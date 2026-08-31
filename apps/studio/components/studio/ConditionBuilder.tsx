@@ -131,7 +131,7 @@ export function ConditionEditor({ value, onChange }: {
   return (
     <div className={`cond-group op-${g.op}`}>
       <div className="row" style={{ marginBottom: 6 }}>
-        <select className="select" style={{ width: 90 }} value={g.op}
+        <select className="select" style={{ width: 112 }} value={g.op}
           onChange={(e) => onChange({ ...g, op: e.target.value as any })}>
           <option value="and">ALL (AND)</option>
           <option value="or">ANY (OR)</option>
