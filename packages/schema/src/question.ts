@@ -1,0 +1,249 @@
+import { z } from "zod";
+import { Condition } from "./conditions.js";
+
+/**
+ * Question model.
+ *
+ * The platform is NOT limited to a fixed set of question types: `type`
+ * is an open string resolved against the QuestionTypeRegistry at runtime.
+ * The enum below lists the built-in types shipped with the platform.
+ */
+
+export const BUILTIN_QUESTION_TYPES = [
+  "single_select",
+  "multi_select",
+  "dropdown",
+  "multi_dropdown",
+  "numeric",
+  "open_text",
+  "long_text",
+  "numeric_list",
+  "text_list",
+  "date",
+  "time",
+  "ranking",
+  "slider",
+  "nps",
+  "matrix_single",
+  "matrix_multi",
+  "matrix_numeric",
+  "matrix_text",
+  "matrix_dropdown",
+  "image_select",
+  "image_ranking",
+  "allocation", // constant sum / percentage allocation
+  "composite", // custom multi-column question (each column its own response type)
+  "custom_table",
+  "custom_component", // rendered by a registered plugin renderer
+  "hidden", // hidden variable
+  "calculated", // calculated variable (expression-driven)
+  "embedded_data", // captured from URL / invitation / API
+  "html", // display-only content block
+  "conjoint_task", // renders tasks from a referenced conjoint design file
+  "maxdiff_task", // renders tasks from a referenced maxdiff design file
+] as const;
+export type BuiltinQuestionType = (typeof BUILTIN_QUESTION_TYPES)[number];
+
+/** Response primitive a column/cell can capture. */
+export const ResponseType = z.enum([
+  "single",
+  "multi",
+  "dropdown",
+  "multi_dropdown",
+  "text",
+  "longtext",
+  "numeric",
+  "date",
+  "time",
+  "rank",
+  "slider",
+  "checkbox",
+  "none",
+]);
+export type ResponseType = z.infer<typeof ResponseType>;
+
+export const OptionFlag = z.enum([
+  "exclusive", // "None of the above" behaviour
+  "other_specify", // shows a text input when selected
+  "none_of_above",
+  "dont_know",
+  "refused",
+  "anchor_top",
+  "anchor_bottom", // excluded from randomization
+]);
+
+export const Option = z.object({
+  code: z.union([z.string(), z.number()]),
+  label: z.string(),
+  /** Optional distinct export/analysis value; defaults to code. */
+  value: z.union([z.string(), z.number()]).optional(),
+  imageUrl: z.string().optional(),
+  flags: z.array(OptionFlag).default([]),
+  /** Show this option only when the condition holds. */
+  visibleIf: Condition.optional(),
+  /** Free metadata for custom renderers. */
+  meta: z.record(z.any()).optional(),
+});
+export type Option = z.infer<typeof Option>;
+
+export const ValidationRule = z.object({
+  kind: z.enum([
+    "required",
+    "min_value",
+    "max_value",
+    "min_length",
+    "max_length",
+    "min_selections",
+    "max_selections",
+    "sum_equals", // allocation / constant sum
+    "sum_max",
+    "sum_min",
+    "pattern", // regex
+    "email",
+    "integer",
+    "custom_expression", // calc-engine expression that must evaluate truthy
+    "custom_script", // registered script id
+  ]),
+  value: z.any().optional(),
+  message: z.string().optional(),
+  /** Only enforce when the condition holds. */
+  when: Condition.optional(),
+});
+export type ValidationRule = z.infer<typeof ValidationRule>;
+
+export const Randomization = z.object({
+  enabled: z.boolean().default(false),
+  scope: z.enum(["options", "rows", "columns"]).default("options"),
+  method: z.enum(["shuffle", "rotate", "reverse_half"]).default("shuffle"),
+  /** Randomize only within these code groups (blocks stay in place). */
+  groups: z.array(z.array(z.union([z.string(), z.number()]))).optional(),
+});
+
+/** Carry-forward / dynamic option pass-through (requirement §4). */
+export const CarryForward = z.object({
+  sourceQuestionId: z.string(),
+  /** Which options travel forward. */
+  filter: z
+    .enum(["selected", "not_selected", "displayed", "answered_rows", "all"])
+    .default("selected"),
+  /** Where the carried options land in this question. */
+  into: z.enum(["options", "rows", "columns"]).default("options"),
+  /** Optionally keep additional statically-defined options too. */
+  keepOwn: z.boolean().default(false),
+  /** Optional extra filter condition evaluated per option code. */
+  where: Condition.optional(),
+});
+export type CarryForward = z.infer<typeof CarryForward>;
+
+/**
+ * Column of a composite / matrix / custom-table question.
+ * EVERY column carries its own response type, its own variable name,
+ * its own options + codes, its own validation and its own visibility —
+ * requirement §3.
+ */
+export const QuestionColumn = z.object({
+  id: z.string(),
+  label: z.string(),
+  responseType: ResponseType,
+  /** Variable naming: `${variableStem}_${rowCode}` (see docs/VARIABLES.md). */
+  variableStem: z.string(),
+  options: z.array(Option).default([]),
+  validation: z.array(ValidationRule).default([]),
+  visibleIf: Condition.optional(),
+  readOnly: z.boolean().default(false),
+  defaultValue: z.any().optional(),
+  /** Expression evaluated by the calc engine (makes the cell calculated). */
+  expression: z.string().optional(),
+  width: z.string().optional(),
+  placeholder: z.string().optional(),
+  min: z.number().optional(),
+  max: z.number().optional(),
+  carryForward: CarryForward.optional(),
+  meta: z.record(z.any()).optional(),
+});
+export type QuestionColumn = z.infer<typeof QuestionColumn>;
+
+export const QuestionRow = z.object({
+  code: z.union([z.string(), z.number()]),
+  label: z.string(),
+  visibleIf: Condition.optional(),
+  flags: z.array(OptionFlag).default([]),
+  meta: z.record(z.any()).optional(),
+});
+export type QuestionRow = z.infer<typeof QuestionRow>;
+
+export const SkipTarget = z.object({
+  kind: z.enum(["question", "page", "block", "section", "end", "terminate", "url"]),
+  ref: z.string().optional(), // id of target, or URL
+  status: z.enum(["complete", "screened", "quota_full", "terminated"]).optional(),
+});
+
+export const SkipRule = z.object({
+  id: z.string(),
+  when: Condition,
+  target: SkipTarget,
+  label: z.string().optional(),
+});
+export type SkipRule = z.infer<typeof SkipRule>;
+
+export const Question = z.object({
+  id: z.string(), // stable internal id, e.g. "q_age"
+  code: z.string(), // display code, e.g. "Q1"
+  /** Base variable name; expanded per option/row/column by the dictionary. */
+  variableName: z.string(),
+  type: z.string(), // open — resolved via QuestionTypeRegistry
+  text: z.string().default(""), // supports piping tokens + HTML
+  instruction: z.string().optional(),
+  description: z.string().optional(),
+
+  options: z.array(Option).default([]),
+  rows: z.array(QuestionRow).default([]),
+  columns: z.array(QuestionColumn).default([]),
+
+  validation: z.array(ValidationRule).default([]),
+  required: z.boolean().default(false),
+
+  settings: z
+    .object({
+      minSelections: z.number().optional(),
+      maxSelections: z.number().optional(),
+      minValue: z.number().optional(),
+      maxValue: z.number().optional(),
+      step: z.number().optional(),
+      sumTarget: z.number().optional(), // allocation
+      sumUnit: z.string().optional(), // "%", "points", "$"
+      listCount: z.number().optional(), // numeric_list / text_list rows
+      placeholder: z.string().optional(),
+      readOnly: z.boolean().default(false),
+      hidden: z.boolean().default(false),
+      defaultValue: z.any().optional(),
+      /** Expression for `calculated` questions / piped defaults. */
+      expression: z.string().optional(),
+      npsLeftLabel: z.string().optional(),
+      npsRightLabel: z.string().optional(),
+      sliderLeftLabel: z.string().optional(),
+      sliderRightLabel: z.string().optional(),
+      designRef: z.string().optional(), // conjoint/maxdiff design file id
+      accessibility: z
+        .object({
+          ariaLabel: z.string().optional(),
+          describedBy: z.string().optional(),
+        })
+        .optional(),
+    })
+    .default({}),
+
+  randomization: Randomization.optional(),
+  carryForward: CarryForward.optional(),
+
+  displayLogic: Condition.optional(),
+  skipLogic: z.array(SkipRule).default([]),
+
+  customJs: z.string().optional(),
+  customCss: z.string().optional(),
+  customHtml: z.string().optional(),
+
+  notes: z.string().optional(),
+  meta: z.record(z.any()).optional(),
+});
+export type Question = z.infer<typeof Question>;

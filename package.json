@@ -1,0 +1,17 @@
+{
+  "name": "rescript-platform",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Rescript — professional survey programming & runtime platform",
+  "scripts": {
+    "build": "pnpm -r --filter './packages/*' build && pnpm --filter @rescript/runtime build && pnpm --filter @rescript/studio build",
+    "dev:studio": "pnpm --filter @rescript/studio dev",
+    "dev:runtime": "pnpm --filter @rescript/runtime dev",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=20"
+  }
+}

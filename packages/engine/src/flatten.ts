@@ -1,0 +1,153 @@
+import type { SurveyDefinition, Question } from "@rescript/schema";
+import type { ResponseState } from "./state.js";
+
+export type FlatVars = Record<string, unknown>;
+
+/**
+ * Flatten the response state into the exported variable map.
+ * This is the same naming the Variable Dictionary documents:
+ *   single/numeric/text        VAR            scalar
+ *   multi                      VAR            array of codes
+ *                              VAR_<code>     0/1 per option
+ *   matrix_*                   VAR_<row>      scalar / array per row
+ *   composite                  <colStem>_<row>  per cell
+ *   allocation                 VAR_<code>     numeric per option
+ *   ranking                    VAR_<code>     rank position (1..n)
+ *   lists                      VAR_1..VAR_n
+ *   other specify              VAR_other
+ */
+export function flattenVariables(def: SurveyDefinition, state: ResponseState): FlatVars {
+  const out: FlatVars = {};
+
+  for (const q of def.questions) {
+    // collect all answer entries for this question (plain + loop-suffixed)
+    const entries = Object.entries(state.answers).filter(
+      ([k]) => k === q.id || k.startsWith(`${q.id}@`),
+    );
+    for (const [key, value] of entries) {
+      const loopSuffix = key.includes("@") ? `_${key.split("@")[1]}` : "";
+      flattenQuestion(q, value, `${q.variableName}${loopSuffix}`, out);
+    }
+    const other = state.answers[`${q.id}__other`];
+    if (other !== undefined) out[`${q.variableName}_other`] = other;
+  }
+
+  for (const [k, v] of Object.entries(state.calculated)) out[k] = v;
+  for (const [k, v] of Object.entries(state.embedded)) out[k] = v;
+  return out;
+}
+
+function flattenQuestion(q: Question, value: unknown, varName: string, out: FlatVars): void {
+  if (value === undefined) return;
+
+  switch (q.type) {
+    case "multi_select":
+    case "multi_dropdown":
+    case "image_select": {
+      const arr = Array.isArray(value) ? value : value == null ? [] : [value];
+      out[varName] = arr;
+      for (const opt of q.options) {
+        out[`${varName}_${opt.code}`] = arr.some((v) => String(v) === String(opt.code)) ? 1 : 0;
+      }
+      break;
+    }
+    case "ranking":
+    case "image_ranking": {
+      const arr = Array.isArray(value) ? value : [];
+      out[varName] = arr;
+      arr.forEach((code, i) => {
+        out[`${varName}_${code}`] = i + 1;
+      });
+      break;
+    }
+    case "allocation": {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        let total = 0;
+        for (const [code, v] of Object.entries(value as Record<string, unknown>)) {
+          out[`${varName}_${code}`] = v;
+          const n = Number(v);
+          if (Number.isFinite(n)) total += n;
+        }
+        out[`${varName}_total`] = total;
+      }
+      break;
+    }
+    case "numeric_list":
+    case "text_list": {
+      const arr = Array.isArray(value) ? value : [];
+      out[varName] = arr;
+      arr.forEach((v, i) => {
+        out[`${varName}_${i + 1}`] = v;
+      });
+      break;
+    }
+    case "matrix_single":
+    case "matrix_numeric":
+    case "matrix_text":
+    case "matrix_dropdown":
+    case "slider": {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        for (const [row, v] of Object.entries(value as Record<string, unknown>)) {
+          out[`${varName}_${row}`] = v;
+        }
+      } else {
+        out[varName] = value;
+      }
+      break;
+    }
+    case "matrix_multi": {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        for (const [row, v] of Object.entries(value as Record<string, unknown>)) {
+          const arr = Array.isArray(v) ? v : v == null ? [] : [v];
+          out[`${varName}_${row}`] = arr;
+          for (const col of q.columns.length ? q.columns : []) {
+            for (const opt of col.options) {
+              out[`${varName}_${row}_${opt.code}`] = arr.some(
+                (x) => String(x) === String(opt.code),
+              )
+                ? 1
+                : 0;
+            }
+          }
+          for (const opt of q.options) {
+            out[`${varName}_${row}_${opt.code}`] = arr.some(
+              (x) => String(x) === String(opt.code),
+            )
+              ? 1
+              : 0;
+          }
+        }
+      }
+      break;
+    }
+    case "composite":
+    case "custom_table": {
+      // { rowCode: { columnId: cellValue } } -> `${column.variableStem}_${row}`
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        for (const [row, cells] of Object.entries(value as Record<string, unknown>)) {
+          if (!cells || typeof cells !== "object") continue;
+          for (const [colId, v] of Object.entries(cells as Record<string, unknown>)) {
+            const col = q.columns.find((c) => c.id === colId);
+            const stem = col?.variableStem ?? `${varName}_${colId}`;
+            if (col && (col.responseType === "multi" || col.responseType === "multi_dropdown")) {
+              const arr = Array.isArray(v) ? v : v == null ? [] : [v];
+              out[`${stem}_${row}`] = arr;
+              for (const opt of col.options) {
+                out[`${stem}_${row}_${opt.code}`] = arr.some(
+                  (x) => String(x) === String(opt.code),
+                )
+                  ? 1
+                  : 0;
+              }
+            } else {
+              out[`${stem}_${row}`] = v;
+            }
+          }
+        }
+      }
+      break;
+    }
+    default:
+      out[varName] = value;
+  }
+}
