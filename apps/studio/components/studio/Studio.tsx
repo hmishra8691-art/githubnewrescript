@@ -12,6 +12,7 @@ import { DesignsPanel } from "./DesignsPanel";
 import { BrandingPanel, ScriptsPanel } from "./BrandingPanel";
 import { VersionsPanel } from "./VersionsPanel";
 import { JsonPanel } from "./JsonPanel";
+import { runtimeBaseUrl } from "@/lib/runtime-url";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
@@ -76,7 +77,7 @@ function StudioShell() {
   };
 
   const preview = () => {
-    const base = process.env.NEXT_PUBLIC_RUNTIME_URL ?? "http://localhost:3001";
+    const base = runtimeBaseUrl();
     const win = window.open(`${base}/preview`, "rescript_preview");
     if (!win) return;
     const send = () => win.postMessage({ type: "rescript:preview", definition: s.def }, "*");

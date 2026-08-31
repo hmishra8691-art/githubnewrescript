@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
+import { runtimeBaseUrl } from "@/lib/runtime-url";
 
 export const dynamic = "force-dynamic";
 
@@ -46,7 +47,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     detail: { survey_id: params.id, version_id: versionId, mode },
   });
 
-  const base = process.env.NEXT_PUBLIC_RUNTIME_URL ?? "http://localhost:3001";
+  const base = runtimeBaseUrl();
   const url = `${base}/${mode === "test" ? "t" : "s"}/${clientSlug}/${studySlug}`;
   return NextResponse.json({ ok: true, url });
 }

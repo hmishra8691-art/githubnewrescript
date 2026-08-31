@@ -2,6 +2,7 @@
 import React from "react";
 import { SurveyDefinition } from "@rescript/schema";
 import { useStudio } from "./store";
+import { runtimeBaseUrl } from "@/lib/runtime-url";
 
 interface VersionRow { id: string; version: string; label: string | null; notes: string | null; created_at: string }
 interface DeploymentRow { id: string; client_slug: string; study_slug: string; mode: string; version_id: string; active: boolean }
@@ -66,7 +67,7 @@ export function VersionsPanel() {
     else s.toast(d.error ?? "deploy failed", "err");
   };
 
-  const runtimeBase = process.env.NEXT_PUBLIC_RUNTIME_URL ?? "http://localhost:3001";
+  const runtimeBase = runtimeBaseUrl();
 
   return (
     <div>
