@@ -164,16 +164,19 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
 
   const content = ended ? (
     <div className="rs-card rs-end">
-      <h2>
-        {ended.message ??
-          (ended.status === "complete"
+      {ended.message ? (
+        <h2 dangerouslySetInnerHTML={{ __html: resolvePiping(ended.message, ctx) }} />
+      ) : (
+        <h2>
+          {ended.status === "complete"
             ? "Thank you for completing this survey!"
             : ended.status === "quota_full"
               ? "Unfortunately the group you belong to is already complete."
               : ended.status === "screened"
                 ? "Thank you — you do not qualify for this study."
-                : "The survey has ended.")}
-      </h2>
+                : "The survey has ended."}
+        </h2>
+      )}
       {ended.redirectUrl && mode !== "live" && (
         <p style={{ color: "var(--rs-subtle)" }}>(test mode: would redirect to {ended.redirectUrl})</p>
       )}
@@ -234,7 +237,7 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
       {(b.logoUrl || b.headerHtml) && (
         <div className={`rs-header ${b.logoPosition}`}>
           {b.headerHtml ? (
-            <div dangerouslySetInnerHTML={{ __html: b.headerHtml }} />
+            <div dangerouslySetInnerHTML={{ __html: resolvePiping(b.headerHtml, ctx) }} />
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
             b.logoUrl && <img src={b.logoUrl} alt="logo" />
@@ -248,7 +251,9 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
         </>
       )}
       {content}
-      {b.footerHtml && <div className="rs-footer" dangerouslySetInnerHTML={{ __html: b.footerHtml }} />}
+      {b.footerHtml && (
+        <div className="rs-footer" dangerouslySetInnerHTML={{ __html: resolvePiping(b.footerHtml, ctx) }} />
+      )}
       {mode !== "live" && <div className="rs-testbadge">{mode.toUpperCase()} MODE</div>}
     </div>
   );

@@ -689,7 +689,12 @@ function CustomComponent(p: QRProps) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.q.id]);
-  return <div ref={ref} dangerouslySetInnerHTML={{ __html: p.q.customHtml ?? "" }} />;
+  return (
+    <div
+      ref={ref}
+      dangerouslySetInnerHTML={{ __html: resolvePiping(p.q.customHtml ?? "", ctxOf(p)) }}
+    />
+  );
 }
 
 /* ------------------------------------------------------------------ shell */
