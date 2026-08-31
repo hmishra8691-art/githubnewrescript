@@ -52,6 +52,12 @@ export async function POST(req: NextRequest) {
     if (parsed.success) definition = parsed.data;
   }
 
+  // Derive a unique default URL slug from the survey code, so every new survey
+  // gets its own /s/<client>/<study> and the Test button never collides.
+  const slug =
+    code.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "study";
+  definition.deployment.studySlug = slug;
+
   const { data: ver, error: verr } = await db
     .from("survey_versions")
     .insert({ survey_id: survey.id, version: "1.0", definition, label: "Initial version" })

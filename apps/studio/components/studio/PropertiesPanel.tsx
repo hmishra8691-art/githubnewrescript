@@ -148,6 +148,27 @@ export function PropertiesPanel() {
         <label className="f"><span>Survey code</span>
           <input className="input mono" value={s.def.meta.code}
             onChange={(e) => s.update((d) => { d.meta.code = e.target.value; })} /></label>
+
+        <h3 className="sec">Survey URL</h3>
+        <p className="muted" style={{ fontSize: 11, marginTop: -4 }}>
+          Must be unique across surveys — respondents get
+          <span className="mono"> /s/{s.def.deployment.clientSlug || "client"}/{s.def.deployment.studySlug || "study-001"}</span>
+        </p>
+        <div className="row">
+          <label className="f grow"><span>Client slug</span>
+            <input className="input mono" value={s.def.deployment.clientSlug}
+              placeholder="acme"
+              onChange={(e) => s.update((d) => {
+                d.deployment.clientSlug = e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+              })} /></label>
+          <label className="f grow"><span>Study slug</span>
+            <input className="input mono" value={s.def.deployment.studySlug}
+              placeholder="brand-tracker-2026"
+              onChange={(e) => s.update((d) => {
+                d.deployment.studySlug = e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+              })} /></label>
+        </div>
+
         <label className="f"><span>Access mode</span>
           <select className="select" value={s.def.deployment.access.mode}
             onChange={(e) => s.update((d) => { d.deployment.access.mode = e.target.value as any; })}>
