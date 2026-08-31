@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3001",
-    "build": "next build",
+    "build": "pnpm --filter @rescript/runtime^... build && next build",
     "start": "next start -p 3001",
     "typecheck": "tsc --noEmit"
   },
