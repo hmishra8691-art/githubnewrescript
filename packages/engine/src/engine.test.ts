@@ -301,3 +301,30 @@ test("compileFlow: loop over selected options", () => {
   assert.equal((pages[1] as any).loop.label, "Apple");
   assert.equal((pages[2] as any).loop.label, "Google");
 });
+
+test("nextVersion never collides and honours explicit requests", async () => {
+  const { nextVersion, compareVersions } = await import("./versioning.js");
+
+  // fresh survey
+  assert.equal(nextVersion([]), "1.0");
+  // normal progression
+  assert.equal(nextVersion(["1.0"]), "1.1");
+  assert.equal(nextVersion(["1.0", "1.1", "1.2"]), "1.3");
+  // the real bug: editor restored to 1.0 while 1.1/1.2 already exist
+  assert.equal(nextVersion(["1.0", "1.1", "1.2"], "1.1"), "1.3");
+  // highest wins even when unordered, and minor 10 > minor 9
+  assert.equal(nextVersion(["1.9", "1.10", "1.2"]), "1.11");
+  // major versions respected
+  assert.equal(nextVersion(["1.0", "2.0", "1.5"]), "2.1");
+  // an explicit, free version is honoured
+  assert.equal(nextVersion(["1.0", "1.1"], "2.0"), "2.0");
+  // a non-numeric request falls back to the computed next
+  assert.equal(nextVersion(["1.0"], "banana"), "1.1");
+  // odd stored strings do not break it
+  assert.equal(nextVersion(["draft", "1.0"]), "1.1");
+  assert.equal(nextVersion(["draft"]), "1.0");
+  assert.equal(nextVersion(["1.0", "draft"], undefined), "1.1");
+
+  assert.ok(compareVersions("1.2", "1.10") < 0);
+  assert.ok(compareVersions("2.0", "1.99") > 0);
+});

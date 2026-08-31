@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
-import { buildVariableDictionary } from "@rescript/engine";
+import { buildVariableDictionary, nextVersion } from "@rescript/engine";
 
 export const dynamic = "force-dynamic";
 
@@ -34,26 +34,43 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   def.meta.updatedAt = new Date().toISOString();
 
   const db = supabaseAdmin();
-  const version = String(body.version ?? def.meta.version ?? "1.0");
+
+  // The editor cannot know which versions exist (after restoring an older one
+  // its number is behind), so the next version is resolved here, from storage.
+  const { data: existingVersions } = await db
+    .from("survey_versions")
+    .select("version")
+    .eq("survey_id", params.id);
+  const taken = (existingVersions ?? []).map((r) => r.version as string);
+
+  let version = nextVersion(taken, body.version ? String(body.version) : undefined);
   def.meta.version = version;
 
-  const { data: ver, error } = await db
-    .from("survey_versions")
-    .insert({
-      survey_id: params.id,
-      version,
-      definition: def,
-      label: body.label ?? null,
-      notes: body.notes ?? null,
-    })
-    .select("id, version")
-    .single();
-  if (error) {
-    const msg = error.message.includes("duplicate")
-      ? `Version ${version} already exists — bump the version number.`
-      : error.message;
-    return NextResponse.json({ error: msg }, { status: 409 });
+  // Retry once on the unique constraint, in case a concurrent save took it.
+  let ver: { id: string; version: string } | null = null;
+  for (let attempt = 0; attempt < 2 && !ver; attempt++) {
+    const { data, error } = await db
+      .from("survey_versions")
+      .insert({
+        survey_id: params.id,
+        version,
+        definition: def,
+        label: body.label ?? null,
+        notes: body.notes ?? null,
+      })
+      .select("id, version")
+      .single();
+    if (data) {
+      ver = data;
+      break;
+    }
+    if (!error?.message.includes("duplicate") || attempt === 1) {
+      return NextResponse.json({ error: error?.message ?? "save failed" }, { status: 500 });
+    }
+    version = nextVersion([...taken, version]);
+    def.meta.version = version;
   }
+  if (!ver) return NextResponse.json({ error: "save failed" }, { status: 500 });
 
   await db.from("surveys").update({ current_version_id: ver.id, title: def.meta.title }).eq("id", params.id);
   await db.from("audit_logs").insert({

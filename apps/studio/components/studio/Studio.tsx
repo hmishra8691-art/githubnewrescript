@@ -32,12 +32,6 @@ const NAV: { key: Tab; label: string; icon: string }[] = [
   { key: "json", label: "JSON", icon: "≡" },
 ];
 
-function bumpVersion(v: string): string {
-  const m = v.match(/^(\d+)\.(\d+)$/);
-  if (!m) return v + ".1";
-  return `${m[1]}.${Number(m[2]) + 1}`;
-}
-
 function StudioShell() {
   const s = useStudio();
   const [tab, setTab] = React.useState<Tab>("questions");
@@ -54,19 +48,20 @@ function StudioShell() {
   const save = async (label?: string): Promise<string | null> => {
     setSaving(true);
     try {
-      const version = bumpVersion(s.def.meta.version);
       const def = structuredClone(s.def);
-      def.meta.version = version;
+      // The server resolves the version number from what is actually stored,
+      // so a restored-then-saved survey can never collide.
       const r = await fetch(`/api/surveys/${s.surveyDbId}/versions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ definition: def, version, label }),
+        body: JSON.stringify({ definition: def, label }),
       });
       const d = await r.json();
       if (!r.ok) {
         s.toast(d.error ?? "save failed", "err");
         return null;
       }
+      def.meta.version = d.version;
       s.replace({ ...def });
       s.markSaved(d.id);
       s.toast(`Saved version ${d.version} (${d.variables} variables)`);
@@ -120,8 +115,9 @@ function StudioShell() {
         <button className="btn" onClick={testSurvey} title="Save + deploy test URL with inspector">🧪 Test Survey</button>
         <a className="btn" href={`/api/surveys/${s.surveyDbId}/export/xlsx`} target="_blank">⬇ Variables .xlsx</a>
         <a className="btn" href={`/api/surveys/${s.surveyDbId}/responses?format=csv`} target="_blank">⬇ Responses .csv</a>
-        <button className="btn primary" disabled={saving} onClick={() => save()}>
-          {saving ? "Saving…" : `Save v${bumpVersion(s.def.meta.version)}`}
+        <button className="btn primary" disabled={saving} onClick={() => save()}
+          title="Save an immutable snapshot; the next version number is assigned by the server">
+          {saving ? "Saving…" : "Save version"}
         </button>
       </div>
       <div className="ide-body">

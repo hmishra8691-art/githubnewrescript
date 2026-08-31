@@ -12,3 +12,4 @@ export * from "./variables.js";
 export * from "./scripts.js";
 export * from "./questionTypes.js";
 export * from "./inspector.js";
+export * from "./versioning.js";
