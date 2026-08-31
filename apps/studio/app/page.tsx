@@ -14,11 +14,40 @@ export default function Dashboard() {
   const [theme, setTheme] = React.useState<string>("");
   const [error, setError] = React.useState<string | null>(null);
 
-  const load = React.useCallback(() => {
-    fetch("/api/surveys").then((r) => r.json()).then((d) => setSurveys(d.surveys ?? []))
-      .catch(() => setError("Could not reach the database. Check SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY."));
+  const load = React.useCallback(async () => {
+    const ENV_HINT =
+      "Check SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in THIS Vercel project's environment variables, then redeploy.";
+    setError(null);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    try {
+      const r = await fetch("/api/surveys", { signal: ctrl.signal });
+      const raw = await r.text();
+      let d: { surveys?: SurveyRow[]; error?: string } = {};
+      try {
+        d = raw ? JSON.parse(raw) : {};
+      } catch {
+        setError(`Server returned ${r.status} (not JSON). ${ENV_HINT}`);
+        return;
+      }
+      if (!r.ok) {
+        setError(`${d.error ?? `Server returned ${r.status}`}. ${ENV_HINT}`);
+        return;
+      }
+      setSurveys(d.surveys ?? []);
+    } catch (e) {
+      setError(
+        (e as Error)?.name === "AbortError"
+          ? `Timed out after 15s — the server could not reach Supabase. ${ENV_HINT}`
+          : `Could not reach the API. ${ENV_HINT}`,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
   }, []);
-  React.useEffect(load, [load]);
+  React.useEffect(() => {
+    void load();
+  }, [load]);
 
   const create = async () => {
     setError(null);

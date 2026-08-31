@@ -19,7 +19,16 @@ async function defaultCustomerId() {
 }
 
 export async function GET() {
-  const db = supabaseAdmin();
+  let db: ReturnType<typeof supabaseAdmin>;
+  try {
+    db = supabaseAdmin();
+  } catch (e) {
+    // Missing env vars: answer with a readable message instead of a 500 page.
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Supabase is not configured" },
+      { status: 503 },
+    );
+  }
   const { data, error } = await db
     .from("surveys")
     .select("id, code, title, status, created_at, updated_at, current_version_id")
