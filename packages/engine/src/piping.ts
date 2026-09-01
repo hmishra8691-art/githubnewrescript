@@ -3,6 +3,7 @@ import type { EvalContext } from "./evaluate.js";
 import { getQuestionByCodeOrVar } from "./state.js";
 import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
+import { escapeHtml } from "./html.js";
 
 /**
  * Piping (requirement §5).
@@ -44,7 +45,7 @@ function renderToken(raw: string, ctx: EvalContext): string {
       resolver: (n) => flat[n],
       names: () => Object.keys(flat),
     });
-    return v == null ? "" : String(v);
+    return v == null ? "" : escapeHtml(String(v));
   }
 
   // split off |join:xxx modifier
@@ -60,11 +61,11 @@ function renderToken(raw: string, ctx: EvalContext): string {
   // namespaces
   if (body.startsWith("calc.")) {
     const v = ctx.state.calculated[body.slice(5)];
-    return v == null ? "" : String(v);
+    return v == null ? "" : escapeHtml(String(v));
   }
   if (body.startsWith("ed.") || body.startsWith("embedded.")) {
     const v = ctx.state.embedded[body.split(".").slice(1).join(".")];
-    return v == null ? "" : String(v);
+    return v == null ? "" : escapeHtml(String(v));
   }
   if (body.startsWith("loop.")) {
     const l = ctx.loop;
@@ -84,7 +85,7 @@ function renderToken(raw: string, ctx: EvalContext): string {
     // fall back to flat variable map (covers calculated & embedded by name)
     const flat = flattenVariables(ctx.def, ctx.state);
     const v = flat[ref];
-    return v == null ? "" : Array.isArray(v) ? v.join(joiner) : String(v);
+    return v == null ? "" : escapeHtml(Array.isArray(v) ? v.join(joiner) : String(v));
   }
 
   const loopKey = ctx.loop ? `${q.id}@${ctx.loop.code}` : null;
@@ -101,7 +102,7 @@ function renderToken(raw: string, ctx: EvalContext): string {
   switch (field) {
     case "value":
     case "code":
-      return codes.map(String).join(joiner);
+      return codes.map((c) => escapeHtml(String(c))).join(joiner);
     case "count":
       return String(codes.length);
     case "first":
@@ -114,7 +115,7 @@ function renderToken(raw: string, ctx: EvalContext): string {
       if (typeof value === "object" && !Array.isArray(value)) {
         // whole matrix/composite object without row — join row summaries
         return Object.entries(value as Record<string, unknown>)
-          .map(([r, v]) => `${rowLabelFor(q, r)}: ${String(v)}`)
+          .map(([r, v]) => `${rowLabelFor(q, r)}: ${escapeHtml(String(v))}`)
           .join(joiner);
       }
       return codes.map((c) => labelFor(ctx.def, q, c)).join(joiner);
@@ -136,7 +137,8 @@ function labelFor(def: SurveyDefinition, q: Question, code: unknown): string {
       ? def.questions.find((x) => x.id === cur!.carryForward!.sourceQuestionId)
       : undefined;
   }
-  return code == null ? "" : String(code);
+  // no matching definition label: the value is respondent-derived free text
+  return code == null ? "" : escapeHtml(String(code));
 }
 
 function rowLabelFor(q: Question, rowCode: string): string {

@@ -3,6 +3,7 @@ import React from "react";
 import type { Question, Option, QuestionColumn, ResponseType, QuestionVariantDef } from "@rescript/schema";
 import { questionTypeRegistry, variantRegistry } from "@rescript/schema";
 import { VariantPickerModal, VariantSwitcher, createFromVariant } from "./VariantPicker";
+import { RichTextEditor } from "./RichTextEditor";
 import { FIELD_TYPES } from "@rescript/engine"; // also registers builtin question types
 import { useStudio, uid } from "./store";
 
@@ -39,8 +40,72 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
 }) {
   const [filter, setFilter] = React.useState("");
   const [showAll, setShowAll] = React.useState(false);
+  const [pasteOpen, setPasteOpen] = React.useState(false);
+  const [pasteText, setPasteText] = React.useState("");
+  const pendingFocus = React.useRef<number | null>(null);
+  const rootRef = React.useRef<HTMLDivElement>(null);
+
+  // after Enter/Backspace restructures the list, land focus on the right row
+  React.useEffect(() => {
+    if (pendingFocus.current == null) return;
+    const idx = pendingFocus.current;
+    pendingFocus.current = null;
+    const el = rootRef.current?.querySelector<HTMLInputElement>(`input[data-oidx="${idx}"]`);
+    el?.focus();
+    el?.select();
+  });
+
   const set = (i: number, patch: Partial<Option>) =>
     onChange(options.map((o, j) => (j === i ? { ...o, ...patch } : o)));
+
+  const insertAfter = (i: number) => {
+    const next = [...options];
+    next.splice(i + 1, 0, { code: String(options.length + 1), label: "", flags: [] } as Option);
+    pendingFocus.current = i + 1;
+    onChange(next);
+  };
+
+  /** Enter = new option below (req §5); Backspace on empty = remove + focus
+   *  previous (req §6); arrows move between options. */
+  const onLabelKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, i: number) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      insertAfter(i);
+    } else if (e.key === "Backspace" && options[i].label === "") {
+      if (options.length <= 1) return;
+      e.preventDefault();
+      pendingFocus.current = Math.max(0, i - 1);
+      onChange(options.filter((_, j) => j !== i));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      rootRef.current?.querySelector<HTMLInputElement>(`input[data-oidx="${i - 1}"]`)?.focus();
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      rootRef.current?.querySelector<HTMLInputElement>(`input[data-oidx="${i + 1}"]`)?.focus();
+    }
+  };
+
+  /** Pasting multi-line text into any option splits it into options (req §7). */
+  const onLabelPaste = (e: React.ClipboardEvent<HTMLInputElement>, i: number) => {
+    const text = e.clipboardData.getData("text/plain");
+    if (!text.includes("\n")) return;
+    e.preventDefault();
+    const parsed = parsePastedOptions(text, options.length + 1);
+    if (parsed.length === 0) return;
+    const next = [...options];
+    next[i] = { ...next[i], label: parsed[0].label, code: options[i].label ? next[i].code : parsed[0].code };
+    next.splice(i + 1, 0, ...(parsed.slice(1) as Option[]));
+    pendingFocus.current = i + parsed.length - 1;
+    onChange(next);
+  };
+
+  const importPaste = () => {
+    const parsed = parsePastedOptions(pasteText, options.length + 1);
+    if (parsed.length === 0) return;
+    onChange([...options, ...(parsed as Option[])]);
+    setPasteText("");
+    setPasteOpen(false);
+  };
   const move = (i: number, dir: -1 | 1) => {
     const j = i + dir;
     if (j < 0 || j >= options.length) return;
@@ -59,7 +124,7 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
   if (!showAll && visible.length > OPTION_WINDOW) visible = visible.slice(0, OPTION_WINDOW);
 
   return (
-    <div>
+    <div ref={rootRef}>
       {big && (
         <div className="row" style={{ marginBottom: 6 }}>
           <input className="input" style={{ maxWidth: 260 }} placeholder={`search ${options.length} options…`}
@@ -76,8 +141,11 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
         <div key={i} className="opt-row">
           <input className="input code-input" value={String(o.code)}
             onChange={(e) => set(i, { code: e.target.value })} title="code" />
-          <input className="input grow" value={o.label}
-            onChange={(e) => set(i, { label: e.target.value })} placeholder="label (piping {{Q1}} allowed)" />
+          <input className="input grow" value={o.label} data-oidx={i}
+            onChange={(e) => set(i, { label: e.target.value })}
+            onKeyDown={(e) => onLabelKeyDown(e, i)}
+            onPaste={(e) => onLabelPaste(e, i)}
+            placeholder="label — Enter adds the next option" />
           {showImage && (
             <input className="input" style={{ width: 180 }} placeholder="image URL"
               value={o.imageUrl ?? ""}
@@ -96,24 +164,27 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
         </div>
       ))}
       <div className="row">
-        <button className="btn small" onClick={() =>
-          onChange([...options, { code: String(options.length + 1), label: "", flags: [] }])}>
-          + option
+        <button className="btn small" data-testid="add-option" onClick={() => insertAfter(options.length - 1)}>
+          + option <span className="muted" style={{ fontSize: 10 }}>(or press Enter)</span>
         </button>
-        <button className="btn small" onClick={() => {
-          const text = prompt("Paste options, one per line (\"code<TAB>label\" or just labels):");
-          if (!text) return;
-          const parsed = text.split("\n").filter(Boolean).map((line, i) => {
-            const [a, b] = line.split("\t");
-            return b !== undefined
-              ? { code: a.trim(), label: b.trim(), flags: [] as any[] }
-              : { code: String(options.length + i + 1), label: line.trim(), flags: [] as any[] };
-          });
-          onChange([...options, ...parsed]);
-        }}>
-          paste list
+        <button className="btn small" onClick={() => setPasteOpen((v) => !v)}>
+          {pasteOpen ? "hide paste box" : "📋 paste options"}
         </button>
       </div>
+      {pasteOpen && (
+        <div className="paste-box">
+          <textarea className="ta" data-testid="paste-box"
+            placeholder={"Paste options here — one per line.\nNumbering (1. / 1)) and bullets (- * •) are cleaned automatically.\nUse code<TAB>label to set codes."}
+            value={pasteText}
+            onChange={(e) => setPasteText(e.target.value)} />
+          <div className="row">
+            <button className="btn small primary" data-testid="import-options" onClick={importPaste}>
+              Import {parsePastedOptions(pasteText, 1).length || ""} option{parsePastedOptions(pasteText, 1).length === 1 ? "" : "s"}
+            </button>
+            <span className="muted" style={{ fontSize: 11 }}>handles 500+ options without freezing (list is windowed)</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -332,9 +403,10 @@ export function QuestionEditor({ q }: { q: Question }) {
         <VariantSwitcher q={q} />
       </div>
 
-      <label className="f"><span>Question text (HTML + piping tokens allowed)</span>
-        <textarea className="ta" value={q.text} onChange={(e) => patch({ text: e.target.value })}
-          placeholder='e.g. Earlier you selected {{Q1}}. Why did you choose {{Q1.first}}?' /></label>
+      <label className="f"><span>Question text — rich text, HTML and piping ({"{{Q1}}"}) supported</span></label>
+      <RichTextEditor value={q.text} autoFocusId={`qtext_${q.id}`}
+        onChange={(html) => patch({ text: html })}
+        placeholder="e.g. Earlier you selected {{Q1}}. Why did you choose {{Q1.first}}?" />
       <div className="row">
         <label className="f grow"><span>Instruction</span>
           <input className="input" value={q.instruction ?? ""}
@@ -495,30 +567,154 @@ export function QuestionEditor({ q }: { q: Question }) {
   );
 }
 
+/** Parse pasted option lists: strips numbering (1. / 1) ), bullets (- * •)
+ *  and supports "code<TAB>label" lines. */
+export function parsePastedOptions(text: string, startCode: number): Option[] {
+  return text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((line, i) => {
+      const tab = line.split("\t");
+      if (tab.length >= 2 && tab[0].trim()) {
+        return { code: tab[0].trim(), label: tab.slice(1).join(" ").trim(), flags: [] as any[] };
+      }
+      const cleaned = line.replace(/^\s*(\d{1,4}[.)]|[-*•‣▪])\s+/, "").trim();
+      return { code: String(startCode + i), label: cleaned || line, flags: [] as any[] };
+    });
+}
+
+interface PageRef {
+  node: { id: string; title?: string; questionIds: string[] };
+  parent: any[];
+  index: number;
+}
+
+/** Every page node with its parent array, in visual order. */
+function listPages(flow: any[]): PageRef[] {
+  const out: PageRef[] = [];
+  const walk = (nodes: any[]) => {
+    nodes.forEach((n, i) => {
+      if (n.type === "page") out.push({ node: n, parent: nodes, index: i });
+      if (n.children) walk(n.children);
+      if (n.branches) for (const b of n.branches) walk(b.children);
+      if (n.otherwise) walk(n.otherwise);
+    });
+  };
+  walk(flow);
+  return out;
+}
+
+/** Inline insert bar shown between questions (reqs §1–2, §4). */
+function InsertBar({ onQuestion, onPick, onBreak, canBreak }: {
+  onQuestion(): void; onPick(): void; onBreak(): void; canBreak: boolean;
+}) {
+  return (
+    <div className="insert-bar">
+      <span className="insert-line" />
+      <button className="btn small" onClick={onQuestion} title="Add a question here (default type — change it inline)">
+        + Question
+      </button>
+      <button className="btn small" onClick={onPick} title="Pick a question type from the full library">▾ type…</button>
+      {canBreak && (
+        <button className="btn small" onClick={onBreak} title="Start a new page here">⤵ Page break</button>
+      )}
+      <span className="insert-line" />
+    </div>
+  );
+}
+
 export function QuestionsPanel() {
   const s = useStudio();
-  const [addOpen, setAddOpen] = React.useState(false);
+  const [pickerAt, setPickerAt] = React.useState<{ pageId: string; pos: number } | null>(null);
   const selected = s.def.questions.find((q) => q.id === s.selectedQuestionId);
+  const pages = listPages(s.def.flow as any[]);
+  const placed = new Set(pages.flatMap((p) => p.node.questionIds));
+  const unplaced = s.def.questions.filter((q) => !placed.has(q.id));
 
-  const addQuestion = (variant: QuestionVariantDef) => {
-    const q = createFromVariant(variant, s.def.questions.length + 1);
-    s.update((d) => {
-      d.questions.push(q);
-      // auto-place on the last page
-      const lastPage = [...flattenPages(d.flow)].pop();
-      if (lastPage) lastPage.questionIds.push(q.id);
-    });
-    s.select(q.id);
-    setAddOpen(false);
-    s.toast(`Added ${variant.familyLabel} → ${variant.name}`);
+  const focusQuestion = (qid: string) => {
+    s.select(qid);
+    // the editor mounts on the next render — retry briefly until it exists
+    let tries = 0;
+    const attempt = () => {
+      const el = document.getElementById(`qtext_${qid}`);
+      if (el) {
+        el.focus();
+        el.scrollIntoView({ block: "center", behavior: "smooth" });
+      } else if (tries++ < 20) {
+        setTimeout(attempt, 50);
+      }
+    };
+    setTimeout(attempt, 30);
   };
 
-  const move = (id: string, dir: -1 | 1) =>
+  /** Insert a question on a page at position pos (after pos-1). */
+  const insertQuestion = (pageId: string, pos: number, variant?: QuestionVariantDef) => {
+    const v = variant ?? variantRegistry.get("single_select.radio")!;
+    const q = createFromVariant(v, s.def.questions.length + 1);
     s.update((d) => {
-      const i = d.questions.findIndex((q) => q.id === id);
-      const j = i + dir;
-      if (i < 0 || j < 0 || j >= d.questions.length) return;
-      [d.questions[i], d.questions[j]] = [d.questions[j], d.questions[i]];
+      d.questions.push(q);
+      for (const pg of listPages(d.flow as any[])) {
+        if (pg.node.id === pageId) {
+          pg.node.questionIds.splice(pos, 0, q.id);
+          return;
+        }
+      }
+      // page not found (edge case): append to last page
+      const last = listPages(d.flow as any[]).pop();
+      last?.node.questionIds.push(q.id);
+    });
+    focusQuestion(q.id);
+    if (variant) s.toast(`Added ${variant.familyLabel} → ${variant.name}`);
+  };
+
+  /** Split a page after position pos — a real structural page break (req §2). */
+  const pageBreak = (pageId: string, pos: number) => {
+    s.update((d) => {
+      for (const pg of listPages(d.flow as any[])) {
+        if (pg.node.id !== pageId) continue;
+        const moved = pg.node.questionIds.slice(pos);
+        pg.node.questionIds = pg.node.questionIds.slice(0, pos);
+        const newPage = { type: "page", id: uid("page"), questionIds: moved };
+        pg.parent.splice(pg.index + 1, 0, newPage);
+        return;
+      }
+    });
+    s.toast("Page break added");
+  };
+
+  /** Merge a page into the previous page at the same level. */
+  const removeBreak = (pageId: string) => {
+    s.update((d) => {
+      const all = listPages(d.flow as any[]);
+      const i = all.findIndex((p) => p.node.id === pageId);
+      if (i <= 0) return;
+      const cur = all[i];
+      const prev = all[i - 1];
+      if (prev.parent !== cur.parent) return; // only merge siblings
+      prev.node.questionIds.push(...cur.node.questionIds);
+      cur.parent.splice(cur.parent.indexOf(cur.node), 1);
+    });
+  };
+
+  /** Reorder within a page; crossing the edge moves to the adjacent page. */
+  const move = (qid: string, dir: -1 | 1) =>
+    s.update((d) => {
+      const all = listPages(d.flow as any[]);
+      const pi = all.findIndex((p) => p.node.questionIds.includes(qid));
+      if (pi < 0) return;
+      const ids = all[pi].node.questionIds;
+      const k = ids.indexOf(qid);
+      const t = k + dir;
+      if (t >= 0 && t < ids.length) {
+        [ids[k], ids[t]] = [ids[t], ids[k]];
+      } else {
+        const adj = all[pi + dir];
+        if (!adj) return;
+        ids.splice(k, 1);
+        if (dir === -1) adj.node.questionIds.push(qid);
+        else adj.node.questionIds.unshift(qid);
+      }
     });
 
   const duplicate = (id: string) =>
@@ -529,7 +725,11 @@ export function QuestionsPanel() {
       copy.id = uid("q");
       copy.code = `${q.code}_COPY`;
       copy.variableName = `${q.variableName}_COPY`;
-      d.questions.splice(d.questions.findIndex((x) => x.id === id) + 1, 0, copy);
+      d.questions.push(copy);
+      for (const pg of listPages(d.flow as any[])) {
+        const k = pg.node.questionIds.indexOf(id);
+        if (k >= 0) { pg.node.questionIds.splice(k + 1, 0, copy.id); return; }
+      }
     });
 
   const remove = (id: string) => {
@@ -541,43 +741,98 @@ export function QuestionsPanel() {
     if (s.selectedQuestionId === id) s.select(null);
   };
 
+  const card = (qid: string) => {
+    const q = s.def.questions.find((x) => x.id === qid);
+    if (!q) return null;
+    return (
+      <div key={q.id}
+        className={`card selectable qcard ${q.id === s.selectedQuestionId ? "selected" : ""}`}
+        onClick={() => s.select(q.id)}>
+        <div className="qlist-item">
+          <strong className="mono">{q.code}</strong>
+          <span className="qtype-badge">{q.variant?.split(".")[1] ?? q.type}</span>
+          <span className="grow qcard-text"
+            dangerouslySetInnerHTML={{ __html: q.text || '<span class="muted">untitled</span>' }} />
+          {q.displayLogic && <span className="chip warn" title="has display logic">DL</span>}
+          {q.skipLogic.length > 0 && <span className="chip warn" title="has skip logic">SL</span>}
+          {q.carryForward && <span className="chip" title="carry-forward">CF</span>}
+          <button className="btn small" onClick={(e) => { e.stopPropagation(); move(q.id, -1); }}>↑</button>
+          <button className="btn small" onClick={(e) => { e.stopPropagation(); move(q.id, 1); }}>↓</button>
+          <button className="btn small" onClick={(e) => { e.stopPropagation(); duplicate(q.id); }}>⧉</button>
+          <button className="btn small danger" onClick={(e) => { e.stopPropagation(); remove(q.id); }}>×</button>
+        </div>
+        {q.id === s.selectedQuestionId && selected && (
+          <div style={{ marginTop: 14 }} onClick={(e) => e.stopPropagation()}>
+            <QuestionEditor q={selected} />
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div>
       <div className="row" style={{ marginBottom: 14 }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>Questions</h2>
         <span className="chip">{s.def.questions.length}</span>
+        <span className="chip">{pages.length} page{pages.length === 1 ? "" : "s"}</span>
         <span className="grow" />
-        <button className="btn primary" onClick={() => setAddOpen(true)}>+ Add question</button>
-        {addOpen && <VariantPickerModal onPick={addQuestion} onClose={() => setAddOpen(false)} />}
+        <button className="btn primary" onClick={() => {
+          const last = pages[pages.length - 1];
+          setPickerAt(last ? { pageId: last.node.id, pos: last.node.questionIds.length } : { pageId: "", pos: 0 });
+        }}>+ Add question</button>
+        {pickerAt && (
+          <VariantPickerModal
+            onPick={(v) => { insertQuestion(pickerAt.pageId, pickerAt.pos, v); setPickerAt(null); }}
+            onClose={() => setPickerAt(null)} />
+        )}
       </div>
 
-      {s.def.questions.map((q) => (
-        <div key={q.id}
-          className={`card selectable ${q.id === s.selectedQuestionId ? "selected" : ""}`}
-          onClick={() => s.select(q.id)}>
-          <div className="qlist-item">
-            <strong className="mono">{q.code}</strong>
-            <span className="qtype-badge">{q.type}</span>
-            <span className="grow" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {q.text.replace(/<[^>]*>/g, "") || <span className="muted">untitled</span>}
-            </span>
-            {q.displayLogic && <span className="chip warn" title="has display logic">DL</span>}
-            {q.skipLogic.length > 0 && <span className="chip warn" title="has skip logic">SL</span>}
-            {q.carryForward && <span className="chip" title="carry-forward">CF</span>}
-            <button className="btn small" onClick={(e) => { e.stopPropagation(); move(q.id, -1); }}>↑</button>
-            <button className="btn small" onClick={(e) => { e.stopPropagation(); move(q.id, 1); }}>↓</button>
-            <button className="btn small" onClick={(e) => { e.stopPropagation(); duplicate(q.id); }}>⧉</button>
-            <button className="btn small danger" onClick={(e) => { e.stopPropagation(); remove(q.id); }}>×</button>
+      {pages.map((pg, pi) => (
+        <div key={pg.node.id} className="page-group">
+          <div className="page-head">
+            <span className="page-badge">PAGE {pi + 1}</span>
+            <input className="input page-title" placeholder="page title (optional)"
+              value={pg.node.title ?? ""}
+              onChange={(e) => s.update((d) => {
+                const hit = listPages(d.flow as any[]).find((x) => x.node.id === pg.node.id);
+                if (hit) (hit.node as any).title = e.target.value || undefined;
+              })} />
+            <span className="muted" style={{ fontSize: 11 }}>{pg.node.questionIds.length} question{pg.node.questionIds.length === 1 ? "" : "s"}</span>
+            {pi > 0 && pages[pi - 1].parent === pg.parent && (
+              <button className="btn small" title="Merge this page into the previous one"
+                onClick={() => removeBreak(pg.node.id)}>merge ↑</button>
+            )}
           </div>
-          {q.id === s.selectedQuestionId && selected && (
-            <div style={{ marginTop: 14 }} onClick={(e) => e.stopPropagation()}>
-              <QuestionEditor q={selected} />
-            </div>
+          {pg.node.questionIds.length === 0 && (
+            <InsertBar canBreak={false}
+              onQuestion={() => insertQuestion(pg.node.id, 0)}
+              onPick={() => setPickerAt({ pageId: pg.node.id, pos: 0 })}
+              onBreak={() => {}} />
           )}
+          {pg.node.questionIds.map((qid, k) => (
+            <React.Fragment key={qid}>
+              {card(qid)}
+              <InsertBar
+                canBreak={k < pg.node.questionIds.length - 1 || pg.node.questionIds.length > 0}
+                onQuestion={() => insertQuestion(pg.node.id, k + 1)}
+                onPick={() => setPickerAt({ pageId: pg.node.id, pos: k + 1 })}
+                onBreak={() => pageBreak(pg.node.id, k + 1)} />
+            </React.Fragment>
+          ))}
         </div>
       ))}
-      {s.def.questions.length === 0 && (
-        <p className="muted">No questions yet. Add one, then place it on a page in the Survey Flow.</p>
+
+      {unplaced.length > 0 && (
+        <div className="page-group">
+          <div className="page-head"><span className="page-badge" style={{ background: "var(--amber)" }}>NOT ON ANY PAGE</span>
+            <span className="muted" style={{ fontSize: 11 }}>assign these in Survey Flow, or they will never display</span></div>
+          {unplaced.map((q) => card(q.id))}
+        </div>
+      )}
+
+      {s.def.questions.length === 0 && pages.length === 0 && (
+        <p className="muted">No pages yet — add a page in the Survey Flow tab, then build questions here.</p>
       )}
     </div>
   );

@@ -15,3 +15,4 @@ export * from "./inspector.js";
 export * from "./versioning.js";
 export * from "./fields.js";
 export * from "./answers.js";
+export * from "./html.js";

@@ -609,3 +609,34 @@ test("hotspot: coordinates model, variables and flatten", () => {
   errs = validateQuestion(def, q, [{ x: 1, y: 2 }], { def, state });
   assert.deepEqual(errs, []);
 });
+
+test("HTML safety: sanitizer strips vectors, piping escapes respondent text", async () => {
+  const { sanitizeHtml, escapeHtml } = await import("./html.js");
+
+  // formatting survives
+  assert.equal(sanitizeHtml("<p>Rate <strong>Product A</strong></p>"), "<p>Rate <strong>Product A</strong></p>");
+  // script vectors do not
+  assert.ok(!sanitizeHtml("<p>hi</p><script>alert(1)</script>").includes("<script"));
+  assert.ok(!/onerror/i.test(sanitizeHtml('<img src=x onerror="alert(1)">')));
+  assert.ok(!/javascript:/i.test(sanitizeHtml('<a href="javascript:alert(1)">x</a>')));
+  assert.ok(!sanitizeHtml('<iframe src="https://evil"></iframe>').includes("<iframe"));
+  // nested payloads can't re-emerge
+  assert.ok(!sanitizeHtml("<scr<script>ipt>alert(1)</scr</script>ipt>").includes("<script"));
+  assert.equal(escapeHtml("<b>&\"'"), "&lt;b&gt;&amp;&quot;&#39;");
+
+  // piping: respondent-entered text is escaped, definition labels are not
+  const def = demoSurvey();
+  const state = createResponseState(def, { seed: 1 });
+  state.answers["q_brands"] = [1];
+  state.answers["q_age"] = 30;
+  def.questions.push({
+    id: "q_open", code: "Q9", variableName: "OPEN", type: "open_text", text: "why?",
+    options: [], rows: [], columns: [], validation: [], required: false,
+    settings: { readOnly: false, hidden: false }, skipLogic: [], listLogic: [],
+  } as any);
+  state.answers["q_open"] = '<img src=x onerror="alert(1)">';
+  const out = resolvePiping("You said: {{Q9}} about {{Q1}}", { def, state });
+  assert.ok(!out.includes("<img"), out);
+  assert.ok(out.includes("&lt;img"), out);
+  assert.ok(out.includes("Apple")); // definition label untouched
+});
