@@ -200,3 +200,63 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .rte-surface:empty::before { content: attr(data-placeholder); color: var(--subtle); pointer-events: none; }
 .rte-surface p { margin: 0 0 6px; }
 .rte-surface ul, .rte-surface ol { margin: 4px 0; padding-left: 22px; }
+
+/* ---------- piping chips & picker (reqs §16–25) ---------- */
+.pipe-anchor { position: relative; display: inline-block; }
+.pipe-chip {
+  display: inline-block; vertical-align: baseline;
+  font-family: var(--mono); font-size: 11.5px; font-weight: 600; line-height: 1.35;
+  padding: 1px 7px; margin: 0 1px; border-radius: 999px;
+  background: var(--tint); color: var(--accent); border: 1px solid var(--accent);
+  white-space: nowrap; user-select: all;
+}
+.rte-btn.pipe-btn { color: var(--accent); font-weight: 600; }
+.pipe-picker {
+  position: absolute; z-index: 40; top: calc(100% + 6px); left: 0; width: 320px;
+  padding: 12px; background: #fff; border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 12px 34px rgba(15, 23, 42, .16);
+}
+.pipe-picker .f { margin-bottom: 8px; }
+.pipe-preview {
+  padding: 6px 8px; border-radius: 6px; background: var(--panel2);
+  border: 1px dashed var(--border); font-size: 11.5px; word-break: break-all;
+}
+
+/* ---------- option-level logic (reqs §1–4, §12–15) ---------- */
+.opt-row.logic-open { background: var(--tint); border-radius: 8px 8px 0 0; }
+.btn.small.has-logic { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.option-logic {
+  border: 1px solid var(--accent); border-top: none; border-radius: 0 0 8px 8px;
+  padding: 12px; margin: 0 0 10px; background: #fff;
+}
+.option-logic-adv { padding-left: 10px; border-left: 2px solid var(--border); }
+.vis-row { gap: 6px; }
+.vis-pill {
+  display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+  font-size: 12px; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--panel2); white-space: nowrap;
+}
+.vis-pill.on { border-color: var(--accent); background: var(--tint); color: var(--accent); font-weight: 600; }
+.vis-pill input { margin: 0; }
+.logic-summary {
+  margin-top: 6px; padding: 6px 9px; border-radius: 6px;
+  background: var(--panel2); border-left: 3px solid var(--accent);
+  font-size: 11.5px; line-height: 1.5; color: var(--text);
+}
+.step-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 999px; font-size: 11px; font-weight: 700;
+  background: var(--accent); color: #fff;
+}
+
+/* ---------- option preview / debugger (reqs §15, §29) ---------- */
+.option-preview { margin-top: 12px; }
+.pipeline-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.pipeline-table td { padding: 4px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.pipeline-table td.k { width: 42%; color: var(--subtle); font-weight: 600; }
+.ok-pill, .hide-pill {
+  display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .04em;
+  padding: 1px 7px; border-radius: 999px; margin-right: 6px;
+}
+.ok-pill { background: #dcfce7; color: #166534; }
+.hide-pill { background: #fee2e2; color: #991b1b; }

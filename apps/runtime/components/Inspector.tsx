@@ -41,6 +41,48 @@ export function Inspector({ snap, logs }: { snap: InspectorSnapshot; logs: strin
         ))}
       </tbody></table>
 
+      {snap.optionPipelines.length > 0 && (
+        <>
+          <h3>Option pipeline</h3>
+          {snap.optionPipelines.map((p) => (
+            <div key={p.questionId} style={{ marginBottom: 10 }}>
+              <div className="k" style={{ marginBottom: 2 }}>{p.code}</div>
+              <table><tbody>
+                {p.trace.stages.filter((st) => st.changed).map((st, i) => (
+                  <tr key={i}>
+                    <td className="k">{st.label}</td>
+                    <td>
+                      {st.after.join(", ") || "—"}
+                      {st.removed.length > 0 && (
+                        <div style={{ opacity: 0.75 }}>
+                          − {st.removed.map((r) => `${r.code} (${r.reason})`).join("; ")}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {Object.values(p.trace.byCode).map((st) => (
+                  <tr key={`o_${st.code}`}>
+                    <td className="k">{st.code}</td>
+                    <td>
+                      <span className={st.status === "visible" ? "true" : "false"}>
+                        {st.status === "visible" ? `VISIBLE #${st.position}` : "HIDDEN"}
+                      </span>
+                      {st.alwaysShow ? " · always show" : ""}
+                      {st.pinned ? " · pinned" : ""}
+                      {st.moved ? ` · moved ${st.moved}` : ""}
+                      {st.status === "hidden" && (
+                        <div style={{ opacity: 0.75 }}>{st.stage}: {st.reason}</div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody></table>
+            </div>
+          ))}
+        </>
+      )}
+
       <h3>Answers</h3>
       <table><tbody>
         {Object.entries(snap.answers).map(([k, v]) => (

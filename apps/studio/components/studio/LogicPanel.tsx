@@ -1,8 +1,76 @@
 "use client";
 import React from "react";
 import type { FlowNode } from "@rescript/schema";
+import { lintSurveyLogic, questionLogicSummary, detectLogicCycles, describeCycle } from "@rescript/engine";
 import { useStudio, uid } from "./store";
 import { ConditionEditor, conditionToText, OptionalCondition } from "./ConditionBuilder";
+
+/**
+ * Survey-wide logic check (reqs §30–31): every broken reference, dead option
+ * code, incompatible operator, empty group, forward reference and circular
+ * dependency in one list, before a respondent ever sees it.
+ */
+function LogicCheck() {
+  const s = useStudio();
+  const issues = React.useMemo(() => lintSurveyLogic(s.def), [s.def]);
+  const cycles = React.useMemo(() => detectLogicCycles(s.def), [s.def]);
+  const errors = issues.filter((i) => i.level === "error");
+  const warnings = issues.filter((i) => i.level === "warning");
+  const [showWarnings, setShowWarnings] = React.useState(false);
+
+  return (
+    <div data-testid="logic-check">
+      <div className="row" style={{ marginBottom: 6, flexWrap: "wrap" }}>
+        <span className={`chip ${errors.length ? "warn" : ""}`} data-testid="logic-error-count">
+          {errors.length} error{errors.length === 1 ? "" : "s"}
+        </span>
+        <span className="chip">{warnings.length} warning{warnings.length === 1 ? "" : "s"}</span>
+        {cycles.length > 0 && <span className="chip warn">{cycles.length} circular dependency</span>}
+        {warnings.length > 0 && (
+          <button className="btn small" onClick={() => setShowWarnings((v) => !v)}>
+            {showWarnings ? "hide warnings" : "show warnings"}
+          </button>
+        )}
+        {errors.length === 0 && warnings.length === 0 && (
+          <span className="muted" style={{ fontSize: 12 }}>All logic references resolve.</span>
+        )}
+      </div>
+      {cycles.map((c, i) => (
+        <div key={`cyc${i}`} className="chip warn" style={{ marginBottom: 4 }}>{describeCycle(s.def, c)}</div>
+      ))}
+      {[...errors, ...(showWarnings ? warnings : [])].map((i, k) => (
+        <div key={k} className={`chip ${i.level === "error" ? "warn" : ""}`}
+          style={{ marginBottom: 4, cursor: i.questionId ? "pointer" : undefined }}
+          onClick={() => i.questionId && s.select(i.questionId)}>
+          {i.level === "error" ? "✕" : "!"} <strong>{i.questionCode ?? "?"}</strong> {i.path}
+          {i.optionCode ? ` [${i.optionCode}]` : ""} — {i.message}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Plain-English summary of everything dynamic in the survey (req §14). */
+function LogicSummaryList() {
+  const s = useStudio();
+  const rows = s.def.questions
+    .map((q) => ({ q, lines: questionLogicSummary(s.def, q) }))
+    .filter((r) => r.lines.length > 0);
+  if (rows.length === 0)
+    return <p className="muted" style={{ fontSize: 12 }}>No dynamic content configured yet.</p>;
+  return (
+    <div>
+      {rows.map(({ q, lines }) => (
+        <div key={q.id} className="card selectable" style={{ padding: 10 }} onClick={() => s.select(q.id)}>
+          <strong className="mono">{q.code}</strong>
+          <div className="logic-summary">
+            {lines.map((l, i) => <div key={i}>{l}</div>)}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 /**
  * Logic panel: named display rules (any target) + the Logic Flow view —
@@ -94,6 +162,12 @@ export function LogicPanel() {
       <div className="row" style={{ marginBottom: 14 }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>Logic</h2>
       </div>
+
+      <h3 className="sec">Logic check</h3>
+      <LogicCheck />
+
+      <h3 className="sec">What is dynamic in this survey</h3>
+      <LogicSummaryList />
 
       <h3 className="sec">Display rules (show/hide anything)</h3>
       <p className="muted" style={{ fontSize: 12 }}>

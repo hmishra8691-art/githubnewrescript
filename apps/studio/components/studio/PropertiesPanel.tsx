@@ -1,10 +1,10 @@
 "use client";
 import React from "react";
-import type { Question, ValidationRule, SkipRule } from "@rescript/schema";
-import { validateExpression, lintPipingTokens } from "@rescript/engine";
-import { variantRegistry } from "@rescript/schema";
+import type { Question, ValidationRule, SkipRule, ListOperation, ListSource } from "@rescript/schema";
+import { validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary } from "@rescript/engine";
+import { variantRegistry, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript/schema";
 import { useStudio, selectedQuestion, uid } from "./store";
-import { OptionalCondition, ConditionEditor, conditionToText } from "./ConditionBuilder";
+import { OptionalCondition, ConditionEditor } from "./ConditionBuilder";
 
 /** Context-aware validation (req §6/§19): only offer rules that make sense
  *  for the question type. */
@@ -160,6 +160,140 @@ function SkipLogicEditor({ q, patch }: { q: Question; patch(p: Partial<Question>
   );
 }
 
+/**
+ * Reusable list-operation builder (reqs §9–11).
+ *
+ * The operations run in the order shown, so the panel doubles as the
+ * documentation of what this question's option list actually does.
+ */
+function ListOperationsEditor({ q, patch }: { q: Question; patch(p: Partial<Question>): void }) {
+  const s = useStudio();
+  const ops = q.optionPipeline ?? [];
+  const others = s.def.questions.filter((x) => x.id !== q.id);
+
+  const setOp = (i: number, p: Partial<ListOperation>) =>
+    patch({ optionPipeline: ops.map((o, j) => (j === i ? { ...o, ...p } : o)) });
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= ops.length) return;
+    const next = [...ops];
+    [next[i], next[j]] = [next[j], next[i]];
+    patch({ optionPipeline: next });
+  };
+  const setSource = (i: number, k: number, p: Partial<ListSource>) =>
+    setOp(i, { sources: ops[i].sources.map((x, m) => (m === k ? { ...x, ...p } : x)) });
+
+  return (
+    <div data-testid="list-operations">
+      <p className="muted" style={{ fontSize: 11, marginTop: -2 }}>
+        Set operations across any number of earlier questions — intersection, union, difference,
+        remaining, dedupe, filter, sort, randomize. They run top to bottom, after the list rules
+        above and before the question&apos;s own sorting and randomization.
+      </p>
+      {ops.map((op, i) => (
+        <div key={op.id} className="card" style={{ padding: 10 }}>
+          <div className="row" style={{ flexWrap: "wrap", marginBottom: 6 }}>
+            <span className="step-badge">{i + 1}</span>
+            <select className="select" style={{ width: 210 }} value={op.kind}
+              data-testid={`list-op-kind-${i}`}
+              onChange={(e) => setOp(i, { kind: e.target.value as any })}>
+              {(Object.keys(LIST_OP_LABELS) as (keyof typeof LIST_OP_LABELS)[]).map((k) => (
+                <option key={k} value={k}>{LIST_OP_LABELS[k]}</option>
+              ))}
+            </select>
+            {op.kind === "sort" && (
+              <select className="select" value={op.order ?? "az"}
+                onChange={(e) => setOp(i, { order: e.target.value as any })}>
+                <option value="az">A → Z</option><option value="za">Z → A</option>
+                <option value="numeric_asc">numeric ↑</option><option value="numeric_desc">numeric ↓</option>
+                <option value="original">programmed order</option>
+              </select>
+            )}
+            {op.kind === "randomize" && (
+              <>
+                <select className="select" value={op.method ?? "shuffle"}
+                  onChange={(e) => setOp(i, { method: e.target.value as any })}>
+                  <option value="shuffle">shuffle</option><option value="rotate">rotate</option>
+                  <option value="reverse_half">reverse half</option><option value="none">keep order</option>
+                </select>
+                <label className="row" style={{ gap: 4, fontSize: 12 }}>
+                  show
+                  <input className="input" type="number" style={{ width: 60 }} value={op.pick ?? ""}
+                    onChange={(e) => setOp(i, { pick: e.target.value === "" ? undefined : Number(e.target.value) })} />
+                </label>
+              </>
+            )}
+            {op.kind === "carry_forward" && (
+              <label className="row" style={{ gap: 4, fontSize: 12 }}>
+                <input type="checkbox" checked={op.keepOwn}
+                  onChange={(e) => setOp(i, { keepOwn: e.target.checked })} /> keep own options
+              </label>
+            )}
+            <span className="grow" />
+            <button className="btn small" onClick={() => move(i, -1)}>↑</button>
+            <button className="btn small" onClick={() => move(i, 1)}>↓</button>
+            <button className="btn small danger"
+              onClick={() => patch({ optionPipeline: ops.filter((_, j) => j !== i) })}>×</button>
+          </div>
+
+          {LIST_OPS_WITH_SOURCES.includes(op.kind) && (
+            <>
+              {op.sources.map((src, k) => (
+                <div key={k} className="row" style={{ marginBottom: 4 }}>
+                  <select className="select" style={{ width: 150 }} value={src.which}
+                    onChange={(e) => setSource(i, k, { which: e.target.value as any })}>
+                    <option value="selected">selected in</option>
+                    <option value="not_selected">NOT selected in</option>
+                    <option value="displayed">displayed in</option>
+                    <option value="answered_rows">answered rows of</option>
+                    <option value="all">all options of</option>
+                  </select>
+                  <select className="select grow" value={src.questionId}
+                    onChange={(e) => setSource(i, k, { questionId: e.target.value })}>
+                    {others.map((x) => <option key={x.id} value={x.id}>{x.code}</option>)}
+                  </select>
+                  <button className="btn small danger"
+                    onClick={() => setOp(i, { sources: op.sources.filter((_, m) => m !== k) })}>×</button>
+                </div>
+              ))}
+              <button className="btn small" disabled={others.length === 0}
+                onClick={() => setOp(i, { sources: [...op.sources, { questionId: others[0].id, which: "selected" }] })}>
+                + list
+              </button>
+            </>
+          )}
+
+          {op.kind === "filter" && (
+            <div style={{ marginTop: 6 }}>
+              <div className="flabel">KEEP OPTIONS WHERE</div>
+              <ConditionEditor perOption
+                value={op.where ?? { type: "group", op: "and", children: [] }}
+                onChange={(where) => setOp(i, { where })} />
+            </div>
+          )}
+
+          <div style={{ marginTop: 6 }}>
+            <OptionalCondition label="Only run this step when" value={op.when}
+              onChange={(when) => setOp(i, { when })} />
+          </div>
+          <div className="logic-summary">{listOperationSummary(s.def, op)}</div>
+        </div>
+      ))}
+      <button className="btn small" data-testid="add-list-op"
+        onClick={() => patch({
+          optionPipeline: [...ops, {
+            id: uid("lop"),
+            kind: "intersect",
+            sources: others.length ? [{ questionId: others[0].id, which: "selected" }] : [],
+            keepOwn: false,
+          } as ListOperation],
+        })}>
+        + list operation
+      </button>
+    </div>
+  );
+}
+
 export function PropertiesPanel() {
   const s = useStudio();
   const q = selectedQuestion(s);
@@ -225,21 +359,27 @@ export function PropertiesPanel() {
   const pipingProblems = lintPipingTokens(s.def, `${q.text} ${q.instruction ?? ""}`);
   const exprError =
     q.type === "calculated" && q.settings.expression ? validateExpression(q.settings.expression) : null;
+  const logicIssues = lintQuestionLogic(s.def, q);
 
   return (
     <div>
       <h2>{q.code} properties</h2>
       {pipingProblems.map((p, i) => <div key={i} className="chip warn" style={{ marginBottom: 6 }}>{p}</div>)}
       {exprError && <div className="chip warn" style={{ marginBottom: 6 }}>expr: {exprError}</div>}
+      {logicIssues.length > 0 && (
+        <div data-testid="logic-issues" style={{ marginBottom: 6 }}>
+          {logicIssues.map((i, k) => (
+            <div key={k} className={`chip ${i.level === "error" ? "warn" : ""}`} style={{ marginBottom: 4 }}>
+              {i.level === "error" ? "✕" : "!"} {i.path}
+              {i.optionCode ? ` [${i.optionCode}]` : ""} — {i.message}
+            </div>
+          ))}
+        </div>
+      )}
 
       <h3 className="sec">Display logic</h3>
       <OptionalCondition label="Show this question only when…"
         value={q.displayLogic} onChange={(c) => patch({ displayLogic: c })} />
-      {q.displayLogic && (
-        <div className="muted mono" style={{ fontSize: 11, marginTop: -6, marginBottom: 8 }}>
-          {conditionToText(q.displayLogic, s.def)}
-        </div>
-      )}
 
       <h3 className="sec">Skip logic</h3>
       <SkipLogicEditor q={q} patch={patch} />
@@ -441,6 +581,9 @@ export function PropertiesPanel() {
         })}>
         + list rule
       </button>
+
+      <h3 className="sec">List operations (intersection / union / difference)</h3>
+      <ListOperationsEditor q={q} patch={patch} />
       </>)}
 
       <h3 className="sec">Validation rules</h3>

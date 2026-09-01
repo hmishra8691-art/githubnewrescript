@@ -70,6 +70,15 @@ can source its options/rows from another question's selected / not-selected /
 displayed answers, with an optional per-option filter condition — works into
 matrices, grids and loops.
 
+**Options are programmable individually.** Every option can carry its own
+visibility (always show / always hide / show when / hide when), eligibility,
+exclusion, prioritisation, randomisation pinning and carry forward / back — and
+a question's whole option list can be built with set operations (intersection,
+union, difference, remaining, dedupe, filter, sort, randomize) across any number
+of earlier questions. One deterministic pipeline produces the result, with a
+debugger that says why each option appeared or disappeared.
+See [docs/OPTION-LOGIC.md](docs/OPTION-LOGIC.md).
+
 **Composite questions (§3).** One question, many columns; every column has its own
 response type, variable stem, codes, validation, visibility, width, read-only state
 or calc expression. Variables export as `STEM_<row>` (and `STEM_<row>_<code>` for
@@ -129,4 +138,5 @@ packages/designs   # conjoint / maxdiff / custom design generators
 packages/exporters # xlsx / json / csv
 supabase/          # migrations (applied to the linked project)
 scripts/           # demo survey builder + e2e smoke test
+docs/              # subsystem references (option logic, list ops, piping)
 ```

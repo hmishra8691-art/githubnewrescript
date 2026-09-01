@@ -4,7 +4,11 @@ import type { Question, Option, QuestionColumn, ResponseType, QuestionVariantDef
 import { questionTypeRegistry, variantRegistry } from "@rescript/schema";
 import { VariantPickerModal, VariantSwitcher, createFromVariant } from "./VariantPicker";
 import { RichTextEditor } from "./RichTextEditor";
+import { OptionLogicEditor } from "./OptionLogicEditor";
+import { OptionPreview } from "./OptionPreview";
+import { InsertPipingButton } from "./PipingPicker";
 import { FIELD_TYPES } from "@rescript/engine"; // also registers builtin question types
+import { isEmptyOptionLogic } from "@rescript/schema";
 import { useStudio, uid } from "./store";
 
 const RESPONSE_TYPES: ResponseType[] = [
@@ -34,14 +38,18 @@ export function allowedFlagsFor(qtype: string): string[] {
 
 const OPTION_WINDOW = 40;
 
-function OptionRows({ options, onChange, showFlags = true, flagChoices, showImage = false }: {
+function OptionRows({ options, onChange, showFlags = true, flagChoices, showImage = false,
+  enableLogic = false, questionId }: {
   options: Option[]; onChange(opts: Option[]): void; showFlags?: boolean;
   flagChoices?: string[]; showImage?: boolean;
+  /** per-option logic + piping controls (reqs §1–4, §21) */
+  enableLogic?: boolean; questionId?: string;
 }) {
   const [filter, setFilter] = React.useState("");
   const [showAll, setShowAll] = React.useState(false);
   const [pasteOpen, setPasteOpen] = React.useState(false);
   const [pasteText, setPasteText] = React.useState("");
+  const [logicOpen, setLogicOpen] = React.useState<number | null>(null);
   const pendingFocus = React.useRef<number | null>(null);
   const rootRef = React.useRef<HTMLDivElement>(null);
 
@@ -137,8 +145,11 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
           )}
         </div>
       )}
-      {visible.map(({ o, i }) => (
-        <div key={i} className="opt-row">
+      {visible.map(({ o, i }) => {
+        const hasLogic = !isEmptyOptionLogic(o.logic) || !!o.visibleIf;
+        return (
+        <React.Fragment key={i}>
+        <div className={`opt-row ${logicOpen === i ? "logic-open" : ""}`}>
           <input className="input code-input" value={String(o.code)}
             onChange={(e) => set(i, { code: e.target.value })} title="code" />
           <input className="input grow" value={o.label} data-oidx={i}
@@ -146,6 +157,10 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
             onKeyDown={(e) => onLabelKeyDown(e, i)}
             onPaste={(e) => onLabelPaste(e, i)}
             placeholder="label — Enter adds the next option" />
+          {enableLogic && (
+            <InsertPipingButton className="btn small" label="{{ }}" currentQuestionId={questionId}
+              onInsert={(tok) => set(i, { label: `${options[i].label}${tok}` })} />
+          )}
           {showImage && (
             <input className="input" style={{ width: 180 }} placeholder="image URL"
               value={o.imageUrl ?? ""}
@@ -158,11 +173,29 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
               {flags.map((fl) => <option key={fl.value} value={fl.value}>{fl.label}</option>)}
             </select>
           )}
+          {enableLogic && (
+            <button className={`btn small ${hasLogic ? "has-logic" : ""}`} data-testid={`option-logic-${i}`}
+              title="Option-level logic: always show / hide, conditions, eligibility, ordering"
+              onClick={() => setLogicOpen(logicOpen === i ? null : i)}>
+              {o.logic?.visibility === "always_show" ? "◉ show"
+                : o.logic?.visibility === "always_hide" ? "◌ hide"
+                : hasLogic ? "⑂ logic" : "⑂"}
+            </button>
+          )}
           <button className="btn small" onClick={() => move(i, -1)}>↑</button>
           <button className="btn small" onClick={() => move(i, 1)}>↓</button>
           <button className="btn small danger" onClick={() => onChange(options.filter((_, j) => j !== i))}>×</button>
         </div>
-      ))}
+        {enableLogic && logicOpen === i && (
+          <OptionLogicEditor
+            title={`Logic for “${o.label.replace(/<[^>]*>/g, "") || o.code}”`}
+            logic={o.logic}
+            visibleIf={o.visibleIf}
+            onChange={(patch) => set(i, patch as Partial<Option>)} />
+        )}
+        </React.Fragment>
+        );
+      })}
       <div className="row">
         <button className="btn small" data-testid="add-option" onClick={() => insertAfter(options.length - 1)}>
           + option <span className="muted" style={{ fontSize: 10 }}>(or press Enter)</span>
@@ -219,7 +252,7 @@ function ColumnEditor({ q, onChange }: { q: Question; onChange(cols: QuestionCol
             <button className="btn small danger" onClick={() => onChange(cols.filter((_, j) => j !== i))}>×</button>
           </div>
           {["single", "multi", "dropdown", "multi_dropdown"].includes(c.responseType) && (
-            <OptionRows options={c.options} showFlags={false}
+            <OptionRows options={c.options} showFlags={false} enableLogic questionId={q.id}
               onChange={(opts) => set(i, { options: opts })} />
           )}
           <div className="row" style={{ marginTop: 6, flexWrap: "wrap" }}>
@@ -404,7 +437,7 @@ export function QuestionEditor({ q }: { q: Question }) {
       </div>
 
       <label className="f"><span>Question text — rich text, HTML and piping ({"{{Q1}}"}) supported</span></label>
-      <RichTextEditor value={q.text} autoFocusId={`qtext_${q.id}`}
+      <RichTextEditor value={q.text} autoFocusId={`qtext_${q.id}`} questionId={q.id}
         onChange={(html) => patch({ text: html })}
         placeholder="e.g. Earlier you selected {{Q1}}. Why did you choose {{Q1.first}}?" />
       <div className="row">
@@ -422,7 +455,7 @@ export function QuestionEditor({ q }: { q: Question }) {
         <>
           <h3 className="sec">Options</h3>
           <OptionRows options={q.options} onChange={(options) => patch({ options })}
-            flagChoices={allowedFlagsFor(q.type)}
+            flagChoices={allowedFlagsFor(q.type)} enableLogic questionId={q.id}
             showImage={has("images") && (variantDef?.capabilities.includes("images") || q.type.startsWith("image"))} />
           <div className="row" style={{ marginTop: 10, flexWrap: "wrap" }}>
             {has("layout_columns") && (
@@ -448,19 +481,27 @@ export function QuestionEditor({ q }: { q: Question }) {
               sorting never changes the programmed order; randomization is configured in the right panel
             </span>
           </div>
+          <OptionPreview q={q} />
         </>
       )}
 
       {feats.rows && q.type !== "numeric_list" && q.type !== "text_list" && (
         <>
           <h3 className="sec">Rows</h3>
-          <OptionRows showFlags={false}
-            options={q.rows.map((r) => ({ code: r.code, label: r.label, flags: r.flags ?? [] }))}
+          <OptionRows showFlags={false} enableLogic questionId={q.id}
+            options={q.rows.map((r) => ({
+              code: r.code, label: r.label, flags: r.flags ?? [],
+              logic: r.logic, visibleIf: r.visibleIf,
+            }))}
             onChange={(rows) =>
               patch({
                 rows: rows.map((r) => {
                   const prev = q.rows.find((x) => String(x.code) === String(r.code));
-                  return { validation: [], required: false, ...prev, code: r.code, label: r.label, flags: [] };
+                  return {
+                    validation: [], required: false, ...prev,
+                    code: r.code, label: r.label, flags: [],
+                    logic: r.logic, visibleIf: r.visibleIf,
+                  };
                 }),
               })} />
           {q.carryForward?.into === "rows" && (

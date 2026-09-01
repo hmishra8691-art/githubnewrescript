@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { Condition } from "./conditions.js";
+import { ListOperation, OptionLogic } from "./optionLogic.js";
 
 /**
  * Question model.
@@ -100,6 +101,13 @@ export const Option = z.object({
   flags: z.array(OptionFlag).default([]),
   /** Show this option only when the condition holds. */
   visibleIf: Condition.optional(),
+  /**
+   * Option-level logic (req §1–9): always show / always hide, conditional
+   * visibility, eligibility, exclusion, prioritisation, randomisation
+   * participation and carry forward / back. Absent = "Always Show", which is
+   * exactly how every pre-existing option already behaves (req §33).
+   */
+  logic: OptionLogic.optional(),
   /** Free metadata for custom renderers. */
   meta: z.record(z.any()).optional(),
 });
@@ -223,6 +231,8 @@ export const QuestionRow = z.object({
   code: z.union([z.string(), z.number()]),
   label: z.string(),
   visibleIf: Condition.optional(),
+  /** Rows share the option-level logic model (same engine, same editor). */
+  logic: OptionLogic.optional(),
   flags: z.array(OptionFlag).default([]),
   /** Form-style list questions: the input type of this row's field. */
   fieldType: FieldType.optional(),
@@ -313,6 +323,13 @@ export const Question = z.object({
   carryForward: CarryForward.optional(),
   /** Previous-question list operations, applied in order (req §12–13). */
   listLogic: z.array(ListLogicRule).default([]),
+  /**
+   * Reusable list-processing pipeline (intersection / union / difference /
+   * remaining / dedupe / filter / sort / randomize), applied in order after
+   * `listLogic`. Empty on every existing question, so the pipeline is a no-op
+   * until a programmer configures it.
+   */
+  optionPipeline: z.array(ListOperation).default([]),
 
   displayLogic: Condition.optional(),
   skipLogic: z.array(SkipRule).default([]),

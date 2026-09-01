@@ -1,14 +1,21 @@
 "use client";
 import React from "react";
 import { sanitizeHtml } from "@rescript/engine";
+import { InsertPipingButton, tokensToChips, chipsToTokens } from "./PipingPicker";
+import { useStudio } from "./store";
 
 /**
- * Rich text / HTML editor for question text (reqs §10–12).
+ * Rich text / HTML editor for question text (reqs §10–12, §20–22).
  * Visual mode is a contentEditable surface with a formatting toolbar;
  * HTML mode exposes the source directly for precise control. Content is
- * sanitized on every commit, commits are debounced so typing never clones
- * the whole survey per keystroke, and piping tokens ({{Q1}}, {{calc.X}})
- * pass through untouched as plain text.
+ * sanitized on every commit and commits are debounced so typing never clones
+ * the whole survey per keystroke.
+ *
+ * Piping: tokens are stored as `{{Q1.label}}` text — the format the engine,
+ * the exporters and every existing survey already use — but rendered in the
+ * visual surface as non-editable chips, so a pipe reads as one object and
+ * cannot be half-deleted into broken syntax. Chips are converted back to
+ * tokens on every commit; the HTML tab always shows the real stored source.
  */
 
 const TOOLS: { cmd: string; arg?: string; label: string; title: string }[] = [
@@ -25,18 +32,26 @@ const TOOLS: { cmd: string; arg?: string; label: string; title: string }[] = [
   { cmd: "justifyRight", label: "⇥", title: "Align right" },
 ];
 
-export function RichTextEditor({ value, onChange, placeholder, autoFocusId }: {
+export function RichTextEditor({ value, onChange, placeholder, autoFocusId, questionId }: {
   value: string;
   onChange(html: string): void;
   placeholder?: string;
   /** id used for programmatic focus (new-question flow) */
   autoFocusId?: string;
+  /** the question being edited — lets the piping picker warn about forward refs */
+  questionId?: string;
 }) {
+  const s = useStudio();
   const [mode, setMode] = React.useState<"visual" | "html">("visual");
   const [htmlDraft, setHtmlDraft] = React.useState(value);
   const surface = React.useRef<HTMLDivElement>(null);
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastCommitted = React.useRef(value);
+
+  const codeFor = React.useCallback(
+    (ref: string) => s.def.questions.find((q) => q.code === ref || q.id === ref)?.code ?? ref,
+    [s.def.questions],
+  );
 
   // keep the surface in sync with external changes (undo via version restore,
   // variant defaults…) — but never while the programmer is typing in it
@@ -45,18 +60,31 @@ export function RichTextEditor({ value, onChange, placeholder, autoFocusId }: {
     if (!el) return;
     if (document.activeElement === el || el.contains(document.activeElement)) return;
     if (value !== lastCommitted.current || el.innerHTML === "") {
-      el.innerHTML = value || "";
+      el.innerHTML = tokensToChips(value || "", codeFor);
       lastCommitted.current = value;
     }
-  }, [value, mode]);
+  }, [value, mode, codeFor]);
 
   const commit = React.useCallback((html: string, immediate = false) => {
-    const clean = sanitizeHtml(html);
+    const clean = sanitizeHtml(chipsToTokens(html));
     lastCommitted.current = clean;
     if (timer.current) clearTimeout(timer.current);
     if (immediate) onChange(clean);
     else timer.current = setTimeout(() => onChange(clean), 300);
   }, [onChange]);
+
+  /** Insert a piping token at the caret, as a chip. */
+  const insertPipe = (token: string) => {
+    const el = surface.current;
+    if (mode === "html") {
+      setHtmlDraft((d) => d + token);
+      commit(htmlDraft + token);
+      return;
+    }
+    el?.focus();
+    document.execCommand("insertHTML", false, `${tokensToChips(token, codeFor)}&nbsp;`);
+    if (el) commit(el.innerHTML);
+  };
 
   const exec = (cmd: string, arg?: string) => {
     surface.current?.focus();
@@ -97,6 +125,8 @@ export function RichTextEditor({ value, onChange, placeholder, autoFocusId }: {
         </label>
         <button type="button" className="rte-btn" title="Clear formatting"
           onMouseDown={(e) => e.preventDefault()} onClick={() => exec("removeFormat")}>⌫fmt</button>
+        <InsertPipingButton className="rte-btn pipe-btn" label="＋ Piping"
+          currentQuestionId={questionId} onInsert={insertPipe} />
         <button type="button" className="rte-btn" title="Undo"
           onMouseDown={(e) => e.preventDefault()} onClick={() => exec("undo")}>↶</button>
         <button type="button" className="rte-btn" title="Redo"
@@ -105,9 +135,9 @@ export function RichTextEditor({ value, onChange, placeholder, autoFocusId }: {
         <button type="button" className={`rte-btn rte-mode ${mode === "visual" ? "on" : ""}`}
           onClick={() => {
             if (mode === "html") {
-              const clean = sanitizeHtml(htmlDraft);
+              const clean = sanitizeHtml(chipsToTokens(htmlDraft));
               commit(clean, true);
-              if (surface.current) surface.current.innerHTML = clean;
+              if (surface.current) surface.current.innerHTML = tokensToChips(clean, codeFor);
             }
             setMode("visual");
           }}>
@@ -115,7 +145,7 @@ export function RichTextEditor({ value, onChange, placeholder, autoFocusId }: {
         </button>
         <button type="button" className={`rte-btn rte-mode ${mode === "html" ? "on" : ""}`}
           onClick={() => {
-            if (surface.current) setHtmlDraft(surface.current.innerHTML);
+            if (surface.current) setHtmlDraft(chipsToTokens(surface.current.innerHTML));
             setMode("html");
           }}>
           HTML
