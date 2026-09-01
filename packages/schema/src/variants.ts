@@ -27,6 +27,7 @@ export type ResponseModel =
   | "rank_order" // ordered codes
   | "allocation" // code → number, summing rules
   | "tasks" // design-file driven (conjoint / maxdiff)
+  | "coordinates" // clicked points on a stimulus image
   | "derived" // hidden / calculated
   | "media" // uploads, recordings
   | "none"; // display-only
@@ -555,11 +556,28 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     baseType: "image_ranking", responseModel: "rank_order",
     capabilities: ["options", "images", "randomization"], validations: ["required"],
   }),
+  stable(F.image, "hotspot", "Image Hotspot / Click Points", "Respondents click up to N points on a stimulus image; X/Y coordinates are captured.", {
+    baseType: "hotspot", renderer: "hotspotclick", responseModel: "coordinates",
+    capabilities: ["min_max_selections"], validations: ["required", "min_selections", "max_selections"],
+    defaults: { settings: { maxSelections: 1 }, instruction: "Click on the image." },
+  }),
+  stable(F.image, "comparison", "Image Comparison (Side-by-Side)", "Two or more large images side by side — pick one.", {
+    baseType: "single_select", renderer: "compare", responseModel: "single_choice",
+    capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
+  }),
+  stable(F.image, "categorization", "Image Categorization / Buckets", "Assign each item to a bucket (stored like matrix rows).", {
+    baseType: "matrix_single", renderer: "categorize", responseModel: "per_row",
+    capabilities: ["rows", "options", "randomization", "carry_forward", "images"],
+    validations: ["required"],
+    defaults: {
+      options: [
+        { code: "keep", label: "Keep" }, { code: "unsure", label: "Unsure" }, { code: "drop", label: "Drop" },
+      ],
+      instruction: "Assign each item to a category.",
+    },
+  }),
   ...planned(F.image, [
-    ["Image Hotspot", "Click regions on an image."],
     ["Image Annotation / Markup", "Draw or comment on an image."],
-    ["Image Comparison", "Side-by-side image judgement."],
-    ["Image Categorization", "Sort images into buckets."],
   ]),
 
   /* -------------------------------------------------- PLANNED-ONLY FAMILIES */
@@ -621,9 +639,12 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     ["Expandable / Flip Cards", "Cards revealing detail."],
     ["Sortable / Swipeable Cards", "Gesture-driven card decks."],
   ]),
+  stable(F.comparison, "side_by_side", "Side-by-Side Comparison", "Large option cards/images side by side — pick one.", {
+    baseType: "single_select", renderer: "compare", responseModel: "single_choice",
+    capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
+  }),
   ...planned(F.comparison, [
-    ["Pairwise Comparison", "A vs B repeated."],
-    ["Side-by-Side Comparison", "Two stimuli with a judgement."],
+    ["Pairwise / Tournament Comparison", "Repeated A-vs-B duels."],
     ["Multi-Item / Attribute Comparison", "Compare across attributes."],
   ]),
 
@@ -671,8 +692,12 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     ["Drag Allocation", "Drag chips onto items."],
   ]),
 
+  stable(F.hotspot, "click", "Image Hotspot / Click Heatmap", "Click up to N points on an image; coordinates recorded as percentages.", {
+    baseType: "hotspot", renderer: "hotspotclick", responseModel: "coordinates",
+    capabilities: ["min_max_selections"], validations: ["required", "min_selections", "max_selections"],
+    defaults: { settings: { maxSelections: 1 }, instruction: "Click on the image." },
+  }),
   ...planned(F.hotspot, [
-    ["Image Hotspot / Click Heatmap", "Click points recorded as coordinates."],
     ["Region / Area Selection", "Select predefined regions."],
     ["Draw-on-Image", "Free-form marking."],
   ]),
@@ -825,6 +850,7 @@ export function responseModelOf(baseType: string): ResponseModel {
     case "ranking": case "image_ranking": return "rank_order";
     case "allocation": return "allocation";
     case "conjoint_task": case "maxdiff_task": return "tasks";
+    case "hotspot": return "coordinates";
     case "hidden": case "calculated": case "embedded_data": return "derived";
     case "html": return "none";
     default: return "none";

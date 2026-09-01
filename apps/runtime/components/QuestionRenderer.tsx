@@ -1319,6 +1319,125 @@ function CarouselSelect(p: QRProps) {
   );
 }
 
+/**
+ * Image hotspot / click heatmap (coordinates model): click up to N points on
+ * the stimulus image; each point stores as {x, y} percentages so results are
+ * resolution-independent. Click a marker to remove it.
+ */
+function HotspotClick(p: QRProps) {
+  const pts: { x: number; y: number }[] = Array.isArray(p.value) ? (p.value as any) : [];
+  const max = p.q.settings.maxSelections ?? 1;
+  const img = p.q.settings.imageUrl;
+  if (!img) {
+    return <div className="rs-error-msg">No stimulus image configured — set the image URL in the editor.</div>;
+  }
+  const onClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (p.q.settings.readOnly) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    const next = [...pts, { x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10 }];
+    p.onChange(max === 1 ? next.slice(-1) : next.slice(0, max));
+  };
+  const removeAt = (i: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    p.onChange(pts.filter((_, j) => j !== i));
+  };
+  return (
+    <div>
+      <div className="rs-hotspot" onClick={onClick} role="img" aria-label="Click to place a point">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={img} alt="" draggable={false} />
+        {pts.map((pt, i) => (
+          <span key={i} className="rs-hotspot-pin"
+            style={{ left: `${pt.x}%`, top: `${pt.y}%` }}
+            title="click to remove"
+            onClick={(e) => removeAt(i, e)}>
+            {max > 1 ? i + 1 : ""}
+          </span>
+        ))}
+      </div>
+      <div className="rs-hotspot-status">
+        {pts.length} / {max} point{max > 1 ? "s" : ""} placed
+        {pts.length > 0 && (
+          <button type="button" className="rs-hotspot-clear" onClick={() => p.onChange([])}>clear</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Side-by-side image comparison: large image cards, pick one. */
+function CompareImages(p: QRProps) {
+  const { options } = effectiveQuestion(p.q, ctxOf(p));
+  return (
+    <div className="rs-compare" style={{ gridTemplateColumns: `repeat(${Math.min(options.length, 4)}, 1fr)` }}>
+      {options.map((o) => {
+        const sel = String(p.value) === String(o.code);
+        return (
+          <div key={String(o.code)}
+            className={`rs-cardopt rs-compare-card ${sel ? "selected" : ""}`}
+            role="radio" aria-checked={sel} tabIndex={0}
+            onClick={() => p.onChange(sel ? null : o.code)}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); p.onChange(sel ? null : o.code); } }}>
+            {o.imageUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={o.imageUrl} alt="" style={{ height: 220 }} />
+            ) : (
+              <div className="rs-compare-noimg">🖼</div>
+            )}
+            <div className="rs-cardopt-title" dangerouslySetInnerHTML={{ __html: o.label }} />
+            <span className="rs-cardopt-check">{sel ? "✓" : ""}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Categorization into buckets (per_row model): each row card gets one
+ *  bucket; stored exactly like a single-select matrix. */
+function Categorize(p: QRProps) {
+  const view = effectiveQuestion(p.q, ctxOf(p));
+  const vals = (p.value ?? {}) as Record<string, unknown>;
+  const setRow = (rc: string, v: unknown) => p.onChange({ ...vals, [rc]: v });
+  const done = view.rows.filter((r) => vals[String(r.code)] !== undefined).length;
+  return (
+    <div>
+      <div className="rs-hotspot-status" style={{ marginBottom: 8 }}>
+        {done} / {view.rows.length} assigned
+      </div>
+      <div className="rs-catgrid">
+        {view.rows.map((row) => {
+          const rc = String(row.code);
+          const img = (row.meta?.image as string) ?? undefined;
+          return (
+            <div key={rc} className={`rs-catcard ${vals[rc] !== undefined ? "assigned" : ""}`}>
+              {img && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={img} alt="" />
+              )}
+              <div className="rs-catcard-label" dangerouslySetInnerHTML={{ __html: row.label }} />
+              <div className="rs-catcard-buckets">
+                {view.options.map((o) => {
+                  const sel = String(vals[rc]) === String(o.code);
+                  return (
+                    <button key={String(o.code)} type="button"
+                      className={`rs-bucket ${sel ? "on" : ""}`}
+                      onClick={() => setRow(rc, sel ? undefined : o.code)}>
+                      <span dangerouslySetInnerHTML={{ __html: o.label }} />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------- custom component */
 function CustomComponent(p: QRProps) {
   const ref = React.useRef<HTMLDivElement>(null);
@@ -1375,6 +1494,12 @@ export function QuestionRenderer(p: QRProps) {
         return <SemanticDifferential {...p} />;
       case "carousel":
         return <CarouselSelect {...p} />;
+      case "hotspotclick":
+        return <HotspotClick {...p} />;
+      case "compare":
+        return <CompareImages {...p} />;
+      case "categorize":
+        return <Categorize {...p} />;
       default:
         return null;
     }
@@ -1408,6 +1533,7 @@ export function QuestionRenderer(p: QRProps) {
     case "allocation": body = <Allocation {...p} />; break;
     case "composite":
     case "custom_table": body = <Composite {...p} />; break;
+    case "hotspot": body = <HotspotClick {...p} />; break;
     case "conjoint_task":
     case "maxdiff_task": body = <DesignTasks {...p} />; break;
     case "custom_component": body = <CustomComponent {...p} />; break;

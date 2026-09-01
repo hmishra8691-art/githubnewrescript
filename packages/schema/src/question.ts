@@ -31,6 +31,7 @@ export const BUILTIN_QUESTION_TYPES = [
   "matrix_dropdown",
   "image_select",
   "image_ranking",
+  "hotspot", // click points on an image — stores coordinates
   "allocation", // constant sum / percentage allocation
   "composite", // custom multi-column question (each column its own response type)
   "custom_table",
@@ -279,6 +280,8 @@ export const Question = z.object({
       sumTarget: z.number().optional(), // allocation
       sumUnit: z.string().optional(), // "%", "points", "$"
       listCount: z.number().optional(), // numeric_list / text_list rows
+      /** Stimulus image for hotspot / image-based questions. */
+      imageUrl: z.string().optional(),
       /** Display options/fields in N columns (1–4). */
       columnsLayout: z.number().optional(),
       /** Presentation sort, applied before randomization; the programmed

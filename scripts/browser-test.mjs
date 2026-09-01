@@ -62,12 +62,27 @@ const def = SurveyDefinition.parse({
         { code: "max", label: "Max", meta: { description: "Everything" } },
       ],
     },
+    {
+      id: "q_hot", code: "Q7", variableName: "HOT", type: "hotspot",
+      variant: "image.hotspot", text: "Click up to two points", required: true,
+      settings: { imageUrl: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='400' height='300'><rect width='400' height='300' fill='%23cbd5e1'/><circle cx='120' cy='150' r='40' fill='%232563eb'/></svg>", maxSelections: 2 },
+    },
+    {
+      id: "q_cat", code: "Q8", variableName: "CAT", type: "matrix_single",
+      variant: "image.categorization", text: "Sort these items",
+      options: [{ code: "keep", label: "Keep" }, { code: "drop", label: "Drop" }],
+      rows: [
+        { code: "i1", label: "Item One", flags: [], validation: [], required: false },
+        { code: "i2", label: "Item Two", flags: [], validation: [], required: false },
+      ],
+    },
   ],
   flow: [
     { type: "page", id: "p1", questionIds: ["q_md"] },
     { type: "page", id: "p2", questionIds: ["q_form"] },
     { type: "page", id: "p3", questionIds: ["q_btn", "q_star"] },
     { type: "page", id: "p4", questionIds: ["q_swipe", "q_carousel"] },
+    { type: "page", id: "p5", questionIds: ["q_hot", "q_cat"] },
     { type: "end", id: "e", status: "complete", message: "Done!" },
   ],
 });
@@ -183,6 +198,35 @@ await page.click(".rs-carousel-foot .rs-btn");
 const picked = await page.$eval(".rs-carousel-card.selected .rs-cardopt-title", (e) => e.textContent);
 assert.equal(picked, "Pro");
 console.log("✔ carousel browses and selects (Pro)");
+await page.click(".rs-nav .rs-btn:not(.secondary)");
+
+// hotspot: click two points, remove one, re-add
+await page.waitForSelector(".rs-hotspot img");
+const hbox = await page.$eval(".rs-hotspot", (e) => {
+  const r = e.getBoundingClientRect();
+  return { x: r.x, y: r.y, w: r.width, h: r.height };
+});
+await page.mouse.click(hbox.x + hbox.w * 0.3, hbox.y + hbox.h * 0.5);
+await page.mouse.click(hbox.x + hbox.w * 0.7, hbox.y + hbox.h * 0.25);
+let pins = await page.$$(".rs-hotspot-pin");
+assert.equal(pins.length, 2);
+let status = await page.$eval(".rs-hotspot-status", (e) => e.textContent);
+assert.ok(/2 \/ 2/.test(status ?? ""), `status: ${status}`);
+await page.click(".rs-hotspot-pin"); // remove first pin
+pins = await page.$$(".rs-hotspot-pin");
+assert.equal(pins.length, 1);
+console.log("✔ hotspot places, caps and removes coordinate points");
+
+// categorization: assign both items to buckets
+const cards = await page.$$(".rs-catcard");
+assert.equal(cards.length, 2);
+await page.click(".rs-catcard:has-text('Item One') .rs-bucket:has-text('Keep')");
+await page.click(".rs-catcard:has-text('Item Two') .rs-bucket:has-text('Drop')");
+const catStatus = await page.$$eval(".rs-hotspot-status", (els) => els.map((e) => e.textContent).join(" "));
+assert.ok(/2 \/ 2 assigned/.test(catStatus), `cat status: ${catStatus}`);
+console.log("✔ categorization assigns items to buckets (per-row values)");
+await page.screenshot({ path: "/tmp/bt-image-family.png" });
+
 await page.click(".rs-nav .rs-btn:not(.secondary)");
 await page.waitForSelector(".rs-end");
 const endText = await page.$eval(".rs-end h2", (e) => e.textContent);

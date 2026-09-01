@@ -33,9 +33,9 @@ export function allowedFlagsFor(qtype: string): string[] {
 
 const OPTION_WINDOW = 40;
 
-function OptionRows({ options, onChange, showFlags = true, flagChoices }: {
+function OptionRows({ options, onChange, showFlags = true, flagChoices, showImage = false }: {
   options: Option[]; onChange(opts: Option[]): void; showFlags?: boolean;
-  flagChoices?: string[];
+  flagChoices?: string[]; showImage?: boolean;
 }) {
   const [filter, setFilter] = React.useState("");
   const [showAll, setShowAll] = React.useState(false);
@@ -78,6 +78,11 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices }: {
             onChange={(e) => set(i, { code: e.target.value })} title="code" />
           <input className="input grow" value={o.label}
             onChange={(e) => set(i, { label: e.target.value })} placeholder="label (piping {{Q1}} allowed)" />
+          {showImage && (
+            <input className="input" style={{ width: 180 }} placeholder="image URL"
+              value={o.imageUrl ?? ""}
+              onChange={(e) => set(i, { imageUrl: e.target.value || undefined })} />
+          )}
           {showFlags && (
             <select className="select" style={{ width: 110 }} value={o.flags?.[0] ?? ""}
               onChange={(e) => set(i, { flags: e.target.value ? [e.target.value as any] : [] })}>
@@ -345,7 +350,8 @@ export function QuestionEditor({ q }: { q: Question }) {
         <>
           <h3 className="sec">Options</h3>
           <OptionRows options={q.options} onChange={(options) => patch({ options })}
-            flagChoices={allowedFlagsFor(q.type)} />
+            flagChoices={allowedFlagsFor(q.type)}
+            showImage={has("images") && (variantDef?.capabilities.includes("images") || q.type.startsWith("image"))} />
           <div className="row" style={{ marginTop: 10, flexWrap: "wrap" }}>
             {has("layout_columns") && (
             <label className="f" style={{ marginBottom: 0, width: 130 }}><span>Layout</span>
@@ -448,6 +454,27 @@ export function QuestionEditor({ q }: { q: Question }) {
                 ? patchSettings({ expression: e.target.value })
                 : patchSettings({ defaultValue: e.target.value })
             } /></label>
+      )}
+
+      {q.type === "hotspot" && (
+        <>
+          <label className="f"><span>Stimulus image URL</span>
+            <input className="input" value={q.settings.imageUrl ?? ""}
+              placeholder="https://…/image.jpg"
+              onChange={(e) => patchSettings({ imageUrl: e.target.value || undefined })} /></label>
+          <div className="row">
+            <label className="f"><span>Min points</span>
+              <input className="input" type="number" style={{ width: 90 }} value={q.settings.minSelections ?? ""}
+                onChange={(e) => patchSettings({ minSelections: e.target.value === "" ? undefined : Number(e.target.value) })} /></label>
+            <label className="f"><span>Max points</span>
+              <input className="input" type="number" style={{ width: 90 }} value={q.settings.maxSelections ?? 1}
+                onChange={(e) => patchSettings({ maxSelections: Number(e.target.value) })} /></label>
+          </div>
+          {q.settings.imageUrl && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={q.settings.imageUrl} alt="stimulus preview" style={{ maxWidth: 320, borderRadius: 8, border: "1px solid var(--border)" }} />
+          )}
+        </>
       )}
 
       {(q.type === "conjoint_task" || q.type === "maxdiff_task") && (

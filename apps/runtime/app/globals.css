@@ -344,3 +344,35 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 }
 .rs-carousel-dots .dot.on { background: var(--rs-subtle); }
 .rs-carousel-dots .dot.picked { background: var(--rs-primary); }
+
+/* ---------- hotspot ---------- */
+.rs-hotspot { position: relative; display: inline-block; max-width: 100%; cursor: crosshair; border-radius: 10px; overflow: hidden; border: 1.5px solid var(--rs-border); }
+.rs-hotspot img { display: block; max-width: 100%; user-select: none; }
+.rs-hotspot-pin {
+  position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px;
+  border-radius: 50%; background: var(--rs-primary); color: #fff;
+  border: 2.5px solid #fff; box-shadow: 0 2px 8px rgba(15,23,42,.4);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; cursor: pointer;
+}
+.rs-hotspot-status { margin-top: 8px; color: var(--rs-subtle); font-size: .9em; display: flex; gap: 12px; align-items: center; }
+.rs-hotspot-clear { border: none; background: none; color: var(--rs-primary); cursor: pointer; font: inherit; font-size: .95em; padding: 0; }
+
+/* ---------- comparison ---------- */
+.rs-compare { display: grid; gap: 14px; }
+@media (max-width: 640px) { .rs-compare { grid-template-columns: 1fr 1fr !important; } }
+.rs-compare-card img { height: 220px; }
+.rs-compare-noimg { height: 220px; display: flex; align-items: center; justify-content: center; background: var(--rs-border); border-radius: 8px; font-size: 40px; margin-bottom: 10px; }
+
+/* ---------- categorization ---------- */
+.rs-catgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.rs-catcard { border: 1.5px solid var(--rs-border); border-radius: 12px; background: var(--rs-surface); padding: 12px; }
+.rs-catcard.assigned { border-color: color-mix(in srgb, var(--rs-primary) 55%, var(--rs-border)); }
+.rs-catcard img { width: 100%; height: 110px; object-fit: cover; border-radius: 8px; margin-bottom: 8px; }
+.rs-catcard-label { font-weight: 600; margin-bottom: 8px; }
+.rs-catcard-buckets { display: flex; flex-wrap: wrap; gap: 6px; }
+.rs-bucket {
+  font: inherit; font-size: .85em; cursor: pointer; padding: 5px 12px; border-radius: 999px;
+  border: 1.5px solid var(--rs-border); background: var(--rs-surface);
+}
+.rs-bucket.on { background: var(--rs-primary); border-color: var(--rs-primary); color: #fff; font-weight: 600; }

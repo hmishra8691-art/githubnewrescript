@@ -262,6 +262,14 @@ export function questionVariables(
       }
       break;
     }
+    case "hotspot": {
+      const points = Math.max(1, Math.min(q.settings.maxSelections ?? 1, 20));
+      for (let i = 1; i <= points; i++) {
+        push({ name: `${q.variableName}_${i}_X`, label: `${q.code} — point ${i} X (%)`, dataType: "numeric" });
+        push({ name: `${q.variableName}_${i}_Y`, label: `${q.code} — point ${i} Y (%)`, dataType: "numeric" });
+      }
+      break;
+    }
     case "hidden":
       push({ name: q.variableName, label: strip(q.text) || q.code, dataType: "text", hidden: true });
       break;

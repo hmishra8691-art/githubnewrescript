@@ -127,6 +127,15 @@ function flattenQuestion(q: Question, value: unknown, varName: string, out: Flat
       }
       break;
     }
+    case "hotspot": {
+      // array of {x, y} percentages -> VAR_<i>_X / VAR_<i>_Y
+      const pts = Array.isArray(value) ? (value as { x: number; y: number }[]) : [];
+      pts.forEach((pt, i) => {
+        out[`${varName}_${i + 1}_X`] = Math.round((Number(pt?.x) || 0) * 10) / 10;
+        out[`${varName}_${i + 1}_Y`] = Math.round((Number(pt?.y) || 0) * 10) / 10;
+      });
+      break;
+    }
     case "composite":
     case "custom_table": {
       // { rowCode: { columnId: cellValue } } -> `${column.variableStem}_${row}`

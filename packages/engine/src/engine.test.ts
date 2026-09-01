@@ -580,3 +580,32 @@ test("variant catalog integrity (family/variant architecture)", async () => {
   assert.ok(!isSafeConversion(undefined, checkbox, "single_select"));
   assert.ok(isSafeConversion(undefined, dropdown, "single_select"));
 });
+
+test("hotspot: coordinates model, variables and flatten", () => {
+  const def = listLogicSurvey();
+  const q = def.questions[1];
+  q.type = "hotspot";
+  q.variant = "image.hotspot" as any;
+  q.options = [];
+  (q.settings as any).imageUrl = "https://example.com/x.png";
+  (q.settings as any).maxSelections = 2;
+
+  const dict = buildVariableDictionary(def);
+  for (const name of ["T_1_X", "T_1_Y", "T_2_X", "T_2_Y"]) {
+    assert.ok(dict.some((v) => v.name === name), `missing ${name}`);
+  }
+
+  const state = createResponseState(def, { seed: 1 });
+  state.answers["q_t"] = [{ x: 12.34, y: 56.78 }, { x: 90, y: 10.05 }] as any;
+  const flat = flattenVariables(def, state);
+  assert.equal(flat["T_1_X"], 12.3);
+  assert.equal(flat["T_1_Y"], 56.8);
+  assert.equal(flat["T_2_X"], 90);
+
+  // required + min/max selections behave like any array answer
+  q.required = true;
+  let errs = validateQuestion(def, q, [], { def, state });
+  assert.ok(errs.length >= 1);
+  errs = validateQuestion(def, q, [{ x: 1, y: 2 }], { def, state });
+  assert.deepEqual(errs, []);
+});
