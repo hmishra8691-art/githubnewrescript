@@ -1,4 +1,5 @@
 import type { SurveyDefinition, Question, VariableDef, FlowNode } from "@rescript/schema";
+import { fieldDataType } from "./fields.js";
 
 /**
  * Variable / Data Dictionary generator (requirement §9).
@@ -44,7 +45,13 @@ function dictionaryRows(q: Question, all?: Question[]): Question["rows"] {
   if (q.rows.length || !q.carryForward || q.carryForward.into !== "rows") return q.rows;
   const src = all?.find((x) => x.id === q.carryForward!.sourceQuestionId);
   if (!src) return q.rows;
-  return src.options.map((o) => ({ code: o.code, label: o.label, flags: [] }));
+  return src.options.map((o) => ({
+    code: o.code,
+    label: o.label,
+    flags: [],
+    validation: [],
+    required: false,
+  }));
 }
 
 export function questionVariables(
@@ -117,13 +124,25 @@ export function questionVariables(
       break;
     case "numeric_list":
     case "text_list": {
-      const n = q.settings.listCount ?? q.rows.length ?? 1;
-      for (let i = 1; i <= n; i++) {
-        push({
-          name: `${q.variableName}_${i}`,
-          label: `${q.code} — item ${i}`,
-          dataType: q.type === "numeric_list" ? "numeric" : "text",
-        });
+      if (q.rows.length > 0) {
+        // labeled form fields — one variable per row, typed by fieldType
+        for (const row of q.rows) {
+          push({
+            name: `${q.variableName}_${row.code}`,
+            label: `${q.code} — ${strip(row.label)}`,
+            dataType: fieldDataType(row.fieldType ?? (q.type === "numeric_list" ? "number" : "text")),
+            rowCode: String(row.code),
+          });
+        }
+      } else {
+        const n = q.settings.listCount ?? 1;
+        for (let i = 1; i <= n; i++) {
+          push({
+            name: `${q.variableName}_${i}`,
+            label: `${q.code} — item ${i}`,
+            dataType: q.type === "numeric_list" ? "numeric" : "text",
+          });
+        }
       }
       break;
     }

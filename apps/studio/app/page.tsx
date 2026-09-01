@@ -13,6 +13,9 @@ export default function Dashboard() {
   const [code, setCode] = React.useState("");
   const [theme, setTheme] = React.useState<string>("");
   const [error, setError] = React.useState<string | null>(null);
+  const [deleting, setDeleting] = React.useState<SurveyRow | null>(null);
+  const [confirmText, setConfirmText] = React.useState("");
+  const [deleteBusy, setDeleteBusy] = React.useState(false);
 
   const load = React.useCallback(async () => {
     const ENV_HINT =
@@ -89,10 +92,50 @@ export default function Dashboard() {
         <div key={s.id} className="card selectable" onClick={() => (window.location.href = `/studio/${s.id}`)}>
           <div className="card-title">
             {s.title} <span className={`chip ${s.status === "live" ? "on" : ""}`}>{s.status}</span>
+            <span className="grow" />
+            <button className="btn small danger" title="Delete this survey project"
+              onClick={(e) => { e.stopPropagation(); setDeleting(s); setConfirmText(""); }}>
+              delete
+            </button>
           </div>
           <div className="card-sub">{s.code} · updated {new Date(s.updated_at).toLocaleString()}</div>
         </div>
       ))}
+
+      {deleting && (
+        <div className="modal-back" onClick={() => setDeleting(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>Delete “{deleting.title}”?</h2>
+            <p className="muted" style={{ fontSize: 13 }}>
+              This permanently deletes the survey project, <strong>all its versions, deployments,
+              test sessions and collected responses</strong>. Live links stop working immediately.
+              This cannot be undone — export the data first if you need it.
+            </p>
+            <label className="f"><span>Type the survey code <strong>{deleting.code}</strong> to confirm</span>
+              <input className="input mono" autoFocus value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)} /></label>
+            <div className="row" style={{ justifyContent: "flex-end" }}>
+              <button className="btn" onClick={() => setDeleting(null)}>Cancel</button>
+              <button className="btn danger" disabled={confirmText !== deleting.code || deleteBusy}
+                style={confirmText === deleting.code ? { borderColor: "var(--red)" } : undefined}
+                onClick={async () => {
+                  setDeleteBusy(true);
+                  try {
+                    const r = await fetch(`/api/surveys/${deleting.id}`, { method: "DELETE" });
+                    const d = await r.json().catch(() => ({}));
+                    if (!r.ok) setError(d.error ?? "delete failed");
+                    setDeleting(null);
+                    await load();
+                  } finally {
+                    setDeleteBusy(false);
+                  }
+                }}>
+                {deleteBusy ? "Deleting…" : "Delete permanently"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {creating && (
         <div className="modal-back" onClick={() => setCreating(false)}>

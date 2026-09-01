@@ -5,6 +5,26 @@ import { validateExpression, lintPipingTokens } from "@rescript/engine";
 import { useStudio, selectedQuestion, uid } from "./store";
 import { OptionalCondition, ConditionEditor, conditionToText } from "./ConditionBuilder";
 
+/** Context-aware validation (req §6/§19): only offer rules that make sense
+ *  for the question type. */
+export function validationKindsFor(qtype: string): ValidationRule["kind"][] {
+  if (["multi_select", "multi_dropdown", "image_select"].includes(qtype))
+    return ["required", "min_selections", "max_selections", "custom_expression"];
+  if (["numeric", "slider", "nps", "matrix_numeric"].includes(qtype))
+    return ["required", "min_value", "max_value", "integer", "custom_expression"];
+  if (["open_text", "long_text", "text_list"].includes(qtype))
+    return ["required", "min_length", "max_length", "pattern", "email", "custom_expression"];
+  if (qtype === "numeric_list")
+    return ["required", "min_value", "max_value", "integer", "custom_expression"];
+  if (qtype === "allocation")
+    return ["required", "sum_equals", "sum_max", "sum_min", "custom_expression"];
+  if (["single_select", "dropdown", "date", "time", "ranking", "image_ranking"].includes(qtype))
+    return ["required", "custom_expression"];
+  if (qtype.startsWith("matrix") || qtype === "composite" || qtype === "custom_table")
+    return ["required", "min_selections", "max_selections", "custom_expression"];
+  return VALIDATION_KINDS.map((k) => k.value);
+}
+
 const VALIDATION_KINDS: { value: ValidationRule["kind"]; label: string; hasValue: boolean }[] = [
   { value: "required", label: "required", hasValue: false },
   { value: "min_value", label: "min value", hasValue: true },
@@ -23,6 +43,8 @@ const VALIDATION_KINDS: { value: ValidationRule["kind"]; label: string; hasValue
 ];
 
 function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question>): void }) {
+  const allowed = validationKindsFor(q.type);
+  const kinds = VALIDATION_KINDS.filter((k) => allowed.includes(k.value));
   return (
     <div>
       {q.validation.map((v, i) => {
@@ -33,7 +55,10 @@ function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question
               onChange={(e) => patch({
                 validation: q.validation.map((x, j) => (j === i ? { ...x, kind: e.target.value as any } : x)),
               })}>
-              {VALIDATION_KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}
+              {/* keep an already-set kind visible even if not offered for this type */}
+              {(kinds.some((k) => k.value === v.kind) ? kinds : [kind!, ...kinds]).map((k) => (
+                <option key={k.value} value={k.value}>{k.label}</option>
+              ))}
             </select>
             {kind?.hasValue && (
               <input className="input grow mono" value={String(v.value ?? "")}
@@ -275,12 +300,136 @@ export function PropertiesPanel() {
             </select>
             <select className="select" value={q.randomization.method}
               onChange={(e) => patch({ randomization: { ...q.randomization!, method: e.target.value as any } })}>
-              <option value="shuffle">shuffle</option><option value="rotate">rotate</option><option value="reverse_half">reverse for half</option>
+              <option value="shuffle">shuffle</option><option value="rotate">rotate</option>
+              <option value="reverse_half">reverse for half</option><option value="none">keep order</option>
             </select>
-            <span className="muted" style={{ fontSize: 11 }}>anchor via option flags</span>
+            <label className="row" style={{ gap: 4, fontSize: 12 }}>
+              show only
+              <input className="input" type="number" style={{ width: 64 }}
+                title="Present N randomly chosen items (anchored items always show)"
+                value={q.randomization.pick ?? ""}
+                onChange={(e) => patch({
+                  randomization: { ...q.randomization!, pick: e.target.value === "" ? undefined : Number(e.target.value) },
+                })} />
+              items
+            </label>
           </>
         )}
       </div>
+      {q.randomization?.enabled && (
+        <>
+          <p className="muted" style={{ fontSize: 11, margin: "4px 0 8px" }}>
+            Fix items in place with the <em>anchor top / anchor bottom</em> option flags —
+            anchored items are never shuffled or dropped by “show only N”.
+          </p>
+          <div className="flabel">Conditional randomization — first matching rule wins</div>
+          {(q.randomization.rules ?? []).map((rule, ri) => (
+            <div key={rule.id} className="card" style={{ padding: 10 }}>
+              <div className="row" style={{ marginBottom: 6, flexWrap: "wrap" }}>
+                <span className="flabel" style={{ margin: 0 }}>WHEN</span>
+                <span className="grow" />
+                <select className="select" style={{ width: 130 }} value={rule.method ?? ""}
+                  onChange={(e) => patch({
+                    randomization: {
+                      ...q.randomization!,
+                      rules: q.randomization!.rules!.map((x, j) =>
+                        j === ri ? { ...x, method: (e.target.value || undefined) as any } : x),
+                    },
+                  })}>
+                  <option value="">method: inherit</option>
+                  <option value="shuffle">shuffle</option><option value="rotate">rotate</option>
+                  <option value="reverse_half">reverse half</option><option value="none">keep order</option>
+                </select>
+                <label className="row" style={{ gap: 4, fontSize: 12 }}>
+                  pick
+                  <input className="input" type="number" style={{ width: 60 }} value={rule.pick ?? ""}
+                    onChange={(e) => patch({
+                      randomization: {
+                        ...q.randomization!,
+                        rules: q.randomization!.rules!.map((x, j) =>
+                          j === ri ? { ...x, pick: e.target.value === "" ? undefined : Number(e.target.value) } : x),
+                      },
+                    })} />
+                </label>
+                <button className="btn small danger" onClick={() => patch({
+                  randomization: {
+                    ...q.randomization!,
+                    rules: q.randomization!.rules!.filter((_, j) => j !== ri),
+                  },
+                })}>×</button>
+              </div>
+              <ConditionEditor value={rule.when}
+                onChange={(when) => patch({
+                  randomization: {
+                    ...q.randomization!,
+                    rules: q.randomization!.rules!.map((x, j) => (j === ri ? { ...x, when } : x)),
+                  },
+                })} />
+            </div>
+          ))}
+          <button className="btn small" onClick={() => patch({
+            randomization: {
+              ...q.randomization!,
+              rules: [...(q.randomization!.rules ?? []), {
+                id: uid("rr"),
+                when: { type: "group", op: "and", children: [] },
+              }],
+            },
+          })}>
+            + conditional rule (e.g. “if Q1 = A, use randomization set A”)
+          </button>
+        </>
+      )}
+
+      <h3 className="sec">List logic (from previous questions)</h3>
+      <p className="muted" style={{ fontSize: 11, marginTop: -2 }}>
+        Include / exclude / prioritize this question&apos;s options based on what an earlier
+        question selected or displayed. Rules apply in order, before sorting and randomization.
+        “Exclude + displayed” = show only items not yet seen.
+      </p>
+      {(q.listLogic ?? []).map((rule, ri) => (
+        <div key={rule.id} className="card" style={{ padding: 10 }}>
+          <div className="row" style={{ flexWrap: "wrap" }}>
+            <select className="select" style={{ width: 120 }} value={rule.action}
+              onChange={(e) => patch({
+                listLogic: q.listLogic!.map((x, j) => (j === ri ? { ...x, action: e.target.value as any } : x)),
+              })}>
+              <option value="include">include only</option>
+              <option value="exclude">exclude</option>
+              <option value="prioritize">move to top</option>
+              <option value="deprioritize">move to bottom</option>
+            </select>
+            <select className="select" style={{ width: 140 }} value={rule.which}
+              onChange={(e) => patch({
+                listLogic: q.listLogic!.map((x, j) => (j === ri ? { ...x, which: e.target.value as any } : x)),
+              })}>
+              <option value="selected">items selected in</option>
+              <option value="not_selected">items NOT selected in</option>
+              <option value="displayed">items displayed in</option>
+            </select>
+            <select className="select grow" value={rule.sourceQuestionId}
+              onChange={(e) => patch({
+                listLogic: q.listLogic!.map((x, j) => (j === ri ? { ...x, sourceQuestionId: e.target.value } : x)),
+              })}>
+              {s.def.questions.filter((x) => x.id !== q.id).map((x) => (
+                <option key={x.id} value={x.id}>{x.code}</option>
+              ))}
+            </select>
+            <button className="btn small danger" onClick={() =>
+              patch({ listLogic: q.listLogic!.filter((_, j) => j !== ri) })}>×</button>
+          </div>
+        </div>
+      ))}
+      <button className="btn small" disabled={s.def.questions.length < 2}
+        onClick={() => patch({
+          listLogic: [...(q.listLogic ?? []), {
+            id: uid("ll"),
+            sourceQuestionId: s.def.questions.find((x) => x.id !== q.id)!.id,
+            action: "include", which: "selected",
+          } as any],
+        })}>
+        + list rule
+      </button>
 
       <h3 className="sec">Validation rules</h3>
       <ValidationEditor q={q} patch={patch} />

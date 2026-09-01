@@ -4,6 +4,7 @@ import { evaluateCondition } from "./evaluate.js";
 import { effectiveQuestion } from "./carryforward.js";
 import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
+import { validateFieldValue } from "./fields.js";
 
 export interface ValidationError {
   questionId: string;
@@ -172,6 +173,29 @@ export function validateQuestion(
         if (col.max != null && !isEmpty(cellValue) && Number(cellValue) > col.max)
           push(`${row.label} — ${col.label}: maximum ${col.max}.`, { rowCode: String(row.code), columnId: col.id });
       }
+    }
+  }
+
+  // form-style lists: per-field type + validation (reqs §3–5)
+  if ((q.type === "text_list" || q.type === "numeric_list") && q.rows.length > 0) {
+    const view = effectiveQuestion(q, ctx);
+    const vals = (value ?? {}) as Record<string, unknown>;
+    for (const row of view.rows) {
+      const rc = String(row.code);
+      const v = typeof vals === "object" && !Array.isArray(vals) ? vals[rc] : undefined;
+      const label = row.label.replace(/<[^>]*>/g, "");
+      if ((row.required || (q.required && !q.rows.some((r) => r.required))) && isEmpty(v)) {
+        push(`${label}: this field is required.`, { rowCode: rc });
+        continue;
+      }
+      if (!isEmpty(v)) {
+        const ft = row.fieldType ?? (q.type === "numeric_list" ? "number" : "text");
+        const typeErr = validateFieldValue(ft, v);
+        if (typeErr) push(`${label}: ${typeErr}`, { rowCode: rc });
+      }
+      checkScalarRules(row.validation ?? [], v, ctx, (m) =>
+        push(`${label}: ${m}`, { rowCode: rc }),
+      );
     }
   }
 

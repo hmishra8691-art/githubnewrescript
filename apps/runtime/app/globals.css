@@ -150,3 +150,73 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
   .rs-with-inspector { grid-template-columns: 1fr; }
   .rs-inspector { position: static; max-height: 320px; }
 }
+
+/* ---------- multi-select dropdown (req §1) ---------- */
+.rs-msd { position: relative; max-width: 480px; }
+.rs-msd-control {
+  min-height: 44px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  padding: 7px 36px 7px 9px; border: 1.5px solid var(--rs-border);
+  border-radius: calc(var(--rs-radius) - 4px); background: var(--rs-surface); cursor: pointer;
+}
+.rs-msd-control:focus { outline: 2px solid color-mix(in srgb, var(--rs-primary) 45%, transparent); }
+.rs-msd-chip {
+  display: inline-flex; align-items: center; gap: 5px; font-size: .88em;
+  background: color-mix(in srgb, var(--rs-primary) 12%, var(--rs-surface));
+  border-radius: 6px; padding: 3px 8px;
+}
+.rs-msd-chip button { border: none; background: none; cursor: pointer; font: inherit; line-height: 1; padding: 0 2px; color: inherit; opacity: .7; }
+.rs-msd-chip button:hover { opacity: 1; }
+.rs-msd-caret { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: var(--rs-subtle); pointer-events: none; font-size: .8em; }
+.rs-msd-pop {
+  position: absolute; z-index: 30; top: calc(100% + 4px); left: 0; right: 0;
+  background: var(--rs-surface); border: 1.5px solid var(--rs-border); border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, .16); padding: 8px;
+}
+.rs-msd-list { max-height: 260px; overflow-y: auto; margin-top: 6px; }
+.rs-msd-item { display: flex; gap: 8px; align-items: center; padding: 7px 8px; border-radius: 6px; cursor: pointer; }
+.rs-msd-item:hover { background: color-mix(in srgb, var(--rs-primary) 7%, var(--rs-surface)); }
+.rs-msd-item.disabled { opacity: .45; cursor: default; }
+.rs-msd-item input { accent-color: var(--rs-primary); pointer-events: none; }
+.rs-msd-actions { display: flex; gap: 10px; align-items: center; margin-top: 6px; font-size: .85em; }
+.rs-msd-actions button { border: none; background: none; color: var(--rs-primary); cursor: pointer; padding: 2px 4px; font: inherit; font-size: .95em; }
+
+/* ---------- N-column option layouts (req §10) ---------- */
+.rs-options.cols-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.rs-options.cols-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.rs-options.cols-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+@media (max-width: 640px) {
+  .rs-options.cols-3, .rs-options.cols-4 { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 440px) {
+  .rs-options.cols-2, .rs-options.cols-3, .rs-options.cols-4 { grid-template-columns: 1fr; }
+}
+.rs-optfilter { margin-bottom: 10px; max-width: 100%; }
+
+/* ---------- form-style list fields (req §3–5) ---------- */
+.rs-field-row { display: flex; gap: 10px; align-items: center; }
+.rs-field-row .flab { min-width: 150px; font-size: .93em; }
+.rs-req { color: var(--rs-error); }
+.rs-prefix { color: var(--rs-subtle); }
+@media (max-width: 520px) {
+  .rs-field-row { flex-direction: column; align-items: stretch; gap: 4px; }
+  .rs-field-row .flab { min-width: 0; }
+}
+
+/* ---------- device preview (req §16) ---------- */
+.rs-devicebar {
+  position: sticky; top: 8px; z-index: 60; width: fit-content; margin: 8px auto 0;
+  display: flex; gap: 4px; background: #0b1220; color: #cbd5e1;
+  padding: 5px 8px; border-radius: 999px; font-size: 12px; box-shadow: 0 4px 16px rgba(0, 0, 0, .3);
+}
+.rs-devicebar button { font: inherit; border: none; border-radius: 999px; padding: 3px 12px; cursor: pointer; background: transparent; color: #cbd5e1; }
+.rs-devicebar button.on { background: #38bdf8; color: #06202e; font-weight: 700; }
+.rs-viewport { margin: 14px auto 24px; background: var(--rs-bg, #f8fafc); }
+.rs-viewport.mobile {
+  max-width: 392px; min-height: 740px; max-height: 82vh; overflow-y: auto;
+  border: 11px solid #0b1220; border-radius: 36px; box-shadow: 0 16px 48px rgba(0, 0, 0, .35);
+}
+.rs-viewport.tablet {
+  max-width: 780px; min-height: 700px; max-height: 82vh; overflow-y: auto;
+  border: 13px solid #0b1220; border-radius: 24px; box-shadow: 0 16px 48px rgba(0, 0, 0, .3);
+}
+.rs-viewport .rs-shell { padding-top: 14px; }

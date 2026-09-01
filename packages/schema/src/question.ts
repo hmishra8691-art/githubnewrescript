@@ -62,6 +62,24 @@ export const ResponseType = z.enum([
 ]);
 export type ResponseType = z.infer<typeof ResponseType>;
 
+/** Field types for form-style list questions (Open Text List / Numeric List).
+ *  Each carries built-in input rendering + validation in the engine. */
+export const FieldType = z.enum([
+  "text",
+  "longtext",
+  "email",
+  "phone",
+  "number",
+  "decimal",
+  "integer",
+  "currency",
+  "date",
+  "time",
+  "url",
+  "zip",
+]);
+export type FieldType = z.infer<typeof FieldType>;
+
 export const OptionFlag = z.enum([
   "exclusive", // "None of the above" behaviour
   "other_specify", // shows a text input when selected
@@ -114,10 +132,47 @@ export type ValidationRule = z.infer<typeof ValidationRule>;
 export const Randomization = z.object({
   enabled: z.boolean().default(false),
   scope: z.enum(["options", "rows", "columns"]).default("options"),
-  method: z.enum(["shuffle", "rotate", "reverse_half"]).default("shuffle"),
+  method: z.enum(["shuffle", "rotate", "reverse_half", "none"]).default("shuffle"),
   /** Randomize only within these code groups (blocks stay in place). */
   groups: z.array(z.array(z.union([z.string(), z.number()]))).optional(),
+  /** Present only N of the (non-anchored) items — "randomize N from a list". */
+  pick: z.number().optional(),
+  /**
+   * Conditional randomization (req: randomize based on previous answers).
+   * The FIRST rule whose condition holds overrides method/pick/groups for
+   * this respondent; with no match the base settings above apply.
+   */
+  rules: z
+    .array(
+      z.object({
+        id: z.string(),
+        label: z.string().optional(),
+        when: Condition,
+        method: z.enum(["shuffle", "rotate", "reverse_half", "none"]).optional(),
+        pick: z.number().optional(),
+        groups: z.array(z.array(z.union([z.string(), z.number()]))).optional(),
+      }),
+    )
+    .optional(),
 });
+export type Randomization = z.infer<typeof Randomization>;
+
+/**
+ * Previous-question list logic (include / exclude / prioritize / deprioritize /
+ * remaining). Rules apply in order to this question's option list, after
+ * carry-forward and before sorting/randomization. "displayed" = the options
+ * the source question actually showed this respondent, so
+ * exclude+displayed = "remaining / not yet seen".
+ */
+export const ListLogicRule = z.object({
+  id: z.string(),
+  sourceQuestionId: z.string(),
+  action: z.enum(["include", "exclude", "prioritize", "deprioritize"]),
+  which: z.enum(["selected", "not_selected", "displayed"]).default("selected"),
+  /** Only apply the rule when this condition holds. */
+  when: Condition.optional(),
+});
+export type ListLogicRule = z.infer<typeof ListLogicRule>;
 
 /** Carry-forward / dynamic option pass-through (requirement §4). */
 export const CarryForward = z.object({
@@ -168,6 +223,12 @@ export const QuestionRow = z.object({
   label: z.string(),
   visibleIf: Condition.optional(),
   flags: z.array(OptionFlag).default([]),
+  /** Form-style list questions: the input type of this row's field. */
+  fieldType: FieldType.optional(),
+  /** Field-level validation for this row (req §5). */
+  validation: z.array(ValidationRule).default([]),
+  required: z.boolean().default(false),
+  placeholder: z.string().optional(),
   meta: z.record(z.any()).optional(),
 });
 export type QuestionRow = z.infer<typeof QuestionRow>;
@@ -213,6 +274,13 @@ export const Question = z.object({
       sumTarget: z.number().optional(), // allocation
       sumUnit: z.string().optional(), // "%", "points", "$"
       listCount: z.number().optional(), // numeric_list / text_list rows
+      /** Display options/fields in N columns (1–4). */
+      columnsLayout: z.number().optional(),
+      /** Presentation sort, applied before randomization; the programmed
+       *  order in `options` is never modified. */
+      optionOrder: z
+        .enum(["original", "az", "za", "numeric_asc", "numeric_desc"])
+        .optional(),
       placeholder: z.string().optional(),
       readOnly: z.boolean().default(false),
       hidden: z.boolean().default(false),
@@ -235,6 +303,8 @@ export const Question = z.object({
 
   randomization: Randomization.optional(),
   carryForward: CarryForward.optional(),
+  /** Previous-question list operations, applied in order (req §12–13). */
+  listLogic: z.array(ListLogicRule).default([]),
 
   displayLogic: Condition.optional(),
   skipLogic: z.array(SkipRule).default([]),

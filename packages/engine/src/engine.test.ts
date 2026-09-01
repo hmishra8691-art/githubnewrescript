@@ -328,3 +328,199 @@ test("nextVersion never collides and honours explicit requests", async () => {
   assert.ok(compareVersions("1.2", "1.10") < 0);
   assert.ok(compareVersions("2.0", "1.99") > 0);
 });
+
+test("exclusive options: one shared implementation (req §2)", async () => {
+  const { toggleMultiValue, isExclusiveOption } = await import("./answers.js");
+  const opts = [
+    { code: 1, flags: [] }, { code: 2, flags: [] },
+    { code: 98, flags: ["none_of_above"] }, { code: 99, flags: ["exclusive"] },
+  ] as any[];
+  // selecting an exclusive clears others
+  assert.deepEqual(toggleMultiValue([1, 2], 98, opts), [98]);
+  assert.deepEqual(toggleMultiValue([1], 99, opts), [99]);
+  // selecting a normal option removes the exclusive
+  assert.deepEqual(toggleMultiValue([98], 1, opts), [1]);
+  // plain toggle on/off
+  assert.deepEqual(toggleMultiValue([1], 2, opts), [1, 2]);
+  assert.deepEqual(toggleMultiValue([1, 2], 2, opts), [1]);
+  // max selections blocks additions but never deselections
+  assert.deepEqual(toggleMultiValue([1, 2], 3, [...opts, { code: 3, flags: [] }] as any, 2), [1, 2]);
+  assert.deepEqual(toggleMultiValue([1, 2], 2, opts, 2), [1]);
+  assert.equal(isExclusiveOption(opts[2] as any), true);
+  assert.equal(isExclusiveOption(opts[0] as any), false);
+});
+
+test("field validation by type (req §4–5)", async () => {
+  const { validateFieldValue } = await import("./fields.js");
+  assert.equal(validateFieldValue("email", "a@b.co"), null);
+  assert.ok(validateFieldValue("email", "not-an-email"));
+  assert.equal(validateFieldValue("integer", "42"), null);
+  assert.ok(validateFieldValue("integer", "4.2"));
+  assert.equal(validateFieldValue("decimal", "4.2"), null);
+  assert.equal(validateFieldValue("phone", "+1 (555) 123-4567"), null);
+  assert.ok(validateFieldValue("phone", "abc"));
+  assert.equal(validateFieldValue("url", "example.com/x"), null);
+  assert.ok(validateFieldValue("url", "not a url"));
+  assert.equal(validateFieldValue("zip", "94103"), null);
+  assert.equal(validateFieldValue("date", "2026-01-05"), null);
+  assert.ok(validateFieldValue("time", "27:99"));
+  assert.equal(validateFieldValue("time", "14:30"), null);
+  // empty is never a type error (required is separate)
+  assert.equal(validateFieldValue("email", ""), null);
+});
+
+function listLogicSurvey() {
+  return SurveyDefinition.parse({
+    meta: { id: "s2", code: "S2", title: "T", version: "1.0" },
+    questions: [
+      {
+        id: "q_src", code: "Q1", variableName: "SRC", type: "multi_select", text: "src",
+        options: [
+          { code: "a", label: "Alpha" }, { code: "b", label: "Bravo" },
+          { code: "c", label: "Charlie" }, { code: "d", label: "Delta" },
+        ],
+      },
+      {
+        id: "q_t", code: "Q2", variableName: "T", type: "multi_select", text: "t",
+        options: [
+          { code: "a", label: "Alpha" }, { code: "b", label: "Bravo" },
+          { code: "c", label: "Charlie" }, { code: "d", label: "Delta" },
+        ],
+      },
+    ],
+    flow: [
+      { type: "page", id: "p1", questionIds: ["q_src"] },
+      { type: "page", id: "p2", questionIds: ["q_t"] },
+      { type: "end", id: "e", status: "complete" },
+    ],
+  });
+}
+
+test("list logic: include / exclude / prioritize / deprioritize / remaining (req §12–13)", () => {
+  const def = listLogicSurvey();
+  const state = createResponseState(def, { seed: 5 });
+  state.answers["q_src"] = ["a", "c"];
+  const q2 = () => def.questions.find((q) => q.id === "q_t")!;
+  const codes = () => effectiveQuestion(q2(), { def, state }).options.map((o) => o.code);
+
+  q2().listLogic = [{ id: "r1", sourceQuestionId: "q_src", action: "include", which: "selected" }] as any;
+  assert.deepEqual(codes(), ["a", "c"]);
+
+  q2().listLogic = [{ id: "r1", sourceQuestionId: "q_src", action: "exclude", which: "selected" }] as any;
+  assert.deepEqual(codes(), ["b", "d"]);
+
+  q2().listLogic = [{ id: "r1", sourceQuestionId: "q_src", action: "prioritize", which: "selected" }] as any;
+  assert.deepEqual(codes(), ["a", "c", "b", "d"]);
+
+  q2().listLogic = [{ id: "r1", sourceQuestionId: "q_src", action: "deprioritize", which: "selected" }] as any;
+  assert.deepEqual(codes(), ["b", "d", "a", "c"]);
+
+  // remaining / not-yet-seen: exclude everything the source DISPLAYED
+  q2().listLogic = [{ id: "r1", sourceQuestionId: "q_src", action: "exclude", which: "displayed" }] as any;
+  assert.deepEqual(codes(), []);
+
+  // not_selected sourcing
+  q2().listLogic = [{ id: "r1", sourceQuestionId: "q_src", action: "include", which: "not_selected" }] as any;
+  assert.deepEqual(codes(), ["b", "d"]);
+
+  // conditional rule only applies when its condition holds
+  q2().listLogic = [{
+    id: "r1", sourceQuestionId: "q_src", action: "exclude", which: "selected",
+    when: cond.rule("q_src", "selected", "d"),
+  }] as any;
+  assert.deepEqual(codes(), ["a", "b", "c", "d"]);
+});
+
+test("option sorting is presentation-only (req §11)", () => {
+  const def = listLogicSurvey();
+  const state = createResponseState(def, { seed: 5 });
+  const q = def.questions[1];
+  q.options = [
+    { code: 3, label: "Charlie", flags: [] }, { code: 1, label: "alpha", flags: [] },
+    { code: 2, label: "Bravo", flags: [] },
+  ] as any;
+  (q.settings as any).optionOrder = "az";
+  let view = effectiveQuestion(q, { def, state });
+  assert.deepEqual(view.options.map((o) => o.label), ["alpha", "Bravo", "Charlie"]);
+  (q.settings as any).optionOrder = "numeric_desc";
+  view = effectiveQuestion(q, { def, state });
+  assert.deepEqual(view.options.map((o) => o.code), [3, 2, 1]);
+  // programmed order untouched
+  assert.deepEqual(q.options.map((o) => o.code), [3, 1, 2]);
+});
+
+test("conditional randomization + pick N (req §7–8)", () => {
+  const def = listLogicSurvey();
+  const q = def.questions[1];
+  q.randomization = {
+    enabled: true, scope: "options", method: "none",
+    rules: [{ id: "rr", when: cond.rule("q_src", "selected", "a"), method: "shuffle" }],
+  } as any;
+
+  // condition false -> method none -> original order
+  const s1 = createResponseState(def, { seed: 777 });
+  s1.answers["q_src"] = ["b"];
+  assert.deepEqual(
+    effectiveQuestion(q, { def, state: s1 }).options.map((o) => o.code),
+    ["a", "b", "c", "d"],
+  );
+
+  // condition true -> shuffled (deterministic per seed)
+  const s2 = createResponseState(def, { seed: 777 });
+  s2.answers["q_src"] = ["a"];
+  const shuffled = effectiveQuestion(q, { def, state: s2 }).options.map((o) => o.code);
+  assert.notDeepEqual(shuffled, ["a", "b", "c", "d"]);
+  const s2b = createResponseState(def, { seed: 777 });
+  s2b.answers["q_src"] = ["a"];
+  assert.deepEqual(effectiveQuestion(q, { def, state: s2b }).options.map((o) => o.code), shuffled);
+
+  // pick 2 of 4 without shuffling keeps original relative order
+  q.randomization = { enabled: true, scope: "options", method: "none", pick: 2 } as any;
+  const s3 = createResponseState(def, { seed: 42 });
+  const picked = effectiveQuestion(q, { def, state: s3 }).options.map((o) => String(o.code));
+  assert.equal(picked.length, 2);
+  assert.deepEqual(picked, [...picked].sort()); // a<b<c<d, original order == sorted
+
+  // anchors survive pick
+  q.options.push({ code: "z", label: "None", flags: ["none_of_above"] } as any);
+  q.randomization = { enabled: true, scope: "options", method: "shuffle", pick: 2 } as any;
+  const s4 = createResponseState(def, { seed: 9 });
+  const withAnchor = effectiveQuestion(q, { def, state: s4 }).options.map((o) => String(o.code));
+  assert.equal(withAnchor.length, 3); // 2 picked + anchored None
+  assert.equal(withAnchor[withAnchor.length - 1], "z");
+});
+
+test("form-style lists: labeled typed fields end to end (req §3–5)", () => {
+  const def = listLogicSurvey();
+  const q = def.questions[1];
+  q.type = "text_list";
+  q.options = [];
+  q.rows = [
+    { code: "name", label: "Full Name", flags: [], fieldType: "text", validation: [], required: true },
+    { code: "email", label: "Email Address", flags: [], fieldType: "email", validation: [], required: true },
+    { code: "age", label: "Age", flags: [], fieldType: "integer", validation: [{ kind: "min_value", value: 18 }], required: false },
+  ] as any;
+  const state = createResponseState(def, { seed: 1 });
+
+  // missing required + bad email + under-age
+  let errs = validateQuestion(def, q, { name: "", email: "nope", age: 15 }, { def, state });
+  assert.ok(errs.some((e) => e.rowCode === "name"));
+  assert.ok(errs.some((e) => e.rowCode === "email" && /email/i.test(e.message)));
+  assert.ok(errs.some((e) => e.rowCode === "age" && /18/.test(e.message)));
+
+  errs = validateQuestion(def, q, { name: "Ada", email: "ada@lovelace.io", age: 36 }, { def, state });
+  assert.deepEqual(errs, []);
+
+  // variables typed per field
+  const dict = buildVariableDictionary(def);
+  const emailVar = dict.find((v) => v.name === "T_email")!;
+  const ageVar = dict.find((v) => v.name === "T_age")!;
+  assert.equal(emailVar.dataType, "text");
+  assert.equal(ageVar.dataType, "numeric");
+
+  // flatten keyed by row code
+  state.answers["q_t"] = { name: "Ada", email: "ada@lovelace.io", age: 36 };
+  const flat = flattenVariables(def, state);
+  assert.equal(flat["T_email"], "ada@lovelace.io");
+  assert.equal(flat["T_age"], 36);
+});

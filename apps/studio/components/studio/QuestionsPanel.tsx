@@ -2,7 +2,7 @@
 import React from "react";
 import type { Question, Option, QuestionColumn, ResponseType } from "@rescript/schema";
 import { questionTypeRegistry } from "@rescript/schema";
-import "@rescript/engine"; // ensures builtin question types are registered
+import { FIELD_TYPES } from "@rescript/engine"; // also registers builtin question types
 import { useStudio, uid } from "./store";
 
 const RESPONSE_TYPES: ResponseType[] = [
@@ -10,9 +10,34 @@ const RESPONSE_TYPES: ResponseType[] = [
   "numeric", "date", "time", "slider", "checkbox",
 ];
 
-function OptionRows({ options, onChange, showFlags = true }: {
+const ALL_FLAGS: { value: string; label: string }[] = [
+  { value: "exclusive", label: "exclusive" },
+  { value: "other_specify", label: "other/specify" },
+  { value: "none_of_above", label: "none of above" },
+  { value: "dont_know", label: "don't know" },
+  { value: "refused", label: "refused" },
+  { value: "anchor_top", label: "anchor top" },
+  { value: "anchor_bottom", label: "anchor bottom" },
+];
+
+/** Context-aware option flags (req §2/§19): exclusive semantics only exist
+ *  on multi-selects; a single-select never shows them. */
+export function allowedFlagsFor(qtype: string): string[] {
+  if (["single_select", "dropdown"].includes(qtype))
+    return ["other_specify", "anchor_top", "anchor_bottom"];
+  if (["ranking", "image_ranking", "allocation"].includes(qtype))
+    return ["anchor_top", "anchor_bottom"];
+  return ALL_FLAGS.map((f) => f.value);
+}
+
+const OPTION_WINDOW = 40;
+
+function OptionRows({ options, onChange, showFlags = true, flagChoices }: {
   options: Option[]; onChange(opts: Option[]): void; showFlags?: boolean;
+  flagChoices?: string[];
 }) {
+  const [filter, setFilter] = React.useState("");
+  const [showAll, setShowAll] = React.useState(false);
   const set = (i: number, patch: Partial<Option>) =>
     onChange(options.map((o, j) => (j === i ? { ...o, ...patch } : o)));
   const move = (i: number, dir: -1 | 1) => {
@@ -22,9 +47,31 @@ function OptionRows({ options, onChange, showFlags = true }: {
     [next[i], next[j]] = [next[j], next[i]];
     onChange(next);
   };
+
+  const flags = ALL_FLAGS.filter((f) => (flagChoices ?? ALL_FLAGS.map((x) => x.value)).includes(f.value));
+  const big = options.length > OPTION_WINDOW;
+  const f = filter.trim().toLowerCase();
+  let visible = options
+    .map((o, i) => ({ o, i }))
+    .filter(({ o }) => !f || o.label.toLowerCase().includes(f) || String(o.code).toLowerCase().includes(f));
+  const total = visible.length;
+  if (!showAll && visible.length > OPTION_WINDOW) visible = visible.slice(0, OPTION_WINDOW);
+
   return (
     <div>
-      {options.map((o, i) => (
+      {big && (
+        <div className="row" style={{ marginBottom: 6 }}>
+          <input className="input" style={{ maxWidth: 260 }} placeholder={`search ${options.length} options…`}
+            value={filter} onChange={(e) => { setFilter(e.target.value); setShowAll(false); }} />
+          <span className="muted" style={{ fontSize: 11 }}>
+            showing {visible.length} of {total}{f ? " matching" : ""}
+          </span>
+          {total > visible.length && (
+            <button className="btn small" onClick={() => setShowAll(true)}>show all</button>
+          )}
+        </div>
+      )}
+      {visible.map(({ o, i }) => (
         <div key={i} className="opt-row">
           <input className="input code-input" value={String(o.code)}
             onChange={(e) => set(i, { code: e.target.value })} title="code" />
@@ -34,13 +81,7 @@ function OptionRows({ options, onChange, showFlags = true }: {
             <select className="select" style={{ width: 110 }} value={o.flags?.[0] ?? ""}
               onChange={(e) => set(i, { flags: e.target.value ? [e.target.value as any] : [] })}>
               <option value="">flags…</option>
-              <option value="exclusive">exclusive</option>
-              <option value="other_specify">other/specify</option>
-              <option value="none_of_above">none of above</option>
-              <option value="dont_know">don&apos;t know</option>
-              <option value="refused">refused</option>
-              <option value="anchor_top">anchor top</option>
-              <option value="anchor_bottom">anchor bottom</option>
+              {flags.map((fl) => <option key={fl.value} value={fl.value}>{fl.label}</option>)}
             </select>
           )}
           <button className="btn small" onClick={() => move(i, -1)}>↑</button>
@@ -148,6 +189,115 @@ function ColumnEditor({ q, onChange }: { q: Question; onChange(cols: QuestionCol
   );
 }
 
+/**
+ * Form-field editor for Open Text List / Numeric List (reqs §3–5):
+ * every row gets its own label, field type, required flag, placeholder and
+ * min/max validation — no predefined label restrictions.
+ */
+function FieldRowsEditor({ q, patch, patchSettings }: {
+  q: Question;
+  patch(p: Partial<Question>): void;
+  patchSettings(p: Partial<Question["settings"]>): void;
+}) {
+  const rows = q.rows;
+  const setRow = (i: number, p: Partial<Question["rows"][number]>) =>
+    patch({ rows: rows.map((r, j) => (j === i ? { ...r, ...p } : r)) });
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= rows.length) return;
+    const next = [...rows];
+    [next[i], next[j]] = [next[j], next[i]];
+    patch({ rows: next });
+  };
+  const numericTypes = ["number", "decimal", "integer", "currency"];
+  const getBound = (r: Question["rows"][number], kind: string) =>
+    r.validation?.find((v) => v.kind === kind)?.value ?? "";
+  const setBound = (i: number, kind: string, raw: string) => {
+    const r = rows[i];
+    const rest = (r.validation ?? []).filter((v) => v.kind !== kind);
+    setRow(i, {
+      validation: raw === "" ? rest : [...rest, { kind: kind as any, value: Number(raw) }],
+    });
+  };
+
+  return (
+    <>
+      <h3 className="sec">Fields — each row is its own typed, validated variable</h3>
+      {rows.length === 0 && (
+        <p className="muted" style={{ fontSize: 12 }}>
+          No fields yet. Add labeled fields below (recommended), or keep the legacy
+          numbered list via <em>item count</em>.
+        </p>
+      )}
+      {rows.map((r, i) => {
+        const ft = r.fieldType ?? (q.type === "numeric_list" ? "number" : "text");
+        const isNum = numericTypes.includes(ft);
+        const boundMin = isNum ? "min_value" : "min_length";
+        const boundMax = isNum ? "max_value" : "max_length";
+        return (
+          <div key={i} className="card" style={{ padding: 10 }}>
+            <div className="row" style={{ flexWrap: "wrap" }}>
+              <input className="input code-input" title="row code / variable suffix" value={String(r.code)}
+                onChange={(e) => setRow(i, { code: e.target.value })} />
+              <input className="input grow" placeholder="Field label, e.g. Email Address"
+                value={r.label} onChange={(e) => setRow(i, { label: e.target.value })} />
+              <select className="select" style={{ width: 150 }} value={ft}
+                onChange={(e) => setRow(i, { fieldType: e.target.value as any })}>
+                {FIELD_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+              </select>
+              <label className="row" style={{ gap: 4, fontSize: 12 }}>
+                <input type="checkbox" checked={r.required ?? false}
+                  onChange={(e) => setRow(i, { required: e.target.checked })} /> required
+              </label>
+              <button className="btn small" onClick={() => move(i, -1)}>↑</button>
+              <button className="btn small" onClick={() => move(i, 1)}>↓</button>
+              <button className="btn small danger"
+                onClick={() => patch({ rows: rows.filter((_, j) => j !== i) })}>×</button>
+            </div>
+            <div className="row" style={{ marginTop: 6, flexWrap: "wrap" }}>
+              <input className="input" style={{ width: 200 }} placeholder="placeholder text"
+                value={r.placeholder ?? ""}
+                onChange={(e) => setRow(i, { placeholder: e.target.value || undefined })} />
+              <label className="row" style={{ gap: 4, fontSize: 12 }}>
+                {isNum ? "min value" : "min length"}
+                <input className="input" style={{ width: 76 }} type="number"
+                  value={String(getBound(r, boundMin))}
+                  onChange={(e) => setBound(i, boundMin, e.target.value)} />
+              </label>
+              <label className="row" style={{ gap: 4, fontSize: 12 }}>
+                {isNum ? "max value" : "max length"}
+                <input className="input" style={{ width: 76 }} type="number"
+                  value={String(getBound(r, boundMax))}
+                  onChange={(e) => setBound(i, boundMax, e.target.value)} />
+              </label>
+            </div>
+          </div>
+        );
+      })}
+      <div className="row" style={{ flexWrap: "wrap" }}>
+        <button className="btn small" onClick={() =>
+          patch({
+            rows: [...rows, {
+              code: `f${rows.length + 1}`, label: `Field ${rows.length + 1}`, flags: [],
+              fieldType: q.type === "numeric_list" ? "number" : "text",
+              validation: [], required: false,
+            } as any],
+          })}>
+          + field
+        </button>
+        {rows.length === 0 && (
+          <label className="row" style={{ gap: 6, fontSize: 12 }}>
+            legacy item count
+            <input className="input" type="number" style={{ width: 80 }}
+              value={q.settings.listCount ?? 3}
+              onChange={(e) => patchSettings({ listCount: Number(e.target.value) })} />
+          </label>
+        )}
+      </div>
+    </>
+  );
+}
+
 export function QuestionEditor({ q }: { q: Question }) {
   const s = useStudio();
   const plugin = questionTypeRegistry.get(q.type);
@@ -193,7 +343,30 @@ export function QuestionEditor({ q }: { q: Question }) {
       {feats.options && (
         <>
           <h3 className="sec">Options</h3>
-          <OptionRows options={q.options} onChange={(options) => patch({ options })} />
+          <OptionRows options={q.options} onChange={(options) => patch({ options })}
+            flagChoices={allowedFlagsFor(q.type)} />
+          <div className="row" style={{ marginTop: 10, flexWrap: "wrap" }}>
+            <label className="f" style={{ marginBottom: 0, width: 130 }}><span>Layout</span>
+              <select className="select" value={q.settings.columnsLayout ?? 1}
+                onChange={(e) => patchSettings({ columnsLayout: Number(e.target.value) === 1 ? undefined : Number(e.target.value) })}>
+                <option value={1}>1 column</option>
+                <option value={2}>2 columns</option>
+                <option value={3}>3 columns</option>
+                <option value={4}>4 columns</option>
+              </select></label>
+            <label className="f" style={{ marginBottom: 0, width: 170 }}><span>Sort (presentation)</span>
+              <select className="select" value={q.settings.optionOrder ?? "original"}
+                onChange={(e) => patchSettings({ optionOrder: e.target.value === "original" ? undefined : (e.target.value as any) })}>
+                <option value="original">original order</option>
+                <option value="az">alphabetical A → Z</option>
+                <option value="za">alphabetical Z → A</option>
+                <option value="numeric_asc">numeric ascending</option>
+                <option value="numeric_desc">numeric descending</option>
+              </select></label>
+            <span className="muted" style={{ fontSize: 11, alignSelf: "flex-end", paddingBottom: 7 }}>
+              sorting never changes the programmed order; randomization is configured in the right panel
+            </span>
+          </div>
         </>
       )}
 
@@ -202,7 +375,13 @@ export function QuestionEditor({ q }: { q: Question }) {
           <h3 className="sec">Rows</h3>
           <OptionRows showFlags={false}
             options={q.rows.map((r) => ({ code: r.code, label: r.label, flags: r.flags ?? [] }))}
-            onChange={(rows) => patch({ rows: rows.map((r) => ({ code: r.code, label: r.label, flags: [] })) })} />
+            onChange={(rows) =>
+              patch({
+                rows: rows.map((r) => {
+                  const prev = q.rows.find((x) => String(x.code) === String(r.code));
+                  return { validation: [], required: false, ...prev, code: r.code, label: r.label, flags: [] };
+                }),
+              })} />
           {q.carryForward?.into === "rows" && (
             <p className="muted" style={{ fontSize: 12 }}>
               Rows are carried forward from {s.def.questions.find((x) => x.id === q.carryForward?.sourceQuestionId)?.code ?? "?"} —
@@ -221,10 +400,7 @@ export function QuestionEditor({ q }: { q: Question }) {
       )}
 
       {(q.type === "numeric_list" || q.type === "text_list") && (
-        <label className="f"><span>Number of list items</span>
-          <input className="input" type="number" style={{ width: 100 }}
-            value={q.settings.listCount ?? 3}
-            onChange={(e) => patchSettings({ listCount: Number(e.target.value) })} /></label>
+        <FieldRowsEditor q={q} patch={patch} patchSettings={patchSettings} />
       )}
 
       {feats.numericBounds && (

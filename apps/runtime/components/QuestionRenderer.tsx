@@ -6,6 +6,9 @@ import {
   resolvePiping,
   evaluateExpression,
   flattenVariables,
+  toggleMultiValue,
+  normalizeMultiValue,
+  fieldInputProps,
   type EvalContext,
   type ResponseState,
   type LoopContext,
@@ -32,12 +35,43 @@ function ctxOf(p: QRProps): EvalContext {
   return { def: p.def, state: p.state, loop: p.loop };
 }
 
+/** N-column option layout (req §10) with a mobile fallback in CSS. */
+function optionsClass(p: QRProps): string {
+  const n = p.q.settings.columnsLayout ?? 1;
+  return n > 1 ? `rs-options cols-${Math.min(n, 4)}` : "rs-options";
+}
+
+/** Search box for long option lists (req §9). */
+function useOptionFilter(options: Option[], threshold = 25) {
+  const [filter, setFilter] = React.useState("");
+  const filtered = React.useMemo(() => {
+    if (!filter.trim()) return options;
+    const f = filter.toLowerCase();
+    return options.filter((o) =>
+      o.label.replace(/<[^>]*>/g, "").toLowerCase().includes(f),
+    );
+  }, [options, filter]);
+  const searchBox =
+    options.length > threshold ? (
+      <input
+        className="rs-input rs-optfilter"
+        placeholder={`Search ${options.length} options…`}
+        value={filter}
+        onChange={(e) => setFilter(e.target.value)}
+      />
+    ) : null;
+  return { filtered, searchBox };
+}
+
 /* ------------------------------------------------ single select / dropdown */
 function SingleSelect(p: QRProps) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
+  const { filtered, searchBox } = useOptionFilter(options);
   return (
-    <div className="rs-options" role="radiogroup">
-      {options.map((o) => {
+    <div>
+    {searchBox}
+    <div className={optionsClass(p)} role="radiogroup">
+      {filtered.map((o) => {
         const sel = String(p.value) === String(o.code);
         return (
           <label key={String(o.code)} className={`rs-option ${sel ? "selected" : ""}`}>
@@ -62,30 +96,32 @@ function SingleSelect(p: QRProps) {
         );
       })}
     </div>
+    </div>
   );
 }
 
 function MultiSelect(p: QRProps) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
+  const { filtered, searchBox } = useOptionFilter(options);
   const vals: (string | number)[] = Array.isArray(p.value) ? (p.value as any) : [];
-  const toggle = (o: Option) => {
-    const on = vals.some((v) => String(v) === String(o.code));
-    let next: (string | number)[];
-    if (on) next = vals.filter((v) => String(v) !== String(o.code));
-    else if (EXCLUSIVE(o)) next = [o.code];
-    else next = [...vals.filter((v) => {
-      const prev = options.find((x) => String(x.code) === String(v));
-      return !(prev && EXCLUSIVE(prev));
-    }), o.code];
-    p.onChange(next);
-  };
+  const toggle = (o: Option) =>
+    p.onChange(toggleMultiValue(vals, o.code, options, p.q.settings.maxSelections));
   return (
-    <div className="rs-options">
-      {options.map((o) => {
+    <div>
+    {searchBox}
+    <div className={optionsClass(p)}>
+      {filtered.map((o) => {
         const sel = vals.some((v) => String(v) === String(o.code));
+        const atMax =
+          !sel &&
+          p.q.settings.maxSelections != null &&
+          vals.length >= p.q.settings.maxSelections;
         return (
-          <label key={String(o.code)} className={`rs-option ${sel ? "selected" : ""}`}>
-            <input type="checkbox" checked={sel} onChange={() => toggle(o)} disabled={p.q.settings.readOnly} />
+          <label key={String(o.code)}
+            className={`rs-option ${sel ? "selected" : ""}`}
+            style={atMax ? { opacity: 0.5 } : undefined}>
+            <input type="checkbox" checked={sel} onChange={() => toggle(o)}
+              disabled={p.q.settings.readOnly} />
             <span className="lbl" dangerouslySetInnerHTML={{ __html: o.label }} />
             {OTHER(o) && sel && (
               <input
@@ -99,6 +135,7 @@ function MultiSelect(p: QRProps) {
           </label>
         );
       })}
+    </div>
     </div>
   );
 }
@@ -120,22 +157,130 @@ function Dropdown(p: QRProps) {
   );
 }
 
+/**
+ * Real multi-select dropdown (req §1): chips for current selections, a
+ * searchable checkbox list, select all / clear all, min/max enforcement and
+ * shared exclusive-option semantics.
+ */
 function MultiDropdown(p: QRProps) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
-  const vals: string[] = Array.isArray(p.value) ? (p.value as any[]).map(String) : [];
+  const vals: (string | number)[] = Array.isArray(p.value) ? (p.value as any) : [];
+  const [open, setOpen] = React.useState(false);
+  const [search, setSearch] = React.useState("");
+  const rootRef = React.useRef<HTMLDivElement>(null);
+  const max = p.q.settings.maxSelections;
+  const min = p.q.settings.minSelections;
+
+  React.useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const plain = (s: string) => s.replace(/<[^>]*>/g, "");
+  const filtered = search.trim()
+    ? options.filter((o) => plain(o.label).toLowerCase().includes(search.toLowerCase()))
+    : options;
+  const selectedOpts = vals
+    .map((v) => options.find((o) => String(o.code) === String(v)))
+    .filter((o): o is Option => !!o);
+
+  const toggle = (o: Option) => {
+    if (o.meta?.disabled) return;
+    p.onChange(toggleMultiValue(vals, o.code, options, max));
+  };
+  const selectAll = () =>
+    p.onChange(
+      normalizeMultiValue(filtered.filter((o) => !o.meta?.disabled).map((o) => o.code), options, max),
+    );
+  const clearAll = () => p.onChange([]);
+
   return (
-    <select
-      className="rs-select"
-      multiple
-      size={Math.min(options.length, 8)}
-      value={vals}
-      onChange={(e) => p.onChange(Array.from(e.target.selectedOptions).map((o) => o.value))}
-      disabled={p.q.settings.readOnly}
-    >
-      {options.map((o) => (
-        <option key={String(o.code)} value={String(o.code)}>{o.label.replace(/<[^>]*>/g, "")}</option>
-      ))}
-    </select>
+    <div className="rs-msd" ref={rootRef}>
+      <div
+        className="rs-msd-control"
+        role="combobox"
+        aria-expanded={open}
+        tabIndex={0}
+        onClick={() => !p.q.settings.readOnly && setOpen((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen((v) => !v); }
+          if (e.key === "Escape") setOpen(false);
+        }}
+      >
+        {selectedOpts.length === 0 && (
+          <span style={{ color: "var(--rs-subtle)" }}>
+            {p.q.settings.placeholder ?? "— Select all that apply —"}
+          </span>
+        )}
+        {selectedOpts.map((o) => (
+          <span key={String(o.code)} className="rs-msd-chip">
+            {plain(o.label)}
+            <button
+              type="button"
+              aria-label={`Remove ${plain(o.label)}`}
+              onClick={(e) => { e.stopPropagation(); toggle(o); }}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+        <span className="rs-msd-caret">{open ? "▲" : "▼"}</span>
+      </div>
+
+      {open && (
+        <div className="rs-msd-pop">
+          {options.length > 7 && (
+            <input
+              className="rs-input"
+              style={{ maxWidth: "100%" }}
+              autoFocus
+              placeholder={`Search ${options.length} options…`}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          )}
+          <div className="rs-msd-actions">
+            <button type="button" onClick={selectAll}>Select all</button>
+            <button type="button" onClick={clearAll}>Clear all</button>
+            <span style={{ marginLeft: "auto", color: "var(--rs-subtle)" }}>
+              {vals.length} selected
+              {min != null ? ` · min ${min}` : ""}{max != null ? ` · max ${max}` : ""}
+            </span>
+          </div>
+          <div className="rs-msd-list" role="listbox" aria-multiselectable>
+            {filtered.length === 0 && (
+              <div style={{ padding: 8, color: "var(--rs-subtle)" }}>No matches</div>
+            )}
+            {filtered.map((o) => {
+              const sel = vals.some((v) => String(v) === String(o.code));
+              const disabled =
+                !!o.meta?.disabled || (!sel && max != null && vals.length >= max && !EXCLUSIVE(o));
+              return (
+                <div
+                  key={String(o.code)}
+                  className={`rs-msd-item ${disabled ? "disabled" : ""}`}
+                  role="option"
+                  aria-selected={sel}
+                  onClick={() => !disabled && toggle(o)}
+                >
+                  <input type="checkbox" readOnly checked={sel} disabled={disabled} />
+                  <span dangerouslySetInnerHTML={{ __html: o.label }} />
+                  {EXCLUSIVE(o) && (
+                    <span style={{ marginLeft: "auto", fontSize: "0.75em", color: "var(--rs-subtle)" }}>
+                      exclusive
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -195,23 +340,84 @@ function TimeInput(p: QRProps) {
   );
 }
 
+/**
+ * Form-style list questions (reqs §3–5): labeled rows, each with its own
+ * field type (email, phone, currency, date…) and validation. Answers store
+ * keyed by row code; surveys without rows keep the legacy numbered inputs.
+ */
 function ListInput(p: QRProps & { numeric: boolean }) {
-  const n = p.q.settings.listCount ?? Math.max(p.q.rows.length, 3);
-  const vals: unknown[] = Array.isArray(p.value) ? [...(p.value as unknown[])] : [];
   const view = effectiveQuestion(p.q, ctxOf(p));
+  const cols = p.q.settings.columnsLayout ?? 1;
+
+  if (view.rows.length > 0) {
+    const vals = (p.value ?? {}) as Record<string, unknown>;
+    const setField = (rc: string, v: unknown) => p.onChange({ ...vals, [rc]: v });
+    return (
+      <div
+        className={cols > 1 ? `rs-options cols-${Math.min(cols, 4)}` : "rs-options"}
+        style={{ maxWidth: cols > 1 ? undefined : 520 }}
+      >
+        {view.rows.map((row) => {
+          const rc = String(row.code);
+          const ft = row.fieldType ?? (p.numeric ? "number" : "text");
+          const ip = fieldInputProps(ft);
+          const v = vals[rc];
+          const err = p.errors.find((e) => e.startsWith(row.label.replace(/<[^>]*>/g, "")));
+          return (
+            <div key={rc}>
+              <div className="rs-field-row">
+                <span className="flab">
+                  <span dangerouslySetInnerHTML={{ __html: row.label }} />
+                  {row.required && <span className="rs-req"> *</span>}
+                </span>
+                {ip.prefix && <span className="rs-prefix">{ip.prefix}</span>}
+                {ip.multiline ? (
+                  <textarea
+                    className="rs-textarea"
+                    style={{ minHeight: 60 }}
+                    placeholder={row.placeholder}
+                    value={v == null ? "" : String(v)}
+                    readOnly={p.q.settings.readOnly}
+                    onChange={(e) => setField(rc, e.target.value || null)}
+                  />
+                ) : (
+                  <input
+                    className="rs-input"
+                    type={ip.inputType}
+                    inputMode={ip.inputMode as any}
+                    placeholder={row.placeholder}
+                    value={v == null ? "" : String(v)}
+                    readOnly={p.q.settings.readOnly}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      const isNum = ["number", "decimal", "integer", "currency"].includes(ft);
+                      setField(rc, raw === "" ? null : isNum && raw.trim() !== "" && Number.isFinite(Number(raw)) ? Number(raw) : raw);
+                    }}
+                  />
+                )}
+              </div>
+              {err && <div className="rs-error-msg">{err}</div>}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  // legacy numbered list (no labeled rows configured)
+  const n = p.q.settings.listCount ?? 3;
+  const arr: unknown[] = Array.isArray(p.value) ? [...(p.value as unknown[])] : [];
   return (
     <div className="rs-options" style={{ maxWidth: 460 }}>
       {Array.from({ length: n }, (_, i) => (
         <div key={i} style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <span style={{ minWidth: 110, fontSize: "0.92em" }}>
-            {view.rows[i]?.label ?? `${i + 1}.`}
-          </span>
+          <span style={{ minWidth: 110, fontSize: "0.92em" }}>{`${i + 1}.`}</span>
           <input
             className="rs-input"
             type={p.numeric ? "number" : "text"}
-            value={vals[i] == null ? "" : String(vals[i])}
+            value={arr[i] == null ? "" : String(arr[i])}
             onChange={(e) => {
-              const next = [...vals];
+              const next = [...arr];
               while (next.length <= i) next.push(null);
               next[i] = e.target.value === "" ? null : p.numeric ? Number(e.target.value) : e.target.value;
               p.onChange(next);
@@ -419,14 +625,12 @@ function Matrix(p: QRProps) {
                   ))}
                 {type === "matrix_multi" &&
                   colOpts.map((o) => {
-                    const arr: unknown[] = Array.isArray(rowVal) ? rowVal : [];
+                    const arr = (Array.isArray(rowVal) ? rowVal : []) as (string | number)[];
                     const on = arr.some((v) => String(v) === String(o.code));
                     return (
                       <td key={String(o.code)}>
                         <input type="checkbox" checked={on}
-                          onChange={() =>
-                            setRow(rc, on ? arr.filter((v) => String(v) !== String(o.code)) : [...arr, o.code])
-                          } />
+                          onChange={() => setRow(rc, toggleMultiValue(arr, o.code, colOpts))} />
                       </td>
                     );
                   })}
@@ -496,12 +700,12 @@ function CompositeCell({
       return (
         <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
           {col.options.map((o) => {
-            const arr: unknown[] = Array.isArray(value) ? value : [];
+            const arr = (Array.isArray(value) ? value : []) as (string | number)[];
             const on = arr.some((v) => String(v) === String(o.code));
             return (
               <label key={String(o.code)} style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
                 <input type="checkbox" checked={on} disabled={ro}
-                  onChange={() => onChange(on ? arr.filter((v) => String(v) !== String(o.code)) : [...arr, o.code])} />
+                  onChange={() => onChange(toggleMultiValue(arr, o.code, col.options))} />
                 <span style={{ fontSize: "0.88em" }}>{o.label.replace(/<[^>]*>/g, "")}</span>
               </label>
             );

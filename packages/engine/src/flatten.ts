@@ -74,11 +74,18 @@ function flattenQuestion(q: Question, value: unknown, varName: string, out: Flat
     }
     case "numeric_list":
     case "text_list": {
-      const arr = Array.isArray(value) ? value : [];
-      out[varName] = arr;
-      arr.forEach((v, i) => {
-        out[`${varName}_${i + 1}`] = v;
-      });
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        // labeled form fields: keyed by row code
+        for (const [rc, v] of Object.entries(value as Record<string, unknown>)) {
+          out[`${varName}_${rc}`] = v;
+        }
+      } else {
+        const arr = Array.isArray(value) ? value : [];
+        out[varName] = arr;
+        arr.forEach((v, i) => {
+          out[`${varName}_${i + 1}`] = v;
+        });
+      }
       break;
     }
     case "matrix_single":

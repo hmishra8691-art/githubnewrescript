@@ -80,9 +80,25 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
   const [ended, setEnded] = React.useState<{ status: string; message?: string; redirectUrl?: string } | null>(null);
   const [logs, setLogs] = React.useState<string[]>([]);
   const [counts] = React.useState<QuotaCounts>(initialCounts ?? {});
+  const [device, setDevice] = React.useState<"desktop" | "tablet" | "mobile">("desktop");
+  const [epoch, setEpoch] = React.useState(0);
   const showInspector = mode === "test" || mode === "preview";
 
-  // init once
+  /** Restart the test session (req: test links must be repeatable).
+   *  Test mode reloads the URL so the server issues a fresh session id;
+   *  preview mode just re-seeds locally. */
+  const restart = () => {
+    if (mode === "test") {
+      window.location.reload();
+      return;
+    }
+    setEnded(null);
+    setErrors([]);
+    setLogs([]);
+    setEpoch((e) => e + 1);
+  };
+
+  // init once per session epoch
   React.useEffect(() => {
     const state = createResponseState(def, {
       sessionId: session?.sessionId,
@@ -109,7 +125,7 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
     if (nav.done) setEnded({ status: nav.endStatus ?? "complete", redirectUrl: nav.redirectUrl });
     force();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [epoch]);
 
   const state = stateRef.current;
   if (!state) return null;
@@ -179,6 +195,11 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
       )}
       {ended.redirectUrl && mode !== "live" && (
         <p style={{ color: "var(--rs-subtle)" }}>(test mode: would redirect to {ended.redirectUrl})</p>
+      )}
+      {mode !== "live" && (
+        <button type="button" className="rs-btn" style={{ marginTop: 18 }} onClick={restart}>
+          ↻ Restart test session
+        </button>
       )}
     </div>
   ) : !pageStep ? (
@@ -261,7 +282,17 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
   if (showInspector && snap) {
     return (
       <div className="rs-with-inspector">
-        <div>{shell}</div>
+        <div>
+          {/* Mobile testing mode (req §16): constrain the respondent viewport */}
+          <div className="rs-devicebar">
+            {(["desktop", "tablet", "mobile"] as const).map((d) => (
+              <button key={d} className={device === d ? "on" : ""} onClick={() => setDevice(d)}>
+                {d === "desktop" ? "🖥 Desktop" : d === "tablet" ? "▭ Tablet" : "📱 Mobile"}
+              </button>
+            ))}
+          </div>
+          <div className={device !== "desktop" ? `rs-viewport ${device}` : undefined}>{shell}</div>
+        </div>
         <Inspector snap={snap} logs={logs} />
       </div>
     );
