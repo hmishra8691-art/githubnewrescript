@@ -12,11 +12,12 @@ import { DesignsPanel } from "./DesignsPanel";
 import { BrandingPanel, ScriptsPanel } from "./BrandingPanel";
 import { VersionsPanel } from "./VersionsPanel";
 import { JsonPanel } from "./JsonPanel";
+import { DataPanel } from "./DataPanel";
 import { runtimeBaseUrl } from "@/lib/runtime-url";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
-  | "quotas" | "designs" | "branding" | "scripts" | "versions" | "json";
+  | "quotas" | "designs" | "branding" | "scripts" | "data" | "versions" | "json";
 
 const NAV: { key: Tab; label: string; icon: string }[] = [
   { key: "questions", label: "Questions", icon: "▤" },
@@ -28,6 +29,7 @@ const NAV: { key: Tab; label: string; icon: string }[] = [
   { key: "designs", label: "Design Generators", icon: "⚗" },
   { key: "branding", label: "Branding", icon: "◩" },
   { key: "scripts", label: "Scripts", icon: "{}" },
+  { key: "data", label: "Data", icon: "▦" },
   { key: "versions", label: "Versions & Deploy", icon: "⎌" },
   { key: "json", label: "JSON", icon: "≡" },
 ];
@@ -114,7 +116,7 @@ function StudioShell() {
         <button className="btn" onClick={preview} title="Instant in-memory preview (no save)">▶ Preview</button>
         <button className="btn" onClick={testSurvey} title="Save + deploy test URL with inspector">🧪 Test Survey</button>
         <a className="btn" href={`/api/surveys/${s.surveyDbId}/export/xlsx`} target="_blank">⬇ Variables .xlsx</a>
-        <a className="btn" href={`/api/surveys/${s.surveyDbId}/responses?format=csv`} target="_blank">⬇ Responses .csv</a>
+        <button className="btn" onClick={() => setTab("data")} title="Browse test and live responses">▦ Data</button>
         <button className="btn primary" disabled={saving} onClick={() => save()}
           title="Save an immutable snapshot; the next version number is assigned by the server">
           {saving ? "Saving…" : "Save version"}
@@ -140,6 +142,7 @@ function StudioShell() {
           {tab === "designs" && <DesignsPanel />}
           {tab === "branding" && <BrandingPanel />}
           {tab === "scripts" && <ScriptsPanel />}
+          {tab === "data" && <DataPanel />}
           {tab === "versions" && <VersionsPanel />}
           {tab === "json" && <JsonPanel />}
         </main>

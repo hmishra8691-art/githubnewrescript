@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
 import { responsesToCSV } from "@rescript/exporters";
+import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +10,10 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const db = supabaseAdmin();
   const format = req.nextUrl.searchParams.get("format") ?? "summary";
-  const includeTest = req.nextUrl.searchParams.get("test") === "1";
+  // include=live|test|all ("test=1" kept for backwards compatibility)
+  const include =
+    req.nextUrl.searchParams.get("include") ??
+    (req.nextUrl.searchParams.get("test") === "1" ? "all" : "live");
 
   if (format === "summary") {
     const { data } = await db
@@ -18,14 +22,13 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       .eq("survey_id", params.id);
     const rows = data ?? [];
     const count = (s: string, t: boolean) => rows.filter((r) => r.status === s && r.is_test === t).length;
-    return NextResponse.json({
-      live: {
-        in_progress: count("in_progress", false), complete: count("complete", false),
-        screened: count("screened", false), quota_full: count("quota_full", false),
-        terminated: count("terminated", false),
-      },
-      test: { total: rows.filter((r) => r.is_test).length },
+    const block = (t: boolean) => ({
+      in_progress: count("in_progress", t), complete: count("complete", t),
+      screened: count("screened", t), quota_full: count("quota_full", t),
+      terminated: count("terminated", t),
+      total: rows.filter((r) => r.is_test === t).length,
     });
+    return NextResponse.json({ live: block(false), test: block(true) });
   }
 
   const { data: survey } = await db.from("surveys").select("current_version_id").eq("id", params.id).single();
@@ -37,7 +40,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   let query = db.from("responses")
     .select("session_id, respondent_id, status, seed, answers, calculated, embedded, flags, started_at, completed_at, is_test")
     .eq("survey_id", params.id);
-  if (!includeTest) query = query.eq("is_test", false);
+  if (include === "live") query = query.eq("is_test", false);
+  else if (include === "test") query = query.eq("is_test", true);
   const { data: resp } = await query.order("started_at");
 
   const states = (resp ?? []).map((r) => ({
@@ -54,11 +58,34 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     flags: r.flags ?? [],
     stepIndex: 0,
   }));
+  if (format === "json") {
+    // Ordered by the data dictionary, so columns follow questionnaire order.
+    const columns = buildVariableDictionary(parsed.data)
+      .filter((v) => v.responseType !== "system")
+      .map((v) => v.name);
+    const rows = states.map((st, i) => {
+      const raw = (resp ?? [])[i];
+      const started = raw?.started_at ? new Date(raw.started_at).getTime() : null;
+      const done = raw?.completed_at ? new Date(raw.completed_at).getTime() : null;
+      return {
+        sessionId: st.sessionId,
+        status: st.status,
+        isTest: !!raw?.is_test,
+        startedAt: raw?.started_at ?? null,
+        completedAt: raw?.completed_at ?? null,
+        durationSec: started && done ? Math.round((done - started) / 1000) : null,
+        flags: st.flags,
+        vars: flattenVariables(parsed.data, st as any),
+      };
+    });
+    return NextResponse.json({ version: ver!.version, columns, rows });
+  }
+
   const csv = responsesToCSV(parsed.data, states as any);
   return new NextResponse(csv, {
     headers: {
       "content-type": "text/csv; charset=utf-8",
-      "content-disposition": `attachment; filename="${parsed.data.meta.code}_responses.csv"`,
+      "content-disposition": `attachment; filename="${parsed.data.meta.code}_${include}_responses.csv"`,
     },
   });
 }
