@@ -231,11 +231,14 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: ["numeric_bounds", "scale_labels"], validations: VAL_NUM,
     defaults: { settings: { step: 1 } },
   }),
+  stable(F.single, "carousel", "Single-Item Carousel", "One option at a time; browse with ‹ › and select.", {
+    baseType: "single_select", renderer: "carousel", responseModel: "single_choice",
+    capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
+  }),
   ...planned(F.single, [
     ["Icon Select", "Pick one option shown as an icon."],
     ["List Select", "Selectable list rows with metadata."],
     ["Heart Rating", "1–N hearts stored as a score."],
-    ["Single-Item Carousel", "One option at a time, swipe/next through."],
     ["Product Choice", "Rich product card chooser."],
     ["Statement Choice", "Choose the statement you agree with."],
     ["Pairwise Choice", "A vs B forced choice."],
@@ -463,8 +466,16 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: ["rows", "options", "randomization", "carry_forward"], validations: ["required"],
     defaults: { settings: {} },
   }),
+  stable(F.matrix, "semantic", "Semantic Differential", "Opposing adjectives at each end — write rows as \"Cheap | Expensive\".", {
+    baseType: "matrix_single", renderer: "semantic", responseModel: "per_row",
+    capabilities: ["rows", "options", "randomization", "carry_forward"],
+    validations: ["required"],
+    defaults: {
+      options: [1, 2, 3, 4, 5, 6, 7].map((n) => ({ code: n, label: String(n) })),
+      instruction: "For each pair, pick the point closest to your view.",
+    },
+  }),
   ...planned(F.matrix, [
-    ["Semantic Differential", "Opposing adjectives at each end of the scale."],
     ["Slider Matrix", "A slider per row."],
     ["Star Rating Matrix", "Stars per row."],
     ["Constant-Sum Matrix", "Allocations across a grid."],
@@ -497,8 +508,12 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     baseType: "maxdiff_task", responseModel: "tasks",
     capabilities: ["design_ref"], validations: [],
   }),
+  stable(F.ranking, "drag", "Drag-and-Drop Ranking", "Drag items into order (arrow buttons on touch).", {
+    baseType: "ranking", renderer: "dragrank", responseModel: "rank_order",
+    capabilities: ["options", "sorting", "randomization", "carry_forward", "list_logic"],
+    validations: ["required"],
+  }),
   ...planned(F.ranking, [
-    ["Drag-and-Drop Ranking", "Drag rows into order."],
     ["Pairwise / Tournament Ranking", "Repeated A-vs-B duels."],
     ["Bucket Ranking", "Drag items into ranked buckets."],
   ]),
@@ -555,19 +570,49 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     ["Audio Recording / Voice Response", "Record a spoken answer."],
     ["Speech-to-Text Response", "Transcribed voice answer."],
   ]),
+  stable(F.dragdrop, "ranking", "Drag-and-Drop Ranking", "Drag items into order.", {
+    baseType: "ranking", renderer: "dragrank", responseModel: "rank_order",
+    capabilities: ["options", "sorting", "randomization", "carry_forward", "list_logic"],
+    validations: ["required"],
+  }),
   ...planned(F.dragdrop, [
-    ["Drag-and-Drop Ranking", "Drag rows into order."],
     ["Drag into Buckets / Categorization", "Sort items into named buckets."],
     ["Drag onto Scale", "Place items along a scale."],
     ["Drag-and-Drop Allocation", "Distribute chips across items."],
   ]),
+  stable(F.swipe, "tinder", "Tinder-Style Swipe", "Card deck: swipe right = like, left = dislike (buttons too). One judgement per item.", {
+    baseType: "matrix_single", renderer: "swipe", responseModel: "per_row",
+    capabilities: ["rows", "options", "randomization", "carry_forward"],
+    validations: ["required"],
+    defaults: {
+      options: [
+        { code: 0, label: "👎 Dislike" },
+        { code: 1, label: "👍 Like" },
+      ],
+      instruction: "Swipe right to like, left to dislike — or use the buttons.",
+    },
+  }),
+  stable(F.swipe, "statement", "Statement Swipe", "Swipe through statements, agreeing or disagreeing.", {
+    baseType: "matrix_single", renderer: "swipe", responseModel: "per_row",
+    capabilities: ["rows", "options", "randomization", "carry_forward"],
+    validations: ["required"],
+    defaults: {
+      options: [
+        { code: 0, label: "✗ Disagree" },
+        { code: 1, label: "✓ Agree" },
+      ],
+      instruction: "Swipe right if you agree, left if you disagree.",
+    },
+  }),
   ...planned(F.swipe, [
-    ["Tinder-Style Swipe", "Swipe right = like, left = dislike."],
     ["Swipe-to-Rate / Rank / Categorize", "Gesture-driven judgements."],
-    ["Card / Image / Product Swipe", "Swipe through a stimulus deck."],
+    ["Four-Direction Swipe", "Up/down/left/right buckets."],
   ]),
+  stable(F.carousel, "single", "Single-Item Carousel", "Browse options one card at a time and select one.", {
+    baseType: "single_select", renderer: "carousel", responseModel: "single_choice",
+    capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
+  }),
   ...planned(F.carousel, [
-    ["Single-Item Carousel", "One stimulus at a time."],
     ["Carousel + Choice / Slider / Text", "Judge each carousel item."],
     ["Comparison Carousel", "Browse and compare."],
   ]),

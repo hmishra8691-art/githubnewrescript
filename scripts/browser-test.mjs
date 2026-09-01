@@ -44,11 +44,30 @@ const def = SurveyDefinition.parse({
       variant: "single_select.stars", text: "Rate us",
       settings: { minValue: 1, maxValue: 5 },
     },
+    {
+      id: "q_swipe", code: "Q5", variableName: "SWIPE", type: "matrix_single",
+      variant: "swipe.tinder", text: "Like or dislike each concept", required: true,
+      options: [{ code: 0, label: "👎 Dislike" }, { code: 1, label: "👍 Like" }],
+      rows: [
+        { code: "c1", label: "Concept One", flags: [], validation: [], required: false },
+        { code: "c2", label: "Concept Two", flags: [], validation: [], required: false },
+      ],
+    },
+    {
+      id: "q_carousel", code: "Q6", variableName: "CAR", type: "single_select",
+      variant: "carousel.single", text: "Browse and pick a plan",
+      options: [
+        { code: "basic", label: "Basic", meta: { description: "For starters" } },
+        { code: "pro", label: "Pro", meta: { description: "Most popular" } },
+        { code: "max", label: "Max", meta: { description: "Everything" } },
+      ],
+    },
   ],
   flow: [
     { type: "page", id: "p1", questionIds: ["q_md"] },
     { type: "page", id: "p2", questionIds: ["q_form"] },
     { type: "page", id: "p3", questionIds: ["q_btn", "q_star"] },
+    { type: "page", id: "p4", questionIds: ["q_swipe", "q_carousel"] },
     { type: "end", id: "e", status: "complete", message: "Done!" },
   ],
 });
@@ -142,6 +161,28 @@ const starVal = await page.$eval(".rs-stars-val", (e) => e.textContent?.trim());
 assert.equal(starVal, "4 / 5");
 console.log("✔ star-rating variant stores a numeric score (4/5)");
 await page.screenshot({ path: "/tmp/bt-variants.png" });
+await page.click(".rs-nav .rs-btn:not(.secondary)");
+
+// swipe deck: judge both cards (buttons), verify done state + progress
+await page.waitForSelector(".rs-swipe-card");
+let prog = await page.$eval(".rs-swipe-progress", (e) => e.textContent);
+assert.equal(prog?.trim(), "1 / 2");
+await page.click(".rs-swipe-btn.right"); // like Concept One
+prog = await page.$eval(".rs-swipe-progress", (e) => e.textContent);
+assert.equal(prog?.trim(), "2 / 2");
+await page.screenshot({ path: "/tmp/bt-swipe.png" });
+await page.click(".rs-swipe-btn.left"); // dislike Concept Two
+const chipsDone = await page.$$eval(".rs-swipe-chip", (els) => els.map((e) => e.textContent?.trim()));
+assert.ok(chipsDone.some((c) => /Concept One.*Like/.test(c ?? "")), `swipe summary: ${chipsDone}`);
+assert.ok(chipsDone.some((c) => /Concept Two.*Dislike/.test(c ?? "")));
+console.log("✔ swipe deck judges cards and stores per-row values");
+
+// carousel: browse to the 2nd card and select it
+await page.click(".rs-carousel-nav[aria-label='Next']");
+await page.click(".rs-carousel-foot .rs-btn");
+const picked = await page.$eval(".rs-carousel-card.selected .rs-cardopt-title", (e) => e.textContent);
+assert.equal(picked, "Pro");
+console.log("✔ carousel browses and selects (Pro)");
 await page.click(".rs-nav .rs-btn:not(.secondary)");
 await page.waitForSelector(".rs-end");
 const endText = await page.$eval(".rs-end h2", (e) => e.textContent);

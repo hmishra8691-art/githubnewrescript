@@ -279,3 +279,68 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
   filter: none; opacity: 1; border-color: var(--rs-primary);
   background: color-mix(in srgb, var(--rs-primary) 8%, var(--rs-surface)); transform: scale(1.08);
 }
+
+/* ---------- swipe deck ---------- */
+.rs-swipe { max-width: 420px; margin: 0 auto; }
+.rs-swipe-progress { text-align: center; color: var(--rs-subtle); font-size: .85em; margin-bottom: 8px; }
+.rs-swipe-stack { position: relative; height: 300px; }
+.rs-swipe-card {
+  position: absolute; inset: 0; background: var(--rs-surface);
+  border: 1.5px solid var(--rs-border); border-radius: 18px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, .12);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 20px; cursor: grab; user-select: none; overflow: hidden;
+}
+.rs-swipe-card:active { cursor: grabbing; }
+.rs-swipe-card.behind { transform: scale(.94) translateY(10px); z-index: 0; opacity: .6; }
+.rs-swipe-card img { max-width: 100%; max-height: 170px; object-fit: cover; border-radius: 10px; margin-bottom: 12px; pointer-events: none; }
+.rs-swipe-label { font-size: 1.15em; font-weight: 600; text-align: center; }
+.rs-swipe-verdict {
+  position: absolute; top: 14px; padding: 4px 12px; border-radius: 8px;
+  font-weight: 800; font-size: .95em; transform: rotate(-8deg);
+}
+.rs-swipe-verdict.right { right: 14px; color: #16a34a; border: 2.5px solid #16a34a; transform: rotate(8deg); }
+.rs-swipe-verdict.left { left: 14px; color: var(--rs-error); border: 2.5px solid var(--rs-error); }
+.rs-swipe-actions { display: flex; justify-content: center; gap: 14px; margin-top: 16px; }
+.rs-swipe-btn {
+  font: inherit; cursor: pointer; padding: 10px 22px; border-radius: 999px;
+  border: 1.5px solid var(--rs-border); background: var(--rs-surface); font-weight: 600;
+}
+.rs-swipe-btn.right { border-color: #16a34a; color: #16a34a; }
+.rs-swipe-btn.left { border-color: var(--rs-error); color: var(--rs-error); }
+.rs-swipe-btn.undo { color: var(--rs-subtle); }
+.rs-swipe-btn:hover { filter: brightness(.96); }
+.rs-swipe-done { text-align: center; }
+.rs-swipe-summary { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.rs-swipe-chip {
+  background: color-mix(in srgb, var(--rs-primary) 8%, var(--rs-surface));
+  border: 1px solid var(--rs-border); border-radius: 999px; padding: 3px 10px;
+  font-size: .85em; cursor: pointer;
+}
+
+/* ---------- drag ranking ---------- */
+.rs-dragrow { cursor: grab; }
+.rs-dragrow.dragging { opacity: .4; }
+.rs-dragrow.dragover { border-color: var(--rs-primary); border-style: dashed; }
+.rs-drag-grip { color: var(--rs-subtle); cursor: grab; font-size: 1.05em; }
+
+/* ---------- semantic differential ---------- */
+.rs-semantic td { border: none; padding: 6px 8px; }
+.rs-semantic td.rowlabel { min-width: 110px; font-weight: 500; }
+
+/* ---------- carousel ---------- */
+.rs-carousel { max-width: 480px; margin: 0 auto; }
+.rs-carousel-row { display: flex; align-items: stretch; gap: 10px; }
+.rs-carousel-card { flex: 1; min-height: 180px; }
+.rs-carousel-nav {
+  font: inherit; font-size: 26px; width: 42px; border-radius: 10px; cursor: pointer;
+  border: 1.5px solid var(--rs-border); background: var(--rs-surface); color: var(--rs-text);
+}
+.rs-carousel-nav:disabled { opacity: .3; cursor: default; }
+.rs-carousel-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; }
+.rs-carousel-dots { display: flex; gap: 6px; }
+.rs-carousel-dots .dot {
+  width: 9px; height: 9px; border-radius: 50%; background: var(--rs-border); cursor: pointer;
+}
+.rs-carousel-dots .dot.on { background: var(--rs-subtle); }
+.rs-carousel-dots .dot.picked { background: var(--rs-primary); }

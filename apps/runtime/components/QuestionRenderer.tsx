@@ -1051,6 +1051,274 @@ function SearchableSingle(p: QRProps) {
   );
 }
 
+/**
+ * Tinder-style swipe (per-row model): each row is a card, judged with the
+ * first option (swipe left) or last option (swipe right). Pointer-drag on
+ * the card or the buttons below — data is identical to a single-select
+ * matrix, so reporting and logic see ordinary VAR_<row> values.
+ */
+function SwipeDeck(p: QRProps) {
+  const view = effectiveQuestion(p.q, ctxOf(p));
+  const vals = (p.value ?? {}) as Record<string, unknown>;
+  const remaining = view.rows.filter((r) => vals[String(r.code)] === undefined);
+  const current = remaining[0];
+  const done = view.rows.length - remaining.length;
+  const [drag, setDrag] = React.useState<{ x: number; active: boolean }>({ x: 0, active: false });
+  const startX = React.useRef(0);
+
+  const leftOpt = view.options[0];
+  const rightOpt = view.options[view.options.length - 1];
+
+  const judge = (rowCode: string, optCode: string | number) => {
+    p.onChange({ ...vals, [rowCode]: optCode });
+    setDrag({ x: 0, active: false });
+  };
+  const undo = () => {
+    const judged = view.rows.filter((r) => vals[String(r.code)] !== undefined);
+    const last = judged[judged.length - 1];
+    if (!last) return;
+    const next = { ...vals };
+    delete next[String(last.code)];
+    p.onChange(next);
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    startX.current = e.clientX;
+    setDrag({ x: 0, active: true });
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!drag.active) return;
+    setDrag({ x: e.clientX - startX.current, active: true });
+  };
+  const onPointerUp = () => {
+    if (!drag.active || !current) return;
+    if (drag.x > 80 && rightOpt) judge(String(current.code), rightOpt.code);
+    else if (drag.x < -80 && leftOpt) judge(String(current.code), leftOpt.code);
+    else setDrag({ x: 0, active: false });
+  };
+
+  if (!current) {
+    return (
+      <div className="rs-swipe-done">
+        <p>All {view.rows.length} cards judged ✓</p>
+        <div className="rs-swipe-summary">
+          {view.rows.map((r) => {
+            const o = view.options.find((x) => String(x.code) === String(vals[String(r.code)]));
+            return (
+              <span key={String(r.code)} className="rs-swipe-chip"
+                title="tap to judge again"
+                onClick={() => {
+                  const next = { ...vals };
+                  delete next[String(r.code)];
+                  p.onChange(next);
+                }}>
+                {r.label.replace(/<[^>]*>/g, "")}: {o?.label.replace(/<[^>]*>/g, "") ?? "?"}
+              </span>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  const img = (current.meta?.image as string) ?? undefined;
+  const tilt = Math.max(-14, Math.min(14, drag.x / 10));
+  const verdict = drag.x > 40 ? rightOpt : drag.x < -40 ? leftOpt : null;
+
+  return (
+    <div className="rs-swipe">
+      <div className="rs-swipe-progress">{done + 1} / {view.rows.length}</div>
+      <div className="rs-swipe-stack">
+        {remaining[1] && <div className="rs-swipe-card behind" />}
+        <div
+          className="rs-swipe-card"
+          style={{
+            transform: `translateX(${drag.x}px) rotate(${tilt}deg)`,
+            transition: drag.active ? "none" : "transform .18s ease",
+            touchAction: "pan-y",
+          }}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
+        >
+          {img && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={img} alt="" draggable={false} />
+          )}
+          <div className="rs-swipe-label" dangerouslySetInnerHTML={{ __html: current.label }} />
+          {verdict && (
+            <div className={`rs-swipe-verdict ${drag.x > 0 ? "right" : "left"}`}>
+              {verdict.label.replace(/<[^>]*>/g, "")}
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="rs-swipe-actions">
+        {leftOpt && (
+          <button type="button" className="rs-swipe-btn left"
+            onClick={() => judge(String(current.code), leftOpt.code)}>
+            <span dangerouslySetInnerHTML={{ __html: leftOpt.label }} />
+          </button>
+        )}
+        {done > 0 && (
+          <button type="button" className="rs-swipe-btn undo" onClick={undo} title="Undo last">↩</button>
+        )}
+        {rightOpt && rightOpt !== leftOpt && (
+          <button type="button" className="rs-swipe-btn right"
+            onClick={() => judge(String(current.code), rightOpt.code)}>
+            <span dangerouslySetInnerHTML={{ __html: rightOpt.label }} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Drag-and-drop ranking (rank_order model) with arrow-button fallback. */
+function DragRank(p: QRProps) {
+  const { options } = effectiveQuestion(p.q, ctxOf(p));
+  const stored: (string | number)[] = Array.isArray(p.value) ? (p.value as any) : [];
+  // order = stored ranking, with any unranked options appended in display order
+  const order = [
+    ...stored.filter((c) => options.some((o) => String(o.code) === String(c))),
+    ...options.map((o) => o.code).filter((c) => !stored.some((s2) => String(s2) === String(c))),
+  ];
+  const [dragIdx, setDragIdx] = React.useState<number | null>(null);
+  const [overIdx, setOverIdx] = React.useState<number | null>(null);
+
+  const commit = (next: (string | number)[]) => p.onChange(next);
+  const moveTo = (from: number, to: number) => {
+    if (from === to) return;
+    const next = [...order];
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item);
+    commit(next);
+  };
+
+  return (
+    <div className="rs-rank-list">
+      <p className="rs-qinstruction" style={{ margin: "0 0 4px" }}>
+        Drag to reorder — 1 = highest.
+      </p>
+      {order.map((code, i) => {
+        const o = options.find((x) => String(x.code) === String(code));
+        if (!o) return null;
+        return (
+          <div key={String(code)}
+            className={`rs-rank-item rs-dragrow ${overIdx === i ? "dragover" : ""} ${dragIdx === i ? "dragging" : ""}`}
+            draggable
+            onDragStart={(e) => { setDragIdx(i); e.dataTransfer.effectAllowed = "move"; }}
+            onDragOver={(e) => { e.preventDefault(); setOverIdx(i); }}
+            onDragLeave={() => setOverIdx((v) => (v === i ? null : v))}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (dragIdx != null) moveTo(dragIdx, i);
+              setDragIdx(null); setOverIdx(null);
+            }}
+            onDragEnd={() => { setDragIdx(null); setOverIdx(null); }}>
+            <span className="rs-drag-grip" aria-hidden>⠿</span>
+            <span className="rs-rank-num">{i + 1}</span>
+            <span dangerouslySetInnerHTML={{ __html: o.label }} />
+            <span className="rs-rank-btns">
+              <button type="button" onClick={() => moveTo(i, Math.max(0, i - 1))} aria-label="Move up">↑</button>
+              <button type="button" onClick={() => moveTo(i, Math.min(order.length - 1, i + 1))} aria-label="Move down">↓</button>
+            </span>
+          </div>
+        );
+      })}
+      {stored.length === 0 && (
+        <button type="button" className="btn-like rs-btn secondary" style={{ alignSelf: "flex-start", padding: "8px 16px" }}
+          onClick={() => commit(order)}>
+          Accept this order
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Semantic differential: row label "Left | Right" anchors a numbered scale. */
+function SemanticDifferential(p: QRProps) {
+  const view = effectiveQuestion(p.q, ctxOf(p));
+  const vals = (p.value ?? {}) as Record<string, unknown>;
+  const setRow = (rc: string, v: unknown) => p.onChange({ ...vals, [rc]: v });
+  return (
+    <div className="rs-table-wrap">
+      <table className="rs-matrix rs-semantic">
+        <tbody>
+          {view.rows.map((row) => {
+            const rc = String(row.code);
+            const [left, right] = row.label.split("|").map((x) => x.trim());
+            return (
+              <tr key={rc}>
+                <td className="rowlabel" style={{ textAlign: "right" }}
+                  dangerouslySetInnerHTML={{ __html: left ?? row.label }} />
+                {view.options.map((o) => (
+                  <td key={String(o.code)}>
+                    <label style={{ display: "block", cursor: "pointer", padding: 2 }} title={o.label.replace(/<[^>]*>/g, "")}>
+                      <input type="radio" name={`${p.q.id}_${rc}`}
+                        checked={String(vals[rc]) === String(o.code)}
+                        onChange={() => setRow(rc, o.code)} />
+                    </label>
+                  </td>
+                ))}
+                <td className="rowlabel"
+                  dangerouslySetInnerHTML={{ __html: right ?? "" }} />
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Single-item carousel: browse option cards one at a time, select one. */
+function CarouselSelect(p: QRProps) {
+  const { options } = effectiveQuestion(p.q, ctxOf(p));
+  const [idx, setIdx] = React.useState(0);
+  if (options.length === 0) return null;
+  const i = Math.min(idx, options.length - 1);
+  const o = options[i];
+  const selected = String(p.value) === String(o.code);
+  const desc = (o.meta?.description as string) ?? "";
+  return (
+    <div className="rs-carousel">
+      <div className="rs-carousel-row">
+        <button type="button" className="rs-carousel-nav" disabled={i === 0}
+          onClick={() => setIdx(i - 1)} aria-label="Previous">‹</button>
+        <div className={`rs-cardopt rs-carousel-card ${selected ? "selected" : ""}`}
+          onClick={() => p.onChange(selected ? null : o.code)}>
+          {o.imageUrl && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={o.imageUrl} alt="" />
+          )}
+          <div className="rs-cardopt-title" dangerouslySetInnerHTML={{ __html: o.label }} />
+          {desc && <div className="rs-cardopt-desc" dangerouslySetInnerHTML={{ __html: desc }} />}
+          <span className="rs-cardopt-check">{selected ? "✓" : ""}</span>
+        </div>
+        <button type="button" className="rs-carousel-nav" disabled={i === options.length - 1}
+          onClick={() => setIdx(i + 1)} aria-label="Next">›</button>
+      </div>
+      <div className="rs-carousel-foot">
+        <span className="rs-carousel-dots">
+          {options.map((x, j) => (
+            <span key={String(x.code)}
+              className={`dot ${j === i ? "on" : ""} ${String(p.value) === String(x.code) ? "picked" : ""}`}
+              onClick={() => setIdx(j)} />
+          ))}
+        </span>
+        <button type="button" className={`rs-btn ${selected ? "" : "secondary"}`}
+          style={{ padding: "8px 20px" }}
+          onClick={() => p.onChange(selected ? null : o.code)}>
+          {selected ? "Selected ✓" : "Select this"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------- custom component */
 function CustomComponent(p: QRProps) {
   const ref = React.useRef<HTMLDivElement>(null);
@@ -1099,6 +1367,14 @@ export function QuestionRenderer(p: QRProps) {
         return <EmojiRating {...p} />;
       case "searchable_single":
         return <SearchableSingle {...p} />;
+      case "swipe":
+        return <SwipeDeck {...p} />;
+      case "dragrank":
+        return <DragRank {...p} />;
+      case "semantic":
+        return <SemanticDifferential {...p} />;
+      case "carousel":
+        return <CarouselSelect {...p} />;
       default:
         return null;
     }
