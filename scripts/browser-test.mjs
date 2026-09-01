@@ -32,10 +32,23 @@ const def = SurveyDefinition.parse({
         { code: "age", label: "Age", flags: [], fieldType: "integer", validation: [{ kind: "min_value", value: 18 }], required: false },
       ],
     },
+    {
+      id: "q_btn", code: "Q3", variableName: "BTN", type: "single_select",
+      variant: "single_select.buttons", text: "Pick one (buttons)",
+      options: [
+        { code: "a", label: "Alpha" }, { code: "b", label: "Bravo" }, { code: "c", label: "Charlie" },
+      ],
+    },
+    {
+      id: "q_star", code: "Q4", variableName: "STARS", type: "numeric",
+      variant: "single_select.stars", text: "Rate us",
+      settings: { minValue: 1, maxValue: 5 },
+    },
   ],
   flow: [
     { type: "page", id: "p1", questionIds: ["q_md"] },
     { type: "page", id: "p2", questionIds: ["q_form"] },
+    { type: "page", id: "p3", questionIds: ["q_btn", "q_star"] },
     { type: "end", id: "e", status: "complete", message: "Done!" },
   ],
 });
@@ -116,6 +129,19 @@ await page.screenshot({ path: "/tmp/bt-form-errors.png" });
 
 await page.fill(".rs-field-row:has-text('Email Address') input", "ada@lovelace.io");
 await page.fill(".rs-field-row:has-text('Age') input", "36");
+await page.click(".rs-nav .rs-btn:not(.secondary)");
+
+// variant renderers page: button select + star rating
+await page.waitForSelector(".rs-choicebtn");
+await page.click(".rs-choicebtn:has-text('Bravo')");
+const btnSel = await page.$eval(".rs-choicebtn.selected", (e) => e.textContent?.trim());
+assert.equal(btnSel, "Bravo");
+console.log("✔ button-select variant renders and selects");
+await page.click(".rs-stars button:nth-of-type(4)");
+const starVal = await page.$eval(".rs-stars-val", (e) => e.textContent?.trim());
+assert.equal(starVal, "4 / 5");
+console.log("✔ star-rating variant stores a numeric score (4/5)");
+await page.screenshot({ path: "/tmp/bt-variants.png" });
 await page.click(".rs-nav .rs-btn:not(.secondary)");
 await page.waitForSelector(".rs-end");
 const endText = await page.$eval(".rs-end h2", (e) => e.textContent);

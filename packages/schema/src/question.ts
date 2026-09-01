@@ -253,6 +253,11 @@ export const Question = z.object({
   /** Base variable name; expanded per option/row/column by the dictionary. */
   variableName: z.string(),
   type: z.string(), // open — resolved via QuestionTypeRegistry
+  /** Presentation variant id from the variant registry (e.g.
+   *  "single_select.buttons"). Absent on legacy questions — every part of
+   *  the platform falls back to base-type behaviour, so old surveys are
+   *  untouched. The response model is owned by `type`, never by `variant`. */
+  variant: z.string().optional(),
   text: z.string().default(""), // supports piping tokens + HTML
   instruction: z.string().optional(),
   description: z.string().optional(),

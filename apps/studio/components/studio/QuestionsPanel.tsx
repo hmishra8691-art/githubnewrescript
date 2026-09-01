@@ -1,7 +1,8 @@
 "use client";
 import React from "react";
-import type { Question, Option, QuestionColumn, ResponseType } from "@rescript/schema";
-import { questionTypeRegistry } from "@rescript/schema";
+import type { Question, Option, QuestionColumn, ResponseType, QuestionVariantDef } from "@rescript/schema";
+import { questionTypeRegistry, variantRegistry } from "@rescript/schema";
+import { VariantPickerModal, VariantSwitcher, createFromVariant } from "./VariantPicker";
 import { FIELD_TYPES } from "@rescript/engine"; // also registers builtin question types
 import { useStudio, uid } from "./store";
 
@@ -302,6 +303,11 @@ export function QuestionEditor({ q }: { q: Question }) {
   const s = useStudio();
   const plugin = questionTypeRegistry.get(q.type);
   const feats = plugin?.features ?? {};
+  // capability-driven configuration: a variant narrows what the editor shows;
+  // legacy questions (no variant) keep the base-type behaviour untouched.
+  const variantDef = q.variant ? variantRegistry.get(q.variant) : undefined;
+  const has = (c: string) =>
+    variantDef ? variantDef.capabilities.includes(c as any) : true;
   const patch = (p: Partial<Question>) =>
     s.update((d) => {
       const i = d.questions.findIndex((x) => x.id === q.id);
@@ -318,12 +324,7 @@ export function QuestionEditor({ q }: { q: Question }) {
         <label className="f grow" style={{ marginBottom: 0 }}><span>Variable name</span>
           <input className="input mono" value={q.variableName}
             onChange={(e) => patch({ variableName: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "_") })} /></label>
-        <label className="f" style={{ width: 190, marginBottom: 0 }}><span>Type</span>
-          <select className="select" value={q.type} onChange={(e) => patch({ type: e.target.value })}>
-            {questionTypeRegistry.all().map((p) => (
-              <option key={p.type} value={p.type}>{p.label}</option>
-            ))}
-          </select></label>
+        <VariantSwitcher q={q} />
       </div>
 
       <label className="f"><span>Question text (HTML + piping tokens allowed)</span>
@@ -340,12 +341,13 @@ export function QuestionEditor({ q }: { q: Question }) {
           </select></label>
       </div>
 
-      {feats.options && (
+      {feats.options && has("options") && (
         <>
           <h3 className="sec">Options</h3>
           <OptionRows options={q.options} onChange={(options) => patch({ options })}
             flagChoices={allowedFlagsFor(q.type)} />
           <div className="row" style={{ marginTop: 10, flexWrap: "wrap" }}>
+            {has("layout_columns") && (
             <label className="f" style={{ marginBottom: 0, width: 130 }}><span>Layout</span>
               <select className="select" value={q.settings.columnsLayout ?? 1}
                 onChange={(e) => patchSettings({ columnsLayout: Number(e.target.value) === 1 ? undefined : Number(e.target.value) })}>
@@ -353,7 +355,8 @@ export function QuestionEditor({ q }: { q: Question }) {
                 <option value={2}>2 columns</option>
                 <option value={3}>3 columns</option>
                 <option value={4}>4 columns</option>
-              </select></label>
+              </select></label>)}
+            {has("sorting") && (
             <label className="f" style={{ marginBottom: 0, width: 170 }}><span>Sort (presentation)</span>
               <select className="select" value={q.settings.optionOrder ?? "original"}
                 onChange={(e) => patchSettings({ optionOrder: e.target.value === "original" ? undefined : (e.target.value as any) })}>
@@ -362,7 +365,7 @@ export function QuestionEditor({ q }: { q: Question }) {
                 <option value="za">alphabetical Z → A</option>
                 <option value="numeric_asc">numeric ascending</option>
                 <option value="numeric_desc">numeric descending</option>
-              </select></label>
+              </select></label>)}
             <span className="muted" style={{ fontSize: 11, alignSelf: "flex-end", paddingBottom: 7 }}>
               sorting never changes the programmed order; randomization is configured in the right panel
             </span>
@@ -424,7 +427,7 @@ export function QuestionEditor({ q }: { q: Question }) {
         </div>
       )}
 
-      {(q.type === "multi_select" || q.type === "multi_dropdown" || q.type === "image_select") && (
+      {(q.type === "multi_select" || q.type === "multi_dropdown" || q.type === "image_select" || q.type === "ranking") && has("min_max_selections") && (
         <div className="row">
           <label className="f"><span>Min selections</span>
             <input className="input" type="number" style={{ width: 90 }} value={q.settings.minSelections ?? ""}
@@ -470,12 +473,8 @@ export function QuestionsPanel() {
   const [addOpen, setAddOpen] = React.useState(false);
   const selected = s.def.questions.find((q) => q.id === s.selectedQuestionId);
 
-  const addQuestion = (type: string) => {
-    const plugin = questionTypeRegistry.get(type);
-    const n = s.def.questions.length + 1;
-    const q = plugin
-      ? plugin.create({ id: uid("q"), code: `Q${n}`, variableName: `Q${n}` })
-      : ({ id: uid("q"), code: `Q${n}`, variableName: `Q${n}`, type, text: "", options: [], rows: [], columns: [], validation: [], required: false, settings: { readOnly: false, hidden: false }, skipLogic: [] } as unknown as Question);
+  const addQuestion = (variant: QuestionVariantDef) => {
+    const q = createFromVariant(variant, s.def.questions.length + 1);
     s.update((d) => {
       d.questions.push(q);
       // auto-place on the last page
@@ -484,6 +483,7 @@ export function QuestionsPanel() {
     });
     s.select(q.id);
     setAddOpen(false);
+    s.toast(`Added ${variant.familyLabel} → ${variant.name}`);
   };
 
   const move = (id: string, dir: -1 | 1) =>
@@ -514,34 +514,14 @@ export function QuestionsPanel() {
     if (s.selectedQuestionId === id) s.select(null);
   };
 
-  const categories = ["choice", "text", "numeric", "matrix", "media", "special", "custom"] as const;
-
   return (
     <div>
       <div className="row" style={{ marginBottom: 14 }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>Questions</h2>
         <span className="chip">{s.def.questions.length}</span>
         <span className="grow" />
-        <div style={{ position: "relative" }}>
-          <button className="btn primary" onClick={() => setAddOpen((v) => !v)}>+ Add question</button>
-          {addOpen && (
-            <div className="card" style={{ position: "absolute", right: 0, top: 36, width: 340, zIndex: 20, maxHeight: 420, overflowY: "auto" }}>
-              {categories.map((cat) => {
-                const items = questionTypeRegistry.all().filter((p) => p.category === cat);
-                if (!items.length) return null;
-                return (
-                  <div key={cat}>
-                    <div className="flabel" style={{ marginTop: 8 }}>{cat}</div>
-                    {items.map((p) => (
-                      <button key={p.type} className="btn small" style={{ margin: "2px 4px 2px 0" }}
-                        onClick={() => addQuestion(p.type)}>{p.label}</button>
-                    ))}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
+        <button className="btn primary" onClick={() => setAddOpen(true)}>+ Add question</button>
+        {addOpen && <VariantPickerModal onPick={addQuestion} onClose={() => setAddOpen(false)} />}
       </div>
 
       {s.def.questions.map((q) => (

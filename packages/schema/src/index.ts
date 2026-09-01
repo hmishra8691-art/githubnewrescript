@@ -3,3 +3,4 @@ export * from "./question.js";
 export * from "./flow.js";
 export * from "./survey.js";
 export * from "./registry.js";
+export * from "./variants.js";

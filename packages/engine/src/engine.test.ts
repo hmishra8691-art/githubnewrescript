@@ -524,3 +524,59 @@ test("form-style lists: labeled typed fields end to end (req §3–5)", () => {
   assert.equal(flat["T_email"], "ada@lovelace.io");
   assert.equal(flat["T_age"], 36);
 });
+
+test("variant catalog integrity (family/variant architecture)", async () => {
+  const {
+    QUESTION_VARIANTS, variantRegistry, variantFamilies, variantsOf,
+    responseModelOf, variantForLegacyType, isSafeConversion, questionTypeRegistry,
+  } = await import("@rescript/schema");
+
+  const KNOWN_VALIDATIONS = new Set([
+    "required", "min_value", "max_value", "min_length", "max_length",
+    "min_selections", "max_selections", "sum_equals", "sum_max", "sum_min",
+    "pattern", "email", "integer", "custom_expression", "custom_script",
+  ]);
+
+  const ids = new Set<string>();
+  for (const v of QUESTION_VARIANTS) {
+    assert.ok(!ids.has(v.id), `duplicate variant id ${v.id}`);
+    ids.add(v.id);
+    assert.ok(variantRegistry.has(v.id), `${v.id} not registered`);
+    if (v.status === "stable") {
+      assert.ok(questionTypeRegistry.has(v.baseType), `${v.id}: unknown base type ${v.baseType}`);
+      for (const val of v.validations) {
+        assert.ok(KNOWN_VALIDATIONS.has(val), `${v.id}: unknown validation kind ${val}`);
+      }
+      // response model must agree with the base type's storage
+      // (image_select doubles as single/multi choice by design)
+      if (v.baseType !== "image_select") {
+        assert.equal(v.responseModel, responseModelOf(v.baseType),
+          `${v.id}: responseModel disagrees with base type`);
+      }
+    }
+  }
+
+  // the taxonomy covers all requested families
+  const fams = variantFamilies();
+  assert.ok(fams.length >= 25, `families: ${fams.length}`);
+  const stableCount = QUESTION_VARIANTS.filter((v) => v.status === "stable").length;
+  assert.ok(stableCount >= 55, `stable variants: ${stableCount}`);
+  assert.ok(variantsOf("single_select").length >= 15);
+
+  // legacy questions infer their base presentation, never a styled one
+  assert.equal(variantForLegacyType("numeric"), "numeric.open");
+  assert.equal(variantForLegacyType("single_select"), "single_select.radio");
+  assert.equal(variantForLegacyType("multi_select"), "multi_select.checkbox");
+
+  // conversion safety: same response model silent, different flagged
+  const radio = variantRegistry.get("single_select.radio")!;
+  const dropdown = variantRegistry.get("single_select.dropdown")!;
+  const buttons = variantRegistry.get("single_select.buttons")!;
+  const checkbox = variantRegistry.get("multi_select.checkbox")!;
+  assert.ok(isSafeConversion(radio, dropdown, "single_select"));
+  assert.ok(isSafeConversion(radio, buttons, "single_select"));
+  assert.ok(!isSafeConversion(radio, checkbox, "single_select"));
+  // legacy question (no variant) converting across models is also flagged
+  assert.ok(!isSafeConversion(undefined, checkbox, "single_select"));
+  assert.ok(isSafeConversion(undefined, dropdown, "single_select"));
+});

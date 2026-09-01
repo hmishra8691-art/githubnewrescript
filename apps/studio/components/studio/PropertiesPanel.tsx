@@ -2,6 +2,7 @@
 import React from "react";
 import type { Question, ValidationRule, SkipRule } from "@rescript/schema";
 import { validateExpression, lintPipingTokens } from "@rescript/engine";
+import { variantRegistry } from "@rescript/schema";
 import { useStudio, selectedQuestion, uid } from "./store";
 import { OptionalCondition, ConditionEditor, conditionToText } from "./ConditionBuilder";
 
@@ -43,7 +44,8 @@ const VALIDATION_KINDS: { value: ValidationRule["kind"]; label: string; hasValue
 ];
 
 function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question>): void }) {
-  const allowed = validationKindsFor(q.type);
+  const qVariant = q.variant ? variantRegistry.get(q.variant) : undefined;
+  const allowed = (qVariant?.validations as ValidationRule["kind"][] | undefined) ?? validationKindsFor(q.type);
   const kinds = VALIDATION_KINDS.filter((k) => allowed.includes(k.value));
   return (
     <div>
@@ -217,6 +219,9 @@ export function PropertiesPanel() {
       if (i >= 0) d.questions[i] = { ...d.questions[i], ...p } as Question;
     });
 
+  const variantDef = q.variant ? variantRegistry.get(q.variant) : undefined;
+  const hasCap = (c: string) =>
+    variantDef ? variantDef.capabilities.includes(c as any) : true;
   const pipingProblems = lintPipingTokens(s.def, `${q.text} ${q.instruction ?? ""}`);
   const exprError =
     q.type === "calculated" && q.settings.expression ? validateExpression(q.settings.expression) : null;
@@ -239,6 +244,7 @@ export function PropertiesPanel() {
       <h3 className="sec">Skip logic</h3>
       <SkipLogicEditor q={q} patch={patch} />
 
+      {hasCap("carry_forward") && (<>
       <h3 className="sec">Carry-forward (dynamic options)</h3>
       {q.carryForward ? (
         <div className="card" style={{ padding: 10 }}>
@@ -282,7 +288,9 @@ export function PropertiesPanel() {
           + carry forward from another question
         </button>
       )}
+      </>)}
 
+      {hasCap("randomization") && (<>
       <h3 className="sec">Randomization</h3>
       <div className="row" style={{ flexWrap: "wrap" }}>
         <label className="row" style={{ gap: 4 }}>
@@ -381,6 +389,9 @@ export function PropertiesPanel() {
         </>
       )}
 
+      </>)}
+
+      {hasCap("list_logic") && (<>
       <h3 className="sec">List logic (from previous questions)</h3>
       <p className="muted" style={{ fontSize: 11, marginTop: -2 }}>
         Include / exclude / prioritize this question&apos;s options based on what an earlier
@@ -430,6 +441,7 @@ export function PropertiesPanel() {
         })}>
         + list rule
       </button>
+      </>)}
 
       <h3 className="sec">Validation rules</h3>
       <ValidationEditor q={q} patch={patch} />

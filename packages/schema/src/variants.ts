@@ -1,0 +1,808 @@
+import { Registry } from "./registry.js";
+
+/**
+ * Question Family → Variant architecture.
+ *
+ * A VARIANT is a presentation + capability profile layered over one of the
+ * canonical base types (`Question.type`). Many variants share one response
+ * model (Radio, Dropdown, Button Select and Card Select all produce
+ * `single_choice`), so reporting, logic, piping, exports and the variable
+ * dictionary never fragment across hundreds of visual treatments.
+ *
+ * `status: "stable"` variants are fully implemented end to end.
+ * `status: "planned"` variants are registered so the taxonomy, picker and
+ * future implementations live in ONE place — the picker shows them greyed
+ * out, and implementing one later means filling in renderer/capabilities
+ * here plus a renderer component, never touching the core.
+ */
+
+export type ResponseModel =
+  | "single_choice" // one coded value
+  | "multiple_choice" // set of coded values
+  | "text"
+  | "numeric"
+  | "fields" // labeled typed fields keyed by row code
+  | "per_row" // matrix: value per row
+  | "cells" // composite: row × column cells
+  | "rank_order" // ordered codes
+  | "allocation" // code → number, summing rules
+  | "tasks" // design-file driven (conjoint / maxdiff)
+  | "derived" // hidden / calculated
+  | "media" // uploads, recordings
+  | "none"; // display-only
+
+export type VariantCapability =
+  | "options"
+  | "rows"
+  | "columns"
+  | "fields" // labeled typed list fields
+  | "search"
+  | "exclusive_options"
+  | "min_max_selections"
+  | "numeric_bounds"
+  | "scale_labels" // left/right end labels
+  | "sum"
+  | "sorting"
+  | "randomization"
+  | "layout_columns"
+  | "carry_forward"
+  | "list_logic"
+  | "other_specify"
+  | "images"
+  | "design_ref"
+  | "expression";
+
+export interface QuestionVariantDef {
+  id: string; // "<family>.<key>"
+  family: string;
+  familyLabel: string;
+  name: string;
+  description: string;
+  /** canonical base type this variant stores as (owns the response model) */
+  baseType: string;
+  /** runtime renderer key; undefined = base type's default renderer */
+  renderer?: string;
+  responseModel: ResponseModel;
+  capabilities: VariantCapability[];
+  /** ValidationRule kinds the editor offers for this variant */
+  validations: string[];
+  /** applied on creation / conversion (merged into the question) */
+  defaults?: {
+    settings?: Record<string, unknown>;
+    options?: { code: string | number; label: string; flags?: string[] }[];
+    rows?: Record<string, unknown>[];
+    validation?: { kind: string; value?: unknown; message?: string }[];
+    instruction?: string;
+  };
+  status: "stable" | "planned";
+  mobile: boolean;
+}
+
+export const variantRegistry = new Registry<QuestionVariantDef>("id");
+
+/* ------------------------------------------------------------------ helpers */
+
+const CAP_SINGLE: VariantCapability[] = [
+  "options", "sorting", "randomization", "layout_columns",
+  "carry_forward", "list_logic", "other_specify",
+];
+const VAL_SINGLE = ["required", "custom_expression"];
+
+const CAP_MULTI: VariantCapability[] = [...CAP_SINGLE, "exclusive_options", "min_max_selections"];
+const VAL_MULTI = ["required", "min_selections", "max_selections", "custom_expression"];
+
+const VAL_TEXT = ["required", "min_length", "max_length", "pattern", "email", "custom_expression"];
+const VAL_NUM = ["required", "min_value", "max_value", "integer", "custom_expression"];
+
+interface Fam {
+  family: string;
+  familyLabel: string;
+}
+
+function stable(
+  f: Fam,
+  key: string,
+  name: string,
+  description: string,
+  def: Omit<Partial<QuestionVariantDef>, "id" | "family" | "familyLabel" | "name" | "description" | "status"> &
+    Pick<QuestionVariantDef, "baseType" | "responseModel">,
+): QuestionVariantDef {
+  return {
+    id: `${f.family}.${key}`,
+    ...f,
+    name,
+    description,
+    capabilities: [],
+    validations: ["required"],
+    mobile: true,
+    status: "stable",
+    ...def,
+  };
+}
+
+function planned(f: Fam, names: [string, string][]): QuestionVariantDef[] {
+  return names.map(([name, description]) => ({
+    id: `${f.family}.${name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")}`,
+    ...f,
+    name,
+    description,
+    baseType: "custom_component",
+    responseModel: "none" as ResponseModel,
+    capabilities: [],
+    validations: [],
+    status: "planned" as const,
+    mobile: true,
+  }));
+}
+
+/* ------------------------------------------------------------------ catalog */
+
+const F = {
+  single: { family: "single_select", familyLabel: "Single Select" },
+  multi: { family: "multi_select", familyLabel: "Multi Select" },
+  text: { family: "text", familyLabel: "Text / Open End" },
+  numeric: { family: "numeric", familyLabel: "Numeric" },
+  list: { family: "list", familyLabel: "List / Form Fields" },
+  matrix: { family: "matrix", familyLabel: "Grid / Matrix" },
+  ranking: { family: "ranking", familyLabel: "Ranking" },
+  slider: { family: "slider", familyLabel: "Slider / Rating" },
+  image: { family: "image", familyLabel: "Image" },
+  media: { family: "media", familyLabel: "Video / Audio" },
+  dragdrop: { family: "dragdrop", familyLabel: "Drag & Drop" },
+  swipe: { family: "swipe", familyLabel: "Swipe / Gesture" },
+  carousel: { family: "carousel", familyLabel: "Carousel" },
+  card: { family: "card", familyLabel: "Cards" },
+  comparison: { family: "comparison", familyLabel: "Comparison" },
+  conjoint: { family: "conjoint", familyLabel: "Conjoint / Choice Modeling" },
+  allocation: { family: "allocation", familyLabel: "Constant Sum / Allocation" },
+  hotspot: { family: "hotspot", familyLabel: "Hotspot / Heatmap" },
+  location: { family: "location", familyLabel: "Location / Map" },
+  datetime: { family: "datetime", familyLabel: "Date / Time" },
+  upload: { family: "upload", familyLabel: "File / Media Upload" },
+  form: { family: "form", familyLabel: "Custom Form" },
+  dynamic: { family: "dynamic", familyLabel: "Dynamic / Adaptive" },
+  calculated: { family: "calculated", familyLabel: "Calculated / Derived" },
+  gamified: { family: "gamified", familyLabel: "Gamified / Assessment" },
+  experimental: { family: "experimental", familyLabel: "Experimental / Behavioral" },
+  ai: { family: "ai", familyLabel: "AI-Enabled" },
+  conversational: { family: "conversational", familyLabel: "Conversational" },
+  content: { family: "content", familyLabel: "Content / Hidden" },
+} as const;
+
+export const QUESTION_VARIANTS: QuestionVariantDef[] = [
+  /* ------------------------------------------------------- SINGLE SELECT */
+  stable(F.single, "radio", "Radio Button", "Classic vertical (or multi-column) radio list.", {
+    baseType: "single_select", responseModel: "single_choice",
+    capabilities: CAP_SINGLE, validations: VAL_SINGLE,
+  }),
+  stable(F.single, "dropdown", "Dropdown", "Compact native select for medium lists.", {
+    baseType: "dropdown", responseModel: "single_choice",
+    capabilities: ["options", "sorting", "randomization", "carry_forward", "list_logic"],
+    validations: VAL_SINGLE,
+  }),
+  stable(F.single, "searchable_dropdown", "Searchable Dropdown", "Type-to-filter dropdown for long lists (autocomplete/combobox behaviour).", {
+    baseType: "dropdown", renderer: "searchable_single", responseModel: "single_choice",
+    capabilities: ["options", "search", "sorting", "randomization", "carry_forward", "list_logic"],
+    validations: VAL_SINGLE,
+  }),
+  stable(F.single, "buttons", "Button Select", "Large tap-friendly buttons — one per option.", {
+    baseType: "single_select", renderer: "buttons", responseModel: "single_choice",
+    capabilities: CAP_SINGLE, validations: VAL_SINGLE,
+  }),
+  stable(F.single, "cards", "Card Select", "Cards with a title and description per option.", {
+    baseType: "single_select", renderer: "cards", responseModel: "single_choice",
+    capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
+  }),
+  stable(F.single, "tiles", "Tile Select", "Compact card grid; set 2–4 columns in Layout.", {
+    baseType: "single_select", renderer: "cards", responseModel: "single_choice",
+    capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
+    defaults: { settings: { columnsLayout: 3 } },
+  }),
+  stable(F.single, "image", "Image Select", "Pick one image from a grid.", {
+    baseType: "image_select", responseModel: "single_choice",
+    capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
+    defaults: { settings: { maxSelections: 1 } },
+  }),
+  stable(F.single, "stars", "Star Rating", "1–N stars stored as a numeric score.", {
+    baseType: "numeric", renderer: "stars", responseModel: "numeric",
+    capabilities: ["numeric_bounds"], validations: VAL_NUM,
+    defaults: { settings: { minValue: 1, maxValue: 5 } },
+  }),
+  stable(F.single, "emoji", "Emoji / Smiley Rating", "Five-point emoji scale stored as 1–5.", {
+    baseType: "numeric", renderer: "emoji", responseModel: "numeric",
+    capabilities: [], validations: ["required"],
+    defaults: { settings: { minValue: 1, maxValue: 5 } },
+  }),
+  stable(F.single, "likelihood", "Likelihood Scale (1–7)", "Numbered scale with end labels.", {
+    baseType: "nps", responseModel: "numeric",
+    capabilities: ["numeric_bounds", "scale_labels"], validations: ["required"],
+    defaults: { settings: { minValue: 1, maxValue: 7, npsLeftLabel: "Not at all likely", npsRightLabel: "Extremely likely" } },
+  }),
+  stable(F.single, "nps", "NPS (0–10)", "Standard Net Promoter Score scale.", {
+    baseType: "nps", responseModel: "numeric",
+    capabilities: ["scale_labels"], validations: ["required"],
+  }),
+  stable(F.single, "slider", "Slider Selection", "Continuous slider between two anchors.", {
+    baseType: "slider", responseModel: "numeric",
+    capabilities: ["numeric_bounds", "scale_labels"], validations: VAL_NUM,
+  }),
+  stable(F.single, "discrete_slider", "Discrete Slider", "Slider snapping to whole steps.", {
+    baseType: "slider", responseModel: "numeric",
+    capabilities: ["numeric_bounds", "scale_labels"], validations: VAL_NUM,
+    defaults: { settings: { step: 1 } },
+  }),
+  ...planned(F.single, [
+    ["Icon Select", "Pick one option shown as an icon."],
+    ["List Select", "Selectable list rows with metadata."],
+    ["Heart Rating", "1–N hearts stored as a score."],
+    ["Single-Item Carousel", "One option at a time, swipe/next through."],
+    ["Product Choice", "Rich product card chooser."],
+    ["Statement Choice", "Choose the statement you agree with."],
+    ["Pairwise Choice", "A vs B forced choice."],
+  ]),
+
+  /* -------------------------------------------------------- MULTI SELECT */
+  stable(F.multi, "checkbox", "Checkbox", "Classic checkbox list with exclusive-option support.", {
+    baseType: "multi_select", responseModel: "multiple_choice",
+    capabilities: CAP_MULTI, validations: VAL_MULTI,
+  }),
+  stable(F.multi, "dropdown", "Multi-Select Dropdown", "Searchable chip dropdown: select all, clear all, min/max, exclusives.", {
+    baseType: "multi_dropdown", responseModel: "multiple_choice",
+    capabilities: [...CAP_MULTI, "search"], validations: VAL_MULTI,
+  }),
+  stable(F.multi, "searchable", "Searchable Multi-Select", "Same as Multi-Select Dropdown (search built in).", {
+    baseType: "multi_dropdown", responseModel: "multiple_choice",
+    capabilities: [...CAP_MULTI, "search"], validations: VAL_MULTI,
+  }),
+  stable(F.multi, "buttons", "Button Multi-Select", "Toggleable buttons; exclusives clear the rest.", {
+    baseType: "multi_select", renderer: "buttons", responseModel: "multiple_choice",
+    capabilities: CAP_MULTI, validations: VAL_MULTI,
+  }),
+  stable(F.multi, "cards", "Card Multi-Select", "Select any number of option cards.", {
+    baseType: "multi_select", renderer: "cards", responseModel: "multiple_choice",
+    capabilities: [...CAP_MULTI, "images"], validations: VAL_MULTI,
+  }),
+  stable(F.multi, "image", "Image Multi-Select / Image Grid", "Pick several images from a grid.", {
+    baseType: "image_select", responseModel: "multiple_choice",
+    capabilities: [...CAP_MULTI, "images"], validations: VAL_MULTI,
+    defaults: { settings: { maxSelections: 99 } },
+  }),
+  stable(F.multi, "top_n", "Top-N Selection / Pick N of X", "Exactly N picks enforced by min = max = N.", {
+    baseType: "multi_select", responseModel: "multiple_choice",
+    capabilities: CAP_MULTI, validations: VAL_MULTI,
+    defaults: { settings: { minSelections: 3, maxSelections: 3 }, instruction: "Please select exactly 3." },
+  }),
+  ...planned(F.multi, [
+    ["Icon Multi-Select", "Multiple icons selectable."],
+    ["List Multi-Select", "Selectable list rows."],
+    ["Multi-Item Carousel", "Select while browsing a carousel."],
+    ["Product Multi-Select", "Rich product multi-chooser."],
+  ]),
+
+  /* ----------------------------------------------------------------- TEXT */
+  stable(F.text, "single_line", "Single-Line Text", "One-line open end.", {
+    baseType: "open_text", responseModel: "text", validations: VAL_TEXT,
+  }),
+  stable(F.text, "multi_line", "Multi-Line Text", "Paragraph answer.", {
+    baseType: "long_text", responseModel: "text", validations: VAL_TEXT,
+  }),
+  stable(F.text, "essay", "Essay / Long Text", "Long-form answer with a minimum length.", {
+    baseType: "long_text", responseModel: "text", validations: VAL_TEXT,
+    defaults: { validation: [{ kind: "min_length", value: 100, message: "Please write at least a few sentences." }] },
+  }),
+  stable(F.text, "email", "Email", "Validated email address.", {
+    baseType: "open_text", responseModel: "text",
+    validations: ["required", "email", "min_length", "max_length", "pattern"],
+    defaults: { validation: [{ kind: "email" }], settings: { placeholder: "name@example.com" } },
+  }),
+  stable(F.text, "phone", "Phone Number", "Validated phone number.", {
+    baseType: "open_text", responseModel: "text",
+    validations: ["required", "pattern", "min_length", "max_length"],
+    defaults: {
+      validation: [{ kind: "pattern", value: "^\\+?[0-9()\\-\\.\\s]{7,20}$", message: "Please enter a valid phone number." }],
+      settings: { placeholder: "+1 555 123 4567" },
+    },
+  }),
+  stable(F.text, "url", "URL", "Validated web address.", {
+    baseType: "open_text", responseModel: "text",
+    validations: ["required", "pattern"],
+    defaults: { validation: [{ kind: "pattern", value: "^(https?:\\/\\/)?[\\w.-]+\\.[A-Za-z]{2,}(\\/\\S*)?$", message: "Please enter a valid URL." }] },
+  }),
+  stable(F.text, "zip", "ZIP / Postal Code", "Validated postal code.", {
+    baseType: "open_text", responseModel: "text",
+    validations: ["required", "pattern"],
+    defaults: { validation: [{ kind: "pattern", value: "^[A-Za-z0-9][A-Za-z0-9\\- ]{2,9}$", message: "Please enter a valid postal code." }] },
+  }),
+  stable(F.text, "regex", "Masked / Regex Text", "Free text constrained by a custom pattern.", {
+    baseType: "open_text", responseModel: "text",
+    validations: ["required", "pattern", "min_length", "max_length"],
+    defaults: { validation: [{ kind: "pattern", value: "", message: "Invalid format." }] },
+  }),
+  stable(F.text, "name", "Name (First / Last)", "Two labeled name fields.", {
+    baseType: "text_list", responseModel: "fields",
+    capabilities: ["fields", "layout_columns"], validations: ["required"],
+    defaults: {
+      rows: [
+        { code: "first", label: "First Name", fieldType: "text", required: true, flags: [], validation: [] },
+        { code: "last", label: "Last Name", fieldType: "text", required: true, flags: [], validation: [] },
+      ],
+    },
+  }),
+  stable(F.text, "address", "Address", "Street / city / state / ZIP field set.", {
+    baseType: "text_list", responseModel: "fields",
+    capabilities: ["fields", "layout_columns"], validations: ["required"],
+    defaults: {
+      rows: [
+        { code: "street", label: "Street Address", fieldType: "text", required: true, flags: [], validation: [] },
+        { code: "city", label: "City", fieldType: "text", required: true, flags: [], validation: [] },
+        { code: "state", label: "State / Region", fieldType: "text", required: false, flags: [], validation: [] },
+        { code: "zip", label: "ZIP / Postal Code", fieldType: "zip", required: true, flags: [], validation: [] },
+      ],
+    },
+  }),
+  stable(F.text, "company", "Company Name", "Single company field.", {
+    baseType: "open_text", responseModel: "text", validations: VAL_TEXT,
+    defaults: { settings: { placeholder: "Company name" } },
+  }),
+  ...planned(F.text, [["Rich Text", "Formatted-text answer."]]),
+
+  /* -------------------------------------------------------------- NUMERIC */
+  stable(F.numeric, "open", "Numeric Open End", "Any number.", {
+    baseType: "numeric", responseModel: "numeric",
+    capabilities: ["numeric_bounds"], validations: VAL_NUM,
+  }),
+  stable(F.numeric, "integer", "Integer", "Whole numbers only.", {
+    baseType: "numeric", responseModel: "numeric",
+    capabilities: ["numeric_bounds"], validations: VAL_NUM,
+    defaults: { validation: [{ kind: "integer" }] },
+  }),
+  stable(F.numeric, "currency", "Currency", "Monetary amount (0 or more).", {
+    baseType: "numeric", responseModel: "numeric",
+    capabilities: ["numeric_bounds"], validations: VAL_NUM,
+    defaults: { settings: { minValue: 0, placeholder: "0.00" } },
+  }),
+  stable(F.numeric, "percentage", "Percentage", "0–100 value.", {
+    baseType: "numeric", responseModel: "numeric",
+    capabilities: ["numeric_bounds"], validations: VAL_NUM,
+    defaults: { settings: { minValue: 0, maxValue: 100 } },
+  }),
+  stable(F.numeric, "quantity", "Quantity", "Non-negative whole number.", {
+    baseType: "numeric", responseModel: "numeric",
+    capabilities: ["numeric_bounds"], validations: VAL_NUM,
+    defaults: { settings: { minValue: 0 }, validation: [{ kind: "integer" }] },
+  }),
+  stable(F.numeric, "slider", "Number Slider", "Numeric input as a slider.", {
+    baseType: "slider", responseModel: "numeric",
+    capabilities: ["numeric_bounds", "scale_labels"], validations: VAL_NUM,
+  }),
+  stable(F.numeric, "percentage_slider", "Percentage Slider", "0–100 slider.", {
+    baseType: "slider", responseModel: "numeric",
+    capabilities: ["scale_labels"], validations: ["required"],
+    defaults: { settings: { minValue: 0, maxValue: 100, sliderRightLabel: "100%" } },
+  }),
+  ...planned(F.numeric, [["Numeric Range", "A from–to pair of numbers."]]),
+
+  /* ----------------------------------------------------------------- LIST */
+  stable(F.list, "text_list", "Open Text List", "Labeled text fields, one variable per row.", {
+    baseType: "text_list", responseModel: "fields",
+    capabilities: ["fields", "layout_columns"], validations: ["required"],
+  }),
+  stable(F.list, "numeric_list", "Numeric List", "Labeled numeric fields.", {
+    baseType: "numeric_list", responseModel: "fields",
+    capabilities: ["fields", "layout_columns"], validations: ["required"],
+  }),
+  stable(F.list, "mixed", "Multi-Field List / Custom Form", "Rows mixing text, email, currency, date… any field type per row.", {
+    baseType: "text_list", responseModel: "fields",
+    capabilities: ["fields", "layout_columns"], validations: ["required"],
+  }),
+  stable(F.list, "ranking", "Ranking List", "Tap-to-rank ordered list.", {
+    baseType: "ranking", responseModel: "rank_order",
+    capabilities: ["options", "sorting", "randomization", "carry_forward", "list_logic"],
+    validations: ["required", "min_selections", "max_selections"],
+  }),
+  stable(F.list, "carry_forward", "Carry-Forward List", "Options pulled from an earlier question's selections.", {
+    baseType: "multi_select", responseModel: "multiple_choice",
+    capabilities: CAP_MULTI, validations: VAL_MULTI,
+    defaults: { instruction: "Configure the source under Carry-forward in the right panel." },
+  }),
+  ...planned(F.list, [
+    ["Dynamic List", "Respondent adds rows as needed."],
+    ["Editable Table", "Spreadsheet-style entry grid."],
+  ]),
+
+  /* --------------------------------------------------------------- MATRIX */
+  stable(F.matrix, "single", "Single-Select Matrix", "One answer per row.", {
+    baseType: "matrix_single", responseModel: "per_row",
+    capabilities: ["rows", "options", "randomization", "carry_forward"],
+    validations: ["required"],
+  }),
+  stable(F.matrix, "multi", "Multi-Select Matrix", "Multiple answers per row, exclusive-aware.", {
+    baseType: "matrix_multi", responseModel: "per_row",
+    capabilities: ["rows", "options", "randomization", "carry_forward", "exclusive_options"],
+    validations: ["required", "min_selections", "max_selections"],
+  }),
+  stable(F.matrix, "likert", "Likert Matrix", "Agreement scale preset (5-point).", {
+    baseType: "matrix_single", responseModel: "per_row",
+    capabilities: ["rows", "options", "randomization", "carry_forward"],
+    validations: ["required"],
+    defaults: {
+      options: [
+        { code: 1, label: "Strongly disagree" }, { code: 2, label: "Disagree" },
+        { code: 3, label: "Neither agree nor disagree" },
+        { code: 4, label: "Agree" }, { code: 5, label: "Strongly agree" },
+      ],
+    },
+  }),
+  stable(F.matrix, "rating", "Rating Matrix (1–5)", "Numbered rating columns.", {
+    baseType: "matrix_single", responseModel: "per_row",
+    capabilities: ["rows", "options", "randomization", "carry_forward"],
+    validations: ["required"],
+    defaults: {
+      options: [1, 2, 3, 4, 5].map((n) => ({ code: n, label: String(n) })),
+    },
+  }),
+  stable(F.matrix, "numeric", "Numeric Matrix", "A number per row.", {
+    baseType: "matrix_numeric", responseModel: "per_row",
+    capabilities: ["rows", "randomization", "carry_forward", "numeric_bounds"],
+    validations: ["required", "min_value", "max_value"],
+  }),
+  stable(F.matrix, "text", "Text Matrix", "A text answer per row.", {
+    baseType: "matrix_text", responseModel: "per_row",
+    capabilities: ["rows", "randomization", "carry_forward"], validations: ["required"],
+  }),
+  stable(F.matrix, "dropdown", "Dropdown Matrix", "A dropdown per row.", {
+    baseType: "matrix_dropdown", responseModel: "per_row",
+    capabilities: ["rows", "options", "randomization", "carry_forward"], validations: ["required"],
+  }),
+  stable(F.matrix, "mixed", "Mixed-Type Matrix (Composite)", "Each column its own response type, variable and validation.", {
+    baseType: "composite", responseModel: "cells",
+    capabilities: ["rows", "columns", "randomization", "carry_forward"], validations: ["required"],
+  }),
+  stable(F.matrix, "random_rows", "Matrix with Randomized Rows", "Single-select matrix, rows shuffled per respondent.", {
+    baseType: "matrix_single", responseModel: "per_row",
+    capabilities: ["rows", "options", "randomization", "carry_forward"], validations: ["required"],
+    defaults: { settings: {} },
+  }),
+  ...planned(F.matrix, [
+    ["Semantic Differential", "Opposing adjectives at each end of the scale."],
+    ["Slider Matrix", "A slider per row."],
+    ["Star Rating Matrix", "Stars per row."],
+    ["Constant-Sum Matrix", "Allocations across a grid."],
+    ["Drag-and-Drop Matrix", "Drag answers into a grid."],
+  ]),
+
+  /* -------------------------------------------------------------- RANKING */
+  stable(F.ranking, "click", "Click-to-Rank", "Tap items in order; reorder with arrows.", {
+    baseType: "ranking", responseModel: "rank_order",
+    capabilities: ["options", "sorting", "randomization", "carry_forward", "list_logic"],
+    validations: ["required", "min_selections", "max_selections"],
+  }),
+  stable(F.ranking, "rank_all", "Rank All Items", "Every item must receive a rank.", {
+    baseType: "ranking", responseModel: "rank_order",
+    capabilities: ["options", "sorting", "randomization", "carry_forward", "list_logic"],
+    validations: ["required"],
+    defaults: { instruction: "Please rank every item." },
+  }),
+  stable(F.ranking, "top_n", "Rank Top N", "Only the top N items are ranked.", {
+    baseType: "ranking", responseModel: "rank_order",
+    capabilities: ["options", "sorting", "randomization", "carry_forward", "list_logic", "min_max_selections"],
+    validations: ["required", "min_selections", "max_selections"],
+    defaults: { settings: { maxSelections: 3 }, instruction: "Rank your top 3." },
+  }),
+  stable(F.ranking, "image", "Image Ranking", "Rank images by tapping them in order.", {
+    baseType: "image_ranking", responseModel: "rank_order",
+    capabilities: ["options", "images", "randomization", "carry_forward"], validations: ["required"],
+  }),
+  stable(F.ranking, "best_worst", "Best–Worst (MaxDiff)", "Best/worst tasks from a generated MaxDiff design.", {
+    baseType: "maxdiff_task", responseModel: "tasks",
+    capabilities: ["design_ref"], validations: [],
+  }),
+  ...planned(F.ranking, [
+    ["Drag-and-Drop Ranking", "Drag rows into order."],
+    ["Pairwise / Tournament Ranking", "Repeated A-vs-B duels."],
+    ["Bucket Ranking", "Drag items into ranked buckets."],
+  ]),
+
+  /* ---------------------------------------------------------------- SLIDER */
+  stable(F.slider, "single", "Single Slider", "One continuous slider.", {
+    baseType: "slider", responseModel: "numeric",
+    capabilities: ["numeric_bounds", "scale_labels"], validations: VAL_NUM,
+  }),
+  stable(F.slider, "stars", "Star Rating", "Star scale (numeric).", {
+    baseType: "numeric", renderer: "stars", responseModel: "numeric",
+    capabilities: ["numeric_bounds"], validations: VAL_NUM,
+    defaults: { settings: { minValue: 1, maxValue: 5 } },
+  }),
+  stable(F.slider, "emoji", "Emoji Slider / Rating", "Emoji five-point scale.", {
+    baseType: "numeric", renderer: "emoji", responseModel: "numeric",
+    capabilities: [], validations: ["required"],
+    defaults: { settings: { minValue: 1, maxValue: 5 } },
+  }),
+  ...planned(F.slider, [
+    ["Dual / Range Slider", "Two handles selecting a range."],
+    ["Vertical Slider", "Vertical orientation."],
+    ["Multi-Attribute Slider", "Several sliders in one question."],
+    ["Allocation Slider", "Sliders that must total 100."],
+  ]),
+
+  /* ---------------------------------------------------------------- IMAGE */
+  stable(F.image, "choice", "Image Choice", "Pick one image.", {
+    baseType: "image_select", responseModel: "single_choice",
+    capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
+    defaults: { settings: { maxSelections: 1 } },
+  }),
+  stable(F.image, "grid", "Image Grid (Multi)", "Pick several images.", {
+    baseType: "image_select", responseModel: "multiple_choice",
+    capabilities: [...CAP_MULTI, "images"], validations: VAL_MULTI,
+    defaults: { settings: { maxSelections: 99 } },
+  }),
+  stable(F.image, "ranking", "Image Ranking", "Rank images in order.", {
+    baseType: "image_ranking", responseModel: "rank_order",
+    capabilities: ["options", "images", "randomization"], validations: ["required"],
+  }),
+  ...planned(F.image, [
+    ["Image Hotspot", "Click regions on an image."],
+    ["Image Annotation / Markup", "Draw or comment on an image."],
+    ["Image Comparison", "Side-by-side image judgement."],
+    ["Image Categorization", "Sort images into buckets."],
+  ]),
+
+  /* -------------------------------------------------- PLANNED-ONLY FAMILIES */
+  ...planned(F.media, [
+    ["Video Rating", "Rate after watching a clip."],
+    ["Video Hotspot / Annotation", "React on the video timeline."],
+    ["Video Watch-Time Tracking", "Capture how long respondents watch."],
+    ["Audio Recording / Voice Response", "Record a spoken answer."],
+    ["Speech-to-Text Response", "Transcribed voice answer."],
+  ]),
+  ...planned(F.dragdrop, [
+    ["Drag-and-Drop Ranking", "Drag rows into order."],
+    ["Drag into Buckets / Categorization", "Sort items into named buckets."],
+    ["Drag onto Scale", "Place items along a scale."],
+    ["Drag-and-Drop Allocation", "Distribute chips across items."],
+  ]),
+  ...planned(F.swipe, [
+    ["Tinder-Style Swipe", "Swipe right = like, left = dislike."],
+    ["Swipe-to-Rate / Rank / Categorize", "Gesture-driven judgements."],
+    ["Card / Image / Product Swipe", "Swipe through a stimulus deck."],
+  ]),
+  ...planned(F.carousel, [
+    ["Single-Item Carousel", "One stimulus at a time."],
+    ["Carousel + Choice / Slider / Text", "Judge each carousel item."],
+    ["Comparison Carousel", "Browse and compare."],
+  ]),
+  ...planned(F.card, [
+    ["Profile / Product / Statement Cards", "Rich selectable cards."],
+    ["Expandable / Flip Cards", "Cards revealing detail."],
+    ["Sortable / Swipeable Cards", "Gesture-driven card decks."],
+  ]),
+  ...planned(F.comparison, [
+    ["Pairwise Comparison", "A vs B repeated."],
+    ["Side-by-Side Comparison", "Two stimuli with a judgement."],
+    ["Multi-Item / Attribute Comparison", "Compare across attributes."],
+  ]),
+
+  /* -------------------------------------------------------------- CONJOINT */
+  stable(F.conjoint, "cbc", "Choice-Based Conjoint (CBC)", "Tasks from a generated conjoint design (Design Generators tab).", {
+    baseType: "conjoint_task", responseModel: "tasks",
+    capabilities: ["design_ref"], validations: [],
+  }),
+  stable(F.conjoint, "maxdiff", "MaxDiff", "Best/worst tasks from a generated MaxDiff design.", {
+    baseType: "maxdiff_task", responseModel: "tasks",
+    capabilities: ["design_ref"], validations: [],
+  }),
+  ...planned(F.conjoint, [
+    ["Adaptive CBC (ACBC)", "Adaptive conjoint tasks."],
+    ["Menu-Based Conjoint", "Configure-your-own menu tasks."],
+    ["Pricing / Configurator Choice", "Price-focused choice tasks."],
+  ]),
+
+  /* ------------------------------------------------------------ ALLOCATION */
+  stable(F.allocation, "constant_sum", "Constant Sum", "Values must total the target.", {
+    baseType: "allocation", responseModel: "allocation",
+    capabilities: ["options", "sum", "sorting", "randomization", "carry_forward", "list_logic"],
+    validations: ["required", "sum_equals", "sum_max", "sum_min"],
+  }),
+  stable(F.allocation, "budget", "Budget Allocation", "Distribute a budget (currency).", {
+    baseType: "allocation", responseModel: "allocation",
+    capabilities: ["options", "sum", "carry_forward", "list_logic"],
+    validations: ["required", "sum_equals", "sum_max", "sum_min"],
+    defaults: { settings: { sumTarget: 100, sumUnit: " $" } },
+  }),
+  stable(F.allocation, "percentage", "Percentage Allocation", "Percentages totalling 100.", {
+    baseType: "allocation", responseModel: "allocation",
+    capabilities: ["options", "sum", "carry_forward", "list_logic"],
+    validations: ["required", "sum_equals"],
+    defaults: { settings: { sumTarget: 100, sumUnit: " %" } },
+  }),
+  stable(F.allocation, "points", "Point Allocation", "Distribute N points.", {
+    baseType: "allocation", responseModel: "allocation",
+    capabilities: ["options", "sum", "carry_forward", "list_logic"],
+    validations: ["required", "sum_equals", "sum_max"],
+    defaults: { settings: { sumTarget: 100, sumUnit: " pts" } },
+  }),
+  ...planned(F.allocation, [
+    ["Slider Allocation", "Sliders constrained to a total."],
+    ["Drag Allocation", "Drag chips onto items."],
+  ]),
+
+  ...planned(F.hotspot, [
+    ["Image Hotspot / Click Heatmap", "Click points recorded as coordinates."],
+    ["Region / Area Selection", "Select predefined regions."],
+    ["Draw-on-Image", "Free-form marking."],
+  ]),
+  ...planned(F.location, [
+    ["Location Picker / Map Pin", "Drop a pin on a map."],
+    ["Address Search", "Geocoded address entry."],
+    ["Radius / Distance Selection", "Select an area around a point."],
+  ]),
+
+  /* --------------------------------------------------------------- DATE */
+  stable(F.datetime, "date", "Date Picker", "Single date.", {
+    baseType: "date", responseModel: "text", validations: ["required"],
+  }),
+  stable(F.datetime, "time", "Time Picker", "Single time of day.", {
+    baseType: "time", responseModel: "text", validations: ["required"],
+  }),
+  stable(F.datetime, "date_range", "Date Range", "From and to dates as two fields.", {
+    baseType: "text_list", responseModel: "fields",
+    capabilities: ["fields"], validations: ["required"],
+    defaults: {
+      rows: [
+        { code: "from", label: "From", fieldType: "date", required: true, flags: [], validation: [] },
+        { code: "to", label: "To", fieldType: "date", required: true, flags: [], validation: [] },
+      ],
+    },
+  }),
+  ...planned(F.datetime, [
+    ["Calendar / Appointment Selection", "Pick slots on a calendar."],
+    ["Month / Year Picker", "Coarse date entry."],
+  ]),
+
+  ...planned(F.upload, [
+    ["File / Document Upload", "Attach a file."],
+    ["Photo / Camera Capture", "Take a photo in-survey."],
+    ["Signature Capture", "Draw a signature."],
+  ]),
+
+  /* ----------------------------------------------------------------- FORM */
+  stable(F.form, "custom", "Custom Form", "Any mix of labeled, typed, validated fields.", {
+    baseType: "text_list", responseModel: "fields",
+    capabilities: ["fields", "layout_columns"], validations: ["required"],
+  }),
+  stable(F.form, "contact", "Contact Form", "Name, email, phone preset.", {
+    baseType: "text_list", responseModel: "fields",
+    capabilities: ["fields", "layout_columns"], validations: ["required"],
+    defaults: {
+      rows: [
+        { code: "name", label: "Full Name", fieldType: "text", required: true, flags: [], validation: [] },
+        { code: "email", label: "Email Address", fieldType: "email", required: true, flags: [], validation: [] },
+        { code: "phone", label: "Phone Number", fieldType: "phone", required: false, flags: [], validation: [] },
+      ],
+    },
+  }),
+  ...planned(F.form, [
+    ["Repeating / Nested Form", "Respondent-driven repetition."],
+    ["Conditional Form", "Fields appearing per earlier answers."],
+  ]),
+
+  /* -------------------------------------------------------------- DYNAMIC */
+  stable(F.dynamic, "previous_answer", "Previous-Answer-Driven Options", "Options carried from an earlier question (include/exclude/prioritize).", {
+    baseType: "multi_select", responseModel: "multiple_choice",
+    capabilities: CAP_MULTI, validations: VAL_MULTI,
+    defaults: { instruction: "Configure Carry-forward and List logic in the right panel." },
+  }),
+  ...planned(F.dynamic, [
+    ["Adaptive Question / Scale", "Content adapting mid-survey."],
+    ["Respondent-Specific Options", "Options from embedded data or APIs."],
+  ]),
+
+  /* ----------------------------------------------------------- CALCULATED */
+  stable(F.calculated, "value", "Calculated Value", "Expression-driven derived variable (calc DSL).", {
+    baseType: "calculated", responseModel: "derived",
+    capabilities: ["expression"], validations: [],
+  }),
+  stable(F.calculated, "hidden", "Hidden Variable", "Invisible variable set by URL, scripts or piping.", {
+    baseType: "hidden", responseModel: "derived",
+    capabilities: [], validations: [],
+  }),
+  stable(F.calculated, "score", "Respondent Score", "Weighted score preset (edit the expression).", {
+    baseType: "calculated", responseModel: "derived",
+    capabilities: ["expression"], validations: [],
+    defaults: { settings: { expression: "weighted(Q1, 0.5, Q2, 0.5)" } },
+  }),
+
+  ...planned(F.gamified, [
+    ["Quiz / Knowledge Test", "Scored right/wrong questions."],
+    ["Timed Question / Reaction Test", "Response-time capture."],
+    ["Matching / Puzzle / Memory", "Game-mechanic tasks."],
+  ]),
+  ...planned(F.experimental, [
+    ["Attention Check", "Trap question with expected answer."],
+    ["Reaction-Time / Implicit Association", "Millisecond-timed stimulus response."],
+    ["A/B / Multivariate Experiment", "Random treatment assignment."],
+    ["Random Stimulus", "Randomly assigned stimulus display."],
+  ]),
+  ...planned(F.ai, [
+    ["AI Open-End Classification", "Auto-code open ends into themes."],
+    ["AI Sentiment Analysis", "Score open-end sentiment."],
+    ["AI Follow-Up / Dynamic Probe", "Model-generated follow-up questions."],
+    ["AI Conversational Survey", "Interview-style adaptive flow."],
+    ["AI Quality Check", "Flag low-quality responses."],
+  ]),
+  ...planned(F.conversational, [
+    ["Chat-Based Question", "One-at-a-time chat presentation."],
+    ["Voice Survey", "Spoken question and answer."],
+    ["Adaptive Conversation", "Dynamic follow-ups in a chat flow."],
+  ]),
+
+  /* --------------------------------------------------------------- CONTENT */
+  stable(F.content, "html", "Text / HTML Block", "Display-only content with piping.", {
+    baseType: "html", responseModel: "none", capabilities: [], validations: [],
+  }),
+  stable(F.content, "embedded", "Embedded Data Field", "Captured from the URL or panel.", {
+    baseType: "embedded_data", responseModel: "derived", capabilities: [], validations: [],
+  }),
+];
+
+for (const v of QUESTION_VARIANTS) {
+  if (!variantRegistry.has(v.id)) variantRegistry.register(v);
+}
+
+/* ------------------------------------------------------------- utilities */
+
+export function variantFamilies(): { family: string; familyLabel: string; stable: number; planned: number }[] {
+  const map = new Map<string, { family: string; familyLabel: string; stable: number; planned: number }>();
+  for (const v of QUESTION_VARIANTS) {
+    const e = map.get(v.family) ?? { family: v.family, familyLabel: v.familyLabel, stable: 0, planned: 0 };
+    e[v.status === "stable" ? "stable" : "planned"]++;
+    map.set(v.family, e);
+  }
+  return [...map.values()];
+}
+
+export function variantsOf(family: string): QuestionVariantDef[] {
+  return QUESTION_VARIANTS.filter((v) => v.family === family);
+}
+
+/** Response model of a base type — the ground truth for conversion safety. */
+export function responseModelOf(baseType: string): ResponseModel {
+  switch (baseType) {
+    case "single_select": case "dropdown": return "single_choice";
+    case "multi_select": case "multi_dropdown": return "multiple_choice";
+    case "image_select": return "multiple_choice"; // stored as array
+    case "numeric": case "slider": case "nps": return "numeric";
+    case "open_text": case "long_text": case "date": case "time": return "text";
+    case "text_list": case "numeric_list": return "fields";
+    case "matrix_single": case "matrix_multi": case "matrix_numeric":
+    case "matrix_text": case "matrix_dropdown": return "per_row";
+    case "composite": case "custom_table": return "cells";
+    case "ranking": case "image_ranking": return "rank_order";
+    case "allocation": return "allocation";
+    case "conjoint_task": case "maxdiff_task": return "tasks";
+    case "hidden": case "calculated": case "embedded_data": return "derived";
+    case "html": return "none";
+    default: return "none";
+  }
+}
+
+/** Default variant id for a legacy question that has none stored.
+ *  Prefers the variant with the base type's default renderer, so a plain
+ *  numeric question infers as "Numeric Open End", never as "Star Rating". */
+export function variantForLegacyType(baseType: string): string | undefined {
+  const candidates = QUESTION_VARIANTS.filter(
+    (v) => v.status === "stable" && v.baseType === baseType,
+  );
+  return (candidates.find((v) => !v.renderer) ?? candidates[0])?.id;
+}
+
+/** Is switching between these variants non-destructive for collected data,
+ *  logic and exports? Same response model = safe. */
+export function isSafeConversion(
+  from: QuestionVariantDef | undefined,
+  to: QuestionVariantDef,
+  fromBaseType: string,
+): boolean {
+  const fromModel = from?.responseModel ?? responseModelOf(fromBaseType);
+  return fromModel === to.responseModel;
+}

@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import type { Question, Option, SurveyDefinition, QuestionColumn } from "@rescript/schema";
+import { variantRegistry } from "@rescript/schema";
 import {
   effectiveQuestion,
   resolvePiping,
@@ -875,6 +876,181 @@ function DesignTasks(p: QRProps) {
   );
 }
 
+/* ------------------------------------------- variant renderers (families) */
+
+/** Button Select / Button Multi-Select — large tap targets, exclusive-aware. */
+function ChoiceButtons(p: QRProps & { multi: boolean }) {
+  const { options } = effectiveQuestion(p.q, ctxOf(p));
+  const { filtered, searchBox } = useOptionFilter(options);
+  const vals: (string | number)[] = p.multi
+    ? Array.isArray(p.value) ? (p.value as any) : []
+    : p.value == null ? [] : [p.value as any];
+  const pick = (o: Option) => {
+    if (p.q.settings.readOnly) return;
+    if (p.multi) p.onChange(toggleMultiValue(vals, o.code, options, p.q.settings.maxSelections));
+    else p.onChange(String(p.value) === String(o.code) ? null : o.code);
+  };
+  return (
+    <div>
+      {searchBox}
+      <div className={`rs-choicebtns ${p.q.settings.columnsLayout ? `cols-${Math.min(p.q.settings.columnsLayout, 4)}` : ""}`}>
+        {filtered.map((o) => {
+          const sel = vals.some((v) => String(v) === String(o.code));
+          return (
+            <button key={String(o.code)} type="button"
+              className={`rs-choicebtn ${sel ? "selected" : ""}`}
+              aria-pressed={sel}
+              onClick={() => pick(o)}>
+              <span dangerouslySetInnerHTML={{ __html: o.label }} />
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Card / Tile Select — title, optional description (option.meta.description)
+ *  and optional image, single or multi. */
+function ChoiceCards(p: QRProps & { multi: boolean }) {
+  const { options } = effectiveQuestion(p.q, ctxOf(p));
+  const vals: (string | number)[] = p.multi
+    ? Array.isArray(p.value) ? (p.value as any) : []
+    : p.value == null ? [] : [p.value as any];
+  const pick = (o: Option) => {
+    if (p.q.settings.readOnly) return;
+    if (p.multi) p.onChange(toggleMultiValue(vals, o.code, options, p.q.settings.maxSelections));
+    else p.onChange(String(p.value) === String(o.code) ? null : o.code);
+  };
+  const cols = p.q.settings.columnsLayout ?? 2;
+  return (
+    <div className={`rs-cardgrid cols-${Math.min(Math.max(cols, 1), 4)}`}>
+      {options.map((o) => {
+        const sel = vals.some((v) => String(v) === String(o.code));
+        const desc = (o.meta?.description as string) ?? "";
+        return (
+          <div key={String(o.code)}
+            className={`rs-cardopt ${sel ? "selected" : ""}`}
+            role={p.multi ? "checkbox" : "radio"}
+            aria-checked={sel}
+            tabIndex={0}
+            onClick={() => pick(o)}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(o); } }}>
+            {o.imageUrl && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={o.imageUrl} alt="" />
+            )}
+            <div className="rs-cardopt-title" dangerouslySetInnerHTML={{ __html: o.label }} />
+            {desc && <div className="rs-cardopt-desc" dangerouslySetInnerHTML={{ __html: desc }} />}
+            <span className="rs-cardopt-check">{sel ? "✓" : ""}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Star Rating — numeric 1..max. */
+function StarRating(p: QRProps) {
+  const max = Math.min(p.q.settings.maxValue ?? 5, 10);
+  const min = p.q.settings.minValue ?? 1;
+  const val = p.value == null ? 0 : Number(p.value);
+  const [hover, setHover] = React.useState(0);
+  const shown = hover || val;
+  return (
+    <div className="rs-stars" role="radiogroup" aria-label="Star rating">
+      {Array.from({ length: max - min + 1 }, (_, i) => min + i).map((n) => (
+        <button key={n} type="button"
+          className={n <= shown ? "on" : ""}
+          aria-label={`${n} star${n > 1 ? "s" : ""}`}
+          onMouseEnter={() => setHover(n)}
+          onMouseLeave={() => setHover(0)}
+          onClick={() => p.onChange(val === n ? null : n)}>
+          ★
+        </button>
+      ))}
+      <span className="rs-stars-val">{val ? `${val} / ${max}` : ""}</span>
+    </div>
+  );
+}
+
+const EMOJI_SCALE = ["😠", "😕", "😐", "🙂", "😍"];
+
+/** Emoji / Smiley Rating — stores 1..5. */
+function EmojiRating(p: QRProps) {
+  const val = p.value == null ? 0 : Number(p.value);
+  return (
+    <div className="rs-emoji" role="radiogroup" aria-label="Rating">
+      {EMOJI_SCALE.map((e, i) => (
+        <button key={i} type="button"
+          className={val === i + 1 ? "on" : ""}
+          aria-label={`${i + 1} of 5`}
+          onClick={() => p.onChange(val === i + 1 ? null : i + 1)}>
+          {e}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Searchable single-select dropdown (autocomplete / combobox). */
+function SearchableSingle(p: QRProps) {
+  const { options } = effectiveQuestion(p.q, ctxOf(p));
+  const [open, setOpen] = React.useState(false);
+  const [search, setSearch] = React.useState("");
+  const rootRef = React.useRef<HTMLDivElement>(null);
+  const plain = (s: string) => s.replace(/<[^>]*>/g, "");
+
+  React.useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const selected = options.find((o) => String(o.code) === String(p.value));
+  const filtered = search.trim()
+    ? options.filter((o) => plain(o.label).toLowerCase().includes(search.toLowerCase()))
+    : options;
+
+  return (
+    <div className="rs-msd" ref={rootRef}>
+      <div className="rs-msd-control" role="combobox" aria-expanded={open} tabIndex={0}
+        onClick={() => !p.q.settings.readOnly && setOpen((v) => !v)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen((v) => !v); } if (e.key === "Escape") setOpen(false); }}>
+        {selected ? (
+          <span>{plain(selected.label)}</span>
+        ) : (
+          <span style={{ color: "var(--rs-subtle)" }}>{p.q.settings.placeholder ?? "— Select —"}</span>
+        )}
+        <span className="rs-msd-caret">{open ? "▲" : "▼"}</span>
+      </div>
+      {open && (
+        <div className="rs-msd-pop">
+          <input className="rs-input" style={{ maxWidth: "100%" }} autoFocus
+            placeholder={`Search ${options.length} options…`}
+            value={search} onChange={(e) => setSearch(e.target.value)} />
+          <div className="rs-msd-list" role="listbox">
+            {filtered.length === 0 && <div style={{ padding: 8, color: "var(--rs-subtle)" }}>No matches</div>}
+            {filtered.map((o) => (
+              <div key={String(o.code)}
+                className="rs-msd-item"
+                role="option"
+                aria-selected={String(o.code) === String(p.value)}
+                onClick={() => { p.onChange(o.code); setOpen(false); setSearch(""); }}>
+                <span dangerouslySetInnerHTML={{ __html: o.label }} />
+                {String(o.code) === String(p.value) && <span style={{ marginLeft: "auto" }}>✓</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ------------------------------------------------------- custom component */
 function CustomComponent(p: QRProps) {
   const ref = React.useRef<HTMLDivElement>(null);
@@ -907,8 +1083,31 @@ export function QuestionRenderer(p: QRProps) {
   const text = resolvePiping(p.q.text, ctx);
   const instruction = p.q.instruction ? resolvePiping(p.q.instruction, ctx) : null;
 
+  // Variant renderer dispatch (family/variant architecture). Questions
+  // without a variant — every pre-existing survey — fall through to the
+  // base-type switch below unchanged.
+  const variantDef = p.q.variant ? variantRegistry.get(p.q.variant) : undefined;
+  const variantBody = ((): React.ReactNode | null => {
+    switch (variantDef?.renderer) {
+      case "buttons":
+        return <ChoiceButtons {...p} multi={variantDef!.responseModel === "multiple_choice"} />;
+      case "cards":
+        return <ChoiceCards {...p} multi={variantDef!.responseModel === "multiple_choice"} />;
+      case "stars":
+        return <StarRating {...p} />;
+      case "emoji":
+        return <EmojiRating {...p} />;
+      case "searchable_single":
+        return <SearchableSingle {...p} />;
+      default:
+        return null;
+    }
+  })();
+
   let body: React.ReactNode;
-  switch (p.q.type) {
+  if (variantBody) {
+    body = variantBody;
+  } else switch (p.q.type) {
     case "single_select": body = <SingleSelect {...p} />; break;
     case "multi_select": body = <MultiSelect {...p} />; break;
     case "dropdown": body = <Dropdown {...p} />; break;
