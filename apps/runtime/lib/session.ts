@@ -5,7 +5,19 @@ import type { QuotaCounts } from "@rescript/engine";
 
 export async function createSession(
   dep: LoadedDeployment,
-  opts: { isTest: boolean; respondentToken?: string; userAgent?: string },
+  opts: {
+    isTest: boolean;
+    respondentToken?: string;
+    userAgent?: string;
+    /**
+     * Test mode only: mint a throwaway respondent for unique-link and
+     * invitation surveys instead of refusing the session. Without this a
+     * programmer could not test those two access modes at all — the test link
+     * dead-ended on "requires a personal invitation link", which reads as a
+     * broken survey rather than as a missing token.
+     */
+    allowTokenless?: boolean;
+  },
 ): Promise<{ sessionId: string; seed: number; respondentId?: string } | { error: string }> {
   const db = supabaseAdmin();
   const sessionId = crypto.randomUUID().replace(/-/g, "");
@@ -14,6 +26,30 @@ export async function createSession(
   let respondentId: string | undefined;
   const access = dep.definition.deployment.access;
   if (access.mode === "unique_links" || access.mode === "invitation") {
+    if (!opts.respondentToken && opts.isTest && opts.allowTokenless) {
+      // a disposable respondent, so test runs exercise the real token path
+      const { data: made } = await db
+        .from("respondents")
+        .insert({
+          survey_id: dep.surveyId,
+          status: "started",
+          meta: { test: true, createdBy: "test-runtime" },
+        })
+        .select("id")
+        .single();
+      respondentId = made?.id;
+      const { error: insErr } = await db.from("responses").insert({
+        survey_id: dep.surveyId,
+        version_id: dep.versionId,
+        session_id: sessionId,
+        respondent_id: respondentId ?? null,
+        is_test: true,
+        seed,
+        user_agent: opts.userAgent?.slice(0, 500) ?? null,
+      });
+      if (insErr) return { error: "Could not start the survey session." };
+      return { sessionId, seed, respondentId };
+    }
     if (!opts.respondentToken) return { error: "This survey requires a personal invitation link." };
     const { data: r } = await db
       .from("respondents")

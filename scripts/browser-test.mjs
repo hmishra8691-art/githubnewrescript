@@ -90,11 +90,15 @@ const def = SurveyDefinition.parse({
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
 page.on("pageerror", (e) => console.error("PAGE ERROR:", e.message));
-await page.addInitScript((d) => {
-  try { localStorage.setItem("rescript_preview_definition", d); } catch {}
-}, JSON.stringify(def));
-
+// The preview receives definitions over postMessage — the same channel the
+// Studio uses. (It previously accepted a localStorage handoff too; nothing in
+// the app ever wrote that key, and a stale value could clobber a freshly
+// pushed definition, so it was removed. Injecting the real way also means this
+// harness exercises the real path.)
 await page.goto("http://localhost:3001/preview", { waitUntil: "networkidle" });
+await page.evaluate((d) => {
+  window.postMessage({ type: "rescript:preview", definition: d }, "*");
+}, def);
 await page.waitForSelector(".rs-msd-control", { timeout: 15000 });
 console.log("✔ preview loaded the definition; multi-select dropdown rendered");
 

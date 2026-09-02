@@ -22,10 +22,10 @@ export default function PreviewPage() {
       if (e.data?.type === "rescript:preview" && e.data.definition) tryLoad(e.data.definition);
     };
     window.addEventListener("message", onMsg);
-    try {
-      const stored = localStorage.getItem("rescript_preview_definition");
-      if (stored) tryLoad(JSON.parse(stored));
-    } catch { /* ignore */ }
+    // NOTE: an earlier build read a "rescript_preview_definition" key from
+    // localStorage here. Nothing has ever written it, and a stale value would
+    // have clobbered the definition the Studio had just pushed. Removed —
+    // postMessage is the only channel.
     // announce readiness to opener
     window.opener?.postMessage({ type: "rescript:preview-ready" }, "*");
     window.parent?.postMessage({ type: "rescript:preview-ready" }, "*");
@@ -47,7 +47,25 @@ export default function PreviewPage() {
       </div></div>
     );
   }
-  // deliberately not keyed on the definition: the Studio pushes edits live and
-  // remounting on each one would restart the respondent every keystroke.
-  return <Runner definition={def} mode="preview" />;
+  /**
+   * A preview you cannot identify is a preview you cannot trust. The banner
+   * names the definition on screen — version and when it was last saved — so
+   * "am I looking at my change?" is answerable without guessing.
+   */
+  const saved = def.meta.updatedAt
+    ? new Date(def.meta.updatedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+    : null;
+  return (
+    <>
+      <div className="rs-preview-bar" data-testid="preview-bar">
+        <strong>Preview</strong>
+        <span>{def.meta.code} · v{def.meta.version}</span>
+        <span>{saved ? `saved ${saved}` : "unsaved draft"}</span>
+        <span className="rs-preview-live">live — follows your edits</span>
+      </div>
+      {/* deliberately not keyed on the definition: the Studio pushes edits live
+          and remounting on each one would restart the respondent every keystroke */}
+      <Runner definition={def} mode="preview" />
+    </>
+  );
 }

@@ -3,7 +3,7 @@ import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
 import { StudioProvider, useStudio } from "./store";
 import { QuestionsPanel } from "./QuestionsPanel";
-import { PropertiesPanel } from "./PropertiesPanel";
+import { PropertiesPanel, SurveySettings } from "./PropertiesPanel";
 import { FlowPanel } from "./FlowPanel";
 import { LogicPanel, CalcPanel } from "./LogicPanel";
 import { VariablesPanel } from "./VariablesPanel";
@@ -17,10 +17,12 @@ import { runtimeBaseUrl } from "@/lib/runtime-url";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
-  | "quotas" | "designs" | "branding" | "scripts" | "data" | "versions" | "json";
+  | "quotas" | "designs" | "branding" | "scripts" | "data" | "versions" | "json"
+  | "settings";
 
 const NAV: { key: Tab; label: string; icon: string }[] = [
   { key: "questions", label: "Questions", icon: "▤" },
+  { key: "settings", label: "Survey Settings", icon: "⚙" },
   { key: "flow", label: "Survey Flow", icon: "⇉" },
   { key: "logic", label: "Logic", icon: "⑂" },
   { key: "variables", label: "Variables", icon: "𝑥" },
@@ -34,6 +36,54 @@ const NAV: { key: Tab; label: string; icon: string }[] = [
   { key: "json", label: "JSON", icon: "≡" },
 ];
 
+/**
+ * The save indicator is the honest answer to "is my work safe?".
+ *
+ * It reports the DRAFT autosave, not the version — that is what protects a
+ * refresh — and says plainly when autosave is unavailable rather than showing
+ * a reassuring tick over unsaved work.
+ */
+function SaveIndicator() {
+  const s = useStudio();
+  const st = s.saveState;
+  const time = (iso: string) =>
+    new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+
+  switch (st.kind) {
+    case "saving":
+      return <span className="save-state saving" data-testid="save-state">Saving…</span>;
+    case "saved":
+      return (
+        <span className="save-state ok" data-testid="save-state" title={`Draft autosaved at ${time(st.savedAt)}`}>
+          ✓ All changes saved
+        </span>
+      );
+    case "dirty":
+      return <span className="save-state dirty" data-testid="save-state">● Unsaved changes</span>;
+    case "error":
+      return (
+        <span className="save-state err" data-testid="save-state" title={st.message}>
+          ⚠ Save failed — {st.message.slice(0, 60)}
+        </span>
+      );
+    case "unavailable":
+      return (
+        <span className="save-state warn" data-testid="save-state" title={st.message}>
+          ⚠ Autosave off — use Save version
+        </span>
+      );
+    case "clean":
+    default:
+      return st.savedAt ? (
+        <span className="save-state ok" data-testid="save-state" title={`Last saved ${time(st.savedAt)}`}>
+          ✓ Saved
+        </span>
+      ) : (
+        <span className="save-state" data-testid="save-state" />
+      );
+  }
+}
+
 function StudioShell() {
   const s = useStudio();
   // ?tab=data lets the dashboard link straight to a survey's responses
@@ -44,6 +94,15 @@ function StudioShell() {
   });
   React.useEffect(() => { s.setGoToTab((t) => setTab(t as Tab)); }, [s]);
   const [saving, setSaving] = React.useState(false);
+  const savingRef = React.useRef(false);
+  const [publishState, setPublishState] = React.useState<
+    { mode: string; version: string; client_slug: string; study_slug: string }[] | null
+  >(null);
+
+  // always the CURRENT definition — every async path reads through this ref so
+  // nothing can act on a snapshot captured before an await
+  const defRef = React.useRef(s.def);
+  defRef.current = s.def;
 
   const counts: Partial<Record<Tab, number>> = {
     questions: s.def.questions.length,
@@ -53,28 +112,41 @@ function StudioShell() {
     scripts: s.def.scripts.length,
   };
 
+  /**
+   * Cut an immutable version from the current draft.
+   *
+   * This used to snapshot the definition BEFORE awaiting the network, then
+   * write that snapshot back afterwards — so any edit made during the
+   * round-trip was silently reverted, the dirty flag cleared, and a "Saved"
+   * toast shown. Now nothing is written back except the version NUMBER, and
+   * that is merged into whatever the definition has become.
+   */
   const save = async (label?: string): Promise<string | null> => {
+    if (savingRef.current) return null; // one save at a time
+    savingRef.current = true;
     setSaving(true);
     try {
-      const def = structuredClone(s.def);
-      // The server resolves the version number from what is actually stored,
-      // so a restored-then-saved survey can never collide.
+      // make sure the draft on the server matches what we are about to version
+      await s.flushDraft();
       const r = await fetch(`/api/surveys/${s.surveyDbId}/versions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ definition: def, label }),
+        body: JSON.stringify({ definition: defRef.current, label }),
+        cache: "no-store",
       });
-      const d = await r.json();
+      const d = await r.json().catch(() => ({}));
       if (!r.ok) {
         s.toast(d.error ?? "save failed", "err");
         return null;
       }
-      def.meta.version = d.version;
-      s.replace({ ...def });
+      // merge ONLY the assigned version number into the live state
+      s.update((draft) => { draft.meta.version = d.version; });
       s.markSaved(d.id);
+      setPublishState(null); // the gap to live has changed
       s.toast(`Saved version ${d.version} (${d.variables} variables)`);
       return d.id as string;
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };
@@ -93,8 +165,6 @@ function StudioShell() {
    * every change, debounced.
    */
   const previewWin = React.useRef<Window | null>(null);
-  const defRef = React.useRef(s.def);
-  defRef.current = s.def;
 
   const pushPreview = React.useCallback(() => {
     const win = previewWin.current;
@@ -127,25 +197,75 @@ function StudioShell() {
     // the tab may already be open and past its ready message
     let n = 0;
     const t = setInterval(() => { pushPreview(); if (++n > 6) clearInterval(t); }, 400);
+    // persist what is being previewed, so a crash mid-test loses nothing
+    void s.flushDraft();
   };
 
+  /**
+   * Test always runs the newest save. The slugs are read from `defRef` AFTER
+   * the save resolves — reading `s.def` from the closure deployed to whatever
+   * the slugs were when the button was clicked, which is how a renamed study
+   * ended up serving an old deployment.
+   */
   const testSurvey = async () => {
     const versionId = await save("test build");
     if (!versionId) return;
+    const dep = defRef.current.deployment;
     const r = await fetch(`/api/surveys/${s.surveyDbId}/deploy`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         versionId,
-        clientSlug: s.def.deployment.clientSlug || "client",
-        studySlug: s.def.deployment.studySlug || "study-001",
+        clientSlug: dep.clientSlug || "client",
+        studySlug: dep.studySlug || "study-001",
         mode: "test",
       }),
+      cache: "no-store",
     });
-    const d = await r.json();
+    const d = await r.json().catch(() => ({}));
     if (d.url) window.open(d.url, "_blank");
     else s.toast(d.error ?? "test deploy failed", "err");
   };
+
+  /** What each deployment mode is actually serving, so the gap is visible. */
+  const loadPublishState = React.useCallback(async () => {
+    // read-only probe: safe everywhere, including the /sandbox fixture where
+    // it simply returns nothing
+    try {
+      const r = await fetch(`/api/surveys/${s.surveyDbId}/publish`, { cache: "no-store" });
+      if (!r.ok) return;
+      const d = await r.json();
+      setPublishState(d.deployments ?? []);
+    } catch { /* the banner is additive — never block the editor on it */ }
+  }, [s.surveyDbId]);
+  React.useEffect(() => { void loadPublishState(); }, [loadPublishState]);
+
+  const publishLive = async () => {
+    const versionId = await save("publish");
+    if (!versionId) return;
+    const dep = defRef.current.deployment;
+    const r = await fetch(`/api/surveys/${s.surveyDbId}/deploy`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        versionId,
+        clientSlug: dep.clientSlug || "client",
+        studySlug: dep.studySlug || "study-001",
+        mode: "live",
+      }),
+      cache: "no-store",
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) {
+      s.toast(`Published v${defRef.current.meta.version} to the live link`);
+      void loadPublishState();
+    } else {
+      s.toast(d.error ?? "publish failed", "err");
+    }
+  };
+
+  const live = publishState?.find((p) => p.mode === "live");
+  const liveIsBehind = !!live && live.version !== s.def.meta.version;
 
   return (
     <div className="ide">
@@ -153,10 +273,14 @@ function StudioShell() {
         <a href="/" className="logo-mark" style={{ width: 26, height: 26, fontSize: 14 }}>R</a>
         <span className="title">{s.def.meta.title}</span>
         <span className="ver">{s.def.meta.code} · v{s.def.meta.version}</span>
-        {s.dirty && <span className="dirty-dot" title="unsaved changes" />}
+        <SaveIndicator />
         <span className="spacer" />
-        <button className="btn" onClick={preview} title="Instant in-memory preview (no save)">▶ Preview</button>
-        <button className="btn" onClick={testSurvey} title="Save + deploy test URL with inspector">🧪 Test Survey</button>
+        <button className="btn" onClick={preview} disabled={saving}
+          title="Full-page preview of the survey you are editing right now">▶ Preview</button>
+        <button className="btn" onClick={testSurvey} disabled={saving}
+          title="Save a version, deploy it to the test link and open it with the inspector">
+          {saving ? "Saving…" : "🧪 Test Survey"}
+        </button>
         <a className="btn" href={`/api/surveys/${s.surveyDbId}/export/xlsx`} target="_blank">⬇ Variables .xlsx</a>
         <button className="btn" onClick={() => setTab("data")} title="Browse test and live responses">▦ Data</button>
         <button className="btn primary" disabled={saving} onClick={() => save()}
@@ -164,6 +288,20 @@ function StudioShell() {
           {saving ? "Saving…" : "Save version"}
         </button>
       </div>
+      {liveIsBehind && (
+        <div className="publish-bar" data-testid="publish-bar">
+          <span className="publish-dot" />
+          The live link is running <strong>v{live!.version}</strong> — you are editing{" "}
+          <strong>v{s.def.meta.version}</strong>. Respondents will not see your changes until you
+          publish.
+          <span className="grow" />
+          <a className="btn small" target="_blank" rel="noreferrer"
+            href={`${runtimeBaseUrl()}/s/${live!.client_slug}/${live!.study_slug}`}>open live link</a>
+          <button className="btn small primary" disabled={saving} onClick={publishLive}>
+            Publish v{s.def.meta.version} to live
+          </button>
+        </div>
+      )}
       <div className="ide-body">
         <nav className="leftnav">
           {NAV.map((n) => (
@@ -176,6 +314,12 @@ function StudioShell() {
         </nav>
         <main className="center">
           {tab === "questions" && <QuestionsPanel />}
+          {tab === "settings" && (
+            <div style={{ maxWidth: 620 }}>
+              <h2 style={{ margin: "0 0 14px", fontSize: 17 }}>Survey settings</h2>
+              <SurveySettings />
+            </div>
+          )}
           {tab === "flow" && <FlowPanel />}
           {tab === "logic" && <LogicPanel />}
           {tab === "variables" && <VariablesPanel />}
@@ -196,11 +340,14 @@ function StudioShell() {
   );
 }
 
-export function Studio({ definition, surveyDbId, versionId }: {
+export function Studio({ definition, surveyDbId, versionId, draftSavedAt }: {
   definition: SurveyDefinition; surveyDbId: string; versionId: string | null;
+  /** set when the loaded definition came from an autosaved draft */
+  draftSavedAt?: string | null;
 }) {
   return (
-    <StudioProvider initial={definition} surveyDbId={surveyDbId} versionId={versionId}>
+    <StudioProvider initial={definition} surveyDbId={surveyDbId} versionId={versionId}
+      draftSavedAt={draftSavedAt}>
       <StudioShell />
     </StudioProvider>
   );

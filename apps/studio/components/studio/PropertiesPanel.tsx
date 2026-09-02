@@ -299,6 +299,88 @@ function ListOperationsEditor({ q, patch }: { q: Question; patch(p: Partial<Ques
   );
 }
 
+/**
+ * Survey-level settings: title, code, URL slugs and access mode.
+ *
+ * These used to live inside the Properties panel's "no question selected"
+ * branch, so the moment a programmer clicked any question the Access mode
+ * control vanished with no way back — which is why "the study mode doesn't
+ * save" was the most common report. It has its own Settings tab now, always
+ * reachable, and the same component is reused in the empty Properties state.
+ */
+export function SurveySettings() {
+  const s = useStudio();
+  const dep = s.def.deployment;
+  const mode = dep.access.mode;
+
+  return (
+    <div data-testid="survey-settings">
+      <label className="f"><span>Title</span>
+        <input className="input" value={s.def.meta.title}
+          onChange={(e) => s.update((d) => { d.meta.title = e.target.value; })} /></label>
+      <label className="f"><span>Survey code</span>
+        <input className="input mono" value={s.def.meta.code}
+          onChange={(e) => s.update((d) => { d.meta.code = e.target.value; })} /></label>
+
+      <h3 className="sec">Survey URL</h3>
+      <p className="muted" style={{ fontSize: 11, marginTop: -4 }}>
+        Must be unique across surveys — respondents get
+        <span className="mono"> /s/{dep.clientSlug || "client"}/{dep.studySlug || "study-001"}</span>
+      </p>
+      <div className="row">
+        <label className="f grow"><span>Client slug</span>
+          <input className="input mono" value={dep.clientSlug}
+            placeholder="acme"
+            onChange={(e) => s.update((d) => {
+              d.deployment.clientSlug = e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+            })} /></label>
+        <label className="f grow"><span>Study slug</span>
+          <input className="input mono" value={dep.studySlug}
+            placeholder="brand-tracker-2026"
+            onChange={(e) => s.update((d) => {
+              d.deployment.studySlug = e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+            })} /></label>
+      </div>
+
+      <h3 className="sec">Who can take this survey</h3>
+      <label className="f"><span>Access mode</span>
+        <select className="select" data-testid="access-mode" value={mode}
+          onChange={(e) => s.update((d) => { d.deployment.access.mode = e.target.value as any; })}>
+          <option value="open">Open link — anyone with the URL</option>
+          <option value="password">Password protected</option>
+          <option value="unique_links">Unique respondent links</option>
+          <option value="invitation">Email invitations</option>
+        </select></label>
+
+      {mode === "password" && (
+        <label className="f"><span>Password</span>
+          <input className="input" value={dep.access.password ?? ""}
+            placeholder="respondents are asked for this"
+            onChange={(e) => s.update((d) => { d.deployment.access.password = e.target.value; })} /></label>
+      )}
+
+      {(mode === "unique_links" || mode === "invitation") && (
+        <div className="chip warn" style={{ marginBottom: 10 }}>
+          Each respondent needs their own token. There is no invitation-management screen yet, so
+          the live link will refuse everyone until tokens exist in the <span className="mono">respondents</span>{" "}
+          table. <strong>Test Survey still works</strong> — it mints a throwaway token for you.
+        </div>
+      )}
+
+      <label className="row" style={{ gap: 6, fontSize: 12, marginBottom: 8 }}>
+        <input type="checkbox" checked={dep.access.allowRetake ?? false}
+          onChange={(e) => s.update((d) => { d.deployment.access.allowRetake = e.target.checked; })} />
+        Allow a respondent to retake the survey
+      </label>
+
+      <p className="muted" style={{ fontSize: 11 }}>
+        Changes here autosave to your draft. They reach respondents only when you save a version
+        and publish it.
+      </p>
+    </div>
+  );
+}
+
 export function PropertiesPanel() {
   const s = useStudio();
   const q = selectedQuestion(s);
@@ -306,48 +388,12 @@ export function PropertiesPanel() {
     return (
       <div>
         <h2>Properties</h2>
-        <p className="muted">Select a question to edit its logic, validation, randomization, carry-forward and custom code.</p>
-        <h2 style={{ marginTop: 24 }}>Survey</h2>
-        <label className="f"><span>Title</span>
-          <input className="input" value={s.def.meta.title}
-            onChange={(e) => s.update((d) => { d.meta.title = e.target.value; })} /></label>
-        <label className="f"><span>Survey code</span>
-          <input className="input mono" value={s.def.meta.code}
-            onChange={(e) => s.update((d) => { d.meta.code = e.target.value; })} /></label>
-
-        <h3 className="sec">Survey URL</h3>
-        <p className="muted" style={{ fontSize: 11, marginTop: -4 }}>
-          Must be unique across surveys — respondents get
-          <span className="mono"> /s/{s.def.deployment.clientSlug || "client"}/{s.def.deployment.studySlug || "study-001"}</span>
+        <p className="muted">
+          Select a question to edit its logic, validation, randomization, carry-forward and custom
+          code.
         </p>
-        <div className="row">
-          <label className="f grow"><span>Client slug</span>
-            <input className="input mono" value={s.def.deployment.clientSlug}
-              placeholder="acme"
-              onChange={(e) => s.update((d) => {
-                d.deployment.clientSlug = e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-");
-              })} /></label>
-          <label className="f grow"><span>Study slug</span>
-            <input className="input mono" value={s.def.deployment.studySlug}
-              placeholder="brand-tracker-2026"
-              onChange={(e) => s.update((d) => {
-                d.deployment.studySlug = e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-");
-              })} /></label>
-        </div>
-
-        <label className="f"><span>Access mode</span>
-          <select className="select" value={s.def.deployment.access.mode}
-            onChange={(e) => s.update((d) => { d.deployment.access.mode = e.target.value as any; })}>
-            <option value="open">open link</option>
-            <option value="password">password protected</option>
-            <option value="unique_links">unique respondent links</option>
-            <option value="invitation">email invitations</option>
-          </select></label>
-        {s.def.deployment.access.mode === "password" && (
-          <label className="f"><span>Password</span>
-            <input className="input" value={s.def.deployment.access.password ?? ""}
-              onChange={(e) => s.update((d) => { d.deployment.access.password = e.target.value; })} /></label>
-        )}
+        <h2 style={{ marginTop: 24 }}>Survey</h2>
+        <SurveySettings />
       </div>
     );
   }

@@ -12,15 +12,39 @@ export default async function TestSurveyPage({
   params: { client: string; study: string };
   searchParams: Record<string, string>;
 }) {
-  const dep =
-    (await loadDeployment(params.client, params.study, "test")) ??
-    (await loadDeployment(params.client, params.study, "live"));
+  /**
+   * A test URL serves the TEST deployment, full stop.
+   *
+   * This used to fall back to the live deployment when no test row existed,
+   * which meant a test link could quietly hand you an older, already-published
+   * version — the exact "preview shows old configuration" complaint, with
+   * nothing on screen to reveal it.
+   */
+  const dep = await loadDeployment(params.client, params.study, "test");
   if (!dep) {
     return (
-      <div className="rs-shell"><div className="rs-card rs-end"><h2>Test survey not found</h2></div></div>
+      <div className="rs-shell"><div className="rs-card rs-end">
+        <h2>No test build for this link</h2>
+        <p>
+          Nothing has been deployed to <code>/t/{params.client}/{params.study}</code> yet.
+          Open the survey in the Studio and click <strong>Test Survey</strong> — it saves a
+          version and deploys it here.
+        </p>
+      </div></div>
     );
   }
-  const session = await createSession(dep, { isTest: true });
+
+  /**
+   * Test mode is for the programmer, so it must work for every access mode.
+   * Unique-link and invitation surveys demand a respondent token; without one
+   * the session refused to start and the tester saw a dead end that looked
+   * like a bug. In test, a throwaway token is minted instead.
+   */
+  const session = await createSession(dep, {
+    isTest: true,
+    respondentToken: searchParams.token,
+    allowTokenless: true,
+  });
   if ("error" in session) {
     return <div className="rs-shell"><div className="rs-card rs-end"><h2>{session.error}</h2></div></div>;
   }
