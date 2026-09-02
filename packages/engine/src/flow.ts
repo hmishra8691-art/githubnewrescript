@@ -45,7 +45,22 @@ export function compileFlow(
     quotaCounts,
   });
 
-  const walk = (nodes: FlowNode[], loop: LoopContext | null, sectionPath: string[]): void => {
+  /**
+   * `blockTitle` is the name of the enclosing block, if any.
+   *
+   * A block can hold several pages — that is how a page break inside a block
+   * is expressed — and a named block shows its name as the respondent-facing
+   * heading. Rather than copying that name onto every child page (state that
+   * would drift the moment someone edits the JSON), an untitled page inherits
+   * it here. A page with its own title still wins, so a block can name its
+   * pages individually.
+   */
+  const walk = (
+    nodes: FlowNode[],
+    loop: LoopContext | null,
+    sectionPath: string[],
+    blockTitle?: string,
+  ): void => {
     for (const node of nodes) {
       switch (node.type) {
         case "page": {
@@ -53,7 +68,7 @@ export function compileFlow(
           steps.push({
             kind: "page",
             pageId: loop ? `${node.id}@${loop.code}` : node.id,
-            title: node.title,
+            title: node.title ?? blockTitle,
             questionIds: node.questionIds,
             loop,
             sectionPath,
@@ -63,26 +78,32 @@ export function compileFlow(
         case "section":
         case "block": {
           if (!evaluateCondition(node.visibleIf, ctxFor(loop))) break;
-          walk(node.children, loop, [...sectionPath, node.title ?? node.id]);
+          walk(
+            node.children,
+            loop,
+            [...sectionPath, node.title ?? node.id],
+            // a section groups pages for reporting; a block also names them
+            node.type === "block" ? (node.title ?? blockTitle) : blockTitle,
+          );
           break;
         }
         case "randomizer": {
           const seed = subSeed(state.seed, `flow:${node.id}`);
           let children = seededShuffle(node.children, seed);
           if (node.show != null) children = children.slice(0, node.show);
-          walk(children, loop, sectionPath);
+          walk(children, loop, sectionPath, blockTitle);
           break;
         }
         case "branch": {
           let matched = false;
           for (const b of node.branches) {
             if (evaluateCondition(b.when, ctxFor(loop))) {
-              walk(b.children, loop, sectionPath);
+              walk(b.children, loop, sectionPath, blockTitle);
               matched = true;
               break;
             }
           }
-          if (!matched && node.otherwise) walk(node.otherwise, loop, sectionPath);
+          if (!matched && node.otherwise) walk(node.otherwise, loop, sectionPath, blockTitle);
           break;
         }
         case "loop": {
@@ -126,7 +147,7 @@ export function compileFlow(
               label: item.label,
               index: i + 1,
             };
-            walk(node.children, iterLoop, sectionPath);
+            walk(node.children, iterLoop, sectionPath, blockTitle);
           });
           break;
         }

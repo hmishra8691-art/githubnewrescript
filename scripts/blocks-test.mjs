@@ -30,9 +30,13 @@ await page.waitForSelector(".block-badge");
 /* ------------------------------------------------- blocks, not page breaks */
 
 const bodyText = await page.evaluate(() => document.body.innerText);
-assert.ok(!/Page break/i.test(bodyText), "a page break is no longer offered as an element");
 assert.match(bodyText, /BLOCK 1/, "the container is labelled as a Block");
-console.log("✔ the editor shows Blocks; “Page break” is not an element any more");
+// A page break is offered again — it paginates a block — but it is never a
+// question card and never a block of its own; pagebreak-test.mjs proves that.
+const breakIsACard = await page.$$eval(".qcard", (els) =>
+  els.some((e) => /page break/i.test(e.textContent)));
+assert.ok(!breakIsACard, "a page break is not presented as a question");
+console.log("✔ the editor shows Blocks, and a page break is structure rather than content");
 
 /* ------------------------------------------------------------ add + rename */
 
@@ -237,7 +241,9 @@ await (async () => {
 
   // block position, as a respondent sees it
   const pos = await p.$eval('[data-testid="block-position"]', (e) => e.textContent.trim());
-  assert.equal(pos, "Block 1 of 2", `the toolbar reports position: ${pos}`);
+  // steps are PAGES, and a block may hold several — so the label counts pages
+  // and names the block they sit in
+  assert.equal(pos, "Intro · Page 1 of 2", `the toolbar reports position: ${pos}`);
   console.log(`✔ the runtime reports “${pos}”`);
 
   // debug on demand, showing real logic evaluation
@@ -259,8 +265,8 @@ await (async () => {
   await p.click("text=Next");
   await p.waitForTimeout(400);
   const pos2 = await p.$eval('[data-testid="block-position"]', (e) => e.textContent.trim());
-  assert.equal(pos2, "Block 2 of 2", `real navigation, not a mock: ${pos2}`);
-  console.log("✔ preview executes the real engine — answering advances to Block 2");
+  assert.equal(pos2, "Detail · Page 2 of 2", `real navigation, not a mock: ${pos2}`);
+  console.log("✔ preview executes the real engine — answering advances to the next page");
 
   await b.close();
 })();

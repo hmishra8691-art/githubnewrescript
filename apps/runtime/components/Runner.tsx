@@ -165,9 +165,19 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
 
   const snap: InspectorSnapshot | null = showInspector ? inspect(def, state, steps, counts) : null;
 
-  /** Which block the respondent is on — "Block 3 of 5", as a respondent sees it. */
+  /**
+   * Where the respondent is — "Page 3 of 5".
+   *
+   * These steps are PAGES, and since a block can hold several of them the
+   * label has to say so: "Block 3 of 5" was only ever right while a block and
+   * a page were the same thing. The block is named alongside it when there is
+   * one, which is the part a programmer is usually looking for.
+   */
   const blockSteps = steps.filter((x) => x.kind === "page");
   const blockIndex = pageStep ? blockSteps.indexOf(pageStep) + 1 : 0;
+  // a wrapped block names itself in the section path; a single-page block
+  // carries its name on the page, which is the same thing said two ways
+  const blockName = pageStep?.sectionPath?.[pageStep.sectionPath.length - 1] ?? pageStep?.title;
 
   const b = def.branding;
   const pageIndexAmongPages = steps.filter((s, i) => s.kind === "page" && i <= state.stepIndex).length;
@@ -323,7 +333,7 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
       <span className="rs-toolbar-mode">{mode.toUpperCase()}</span>
       {blockIndex > 0 && (
         <span className="rs-toolbar-pos" data-testid="block-position">
-          Block {blockIndex} of {Math.max(blockSteps.length, 1)}
+          {blockName ? `${blockName} · ` : ""}Page {blockIndex} of {Math.max(blockSteps.length, 1)}
         </span>
       )}
       <span className="rs-toolbar-gap" />

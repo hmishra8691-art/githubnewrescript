@@ -484,6 +484,38 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .add-block-btn { display: block; width: 100%; margin: 4px 0 24px; }
 .select.small.move-to { width: 104px; padding: 2px 6px; font-size: 11.5px; }
 
+/* ---------- page breaks inside a block ---------- */
+/* A break is a boundary, not an element: it is drawn as a rule across the
+   block rather than as another card, so it can never be mistaken for content.
+   The block frame continues through it, which is the whole point — the block
+   does not end here, the respondent's page does. */
+.page-break {
+  display: flex; align-items: center; gap: 7px;
+  margin: 14px -12px; padding: 0 12px;
+}
+.pb-line { flex: 1; height: 1px; background: repeating-linear-gradient(
+  to right, var(--accent) 0 6px, transparent 6px 11px); opacity: .5; }
+.pb-label {
+  font-size: 10px; font-weight: 800; letter-spacing: .1em; white-space: nowrap;
+  color: var(--accent); background: var(--panel2);
+  border: 1px solid var(--border); border-radius: 5px; padding: 2px 8px;
+}
+.page-break .btn.small { padding: 1px 6px; font-size: 11px; opacity: .55; }
+.page-break:hover .btn.small, .page-break:focus-within .btn.small { opacity: 1; }
+.page-row { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }
+.page-badge {
+  font-size: 10px; font-weight: 800; letter-spacing: .08em; white-space: nowrap;
+  color: var(--subtle); background: var(--panel2);
+  border-radius: 5px; padding: 2px 7px;
+}
+.page-title {
+  flex: 1; min-width: 0; max-width: 260px; padding: 2px 7px; font-size: 12px;
+  background: transparent; border-color: transparent;
+}
+.page-title:hover, .page-title:focus { background: #fff; border-color: var(--border); }
+.insert-bar .btn.small.ghost { color: var(--subtle); }
+.insert-bar .btn.small.ghost:hover { color: var(--accent); border-color: var(--accent); }
+
 /* ---------- multi-property options (Phase 4) ---------- */
 .opt-flags { position: relative; flex: none; }
 .opt-flags > summary {

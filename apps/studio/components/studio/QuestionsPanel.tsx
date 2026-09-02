@@ -775,13 +775,105 @@ function listPages(flow: any[]): PageRef[] {
   return out;
 }
 
+interface BlockRef {
+  /** Stable identity: the block node's id when wrapped, else the page's. */
+  id: string;
+  title?: string;
+  /** The node that IS the block — a `block` container, or a lone `page`. */
+  node: any;
+  parent: any[];
+  /** Respondent-facing pages inside this block, in order. Never empty. */
+  pages: PageRef[];
+  /** True once the block holds a page break and became a `block` container. */
+  wrapped: boolean;
+}
+
 /**
- * The subtle bar between questions. A page break is NOT offered here any more:
- * a break is not a survey element sitting between two questions, it is the
- * boundary of a Block. Splitting a block is a block-level action, on the block
- * header, where it reads as structure rather than as content.
+ * Blocks, in visual order.
+ *
+ * A Block is one of two shapes, and both are original schema — nothing here
+ * was invented for page breaks:
+ *
+ *   page                      a block with a single page (every block until
+ *                             someone adds a break; every legacy survey)
+ *   block { children: page[] }  a block whose pages are separated by breaks
+ *
+ * The wrap happens lazily, on the first page break, and is undone when the
+ * last break is removed. So a survey that never uses the feature keeps a flow
+ * that is byte-for-byte what it was.
  */
-function InsertBar({ onQuestion, onPick }: { onQuestion(): void; onPick(): void }) {
+function listBlocks(flow: any[]): BlockRef[] {
+  const out: BlockRef[] = [];
+  const walk = (nodes: any[]) => {
+    for (const n of nodes) {
+      if (n.type === "page") {
+        out.push({
+          id: n.id, title: n.title, node: n, parent: nodes, wrapped: false,
+          pages: [{ node: n, parent: nodes, index: nodes.indexOf(n) }],
+        });
+        continue;
+      }
+      if (n.type === "block") {
+        const kids: any[] = n.children ?? [];
+        const pages = kids
+          .filter((k) => k.type === "page")
+          .map((k) => ({ node: k, parent: kids, index: kids.indexOf(k) }));
+        if (pages.length) {
+          out.push({ id: n.id, title: n.title, node: n, parent: nodes, wrapped: true, pages });
+        }
+        // a block can still contain other constructs; they list on their own
+        walk(kids.filter((k) => k.type !== "page"));
+        continue;
+      }
+      if (n.children) walk(n.children);
+      if (n.branches) for (const b of n.branches) walk(b.children);
+      if (n.otherwise) walk(n.otherwise);
+    }
+  };
+  walk(flow);
+  return out;
+}
+
+/**
+ * Turn a single-page block into a `block` container so it can hold breaks.
+ *
+ * The PAGE keeps its id and the new block node gets a fresh one, deliberately:
+ * skip rules written before this point refer to the page id, and jumping to
+ * the first page of the block is exactly what "jump to this block" meant. The
+ * name and visibility move up to the block, where they now govern every page.
+ */
+function wrapBlock(b: BlockRef): any {
+  if (b.wrapped) return b.node;
+  const page = b.node;
+  const blockNode: any = { type: "block", id: uid("block"), children: [page] };
+  if (page.title) { blockNode.title = page.title; delete page.title; }
+  if (page.visibleIf) { blockNode.visibleIf = page.visibleIf; delete page.visibleIf; }
+  b.parent.splice(b.parent.indexOf(page), 1, blockNode);
+  return blockNode;
+}
+
+/** Collapse a block back to a bare page once it has no breaks left. */
+function unwrapIfSingle(b: BlockRef): void {
+  if (!b.wrapped) return;
+  const kids: any[] = b.node.children ?? [];
+  if (kids.length !== 1 || kids[0].type !== "page") return;
+  const page = kids[0];
+  if (b.node.title && !page.title) page.title = b.node.title;
+  if (b.node.visibleIf && !page.visibleIf) page.visibleIf = b.node.visibleIf;
+  b.parent.splice(b.parent.indexOf(b.node), 1, page);
+}
+
+/**
+ * The subtle bar between questions.
+ *
+ * A page break is offered here, but only where it would do something: at the
+ * start or end of a page there is nothing to split off. It stays visually
+ * quieter than "+ Question" because it is structure, not content — and it does
+ * NOT create a block. The block-level split lives on the block header.
+ */
+function InsertBar({
+  onQuestion, onPick, onPageBreak,
+}: { onQuestion(): void; onPick(): void; onPageBreak?(): void }) {
   return (
     <div className="insert-bar">
       <span className="insert-line" />
@@ -789,6 +881,12 @@ function InsertBar({ onQuestion, onPick }: { onQuestion(): void; onPick(): void 
         + Question
       </button>
       <button className="btn small" onClick={onPick} title="Pick a question type from the full library">▾ type…</button>
+      {onPageBreak && (
+        <button className="btn small ghost" data-testid="add-page-break" onClick={onPageBreak}
+          title="Start a new respondent page here — the block stays one block">
+          ⎯ Page break
+        </button>
+      )}
       <span className="insert-line" />
     </div>
   );
@@ -801,6 +899,7 @@ export function QuestionsPanel() {
   const [menuFor, setMenuFor] = React.useState<string | null>(null);
   const selected = s.def.questions.find((q) => q.id === s.selectedQuestionId);
   const pages = listPages(s.def.flow as any[]);
+  const blocks = listBlocks(s.def.flow as any[]);
   const placed = new Set(pages.flatMap((p) => p.node.questionIds));
   const unplaced = s.def.questions.filter((q) => !placed.has(q.id));
 
@@ -860,58 +959,77 @@ export function QuestionsPanel() {
     s.toast("Block added");
   };
 
-  const renameBlock = (pageId: string, title: string) =>
+  /** The same block, resolved inside a draft definition. */
+  const blockIn = (d: any, blockId: string) =>
+    listBlocks(d.flow as any[]).find((b) => b.id === blockId);
+
+  const renameBlock = (blockId: string, title: string) =>
     s.update((d) => {
-      const hit = listPages(d.flow as any[]).find((x) => x.node.id === pageId);
-      if (hit) (hit.node as any).title = title || undefined;
+      const b = blockIn(d, blockId);
+      if (b) b.node.title = title || undefined;
     });
 
-  const deleteBlock = (pageId: string) => {
-    const pg = pages.find((p) => p.node.id === pageId);
-    if (!pg) return;
-    const n = pg.node.questionIds.length;
+  /** An optional heading for one page of a multi-page block. */
+  const renamePage = (blockId: string, pageIdx: number, title: string) =>
+    s.update((d) => {
+      const p = blockIn(d, blockId)?.pages[pageIdx];
+      if (p) (p.node as any).title = title || undefined;
+    });
+
+  const deleteBlock = (blockId: string) => {
+    const b = blocks.find((x) => x.id === blockId);
+    if (!b) return;
+    const qids = b.pages.flatMap((p) => p.node.questionIds);
+    const n = qids.length;
     if (n > 0 && !confirm(
       `Delete this block and its ${n} question${n === 1 ? "" : "s"}? Logic referring to them will need updating.`,
     )) return;
     s.update((d) => {
-      const hit = listPages(d.flow as any[]).find((x) => x.node.id === pageId);
+      const hit = blockIn(d, blockId);
       if (!hit) return;
-      const ids = new Set(hit.node.questionIds);
+      const ids = new Set(hit.pages.flatMap((p) => p.node.questionIds));
       d.questions = d.questions.filter((q) => !ids.has(q.id));
       hit.parent.splice(hit.parent.indexOf(hit.node), 1);
     });
-    if (s.selectedQuestionId && pg.node.questionIds.includes(s.selectedQuestionId)) s.select(null);
+    if (s.selectedQuestionId && qids.includes(s.selectedQuestionId)) s.select(null);
   };
 
-  /** Copy a block and every question in it, ids and codes freshly minted. */
-  const duplicateBlock = (pageId: string) =>
+  /**
+   * Copy a block and every question in it, ids and codes freshly minted.
+   * Page breaks are part of the block, so the copy keeps its pagination.
+   */
+  const duplicateBlock = (blockId: string) =>
     s.update((d) => {
-      const hit = listPages(d.flow as any[]).find((x) => x.node.id === pageId);
+      const hit = blockIn(d, blockId);
       if (!hit) return;
-      const newIds: string[] = [];
-      for (const qid of hit.node.questionIds) {
-        const q = d.questions.find((x) => x.id === qid);
-        if (!q) continue;
-        const copy = structuredClone(q);
-        copy.id = uid("q");
-        copy.code = `${q.code}_COPY`;
-        copy.variableName = `${q.variableName}_COPY`;
-        d.questions.push(copy);
-        newIds.push(copy.id);
-      }
-      const node = {
-        type: "page",
-        id: uid("page"),
-        title: hit.node.title ? `${hit.node.title} (copy)` : undefined,
-        questionIds: newIds,
+      const copyPage = (page: any) => {
+        const newIds: string[] = [];
+        for (const qid of page.questionIds) {
+          const q = d.questions.find((x: any) => x.id === qid);
+          if (!q) continue;
+          const copy = structuredClone(q);
+          copy.id = uid("q");
+          copy.code = `${q.code}_COPY`;
+          copy.variableName = `${q.variableName}_COPY`;
+          d.questions.push(copy);
+          newIds.push(copy.id);
+        }
+        const out: any = { type: "page", id: uid("page"), questionIds: newIds };
+        if (page.title) out.title = page.title;
+        return out;
       };
+      const copies = hit.pages.map((p) => copyPage(p.node));
+      const title = hit.title ? `${hit.title} (copy)` : undefined;
+      const node = copies.length === 1
+        ? { ...copies[0], ...(title ? { title } : {}) }
+        : { type: "block", id: uid("block"), ...(title ? { title } : {}), children: copies };
       hit.parent.splice(hit.parent.indexOf(hit.node) + 1, 0, node);
     });
 
-  const moveBlock = (pageId: string, dir: -1 | 1) =>
+  const moveBlock = (blockId: string, dir: -1 | 1) =>
     s.update((d) => {
-      const all = listPages(d.flow as any[]);
-      const i = all.findIndex((x) => x.node.id === pageId);
+      const all = listBlocks(d.flow as any[]);
+      const i = all.findIndex((x) => x.id === blockId);
       const target = all[i + dir];
       if (i < 0 || !target || target.parent !== all[i].parent) return; // siblings only
       const arr = all[i].parent;
@@ -920,7 +1038,77 @@ export function QuestionsPanel() {
       [arr[a], arr[b]] = [arr[b], arr[a]];
     });
 
-  /** Split a block after position pos — the page break, as block structure. */
+  /* -------------------------------------------------------- page breaks */
+
+  /**
+   * Split one page of a block in two at `pos`. The block does not change:
+   * it gains a page, so the respondent gets an extra page inside it.
+   */
+  const addPageBreak = (pageId: string, pos: number) => {
+    s.update((d) => {
+      for (const b of listBlocks(d.flow as any[])) {
+        const page = b.pages.find((p) => p.node.id === pageId)?.node as any;
+        if (!page) continue;
+        if (pos <= 0 || pos >= page.questionIds.length) return; // nothing to split
+        const rest = page.questionIds.slice(pos);
+        page.questionIds = page.questionIds.slice(0, pos);
+        const newPage = { type: "page", id: uid("page"), questionIds: rest };
+        const blockNode = wrapBlock(b);
+        const kids: any[] = blockNode.children;
+        kids.splice(kids.indexOf(page) + 1, 0, newPage);
+        return;
+      }
+    });
+    s.toast("Page break added — same block, new respondent page");
+  };
+
+  /** Remove the break between page i and page i+1: the two pages become one. */
+  const removePageBreak = (blockId: string, i: number) =>
+    s.update((d) => {
+      const b = blockIn(d, blockId);
+      if (!b || !b.wrapped || i < 0 || i + 1 >= b.pages.length) return;
+      const kids: any[] = b.node.children;
+      const first = b.pages[i].node as any;
+      const second = b.pages[i + 1].node as any;
+      first.questionIds.push(...second.questionIds);
+      kids.splice(kids.indexOf(second), 1);
+      unwrapIfSingle(b);
+    });
+
+  /** Nudge a break past one question, in either direction. */
+  const movePageBreak = (blockId: string, i: number, dir: -1 | 1) =>
+    s.update((d) => {
+      const b = blockIn(d, blockId);
+      if (!b || i < 0 || i + 1 >= b.pages.length) return;
+      const before = b.pages[i].node as any;
+      const after = b.pages[i + 1].node as any;
+      if (dir === -1) {
+        if (before.questionIds.length <= 1) return; // never leave a page empty
+        after.questionIds.unshift(before.questionIds.pop());
+      } else {
+        if (after.questionIds.length <= 1) return;
+        before.questionIds.push(after.questionIds.shift());
+      }
+    });
+
+  /** Promote everything after a break into a block of its own. */
+  const splitBlockAtBreak = (blockId: string, i: number) => {
+    s.update((d) => {
+      const b = blockIn(d, blockId);
+      if (!b || !b.wrapped || i + 1 >= b.pages.length) return;
+      const kids: any[] = b.node.children;
+      const tail = b.pages.slice(i + 1).map((p) => p.node as any);
+      for (const p of tail) kids.splice(kids.indexOf(p), 1);
+      const node = tail.length === 1
+        ? tail[0]
+        : { type: "block", id: uid("block"), children: tail };
+      b.parent.splice(b.parent.indexOf(b.node) + 1, 0, node);
+      unwrapIfSingle(b);
+    });
+    s.toast("New block started");
+  };
+
+  /** Split a single-page block into two blocks after position pos. */
   const splitBlock = (pageId: string, pos: number) => {
     s.update((d) => {
       for (const pg of listPages(d.flow as any[])) {
@@ -934,28 +1122,36 @@ export function QuestionsPanel() {
     s.toast("Block split");
   };
 
-  /** Merge a block into the one above it. */
-  const mergeUp = (pageId: string) =>
+  /** Merge a block into the one above it, keeping both blocks' page breaks. */
+  const mergeUp = (blockId: string) =>
     s.update((d) => {
-      const all = listPages(d.flow as any[]);
-      const i = all.findIndex((p) => p.node.id === pageId);
+      const all = listBlocks(d.flow as any[]);
+      const i = all.findIndex((b) => b.id === blockId);
       if (i <= 0) return;
       const cur = all[i];
       const prev = all[i - 1];
       if (prev.parent !== cur.parent) return;
-      prev.node.questionIds.push(...cur.node.questionIds);
+      const curPages = cur.pages.map((p) => p.node as any);
+      if (curPages.length === 1 && prev.pages.length === 1) {
+        // the simple case stays simple: one page absorbs the other
+        (prev.pages[0].node as any).questionIds.push(...curPages[0].questionIds);
+      } else {
+        const target = wrapBlock(prev);
+        for (const p of curPages) target.children.push(p);
+      }
       cur.parent.splice(cur.parent.indexOf(cur.node), 1);
     });
 
-  /** Move a question into another block, appended at its end. */
-  const moveQuestionToBlock = (qid: string, pageId: string) =>
+  /** Move a question into another block, appended to its last page. */
+  const moveQuestionToBlock = (qid: string, blockId: string) =>
     s.update((d) => {
       for (const pg of listPages(d.flow as any[])) {
         const k = pg.node.questionIds.indexOf(qid);
         if (k >= 0) pg.node.questionIds.splice(k, 1);
       }
-      const target = listPages(d.flow as any[]).find((x) => x.node.id === pageId);
-      target?.node.questionIds.push(qid);
+      const target = blockIn(d, blockId);
+      const last = target?.pages[target.pages.length - 1];
+      (last?.node as any)?.questionIds.push(qid);
     });
 
   /** Reorder within a block; crossing the edge moves to the adjacent block. */
@@ -1002,7 +1198,14 @@ export function QuestionsPanel() {
     if (s.selectedQuestionId === id) s.select(null);
   };
 
-  const card = (qid: string, blockId: string, indexInBlock: number, blockSize: number) => {
+  const card = (
+    qid: string,
+    pageId: string,
+    blockId: string,
+    indexInPage: number,
+    pageSize: number,
+    canSplit: boolean,
+  ) => {
     const q = s.def.questions.find((x) => x.id === qid);
     if (!q) return null;
     const isSelected = q.id === s.selectedQuestionId;
@@ -1021,21 +1224,21 @@ export function QuestionsPanel() {
           <button className="btn small" title="Move up" onClick={(e) => { e.stopPropagation(); move(q.id, -1); }}>↑</button>
           <button className="btn small" title="Move down" onClick={(e) => { e.stopPropagation(); move(q.id, 1); }}>↓</button>
           <button className="btn small" title="Duplicate" onClick={(e) => { e.stopPropagation(); duplicate(q.id); }}>⧉</button>
-          {pages.length > 1 && (
+          {blocks.length > 1 && (
             <select className="select small move-to" title="Move to another block"
               value="" onClick={(e) => e.stopPropagation()}
               onChange={(e) => { if (e.target.value) moveQuestionToBlock(q.id, e.target.value); }}>
               <option value="">move to…</option>
-              {pages.filter((p) => p.node.id !== blockId).map((p, i) => (
-                <option key={p.node.id} value={p.node.id}>
-                  Block {pages.indexOf(p) + 1}{p.node.title ? ` — ${p.node.title}` : ""}
+              {blocks.filter((b) => b.id !== blockId).map((b) => (
+                <option key={b.id} value={b.id}>
+                  Block {blocks.indexOf(b) + 1}{b.title ? ` — ${b.title}` : ""}
                 </option>
               ))}
             </select>
           )}
-          {indexInBlock > 0 && indexInBlock < blockSize && (
+          {canSplit && indexInPage > 0 && indexInPage < pageSize && (
             <button className="btn small" title="Start a new block here"
-              onClick={(e) => { e.stopPropagation(); splitBlock(blockId, indexInBlock); }}>⤵</button>
+              onClick={(e) => { e.stopPropagation(); splitBlock(pageId, indexInPage); }}>⤵</button>
           )}
           <button className="btn small danger" title="Delete" onClick={(e) => { e.stopPropagation(); remove(q.id); }}>×</button>
         </div>
@@ -1053,11 +1256,11 @@ export function QuestionsPanel() {
       <div className="row" style={{ marginBottom: 14 }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>Questions</h2>
         <span className="chip">{s.def.questions.length} question{s.def.questions.length === 1 ? "" : "s"}</span>
-        <span className="chip">{pages.length} block{pages.length === 1 ? "" : "s"}</span>
+        <span className="chip">{blocks.length} block{blocks.length === 1 ? "" : "s"}</span>
         <span className="grow" />
         <button className="btn" onClick={addBlock} data-testid="add-block">+ Add block</button>
         <button className="btn primary" data-testid="add-question-top" onClick={() => {
-          const last = pages[pages.length - 1];
+          const last = blocks[blocks.length - 1]?.pages.slice(-1)[0];
           setPickerAt(last ? { pageId: last.node.id, pos: last.node.questionIds.length } : { pageId: "", pos: 0 });
         }}>+ Add question</button>
         {pickerAt && (
@@ -1067,42 +1270,46 @@ export function QuestionsPanel() {
         )}
       </div>
 
-      {pages.map((pg, pi) => {
-        const isCollapsed = collapsed[pg.node.id];
-        const n = pg.node.questionIds.length;
+      {blocks.map((b, pi) => {
+        const isCollapsed = collapsed[b.id];
+        const n = b.pages.reduce((t, p) => t + p.node.questionIds.length, 0);
+        const multi = b.pages.length > 1;
         return (
-        <div key={pg.node.id} className={`block ${isCollapsed ? "collapsed" : ""}`} data-testid="block">
+        <div key={b.id} className={`block ${isCollapsed ? "collapsed" : ""}`} data-testid="block">
           <div className="block-head">
             <button className="block-toggle" title={isCollapsed ? "Expand block" : "Collapse block"}
-              onClick={() => setCollapsed((c) => ({ ...c, [pg.node.id]: !c[pg.node.id] }))}>
+              onClick={() => setCollapsed((c) => ({ ...c, [b.id]: !c[b.id] }))}>
               {isCollapsed ? "▸" : "▾"}
             </button>
             <span className="block-badge">BLOCK {pi + 1}</span>
             <input className="input block-title" placeholder="Name this block — e.g. Introduction"
               data-testid="block-title"
-              value={pg.node.title ?? ""}
-              onChange={(e) => renameBlock(pg.node.id, e.target.value)} />
-            <span className="muted block-count">{n} question{n === 1 ? "" : "s"}</span>
+              value={b.title ?? ""}
+              onChange={(e) => renameBlock(b.id, e.target.value)} />
+            <span className="muted block-count">
+              {n} question{n === 1 ? "" : "s"}
+              {multi && ` · ${b.pages.length} pages`}
+            </span>
             <div className="menu-anchor">
               <button className="btn small" data-testid="block-menu"
-                onClick={() => setMenuFor(menuFor === pg.node.id ? null : pg.node.id)}>•••</button>
-              {menuFor === pg.node.id && (
+                onClick={() => setMenuFor(menuFor === b.id ? null : b.id)}>•••</button>
+              {menuFor === b.id && (
                 <>
                   <div className="menu-scrim" onClick={() => setMenuFor(null)} />
                   <div className="menu" role="menu">
                     <button className="menu-item" disabled={pi === 0}
-                      onClick={() => { setMenuFor(null); moveBlock(pg.node.id, -1); }}>↑ Move block up</button>
-                    <button className="menu-item" disabled={pi === pages.length - 1}
-                      onClick={() => { setMenuFor(null); moveBlock(pg.node.id, 1); }}>↓ Move block down</button>
+                      onClick={() => { setMenuFor(null); moveBlock(b.id, -1); }}>↑ Move block up</button>
+                    <button className="menu-item" disabled={pi === blocks.length - 1}
+                      onClick={() => { setMenuFor(null); moveBlock(b.id, 1); }}>↓ Move block down</button>
                     <button className="menu-item"
-                      onClick={() => { setMenuFor(null); duplicateBlock(pg.node.id); }}>⧉ Duplicate block</button>
-                    {pi > 0 && pages[pi - 1].parent === pg.parent && (
+                      onClick={() => { setMenuFor(null); duplicateBlock(b.id); }}>⧉ Duplicate block</button>
+                    {pi > 0 && blocks[pi - 1].parent === b.parent && (
                       <button className="menu-item"
-                        onClick={() => { setMenuFor(null); mergeUp(pg.node.id); }}>⇧ Merge into block above</button>
+                        onClick={() => { setMenuFor(null); mergeUp(b.id); }}>⇧ Merge into block above</button>
                     )}
                     <div className="menu-sep" />
                     <button className="menu-item danger"
-                      onClick={() => { setMenuFor(null); deleteBlock(pg.node.id); }}>Delete block…</button>
+                      onClick={() => { setMenuFor(null); deleteBlock(b.id); }}>Delete block…</button>
                   </div>
                 </>
               )}
@@ -1117,18 +1324,57 @@ export function QuestionsPanel() {
                   {/* the same control as between questions, so adding the first
                       one and adding the tenth look and behave identically */}
                   <InsertBar
-                    onQuestion={() => insertQuestion(pg.node.id, 0)}
-                    onPick={() => setPickerAt({ pageId: pg.node.id, pos: 0 })} />
+                    onQuestion={() => insertQuestion(b.pages[0].node.id, 0)}
+                    onPick={() => setPickerAt({ pageId: b.pages[0].node.id, pos: 0 })} />
                 </>
               )}
-              {pg.node.questionIds.map((qid, k) => (
-                <React.Fragment key={qid}>
-                  {card(qid, pg.node.id, k, n)}
-                  <InsertBar
-                    onQuestion={() => insertQuestion(pg.node.id, k + 1)}
-                    onPick={() => setPickerAt({ pageId: pg.node.id, pos: k + 1 })} />
+              {b.pages.map((pg, pgi) => {
+                const ids: string[] = pg.node.questionIds;
+                return (
+                <React.Fragment key={pg.node.id}>
+                  {/* a page break, drawn as the boundary it is */}
+                  {pgi > 0 && (
+                    <div className="page-break" data-testid="page-break">
+                      <span className="pb-line" />
+                      <span className="pb-label">PAGE BREAK</span>
+                      <button className="btn small" title="Move the break up one question"
+                        onClick={() => movePageBreak(b.id, pgi - 1, -1)}>↑</button>
+                      <button className="btn small" title="Move the break down one question"
+                        onClick={() => movePageBreak(b.id, pgi - 1, 1)}>↓</button>
+                      <button className="btn small" data-testid="break-to-block"
+                        title="Make this page and everything below it a separate block"
+                        onClick={() => splitBlockAtBreak(b.id, pgi - 1)}>split block</button>
+                      <button className="btn small danger" data-testid="remove-page-break"
+                        title="Remove this break — the two pages become one"
+                        onClick={() => removePageBreak(b.id, pgi - 1)}>×</button>
+                      <span className="pb-line" />
+                    </div>
+                  )}
+                  {multi && (
+                    <div className="page-row">
+                      <span className="page-badge" data-testid="page-badge">PAGE {pgi + 1}</span>
+                      <input className="input page-title" placeholder="Page heading (optional)"
+                        value={pg.node.title ?? ""}
+                        onChange={(e) => renamePage(b.id, pgi, e.target.value)} />
+                      <span className="muted" style={{ fontSize: 11 }}>
+                        {ids.length} question{ids.length === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                  )}
+                  {ids.map((qid, k) => (
+                    <React.Fragment key={qid}>
+                      {card(qid, pg.node.id, b.id, k, ids.length, !multi)}
+                      <InsertBar
+                        onQuestion={() => insertQuestion(pg.node.id, k + 1)}
+                        onPick={() => setPickerAt({ pageId: pg.node.id, pos: k + 1 })}
+                        onPageBreak={k + 1 < ids.length
+                          ? () => addPageBreak(pg.node.id, k + 1)
+                          : undefined} />
+                    </React.Fragment>
+                  ))}
                 </React.Fragment>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -1148,14 +1394,14 @@ export function QuestionsPanel() {
           <div className="block-body">
             {unplaced.map((q) => (
               <div key={q.id} className="row" style={{ gap: 6, alignItems: "stretch" }}>
-                <div style={{ flex: 1 }}>{card(q.id, "", 0, 0)}</div>
-                {pages.length > 0 && (
+                <div style={{ flex: 1 }}>{card(q.id, "", "", 0, 0, false)}</div>
+                {blocks.length > 0 && (
                   <select className="select" style={{ width: 150, alignSelf: "center" }}
                     value="" onChange={(e) => { if (e.target.value) moveQuestionToBlock(q.id, e.target.value); }}>
                     <option value="">move into…</option>
-                    {pages.map((p, i) => (
-                      <option key={p.node.id} value={p.node.id}>
-                        Block {i + 1}{p.node.title ? ` — ${p.node.title}` : ""}
+                    {blocks.map((b, i) => (
+                      <option key={b.id} value={b.id}>
+                        Block {i + 1}{b.title ? ` — ${b.title}` : ""}
                       </option>
                     ))}
                   </select>
@@ -1166,7 +1412,7 @@ export function QuestionsPanel() {
         </div>
       )}
 
-      {s.def.questions.length === 0 && pages.length === 0 && (
+      {s.def.questions.length === 0 && blocks.length === 0 && (
         <p className="muted">Start by adding a block, then put questions inside it.</p>
       )}
     </div>
