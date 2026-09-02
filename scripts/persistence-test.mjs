@@ -59,7 +59,7 @@ await page.route("**/api/surveys/*/responses*", (route) =>
   route.fulfill({ status: 200, contentType: "application/json", body: "[]" }));
 
 await page.goto("http://localhost:3000/sandbox", { waitUntil: "networkidle" });
-await page.waitForSelector(".page-badge");
+await page.waitForSelector(".block-badge");
 
 /* ------------------------------------------- the settings are reachable */
 

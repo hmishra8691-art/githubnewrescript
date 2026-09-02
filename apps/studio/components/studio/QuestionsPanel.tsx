@@ -196,11 +196,50 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
               onChange={(e) => set(i, { imageUrl: e.target.value || undefined })} />
           )}
           {showFlags && (
-            <select className="select" style={{ width: 110 }} value={o.flags?.[0] ?? ""}
-              onChange={(e) => set(i, { flags: e.target.value ? [e.target.value as any] : [] })}>
-              <option value="">flags…</option>
-              {flags.map((fl) => <option key={fl.value} value={fl.value}>{fl.label}</option>)}
-            </select>
+            /**
+             * Option properties are INDEPENDENT and combine freely.
+             *
+             * This was a single-value <select>: choosing "exclusive" erased
+             * "other/specify", so the commonest requirement in survey research
+             * — an "Other: ____" that is also exclusive, or a "None of these"
+             * anchored to the bottom — could not be expressed at all. The
+             * engine always supported a list; only the editor insisted on one.
+             */
+            <details className="opt-flags" onClick={(e) => e.stopPropagation()}>
+              <summary className={(o.flags?.length ?? 0) > 0 ? "has" : ""}
+                title="Option properties — combine as many as you need"
+                data-testid={`option-flags-${i}`}>
+                {(o.flags?.length ?? 0) > 0
+                  ? o.flags!.map((f2) => ALL_FLAGS.find((x) => x.value === f2)?.label ?? f2).join(" + ")
+                  : "properties…"}
+              </summary>
+              <div className="opt-flags-menu">
+                {flags.map((fl) => {
+                  const on = o.flags?.includes(fl.value as any) ?? false;
+                  return (
+                    <label key={fl.value} className="opt-flag-row">
+                      <input type="checkbox" checked={on}
+                        data-testid={`option-flag-${i}-${fl.value}`}
+                        onChange={(e) => {
+                          const cur = new Set(o.flags ?? []);
+                          if (e.target.checked) cur.add(fl.value as any);
+                          else cur.delete(fl.value as any);
+                          // anchor top and bottom are the one genuinely
+                          // exclusive pair — an option cannot be pinned to
+                          // both ends of the list
+                          if (e.target.checked && fl.value === "anchor_top") cur.delete("anchor_bottom" as any);
+                          if (e.target.checked && fl.value === "anchor_bottom") cur.delete("anchor_top" as any);
+                          set(i, { flags: [...cur] as any });
+                        }} />
+                      {fl.label}
+                    </label>
+                  );
+                })}
+                {(o.flags?.length ?? 0) > 0 && (
+                  <button className="btn small" onClick={() => set(i, { flags: [] })}>clear</button>
+                )}
+              </div>
+            </details>
           )}
           {enableLogic && (
             <button className={`btn small ${hasLogic ? "has-logic" : ""}`} data-testid={`option-logic-${i}`}
@@ -736,20 +775,20 @@ function listPages(flow: any[]): PageRef[] {
   return out;
 }
 
-/** Inline insert bar shown between questions (reqs §1–2, §4). */
-function InsertBar({ onQuestion, onPick, onBreak, canBreak }: {
-  onQuestion(): void; onPick(): void; onBreak(): void; canBreak: boolean;
-}) {
+/**
+ * The subtle bar between questions. A page break is NOT offered here any more:
+ * a break is not a survey element sitting between two questions, it is the
+ * boundary of a Block. Splitting a block is a block-level action, on the block
+ * header, where it reads as structure rather than as content.
+ */
+function InsertBar({ onQuestion, onPick }: { onQuestion(): void; onPick(): void }) {
   return (
     <div className="insert-bar">
       <span className="insert-line" />
-      <button className="btn small" onClick={onQuestion} title="Add a question here (default type — change it inline)">
+      <button className="btn small" onClick={onQuestion} title="Add a question here">
         + Question
       </button>
       <button className="btn small" onClick={onPick} title="Pick a question type from the full library">▾ type…</button>
-      {canBreak && (
-        <button className="btn small" onClick={onBreak} title="Start a new page here">⤵ Page break</button>
-      )}
       <span className="insert-line" />
     </div>
   );
@@ -758,6 +797,8 @@ function InsertBar({ onQuestion, onPick, onBreak, canBreak }: {
 export function QuestionsPanel() {
   const s = useStudio();
   const [pickerAt, setPickerAt] = React.useState<{ pageId: string; pos: number } | null>(null);
+  const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({});
+  const [menuFor, setMenuFor] = React.useState<string | null>(null);
   const selected = s.def.questions.find((q) => q.id === s.selectedQuestionId);
   const pages = listPages(s.def.flow as any[]);
   const placed = new Set(pages.flatMap((p) => p.node.questionIds));
@@ -779,7 +820,7 @@ export function QuestionsPanel() {
     setTimeout(attempt, 30);
   };
 
-  /** Insert a question on a page at position pos (after pos-1). */
+  /** Insert a question in a block at position pos (after pos-1). */
   const insertQuestion = (pageId: string, pos: number, variant?: QuestionVariantDef) => {
     const v = variant ?? variantRegistry.get("single_select.radio")!;
     const q = createFromVariant(v, s.def.questions.length + 1);
@@ -791,7 +832,6 @@ export function QuestionsPanel() {
           return;
         }
       }
-      // page not found (edge case): append to last page
       const last = listPages(d.flow as any[]).pop();
       last?.node.questionIds.push(q.id);
     });
@@ -799,36 +839,126 @@ export function QuestionsPanel() {
     if (variant) s.toast(`Added ${variant.familyLabel} → ${variant.name}`);
   };
 
-  /** Split a page after position pos — a real structural page break (req §2). */
-  const pageBreak = (pageId: string, pos: number) => {
+  /* ------------------------------------------------------------- blocks */
+
+  /**
+   * A Block is a page node. The schema is unchanged — this is a change of
+   * mental model, not of data: "Block" is what a page has always been, and
+   * calling it one stops page breaks looking like questions.
+   */
+  const addBlock = () => {
+    const id = uid("page");
+    s.update((d) => {
+      const all = listPages(d.flow as any[]);
+      const node = { type: "page", id, title: undefined, questionIds: [] };
+      if (all.length === 0) (d.flow as any[]).unshift(node);
+      else {
+        const last = all[all.length - 1];
+        last.parent.splice(last.parent.indexOf(last.node) + 1, 0, node);
+      }
+    });
+    s.toast("Block added");
+  };
+
+  const renameBlock = (pageId: string, title: string) =>
+    s.update((d) => {
+      const hit = listPages(d.flow as any[]).find((x) => x.node.id === pageId);
+      if (hit) (hit.node as any).title = title || undefined;
+    });
+
+  const deleteBlock = (pageId: string) => {
+    const pg = pages.find((p) => p.node.id === pageId);
+    if (!pg) return;
+    const n = pg.node.questionIds.length;
+    if (n > 0 && !confirm(
+      `Delete this block and its ${n} question${n === 1 ? "" : "s"}? Logic referring to them will need updating.`,
+    )) return;
+    s.update((d) => {
+      const hit = listPages(d.flow as any[]).find((x) => x.node.id === pageId);
+      if (!hit) return;
+      const ids = new Set(hit.node.questionIds);
+      d.questions = d.questions.filter((q) => !ids.has(q.id));
+      hit.parent.splice(hit.parent.indexOf(hit.node), 1);
+    });
+    if (s.selectedQuestionId && pg.node.questionIds.includes(s.selectedQuestionId)) s.select(null);
+  };
+
+  /** Copy a block and every question in it, ids and codes freshly minted. */
+  const duplicateBlock = (pageId: string) =>
+    s.update((d) => {
+      const hit = listPages(d.flow as any[]).find((x) => x.node.id === pageId);
+      if (!hit) return;
+      const newIds: string[] = [];
+      for (const qid of hit.node.questionIds) {
+        const q = d.questions.find((x) => x.id === qid);
+        if (!q) continue;
+        const copy = structuredClone(q);
+        copy.id = uid("q");
+        copy.code = `${q.code}_COPY`;
+        copy.variableName = `${q.variableName}_COPY`;
+        d.questions.push(copy);
+        newIds.push(copy.id);
+      }
+      const node = {
+        type: "page",
+        id: uid("page"),
+        title: hit.node.title ? `${hit.node.title} (copy)` : undefined,
+        questionIds: newIds,
+      };
+      hit.parent.splice(hit.parent.indexOf(hit.node) + 1, 0, node);
+    });
+
+  const moveBlock = (pageId: string, dir: -1 | 1) =>
+    s.update((d) => {
+      const all = listPages(d.flow as any[]);
+      const i = all.findIndex((x) => x.node.id === pageId);
+      const target = all[i + dir];
+      if (i < 0 || !target || target.parent !== all[i].parent) return; // siblings only
+      const arr = all[i].parent;
+      const a = arr.indexOf(all[i].node);
+      const b = arr.indexOf(target.node);
+      [arr[a], arr[b]] = [arr[b], arr[a]];
+    });
+
+  /** Split a block after position pos — the page break, as block structure. */
+  const splitBlock = (pageId: string, pos: number) => {
     s.update((d) => {
       for (const pg of listPages(d.flow as any[])) {
         if (pg.node.id !== pageId) continue;
         const moved = pg.node.questionIds.slice(pos);
         pg.node.questionIds = pg.node.questionIds.slice(0, pos);
-        const newPage = { type: "page", id: uid("page"), questionIds: moved };
-        pg.parent.splice(pg.index + 1, 0, newPage);
+        pg.parent.splice(pg.index + 1, 0, { type: "page", id: uid("page"), questionIds: moved });
         return;
       }
     });
-    s.toast("Page break added");
+    s.toast("Block split");
   };
 
-  /** Merge a page into the previous page at the same level. */
-  const removeBreak = (pageId: string) => {
+  /** Merge a block into the one above it. */
+  const mergeUp = (pageId: string) =>
     s.update((d) => {
       const all = listPages(d.flow as any[]);
       const i = all.findIndex((p) => p.node.id === pageId);
       if (i <= 0) return;
       const cur = all[i];
       const prev = all[i - 1];
-      if (prev.parent !== cur.parent) return; // only merge siblings
+      if (prev.parent !== cur.parent) return;
       prev.node.questionIds.push(...cur.node.questionIds);
       cur.parent.splice(cur.parent.indexOf(cur.node), 1);
     });
-  };
 
-  /** Reorder within a page; crossing the edge moves to the adjacent page. */
+  /** Move a question into another block, appended at its end. */
+  const moveQuestionToBlock = (qid: string, pageId: string) =>
+    s.update((d) => {
+      for (const pg of listPages(d.flow as any[])) {
+        const k = pg.node.questionIds.indexOf(qid);
+        if (k >= 0) pg.node.questionIds.splice(k, 1);
+      }
+      const target = listPages(d.flow as any[]).find((x) => x.node.id === pageId);
+      target?.node.questionIds.push(qid);
+    });
+
+  /** Reorder within a block; crossing the edge moves to the adjacent block. */
   const move = (qid: string, dir: -1 | 1) =>
     s.update((d) => {
       const all = listPages(d.flow as any[]);
@@ -872,12 +1002,13 @@ export function QuestionsPanel() {
     if (s.selectedQuestionId === id) s.select(null);
   };
 
-  const card = (qid: string) => {
+  const card = (qid: string, blockId: string, indexInBlock: number, blockSize: number) => {
     const q = s.def.questions.find((x) => x.id === qid);
     if (!q) return null;
+    const isSelected = q.id === s.selectedQuestionId;
     return (
       <div key={q.id}
-        className={`card selectable qcard ${q.id === s.selectedQuestionId ? "selected" : ""}`}
+        className={`card selectable qcard ${isSelected ? "selected" : ""}`}
         onClick={() => s.select(q.id)}>
         <div className="qlist-item">
           <strong className="mono">{q.code}</strong>
@@ -887,12 +1018,28 @@ export function QuestionsPanel() {
           {q.displayLogic && <span className="chip warn" title="has display logic">DL</span>}
           {q.skipLogic.length > 0 && <span className="chip warn" title="has skip logic">SL</span>}
           {q.carryForward && <span className="chip" title="carry-forward">CF</span>}
-          <button className="btn small" onClick={(e) => { e.stopPropagation(); move(q.id, -1); }}>↑</button>
-          <button className="btn small" onClick={(e) => { e.stopPropagation(); move(q.id, 1); }}>↓</button>
-          <button className="btn small" onClick={(e) => { e.stopPropagation(); duplicate(q.id); }}>⧉</button>
-          <button className="btn small danger" onClick={(e) => { e.stopPropagation(); remove(q.id); }}>×</button>
+          <button className="btn small" title="Move up" onClick={(e) => { e.stopPropagation(); move(q.id, -1); }}>↑</button>
+          <button className="btn small" title="Move down" onClick={(e) => { e.stopPropagation(); move(q.id, 1); }}>↓</button>
+          <button className="btn small" title="Duplicate" onClick={(e) => { e.stopPropagation(); duplicate(q.id); }}>⧉</button>
+          {pages.length > 1 && (
+            <select className="select small move-to" title="Move to another block"
+              value="" onClick={(e) => e.stopPropagation()}
+              onChange={(e) => { if (e.target.value) moveQuestionToBlock(q.id, e.target.value); }}>
+              <option value="">move to…</option>
+              {pages.filter((p) => p.node.id !== blockId).map((p, i) => (
+                <option key={p.node.id} value={p.node.id}>
+                  Block {pages.indexOf(p) + 1}{p.node.title ? ` — ${p.node.title}` : ""}
+                </option>
+              ))}
+            </select>
+          )}
+          {indexInBlock > 0 && indexInBlock < blockSize && (
+            <button className="btn small" title="Start a new block here"
+              onClick={(e) => { e.stopPropagation(); splitBlock(blockId, indexInBlock); }}>⤵</button>
+          )}
+          <button className="btn small danger" title="Delete" onClick={(e) => { e.stopPropagation(); remove(q.id); }}>×</button>
         </div>
-        {q.id === s.selectedQuestionId && selected && (
+        {isSelected && selected && (
           <div style={{ marginTop: 14 }} onClick={(e) => e.stopPropagation()}>
             <QuestionEditor q={selected} />
           </div>
@@ -905,10 +1052,11 @@ export function QuestionsPanel() {
     <div>
       <div className="row" style={{ marginBottom: 14 }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>Questions</h2>
-        <span className="chip">{s.def.questions.length}</span>
-        <span className="chip">{pages.length} page{pages.length === 1 ? "" : "s"}</span>
+        <span className="chip">{s.def.questions.length} question{s.def.questions.length === 1 ? "" : "s"}</span>
+        <span className="chip">{pages.length} block{pages.length === 1 ? "" : "s"}</span>
         <span className="grow" />
-        <button className="btn primary" onClick={() => {
+        <button className="btn" onClick={addBlock} data-testid="add-block">+ Add block</button>
+        <button className="btn primary" data-testid="add-question-top" onClick={() => {
           const last = pages[pages.length - 1];
           setPickerAt(last ? { pageId: last.node.id, pos: last.node.questionIds.length } : { pageId: "", pos: 0 });
         }}>+ Add question</button>
@@ -919,51 +1067,107 @@ export function QuestionsPanel() {
         )}
       </div>
 
-      {pages.map((pg, pi) => (
-        <div key={pg.node.id} className="page-group">
-          <div className="page-head">
-            <span className="page-badge">PAGE {pi + 1}</span>
-            <input className="input page-title" placeholder="page title (optional)"
+      {pages.map((pg, pi) => {
+        const isCollapsed = collapsed[pg.node.id];
+        const n = pg.node.questionIds.length;
+        return (
+        <div key={pg.node.id} className={`block ${isCollapsed ? "collapsed" : ""}`} data-testid="block">
+          <div className="block-head">
+            <button className="block-toggle" title={isCollapsed ? "Expand block" : "Collapse block"}
+              onClick={() => setCollapsed((c) => ({ ...c, [pg.node.id]: !c[pg.node.id] }))}>
+              {isCollapsed ? "▸" : "▾"}
+            </button>
+            <span className="block-badge">BLOCK {pi + 1}</span>
+            <input className="input block-title" placeholder="Name this block — e.g. Introduction"
+              data-testid="block-title"
               value={pg.node.title ?? ""}
-              onChange={(e) => s.update((d) => {
-                const hit = listPages(d.flow as any[]).find((x) => x.node.id === pg.node.id);
-                if (hit) (hit.node as any).title = e.target.value || undefined;
-              })} />
-            <span className="muted" style={{ fontSize: 11 }}>{pg.node.questionIds.length} question{pg.node.questionIds.length === 1 ? "" : "s"}</span>
-            {pi > 0 && pages[pi - 1].parent === pg.parent && (
-              <button className="btn small" title="Merge this page into the previous one"
-                onClick={() => removeBreak(pg.node.id)}>merge ↑</button>
-            )}
+              onChange={(e) => renameBlock(pg.node.id, e.target.value)} />
+            <span className="muted block-count">{n} question{n === 1 ? "" : "s"}</span>
+            <div className="menu-anchor">
+              <button className="btn small" data-testid="block-menu"
+                onClick={() => setMenuFor(menuFor === pg.node.id ? null : pg.node.id)}>•••</button>
+              {menuFor === pg.node.id && (
+                <>
+                  <div className="menu-scrim" onClick={() => setMenuFor(null)} />
+                  <div className="menu" role="menu">
+                    <button className="menu-item" disabled={pi === 0}
+                      onClick={() => { setMenuFor(null); moveBlock(pg.node.id, -1); }}>↑ Move block up</button>
+                    <button className="menu-item" disabled={pi === pages.length - 1}
+                      onClick={() => { setMenuFor(null); moveBlock(pg.node.id, 1); }}>↓ Move block down</button>
+                    <button className="menu-item"
+                      onClick={() => { setMenuFor(null); duplicateBlock(pg.node.id); }}>⧉ Duplicate block</button>
+                    {pi > 0 && pages[pi - 1].parent === pg.parent && (
+                      <button className="menu-item"
+                        onClick={() => { setMenuFor(null); mergeUp(pg.node.id); }}>⇧ Merge into block above</button>
+                    )}
+                    <div className="menu-sep" />
+                    <button className="menu-item danger"
+                      onClick={() => { setMenuFor(null); deleteBlock(pg.node.id); }}>Delete block…</button>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
-          {pg.node.questionIds.length === 0 && (
-            <InsertBar canBreak={false}
-              onQuestion={() => insertQuestion(pg.node.id, 0)}
-              onPick={() => setPickerAt({ pageId: pg.node.id, pos: 0 })}
-              onBreak={() => {}} />
+
+          {!isCollapsed && (
+            <div className="block-body">
+              {n === 0 && (
+                <>
+                  <div className="block-empty">This block has no questions yet.</div>
+                  {/* the same control as between questions, so adding the first
+                      one and adding the tenth look and behave identically */}
+                  <InsertBar
+                    onQuestion={() => insertQuestion(pg.node.id, 0)}
+                    onPick={() => setPickerAt({ pageId: pg.node.id, pos: 0 })} />
+                </>
+              )}
+              {pg.node.questionIds.map((qid, k) => (
+                <React.Fragment key={qid}>
+                  {card(qid, pg.node.id, k, n)}
+                  <InsertBar
+                    onQuestion={() => insertQuestion(pg.node.id, k + 1)}
+                    onPick={() => setPickerAt({ pageId: pg.node.id, pos: k + 1 })} />
+                </React.Fragment>
+              ))}
+            </div>
           )}
-          {pg.node.questionIds.map((qid, k) => (
-            <React.Fragment key={qid}>
-              {card(qid)}
-              <InsertBar
-                canBreak={k < pg.node.questionIds.length - 1 || pg.node.questionIds.length > 0}
-                onQuestion={() => insertQuestion(pg.node.id, k + 1)}
-                onPick={() => setPickerAt({ pageId: pg.node.id, pos: k + 1 })}
-                onBreak={() => pageBreak(pg.node.id, k + 1)} />
-            </React.Fragment>
-          ))}
         </div>
-      ))}
+        );
+      })}
+
+      <button className="btn add-block-btn" onClick={addBlock}>+ Add block</button>
 
       {unplaced.length > 0 && (
-        <div className="page-group">
-          <div className="page-head"><span className="page-badge" style={{ background: "var(--amber)" }}>NOT ON ANY PAGE</span>
-            <span className="muted" style={{ fontSize: 11 }}>assign these in Survey Flow, or they will never display</span></div>
-          {unplaced.map((q) => card(q.id))}
+        <div className="block warn-block">
+          <div className="block-head">
+            <span className="block-badge" style={{ background: "var(--amber)" }}>NOT IN ANY BLOCK</span>
+            <span className="muted" style={{ fontSize: 11 }}>
+              these never display — move them into a block
+            </span>
+          </div>
+          <div className="block-body">
+            {unplaced.map((q) => (
+              <div key={q.id} className="row" style={{ gap: 6, alignItems: "stretch" }}>
+                <div style={{ flex: 1 }}>{card(q.id, "", 0, 0)}</div>
+                {pages.length > 0 && (
+                  <select className="select" style={{ width: 150, alignSelf: "center" }}
+                    value="" onChange={(e) => { if (e.target.value) moveQuestionToBlock(q.id, e.target.value); }}>
+                    <option value="">move into…</option>
+                    {pages.map((p, i) => (
+                      <option key={p.node.id} value={p.node.id}>
+                        Block {i + 1}{p.node.title ? ` — ${p.node.title}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
       {s.def.questions.length === 0 && pages.length === 0 && (
-        <p className="muted">No pages yet — add a page in the Survey Flow tab, then build questions here.</p>
+        <p className="muted">Start by adding a block, then put questions inside it.</p>
       )}
     </div>
   );

@@ -1,7 +1,7 @@
 /**
  * Editor-level E2E (authoring UX batch): drives the real Studio at /sandbox.
  *  - inline + Question after a question, with focus moving to the new editor
- *  - structural + Page break, page grouping, merge
+ *  - splitting a block, block grouping, merging blocks back
  *  - Enter-key option entry with focus follow; Backspace removes empty option
  *  - paste box: numbered/bulleted list import with cleanup
  *  - rich text: bold formatting persisted into the definition (JSON tab)
@@ -15,8 +15,8 @@ page.on("pageerror", (e) => console.error("PAGE ERROR:", e.message));
 page.on("dialog", (d) => d.accept());
 
 await page.goto("http://localhost:3000/sandbox", { waitUntil: "networkidle" });
-await page.waitForSelector(".page-badge");
-console.log("✔ sandbox loads the Studio with page grouping");
+await page.waitForSelector(".block-badge");
+console.log("✔ sandbox loads the Studio with block grouping");
 
 // --- inline add: first question via insert bar on the empty page
 await page.click(".insert-bar >> text=+ Question");
@@ -83,20 +83,24 @@ assert.equal(cardCount, 2);
 console.log("✔ inline + Question adds a second question below the first");
 
 // --- page break between Q1 and Q2 → PAGE 2 appears containing Q2
-const badgesBefore = await page.$$eval(".page-badge", (els) => els.length);
-await page.click(".page-group .insert-bar >> nth=0 >> text=⤵ Page break");
-await page.waitForFunction((n) => document.querySelectorAll(".page-badge").length === n + 1, badgesBefore);
-const perPage = await page.$$eval(".page-group", (els) =>
+// Splitting is now a BLOCK action on the question card (⤵), not a
+// "Page break" pseudo-element sitting between questions.
+const badgesBefore = await page.$$eval(".block-badge", (els) => els.length);
+await page.click('.qcard >> nth=1 >> button[title="Start a new block here"]');
+await page.waitForFunction((n) => document.querySelectorAll(".block-badge").length === n + 1, badgesBefore);
+const perBlock = await page.$$eval(".block", (els) =>
   els.map((e) => e.querySelectorAll(".qcard").length));
-assert.deepEqual(perPage, [1, 1], `questions per page: ${perPage}`);
-console.log("✔ page break splits into PAGE 1 (Q1) and PAGE 2 (Q2)");
+assert.deepEqual(perBlock, [1, 1], `questions per block: ${perBlock}`);
+console.log("✔ splitting moves Q2 into BLOCK 2, leaving Q1 in BLOCK 1");
 
-// merge back
-await page.click(".page-group:nth-of-type(3) >> text=merge ↑").catch(() => {});
-// (merge button may be in second group depending on DOM order; try generic)
-const mergeBtn = await page.$(".page-head >> text=merge ↑");
-if (mergeBtn) await mergeBtn.click();
-await page.waitForTimeout(200);
+// merge back, from the block menu
+const menus = await page.$$('[data-testid="block-menu"]');
+if (menus[1]) {
+  await menus[1].click();
+  const mergeBtn = await page.$('.menu-item:has-text("Merge into block above")');
+  if (mergeBtn) await mergeBtn.click();
+}
+await page.waitForTimeout(250);
 
 // --- verify formatting + structure persisted into the definition JSON
 await page.click(".leftnav >> text=JSON");

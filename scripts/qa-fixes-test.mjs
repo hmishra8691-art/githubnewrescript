@@ -264,13 +264,17 @@ assert.ok(allCodes.includes("1"), `codes start at 1: ${allCodes.join(",")}`);
 assert.equal(new Set(allCodes).size, allCodes.length, `no duplicate codes: ${allCodes.join(",")}`);
 console.log(`✔ codes are unique and start at 1 (${allCodes.join(", ")})`);
 
-// row flags are offered (anchor top/bottom), which the engine already honoured
+// row flags are offered (anchor top/bottom), which the engine already honoured.
+// The control is a multi-select property list now, not a single-value dropdown.
+await studio.click('.qcard.selected [data-testid="option-flags-0"]');
+await studio.waitForSelector(".opt-flags-menu");
 const rowFlagOptions = await studio.$$eval(
-  '.qcard.selected .opt-row select option',
-  (els) => els.map((e) => e.textContent),
+  ".opt-flags-menu .opt-flag-row",
+  (els) => els.map((e) => e.textContent.trim()),
 );
-assert.ok(rowFlagOptions.some((t) => /anchor bottom/.test(t)), `row flags offered: ${[...new Set(rowFlagOptions)].join("|")}`);
-console.log("✔ matrix rows offer anchor top / anchor bottom");
+assert.ok(rowFlagOptions.some((t) => /anchor bottom/.test(t)),
+  `row flags offered: ${rowFlagOptions.join(" | ")}`);
+console.log(`✔ matrix rows offer ${rowFlagOptions.join(", ")}`);
 
 /* ------------------------------- condition builder layout (screenshot issue) */
 
