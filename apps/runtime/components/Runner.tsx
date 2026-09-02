@@ -82,7 +82,18 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
   const [counts] = React.useState<QuotaCounts>(initialCounts ?? {});
   const [device, setDevice] = React.useState<"desktop" | "tablet" | "mobile">("desktop");
   const [epoch, setEpoch] = React.useState(0);
-  const showInspector = mode === "test" || mode === "preview";
+  /**
+   * Debug is OPTIONAL and off by default.
+   *
+   * The inspector used to be pinned open in preview and test, permanently
+   * taking a 380px column — which is why testing a survey felt like looking at
+   * it through a letterbox rather than seeing what a respondent sees. It is a
+   * tool you reach for, so it is now behind a toggle and the survey gets the
+   * full page until you ask for it.
+   */
+  const canDebug = mode === "test" || mode === "preview";
+  const [debug, setDebug] = React.useState(false);
+  const showInspector = canDebug && debug;
 
   /** Restart the test session (req: test links must be repeatable).
    *  Test mode reloads the URL so the server issues a fresh session id;
@@ -153,6 +164,10 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
   const ctx = { def, state, loop: pageStep?.loop ?? null, quotaCounts: counts };
 
   const snap: InspectorSnapshot | null = showInspector ? inspect(def, state, steps, counts) : null;
+
+  /** Which block the respondent is on — "Block 3 of 5", as a respondent sees it. */
+  const blockSteps = steps.filter((x) => x.kind === "page");
+  const blockIndex = pageStep ? blockSteps.indexOf(pageStep) + 1 : 0;
 
   const b = def.branding;
   const pageIndexAmongPages = steps.filter((s, i) => s.kind === "page" && i <= state.stepIndex).length;
@@ -296,23 +311,53 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
     </div>
   );
 
-  if (showInspector && snap) {
-    return (
-      <div className="rs-with-inspector">
-        <div>
-          {/* Mobile testing mode (req §16): constrain the respondent viewport */}
-          <div className="rs-devicebar">
-            {(["desktop", "tablet", "mobile"] as const).map((d) => (
-              <button key={d} className={device === d ? "on" : ""} onClick={() => setDevice(d)}>
-                {d === "desktop" ? "🖥 Desktop" : d === "tablet" ? "▭ Tablet" : "📱 Mobile"}
-              </button>
-            ))}
-          </div>
-          <div className={device !== "desktop" ? `rs-viewport ${device}` : undefined}>{shell}</div>
-        </div>
-        <Inspector snap={snap} logs={logs} />
+  if (!canDebug) return shell;
+
+  /**
+   * Preview and test run the REAL runtime — the same engine, flow, validation,
+   * logic, quotas and piping a respondent gets. The only additions are this
+   * slim toolbar and the optional inspector, so what you test is what ships.
+   */
+  const toolbar = (
+    <div className="rs-toolbar" data-testid="runtime-toolbar">
+      <span className="rs-toolbar-mode">{mode.toUpperCase()}</span>
+      {blockIndex > 0 && (
+        <span className="rs-toolbar-pos" data-testid="block-position">
+          Block {blockIndex} of {Math.max(blockSteps.length, 1)}
+        </span>
+      )}
+      <span className="rs-toolbar-gap" />
+      <div className="rs-devicebar">
+        {(["desktop", "tablet", "mobile"] as const).map((d) => (
+          <button key={d} className={device === d ? "on" : ""} onClick={() => setDevice(d)}
+            title={`Preview at ${d} width`} aria-label={`${d} viewport`}>
+            {d === "desktop" ? "🖥 Desktop" : d === "tablet" ? "▭ Tablet" : "📱 Mobile"}
+          </button>
+        ))}
       </div>
-    );
-  }
-  return shell;
+      <button className={`rs-debug-toggle ${debug ? "on" : ""}`} data-testid="debug-toggle"
+        onClick={() => setDebug((v) => !v)}
+        title="Show how the engine is evaluating this page">
+        {debug ? "✕ Hide debug" : "🐞 Debug"}
+      </button>
+    </div>
+  );
+
+  const body = (
+    <div className={device !== "desktop" ? `rs-viewport ${device}` : undefined}>{shell}</div>
+  );
+
+  return (
+    <>
+      {toolbar}
+      {showInspector && snap ? (
+        <div className="rs-with-inspector">
+          <div>{body}</div>
+          <Inspector snap={snap} logs={logs} />
+        </div>
+      ) : (
+        body
+      )}
+    </>
+  );
 }

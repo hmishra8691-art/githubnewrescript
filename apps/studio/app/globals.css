@@ -504,3 +504,16 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
   padding: 4px 6px; border-radius: 5px; cursor: pointer;
 }
 .opt-flag-row:hover { background: var(--panel2); }
+
+/* ---------- IF → THEN logic framing (Phase 3) ---------- */
+.logic-rule { margin-bottom: 10px; }
+.logic-if, .logic-then-word {
+  font-size: 10.5px; font-weight: 800; letter-spacing: .09em;
+  color: var(--accent); text-transform: uppercase;
+}
+.logic-if { margin-bottom: 2px; }
+.logic-then {
+  margin-top: 4px; font-size: 12.5px; color: var(--text);
+  padding: 6px 9px; border-radius: 6px; background: var(--tint);
+  border-left: 3px solid var(--accent);
+}

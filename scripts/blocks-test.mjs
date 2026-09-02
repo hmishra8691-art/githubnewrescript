@@ -183,3 +183,86 @@ console.log("✔ anchor top / bottom stay mutually exclusive — the one pair th
 
 await browser.close();
 console.log("\nALL BLOCK + OPTION PROPERTY CHECKS PASSED");
+
+/* =================== Phase 3 + 5: IF/THEN logic, full-page test, debug === */
+
+await (async () => {
+  const b = await chromium.launch();
+  const p = await b.newPage({ viewport: { width: 1500, height: 950 } });
+  p.on("pageerror", (e) => console.error("PAGE ERROR:", e.message));
+
+  // --- Phase 3: display and skip logic read as IF → THEN
+  await p.goto("http://localhost:3000/sandbox", { waitUntil: "networkidle" });
+  await p.click(".insert-bar >> text=+ Question");
+  await p.waitForSelector(".qcard.selected");
+  await p.waitForTimeout(300);
+
+  const ifThen = await p.$eval(".rightpanel", (e) => e.innerText.replace(/\s+/g, " "));
+  assert.match(ifThen, /IF/, `display logic is framed as IF: ${ifThen.slice(0, 120)}`);
+  assert.match(ifThen, /THEN show/, `and states the action: ${ifThen.slice(0, 200)}`);
+  console.log("✔ display logic reads IF → conditions → THEN show <question>");
+
+  await p.click('.rightpanel >> text=+ skip rule');
+  await p.waitForSelector(".skip-target");
+  const skipText = await p.$eval(".rightpanel", (e) => e.innerText.replace(/\s+/g, " "));
+  assert.match(skipText, /THEN GO TO/, `skip logic states its action: ${skipText.slice(0, 200)}`);
+  console.log("✔ skip logic reads IF → conditions → THEN GO TO <target>");
+
+  // --- Phase 5: the survey runs full-page, debug is optional
+  const def = {
+    meta: { id: "p5", code: "P5", title: "Phase 5", version: "1.0" },
+    questions: [
+      { id: "q1", code: "Q1", variableName: "A", type: "single_select", text: "Pick one",
+        options: [{ code: 1, label: "Yes" }, { code: 2, label: "No" }] },
+      { id: "q2", code: "Q2", variableName: "B", type: "open_text", text: "Why?" },
+    ],
+    flow: [
+      { type: "page", id: "b1", title: "Intro", questionIds: ["q1"] },
+      { type: "page", id: "b2", title: "Detail", questionIds: ["q2"] },
+      { type: "end", id: "e", status: "complete" },
+    ],
+  };
+  await p.goto("http://localhost:3001/preview", { waitUntil: "networkidle" });
+  await p.evaluate((d) => window.postMessage({ type: "rescript:preview", definition: d }, "*"), def);
+  await p.waitForSelector(".rs-card");
+
+  // no inspector until asked for — the survey gets the whole page
+  let inspectorOpen = await p.$$eval(".rs-inspector", (els) => els.length);
+  assert.equal(inspectorOpen, 0, "debug is off by default");
+  const shellWidth = await p.$eval(".rs-shell, .rs-card", (e) => e.getBoundingClientRect().width);
+  const pageWidth = await p.evaluate(() => document.documentElement.clientWidth);
+  assert.ok(shellWidth > pageWidth * 0.4,
+    `the survey is not squeezed into a column: ${shellWidth.toFixed(0)} of ${pageWidth}`);
+  console.log(`✔ preview runs full-page (${shellWidth.toFixed(0)}px of ${pageWidth}px), no docked panel`);
+
+  // block position, as a respondent sees it
+  const pos = await p.$eval('[data-testid="block-position"]', (e) => e.textContent.trim());
+  assert.equal(pos, "Block 1 of 2", `the toolbar reports position: ${pos}`);
+  console.log(`✔ the runtime reports “${pos}”`);
+
+  // debug on demand, showing real logic evaluation
+  await p.click('[data-testid="debug-toggle"]');
+  await p.waitForSelector(".rs-inspector");
+  const dbg = (await p.$eval(".rs-inspector", (e) => e.innerText)).toLowerCase();
+  for (const section of ["session", "display logic", "answers"]) {
+    assert.ok(dbg.includes(section), `debug shows ${section}: ${dbg.slice(0, 120)}`);
+  }
+  console.log("✔ debug opens on demand with session, display-logic evaluation and answers");
+
+  await p.click('[data-testid="debug-toggle"]');
+  inspectorOpen = await p.$$eval(".rs-inspector", (els) => els.length);
+  assert.equal(inspectorOpen, 0, "debug closes again");
+  console.log("✔ debug closes, returning the full page to the survey");
+
+  // the real engine drives it: answering advances the block
+  await p.click(".rs-option");
+  await p.click("text=Next");
+  await p.waitForTimeout(400);
+  const pos2 = await p.$eval('[data-testid="block-position"]', (e) => e.textContent.trim());
+  assert.equal(pos2, "Block 2 of 2", `real navigation, not a mock: ${pos2}`);
+  console.log("✔ preview executes the real engine — answering advances to Block 2");
+
+  await b.close();
+})();
+
+console.log("\nALL PHASE 3 + 5 CHECKS PASSED");

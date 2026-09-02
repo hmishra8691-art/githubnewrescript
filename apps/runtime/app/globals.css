@@ -426,3 +426,29 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 }
 .rs-preview-bar strong { letter-spacing: .06em; text-transform: uppercase; font-size: 10.5px; }
 .rs-preview-live { margin-left: auto; opacity: .75; }
+
+/* ---------- preview / test toolbar (Phase 5) ---------- */
+.rs-toolbar {
+  position: sticky; top: 0; z-index: 19;
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 14px; font-size: 12px;
+  background: #1f2937; color: #e5e7eb;
+}
+.rs-toolbar-mode {
+  font-size: 10px; font-weight: 800; letter-spacing: .08em;
+  padding: 2px 7px; border-radius: 4px; background: #374151;
+}
+.rs-toolbar-pos { opacity: .8; }
+.rs-toolbar-gap { flex: 1; }
+.rs-toolbar .rs-devicebar { display: flex; gap: 2px; background: none; padding: 0; border: none; }
+.rs-toolbar .rs-devicebar button {
+  font: inherit; font-size: 13px; cursor: pointer; padding: 2px 7px;
+  border-radius: 5px; border: 1px solid transparent; background: none; color: #e5e7eb;
+}
+.rs-toolbar .rs-devicebar button.on { background: #374151; border-color: #4b5563; }
+.rs-debug-toggle {
+  font: inherit; font-size: 11.5px; font-weight: 600; cursor: pointer;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid #4b5563; background: none; color: #e5e7eb;
+}
+.rs-debug-toggle.on { background: #2563eb; border-color: #2563eb; color: #fff; }

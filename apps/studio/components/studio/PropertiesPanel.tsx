@@ -109,10 +109,10 @@ function SkipLogicEditor({ q, patch }: { q: Question; patch(p: Partial<Question>
             <button className="btn small danger" title="Remove this skip rule"
               onClick={() => patch({ skipLogic: q.skipLogic.filter((_, j) => j !== i) })}>×</button>
           </div>
-          <div className="flabel">WHEN</div>
+          <div className="logic-if">IF</div>
           <ConditionEditor value={rule.when} onChange={(when) => setRule(i, { ...rule, when })} />
           <div className="row skip-target" style={{ marginTop: 8 }}>
-            <span className="flabel" style={{ marginBottom: 0 }}>GO TO</span>
+            <span className="flabel logic-then-word" style={{ marginBottom: 0 }}>THEN GO TO</span>
             <select className="select" value={rule.target.kind}
               onChange={(e) => setRule(i, { ...rule, target: { ...rule.target, kind: e.target.value as any } })}>
               <option value="question">question</option>
@@ -436,9 +436,17 @@ export function PropertiesPanel() {
         </div>
       )}
 
+      {/* Logic reads as IF → THEN: the conditions, then what happens. */}
       <h3 className="sec">Display logic</h3>
-      <OptionalCondition label="Show this question only when…"
-        value={q.displayLogic} onChange={(c) => patch({ displayLogic: c })} />
+      <div className="logic-rule">
+        <div className="logic-if">IF</div>
+        <OptionalCondition label="these conditions hold"
+          hint={`Nothing here means ${q.code} always shows.`}
+          value={q.displayLogic} onChange={(c) => patch({ displayLogic: c })} />
+        <div className="logic-then">
+          <span className="logic-then-word">THEN</span> show <strong>{q.code}</strong>
+        </div>
+      </div>
 
       <h3 className="sec">Skip logic</h3>
       <SkipLogicEditor q={q} patch={patch} />
