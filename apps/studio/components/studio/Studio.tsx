@@ -36,7 +36,12 @@ const NAV: { key: Tab; label: string; icon: string }[] = [
 
 function StudioShell() {
   const s = useStudio();
-  const [tab, setTab] = React.useState<Tab>("questions");
+  // ?tab=data lets the dashboard link straight to a survey's responses
+  const [tab, setTab] = React.useState<Tab>(() => {
+    if (typeof window === "undefined") return "questions";
+    const t = new URLSearchParams(window.location.search).get("tab");
+    return (NAV.some((n) => n.key === t) ? t : "questions") as Tab;
+  });
   React.useEffect(() => { s.setGoToTab((t) => setTab(t as Tab)); }, [s]);
   const [saving, setSaving] = React.useState(false);
 

@@ -8,6 +8,7 @@ export * from "./pipingTokens.js";
 export * from "./carryforward.js";
 export * from "./dependencies.js";
 export * from "./renumber.js";
+export * from "./questionCount.js";
 export * from "./lintLogic.js";
 export * from "./logicSummary.js";
 export * from "./flow.js";

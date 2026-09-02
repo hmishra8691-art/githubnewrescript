@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { newSurveyDefinition } from "@/lib/defaults";
+import { loadDashboardStats } from "@/lib/dashboard";
 import { SurveyDefinition } from "@rescript/schema";
 
 export const dynamic = "force-dynamic";
@@ -31,10 +32,36 @@ export async function GET() {
   }
   const { data, error } = await db
     .from("surveys")
-    .select("id, code, title, status, created_at, updated_at, current_version_id")
+    .select("id, code, title, status, created_at, updated_at, current_version_id, created_by")
     .order("updated_at", { ascending: false });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ surveys: data });
+
+  const surveys = data ?? [];
+
+  /**
+   * Statistics are additive: if they cannot be loaded the listing still
+   * renders with names, statuses and dates, and each missing number shows as
+   * "—" rather than a misleading 0 (reqs §23–§25).
+   */
+  let dashboard = null;
+  try {
+    dashboard = await loadDashboardStats(db, surveys);
+  } catch (e) {
+    return NextResponse.json({
+      surveys,
+      stats: {},
+      contributors: {},
+      warnings: [`statistics unavailable: ${e instanceof Error ? e.message : String(e)}`],
+    });
+  }
+
+  return NextResponse.json({
+    surveys,
+    stats: dashboard.stats,
+    contributors: dashboard.contributors,
+    statsSource: dashboard.source,
+    warnings: dashboard.warnings,
+  });
 }
 
 export async function POST(req: NextRequest) {

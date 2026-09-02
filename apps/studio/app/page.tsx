@@ -1,13 +1,35 @@
 "use client";
 import React from "react";
 import { THEME_PRESETS } from "@/lib/defaults";
+import {
+  SurveyCard, SurveyCardSkeleton, STATUS_META,
+  type SurveyRow, type SurveyStats, type Contributor,
+} from "@/components/SurveyCard";
 
-interface SurveyRow {
-  id: string; code: string; title: string; status: string; updated_at: string;
-}
+type SortKey =
+  | "updated" | "created" | "name_az" | "name_za"
+  | "responses_desc" | "responses_asc" | "questions_desc";
+
+const SORTS: { key: SortKey; label: string }[] = [
+  { key: "updated", label: "Recently updated" },
+  { key: "created", label: "Recently created" },
+  { key: "name_az", label: "Name A–Z" },
+  { key: "name_za", label: "Name Z–A" },
+  { key: "responses_desc", label: "Most responses" },
+  { key: "responses_asc", label: "Fewest responses" },
+  { key: "questions_desc", label: "Most questions" },
+];
 
 export default function Dashboard() {
   const [surveys, setSurveys] = React.useState<SurveyRow[] | null>(null);
+  const [stats, setStats] = React.useState<Record<string, SurveyStats>>({});
+  const [contributors, setContributors] = React.useState<Record<string, Contributor>>({});
+  const [warnings, setWarnings] = React.useState<string[]>([]);
+  const [statsLoading, setStatsLoading] = React.useState(true);
+  const [search, setSearch] = React.useState("");
+  const [statusFilter, setStatusFilter] = React.useState<string>("all");
+  const [responseFilter, setResponseFilter] = React.useState<"any" | "has" | "none">("any");
+  const [sort, setSort] = React.useState<SortKey>("updated");
   const [creating, setCreating] = React.useState(false);
   const [title, setTitle] = React.useState("");
   const [code, setCode] = React.useState("");
@@ -26,7 +48,12 @@ export default function Dashboard() {
     try {
       const r = await fetch("/api/surveys", { signal: ctrl.signal });
       const raw = await r.text();
-      let d: { surveys?: SurveyRow[]; error?: string } = {};
+      let d: {
+        surveys?: SurveyRow[]; error?: string;
+        stats?: Record<string, SurveyStats>;
+        contributors?: Record<string, Contributor>;
+        warnings?: string[];
+      } = {};
       try {
         d = raw ? JSON.parse(raw) : {};
       } catch {
@@ -38,6 +65,11 @@ export default function Dashboard() {
         return;
       }
       setSurveys(d.surveys ?? []);
+      // statistics are additive — the listing renders even if they failed
+      setStats(d.stats ?? {});
+      setContributors(d.contributors ?? {});
+      setWarnings(d.warnings ?? []);
+      setStatsLoading(false);
     } catch (e) {
       setError(
         (e as Error)?.name === "AbortError"
@@ -46,6 +78,7 @@ export default function Dashboard() {
       );
     } finally {
       clearTimeout(timer);
+      setStatsLoading(false);
     }
   }, []);
   React.useEffect(() => {
@@ -74,32 +107,133 @@ export default function Dashboard() {
     else setError(d.error ?? "create failed");
   };
 
+  const setStatus = async (id: string, status: string) => {
+    // optimistic: the pill flips immediately, and reverts if the server says no
+    const before = surveys?.find((x) => x.id === id)?.status;
+    setSurveys((rows) => rows?.map((x) => (x.id === id ? { ...x, status } : x)) ?? rows);
+    const r = await fetch(`/api/surveys/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      setError(d.error ?? "could not change status");
+      setSurveys((rows) => rows?.map((x) => (x.id === id ? { ...x, status: before ?? x.status } : x)) ?? rows);
+    }
+  };
+
+  /** Search, filter and sort all run on the loaded metadata — no extra calls. */
+  const visible = React.useMemo(() => {
+    if (!surveys) return null;
+    const q = search.trim().toLowerCase();
+    let rows = surveys.filter((s2) => {
+      if (statusFilter !== "all" && s2.status !== statusFilter) return false;
+      const n = stats[s2.id]?.responseCount ?? 0;
+      if (responseFilter === "has" && n === 0) return false;
+      if (responseFilter === "none" && n > 0) return false;
+      if (!q) return true;
+      return (
+        s2.title.toLowerCase().includes(q) ||
+        s2.code.toLowerCase().includes(q) ||
+        s2.status.toLowerCase().includes(q)
+      );
+    });
+    const n = (id: string, k: keyof SurveyStats) => Number(stats[id]?.[k] ?? 0);
+    rows = [...rows].sort((a, b) => {
+      switch (sort) {
+        case "created": return b.created_at.localeCompare(a.created_at);
+        case "name_az": return a.title.localeCompare(b.title);
+        case "name_za": return b.title.localeCompare(a.title);
+        case "responses_desc": return n(b.id, "responseCount") - n(a.id, "responseCount");
+        case "responses_asc": return n(a.id, "responseCount") - n(b.id, "responseCount");
+        case "questions_desc": return n(b.id, "questionCount") - n(a.id, "questionCount");
+        case "updated":
+        default: return b.updated_at.localeCompare(a.updated_at);
+      }
+    });
+    return rows;
+  }, [surveys, stats, search, statusFilter, responseFilter, sort]);
+
+  const totals = React.useMemo(() => {
+    const list = Object.values(stats);
+    return {
+      surveys: surveys?.length ?? 0,
+      live: surveys?.filter((x) => x.status === "live").length ?? 0,
+      responses: list.reduce((a, b) => a + (b.liveResponseCount ?? 0), 0),
+    };
+  }, [surveys, stats]);
+
   return (
     <div className="dash">
       <h1><span className="logo-mark">R</span> Rescript Studio</h1>
       <p className="muted">Professional survey programming &amp; runtime platform — JSON-driven, versioned, extensible.</p>
 
-      <div className="row" style={{ margin: "22px 0" }}>
+      <div className="dash-toolbar">
         <button className="btn primary" onClick={() => setCreating(true)}>+ New survey</button>
+        <input className="input dash-search" placeholder="Search surveys…"
+          aria-label="Search surveys" value={search}
+          onChange={(e) => setSearch(e.target.value)} />
+        <select className="select" aria-label="Sort surveys" value={sort}
+          onChange={(e) => setSort(e.target.value as SortKey)}>
+          {SORTS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+        </select>
+        <select className="select" aria-label="Filter by responses" value={responseFilter}
+          onChange={(e) => setResponseFilter(e.target.value as any)}>
+          <option value="any">Any responses</option>
+          <option value="has">Has responses</option>
+          <option value="none">No responses</option>
+        </select>
+      </div>
+
+      <div className="dash-filters">
+        <button className={`filter-pill ${statusFilter === "all" ? "on" : ""}`}
+          onClick={() => setStatusFilter("all")}>
+          All <span className="n">{surveys?.length ?? 0}</span>
+        </button>
+        {Object.entries(STATUS_META).map(([key, m]) => {
+          const n = surveys?.filter((x) => x.status === key).length ?? 0;
+          if (n === 0 && statusFilter !== key) return null;
+          return (
+            <button key={key} className={`filter-pill ${statusFilter === key ? "on" : ""}`}
+              title={m.hint} onClick={() => setStatusFilter(key)}>
+              {m.label} <span className="n">{n}</span>
+            </button>
+          );
+        })}
         <span className="grow" />
+        {surveys && surveys.length > 0 && (
+          <span className="muted dash-summary">
+            {totals.surveys} survey{totals.surveys === 1 ? "" : "s"} · {totals.live} live ·{" "}
+            {totals.responses.toLocaleString()} live responses
+          </span>
+        )}
       </div>
 
       {error && <div className="card" style={{ borderColor: "var(--red)", color: "var(--red)" }}>{error}</div>}
+      {warnings.map((w, i) => (
+        <div key={i} className="chip warn" style={{ marginBottom: 8 }}>{w}</div>
+      ))}
 
-      {surveys === null && !error && <p className="muted">Loading…</p>}
+      {surveys === null && !error && (
+        <>{[0, 1, 2].map((i) => <SurveyCardSkeleton key={i} />)}</>
+      )}
       {surveys?.length === 0 && <p className="muted">No surveys yet — create your first one.</p>}
-      {surveys?.map((s) => (
-        <div key={s.id} className="card selectable" onClick={() => (window.location.href = `/studio/${s.id}`)}>
-          <div className="card-title">
-            {s.title} <span className={`chip ${s.status === "live" ? "on" : ""}`}>{s.status}</span>
-            <span className="grow" />
-            <button className="btn small danger" title="Delete this survey project"
-              onClick={(e) => { e.stopPropagation(); setDeleting(s); setConfirmText(""); }}>
-              delete
-            </button>
-          </div>
-          <div className="card-sub">{s.code} · updated {new Date(s.updated_at).toLocaleString()}</div>
-        </div>
+      {visible?.length === 0 && (surveys?.length ?? 0) > 0 && (
+        <p className="muted">
+          No surveys match this filter.{" "}
+          <button className="btn small" onClick={() => {
+            setSearch(""); setStatusFilter("all"); setResponseFilter("any");
+          }}>Clear filters</button>
+        </p>
+      )}
+      {visible?.map((s) => (
+        <SurveyCard key={s.id} survey={s} stats={stats[s.id]} contributors={contributors}
+          loading={statsLoading && !stats[s.id]}
+          onOpen={() => (window.location.href = `/studio/${s.id}`)}
+          onResponses={() => (window.location.href = `/studio/${s.id}?tab=data`)}
+          onStatus={(status) => setStatus(s.id, status)}
+          onDelete={() => { setDeleting(s); setConfirmText(""); }} />
       ))}
 
       {deleting && (

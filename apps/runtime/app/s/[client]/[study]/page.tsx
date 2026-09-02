@@ -1,4 +1,4 @@
-import { loadDeployment } from "@/lib/deployment";
+import { loadDeployment, BLOCKING_STATUSES } from "@/lib/deployment";
 import { createSession, loadQuotaCounts } from "@/lib/session";
 import { Runner } from "@/components/Runner";
 import { headers } from "next/headers";
@@ -17,6 +17,17 @@ export default async function SurveyPage({
     return (
       <div className="rs-shell"><div className="rs-card rs-end"><h2>Survey not found</h2>
         <p>This survey link is not active. Please check the URL.</p></div></div>
+    );
+  }
+
+  // A paused / closed / archived project stops taking live responses without
+  // anything being deleted, and without touching its test link.
+  const blocked = BLOCKING_STATUSES[dep.surveyStatus];
+  if (blocked) {
+    return (
+      <div className="rs-shell"><div className="rs-card rs-end">
+        <h2>{blocked.title}</h2><p>{blocked.body}</p>
+      </div></div>
     );
   }
 
