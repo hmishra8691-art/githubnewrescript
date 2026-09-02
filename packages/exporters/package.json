@@ -16,8 +16,9 @@
     "test": "node --test dist/*.test.js"
   },
   "dependencies": {
-    "@rescript/schema": "workspace:*",
     "@rescript/engine": "workspace:*",
+    "@rescript/schema": "workspace:*",
+    "docx": "^9.7.1",
     "exceljs": "^4.4.0"
   },
   "devDependencies": {

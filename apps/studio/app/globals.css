@@ -170,6 +170,53 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .flow-children { margin-left: 26px; border-left: 1px dashed var(--border); padding-left: 10px; margin-bottom: 8px; }
 .fn-body { padding: 0 12px 12px; }
 
+/* ---------- Survey Flow, read at block level ---------- */
+/* The flow is a vertical spine: START, then cards, then END. Every gap is an
+   insertion point AND a drop target, so "put a branch between these two
+   blocks" and "move this block into that group" are the same gesture. */
+.flow-panel { max-width: 940px; }
+.flow-start, .flow-end {
+  font-size: 10px; font-weight: 800; letter-spacing: .12em; color: var(--subtle);
+  text-align: center; padding: 4px 0;
+}
+.flow-card {
+  border: 1px solid var(--border); border-radius: 9px; background: var(--panel);
+  box-shadow: 0 1px 2px rgba(16,24,40,.04);
+}
+.flow-card.block-card { border-left: 3px solid var(--accent); }
+.flow-card.element-card { border-left: 3px solid var(--amber); background: var(--panel2); }
+.flow-card > .fc-head { display: flex; align-items: center; gap: 8px; padding: 8px 11px; }
+.flow-card .fc-summary { font-size: 12px; color: var(--subtle); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.fc-body { padding: 2px 12px 12px 34px; }
+.fc-page { margin-bottom: 6px; }
+.fc-q { display: flex; gap: 8px; align-items: baseline; font-size: 12px; padding: 1px 0; }
+.fc-qcode { color: var(--accent); font-size: 11px; min-width: 42px; }
+.fc-qtext { color: var(--subtle); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.flow-insert { display: flex; align-items: center; gap: 8px; padding: 1px 0; }
+.fi-rail { flex: 1; height: 1px; background: var(--border); }
+.fi-btn {
+  font: inherit; font-size: 11px; padding: 2px 10px; border-radius: 999px;
+  border: 1px dashed var(--border); background: var(--panel); color: var(--subtle);
+  cursor: pointer; opacity: .5; transition: opacity .12s, color .12s, border-color .12s;
+}
+.flow-insert:hover .fi-btn, .flow-insert:focus-within .fi-btn { opacity: 1; color: var(--accent); border-color: var(--accent); }
+.flow-insert.dropping .fi-btn { opacity: 1; color: var(--accent); border-style: solid; border-color: var(--accent); }
+.flow-insert.dropping .fi-rail { background: var(--accent); }
+.menu.wide { min-width: 250px; }
+.menu.wide .mi-label { display: block; }
+.menu.wide .mi-hint { display: block; font-size: 11px; color: var(--subtle); }
+
+.flow-group { border: 1px solid var(--border); border-radius: 10px; background: var(--panel2); margin: 2px 0; }
+.flow-group .fg-head { display: flex; align-items: center; gap: 8px; padding: 8px 11px; }
+.flow-group .fg-body { padding: 0 11px 8px 22px; }
+.flow-group .fg-shut { padding: 0 11px 10px 40px; font-size: 12px; }
+.group-badge {
+  font-size: 10px; font-weight: 800; letter-spacing: .08em; color: #fff;
+  background: var(--accent2); border-radius: 5px; padding: 2px 8px; white-space: nowrap;
+}
+
 /* logic flow ascii */
 .logic-pre { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; overflow-x: auto; color: var(--text); }
 
@@ -191,6 +238,30 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .modal-back { position: fixed; inset: 0; background: rgba(15,23,42,.35); display: flex; align-items: center; justify-content: center; z-index: 90; }
 .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; width: 520px; max-width: 92vw; max-height: 86vh; overflow-y: auto; box-shadow: 0 20px 48px rgba(15,23,42,.18); }
 .modal h2 { margin-top: 0; }
+
+/* ---------- move-question dialog ---------- */
+.move-modal { width: 560px; }
+.move-list { border: 1px solid var(--border); border-radius: 8px; max-height: 220px; overflow-y: auto; }
+.move-opt {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12.5px;
+  cursor: pointer; border-bottom: 1px solid var(--border);
+}
+.move-opt:last-child { border-bottom: none; }
+.move-opt:hover { background: var(--panel2); }
+.move-opt.on { background: var(--tint); }
+.move-opt input { margin: 0; flex: none; }
+
+/* ---------- export dialog ---------- */
+.export-modal { width: 620px; }
+.move-opt.fmt { flex: 1; border: 1px solid var(--border); border-radius: 8px; align-items: flex-start; }
+.move-opt.fmt.on { border-color: var(--accent); }
+.export-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.export-group { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.eg-title { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--accent2); margin-bottom: 5px; }
+.export-check { display: flex; gap: 7px; align-items: flex-start; font-size: 12px; padding: 2px 0; cursor: pointer; }
+.export-check input { margin: 2px 0 0; flex: none; }
+@media (max-width: 700px) { .export-fields { grid-template-columns: 1fr; } }
 
 /* ---------- page groups & inline authoring ---------- */
 .page-group { margin-bottom: 26px; }

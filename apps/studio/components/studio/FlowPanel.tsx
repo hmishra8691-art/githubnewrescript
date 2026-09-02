@@ -2,6 +2,10 @@
 import React from "react";
 import type { FlowNode } from "@rescript/schema";
 import { useStudio, uid } from "./store";
+import {
+  type BlockRef, listBlocks, blockSize, flowOutline, isBlockNode, isGroupNode,
+  newBlockNode, newGroupNode, ELEMENT_LABELS, INSERTABLE,
+} from "./blockModel";
 import { OptionalCondition, ConditionEditor, conditionToText } from "./ConditionBuilder";
 
 /** Structured Survey Flow editor (requirement §7). */
@@ -335,17 +339,480 @@ function FlowTree({ nodes, onChange, depth = 0 }: {
   );
 }
 
+/* ==========================================================================
+ * The Survey Flow, read at BLOCK level.
+ *
+ * The flow used to render `def.flow` node-for-node, so a four-block survey
+ * read "page, page, page, page" — the respondent's pagination presented as
+ * the survey's architecture. It now shows what a programmer designs with:
+ * Blocks, Groups of blocks, and the flow Elements between them. Page breaks
+ * stay where they belong, inside their block.
+ *
+ * Nothing is duplicated to do this. Every card below is a view of a node in
+ * `def.flow`; every control edits that node in place, which is why the
+ * Questions panel, Preview, Test and both exports change the moment you do
+ * anything here.
+ * ======================================================================== */
+
+/** Insert-between control: the "+" node the brief asks for between blocks. */
+function InsertNode({ onInsert, onDropNode, testid }: {
+  onInsert(type: string): void;
+  onDropNode?(id: string): void;
+  testid?: string;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [over, setOver] = React.useState(false);
+  return (
+    <div className={`flow-insert ${over ? "dropping" : ""}`}
+      onDragOver={(e) => { if (onDropNode) { e.preventDefault(); setOver(true); } }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        setOver(false);
+        const id = e.dataTransfer.getData("text/rescript-node");
+        if (id && onDropNode) { e.preventDefault(); onDropNode(id); }
+      }}>
+      <span className="fi-rail" />
+      <div className="menu-anchor">
+        <button className="fi-btn" data-testid={testid ?? "flow-insert"}
+          title="Add a flow element here" onClick={() => setOpen((o) => !o)}>
+          + Add element
+        </button>
+        {open && (
+          <>
+            <div className="menu-scrim" onClick={() => setOpen(false)} />
+            <div className="menu wide" role="menu">
+              {INSERTABLE.map((it) => (
+                <button key={it.type} className="menu-item" data-testid={`insert-${it.type}`}
+                  onClick={() => { setOpen(false); onInsert(it.type); }}>
+                  <span className="mi-label">{it.label}</span>
+                  <span className="mi-hint">{it.hint}</span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+      <span className="fi-rail" />
+    </div>
+  );
+}
+
+/** One block, as the flow shows it: what it is, not how it paginates. */
+function BlockCard({ block, index, onOpen, ...ops }: {
+  block: BlockRef; index: number; onOpen(): void;
+  onRename(t: string): void; onMove(dir: -1 | 1): void; onDelete(): void;
+  onMoveToGroup(groupId: string | null): void;
+  groups: { id: string; title: string }[];
+  inGroup: string | null;
+}) {
+  const s = useStudio();
+  const [open, setOpen] = React.useState(false);
+  const n = blockSize(block);
+  const pages = block.pages.length;
+  return (
+    <div className="flow-card block-card" data-testid="flow-block" draggable
+      onDragStart={(e) => {
+        // without this the enclosing group's handler runs too and overwrites
+        // the payload, so dragging a block out of a group moved the group
+        e.stopPropagation();
+        e.dataTransfer.setData("text/rescript-node", block.id);
+      }}>
+      <div className="fc-head">
+        <button className="block-toggle" onClick={() => setOpen((o) => !o)}
+          title={open ? "Hide questions" : "Show questions"}>{open ? "▾" : "▸"}</button>
+        <span className="block-badge">BLOCK {index}</span>
+        {/* a text field inside a draggable card: selecting text would start
+            a node drag unless the field opts out */}
+        <input className="input block-title" data-testid="flow-block-title" draggable={false}
+          placeholder="Name this block" value={block.title ?? ""}
+          onChange={(e) => ops.onRename(e.target.value)} />
+        <span className="muted block-count">
+          {n} question{n === 1 ? "" : "s"}{pages > 1 ? ` · ${pages} pages` : ""}
+        </span>
+        <button className="btn small" title="Edit this block's questions" onClick={onOpen}>edit</button>
+        <button className="btn small" title="Move up" onClick={() => ops.onMove(-1)}>↑</button>
+        <button className="btn small" title="Move down" onClick={() => ops.onMove(1)}>↓</button>
+        {ops.groups.length > 0 && (
+          <select className="select small move-to" title="Move this block into a group" value=""
+            data-testid="block-to-group"
+            onChange={(e) => { if (e.target.value) ops.onMoveToGroup(e.target.value === "__root" ? null : e.target.value); }}>
+            <option value="">group…</option>
+            {ops.inGroup && <option value="__root">(no group)</option>}
+            {ops.groups.filter((g) => g.id !== ops.inGroup).map((g) => (
+              <option key={g.id} value={g.id}>{g.title || "Untitled group"}</option>
+            ))}
+          </select>
+        )}
+        <button className="btn small danger" title="Delete block" onClick={ops.onDelete}>×</button>
+      </div>
+      {open && (
+        <div className="fc-body">
+          {block.pages.map((p, pi) => (
+            <div key={p.node.id} className="fc-page">
+              {pages > 1 && <span className="page-badge">PAGE {pi + 1}</span>}
+              {p.node.questionIds.length === 0 && <span className="muted" style={{ fontSize: 12 }}>empty</span>}
+              {p.node.questionIds.map((qid) => {
+                const q = s.def.questions.find((x) => x.id === qid);
+                return (
+                  <div key={qid} className="fc-q">
+                    <span className="mono fc-qcode">{q?.code ?? "?"}</span>
+                    <span className="fc-qtext">
+                      {q ? q.text.replace(/<[^>]*>/g, "").slice(0, 90) || "(untitled)" : `⚠ missing ${qid}`}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A flow element — everything that is not a block or a group. */
+function ElementCard({ node, onChange, onMove, onDelete }: {
+  node: FlowNode; onChange(n: FlowNode): void; onMove(dir: -1 | 1): void; onDelete(): void;
+}) {
+  const s = useStudio();
+  const [open, setOpen] = React.useState(false);
+  const summary =
+    node.type === "branch" ? `${node.branches.length} branch${node.branches.length === 1 ? "" : "es"}`
+    : node.type === "loop" ? `over ${node.loopVar}`
+    : node.type === "end" ? node.status
+    : node.type === "randomizer" ? (node.show != null ? `show ${node.show} of ${node.children.length}` : `${node.children.length} children`)
+    : node.type === "embedded_data" ? `${node.fields.length} field${node.fields.length === 1 ? "" : "s"}`
+    : node.type === "quota_check" ? `${node.quotaIds.length} quota${node.quotaIds.length === 1 ? "" : "s"}`
+    : node.type === "redirect" ? node.url
+    : node.id;
+  return (
+    <div className="flow-card element-card" data-testid="flow-element" draggable
+      onDragStart={(e) => { e.stopPropagation(); e.dataTransfer.setData("text/rescript-node", node.id); }}>
+      <div className="fc-head">
+        <button className="block-toggle" onClick={() => setOpen((o) => !o)}>{open ? "▾" : "▸"}</button>
+        <span className={`fn-type ${node.type}`}>{ELEMENT_LABELS[node.type] ?? node.type}</span>
+        <span className="grow fc-summary">{summary}</span>
+        <button className="btn small" onClick={() => onMove(-1)}>↑</button>
+        <button className="btn small" onClick={() => onMove(1)}>↓</button>
+        <button className="btn small danger" onClick={onDelete}>×</button>
+      </div>
+      {open && (
+        <div className="fc-body">
+          <NodeEditor node={node} onChange={onChange} />
+          {"children" in node && Array.isArray((node as any).children) && (
+            <div className="flow-children">
+              <div className="flabel">inside this {ELEMENT_LABELS[node.type]?.toLowerCase() ?? node.type}</div>
+              <FlowTree depth={1} nodes={(node as any).children}
+                onChange={(children) => onChange({ ...(node as any), children })} />
+            </div>
+          )}
+          {node.type === "branch" && (
+            <>
+              {node.branches.map((b, bi) => (
+                <div key={b.id} className="flow-children">
+                  <div className="flabel">
+                    branch: {b.label || conditionToText(b.when, s.def) || "(no condition)"}
+                  </div>
+                  <FlowTree depth={1} nodes={b.children}
+                    onChange={(children) =>
+                      onChange({ ...node, branches: node.branches.map((x, j) => (j === bi ? { ...x, children } : x)) })} />
+                </div>
+              ))}
+              <div className="flow-children">
+                <div className="flabel">otherwise</div>
+                <FlowTree depth={1} nodes={node.otherwise ?? []}
+                  onChange={(otherwise) => onChange({ ...node, otherwise })} />
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function FlowPanel() {
   const s = useStudio();
+  const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({});
+  const flow = s.def.flow as any[];
+  const entries = flowOutline(flow);
+  const groups = entries
+    .filter((e) => e.kind === "group")
+    .map((e: any) => ({ id: e.node.id, title: e.node.title ?? "" }));
+
+  /* --------------------------------------------------------- mutations */
+  /* Every one of these edits `def.flow` in place. There is no second copy of
+     the flow to keep in step, which is the point. */
+
+  /** The array a node lives in, searching the top level and inside groups. */
+  const locate = (d: any, id: string): { arr: any[]; i: number } | null => {
+    const scan = (arr: any[]): { arr: any[]; i: number } | null => {
+      const i = arr.findIndex((n: any) => n.id === id);
+      if (i >= 0) return { arr, i };
+      for (const n of arr) {
+        if (isGroupNode(n) && Array.isArray(n.children)) {
+          const hit = scan(n.children);
+          if (hit) return hit;
+        }
+      }
+      return null;
+    };
+    return scan(d.flow as any[]);
+  };
+
+  const container = (d: any, groupId: string | null): any[] => {
+    if (!groupId) return d.flow as any[];
+    const g = (d.flow as any[]).find((n) => n.id === groupId && isGroupNode(n));
+    if (!g) return d.flow as any[];
+    if (!Array.isArray(g.children)) g.children = [];
+    return g.children;
+  };
+
+  const makeNode = (type: string): any =>
+    type === "page" ? newBlockNode()
+    : type === "section" ? newGroupNode()
+    : newNode(type as FlowNode["type"]);
+
+  /**
+   * Where the header buttons add things.
+   *
+   * Appending to the very end puts a block AFTER the End node, where no
+   * respondent will ever reach it — the flow stops at the first end. So new
+   * top-level items go in front of it, which is what "add a block" means.
+   */
+  const defaultInsertIndex = (): number => {
+    const i = flow.findIndex((n: any) => n?.type === "end");
+    return i < 0 ? flow.length : i;
+  };
+
+  const insert = (groupId: string | null, index: number, type: string) => {
+    s.update((d) => { container(d, groupId).splice(index, 0, makeNode(type)); });
+    s.toast(`${ELEMENT_LABELS[type] ?? type} added`);
+  };
+
+  const moveNode = (id: string, dir: -1 | 1) =>
+    s.update((d) => {
+      const hit = locate(d, id);
+      if (!hit) return;
+      const j = hit.i + dir;
+      if (j < 0 || j >= hit.arr.length) return;
+      [hit.arr[hit.i], hit.arr[j]] = [hit.arr[j], hit.arr[hit.i]];
+    });
+
+  /**
+   * Drop a dragged node immediately before `index` in a container.
+   *
+   * Two things it refuses, because both produce a flow the editor can no
+   * longer represent: dropping a group inside itself, and nesting a group in
+   * another group (the Flow renders one level of grouping, so a nested group
+   * would fall through to the raw node tree this work exists to replace).
+   */
+  const dropInto = (groupId: string | null, index: number, id: string) =>
+    s.update((d) => {
+      const hit = locate(d, id);
+      if (!hit) return;
+      const dragged = hit.arr[hit.i];
+      if (groupId && isGroupNode(dragged)) return; // no groups inside groups
+      if (groupId && dragged.id === groupId) return; // nor inside itself
+      hit.arr.splice(hit.i, 1);
+      const target = container(d, groupId);
+      // removing from the same array first shifts everything after it
+      const at = target === hit.arr && hit.i < index ? index - 1 : index;
+      target.splice(Math.max(0, Math.min(at, target.length)), 0, dragged);
+    });
+
+  const renameNode = (id: string, title: string) =>
+    s.update((d) => {
+      const hit = locate(d, id);
+      if (hit) hit.arr[hit.i].title = title || undefined;
+    });
+
+  const setNode = (id: string, next: any) =>
+    s.update((d) => {
+      const hit = locate(d, id);
+      if (hit) hit.arr[hit.i] = next;
+    });
+
+  /** Deleting a block takes its questions with it, exactly as in Questions. */
+  const deleteBlock = (b: BlockRef) => {
+    const n = blockSize(b);
+    if (n > 0 && !confirm(
+      `Delete this block and its ${n} question${n === 1 ? "" : "s"}? Logic referring to them will need updating.`,
+    )) return;
+    s.update((d) => {
+      const hit = locate(d, b.id);
+      if (!hit) return;
+      const ids = new Set(listBlocks([hit.arr[hit.i]]).flatMap((x) => x.pages.flatMap((p) => p.node.questionIds)));
+      d.questions = d.questions.filter((q: any) => !ids.has(q.id));
+      hit.arr.splice(hit.i, 1);
+    });
+  };
+
+  const deleteElement = (id: string) => {
+    if (!confirm("Remove this flow element? Anything nested inside it goes too.")) return;
+    s.update((d) => {
+      const hit = locate(d, id);
+      if (hit) hit.arr.splice(hit.i, 1);
+    });
+  };
+
+  /** Ungroup: the group disappears, its blocks stay exactly where they were. */
+  const ungroup = (id: string) =>
+    s.update((d) => {
+      const hit = locate(d, id);
+      if (!hit) return;
+      const kids = hit.arr[hit.i].children ?? [];
+      hit.arr.splice(hit.i, 1, ...kids);
+    });
+
+  const deleteGroup = (id: string, count: number) => {
+    if (!confirm(
+      `Delete this group and the ${count} block${count === 1 ? "" : "s"} in it, with their questions?\n\n` +
+      `To keep the blocks, use “Ungroup” instead.`,
+    )) return;
+    s.update((d) => {
+      const hit = locate(d, id);
+      if (!hit) return;
+      const ids = new Set(
+        listBlocks(hit.arr[hit.i].children ?? []).flatMap((x) => x.pages.flatMap((p) => p.node.questionIds)),
+      );
+      d.questions = d.questions.filter((q: any) => !ids.has(q.id));
+      hit.arr.splice(hit.i, 1);
+    });
+  };
+
+  const moveBlockToGroup = (blockId: string, groupId: string | null) =>
+    s.update((d) => {
+      const hit = locate(d, blockId);
+      if (!hit) return;
+      const [node] = hit.arr.splice(hit.i, 1);
+      const target = container(d, groupId);
+      // leaving a group means going back to the top level, which must be in
+      // FRONT of the End node — the flow stops there, so a block after it is
+      // one the Studio draws and no respondent ever sees
+      if (!groupId) {
+        const end = target.findIndex((n: any) => n?.type === "end");
+        target.splice(end < 0 ? target.length : end, 0, node);
+      } else {
+        target.push(node);
+      }
+    });
+
+  /* ------------------------------------------------------------ render */
+
+  let blockNo = 0;
+  const numberOf = () => ++blockNo;
+
+  const renderBlock = (b: BlockRef, groupId: string | null) => (
+    <BlockCard key={b.id} block={b} index={numberOf()}
+      groups={groups} inGroup={groupId}
+      onOpen={() => { s.select(b.pages[0]?.node.questionIds[0] ?? null); s.goToTab?.("questions"); }}
+      onRename={(t) => renameNode(b.id, t)}
+      onMove={(dir) => moveNode(b.id, dir)}
+      onMoveToGroup={(g) => moveBlockToGroup(b.id, g)}
+      onDelete={() => deleteBlock(b)} />
+  );
+
   return (
-    <div>
-      <div className="row" style={{ marginBottom: 14 }}>
+    <div className="flow-panel">
+      <div className="row" style={{ marginBottom: 8 }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>Survey Flow</h2>
-        <span className="muted" style={{ fontSize: 12 }}>
-          START → nodes below in order → END. Branches, loops, randomizers nest arbitrarily.
+        {/* count the BLOCKS, including those inside groups — "3 in order"
+            was ambiguous the moment a group held two of them */}
+        <span className="chip" data-testid="flow-counts">
+          {listBlocks(flow).length} block{listBlocks(flow).length === 1 ? "" : "s"}
+          {groups.length > 0 && ` · ${groups.length} group${groups.length === 1 ? "" : "s"}`}
         </span>
+        <span className="grow" />
+        <button className="btn" data-testid="add-group"
+          onClick={() => insert(null, defaultInsertIndex(), "section")}>+ Add group</button>
+        <button className="btn" data-testid="add-flow-block"
+          onClick={() => insert(null, defaultInsertIndex(), "page")}>+ Add block</button>
       </div>
-      <FlowTree nodes={s.def.flow} onChange={(flow) => s.update((d) => { d.flow = flow; })} />
+      <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+        The survey runs top to bottom. Blocks hold the questions — page breaks inside a
+        block are the respondent’s pages, and stay in the Questions tab. Drag a card onto
+        any <em>+ Add element</em> line to move it, including into and out of a group.
+      </p>
+
+      <div className="flow-start">START</div>
+
+      {entries.map((e, i) => (
+        <React.Fragment key={e.kind === "group" ? e.node.id : e.kind === "block" ? e.block.id : e.node.id}>
+          <InsertNode onInsert={(t) => insert(null, i, t)} onDropNode={(id) => dropInto(null, i, id)} />
+          {e.kind === "block" && renderBlock(e.block, null)}
+          {e.kind === "element" && (
+            <ElementCard node={e.node} onChange={(n) => setNode(e.node.id, n)}
+              onMove={(dir) => moveNode(e.node.id, dir)}
+              onDelete={() => deleteElement(e.node.id)} />
+          )}
+          {e.kind === "group" && (() => {
+            const isShut = collapsed[e.node.id];
+            const kids: any[] = e.node.children ?? [];
+            return (
+              <div className={`flow-group ${isShut ? "collapsed" : ""}`} data-testid="flow-group" draggable
+                onDragStart={(ev) => { ev.stopPropagation(); ev.dataTransfer.setData("text/rescript-node", e.node.id); }}>
+                <div className="fg-head">
+                  <button className="block-toggle" data-testid="group-toggle"
+                    onClick={() => setCollapsed((c) => ({ ...c, [e.node.id]: !c[e.node.id] }))}>
+                    {isShut ? "▶" : "▼"}
+                  </button>
+                  <span className="group-badge">GROUP</span>
+                  <input className="input block-title" data-testid="group-title" draggable={false}
+                    placeholder="Name this group"
+                    value={e.node.title ?? ""} onChange={(ev) => renameNode(e.node.id, ev.target.value)} />
+                  <span className="muted block-count">
+                    {e.blocks.length} block{e.blocks.length === 1 ? "" : "s"}
+                  </span>
+                  <button className="btn small" onClick={() => moveNode(e.node.id, -1)}>↑</button>
+                  <button className="btn small" onClick={() => moveNode(e.node.id, 1)}>↓</button>
+                  <button className="btn small" data-testid="ungroup" title="Remove the group, keep its blocks"
+                    onClick={() => ungroup(e.node.id)}>ungroup</button>
+                  <button className="btn small danger" title="Delete the group and everything in it"
+                    onClick={() => deleteGroup(e.node.id, e.blocks.length)}>×</button>
+                </div>
+                {isShut ? (
+                  // collapsed groups still count what is inside, so a long flow
+                  // can be folded away without losing track of it
+                  <div className="fg-shut muted">
+                    {e.blocks.length === 0 ? "empty" : e.blocks.map((b) => b.title || "Untitled block").join(" · ")}
+                  </div>
+                ) : (
+                  <div className="fg-body">
+                    {kids.map((k: any, ki: number) => {
+                      const [blk] = isBlockNode(k) ? listBlocks([k]) : [];
+                      return (
+                        <React.Fragment key={k.id}>
+                          <InsertNode onInsert={(t) => insert(e.node.id, ki, t)}
+                            onDropNode={(id) => dropInto(e.node.id, ki, id)} />
+                          {blk
+                            ? renderBlock(blk, e.node.id)
+                            : (
+                              <ElementCard node={k} onChange={(n) => setNode(k.id, n)}
+                                onMove={(dir) => moveNode(k.id, dir)}
+                                onDelete={() => deleteElement(k.id)} />
+                            )}
+                        </React.Fragment>
+                      );
+                    })}
+                    <InsertNode onInsert={(t) => insert(e.node.id, kids.length, t)}
+                      onDropNode={(id) => dropInto(e.node.id, kids.length, id)}
+                      testid="group-insert-end" />
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </React.Fragment>
+      ))}
+
+      <InsertNode onInsert={(t) => insert(null, flow.length, t)}
+        onDropNode={(id) => dropInto(null, flow.length, id)} testid="flow-insert-end" />
+      <div className="flow-end">END</div>
+
+      {flow.length === 0 && (
+        <p className="muted">Nothing in the flow yet — add a block to start.</p>
+      )}
     </div>
   );
 }

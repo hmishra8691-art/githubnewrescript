@@ -2,6 +2,7 @@
 import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
 import { StudioProvider, useStudio } from "./store";
+import { ExportDialog } from "./ExportDialog";
 import { QuestionsPanel } from "./QuestionsPanel";
 import { PropertiesPanel, SurveySettings } from "./PropertiesPanel";
 import { FlowPanel } from "./FlowPanel";
@@ -87,6 +88,7 @@ function SaveIndicator() {
 function StudioShell() {
   const s = useStudio();
   // ?tab=data lets the dashboard link straight to a survey's responses
+  const [exportOpen, setExportOpen] = React.useState(false);
   const [tab, setTab] = React.useState<Tab>(() => {
     if (typeof window === "undefined") return "questions";
     const t = new URLSearchParams(window.location.search).get("tab");
@@ -282,12 +284,15 @@ function StudioShell() {
           {saving ? "Saving…" : "🧪 Test Survey"}
         </button>
         <a className="btn" href={`/api/surveys/${s.surveyDbId}/export/xlsx`} target="_blank">⬇ Variables .xlsx</a>
+        <button className="btn" data-testid="export-survey" onClick={() => setExportOpen(true)}
+          title="Export the survey you are editing as Word or JSON">⬇ Export</button>
         <button className="btn" onClick={() => setTab("data")} title="Browse test and live responses">▦ Data</button>
         <button className="btn primary" disabled={saving} onClick={() => save()}
           title="Save an immutable snapshot; the next version number is assigned by the server">
           {saving ? "Saving…" : "Save version"}
         </button>
       </div>
+      {exportOpen && <ExportDialog onClose={() => setExportOpen(false)} />}
       {liveIsBehind && (
         <div className="publish-bar" data-testid="publish-bar">
           <span className="publish-dot" />

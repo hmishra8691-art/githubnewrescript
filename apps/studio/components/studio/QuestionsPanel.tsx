@@ -10,6 +10,10 @@ import { InsertPipingButton } from "./PipingPicker";
 import { FIELD_TYPES, nextCode, resequenceQuestionCodes } from "@rescript/engine"; // also registers builtin question types
 import { isEmptyOptionLogic } from "@rescript/schema";
 import { useStudio, uid } from "./store";
+import {
+  type PageRef, type BlockRef, listPages, listBlocks, wrapBlock, unwrapIfSingle,
+} from "./blockModel";
+import { MoveQuestionModal } from "./MoveQuestion";
 
 const RESPONSE_TYPES: ResponseType[] = [
   "single", "multi", "dropdown", "multi_dropdown", "text", "longtext",
@@ -754,115 +758,6 @@ export function parsePastedOptions(text: string, startCode: number): Option[] {
     });
 }
 
-interface PageRef {
-  node: { id: string; title?: string; questionIds: string[] };
-  parent: any[];
-  index: number;
-}
-
-/** Every page node with its parent array, in visual order. */
-function listPages(flow: any[]): PageRef[] {
-  const out: PageRef[] = [];
-  const walk = (nodes: any[]) => {
-    nodes.forEach((n, i) => {
-      if (n.type === "page") out.push({ node: n, parent: nodes, index: i });
-      if (n.children) walk(n.children);
-      if (n.branches) for (const b of n.branches) walk(b.children);
-      if (n.otherwise) walk(n.otherwise);
-    });
-  };
-  walk(flow);
-  return out;
-}
-
-interface BlockRef {
-  /** Stable identity: the block node's id when wrapped, else the page's. */
-  id: string;
-  title?: string;
-  /** The node that IS the block — a `block` container, or a lone `page`. */
-  node: any;
-  parent: any[];
-  /** Respondent-facing pages inside this block, in order. Never empty. */
-  pages: PageRef[];
-  /** True once the block holds a page break and became a `block` container. */
-  wrapped: boolean;
-}
-
-/**
- * Blocks, in visual order.
- *
- * A Block is one of two shapes, and both are original schema — nothing here
- * was invented for page breaks:
- *
- *   page                      a block with a single page (every block until
- *                             someone adds a break; every legacy survey)
- *   block { children: page[] }  a block whose pages are separated by breaks
- *
- * The wrap happens lazily, on the first page break, and is undone when the
- * last break is removed. So a survey that never uses the feature keeps a flow
- * that is byte-for-byte what it was.
- */
-function listBlocks(flow: any[]): BlockRef[] {
-  const out: BlockRef[] = [];
-  const walk = (nodes: any[]) => {
-    for (const n of nodes) {
-      if (n.type === "page") {
-        out.push({
-          id: n.id, title: n.title, node: n, parent: nodes, wrapped: false,
-          pages: [{ node: n, parent: nodes, index: nodes.indexOf(n) }],
-        });
-        continue;
-      }
-      if (n.type === "block") {
-        const kids: any[] = n.children ?? [];
-        const pages = kids
-          .filter((k) => k.type === "page")
-          .map((k) => ({ node: k, parent: kids, index: kids.indexOf(k) }));
-        if (pages.length) {
-          out.push({ id: n.id, title: n.title, node: n, parent: nodes, wrapped: true, pages });
-        }
-        // a block can still contain other constructs; they list on their own
-        walk(kids.filter((k) => k.type !== "page"));
-        continue;
-      }
-      if (n.children) walk(n.children);
-      if (n.branches) for (const b of n.branches) walk(b.children);
-      if (n.otherwise) walk(n.otherwise);
-    }
-  };
-  walk(flow);
-  return out;
-}
-
-/**
- * Turn a single-page block into a `block` container so it can hold breaks.
- *
- * The PAGE keeps its id and the new block node gets a fresh one, deliberately:
- * skip rules written before this point refer to the page id, and jumping to
- * the first page of the block is exactly what "jump to this block" meant. The
- * name and visibility move up to the block, where they now govern every page.
- */
-function wrapBlock(b: BlockRef): any {
-  if (b.wrapped) return b.node;
-  const page = b.node;
-  const blockNode: any = { type: "block", id: uid("block"), children: [page] };
-  if (page.title) { blockNode.title = page.title; delete page.title; }
-  if (page.visibleIf) { blockNode.visibleIf = page.visibleIf; delete page.visibleIf; }
-  b.parent.splice(b.parent.indexOf(page), 1, blockNode);
-  return blockNode;
-}
-
-/** Collapse a block back to a bare page once it has no breaks left. */
-function unwrapIfSingle(b: BlockRef): void {
-  if (!b.wrapped) return;
-  const kids: any[] = b.node.children ?? [];
-  if (kids.length !== 1 || kids[0].type !== "page") return;
-  const page = kids[0];
-  if (b.node.title && !page.title) page.title = b.node.title;
-  if (b.node.visibleIf && !page.visibleIf) page.visibleIf = b.node.visibleIf;
-  b.parent.splice(b.parent.indexOf(b.node), 1, page);
-}
-
 /**
  * The subtle bar between questions.
  *
@@ -897,6 +792,7 @@ export function QuestionsPanel() {
   const [pickerAt, setPickerAt] = React.useState<{ pageId: string; pos: number } | null>(null);
   const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({});
   const [menuFor, setMenuFor] = React.useState<string | null>(null);
+  const [moveFor, setMoveFor] = React.useState<string | null>(null);
   const selected = s.def.questions.find((q) => q.id === s.selectedQuestionId);
   const pages = listPages(s.def.flow as any[]);
   const blocks = listBlocks(s.def.flow as any[]);
@@ -1225,16 +1121,9 @@ export function QuestionsPanel() {
           <button className="btn small" title="Move down" onClick={(e) => { e.stopPropagation(); move(q.id, 1); }}>↓</button>
           <button className="btn small" title="Duplicate" onClick={(e) => { e.stopPropagation(); duplicate(q.id); }}>⧉</button>
           {blocks.length > 1 && (
-            <select className="select small move-to" title="Move to another block"
-              value="" onClick={(e) => e.stopPropagation()}
-              onChange={(e) => { if (e.target.value) moveQuestionToBlock(q.id, e.target.value); }}>
-              <option value="">move to…</option>
-              {blocks.filter((b) => b.id !== blockId).map((b) => (
-                <option key={b.id} value={b.id}>
-                  Block {blocks.indexOf(b) + 1}{b.title ? ` — ${b.title}` : ""}
-                </option>
-              ))}
-            </select>
+            <button className="btn small" data-testid="move-question-btn"
+              title="Move this question to another block and position"
+              onClick={(e) => { e.stopPropagation(); setMoveFor(q.id); }}>move…</button>
           )}
           {canSplit && indexInPage > 0 && indexInPage < pageSize && (
             <button className="btn small" title="Start a new block here"
@@ -1411,6 +1300,8 @@ export function QuestionsPanel() {
           </div>
         </div>
       )}
+
+      {moveFor && <MoveQuestionModal qid={moveFor} onClose={() => setMoveFor(null)} />}
 
       {s.def.questions.length === 0 && blocks.length === 0 && (
         <p className="muted">Start by adding a block, then put questions inside it.</p>

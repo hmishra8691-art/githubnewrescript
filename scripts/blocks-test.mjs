@@ -80,11 +80,16 @@ console.log("✔ the flow matches the visual hierarchy");
 
 /* ------------------------------------------------- move a question across */
 
-const moveSelect = await page.$(".qcard .move-to");
-assert.ok(moveSelect, "each question offers a move-to-block control");
-const targetValue = await page.$eval(".qcard .move-to option:nth-child(2)", (e) => e.value);
-await page.selectOption(".qcard .move-to", targetValue);
-await page.waitForTimeout(300);
+// the cramped "move to…" select became a dialog that also picks the position;
+// flow-export-test.mjs covers the position choice, this covers the move
+const moveBtn = await page.$('[data-testid="move-question-btn"]');
+assert.ok(moveBtn, "each question offers a move control");
+await moveBtn.click();
+await page.waitForSelector('[data-testid="move-question"]');
+const dests = await page.$$('[data-testid="move-blocks"] input[type=radio]');
+await dests[1].check();
+await page.click('[data-testid="do-move"]');
+await page.waitForTimeout(350);
 assert.deepEqual(await perBlock(), [1, 2], `question moved between blocks: ${await perBlock()}`);
 console.log("✔ a question can be moved into another block");
 
