@@ -9,7 +9,16 @@ export interface StudioState {
   currentVersionId: string | null;
   dirty: boolean;
   selectedQuestionId: string | null;
+  /**
+   * True once this survey has collected responses. Code re-sequencing rewrites
+   * references across the definition, but it cannot rewrite data already
+   * stored against the old codes — so once this is true, codes freeze.
+   */
+  hasResponses: boolean;
   update(mutator: (draft: SurveyDefinition) => void): void;
+  /** switch the centre panel — lets one panel point at another */
+  goToTab?(tab: string): void;
+  setGoToTab(fn: (tab: string) => void): void;
   replace(def: SurveyDefinition): void;
   select(questionId: string | null): void;
   markSaved(versionId: string): void;
@@ -33,7 +42,24 @@ export function StudioProvider({
   const [selectedQuestionId, setSelected] = React.useState<string | null>(null);
   const [currentVersionId, setVersionId] = React.useState<string | null>(versionId);
   const [toastMsg, setToastMsg] = React.useState<{ msg: string; kind: "ok" | "err" } | null>(null);
+  const [hasResponses, setHasResponses] = React.useState(false);
+  const goToTabRef = React.useRef<((tab: string) => void) | undefined>(undefined);
   const toastTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // one cheap probe on mount; a survey with data must not have its codes moved
+  React.useEffect(() => {
+    let cancelled = false;
+    if (surveyDbId === "sandbox") return;
+    fetch(`/api/surveys/${surveyDbId}/responses?limit=1`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled || !d) return;
+        const n = Array.isArray(d) ? d.length : (d.total ?? d.rows?.length ?? 0);
+        setHasResponses(n > 0);
+      })
+      .catch(() => { /* offline / not deployed yet — treat as no data */ });
+    return () => { cancelled = true; };
+  }, [surveyDbId]);
 
   const value: StudioState = {
     def,
@@ -41,6 +67,9 @@ export function StudioProvider({
     currentVersionId,
     dirty,
     selectedQuestionId,
+    hasResponses,
+    goToTab: (tab) => goToTabRef.current?.(tab),
+    setGoToTab(fn) { goToTabRef.current = fn; },
     update(mutator) {
       setDef((prev) => {
         const draft = structuredClone(prev);

@@ -77,9 +77,36 @@ export interface QuestionVariantDef {
   };
   status: "stable" | "planned";
   mobile: boolean;
+  /**
+   * This variant is a duplicate of another one and has been retired from the
+   * picker. It stays registered so surveys that already reference the id keep
+   * resolving to the right renderer, response model and capabilities — only
+   * the authoring UI hides it, and the switcher offers the survivor instead.
+   */
+  supersededBy?: string;
 }
 
 export const variantRegistry = new Registry<QuestionVariantDef>("id");
+
+/** Variants a programmer may choose today: stable, and not retired. */
+export function isSelectableVariant(v: QuestionVariantDef): boolean {
+  return v.status === "stable" && !v.supersededBy;
+}
+
+/**
+ * Follow a retired variant to the one that replaced it.
+ * Loops and dangling pointers resolve to the original rather than throwing.
+ */
+export function resolveVariant(id: string | undefined): QuestionVariantDef | undefined {
+  let cur = id ? variantRegistry.get(id) : undefined;
+  const seen = new Set<string>();
+  while (cur?.supersededBy && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    cur = variantRegistry.get(cur.supersededBy) ?? cur;
+    if (!cur.supersededBy) break;
+  }
+  return cur;
+}
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -204,15 +231,19 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
     defaults: { settings: { maxSelections: 1 } },
   }),
+  // Retired duplicates — the rating scales live in the Slider / Rating family.
+  // Kept registered so existing surveys keep rendering; hidden from the picker.
   stable(F.single, "stars", "Star Rating", "1–N stars stored as a numeric score.", {
     baseType: "numeric", renderer: "stars", responseModel: "numeric",
     capabilities: ["numeric_bounds"], validations: VAL_NUM,
     defaults: { settings: { minValue: 1, maxValue: 5 } },
+    supersededBy: "slider.stars",
   }),
   stable(F.single, "emoji", "Emoji / Smiley Rating", "Five-point emoji scale stored as 1–5.", {
     baseType: "numeric", renderer: "emoji", responseModel: "numeric",
-    capabilities: [], validations: ["required"],
+    capabilities: ["numeric_bounds"], validations: VAL_NUM,
     defaults: { settings: { minValue: 1, maxValue: 5 } },
+    supersededBy: "slider.emoji",
   }),
   stable(F.single, "likelihood", "Likelihood Scale (1–7)", "Numbered scale with end labels.", {
     baseType: "nps", responseModel: "numeric",
@@ -226,15 +257,18 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   stable(F.single, "slider", "Slider Selection", "Continuous slider between two anchors.", {
     baseType: "slider", responseModel: "numeric",
     capabilities: ["numeric_bounds", "scale_labels"], validations: VAL_NUM,
+    supersededBy: "slider.single",
   }),
   stable(F.single, "discrete_slider", "Discrete Slider", "Slider snapping to whole steps.", {
     baseType: "slider", responseModel: "numeric",
     capabilities: ["numeric_bounds", "scale_labels"], validations: VAL_NUM,
     defaults: { settings: { step: 1 } },
+    supersededBy: "slider.discrete",
   }),
   stable(F.single, "carousel", "Single-Item Carousel", "One option at a time; browse with ‹ › and select.", {
     baseType: "single_select", renderer: "carousel", responseModel: "single_choice",
     capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
+    supersededBy: "carousel.single",
   }),
   ...planned(F.single, [
     ["Icon Select", "Pick one option shown as an icon."],
@@ -271,7 +305,7 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: [...CAP_MULTI, "images"], validations: VAL_MULTI,
     defaults: { settings: { maxSelections: 99 } },
   }),
-  stable(F.multi, "top_n", "Top-N Selection / Pick N of X", "Exactly N picks enforced by min = max = N.", {
+  stable(F.multi, "top_n", "Pick Exactly N", "A multi-select that accepts exactly N answers — \"choose your 3 favourites\". Set N with min/max selections.", {
     baseType: "multi_select", responseModel: "multiple_choice",
     capabilities: CAP_MULTI, validations: VAL_MULTI,
     defaults: { settings: { minSelections: 3, maxSelections: 3 }, instruction: "Please select exactly 3." },
@@ -292,7 +326,9 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   }),
   stable(F.text, "essay", "Essay / Long Text", "Long-form answer with a minimum length.", {
     baseType: "long_text", responseModel: "text", validations: VAL_TEXT,
-    defaults: { validation: [{ kind: "min_length", value: 100, message: "Please write at least a few sentences." }] },
+    // the threshold has to be in the message: a respondent who types a
+    // sentence and is refused with "write a few sentences" has no idea why.
+    defaults: { validation: [{ kind: "min_length", value: 100, message: "Please write at least 100 characters." }] },
   }),
   stable(F.text, "email", "Email", "Validated email address.", {
     baseType: "open_text", responseModel: "text",
@@ -378,6 +414,7 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   stable(F.numeric, "slider", "Number Slider", "Numeric input as a slider.", {
     baseType: "slider", responseModel: "numeric",
     capabilities: ["numeric_bounds", "scale_labels"], validations: VAL_NUM,
+    supersededBy: "slider.single",
   }),
   stable(F.numeric, "percentage_slider", "Percentage Slider", "0–100 slider.", {
     baseType: "slider", responseModel: "numeric",
@@ -400,6 +437,7 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: ["fields", "layout_columns"], validations: ["required"],
   }),
   stable(F.list, "ranking", "Ranking List", "Tap-to-rank ordered list.", {
+    supersededBy: "ranking.click",
     baseType: "ranking", responseModel: "rank_order",
     capabilities: ["options", "sorting", "randomization", "carry_forward", "list_logic"],
     validations: ["required", "min_selections", "max_selections"],
@@ -484,22 +522,26 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   ]),
 
   /* -------------------------------------------------------------- RANKING */
-  stable(F.ranking, "click", "Click-to-Rank", "Tap items in order; reorder with arrows.", {
+  // The three ranking variants differ by `settings.rankMode`, which the
+  // renderer and the validator both read — without it they were three labels
+  // over one identical tap-to-rank behaviour.
+  stable(F.ranking, "click", "Click-to-Rank", "Tap items in order; rank as many as you like.", {
     baseType: "ranking", responseModel: "rank_order",
     capabilities: ["options", "sorting", "randomization", "carry_forward", "list_logic"],
     validations: ["required", "min_selections", "max_selections"],
+    defaults: { settings: { rankMode: "click" } },
   }),
   stable(F.ranking, "rank_all", "Rank All Items", "Every item must receive a rank.", {
     baseType: "ranking", responseModel: "rank_order",
     capabilities: ["options", "sorting", "randomization", "carry_forward", "list_logic"],
     validations: ["required"],
-    defaults: { instruction: "Please rank every item." },
+    defaults: { settings: { rankMode: "all" }, instruction: "Please rank every item." },
   }),
-  stable(F.ranking, "top_n", "Rank Top N", "Only the top N items are ranked.", {
+  stable(F.ranking, "top_n", "Rank Top N", "Respondents rank only their best N items and leave the rest unranked — \"rank your top 3 of 10\".", {
     baseType: "ranking", responseModel: "rank_order",
     capabilities: ["options", "sorting", "randomization", "carry_forward", "list_logic", "min_max_selections"],
     validations: ["required", "min_selections", "max_selections"],
-    defaults: { settings: { maxSelections: 3 }, instruction: "Rank your top 3." },
+    defaults: { settings: { rankMode: "top_n", maxSelections: 3 }, instruction: "Rank your top 3." },
   }),
   stable(F.ranking, "image", "Image Ranking", "Rank images by tapping them in order.", {
     baseType: "image_ranking", responseModel: "rank_order",
@@ -524,14 +566,19 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     baseType: "slider", responseModel: "numeric",
     capabilities: ["numeric_bounds", "scale_labels"], validations: VAL_NUM,
   }),
-  stable(F.slider, "stars", "Star Rating", "Star scale (numeric).", {
+  stable(F.slider, "discrete", "Discrete Slider", "Slider snapping to whole steps.", {
+    baseType: "slider", responseModel: "numeric",
+    capabilities: ["numeric_bounds", "scale_labels"], validations: VAL_NUM,
+    defaults: { settings: { step: 1 } },
+  }),
+  stable(F.slider, "stars", "Star Rating", "1–N stars stored as a numeric score.", {
     baseType: "numeric", renderer: "stars", responseModel: "numeric",
     capabilities: ["numeric_bounds"], validations: VAL_NUM,
     defaults: { settings: { minValue: 1, maxValue: 5 } },
   }),
-  stable(F.slider, "emoji", "Emoji Slider / Rating", "Emoji five-point scale.", {
+  stable(F.slider, "emoji", "Emoji / Smiley Rating", "Emoji scale; the face count follows min–max.", {
     baseType: "numeric", renderer: "emoji", responseModel: "numeric",
-    capabilities: [], validations: ["required"],
+    capabilities: ["numeric_bounds"], validations: VAL_NUM,
     defaults: { settings: { minValue: 1, maxValue: 5 } },
   }),
   ...planned(F.slider, [
@@ -815,7 +862,39 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   }),
 ];
 
+/**
+ * Row-based question types are unusable with zero rows: a matrix renders an
+ * empty grid, and a swipe deck reports "0 cards judged" because its cards ARE
+ * its rows. Nothing in the catalog declared starter rows, so every one of them
+ * was born broken. Rather than repeat a `defaults.rows` block on a dozen
+ * entries, seed any stable row-driven variant that doesn't bring its own.
+ */
+const ROW_DRIVEN_BASE_TYPES = [
+  "matrix_single",
+  "matrix_multi",
+  "matrix_numeric",
+  "matrix_text",
+  "matrix_dropdown",
+];
+
+/**
+ * Numeric codes, so the seeded rows and anything the programmer adds after
+ * them form one consistent 1..N sequence (and stay re-sequenceable). A mixed
+ * list like r1, r2, r3, 4 is exactly the confusion this batch was reported for.
+ */
+function starterRows(v: QuestionVariantDef): { code: string; label: string }[] {
+  const noun = v.renderer === "swipe" ? "Card" : "Statement";
+  return [1, 2, 3].map((n) => ({ code: String(n), label: `${noun} ${n}` }));
+}
+
 for (const v of QUESTION_VARIANTS) {
+  if (
+    v.status === "stable" &&
+    ROW_DRIVEN_BASE_TYPES.includes(v.baseType) &&
+    !v.defaults?.rows
+  ) {
+    v.defaults = { ...(v.defaults ?? {}), rows: starterRows(v) };
+  }
   if (!variantRegistry.has(v.id)) variantRegistry.register(v);
 }
 

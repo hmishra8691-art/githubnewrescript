@@ -1,13 +1,13 @@
 "use client";
 import React from "react";
 import type { Question, Option, QuestionColumn, ResponseType, QuestionVariantDef } from "@rescript/schema";
-import { questionTypeRegistry, variantRegistry } from "@rescript/schema";
+import { questionTypeRegistry, variantRegistry, resolveVariant } from "@rescript/schema";
 import { VariantPickerModal, VariantSwitcher, createFromVariant } from "./VariantPicker";
 import { RichTextEditor } from "./RichTextEditor";
 import { OptionLogicEditor } from "./OptionLogicEditor";
 import { OptionPreview } from "./OptionPreview";
 import { InsertPipingButton } from "./PipingPicker";
-import { FIELD_TYPES } from "@rescript/engine"; // also registers builtin question types
+import { FIELD_TYPES, nextCode, resequenceQuestionCodes } from "@rescript/engine"; // also registers builtin question types
 import { isEmptyOptionLogic } from "@rescript/schema";
 import { useStudio, uid } from "./store";
 
@@ -36,20 +36,34 @@ export function allowedFlagsFor(qtype: string): string[] {
   return ALL_FLAGS.map((f) => f.value);
 }
 
+/**
+ * Flags that make sense on a matrix ROW (a statement), as opposed to a column
+ * option (the scale point). Anchoring and exclusivity are row-level concepts
+ * the engine already honours — the editor simply never offered them, so a
+ * programmer could not pin "None of these" to the bottom of a grid.
+ */
+export function allowedRowFlagsFor(qtype: string): string[] {
+  const base = ["anchor_top", "anchor_bottom", "other_specify"];
+  if (qtype === "matrix_multi") return [...base, "exclusive", "none_of_above"];
+  return base;
+}
+
 const OPTION_WINDOW = 40;
 
 function OptionRows({ options, onChange, showFlags = true, flagChoices, showImage = false,
-  enableLogic = false, questionId }: {
+  enableLogic = false, questionId, onAfterDelete }: {
   options: Option[]; onChange(opts: Option[]): void; showFlags?: boolean;
   flagChoices?: string[]; showImage?: boolean;
   /** per-option logic + piping controls (reqs §1–4, §21) */
   enableLogic?: boolean; questionId?: string;
+  /** called after a removal so the owner can re-sequence codes */
+  onAfterDelete?(): void;
 }) {
   const [filter, setFilter] = React.useState("");
   const [showAll, setShowAll] = React.useState(false);
   const [pasteOpen, setPasteOpen] = React.useState(false);
   const [pasteText, setPasteText] = React.useState("");
-  const [logicOpen, setLogicOpen] = React.useState<number | null>(null);
+  const [logicOpen, setLogicOpen] = React.useState<string | null>(null);
   const pendingFocus = React.useRef<number | null>(null);
   const rootRef = React.useRef<HTMLDivElement>(null);
 
@@ -66,9 +80,17 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
   const set = (i: number, patch: Partial<Option>) =>
     onChange(options.map((o, j) => (j === i ? { ...o, ...patch } : o)));
 
+  /**
+   * New codes are `max(existing) + 1`. Using the list LENGTH — as this did —
+   * produces a duplicate the moment anything has been deleted (delete #2 of 5,
+   * add one, and the new option is also coded 5), and duplicate codes silently
+   * corrupt every code-keyed lookup: logic, piping, exports, stored answers.
+   * It also numbered the first five rows 2,3,4,5,6 whenever a blank row
+   * already existed.
+   */
   const insertAfter = (i: number) => {
     const next = [...options];
-    next.splice(i + 1, 0, { code: String(options.length + 1), label: "", flags: [] } as Option);
+    next.splice(i + 1, 0, { code: nextCode(options), label: "", flags: [] } as Option);
     pendingFocus.current = i + 1;
     onChange(next);
   };
@@ -84,6 +106,7 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
       e.preventDefault();
       pendingFocus.current = Math.max(0, i - 1);
       onChange(options.filter((_, j) => j !== i));
+      onAfterDelete?.();
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       rootRef.current?.querySelector<HTMLInputElement>(`input[data-oidx="${i - 1}"]`)?.focus();
@@ -98,19 +121,22 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
     const text = e.clipboardData.getData("text/plain");
     if (!text.includes("\n")) return;
     e.preventDefault();
-    const parsed = parsePastedOptions(text, options.length + 1);
+    const parsed = parsePastedOptions(text, Number(nextCode(options)));
     if (parsed.length === 0) return;
     const next = [...options];
     next[i] = { ...next[i], label: parsed[0].label, code: options[i].label ? next[i].code : parsed[0].code };
     next.splice(i + 1, 0, ...(parsed.slice(1) as Option[]));
     pendingFocus.current = i + parsed.length - 1;
+    setShowAll(true); // the pasted rows must be mounted for focus to land
     onChange(next);
   };
 
   const importPaste = () => {
-    const parsed = parsePastedOptions(pasteText, options.length + 1);
+    const parsed = parsePastedOptions(pasteText, Number(nextCode(options)));
     if (parsed.length === 0) return;
     onChange([...options, ...(parsed as Option[])]);
+    setFilter("");
+    setShowAll(true);
     setPasteText("");
     setPasteOpen(false);
   };
@@ -123,8 +149,11 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
   };
 
   const flags = ALL_FLAGS.filter((f) => (flagChoices ?? ALL_FLAGS.map((x) => x.value)).includes(f.value));
-  const big = options.length > OPTION_WINDOW;
   const f = filter.trim().toLowerCase();
+  // Showing the search box only while the list is long meant that deleting
+  // back under the threshold unmounted it with the filter still applied — the
+  // rows vanished and there was no control left to clear it.
+  const big = options.length > OPTION_WINDOW || f.length > 0;
   let visible = options
     .map((o, i) => ({ o, i }))
     .filter(({ o }) => !f || o.label.toLowerCase().includes(f) || String(o.code).toLowerCase().includes(f));
@@ -149,7 +178,7 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
         const hasLogic = !isEmptyOptionLogic(o.logic) || !!o.visibleIf;
         return (
         <React.Fragment key={i}>
-        <div className={`opt-row ${logicOpen === i ? "logic-open" : ""}`}>
+        <div className={`opt-row ${logicOpen === String(o.code) ? "logic-open" : ""}`}>
           <input className="input code-input" value={String(o.code)}
             onChange={(e) => set(i, { code: e.target.value })} title="code" />
           <input className="input grow" value={o.label} data-oidx={i}
@@ -176,7 +205,7 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
           {enableLogic && (
             <button className={`btn small ${hasLogic ? "has-logic" : ""}`} data-testid={`option-logic-${i}`}
               title="Option-level logic: always show / hide, conditions, eligibility, ordering"
-              onClick={() => setLogicOpen(logicOpen === i ? null : i)}>
+              onClick={() => setLogicOpen(logicOpen === String(o.code) ? null : String(o.code))}>
               {o.logic?.visibility === "always_show" ? "◉ show"
                 : o.logic?.visibility === "always_hide" ? "◌ hide"
                 : hasLogic ? "⑂ logic" : "⑂"}
@@ -184,9 +213,10 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
           )}
           <button className="btn small" onClick={() => move(i, -1)}>↑</button>
           <button className="btn small" onClick={() => move(i, 1)}>↓</button>
-          <button className="btn small danger" onClick={() => onChange(options.filter((_, j) => j !== i))}>×</button>
+          <button className="btn small danger"
+            onClick={() => { onChange(options.filter((_, j) => j !== i)); onAfterDelete?.(); }}>×</button>
         </div>
-        {enableLogic && logicOpen === i && (
+        {enableLogic && logicOpen === String(o.code) && (
           <OptionLogicEditor
             title={`Logic for “${o.label.replace(/<[^>]*>/g, "") || o.code}”`}
             logic={o.logic}
@@ -410,11 +440,18 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
 
 export function QuestionEditor({ q }: { q: Question }) {
   const s = useStudio();
+  const pendingResequenceNote = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    const n = pendingResequenceNote.current;
+    if (n == null) return;
+    pendingResequenceNote.current = null;
+    s.toast(n > 0 ? `Codes re-sequenced — ${n} logic reference${n === 1 ? "" : "s"} updated` : "Codes re-sequenced");
+  });
   const plugin = questionTypeRegistry.get(q.type);
   const feats = plugin?.features ?? {};
   // capability-driven configuration: a variant narrows what the editor shows;
   // legacy questions (no variant) keep the base-type behaviour untouched.
-  const variantDef = q.variant ? variantRegistry.get(q.variant) : undefined;
+  const variantDef = resolveVariant(q.variant);
   const has = (c: string) =>
     variantDef ? variantDef.capabilities.includes(c as any) : true;
   const patch = (p: Partial<Question>) =>
@@ -424,6 +461,24 @@ export function QuestionEditor({ q }: { q: Question }) {
     });
   const patchSettings = (p: Partial<Question["settings"]>) =>
     patch({ settings: { ...q.settings, ...p } });
+
+  /**
+   * After a deletion, re-sequence this list's codes to 1..N and repoint every
+   * reference to them — conditions, list rules, pipeline sources,
+   * randomization groups, quota cells and matrix row pipes — in the same edit.
+   * Skipped entirely once the survey has responses, because stored answers are
+   * keyed by the old codes and cannot be rewritten, and skipped for lists that
+   * use meaningful (non-numeric) codes.
+   */
+  const resequence = (scope: "options" | "rows") => {
+    if (s.hasResponses) return;
+    s.update((d) => {
+      const r = resequenceQuestionCodes(d, q.id, scope);
+      if (Object.keys(r.mapping).length === 0) return;
+      Object.assign(d, r.def);
+      pendingResequenceNote.current = r.referencesUpdated;
+    });
+  };
 
   return (
     <div>
@@ -440,10 +495,13 @@ export function QuestionEditor({ q }: { q: Question }) {
       <RichTextEditor value={q.text} autoFocusId={`qtext_${q.id}`} questionId={q.id}
         onChange={(html) => patch({ text: html })}
         placeholder="e.g. Earlier you selected {{Q1}}. Why did you choose {{Q1.first}}?" />
-      <div className="row">
-        <label className="f grow"><span>Instruction</span>
-          <input className="input" value={q.instruction ?? ""}
-            onChange={(e) => patch({ instruction: e.target.value || undefined })} /></label>
+      <div className="row" style={{ alignItems: "flex-start" }}>
+        <div className="f grow">
+          <span>Instruction — formatting and piping supported</span>
+          <RichTextEditor value={q.instruction ?? ""} questionId={q.id}
+            onChange={(html) => patch({ instruction: html || undefined })}
+            placeholder="e.g. Select all that apply." />
+        </div>
         <label className="f" style={{ width: 120 }}><span>Required</span>
           <select className="select" value={q.required ? "1" : "0"}
             onChange={(e) => patch({ required: e.target.value === "1" })}>
@@ -455,6 +513,7 @@ export function QuestionEditor({ q }: { q: Question }) {
         <>
           <h3 className="sec">Options</h3>
           <OptionRows options={q.options} onChange={(options) => patch({ options })}
+            onAfterDelete={() => resequence("options")}
             flagChoices={allowedFlagsFor(q.type)} enableLogic questionId={q.id}
             showImage={has("images") && (variantDef?.capabilities.includes("images") || q.type.startsWith("image"))} />
           <div className="row" style={{ marginTop: 10, flexWrap: "wrap" }}>
@@ -477,6 +536,13 @@ export function QuestionEditor({ q }: { q: Question }) {
                 <option value="numeric_asc">numeric ascending</option>
                 <option value="numeric_desc">numeric descending</option>
               </select></label>)}
+            {has("layout_columns") && q.options.length >= 10 && !q.settings.columnsLayout && (
+              <button className="btn small" style={{ alignSelf: "flex-end", marginBottom: 7 }}
+                title="A long single column is hard to scan"
+                onClick={() => patchSettings({ columnsLayout: q.options.length >= 16 ? 4 : q.options.length >= 9 ? 3 : 2 })}>
+                {q.options.length} options — use {q.options.length >= 16 ? 4 : 3} columns?
+              </button>
+            )}
             <span className="muted" style={{ fontSize: 11, alignSelf: "flex-end", paddingBottom: 7 }}>
               sorting never changes the programmed order; randomization is configured in the right panel
             </span>
@@ -488,22 +554,35 @@ export function QuestionEditor({ q }: { q: Question }) {
       {feats.rows && q.type !== "numeric_list" && q.type !== "text_list" && (
         <>
           <h3 className="sec">Rows</h3>
-          <OptionRows showFlags={false} enableLogic questionId={q.id}
+          <OptionRows enableLogic questionId={q.id}
+            flagChoices={allowedRowFlagsFor(q.type)}
+            onAfterDelete={() => resequence("rows")}
             options={q.rows.map((r) => ({
               code: r.code, label: r.label, flags: r.flags ?? [],
               logic: r.logic, visibleIf: r.visibleIf,
             }))}
             onChange={(rows) =>
               patch({
-                rows: rows.map((r) => {
-                  const prev = q.rows.find((x) => String(x.code) === String(r.code));
+                rows: rows.map((r, i) => {
+                  // match by position, not by code: a code edit would otherwise
+                  // lose the row's validation and field settings
+                  const prev = q.rows[i];
                   return {
-                    validation: [], required: false, ...prev,
-                    code: r.code, label: r.label, flags: [],
+                    ...prev,
+                    validation: prev?.validation ?? [],
+                    required: prev?.required ?? false,
+                    code: r.code, label: r.label,
+                    // flags used to be hard-reset to [] here, silently wiping
+                    // any anchoring the row carried
+                    flags: r.flags ?? [],
                     logic: r.logic, visibleIf: r.visibleIf,
                   };
                 }),
               })} />
+          <p className="muted" style={{ fontSize: 11, marginTop: -2 }}>
+            Row flags anchor a statement to the top or bottom of the grid — anchored rows
+            are never moved by row randomization (Properties → Randomization → scope “rows”).
+          </p>
           {q.carryForward?.into === "rows" && (
             <p className="muted" style={{ fontSize: 12 }}>
               Rows are carried forward from {s.def.questions.find((x) => x.id === q.carryForward?.sourceQuestionId)?.code ?? "?"} —
@@ -591,12 +670,23 @@ export function QuestionEditor({ q }: { q: Question }) {
       )}
 
       {(q.type === "conjoint_task" || q.type === "maxdiff_task") && (
-        <label className="f"><span>Design file</span>
-          <select className="select" value={q.settings.designRef ?? ""}
-            onChange={(e) => patchSettings({ designRef: e.target.value || undefined })}>
-            <option value="">— pick a generated design —</option>
-            {s.def.designs.map((d) => <option key={d.id} value={d.id}>{d.name} ({d.kind} v{d.version})</option>)}
-          </select></label>
+        <>
+          <label className="f"><span>Design file</span>
+            <select className="select" value={q.settings.designRef ?? ""}
+              data-testid="design-ref"
+              onChange={(e) => patchSettings({ designRef: e.target.value || undefined })}>
+              <option value="">— pick a generated design —</option>
+              {s.def.designs.map((d) => <option key={d.id} value={d.id}>{d.name} ({d.kind} v{d.version})</option>)}
+            </select></label>
+          {s.def.designs.length === 0 && (
+            <div className="chip warn" data-testid="no-designs" style={{ marginTop: -6 }}>
+              No designs yet — generate one in{" "}
+              <button className="btn small" style={{ marginLeft: 4 }}
+                onClick={() => s.goToTab?.("designs")}>Design Generators →</button>
+              {" "}then come back and pick it here.
+            </div>
+          )}
+        </>
       )}
 
       {q.type === "html" && (

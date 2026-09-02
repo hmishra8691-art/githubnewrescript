@@ -205,7 +205,7 @@ export function ConditionEditor({ value, onChange, perOption }: {
           onRemove={() => onChange({ type: "group", op: "and", children: [] })} />
         <button className="btn small" onClick={() =>
           onChange({ type: "group", op: "and", children: [value, newRule(firstRef)] })}>
-          + add condition (AND/OR)
+          + condition
         </button>
       </div>
     );
@@ -242,13 +242,32 @@ export function ConditionEditor({ value, onChange, perOption }: {
         ),
       )}
       <div className="row">
-        <button className="btn small" onClick={() => onChange({ ...g, children: [...g.children, newRule(firstRef)] })}>
+        <button className="btn small"
+          title={`Add another condition to this ${g.op === "and" ? "ALL (AND)" : g.op === "or" ? "ANY (OR)" : "NOT"} group`}
+          onClick={() => onChange({ ...g, children: [...g.children, newRule(firstRef)] })}>
           + condition
         </button>
-        <button className="btn small" onClick={() =>
-          onChange({ ...g, children: [...g.children, { type: "group", op: "or", children: [newRule(firstRef)] }] })}>
-          + nested group
+        {/* A group has ONE operator, so mixing AND with OR means nesting. The
+            button used to be an unlabelled "+ nested group" that no survey
+            programmer would guess was the answer to "how do I write
+            A AND (B OR C)?" — hence the report that mixing was impossible. */}
+        <button className="btn small"
+          title={`Nest a sub-group so you can mix operators — e.g. A ${g.op === "and" ? "AND" : "OR"} (B ${g.op === "and" ? "OR" : "AND"} C)`}
+          onClick={() =>
+            onChange({
+              ...g,
+              children: [
+                ...g.children,
+                // the opposite operator, which is the only useful default:
+                // nesting an OR inside an OR changes nothing
+                { type: "group", op: g.op === "or" ? "and" : "or", children: [newRule(firstRef)] },
+              ],
+            })}>
+          + group {g.op === "or" ? "(AND …)" : "(OR …)"}
         </button>
+        <span className="muted" style={{ fontSize: 11 }}>
+          mixing AND with OR? add a group
+        </span>
       </div>
     </div>
   );

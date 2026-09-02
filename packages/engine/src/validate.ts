@@ -209,11 +209,27 @@ export function validateQuestion(
     }
   }
 
-  // ranking completeness when required
+  // ranking completeness when required — what "complete" means depends on the
+  // ranking mode, so Rank-Top-N isn't held to "rank everything" (which no
+  // respondent could ever satisfy)
   if (q.required && (q.type === "ranking" || q.type === "image_ranking") && Array.isArray(value)) {
     const view = effectiveQuestion(q, ctx);
-    if (value.length < view.options.length)
-      push("Please rank all items.");
+    const mode = q.settings.rankMode ?? "all";
+    const target =
+      mode === "top_n"
+        ? Math.min(q.settings.maxSelections ?? view.options.length, view.options.length)
+        : mode === "click"
+          ? Math.min(q.settings.minSelections ?? 1, view.options.length)
+          : view.options.length;
+    if (value.length < target) {
+      push(
+        mode === "top_n"
+          ? `Please rank your top ${target}.`
+          : mode === "click"
+            ? `Please rank at least ${target} item${target === 1 ? "" : "s"}.`
+            : "Please rank all items.",
+      );
+    }
   }
 
   return errors;

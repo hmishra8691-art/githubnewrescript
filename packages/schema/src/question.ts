@@ -294,6 +294,13 @@ export const Question = z.object({
       imageUrl: z.string().optional(),
       /** Display options/fields in N columns (1–4). */
       columnsLayout: z.number().optional(),
+      /**
+       * Ranking behaviour. "click" = rank as many as you like, "all" = every
+       * item must be ranked, "top_n" = stop at `maxSelections`. Read by the
+       * renderer AND the validator, so the three ranking variants actually
+       * differ rather than sharing one tap-to-rank behaviour.
+       */
+      rankMode: z.enum(["click", "all", "top_n"]).optional(),
       /** Presentation sort, applied before randomization; the programmed
        *  order in `options` is never modified. */
       optionOrder: z

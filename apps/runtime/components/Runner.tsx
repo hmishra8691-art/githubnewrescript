@@ -127,6 +127,23 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [epoch]);
 
+  /**
+   * Live preview: the Studio pushes the definition on every edit, so the
+   * compiled flow has to be rebuilt — otherwise a newly added page or a
+   * changed branch never appears. The respondent's position and answers are
+   * kept, and the index is clamped in case the survey got shorter.
+   */
+  React.useEffect(() => {
+    if (mode !== "preview" || !stateRef.current) return;
+    const next = compileFlow(def, stateRef.current, counts);
+    setSteps(next);
+    if (stateRef.current.stepIndex >= next.length) {
+      stateRef.current.stepIndex = Math.max(0, next.length - 1);
+    }
+    force();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [def]);
+
   const state = stateRef.current;
   if (!state) return null;
 

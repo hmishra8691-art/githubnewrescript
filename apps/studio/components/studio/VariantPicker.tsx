@@ -7,8 +7,10 @@ import {
   variantFamilies,
   variantsOf,
   variantForLegacyType,
+  resolveVariant,
   responseModelOf,
   isSafeConversion,
+  isSelectableVariant,
 } from "@rescript/schema";
 import { useStudio, uid } from "./store";
 
@@ -69,7 +71,7 @@ export function VariantPickerModal({ onPick, onClose }: {
 }) {
   const families = variantFamilies();
   const [family, setFamily] = React.useState(families[0]?.family ?? "single_select");
-  const variants = variantsOf(family);
+  const variants = variantsOf(family).filter((v) => isSelectableVariant(v) || v.status === "planned");
 
   return (
     <div className="modal-back" onClick={onClose}>
@@ -119,12 +121,14 @@ export function VariantPickerModal({ onPick, onClose }: {
 
 export function VariantSwitcher({ q }: { q: Question }) {
   const s = useStudio();
+  // a question saved against a retired duplicate resolves to its survivor, so
+  // the switcher shows where that type lives now rather than a blank
   const current: QuestionVariantDef | undefined =
-    (q.variant ? variantRegistry.get(q.variant) : undefined) ??
+    resolveVariant(q.variant) ??
     (variantForLegacyType(q.type) ? variantRegistry.get(variantForLegacyType(q.type)!) : undefined);
   const families = variantFamilies().filter((f) => f.stable > 0);
   const family = current?.family ?? "single_select";
-  const stableVariants = variantsOf(family).filter((v) => v.status === "stable");
+  const stableVariants = variantsOf(family).filter(isSelectableVariant);
 
   const switchTo = (to: QuestionVariantDef) => {
     const safe = isSafeConversion(current, to, q.type);
@@ -169,7 +173,7 @@ export function VariantSwitcher({ q }: { q: Question }) {
       <label className="f" style={{ width: 150, marginBottom: 0 }}><span>Family</span>
         <select className="select" value={family}
           onChange={(e) => {
-            const first = variantsOf(e.target.value).find((v) => v.status === "stable");
+            const first = variantsOf(e.target.value).find(isSelectableVariant);
             if (first) switchTo(first);
           }}>
           {families.map((f) => <option key={f.family} value={f.family}>{f.familyLabel}</option>)}

@@ -47,5 +47,7 @@ export default function PreviewPage() {
       </div></div>
     );
   }
-  return <Runner key={def.meta.updatedAt ?? "def"} definition={def} mode="preview" />;
+  // deliberately not keyed on the definition: the Studio pushes edits live and
+  // remounting on each one would restart the respondent every keystroke.
+  return <Runner definition={def} mode="preview" />;
 }

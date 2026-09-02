@@ -95,6 +95,13 @@ function GeneratorForm({ kind, existing, onDone }: {
   const [errors, setErrors] = React.useState<string[]>([]);
   const [preview, setPreview] = React.useState<{ columns: string[]; rows: Record<string, unknown>[]; summary?: any } | null>(null);
 
+  /**
+   * Generating used to only set local preview state; a separate "Attach to
+   * survey" button — which appeared mid-form only after a successful generate
+   * — was what actually added the design. Miss it and the question editor's
+   * design picker stays empty forever while the generator looks like it
+   * worked. Generate now previews AND attaches in one step.
+   */
   const generate = () => {
     const errs = plugin.validateConfig?.(config) ?? [];
     setErrors(errs);
@@ -102,13 +109,13 @@ function GeneratorForm({ kind, existing, onDone }: {
     try {
       const file = plugin.generate(config, seed);
       setPreview(file);
+      attach(file);
     } catch (e) {
       setErrors([e instanceof Error ? e.message : String(e)]);
     }
   };
 
-  const save = () => {
-    if (!preview) return;
+  const attach = (file: { columns: string[]; rows: Record<string, unknown>[] }) => {
     s.update((d) => {
       if (existing) {
         const i = d.designs.findIndex((x) => x.id === existing.id);
@@ -116,17 +123,22 @@ function GeneratorForm({ kind, existing, onDone }: {
           d.designs[i] = {
             ...d.designs[i], name, seed, config,
             version: d.designs[i].version + 1,
-            file: { format: "json", columns: preview.columns, rows: preview.rows, generatedAt: new Date().toISOString() },
+            file: { format: "json", columns: file.columns, rows: file.rows, generatedAt: new Date().toISOString() },
           };
         }
       } else {
         d.designs.push({
           id: uid("design"), kind, name, version: 1, seed, config,
-          file: { format: "json", columns: preview.columns, rows: preview.rows, generatedAt: new Date().toISOString() },
+          file: { format: "json", columns: file.columns, rows: file.rows, generatedAt: new Date().toISOString() },
         });
       }
     });
-    s.toast(`Design "${name}" generated (${preview.rows.length} rows)`);
+    s.toast(`Design "${name}" attached — pick it on a ${kind} question (${file.rows.length} rows)`);
+  };
+
+  const save = () => {
+    if (!preview) return;
+    attach(preview);
     onDone();
   };
 

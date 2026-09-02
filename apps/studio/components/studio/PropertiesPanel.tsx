@@ -2,7 +2,7 @@
 import React from "react";
 import type { Question, ValidationRule, SkipRule, ListOperation, ListSource } from "@rescript/schema";
 import { validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary } from "@rescript/engine";
-import { variantRegistry, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript/schema";
+import { resolveVariant, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript/schema";
 import { useStudio, selectedQuestion, uid } from "./store";
 import { OptionalCondition, ConditionEditor } from "./ConditionBuilder";
 
@@ -44,7 +44,7 @@ const VALIDATION_KINDS: { value: ValidationRule["kind"]; label: string; hasValue
 ];
 
 function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question>): void }) {
-  const qVariant = q.variant ? variantRegistry.get(q.variant) : undefined;
+  const qVariant = resolveVariant(q.variant);
   const allowed = (qVariant?.validations as ValidationRule["kind"][] | undefined) ?? validationKindsFor(q.type);
   const kinds = VALIDATION_KINDS.filter((k) => allowed.includes(k.value));
   return (
@@ -353,7 +353,7 @@ export function PropertiesPanel() {
       if (i >= 0) d.questions[i] = { ...d.questions[i], ...p } as Question;
     });
 
-  const variantDef = q.variant ? variantRegistry.get(q.variant) : undefined;
+  const variantDef = resolveVariant(q.variant);
   const hasCap = (c: string) =>
     variantDef ? variantDef.capabilities.includes(c as any) : true;
   const pipingProblems = lintPipingTokens(s.def, `${q.text} ${q.instruction ?? ""}`);

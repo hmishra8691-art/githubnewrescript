@@ -53,7 +53,14 @@ body {
 }
 .rs-option:hover { border-color: var(--rs-primary); }
 .rs-option.selected { border-color: var(--rs-primary); background: color-mix(in srgb, var(--rs-primary) 7%, var(--rs-surface)); }
-.rs-option input { accent-color: var(--rs-primary); width: 17px; height: 17px; margin: 0; flex: none; }
+/* Scope the control sizing to the radio/checkbox itself. Written as a bare
+   `.rs-option input` it also matched the "Other (please specify)" box nested
+   in the same label, and at (0,1,1) it outranked `.rs-input` — squashing that
+   text field to a 17px square with 12px of padding, i.e. no usable width. */
+.rs-option > input[type="radio"],
+.rs-option > input[type="checkbox"] {
+  accent-color: var(--rs-primary); width: 17px; height: 17px; margin: 0; flex: none;
+}
 .rs-option .lbl { flex: 1; }
 
 .rs-input, .rs-select, .rs-textarea {
@@ -125,7 +132,19 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-footer { color: var(--rs-subtle); font-size: 12px; text-align: center; padding: 20px 0; }
 
 /* other-specify inline input */
-.rs-other-input { margin-left: 8px; flex: 1; }
+.rs-other-input {
+  margin-left: 8px;
+  flex: 2 1 220px;   /* outweigh the label so the box is actually typable */
+  min-width: 180px;
+  max-width: none;
+  width: auto;
+  padding: 7px 10px;
+}
+/* on a narrow screen give it its own line rather than a 60px stub */
+@media (max-width: 560px) {
+  .rs-option { flex-wrap: wrap; }
+  .rs-other-input { flex-basis: 100%; margin-left: 27px; }
+}
 
 /* ---------- Inspector (test mode) ---------- */
 .rs-with-inspector { display: grid; grid-template-columns: 1fr 380px; gap: 0; min-height: 100vh; }
@@ -376,3 +395,24 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
   border: 1.5px solid var(--rs-border); background: var(--rs-surface);
 }
 .rs-bucket.on { background: var(--rs-primary); border-color: var(--rs-primary); color: #fff; font-weight: 600; }
+
+/* ---------- NPS / rating scale (label row sized to the buttons) ---------- */
+.rs-nps-wrap { display: inline-block; max-width: 100%; }
+.rs-nps-wrap .rs-nps-labels { max-width: none; }
+
+/* ---------- ranking ---------- */
+.rs-rank-progress {
+  font-size: 0.82em; color: var(--rs-subtle); font-weight: 600;
+  letter-spacing: .02em; margin-bottom: 6px;
+}
+.rs-rank-item.rs-rank-locked:hover { border-color: var(--rs-border); }
+
+/* ---------- character counter (essay / long text) ---------- */
+.rs-counter { font-size: 0.8em; color: var(--rs-subtle); margin-top: 4px; }
+.rs-counter.short { color: var(--rs-danger, #d02b2b); }
+
+/* ---------- empty states in the preview ---------- */
+.rs-empty-hint {
+  border: 1.5px dashed var(--rs-border); border-radius: var(--rs-radius);
+  padding: 18px; color: var(--rs-subtle); font-size: 0.92em; text-align: center;
+}

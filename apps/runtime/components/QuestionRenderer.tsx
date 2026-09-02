@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { Question, Option, SurveyDefinition, QuestionColumn } from "@rescript/schema";
-import { variantRegistry } from "@rescript/schema";
+import { resolveVariant } from "@rescript/schema";
 import {
   effectiveQuestion,
   resolvePiping,
@@ -40,6 +40,20 @@ function ctxOf(p: QRProps): EvalContext {
 function optionsClass(p: QRProps): string {
   const n = p.q.settings.columnsLayout ?? 1;
   return n > 1 ? `rs-options cols-${Math.min(n, 4)}` : "rs-options";
+}
+
+/**
+ * The Question Layout setting only ever reached the radio/checkbox list, the
+ * button select and the card grid — every other grid renderer hardcoded its
+ * own `auto-fill` track list, so choosing "3 columns" on an image select or a
+ * comparison did nothing at all. This turns the setting into an override any
+ * grid can apply.
+ */
+function gridColumnsStyle(p: QRProps, fallback: string): React.CSSProperties {
+  const n = p.q.settings.columnsLayout;
+  return n && n > 1
+    ? { gridTemplateColumns: `repeat(${Math.min(n, 4)}, minmax(0, 1fr))` }
+    : { gridTemplateColumns: fallback };
 }
 
 /** Search box for long option lists (req §9). */
@@ -120,9 +134,13 @@ function MultiSelect(p: QRProps) {
         return (
           <label key={String(o.code)}
             className={`rs-option ${sel ? "selected" : ""}`}
+            title={atMax ? `You have already chosen ${p.q.settings.maxSelections}.` : undefined}
             style={atMax ? { opacity: 0.5 } : undefined}>
+            {/* At the cap the engine silently ignored the click, so the last
+                option — conventionally "Other" — looked broken. Disabling the
+                control says so instead of failing quietly. */}
             <input type="checkbox" checked={sel} onChange={() => toggle(o)}
-              disabled={p.q.settings.readOnly} />
+              disabled={p.q.settings.readOnly || atMax} />
             <span className="lbl" dangerouslySetInnerHTML={{ __html: o.label }} />
             {OTHER(o) && sel && (
               <input
@@ -143,7 +161,12 @@ function MultiSelect(p: QRProps) {
 
 function Dropdown(p: QRProps) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
+  // an other-specify option is meaningless without somewhere to type
+  const otherSelected = options.some(
+    (o) => OTHER(o) && String(o.code) === String(p.value),
+  );
   return (
+    <>
     <select
       className="rs-select"
       value={p.value == null ? "" : String(p.value)}
@@ -155,6 +178,16 @@ function Dropdown(p: QRProps) {
         <option key={String(o.code)} value={String(o.code)}>{o.label.replace(/<[^>]*>/g, "")}</option>
       ))}
     </select>
+    {otherSelected && (
+      <input
+        className="rs-input"
+        style={{ marginTop: 8 }}
+        placeholder="Please specify"
+        value={p.otherValue ?? ""}
+        onChange={(e) => p.onOtherChange?.(e.target.value)}
+      />
+    )}
+    </>
   );
 }
 
@@ -286,19 +319,88 @@ function MultiDropdown(p: QRProps) {
 }
 
 /* -------------------------------------------------------- numeric / text */
-function NumericInput(p: QRProps) {
+
+/**
+ * A numeric field that survives being typed into.
+ *
+ * A controlled `<input type="number">` whose model is `Number(raw)` and whose
+ * displayed value is `String(model)` destroys any transient text that isn't a
+ * canonical number. Typing "90.09" goes "90" → "90." (invalid, reads as "")
+ * → "90.0" → Number → 90 → React writes "90" back, eating the ".0" — and the
+ * next keystroke lands as "909". The decimal point can never survive.
+ *
+ * So the field owns the raw string while it is focused and only commits a
+ * number outward; the model is echoed back in only when the value changed
+ * from somewhere else (a calculation, a reset, another respondent action).
+ */
+function NumberField({
+  value, onChange, className = "rs-input sm", min, max, step, placeholder, readOnly, ariaLabel, disabled,
+}: {
+  value: unknown;
+  onChange(v: number | null): void;
+  className?: string;
+  min?: number; max?: number; step?: number | string;
+  placeholder?: string; readOnly?: boolean; disabled?: boolean; ariaLabel?: string;
+}) {
+  const external = value == null || value === "" ? "" : String(value);
+  const [raw, setRaw] = React.useState(external);
+  const focused = React.useRef(false);
+
+  React.useEffect(() => {
+    // don't yank the text out from under someone mid-keystroke
+    if (focused.current) return;
+    if (Number(raw) !== Number(external) || (raw === "") !== (external === "")) setRaw(external);
+  }, [external]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const commit = (text: string) => {
+    setRaw(text);
+    if (text === "" || text === "-") return onChange(null);
+    const n = Number(text);
+    // "90." and "1e" are legitimate mid-typing states — keep them on screen
+    // and simply don't push a value out until they parse
+    if (Number.isFinite(n)) onChange(n);
+  };
+
   return (
     <input
-      className="rs-input sm"
-      type="number"
+      className={className}
+      type="text"
       inputMode="decimal"
+      aria-label={ariaLabel}
+      value={raw}
+      placeholder={placeholder}
+      readOnly={readOnly}
+      disabled={disabled}
+      onFocus={() => { focused.current = true; }}
+      onBlur={() => {
+        focused.current = false;
+        // normalise on the way out, so the stored value and the display agree
+        const n = Number(raw);
+        if (raw !== "" && Number.isFinite(n)) setRaw(String(n));
+        else if (!Number.isFinite(n)) { setRaw(""); onChange(null); }
+      }}
+      onChange={(e) => {
+        const t = e.target.value;
+        if (t !== "" && !/^-?\d*\.?\d*(e-?\d*)?$/i.test(t)) return; // reject letters, keep the caret
+        commit(t);
+      }}
+      data-min={min}
+      data-max={max}
+      data-step={step}
+    />
+  );
+}
+
+function NumericInput(p: QRProps) {
+  return (
+    <NumberField
+      value={p.value}
       min={p.q.settings.minValue}
       max={p.q.settings.maxValue}
       step={p.q.settings.step ?? "any"}
-      value={p.value == null ? "" : String(p.value)}
       placeholder={p.q.settings.placeholder}
       readOnly={p.q.settings.readOnly}
-      onChange={(e) => p.onChange(e.target.value === "" ? null : Number(e.target.value))}
+      onChange={p.onChange}
     />
   );
 }
@@ -317,14 +419,30 @@ function TextInput(p: QRProps) {
 }
 
 function LongText(p: QRProps) {
+  const text = p.value == null ? "" : String(p.value);
+  // Essay variants carry a min_length rule. Without a counter a respondent
+  // types a sentence, is refused, and has no idea what the survey wants.
+  const minLen = p.q.validation?.find((v) => v.kind === "min_length")?.value;
+  const maxLen = p.q.validation?.find((v) => v.kind === "max_length")?.value;
+  const min = Number(minLen);
+  const short = Number.isFinite(min) && text.length < min;
   return (
-    <textarea
-      className="rs-textarea"
-      value={p.value == null ? "" : String(p.value)}
-      placeholder={p.q.settings.placeholder}
-      readOnly={p.q.settings.readOnly}
-      onChange={(e) => p.onChange(e.target.value)}
-    />
+    <div>
+      <textarea
+        className="rs-textarea"
+        value={text}
+        placeholder={p.q.settings.placeholder}
+        readOnly={p.q.settings.readOnly}
+        maxLength={Number.isFinite(Number(maxLen)) ? Number(maxLen) : undefined}
+        onChange={(e) => p.onChange(e.target.value)}
+      />
+      {(Number.isFinite(min) || Number.isFinite(Number(maxLen))) && (
+        <div className={`rs-counter ${short ? "short" : ""}`} data-testid="char-counter">
+          {text.length}
+          {Number.isFinite(min) ? ` / ${min} characters minimum` : ` / ${maxLen} characters`}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -381,6 +499,14 @@ function ListInput(p: QRProps & { numeric: boolean }) {
                     readOnly={p.q.settings.readOnly}
                     onChange={(e) => setField(rc, e.target.value || null)}
                   />
+                ) : ["number", "decimal", "integer", "currency"].includes(ft) ? (
+                  <NumberField
+                    className="rs-input"
+                    placeholder={row.placeholder}
+                    value={v}
+                    readOnly={p.q.settings.readOnly}
+                    onChange={(n) => setField(rc, n)}
+                  />
                 ) : (
                   <input
                     className="rs-input"
@@ -389,11 +515,7 @@ function ListInput(p: QRProps & { numeric: boolean }) {
                     placeholder={row.placeholder}
                     value={v == null ? "" : String(v)}
                     readOnly={p.q.settings.readOnly}
-                    onChange={(e) => {
-                      const raw = e.target.value;
-                      const isNum = ["number", "decimal", "integer", "currency"].includes(ft);
-                      setField(rc, raw === "" ? null : isNum && raw.trim() !== "" && Number.isFinite(Number(raw)) ? Number(raw) : raw);
-                    }}
+                    onChange={(e) => setField(rc, e.target.value === "" ? null : e.target.value)}
                   />
                 )}
               </div>
@@ -413,17 +535,30 @@ function ListInput(p: QRProps & { numeric: boolean }) {
       {Array.from({ length: n }, (_, i) => (
         <div key={i} style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <span style={{ minWidth: 110, fontSize: "0.92em" }}>{`${i + 1}.`}</span>
-          <input
-            className="rs-input"
-            type={p.numeric ? "number" : "text"}
-            value={arr[i] == null ? "" : String(arr[i])}
-            onChange={(e) => {
-              const next = [...arr];
-              while (next.length <= i) next.push(null);
-              next[i] = e.target.value === "" ? null : p.numeric ? Number(e.target.value) : e.target.value;
-              p.onChange(next);
-            }}
-          />
+          {p.numeric ? (
+            <NumberField
+              className="rs-input"
+              value={arr[i]}
+              onChange={(n) => {
+                const next = [...arr];
+                while (next.length <= i) next.push(null);
+                next[i] = n;
+                p.onChange(next);
+              }}
+            />
+          ) : (
+            <input
+              className="rs-input"
+              type="text"
+              value={arr[i] == null ? "" : String(arr[i])}
+              onChange={(e) => {
+                const next = [...arr];
+                while (next.length <= i) next.push(null);
+                next[i] = e.target.value === "" ? null : e.target.value;
+                p.onChange(next);
+              }}
+            />
+          )}
         </div>
       ))}
     </div>
@@ -434,8 +569,12 @@ function ListInput(p: QRProps & { numeric: boolean }) {
 function Nps(p: QRProps) {
   const min = p.q.settings.minValue ?? 0;
   const max = p.q.settings.maxValue ?? 10;
+  // The label row has to be the same width as the button row, or the right
+  // label drifts to the card edge — badly on short scales, where the buttons
+  // occupy half the width. Wrapping both in one inline-block sizes the labels
+  // to the scale rather than to the card.
   return (
-    <div>
+    <div className="rs-nps-wrap">
       <div className="rs-nps">
         {Array.from({ length: max - min + 1 }, (_, i) => min + i).map((n) => (
           <button
@@ -476,10 +615,27 @@ function Slider(p: QRProps) {
 }
 
 /* ----------------------------------------------------------------- ranking */
+/**
+ * One component, three behaviours, driven by `settings.rankMode`:
+ *
+ *   click   rank as many as you like (the original behaviour)
+ *   all     every item must be ranked — progress is shown
+ *   top_n   only `maxSelections` items may be ranked; the rest lock once full
+ *
+ * Before this the three ranking variants were three labels over one identical
+ * tap-to-rank list, and a required Rank-Top-N could never be completed because
+ * validation demanded every item.
+ */
 function Ranking(p: QRProps) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
   const ranked: (string | number)[] = Array.isArray(p.value) ? (p.value as any) : [];
   const unranked = options.filter((o) => !ranked.some((r) => String(r) === String(o.code)));
+  const mode = p.q.settings.rankMode ?? "all";
+  const topN =
+    mode === "top_n"
+      ? Math.min(p.q.settings.maxSelections ?? options.length, options.length)
+      : null;
+  const full = topN != null && ranked.length >= topN;
   const move = (code: string | number, dir: -1 | 1) => {
     const idx = ranked.findIndex((r) => String(r) === String(code));
     const next = [...ranked];
@@ -490,6 +646,13 @@ function Ranking(p: QRProps) {
   };
   return (
     <div className="rs-rank-list">
+      {(topN != null || mode === "all") && (
+        <div className="rs-rank-progress" data-testid="rank-progress">
+          {topN != null
+            ? `${ranked.length} of ${topN} ranked`
+            : `${ranked.length} of ${options.length} ranked`}
+        </div>
+      )}
       {ranked.map((code, i) => {
         const o = options.find((x) => String(x.code) === String(code));
         if (!o) return null;
@@ -508,13 +671,16 @@ function Ranking(p: QRProps) {
       {unranked.map((o) => (
         <div
           key={String(o.code)}
-          className="rs-rank-item"
-          style={{ cursor: "pointer", opacity: 0.85 }}
-          onClick={() => p.onChange([...ranked, o.code])}
+          className={`rs-rank-item ${full ? "rs-rank-locked" : ""}`}
+          style={{ cursor: full ? "not-allowed" : "pointer", opacity: full ? 0.45 : 0.85 }}
+          aria-disabled={full}
+          onClick={() => { if (!full) p.onChange([...ranked, o.code]); }}
         >
           <span className="rs-rank-num empty">–</span>
           <span dangerouslySetInnerHTML={{ __html: o.label }} />
-          <span style={{ marginLeft: "auto", fontSize: "0.8em", color: "var(--rs-subtle)" }}>tap to rank</span>
+          <span style={{ marginLeft: "auto", fontSize: "0.8em", color: "var(--rs-subtle)" }}>
+            {full ? `top ${topN} chosen` : "tap to rank"}
+          </span>
         </div>
       ))}
     </div>
@@ -532,14 +698,11 @@ function Allocation(p: QRProps) {
       {options.map((o) => (
         <div key={String(o.code)} className="rs-alloc-row">
           <span className="lbl" dangerouslySetInnerHTML={{ __html: o.label }} />
-          <input
-            className="rs-input sm"
-            type="number"
+          <NumberField
             min={0}
-            value={vals[String(o.code)] == null ? "" : String(vals[String(o.code)])}
-            onChange={(e) =>
-              p.onChange({ ...vals, [String(o.code)]: e.target.value === "" ? null : Number(e.target.value) })
-            }
+            ariaLabel={o.label.replace(/<[^>]*>/g, "")}
+            value={vals[String(o.code)]}
+            onChange={(n) => p.onChange({ ...vals, [String(o.code)]: n })}
           />
           {p.q.settings.sumUnit && <span style={{ color: "var(--rs-subtle)" }}>{p.q.settings.sumUnit}</span>}
         </div>
@@ -567,7 +730,7 @@ function ImageSelect(p: QRProps & { multi?: boolean; ranking?: boolean }) {
     }
   };
   return (
-    <div className="rs-imggrid">
+    <div className="rs-imggrid" style={gridColumnsStyle(p, "repeat(auto-fill, minmax(150px, 1fr))")}>
       {options.map((o) => {
         const idx = vals.findIndex((v) => String(v) === String(o.code));
         const sel = idx >= 0;
@@ -637,9 +800,9 @@ function Matrix(p: QRProps) {
                   })}
                 {type === "matrix_numeric" && (
                   <td>
-                    <input className="rs-input" type="number"
-                      value={rowVal == null ? "" : String(rowVal)}
-                      onChange={(e) => setRow(rc, e.target.value === "" ? null : Number(e.target.value))} />
+                    <NumberField className="rs-input"
+                      value={rowVal}
+                      onChange={(n) => setRow(rc, n)} />
                   </td>
                 )}
                 {type === "matrix_text" && (
@@ -736,10 +899,10 @@ function CompositeCell({
     case "numeric":
     case "slider":
       return (
-        <input className="rs-input" type="number" readOnly={ro} min={col.min} max={col.max}
+        <NumberField className="rs-input" readOnly={ro} min={col.min} max={col.max}
           placeholder={col.placeholder}
-          value={value == null ? "" : String(value)}
-          onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))} />
+          value={value}
+          onChange={onChange} />
       );
     case "date":
       return <input className="rs-input" type="date" readOnly={ro} value={value == null ? "" : String(value)}
@@ -974,21 +1137,65 @@ function StarRating(p: QRProps) {
   );
 }
 
-const EMOJI_SCALE = ["😠", "😕", "😐", "🙂", "😍"];
+/**
+ * Emoji scales, hand-picked per length so the expressions read as an even
+ * progression rather than a mechanical interpolation. Anything longer than
+ * the largest curated set falls back to sampling the 11-point scale.
+ */
+const EMOJI_SCALES: Record<number, string[]> = {
+  2: ["😠", "😍"],
+  3: ["😠", "😐", "😍"],
+  4: ["😠", "😕", "🙂", "😍"],
+  5: ["😠", "😕", "😐", "🙂", "😍"],
+  6: ["😡", "😠", "😕", "😐", "🙂", "😍"],
+  7: ["😡", "😠", "😕", "😐", "🙂", "😃", "😍"],
+  8: ["😡", "😠", "☹️", "😕", "😐", "🙂", "😃", "😍"],
+  9: ["😡", "😠", "☹️", "😕", "😐", "🙂", "😊", "😃", "😍"],
+  10: ["😡", "😠", "☹️", "😕", "😟", "😐", "🙂", "😊", "😃", "😍"],
+  11: ["😡", "😠", "☹️", "😕", "😟", "😐", "🙂", "😊", "😃", "🤩", "😍"],
+};
 
-/** Emoji / Smiley Rating — stores 1..5. */
+export function emojiScale(count: number): string[] {
+  if (count <= 1) return ["😐"];
+  const exact = EMOJI_SCALES[count];
+  if (exact) return exact;
+  const base = EMOJI_SCALES[11];
+  return Array.from({ length: count }, (_, i) =>
+    base[Math.round((i / (count - 1)) * (base.length - 1))],
+  );
+}
+
+/**
+ * Emoji / Smiley Rating. The face count follows the configured min–max, so a
+ * 1–10 scale renders ten faces; it previously drew a hardcoded five whatever
+ * the editor said, which made the bounds fields quietly meaningless.
+ */
 function EmojiRating(p: QRProps) {
-  const val = p.value == null ? 0 : Number(p.value);
+  const min = p.q.settings.minValue ?? 1;
+  const max = p.q.settings.maxValue ?? 5;
+  const count = Math.max(1, Math.min(11, max - min + 1));
+  const faces = emojiScale(count);
+  const val = p.value == null ? null : Number(p.value);
   return (
     <div className="rs-emoji" role="radiogroup" aria-label="Rating">
-      {EMOJI_SCALE.map((e, i) => (
-        <button key={i} type="button"
-          className={val === i + 1 ? "on" : ""}
-          aria-label={`${i + 1} of 5`}
-          onClick={() => p.onChange(val === i + 1 ? null : i + 1)}>
-          {e}
-        </button>
-      ))}
+      {faces.map((e, i) => {
+        const score = min + i;
+        return (
+          <button key={score} type="button"
+            className={val === score ? "on" : ""}
+            aria-label={`${score} of ${max}`}
+            title={String(score)}
+            onClick={() => p.onChange(val === score ? null : score)}>
+            {e}
+          </button>
+        );
+      })}
+      {(p.q.settings.npsLeftLabel || p.q.settings.npsRightLabel) && (
+        <div className="rs-nps-labels" style={{ width: "100%" }}>
+          <span>{p.q.settings.npsLeftLabel}</span>
+          <span>{p.q.settings.npsRightLabel}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -1068,6 +1275,19 @@ function SwipeDeck(p: QRProps) {
 
   const leftOpt = view.options[0];
   const rightOpt = view.options[view.options.length - 1];
+
+  // The deck's cards ARE the question's rows. With none configured the "done"
+  // branch below rendered the notorious "All 0 cards judged ✓" instead of
+  // saying what is missing.
+  if (view.rows.length === 0) {
+    return (
+      <div className="rs-empty-hint" data-testid="swipe-no-cards">
+        This swipe deck has no cards yet — add them in the question’s
+        <strong> Rows </strong> section. Each row becomes one card; the options
+        are the two verdicts.
+      </div>
+    );
+  }
 
   const judge = (rowCode: string, optCode: string | number) => {
     p.onChange({ ...vals, [rowCode]: optCode });
@@ -1371,7 +1591,8 @@ function HotspotClick(p: QRProps) {
 function CompareImages(p: QRProps) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
   return (
-    <div className="rs-compare" style={{ gridTemplateColumns: `repeat(${Math.min(options.length, 4)}, 1fr)` }}>
+    <div className="rs-compare"
+      style={gridColumnsStyle(p, `repeat(${Math.min(options.length, 4)}, 1fr)`)}>
       {options.map((o) => {
         const sel = String(p.value) === String(o.code);
         return (
@@ -1407,7 +1628,7 @@ function Categorize(p: QRProps) {
       <div className="rs-hotspot-status" style={{ marginBottom: 8 }}>
         {done} / {view.rows.length} assigned
       </div>
-      <div className="rs-catgrid">
+      <div className="rs-catgrid" style={gridColumnsStyle(p, "repeat(auto-fill, minmax(220px, 1fr))")}>
         {view.rows.map((row) => {
           const rc = String(row.code);
           const img = (row.meta?.image as string) ?? undefined;
@@ -1473,7 +1694,7 @@ export function QuestionRenderer(p: QRProps) {
   // Variant renderer dispatch (family/variant architecture). Questions
   // without a variant — every pre-existing survey — fall through to the
   // base-type switch below unchanged.
-  const variantDef = p.q.variant ? variantRegistry.get(p.q.variant) : undefined;
+  const variantDef = resolveVariant(p.q.variant);
   const variantBody = ((): React.ReactNode | null => {
     switch (variantDef?.renderer) {
       case "buttons":

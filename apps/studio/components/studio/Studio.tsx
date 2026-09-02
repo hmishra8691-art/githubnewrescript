@@ -37,6 +37,7 @@ const NAV: { key: Tab; label: string; icon: string }[] = [
 function StudioShell() {
   const s = useStudio();
   const [tab, setTab] = React.useState<Tab>("questions");
+  React.useEffect(() => { s.setGoToTab((t) => setTab(t as Tab)); }, [s]);
   const [saving, setSaving] = React.useState(false);
 
   const counts: Partial<Record<Tab, number>> = {
@@ -73,18 +74,54 @@ function StudioShell() {
     }
   };
 
+  /**
+   * Live preview.
+   *
+   * This used to capture `s.def` in a closure at click time and re-post that
+   * one snapshot ten times over five seconds. Every edit after the click —
+   * switching a question to Side-by-Side, pasting an image URL, changing the
+   * column layout — never reached the open tab, so the preview kept showing
+   * the old question and the change looked broken. Three separate bug reports
+   * traced back to it.
+   *
+   * Now the open window is remembered and the current definition is pushed on
+   * every change, debounced.
+   */
+  const previewWin = React.useRef<Window | null>(null);
+  const defRef = React.useRef(s.def);
+  defRef.current = s.def;
+
+  const pushPreview = React.useCallback(() => {
+    const win = previewWin.current;
+    if (!win || win.closed) return;
+    win.postMessage({ type: "rescript:preview", definition: defRef.current }, "*");
+  }, []);
+
+  // the preview tab announces itself when it mounts or reloads
+  React.useEffect(() => {
+    const onReady = (e: MessageEvent) => {
+      if (e.data?.type === "rescript:preview-ready") pushPreview();
+    };
+    window.addEventListener("message", onReady);
+    return () => window.removeEventListener("message", onReady);
+  }, [pushPreview]);
+
+  // and every subsequent edit follows it across
+  React.useEffect(() => {
+    if (!previewWin.current || previewWin.current.closed) return;
+    const t = setTimeout(pushPreview, 250);
+    return () => clearTimeout(t);
+  }, [s.def, pushPreview]);
+
   const preview = () => {
     const base = runtimeBaseUrl();
     const win = window.open(`${base}/preview`, "rescript_preview");
     if (!win) return;
-    const send = () => win.postMessage({ type: "rescript:preview", definition: s.def }, "*");
-    const onReady = (e: MessageEvent) => {
-      if (e.data?.type === "rescript:preview-ready") { send(); }
-    };
-    window.addEventListener("message", onReady);
-    // also push a few times in case ready was missed
+    previewWin.current = win;
+    win.focus();
+    // the tab may already be open and past its ready message
     let n = 0;
-    const t = setInterval(() => { send(); if (++n > 10) { clearInterval(t); window.removeEventListener("message", onReady); } }, 500);
+    const t = setInterval(() => { pushPreview(); if (++n > 6) clearInterval(t); }, 400);
   };
 
   const testSurvey = async () => {
