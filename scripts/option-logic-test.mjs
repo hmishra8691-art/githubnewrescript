@@ -89,12 +89,18 @@ await page.click('.qcard.selected [data-testid="option-logic-0"]');
 await page.click('[data-testid="option-logic"] [data-testid="vis-show_when"]');
 await page.waitForSelector('[data-testid="option-logic"] .cond-rule');
 
-// source question = Q1, operator = has selected, value = this option
+// source question = Q1, operator = has selected, value = this option.
+// The source is now ONE grouped select whose values are prefixed by kind.
 const rule = '[data-testid="option-logic"] .cond-rule';
-const selects = await page.$$(`${rule} select`);
-await selects[1].selectOption({ index: 1 }); // first question in the ref list
-const opSelect = await page.$$(`${rule} select`);
-await opSelect[opSelect.length - 1].selectOption("selected").catch(() => {});
+const sourceSel = `${rule} .ref-select`;
+const firstQ = await page.$eval(sourceSel, (el) => {
+  const opt = [...el.options].find((o) => o.value.startsWith("q:") && o.value.length > 2);
+  return opt ? opt.value : "";
+});
+assert.ok(firstQ, "the source picker lists questions");
+await page.selectOption(sourceSel, firstQ);
+await page.waitForTimeout(150);
+await page.selectOption(`${rule} .op-select`, "selected").catch(() => {});
 await page.click(`${rule} >> text=↺ this option`);
 await page.waitForTimeout(300);
 

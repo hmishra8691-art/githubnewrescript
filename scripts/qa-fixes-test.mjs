@@ -272,5 +272,57 @@ const rowFlagOptions = await studio.$$eval(
 assert.ok(rowFlagOptions.some((t) => /anchor bottom/.test(t)), `row flags offered: ${[...new Set(rowFlagOptions)].join("|")}`);
 console.log("✔ matrix rows offer anchor top / anchor bottom");
 
+/* ------------------------------- condition builder layout (screenshot issue) */
+
+// A five-control rule row in a 340px panel clipped its buttons and overlapped
+// its hint text. The row now wraps, and nothing may escape the panel.
+await studio.goto("http://localhost:3000/sandbox", { waitUntil: "networkidle" });
+await studio.click(".insert-bar >> text=+ Question");
+await studio.waitForSelector(".qcard.selected .rte-surface");
+await studio.waitForFunction(() => document.activeElement?.classList.contains("rte-surface"));
+await studio.keyboard.type("Layout check");
+await studio.waitForTimeout(350);
+
+await studio.click('.rightpanel >> text=+ skip rule');
+await studio.waitForSelector(".rightpanel .cond-group");
+await studio.click('.rightpanel .cond-add >> text=+ condition');
+await studio.waitForTimeout(150);
+await studio.click('.rightpanel .cond-add >> text=+ bracket ( … )');
+await studio.waitForTimeout(150);
+const targetSel = await studio.$$('.rightpanel .skip-target select');
+await targetSel[0].selectOption("url");
+await studio.waitForTimeout(300);
+
+// the connector lives between the rules, and there is exactly one per gap
+const joins = await studio.$$eval(".rightpanel .cond-group > .cond-join select",
+  (els) => els.map((e) => e.value));
+assert.deepEqual(joins, ["and"], `one connector between two children: ${joins}`);
+console.log("✔ AND/OR sits between the conditions, not as a leading dropdown");
+
+// nothing may overflow its box or escape the panel
+const layout = await studio.evaluate(() => {
+  const root = document.querySelector(".rightpanel");
+  const r = root.getBoundingClientRect();
+  const clipped = [];
+  const spill = [];
+  for (const el of root.querySelectorAll("select, button, input, .cond-rule, .cond-add")) {
+    const b = el.getBoundingClientRect();
+    if (b.width === 0) continue;
+    if (el.scrollWidth > el.clientWidth + 2 && !el.matches("textarea")) {
+      clipped.push(`${el.className}|${(el.textContent || "").slice(0, 20)}`);
+    }
+    if (b.right > r.right + 1 || b.left < r.left - 1) spill.push(el.className);
+  }
+  return { clipped, spill, width: r.width };
+});
+assert.deepEqual(layout.clipped, [], `no control is clipped: ${layout.clipped.join(", ")}`);
+assert.deepEqual(layout.spill, [], `nothing escapes the panel: ${layout.spill.join(", ")}`);
+console.log(`✔ every control fits inside the ${layout.width}px properties panel`);
+
+// the external-URL field gets a usable width instead of a stub
+const urlW = await studio.$eval(".rightpanel .skip-url", (e) => e.getBoundingClientRect().width);
+assert.ok(urlW > 250, `the URL field is usable: ${urlW.toFixed(0)}px`);
+console.log(`✔ the external URL field is ${urlW.toFixed(0)}px wide`);
+
 await browser.close();
 console.log("\nALL QA FIX CHECKS PASSED");

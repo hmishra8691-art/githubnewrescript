@@ -71,7 +71,8 @@ h3.sec { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; colo
 .topbar .spacer { flex: 1; }
 .dirty-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); }
 
-.ide-body { display: grid; grid-template-columns: 210px 1fr 340px; min-height: 0; }
+.ide-body { display: grid; grid-template-columns: 210px minmax(0, 1fr) 420px; min-height: 0; }
+@media (max-width: 1500px) { .ide-body { grid-template-columns: 190px minmax(0, 1fr) 380px; } }
 .leftnav { background: var(--panel); border-right: 1px solid var(--border); padding: 10px 0; overflow-y: auto; }
 .leftnav .nav-item {
   display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
@@ -115,11 +116,47 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .opt-row button { flex: none; }
 
 /* ---------- condition builder ---------- */
-.cond-group { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; padding: 10px; margin: 6px 0; background: rgba(37,99,235,.04); }
+/* ---------- condition builder ----------
+   Rules read top-to-bottom as a sentence, with the AND/OR connector sitting
+   BETWEEN them the way survey programmers expect — rather than a leading
+   "ALL (AND)" dropdown, which is the first thing you see and the last thing
+   that makes sense. Everything must survive a ~380px panel, so controls
+   shrink (min-width: 0) instead of overflowing. */
+.cond-group { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; padding: 8px 10px; margin: 6px 0; background: rgba(37,99,235,.04); }
 .cond-group.op-or { border-left-color: var(--amber); background: rgba(164,92,7,.04); }
 .cond-group.op-not { border-left-color: var(--red); background: rgba(208,43,43,.04); }
-.cond-rule { display: flex; gap: 6px; align-items: center; margin: 5px 0; flex-wrap: wrap; }
-.cond-rule .select, .cond-rule .input { width: auto; min-width: 90px; }
+.cond-group.nested { margin: 4px 0 4px 6px; }
+
+.cond-rule {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 6px; align-items: start; margin: 4px 0;
+  padding: 7px 8px; border-radius: 7px;
+  background: var(--panel); border: 1px solid var(--border);
+}
+.cond-rule-main { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.cond-rule .select, .cond-rule .input {
+  width: auto; min-width: 0; flex: 1 1 auto; max-width: 100%;
+  padding: 4px 7px; font-size: 12.5px;
+}
+/* the source-kind picker is rarely changed — it should not eat the row */
+.cond-rule .kind-select { flex: 0 0 auto; width: 74px; }
+.cond-rule .ref-select { flex: 2 1 130px; }
+.cond-rule .op-select { flex: 1 1 110px; }
+.cond-rule-actions { display: flex; gap: 4px; align-items: center; }
+
+/* the connector between two rules */
+.cond-join { display: flex; align-items: center; gap: 8px; margin: 2px 0; }
+.cond-join::before, .cond-join::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.cond-join select {
+  font: inherit; font-size: 11px; font-weight: 700; letter-spacing: .06em;
+  padding: 2px 6px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--accent); background: var(--tint); color: var(--accent);
+}
+.cond-group.op-or > .cond-join select { border-color: var(--amber); color: var(--amber); background: rgba(164,92,7,.07); }
+.cond-group.op-not > .cond-join select { border-color: var(--red); color: var(--red); background: rgba(208,43,43,.07); }
+
+.cond-lead { font-size: 11.5px; color: var(--subtle); margin-bottom: 2px; }
+.cond-add { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 
 /* ---------- flow tree ---------- */
 .flow-node { border: 1px solid var(--border); border-radius: 8px; margin: 6px 0; background: var(--panel); }
@@ -260,3 +297,10 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 }
 .ok-pill { background: #dcfce7; color: #166534; }
 .hide-pill { background: #fee2e2; color: #991b1b; }
+
+/* ---------- skip-rule target row ---------- */
+.skip-target { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.skip-target .select { flex: 1 1 130px; min-width: 0; }
+/* the URL is long: give it the full width of the panel rather than whatever
+   is left at the end of a wrapped row */
+.skip-target .skip-url { flex: 1 0 100%; min-width: 0; font-size: 12.5px; }

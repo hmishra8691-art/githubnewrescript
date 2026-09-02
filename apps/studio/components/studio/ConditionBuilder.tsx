@@ -8,7 +8,7 @@ import {
   isOptionValueRef,
 } from "@rescript/schema";
 import { operatorsForQuestion, conditionSummary } from "@rescript/engine";
-import { useStudio, refOptions } from "./store";
+import { useStudio } from "./store";
 
 /**
  * Recursive visual condition builder — arbitrary AND/OR/NOT nesting with
@@ -85,7 +85,6 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
   rule: ConditionRule; onChange(r: ConditionRule): void; onRemove(): void; perOption?: boolean;
 }) {
   const s = useStudio();
-  const refs = refOptions(s.def);
   const q: Question | undefined = s.def.questions.find((x) => x.id === rule.source.ref);
   const listOps = LIST_VALUE_OPERATORS.includes(rule.operator);
   const needsValue = !VALUELESS_OPERATORS.includes(rule.operator);
@@ -102,35 +101,65 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
   const setSource = (patch: Partial<ConditionRule["source"]>) =>
     onChange({ ...rule, source: { ...rule.source, ...patch } });
 
+  /**
+   * Source is ONE control, not two. A separate "Question / Variable /
+   * Calculation / Embedded" picker sat in front of every rule, truncated to
+   * "Questi⌄" in the panel, and was almost never changed — the overwhelming
+   * majority of conditions read a question. Option groups put every source in
+   * a single dropdown, which is both narrower and less to explain.
+   */
+  const sourceValue =
+    rule.source.kind === "question" ? `q:${rule.source.ref}`
+      : rule.source.kind === "option" ? `o:${rule.source.ref || "code"}`
+        : `${rule.source.kind}:${rule.source.ref}`;
+
+  const pickSource = (raw: string) => {
+    const [kind, ...rest] = raw.split(":");
+    const ref = rest.join(":");
+    if (kind === "q") return setSource({ kind: "question", ref });
+    if (kind === "o") return setSource({ kind: "option", ref: ref || "code" });
+    setSource({ kind: kind as any, ref });
+  };
+
   return (
     <div className="cond-rule">
-      <select className="select" value={rule.source.kind}
-        onChange={(e) => setSource({ kind: e.target.value as any, ref: e.target.value === "option" ? "code" : rule.source.ref })}>
-        <option value="question">Question</option>
-        <option value="variable">Variable</option>
-        <option value="calculation">Calculation</option>
-        <option value="embedded">Embedded</option>
-        <option value="loop">Loop</option>
-        {perOption && <option value="option">This option</option>}
+      <div className="cond-rule-main">
+      <select className="select ref-select" aria-label="What this condition reads"
+        value={sourceValue} onChange={(e) => pickSource(e.target.value)}>
+        <option value="q:">— pick a question —</option>
+        {perOption && (
+          <optgroup label="This option">
+            <option value="o:code">this option’s code</option>
+            <option value="o:label">this option’s label</option>
+            <option value="o:value">this option’s value</option>
+            <option value="o:index">this option’s position</option>
+          </optgroup>
+        )}
+        <optgroup label="Questions">
+          {s.def.questions.map((x) => (
+            <option key={x.id} value={`q:${x.id}`}>{x.code} — {x.variableName}</option>
+          ))}
+        </optgroup>
+        {s.def.calculations.length > 0 && (
+          <optgroup label="Calculations">
+            {s.def.calculations.map((c) => (
+              <option key={c.id} value={`calculation:${c.targetVariable}`}>{c.targetVariable}</option>
+            ))}
+          </optgroup>
+        )}
+        {s.def.embeddedData.length > 0 && (
+          <optgroup label="Embedded data">
+            {s.def.embeddedData.map((e2) => (
+              <option key={e2.name} value={`embedded:${e2.name}`}>{e2.name}</option>
+            ))}
+          </optgroup>
+        )}
+        <optgroup label="Loop">
+          <option value="loop:label">loop label</option>
+          <option value="loop:code">loop code</option>
+          <option value="loop:index">loop index</option>
+        </optgroup>
       </select>
-      {rule.source.kind === "option" ? (
-        <select className="select" value={rule.source.ref || "code"}
-          onChange={(e) => setSource({ ref: e.target.value })}>
-          <option value="code">its code</option>
-          <option value="label">its label</option>
-          <option value="value">its value</option>
-          <option value="index">its position</option>
-        </select>
-      ) : rule.source.kind === "question" ? (
-        <select className="select" value={rule.source.ref}
-          onChange={(e) => setSource({ ref: e.target.value })}>
-          <option value="">— pick —</option>
-          {refs.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
-        </select>
-      ) : (
-        <input className="input mono" style={{ width: 130 }} placeholder="name" value={rule.source.ref}
-          onChange={(e) => setSource({ ref: e.target.value })} />
-      )}
       {q && (q.rows.length > 0 || q.columns.length > 0) && (
         <>
           {q.rows.length > 0 && (
@@ -149,7 +178,7 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
           )}
         </>
       )}
-      <select className="select" value={rule.operator}
+      <select className="select op-select" value={rule.operator}
         onChange={(e) => onChange({ ...rule, operator: e.target.value as ComparisonOperator })}>
         {operatorChoices.map((o) => <option key={o} value={o}>{OPERATOR_LABELS[o] ?? o}</option>)}
       </select>
@@ -168,7 +197,7 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
             ))}
           </select>
         ) : (
-          <input className="input" style={{ width: 120 }}
+          <input className="input"
             placeholder={listOps ? "1,2,3" : "value"}
             value={listOps && Array.isArray(rule.value) ? rule.value.join(",") : String(rule.value ?? "")}
             onChange={(e) =>
@@ -177,23 +206,38 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
         )
       )}
       {perOption && needsValue && (
-        <button className="btn small" title="Compare against the option this rule is attached to"
+        <button className="btn small" style={{ flex: "0 0 auto" }}
+          title="Compare against the option this rule is attached to"
           onClick={() => onChange({ ...rule, value: usesOption ? "" : { $option: "code" } })}>
-          {usesOption ? "use a fixed value" : "↺ this option"}
+          {usesOption ? "fixed value" : "↺ this option"}
         </button>
       )}
       {needsValue2 && (
-        <input className="input" style={{ width: 90 }} placeholder={VALUE2_PLACEHOLDER[rule.operator] ?? "and"}
+        <input className="input" style={{ flex: "0 1 90px" }} placeholder={VALUE2_PLACEHOLDER[rule.operator] ?? "and"}
           value={String(rule.value2 ?? "")}
           onChange={(e) => onChange({ ...rule, value2: e.target.value })} />
       )}
-      <button className="btn small danger" onClick={onRemove}>×</button>
+      </div>
+      <div className="cond-rule-actions">
+        <button className="btn small danger" title="Remove this condition" onClick={onRemove}>×</button>
+      </div>
     </div>
   );
 }
 
-export function ConditionEditor({ value, onChange, perOption }: {
-  value: Condition; onChange(c: Condition): void; perOption?: boolean;
+/**
+ * One group of conditions.
+ *
+ * A group has a single operator, but showing it as a leading "ALL (AND)"
+ * dropdown put the most abstract control first and made a two-line rule look
+ * like set theory. The operator now lives BETWEEN the rules, as the connector
+ * you actually read — "Q1 is answered / AND / Q2 is Apple" — which is both how
+ * every survey tool presents it and how the sentence reads out loud. Changing
+ * any connector changes the group, because there is only one; with a single
+ * condition no connector is shown at all.
+ */
+export function ConditionEditor({ value, onChange, perOption, nested }: {
+  value: Condition; onChange(c: Condition): void; perOption?: boolean; nested?: boolean;
 }) {
   const s = useStudio();
   const firstRef = s.def.questions[0]?.id ?? "";
@@ -203,71 +247,84 @@ export function ConditionEditor({ value, onChange, perOption }: {
       <div className="cond-group">
         <RuleEditor rule={value} onChange={onChange} perOption={perOption}
           onRemove={() => onChange({ type: "group", op: "and", children: [] })} />
-        <button className="btn small" onClick={() =>
-          onChange({ type: "group", op: "and", children: [value, newRule(firstRef)] })}>
-          + condition
-        </button>
+        <div className="cond-add">
+          <button className="btn small" onClick={() =>
+            onChange({ type: "group", op: "and", children: [value, newRule(firstRef)] })}>
+            + condition
+          </button>
+        </div>
       </div>
     );
   }
 
   const g = value;
+  const setOp = (op: "and" | "or" | "not") => onChange({ ...g, op });
+
+  /** The connector shown between two rules — and the only place the operator
+   *  is editable, so it can never disagree with itself. */
+  const Connector = () => (
+    <div className="cond-join">
+      <select value={g.op} aria-label="How these conditions combine"
+        title={
+          g.op === "and" ? "Every condition must be true"
+            : g.op === "or" ? "At least one condition must be true"
+              : "None of these may be true"
+        }
+        onChange={(e) => setOp(e.target.value as any)}>
+        <option value="and">AND</option>
+        <option value="or">OR</option>
+        <option value="not">NOR</option>
+      </select>
+    </div>
+  );
+
   return (
-    <div className={`cond-group op-${g.op}`}>
-      <div className="row" style={{ marginBottom: 6 }}>
-        <select className="select" style={{ width: 112 }} value={g.op}
-          onChange={(e) => onChange({ ...g, op: e.target.value as any })}>
-          <option value="and">ALL (AND)</option>
-          <option value="or">ANY (OR)</option>
-          <option value="not">NOT</option>
-        </select>
-        <span className="muted" style={{ fontSize: 12 }}>
-          {g.op === "and" ? "all of these must hold" : g.op === "or" ? "at least one must hold" : "none of these may hold"}
-        </span>
+    <div className={`cond-group op-${g.op}${nested ? " nested" : ""}`} data-testid="cond-group">
+      <div className="cond-lead">
+        {g.children.length <= 1 && !nested
+          ? "This is true when:"
+          : g.op === "and" ? "All of these are true:"
+            : g.op === "or" ? "Any one of these is true:"
+              : "None of these is true:"}
       </div>
-      {g.children.map((child, i) =>
-        child.type === "rule" ? (
-          <RuleEditor key={i} rule={child} perOption={perOption}
-            onChange={(r) => onChange({ ...g, children: g.children.map((c, j) => (j === i ? r : c)) })}
-            onRemove={() => onChange({ ...g, children: g.children.filter((_, j) => j !== i) })} />
-        ) : (
-          <div key={i}>
-            <ConditionEditor value={child} perOption={perOption}
-              onChange={(c) => onChange({ ...g, children: g.children.map((x, j) => (j === i ? c : x)) })} />
-            <button className="btn small danger" style={{ marginTop: -2, marginBottom: 6 }}
-              onClick={() => onChange({ ...g, children: g.children.filter((_, j) => j !== i) })}>
-              remove group
-            </button>
-          </div>
-        ),
-      )}
-      <div className="row">
-        <button className="btn small"
-          title={`Add another condition to this ${g.op === "and" ? "ALL (AND)" : g.op === "or" ? "ANY (OR)" : "NOT"} group`}
+      {g.children.map((child, i) => (
+        <React.Fragment key={i}>
+          {i > 0 && <Connector />}
+          {child.type === "rule" ? (
+            <RuleEditor rule={child} perOption={perOption}
+              onChange={(r) => onChange({ ...g, children: g.children.map((c, j) => (j === i ? r : c)) })}
+              onRemove={() => onChange({ ...g, children: g.children.filter((_, j) => j !== i) })} />
+          ) : (
+            <div className="cond-subgroup">
+              <ConditionEditor value={child} perOption={perOption} nested
+                onChange={(c) => onChange({ ...g, children: g.children.map((x, j) => (j === i ? c : x)) })} />
+              <button className="btn small danger" style={{ marginTop: -2, marginBottom: 6 }}
+                onClick={() => onChange({ ...g, children: g.children.filter((_, j) => j !== i) })}>
+                remove group
+              </button>
+            </div>
+          )}
+        </React.Fragment>
+      ))}
+      <div className="cond-add">
+        <button className="btn small" title="Add another condition"
           onClick={() => onChange({ ...g, children: [...g.children, newRule(firstRef)] })}>
           + condition
         </button>
-        {/* A group has ONE operator, so mixing AND with OR means nesting. The
-            button used to be an unlabelled "+ nested group" that no survey
-            programmer would guess was the answer to "how do I write
-            A AND (B OR C)?" — hence the report that mixing was impossible. */}
+        {/* A group has ONE operator, so mixing AND with OR means nesting. */}
         <button className="btn small"
-          title={`Nest a sub-group so you can mix operators — e.g. A ${g.op === "and" ? "AND" : "OR"} (B ${g.op === "and" ? "OR" : "AND"} C)`}
+          title={`Add a bracketed sub-group, for rules like A ${g.op === "and" ? "AND" : "OR"} (B ${g.op === "and" ? "OR" : "AND"} C)`}
           onClick={() =>
             onChange({
               ...g,
               children: [
                 ...g.children,
-                // the opposite operator, which is the only useful default:
-                // nesting an OR inside an OR changes nothing
+                // the opposite operator — nesting an OR inside an OR is a no-op
                 { type: "group", op: g.op === "or" ? "and" : "or", children: [newRule(firstRef)] },
               ],
             })}>
-          + group {g.op === "or" ? "(AND …)" : "(OR …)"}
+          + bracket ( … )
         </button>
-        <span className="muted" style={{ fontSize: 11 }}>
-          mixing AND with OR? add a group
-        </span>
       </div>
     </div>
   );

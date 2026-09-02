@@ -103,9 +103,15 @@ function SkipLogicEditor({ q, patch }: { q: Question; patch(p: Partial<Question>
     <div>
       {q.skipLogic.map((rule, i) => (
         <div key={rule.id} className="card" style={{ padding: 10 }}>
+          <div className="row" style={{ marginBottom: 4 }}>
+            <span className="flabel" style={{ margin: 0 }}>RULE {i + 1}</span>
+            <span className="grow" />
+            <button className="btn small danger" title="Remove this skip rule"
+              onClick={() => patch({ skipLogic: q.skipLogic.filter((_, j) => j !== i) })}>×</button>
+          </div>
           <div className="flabel">WHEN</div>
           <ConditionEditor value={rule.when} onChange={(when) => setRule(i, { ...rule, when })} />
-          <div className="row" style={{ marginTop: 6 }}>
+          <div className="row skip-target" style={{ marginTop: 8 }}>
             <span className="flabel" style={{ marginBottom: 0 }}>GO TO</span>
             <select className="select" value={rule.target.kind}
               onChange={(e) => setRule(i, { ...rule, target: { ...rule.target, kind: e.target.value as any } })}>
@@ -130,7 +136,8 @@ function SkipLogicEditor({ q, patch }: { q: Question; patch(p: Partial<Question>
               </select>
             )}
             {rule.target.kind === "url" && (
-              <input className="input grow" placeholder="https://…" value={rule.target.ref ?? ""}
+              <input className="input skip-url" placeholder="https://example.com/thanks"
+                value={rule.target.ref ?? ""}
                 onChange={(e) => setRule(i, { ...rule, target: { ...rule.target, ref: e.target.value } })} />
             )}
             {rule.target.kind === "terminate" && (
@@ -141,8 +148,6 @@ function SkipLogicEditor({ q, patch }: { q: Question; patch(p: Partial<Question>
                 <option value="quota_full">quota full</option>
               </select>
             )}
-            <button className="btn small danger"
-              onClick={() => patch({ skipLogic: q.skipLogic.filter((_, j) => j !== i) })}>×</button>
           </div>
         </div>
       ))}
@@ -366,14 +371,22 @@ export function PropertiesPanel() {
       <h2>{q.code} properties</h2>
       {pipingProblems.map((p, i) => <div key={i} className="chip warn" style={{ marginBottom: 6 }}>{p}</div>)}
       {exprError && <div className="chip warn" style={{ marginBottom: 6 }}>expr: {exprError}</div>}
-      {logicIssues.length > 0 && (
+      {/* Only errors are shown here. Warnings ("operator has no value set")
+          are true but fire the instant you add a condition, before there is
+          anything to type into — which made the panel look broken on first
+          use. They stay available in Logic → Logic check. */}
+      {logicIssues.some((i) => i.level === "error") && (
         <div data-testid="logic-issues" style={{ marginBottom: 6 }}>
-          {logicIssues.map((i, k) => (
-            <div key={k} className={`chip ${i.level === "error" ? "warn" : ""}`} style={{ marginBottom: 4 }}>
-              {i.level === "error" ? "✕" : "!"} {i.path}
-              {i.optionCode ? ` [${i.optionCode}]` : ""} — {i.message}
+          {logicIssues.filter((i) => i.level === "error").map((i, k) => (
+            <div key={k} className="chip warn" style={{ marginBottom: 4 }}>
+              ✕ {i.path}{i.optionCode ? ` [${i.optionCode}]` : ""} — {i.message}
             </div>
           ))}
+        </div>
+      )}
+      {logicIssues.length > 0 && !logicIssues.some((i) => i.level === "error") && (
+        <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>
+          {logicIssues.length} logic note{logicIssues.length === 1 ? "" : "s"} — see Logic → Logic check
         </div>
       )}
 
