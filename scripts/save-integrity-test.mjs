@@ -211,8 +211,17 @@ const saveState = (page) => page.$eval('[data-testid="save-state"]', (e) => e.te
   await page.waitForSelector('[data-testid="lb-group"]');
   await settle(page);
 
-  // the top level's operator is the connector; the bracket's is in its header
-  const rootOp = await page.$('[data-testid="lb-join-op"]');
+  /*
+   * The top level's operator is the connector between its rows; the bracket's
+   * is in its header.
+   *
+   * Scope the connector to the ROOT list. A nested group renders inside its
+   * row, so ITS connectors come first in document order — an unscoped
+   * `[data-testid="lb-join-op"]` reads the bracket's operator and then reports
+   * the parent as having changed when only the bracket did.
+   */
+  const ROOT_JOIN = '.lb-list.root > .lb-join select[data-testid="lb-join-op"]';
+  const rootOp = await page.$(ROOT_JOIN);
   assert.ok(rootOp, "the top level has an operator control of its own");
   const parentBefore = await rootOp.inputValue();
   const nested = await page.$('[data-testid="group-op"]');
@@ -222,7 +231,7 @@ const saveState = (page) => page.$eval('[data-testid="save-state"]', (e) => e.te
   await nested.selectOption(nestedBefore === "and" ? "or" : "and");
   await settle(page);
 
-  const parentAfter = await (await page.$('[data-testid="lb-join-op"]')).inputValue();
+  const parentAfter = await (await page.$(ROOT_JOIN)).inputValue();
   assert.equal(parentAfter, parentBefore,
     `the parent operator is untouched (${parentBefore} → ${parentAfter})`);
   console.log(`✔ changing the nested operator left the parent as ${parentAfter}`);

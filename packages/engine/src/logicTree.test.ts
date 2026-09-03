@@ -5,7 +5,7 @@ import {
   editableCondition, canonicalCondition, emptyGroup, newConditionRule,
   getAt, replaceAt, removeAt, appendTo, duplicateAt, setOperatorAt,
   groupSelection, ungroupAt, validateLogicTree, countConditions, countGroups,
-  isUnder, OPERATOR_LABEL,
+  isUnder, OPERATOR_LABEL, connectorsOf, setGroupConnector,
 } from "./logicTree.js";
 import { evaluateCondition } from "./evaluate.js";
 import { createResponseState } from "./state.js";
@@ -444,4 +444,209 @@ test("§16: logic saved before this builder existed loads, means the same, and r
         `meaning preserved for ${JSON.stringify(legacy)} with ${JSON.stringify(a)}`);
     }
   }
+});
+
+/* ==========================================================================
+ * Independent operators (the AND/OR-shared-state report).
+ *
+ * The data model was never shared state — every group has owned its own `op`
+ * throughout, which the tests above prove. What was shared was the CONTROL:
+ * a group has one operator, and the builder drew one dropdown per gap between
+ * its children, so four conditions in one list put three dropdowns onto one
+ * stored value. Setting one appeared to set the others, and
+ * `C1 AND C2 OR C3 AND C4` could not be expressed at all.
+ * ======================================================================== */
+
+test("the reported symptom: one level, one operator, so every gap read the same", () => {
+  let root = emptyGroup("and");
+  for (const r of [rule("a1", "yes"), rule("a1", "no"), rule("a1", "maybe"), rule("a2", "m")]) {
+    root = appendTo(root, [], r);
+  }
+  // three gaps, one stored operator — this is what the old control edited
+  assert.deepEqual(connectorsOf(root), ["and", "and", "and"]);
+  const allChanged = setOperatorAt(root, [], "or");
+  assert.deepEqual(connectorsOf(allChanged), ["or", "or", "or"],
+    "setting the group's operator moves every gap, by definition");
+});
+
+test("§1: setting ONE gap leaves the others alone — C1 AND C2 OR C3 AND C4", () => {
+  let root = emptyGroup("and");
+  for (const r of [rule("a1", "yes"), rule("a1", "no"), rule("a1", "maybe"), rule("a2", "m")]) {
+    root = appendTo(root, [], r);
+  }
+  // change only the middle gap
+  const next = setGroupConnector(root, [], 1, "or");
+
+  // AND binds tighter, so the structure the edit means is (C1 AND C2) OR (C3 AND C4)
+  assert.equal(next.op, "or");
+  assert.equal(next.children.length, 2);
+  const [left, right] = next.children as ConditionGroup[];
+  assert.equal(left.op, "and");
+  assert.equal(right.op, "and");
+  assert.deepEqual(left.children.map((c: any) => c.value), ["yes", "no"]);
+  assert.deepEqual(right.children.map((c: any) => c.value), ["maybe", "m"]);
+
+  // and it evaluates as written
+  assert.equal(check(next, { a1: "yes", a2: "f" }), false, "C1 alone is not enough");
+  assert.equal(check(next, { a1: "yes", a2: "m" }), false, "C1 and C4 straddle the OR");
+  const withLeft = canonicalCondition(next);
+  assert.equal(check(withLeft, { a1: "yes" }), false);
+});
+
+test("§1: setting a gap back restores the meaning, and leaves the bracket to be ungrouped", () => {
+  let root = emptyGroup("and");
+  for (const r of [rule("a1", "yes"), rule("a1", "no"), rule("a1", "maybe")]) {
+    root = appendTo(root, [], r);
+  }
+  const before = canonicalCondition(root);
+  const split = setGroupConnector(root, [], 0, "or");   // C1 OR (C2 AND C3)
+  assert.equal(split.op, "or");
+  assert.equal((split.children[1] as ConditionGroup).op, "and");
+
+  /*
+   * Setting that gap back to AND gives `C1 AND (C2 AND C3)` — the same thing
+   * as `C1 AND C2 AND C3` to the evaluator, but with the bracket still drawn.
+   *
+   * The bracket is NOT dissolved automatically. A bracket may have been
+   * created deliberately with "Move to new group", and there is nothing in the
+   * tree that distinguishes one the programmer made from one precedence
+   * produced — so removing it on a hunch would silently delete structure
+   * someone built. It is one visible click ("ungroup") away instead.
+   */
+  const merged = setGroupConnector(split, [], 0, "and");
+  assert.equal(merged.op, "and");
+  const answers = [
+    { a1: "yes" }, { a1: "no" }, { a1: "maybe" }, {},
+  ];
+  for (const a of answers) {
+    assert.equal(check(canonicalCondition(merged), a), check(before, a),
+      `same meaning as the flat AND for ${JSON.stringify(a)}`);
+  }
+  // and ungrouping gets the flat list back exactly
+  const flat = ungroupAt(merged, [1]);
+  assert.deepEqual(flat.children.map((c: any) => c.value), ["yes", "no", "maybe"]);
+});
+
+test("§16 test 1–2: sibling groups keep their own operators", () => {
+  const root: ConditionGroup = {
+    type: "group", op: "and",
+    children: [
+      { type: "group", op: "and", children: [rule("a1", "yes"), rule("a2", "m")] },   // A
+      { type: "group", op: "or", children: [rule("a1", "no"), rule("a3", 25, "gt")] }, // B
+      { type: "group", op: "not", children: [rule("a1", "maybe")] },                  // C
+    ],
+  };
+  const ops = (g: ConditionGroup) => g.children.map((c: any) => c.op);
+  assert.deepEqual(ops(root), ["and", "or", "not"]);
+
+  // change A, then B, then C — each time the other two are untouched
+  const afterA = setOperatorAt(root, [0], "or");
+  assert.deepEqual(ops(afterA), ["or", "or", "not"]);
+  const afterB = setOperatorAt(afterA, [1], "and");
+  assert.deepEqual(ops(afterB), ["or", "and", "not"]);
+  const afterC = setOperatorAt(afterB, [2], "or");
+  assert.deepEqual(ops(afterC), ["or", "and", "or"]);
+  // the parent never moved
+  assert.equal(afterC.op, "and");
+});
+
+test("§16 test 3: parent, child and grandchild are independent", () => {
+  const root: ConditionGroup = {
+    type: "group", op: "and",
+    children: [
+      rule("a1", "yes"),
+      {
+        type: "group", op: "or",
+        children: [
+          rule("a2", "m"),
+          { type: "group", op: "not", children: [rule("a3", 25, "gt")] },
+        ],
+      },
+    ],
+  };
+  const child = setOperatorAt(root, [1], "and");
+  assert.equal(child.op, "and", "parent unchanged");
+  assert.equal((child.children[1] as ConditionGroup).op, "and", "child changed");
+  assert.equal(
+    ((child.children[1] as ConditionGroup).children[1] as ConditionGroup).op, "not",
+    "grandchild unchanged",
+  );
+});
+
+test("§16 test 4: four sibling groups, four independent operators", () => {
+  const pair = (op: ConditionGroup["op"]): Condition =>
+    ({ type: "group", op, children: [rule("a1", "yes"), rule("a2", "m")] });
+  let root: ConditionGroup = {
+    type: "group", op: "and",
+    children: [pair("and"), pair("or"), pair("and"), pair("or")],
+  };
+  root = setOperatorAt(root, [1], "and");
+  root = setOperatorAt(root, [3], "not");
+  assert.deepEqual(root.children.map((c: any) => c.op), ["and", "and", "and", "not"]);
+  root = setOperatorAt(root, [0], "or");
+  assert.deepEqual(root.children.map((c: any) => c.op), ["or", "and", "and", "not"]);
+});
+
+test("§16 test 5: a group made from a selection gets its own operator", () => {
+  let root = emptyGroup("or");
+  for (const r of [rule("a1", "yes"), rule("a1", "no"), rule("a1", "maybe"), rule("a2", "m")]) {
+    root = appendTo(root, [], r);
+  }
+  // the list is OR; group two of them and make that bracket AND
+  const grouped = groupSelection(root, [[0], [1]], "and");
+  assert.ok(grouped.ok);
+  const next = setOperatorAt(grouped.root, [0], "and");
+  assert.equal(next.op, "or", "the level around it is still OR");
+  assert.equal((next.children[0] as ConditionGroup).op, "and", "the new bracket is AND");
+  // …and evaluates as (C1 AND C2) OR C3 OR C4
+  assert.equal(check(canonicalCondition(next), { a1: "maybe", a2: "f" }), true);
+  assert.equal(check(canonicalCondition(next), { a1: "yes", a2: "f" }), false,
+    "the AND bracket needs both of its own conditions");
+});
+
+test("§16 test 7 / §14: every group's own operator drives the evaluation", () => {
+  // A AND (B OR C)
+  const andOr: Condition = {
+    type: "group", op: "and",
+    children: [rule("a1", "yes"), { type: "group", op: "or", children: [rule("a2", "m"), rule("a3", 25, "gt")] }],
+  };
+  assert.equal(check(andOr, { a1: "yes", a2: "m", a3: 1 }), true);
+  assert.equal(check(andOr, { a1: "no", a2: "m", a3: 30 }), false);
+
+  // A OR (B AND C) — same shape, different operators, different meaning
+  const orAnd: Condition = {
+    type: "group", op: "or",
+    children: [rule("a1", "yes"), { type: "group", op: "and", children: [rule("a2", "m"), rule("a3", 25, "gt")] }],
+  };
+  assert.equal(check(orAnd, { a1: "yes", a2: "f", a3: 1 }), true);
+  assert.equal(check(orAnd, { a1: "no", a2: "m", a3: 1 }), false);
+});
+
+test("§8: setting a gap does not flatten anything the programmer built", () => {
+  // a hand-made bracket sits among bare conditions
+  let root = emptyGroup("and");
+  root = appendTo(root, [], rule("a1", "yes"));
+  root = appendTo(root, [], { type: "group", op: "or", children: [rule("a2", "m"), rule("a2", "f")] });
+  root = appendTo(root, [], rule("a3", 25, "gt"));
+
+  const next = setGroupConnector(root, [], 1, "or");
+  // the hand-made OR bracket is still a bracket, with its own children
+  const kept = (next.children[0] as ConditionGroup).children[1] as ConditionGroup;
+  assert.equal(kept.op, "or");
+  assert.deepEqual(kept.children.map((c: any) => c.value), ["m", "f"]);
+  // and the new structure is (C1 AND (m OR f)) OR C3
+  assert.equal(next.op, "or");
+  assert.equal((next.children[0] as ConditionGroup).op, "and");
+});
+
+test("a NOT group has no binary connector to set", () => {
+  const root: ConditionGroup = {
+    type: "group", op: "not",
+    children: [rule("a1", "yes"), rule("a2", "m")],
+  };
+  assert.equal(setGroupConnector(root, [], 0, "or"), root, "NOT is left to its own control");
+  // out-of-range gaps are refused rather than guessed at
+  const two = { type: "group", op: "and", children: [rule("a1", "yes"), rule("a2", "m")] } as ConditionGroup;
+  assert.equal(setGroupConnector(two, [], 5, "or"), two);
+  assert.equal(setGroupConnector(emptyGroup(), [], 0, "or").children.length, 0);
 });

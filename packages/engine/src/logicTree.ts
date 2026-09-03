@@ -179,6 +179,74 @@ export function setOperatorAt(
   return replaceAt(root, path, { ...target, op });
 }
 
+/* ---------------------------------------------------------- connectors */
+
+/**
+ * The operator shown in each gap between a group's children.
+ *
+ * A group owns ONE operator, so every gap in it reads the same — which is
+ * fine as a display, and was the whole bug as a set of *controls*: four
+ * conditions in one list drew three dropdowns onto one stored value, so
+ * setting one appeared to set the others. It also made
+ * `C1 AND C2 OR C3 AND C4` impossible to express, because a single level can
+ * only hold a single operator.
+ *
+ * `setGroupConnector` is the fix: each gap can be set independently, and the
+ * result is materialised as real nested groups.
+ */
+export function connectorsOf(group: ConditionGroup): ConditionGroup["op"][] {
+  return Array(Math.max(0, group.children.length - 1)).fill(group.op);
+}
+
+/**
+ * Set ONE gap's operator, restructuring the group so the other gaps keep
+ * theirs.
+ *
+ * AND binds tighter than OR, as in every language and every survey tool, so
+ * `C1 AND C2 OR C3 AND C4` becomes `(C1 AND C2) OR (C3 AND C4)`. The brackets
+ * that appear are real groups with their own operators — nothing is implied,
+ * hidden or shared, and the programmer sees the structure their edit means.
+ *
+ * Setting the gap back merges the runs again, so the operation is reversible.
+ */
+export function setGroupConnector(
+  root: ConditionGroup,
+  path: LogicPath,
+  gapIndex: number,
+  op: "and" | "or",
+): ConditionGroup {
+  const group = getAt(root, path);
+  if (!group || !isGroup(group)) return root;
+  // NOT is not a binary connector — it belongs to a group as a whole
+  if (group.op === "not") return root;
+  const items = group.children;
+  if (items.length < 2 || gapIndex < 0 || gapIndex > items.length - 2) return root;
+
+  const gaps = connectorsOf(group).map((g) => (g === "or" ? "or" : "and")) as ("and" | "or")[];
+  gaps[gapIndex] = op;
+  return replaceAt(root, path, regroupByPrecedence(items, gaps));
+}
+
+/** Rebuild one level from its items and the operator in each gap. */
+function regroupByPrecedence(items: Condition[], gaps: ("and" | "or")[]): ConditionGroup {
+  if (gaps.every((g) => g === gaps[0])) {
+    return { type: "group", op: gaps[0], children: items };
+  }
+  // split into AND-runs wherever a gap says OR
+  const runs: Condition[][] = [[items[0]]];
+  gaps.forEach((g, i) => {
+    if (g === "or") runs.push([items[i + 1]]);
+    else runs[runs.length - 1].push(items[i + 1]);
+  });
+  return {
+    type: "group",
+    op: "or",
+    children: runs.map((run) =>
+      run.length === 1 ? run[0] : ({ type: "group", op: "and", children: run } as Condition),
+    ),
+  };
+}
+
 /* ------------------------------------------------------------ grouping */
 
 export interface GroupResult {

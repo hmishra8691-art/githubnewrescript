@@ -160,8 +160,10 @@ await setRow(3, { ref: "a2", op: "eq", value: "m" });
 const joins = await page.$$('[data-testid="lb-join-op"]');
 assert.ok(joins.length >= 1, "with more than one condition the connector appears");
 const joinOptions = await joins[0].$$eval("option", (els) => els.map((e) => e.textContent.trim()));
-assert.deepEqual(joinOptions, ["AND", "OR", "NOT"], `only clear operators: ${joinOptions}`);
-console.log("✔ §7: the operator appears once there is something to combine, as AND / OR / NOT");
+// a connector joins two things, so AND / OR; NOT applies to a group as a whole
+// and lives in that group's header
+assert.deepEqual(joinOptions, ["AND", "OR"], `only clear operators: ${joinOptions}`);
+console.log("✔ §7: the operator appears once there is something to combine, as AND / OR");
 
 def = await readDef();
 logic = displayLogicOf(def);
@@ -305,6 +307,92 @@ await page.waitForTimeout(400);
 assert.equal(JSON.stringify(displayLogicOf(await readDef())), shapeBefore,
   "one ⌘Z undoes the whole grouping operation");
 console.log("✔ §18: “Move to new group” is a single undoable operation");
+
+/* ==========================================================================
+ * Independent operators — the reported bug.
+ *
+ * Four conditions in one list used to draw three dropdowns onto ONE stored
+ * operator, so setting any of them moved all three, and
+ * "C1 AND C2 OR C3 AND C4" could not be expressed at all.
+ * ======================================================================== */
+
+await openQuestionLogic();
+await page.click('[data-testid="optional-add"]').catch(() => {});
+{
+  // start from a clean four-condition list
+  const clearBtn = await page.$('.rightpanel >> text=clear');
+  if (clearBtn) { await clearBtn.click(); await page.waitForTimeout(250); }
+  await page.click('[data-testid="optional-add"]');
+  await page.waitForSelector('[data-testid="logic-builder"]');
+  for (let i = 0; i < 4; i++) {
+    await page.click('[data-testid="lb-add-condition"] >> nth=0');
+    await page.waitForTimeout(180);
+  }
+}
+await setRow(0, { ref: "a1", op: "eq", value: "yes" });
+await setRow(1, { ref: "a1", op: "eq", value: "no" });
+await setRow(2, { ref: "a1", op: "eq", value: "maybe" });
+await setRow(3, { ref: "a2", op: "eq", value: "m" });
+
+const rootJoins = await page.$$('[data-testid="lb-join-op"]');
+assert.equal(rootJoins.length, 3, "three gaps between four conditions");
+const opsOnly = await rootJoins[0].$$eval("option", (els) => els.map((e) => e.textContent.trim()));
+assert.deepEqual(opsOnly, ["AND", "OR"],
+  "a connector joins two things, so it offers AND / OR — NOT belongs to a group");
+console.log("✔ four conditions show three independent connectors");
+
+// change ONLY the middle one
+await rootJoins[1].selectOption("or");
+await page.waitForTimeout(400);
+
+def = await readDef();
+logic = displayLogicOf(def);
+// AND binds tighter, so the structure the edit means is (C1 AND C2) OR (C3 AND C4)
+assert.equal(logic.op, "or", `the changed gap became the outer relationship: ${logic.op}`);
+assert.equal(logic.children.length, 2);
+assert.deepEqual(logic.children.map((c) => c.op), ["and", "and"],
+  "the two gaps that were NOT touched still read AND");
+assert.deepEqual(logic.children[0].children.map((c) => c.value), ["yes", "no"]);
+assert.deepEqual(logic.children[1].children.map((c) => c.value), ["maybe", "m"]);
+console.log("✔ §1: changing one connector left the other two alone — (A1=yes AND A1=no) OR (A1=maybe AND A2=m)");
+
+// every operator on screen is now its own control, and setting one moves one
+const groupSelects = await page.$$('[data-testid="group-op"]');
+assert.equal(groupSelects.length, 2, "two real groups, two operator controls");
+const beforeOps = await Promise.all(groupSelects.map((g) => g.inputValue()));
+assert.deepEqual(beforeOps, ["and", "and"]);
+await groupSelects[1].selectOption("or");
+await page.waitForTimeout(400);
+
+def = await readDef();
+logic = displayLogicOf(def);
+assert.deepEqual(logic.children.map((c) => c.op), ["and", "or"],
+  "the second group changed and the first did not");
+assert.equal(logic.op, "or", "and the level above them is untouched");
+console.log("✔ §16 test 1: changing group 2's operator left group 1 and the parent alone");
+
+/* -------------------------- three operators, all different, all independent */
+
+// make the first group a NOT — three distinct operators in one tree
+const g3 = await page.$$('[data-testid="group-op"]');
+await g3[0].selectOption("not");
+await page.waitForTimeout(400);
+def = await readDef();
+logic = displayLogicOf(def);
+assert.equal(logic.op, "or", "parent: OR");
+assert.deepEqual(logic.children.map((c) => c.op), ["not", "or"], "children: NOT and OR");
+console.log("✔ §16 test 2: OR / NOT / OR coexist, each set on its own group");
+
+/* ------------------------------------------------ §15: survives a round trip */
+
+const nestedShape = JSON.stringify(logic);
+await goTab("Survey Settings");
+await page.waitForTimeout(200);
+await goTab("Questions");
+await page.waitForTimeout(250);
+assert.equal(JSON.stringify(displayLogicOf(await readDef())), nestedShape,
+  "every operator came back as it was set");
+console.log("✔ §15: OR / NOT / OR survive leaving the panel and returning");
 
 /* ------------------------- §14: the same builder in Survey Flow branch logic */
 

@@ -319,9 +319,24 @@ const groupOps = await studio.$$eval(".rightpanel [data-testid='group-op']", (el
 const groups = await studio.$$eval(".rightpanel .lb-group", (els) => els.length);
 assert.equal(groupOps, groups,
   `every group has exactly one operator control of its own (${groupOps} controls, ${groups} groups)`);
-const insideJoins = await studio.$$eval(".rightpanel .lb-group .lb-join select", (els) => els.length);
-assert.equal(insideJoins, 0, "a group's connectors are words, not a second control for its operator");
-console.log(`✔ each of the ${groups} groups owns its operator, and no connector duplicates it`);
+/*
+ * Connectors are now per-GAP controls, not a repeat of the group's operator:
+ * setting one writes that gap and rebuilds the level so the others keep
+ * theirs. A group with two children therefore has one gap and one connector,
+ * plus its own header control for the group as a whole (where NOT lives).
+ */
+const groupWithTwo = await studio.$$eval(
+  ".rightpanel .lb-group",
+  (els) => els.map((g) => ({
+    rows: g.querySelectorAll(":scope > .lb-group-body > .lb-list > .lb-row").length,
+    joins: g.querySelectorAll(":scope > .lb-group-body > .lb-list > .lb-join select").length,
+  })),
+);
+for (const g of groupWithTwo) {
+  assert.equal(g.joins, Math.max(0, g.rows - 1),
+    `one connector per gap, not per group: ${JSON.stringify(g)}`);
+}
+console.log(`✔ each of the ${groups} groups owns its operator, and each gap owns its own connector`);
 
 // nothing may overflow its box or escape the panel
 const layout = await studio.evaluate(() => {

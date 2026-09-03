@@ -12,7 +12,7 @@ import {
   type LogicPath,
   editableCondition, canonicalCondition, pathKey, appendTo, replaceAt, removeAt,
   duplicateAt, setOperatorAt, groupSelection, ungroupAt, validateLogicTree,
-  OPERATOR_LABEL, OPERATOR_HINT,
+  OPERATOR_LABEL, OPERATOR_HINT, setGroupConnector,
 } from "@rescript/engine";
 import { useStudio } from "./store";
 
@@ -325,7 +325,7 @@ function ConditionList({ ctx, path, group }: {
         return (
           <React.Fragment key={key}>
             {i > 0 && (
-              <Connector ctx={ctx} path={path} group={group} editable={isRoot} />
+              <Connector ctx={ctx} path={path} group={group} gapIndex={i - 1} />
             )}
             <div className={`lb-row${ctx.selected.includes(key) ? " selected" : ""}`}
               data-testid="lb-row">
@@ -361,35 +361,42 @@ function ConditionList({ ctx, path, group }: {
 }
 
 /**
- * The word between two rows.
+ * The operator between two rows — one per gap, each independently settable.
  *
- * At the top level it is the only place that level's operator can be set, so
- * it is a control. Inside a group the group's own header owns the operator and
- * this is plain text — one control per group, so two of them can never
- * disagree about one value.
+ * This is the fix for "changing one AND/OR changes the others". A group holds
+ * ONE operator, and this control used to write it directly, so four conditions
+ * in one list drew three dropdowns onto one stored value: setting any of them
+ * moved all three. Worse, `C1 AND C2 OR C3 AND C4` could not be expressed at
+ * all, because one level can only hold one operator.
+ *
+ * `setGroupConnector` writes the gap instead, and rebuilds the level so every
+ * other gap keeps what it had — AND binding tighter than OR, so the brackets
+ * that appear are exactly the ones the edit means. Each operator then lives on
+ * a real group node of its own; nothing is shared.
  */
-function Connector({ ctx, path, group, editable }: {
-  ctx: BuilderCtx; path: LogicPath; group: ConditionGroup; editable: boolean;
+function Connector({ ctx, path, group, gapIndex }: {
+  ctx: BuilderCtx; path: LogicPath; group: ConditionGroup; gapIndex: number;
 }) {
-  if (!editable) {
+  // NOT is not a relationship between two things — it belongs to the group as
+  // a whole, and is set in that group's header
+  if (group.op === "not") {
     return (
       <div className="lb-join">
-        <span className="lb-join-label" data-testid="cond-join">{OPERATOR_LABEL[group.op]}</span>
+        <span className="lb-join-label" data-testid="cond-join">{OPERATOR_LABEL.not}</span>
       </div>
     );
   }
   return (
     <div className="lb-join">
       <select className="select lb-join-select" data-testid="lb-join-op"
-        aria-label="How these conditions combine"
-        value={group.op}
+        aria-label="How these two combine"
+        value={group.op === "or" ? "or" : "and"}
         onChange={(e) => ctx.commit(
-          setOperatorAt(ctx.root, path, e.target.value as ConditionGroup["op"]),
+          setGroupConnector(ctx.root, path, gapIndex, e.target.value as "and" | "or"),
           "change operator",
         )}>
         <option value="and">AND</option>
         <option value="or">OR</option>
-        <option value="not">NOT</option>
       </select>
       <span className="muted lb-join-hint">{OPERATOR_HINT[group.op]}</span>
     </div>
