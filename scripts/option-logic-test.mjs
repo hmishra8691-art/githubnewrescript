@@ -87,6 +87,10 @@ console.log("✔ Always Hide keeps the option in the definition but marks it hid
 
 await page.click('.qcard.selected [data-testid="option-logic-0"]');
 await page.click('[data-testid="option-logic"] [data-testid="vis-show_when"]');
+// the builder now opens EMPTY — conditions come first, groups only when asked
+// for — so the first condition is added rather than assumed
+await page.waitForSelector('[data-testid="option-logic"] [data-testid="logic-builder"]');
+await page.click('[data-testid="option-logic"] [data-testid="lb-add-condition"]');
 await page.waitForSelector('[data-testid="option-logic"] .cond-rule');
 
 // source question = Q1, operator = has selected, value = this option.

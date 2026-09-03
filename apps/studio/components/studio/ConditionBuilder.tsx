@@ -1,13 +1,19 @@
 "use client";
 import React from "react";
-import type { Condition, ConditionRule, ComparisonOperator, Question } from "@rescript/schema";
+import type { Condition, ConditionGroup, ConditionRule, ComparisonOperator, Question } from "@rescript/schema";
 import {
   VALUELESS_OPERATORS,
   TWO_VALUE_OPERATORS,
   LIST_VALUE_OPERATORS,
   isOptionValueRef,
 } from "@rescript/schema";
-import { operatorsForQuestion, conditionSummary, embeddedCatalog } from "@rescript/engine";
+import {
+  operatorsForQuestion, conditionSummary, embeddedCatalog,
+  type LogicPath,
+  editableCondition, canonicalCondition, pathKey, appendTo, replaceAt, removeAt,
+  duplicateAt, setOperatorAt, groupSelection, ungroupAt, validateLogicTree,
+  OPERATOR_LABEL, OPERATOR_HINT,
+} from "@rescript/engine";
 import { useStudio } from "./store";
 
 /**
@@ -74,9 +80,15 @@ function newRule(defaultRef: string): ConditionRule {
   return { type: "rule", source: { kind: "question", ref: defaultRef }, operator: "eq", value: "" };
 }
 
-/** A ready-to-edit condition group with one starter row. */
-export function newConditionGroup(defaultRef: string): Condition {
-  return { type: "group", op: "and", children: [newRule(defaultRef)] };
+/**
+ * A ready-to-edit condition list.
+ *
+ * Deliberately EMPTY. It used to arrive with one rule already in it and an
+ * AND group around it, which is the thing the builder now avoids: the
+ * programmer adds conditions first and decides about grouping afterwards.
+ */
+export function newConditionGroup(_defaultRef?: string): Condition {
+  return { type: "group", op: "and", children: [] };
 }
 
 const stripHtml = (s: string) => s.replace(/<[^>]*>/g, "");
@@ -229,126 +241,297 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
   );
 }
 
-/**
- * One group of conditions.
+/* ==========================================================================
+ * The logic builder: conditions first, groups only when asked for.
  *
- * A group has a single operator, but showing it as a leading "ALL (AND)"
- * dropdown put the most abstract control first and made a two-line rule look
- * like set theory. The operator now lives BETWEEN the rules, as the connector
- * you actually read — "Q1 is answered / AND / Q2 is Apple" — which is both how
- * every survey tool presents it and how the sentence reads out loud. Changing
- * any connector changes the group, because there is only one; with a single
- * condition no connector is shown at all.
+ * It used to open on a logical structure — a group, an "ALL (AND)" operator
+ * and an empty slot — so the first thing a programmer met was set theory, and
+ * mixing AND with OR meant knowing to press "+ condition group ( … )" before
+ * writing anything down.
+ *
+ * Now the builder opens empty. Conditions are added to a flat list. When two
+ * of them belong together the programmer ticks them and presses
+ * "Move to new group", which is the only nesting gesture there is — and it
+ * works on groups too, so depth accumulates the same way at every level.
+ *
+ * The stored shape does not change: still `Condition`, still a group that owns
+ * its own `op`, still evaluated by the recursive evaluator. All of the tree
+ * arithmetic lives in `@rescript/engine`'s `logicTree.ts`, shared with Survey
+ * Flow, so question logic and branch logic cannot drift apart (req §14).
+ * ======================================================================== */
+
+/** Number the groups in document order, so the badges read "Group 1, 2, 3". */
+function groupNumbers(root: ConditionGroup): Map<string, number> {
+  const out = new Map<string, number>();
+  let n = 0;
+  const walk = (node: Condition, path: LogicPath) => {
+    if (node.type !== "group") return;
+    node.children.forEach((child, i) => {
+      const p = [...path, i];
+      if (child.type === "group") out.set(pathKey(p), ++n);
+      walk(child, p);
+    });
+  };
+  walk(root, []);
+  return out;
+}
+
+interface BuilderCtx {
+  root: ConditionGroup;
+  commit(next: ConditionGroup, label: string): void;
+  selected: string[];
+  toggle(path: LogicPath, on: boolean): void;
+  numbers: Map<string, number>;
+  perOption?: boolean;
+  justGrouped: string | null;
+}
+
+/**
+ * One level of the list: the rows, the connector between them, and the
+ * "+ Add condition" that grows it.
+ *
+ * The same component renders the top level and the inside of every group,
+ * which is what makes nesting free — a group is a row that happens to contain
+ * a list.
  */
-export function ConditionEditor({ value, onChange, perOption, nested }: {
-  value: Condition; onChange(c: Condition): void; perOption?: boolean; nested?: boolean;
+function ConditionList({ ctx, path, group }: {
+  ctx: BuilderCtx; path: LogicPath; group: ConditionGroup;
 }) {
   const s = useStudio();
   const firstRef = s.def.questions[0]?.id ?? "";
+  const isRoot = path.length === 0;
 
-  if (value.type === "rule") {
+  const addCondition = () =>
+    ctx.commit(appendTo(ctx.root, path, newRule(firstRef)), "add condition");
+
+  if (group.children.length === 0) {
     return (
-      <div className="cond-group">
-        <RuleEditor rule={value} onChange={onChange} perOption={perOption}
-          onRemove={() => onChange({ type: "group", op: "and", children: [] })} />
-        <div className="cond-add">
-          <button className="btn small" onClick={() =>
-            onChange({ type: "group", op: "and", children: [value, newRule(firstRef)] })}>
-            + condition
-          </button>
-        </div>
+      <div className="lb-empty" data-testid={isRoot ? "lb-empty" : "lb-empty-group"}>
+        <span className="muted">
+          {isRoot ? "No conditions added yet." : "This group is empty."}
+        </span>
+        <button className="btn small primary" data-testid="lb-add-condition" onClick={addCondition}>
+          + Add condition
+        </button>
       </div>
     );
   }
 
-  const g = value;
-  const setOp = (op: "and" | "or" | "not") => onChange({ ...g, op });
-
-  /** The connector shown between two rules — and the only place the operator
-   *  is editable, so it can never disagree with itself. */
-  const Connector = () => (
-    <div className="cond-join">
-      <span className="cond-join-label" data-testid="cond-join">
-        {g.op === "and" ? "AND" : g.op === "or" ? "OR" : "NOR"}
-      </span>
+  return (
+    <div className={`lb-list${isRoot ? " root" : ""}`}>
+      {group.children.map((child, i) => {
+        const childPath = [...path, i];
+        const key = pathKey(childPath);
+        return (
+          <React.Fragment key={key}>
+            {i > 0 && (
+              <Connector ctx={ctx} path={path} group={group} editable={isRoot} />
+            )}
+            <div className={`lb-row${ctx.selected.includes(key) ? " selected" : ""}`}
+              data-testid="lb-row">
+              {/* a plain span, not a <label>: a label wrapping its own checkbox
+                  re-dispatches the click to it, which toggles twice */}
+              <span className="lb-pick">
+                <input type="checkbox" data-testid="lb-check"
+                  aria-label="Select this condition to group, duplicate or delete it"
+                  title="Select this to group, duplicate or delete it"
+                  checked={ctx.selected.includes(key)}
+                  onChange={(e) => ctx.toggle(childPath, e.target.checked)} />
+              </span>
+              <div className="lb-row-body">
+                {child.type === "rule" ? (
+                  <RuleEditor rule={child} perOption={ctx.perOption}
+                    onChange={(r) => ctx.commit(replaceAt(ctx.root, childPath, r), "edit condition")}
+                    onRemove={() => ctx.commit(removeAt(ctx.root, childPath), "remove condition")} />
+                ) : (
+                  <GroupRow ctx={ctx} path={childPath} group={child} />
+                )}
+              </div>
+            </div>
+          </React.Fragment>
+        );
+      })}
+      <div className="lb-add">
+        <button className="btn small" data-testid="lb-add-condition" onClick={addCondition}>
+          + Add condition
+        </button>
+      </div>
     </div>
   );
+}
 
-  /**
-   * Each group owns its operator, and each group shows it.
-   *
-   * The operator used to appear ONLY as a connector between two children, so
-   * a bracketed sub-group holding one condition displayed no control of its
-   * own — the nearest dropdown belonged to the PARENT. Changing "the nested
-   * OR" therefore changed the parent's AND, which is exactly the bug this
-   * fixes. The header control below is scoped to `g` and nothing else; the
-   * connectors between rows are now plain text, so two controls can never
-   * disagree about one group.
-   */
-  const showHeaderOp = nested || g.children.length > 1;
+/**
+ * The word between two rows.
+ *
+ * At the top level it is the only place that level's operator can be set, so
+ * it is a control. Inside a group the group's own header owns the operator and
+ * this is plain text — one control per group, so two of them can never
+ * disagree about one value.
+ */
+function Connector({ ctx, path, group, editable }: {
+  ctx: BuilderCtx; path: LogicPath; group: ConditionGroup; editable: boolean;
+}) {
+  if (!editable) {
+    return (
+      <div className="lb-join">
+        <span className="lb-join-label" data-testid="cond-join">{OPERATOR_LABEL[group.op]}</span>
+      </div>
+    );
+  }
+  return (
+    <div className="lb-join">
+      <select className="select lb-join-select" data-testid="lb-join-op"
+        aria-label="How these conditions combine"
+        value={group.op}
+        onChange={(e) => ctx.commit(
+          setOperatorAt(ctx.root, path, e.target.value as ConditionGroup["op"]),
+          "change operator",
+        )}>
+        <option value="and">AND</option>
+        <option value="or">OR</option>
+        <option value="not">NOT</option>
+      </select>
+      <span className="muted lb-join-hint">{OPERATOR_HINT[group.op]}</span>
+    </div>
+  );
+}
+
+/** A group: a bordered container with its own operator, holding its own list. */
+function GroupRow({ ctx, path, group }: {
+  ctx: BuilderCtx; path: LogicPath; group: ConditionGroup;
+}) {
+  const key = pathKey(path);
+  const n = ctx.numbers.get(key);
+  return (
+    <div className={`lb-group op-${group.op}${ctx.justGrouped === key ? " just-created" : ""}`}
+      data-testid="lb-group">
+      <div className="lb-group-head">
+        <span className="lb-group-badge">GROUP {n ?? ""}</span>
+        <select className="select lb-op-select" data-testid="group-op"
+          aria-label="How the conditions in this group combine"
+          value={group.op}
+          onChange={(e) => ctx.commit(
+            setOperatorAt(ctx.root, path, e.target.value as ConditionGroup["op"]),
+            "change group operator",
+          )}>
+          <option value="and">AND</option>
+          <option value="or">OR</option>
+          <option value="not">NOT</option>
+        </select>
+        <span className="muted lb-group-hint">{OPERATOR_HINT[group.op]}</span>
+        {/* the two buttons travel together: letting them wrap independently
+            dropped a lone × onto a second line in the 380px panel */}
+        <span className="lb-group-actions">
+          <button className="btn small" data-testid="lb-ungroup"
+            title="Remove this group, keep the conditions in it"
+            onClick={() => ctx.commit(ungroupAt(ctx.root, path), "ungroup")}>
+            ungroup
+          </button>
+          <button className="btn small danger" title="Delete this group and everything in it"
+            onClick={() => ctx.commit(removeAt(ctx.root, path), "delete group")}>×</button>
+        </span>
+      </div>
+      <div className="lb-group-body">
+        <ConditionList ctx={ctx} path={path} group={group} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The builder. `value` is the stored condition; what comes back out is the
+ * smallest tree with the same meaning, so a one-condition rule is stored as a
+ * rule and an emptied builder as an empty list rather than an inverted one.
+ */
+export function ConditionEditor({ value, onChange, perOption }: {
+  value: Condition; onChange(c: Condition): void; perOption?: boolean;
+}) {
+  const s = useStudio();
+  const root = editableCondition(value);
+  const [selected, setSelected] = React.useState<string[]>([]);
+  const [justGrouped, setJustGrouped] = React.useState<string | null>(null);
+  const [notice, setNotice] = React.useState<string | null>(null);
+
+  /** Every write goes through here: canonicalise, label for undo, save. */
+  const commit = (next: ConditionGroup, label: string) => {
+    s.labelNextEdit?.(label);
+    onChange(canonicalCondition(next, { allowEmpty: false })!);
+  };
+
+  const toggle = (path: LogicPath, on: boolean) => {
+    const key = pathKey(path);
+    setNotice(null);
+    setSelected((cur) => (on ? [...cur, key] : cur.filter((k) => k !== key)));
+  };
+
+  const selectedPaths: LogicPath[] = selected.map((k) => k.split(".").map(Number));
+  // grouping only makes sense among siblings; the engine refuses the rest
+  const sameLevel = selectedPaths.length > 0 &&
+    new Set(selectedPaths.map((p) => p.slice(0, -1).join("."))).size === 1;
+
+  const moveToGroup = () => {
+    const res = groupSelection(root, selectedPaths, "and");
+    if (!res.ok) { setNotice(res.reason ?? "That selection cannot be grouped"); return; }
+    commit(res.root, "move to new group");
+    setSelected([]);
+    const key = res.groupPath ? pathKey(res.groupPath) : null;
+    setJustGrouped(key);
+    setTimeout(() => setJustGrouped(null), 1800);
+  };
+
+  const duplicateSelected = () => {
+    // deepest-last, so earlier duplications do not shift later paths
+    const ordered = [...selectedPaths].sort((a, b) => b.join(".").localeCompare(a.join(".")));
+    let next = root;
+    for (const p of ordered) next = duplicateAt(next, p);
+    commit(next, "duplicate conditions");
+    setSelected([]);
+  };
+
+  const deleteSelected = () => {
+    const ordered = [...selectedPaths].sort((a, b) => b.join(".").localeCompare(a.join(".")));
+    let next = root;
+    for (const p of ordered) next = removeAt(next, p);
+    commit(next, "delete conditions");
+    setSelected([]);
+  };
+
+  const numbers = groupNumbers(root);
+  const ctx: BuilderCtx = { root, commit, selected, toggle, numbers, perOption, justGrouped };
+  const issues = validateLogicTree(root);
 
   return (
-    <div className={`cond-group op-${g.op}${nested ? " nested" : ""}`} data-testid="cond-group">
-      <div className="cond-lead">
-        {showHeaderOp ? (
-          <span className="cond-op-head">
-            <select className="select cond-op-select" data-testid="group-op"
-              value={g.op} aria-label={nested ? "How this bracketed group combines" : "How these conditions combine"}
-              onChange={(e) => setOp(e.target.value as any)}>
-              <option value="and">AND</option>
-              <option value="or">OR</option>
-              <option value="not">NOR</option>
-            </select>
-            <span className="muted" style={{ fontSize: 11.5 }}>
-              {g.op === "and" ? "every condition in this group must be true"
-                : g.op === "or" ? "any one condition in this group"
-                  : "none of these may be true"}
-              {nested ? " — this bracket only" : ""}
-            </span>
-          </span>
-        ) : (
-          "This is true when:"
-        )}
-      </div>
-      {g.children.map((child, i) => (
-        <React.Fragment key={i}>
-          {i > 0 && <Connector />}
-          {child.type === "rule" ? (
-            <RuleEditor rule={child} perOption={perOption}
-              onChange={(r) => onChange({ ...g, children: g.children.map((c, j) => (j === i ? r : c)) })}
-              onRemove={() => onChange({ ...g, children: g.children.filter((_, j) => j !== i) })} />
-          ) : (
-            <div className="cond-subgroup">
-              <ConditionEditor value={child} perOption={perOption} nested
-                onChange={(c) => onChange({ ...g, children: g.children.map((x, j) => (j === i ? c : x)) })} />
-              <button className="btn small danger" style={{ marginTop: -2, marginBottom: 6 }}
-                onClick={() => onChange({ ...g, children: g.children.filter((_, j) => j !== i) })}>
-                remove group
-              </button>
-            </div>
-          )}
-        </React.Fragment>
+    <div className="logic-builder" data-testid="logic-builder">
+      {selected.length > 0 && (
+        <div className="lb-actions" data-testid="lb-actions">
+          <span className="lb-count" data-testid="lb-count">{selected.length} selected</span>
+          <button className="btn small primary" data-testid="lb-move-to-group"
+            disabled={!sameLevel}
+            title={sameLevel
+              ? "Wrap the selected conditions in a group you can give its own AND / OR / NOT"
+              : "Select conditions that sit at the same level"}
+            onClick={moveToGroup}>
+            Move to new group
+          </button>
+          <button className="btn small" data-testid="lb-duplicate" onClick={duplicateSelected}>
+            Duplicate
+          </button>
+          <button className="btn small danger" data-testid="lb-delete" onClick={deleteSelected}>
+            Delete
+          </button>
+          <span className="grow" />
+          <button className="btn small" onClick={() => { setSelected([]); setNotice(null); }}>
+            Clear selection
+          </button>
+        </div>
+      )}
+      {notice && <div className="lb-notice" data-testid="lb-notice">{notice}</div>}
+
+      <ConditionList ctx={ctx} path={[]} group={root} />
+
+      {issues.filter((i) => i.level === "error").slice(0, 3).map((i, k) => (
+        <div key={k} className="lb-issue" data-testid="lb-issue">⛔ {i.message}</div>
       ))}
-      <div className="cond-add">
-        <button className="btn small" title="Add another condition"
-          onClick={() => onChange({ ...g, children: [...g.children, newRule(firstRef)] })}>
-          + condition
-        </button>
-        {/* A group has ONE operator, so mixing AND with OR means nesting. */}
-        <button className="btn small"
-          title={`Add a bracketed sub-group, for rules like A ${g.op === "and" ? "AND" : "OR"} (B ${g.op === "and" ? "OR" : "AND"} C)`}
-          onClick={() =>
-            onChange({
-              ...g,
-              children: [
-                ...g.children,
-                // the opposite operator — nesting an OR inside an OR is a no-op
-                { type: "group", op: g.op === "or" ? "and" : "or", children: [newRule(firstRef)] },
-              ],
-            })}>
-          + condition group ( … )
-        </button>
-      </div>
     </div>
   );
 }
@@ -358,8 +541,6 @@ export function OptionalCondition({ label, value, onChange, perOption, hint }: {
   label: string; value: Condition | undefined; onChange(c: Condition | undefined): void;
   perOption?: boolean; hint?: string;
 }) {
-  const s = useStudio();
-  const firstRef = s.def.questions[0]?.id ?? "";
   return (
     <div style={{ marginBottom: 12 }}>
       <div className="row" style={{ marginBottom: 4 }}>
@@ -368,8 +549,9 @@ export function OptionalCondition({ label, value, onChange, perOption, hint }: {
         {value ? (
           <button className="btn small danger" onClick={() => onChange(undefined)}>clear</button>
         ) : (
-          <button className="btn small" onClick={() =>
-            onChange({ type: "group", op: "and", children: [newRule(firstRef)] })}>
+          /* opens an EMPTY builder — no group, no operator, nothing to undo */
+          <button className="btn small" data-testid="optional-add"
+            onClick={() => onChange(newConditionGroup())}>
             + add
           </button>
         )}

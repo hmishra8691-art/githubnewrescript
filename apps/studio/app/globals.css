@@ -140,6 +140,96 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
   padding: 1px 7px; border-radius: 4px; background: var(--panel2); border: 1px solid var(--border);
 }
 
+/* ==========================================================================
+   Logic builder — conditions first, groups only when asked for.
+
+   The visual job here is to make one condition look like one line of plain
+   text, and to make a group look like a bracket around some of those lines.
+   Nothing signals "logic tree" until the programmer has built one.
+   ========================================================================== */
+.logic-builder { display: grid; gap: 2px; }
+
+/* the contextual bar, visible only while something is ticked */
+.lb-actions {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 6px 8px; margin-bottom: 4px; border-radius: 8px;
+  background: var(--tint); border: 1px solid var(--accent);
+}
+.lb-count { font-size: 12px; font-weight: 600; color: var(--accent); }
+.lb-notice {
+  font-size: 11.5px; padding: 5px 9px; border-radius: 6px; margin-bottom: 4px;
+  background: #fdf3e6; color: var(--amber); border: 1px solid rgba(164,92,7,.25);
+}
+.lb-issue {
+  font-size: 11.5px; padding: 5px 9px; border-radius: 6px; margin-top: 4px;
+  background: #fdeaea; color: var(--red); border: 1px solid rgba(208,43,43,.3);
+}
+
+.lb-empty {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 12px; border: 1px dashed var(--border); border-radius: 8px;
+  font-size: 12px; background: var(--panel);
+}
+
+.lb-list { display: grid; gap: 0; }
+.lb-add { margin: 5px 0 2px; }
+
+/* a row: the tick box, then the condition or the group it holds */
+.lb-row { display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: start; }
+.lb-row.selected > .lb-row-body > .cond-rule { border-color: var(--accent); background: var(--tint); }
+.lb-pick { display: flex; align-items: center; justify-content: center; padding-top: 13px; }
+.lb-pick input { cursor: pointer; }
+.lb-row-body { min-width: 0; }
+
+/* the connector between two rows: a control at the top level, a word inside a
+   group (whose header owns the operator) — one control per group, always */
+.lb-join { display: flex; align-items: center; gap: 8px; padding: 2px 0 2px 22px; }
+.lb-join-label {
+  font-size: 10.5px; font-weight: 800; letter-spacing: .09em; color: var(--accent2);
+  background: var(--panel2); border-radius: 4px; padding: 1px 7px;
+}
+.lb-join-select {
+  width: auto; flex: 0 0 auto; padding: 1px 6px; font-size: 11.5px; font-weight: 700;
+  color: var(--accent); border-color: var(--accent); background: #fff;
+}
+.lb-join-hint { font-size: 11px; }
+
+/* a group is a bracket, drawn as one */
+.lb-group {
+  border: 1px solid var(--border); border-left: 3px solid var(--accent2);
+  border-radius: 8px; margin: 4px 0; background: rgba(11,106,168,.035);
+}
+.lb-group.op-or { border-left-color: var(--amber); background: rgba(164,92,7,.04); }
+.lb-group.op-not { border-left-color: var(--red); background: rgba(208,43,43,.04); }
+.lb-group-head {
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+  padding: 6px 9px; border-bottom: 1px solid var(--border);
+}
+.lb-group-badge {
+  font-size: 10px; font-weight: 800; letter-spacing: .08em; color: #fff;
+  background: var(--accent2); border-radius: 4px; padding: 2px 7px; white-space: nowrap;
+}
+.lb-group.op-or .lb-group-badge { background: var(--amber); }
+.lb-group.op-not .lb-group-badge { background: var(--red); }
+.lb-op-select {
+  width: auto; flex: 0 0 auto; padding: 2px 7px; font-size: 12px; font-weight: 700;
+}
+/* the hint shrinks and ellipses; the buttons never get pushed to a new line */
+.lb-group-hint {
+  font-size: 11px; flex: 1 1 30px; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.lb-group-actions { display: flex; gap: 5px; flex: 0 0 auto; margin-left: auto; }
+.lb-group-body { padding: 4px 9px 6px; }
+@media (max-width: 1500px) { .lb-group-hint { display: none; } }
+
+/* a group that has just been created gets pointed at, once */
+@keyframes lb-pulse {
+  0%   { box-shadow: 0 0 0 3px rgba(37,99,235,.35); }
+  100% { box-shadow: 0 0 0 3px rgba(37,99,235,0); }
+}
+.lb-group.just-created { animation: lb-pulse 1.6s ease-out; }
+
 .cond-rule {
   display: grid; grid-template-columns: minmax(0, 1fr) auto;
   gap: 4px 6px; align-items: start; margin: 4px 0;

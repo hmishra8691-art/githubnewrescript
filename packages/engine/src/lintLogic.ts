@@ -79,14 +79,29 @@ interface Ctx {
   push(issue: Omit<LogicIssue, "questionId" | "questionCode">): void;
 }
 
-function lintCondition(c: Condition | undefined | null, path: string, ctx: Ctx): void {
+function lintCondition(
+  c: Condition | undefined | null,
+  path: string,
+  ctx: Ctx,
+  depth = 0,
+): void {
   if (!c) return;
   if (c.type === "group") {
     if (!c.children || c.children.length === 0) {
-      ctx.push({ level: "warning", path, message: "Empty condition group — it always passes." });
+      /*
+       * An empty list at the TOP of a logic tree is the normal starting state
+       * of the builder — conditions are added first, and until then there is
+       * simply no constraint. Reporting it made "1 logic note" appear the
+       * moment a programmer opened the panel, which is the noise this counter
+       * exists to avoid. A NESTED empty group is different: inside an OR it
+       * would make the whole bracket pass, so it stays an issue.
+       */
+      if (depth > 0) {
+        ctx.push({ level: "warning", path, message: "Empty condition group — it always passes." });
+      }
       return;
     }
-    c.children.forEach((child, i) => lintCondition(child, `${path}.${c.op}[${i}]`, ctx));
+    c.children.forEach((child, i) => lintCondition(child, `${path}.${c.op}[${i}]`, ctx, depth + 1));
     return;
   }
 

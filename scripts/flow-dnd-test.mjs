@@ -339,7 +339,7 @@ await page.waitForSelector('[data-testid="logic-check"]');
 await page.click('button:has-text("+ display rule")');
 await page.waitForTimeout(300);
 // a new rule starts as an empty group; one click gives it a condition row
-await page.click('button:has-text("+ condition") >> nth=0');
+await page.click('[data-testid="lb-add-condition"] >> nth=0');
 await page.waitForSelector("select.ref-select");
 const refTexts = await page.$$eval("select.ref-select option", (els) => els.map((e) => e.textContent.trim()));
 assert.ok(refTexts.some((t) => /customer_score \(integer\)/.test(t)),

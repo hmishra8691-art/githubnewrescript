@@ -288,33 +288,40 @@ await studio.keyboard.type("Layout check");
 await studio.waitForTimeout(350);
 
 await studio.click('.rightpanel >> text=+ skip rule');
-await studio.waitForSelector(".rightpanel .cond-group");
-await studio.click('.rightpanel .cond-add >> text=+ condition');
+// conditions first: the builder opens empty, so build two and group them
+await studio.waitForSelector('.rightpanel [data-testid="logic-builder"]');
+await studio.click('.rightpanel [data-testid="lb-add-condition"]');
+await studio.waitForTimeout(200);
+await studio.click('.rightpanel [data-testid="lb-add-condition"] >> nth=0');
+await studio.waitForTimeout(250);
+const picks = await studio.$$('.rightpanel .lb-list.root > .lb-row > .lb-pick > input');
+await picks[0].click();
+await picks[1].click();
 await studio.waitForTimeout(150);
-await studio.click('.rightpanel .cond-add >> text=+ condition group ( … )');
-await studio.waitForTimeout(150);
+await studio.click('.rightpanel [data-testid="lb-move-to-group"]');
+await studio.waitForSelector('.rightpanel [data-testid="lb-group"]');
+await studio.waitForTimeout(200);
 const targetSel = await studio.$$('.rightpanel .skip-target select');
 await targetSel[0].selectOption("url");
 await studio.waitForTimeout(300);
 
 /*
- * The connector between rules is now a LABEL, and the operator control lives
- * in each group's own header. Two controls for one operator is how "change the
- * nested OR" ended up changing the parent AND: a bracketed group holding a
- * single condition showed no control of its own, so the nearest dropdown
- * belonged to its parent.
+ * Each group owns exactly one operator control, in its own header. That is
+ * what fixed "change the nested OR and the parent AND changes": a bracketed
+ * group holding a single condition used to show no control of its own, so the
+ * nearest dropdown belonged to its parent.
+ *
+ * The top level has no header — it is a list, not a bracket — so its operator
+ * is the connector between the rows, and the connectors inside a group are
+ * plain words that mirror the header.
  */
-const joinLabels = await studio.$$eval(".rightpanel .cond-group > .cond-join [data-testid='cond-join']",
-  (els) => els.map((e) => e.textContent.trim()));
-assert.ok(joinLabels.length >= 1, `the connector still reads between the rules: ${joinLabels}`);
-assert.equal(await studio.$$eval(".rightpanel .cond-join select", (els) => els.length), 0,
-  "and it is not a second control for the same operator");
-
 const groupOps = await studio.$$eval(".rightpanel [data-testid='group-op']", (els) => els.length);
-const groups = await studio.$$eval(".rightpanel .cond-group", (els) => els.length);
+const groups = await studio.$$eval(".rightpanel .lb-group", (els) => els.length);
 assert.equal(groupOps, groups,
   `every group has exactly one operator control of its own (${groupOps} controls, ${groups} groups)`);
-console.log(`✔ AND/OR reads between the conditions, and each of the ${groups} groups owns its operator`);
+const insideJoins = await studio.$$eval(".rightpanel .lb-group .lb-join select", (els) => els.length);
+assert.equal(insideJoins, 0, "a group's connectors are words, not a second control for its operator");
+console.log(`✔ each of the ${groups} groups owns its operator, and no connector duplicates it`);
 
 // nothing may overflow its box or escape the panel
 const layout = await studio.evaluate(() => {
@@ -322,7 +329,7 @@ const layout = await studio.evaluate(() => {
   const r = root.getBoundingClientRect();
   const clipped = [];
   const spill = [];
-  for (const el of root.querySelectorAll("select, button, input, .cond-rule, .cond-add")) {
+  for (const el of root.querySelectorAll("select, button, input, .cond-rule, .lb-row, .lb-group-head, .lb-actions")) {
     const b = el.getBoundingClientRect();
     if (b.width === 0) continue;
     if (el.scrollWidth > el.clientWidth + 2 && !el.matches("textarea")) {

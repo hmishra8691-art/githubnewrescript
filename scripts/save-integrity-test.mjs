@@ -97,6 +97,10 @@ const saveState = (page) => page.$eval('[data-testid="save-state"]', (e) => e.te
   const addBtn = await page.$('.rightpanel >> text=+ add');
   if (addBtn) {
     await addBtn.click();
+    // the builder opens empty now, so a condition has to be added before there
+    // is any logic to reach the server
+    await page.waitForSelector('[data-testid="logic-builder"]');
+    await page.click('[data-testid="lb-add-condition"]');
     await page.waitForSelector(".cond-rule");
     await settle(page);
     const q2 = server.draft.questions[1];
@@ -187,26 +191,38 @@ const saveState = (page) => page.$eval('[data-testid="save-state"]', (e) => e.te
   const add = await page.$('.rightpanel >> text=+ add');
   assert.ok(add, "display logic can be added");
   await add.click();
-  await page.waitForSelector(".cond-rule");
+  await page.waitForSelector('[data-testid="logic-builder"]');
 
-  // add a second condition, so the parent group has an operator of its own
-  await page.click('.rightpanel >> text=+ condition');
-  await page.waitForTimeout(250);
-  // then a nested group
-  await page.click('.rightpanel >> text=+ condition group');
-  await page.waitForTimeout(350);
+  /*
+   * Build three conditions, then group two of them — the conditions-first
+   * workflow. That gives a top level with its own operator and one bracket
+   * with its own, which is what the independence check needs.
+   */
+  for (let i = 0; i < 3; i++) {
+    await page.click('[data-testid="lb-add-condition"] >> nth=0');
+    await page.waitForTimeout(200);
+  }
+  const boxes = await page.$$(".lb-list.root > .lb-row > .lb-pick > input");
+  assert.equal(boxes.length, 3, "three conditions in a flat list");
+  await boxes[0].click();
+  await boxes[1].click();
+  await page.waitForTimeout(150);
+  await page.click('[data-testid="lb-move-to-group"]');
+  await page.waitForSelector('[data-testid="lb-group"]');
+  await settle(page);
 
-  const ops = await page.$$('[data-testid="group-op"]');
-  assert.ok(ops.length >= 2, `every group shows its own operator control: ${ops.length}`);
-  const parentBefore = await ops[0].inputValue();
+  // the top level's operator is the connector; the bracket's is in its header
+  const rootOp = await page.$('[data-testid="lb-join-op"]');
+  assert.ok(rootOp, "the top level has an operator control of its own");
+  const parentBefore = await rootOp.inputValue();
+  const nested = await page.$('[data-testid="group-op"]');
+  const nestedBefore = await nested.inputValue();
 
   // change the NESTED group's operator
-  const nested = ops[ops.length - 1];
-  const nestedBefore = await nested.inputValue();
   await nested.selectOption(nestedBefore === "and" ? "or" : "and");
   await settle(page);
 
-  const parentAfter = await (await page.$$('[data-testid="group-op"]'))[0].inputValue();
+  const parentAfter = await (await page.$('[data-testid="lb-join-op"]')).inputValue();
   assert.equal(parentAfter, parentBefore,
     `the parent operator is untouched (${parentBefore} → ${parentAfter})`);
   console.log(`✔ changing the nested operator left the parent as ${parentAfter}`);
@@ -218,7 +234,8 @@ const saveState = (page) => page.$eval('[data-testid="save-state"]', (e) => e.te
   const child = logic.children.find((c) => c.type === "group");
   assert.ok(child, "the nested group is stored as a nested group, not flattened");
   assert.notEqual(child.op, nestedBefore, "and its operator is the one that changed");
-  console.log(`✔ stored tree: ${logic.op.toUpperCase()} [ rule, ${child.op.toUpperCase()} [...] ] — nesting preserved`);
+  assert.equal(child.children.length, 2, "the bracket holds the two conditions that were selected");
+  console.log(`✔ stored tree: ${logic.op.toUpperCase()} [ ${child.op.toUpperCase()} [2], rule ] — nesting preserved`);
 
   await page.close();
 }

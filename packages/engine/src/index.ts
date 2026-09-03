@@ -1,6 +1,7 @@
 export * from "./state.js";
 export * from "./random.js";
 export * from "./evaluate.js";
+export * from "./logicTree.js";
 export * from "./flatten.js";
 export * from "./calc.js";
 export * from "./piping.js";
