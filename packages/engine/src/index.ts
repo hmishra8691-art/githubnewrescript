@@ -29,3 +29,4 @@ export * from "./fields.js";
 export * from "./answers.js";
 export * from "./html.js";
 export * from "./blocks.js";
+export * from "./droppedFields.js";

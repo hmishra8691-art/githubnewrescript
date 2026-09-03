@@ -193,14 +193,28 @@ export function StudioProvider({
           setRevision(d.revision);
         }
         if (d.unguarded) setUnguarded(true);
-        if (d.droppedFields) {
-          // the server's schema did not recognise part of what we sent, so it
-          // was not stored — better said than silently dropped
+        /*
+         * The server's schema did not recognise part of what we sent, so that
+         * part was not stored — better said than silently dropped.
+         *
+         * Newer servers send the list of paths; older ones sent `true`. An
+         * empty list never reaches here (the server omits the key), because an
+         * empty array is truthy and used to turn every lossless save into a
+         * reported failure.
+         */
+        const lost = Array.isArray(d.droppedFields)
+          ? d.droppedFields
+          : d.droppedFields === true
+            ? []
+            : null;
+        if (lost) {
           setSaveState({
             kind: "error",
             message:
-              "Saved, but some settings were not recognised by the server and were NOT stored. " +
-              "The deployed build is older than this editor — reload the page.",
+              "Saved, but the server did not recognise " +
+              (lost.length ? lost.join(", ") : "some settings") +
+              ", so that part was NOT stored. This editor is newer than the " +
+              "deployed build — reload the page to match it.",
           });
           return false;
         }

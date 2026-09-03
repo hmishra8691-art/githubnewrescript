@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
+import { droppedFieldPaths } from "@rescript/engine";
 
 export const dynamic = "force-dynamic";
 
@@ -59,8 +60,16 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
    * than this server, storing the parsed copy would silently drop the fields
    * the server has not learned about yet — a save that reports success while
    * losing data. Say so instead.
+   *
+   * This asks the question in one direction only — did anything we were sent
+   * fail to survive — because comparing the two JSON strings flags a default
+   * the schema ADDED (an editor one build behind is missing exactly those
+   * keys) and flags a key the editor's spread put in a different position.
+   * Both were reported as data loss while the data was being stored fine.
+   * See droppedFieldPaths.
    */
-  const droppedFields = JSON.stringify(parsed.data) !== JSON.stringify(body.definition);
+  const dropped = droppedFieldPaths(body.definition, parsed.data);
+  const droppedFields = dropped.length > 0 ? dropped : undefined;
 
   const db = supabaseAdmin();
   const baseRevision = Number.isFinite(body?.baseRevision) ? Number(body.baseRevision) : null;
