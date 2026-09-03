@@ -8,6 +8,7 @@ import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
 import { checkQuotas, type QuotaCounts } from "./quotas.js";
 import { applyEmbeddedField, type EmbeddedField } from "./embedded.js";
+import { prefillQuestions } from "./setExpression.js";
 import { resolveUrlTemplate } from "./redirect.js";
 
 /**
@@ -359,6 +360,14 @@ export function advance(
       const visible = visibleQuestions(def, s, state, quotaCounts);
       if (visible.length === 0) { idx++; continue; }
       state.stepIndex = idx;
+      /*
+       * Auto-selection runs here — once per navigation, on the questions the
+       * respondent is about to see, from state that already exists. Doing it
+       * during render would recompute on every keystroke and fight the
+       * respondent for control of the answer.
+       */
+      prefillQuestions(visible, { def, state, loop: s.loop, quotaCounts },
+        (q) => answerKey(q.id, s.loop));
       return { steps, stepIndex: idx, done: false, triggeredSkips, quotaFull: [] };
     }
     if (s.kind === "embedded_data") {

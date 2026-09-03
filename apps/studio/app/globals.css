@@ -141,6 +141,77 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 }
 
 /* ==========================================================================
+   Masking builder — dynamic option sets.
+
+   One row per set, an operator in each gap, and brackets drawn as indented
+   cards. The shape on screen is the shape of the stored tree.
+   ========================================================================== */
+.masking-builder { display: grid; gap: 5px; }
+.mb-empty {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 9px 11px; border: 1px dashed var(--border); border-radius: 8px;
+  font-size: 12px; background: var(--panel);
+}
+.mb-chain { display: grid; gap: 2px; }
+.mb-chain.nested { padding-left: 8px; }
+.mb-row {
+  display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
+  padding: 6px 8px; border: 1px solid var(--border); border-radius: 7px;
+  background: var(--panel);
+}
+.mb-row .mb-q { flex: 1 1 120px; min-width: 0; }
+.mb-row .mb-sel { flex: 0 1 118px; min-width: 0; }
+.mb-row .select { padding: 4px 7px; font-size: 12.5px; }
+.mb-kind, .mb-not {
+  font-size: 10.5px; font-weight: 800; letter-spacing: .06em;
+  color: var(--accent2); flex: none;
+}
+.mb-not { color: var(--red); }
+
+.mb-join { display: flex; align-items: center; gap: 7px; padding: 2px 0 2px 4px; }
+.mb-op {
+  width: auto; flex: 0 0 auto; padding: 1px 6px; font-size: 11.5px; font-weight: 700;
+  color: var(--accent); border-color: var(--accent); background: #fff;
+}
+.mb-op-hint { font-size: 10.5px; }
+
+.mb-bracket {
+  border: 1px solid var(--border); border-left: 3px solid var(--accent2);
+  border-radius: 8px; background: rgba(11,106,168,.035); margin: 3px 0;
+}
+.mb-bracket-head {
+  display: flex; align-items: center; gap: 7px; padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.mb-badge {
+  font-size: 10px; font-weight: 800; letter-spacing: .07em; color: #fff;
+  background: var(--accent2); border-radius: 4px; padding: 1px 6px;
+}
+
+.mb-convert {
+  font-size: 11.5px; padding: 6px 9px; border-radius: 7px; display: flex;
+  align-items: center; gap: 8px; flex-wrap: wrap;
+  background: var(--tint); border: 1px solid var(--accent); color: var(--text);
+}
+.mb-convert code { font-size: 11px; }
+
+.mb-expr { display: grid; gap: 4px; }
+.mb-picker { border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; background: var(--panel2); }
+.mb-picker-list { display: flex; flex-wrap: wrap; gap: 4px; max-height: 130px; overflow-y: auto; }
+.mb-chip {
+  display: inline-flex; align-items: baseline; gap: 5px; cursor: grab;
+  font: inherit; font-size: 11px; padding: 2px 7px; border-radius: 5px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text);
+}
+.mb-chip:hover { border-color: var(--accent); }
+.mb-chip:active { cursor: grabbing; }
+.mb-chip .mono { color: var(--accent2); font-weight: 600; }
+.mb-chip .muted { font-size: 10.5px; }
+
+.mb-punch-card { background: var(--panel2); }
+.mb-map { margin-top: 4px; }
+
+/* ==========================================================================
    Expression editor — the written half of the logic builder.
 
    Two panes over one canonical tree. The mode bar is deliberately small: it
@@ -170,11 +241,15 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .xe-chip:hover { border-color: var(--accent); color: var(--accent); background: var(--tint); }
 .xe-chip.wide { font-weight: 600; letter-spacing: .02em; }
 
-.xe-input {
+/* `textarea.code` (0,1,1) outranks a bare `.xe-input` (0,1,0), so these were
+   being served its 160px min-height and `white-space: pre` — a tall box with
+   a long line scrolled off the right. Matching the element raises the
+   specificity to 0,1,1 and the later rule wins. */
+textarea.xe-input {
   min-height: 62px; font-size: 12.5px; line-height: 1.55; white-space: pre-wrap;
-  tab-size: 2;
+  tab-size: 2; resize: vertical;
 }
-.xe-input:focus { border-color: var(--accent); }
+textarea.xe-input:focus { border-color: var(--accent); }
 
 .xe-suggest { display: flex; flex-wrap: wrap; gap: 4px; }
 .xe-sugg {

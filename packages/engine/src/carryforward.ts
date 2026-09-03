@@ -15,6 +15,7 @@ import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition, withOption, withLegacyOptionLoop } from "./evaluate.js";
 import { getQuestion } from "./state.js";
 import { resolvePiping, registerDisplayedOptionsResolver } from "./piping.js";
+import { evaluateSetExpr } from "./setExpression.js";
 import { seededShuffle, subSeed, mulberry32 } from "./random.js";
 
 /**
@@ -67,7 +68,7 @@ type Which = "selected" | "not_selected" | "displayed" | "answered_rows" | "all"
  */
 const resolving = new Set<string>();
 
-function codesFrom(
+export function codesFrom(
   sourceQuestionId: string,
   which: Which,
   ctx: EvalContext,
@@ -682,6 +683,73 @@ function pinnedCodes<T extends ItemWithLogic>(
   return out;
 }
 
+/**
+ * Stage 4b — the mask (reqs §1–§13, §29–§30).
+ *
+ * The set expression is evaluated against the current answers, and the result
+ * is applied according to the mask's action. Two rules make it safe to use:
+ *
+ *   • options that are flagged Always Show, or that are special ("Other",
+ *     "None of the above", "Don't know", "Prefer not to say"), survive a mask
+ *     that returns nothing. Without that, a respondent can be shown a question
+ *     with no answerable option at all — which is how a survey dead-ends.
+ *   • the mask never invents options. It selects from the list this question
+ *     already has, so an answer can never hold a code the question does not
+ *     define, and every export stays readable.
+ */
+function applyMask<T extends ItemWithLogic & { flags?: string[]; code: string | number }>(
+  q: Question,
+  items: T[],
+  ctx: EvalContext,
+  rec: Recorder | null,
+): T[] {
+  const mask = q.mask;
+  if (!mask) return items;
+  if (mask.when && !evaluateCondition(mask.when, ctx)) return items;
+
+  const before = items;
+  const selected = new Set(
+    evaluateSetExpr(mask.expr, ctx, { target: q }).map((c: string | number) => String(c)),
+  );
+
+  /** Kept whatever the mask says: explicit Always Show, or a special option. */
+  const protectedItem = (i: T) =>
+    mask.keepAlwaysShow &&
+    (isAlwaysShow(i) ||
+      !!i.flags?.some((f) =>
+        ["other_specify", "none_of_above", "dont_know", "refused"].includes(f)));
+
+  let out = items;
+  switch (mask.action) {
+    case "display":
+    case "display_and_preselect":
+      out = items.filter((i) => selected.has(String(i.code)) || protectedItem(i));
+      break;
+    case "remove":
+      out = items.filter((i) => !selected.has(String(i.code)) || protectedItem(i));
+      break;
+    case "preselect":
+    case "disable":
+      // the list is untouched; the runtime reads the set for ticking/disabling
+      out = items;
+      break;
+  }
+
+  record(
+    rec,
+    "mask",
+    mask.action === "remove" ? "Mask (remove)" : "Mask",
+    before,
+    out,
+    new Map(
+      before
+        .filter((i) => !out.includes(i))
+        .map((i) => [String(i.code), "removed by the mask"]),
+    ),
+  );
+  return out;
+}
+
 /** "Always Show" options may be shuffled, but never dropped by "show only N". */
 function alwaysShowCodes<T extends ItemWithLogic>(items: T[]): Set<string> {
   return new Set(items.filter(isAlwaysShow).map((i) => String(i.code)));
@@ -806,6 +874,11 @@ function runOptions(
 
   // 4 — previous-answer list logic
   options = applyListLogic(q.listLogic ?? [], options, ctx, rec);
+
+  // 4b — the mask: a nested set expression over other questions' answers
+  if (q.mask) {
+    options = applyMask(q, options, ctx, rec);
+  }
 
   // 5 — reusable list operations
   if (q.optionPipeline?.length) {

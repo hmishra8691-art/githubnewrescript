@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { Condition } from "./conditions.js";
 import { ListOperation, OptionLogic } from "./optionLogic.js";
+import { OptionMask, PunchRule } from "./setExpression.js";
 
 /**
  * Question model.
@@ -337,6 +338,22 @@ export const Question = z.object({
    * until a programmer configures it.
    */
   optionPipeline: z.array(ListOperation).default([]),
+  /**
+   * Visual masking: a NESTED set expression over other questions' answers,
+   * plus what to do with the result (reqs §1–§13).
+   *
+   * The pipeline above is a sequence, so it cannot express
+   * `A UNION (B INTERSECTION C)` — every step applies to what the last step
+   * produced. A mask is a tree, so brackets have somewhere to live. It runs
+   * BEFORE the pipeline, and both are absent on every existing question.
+   */
+  mask: OptionMask.optional(),
+  /**
+   * Auto-selection: tick options in THIS question from other answers
+   * (reqs §14–§19). The rule lives on the question being filled, so it only
+   * ever reads state that already exists.
+   */
+  punches: z.array(PunchRule).default([]),
 
   displayLogic: Condition.optional(),
   skipLogic: z.array(SkipRule).default([]),

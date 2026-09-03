@@ -5,6 +5,7 @@ import { validateExpression, lintPipingTokens, lintQuestionLogic, listOperationS
 import { resolveVariant, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript/schema";
 import { useStudio, selectedQuestion, uid } from "./store";
 import { OptionalCondition, ConditionEditor } from "./ConditionBuilder";
+import { MaskingBuilder } from "./MaskingBuilder";
 
 /** Context-aware validation (req §6/§19): only offer rules that make sense
  *  for the question type. */
@@ -599,6 +600,9 @@ export function PropertiesPanel() {
       </>)}
 
       {hasCap("list_logic") && (<>
+      <h3 className="sec">Masking (dynamic option sets)</h3>
+      <MaskingBuilder q={q} patch={patch} />
+
       <h3 className="sec">List logic (from previous questions)</h3>
       <p className="muted" style={{ fontSize: 11, marginTop: -2 }}>
         Include / exclude / prioritize this question&apos;s options based on what an earlier

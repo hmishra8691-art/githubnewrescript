@@ -5,6 +5,7 @@ import type {
   Question,
   SurveyDefinition,
 } from "@rescript/schema";
+import { setExprSources } from "./setExpression.js";
 import { getQuestionByCodeOrVar } from "./state.js";
 import { pipeTokensIn } from "./pipingTokens.js";
 
@@ -126,6 +127,20 @@ export function questionDependencies(def: SurveyDefinition, q: Question): Set<st
     conditionRefs(def, r.when, into);
   }
   listOpRefs(def, q.optionPipeline, into);
+
+  /*
+   * A mask and a punch rule both READ other questions, so they are edges in
+   * the same graph — which is what makes `detectLogicCycles` refuse
+   * "Q5 masks Q6, Q6 masks Q5" without a second cycle detector (req §31).
+   */
+  if (q.mask) {
+    for (const id of setExprSources(q.mask.expr)) into.add(id);
+    conditionRefs(def, q.mask.when, into);
+  }
+  for (const rule of q.punches ?? []) {
+    for (const id of setExprSources(rule.source)) into.add(id);
+    conditionRefs(def, rule.when, into);
+  }
 
   for (const o of q.options ?? []) {
     conditionRefs(def, o.visibleIf, into);

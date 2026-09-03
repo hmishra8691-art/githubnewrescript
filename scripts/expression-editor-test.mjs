@@ -241,12 +241,23 @@ err = await page.textContent('[data-testid="xe-error"]');
 assert.match(err, /cannot start with AND/);
 console.log("✔ §9: malformed expressions are refused, with the reason, and change nothing");
 
-// a mixed AND/OR without brackets parses but says so
+/*
+ * §16: a mixed AND/OR line has a documented precedence — AND binds tighter —
+ * and the editor does something better than warn about it: the moment the
+ * text parses, the pane re-prints from the tree, so the ambiguous line becomes
+ * the explicit one. (The parser's warning is still there for a caller that
+ * does not re-print; an engine test covers it.)
+ */
 await openExpression();
 await setExpression("Q1.brandA OR Q1.brandB AND Q2.R1");
-const warn = await page.textContent('[data-testid="xe-warning"]');
-assert.match(warn, /AND binds tighter/, `precedence warning: ${warn}`);
-console.log("✔ §16: mixing AND and OR without brackets is accepted but flagged");
+const tidied = await page.inputValue('[data-testid="xe-input"]');
+assert.equal(tidied.replace(/\s+/g, " ").trim(), "Q1.brandA OR (Q1.brandB AND Q2.R1)",
+  `the ambiguous line was made explicit: ${tidied}`);
+def = await readDef();
+logic = displayLogicOf(def);
+assert.equal(logic.op, "or", "OR is the outermost, as the precedence says");
+assert.equal(logic.children[1].op, "and", "and the AND bound tighter");
+console.log("✔ §16: AND binds tighter, and the editor re-prints the line with the brackets in");
 
 /* ================================================ §22: save / reload the tree */
 

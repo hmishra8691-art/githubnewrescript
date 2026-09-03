@@ -213,6 +213,8 @@ export function parseLogicExpression(
   if (tokens.length === 0) return { errors: [], warnings };
 
   let at = 0;
+  /** Groups that came from brackets the programmer typed, not from precedence. */
+  const bracketed = new WeakSet<object>();
   const peek = (k = 0): Tok | undefined => tokens[at + k];
   const isWord = (t: Tok | undefined, w: string) =>
     !!t && t.kind === "ident" && t.text.toLowerCase() === w;
@@ -331,7 +333,14 @@ export function parseLogicExpression(
       at += 1;
       // an explicit bracket is kept as a group, so the shape the programmer
       // wrote is the shape that gets stored (req §4, §16)
-      return inner.type === "group" ? inner : { type: "group", op: "and", children: [inner] };
+      const group: Condition = inner.type === "group"
+        ? inner
+        : { type: "group", op: "and", children: [inner] };
+      // remember that THIS group came from brackets the programmer typed, so
+      // the precedence warning below can tell it apart from one precedence
+      // built on its own
+      bracketed.add(group);
+      return group;
     }
     if (t!.kind === "punct") fail(`Unexpected “${t!.text}”`, t!.pos);
     if (isWord(t, "and") || isWord(t, "or")) {
@@ -388,16 +397,24 @@ export function parseLogicExpression(
 
   const parseOr = (): Condition => {
     const parts = [parseAnd()];
-    let sawMix = false;
     while (isWord(peek(), "or")) {
       at += 1;
       if (!peek()) fail("Expression ends with OR — expected another condition");
-      const next = parseAnd();
-      if (next.type === "group" && next.op === "and") sawMix = true;
-      parts.push(next);
+      parts.push(parseAnd());
     }
     if (parts.length === 1) return parts[0];
-    if (sawMix || (parts[0].type === "group" && parts[0].op === "and")) {
+    /*
+     * Warn only when precedence did the grouping.
+     *
+     * `A OR B AND C` is the ambiguous line worth flagging. A fully bracketed
+     * one — `(A AND B) OR (C AND D)`, or anything this module printed — is not
+     * ambiguous at all, and warning about it told programmers their correct
+     * expression looked wrong.
+     */
+    const implicitAnd = parts.some(
+      (p) => p.type === "group" && p.op === "and" && !bracketed.has(p),
+    );
+    if (implicitAnd) {
       warnings.push({
         message: "AND and OR are mixed without parentheses — AND binds tighter. Add brackets to be explicit.",
       });
