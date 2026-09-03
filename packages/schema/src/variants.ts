@@ -916,15 +916,78 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     baseType: "single_select", renderer: "carousel", responseModel: "single_choice",
     capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
   }),
-  ...planned(F.carousel, [
-    ["Carousel + Choice / Slider / Text", "Judge each carousel item."],
-    ["Comparison Carousel", "Browse and compare."],
-  ]),
-  ...planned(F.card, [
-    ["Profile / Product / Statement Cards", "Rich selectable cards."],
-    ["Expandable / Flip Cards", "Cards revealing detail."],
-    ["Sortable / Swipeable Cards", "Gesture-driven card decks."],
-  ]),
+  /**
+   * Judge each carousel item. One variant, three judgement inputs: the base
+   * type switches between matrix_single (a choice scale), matrix_numeric (a
+   * slider) and matrix_text (a comment) from the editor's "Judgement" select,
+   * so all three store the same `{ rowCode: value }` per-row shape and the
+   * variant id never changes underneath a programmed survey.
+   */
+  stable(F.carousel, "judge", "Carousel + Choice / Slider / Text", "Judge each carousel item — a choice scale, a slider or a comment per card.", {
+    baseType: "matrix_single", renderer: "carouseljudge", responseModel: "per_row",
+    capabilities: ["rows", "options", "randomization", "carry_forward", "numeric_bounds", "scale_labels"],
+    validations: ["required"],
+    defaults: {
+      options: [
+        { code: 1, label: "Dislike" },
+        { code: 2, label: "Neutral" },
+        { code: 3, label: "Like" },
+      ],
+      rows: [
+        { code: 1, label: "Item one", meta: { description: "Describe this item in the Rows section." } },
+        { code: 2, label: "Item two", meta: { description: "Each row is one card in the carousel." } },
+        { code: 3, label: "Item three", meta: { description: "Add an image per card if you have one." } },
+      ],
+      settings: { minValue: 0, maxValue: 10, step: 1 },
+      instruction: "Browse the items with ‹ › and judge each one.",
+    },
+  }),
+  stable(F.carousel, "comparison", "Comparison Carousel", "Browse and compare — two items side by side per slide, choose one.", {
+    baseType: "single_select", renderer: "comparecarousel", responseModel: "single_choice",
+    capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
+    defaults: {
+      options: [
+        { code: 1, label: "Item A", meta: { description: "What makes this one different." } },
+        { code: 2, label: "Item B", meta: { description: "What makes this one different." } },
+        { code: 3, label: "Item C", meta: { description: "What makes this one different." } },
+      ],
+      instruction: "Two at a time — browse the pairs with ‹ › and choose one.",
+    },
+  }),
+  stable(F.card, "rich", "Profile / Product / Statement Cards", "Rich selectable cards — image, title, description, price, badge.", {
+    baseType: "single_select", renderer: "richcards", responseModel: "single_choice",
+    capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
+    defaults: { settings: { columnsLayout: 3 } },
+  }),
+  stable(F.card, "flip", "Expandable / Flip Cards", "Cards revealing detail — flip a card for the full description, then select it.", {
+    baseType: "single_select", renderer: "flipcards", responseModel: "single_choice",
+    capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
+    defaults: {
+      options: [
+        { code: 1, label: "Option one", meta: { description: "The detail a respondent sees after flipping this card.", icon: "①" } },
+        { code: 2, label: "Option two", meta: { description: "The detail a respondent sees after flipping this card.", icon: "②" } },
+        { code: 3, label: "Option three", meta: { description: "The detail a respondent sees after flipping this card.", icon: "③" } },
+      ],
+      instruction: "Open a card for details, then select it.",
+    },
+  }),
+  stable(F.card, "sortable", "Sortable / Swipeable Cards", "Gesture-driven card decks — swipe or tap each card into one of the piles.", {
+    baseType: "matrix_single", renderer: "cardsort", responseModel: "per_row",
+    capabilities: ["rows", "options", "randomization", "carry_forward"],
+    validations: ["required"],
+    defaults: {
+      options: [
+        { code: 1, label: "Not for me" },
+        { code: 2, label: "Interested" },
+      ],
+      rows: [
+        { code: 1, label: "Card one" },
+        { code: 2, label: "Card two" },
+        { code: 3, label: "Card three" },
+      ],
+      instruction: "Swipe a card left or right, drag it onto a pile, or tap one.",
+    },
+  }),
   stable(F.comparison, "side_by_side", "Side-by-Side Comparison", "Large option cards/images side by side — pick one.", {
     baseType: "single_select", renderer: "compare", responseModel: "single_choice",
     capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
@@ -945,9 +1008,30 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       instruction: "Pick the one you prefer in each pair.",
     },
   }),
-  ...planned(F.comparison, [
-    ["Multi-Item / Attribute Comparison", "Compare across attributes."],
-  ]),
+  /**
+   * A comparison table: the options are the columns (items), `rows` are the
+   * attributes compared, and each cell's text lives in
+   * `option.meta.attributes[rowCode]`. The answer is still one code — the
+   * item chosen — so logic, exports and the dictionary see an ordinary
+   * single select.
+   */
+  stable(F.comparison, "attributes", "Multi-Item / Attribute Comparison", "Compare across attributes in a table, then choose an item.", {
+    baseType: "single_select", renderer: "attrcompare", responseModel: "single_choice",
+    capabilities: ["options", "rows", "images", "sorting", "randomization", "carry_forward", "list_logic"],
+    validations: VAL_SINGLE,
+    defaults: {
+      options: [
+        { code: 1, label: "Model A", meta: { attributes: { price: "$249", warranty: "2 years", weight: "1.2 kg" } } },
+        { code: 2, label: "Model B", meta: { attributes: { price: "$319", warranty: "3 years", weight: "0.9 kg" } } },
+      ],
+      rows: [
+        { code: "price", label: "Price" },
+        { code: "warranty", label: "Warranty" },
+        { code: "weight", label: "Weight" },
+      ],
+      instruction: "Compare the attributes, then choose one.",
+    },
+  }),
 
   /* -------------------------------------------------------------- CONJOINT */
   stable(F.conjoint, "cbc", "Choice-Based Conjoint (CBC)", "Tasks from a generated conjoint design (Design Generators tab).", {
