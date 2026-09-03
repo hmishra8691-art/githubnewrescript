@@ -220,8 +220,45 @@ export function validateQuestion(
     }
   }
 
+  // ---- text / numeric+slider families (variant batch) ----
+  // Rich Text stores sanitized HTML in an ordinary `long_text` answer, so the
+  // length rules must measure what the respondent actually wrote:
+  // "<b>Hi</b>" is two characters to them, not nine. A plain long-text answer
+  // holds no tags and is measured exactly as before.
+  const LENGTH_KINDS = ["min_length", "max_length"];
+  const richTextValue =
+    q.type === "long_text" && typeof value === "string" && /<[a-z][\s\S]*>/i.test(value)
+      ? htmlToText(value)
+      : null;
+  if (richTextValue != null) {
+    checkScalarRules(
+      q.validation.filter((r) => LENGTH_KINDS.includes(r.kind)),
+      richTextValue, ctx, (m) => push(m),
+    );
+  }
+  // A from–to pair (Numeric Range, Dual / Range Slider) declares the
+  // numeric_bounds capability, but its answer is an object, so the scalar
+  // bounds check above never reaches it. Hold each side to the same bounds.
+  if (q.settings.rangePair && value && typeof value === "object" && !Array.isArray(value)) {
+    const v = value as Record<string, unknown>;
+    for (const row of q.rows ?? []) {
+      const side = v[String(row.code)];
+      if (isEmpty(side)) continue;
+      const label = row.label.replace(/<[^>]*>/g, "");
+      if (q.settings.minValue != null && Number(side) < q.settings.minValue)
+        push(`${label}: must be at least ${q.settings.minValue}.`, { rowCode: String(row.code) });
+      if (q.settings.maxValue != null && Number(side) > q.settings.maxValue)
+        push(`${label}: must be at most ${q.settings.maxValue}.`, { rowCode: String(row.code) });
+    }
+  }
+  // ---- end variant batch ----
+
   checkScalarRules(
-    q.validation.filter((r) => !["sum_equals", "sum_max", "sum_min"].includes(r.kind)),
+    q.validation.filter(
+      (r) => !["sum_equals", "sum_max", "sum_min"].includes(r.kind)
+        // measured above, against the text rather than the markup
+        && !(richTextValue != null && LENGTH_KINDS.includes(r.kind)),
+    ),
     value,
     ctx,
     (m) => push(m),
@@ -304,6 +341,28 @@ export function validateQuestion(
 
   return errors;
 }
+
+// ---- text family (variant batch) ----
+/**
+ * The visible text of a formatted answer, for length measurement only:
+ * block ends become spaces so "<p>a</p><p>b</p>" is not measured as "ab",
+ * tags are dropped and the handful of entities a rich-text surface produces
+ * are decoded back to the one character they stand for.
+ */
+export function htmlToText(html: string): string {
+  return html
+    .replace(/<\s*(br|\/p|\/div|\/li|\/h[1-6])\b[^>]*>/gi, " ")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&amp;/gi, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+// ---- end variant batch ----
 
 /** Validate all visible questions on a page. */
 export function validatePage(

@@ -424,7 +424,14 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     baseType: "open_text", responseModel: "text", validations: VAL_TEXT,
     defaults: { settings: { placeholder: "Company name" } },
   }),
-  ...planned(F.text, [["Rich Text", "Formatted-text answer."]]),
+  stable(F.text, "rich_text", "Rich Text", "Formatted-text answer.", {
+    baseType: "long_text", renderer: "richtext", responseModel: "text",
+    validations: ["required", "min_length", "max_length", "custom_expression"],
+    // The answer is sanitized HTML, so the length rules measure the visible
+    // text rather than the markup (see validate.ts) — otherwise bolding a
+    // word would spend twenty of the respondent's characters on tags.
+    defaults: { settings: { placeholder: "Type your answer — use the toolbar to format it." } },
+  }),
 
   /* -------------------------------------------------------------- NUMERIC */
   stable(F.numeric, "open", "Numeric Open End", "Any number.", {
@@ -461,7 +468,19 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: ["scale_labels"], validations: ["required"],
     defaults: { settings: { minValue: 0, maxValue: 100, sliderRightLabel: "100%" } },
   }),
-  ...planned(F.numeric, [["Numeric Range", "A from–to pair of numbers."]]),
+  stable(F.numeric, "numeric_range", "Numeric Range", "A from–to pair of numbers.", {
+    // Two labelled numeric fields — exactly what a numeric list stores — so
+    // the pair exports as VAR_from / VAR_to and needs no new response model.
+    baseType: "numeric_list", renderer: "numrange", responseModel: "fields",
+    capabilities: ["fields", "numeric_bounds"], validations: ["required"],
+    defaults: {
+      rows: [
+        { code: "from", label: "From", fieldType: "number" },
+        { code: "to", label: "To", fieldType: "number" },
+      ],
+      settings: { rangePair: true },
+    },
+  }),
 
   /* ----------------------------------------------------------------- LIST */
   stable(F.list, "text_list", "Open Text List", "Labeled text fields, one variable per row.", {
@@ -621,12 +640,50 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: ["numeric_bounds"], validations: VAL_NUM,
     defaults: { settings: { minValue: 1, maxValue: 5 } },
   }),
-  ...planned(F.slider, [
-    ["Dual / Range Slider", "Two handles selecting a range."],
-    ["Vertical Slider", "Vertical orientation."],
-    ["Multi-Attribute Slider", "Several sliders in one question."],
-    ["Allocation Slider", "Sliders that must total 100."],
-  ]),
+  stable(F.slider, "dual", "Dual / Range Slider", "Two handles selecting a range.", {
+    // The same from–to pair as numeric.numeric_range, dragged instead of
+    // typed: one response model, one export layout, two presentations.
+    baseType: "numeric_list", renderer: "rangeslider", responseModel: "fields",
+    capabilities: ["numeric_bounds", "scale_labels"], validations: ["required"],
+    defaults: {
+      rows: [
+        { code: "from", label: "From", fieldType: "number" },
+        { code: "to", label: "To", fieldType: "number" },
+      ],
+      settings: { rangePair: true, minValue: 0, maxValue: 100, step: 1 },
+    },
+  }),
+  stable(F.slider, "vertical", "Vertical Slider", "Vertical orientation.", {
+    baseType: "slider", renderer: "vslider", responseModel: "numeric",
+    capabilities: ["numeric_bounds", "scale_labels"], validations: VAL_NUM,
+    defaults: { settings: { minValue: 0, maxValue: 100, step: 1, orientation: "vertical" } },
+  }),
+  stable(F.slider, "multi_attribute", "Multi-Attribute Slider", "Several sliders in one question.", {
+    // Rows are the attributes; a number per row is what a numeric matrix
+    // stores, so required-per-row, exports and VAR_<row> all come for free.
+    baseType: "matrix_numeric", renderer: "slidermatrix", responseModel: "per_row",
+    capabilities: ["rows", "numeric_bounds", "scale_labels", "randomization", "carry_forward"],
+    validations: ["required", "min_value", "max_value"],
+    defaults: {
+      rows: [
+        { code: "r1", label: "Price" },
+        { code: "r2", label: "Quality" },
+        { code: "r3", label: "Service" },
+      ],
+      settings: { minValue: 0, maxValue: 100, step: 1, sliderLayout: "stack" },
+    },
+  }),
+  stable(F.slider, "allocation_slider", "Allocation Slider", "Sliders that must total 100.", {
+    baseType: "allocation", renderer: "sliderallocation", responseModel: "allocation",
+    capabilities: ["options", "sum", "carry_forward", "list_logic"],
+    validations: ["required", "sum_equals", "sum_max", "sum_min"],
+    defaults: {
+      options: [
+        { code: 1, label: "Option A" }, { code: 2, label: "Option B" }, { code: 3, label: "Option C" },
+      ],
+      settings: { sumTarget: 100, sumUnit: " %" },
+    },
+  }),
 
   /* ---------------------------------------------------------------- IMAGE */
   stable(F.image, "choice", "Image Choice", "Pick one image.", {
@@ -774,10 +831,20 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     validations: ["required", "sum_equals", "sum_max"],
     defaults: { settings: { sumTarget: 100, sumUnit: " pts" } },
   }),
-  ...planned(F.allocation, [
-    ["Slider Allocation", "Sliders constrained to a total."],
-    ["Drag Allocation", "Drag chips onto items."],
-  ]),
+  stable(F.allocation, "slider_allocation", "Slider Allocation", "Sliders constrained to a total.", {
+    // Same renderer and model as slider.allocation_slider — the two families
+    // both legitimately offer it, and one implementation serves both.
+    baseType: "allocation", renderer: "sliderallocation", responseModel: "allocation",
+    capabilities: ["options", "sum", "carry_forward", "list_logic"],
+    validations: ["required", "sum_equals", "sum_max", "sum_min"],
+    defaults: {
+      options: [
+        { code: 1, label: "Option A" }, { code: 2, label: "Option B" }, { code: 3, label: "Option C" },
+      ],
+      settings: { sumTarget: 100, sumUnit: " %" },
+    },
+  }),
+  ...planned(F.allocation, [["Drag Allocation", "Drag chips onto items."]]),
 
   stable(F.hotspot, "click", "Image Hotspot / Click Heatmap", "Click up to N points on an image; coordinates recorded as percentages.", {
     baseType: "hotspot", renderer: "hotspotclick", responseModel: "coordinates",

@@ -1,1 +1,39 @@
 /* ---- numeric variant family */
+
+/* Numeric Range: two fields reading as one range, wrapping instead of
+   overflowing on a narrow phone. */
+.rs-numrange {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.rs-numrange-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.rs-numrange-lbl {
+  font-size: 0.82em;
+  color: var(--rs-subtle);
+}
+.rs-numrange-field .rs-input {
+  max-width: 130px;
+  width: 100%;
+}
+.rs-numrange-dash {
+  color: var(--rs-subtle);
+  padding-bottom: 9px;
+}
+.rs-numrange-bounds {
+  font-size: 0.8em;
+  color: var(--rs-subtle);
+  padding-bottom: 9px;
+}
+
+@media (max-width: 420px) {
+  .rs-numrange-dash { display: none; }
+  .rs-numrange-field { flex: 1 1 120px; }
+  .rs-numrange-bounds { flex-basis: 100%; padding-bottom: 0; }
+}

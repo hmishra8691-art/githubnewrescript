@@ -1,1 +1,7 @@
 /* ---- allocation variant family */
+
+/* The Slider Allocation renderer is shared with the Slider / Rating family
+   (both offer "sliders that must total 100"), so its styles live beside the
+   other sliders in variants/slider.css. Nothing else in this family needs
+   its own rules yet — the typed constant-sum presentations use the shared
+   .rs-alloc-* styles in globals.css. */
