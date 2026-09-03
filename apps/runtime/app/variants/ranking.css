@@ -1,1 +1,79 @@
-/* ---- ranking variant family */
+/* ---- ranking variant family (tournament duels, bucket ranking)
+        chips, pools and the drag ghost come from variants/dragdrop.css */
+
+/* ------------------------------------------------------------- tournament */
+.rs-tour { display: flex; flex-direction: column; gap: 10px; }
+.rs-tour-progress { font-size: .88em; font-weight: 600; color: var(--rs-subtle); }
+.rs-tour-bar {
+  height: 6px; border-radius: 999px; overflow: hidden;
+  background: color-mix(in srgb, var(--rs-border) 70%, var(--rs-surface));
+}
+.rs-tour-bar > span { display: block; height: 100%; background: var(--rs-primary); transition: width .2s ease; }
+.rs-tour-ask { margin: 2px 0 0; font-weight: 650; }
+
+.rs-tour-duel { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center; }
+.rs-tour-or {
+  font-size: .82em; font-weight: 700; color: var(--rs-subtle); text-transform: uppercase; letter-spacing: .06em;
+}
+.rs-tour-side {
+  display: flex; flex-direction: column; align-items: center; gap: 10px; min-width: 0;
+  padding: 18px 14px; font: inherit; text-align: center; cursor: pointer;
+  border: 2px solid var(--rs-border); border-radius: var(--rs-radius);
+  background: var(--rs-surface); color: var(--rs-text);
+}
+.rs-tour-side:hover { border-color: var(--rs-primary); }
+.rs-tour-side:focus-visible { outline: 2px solid var(--rs-primary); outline-offset: 2px; }
+.rs-tour-side img { width: 100%; max-height: 150px; object-fit: contain; }
+.rs-tour-side-label { font-weight: 650; font-size: 1.02em; overflow-wrap: anywhere; }
+.rs-tour-pick {
+  font-size: .82em; font-weight: 600; padding: 6px 14px; border-radius: 999px;
+  border: 1.5px solid var(--rs-primary); color: var(--rs-primary);
+}
+.rs-tour-side:hover .rs-tour-pick { background: var(--rs-primary); color: #fff; }
+
+.rs-tour-final { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.rs-tour-rank {
+  display: flex; align-items: center; gap: 12px; padding: 9px 14px;
+  border: 1.5px solid var(--rs-border); border-radius: calc(var(--rs-radius) * .7);
+  background: var(--rs-surface);
+}
+.rs-tour-num {
+  flex: none; width: 26px; height: 26px; display: grid; place-items: center;
+  border-radius: 50%; font-size: .82em; font-weight: 700;
+  background: var(--rs-primary); color: #fff;
+}
+.rs-tour-restart {
+  align-self: flex-start; padding: 7px 14px; font: inherit; font-size: .86em;
+  border: 1.5px solid var(--rs-border); border-radius: 999px;
+  background: var(--rs-surface); color: var(--rs-subtle); cursor: pointer;
+}
+.rs-tour-restart:hover { border-color: var(--rs-primary); color: var(--rs-primary); }
+
+/* ---------------------------------------------------------- rank buckets */
+.rs-rb-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+.rs-rb-pool { align-content: flex-start; min-height: 120px; }
+.rs-rb-slots { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.rs-rb-slot {
+  display: flex; align-items: center; gap: 10px; min-height: 46px; width: 100%; text-align: left;
+  padding: 6px 10px; border: 2px dashed var(--rs-border); border-radius: calc(var(--rs-radius) * .7);
+  background: var(--rs-surface); cursor: pointer;
+}
+.rs-rb-slot.full { border-style: solid; border-color: color-mix(in srgb, var(--rs-primary) 45%, var(--rs-border)); }
+.rs-rb-slot.armed { border-color: color-mix(in srgb, var(--rs-primary) 60%, var(--rs-border)); }
+.rs-rb-slot:hover { border-color: var(--rs-primary); }
+.rs-rb-slot:focus-visible { outline: 2px solid var(--rs-primary); outline-offset: 2px; }
+.rs-rb-num {
+  flex: none; min-width: 40px; font-size: .8em; font-weight: 700; color: var(--rs-subtle);
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.rs-rb-slot.full .rs-rb-num { color: var(--rs-primary); }
+
+/* --------------------------------------------------------------- mobile */
+@media (max-width: 560px) {
+  .rs-tour-duel { grid-template-columns: 1fr; }
+  .rs-tour-or { justify-self: center; }
+  .rs-tour-side { padding: 14px 12px; }
+  .rs-rb-cols { grid-template-columns: 1fr; }
+  .rs-rb-pool { min-height: 60px; }
+  .rs-rb-num { min-width: 34px; }
+}
