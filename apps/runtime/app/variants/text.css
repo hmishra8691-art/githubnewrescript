@@ -1,1 +1,66 @@
 /* ---- text variant family */
+
+/* Rich Text: a small toolbar over a contentEditable surface. */
+.rs-richtext { max-width: 100%; }
+
+.rs-richtext-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--rs-border);
+  border-bottom: none;
+  border-radius: var(--rs-radius) var(--rs-radius) 0 0;
+  background: var(--rs-bg);
+}
+.rs-richtext-tool {
+  min-width: 32px;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--rs-border);
+  border-radius: 6px;
+  background: var(--rs-surface);
+  color: var(--rs-text);
+  font-size: 0.88em;
+  cursor: pointer;
+}
+.rs-richtext-tool:hover:not(:disabled) { border-color: var(--rs-primary); color: var(--rs-primary); }
+.rs-richtext-tool:disabled { opacity: 0.5; cursor: default; }
+.rs-richtext-tool[data-cmd="bold"] { font-weight: 800; }
+.rs-richtext-tool[data-cmd="italic"] { font-style: italic; }
+.rs-richtext-tool[data-cmd="underline"] { text-decoration: underline; }
+.rs-richtext-tool.plain { font-size: 0.78em; color: var(--rs-subtle); }
+
+.rs-richtext-surface-wrap { position: relative; }
+.rs-richtext-surface {
+  min-height: 120px;
+  padding: 10px 12px;
+  border: 1px solid var(--rs-border);
+  border-radius: 0 0 var(--rs-radius) var(--rs-radius);
+  background: var(--rs-surface);
+  color: var(--rs-text);
+  font: inherit;
+  line-height: 1.5;
+  overflow-wrap: break-word;
+}
+.rs-richtext-surface:focus-visible,
+.rs-richtext-surface:focus {
+  outline: none;
+  border-color: var(--rs-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--rs-primary) 18%, transparent);
+}
+/* the surface's own content: lists need their markers back, since the
+   runtime's reset removes them site-wide */
+.rs-richtext-surface ul { list-style: disc; padding-left: 1.4em; margin: 0.3em 0; }
+.rs-richtext-surface ol { list-style: decimal; padding-left: 1.6em; margin: 0.3em 0; }
+.rs-richtext-surface li { margin: 0.1em 0; }
+.rs-richtext-surface p { margin: 0.3em 0; }
+
+.rs-richtext-placeholder {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  right: 12px;
+  color: var(--rs-subtle);
+  pointer-events: none;
+}

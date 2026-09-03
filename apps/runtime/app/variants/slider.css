@@ -1,1 +1,253 @@
 /* ---- slider variant family */
+
+/* ------------------------------------------------ Dual / Range Slider */
+.rs-rangeslider { max-width: 520px; }
+
+.rs-rangeslider-readout {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 1.15em;
+  font-weight: 650;
+  margin-bottom: 6px;
+}
+.rs-rangeslider-readout.muted { color: var(--rs-subtle); font-weight: 500; }
+.rs-rangeslider-sep { color: var(--rs-subtle); font-weight: 400; }
+.rs-rangeslider-hint {
+  font-size: 0.72em;
+  font-weight: 400;
+  color: var(--rs-subtle);
+}
+
+.rs-rangeslider-track {
+  position: relative;
+  height: 34px;
+  display: flex;
+  align-items: center;
+}
+.rs-rangeslider-rail,
+.rs-rangeslider-fill {
+  position: absolute;
+  height: 5px;
+  border-radius: 3px;
+  pointer-events: none;
+}
+.rs-rangeslider-rail { left: 0; right: 0; background: var(--rs-border); }
+.rs-rangeslider-fill { background: var(--rs-primary); }
+/* Until a handle moves there is no answer, so the track must not look like
+   one: an untouched full-width fill reads as "0–100 chosen". */
+.rs-rangeslider-track.untouched .rs-rangeslider-fill { background: #cbd5e1; }
+
+/* Both inputs sit on the same track. The input itself is pointer-transparent
+   so the one underneath is still reachable; only the thumbs take the pointer,
+   which is what makes two handles on one rail work. Keyboard focus is
+   unaffected — each range input is tabbable and arrow-operable. */
+.rs-rangeslider-input {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  margin: 0;
+  height: 34px;
+  background: none;
+  appearance: none;
+  -webkit-appearance: none;
+  pointer-events: none;
+}
+.rs-rangeslider-input::-webkit-slider-runnable-track {
+  background: transparent;
+  height: 34px;
+}
+.rs-rangeslider-input::-moz-range-track { background: transparent; height: 34px; }
+.rs-rangeslider-input::-webkit-slider-thumb {
+  pointer-events: auto;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--rs-surface);
+  border: 3px solid var(--rs-primary);
+  box-shadow: 0 1px 3px rgb(15 23 42 / 25%);
+  cursor: grab;
+}
+.rs-rangeslider-input::-moz-range-thumb {
+  pointer-events: auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--rs-surface);
+  border: 3px solid var(--rs-primary);
+  cursor: grab;
+}
+.rs-rangeslider-input:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--rs-primary);
+  outline-offset: 2px;
+}
+.rs-rangeslider-ends {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.82em;
+  color: var(--rs-subtle);
+  margin-top: 2px;
+}
+
+/* ------------------------------------------------------ Vertical Slider */
+.rs-vslider {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+.rs-vslider-col {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.rs-vslider-end {
+  font-size: 0.82em;
+  color: var(--rs-subtle);
+  max-width: 140px;
+  text-align: center;
+}
+/* vertical-lr + rtl puts the minimum at the bottom without a transform, so
+   hit testing and keyboard handling stay native. */
+.rs-vslider-input {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 26px;
+  height: 220px;
+  accent-color: var(--rs-primary);
+  margin: 0;
+}
+.rs-vslider-val {
+  font-weight: 650;
+  font-size: 1.35em;
+  min-width: 3ch;
+}
+.rs-vslider-val.muted { color: var(--rs-subtle); font-weight: 500; }
+
+/* An untouched slider sits at the middle of its scale for want of anywhere
+   better to be — greying it says "this is where the handle starts", not
+   "you have already answered 50".
+
+   Greyscale rather than a grey accent-color: Chromium derives the *unfilled*
+   part of the track from the accent, so a pale accent turns the remainder
+   near-black and the control reads as broken. */
+.rs-vslider-input.untouched,
+.rs-slidermatrix-input.untouched { filter: grayscale(1); opacity: 0.6; }
+
+/* -------------------------------------------------- Multi-attribute slider */
+.rs-slidermatrix { max-width: 620px; }
+.rs-slidermatrix-input {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--rs-primary);
+}
+.rs-slidermatrix-val {
+  min-width: 3.5ch;
+  text-align: right;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.rs-slidermatrix-val.muted { color: var(--rs-subtle); font-weight: 500; }
+.rs-slidermatrix-ends {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8em;
+  color: var(--rs-subtle);
+}
+
+/* stacked: one labelled slider per attribute. The end labels head the whole
+   question, so they line up with the ends of the tracks below — not with the
+   value column beside them. */
+.rs-slidermatrix.stack .rs-slidermatrix-ends.top {
+  margin-bottom: 4px;
+  padding-right: calc(3.5ch + 12px);
+}
+.rs-slidermatrix-item + .rs-slidermatrix-item {
+  margin-top: 10px;
+  border-top: 1px solid var(--rs-border);
+  padding-top: 10px;
+}
+.rs-slidermatrix.stack .rs-slidermatrix-label {
+  font-size: 0.92em;
+  margin-bottom: 2px;
+}
+.rs-slidermatrix-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* grid: label | slider | value, compact rows under one pair of end labels */
+.rs-slidermatrix.grid .rs-slidermatrix-head,
+.rs-slidermatrix-gridrow {
+  display: grid;
+  grid-template-columns: minmax(90px, 11em) 1fr 3.5em;
+  align-items: center;
+  gap: 12px;
+}
+.rs-slidermatrix.grid .rs-slidermatrix-head { padding-bottom: 2px; }
+.rs-slidermatrix-gridrow { padding: 6px 0; }
+.rs-slidermatrix-gridrow + .rs-slidermatrix-gridrow {
+  border-top: 1px solid var(--rs-border);
+}
+.rs-slidermatrix.grid .rs-slidermatrix-label { font-size: 0.9em; }
+
+@media (max-width: 520px) {
+  /* the label needs the full width before the track gets unusable */
+  .rs-slidermatrix.grid .rs-slidermatrix-head { display: none; }
+  .rs-slidermatrix-gridrow {
+    grid-template-columns: 1fr 3.5em;
+    grid-template-areas: "label label" "slider value";
+    row-gap: 4px;
+  }
+  .rs-slidermatrix-gridrow .rs-slidermatrix-label { grid-area: label; }
+  .rs-slidermatrix-gridrow .rs-slidermatrix-input { grid-area: slider; }
+  .rs-slidermatrix-gridrow .rs-slidermatrix-val { grid-area: value; }
+}
+
+/* ----------------------------------------------------- Allocation sliders */
+.rs-sliderallocation { max-width: 560px; }
+.rs-sliderallocation-row {
+  display: grid;
+  grid-template-columns: minmax(80px, 10em) 1fr 4.5em;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+}
+.rs-sliderallocation-row + .rs-sliderallocation-row {
+  border-top: 1px solid var(--rs-border);
+}
+.rs-sliderallocation-label { font-size: 0.92em; }
+.rs-sliderallocation-input {
+  min-width: 0;
+  accent-color: var(--rs-primary);
+}
+.rs-sliderallocation-val {
+  text-align: right;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.rs-sliderallocation-total {
+  margin-top: 10px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.rs-sliderallocation-total.ok { color: #16a34a; }
+.rs-sliderallocation-total.bad { color: var(--rs-error); }
+.rs-sliderallocation-left { font-size: 0.82em; color: var(--rs-subtle); }
+.rs-sliderallocation-total.ok .rs-sliderallocation-left { color: inherit; }
+
+@media (max-width: 520px) {
+  .rs-sliderallocation-row {
+    grid-template-columns: 1fr 4.5em;
+    grid-template-areas: "label value" "slider slider";
+    row-gap: 4px;
+  }
+  .rs-sliderallocation-row .rs-sliderallocation-label { grid-area: label; }
+  .rs-sliderallocation-row .rs-sliderallocation-input { grid-area: slider; }
+  .rs-sliderallocation-row .rs-sliderallocation-val { grid-area: value; }
+}
