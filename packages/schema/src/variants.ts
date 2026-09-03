@@ -596,10 +596,41 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: ["options", "sorting", "randomization", "carry_forward", "list_logic"],
     validations: ["required"],
   }),
-  ...planned(F.ranking, [
-    ["Pairwise / Tournament Ranking", "Repeated A-vs-B duels."],
-    ["Bucket Ranking", "Drag items into ranked buckets."],
-  ]),
+  /*
+   * Tournament and bucket ranking both store an ordinary rank_order array, so
+   * logic, piping, exports and VAR_<code> rank positions see nothing new.
+   *
+   * Both default to `rankMode: "top_n"`, which with no `maxSelections` is
+   * exactly "rank everything" — and the moment the author caps the list
+   * ("stop after top 3", "rank your top 3") completeness follows the cap
+   * instead of demanding a rank nobody was ever asked for.
+   */
+  stable(F.ranking, "tournament", "Pairwise / Tournament Ranking", "Repeated A-vs-B duels — the respondent only ever answers \"which of these two?\", and binary insertion turns that into a full ranking.", {
+    baseType: "ranking", renderer: "tournament", responseModel: "rank_order",
+    capabilities: ["options", "randomization", "carry_forward", "list_logic"],
+    validations: ["required"],
+    defaults: {
+      settings: { rankMode: "top_n" },
+      options: [
+        { code: 1, label: "Price" }, { code: 2, label: "Quality" },
+        { code: 3, label: "Speed" }, { code: 4, label: "Service" },
+      ],
+      instruction: "Pick the one you prefer in each pair.",
+    },
+  }),
+  stable(F.ranking, "buckets", "Bucket Ranking", "Drag items into numbered rank slots (or tap an item, then a slot).", {
+    baseType: "ranking", renderer: "rankbuckets", responseModel: "rank_order",
+    capabilities: ["options", "sorting", "randomization", "carry_forward", "list_logic", "min_max_selections"],
+    validations: ["required", "min_selections", "max_selections"],
+    defaults: {
+      settings: { rankMode: "top_n" },
+      options: [
+        { code: 1, label: "Price" }, { code: 2, label: "Quality" },
+        { code: 3, label: "Speed" }, { code: 4, label: "Service" },
+      ],
+      instruction: "Put each item in a rank slot — 1 is best.",
+    },
+  }),
 
   /* ---------------------------------------------------------------- SLIDER */
   stable(F.slider, "single", "Single Slider", "One continuous slider.", {
@@ -680,11 +711,53 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: ["options", "sorting", "randomization", "carry_forward", "list_logic"],
     validations: ["required"],
   }),
-  ...planned(F.dragdrop, [
-    ["Drag into Buckets / Categorization", "Sort items into named buckets."],
-    ["Drag onto Scale", "Place items along a scale."],
-    ["Drag-and-Drop Allocation", "Distribute chips across items."],
-  ]),
+  stable(F.dragdrop, "buckets", "Drag into Buckets / Categorization", "Sort items into named buckets — drag a chip, or tap the chip then the bucket.", {
+    baseType: "matrix_single", renderer: "dragbuckets", responseModel: "per_row",
+    capabilities: ["rows", "options", "randomization", "carry_forward", "layout_columns"],
+    validations: ["required"],
+    defaults: {
+      settings: { columnsLayout: 3 },
+      options: [
+        { code: "must", label: "Must have" },
+        { code: "nice", label: "Nice to have" },
+        { code: "no", label: "Not needed" },
+      ],
+      rows: [
+        { code: "1", label: "Item 1" }, { code: "2", label: "Item 2" },
+        { code: "3", label: "Item 3" }, { code: "4", label: "Item 4" },
+      ],
+      instruction: "Drag each item into a bucket — or tap the item, then the bucket.",
+    },
+  }),
+  stable(F.dragdrop, "scale", "Drag onto Scale", "Place items along a continuous scale; each item's position is its score.", {
+    baseType: "matrix_numeric", renderer: "dragscale", responseModel: "per_row",
+    capabilities: ["rows", "numeric_bounds", "scale_labels", "randomization", "carry_forward"],
+    validations: ["required"],
+    defaults: {
+      settings: {
+        minValue: 0, maxValue: 100, step: 1,
+        sliderLeftLabel: "Not at all important", sliderRightLabel: "Extremely important",
+      },
+      rows: [
+        { code: "1", label: "Item 1" }, { code: "2", label: "Item 2" },
+        { code: "3", label: "Item 3" }, { code: "4", label: "Item 4" },
+      ],
+      instruction: "Drag each item onto the scale — or select it and use the arrow keys.",
+    },
+  }),
+  stable(F.dragdrop, "allocation", "Drag-and-Drop Allocation", "Distribute chips across items; each chip is worth a fixed amount.", {
+    baseType: "allocation", renderer: "chipallocation", responseModel: "allocation",
+    capabilities: ["options", "sum", "randomization", "carry_forward", "list_logic"],
+    validations: ["required", "sum_equals", "sum_max", "sum_min"],
+    defaults: {
+      settings: { sumTarget: 100, chipValue: 10, sumUnit: " pts" },
+      options: [
+        { code: 1, label: "Price" }, { code: 2, label: "Quality" },
+        { code: 3, label: "Speed" }, { code: 4, label: "Service" },
+      ],
+      instruction: "Drag chips onto the items — or use + and −.",
+    },
+  }),
   stable(F.swipe, "tinder", "Tinder-Style Swipe", "Card deck: swipe right = like, left = dislike (buttons too). One judgement per item.", {
     baseType: "matrix_single", renderer: "swipe", responseModel: "per_row",
     capabilities: ["rows", "options", "randomization", "carry_forward"],
@@ -709,10 +782,36 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       instruction: "Swipe right if you agree, left if you disagree.",
     },
   }),
-  ...planned(F.swipe, [
-    ["Swipe-to-Rate / Rank / Categorize", "Gesture-driven judgements."],
-    ["Four-Direction Swipe", "Up/down/left/right buckets."],
-  ]),
+  stable(F.swipe, "rate", "Swipe-to-Rate / Rank / Categorize", "Card deck with a scale under the card: swipe to the extremes, or tap any point on the scale.", {
+    baseType: "matrix_single", renderer: "swiperate", responseModel: "per_row",
+    capabilities: ["rows", "options", "randomization", "carry_forward"],
+    validations: ["required"],
+    defaults: {
+      options: [
+        { code: 1, label: "1" }, { code: 2, label: "2" }, { code: 3, label: "3" },
+        { code: 4, label: "4" }, { code: 5, label: "5" },
+      ],
+      rows: [
+        { code: "1", label: "Card 1" }, { code: "2", label: "Card 2" }, { code: "3", label: "Card 3" },
+      ],
+      instruction: "Swipe left for the lowest, right for the highest — or tap a point on the scale.",
+    },
+  }),
+  stable(F.swipe, "four_direction", "Four-Direction Swipe", "Card deck with four buckets: up, down, left and right.", {
+    baseType: "matrix_single", renderer: "swipe4", responseModel: "per_row",
+    capabilities: ["rows", "options", "randomization", "carry_forward"],
+    validations: ["required"],
+    defaults: {
+      options: [
+        { code: "dislike", label: "Dislike" }, { code: "like", label: "Like" },
+        { code: "love", label: "Love" }, { code: "unknown", label: "Never heard of it" },
+      ],
+      rows: [
+        { code: "1", label: "Card 1" }, { code: "2", label: "Card 2" }, { code: "3", label: "Card 3" },
+      ],
+      instruction: "Swipe each card towards the verdict that fits — or tap an arrow.",
+    },
+  }),
   stable(F.carousel, "single", "Single-Item Carousel", "Browse options one card at a time and select one.", {
     baseType: "single_select", renderer: "carousel", responseModel: "single_choice",
     capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
@@ -730,8 +829,23 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     baseType: "single_select", renderer: "compare", responseModel: "single_choice",
     capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
   }),
+  /* Same duels, same `tournament` renderer, same rank_order answer as
+   * ranking.tournament — it lives in both families because programmers look
+   * for "which do you prefer?" under Comparison as often as under Ranking. */
+  stable(F.comparison, "tournament", "Pairwise / Tournament Comparison", "Repeated A-vs-B duels; the winner order is the ranking.", {
+    baseType: "ranking", renderer: "tournament", responseModel: "rank_order",
+    capabilities: ["options", "randomization", "carry_forward", "list_logic"],
+    validations: ["required"],
+    defaults: {
+      settings: { rankMode: "top_n" },
+      options: [
+        { code: 1, label: "Option A" }, { code: 2, label: "Option B" },
+        { code: 3, label: "Option C" }, { code: 4, label: "Option D" },
+      ],
+      instruction: "Pick the one you prefer in each pair.",
+    },
+  }),
   ...planned(F.comparison, [
-    ["Pairwise / Tournament Comparison", "Repeated A-vs-B duels."],
     ["Multi-Item / Attribute Comparison", "Compare across attributes."],
   ]),
 
@@ -776,8 +890,22 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   }),
   ...planned(F.allocation, [
     ["Slider Allocation", "Sliders constrained to a total."],
-    ["Drag Allocation", "Drag chips onto items."],
   ]),
+  /* The same `chipallocation` renderer as dragdrop.allocation — chips are how
+   * a phone respondent splits a budget, and it belongs in both families. */
+  stable(F.allocation, "drag", "Drag Allocation", "Drag chips onto items; each chip is worth a fixed amount.", {
+    baseType: "allocation", renderer: "chipallocation", responseModel: "allocation",
+    capabilities: ["options", "sum", "randomization", "carry_forward", "list_logic"],
+    validations: ["required", "sum_equals", "sum_max", "sum_min"],
+    defaults: {
+      settings: { sumTarget: 100, chipValue: 10, sumUnit: " pts" },
+      options: [
+        { code: 1, label: "Price" }, { code: 2, label: "Quality" },
+        { code: 3, label: "Speed" }, { code: 4, label: "Service" },
+      ],
+      instruction: "Drag chips onto the items — or use + and −.",
+    },
+  }),
 
   stable(F.hotspot, "click", "Image Hotspot / Click Heatmap", "Click up to N points on an image; coordinates recorded as percentages.", {
     baseType: "hotspot", renderer: "hotspotclick", responseModel: "coordinates",

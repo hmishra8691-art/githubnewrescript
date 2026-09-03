@@ -1,1 +1,146 @@
-/* ---- dragdrop variant family */
+/* ---- dragdrop variant family (dragbuckets, dragscale, chipallocation)
+        plus the shared chip / pool / ghost pieces that bucket ranking reuses */
+
+.rs-dd { display: flex; flex-direction: column; gap: 12px; }
+
+.rs-dd-status {
+  font-size: .88em; color: var(--rs-subtle); font-weight: 600;
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline;
+}
+.rs-dd-hint { font-weight: 400; }
+.rs-dd-empty { font-size: .82em; color: var(--rs-subtle); font-style: italic; }
+
+/* a chip: an item you can pick up. `touch-action: none` so a drag on a phone
+   moves the chip instead of scrolling the page away from it. */
+.rs-dd-chip {
+  display: inline-flex; align-items: center; gap: 7px; max-width: 100%;
+  padding: 7px 12px; font: inherit; font-size: .92em; text-align: left;
+  border: 1.5px solid var(--rs-border); border-radius: 999px;
+  background: var(--rs-surface); color: var(--rs-text);
+  cursor: grab; touch-action: none; user-select: none;
+}
+.rs-dd-chip:hover { border-color: var(--rs-primary); }
+.rs-dd-chip:focus-visible { outline: 2px solid var(--rs-primary); outline-offset: 2px; }
+.rs-dd-chip.held {
+  border-color: var(--rs-primary); background: color-mix(in srgb, var(--rs-primary) 14%, var(--rs-surface));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--rs-primary) 20%, transparent);
+}
+.rs-dd-chip.placed { background: color-mix(in srgb, var(--rs-primary) 7%, var(--rs-surface)); }
+.rs-dd-grip { color: var(--rs-subtle); font-size: .9em; flex: none; }
+
+.rs-dd-pool {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-height: 46px;
+  padding: 10px; border: 1.5px dashed var(--rs-border); border-radius: var(--rs-radius);
+  background: color-mix(in srgb, var(--rs-border) 22%, var(--rs-surface));
+}
+
+.rs-dd-ghost {
+  position: fixed; z-index: 60; transform: translate(-50%, -50%);
+  padding: 6px 12px; font-size: .88em; border-radius: 999px;
+  background: var(--rs-primary); color: #fff; box-shadow: 0 6px 18px rgb(0 0 0 / .22);
+  /* the drop target is found with elementFromPoint — a ghost that could be
+     hit would make every drop land on itself */
+  pointer-events: none; white-space: nowrap; max-width: 60vw; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* --------------------------------------------------------------- buckets */
+.rs-dd-buckets { display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.rs-dd-buckets.cols-1 { grid-template-columns: 1fr; }
+.rs-dd-buckets.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.rs-dd-buckets.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.rs-dd-bucket {
+  display: flex; flex-direction: column; gap: 8px; min-height: 118px; text-align: left;
+  padding: 10px 12px 12px; border: 2px solid var(--rs-border); border-radius: var(--rs-radius);
+  background: var(--rs-surface); cursor: pointer;
+}
+.rs-dd-bucket.armed { border-color: color-mix(in srgb, var(--rs-primary) 55%, var(--rs-border)); }
+.rs-dd-bucket:hover { border-color: var(--rs-primary); }
+.rs-dd-bucket:focus-visible { outline: 2px solid var(--rs-primary); outline-offset: 2px; }
+.rs-dd-bucket-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-weight: 650; font-size: .95em; border-bottom: 1px solid var(--rs-border); padding-bottom: 7px;
+}
+.rs-dd-count {
+  flex: none; min-width: 22px; text-align: center; font-size: .78em; font-weight: 700;
+  padding: 2px 6px; border-radius: 999px;
+  background: color-mix(in srgb, var(--rs-primary) 14%, var(--rs-surface)); color: var(--rs-primary);
+}
+.rs-dd-bucket-body { display: flex; flex-wrap: wrap; gap: 6px; align-content: flex-start; flex: 1; }
+
+/* ----------------------------------------------------------------- scale */
+.rs-ds-zone {
+  padding: 10px 14px 6px; border: 1.5px dashed var(--rs-border);
+  border-radius: var(--rs-radius); background: var(--rs-surface);
+}
+.rs-ds-placed { position: relative; }
+.rs-dd-chip.on-scale {
+  /* the transform is set inline: centred on the value, but pinned inside the
+     card at either end of the track */
+  position: absolute; white-space: nowrap;
+  max-width: 46%; overflow: hidden; padding: 5px 10px; font-size: .85em;
+  border-color: var(--rs-primary); background: color-mix(in srgb, var(--rs-primary) 10%, var(--rs-surface));
+}
+.rs-ds-val { font-weight: 700; color: var(--rs-primary); }
+.rs-ds-track {
+  position: relative; height: 16px; margin: 6px 0 4px; cursor: pointer;
+  border-radius: 999px; background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--rs-border) 70%, var(--rs-surface)),
+    color-mix(in srgb, var(--rs-primary) 30%, var(--rs-surface)));
+}
+.rs-ds-tick { position: absolute; top: 3px; width: 1px; height: 10px; background: var(--rs-subtle); opacity: .35; }
+.rs-ds-tick.major { top: 0; height: 16px; opacity: .6; }
+.rs-ds-marker {
+  position: absolute; top: -3px; width: 8px; height: 22px; margin-left: -4px;
+  border-radius: 3px; background: var(--rs-primary);
+}
+.rs-ds-ends { display: flex; justify-content: space-between; gap: 10px; font-size: .8em; color: var(--rs-subtle); }
+
+/* ------------------------------------------------------- chip allocation */
+.rs-ca-status { font-size: .92em; font-weight: 650; display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.rs-ca-status.ok { color: #15803d; }
+.rs-ca-status.bad { color: var(--rs-subtle); }
+.rs-ca-pool {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 44px;
+  padding: 9px 12px; border: 1.5px dashed var(--rs-border); border-radius: var(--rs-radius);
+  background: color-mix(in srgb, var(--rs-border) 22%, var(--rs-surface));
+}
+.rs-ca-chip {
+  display: inline-block; flex: none; width: 22px; height: 22px; border-radius: 50%;
+  background: color-mix(in srgb, var(--rs-primary) 30%, var(--rs-surface));
+  border: 2px solid color-mix(in srgb, var(--rs-primary) 55%, var(--rs-surface));
+  cursor: grab; touch-action: none;
+}
+.rs-ca-chip.on { background: var(--rs-primary); border-color: var(--rs-primary); }
+.rs-ca-items { display: flex; flex-direction: column; gap: 8px; }
+.rs-ca-item {
+  padding: 8px 12px 10px; border: 2px solid var(--rs-border);
+  border-radius: var(--rs-radius); background: var(--rs-surface);
+}
+.rs-ca-item.filled { border-color: color-mix(in srgb, var(--rs-primary) 45%, var(--rs-border)); }
+.rs-ca-item-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.rs-ca-item-label { font-weight: 600; min-width: 0; }
+.rs-ca-item-val { font-weight: 700; white-space: nowrap; color: var(--rs-primary); }
+.rs-ca-item-body { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
+.rs-ca-holds { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; flex: 1; min-height: 26px; min-width: 0; }
+.rs-ca-btn {
+  flex: none; width: 34px; height: 34px; font-size: 19px; line-height: 1; font-family: inherit;
+  border: 1.5px solid var(--rs-border); border-radius: 9px; background: var(--rs-surface);
+  color: var(--rs-text); cursor: pointer;
+}
+.rs-ca-btn:hover:not(:disabled) { border-color: var(--rs-primary); color: var(--rs-primary); }
+.rs-ca-btn:disabled { opacity: .35; cursor: not-allowed; }
+
+/* --------------------------------------------------------------- mobile */
+@media (max-width: 560px) {
+  .rs-dd-buckets, .rs-dd-buckets.cols-2, .rs-dd-buckets.cols-3, .rs-dd-buckets.cols-4 {
+    grid-template-columns: 1fr;
+  }
+  .rs-dd-bucket { min-height: 90px; }
+  .rs-dd-chip { font-size: .86em; padding: 6px 10px; }
+  .rs-dd-chip.on-scale { max-width: 68%; }
+  /* the chips need the full width, so they drop to their own line — and the
+     − / + buttons stay at the ends where a thumb expects them */
+  .rs-ca-item-body { flex-wrap: wrap; justify-content: space-between; }
+  .rs-ca-holds { order: 3; flex-basis: 100%; }
+}
