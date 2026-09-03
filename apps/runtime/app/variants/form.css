@@ -1,1 +1,68 @@
 /* ---- form variant family */
+
+/* ------------------------------------------------- repeating / nested form */
+.rs-repeatform { display: flex; flex-direction: column; gap: 12px; }
+
+.rs-entry {
+  border: 1px solid var(--rs-border);
+  border-radius: var(--rs-radius);
+  padding: 12px 14px;
+  background: var(--rs-surface);
+}
+.rs-entry.bad { border-color: var(--rs-error); }
+.rs-entry-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.rs-entry-n {
+  font-size: 0.78em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--rs-subtle);
+}
+.rs-entry-remove {
+  width: 26px; height: 26px;
+  border: 1px solid var(--rs-border);
+  border-radius: 8px;
+  background: var(--rs-surface);
+  color: var(--rs-subtle);
+  cursor: pointer;
+  font-size: 0.82em;
+  line-height: 1;
+}
+.rs-entry-remove:hover:not(:disabled) { border-color: var(--rs-error); color: var(--rs-error); }
+.rs-entry-remove:disabled { opacity: 0.3; cursor: default; }
+
+.rs-entry-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px 14px;
+}
+.rs-entry-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.rs-entry-field > .flab {
+  font-size: 0.84em;
+  color: var(--rs-subtle);
+}
+.rs-entry-field .rs-req { color: var(--rs-error); }
+.rs-entry-field .rs-input,
+.rs-entry-field .rs-textarea { width: 100%; max-width: 100%; min-width: 0; }
+
+.rs-repeatform-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 520px) {
+  .rs-entry-fields { grid-template-columns: 1fr; }
+}

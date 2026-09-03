@@ -506,10 +506,23 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: CAP_MULTI, validations: VAL_MULTI,
     defaults: { instruction: "Configure the source under Carry-forward in the right panel." },
   }),
-  ...planned(F.list, [
-    ["Dynamic List", "Respondent adds rows as needed."],
-    ["Editable Table", "Spreadsheet-style entry grid."],
-  ]),
+  stable(F.list, "dynamic_list", "Dynamic List", "Respondent adds rows as needed.", {
+    baseType: "repeating_group", renderer: "dynamiclist", responseModel: "fields",
+    capabilities: ["fields"], validations: ["required"],
+    defaults: {
+      // one field per entry: the list is a column of single values
+      rows: [{ code: "item", label: "Item", fieldType: "text", required: true }],
+      settings: { minRepeats: 1, maxRepeats: 10 },
+    },
+  }),
+  stable(F.list, "editable_table", "Editable Table", "Spreadsheet-style entry grid.", {
+    baseType: "custom_table", renderer: "spreadsheet", responseModel: "cells",
+    capabilities: ["rows", "columns"], validations: ["required"],
+    defaults: {
+      rows: [1, 2, 3].map((n) => ({ code: String(n), label: `Row ${n}` })),
+      instruction: "Tab or the arrow keys move between cells; Enter moves down.",
+    },
+  }),
 
   /* --------------------------------------------------------------- MATRIX */
   stable(F.matrix, "single", "Single-Select Matrix", "One answer per row.", {
@@ -573,12 +586,42 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       instruction: "For each pair, pick the point closest to your view.",
     },
   }),
-  ...planned(F.matrix, [
-    ["Slider Matrix", "A slider per row."],
-    ["Star Rating Matrix", "Stars per row."],
-    ["Constant-Sum Matrix", "Allocations across a grid."],
-    ["Drag-and-Drop Matrix", "Drag answers into a grid."],
-  ]),
+  stable(F.matrix, "slider_matrix", "Slider Matrix", "A slider per row.", {
+    baseType: "matrix_numeric", renderer: "slidermatrix", responseModel: "per_row",
+    capabilities: ["rows", "numeric_bounds", "scale_labels", "randomization", "carry_forward"],
+    validations: ["required", "min_value", "max_value"],
+    defaults: { settings: { sliderLayout: "grid", minValue: 0, maxValue: 100, step: 1 } },
+  }),
+  stable(F.matrix, "star_matrix", "Star Rating Matrix", "Stars per row.", {
+    baseType: "matrix_numeric", renderer: "starmatrix", responseModel: "per_row",
+    capabilities: ["rows", "numeric_bounds", "randomization", "carry_forward"],
+    validations: ["required", "min_value", "max_value"],
+    defaults: { settings: { minValue: 1, maxValue: 5 } },
+  }),
+  /**
+   * Each ROW spreads `settings.sumTarget` across the COLUMNS — "split 100
+   * points between the brands, for every attribute". The cells are an
+   * ordinary composite, so variables, piping and the CSV layout are the ones
+   * the Mixed-Type Matrix already exports; `settings.rowSum` is what tells
+   * the validator to hold each row to the target (see validate.ts).
+   */
+  stable(F.matrix, "constant_sum", "Constant-Sum Matrix", "Allocations across a grid.", {
+    baseType: "composite", renderer: "summatrix", responseModel: "cells",
+    capabilities: ["rows", "columns", "sum", "randomization", "carry_forward"],
+    validations: ["required"],
+    defaults: {
+      // composite is not row-driven, so this variant brings its own rows
+      rows: [1, 2, 3].map((n) => ({ code: String(n), label: `Attribute ${n}` })),
+      settings: { rowSum: true, sumTarget: 100 },
+      instruction: "Split the total across the columns — every row must reach the target.",
+    },
+  }),
+  stable(F.matrix, "dragdrop_matrix", "Drag-and-Drop Matrix", "Drag answers into a grid.", {
+    baseType: "matrix_single", renderer: "dragmatrix", responseModel: "per_row",
+    capabilities: ["rows", "options", "randomization", "carry_forward"],
+    validations: ["required"],
+    defaults: { instruction: "Drag each item into a column — or tap the item, then the column." },
+  }),
 
   /* -------------------------------------------------------------- RANKING */
   // The three ranking variants differ by `settings.rankMode`, which the
@@ -905,10 +948,35 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       ],
     },
   }),
-  ...planned(F.form, [
-    ["Repeating / Nested Form", "Respondent-driven repetition."],
-    ["Conditional Form", "Fields appearing per earlier answers."],
-  ]),
+  stable(F.form, "repeating", "Repeating / Nested Form", "Respondent-driven repetition.", {
+    baseType: "repeating_group", renderer: "repeatform", responseModel: "fields",
+    capabilities: ["fields"], validations: ["required"],
+    defaults: {
+      rows: [
+        { code: "name", label: "Name", fieldType: "text", required: true },
+        { code: "email", label: "Email", fieldType: "email" },
+        { code: "relationship", label: "Relationship", fieldType: "text" },
+      ],
+      settings: { minRepeats: 1, maxRepeats: 5 },
+    },
+  }),
+  /**
+   * An ordinary field list whose ROWS carry `visibleIf` — the runtime
+   * re-evaluates row visibility on every answer change, so a field appears
+   * and disappears live as an earlier question is answered. No renderer of
+   * its own: the condition is the whole feature.
+   */
+  stable(F.form, "conditional", "Conditional Form", "Fields appearing per earlier answers.", {
+    baseType: "text_list", responseModel: "fields",
+    capabilities: ["fields", "layout_columns"], validations: ["required"],
+    defaults: {
+      rows: [
+        { code: "employed", label: "Are you employed?", fieldType: "text" },
+        { code: "employer", label: "Employer", fieldType: "text" },
+      ],
+      instruction: "Add a Show-when condition on any field in its ⑂ logic — it appears only when the condition holds.",
+    },
+  }),
 
   /* -------------------------------------------------------------- DYNAMIC */
   stable(F.dynamic, "previous_answer", "Previous-Answer-Driven Options", "Options carried from an earlier question (include/exclude/prioritize).", {
