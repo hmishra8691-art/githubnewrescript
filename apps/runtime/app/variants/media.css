@@ -1,1 +1,76 @@
 /* ---- media variant family */
+
+.rs-media { display: flex; flex-direction: column; gap: 10px; }
+.rs-media-el {
+  display: block; width: 100%; max-width: 100%; max-height: 380px;
+  background: #0b1120; border-radius: calc(var(--rs-radius) - 4px);
+}
+.rs-media-note {
+  font-size: 0.85em; color: var(--rs-subtle);
+  background: var(--rs-bg); border: 1px solid var(--rs-border);
+  border-radius: 8px; padding: 7px 10px;
+}
+
+/* Video Rating — the stars are inside a fieldset so the gate really disables them */
+.rs-media-rate { border: 0; margin: 0; padding: 0; min-width: 0; }
+.rs-media-rate:disabled { opacity: .45; }
+
+/* Video Hotspot / timeline reactions */
+.rs-tl-strip {
+  position: relative; height: 26px; margin-top: 2px;
+  background: var(--rs-border); border-radius: 999px;
+}
+.rs-tl-played {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  background: color-mix(in srgb, var(--rs-primary) 35%, var(--rs-border));
+  border-radius: 999px;
+}
+.rs-tl-mark {
+  position: absolute; top: -2px; transform: translateX(-50%);
+  font: inherit; font-size: 15px; line-height: 1; cursor: pointer;
+  border: none; background: transparent; color: var(--rs-primary); padding: 4px 3px;
+}
+.rs-tl-mark:hover { color: var(--rs-secondary); }
+.rs-tl-time { font-size: 0.78em; color: var(--rs-subtle); text-align: right; margin-top: -4px; }
+
+.rs-tl-bar { display: flex; flex-wrap: wrap; gap: 8px; }
+.rs-tl-opt {
+  font: inherit; font-size: 0.95em; font-weight: 600; cursor: pointer;
+  padding: 10px 16px; border-radius: 999px;
+  border: 1.5px solid var(--rs-border); background: var(--rs-surface); color: var(--rs-text);
+}
+.rs-tl-opt:hover:not(:disabled) { border-color: var(--rs-primary); color: var(--rs-primary); }
+.rs-tl-react { padding: 10px 26px; }
+
+.rs-tl-list { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.rs-tl-list li {
+  display: flex; align-items: center; gap: 8px; font-size: 0.88em;
+  border: 1px solid var(--rs-border); border-radius: 8px; padding: 5px 8px;
+}
+.rs-tl-jump {
+  font: inherit; font-size: 0.92em; font-variant-numeric: tabular-nums; cursor: pointer;
+  border: none; background: transparent; color: var(--rs-primary); font-weight: 700; padding: 0;
+}
+.rs-tl-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs-tl-x {
+  font: inherit; font-size: 17px; line-height: 1; cursor: pointer;
+  border: none; background: transparent; color: var(--rs-error); padding: 0 4px;
+}
+
+/* Watch-time tracking */
+.rs-wt-bar { height: 6px; background: var(--rs-border); border-radius: 999px; overflow: hidden; }
+.rs-wt-fill { height: 100%; background: var(--rs-primary); border-radius: 999px; transition: width .2s linear; }
+.rs-wt-done { color: var(--rs-primary); font-weight: 600; }
+
+/* Audio recording / voice response */
+.rs-rec { display: flex; flex-direction: column; gap: 10px; }
+.rs-rec-play { width: 100%; max-width: 100%; }
+.rs-rec-start { background: var(--rs-error); border-color: var(--rs-error); }
+.rs-rec-stop { background: var(--rs-secondary); border-color: var(--rs-secondary); }
+.rs-rec-or { color: var(--rs-subtle); font-size: 0.85em; }
+.rs-rec-live { font-size: 0.85em; color: var(--rs-error); font-weight: 600; }
+
+@media (max-width: 520px) {
+  .rs-tl-opt { padding: 9px 12px; font-size: 0.88em; }
+  .rs-rec-or { width: 100%; }
+}

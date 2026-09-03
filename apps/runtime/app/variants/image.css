@@ -1,1 +1,62 @@
 /* ---- image variant family */
+
+/* Image Annotation / Markup + Draw-on-Image (renderer "annotate") */
+.rs-annot { display: flex; flex-direction: column; gap: 10px; }
+
+.rs-annot-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.rs-annot-spacer { flex: 1 1 auto; }
+.rs-annot-tool {
+  font: inherit; font-size: 0.88em; font-weight: 600; cursor: pointer;
+  padding: 7px 12px; border-radius: 999px;
+  border: 1.5px solid var(--rs-border); background: var(--rs-surface); color: var(--rs-text);
+}
+.rs-annot-tool:hover:not(:disabled) { border-color: var(--rs-primary); }
+.rs-annot-tool.on { border-color: var(--rs-primary); background: color-mix(in srgb, var(--rs-primary) 10%, var(--rs-surface)); color: var(--rs-primary); }
+.rs-annot-tool:disabled { opacity: .45; cursor: default; }
+
+.rs-annot-stage {
+  position: relative; display: block; width: 100%; max-width: 100%;
+  border: 1px solid var(--rs-border); border-radius: calc(var(--rs-radius) - 4px);
+  overflow: hidden; background: var(--rs-bg); line-height: 0;
+}
+.rs-annot-img { display: block; width: 100%; height: auto; user-select: none; }
+.rs-annot-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.rs-annot-surface { position: absolute; inset: 0; touch-action: none; }
+.rs-annot-surface.tool-pin { cursor: crosshair; }
+.rs-annot-surface.tool-pen,
+.rs-annot-surface.tool-highlight { cursor: crosshair; }
+
+.rs-annot-pins { position: absolute; inset: 0; pointer-events: none; }
+.rs-annot-pin {
+  position: absolute; transform: translate(-50%, -50%); pointer-events: auto;
+  width: 26px; height: 26px; border-radius: 999px; cursor: pointer;
+  border: 2px solid #fff; background: var(--rs-primary); color: #fff;
+  font: inherit; font-size: 12px; font-weight: 700; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 1px 6px rgb(0 0 0 / 35%);
+}
+.rs-annot-pin.open { outline: 2px solid var(--rs-primary); outline-offset: 2px; }
+/* a pin that carries a comment reads differently from an empty marker */
+.rs-annot-pin.noted { box-shadow: 0 1px 6px rgb(0 0 0 / 35%), 0 0 0 3px color-mix(in srgb, var(--rs-primary) 35%, transparent); }
+
+.rs-annot-note {
+  position: absolute; pointer-events: auto; transform: translate(-50%, 14px);
+  display: flex; align-items: center; gap: 4px; z-index: 2;
+  background: var(--rs-surface); border: 1px solid var(--rs-border);
+  border-radius: 8px; padding: 5px; box-shadow: 0 4px 14px rgb(0 0 0 / 18%);
+  max-width: min(260px, 80%);
+}
+.rs-annot-note .rs-input { max-width: 190px; line-height: 1.4; }
+.rs-annot-note-x {
+  font: inherit; cursor: pointer; border: none; background: transparent;
+  color: var(--rs-error); font-size: 18px; line-height: 1; padding: 0 4px;
+}
+
+.rs-annot-status { font-size: 0.85em; color: var(--rs-subtle); }
+.rs-annot-hint { color: var(--rs-subtle); }
+
+@media (max-width: 520px) {
+  .rs-annot-tool { padding: 6px 9px; font-size: 0.82em; }
+  .rs-annot-note { max-width: 78vw; }
+  .rs-annot-note .rs-input { max-width: 52vw; }
+}
