@@ -1,4 +1,5 @@
 "use client";
+import { CountInput } from "./CountInput";
 import React from "react";
 import type { Question, Option, QuestionColumn, ResponseType, QuestionVariantDef } from "@rescript/schema";
 import { questionTypeRegistry, variantRegistry, resolveVariant } from "@rescript/schema";
@@ -471,9 +472,9 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
         {rows.length === 0 && (
           <label className="row" style={{ gap: 6, fontSize: 12 }}>
             legacy item count
-            <input className="input" type="number" style={{ width: 80 }}
+            <CountInput min={1} allowEmpty={false} width={80}
               value={q.settings.listCount ?? 3}
-              onChange={(e) => patchSettings({ listCount: Number(e.target.value) })} />
+              onChange={(v) => patchSettings({ listCount: v ?? 1 })} />
           </label>
         )}
       </div>
@@ -668,14 +669,30 @@ export function QuestionEditor({ q }: { q: Question }) {
         </div>
       )}
 
+      {q.options.some((o) => o.flags?.includes("other_specify")) && (
+        <label className="row" style={{ gap: 8, fontSize: 12.5 }} data-testid="other-specify-required">
+          <input type="checkbox"
+            checked={!q.settings.otherSpecifyOptional}
+            onChange={(e) => patchSettings({ otherSpecifyOptional: e.target.checked ? undefined : true })} />
+          <span>
+            Require the “Other” text —{" "}
+            <span className="muted">respondents who pick Other cannot continue until they say what it is</span>
+          </span>
+        </label>
+      )}
+
       {(q.type === "multi_select" || q.type === "multi_dropdown" || q.type === "image_select" || q.type === "ranking") && has("min_max_selections") && (
         <div className="row">
           <label className="f"><span>Min selections</span>
-            <input className="input" type="number" style={{ width: 90 }} value={q.settings.minSelections ?? ""}
-              onChange={(e) => patchSettings({ minSelections: e.target.value === "" ? undefined : Number(e.target.value) })} /></label>
+            <CountInput data-testid="min-selections" value={q.settings.minSelections}
+              onChange={(v) => patchSettings({ minSelections: v })} /></label>
           <label className="f"><span>Max selections</span>
-            <input className="input" type="number" style={{ width: 90 }} value={q.settings.maxSelections ?? ""}
-              onChange={(e) => patchSettings({ maxSelections: e.target.value === "" ? undefined : Number(e.target.value) })} /></label>
+            <CountInput data-testid="max-selections" value={q.settings.maxSelections}
+              onChange={(v) => patchSettings({ maxSelections: v })} /></label>
+          {q.settings.minSelections != null && q.settings.maxSelections != null
+            && q.settings.minSelections > q.settings.maxSelections && (
+            <span className="chip warn" data-testid="selections-inverted">min is above max — nothing can satisfy both</span>
+          )}
         </div>
       )}
 
@@ -699,11 +716,11 @@ export function QuestionEditor({ q }: { q: Question }) {
               onChange={(e) => patchSettings({ imageUrl: e.target.value || undefined })} /></label>
           <div className="row">
             <label className="f"><span>Min points</span>
-              <input className="input" type="number" style={{ width: 90 }} value={q.settings.minSelections ?? ""}
-                onChange={(e) => patchSettings({ minSelections: e.target.value === "" ? undefined : Number(e.target.value) })} /></label>
+              <CountInput value={q.settings.minSelections}
+                onChange={(v) => patchSettings({ minSelections: v })} /></label>
             <label className="f"><span>Max points</span>
-              <input className="input" type="number" style={{ width: 90 }} value={q.settings.maxSelections ?? 1}
-                onChange={(e) => patchSettings({ maxSelections: Number(e.target.value) })} /></label>
+              <CountInput min={1} allowEmpty={false} value={q.settings.maxSelections ?? 1}
+                onChange={(v) => patchSettings({ maxSelections: v ?? 1 })} /></label>
           </div>
           {q.settings.imageUrl && (
             // eslint-disable-next-line @next/next/no-img-element
@@ -739,6 +756,26 @@ export function QuestionEditor({ q }: { q: Question }) {
       )}
     </div>
   );
+}
+
+/**
+ * Esc closes the open question. Listens on the document because the card is
+ * not focusable, so a keypress lands on the body — but yields to anything
+ * modal (the variant picker, a menu, a dialog), which owns Esc while open.
+ */
+function EscapeCloses({ onClose }: { onClose: () => void }) {
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.('[role="dialog"], .modal, .menu, .picker, [data-modal]')) return;
+      if (document.querySelector('[role="dialog"], .modal-back, .menu-scrim')) return;
+      onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return null;
 }
 
 /** Parse pasted option lists: strips numbering (1. / 1) ), bullets (- * •)
@@ -864,6 +901,22 @@ export function QuestionsPanel() {
       const b = blockIn(d, blockId);
       if (b) b.node.title = title || undefined;
     });
+
+  /**
+   * Whether respondents see this block's name. Three states: inherit the
+   * survey default (unset), always show, always hide. The Studio shows the
+   * name regardless — it is the programmer's label first.
+   */
+  const setBlockShowTitle = (blockId: string, v: boolean | undefined) =>
+    s.update((d) => {
+      const b = blockIn(d, blockId);
+      if (!b) return;
+      if (v === undefined) delete (b.node as any).showTitle;
+      else (b.node as any).showTitle = v;
+    });
+  const surveyShowsTitles = s.def.branding?.layout?.showBlockTitles ?? true;
+  const blockShowsTitle = (b: BlockRef) =>
+    ((b.node as any).showTitle as boolean | undefined) ?? surveyShowsTitles;
 
   /** An optional heading for one page of a multi-page block. */
   const renamePage = (blockId: string, pageIdx: number, title: string) =>
@@ -1105,10 +1158,20 @@ export function QuestionsPanel() {
     const q = s.def.questions.find((x) => x.id === qid);
     if (!q) return null;
     const isSelected = q.id === s.selectedQuestionId;
+    /*
+     * Closing an open question was reported as impossible: clicking the card
+     * re-selected it, so it never collapsed, and the only × on the row is
+     * Delete — a tester looking for "close" finds the one button that destroys
+     * the question. Now: the header toggles, Done closes, Esc closes, and the
+     * block head has its own Close. Delete stays last and stays red.
+     */
+    const close = () => s.select(null);
     return (
       <div key={q.id}
         className={`card selectable qcard ${isSelected ? "selected" : ""}`}
-        onClick={() => s.select(q.id)}>
+        data-testid="qcard"
+        onClick={() => s.select(isSelected ? null : q.id)}>
+        {isSelected && <EscapeCloses onClose={close} />}
         <div className="qlist-item">
           <strong className="mono">{q.code}</strong>
           <span className="qtype-badge">{q.variant?.split(".")[1] ?? q.type}</span>
@@ -1129,11 +1192,23 @@ export function QuestionsPanel() {
             <button className="btn small" title="Start a new block here"
               onClick={(e) => { e.stopPropagation(); splitBlock(pageId, indexInPage); }}>⤵</button>
           )}
-          <button className="btn small danger" title="Delete" onClick={(e) => { e.stopPropagation(); remove(q.id); }}>×</button>
+          {isSelected && (
+            <button className="btn small primary" data-testid="close-question"
+              title="Done editing — close this question (Esc)"
+              onClick={(e) => { e.stopPropagation(); close(); }}>Done</button>
+          )}
+          <button className="btn small danger" title="Delete this question" onClick={(e) => { e.stopPropagation(); remove(q.id); }}>×</button>
         </div>
         {isSelected && selected && (
           <div style={{ marginTop: 14 }} onClick={(e) => e.stopPropagation()}>
             <QuestionEditor q={selected} />
+            <div className="row qcard-foot">
+              <span className="muted" style={{ fontSize: 11 }}>Changes save automatically.</span>
+              <span className="grow" />
+              <button className="btn primary" data-testid="close-question-bottom"
+                title="Done editing — close this question (Esc)"
+                onClick={close}>Done</button>
+            </div>
           </div>
         )}
       </div>
@@ -1179,6 +1254,19 @@ export function QuestionsPanel() {
               {n} question{n === 1 ? "" : "s"}
               {multi && ` · ${b.pages.length} pages`}
             </span>
+            {b.title && !blockShowsTitle(b) && (
+              <span className="chip" data-testid="block-title-hidden"
+                title="Respondents will not see this block's name — change it in the ••• menu">name hidden</span>
+            )}
+            {!isCollapsed && (
+              <button className="btn small" data-testid="block-close"
+                title="Close this block — collapses it and closes any open question inside"
+                onClick={() => {
+                  const inside = b.pages.some((p) => p.node.questionIds.includes(s.selectedQuestionId ?? ""));
+                  if (inside) s.select(null);
+                  setCollapsed((c) => ({ ...c, [b.id]: true }));
+                }}>Close</button>
+            )}
             <div className="menu-anchor">
               <button className="btn small" data-testid="block-menu"
                 onClick={() => setMenuFor(menuFor === b.id ? null : b.id)}>•••</button>
@@ -1192,6 +1280,23 @@ export function QuestionsPanel() {
                       onClick={() => { setMenuFor(null); moveBlock(b.id, 1); }}>↓ Move block down</button>
                     <button className="menu-item"
                       onClick={() => { setMenuFor(null); duplicateBlock(b.id); }}>⧉ Duplicate block</button>
+                    <div className="menu-sep" />
+                    <div className="menu-label">Block name for respondents</div>
+                    {([
+                      [undefined, `Survey default (${surveyShowsTitles ? "shown" : "hidden"})`],
+                      [true, "Always shown"],
+                      [false, "Always hidden"],
+                    ] as [boolean | undefined, string][]).map(([v, label]) => {
+                      const cur = (b.node as any).showTitle as boolean | undefined;
+                      return (
+                        <button key={String(v)} className="menu-item" role="menuitemradio"
+                          aria-checked={cur === v}
+                          data-testid={`block-title-${v === undefined ? "inherit" : v ? "show" : "hide"}`}
+                          onClick={() => { setMenuFor(null); setBlockShowTitle(b.id, v); }}>
+                          {cur === v ? "● " : "○ "}{label}
+                        </button>
+                      );
+                    })}
                     {pi > 0 && blocks[pi - 1].parent === b.parent && (
                       <button className="menu-item"
                         onClick={() => { setMenuFor(null); mergeUp(b.id); }}>⇧ Merge into block above</button>

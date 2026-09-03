@@ -355,6 +355,42 @@ function lintPiping(text: string | undefined, path: string, ctx: Ctx): void {
  * hand-edited definition must surface as a reported problem rather than
  * taking the whole panel down.
  */
+/**
+ * Counts that cannot be what they say. The Studio's inputs refuse these now,
+ * but a definition can arrive from JSON, an import or an older build, and
+ * "select at least -5" must be reported rather than quietly treated as 0.
+ */
+function lintCounts(q: Question, push: (i: Omit<LogicIssue, "questionId" | "questionCode">) => void): void {
+  const st = q.settings ?? {};
+  const counts: [string, number | undefined, number][] = [
+    ["minSelections", st.minSelections, 0],
+    ["maxSelections", st.maxSelections, 1],
+    ["listCount", st.listCount, 1],
+    ["columnsLayout", st.columnsLayout, 1],
+  ];
+  for (const [name, v, floor] of counts) {
+    if (v == null) continue;
+    if (!Number.isFinite(v) || !Number.isInteger(v) || v < floor) {
+      push({
+        level: "error",
+        path: `settings.${name}`,
+        message: `${name} is ${v} — it must be a whole number of at least ${floor}.`,
+      });
+    }
+  }
+  if (st.minSelections != null && st.maxSelections != null && st.minSelections > st.maxSelections) {
+    push({
+      level: "error",
+      path: "settings.minSelections",
+      message: `minSelections (${st.minSelections}) is above maxSelections (${st.maxSelections}) — no answer can satisfy both.`,
+    });
+  }
+  const pick = q.randomization?.pick;
+  if (pick != null && (!Number.isInteger(pick) || pick < 1)) {
+    push({ level: "error", path: "randomization.pick", message: `“show only” is ${pick} — it must be a whole number of at least 1.` });
+  }
+}
+
 export function lintQuestionLogic(def: SurveyDefinition, q: Question): LogicIssue[] {
   try {
     return lintQuestionLogicUnsafe(def, q);
@@ -372,6 +408,7 @@ export function lintQuestionLogic(def: SurveyDefinition, q: Question): LogicIssu
 function lintQuestionLogicUnsafe(def: SurveyDefinition, q: Question): LogicIssue[] {
   const issues: LogicIssue[] = [];
   const order = orderIndex(def);
+  lintCounts(q, (i) => issues.push({ ...i, questionId: q.id, questionCode: q.code }));
   const base = (perOption: boolean): Ctx => ({
     def,
     q,

@@ -109,6 +109,30 @@ export function validateQuestion(
     push("This question is required.");
   }
 
+  /*
+   * Other (specify): selecting it is not an answer until the respondent says
+   * what "other" is. A blank specify was reaching the data — enforced here in
+   * the engine, so the runtime, the preview and the inspector agree, and so
+   * every renderer that shows the box gets it without its own check. The
+   * text lives beside the answer under `<id>__other` (see state.ts).
+   */
+  if (!q.settings.otherSpecifyOptional && !isEmpty(value) && Array.isArray(q.options)) {
+    const otherCodes = q.options
+      .filter((o) => o.flags?.includes("other_specify"))
+      .map((o) => String(o.code));
+    if (otherCodes.length > 0) {
+      const chosen = (Array.isArray(value) ? value : [value]).map(String);
+      if (chosen.some((c) => otherCodes.includes(c))) {
+        const answers = ctx.state.answers as Record<string, unknown>;
+        const raw =
+          (ctx.loop ? answers[`${q.id}@${ctx.loop.code}__other`] : undefined) ??
+          answers[`${q.id}__other`];
+        const text = typeof raw === "string" ? raw.trim() : raw;
+        if (isEmpty(text)) push("Please say what “Other” is before continuing.");
+      }
+    }
+  }
+
   // bounds from settings
   if (!isEmpty(value) && (q.type === "numeric" || q.type === "slider" || q.type === "nps")) {
     if (q.settings.minValue != null && Number(value) < q.settings.minValue)

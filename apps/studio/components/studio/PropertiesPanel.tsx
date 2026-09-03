@@ -1,4 +1,5 @@
 "use client";
+import { CountInput } from "./CountInput";
 import React from "react";
 import type { Question, ValidationRule, SkipRule, ListOperation, ListSource } from "@rescript/schema";
 import { validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary } from "@rescript/engine";
@@ -224,8 +225,8 @@ function ListOperationsEditor({ q, patch }: { q: Question; patch(p: Partial<Ques
                 </select>
                 <label className="row" style={{ gap: 4, fontSize: 12 }}>
                   show
-                  <input className="input" type="number" style={{ width: 60 }} value={op.pick ?? ""}
-                    onChange={(e) => setOp(i, { pick: e.target.value === "" ? undefined : Number(e.target.value) })} />
+                  <CountInput min={1} width={60} value={op.pick}
+                    onChange={(v) => setOp(i, { pick: v })} />
                 </label>
               </>
             )}
@@ -521,11 +522,11 @@ export function PropertiesPanel() {
             </select>
             <label className="row" style={{ gap: 4, fontSize: 12 }}>
               show only
-              <input className="input" type="number" style={{ width: 64 }}
+              <CountInput min={1} width={64}
                 title="Present N randomly chosen items (anchored items always show)"
-                value={q.randomization.pick ?? ""}
-                onChange={(e) => patch({
-                  randomization: { ...q.randomization!, pick: e.target.value === "" ? undefined : Number(e.target.value) },
+                value={q.randomization.pick}
+                onChange={(v) => patch({
+                  randomization: { ...q.randomization!, pick: v },
                 })} />
               items
             </label>
@@ -558,12 +559,12 @@ export function PropertiesPanel() {
                 </select>
                 <label className="row" style={{ gap: 4, fontSize: 12 }}>
                   pick
-                  <input className="input" type="number" style={{ width: 60 }} value={rule.pick ?? ""}
-                    onChange={(e) => patch({
+                  <CountInput min={1} width={60} value={rule.pick}
+                    onChange={(v) => patch({
                       randomization: {
                         ...q.randomization!,
                         rules: q.randomization!.rules!.map((x, j) =>
-                          j === ri ? { ...x, pick: e.target.value === "" ? undefined : Number(e.target.value) } : x),
+                          j === ri ? { ...x, pick: v } : x),
                       },
                     })} />
                 </label>

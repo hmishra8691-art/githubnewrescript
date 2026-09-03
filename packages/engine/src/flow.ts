@@ -26,6 +26,8 @@ export type RuntimeStep =
       kind: "page";
       pageId: string;
       title?: string;
+      /** resolved: page → enclosing block → branding.layout.showBlockTitles */
+      showTitle: boolean;
       questionIds: string[];
       loop?: LoopContext | null;
       sectionPath: string[];
@@ -58,11 +60,13 @@ export function compileFlow(
    * it here. A page with its own title still wins, so a block can name its
    * pages individually.
    */
+  const surveyDefault = def.branding?.layout?.showBlockTitles ?? true;
   const walk = (
     nodes: FlowNode[],
     loop: LoopContext | null,
     sectionPath: string[],
     blockTitle?: string,
+    blockShowTitle?: boolean,
   ): void => {
     for (const node of nodes) {
       switch (node.type) {
@@ -72,6 +76,7 @@ export function compileFlow(
             kind: "page",
             pageId: loop ? `${node.id}@${loop.code}` : node.id,
             title: node.title ?? blockTitle,
+            showTitle: node.showTitle ?? blockShowTitle ?? surveyDefault,
             questionIds: node.questionIds,
             loop,
             sectionPath,
@@ -87,6 +92,7 @@ export function compileFlow(
             [...sectionPath, node.title ?? node.id],
             // a section groups pages for reporting; a block also names them
             node.type === "block" ? (node.title ?? blockTitle) : blockTitle,
+            node.type === "block" ? (node.showTitle ?? blockShowTitle) : blockShowTitle,
           );
           break;
         }

@@ -676,6 +676,7 @@ body.flow-dragging .flow-dropzone { height: 26px; }
 .insert-bar:hover, .insert-bar:focus-within { opacity: 1; }
 .insert-line { flex: 1; height: 1px; background: var(--border); }
 .qcard .qcard-text { overflow: hidden; max-height: 44px; }
+.qcard-foot { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); }
 .qcard .qcard-text p { margin: 0; display: inline; }
 
 .paste-box { margin-top: 8px; }

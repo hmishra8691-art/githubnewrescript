@@ -94,6 +94,14 @@ export function BrandingPanel() {
             onChange={(e) => set((x) => { x.layout.progressBar = e.target.value as any; })}>
             <option value="top">top</option><option value="bottom">bottom</option><option value="none">none</option>
           </select></label>
+        <label className="f" style={{ width: 230 }} title="Block names always show in the Studio. This decides whether respondents see them as page headings. A block can override it in its ••• menu.">
+          <span>Block names</span>
+          <select className="select" data-testid="show-block-titles"
+            value={b.layout.showBlockTitles ? "show" : "hide"}
+            onChange={(e) => set((x) => { x.layout.showBlockTitles = e.target.value === "show"; })}>
+            <option value="show">shown to respondents</option>
+            <option value="hide">hidden from respondents</option>
+          </select></label>
       </div>
 
       <h3 className="sec">Buttons</h3>

@@ -107,6 +107,12 @@ export const Branding = z.object({
       spacing: z.enum(["compact", "regular", "relaxed"]).default("regular"),
       progressBar: z.enum(["top", "bottom", "none"]).default("top"),
       progressStyle: z.enum(["bar", "steps", "percent"]).default("bar"),
+      /**
+       * Survey-wide default for whether block names reach respondents. `true`
+       * keeps what every existing survey did; a block can override it either
+       * way with its own `showTitle`.
+       */
+      showBlockTitles: z.boolean().default(true),
     })
     .default({}),
   buttons: z

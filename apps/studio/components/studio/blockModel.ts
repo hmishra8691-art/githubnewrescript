@@ -29,6 +29,7 @@ export function wrapBlock(b: BlockRef): any {
   const page = b.node;
   const blockNode: any = { type: "block", id: uid("block"), children: [page] };
   if (page.title) { blockNode.title = page.title; delete page.title; }
+  if (page.showTitle !== undefined) { blockNode.showTitle = page.showTitle; delete page.showTitle; }
   if (page.visibleIf) { blockNode.visibleIf = page.visibleIf; delete page.visibleIf; }
   b.parent.splice(b.parent.indexOf(page), 1, blockNode);
   return blockNode;
@@ -41,6 +42,7 @@ export function unwrapIfSingle(b: BlockRef): void {
   if (kids.length !== 1 || kids[0].type !== "page") return;
   const page = kids[0];
   if (b.node.title && !page.title) page.title = b.node.title;
+  if (b.node.showTitle !== undefined && page.showTitle === undefined) page.showTitle = b.node.showTitle;
   if (b.node.visibleIf && !page.visibleIf) page.visibleIf = b.node.visibleIf;
   b.parent.splice(b.parent.indexOf(b.node), 1, page);
 }

@@ -1,4 +1,5 @@
 "use client";
+import { CountInput } from "./CountInput";
 import React from "react";
 import { useStudio, uid } from "./store";
 import { ConditionEditor, conditionToText } from "./ConditionBuilder";
@@ -36,8 +37,8 @@ export function QuotasPanel() {
               <option value="hard">hard</option><option value="soft">soft</option>
             </select>
             <label className="row" style={{ gap: 4 }}>target total
-              <input className="input" style={{ width: 90 }} type="number" value={qt.targetTotal ?? ""}
-                onChange={(e) => s.update((d) => { d.quotas[qi].targetTotal = e.target.value === "" ? undefined : Number(e.target.value); })} />
+              <CountInput value={qt.targetTotal}
+                onChange={(v) => s.update((d) => { d.quotas[qi].targetTotal = v; })} />
             </label>
             <select className="select" value={qt.onFull.kind}
               onChange={(e) => s.update((d) => { d.quotas[qi].onFull.kind = e.target.value as any; })}>
@@ -61,8 +62,8 @@ export function QuotasPanel() {
                 <div className="row">
                   <input className="input" style={{ width: 180 }} value={cell.label}
                     onChange={(e) => s.update((d) => { d.quotas[qi].cells[ci].label = e.target.value; })} />
-                  <input className="input" style={{ width: 84 }} type="number" value={cell.limit}
-                    onChange={(e) => s.update((d) => { d.quotas[qi].cells[ci].limit = Number(e.target.value); })} />
+                  <CountInput width={84} allowEmpty={false} value={cell.limit}
+                    onChange={(v) => s.update((d) => { d.quotas[qi].cells[ci].limit = v ?? 0; })} />
                   <select className="select" style={{ width: 100 }} value={cell.limitType}
                     onChange={(e) => s.update((d) => { d.quotas[qi].cells[ci].limitType = e.target.value as any; })}>
                     <option value="count">count</option><option value="percent">%</option>

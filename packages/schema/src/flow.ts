@@ -30,6 +30,7 @@ export type FlowNode =
       type: "page";
       id: string;
       title?: string;
+      showTitle?: boolean;
       questionIds: string[];
       visibleIf?: Condition;
     }
@@ -44,6 +45,7 @@ export type FlowNode =
       type: "block";
       id: string;
       title?: string;
+      showTitle?: boolean;
       children: FlowNode[];
       visibleIf?: Condition;
     }
@@ -125,6 +127,12 @@ export const FlowNode: z.ZodType<FlowNode> = z.lazy(() =>
       type: z.literal("page"),
       id: z.string(),
       title: z.string().optional(),
+      /**
+       * Whether respondents see the name. Unset inherits the enclosing block,
+       * then `branding.layout.showBlockTitles`. The name is always shown in
+       * the Studio — it exists for the programmer first.
+       */
+      showTitle: z.boolean().optional(),
       questionIds: z.array(z.string()),
       visibleIf: Condition.optional(),
     }),
@@ -139,6 +147,7 @@ export const FlowNode: z.ZodType<FlowNode> = z.lazy(() =>
       type: z.literal("block"),
       id: z.string(),
       title: z.string().optional(),
+      showTitle: z.boolean().optional(),
       children: z.array(FlowNode),
       visibleIf: Condition.optional(),
     }),

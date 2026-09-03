@@ -285,6 +285,12 @@ export const Question = z.object({
     .object({
       minSelections: z.number().optional(),
       maxSelections: z.number().optional(),
+      /**
+       * Choosing an "Other (specify)" option is not an answer until the
+       * respondent says what it is; the text is required unless this is set.
+       * Off by default because a blank "Other" is unusable data.
+       */
+      otherSpecifyOptional: z.boolean().optional(),
       minValue: z.number().optional(),
       maxValue: z.number().optional(),
       step: z.number().optional(),

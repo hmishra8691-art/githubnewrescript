@@ -177,7 +177,18 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
   const blockIndex = pageStep ? blockSteps.indexOf(pageStep) + 1 : 0;
   // a wrapped block names itself in the section path; a single-page block
   // carries its name on the page, which is the same thing said two ways
-  const blockName = pageStep?.sectionPath?.[pageStep.sectionPath.length - 1] ?? pageStep?.title;
+  // The toolbar is programmer chrome, but it renders in live mode too, so a
+  // hidden name must not leak through it to respondents. In test and preview
+  // the programmer still sees it, marked as hidden, so they can tell the
+  // setting took without opening the inspector.
+  const rawBlockName = pageStep?.sectionPath?.[pageStep.sectionPath.length - 1] ?? pageStep?.title;
+  const blockName = !rawBlockName
+    ? undefined
+    : pageStep?.showTitle
+      ? rawBlockName
+      : mode === "live"
+        ? undefined
+        : `${rawBlockName} (name hidden from respondents)`;
 
   const b = def.branding;
   const pageIndexAmongPages = steps.filter((s, i) => s.kind === "page" && i <= state.stepIndex).length;
@@ -255,8 +266,8 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
     <div className="rs-card rs-end"><h2>Loading…</h2></div>
   ) : (
     <>
-      {pageStep.title && (
-        <h1 style={{ fontWeight: "var(--rs-heading-weight)" as any, fontSize: "1.3em" }}>
+      {pageStep.title && pageStep.showTitle && (
+        <h1 data-testid="rs-block-title" style={{ fontWeight: "var(--rs-heading-weight)" as any, fontSize: "1.3em" }}>
           {resolvePiping(pageStep.title, ctx)}
         </h1>
       )}
