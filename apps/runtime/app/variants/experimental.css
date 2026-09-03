@@ -1,1 +1,77 @@
 /* ---- experimental variant family */
+
+/* Attention check: intentionally indistinguishable from an ordinary question. */
+.rs-attention { display: contents; }
+
+/* Reaction time / IAT --------------------------------------------------- */
+.rs-iat {
+  border: 1.5px solid var(--rs-border); border-radius: var(--rs-radius);
+  background: var(--rs-surface); padding: 14px;
+}
+.rs-iat-cats { display: flex; gap: 10px; }
+.rs-iat-cat {
+  flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 4px;
+  align-items: center; padding: 10px 8px; cursor: pointer;
+  border: 1.5px solid var(--rs-border); border-radius: calc(var(--rs-radius) - 4px);
+  background: color-mix(in srgb, var(--rs-primary) 5%, var(--rs-surface));
+  font: inherit; font-size: 0.92em; color: var(--rs-text); text-align: center;
+  overflow-wrap: anywhere;
+}
+.rs-iat-cat:hover:not(:disabled) { border-color: var(--rs-primary); }
+.rs-iat-cat:disabled { opacity: 0.55; cursor: default; }
+.rs-iat-key {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 26px; padding: 1px 6px; font-size: 0.78em; font-weight: 700;
+  border: 1.5px solid var(--rs-subtle); border-radius: 6px; color: var(--rs-subtle);
+}
+
+.rs-iat-stage {
+  min-height: 150px; margin: 14px 0; padding: 10px;
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  border-radius: calc(var(--rs-radius) - 4px);
+  background: color-mix(in srgb, var(--rs-border) 30%, var(--rs-surface));
+}
+.rs-iat-fixation { font-size: 2.6em; font-weight: 300; color: var(--rs-subtle); line-height: 1; }
+.rs-iat-stim { font-size: 1.7em; font-weight: 650; overflow-wrap: anywhere; }
+.rs-iat-stim img { max-height: 130px; max-width: 100%; object-fit: contain; }
+
+.rs-iat-done { width: 100%; }
+.rs-iat-summary { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 10px; }
+.rs-iat-chip {
+  font-size: 0.8em; padding: 3px 9px; border-radius: 999px;
+  background: var(--rs-surface); border: 1px solid var(--rs-border);
+}
+.rs-iat-chip em { color: var(--rs-subtle); font-style: normal; }
+
+.rs-iat-foot {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline;
+  font-size: 0.82em; color: var(--rs-subtle);
+}
+.rs-iat-hint { margin-left: auto; }
+
+/* A/B experiment / random stimulus -------------------------------------- */
+.rs-experiment { display: flex; flex-direction: column; gap: 10px; }
+.rs-experiment-tag {
+  align-self: flex-start;
+  font-size: 0.72em; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--rs-subtle); background: color-mix(in srgb, var(--rs-border) 55%, var(--rs-surface));
+  border-radius: 999px; padding: 2px 9px;
+}
+.rs-experiment-media {
+  max-width: 100%; width: 100%; max-height: 340px; object-fit: contain;
+  border-radius: calc(var(--rs-radius) - 4px); background: color-mix(in srgb, var(--rs-border) 30%, var(--rs-surface));
+}
+.rs-experiment-html { overflow-wrap: anywhere; }
+.rs-experiment-html img, .rs-experiment-html video { max-width: 100%; }
+.rs-experiment-bare {
+  padding: 22px; text-align: center; font-weight: 600;
+  border: 1.5px dashed var(--rs-border); border-radius: calc(var(--rs-radius) - 4px);
+  color: var(--rs-subtle);
+}
+
+@media (max-width: 460px) {
+  .rs-iat-cats { gap: 6px; }
+  .rs-iat-cat { font-size: 0.86em; padding: 8px 4px; }
+  .rs-iat-stim { font-size: 1.3em; }
+  .rs-iat-hint { margin-left: 0; flex-basis: 100%; }
+}

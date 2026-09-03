@@ -30,6 +30,25 @@ export function flattenVariables(def: SurveyDefinition, state: ResponseState): F
     }
     const other = state.answers[`${q.id}__other`];
     if (other !== undefined) out[`${q.variableName}_other`] = other;
+
+    // ---- gamified / experimental families (variant batch) ----
+    // Side answers live beside the answer exactly like `__other` above:
+    // `<id>__correct`, `__rt`, `__timeout`, `__passed`. A reaction-time map
+    // (`{rowCode: ms}`) spreads to one column per row, matching the
+    // dictionary's VAR_<row>_RT.
+    for (const [suffix, stem] of [
+      ["correct", "CORRECT"], ["passed", "PASSED"], ["timeout", "TIMEOUT"], ["rt", "RT"],
+    ] as const) {
+      const side = state.answers[`${q.id}__${suffix}`];
+      if (side === undefined) continue;
+      if (suffix === "rt" && side && typeof side === "object" && !Array.isArray(side)) {
+        for (const [row, ms] of Object.entries(side as Record<string, unknown>)) {
+          out[`${q.variableName}_${row}_RT`] = ms;
+        }
+      } else {
+        out[`${q.variableName}_${stem}`] = side;
+      }
+    }
   }
 
   for (const [k, v] of Object.entries(state.calculated)) out[k] = v;

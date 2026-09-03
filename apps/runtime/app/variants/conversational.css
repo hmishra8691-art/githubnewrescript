@@ -1,1 +1,59 @@
 /* ---- conversational variant family */
+
+.rs-chat { max-width: 560px; }
+.rs-chat-progress { font-size: 0.82em; color: var(--rs-subtle); margin-bottom: 8px; }
+
+.rs-chat-log {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 14px; max-height: 380px; overflow-y: auto;
+  border: 1.5px solid var(--rs-border); border-radius: var(--rs-radius);
+  background: color-mix(in srgb, var(--rs-border) 22%, var(--rs-surface));
+}
+.rs-chat-row { display: flex; }
+.rs-chat-row.out { justify-content: flex-end; }
+
+.rs-chat-bubble {
+  max-width: 78%; padding: 9px 13px; font-size: 0.95em; line-height: 1.4;
+  border-radius: 16px; overflow-wrap: anywhere;
+}
+.rs-chat-bubble.in {
+  background: var(--rs-surface); border: 1px solid var(--rs-border);
+  border-bottom-left-radius: 5px;
+}
+.rs-chat-bubble.out {
+  background: var(--rs-primary); color: #fff; cursor: pointer;
+  border-bottom-right-radius: 5px;
+  display: flex; align-items: baseline; gap: 8px;
+}
+.rs-chat-bubble.out:hover { background: color-mix(in srgb, var(--rs-primary) 85%, #000); }
+.rs-chat-bubble.out:focus-visible { outline: 2px solid var(--rs-text); outline-offset: 2px; }
+.rs-chat-bubble.out.editing { background: color-mix(in srgb, var(--rs-primary) 70%, var(--rs-surface)); }
+.rs-chat-edit { font-size: 0.8em; opacity: 0.75; margin-left: auto; }
+
+.rs-chat-bubble.typing { display: flex; gap: 4px; padding: 12px 14px; }
+.rs-chat-bubble.typing i {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--rs-subtle);
+  animation: rs-chat-blink 1.2s infinite;
+}
+.rs-chat-bubble.typing i:nth-child(2) { animation-delay: .2s; }
+.rs-chat-bubble.typing i:nth-child(3) { animation-delay: .4s; }
+@keyframes rs-chat-blink {
+  0%, 60%, 100% { opacity: .25; }
+  30% { opacity: 1; }
+}
+
+.rs-chat-compose { display: flex; gap: 8px; margin-top: 10px; }
+.rs-chat-input { flex: 1; min-width: 0; max-width: none; }
+.rs-chat-send { flex: none; padding: 10px 18px; }
+.rs-chat-send:disabled { opacity: 0.5; cursor: not-allowed; }
+.rs-chat-cancel {
+  margin-top: 6px; border: none; background: none; padding: 0; cursor: pointer;
+  color: var(--rs-primary); font: inherit; font-size: 0.82em; text-decoration: underline;
+}
+.rs-chat-done { margin-top: 8px; font-size: 0.85em; color: var(--rs-subtle); }
+
+@media (max-width: 460px) {
+  .rs-chat-log { padding: 10px; }
+  .rs-chat-bubble { max-width: 88%; }
+  .rs-chat-send { padding: 10px 14px; }
+}

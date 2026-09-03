@@ -1,1 +1,81 @@
 /* ---- datetime variant family */
+
+/* Calendar / Appointment Selection ------------------------------------- */
+.rs-cal {
+  max-width: 360px;
+  border: 1.5px solid var(--rs-border);
+  border-radius: var(--rs-radius);
+  background: var(--rs-surface);
+  padding: 12px;
+}
+.rs-cal-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.rs-cal-month { flex: 1; text-align: center; font-weight: 600; }
+.rs-cal-nav {
+  width: 32px; height: 32px; flex: none; cursor: pointer;
+  border: 1.5px solid var(--rs-border); border-radius: 8px;
+  background: var(--rs-surface); color: var(--rs-text); font: inherit; line-height: 1;
+}
+.rs-cal-nav:hover { border-color: var(--rs-primary); }
+
+.rs-cal-dow,
+.rs-cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
+.rs-cal-dow {
+  margin-bottom: 4px; font-size: 0.72em; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--rs-subtle); text-align: center;
+}
+.rs-cal-dow .off { opacity: 0.45; text-decoration: line-through; }
+
+.rs-cal-day {
+  aspect-ratio: 1 / 1; min-width: 0; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  font: inherit; font-size: 0.9em; cursor: pointer;
+  border: 1.5px solid transparent; border-radius: 8px;
+  background: color-mix(in srgb, var(--rs-border) 35%, var(--rs-surface));
+  color: var(--rs-text);
+}
+.rs-cal-day:hover:not(:disabled) { border-color: var(--rs-primary); }
+.rs-cal-day:focus-visible { outline: 2px solid color-mix(in srgb, var(--rs-primary) 55%, transparent); outline-offset: 1px; }
+.rs-cal-day.today { font-weight: 700; box-shadow: inset 0 -2px 0 var(--rs-subtle); }
+.rs-cal-day.open { border-color: var(--rs-primary); }
+.rs-cal-day.selected {
+  background: var(--rs-primary); border-color: var(--rs-primary);
+  color: #fff; font-weight: 650;
+}
+.rs-cal-day.disabled,
+.rs-cal-day:disabled { opacity: 0.32; cursor: not-allowed; background: transparent; text-decoration: line-through; }
+.rs-cal-pad { aspect-ratio: 1 / 1; }
+
+.rs-cal-slots { margin-top: 12px; border-top: 1px solid var(--rs-border); padding-top: 10px; }
+.rs-cal-hint { font-size: 0.82em; color: var(--rs-subtle); margin-bottom: 6px; }
+.rs-cal-slotrow { display: flex; flex-wrap: wrap; gap: 6px; }
+.rs-cal-slot {
+  padding: 7px 12px; font: inherit; font-size: 0.88em; cursor: pointer;
+  border: 1.5px solid var(--rs-border); border-radius: 999px;
+  background: var(--rs-surface); color: var(--rs-text);
+}
+.rs-cal-slot:hover { border-color: var(--rs-primary); }
+.rs-cal-slot.selected { background: var(--rs-primary); border-color: var(--rs-primary); color: #fff; }
+
+.rs-cal-status {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 10px; font-size: 0.84em; color: var(--rs-subtle);
+}
+.rs-cal-clear {
+  border: none; background: none; padding: 0; cursor: pointer;
+  color: var(--rs-primary); font: inherit; font-size: 1em; text-decoration: underline;
+}
+
+/* Month / Year picker --------------------------------------------------- */
+.rs-monthyear { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+.rs-my-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.rs-my-field > span { font-size: 0.78em; color: var(--rs-subtle); }
+.rs-my-field .rs-select { min-width: 130px; max-width: 100%; }
+.rs-my-value { font-weight: 600; padding-bottom: 10px; }
+
+@media (max-width: 460px) {
+  .rs-cal { max-width: 100%; }
+  .rs-monthyear { gap: 10px; }
+  .rs-my-field { flex: 1 1 120px; }
+  .rs-my-field .rs-select { min-width: 0; width: 100%; }
+  .rs-my-value { flex-basis: 100%; padding-bottom: 0; }
+}
