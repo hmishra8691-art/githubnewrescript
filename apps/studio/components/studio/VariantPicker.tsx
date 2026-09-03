@@ -82,6 +82,7 @@ export function VariantPickerModal({ onPick, onClose }: {
           {families.map((f) => (
             <button key={f.family}
               className={`nav-item ${family === f.family ? "active" : ""}`}
+              data-testid={`picker-family-${f.family}`}
               onClick={() => setFamily(f.family)}>
               {f.familyLabel}
               <span className="nav-count">{f.stable > 0 ? f.stable : "soon"}</span>
@@ -99,6 +100,7 @@ export function VariantPickerModal({ onPick, onClose }: {
           {variants.map((v) => (
             <div key={v.id}
               className={`card ${v.status === "stable" ? "selectable" : ""}`}
+              data-testid={`picker-variant-${v.id}`} data-status={v.status}
               style={{ padding: "10px 14px", opacity: v.status === "stable" ? 1 : 0.55 }}
               onClick={() => v.status === "stable" && onPick(v)}>
               <div className="card-title" style={{ fontSize: 13 }}>

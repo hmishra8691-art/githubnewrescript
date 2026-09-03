@@ -136,6 +136,47 @@ function flattenQuestion(q: Question, value: unknown, varName: string, out: Flat
       });
       break;
     }
+    case "annotation": {
+      const v = (value ?? {}) as { pins?: unknown[]; strokes?: unknown[] };
+      const pins = Array.isArray(v.pins) ? v.pins : [];
+      const strokes = Array.isArray(v.strokes) ? v.strokes : [];
+      out[`${varName}_PINS`] = pins.length;
+      out[`${varName}_STROKES`] = strokes.length;
+      out[`${varName}_JSON`] = pins.length || strokes.length ? JSON.stringify({ pins, strokes }) : "";
+      break;
+    }
+    case "media_timeline": {
+      const arr = Array.isArray(value) ? (value as { t: number; code?: unknown }[]) : [];
+      out[`${varName}_N`] = arr.length;
+      out[`${varName}_JSON`] = arr.length ? JSON.stringify(arr) : "";
+      for (const o of q.options ?? []) {
+        out[`${varName}_${o.code}_N`] = arr.filter((r) => String(r?.code) === String(o.code)).length;
+      }
+      break;
+    }
+    case "upload": {
+      const files = Array.isArray(value) ? value : value ? [value] : [];
+      const n = Math.max(1, q.settings.maxFiles ?? 1);
+      for (let i = 0; i < n; i++) {
+        const f = files[i] as { url?: string; name?: string; size?: number } | undefined;
+        const stem = n === 1 ? varName : `${varName}_${i + 1}`;
+        out[`${stem}_URL`] = f?.url ?? "";
+        out[`${stem}_NAME`] = f?.name ?? "";
+        out[`${stem}_SIZE`] = f?.size ?? "";
+      }
+      break;
+    }
+    case "repeating_group": {
+      const entries = Array.isArray(value) ? (value as Record<string, unknown>[]) : [];
+      const n = Math.max(1, q.settings.maxRepeats ?? 10);
+      out[`${varName}_N`] = entries.length;
+      for (let i = 0; i < n; i++) {
+        for (const r of q.rows ?? []) {
+          out[`${varName}_${i + 1}_${r.code}`] = entries[i]?.[String(r.code)] ?? "";
+        }
+      }
+      break;
+    }
     case "composite":
     case "custom_table": {
       // { rowCode: { columnId: cellValue } } -> `${column.variableStem}_${row}`

@@ -287,6 +287,54 @@ export function questionVariables(
       push({ name: `${q.variableName}_TASKS`, label: `${q.code} — task responses`, dataType: "text", notes: "One column per task expanded at export from the design file." });
       break;
     }
+    case "annotation": {
+      push({ name: `${q.variableName}_PINS`, label: `${q.code} — number of pins`, dataType: "numeric" });
+      push({ name: `${q.variableName}_STROKES`, label: `${q.code} — number of strokes`, dataType: "numeric" });
+      push({ name: `${q.variableName}_JSON`, label: `${q.code} — marks (JSON)`, dataType: "text",
+        notes: "Pins as {x,y,comment} percentages and strokes as point lists." });
+      break;
+    }
+    case "media_timeline": {
+      push({ name: `${q.variableName}_N`, label: `${q.code} — number of reactions`, dataType: "numeric" });
+      push({ name: `${q.variableName}_JSON`, label: `${q.code} — reactions (JSON)`, dataType: "text",
+        notes: "Each reaction is {t: seconds, code} — code is the option chosen, or 1 for a plain tap." });
+      for (const o of q.options ?? []) {
+        push({ name: `${q.variableName}_${o.code}_N`, label: `${q.code} — ${strip(o.label)} count`, dataType: "numeric" });
+      }
+      break;
+    }
+    case "upload": {
+      const n = Math.max(1, q.settings.maxFiles ?? 1);
+      for (let i = 1; i <= n; i++) {
+        const stem = n === 1 ? q.variableName : `${q.variableName}_${i}`;
+        push({ name: `${stem}_URL`, label: `${q.code} — file ${n === 1 ? "" : i + " "}URL`.replace("  ", " "), dataType: "text" });
+        push({ name: `${stem}_NAME`, label: `${q.code} — file ${n === 1 ? "" : i + " "}name`.replace("  ", " "), dataType: "text" });
+        push({ name: `${stem}_SIZE`, label: `${q.code} — file ${n === 1 ? "" : i + " "}size (bytes)`.replace("  ", " "), dataType: "numeric" });
+      }
+      break;
+    }
+    case "repeating_group": {
+      // array of records → VAR_<i>_<row> up to the cap
+      const n = Math.max(1, q.settings.maxRepeats ?? 10);
+      push({ name: `${q.variableName}_N`, label: `${q.code} — number of entries`, dataType: "numeric" });
+      for (let i = 1; i <= n; i++) {
+        for (const r of q.rows ?? []) {
+          push({
+            name: `${q.variableName}_${i}_${r.code}`,
+            label: `${q.code} — entry ${i}: ${strip(r.label)}`,
+            dataType: r.fieldType && ["number", "decimal", "integer", "currency"].includes(r.fieldType) ? "numeric" : "text",
+          });
+        }
+      }
+      break;
+    }
+    case "experiment": {
+      push({
+        name: q.variableName, label: strip(q.text) || `${q.code} — assigned arm`, dataType: "text",
+        valueLabels: Object.fromEntries((q.settings.arms ?? []).map((a) => [String(a.code), a.label])),
+      });
+      break;
+    }
     default:
       push({ name: q.variableName, label: strip(q.text) || q.code, dataType: "text" });
   }

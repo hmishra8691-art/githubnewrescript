@@ -1,4 +1,5 @@
 "use client";
+import { optionMetaFields, VariantSettings, type MetaField } from "./variantConfig";
 import { CountInput } from "./CountInput";
 import React from "react";
 import type { Question, Option, QuestionColumn, ResponseType, QuestionVariantDef } from "@rescript/schema";
@@ -55,10 +56,10 @@ export function allowedRowFlagsFor(qtype: string): string[] {
 
 const OPTION_WINDOW = 40;
 
-function OptionRows({ options, onChange, showFlags = true, flagChoices, showImage = false,
+function OptionRows({ options, onChange, showFlags = true, flagChoices, showImage = false, metaFields = [],
   enableLogic = false, questionId, onAfterDelete }: {
   options: Option[]; onChange(opts: Option[]): void; showFlags?: boolean;
-  flagChoices?: string[]; showImage?: boolean;
+  flagChoices?: string[]; showImage?: boolean; metaFields?: MetaField[];
   /** per-option logic + piping controls (reqs §1–4, §21) */
   enableLogic?: boolean; questionId?: string;
   /** called after a removal so the owner can re-sequence codes */
@@ -200,6 +201,31 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
               value={o.imageUrl ?? ""}
               onChange={(e) => set(i, { imageUrl: e.target.value || undefined })} />
           )}
+          {metaFields.map((mf) => {
+            const cur = o.meta?.[mf.key];
+            const setMeta = (v: unknown) => {
+              const meta = { ...(o.meta ?? {}) };
+              if (v === undefined || v === "" || v === false) delete meta[mf.key]; else meta[mf.key] = v;
+              set(i, { meta: Object.keys(meta).length ? meta : undefined });
+            };
+            if (mf.kind === "check") {
+              return (
+                <label key={mf.key} className="row" style={{ gap: 4, fontSize: 11 }} title={mf.label}>
+                  <input type="checkbox" checked={!!cur} data-testid={`option-meta-${mf.key}-${i}`}
+                    onChange={(e) => setMeta(e.target.checked)} />
+                  {mf.label}
+                </label>
+              );
+            }
+            return (
+              <input key={mf.key} className="input" style={{ width: mf.width ?? 120 }}
+                type={mf.kind === "number" ? "number" : "text"}
+                placeholder={mf.placeholder ?? mf.label} title={mf.label}
+                data-testid={`option-meta-${mf.key}-${i}`}
+                value={cur == null ? "" : String(cur)}
+                onChange={(e) => setMeta(mf.kind === "number" ? (e.target.value === "" ? undefined : Number(e.target.value)) : e.target.value)} />
+            );
+          })}
           {showFlags && (
             /**
              * Option properties are INDEPENDENT and combine freely.
@@ -559,7 +585,8 @@ export function QuestionEditor({ q }: { q: Question }) {
           <OptionRows options={q.options} onChange={(options) => patch({ options })}
             onAfterDelete={() => resequence("options")}
             flagChoices={allowedFlagsFor(q.type)} enableLogic questionId={q.id}
-            showImage={has("images") && (variantDef?.capabilities.includes("images") || q.type.startsWith("image"))} />
+            showImage={has("images") && (variantDef?.capabilities.includes("images") || q.type.startsWith("image"))}
+            metaFields={optionMetaFields(variantDef)} />
           <div className="row" style={{ marginTop: 10, flexWrap: "wrap" }}>
             {has("layout_columns") && (
             <label className="f" style={{ marginBottom: 0, width: 130 }}><span>Layout</span>
@@ -748,6 +775,8 @@ export function QuestionEditor({ q }: { q: Question }) {
           )}
         </>
       )}
+
+      <VariantSettings q={q} v={variantDef} patch={patch} patchSettings={patchSettings} />
 
       {q.type === "html" && (
         <label className="f"><span>HTML content</span>

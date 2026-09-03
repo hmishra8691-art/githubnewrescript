@@ -1,3 +1,4 @@
+@import "./variants/choice.css";
 /* Rescript runtime — themable via CSS variables set from Branding config */
 :root {
   --rs-primary: #2563eb;

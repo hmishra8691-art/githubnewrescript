@@ -70,7 +70,7 @@ export interface QuestionVariantDef {
   /** applied on creation / conversion (merged into the question) */
   defaults?: {
     settings?: Record<string, unknown>;
-    options?: { code: string | number; label: string; flags?: string[] }[];
+    options?: { code: string | number; label: string; flags?: string[]; imageUrl?: string; meta?: Record<string, unknown> }[];
     rows?: Record<string, unknown>[];
     validation?: { kind: string; value?: unknown; message?: string }[];
     instruction?: string;
@@ -270,14 +270,42 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
     supersededBy: "carousel.single",
   }),
-  ...planned(F.single, [
-    ["Icon Select", "Pick one option shown as an icon."],
-    ["List Select", "Selectable list rows with metadata."],
-    ["Heart Rating", "1–N hearts stored as a score."],
-    ["Product Choice", "Rich product card chooser."],
-    ["Statement Choice", "Choose the statement you agree with."],
-    ["Pairwise Choice", "A vs B forced choice."],
-  ]),
+  stable(F.single, "icon_select", "Icon Select", "Pick one option shown as an icon — an emoji, short text or image per option.", {
+    baseType: "single_select", renderer: "icons", responseModel: "single_choice",
+    capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
+    defaults: {
+      options: [
+        { code: 1, label: "Home", meta: { icon: "🏠" } },
+        { code: 2, label: "Work", meta: { icon: "💼" } },
+        { code: 3, label: "Travel", meta: { icon: "✈️" } },
+      ],
+      settings: { columnsLayout: 3 },
+    },
+  }),
+  stable(F.single, "list_select", "List Select", "Selectable list rows with a description, badge and right-hand figure per option.", {
+    baseType: "single_select", renderer: "listrows", responseModel: "single_choice",
+    capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
+  }),
+  stable(F.single, "heart_rating", "Heart Rating", "1–N hearts stored as a score.", {
+    baseType: "numeric", renderer: "hearts", responseModel: "numeric",
+    capabilities: ["numeric_bounds"], validations: VAL_NUM,
+    defaults: { settings: { minValue: 1, maxValue: 5 } },
+  }),
+  stable(F.single, "product_choice", "Product Choice", "Rich product cards — image, description, price, badge — pick one.", {
+    baseType: "single_select", renderer: "richcards", responseModel: "single_choice",
+    capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
+    defaults: { settings: { columnsLayout: 3 } },
+  }),
+  stable(F.single, "statement_choice", "Statement Choice", "Full-width statements — choose the one you agree with most.", {
+    baseType: "single_select", renderer: "statements", responseModel: "single_choice",
+    capabilities: CAP_SINGLE, validations: VAL_SINGLE,
+    defaults: { instruction: "Which statement comes closest to your view?" },
+  }),
+  stable(F.single, "pairwise_choice", "Pairwise Choice", "A vs B forced choice between exactly two options.", {
+    baseType: "single_select", renderer: "pairwise", responseModel: "single_choice",
+    capabilities: ["options", "images", "randomization", "carry_forward"], validations: VAL_SINGLE,
+    defaults: { options: [{ code: 1, label: "Option A" }, { code: 2, label: "Option B" }] },
+  }),
 
   /* -------------------------------------------------------- MULTI SELECT */
   stable(F.multi, "checkbox", "Checkbox", "Classic checkbox list with exclusive-option support.", {
@@ -310,12 +338,24 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: CAP_MULTI, validations: VAL_MULTI,
     defaults: { settings: { minSelections: 3, maxSelections: 3 }, instruction: "Please select exactly 3." },
   }),
-  ...planned(F.multi, [
-    ["Icon Multi-Select", "Multiple icons selectable."],
-    ["List Multi-Select", "Selectable list rows."],
-    ["Multi-Item Carousel", "Select while browsing a carousel."],
-    ["Product Multi-Select", "Rich product multi-chooser."],
-  ]),
+  stable(F.multi, "icon_multi_select", "Icon Multi-Select", "Select any number of icons.", {
+    baseType: "multi_select", renderer: "icons", responseModel: "multiple_choice",
+    capabilities: [...CAP_MULTI, "images"], validations: VAL_MULTI,
+    defaults: { settings: { columnsLayout: 4 } },
+  }),
+  stable(F.multi, "list_multi_select", "List Multi-Select", "Selectable list rows with a description, badge and right-hand figure.", {
+    baseType: "multi_select", renderer: "listrows", responseModel: "multiple_choice",
+    capabilities: [...CAP_MULTI, "images"], validations: VAL_MULTI,
+  }),
+  stable(F.multi, "multi_item_carousel", "Multi-Item Carousel", "Browse one card at a time and select as many as apply.", {
+    baseType: "multi_select", renderer: "multicarousel", responseModel: "multiple_choice",
+    capabilities: [...CAP_MULTI, "images"], validations: VAL_MULTI,
+  }),
+  stable(F.multi, "product_multi_select", "Product Multi-Select", "Rich product cards — select several.", {
+    baseType: "multi_select", renderer: "richcards", responseModel: "multiple_choice",
+    capabilities: [...CAP_MULTI, "images"], validations: VAL_MULTI,
+    defaults: { settings: { columnsLayout: 3 } },
+  }),
 
   /* ----------------------------------------------------------------- TEXT */
   stable(F.text, "single_line", "Single-Line Text", "One-line open end.", {
@@ -929,8 +969,10 @@ export function responseModelOf(baseType: string): ResponseModel {
     case "ranking": case "image_ranking": return "rank_order";
     case "allocation": return "allocation";
     case "conjoint_task": case "maxdiff_task": return "tasks";
-    case "hotspot": return "coordinates";
-    case "hidden": case "calculated": case "embedded_data": return "derived";
+    case "hotspot": case "annotation": case "media_timeline": return "coordinates";
+    case "upload": return "media";
+    case "repeating_group": return "fields";
+    case "hidden": case "calculated": case "embedded_data": case "experiment": return "derived";
     case "html": return "none";
     default: return "none";
   }

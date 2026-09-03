@@ -44,6 +44,12 @@ export const BUILTIN_QUESTION_TYPES = [
   "html", // display-only content block
   "conjoint_task", // renders tasks from a referenced conjoint design file
   "maxdiff_task", // renders tasks from a referenced maxdiff design file
+  // --- added with the 2026-09 variant batch; each owns a response model ---
+  "annotation", // marks + strokes on a stimulus image (pins with comments, freehand)
+  "media_timeline", // reactions at moments on a video/audio timeline
+  "upload", // a file the respondent supplied: {url, name, size, type}, or several
+  "repeating_group", // respondent-driven repetition of a field set: array of records
+  "experiment", // random arm assignment, stored as a derived value
 ] as const;
 export type BuiltinQuestionType = (typeof BUILTIN_QUESTION_TYPES)[number];
 
@@ -324,6 +330,92 @@ export const Question = z.object({
       sliderLeftLabel: z.string().optional(),
       sliderRightLabel: z.string().optional(),
       designRef: z.string().optional(), // conjoint/maxdiff design file id
+
+      /* ---- 2026-09 variant batch. Every field optional; absent = old behaviour. */
+      /** Video / audio stimulus URL (video rating, timeline, watch-time). */
+      mediaUrl: z.string().optional(),
+      /** Respondent must reach the end of the media before answering. */
+      requireComplete: z.boolean().optional(),
+      /** Timeline reactions: the option set is offered at each tap. */
+      timelineMode: z.enum(["tap", "options"]).optional(),
+      /** Upload: accepted MIME/extension list, size cap and file count. */
+      accept: z.string().optional(),
+      maxSizeMb: z.number().optional(),
+      maxFiles: z.number().optional(),
+      /** Repeating group / dynamic list bounds. */
+      minRepeats: z.number().optional(),
+      maxRepeats: z.number().optional(),
+      /** Annotation / draw-on-image tools offered. */
+      tools: z.array(z.enum(["pin", "pen", "highlight"])).optional(),
+      /** Pen colour and width for drawing variants. */
+      penColor: z.string().optional(),
+      penWidth: z.number().optional(),
+      /** Timed question: seconds allowed; what happens when they run out. */
+      timeLimitSeconds: z.number().optional(),
+      onTimeout: z.enum(["lock", "advance"]).optional(),
+      /** Attention check: the codes that count as passing, and the consequence. */
+      expectedCodes: z.array(z.union([z.string(), z.number()])).optional(),
+      onFail: z.enum(["flag", "terminate"]).optional(),
+      /** Quiz: show right/wrong after answering; points per correct option. */
+      showFeedback: z.boolean().optional(),
+      pointsPerCorrect: z.number().optional(),
+      /** Chip allocation: value of one chip (sumTarget / chipValue chips). */
+      chipValue: z.number().optional(),
+      /** Slider stack vs grid for multi-slider matrices. */
+      sliderLayout: z.enum(["stack", "grid"]).optional(),
+      /** Slider orientation. */
+      orientation: z.enum(["horizontal", "vertical"]).optional(),
+      /** Calendar: selectable window and the slots offered per day. */
+      minDate: z.string().optional(),
+      maxDate: z.string().optional(),
+      timeSlots: z.array(z.string()).optional(),
+      disabledWeekdays: z.array(z.number()).optional(),
+      /** Month/year picker window. */
+      minYear: z.number().optional(),
+      maxYear: z.number().optional(),
+      /** Experiment arms; weights default equal. */
+      arms: z
+        .array(z.object({
+          code: z.union([z.string(), z.number()]),
+          label: z.string(),
+          weight: z.number().optional(),
+          html: z.string().optional(),
+          mediaUrl: z.string().optional(),
+        }))
+        .optional(),
+      /**
+       * Adaptive question: the first alternative whose condition holds
+       * replaces text / instruction / options. None matching = the question
+       * as authored, so an adaptive question with no alternatives is ordinary.
+       */
+      adaptive: z
+        .array(z.object({
+          label: z.string().optional(),
+          when: Condition,
+          text: z.string().optional(),
+          instruction: z.string().optional(),
+          options: z.array(Option).optional(),
+          minValue: z.number().optional(),
+          maxValue: z.number().optional(),
+        }))
+        .optional(),
+      /** Swipe: which option each direction commits. */
+      swipeDirections: z
+        .object({
+          left: z.union([z.string(), z.number()]).optional(),
+          right: z.union([z.string(), z.number()]).optional(),
+          up: z.union([z.string(), z.number()]).optional(),
+          down: z.union([z.string(), z.number()]).optional(),
+        })
+        .optional(),
+      /** Chat presentation: delay between bubbles in ms. */
+      chatDelayMs: z.number().optional(),
+      /** Tournament ranking: stop after the top N are settled. */
+      tournamentTopN: z.number().optional(),
+      /** Region selection: allow several regions. */
+      multiRegion: z.boolean().optional(),
+      /** Range pair (numeric range / dual slider): enforce from <= to. */
+      rangePair: z.boolean().optional(),
       accessibility: z
         .object({
           ariaLabel: z.string().optional(),

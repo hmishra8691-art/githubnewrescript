@@ -14,6 +14,9 @@ import {
   type ResponseState,
   type LoopContext,
 } from "@rescript/engine";
+import { variantRenderers } from "./variants/registry";
+// side-effect: every family registers its renderers
+import "./variants";
 
 export interface QRProps {
   def: SurveyDefinition;
@@ -27,17 +30,17 @@ export interface QRProps {
   onOtherChange?(text: string): void;
 }
 
-const OTHER = (o: Option) => o.flags?.includes("other_specify");
-const EXCLUSIVE = (o: Option) =>
+export const OTHER = (o: Option) => o.flags?.includes("other_specify");
+export const EXCLUSIVE = (o: Option) =>
   o.flags?.includes("exclusive") || o.flags?.includes("none_of_above") ||
   o.flags?.includes("dont_know") || o.flags?.includes("refused");
 
-function ctxOf(p: QRProps): EvalContext {
+export function ctxOf(p: QRProps): EvalContext {
   return { def: p.def, state: p.state, loop: p.loop };
 }
 
 /** N-column option layout (req §10) with a mobile fallback in CSS. */
-function optionsClass(p: QRProps): string {
+export function optionsClass(p: QRProps): string {
   const n = p.q.settings.columnsLayout ?? 1;
   return n > 1 ? `rs-options cols-${Math.min(n, 4)}` : "rs-options";
 }
@@ -49,7 +52,7 @@ function optionsClass(p: QRProps): string {
  * comparison did nothing at all. This turns the setting into an override any
  * grid can apply.
  */
-function gridColumnsStyle(p: QRProps, fallback: string): React.CSSProperties {
+export function gridColumnsStyle(p: QRProps, fallback: string): React.CSSProperties {
   const n = p.q.settings.columnsLayout;
   return n && n > 1
     ? { gridTemplateColumns: `repeat(${Math.min(n, 4)}, minmax(0, 1fr))` }
@@ -57,7 +60,7 @@ function gridColumnsStyle(p: QRProps, fallback: string): React.CSSProperties {
 }
 
 /** Search box for long option lists (req §9). */
-function useOptionFilter(options: Option[], threshold = 25) {
+export function useOptionFilter(options: Option[], threshold = 25) {
   const [filter, setFilter] = React.useState("");
   const filtered = React.useMemo(() => {
     if (!filter.trim()) return options;
@@ -79,7 +82,7 @@ function useOptionFilter(options: Option[], threshold = 25) {
 }
 
 /* ------------------------------------------------ single select / dropdown */
-function SingleSelect(p: QRProps) {
+export function SingleSelect(p: QRProps) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
   const { filtered, searchBox } = useOptionFilter(options);
   return (
@@ -115,7 +118,7 @@ function SingleSelect(p: QRProps) {
   );
 }
 
-function MultiSelect(p: QRProps) {
+export function MultiSelect(p: QRProps) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
   const { filtered, searchBox } = useOptionFilter(options);
   const vals: (string | number)[] = Array.isArray(p.value) ? (p.value as any) : [];
@@ -159,7 +162,7 @@ function MultiSelect(p: QRProps) {
   );
 }
 
-function Dropdown(p: QRProps) {
+export function Dropdown(p: QRProps) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
   // an other-specify option is meaningless without somewhere to type
   const otherSelected = options.some(
@@ -196,7 +199,7 @@ function Dropdown(p: QRProps) {
  * searchable checkbox list, select all / clear all, min/max enforcement and
  * shared exclusive-option semantics.
  */
-function MultiDropdown(p: QRProps) {
+export function MultiDropdown(p: QRProps) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
   const vals: (string | number)[] = Array.isArray(p.value) ? (p.value as any) : [];
   const [open, setOpen] = React.useState(false);
@@ -333,7 +336,7 @@ function MultiDropdown(p: QRProps) {
  * number outward; the model is echoed back in only when the value changed
  * from somewhere else (a calculation, a reset, another respondent action).
  */
-function NumberField({
+export function NumberField({
   value, onChange, className = "rs-input sm", min, max, step, placeholder, readOnly, ariaLabel, disabled,
 }: {
   value: unknown;
@@ -391,7 +394,7 @@ function NumberField({
   );
 }
 
-function NumericInput(p: QRProps) {
+export function NumericInput(p: QRProps) {
   return (
     <NumberField
       value={p.value}
@@ -405,7 +408,7 @@ function NumericInput(p: QRProps) {
   );
 }
 
-function TextInput(p: QRProps) {
+export function TextInput(p: QRProps) {
   return (
     <input
       className="rs-input"
@@ -418,7 +421,7 @@ function TextInput(p: QRProps) {
   );
 }
 
-function LongText(p: QRProps) {
+export function LongText(p: QRProps) {
   const text = p.value == null ? "" : String(p.value);
   // Essay variants carry a min_length rule. Without a counter a respondent
   // types a sentence, is refused, and has no idea what the survey wants.
@@ -446,13 +449,13 @@ function LongText(p: QRProps) {
   );
 }
 
-function DateInput(p: QRProps) {
+export function DateInput(p: QRProps) {
   return (
     <input className="rs-input sm" type="date" value={p.value == null ? "" : String(p.value)}
       readOnly={p.q.settings.readOnly} onChange={(e) => p.onChange(e.target.value || null)} style={{ maxWidth: 190 }} />
   );
 }
-function TimeInput(p: QRProps) {
+export function TimeInput(p: QRProps) {
   return (
     <input className="rs-input sm" type="time" value={p.value == null ? "" : String(p.value)}
       readOnly={p.q.settings.readOnly} onChange={(e) => p.onChange(e.target.value || null)} style={{ maxWidth: 150 }} />
@@ -464,7 +467,7 @@ function TimeInput(p: QRProps) {
  * field type (email, phone, currency, date…) and validation. Answers store
  * keyed by row code; surveys without rows keep the legacy numbered inputs.
  */
-function ListInput(p: QRProps & { numeric: boolean }) {
+export function ListInput(p: QRProps & { numeric: boolean }) {
   const view = effectiveQuestion(p.q, ctxOf(p));
   const cols = p.q.settings.columnsLayout ?? 1;
 
@@ -566,7 +569,7 @@ function ListInput(p: QRProps & { numeric: boolean }) {
 }
 
 /* ------------------------------------------------------------- NPS / slider */
-function Nps(p: QRProps) {
+export function Nps(p: QRProps) {
   const min = p.q.settings.minValue ?? 0;
   const max = p.q.settings.maxValue ?? 10;
   // The label row has to be the same width as the button row, or the right
@@ -595,7 +598,7 @@ function Nps(p: QRProps) {
   );
 }
 
-function Slider(p: QRProps) {
+export function Slider(p: QRProps) {
   const min = p.q.settings.minValue ?? 0;
   const max = p.q.settings.maxValue ?? 100;
   const val = p.value == null ? Math.round((min + max) / 2) : Number(p.value);
@@ -626,7 +629,7 @@ function Slider(p: QRProps) {
  * tap-to-rank list, and a required Rank-Top-N could never be completed because
  * validation demanded every item.
  */
-function Ranking(p: QRProps) {
+export function Ranking(p: QRProps) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
   const ranked: (string | number)[] = Array.isArray(p.value) ? (p.value as any) : [];
   const unranked = options.filter((o) => !ranked.some((r) => String(r) === String(o.code)));
@@ -688,7 +691,7 @@ function Ranking(p: QRProps) {
 }
 
 /* -------------------------------------------------------------- allocation */
-function Allocation(p: QRProps) {
+export function Allocation(p: QRProps) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
   const vals = (p.value ?? {}) as Record<string, number | null>;
   const total = Object.values(vals).reduce((a: number, b) => a + (Number(b) || 0), 0);
@@ -715,7 +718,7 @@ function Allocation(p: QRProps) {
 }
 
 /* ------------------------------------------------------------ image select */
-function ImageSelect(p: QRProps & { multi?: boolean; ranking?: boolean }) {
+export function ImageSelect(p: QRProps & { multi?: boolean; ranking?: boolean }) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
   const vals: (string | number)[] = Array.isArray(p.value) ? (p.value as any) : p.value == null ? [] : [p.value as any];
   const click = (o: Option) => {
@@ -754,7 +757,7 @@ function ImageSelect(p: QRProps & { multi?: boolean; ranking?: boolean }) {
 }
 
 /* ----------------------------------------------------------------- matrix */
-function Matrix(p: QRProps) {
+export function Matrix(p: QRProps) {
   const view = effectiveQuestion(p.q, ctxOf(p));
   const colOpts = view.columns[0]?.options?.length ? view.columns[0].options : view.options;
   const vals = (p.value ?? {}) as Record<string, unknown>;
@@ -922,7 +925,7 @@ function CompositeCell({
   }
 }
 
-function Composite(p: QRProps) {
+export function Composite(p: QRProps) {
   const view = effectiveQuestion(p.q, ctxOf(p));
   const vals = (p.value ?? {}) as Record<string, Record<string, unknown>>;
   const setCell = (row: string, col: string, v: unknown) =>
@@ -1042,7 +1045,7 @@ function DesignTasks(p: QRProps) {
 /* ------------------------------------------- variant renderers (families) */
 
 /** Button Select / Button Multi-Select — large tap targets, exclusive-aware. */
-function ChoiceButtons(p: QRProps & { multi: boolean }) {
+export function ChoiceButtons(p: QRProps & { multi: boolean }) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
   const { filtered, searchBox } = useOptionFilter(options);
   const vals: (string | number)[] = p.multi
@@ -1075,7 +1078,7 @@ function ChoiceButtons(p: QRProps & { multi: boolean }) {
 
 /** Card / Tile Select — title, optional description (option.meta.description)
  *  and optional image, single or multi. */
-function ChoiceCards(p: QRProps & { multi: boolean }) {
+export function ChoiceCards(p: QRProps & { multi: boolean }) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
   const vals: (string | number)[] = p.multi
     ? Array.isArray(p.value) ? (p.value as any) : []
@@ -1114,7 +1117,7 @@ function ChoiceCards(p: QRProps & { multi: boolean }) {
 }
 
 /** Star Rating — numeric 1..max. */
-function StarRating(p: QRProps) {
+export function StarRating(p: QRProps) {
   const max = Math.min(p.q.settings.maxValue ?? 5, 10);
   const min = p.q.settings.minValue ?? 1;
   const val = p.value == null ? 0 : Number(p.value);
@@ -1170,7 +1173,7 @@ export function emojiScale(count: number): string[] {
  * 1–10 scale renders ten faces; it previously drew a hardcoded five whatever
  * the editor said, which made the bounds fields quietly meaningless.
  */
-function EmojiRating(p: QRProps) {
+export function EmojiRating(p: QRProps) {
   const min = p.q.settings.minValue ?? 1;
   const max = p.q.settings.maxValue ?? 5;
   const count = Math.max(1, Math.min(11, max - min + 1));
@@ -1201,7 +1204,7 @@ function EmojiRating(p: QRProps) {
 }
 
 /** Searchable single-select dropdown (autocomplete / combobox). */
-function SearchableSingle(p: QRProps) {
+export function SearchableSingle(p: QRProps) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
   const [open, setOpen] = React.useState(false);
   const [search, setSearch] = React.useState("");
@@ -1264,7 +1267,7 @@ function SearchableSingle(p: QRProps) {
  * the card or the buttons below — data is identical to a single-select
  * matrix, so reporting and logic see ordinary VAR_<row> values.
  */
-function SwipeDeck(p: QRProps) {
+export function SwipeDeck(p: QRProps) {
   const view = effectiveQuestion(p.q, ctxOf(p));
   const vals = (p.value ?? {}) as Record<string, unknown>;
   const remaining = view.rows.filter((r) => vals[String(r.code)] === undefined);
@@ -1397,7 +1400,7 @@ function SwipeDeck(p: QRProps) {
 }
 
 /** Drag-and-drop ranking (rank_order model) with arrow-button fallback. */
-function DragRank(p: QRProps) {
+export function DragRank(p: QRProps) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
   const stored: (string | number)[] = Array.isArray(p.value) ? (p.value as any) : [];
   // order = stored ranking, with any unranked options appended in display order
@@ -1459,7 +1462,7 @@ function DragRank(p: QRProps) {
 }
 
 /** Semantic differential: row label "Left | Right" anchors a numbered scale. */
-function SemanticDifferential(p: QRProps) {
+export function SemanticDifferential(p: QRProps) {
   const view = effectiveQuestion(p.q, ctxOf(p));
   const vals = (p.value ?? {}) as Record<string, unknown>;
   const setRow = (rc: string, v: unknown) => p.onChange({ ...vals, [rc]: v });
@@ -1495,7 +1498,7 @@ function SemanticDifferential(p: QRProps) {
 }
 
 /** Single-item carousel: browse option cards one at a time, select one. */
-function CarouselSelect(p: QRProps) {
+export function CarouselSelect(p: QRProps) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
   const [idx, setIdx] = React.useState(0);
   if (options.length === 0) return null;
@@ -1544,7 +1547,7 @@ function CarouselSelect(p: QRProps) {
  * the stimulus image; each point stores as {x, y} percentages so results are
  * resolution-independent. Click a marker to remove it.
  */
-function HotspotClick(p: QRProps) {
+export function HotspotClick(p: QRProps) {
   const pts: { x: number; y: number }[] = Array.isArray(p.value) ? (p.value as any) : [];
   const max = p.q.settings.maxSelections ?? 1;
   const img = p.q.settings.imageUrl;
@@ -1588,7 +1591,7 @@ function HotspotClick(p: QRProps) {
 }
 
 /** Side-by-side image comparison: large image cards, pick one. */
-function CompareImages(p: QRProps) {
+export function CompareImages(p: QRProps) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
   return (
     <div className="rs-compare"
@@ -1618,7 +1621,7 @@ function CompareImages(p: QRProps) {
 
 /** Categorization into buckets (per_row model): each row card gets one
  *  bucket; stored exactly like a single-select matrix. */
-function Categorize(p: QRProps) {
+export function Categorize(p: QRProps) {
   const view = effectiveQuestion(p.q, ctxOf(p));
   const vals = (p.value ?? {}) as Record<string, unknown>;
   const setRow = (rc: string, v: unknown) => p.onChange({ ...vals, [rc]: v });
@@ -1696,6 +1699,14 @@ export function QuestionRenderer(p: QRProps) {
   // base-type switch below unchanged.
   const variantDef = resolveVariant(p.q.variant);
   const variantBody = ((): React.ReactNode | null => {
+    // 2026-09 batch: renderers live in ./variants/<family>.tsx and register
+    // themselves by key, so adding one never touches this file. A base type
+    // with no variant (a legacy question, or one created from JSON) finds its
+    // default renderer under `base:<type>`.
+    const Registered =
+      (variantDef?.renderer && variantRenderers[variantDef.renderer]) ||
+      variantRenderers[`base:${p.q.type}`];
+    if (Registered) return <Registered {...p} />;
     switch (variantDef?.renderer) {
       case "buttons":
         return <ChoiceButtons {...p} multi={variantDef!.responseModel === "multiple_choice"} />;

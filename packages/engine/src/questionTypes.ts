@@ -67,6 +67,11 @@ const CATEGORIES: Record<string, QuestionTypePlugin["category"]> = {
   html: "special",
   conjoint_task: "special",
   maxdiff_task: "special",
+  annotation: "media",
+  media_timeline: "media",
+  upload: "media",
+  repeating_group: "text",
+  experiment: "special",
 };
 
 const LABELS: Record<string, string> = {
@@ -102,6 +107,11 @@ const LABELS: Record<string, string> = {
   html: "Text / HTML block",
   conjoint_task: "Conjoint tasks",
   maxdiff_task: "MaxDiff tasks",
+  annotation: "Image annotation",
+  media_timeline: "Media timeline reactions",
+  upload: "File upload",
+  repeating_group: "Repeating form",
+  experiment: "Experiment arm",
 };
 
 function featuresFor(type: string): QuestionTypePlugin["features"] {
@@ -110,10 +120,10 @@ function featuresFor(type: string): QuestionTypePlugin["features"] {
     "image_select", "image_ranking", "allocation",
   ].includes(type);
   const hasRows = type.startsWith("matrix") || type === "composite" || type === "custom_table"
-    || type === "numeric_list" || type === "text_list";
+    || type === "numeric_list" || type === "text_list" || type === "repeating_group";
   const hasColumns = type.startsWith("matrix") || type === "composite" || type === "custom_table";
   return {
-    options: hasOptions || type.startsWith("matrix"),
+    options: hasOptions || type.startsWith("matrix") || type === "media_timeline",
     rows: hasRows,
     columns: hasColumns,
     numericBounds: ["numeric", "slider", "nps", "matrix_numeric", "allocation"].includes(type),

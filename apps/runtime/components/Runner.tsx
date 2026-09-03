@@ -129,6 +129,9 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
       }
     }
     stateRef.current = state;
+    // test and preview only: the live state, for the inspector's consumers and
+    // the browser suites — the same object, so it is never stale
+    if (mode !== "live" && typeof window !== "undefined") (window as any).__rescriptState = state;
     const r = runScripts(def, state, "on_load");
     setLogs(r.logs);
     const nav = start(def, state, counts);

@@ -147,6 +147,52 @@ export function validateQuestion(
       push(`Select at most ${q.settings.maxSelections}.`);
   }
 
+  // a from–to pair (numeric range, dual slider): the order has to hold
+  if (q.settings.rangePair && value && typeof value === "object" && !Array.isArray(value)) {
+    const v = value as Record<string, unknown>;
+    const codes = (q.rows ?? []).map((r) => String(r.code));
+    const lo = v[codes[0] ?? "from"], hi = v[codes[1] ?? "to"];
+    if (!isEmpty(lo) && !isEmpty(hi) && Number(lo) > Number(hi)) {
+      push("The first value must not be greater than the second.");
+    }
+  }
+
+  // repeating group: how many entries, and each entry's required fields
+  if (q.type === "repeating_group") {
+    const entries = Array.isArray(value) ? (value as Record<string, unknown>[]) : [];
+    const filled = entries.filter((e) => e && Object.values(e).some((x) => !isEmpty(x)));
+    const min = q.settings.minRepeats ?? (q.required ? 1 : 0);
+    if (filled.length < min) push(`Please add at least ${min} ${min === 1 ? "entry" : "entries"}.`);
+    if (q.settings.maxRepeats != null && filled.length > q.settings.maxRepeats)
+      push(`Please keep to at most ${q.settings.maxRepeats} entries.`);
+    filled.forEach((e, i) => {
+      for (const r of q.rows ?? []) {
+        if (r.required && isEmpty(e[String(r.code)])) push(`Entry ${i + 1}: ${r.label} is required.`, { rowCode: String(r.code) });
+      }
+    });
+  }
+
+  // uploads: count and size
+  if (q.type === "upload" && !isEmpty(value)) {
+    const files = (Array.isArray(value) ? value : [value]) as { size?: number }[];
+    const max = q.settings.maxFiles ?? 1;
+    if (files.length > max) push(`Please attach at most ${max} file${max === 1 ? "" : "s"}.`);
+    const cap = q.settings.maxSizeMb;
+    if (cap != null && files.some((f) => (f?.size ?? 0) > cap * 1024 * 1024))
+      push(`Each file must be under ${cap} MB.`);
+  }
+
+  // media timeline / annotation: the count rules are the min/max selections
+  if ((q.type === "media_timeline" || q.type === "annotation") && !isEmpty(value)) {
+    const n = q.type === "media_timeline"
+      ? (Array.isArray(value) ? value.length : 0)
+      : (((value as { pins?: unknown[] }).pins?.length ?? 0) + ((value as { strokes?: unknown[] }).strokes?.length ?? 0));
+    if (q.settings.minSelections != null && n < q.settings.minSelections)
+      push(`Please add at least ${q.settings.minSelections}.`);
+    if (q.settings.maxSelections != null && n > q.settings.maxSelections)
+      push(`Please add at most ${q.settings.maxSelections}.`);
+  }
+
   // allocation sum
   if (q.type === "allocation" && q.settings.sumTarget != null && !isEmpty(value)) {
     const total = Object.values((value as Record<string, unknown>) ?? {}).reduce(
