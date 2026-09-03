@@ -1,6 +1,10 @@
 "use client";
 import React from "react";
 import type { Question, QuestionVariantDef } from "@rescript/schema";
+import {
+  OPTION_META_FIELDS, VARIANT_SETTINGS, registerOptionMetaFields, registerVariantSettings,
+  DESC, BADGE, PRICE, type MetaField, type VariantSettingsProps,
+} from "./variantConfig/registry";
 
 /**
  * Variant-specific authoring, kept out of the (already large) question editor.
@@ -9,49 +13,39 @@ import type { Question, QuestionVariantDef } from "@rescript/schema";
  *   - `optionMetaFields(variant)` — extra per-option inputs, written to
  *     `option.meta.<key>`, for renderers that draw more than a label.
  *   - `<VariantSettings>` — a settings block for renderers that need one
- *     (media URL, time limit, arms, …). Families add a case here.
+ *     (media URL, time limit, arms, …).
  *
- * Neither changes what is stored for existing questions: a variant that
- * declares nothing gets exactly the editor it had.
+ * Families register both from `./variantConfig/<family>.tsx`, imported at the
+ * bottom of this file. The store itself lives in `./variantConfig/registry`
+ * so those files can register at load without a circular import.
+ *
+ * A variant that declares nothing gets exactly the editor it had.
  */
 
-export interface MetaField {
-  key: string;
-  label: string;
-  placeholder?: string;
-  width?: number;
-  /** "text" (default) | "number" | "check" */
-  kind?: "text" | "number" | "check";
-}
+export type { MetaField, VariantSettingsProps };
+export { registerOptionMetaFields, registerVariantSettings };
 
-const DESC: MetaField = { key: "description", label: "description", placeholder: "secondary line", width: 200 };
-const BADGE: MetaField = { key: "badge", label: "badge", placeholder: "e.g. Popular", width: 100 };
-const PRICE: MetaField = { key: "price", label: "price", placeholder: "$ 9.99", width: 90 };
+// the Single / Multi Select batch, and pre-existing renderers that already read meta.description
+registerOptionMetaFields("icons", [{ key: "icon", label: "icon", placeholder: "emoji / short text", width: 110 }]);
+registerOptionMetaFields("listrows", [DESC, BADGE, PRICE]);
+registerOptionMetaFields("richcards", [{ key: "subtitle", label: "subtitle", placeholder: "subtitle", width: 130 }, DESC, PRICE, BADGE]);
+registerOptionMetaFields("pairwise", [DESC]);
+registerOptionMetaFields("multicarousel", [DESC]);
+registerOptionMetaFields("cards", [DESC]);
+registerOptionMetaFields("carousel", [DESC]);
+registerOptionMetaFields("compare", [DESC]);
 
-const OPTION_META_FIELDS: Record<string, MetaField[]> = {
-  icons: [{ key: "icon", label: "icon", placeholder: "emoji / short text", width: 110 }],
-  listrows: [DESC, BADGE, PRICE],
-  richcards: [{ key: "subtitle", label: "subtitle", placeholder: "subtitle", width: 130 }, DESC, PRICE, BADGE],
-  pairwise: [DESC],
-  multicarousel: [DESC],
-  // pre-existing renderers already read meta.description; expose it
-  cards: [DESC],
-  carousel: [DESC],
-  compare: [DESC],
-};
+registerVariantSettings("pairwise", ({ q }) =>
+  q.options.length !== 2 ? (
+    <div className="chip warn" data-testid="pairwise-count">
+      A pairwise choice shows exactly two options — this one has {q.options.length}. Only the first two will be offered.
+    </div>
+  ) : null,
+);
 
 export function optionMetaFields(v: QuestionVariantDef | undefined): MetaField[] {
   if (!v?.renderer) return [];
   return OPTION_META_FIELDS[v.renderer] ?? [];
-}
-
-/* ------------------------------------------------------- settings blocks */
-
-export interface VariantSettingsProps {
-  q: Question;
-  v: QuestionVariantDef | undefined;
-  patch(p: Partial<Question>): void;
-  patchSettings(p: Partial<Question["settings"]>): void;
 }
 
 /**
@@ -62,21 +56,33 @@ export function VariantSettings({ q, v, patch, patchSettings }: VariantSettingsP
   const key = v?.renderer ?? `base:${q.type}`;
   const block = VARIANT_SETTINGS[key] ?? VARIANT_SETTINGS[`base:${q.type}`];
   if (!block) return null;
-  return <div className="variant-settings" data-testid={`variant-settings-${key.replace(":", "-")}`}>{block({ q, v, patch, patchSettings })}</div>;
+  return (
+    <div className="variant-settings" data-testid={`variant-settings-${key.replace(":", "-")}`}>
+      {block({ q, v, patch, patchSettings })}
+    </div>
+  );
 }
 
-type Block = (p: VariantSettingsProps) => React.ReactNode;
-
-const VARIANT_SETTINGS: Record<string, Block> = {
-  pairwise: ({ q }) =>
-    q.options.length !== 2 ? (
-      <div className="chip warn" data-testid="pairwise-count">
-        A pairwise choice shows exactly two options — this one has {q.options.length}. Only the first two will be offered.
-      </div>
-    ) : null,
-};
-
-/** Families register their settings blocks here. */
-export function registerVariantSettings(key: string, block: Block): void {
-  VARIANT_SETTINGS[key] = block;
-}
+/* one import per family — each registers its own settings blocks and meta fields */
+import "./variantConfig/text";
+import "./variantConfig/numeric";
+import "./variantConfig/list";
+import "./variantConfig/matrix";
+import "./variantConfig/ranking";
+import "./variantConfig/slider";
+import "./variantConfig/image";
+import "./variantConfig/media";
+import "./variantConfig/dragdrop";
+import "./variantConfig/swipe";
+import "./variantConfig/carousel";
+import "./variantConfig/card";
+import "./variantConfig/comparison";
+import "./variantConfig/allocation";
+import "./variantConfig/hotspot";
+import "./variantConfig/datetime";
+import "./variantConfig/upload";
+import "./variantConfig/form";
+import "./variantConfig/dynamic";
+import "./variantConfig/gamified";
+import "./variantConfig/experimental";
+import "./variantConfig/conversational";

@@ -1,4 +1,26 @@
 @import "./variants/choice.css";
+@import "./variants/text.css";
+@import "./variants/numeric.css";
+@import "./variants/list.css";
+@import "./variants/matrix.css";
+@import "./variants/ranking.css";
+@import "./variants/slider.css";
+@import "./variants/image.css";
+@import "./variants/media.css";
+@import "./variants/dragdrop.css";
+@import "./variants/swipe.css";
+@import "./variants/carousel.css";
+@import "./variants/card.css";
+@import "./variants/comparison.css";
+@import "./variants/allocation.css";
+@import "./variants/hotspot.css";
+@import "./variants/datetime.css";
+@import "./variants/upload.css";
+@import "./variants/form.css";
+@import "./variants/dynamic.css";
+@import "./variants/gamified.css";
+@import "./variants/experimental.css";
+@import "./variants/conversational.css";
 /* Rescript runtime — themable via CSS variables set from Branding config */
 :root {
   --rs-primary: #2563eb;
