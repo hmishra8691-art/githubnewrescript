@@ -32,3 +32,4 @@ export * from "./blocks.js";
 export * from "./droppedFields.js";
 export * from "./tournament.js";
 export * from "./adaptive.js";
+export * from "./testBuild.js";

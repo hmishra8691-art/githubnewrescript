@@ -101,6 +101,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
           .select("revision, draft_definition, draft_updated_at, current_version_id")
           .eq("id", params.id)
           .single();
+        console.warn("[rescript:draft] REFUSED stale write", JSON.stringify({ surveyId: params.id, baseRevision, serverRevision: cur?.revision ?? null }));
         return NextResponse.json(
           {
             error:
@@ -115,6 +116,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
           { status: 409 },
         );
       }
+      console.info("[rescript:draft] saved", JSON.stringify({ surveyId: params.id, baseRevision, newRevision: row.revision, dropped: dropped.length }));
       return NextResponse.json({
         ok: true,
         savedAt: row.draft_updated_at ?? new Date().toISOString(),

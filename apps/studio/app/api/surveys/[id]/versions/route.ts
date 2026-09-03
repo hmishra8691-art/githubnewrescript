@@ -111,6 +111,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!rpc.error) {
     const row = Array.isArray(rpc.data) ? rpc.data[0] : rpc.data;
     newRevision = row?.revision ?? null;
+    console.info("[rescript:version] cut", JSON.stringify({ surveyId: params.id, versionId: ver.id, version, newRevision, questions: def.questions.length }));
     await db.from("surveys").update({ title: def.meta.title }).eq("id", params.id);
   }
 

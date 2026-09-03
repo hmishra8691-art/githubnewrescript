@@ -73,6 +73,14 @@ export interface StudioState {
   replace(def: SurveyDefinition): void;
   select(questionId: string | null): void;
   markSaved(versionId: string, revision?: number | null): void;
+  /**
+   * True once a write has been refused because this editor is behind the
+   * server. Read the REF, not `saveState`: any edit after the conflict (even
+   * the blur-commit a button click causes) flips the visible state to "dirty"
+   * for a render, and a guard on the visible state let a stale editor cut a
+   * version right over newer work.
+   */
+  hasConflict(): boolean;
   /** flush any pending autosave now; resolves when the draft is stored */
   flushDraft(): Promise<boolean>;
   /**
@@ -156,12 +164,18 @@ export function StudioProvider({
     // A conflict means this editor is behind. Writing again would overwrite
     // whatever is newer, so autosave stops until the programmer resolves it.
     if (blocked.current) return false;
+    // the exact object being sent — compared after the round trip, so a save
+    // that lands while newer edits exist never reports "all changes saved"
+    const sent = latest.current;
+    const baseRevision = revisionRef.current;
     const body = JSON.stringify({
-      definition: latest.current,
+      definition: sent,
       baseVersionId: versionId,
-      baseRevision: revisionRef.current,
+      baseRevision,
     });
     setSaveState({ kind: "saving" });
+    const startedAt = Date.now();
+    console.debug("[rescript:save] draft start", { surveyId: surveyDbId, baseRevision, questions: sent.questions.length });
     const run = (async () => {
       try {
         const r = await fetch(`/api/surveys/${surveyDbId}/draft`, {
@@ -176,6 +190,7 @@ export function StudioProvider({
           return false;
         }
         if (r.status === 409) {
+          console.warn("[rescript:save] draft REFUSED (stale)", { surveyId: surveyDbId, baseRevision, serverRevision: d.revision, ms: Date.now() - startedAt });
           blocked.current = true;
           setSaveState({
             kind: "conflict",
@@ -185,9 +200,11 @@ export function StudioProvider({
           return false;
         }
         if (!r.ok) {
+          console.warn("[rescript:save] draft FAILED", { surveyId: surveyDbId, baseRevision, status: r.status, error: d.error, ms: Date.now() - startedAt });
           setSaveState({ kind: "error", message: d.error ?? `save failed (${r.status})` });
           return false;
         }
+        console.debug("[rescript:save] draft done", { surveyId: surveyDbId, baseRevision, newRevision: d.revision, ms: Date.now() - startedAt });
         if (typeof d.revision === "number") {
           revisionRef.current = d.revision;
           setRevision(d.revision);
@@ -218,9 +235,13 @@ export function StudioProvider({
           });
           return false;
         }
-        setSaveState({ kind: "saved", savedAt: d.savedAt ?? new Date().toISOString() });
+        // edits made during the round trip are not saved yet — say so; the
+        // debounced autosave they scheduled will pick them up
+        if (latest.current !== sent) setSaveState({ kind: "dirty" });
+        else setSaveState({ kind: "saved", savedAt: d.savedAt ?? new Date().toISOString() });
         return true;
       } catch (e) {
+        console.warn("[rescript:save] draft FAILED", { surveyId: surveyDbId, baseRevision, error: (e as Error).message });
         setSaveState({ kind: "error", message: (e as Error).message || "network error" });
         return false;
       } finally {
@@ -282,7 +303,9 @@ export function StudioProvider({
 
   const touched = () => {
     setDirty(true);
-    setSaveState({ kind: "dirty" });
+    // a conflict is terminal until reload — an edit made after it must not
+    // relabel the header "Unsaved changes" as if autosave were still running
+    setSaveState((prev) => (prev.kind === "conflict" ? prev : { kind: "dirty" }));
     scheduleDraftSave();
   };
 
@@ -372,6 +395,7 @@ export function StudioProvider({
       setSaveState({ kind: "clean", savedAt: new Date().toISOString() });
     },
     flushDraft,
+    hasConflict: () => blocked.current,
     toast(msg, kind = "ok") {
       setToastMsg({ msg, kind });
       if (toastTimer.current) clearTimeout(toastTimer.current);

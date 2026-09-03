@@ -64,7 +64,9 @@ function SaveIndicator() {
     case "error":
       return (
         <span className="save-state err" data-testid="save-state" title={st.message}>
-          ⚠ Save failed — {st.message.slice(0, 60)}
+          ⚠ Save failed — {st.message.slice(0, 60)}{" "}
+          <button className="btn small" style={{ marginLeft: 6 }} data-testid="save-retry"
+            onClick={() => void s.flushDraft()}>Retry</button>
         </span>
       );
     case "unavailable":
@@ -135,11 +137,30 @@ function StudioShell() {
    */
   const save = async (label?: string): Promise<string | null> => {
     if (savingRef.current) return null; // one save at a time
+    /*
+     * A conflict means this editor is BEHIND the server: someone (or another
+     * tab) saved newer work. Cutting a version from here would write this
+     * editor's older state over it — the one thing the revision guard exists
+     * to prevent — so a save is refused until the editor reloads.
+     *
+     * Asked of the store's ref, not of `saveState`: the click that reaches
+     * this button first blurs whatever field was being edited, that commit
+     * marks the editor "dirty", and React renders that before the click
+     * handler runs — so the visible state said "dirty" while the editor was
+     * in fact behind. That is how a stale editor got to cut version 1.1.
+     */
+    if (s.hasConflict()) {
+      s.toast("This survey changed elsewhere. Reload to pick up the newer work before saving.", "err");
+      return null;
+    }
     savingRef.current = true;
     setSaving(true);
+    const startedAt = Date.now();
+    const baseRevision = s.revision;
     try {
       // make sure the draft on the server matches what we are about to version
       await s.flushDraft();
+      console.debug("[rescript:save] version start", { surveyId: s.surveyDbId, baseRevision, label });
       const r = await fetch(`/api/surveys/${s.surveyDbId}/versions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -148,9 +169,11 @@ function StudioShell() {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
+        console.warn("[rescript:save] version FAILED", { surveyId: s.surveyDbId, baseRevision, status: r.status, error: d.error, ms: Date.now() - startedAt });
         s.toast(d.error ?? "save failed", "err");
         return null;
       }
+      console.debug("[rescript:save] version done", { surveyId: s.surveyDbId, baseRevision, newRevision: d.revision, version: d.version, versionId: d.id, ms: Date.now() - startedAt });
       // merge ONLY the assigned version number into the live state
       s.update((draft) => { draft.meta.version = d.version; });
       s.markSaved(d.id, typeof d.revision === "number" ? d.revision : null);
@@ -213,15 +236,47 @@ function StudioShell() {
     void s.flushDraft();
   };
 
+  /** The build the last Test Survey click produced — shown beside the button. */
+  const [lastTest, setLastTest] = React.useState<{ version: string; revision: number | null } | null>(null);
+
   /**
-   * Test always runs the newest save. The slugs are read from `defRef` AFTER
-   * the save resolves — reading `s.def` from the closure deployed to whatever
-   * the slugs were when the button was clicked, which is how a renamed study
-   * ended up serving an old deployment.
+   * Test Survey = save, then run EXACTLY what was saved.
+   *
+   *   unsaved changes → flush the draft → cut a version → deploy the slug →
+   *   open /t/<client>/<study>?v=<that version id>
+   *
+   * The `?v=` is the handshake: the runtime loads that version or shows an
+   * error — it never quietly serves whatever the test deployment pointed at
+   * before. The tab is opened synchronously, inside the click, because a
+   * `window.open` after two awaits is what popup blockers exist to stop; when
+   * it was blocked here the save still happened, nothing opened, and the
+   * tester reached for an old tab or bookmark and tested an older build.
+   *
+   * The slugs are read from `defRef` AFTER the save resolves — reading `s.def`
+   * from the closure deployed to whatever the slugs were when the button was
+   * clicked, which is how a renamed study ended up serving an old deployment.
    */
   const testSurvey = async () => {
+    if (s.hasConflict()) {
+      s.toast("This survey changed elsewhere. Reload before testing, or you would be testing an older state.", "err");
+      return;
+    }
+    const tab = window.open("", "rescript_test");
+    // the named window is reused across clicks; once it holds the runtime it
+    // is cross-origin and its document is off limits — only its location is not
+    try {
+      tab?.document.write("<title>Rescript — saving…</title><p style='font:14px system-ui;padding:24px'>Saving your latest changes, then opening the test survey…</p>");
+    } catch { /* already showing a previous build; it will be navigated below */ }
+    const fail = (msg: string) => {
+      console.warn("[rescript:test] refused", { surveyId: s.surveyDbId, reason: msg });
+      s.toast(msg, "err");
+      if (tab && !tab.closed) tab.close();
+    };
     const versionId = await save("test build");
-    if (!versionId) return;
+    if (!versionId) {
+      fail("Your latest changes could not be saved. Please retry before starting the test survey.");
+      return;
+    }
     const dep = defRef.current.deployment;
     const r = await fetch(`/api/surveys/${s.surveyDbId}/deploy`, {
       method: "POST",
@@ -235,8 +290,19 @@ function StudioShell() {
       cache: "no-store",
     });
     const d = await r.json().catch(() => ({}));
-    if (d.url) window.open(d.url, "_blank");
-    else s.toast(d.error ?? "test deploy failed", "err");
+    if (!r.ok || !d.url) {
+      fail(d.error ?? "The test link could not be deployed. Your version was saved; please retry.");
+      return;
+    }
+    const url = `${d.url}${d.url.includes("?") ? "&" : "?"}v=${encodeURIComponent(versionId)}`;
+    console.info("[rescript:test] opening", { surveyId: s.surveyDbId, versionId, version: defRef.current.meta.version, revision: s.revision, url });
+    setLastTest({ version: defRef.current.meta.version, revision: s.revision });
+    if (tab && !tab.closed) tab.location.href = url;
+    else {
+      // the popup was blocked after all — give the tester the link instead of silence
+      const win = window.open(url, "_blank");
+      if (!win) s.toast(`Pop-up blocked. Open the test survey here: ${url}`, "err");
+    }
   };
 
   /** What each deployment mode is actually serving, so the gap is visible. */
@@ -284,13 +350,17 @@ function StudioShell() {
       <div className="topbar">
         <a href="/" className="logo-mark" style={{ width: 26, height: 26, fontSize: 14 }}>R</a>
         <span className="title">{s.def.meta.title}</span>
-        <span className="ver">{s.def.meta.code} · v{s.def.meta.version}</span>
+        <span className="ver" title="Version number of the last saved version, and the row revision every save is based on">
+          {s.def.meta.code} · v{s.def.meta.version}{s.revision != null && <span className="muted"> · rev {s.revision}</span>}
+        </span>
         <SaveIndicator />
         <span className="spacer" />
         <button className="btn" onClick={preview} disabled={saving}
           title="Full-page preview of the survey you are editing right now">▶ Preview</button>
-        <button className="btn" onClick={testSurvey} disabled={saving}
-          title="Save a version, deploy it to the test link and open it with the inspector">
+        <button className="btn" onClick={testSurvey} disabled={saving} data-testid="test-survey"
+          title={lastTest
+            ? `Saves your latest changes as a new version and opens exactly that. Last test build: v${lastTest.version}${lastTest.revision != null ? ` (rev ${lastTest.revision})` : ""}`
+            : "Saves your latest changes as a new version, deploys it to the test link and opens exactly that version with the inspector"}>
           {saving ? "Saving…" : "🧪 Test Survey"}
         </button>
         <a className="btn" href={`/api/surveys/${s.surveyDbId}/export/xlsx`} target="_blank">⬇ Variables .xlsx</a>

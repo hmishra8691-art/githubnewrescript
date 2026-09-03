@@ -28,6 +28,13 @@ export interface RunnerProps {
   session?: { sessionId: string; seed: number; surveyDbId: string; versionDbId: string };
   quotaCounts?: QuotaCounts;
   urlParams?: Record<string, string>;
+  /**
+   * Test mode: exactly which saved state this is — the version number (or
+   * "draft"), the row revision, where it came from. Shown in the toolbar so a
+   * tester can tell at a glance whether they are looking at what they just
+   * saved, instead of discovering it question by question.
+   */
+  build?: { source: "requested" | "draft" | "current"; version: string; versionId: string; revision: number | null; draftUpdatedAt?: string | null };
 }
 
 function brandingVars(b: Branding): React.CSSProperties {
@@ -72,7 +79,7 @@ async function persist(mode: string, session: RunnerProps["session"], state: Res
   }
 }
 
-export function Runner({ definition: def, mode, session, quotaCounts: initialCounts, urlParams }: RunnerProps) {
+export function Runner({ definition: def, mode, session, quotaCounts: initialCounts, urlParams, build }: RunnerProps) {
   const [, force] = React.useReducer((x: number) => x + 1, 0);
   const stateRef = React.useRef<ResponseState | null>(null);
   const [steps, setSteps] = React.useState<RuntimeStep[]>([]);
@@ -352,6 +359,18 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
   const toolbar = (
     <div className="rs-toolbar" data-testid="runtime-toolbar">
       <span className="rs-toolbar-mode">{mode.toUpperCase()}</span>
+      {build && (
+        <span className="rs-toolbar-build" data-testid="test-build"
+          title={build.source === "requested"
+            ? "The exact version the Studio saved when you clicked Test Survey"
+            : build.source === "draft"
+              ? `The latest autosaved draft${build.draftUpdatedAt ? ` (saved ${new Date(build.draftUpdatedAt).toLocaleTimeString()})` : ""} — not yet cut as a version`
+              : "The survey's current saved version"}>
+          {build.version === "draft" ? "draft" : `v${build.version}`}
+          {build.revision != null && ` · rev ${build.revision}`}
+          {build.source === "draft" && " · autosaved"}
+        </span>
+      )}
       {blockIndex > 0 && (
         <span className="rs-toolbar-pos" data-testid="block-position">
           {blockName ? `${blockName} · ` : ""}Page {blockIndex} of {Math.max(blockSteps.length, 1)}

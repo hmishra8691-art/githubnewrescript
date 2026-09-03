@@ -15,11 +15,12 @@ import { newSurveyDefinition } from "@/lib/defaults";
  */
 export default function SandboxPage() {
   const [def] = React.useState(() => newSurveyDefinition("sandbox", "SANDBOX", "Editor Sandbox"));
-  const [params] = React.useState(() =>
-    typeof window === "undefined"
-      ? new URLSearchParams()
-      : new URLSearchParams(window.location.search),
-  );
+  // The URL is only readable in the browser, and the Studio renders values
+  // from it (the revision in the header), so mount it after hydration rather
+  // than server-render one thing and hydrate another.
+  const [params, setParams] = React.useState<URLSearchParams | null>(null);
+  React.useEffect(() => { setParams(new URLSearchParams(window.location.search)); }, []);
+  if (!params) return null;
   const dbid = params.get("dbid") || "sandbox";
   const rev = params.get("rev");
   return (
