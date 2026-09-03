@@ -18,7 +18,10 @@ import assert from "node:assert/strict";
 
 export { assert };
 
-export async function openHarness({ studio = "http://localhost:3000", runtime = "http://localhost:3001" } = {}) {
+export async function openHarness({
+  studio = process.env.STUDIO_URL ?? "http://localhost:3000",
+  runtime = process.env.RUNTIME_URL ?? "http://localhost:3001",
+} = {}) {
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1700, height: 1150 } });
   page.on("pageerror", (e) => console.error("STUDIO PAGE ERROR:", e.message));
