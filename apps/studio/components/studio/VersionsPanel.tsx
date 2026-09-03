@@ -34,9 +34,19 @@ export function VersionsPanel() {
     if (!d.version) return s.toast("Could not load version", "err");
     const parsed = SurveyDefinition.safeParse(d.version.definition);
     if (!parsed.success) return s.toast("Stored version invalid", "err");
+    /*
+     * Point the survey at this version FIRST, and only then put it in the
+     * editor. The other order let the autosave triggered by `replace` write
+     * the restored definition into a draft that the server was about to
+     * clear — a race whose loser was whichever request finished last.
+     */
+    const res = await fetch(`/api/surveys/${s.surveyDbId}/versions/${versionId}`, { method: "POST" });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) return s.toast(out.error ?? "Could not restore that version", "err");
     s.replace(parsed.data);
-    await fetch(`/api/surveys/${s.surveyDbId}/versions/${versionId}`, { method: "POST" });
-    s.toast(`Loaded v${d.version.version} into the editor`);
+    // the draft is gone and this version is now current: nothing is pending
+    s.markSaved(versionId, typeof out.revision === "number" ? out.revision : null);
+    s.toast(`Restored v${d.version.version} — it is now the current version`);
     load();
   };
 

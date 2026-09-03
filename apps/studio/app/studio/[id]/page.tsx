@@ -27,7 +27,7 @@ export default async function StudioPage({ params }: { params: { id: string } })
   let survey: Record<string, unknown> | null = null;
   const withDraft = await db
     .from("surveys")
-    .select("id, code, title, current_version_id, draft_definition, draft_updated_at")
+    .select("id, code, title, current_version_id, draft_definition, draft_updated_at, revision")
     .eq("id", params.id)
     .single();
   if (withDraft.data) survey = withDraft.data;
@@ -73,12 +73,27 @@ export default async function StudioPage({ params }: { params: { id: string } })
     }
   }
 
-  // a draft always wins over the version — it is the newer work
+  /*
+   * A draft always wins over the version — it is the newer work.
+   *
+   * If it will not parse, the editor STOPS. It used to fall through to the
+   * older version without a word, which is the single worst thing this code
+   * could do: the programmer sees their recent work missing, edits on top of
+   * the older structure, and the next autosave writes that older structure
+   * over the draft that still held the real thing. Refusing to open is
+   * recoverable; silently reverting is not.
+   */
   if (survey.draft_definition) {
     const draft = SurveyDefinition.safeParse(survey.draft_definition);
     if (draft.success) {
       definition = draft.data;
       draftSavedAt = (survey.draft_updated_at as string) ?? null;
+    } else {
+      loadError =
+        "This survey has autosaved work that does not match the current schema, so it was NOT loaded — " +
+        "and the editor has stopped rather than showing you the older saved version as if it were current. " +
+        "The draft is still in the database, untouched. " +
+        draft.error.issues.slice(0, 3).map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
     }
   }
 
@@ -88,8 +103,8 @@ export default async function StudioPage({ params }: { params: { id: string } })
         <h1>This survey could not be opened safely</h1>
         <div className="card" style={{ borderColor: "var(--red)", color: "var(--red)" }}>{loadError}</div>
         <p className="muted" style={{ marginTop: 12 }}>
-          Opening it as a blank survey would risk overwriting the stored questionnaire on the next
-          save, so the editor has stopped instead.
+          Opening it anyway would risk overwriting the stored questionnaire on the next
+          autosave, so the editor has stopped instead. Nothing has been changed or deleted.
         </p>
         <a className="btn" href="/">← back to surveys</a>
       </div>
@@ -102,6 +117,7 @@ export default async function StudioPage({ params }: { params: { id: string } })
       surveyDbId={String(survey.id)}
       versionId={versionId}
       draftSavedAt={draftSavedAt}
+      revision={typeof survey.revision === "number" ? survey.revision : null}
     />
   );
 }

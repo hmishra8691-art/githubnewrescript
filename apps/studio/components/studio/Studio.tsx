@@ -73,6 +73,16 @@ function SaveIndicator() {
           ⚠ Autosave off — use Save version
         </span>
       );
+    case "conflict":
+      // deliberately loud and deliberately terminal: autosave has stopped, and
+      // the one safe action is to reload, because this editor is behind
+      return (
+        <span className="save-state err" data-testid="save-state" title={st.message}>
+          ⚠ Changed elsewhere — not saved.{" "}
+          <button className="btn small" style={{ marginLeft: 6 }}
+            onClick={() => window.location.reload()}>Reload</button>
+        </span>
+      );
     case "clean":
     default:
       return st.savedAt ? (
@@ -143,7 +153,7 @@ function StudioShell() {
       }
       // merge ONLY the assigned version number into the live state
       s.update((draft) => { draft.meta.version = d.version; });
-      s.markSaved(d.id);
+      s.markSaved(d.id, typeof d.revision === "number" ? d.revision : null);
       setPublishState(null); // the gap to live has changed
       s.toast(`Saved version ${d.version} (${d.variables} variables)`);
       return d.id as string;
@@ -345,14 +355,16 @@ function StudioShell() {
   );
 }
 
-export function Studio({ definition, surveyDbId, versionId, draftSavedAt }: {
+export function Studio({ definition, surveyDbId, versionId, draftSavedAt, revision }: {
   definition: SurveyDefinition; surveyDbId: string; versionId: string | null;
   /** set when the loaded definition came from an autosaved draft */
   draftSavedAt?: string | null;
+  /** the row revision this editor loaded on top of */
+  revision?: number | null;
 }) {
   return (
     <StudioProvider initial={definition} surveyDbId={surveyDbId} versionId={versionId}
-      draftSavedAt={draftSavedAt}>
+      draftSavedAt={draftSavedAt} revision={revision}>
       <StudioShell />
     </StudioProvider>
   );

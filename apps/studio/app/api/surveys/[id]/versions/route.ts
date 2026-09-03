@@ -93,17 +93,40 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
    * leaving it behind would make the editor reopen on a draft identical to the
    * version while still showing "unsaved changes".
    */
-  const { error: pointerError } = await db
-    .from("surveys")
-    .update({
-      current_version_id: ver.id,
-      title: def.meta.title,
-      draft_definition: null,
-      draft_updated_at: null,
-      draft_base_version_id: null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", params.id);
+  /*
+   * Prefer the guarded RPC (migration 0004): it points the survey at the new
+   * version, clears the draft and bumps the revision in ONE statement, and
+   * returns the new revision so the editor keeps writing on top of the right
+   * one instead of conflicting with itself on its next keystroke.
+   *
+   * Cutting a version is explicit intent, so it forces past the revision
+   * guard (-1) rather than failing on a draft written moments earlier.
+   */
+  let newRevision: number | null = null;
+  const rpc = await db.rpc("rescript_finalize_version", {
+    p_survey_id: params.id,
+    p_version_id: ver.id,
+    p_base_revision: -1,
+  });
+  if (!rpc.error) {
+    const row = Array.isArray(rpc.data) ? rpc.data[0] : rpc.data;
+    newRevision = row?.revision ?? null;
+    await db.from("surveys").update({ title: def.meta.title }).eq("id", params.id);
+  }
+
+  const { error: pointerError } = newRevision !== null
+    ? { error: null }
+    : await db
+      .from("surveys")
+      .update({
+        current_version_id: ver.id,
+        title: def.meta.title,
+        draft_definition: null,
+        draft_updated_at: null,
+        draft_base_version_id: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", params.id);
 
   if (pointerError) {
     // Retry without the draft columns — they only exist after migration 0003,
@@ -127,5 +150,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     action: "survey.version.save", entity: "survey_version", entity_id: ver.id,
     detail: { survey_id: params.id, version, label: body.label ?? null },
   });
-  return NextResponse.json({ id: ver.id, version: ver.version, variables: def.variables.length });
+  return NextResponse.json({
+    id: ver.id, version: ver.version, variables: def.variables.length, revision: newRevision,
+  });
 }

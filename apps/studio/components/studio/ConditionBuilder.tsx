@@ -264,28 +264,47 @@ export function ConditionEditor({ value, onChange, perOption, nested }: {
    *  is editable, so it can never disagree with itself. */
   const Connector = () => (
     <div className="cond-join">
-      <select value={g.op} aria-label="How these conditions combine"
-        title={
-          g.op === "and" ? "Every condition must be true"
-            : g.op === "or" ? "At least one condition must be true"
-              : "None of these may be true"
-        }
-        onChange={(e) => setOp(e.target.value as any)}>
-        <option value="and">AND</option>
-        <option value="or">OR</option>
-        <option value="not">NOR</option>
-      </select>
+      <span className="cond-join-label" data-testid="cond-join">
+        {g.op === "and" ? "AND" : g.op === "or" ? "OR" : "NOR"}
+      </span>
     </div>
   );
+
+  /**
+   * Each group owns its operator, and each group shows it.
+   *
+   * The operator used to appear ONLY as a connector between two children, so
+   * a bracketed sub-group holding one condition displayed no control of its
+   * own — the nearest dropdown belonged to the PARENT. Changing "the nested
+   * OR" therefore changed the parent's AND, which is exactly the bug this
+   * fixes. The header control below is scoped to `g` and nothing else; the
+   * connectors between rows are now plain text, so two controls can never
+   * disagree about one group.
+   */
+  const showHeaderOp = nested || g.children.length > 1;
 
   return (
     <div className={`cond-group op-${g.op}${nested ? " nested" : ""}`} data-testid="cond-group">
       <div className="cond-lead">
-        {g.children.length <= 1 && !nested
-          ? "This is true when:"
-          : g.op === "and" ? "All of these are true:"
-            : g.op === "or" ? "Any one of these is true:"
-              : "None of these is true:"}
+        {showHeaderOp ? (
+          <span className="cond-op-head">
+            <select className="select cond-op-select" data-testid="group-op"
+              value={g.op} aria-label={nested ? "How this bracketed group combines" : "How these conditions combine"}
+              onChange={(e) => setOp(e.target.value as any)}>
+              <option value="and">AND</option>
+              <option value="or">OR</option>
+              <option value="not">NOR</option>
+            </select>
+            <span className="muted" style={{ fontSize: 11.5 }}>
+              {g.op === "and" ? "every condition in this group must be true"
+                : g.op === "or" ? "any one condition in this group"
+                  : "none of these may be true"}
+              {nested ? " — this bracket only" : ""}
+            </span>
+          </span>
+        ) : (
+          "This is true when:"
+        )}
       </div>
       {g.children.map((child, i) => (
         <React.Fragment key={i}>
@@ -323,7 +342,7 @@ export function ConditionEditor({ value, onChange, perOption, nested }: {
                 { type: "group", op: g.op === "or" ? "and" : "or", children: [newRule(firstRef)] },
               ],
             })}>
-          + bracket ( … )
+          + condition group ( … )
         </button>
       </div>
     </div>

@@ -412,6 +412,15 @@ export function evaluateCondition(
   const { op, children } = condition;
   if (op === "and") return children.every((c) => evaluateCondition(c, ctx));
   if (op === "or") return children.some((c) => evaluateCondition(c, ctx));
-  // "not" = negation of the conjunction of children
-  return !children.every((c) => evaluateCondition(c, ctx));
+  /*
+   * "not" means NONE of these are true.
+   *
+   * It used to compute NOT(a AND b) — a NAND, true whenever any child was
+   * false — while every label in the editor said "None of these is true".
+   * A programmer selecting it got the opposite of what they read on two
+   * children out of three. The evaluator now matches what the editor
+   * promises; with a single child the two readings are identical, so only a
+   * multi-child NOR group behaves differently from before.
+   */
+  return !children.some((c) => evaluateCondition(c, ctx));
 }

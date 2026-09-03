@@ -291,17 +291,30 @@ await studio.click('.rightpanel >> text=+ skip rule');
 await studio.waitForSelector(".rightpanel .cond-group");
 await studio.click('.rightpanel .cond-add >> text=+ condition');
 await studio.waitForTimeout(150);
-await studio.click('.rightpanel .cond-add >> text=+ bracket ( … )');
+await studio.click('.rightpanel .cond-add >> text=+ condition group ( … )');
 await studio.waitForTimeout(150);
 const targetSel = await studio.$$('.rightpanel .skip-target select');
 await targetSel[0].selectOption("url");
 await studio.waitForTimeout(300);
 
-// the connector lives between the rules, and there is exactly one per gap
-const joins = await studio.$$eval(".rightpanel .cond-group > .cond-join select",
-  (els) => els.map((e) => e.value));
-assert.deepEqual(joins, ["and"], `one connector between two children: ${joins}`);
-console.log("✔ AND/OR sits between the conditions, not as a leading dropdown");
+/*
+ * The connector between rules is now a LABEL, and the operator control lives
+ * in each group's own header. Two controls for one operator is how "change the
+ * nested OR" ended up changing the parent AND: a bracketed group holding a
+ * single condition showed no control of its own, so the nearest dropdown
+ * belonged to its parent.
+ */
+const joinLabels = await studio.$$eval(".rightpanel .cond-group > .cond-join [data-testid='cond-join']",
+  (els) => els.map((e) => e.textContent.trim()));
+assert.ok(joinLabels.length >= 1, `the connector still reads between the rules: ${joinLabels}`);
+assert.equal(await studio.$$eval(".rightpanel .cond-join select", (els) => els.length), 0,
+  "and it is not a second control for the same operator");
+
+const groupOps = await studio.$$eval(".rightpanel [data-testid='group-op']", (els) => els.length);
+const groups = await studio.$$eval(".rightpanel .cond-group", (els) => els.length);
+assert.equal(groupOps, groups,
+  `every group has exactly one operator control of its own (${groupOps} controls, ${groups} groups)`);
+console.log(`✔ AND/OR reads between the conditions, and each of the ${groups} groups owns its operator`);
 
 // nothing may overflow its box or escape the panel
 const layout = await studio.evaluate(() => {
