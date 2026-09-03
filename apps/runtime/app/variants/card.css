@@ -1,1 +1,124 @@
-/* ---- card variant family */
+/* ---- card variant family (flip cards, card sort) */
+
+/* --- Expandable / flip cards --- */
+.rs-flipgrid { display: grid; gap: 14px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.rs-flipgrid.cols-1 { grid-template-columns: 1fr; }
+.rs-flipgrid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.rs-flipgrid.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+.rs-flipcard { position: relative; height: 300px; perspective: 1200px; min-width: 0; }
+.rs-flipcard-inner {
+  position: absolute; inset: 0; transform-style: preserve-3d; transition: transform .45s ease;
+}
+.rs-flipcard.flipped .rs-flipcard-inner { transform: rotateY(180deg); }
+.rs-flipface {
+  position: absolute; inset: 0; box-sizing: border-box; overflow: auto;
+  -webkit-backface-visibility: hidden; backface-visibility: hidden;
+  display: flex; flex-direction: column; gap: 8px; padding: 12px;
+  border: 2px solid var(--rs-border); border-radius: var(--rs-radius); background: var(--rs-surface);
+}
+.rs-flipface.front { cursor: pointer; }
+.rs-flipface.front:hover { border-color: var(--rs-primary); }
+.rs-flipface.back { transform: rotateY(180deg); }
+.rs-flipcard.selected .rs-flipface { border-color: var(--rs-primary); }
+.rs-flipcard.selected .rs-flipface.front {
+  background: color-mix(in srgb, var(--rs-primary) 8%, var(--rs-surface));
+}
+/* the face turned away must not swallow clicks or focus */
+.rs-flipcard:not(.flipped) .rs-flipface.back { pointer-events: none; }
+.rs-flipcard.flipped .rs-flipface.front { pointer-events: none; }
+.rs-flipface.front:focus-visible { outline: 2px solid var(--rs-primary); outline-offset: 2px; }
+
+.rs-flip-badge { position: absolute; top: 10px; left: 10px; background: var(--rs-primary); color: #fff; }
+.rs-flip-img { width: 100%; height: 140px; object-fit: cover; border-radius: 8px; display: block; }
+.rs-flip-icon {
+  height: 140px; display: grid; place-items: center; font-size: 2.6em; border-radius: 8px;
+  background: color-mix(in srgb, var(--rs-border) 45%, var(--rs-surface)); color: var(--rs-subtle);
+}
+.rs-flip-title { font-weight: 650; }
+.rs-flip-desc { font-size: .9em; color: var(--rs-subtle); }
+.rs-flip-meta { display: flex; align-items: center; gap: 8px; }
+.rs-flip-foot, .rs-flip-actions { margin-top: auto; display: flex; align-items: center; gap: 8px; }
+.rs-flipface .rs-richcard-select { cursor: pointer; font: inherit; font-size: .85em; font-weight: 600; background: var(--rs-surface); }
+.rs-flipface .rs-richcard-select.on { background: var(--rs-primary); color: #fff; }
+.rs-flip-back {
+  font: inherit; font-size: .85em; cursor: pointer; padding: 6px 12px; border-radius: 999px;
+  border: 1.5px solid var(--rs-border); background: var(--rs-surface); color: var(--rs-subtle);
+}
+@media (prefers-reduced-motion: reduce) {
+  .rs-flipcard-inner { transition: none; }
+}
+
+/* --- Sortable / swipeable cards --- */
+.rs-cardsort { max-width: 460px; margin: 0 auto; }
+.rs-cardsort-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  color: var(--rs-subtle); font-size: .88em; margin-bottom: 8px;
+}
+.rs-cardsort-undo {
+  font: inherit; font-size: .95em; cursor: pointer; padding: 4px 10px; border-radius: 999px;
+  border: 1.5px solid var(--rs-border); background: var(--rs-surface); color: var(--rs-subtle);
+}
+.rs-cardsort-stack { position: relative; height: 210px; }
+.rs-cardsort-card {
+  position: absolute; inset: 0; z-index: 1; box-sizing: border-box;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  padding: 18px; text-align: center; cursor: grab; user-select: none; touch-action: pan-y;
+  border: 2px solid var(--rs-border); border-radius: var(--rs-radius);
+  background: var(--rs-surface); box-shadow: 0 6px 18px rgba(15, 23, 42, .08);
+}
+.rs-cardsort-card:active { cursor: grabbing; }
+.rs-cardsort-card.behind { transform: scale(.94) translateY(10px); z-index: 0; opacity: .55; }
+.rs-cardsort-card.empty { color: var(--rs-subtle); border-style: dashed; box-shadow: none; }
+.rs-cardsort-card img { max-width: 100%; max-height: 110px; object-fit: cover; border-radius: 8px; pointer-events: none; }
+.rs-cardsort-label { font-size: 1.1em; font-weight: 650; }
+.rs-cardsort-desc { font-size: .9em; color: var(--rs-subtle); }
+.rs-cardsort-verdict {
+  position: absolute; top: 14px; padding: 4px 10px; border-radius: 8px; font-weight: 700;
+  font-size: .85em; text-transform: uppercase; background: var(--rs-surface);
+}
+.rs-cardsort-verdict.right { right: 14px; color: #16a34a; border: 2.5px solid #16a34a; transform: rotate(8deg); }
+.rs-cardsort-verdict.left { left: 14px; color: var(--rs-error); border: 2.5px solid var(--rs-error); transform: rotate(-8deg); }
+
+.rs-cardsort-piles {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-top: 16px;
+}
+.rs-cardsort-pile {
+  position: relative; display: flex; flex-direction: column; gap: 6px; min-width: 0;
+  padding: 10px; border: 1.5px dashed var(--rs-border); border-radius: 10px; background: var(--rs-surface);
+}
+.rs-cardsort-pile.open { border-style: solid; border-color: var(--rs-primary); }
+.rs-cardsort-pilebtn {
+  display: flex; align-items: center; justify-content: center; gap: 6px; font: inherit; font-weight: 600;
+  cursor: pointer; padding: 10px 8px; border-radius: 8px; min-width: 0;
+  border: 1.5px solid var(--rs-border); background: var(--rs-surface); color: var(--rs-text);
+}
+.rs-cardsort-pilebtn:hover:not(:disabled) { border-color: var(--rs-primary); color: var(--rs-primary); }
+.rs-cardsort-pilebtn:disabled { opacity: .55; cursor: default; }
+.rs-cardsort-dir { color: var(--rs-subtle); font-weight: 400; }
+.rs-cardsort-count {
+  position: absolute; top: -9px; right: 4px; width: 24px; height: 24px; border-radius: 50%;
+  display: grid; place-items: center; font: inherit; font-size: .78em; font-weight: 700; cursor: pointer;
+  border: 1.5px solid var(--rs-primary); background: var(--rs-surface); color: var(--rs-primary);
+}
+.rs-cardsort-held { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px; }
+.rs-cardsort-held li { min-width: 0; }
+.rs-cardsort-held button {
+  font: inherit; font-size: .78em; cursor: pointer; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--rs-border); background: color-mix(in srgb, var(--rs-primary) 8%, var(--rs-surface));
+  color: var(--rs-text); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  .rs-flipgrid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .rs-flipcard { height: 300px; }
+  .rs-flipface { padding: 10px; gap: 6px; }
+  .rs-flip-img, .rs-flip-icon { height: 92px; }
+  /* Select + Back side by side do not fit half a phone's width */
+  .rs-flip-actions { flex-wrap: wrap; gap: 6px; }
+  .rs-cardsort-piles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* Profile / Product / Statement Cards reuse the shared rich-card grid, whose
+     footer (price + Select) is one unwrappable row — on two narrow columns the
+     price and the pill collided. */
+  .rs-richcard-foot { flex-wrap: wrap; gap: 6px; }
+}

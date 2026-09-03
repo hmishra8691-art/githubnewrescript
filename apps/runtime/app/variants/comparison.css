@@ -1,1 +1,50 @@
-/* ---- comparison variant family */
+/* ---- comparison variant family (multi-item / attribute comparison table) */
+
+.rs-attrcompare-pick { margin-bottom: 10px; font-size: .95em; }
+
+/* the table scrolls inside its own wrapper — the page never scrolls sideways */
+.rs-attrcompare-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
+.rs-attrcompare-wrap:focus-visible { outline: 2px solid var(--rs-primary); outline-offset: 2px; }
+
+.rs-attrtable { border-collapse: collapse; width: 100%; min-width: 340px; font-size: .95em; }
+.rs-attrtable th, .rs-attrtable td {
+  border: 1px solid var(--rs-border); padding: 10px 12px; text-align: center; vertical-align: middle;
+}
+.rs-attrtable thead th {
+  background: color-mix(in srgb, var(--rs-primary) 5%, var(--rs-surface));
+  min-width: 130px;
+}
+.rs-attrtable thead th img {
+  display: block; width: 100%; max-width: 120px; height: 74px; object-fit: cover;
+  border-radius: 8px; margin: 0 auto 6px;
+}
+.rs-attr-item { font-weight: 650; display: block; }
+.rs-attrtable th.attr {
+  text-align: left; font-weight: 600; white-space: nowrap; position: sticky; left: 0; z-index: 1;
+  background: var(--rs-surface); min-width: 108px;
+}
+.rs-attrtable thead th.attr { background: color-mix(in srgb, var(--rs-primary) 5%, var(--rs-surface)); }
+.rs-attrtable tbody tr:nth-child(even) td { background: color-mix(in srgb, var(--rs-border) 22%, var(--rs-surface)); }
+.rs-attrtable .chosen {
+  background: color-mix(in srgb, var(--rs-primary) 10%, var(--rs-surface)) !important;
+}
+.rs-attrtable thead th.chosen { box-shadow: inset 0 3px 0 var(--rs-primary); }
+.rs-attrtable tfoot td { background: var(--rs-surface); }
+.rs-attrtable .rs-richcard-select {
+  font: inherit; font-size: .85em; font-weight: 600; cursor: pointer; white-space: nowrap;
+  background: var(--rs-surface); border: 1.5px solid var(--rs-primary); color: var(--rs-primary);
+  padding: 6px 14px; border-radius: 999px;
+}
+.rs-attrtable .rs-richcard-select.on { background: var(--rs-primary); color: #fff; }
+
+.rs-sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+@media (max-width: 560px) {
+  .rs-attrtable { font-size: .9em; }
+  .rs-attrtable th, .rs-attrtable td { padding: 8px; }
+  .rs-attrtable thead th { min-width: 118px; }
+  .rs-attrtable thead th img { height: 58px; }
+}

@@ -1,1 +1,86 @@
-/* ---- carousel variant family */
+/* ---- carousel variant family (judge each item, comparison carousel) */
+
+/* --- Carousel + Choice / Slider / Text --- */
+/* wider than a plain option carousel: the card carries a judgement control */
+.rs-carousel.rs-judge { max-width: 620px; }
+/* full-height ‹ › on a 300px card reads as two grey walls — centre them */
+.rs-judge .rs-carousel-row { align-items: center; }
+.rs-judge .rs-carousel-nav { height: 76px; }
+.rs-judge-card {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px;
+  padding: 16px; border: 2px solid var(--rs-border); border-radius: var(--rs-radius);
+  background: var(--rs-surface);
+}
+.rs-judge-img { width: 100%; max-height: 180px; object-fit: cover; border-radius: 8px; display: block; }
+.rs-judge-title { font-weight: 650; font-size: 1.06em; }
+.rs-judge-desc { color: var(--rs-subtle); font-size: .9em; margin-top: -4px; }
+.rs-judge-hint { color: var(--rs-subtle); font-size: .85em; }
+
+.rs-judge-scale { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; }
+.rs-judge-btn {
+  flex: 1 1 auto; min-width: 84px; padding: 10px 12px; font: inherit; cursor: pointer;
+  border: 1.5px solid var(--rs-border); border-radius: 999px;
+  background: var(--rs-surface); color: var(--rs-text);
+}
+.rs-judge-btn:hover { border-color: var(--rs-primary); }
+.rs-judge-btn.on { background: var(--rs-primary); border-color: var(--rs-primary); color: #fff; font-weight: 600; }
+
+.rs-judge-slider { display: flex; align-items: center; gap: 10px; margin-top: auto; flex-wrap: wrap; }
+.rs-judge-slider input[type="range"] { flex: 1 1 140px; min-width: 0; accent-color: var(--rs-primary); }
+.rs-judge-end { font-size: .82em; color: var(--rs-subtle); }
+.rs-judge-val { font-weight: 700; min-width: 2.2em; text-align: right; }
+
+.rs-judge-text { width: 100%; box-sizing: border-box; resize: vertical; margin-top: auto; }
+
+/* dots carry a "judged" tick, so they need room for a glyph */
+.rs-judge .rs-carousel-dots .dot {
+  width: 16px; height: 16px; display: grid; place-items: center;
+  font-size: 10px; line-height: 1; color: #fff;
+}
+.rs-judge .rs-carousel-dots .dot:focus-visible { outline: 2px solid var(--rs-primary); outline-offset: 2px; }
+.rs-judge .rs-carousel-foot { gap: 10px; flex-wrap: wrap; }
+
+/* --- Comparison carousel --- */
+.rs-comparecar { max-width: 100%; }
+.rs-comparecar-pick { margin-bottom: 10px; font-size: .95em; }
+.rs-comparecar .rs-carousel-row { align-items: center; }
+.rs-comparecar .rs-carousel-nav { height: 96px; }
+.rs-comparecar-pair {
+  flex: 1; min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;
+}
+.rs-comparecar-side {
+  display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center;
+  padding: 14px 12px; border: 2px solid var(--rs-border); border-radius: var(--rs-radius);
+  background: var(--rs-surface); min-width: 0;
+}
+.rs-comparecar-side.selected {
+  border-color: var(--rs-primary); background: color-mix(in srgb, var(--rs-primary) 8%, var(--rs-surface));
+}
+.rs-comparecar-side img { width: 100%; max-height: 170px; object-fit: contain; border-radius: 8px; }
+.rs-comparecar-noimg {
+  width: 100%; height: 110px; display: grid; place-items: center; font-size: 2em;
+  background: color-mix(in srgb, var(--rs-border) 45%, var(--rs-surface)); border-radius: 8px; color: var(--rs-subtle);
+}
+.rs-comparecar-title { font-weight: 650; }
+.rs-comparecar-desc { font-size: .88em; color: var(--rs-subtle); }
+.rs-comparecar-price { font-weight: 700; }
+.rs-comparecar-side .rs-richcard-select {
+  margin-top: auto; cursor: pointer; background: var(--rs-surface); font: inherit;
+  font-size: .85em; font-weight: 600;
+}
+.rs-comparecar-side .rs-richcard-select.on { background: var(--rs-primary); color: #fff; }
+
+/* on a phone the ‹ › columns and the card padding are worth more to the
+   content than to the chrome */
+@media (max-width: 560px) {
+  .rs-judge .rs-carousel-row, .rs-comparecar .rs-carousel-row { gap: 6px; }
+  .rs-judge .rs-carousel-nav, .rs-comparecar .rs-carousel-nav { width: 30px; font-size: 20px; height: 64px; }
+  .rs-judge-card { padding: 12px; }
+  .rs-judge-btn { min-width: 0; padding: 9px 8px; }
+  .rs-judge .rs-carousel-foot { justify-content: flex-start; }
+  .rs-comparecar-pair { gap: 8px; }
+  .rs-comparecar-side { padding: 10px 7px; gap: 6px; }
+  .rs-comparecar-side img, .rs-comparecar-noimg { max-height: 100px; height: auto; }
+  .rs-comparecar-side .rs-richcard-select { padding: 6px 8px; font-size: .8em; }
+  .rs-comparecar-desc { font-size: .82em; }
+}
