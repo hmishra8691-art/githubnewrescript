@@ -1,1 +1,61 @@
 /* ---- upload variant family */
+
+.rs-up { display: flex; flex-direction: column; gap: 10px; }
+/* the input is driven by the drop zone / buttons; it stays in the DOM (and
+   reachable by tests and assistive tech) rather than being display:none */
+.rs-up-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+.rs-up-zone {
+  display: flex; align-items: center; gap: 12px; cursor: pointer;
+  padding: 18px 16px; text-align: left;
+  border: 2px dashed var(--rs-border); border-radius: calc(var(--rs-radius) - 2px);
+  background: var(--rs-bg); color: var(--rs-text); font-size: 0.95em;
+}
+.rs-up-zone:hover, .rs-up-zone:focus-visible { border-color: var(--rs-primary); }
+.rs-up-zone.over { border-color: var(--rs-primary); background: color-mix(in srgb, var(--rs-primary) 8%, var(--rs-bg)); }
+.rs-up-zone.ro { cursor: default; opacity: .6; }
+.rs-up-zone-icon { font-size: 20px; line-height: 1; }
+.rs-up-hint { display: block; color: var(--rs-subtle); font-size: 0.85em; }
+
+.rs-up-list { display: flex; flex-direction: column; gap: 6px; }
+.rs-up-row {
+  display: flex; align-items: center; gap: 10px; min-width: 0;
+  border: 1px solid var(--rs-border); border-radius: 8px; padding: 7px 10px; font-size: 0.9em;
+}
+.rs-up-thumb { width: 34px; height: 34px; object-fit: cover; border-radius: 5px; flex: 0 0 auto; }
+.rs-up-icon { font-size: 18px; flex: 0 0 auto; }
+.rs-up-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs-up-size { color: var(--rs-subtle); font-size: 0.85em; white-space: nowrap; }
+.rs-up-x {
+  font: inherit; font-size: 18px; line-height: 1; cursor: pointer;
+  border: none; background: transparent; color: var(--rs-error); padding: 0 4px; flex: 0 0 auto;
+}
+.rs-up-busy { font-size: 0.85em; color: var(--rs-subtle); }
+
+.rs-up-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.rs-up-actions .rs-btn { padding: 9px 18px; }
+
+/* Photo / camera capture */
+.rs-cam-live, .rs-cam-shot {
+  display: block; width: 100%; max-width: 340px; max-height: 320px;
+  border-radius: calc(var(--rs-radius) - 4px); border: 1px solid var(--rs-border);
+  background: #0b1120; object-fit: contain;
+}
+
+/* Signature capture */
+.rs-sig { display: flex; flex-direction: column; gap: 10px; }
+.rs-sig-pad {
+  display: block; width: 100%; height: 170px; touch-action: none; cursor: crosshair;
+  background: var(--rs-surface);
+  border: 2px dashed var(--rs-border); border-radius: calc(var(--rs-radius) - 4px);
+}
+.rs-sig-saved {
+  display: block; width: 100%; max-width: 340px; height: auto;
+  background: var(--rs-surface);
+  border: 1px solid var(--rs-border); border-radius: calc(var(--rs-radius) - 4px);
+}
+
+@media (max-width: 520px) {
+  .rs-up-zone { padding: 14px 12px; font-size: 0.9em; }
+  .rs-up-actions .rs-btn { padding: 9px 14px; }
+}

@@ -663,18 +663,62 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       instruction: "Assign each item to a category.",
     },
   }),
-  ...planned(F.image, [
-    ["Image Annotation / Markup", "Draw or comment on an image."],
-  ]),
+  stable(F.image, "annotation", "Image Annotation / Markup", "Draw or comment on an image.", {
+    baseType: "annotation", renderer: "annotate", responseModel: "coordinates",
+    capabilities: ["min_max_selections", "images"],
+    validations: ["required", "min_selections", "max_selections"],
+    defaults: {
+      settings: { tools: ["pin", "pen"], penColor: "#e11d48", penWidth: 3 },
+      instruction: "Drop a pin to comment, or draw on the image.",
+    },
+  }),
 
-  /* -------------------------------------------------- PLANNED-ONLY FAMILIES */
-  ...planned(F.media, [
-    ["Video Rating", "Rate after watching a clip."],
-    ["Video Hotspot / Annotation", "React on the video timeline."],
-    ["Video Watch-Time Tracking", "Capture how long respondents watch."],
-    ["Audio Recording / Voice Response", "Record a spoken answer."],
-    ["Speech-to-Text Response", "Transcribed voice answer."],
-  ]),
+  /* ------------------------------------------------------------ VIDEO/AUDIO */
+  stable(F.media, "video_rating", "Video Rating", "Rate after watching a clip.", {
+    baseType: "numeric", renderer: "videorating", responseModel: "numeric",
+    capabilities: ["numeric_bounds"], validations: VAL_NUM,
+    defaults: {
+      settings: { minValue: 1, maxValue: 5, requireComplete: true },
+      instruction: "Watch the clip, then rate it.",
+    },
+  }),
+  stable(F.media, "video_timeline", "Video Hotspot / Annotation", "React on the video timeline.", {
+    baseType: "media_timeline", renderer: "videotimeline", responseModel: "coordinates",
+    capabilities: ["options", "min_max_selections"],
+    validations: ["required", "min_selections", "max_selections"],
+    defaults: {
+      settings: { timelineMode: "options" },
+      options: [
+        { code: "like", label: "👍 Like" },
+        { code: "dislike", label: "👎 Dislike" },
+        { code: "confusing", label: "❓ Confusing" },
+      ],
+      instruction: "While the clip plays, tap a reaction whenever you feel it.",
+    },
+  }),
+  stable(F.media, "watch_time", "Video Watch-Time Tracking", "Capture how long respondents watch.", {
+    baseType: "numeric_list", renderer: "watchtime", responseModel: "fields",
+    capabilities: ["fields"], validations: ["required"],
+    defaults: {
+      settings: { requireComplete: false },
+      rows: [
+        { code: "watched", label: "Seconds watched", fieldType: "number" },
+        { code: "duration", label: "Clip duration (s)", fieldType: "number" },
+        { code: "percent", label: "Percent watched", fieldType: "number" },
+        { code: "completed", label: "Watched to the end", fieldType: "number" },
+      ],
+      instruction: "Please watch the clip.",
+    },
+  }),
+  stable(F.media, "audio_recording", "Audio Recording / Voice Response", "Record a spoken answer.", {
+    baseType: "upload", renderer: "audiorec", responseModel: "media",
+    capabilities: [], validations: ["required"],
+    defaults: {
+      settings: { accept: "audio/*", maxFiles: 1, maxSizeMb: 10 },
+      instruction: "Record your answer in your own words.",
+    },
+  }),
+  ...planned(F.media, [["Speech-to-Text Response", "Transcribed voice answer."]]),
   stable(F.dragdrop, "ranking", "Drag-and-Drop Ranking", "Drag items into order.", {
     baseType: "ranking", renderer: "dragrank", responseModel: "rank_order",
     capabilities: ["options", "sorting", "randomization", "carry_forward", "list_logic"],
@@ -784,10 +828,28 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: ["min_max_selections"], validations: ["required", "min_selections", "max_selections"],
     defaults: { settings: { maxSelections: 1 }, instruction: "Click on the image." },
   }),
-  ...planned(F.hotspot, [
-    ["Region / Area Selection", "Select predefined regions."],
-    ["Draw-on-Image", "Free-form marking."],
-  ]),
+  stable(F.hotspot, "regions", "Region / Area Selection", "Select predefined regions.", {
+    baseType: "image_select", renderer: "regions", responseModel: "multiple_choice",
+    capabilities: ["options", "images", "min_max_selections", "randomization", "list_logic"],
+    validations: VAL_MULTI,
+    defaults: {
+      settings: { maxSelections: 1, multiRegion: false },
+      options: [
+        { code: "top", label: "Top half", meta: { region: { x: 5, y: 5, w: 90, h: 42 } } },
+        { code: "bottom", label: "Bottom half", meta: { region: { x: 5, y: 53, w: 90, h: 42 } } },
+      ],
+      instruction: "Select the region you mean.",
+    },
+  }),
+  stable(F.hotspot, "draw", "Draw-on-Image", "Free-form marking.", {
+    baseType: "annotation", renderer: "annotate", responseModel: "coordinates",
+    capabilities: ["min_max_selections", "images"],
+    validations: ["required", "min_selections", "max_selections"],
+    defaults: {
+      settings: { tools: ["pen", "highlight"], penColor: "#e11d48", penWidth: 3 },
+      instruction: "Draw on the image to mark what you mean.",
+    },
+  }),
   ...planned(F.location, [
     ["Location Picker / Map Pin", "Drop a pin on a map."],
     ["Address Search", "Geocoded address entry."],
@@ -816,11 +878,32 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     ["Month / Year Picker", "Coarse date entry."],
   ]),
 
-  ...planned(F.upload, [
-    ["File / Document Upload", "Attach a file."],
-    ["Photo / Camera Capture", "Take a photo in-survey."],
-    ["Signature Capture", "Draw a signature."],
-  ]),
+  /* --------------------------------------------------- FILE / MEDIA UPLOAD */
+  // `upload.file` is the base type's own presentation, so it carries no
+  // renderer key: the runtime finds it under `base:upload`, and a question
+  // typed `upload` with no variant stored infers this one rather than a
+  // camera or a signature pad.
+  stable(F.upload, "file", "File / Document Upload", "Attach a file.", {
+    baseType: "upload", responseModel: "media",
+    capabilities: [], validations: ["required"],
+    defaults: { settings: { maxFiles: 1, maxSizeMb: 10 } },
+  }),
+  stable(F.upload, "photo", "Photo / Camera Capture", "Take a photo in-survey.", {
+    baseType: "upload", renderer: "camera", responseModel: "media",
+    capabilities: [], validations: ["required"],
+    defaults: {
+      settings: { accept: "image/*", maxFiles: 1, maxSizeMb: 10 },
+      instruction: "Take a photo, or choose one from your device.",
+    },
+  }),
+  stable(F.upload, "signature", "Signature Capture", "Draw a signature.", {
+    baseType: "upload", renderer: "signature", responseModel: "media",
+    capabilities: [], validations: ["required"],
+    defaults: {
+      settings: { maxFiles: 1 },
+      instruction: "Sign in the box below.",
+    },
+  }),
 
   /* ----------------------------------------------------------------- FORM */
   stable(F.form, "custom", "Custom Form", "Any mix of labeled, typed, validated fields.", {

@@ -302,6 +302,26 @@ export function validateQuestion(
     }
   }
 
+  // ---- media family (variant batch) ----
+  /*
+   * Watch-Time Tracking (media.watch_time) stores its telemetry as
+   * `numeric_list` fields, one of which is `completed`. With
+   * `settings.requireComplete` the survey is saying "you may not continue
+   * until the clip has finished", and that has to be an engine rule: the
+   * renderer could otherwise be bypassed by going Back, and the preview and
+   * the inspector would disagree with the live interview about whether the
+   * page is answerable. Keyed on the setting AND on a `completed` row, so no
+   * ordinary numeric list is affected.
+   */
+  if (
+    q.type === "numeric_list" &&
+    q.settings.requireComplete &&
+    (q.rows ?? []).some((r) => String(r.code) === "completed")
+  ) {
+    const v = (value ?? {}) as Record<string, unknown>;
+    if (Number(v.completed) !== 1) push("Please watch the video to the end.");
+  }
+
   return errors;
 }
 
