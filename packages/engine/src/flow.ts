@@ -7,6 +7,8 @@ import { seededShuffle, subSeed } from "./random.js";
 import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
 import { checkQuotas, type QuotaCounts } from "./quotas.js";
+import { applyEmbeddedField, type EmbeddedField } from "./embedded.js";
+import { resolveUrlTemplate } from "./redirect.js";
 
 /**
  * Survey Flow interpreter (requirement §7).
@@ -27,9 +29,9 @@ export type RuntimeStep =
       loop?: LoopContext | null;
       sectionPath: string[];
     }
-  | { kind: "embedded_data"; nodeId: string; fields: { name: string; source: string; value?: string }[] }
+  | { kind: "embedded_data"; nodeId: string; fields: EmbeddedField[] }
   | { kind: "quota_check"; nodeId: string; quotaIds: string[]; onFull: { kind: string; url?: string } }
-  | { kind: "redirect"; nodeId: string; url: string }
+  | { kind: "redirect"; nodeId: string; url: string; newWindow?: boolean }
   | { kind: "end"; nodeId: string; status: "complete" | "screened" | "quota_full" | "terminated"; message?: string; redirectUrl?: string };
 
 export function compileFlow(
@@ -159,7 +161,14 @@ export function compileFlow(
           break;
         case "redirect":
           if (evaluateCondition(node.when, ctxFor(loop))) {
-            steps.push({ kind: "redirect", nodeId: node.id, url: node.url });
+            steps.push({
+              kind: "redirect",
+              nodeId: node.id,
+              // tokens in the URL are resolved against the state that exists
+              // when the respondent actually reaches this step
+              url: resolveUrlTemplate(node.url, ctxFor(loop)),
+              newWindow: node.newWindow,
+            });
           }
           break;
         case "end":
@@ -247,6 +256,8 @@ export interface NavigationResult {
   done: boolean;
   endStatus?: "complete" | "screened" | "quota_full" | "terminated";
   redirectUrl?: string;
+  /** The redirect asked to open in a new tab rather than replace the survey. */
+  redirectNewWindow?: boolean;
   triggeredSkips: { questionId: string; ruleId: string }[];
   quotaFull?: string[];
 }
@@ -351,17 +362,8 @@ export function advance(
       return { steps, stepIndex: idx, done: false, triggeredSkips, quotaFull: [] };
     }
     if (s.kind === "embedded_data") {
-      for (const f of s.fields) {
-        if (f.source === "static") state.embedded[f.name] = f.value ?? null;
-        else if (f.source === "expression" && f.value) {
-          const flat = flattenVariables(def, state);
-          try {
-            const v = evaluateExpression(f.value, { resolver: (n) => flat[n], names: () => Object.keys(flat) });
-            state.embedded[f.name] = Array.isArray(v) ? v.join(",") : (v as any);
-          } catch { state.embedded[f.name] = null; }
-        }
-        // url/panel sources are populated at session start by the runtime
-      }
+      // one typed capture per field: source → default → declared type
+      for (const f of s.fields) applyEmbeddedField(def, state, f);
       idx++; continue;
     }
     if (s.kind === "quota_check") {
@@ -381,12 +383,23 @@ export function advance(
     }
     if (s.kind === "redirect") {
       state.status = "complete";
-      return { steps, stepIndex: idx, done: true, endStatus: "complete", redirectUrl: s.url, triggeredSkips, quotaFull: [] };
+      return {
+        steps, stepIndex: idx, done: true, endStatus: "complete",
+        redirectUrl: s.url, redirectNewWindow: s.newWindow, triggeredSkips, quotaFull: [],
+      };
     }
     if (s.kind === "end") {
       state.status = s.status;
       runCalculations(def, state, "on_complete");
-      return { steps, stepIndex: idx, done: true, endStatus: s.status, redirectUrl: s.redirectUrl, triggeredSkips, quotaFull: [] };
+      return {
+        steps, stepIndex: idx, done: true, endStatus: s.status,
+        // an end-of-survey URL takes tokens too, so a completion can carry the
+        // respondent id or a score back to the panel
+        redirectUrl: s.redirectUrl
+          ? resolveUrlTemplate(s.redirectUrl, { def, state, loop: null, quotaCounts })
+          : undefined,
+        triggeredSkips, quotaFull: [],
+      };
     }
     idx++;
   }

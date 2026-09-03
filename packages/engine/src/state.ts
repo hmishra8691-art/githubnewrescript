@@ -36,8 +36,8 @@ export interface ResponseState {
   status: "in_progress" | "complete" | "screened" | "quota_full" | "terminated";
   /** questionId (optionally suffixed with loop key `@code`) -> value */
   answers: Record<string, AnswerValue>;
-  /** embedded data fields */
-  embedded: Record<string, string | number | null>;
+  /** embedded data fields — booleans since typed embedded data (req §12) */
+  embedded: Record<string, string | number | boolean | null>;
   /** calculated variable values */
   calculated: Record<string, string | number | boolean | null>;
   /** flags raised by soft quotas / scripts */

@@ -1,7 +1,10 @@
 "use client";
 import React from "react";
 import type { FlowNode } from "@rescript/schema";
-import { lintSurveyLogic, questionLogicSummary, detectLogicCycles, describeCycle } from "@rescript/engine";
+import {
+  lintSurveyLogic, questionLogicSummary, detectLogicCycles, describeCycle,
+  validateFlowStructure, type LogicIssue,
+} from "@rescript/engine";
 import { useStudio, uid } from "./store";
 import { ConditionEditor, conditionToText, OptionalCondition } from "./ConditionBuilder";
 
@@ -12,7 +15,17 @@ import { ConditionEditor, conditionToText, OptionalCondition } from "./Condition
  */
 function LogicCheck() {
   const s = useStudio();
-  const issues = React.useMemo(() => lintSurveyLogic(s.def), [s.def]);
+  // logic references AND the shape of the flow — a survey can be broken by
+  // either, and a programmer checking "is this survey sound?" wants one answer
+  const issues: LogicIssue[] = React.useMemo(() => [
+    ...lintSurveyLogic(s.def),
+    ...validateFlowStructure(s.def.flow as FlowNode[]).map((i) => ({
+      level: i.level,
+      questionCode: "Flow",
+      path: i.nodeId ? `flow.${i.nodeId}` : "flow",
+      message: i.message,
+    })),
+  ], [s.def]);
   const cycles = React.useMemo(() => detectLogicCycles(s.def), [s.def]);
   const errors = issues.filter((i) => i.level === "error");
   const warnings = issues.filter((i) => i.level === "warning");

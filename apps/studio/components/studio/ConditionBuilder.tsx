@@ -7,7 +7,7 @@ import {
   LIST_VALUE_OPERATORS,
   isOptionValueRef,
 } from "@rescript/schema";
-import { operatorsForQuestion, conditionSummary } from "@rescript/engine";
+import { operatorsForQuestion, conditionSummary, embeddedCatalog } from "@rescript/engine";
 import { useStudio } from "./store";
 
 /**
@@ -147,10 +147,14 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
             ))}
           </optgroup>
         )}
-        {s.def.embeddedData.length > 0 && (
+        {/* every embedded field declared anywhere in the flow, with its type —
+            not only the ones registered on the survey (reqs §15–16) */}
+        {embeddedCatalog(s.def).length > 0 && (
           <optgroup label="Embedded data">
-            {s.def.embeddedData.map((e2) => (
-              <option key={e2.name} value={`embedded:${e2.name}`}>{e2.name}</option>
+            {embeddedCatalog(s.def).map((e2) => (
+              <option key={e2.name} value={`embedded:${e2.name}`}>
+                {e2.name}{e2.dataType !== "string" ? ` (${e2.dataType})` : ""}
+              </option>
             ))}
           </optgroup>
         )}

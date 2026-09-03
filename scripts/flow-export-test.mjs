@@ -108,9 +108,13 @@ await page.waitForSelector('[data-testid="flow-group"]');
 await page.fill('[data-testid="group-title"]', "Demographics");
 await page.waitForTimeout(250);
 
-// move Block 2 into the group through the block's own control
-const selects = await page.$$('[data-testid="block-to-group"]');
-await selects[1].selectOption({ label: "Demographics" });
+// move Block 2 into the group through its ⋮ menu. The per-block "group…"
+// dropdown this used to drive is gone: "Move into…" replaced it, and lists
+// every container that would accept the block, not only groups.
+const blockEls = await page.$$('[data-testid="flow-block"]');
+await blockEls[1].$eval('[data-testid="node-menu"]', (b) => b.click());
+await page.waitForSelector('[data-testid="node-menu-open"]');
+await page.click('[data-testid="move-into"] >> text=Group \u201cDemographics\u201d');
 await page.waitForTimeout(320);
 
 def = await readDef();
@@ -303,12 +307,15 @@ await page.click('[data-testid="add-group"]');
 await page.waitForSelector('[data-testid="flow-group"]');
 await page.fill('[data-testid="group-title"]', "Temp group");
 await page.waitForTimeout(250);
-let gsel = await page.$$('[data-testid="block-to-group"]');
-await gsel[1].selectOption({ label: "Temp group" });
-await page.waitForTimeout(320);
-gsel = await page.$$('[data-testid="block-to-group"]');
-await gsel[1].selectOption("__root");   // "(no group)"
-await page.waitForTimeout(320);
+const moveVia = async (blockIndex, destination) => {
+  const cards = await page.$$('[data-testid="flow-block"]');
+  await cards[blockIndex].$eval('[data-testid="node-menu"]', (b) => b.click());
+  await page.waitForSelector('[data-testid="node-menu-open"]');
+  await page.click(`[data-testid="move-into"] >> text=${destination}`);
+  await page.waitForTimeout(320);
+};
+await moveVia(1, "Group \u201cTemp group\u201d");
+await moveVia(1, "Top level of the survey");
 
 def = await readDef();
 const endIdx = def.flow.findIndex((n) => n.type === "end");

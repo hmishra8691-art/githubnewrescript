@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { Condition } from "./conditions.js";
 import { Question } from "./question.js";
-import { FlowNode, LogicFlow } from "./flow.js";
+import { FlowNode, LogicFlow, EmbeddedDataType } from "./flow.js";
 
 /** Named display-logic rules that can target anything (requirement §6). */
 export const DisplayRule = z.object({
@@ -216,7 +216,14 @@ export const SurveyDefinition = z.object({
   /** Generated dictionary (kept in the JSON so exports reflect exact state). */
   variables: z.array(VariableDef).default([]),
   embeddedData: z
-    .array(z.object({ name: z.string(), label: z.string().optional(), source: z.string().optional() }))
+    .array(z.object({
+      name: z.string(),
+      label: z.string().optional(),
+      source: z.string().optional(),
+      /** Declared type; absent = string, which is the historical behaviour. */
+      dataType: EmbeddedDataType.optional(),
+      defaultValue: z.string().optional(),
+    }))
     .default([]),
   deployment: DeploymentConfig.default({}),
   meta_extensions: z.record(z.any()).optional(),

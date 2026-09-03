@@ -205,7 +205,12 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
         redirectUrl: nav.redirectUrl,
       });
       await persist(mode, session, state, true);
-      if (nav.redirectUrl && mode === "live") window.location.href = nav.redirectUrl;
+      if (nav.redirectUrl && mode === "live") {
+        // "new window" keeps the completion page in place behind the panel's
+        // own page — some panels require the survey tab to stay open
+        if (nav.redirectNewWindow) window.open(nav.redirectUrl, "_blank", "noopener");
+        else window.location.href = nav.redirectUrl;
+      }
     } else {
       persist(mode, session, state, false);
       window.scrollTo({ top: 0 });
@@ -236,7 +241,9 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
         </h2>
       )}
       {ended.redirectUrl && mode !== "live" && (
-        <p style={{ color: "var(--rs-subtle)" }}>(test mode: would redirect to {ended.redirectUrl})</p>
+        <p style={{ color: "var(--rs-subtle)" }} data-testid="rs-would-redirect">
+          (test mode: would redirect to {ended.redirectUrl})
+        </p>
       )}
       {mode !== "live" && (
         <button type="button" className="rs-btn" style={{ marginTop: 18 }} onClick={restart}>

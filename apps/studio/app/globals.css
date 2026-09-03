@@ -198,7 +198,9 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 }
 .flow-card.block-card { border-left: 3px solid var(--accent); }
 .flow-card.element-card { border-left: 3px solid var(--amber); background: var(--panel2); }
-.flow-card > .fc-head { display: flex; align-items: center; gap: 8px; padding: 8px 11px; }
+.flow-card > .fc-head, .flow-inside-target > .fc-head {
+  display: flex; align-items: center; gap: 8px; padding: 8px 11px;
+}
 .flow-card .fc-summary { font-size: 12px; color: var(--subtle); overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
 .fc-body { padding: 2px 12px 12px 34px; }
@@ -228,6 +230,146 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 .group-badge {
   font-size: 10px; font-weight: 800; letter-spacing: .08em; color: #fff;
   background: var(--accent2); border-radius: 5px; padding: 2px 8px; white-space: nowrap;
+}
+
+/* ==========================================================================
+   Survey Flow drag-and-drop (reqs §5–9)
+
+   Three states have to be unmistakable while dragging: where a drop WOULD go,
+   where it CANNOT go, and what is being carried. Nothing here is decorative —
+   each rule paints one of those three answers.
+   ========================================================================== */
+
+/* the grab handle: quiet until you approach it, never the whole card */
+.flow-grip {
+  font-size: 14px; line-height: 1; letter-spacing: -1px; cursor: grab;
+  border: none; background: none; color: var(--border);
+  padding: 4px 2px; border-radius: 5px; flex: none;
+  touch-action: none; /* the pointer belongs to the drag, not to scrolling */
+  transition: color .12s, background .12s;
+}
+.flow-card:hover .flow-grip, .flow-group:hover .flow-grip { color: var(--subtle); }
+.flow-grip:hover { color: var(--accent); background: var(--tint); }
+.flow-grip:active, .flow-grip.is-dragging { cursor: grabbing; color: var(--accent); }
+.flow-grip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; color: var(--accent); }
+
+/* while a drag is live, nothing else on the page should look interactive */
+body.flow-dragging { cursor: grabbing; user-select: none; }
+body.flow-dragging .flow-card, body.flow-dragging .flow-group { transition: opacity .12s; }
+body.flow-dragging input, body.flow-dragging select, body.flow-dragging textarea { pointer-events: none; }
+
+/* --- the line between two elements */
+.flow-dropzone {
+  position: relative; height: 10px; margin: 1px 0; display: flex; align-items: center;
+  border-radius: 5px;
+}
+.flow-dropzone .fdz-line {
+  flex: 1; height: 2px; border-radius: 2px; background: transparent; transition: background .1s;
+}
+.flow-dropzone.valid .fdz-line { background: rgba(37, 99, 235, .28); }
+.flow-dropzone.invalid .fdz-line { background: rgba(208, 43, 43, .16); }
+/* Every zone takes its full height the moment a drag begins, not when it is
+   hovered. Growing on hover reflowed the page under the cursor, so the target
+   slid away from the pointer that was aiming at it. */
+body.flow-dragging .flow-dropzone { height: 26px; }
+.flow-dropzone.over.valid { background: var(--tint); box-shadow: inset 0 0 0 1px var(--accent); }
+.flow-dropzone.over.valid .fdz-line { background: var(--accent); height: 3px; }
+.flow-dropzone.over.invalid { background: #fdeaea; box-shadow: inset 0 0 0 1px var(--red); }
+.flow-dropzone.over.invalid .fdz-line { background: var(--red); }
+.fdz-label {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  font-size: 10px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+  background: var(--panel); padding: 1px 9px; border-radius: 999px; white-space: nowrap;
+}
+.flow-dropzone.over.valid .fdz-label { color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.flow-dropzone.over.invalid .fdz-label { color: var(--red); box-shadow: 0 0 0 1px var(--red); }
+
+/* --- dropping INTO a container: the whole header lights up */
+.flow-inside-target { position: relative; border-radius: 8px; }
+.flow-inside-target.over.valid { box-shadow: inset 0 0 0 2px var(--accent); background: var(--tint); }
+.flow-inside-target.over.invalid { box-shadow: inset 0 0 0 2px var(--red); background: #fdeaea; }
+.fit-banner {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  font-size: 10px; font-weight: 800; letter-spacing: .1em; padding: 2px 9px;
+  border-radius: 999px; pointer-events: none; z-index: 2; max-width: 60%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fit-banner.ok { background: var(--accent); color: #fff; }
+.fit-banner.bad { background: var(--red); color: #fff; letter-spacing: .02em; text-transform: none; font-weight: 600; }
+
+/* --- an empty container is visibly a place to put something */
+.flow-empty-zone {
+  border: 1px dashed var(--border); border-radius: 8px; padding: 10px 12px;
+  font-size: 11.5px; color: var(--subtle); text-align: center; background: var(--panel);
+}
+.flow-empty-zone.valid { border-color: var(--accent); color: var(--accent); background: var(--tint); }
+.flow-empty-zone.invalid { border-color: var(--red); color: var(--red); background: #fdeaea; }
+.flow-empty-zone.over { border-style: solid; font-weight: 600; }
+
+/* --- what is being carried, and what will happen (reqs §8–9) */
+.flow-drag-preview {
+  position: fixed; z-index: 200; pointer-events: none; max-width: 320px;
+}
+.fdp-card {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--panel); border: 1px solid var(--accent); border-radius: 8px;
+  padding: 7px 11px; box-shadow: 0 10px 26px rgba(15, 23, 42, .22);
+}
+.fdp-grip { color: var(--accent); font-size: 13px; letter-spacing: -1px; }
+.fdp-label { font-weight: 600; font-size: 12.5px; }
+.fdp-detail { font-size: 11px; color: var(--subtle); }
+.fdp-verdict {
+  margin-top: 4px; font-size: 11px; padding: 3px 10px; border-radius: 999px;
+  display: inline-block; max-width: 320px;
+}
+.fdp-verdict.ok { background: var(--accent); color: #fff; }
+.fdp-verdict.bad { background: var(--red); color: #fff; }
+.fdp-verdict.idle { background: var(--panel2); color: var(--subtle); border: 1px solid var(--border); }
+
+/* --- containers that hold other flow elements */
+.flow-card.container-card { border-left: 3px solid #a21caf; }
+.flow-card.container-card.branch { border-left-color: var(--amber); }
+.flow-card.container-card.loop { border-left-color: var(--accent2); }
+.branch-path { margin: 8px 0 4px; }
+.branch-path .bp-head {
+  padding: 4px 8px; background: var(--panel2); border-radius: 6px;
+  border-left: 2px solid var(--amber);
+}
+
+/* --- structural problems, shown where the structure is edited */
+.flow-issues { margin: 6px 0 10px; display: grid; gap: 4px; }
+.fi-issue { font-size: 11.5px; padding: 5px 9px; border-radius: 6px; }
+.fi-issue.error { background: #fdeaea; color: var(--red); border: 1px solid rgba(208,43,43,.3); }
+.fi-issue.warning { background: #fdf3e6; color: var(--amber); border: 1px solid rgba(164,92,7,.25); }
+
+/* --- typed embedded data + expression builder (reqs §12–14) */
+.ed-field { padding: 10px; }
+.ed-row1 { flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.ed-row2 { margin-top: 8px; }
+.expr-field { display: grid; gap: 4px; }
+.expr-input { min-height: 46px; font-size: 12.5px; }
+.expr-tools { flex-wrap: wrap; gap: 8px; }
+.expr-normalized { padding-left: 2px; }
+.expr-palette {
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px;
+  background: var(--panel2); display: grid; gap: 8px;
+}
+.ep-group { display: grid; gap: 4px; }
+.ep-keys { display: flex; flex-wrap: wrap; gap: 4px; }
+.ep-key {
+  font: inherit; font-size: 11.5px; font-family: var(--mono);
+  padding: 2px 8px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text);
+}
+.ep-key:hover { border-color: var(--accent); color: var(--accent); }
+.ep-key.op { font-weight: 700; color: var(--accent2); }
+
+/* --- redirect */
+.redirect-editor { display: grid; gap: 6px; }
+.menu-scroll { max-height: 260px; overflow-y: auto; }
+.menu-group {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--subtle); padding: 6px 8px 2px;
 }
 
 /* logic flow ascii */

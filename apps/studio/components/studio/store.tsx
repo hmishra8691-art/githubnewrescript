@@ -53,6 +53,20 @@ export interface StudioState {
    */
   hasResponses: boolean;
   update(mutator: (draft: SurveyDefinition) => void): void;
+  /**
+   * Undo / redo across every edit that went through `update` or `replace`
+   * (req §21). Structural drags move a lot at once, so being able to take one
+   * back is what makes dragging safe to try.
+   */
+  undo(): void;
+  redo(): void;
+  canUndo: boolean;
+  canRedo: boolean;
+  /** What undo would take back, for the button's tooltip. */
+  undoLabel: string | null;
+  redoLabel: string | null;
+  /** Name the edit the next `update` performs, so undo can describe it. */
+  labelNextEdit(label: string): void;
   /** switch the centre panel — lets one panel point at another */
   goToTab?(tab: string): void;
   setGoToTab(fn: (tab: string) => void): void;
@@ -107,6 +121,19 @@ export function StudioProvider({
   const [unguarded, setUnguarded] = React.useState(false);
   const goToTabRef = React.useRef<((tab: string) => void) | undefined>(undefined);
   const toastTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /**
+   * Undo history.
+   *
+   * Each entry is the WHOLE definition as it was before an edit, which is
+   * affordable because the definition is already cloned on every update and
+   * bounded because only the last 50 are kept. Storing deltas instead would
+   * mean a second model of what an edit is, and the two would drift.
+   */
+  const [past, setPast] = React.useState<{ def: SurveyDefinition; label: string }[]>([]);
+  const [future, setFuture] = React.useState<{ def: SurveyDefinition; label: string }[]>([]);
+  const nextLabel = React.useRef<string | null>(null);
+  const UNDO_LIMIT = 50;
 
   // The autosave always sends the LATEST definition, never a snapshot taken
   // when the timer was set — that distinction is the whole bug class this
@@ -257,18 +284,59 @@ export function StudioProvider({
     hasResponses,
     goToTab: (tab) => goToTabRef.current?.(tab),
     setGoToTab(fn) { goToTabRef.current = fn; },
+    /**
+     * `latest.current` is the previous definition, not `setDef`'s argument.
+     *
+     * Pushing onto the undo stack from inside a state updater would run twice
+     * under React's development double-invocation and record every edit twice,
+     * so one ⌘Z would appear to do nothing. The ref is kept in step on every
+     * render and on every mutation below, which makes it the safe source.
+     */
     update(mutator) {
-      setDef((prev) => {
-        const draft = structuredClone(prev);
-        mutator(draft);
-        latest.current = draft;
-        return draft;
-      });
+      const label = nextLabel.current ?? "edit";
+      nextLabel.current = null;
+      const prev = latest.current;
+      const draft = structuredClone(prev);
+      mutator(draft);
+      latest.current = draft;
+      setPast((p) => [...p, { def: prev, label }].slice(-UNDO_LIMIT));
+      setFuture([]);
+      setDef(draft);
       touched();
     },
     replace(next) {
-      setDef(next);
+      const label = nextLabel.current ?? "replace survey";
+      nextLabel.current = null;
+      const prev = latest.current;
       latest.current = next;
+      setPast((p) => [...p, { def: prev, label }].slice(-UNDO_LIMIT));
+      setFuture([]);
+      setDef(next);
+      touched();
+    },
+    labelNextEdit(label) { nextLabel.current = label; },
+    canUndo: past.length > 0,
+    canRedo: future.length > 0,
+    undoLabel: past.length ? past[past.length - 1].label : null,
+    redoLabel: future.length ? future[future.length - 1].label : null,
+    undo() {
+      if (past.length === 0) return;
+      const entry = past[past.length - 1];
+      const current = latest.current;
+      latest.current = entry.def;
+      setPast((p) => p.slice(0, -1));
+      setFuture((f) => [...f, { def: current, label: entry.label }]);
+      setDef(entry.def);
+      touched();
+    },
+    redo() {
+      if (future.length === 0) return;
+      const entry = future[future.length - 1];
+      const current = latest.current;
+      latest.current = entry.def;
+      setFuture((f) => f.slice(0, -1));
+      setPast((p) => [...p, { def: current, label: entry.label }].slice(-UNDO_LIMIT));
+      setDef(entry.def);
       touched();
     },
     select: setSelected,
@@ -296,6 +364,29 @@ export function StudioProvider({
       toastTimer.current = setTimeout(() => setToastMsg(null), 3500);
     },
   };
+
+  /**
+   * ⌘Z / ⌘⇧Z, except while typing.
+   *
+   * A text field has its own undo stack and the programmer expects it, so a
+   * keystroke inside one is left to the browser; taking it over would make
+   * undo mean two different things depending on focus.
+   */
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z") return;
+      const el = e.target as HTMLElement | null;
+      const typing = !!el && (
+        el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable
+      );
+      if (typing) return;
+      e.preventDefault();
+      if (e.shiftKey) value.redo();
+      else value.undo();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   return (
     <Ctx.Provider value={value}>
