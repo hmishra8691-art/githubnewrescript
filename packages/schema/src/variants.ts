@@ -1195,10 +1195,18 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       ],
     },
   }),
-  ...planned(F.datetime, [
-    ["Calendar / Appointment Selection", "Pick slots on a calendar."],
-    ["Month / Year Picker", "Coarse date entry."],
-  ]),
+  stable(F.datetime, "calendar", "Calendar / Appointment Selection", "Pick slots on a calendar.", {
+    baseType: "date", renderer: "calendar", responseModel: "text",
+    capabilities: [], validations: ["required"],
+    defaults: {
+      settings: { disabledWeekdays: [0, 6], timeSlots: ["09:00", "10:30", "13:00", "14:30", "16:00"] },
+      instruction: "Choose a day, then a time.",
+    },
+  }),
+  stable(F.datetime, "month_year", "Month / Year Picker", "Coarse date entry.", {
+    baseType: "date", renderer: "monthyear", responseModel: "text",
+    capabilities: [], validations: ["required"],
+  }),
 
   /* --------------------------------------------------- FILE / MEDIA UPLOAD */
   // `upload.file` is the base type's own presentation, so it carries no
@@ -1279,8 +1287,19 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: CAP_MULTI, validations: VAL_MULTI,
     defaults: { instruction: "Configure Carry-forward and List logic in the right panel." },
   }),
+  stable(F.dynamic, "adaptive", "Adaptive Question / Scale", "Content adapting mid-survey.", {
+    baseType: "single_select", renderer: "adaptive", responseModel: "single_choice",
+    capabilities: CAP_SINGLE, validations: VAL_SINGLE,
+    defaults: {
+      options: [
+        { code: 1, label: "Option 1" },
+        { code: 2, label: "Option 2" },
+        { code: 3, label: "Option 3" },
+      ],
+      instruction: "Add alternatives in the right panel: the first whose condition holds replaces the wording and/or the options.",
+    },
+  }),
   ...planned(F.dynamic, [
-    ["Adaptive Question / Scale", "Content adapting mid-survey."],
     ["Respondent-Specific Options", "Options from embedded data or APIs."],
   ]),
 
@@ -1299,17 +1318,112 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     defaults: { settings: { expression: "weighted(Q1, 0.5, Q2, 0.5)" } },
   }),
 
-  ...planned(F.gamified, [
-    ["Quiz / Knowledge Test", "Scored right/wrong questions."],
-    ["Timed Question / Reaction Test", "Response-time capture."],
-    ["Matching / Puzzle / Memory", "Game-mechanic tasks."],
-  ]),
-  ...planned(F.experimental, [
-    ["Attention Check", "Trap question with expected answer."],
-    ["Reaction-Time / Implicit Association", "Millisecond-timed stimulus response."],
-    ["A/B / Multivariate Experiment", "Random treatment assignment."],
-    ["Random Stimulus", "Randomly assigned stimulus display."],
-  ]),
+  /* -------------------------------------------------------------- GAMIFIED */
+  stable(F.gamified, "quiz", "Quiz / Knowledge Test", "Scored right/wrong questions.", {
+    baseType: "single_select", renderer: "quiz", responseModel: "single_choice",
+    capabilities: ["options", "sorting", "randomization", "layout_columns"],
+    validations: VAL_SINGLE,
+    defaults: {
+      settings: { showFeedback: true, pointsPerCorrect: 1 },
+      options: [
+        { code: 1, label: "Answer A", meta: { correct: true } },
+        { code: 2, label: "Answer B" },
+        { code: 3, label: "Answer C" },
+      ],
+      instruction: "Choose the correct answer.",
+    },
+  }),
+  stable(F.gamified, "timed", "Timed Question / Reaction Test", "Response-time capture.", {
+    baseType: "single_select", renderer: "timed", responseModel: "single_choice",
+    capabilities: ["options", "sorting", "randomization"],
+    validations: VAL_SINGLE,
+    defaults: {
+      settings: { timeLimitSeconds: 10, onTimeout: "lock" },
+      options: [
+        { code: 1, label: "Option 1" },
+        { code: 2, label: "Option 2" },
+      ],
+      instruction: "Answer as quickly as you can.",
+    },
+  }),
+  stable(F.gamified, "matching", "Matching / Puzzle / Memory", "Game-mechanic tasks.", {
+    baseType: "matrix_single", renderer: "matching", responseModel: "per_row",
+    capabilities: ["options", "rows", "randomization"],
+    validations: ["required"],
+    defaults: {
+      settings: { showFeedback: true },
+      rows: [
+        { code: "r1", label: "Prompt 1", flags: [], validation: [], required: false, meta: { answer: "a1" } },
+        { code: "r2", label: "Prompt 2", flags: [], validation: [], required: false, meta: { answer: "a2" } },
+        { code: "r3", label: "Prompt 3", flags: [], validation: [], required: false, meta: { answer: "a3" } },
+      ],
+      options: [
+        { code: "a1", label: "Match for 1" },
+        { code: "a2", label: "Match for 2" },
+        { code: "a3", label: "Match for 3" },
+      ],
+      instruction: "Pair each prompt on the left with its match on the right.",
+    },
+  }),
+
+  /* ---------------------------------------------------------- EXPERIMENTAL */
+  stable(F.experimental, "attention_check", "Attention Check", "Trap question with expected answer.", {
+    baseType: "single_select", renderer: "attention", responseModel: "single_choice",
+    capabilities: ["options", "randomization"], validations: VAL_SINGLE,
+    defaults: {
+      settings: { expectedCodes: [3], onFail: "flag" },
+      instruction: "Trap wording goes in the question text — e.g. “please select Somewhat agree”. Mark the expected answer in the right panel.",
+      options: [
+        { code: 1, label: "Strongly disagree" },
+        { code: 2, label: "Somewhat disagree" },
+        { code: 3, label: "Somewhat agree" },
+        { code: 4, label: "Strongly agree" },
+      ],
+    },
+  }),
+  stable(F.experimental, "reaction_time", "Reaction-Time / Implicit Association", "Millisecond-timed stimulus response.", {
+    baseType: "matrix_single", renderer: "iat", responseModel: "per_row",
+    capabilities: ["options", "rows", "randomization"], validations: ["required"],
+    defaults: {
+      rows: [
+        { code: "s1", label: "Flower", flags: [], validation: [], required: false },
+        { code: "s2", label: "Insect", flags: [], validation: [], required: false },
+        { code: "s3", label: "Joy", flags: [], validation: [], required: false },
+        { code: "s4", label: "Pain", flags: [], validation: [], required: false },
+      ],
+      options: [
+        { code: 1, label: "Pleasant" },
+        { code: 2, label: "Unpleasant" },
+      ],
+      instruction: "Sort each word as fast as you can — press E or I.",
+    },
+  }),
+  stable(F.experimental, "ab", "A/B / Multivariate Experiment", "Random treatment assignment.", {
+    baseType: "experiment", renderer: "experiment", responseModel: "derived",
+    capabilities: [], validations: [],
+    defaults: {
+      settings: {
+        arms: [
+          { code: "A", label: "Control", weight: 1, html: "<p>Control wording goes here.</p>" },
+          { code: "B", label: "Treatment", weight: 1, html: "<p>Treatment wording goes here.</p>" },
+        ],
+      },
+    },
+  }),
+  stable(F.experimental, "stimulus", "Random Stimulus", "Randomly assigned stimulus display.", {
+    baseType: "experiment", renderer: "experiment", responseModel: "derived",
+    capabilities: [], validations: [],
+    defaults: {
+      settings: {
+        arms: [
+          { code: "S1", label: "Stimulus 1", weight: 1 },
+          { code: "S2", label: "Stimulus 2", weight: 1 },
+          { code: "S3", label: "Stimulus 3", weight: 1 },
+        ],
+      },
+      instruction: "Each respondent sees one of these at random.",
+    },
+  }),
   ...planned(F.ai, [
     ["AI Open-End Classification", "Auto-code open ends into themes."],
     ["AI Sentiment Analysis", "Score open-end sentiment."],
@@ -1317,8 +1431,19 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     ["AI Conversational Survey", "Interview-style adaptive flow."],
     ["AI Quality Check", "Flag low-quality responses."],
   ]),
+  stable(F.conversational, "chat_based_question", "Chat-Based Question", "One-at-a-time chat presentation.", {
+    baseType: "matrix_text", renderer: "chat", responseModel: "per_row",
+    capabilities: ["rows"], validations: ["required"],
+    defaults: {
+      settings: { chatDelayMs: 600 },
+      rows: [
+        { code: "q1", label: "Hi! What first brought you to us?", flags: [], validation: [], required: false },
+        { code: "q2", label: "And what has kept you coming back?", flags: [], validation: [], required: false },
+        { code: "q3", label: "Last one — what would you change?", flags: [], validation: [], required: false },
+      ],
+    },
+  }),
   ...planned(F.conversational, [
-    ["Chat-Based Question", "One-at-a-time chat presentation."],
     ["Voice Survey", "Spoken question and answer."],
     ["Adaptive Conversation", "Dynamic follow-ups in a chat flow."],
   ]),

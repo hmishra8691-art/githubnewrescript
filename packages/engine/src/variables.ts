@@ -338,6 +338,49 @@ export function questionVariables(
     default:
       push({ name: q.variableName, label: strip(q.text) || q.code, dataType: "text" });
   }
+
+  // ---- gamified / experimental families (variant batch) ----
+  // Side data stored beside the answer under `<id>__<suffix>` (see
+  // variants/shared.tsx setSide) needs a column of its own, or a quiz score
+  // and a reaction time would be captured and then never exported.
+  if (q.options.some((o) => o.meta?.correct)) {
+    push({
+      name: `${q.variableName}_CORRECT`, label: `${q.code} — answered correctly`,
+      dataType: "numeric", valueCodes: [0, 1], valueLabels: { "0": "Incorrect", "1": "Correct" },
+      derived: true,
+    });
+  }
+  // keyed to the variant, not to `timeLimitSeconds`: other families use a time
+  // limit for other things (a media stimulus, a page clock) and must not
+  // silently gain two reaction-time columns
+  if (q.variant === "gamified.timed") {
+    push({ name: `${q.variableName}_RT`, label: `${q.code} — response time (ms)`, dataType: "numeric", derived: true });
+    push({
+      name: `${q.variableName}_TIMEOUT`, label: `${q.code} — ran out of time`,
+      dataType: "numeric", valueCodes: [0, 1], valueLabels: { "0": "Answered in time", "1": "Timed out" },
+      derived: true,
+    });
+  }
+  if (q.settings.expectedCodes?.length) {
+    push({
+      name: `${q.variableName}_PASSED`, label: `${q.code} — attention check passed`,
+      dataType: "numeric", valueCodes: [0, 1], valueLabels: { "0": "Failed", "1": "Passed" },
+      derived: true,
+    });
+  }
+  if (q.variant === "experimental.reaction_time") {
+    for (const row of rows) {
+      push({
+        name: `${q.variableName}_${row.code}_RT`,
+        label: `${q.code} — ${strip(row.label)} response time (ms)`,
+        dataType: "numeric", rowCode: String(row.code), derived: true,
+      });
+    }
+  }
+  if (q.variant === "gamified.matching" && rows.some((r) => r.meta?.answer != null)
+    && !q.options.some((o) => o.meta?.correct)) {
+    push({ name: `${q.variableName}_CORRECT`, label: `${q.code} — pairs matched correctly`, dataType: "numeric", derived: true });
+  }
   return out;
 }
 
