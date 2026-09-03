@@ -1,1 +1,159 @@
 /* ---- matrix variant family */
+
+/* shared empty-state hint (rows / options not configured yet) */
+.rs-empty-hint {
+  border: 1px dashed var(--rs-border);
+  border-radius: var(--rs-radius);
+  padding: 14px 16px;
+  color: var(--rs-subtle);
+  font-size: 0.92em;
+  line-height: 1.5;
+  background: color-mix(in srgb, var(--rs-primary) 3%, var(--rs-surface));
+}
+
+/* ------------------------------------------------------ star rating matrix */
+.rs-starmatrix { display: flex; flex-direction: column; gap: 2px; }
+.rs-starmatrix-progress,
+.rs-dragmatrix-progress {
+  font-size: 0.82em;
+  color: var(--rs-subtle);
+  margin-bottom: 6px;
+}
+.rs-starmatrix-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid var(--rs-border);
+  border-radius: 10px;
+  background: var(--rs-surface);
+}
+.rs-starmatrix-row.rated { border-color: color-mix(in srgb, var(--rs-primary) 45%, var(--rs-border)); }
+.rs-starmatrix-label { flex: 1 1 160px; min-width: 0; font-weight: 500; }
+.rs-starmatrix-stars { display: flex; gap: 2px; flex-shrink: 0; }
+.rs-starmatrix-stars button {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-size: 1.5rem;
+  line-height: 1;
+  padding: 2px 1px;
+  color: var(--rs-border);
+  transition: color .1s ease, transform .1s ease;
+}
+.rs-starmatrix-stars button.on { color: #f59e0b; }
+.rs-starmatrix-stars button:hover { transform: scale(1.12); }
+.rs-starmatrix-stars button:focus-visible { outline: 2px solid var(--rs-primary); outline-offset: 1px; border-radius: 4px; }
+.rs-starmatrix-stars button:disabled { cursor: default; transform: none; }
+.rs-starmatrix-val {
+  flex: 0 0 auto;
+  min-width: 46px;
+  text-align: right;
+  font-size: 0.82em;
+  color: var(--rs-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ----------------------------------------------------- constant-sum matrix */
+table.rs-summatrix td[data-col] { padding: 5px 6px; }
+table.rs-summatrix td[data-col] .rs-input { max-width: 84px; min-width: 56px; text-align: right; }
+.rs-summatrix-th-total { white-space: nowrap; }
+.rs-summatrix-total {
+  font-weight: 600;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.92em;
+}
+.rs-summatrix-total.ok { color: #15803d; background: color-mix(in srgb, #15803d 8%, var(--rs-surface)); }
+.rs-summatrix-total.over { color: var(--rs-error); background: color-mix(in srgb, var(--rs-error) 8%, var(--rs-surface)); }
+.rs-summatrix-total.under { color: var(--rs-subtle); }
+
+/* ---------------------------------------------------- drag-and-drop matrix */
+.rs-dragmatrix { display: flex; flex-direction: column; gap: 12px; }
+
+.rs-dragchip {
+  display: inline-block;
+  padding: 7px 12px;
+  border: 1.5px solid var(--rs-border);
+  border-radius: 999px;
+  background: var(--rs-surface);
+  font-size: 0.9em;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.rs-dragchip:focus-visible { outline: 2px solid var(--rs-primary); outline-offset: 2px; }
+.rs-dragchip.picked {
+  border-color: var(--rs-primary);
+  background: color-mix(in srgb, var(--rs-primary) 12%, var(--rs-surface));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--rs-primary) 18%, transparent);
+}
+.rs-dragchip.dragging { opacity: 0.45; }
+
+.rs-dragpool {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 52px;
+  align-items: center;
+  padding: 10px;
+  border: 1.5px dashed var(--rs-border);
+  border-radius: var(--rs-radius);
+  background: color-mix(in srgb, var(--rs-secondary) 3%, var(--rs-surface));
+}
+.rs-dragpool.armed { border-color: var(--rs-primary); cursor: pointer; }
+.rs-dragpool-empty { color: var(--rs-subtle); font-size: 0.85em; }
+
+.rs-dragcols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+.rs-dragcol {
+  display: flex;
+  flex-direction: column;
+  border: 1.5px solid var(--rs-border);
+  border-radius: var(--rs-radius);
+  overflow: hidden;
+  min-width: 0;
+}
+.rs-dragcol.armed { border-color: var(--rs-primary); cursor: pointer; }
+.rs-dragcol.armed .rs-dragcol-body { background: color-mix(in srgb, var(--rs-primary) 6%, var(--rs-surface)); }
+.rs-dragcol:focus-visible { outline: 2px solid var(--rs-primary); outline-offset: 2px; }
+.rs-dragcol-head {
+  padding: 8px 10px;
+  font-weight: 600;
+  font-size: 0.88em;
+  text-align: center;
+  background: color-mix(in srgb, var(--rs-primary) 6%, var(--rs-surface));
+  border-bottom: 1px solid var(--rs-border);
+  overflow-wrap: anywhere;
+}
+.rs-dragcol-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 8px;
+  min-height: 64px;
+  justify-content: center;
+}
+.rs-dragcol-empty { color: var(--rs-subtle); font-size: 0.78em; }
+
+@media (max-width: 520px) {
+  .rs-starmatrix-label { flex-basis: 100%; }
+  .rs-starmatrix-val { min-width: 0; }
+  .rs-dragcols { grid-template-columns: 1fr; }
+  .rs-dragcol-body { flex-direction: row; flex-wrap: wrap; justify-content: flex-start; min-height: 48px; }
+  /* the running total is the whole point of this grid — keep it on screen
+     on a phone rather than parked past the right edge of the scroller */
+  table.rs-summatrix th,
+  table.rs-summatrix td { padding: 6px 5px; }
+  table.rs-summatrix td.rowlabel { min-width: 62px; }
+  table.rs-summatrix th { font-size: 0.82em; }
+  table.rs-summatrix td[data-col] .rs-input { min-width: 44px; max-width: 56px; padding: 5px 4px; }
+  .rs-summatrix-total { font-size: 0.8em; }
+}

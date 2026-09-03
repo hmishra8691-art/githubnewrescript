@@ -1,1 +1,89 @@
 /* ---- list variant family */
+
+/* ------------------------------------------------------------ dynamic list */
+.rs-dynlist { display: flex; flex-direction: column; gap: 6px; max-width: 520px; }
+.rs-dynlist-line { display: flex; align-items: center; gap: 8px; }
+.rs-dynlist-n {
+  flex: 0 0 22px;
+  text-align: right;
+  font-size: 0.82em;
+  color: var(--rs-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.rs-dynlist-line .rs-input { flex: 1 1 auto; min-width: 0; }
+.rs-dynlist-remove {
+  flex: 0 0 auto;
+  width: 28px; height: 28px;
+  border: 1px solid var(--rs-border);
+  border-radius: 8px;
+  background: var(--rs-surface);
+  color: var(--rs-subtle);
+  cursor: pointer;
+  font-size: 0.85em;
+  line-height: 1;
+}
+.rs-dynlist-remove:hover:not(:disabled) { border-color: var(--rs-error); color: var(--rs-error); }
+.rs-dynlist-remove:disabled { opacity: 0.35; cursor: default; }
+.rs-dynlist-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+  padding-left: 30px;
+  flex-wrap: wrap;
+}
+.rs-dynlist-add,
+.rs-repeatform-add {
+  border: 1.5px dashed var(--rs-border);
+  border-radius: 8px;
+  background: none;
+  color: var(--rs-primary);
+  font: inherit;
+  font-size: 0.88em;
+  padding: 7px 14px;
+  cursor: pointer;
+}
+.rs-dynlist-add:hover:not(:disabled),
+.rs-repeatform-add:hover:not(:disabled) { border-color: var(--rs-primary); border-style: solid; }
+.rs-dynlist-add:disabled,
+.rs-repeatform-add:disabled { opacity: 0.4; cursor: default; }
+.rs-dynlist-count,
+.rs-repeatform-count { font-size: 0.8em; color: var(--rs-subtle); }
+
+/* ----------------------------------------------------------- editable table */
+table.rs-sheet { font-size: 0.9em; }
+table.rs-sheet th,
+table.rs-sheet td { padding: 6px; }
+table.rs-sheet th.rs-sheet-n,
+table.rs-sheet td.rs-sheet-n {
+  width: 34px;
+  min-width: 34px;
+  text-align: center;
+  color: var(--rs-subtle);
+  font-weight: 500;
+  font-size: 0.85em;
+  background: color-mix(in srgb, var(--rs-secondary) 4%, var(--rs-surface));
+}
+table.rs-sheet td.rowlabel { min-width: 90px; }
+.rs-sheet-in {
+  width: 100%;
+  max-width: 100% !important;
+  min-width: 60px !important;
+  padding: 5px 6px !important;
+  border-radius: 4px;
+}
+table.rs-sheet .rs-sheet-in:focus {
+  outline: 2px solid var(--rs-primary);
+  outline-offset: -1px;
+}
+
+@media (max-width: 520px) {
+  .rs-dynlist-foot { padding-left: 0; }
+  /* a data-entry grid still scrolls inside its .rs-table-wrap on a phone,
+     but tighten it so most of it is on screen before anyone has to */
+  table.rs-sheet th,
+  table.rs-sheet td { padding: 4px; }
+  table.rs-sheet th { font-size: 0.8em; }
+  .rs-sheet-in { min-width: 44px !important; padding: 4px !important; }
+  table.rs-sheet td.rowlabel { min-width: 56px; font-size: 0.88em; }
+}

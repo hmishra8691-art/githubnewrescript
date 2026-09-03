@@ -302,6 +302,42 @@ export function validateQuestion(
     }
   }
 
+  // ---- matrix family (variant batch) ----
+  /**
+   * Constant-sum grid: `settings.rowSum` says every ROW of a cell question
+   * allocates `settings.sumTarget` across its columns. Keyed on the setting
+   * rather than on a variant id, so the rule belongs to the question, not to
+   * one presentation of it.
+   *
+   * A row nobody has touched is only an error when the question is required
+   * — otherwise a respondent who skips an optional grid would be told their
+   * empty rows do not add up.
+   */
+  if (
+    (q.type === "composite" || q.type === "custom_table") &&
+    q.settings.rowSum &&
+    q.settings.sumTarget != null
+  ) {
+    const view = effectiveQuestion(q, ctx);
+    const cells = (value ?? {}) as Record<string, Record<string, unknown>>;
+    const cols = view.columns.filter((c) => !c.readOnly && !c.expression);
+    const target = q.settings.sumTarget;
+    const unit = q.settings.sumUnit ?? "";
+    for (const row of view.rows) {
+      const rc = String(row.code);
+      const label = row.label.replace(/<[^>]*>/g, "");
+      const vals = cols.map((c) => cells?.[rc]?.[c.id]);
+      const filled = vals.filter((v) => !isEmpty(v));
+      const complete = cols.length > 0 && filled.length === cols.length;
+      if (!complete) {
+        if (q.required) push(`Row “${label}” must total ${target}${unit}.`, { rowCode: rc });
+        continue;
+      }
+      const total = vals.reduce((a: number, b) => a + (Number(b) || 0), 0);
+      if (total !== target) push(`Row “${label}” must total ${target}${unit}.`, { rowCode: rc });
+    }
+  }
+
   return errors;
 }
 

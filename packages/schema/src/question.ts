@@ -416,6 +416,13 @@ export const Question = z.object({
       multiRegion: z.boolean().optional(),
       /** Range pair (numeric range / dual slider): enforce from <= to. */
       rangePair: z.boolean().optional(),
+      /**
+       * Constant-sum grid: each ROW of a cell question must total
+       * `sumTarget` across its columns (Constant-Sum Matrix). Set on the
+       * question, not inferred from the variant id, so any composite /
+       * custom_table can opt in.
+       */
+      rowSum: z.boolean().optional(),
       accessibility: z
         .object({
           ariaLabel: z.string().optional(),
