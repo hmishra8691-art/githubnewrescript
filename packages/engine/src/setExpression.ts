@@ -577,7 +577,8 @@ export function applyPunches(
 
   const multi = Array.isArray(existing) || isMultiValued(q);
   if (multi) {
-    const current = Array.isArray(existing) ? [...existing] : [];
+    // punching only ever targets choice questions, whose arrays hold codes
+    const current: (string | number)[] = Array.isArray(existing) ? ([...existing] as (string | number)[]) : [];
     const drop = new Set(result.deselect.map(key0));
     const next = [
       ...current.filter((c) => !drop.has(key0(c as string | number))),

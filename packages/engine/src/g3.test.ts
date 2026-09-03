@@ -262,9 +262,9 @@ test("the two tournament entries and the two chip entries are one renderer each"
     variantRegistry.get("dragdrop.allocation")!.renderer,
     variantRegistry.get("allocation.drag")!.renderer,
   );
-  // and the entries another agent owns are untouched
-  assert.equal(variantRegistry.get("comparison.multi_item_attribute_comparison")!.status, "planned");
-  assert.equal(variantRegistry.get("allocation.slider_allocation")!.status, "planned");
+  // the sibling entries other batches built are merged alongside: all stable now
+  assert.equal(variantRegistry.get("comparison.attributes")!.status, "stable");
+  assert.equal(variantRegistry.get("allocation.slider_allocation")!.status, "stable");
 });
 
 test("the four swipe directions default to the option order", () => {

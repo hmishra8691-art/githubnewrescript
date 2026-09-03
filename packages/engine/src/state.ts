@@ -17,7 +17,9 @@ export type AnswerValue =
   | boolean
   | null
   | Array<string | number>
-  | Record<string, unknown>;
+  | Record<string, unknown>
+  // repeating groups, timeline reactions, multi-file uploads
+  | Array<Record<string, unknown>>;
 
 export interface LoopContext {
   loopVar: string;

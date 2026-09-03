@@ -72,6 +72,8 @@ export interface QuestionVariantDef {
     settings?: Record<string, unknown>;
     options?: { code: string | number; label: string; flags?: string[]; imageUrl?: string; meta?: Record<string, unknown> }[];
     rows?: Record<string, unknown>[];
+    /** cell questions (composite / custom_table): starter columns */
+    columns?: Record<string, unknown>[];
     validation?: { kind: string; value?: unknown; message?: string }[];
     instruction?: string;
   };
@@ -520,6 +522,11 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: ["rows", "columns"], validations: ["required"],
     defaults: {
       rows: [1, 2, 3].map((n) => ({ code: String(n), label: `Row ${n}` })),
+      columns: [
+        { id: "c1", label: "Item", responseType: "text" },
+        { id: "c2", label: "Detail", responseType: "text" },
+        { id: "c3", label: "Amount", responseType: "numeric" },
+      ],
       instruction: "Tab or the arrow keys move between cells; Enter moves down.",
     },
   }),
@@ -612,6 +619,9 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     defaults: {
       // composite is not row-driven, so this variant brings its own rows
       rows: [1, 2, 3].map((n) => ({ code: String(n), label: `Attribute ${n}` })),
+      // same ids as the runtime's fallbackSumColumns, so a table authored before
+      // this existed and one created now store cells under the same keys
+      columns: [1, 2, 3].map((n) => ({ id: `c${n}`, label: `Column ${n}`, responseType: "numeric", min: 0 })),
       settings: { rowSum: true, sumTarget: 100 },
       instruction: "Split the total across the columns — every row must reach the target.",
     },

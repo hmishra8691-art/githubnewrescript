@@ -59,17 +59,19 @@ made.sw_rate = await h.createFromPicker("swipe", "swipe.rate");
 made.sw_four = await h.createFromPicker("swipe", "swipe.four_direction");
 console.log("✔ all 9 variants are stable in the picker and create with their variant id");
 
-// the neighbouring tuples another agent owns must still read "coming soon"
+// the sibling entries built in other batches are merged alongside — all stable,
+// and nothing in either family reads "coming soon" any more
 await h.goTab("Questions");
 await h.page.click('[data-testid="add-question-top"]');
 await h.page.click('[data-testid="picker-family-comparison"]');
-let other = await h.page.waitForSelector('[data-testid="picker-variant-comparison.multi_item_attribute_comparison"]');
-assert.equal(await other.getAttribute("data-status"), "planned", "Multi-Item Comparison is left alone");
+let other = await h.page.waitForSelector('[data-testid="picker-variant-comparison.attributes"]');
+assert.equal(await other.getAttribute("data-status"), "stable", "Multi-Item Comparison is stable too");
 await h.page.click('[data-testid="picker-family-allocation"]');
 other = await h.page.waitForSelector('[data-testid="picker-variant-allocation.slider_allocation"]');
-assert.equal(await other.getAttribute("data-status"), "planned", "Slider Allocation is left alone");
+assert.equal(await other.getAttribute("data-status"), "stable", "Slider Allocation is stable too");
+assert.equal((await h.page.$$('.modal [data-status="planned"]')).length, 0, "no allocation entry is still planned");
 await h.page.click(".modal button:has-text('close')");
-console.log("✔ the comparison / allocation entries owned elsewhere are untouched");
+console.log("✔ the comparison / allocation families are complete — nothing left planned");
 
 /* --------------------------------------------------- base types + defaults */
 assert.equal(made.tournament.type, "ranking");

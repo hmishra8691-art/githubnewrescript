@@ -1,4 +1,5 @@
 "use client";
+import { OptionalCondition } from "./ConditionBuilder";
 import { optionMetaFields, VariantSettings, type MetaField } from "./variantConfig";
 import { CountInput } from "./CountInput";
 import React from "react";
@@ -410,6 +411,7 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
   patchSettings(p: Partial<Question["settings"]>): void;
 }) {
   const rows = q.rows;
+  const [condOpen, setCondOpen] = React.useState<number | null>(null);
   const setRow = (i: number, p: Partial<Question["rows"][number]>) =>
     patch({ rows: rows.map((r, j) => (j === i ? { ...r, ...p } : r)) });
   const move = (i: number, dir: -1 | 1) => {
@@ -451,12 +453,12 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
                 onChange={(e) => setRow(i, { code: e.target.value })} />
               <input className="input grow" placeholder="Field label, e.g. Email Address"
                 value={r.label} onChange={(e) => setRow(i, { label: e.target.value })} />
-              <select className="select" style={{ width: 150 }} value={ft}
+              <select className="select" style={{ width: 150 }} value={ft} data-testid={`field-type-${i}`}
                 onChange={(e) => setRow(i, { fieldType: e.target.value as any })}>
                 {FIELD_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
               </select>
               <label className="row" style={{ gap: 4, fontSize: 12 }}>
-                <input type="checkbox" checked={r.required ?? false}
+                <input type="checkbox" checked={r.required ?? false} data-testid={`field-required-${i}`}
                   onChange={(e) => setRow(i, { required: e.target.checked })} /> required
               </label>
               <button className="btn small" onClick={() => move(i, -1)}>↑</button>
@@ -468,6 +470,15 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
               <input className="input" style={{ width: 200 }} placeholder="placeholder text"
                 value={r.placeholder ?? ""}
                 onChange={(e) => setRow(i, { placeholder: e.target.value || undefined })} />
+              {/* a field that appears only when an earlier answer says so — the
+                  runtime already honours row.visibleIf live; this is where it
+                  gets set (the Conditional Form variant is built on it) */}
+              <button className={`btn small ${r.visibleIf ? "has-logic" : ""}`}
+                data-testid={`field-showwhen-${i}`}
+                title="Show this field only when a condition holds"
+                onClick={() => setCondOpen(condOpen === i ? null : i)}>
+                {r.visibleIf ? "⑂ shown when…" : "⑂ show when"}
+              </button>
               <label className="row" style={{ gap: 4, fontSize: 12 }}>
                 {isNum ? "min value" : "min length"}
                 <input className="input" style={{ width: 76 }} type="number"
@@ -481,6 +492,14 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
                   onChange={(e) => setBound(i, boundMax, e.target.value)} />
               </label>
             </div>
+            {condOpen === i && (
+              <div style={{ marginTop: 8 }} data-testid={`field-showwhen-editor-${i}`}>
+                <OptionalCondition label={`Show “${r.label || r.code}” when`}
+                  hint="Leave empty to always show this field."
+                  value={r.visibleIf}
+                  onChange={(c) => setRow(i, { visibleIf: c })} />
+              </div>
+            )}
           </div>
         );
       })}
@@ -622,7 +641,7 @@ export function QuestionEditor({ q }: { q: Question }) {
         </>
       )}
 
-      {feats.rows && q.type !== "numeric_list" && q.type !== "text_list" && (
+      {feats.rows && q.type !== "numeric_list" && q.type !== "text_list" && q.type !== "repeating_group" && (
         <>
           <h3 className="sec">Rows</h3>
           <OptionRows enableLogic questionId={q.id}
@@ -671,7 +690,7 @@ export function QuestionEditor({ q }: { q: Question }) {
         </>
       )}
 
-      {(q.type === "numeric_list" || q.type === "text_list") && (
+      {(q.type === "numeric_list" || q.type === "text_list" || q.type === "repeating_group") && (
         <FieldRowsEditor q={q} patch={patch} patchSettings={patchSettings} />
       )}
 

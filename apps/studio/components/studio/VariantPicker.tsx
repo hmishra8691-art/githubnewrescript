@@ -58,6 +58,13 @@ export function createFromVariant(v: QuestionVariantDef, n: number): Question {
   if (v.defaults?.settings) q.settings = { ...q.settings, ...v.defaults.settings } as any;
   if (v.defaults?.options) q.options = v.defaults.options.map((o) => ({ flags: [], ...o })) as any;
   if (v.defaults?.rows) q.rows = v.defaults.rows.map((r) => ({ flags: [], validation: [], required: false, ...r })) as any;
+  if (v.defaults?.columns) {
+    q.columns = v.defaults.columns.map((c, i) => ({
+      options: [], validation: [], readOnly: false,
+      variableStem: `${q.variableName}_C${i + 1}`,
+      ...c,
+    })) as any;
+  }
   if (v.defaults?.validation) q.validation = v.defaults.validation as any;
   if (v.defaults?.instruction) q.instruction = v.defaults.instruction;
   return q;

@@ -99,21 +99,28 @@ await h.setQuestion(made.star_matrix.id, (q) => { q.settings.maxValue = 5; });
 ok("Studio: the Star Rating Matrix exposes its star count");
 
 await openEditor("constant_sum", "summatrix-target");
-assert.ok(await h.page.$('[data-testid="summatrix-no-columns"]'),
-  "an unconfigured cell grid says so, and offers to create its columns");
+// the variant now seeds its three columns on creation (defaults.columns), so the
+// "create columns" offer is only for grids authored before that existed
+assert.ok(!(await h.page.$('[data-testid="summatrix-no-columns"]')),
+  "a freshly created constant-sum grid already has its columns");
 await h.page.fill('[data-testid="summatrix-unit"]', "%");
 await h.page.waitForTimeout(250);
-await h.page.click('[data-testid="summatrix-seed-columns"]');
-await h.page.waitForTimeout(350);
 def = await h.readDef();
 assert.equal(def.questions[2].settings.sumUnit, "%", "the sum block writes settings.sumUnit");
-assert.equal(def.questions[2].columns.length, 3, "the starter columns are created for editing");
+assert.equal(def.questions[2].columns.length, 3, "the starter columns are seeded on creation");
 assert.deepEqual(def.questions[2].columns.map((c) => c.id), ["c1", "c2", "c3"],
   "with the same ids the runtime falls back to, so nothing already answered moves");
 assert.equal(def.questions[2].columns[0].responseType, "numeric");
 assert.equal(def.questions[2].columns[0].variableStem, `${def.questions[2].variableName}_C1`);
-await h.setQuestion(made.constant_sum.id, (q) => { delete q.settings.sumUnit; });
-ok("Studio: the Constant-Sum Matrix exposes its target + unit and materialises its columns");
+// and a grid that arrives from JSON without columns still gets the offer
+await h.setQuestion(made.constant_sum.id, (q) => { delete q.settings.sumUnit; q.columns = []; });
+await openEditor("constant_sum", "summatrix-target");
+assert.ok(await h.page.$('[data-testid="summatrix-no-columns"]'), "an unconfigured grid says so and offers to create its columns");
+await h.page.click('[data-testid="summatrix-seed-columns"]');
+await h.page.waitForTimeout(350);
+def = await h.readDef();
+assert.equal(def.questions[2].columns.length, 3, "the offer creates them");
+ok("Studio: the Constant-Sum Matrix seeds its columns, exposes target + unit, and can re-create columns for an old grid");
 
 await openEditor("dynamic_list", "repeat-max");
 await h.page.fill('[data-testid="repeat-max"]', "4");
@@ -123,12 +130,13 @@ assert.equal(def.questions[4].settings.maxRepeats, 4, "the entry-bounds block wr
 await h.setQuestion(made.dynamic_list.id, (q) => { q.settings.maxRepeats = 10; });
 ok("Studio: the Dynamic List exposes its entry bounds");
 
-// the editor's Fields section is wired to text_list / numeric_list only, so a
-// repeating group's rows get a type and a required flag from the variant block
-await openEditor("repeating", "repeat-fieldtype-1");
-await h.page.selectOption('[data-testid="repeat-fieldtype-1"]', "phone");
+// a repeating group's rows are its FIELDS, and the editor's Fields section
+// (type, required, bounds, show-when) now serves it like any form
+await openEditor("repeating", "field-type-1");
+await h.page.selectOption('[data-testid="field-type-1"]', "phone");
 await h.page.waitForTimeout(200);
-await h.page.click('[data-testid="repeat-required-1"]');
+await h.page.click('[data-testid="field-required-1"]');
+assert.ok(await h.page.$('[data-testid="field-showwhen-1"]'), "every field offers a Show-when condition");
 await h.page.waitForTimeout(350);
 def = await h.readDef();
 assert.equal(def.questions[6].rows[1].fieldType, "phone", "a field's type is editable");

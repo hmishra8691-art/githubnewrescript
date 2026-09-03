@@ -22,19 +22,19 @@ for (const k of ["rich", "flip", "sortable"]) made[k] = await h.createFromPicker
 made.attributes = await h.createFromPicker("comparison", "comparison.attributes");
 console.log("✔ all 6 carousel / card / comparison variants are stable in the picker and create with their variant id");
 
-/* the other agent's tournament entry must be untouched by this branch */
+/* the tournament entry built in another batch is merged alongside: both stable */
 await h.goTab("Questions");
 await h.page.click('[data-testid="add-question-top"]');
 await h.page.waitForSelector('[data-testid="picker-family-comparison"]');
 await h.page.click('[data-testid="picker-family-comparison"]');
-const tourn = await h.page.waitForSelector('[data-testid="picker-variant-comparison.pairwise_tournament_comparison"]');
-assert.equal(await tourn.getAttribute("data-status"), "planned", "the tournament comparison is still coming soon");
+const tourn = await h.page.waitForSelector('[data-testid="picker-variant-comparison.tournament"]');
+assert.equal(await tourn.getAttribute("data-status"), "stable", "the tournament comparison is stable too");
 const attrCard = await h.page.$('[data-testid="picker-variant-comparison.attributes"]');
 assert.ok(!!attrCard);
 assert.equal(await attrCard.getAttribute("data-status"), "stable");
 await h.page.click('.modal button:has-text("close")');
 await h.page.waitForTimeout(200);
-console.log("✔ comparison family: the attribute comparison is stable, the tournament entry is left planned");
+console.log("✔ comparison family: attribute comparison and tournament are both stable");
 
 /* ------------------------------------------------ base types + seeded defaults */
 assert.equal(made.judge.type, "matrix_single", "judge starts as a choice matrix");

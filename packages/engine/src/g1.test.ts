@@ -183,6 +183,8 @@ test("all seven G1 variants are stable and point at their renderer + base type",
     variantRegistry.get("slider.dual")!.defaults!.rows!.map((r) => r.code),
     variantRegistry.get("numeric.numeric_range")!.defaults!.rows!.map((r) => r.code),
   );
-  assert.equal(variantRegistry.get("allocation.drag_allocation")!.status, "planned",
-    "Drag Allocation stays planned — another batch owns it");
+  // Drag Allocation was built in another batch and merged alongside this one;
+  // the two share the family, and one renderer each
+  assert.equal(variantRegistry.get("allocation.drag")!.status, "stable");
+  assert.equal(variantRegistry.get("allocation.drag")!.renderer, "chipallocation");
 });
