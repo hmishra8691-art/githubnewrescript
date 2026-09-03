@@ -141,6 +141,81 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 }
 
 /* ==========================================================================
+   Expression editor — the written half of the logic builder.
+
+   Two panes over one canonical tree. The mode bar is deliberately small: it
+   is a preference, not a decision, and the visual builder stays the default.
+   ========================================================================== */
+.cond-modes { display: grid; gap: 4px; }
+.cond-mode-bar {
+  display: flex; align-items: center; gap: 4px;
+  border-bottom: 1px solid var(--border); padding-bottom: 4px; margin-bottom: 2px;
+}
+.cm-tab {
+  font: inherit; font-size: 11.5px; padding: 2px 10px; cursor: pointer;
+  border: 1px solid transparent; border-radius: 999px;
+  background: none; color: var(--subtle);
+}
+.cm-tab:hover { color: var(--accent); }
+.cm-tab.on { background: var(--tint); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.cm-hint { font-size: 10.5px; }
+
+.expr-editor { display: grid; gap: 5px; }
+.xe-chips { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.xe-chip {
+  font: inherit; font-family: var(--mono); font-size: 11.5px; font-weight: 700;
+  padding: 2px 9px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--panel); color: var(--accent2);
+}
+.xe-chip:hover { border-color: var(--accent); color: var(--accent); background: var(--tint); }
+.xe-chip.wide { font-weight: 600; letter-spacing: .02em; }
+
+.xe-input {
+  min-height: 62px; font-size: 12.5px; line-height: 1.55; white-space: pre-wrap;
+  tab-size: 2;
+}
+.xe-input:focus { border-color: var(--accent); }
+
+.xe-suggest { display: flex; flex-wrap: wrap; gap: 4px; }
+.xe-sugg {
+  font: inherit; font-family: var(--mono); font-size: 11px; cursor: pointer;
+  padding: 1px 7px; border-radius: 5px;
+  border: 1px solid var(--accent); background: var(--tint); color: var(--accent);
+}
+
+.xe-error {
+  font-size: 11.5px; padding: 5px 9px; border-radius: 6px;
+  background: #fdeaea; color: var(--red); border: 1px solid rgba(208,43,43,.3);
+}
+.xe-warn {
+  font-size: 11.5px; padding: 5px 9px; border-radius: 6px;
+  background: #fdf3e6; color: var(--amber); border: 1px solid rgba(164,92,7,.25);
+}
+.xe-hint { font-size: 11px; }
+
+/* the survey structure, as a source of references */
+.xe-picker { border: 1px solid var(--border); border-radius: 8px; padding: 7px 8px; background: var(--panel2); }
+.xe-tree { max-height: 210px; overflow-y: auto; }
+.xr-branch { }
+.xr-row { display: flex; align-items: center; gap: 2px; }
+.xr-twisty {
+  font: inherit; font-size: 10px; width: 14px; flex: none; cursor: pointer;
+  border: none; background: none; color: var(--subtle); padding: 0;
+}
+.xr-token {
+  display: flex; align-items: baseline; gap: 6px; flex: 1; min-width: 0;
+  font: inherit; font-size: 11.5px; text-align: left; cursor: grab;
+  padding: 2px 6px; border-radius: 5px; border: 1px solid transparent; background: none;
+}
+.xr-token:hover { background: var(--panel); border-color: var(--accent); }
+.xr-token:active { cursor: grabbing; }
+.xr-code { font-family: var(--mono); color: var(--accent2); font-weight: 600; white-space: nowrap; }
+.xr-token.kind-row .xr-code { color: var(--accent); }
+.xr-token.kind-option .xr-code, .xr-token.kind-column .xr-code { color: var(--green); }
+.xr-token.kind-variable .xr-code { color: var(--amber); }
+.xr-label { color: var(--subtle); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ==========================================================================
    Logic builder — conditions first, groups only when asked for.
 
    The visual job here is to make one condition look like one line of plain

@@ -15,6 +15,7 @@ import {
   OPERATOR_LABEL, OPERATOR_HINT, setGroupConnector,
 } from "@rescript/engine";
 import { useStudio } from "./store";
+import { ExpressionEditor } from "./ExpressionEditor";
 
 /**
  * Recursive visual condition builder — arbitrary AND/OR/NOT nesting with
@@ -450,7 +451,41 @@ function GroupRow({ ctx, path, group }: {
  * smallest tree with the same meaning, so a one-condition rule is stored as a
  * rule and an emptied builder as an empty list rather than an inverted one.
  */
-export function ConditionEditor({ value, onChange, perOption }: {
+/**
+ * Visual or written — the same logic either way.
+ *
+ * Both panes edit the one canonical tree: the visual builder assembles it,
+ * the expression editor parses text into it and prints it back. Nothing
+ * stores an expression, so switching modes cannot lose or change anything
+ * (reqs §1, §13–15).
+ */
+export function ConditionEditor(props: {
+  value: Condition; onChange(c: Condition): void; perOption?: boolean;
+}) {
+  const [mode, setMode] = React.useState<"visual" | "expression">("visual");
+  return (
+    <div className="cond-modes">
+      <div className="cond-mode-bar" data-testid="logic-mode-bar">
+        <button className={`cm-tab ${mode === "visual" ? "on" : ""}`} data-testid="mode-visual"
+          onClick={() => setMode("visual")}>Visual</button>
+        <button className={`cm-tab ${mode === "expression" ? "on" : ""}`} data-testid="mode-expression"
+          onClick={() => setMode("expression")}>Expression</button>
+        <span className="grow" />
+        <span className="muted cm-hint">
+          {mode === "visual" ? "click to build" : "type, drag or click references"}
+        </span>
+      </div>
+      {mode === "visual"
+        ? <VisualConditionEditor {...props} />
+        : <ExpressionEditor {...props} />}
+      {/* one plain-English reading, under whichever pane is open — it used to
+          be rendered by OptionalCondition as well, which showed it twice */}
+      <ConditionSummary value={props.value} />
+    </div>
+  );
+}
+
+function VisualConditionEditor({ value, onChange, perOption }: {
   value: Condition; onChange(c: Condition): void; perOption?: boolean;
 }) {
   const s = useStudio();
@@ -565,7 +600,6 @@ export function OptionalCondition({ label, value, onChange, perOption, hint }: {
       </div>
       {hint && !value && <div className="muted" style={{ fontSize: 11, marginTop: -2 }}>{hint}</div>}
       {value && <ConditionEditor value={value} onChange={onChange} perOption={perOption} />}
-      {value && <ConditionSummary value={value} />}
     </div>
   );
 }
