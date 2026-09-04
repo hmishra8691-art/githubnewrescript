@@ -34,6 +34,61 @@ const PUBLIC = {
   "auth/heartbeat/route.ts": "validates the session cookie itself and answers 401 without the guard's shape",
 };
 
+/**
+ * THE SECOND RULE, added for P0-6 and P0-7.
+ *
+ * A capability check alone is not enough to accept a change to the survey.
+ * §16 of the original spec and the P0 list both state the condition three
+ * ways over: current user == locked_by_user_id AND current session ==
+ * locked_by_session_id AND the lock is still valid. `requireProject(…,
+ * "survey.edit")` answers only the first third of that, so a handler that
+ * mutates the definition behind it would accept two editors' writes and lose
+ * one of them — which is P0-6 — while looking perfectly guarded to the
+ * original version of this audit.
+ *
+ * So: any handler that asks for one of these capabilities must go through
+ * `requireEditRight`.
+ */
+const LOCKED_CAPABILITIES = ["survey.edit", "survey.save_version"];
+
+/**
+ * Capabilities deliberately guarded by ROLE ALONE, with the reason.
+ *
+ * Not an oversight, and worth stating so the next person does not "fix" it.
+ * The edit lock exists to stop two people overwriting one DOCUMENT — the
+ * survey definition. It is the wrong instrument for anything else, and
+ * applying it everywhere would mean a deployment manager could not publish
+ * while a programmer had the questions open, which is precisely the
+ * separation of duties §11 asks for.
+ */
+const CAPABILITY_ONLY = {
+  "responses.manage":
+    "response data is not the survey document: concurrent changes to different rows are not a lost update, "
+    + "and purging test data must not require taking editing away from a colleague",
+  "deploy.manage":
+    "a deployment manager holds no editing capability at all (§11), so they can never hold the lock — "
+    + "requiring it would leave the role unable to do its only job",
+};
+
+/**
+ * Handlers that ask for a locked capability but are exempt, with the reason.
+ *
+ * One route, and it is a judgement rather than a gap. `quality_profiles` is a
+ * WORKSPACE-level library of reusable quality settings, keyed by
+ * (customer_id, name) and shared across every project. It borrows
+ * `survey.edit` on some project as a proxy for "may configure quality", which
+ * correctly refuses a viewer or a reviewer — so P0-7 is closed here — but the
+ * row it writes belongs to no survey's definition. Requiring a particular
+ * survey's edit lock to save a reusable profile would be arbitrary (which
+ * survey?) and a regression in the quality workflow.
+ */
+const LOCK_EXEMPT = {
+  "surveys/[id]/quality/profiles/route.ts POST":
+    "writes a workspace-level reusable profile, not the survey definition",
+  "surveys/[id]/quality/profiles/route.ts DELETE":
+    "deletes a workspace-level reusable profile, scoped to the caller's own workspace",
+};
+
 const files = [];
 (function walk(dir) {
   for (const entry of readdirSync(dir)) {
@@ -48,6 +103,8 @@ const VERBS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 let checked = 0;
 const failures = [];
 const exempt = [];
+const lockExempt = [];
+const capabilityOnly = [];
 
 for (const file of files) {
   const rel = relative(ROOT, file);
@@ -117,14 +174,55 @@ for (const file of files) {
       failures.push(`${rel} ${verb} — calls ${guard} but never checks isFailure(), so a refusal is ignored`);
       continue;
     }
-    console.log(`  ok   ${rel} ${verb} — ${guard}`);
+
+    /*
+     * P0-6 / P0-7: capability is not enough for a change to the survey.
+     *
+     * Only non-GET handlers are asked this. A GET that reads with
+     * `survey.edit` is answering "may this person edit?", which is a question
+     * about capability and has nothing to do with who currently holds the
+     * lock.
+     */
+    const asksForLocked = LOCKED_CAPABILITIES.filter((c) => body.includes(`"${c}"`));
+    const usesEditRight = /requireEditRight(For)?\s*\(/.test(body);
+    const exemptKey = `${rel} ${verb}`;
+    if (verb !== "GET" && asksForLocked.length && !usesEditRight) {
+      if (LOCK_EXEMPT[exemptKey]) {
+        lockExempt.push(`${exemptKey} — ${LOCK_EXEMPT[exemptKey]}`);
+      } else {
+        failures.push(
+          `${rel} ${verb} — asks for ${asksForLocked.join(", ")} but never calls requireEditRight, `
+          + "so it would accept a write from an editor who does not hold the lock (P0-6)",
+        );
+        continue;
+      }
+    }
+
+    // which write capabilities this handler guards by role alone, reported so
+    // the shape of the whole surface is visible rather than assumed
+    for (const [cap, why] of Object.entries(CAPABILITY_ONLY)) {
+      if (verb !== "GET" && body.includes(`"${cap}"`) && !usesEditRight) {
+        capabilityOnly.push(`${exemptKey} — ${cap}: ${why}`);
+      }
+    }
+
+    console.log(`  ok   ${rel} ${verb} — ${guard}${usesEditRight && verb !== "GET" ? " + edit lock" : ""}`);
   }
 }
 
 console.log(`\nDeliberately public (${exempt.length}):`);
 for (const e of exempt) console.log(`  · ${e}`);
 
-console.log(`\n${checked} handlers checked, ${failures.length} unguarded`);
+if (capabilityOnly.length) {
+  console.log(`\nWrite handlers guarded by role alone, by design (${capabilityOnly.length}):`);
+  for (const e of capabilityOnly) console.log(`  · ${e}`);
+}
+if (lockExempt.length) {
+  console.log(`\nExempt from the edit-lock rule, with a stated reason (${lockExempt.length}):`);
+  for (const e of lockExempt) console.log(`  · ${e}`);
+}
+
+console.log(`\n${checked} handlers checked, ${failures.length} problem(s)`);
 if (failures.length) {
   for (const f of failures) console.log(`  FAIL ${f}`);
   process.exit(1);

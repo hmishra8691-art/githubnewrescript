@@ -285,16 +285,34 @@ function SaveStatus() {
     );
     case "conflict": return (
       <span className="qs-save err" data-testid="quality-save-state" data-state="conflict" title={st.message}>
-        ⚠ Changed elsewhere — not saved
-        <button className="btn small" onClick={() => window.location.reload()}>Reload</button>
+        {/* no Reload button here: this indicator sits inside a panel, and the
+            header's save state owns the conflict resolution — including
+            handing the draft back as a file before anything is discarded */}
+        ⚠ Changed elsewhere — not saved. Nothing was overwritten; see the save status in the header.
+      </span>
+    );
+    /*
+     * Refused for want of the edit lock, or because the session ended. Both
+     * are reported here as "not saved, work intact"; the header carries the
+     * actions, so the two indicators cannot offer contradictory advice.
+     */
+    case "lock_lost": return (
+      <span className="qs-save warn" data-testid="quality-save-state" data-state="lock_lost" title={st.message}>
+        ⚠ Not saved — {st.heldByName ? `${st.heldByName} is editing this project` : "this session does not hold the edit lock"}. Your changes are still here.
+      </span>
+    );
+    case "signed_out": return (
+      <span className="qs-save err" data-testid="quality-save-state" data-state="signed_out" title={st.message}>
+        ⚠ Not saved — your session ended. Your changes are still here; sign in again from the header.
       </span>
     );
     case "unavailable": return <span className="qs-save warn" data-testid="quality-save-state" data-state="unavailable" title={st.message}>⚠ Autosave off — use Save version</span>;
     case "clean":
-    default:
       return st.savedAt
         ? <span className="qs-save ok" data-testid="quality-save-state" data-state="clean">✓ Saved {fmtTime(st.savedAt)}</span>
         : <span className="qs-save" data-testid="quality-save-state" data-state="clean">No unsaved changes</span>;
+    default:
+      return <span className="qs-save" data-testid="quality-save-state" data-state="clean">No unsaved changes</span>;
   }
 }
 

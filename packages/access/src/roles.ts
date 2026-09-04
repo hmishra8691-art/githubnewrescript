@@ -218,9 +218,12 @@ export interface AccessDecision {
   role: ProjectRole | null;
   /** true when the capability came from platform-admin duties, not membership */
   viaAdmin: boolean;
+  /** owner / explicit share / workspace baseline — what the UI explains */
+  source: RoleSource;
   reason:
     | "owner"
     | "member"
+    | "workspace"
     | "platform_admin"
     | "not_a_member"
     | "insufficient_role";
@@ -230,19 +233,137 @@ export function decideAccess(
   actor: Actor,
   role: ProjectRole | null,
   capability: Capability,
+  /**
+   * Where `role` came from. Optional so every existing caller keeps working:
+   * without it the decision is inferred from the role alone, exactly as
+   * before. Callers that resolved the role through `resolveProjectRole` pass
+   * the source so a refusal can say "your workspace's default role is viewer"
+   * rather than the much less useful "your role is viewer".
+   */
+  source?: RoleSource,
 ): AccessDecision {
+  const src: RoleSource = source ?? (role === "owner" ? "owner" : role ? "member" : "none");
   if (role && can(role, capability)) {
-    return { allowed: true, role, viaAdmin: false, reason: role === "owner" ? "owner" : "member" };
+    return {
+      allowed: true, role, viaAdmin: false, source: src,
+      reason: src === "workspace" ? "workspace" : role === "owner" ? "owner" : "member",
+    };
   }
   if (actor.isPlatformAdmin && ADMIN_SET.has(capability)) {
-    return { allowed: true, role, viaAdmin: true, reason: "platform_admin" };
+    return { allowed: true, role, viaAdmin: true, source: src, reason: "platform_admin" };
   }
   return {
     allowed: false,
     role,
     viaAdmin: false,
+    source: src,
     reason: role ? "insufficient_role" : "not_a_member",
   };
+}
+
+/* ------------------------------------------------------------ where a role came from */
+
+/**
+ * WORKSPACE MEMBERSHIP AS A BASELINE ROLE — the fix for P0-1 and P0-5.
+ *
+ * The original model recognised exactly two ways to hold a role: own the
+ * project, or have somebody add you to it. Everything else was "not a member",
+ * which answers 404 — indistinguishable, deliberately, from a project that
+ * does not exist.
+ *
+ * That is correct between organizations and was catastrophic inside one. The
+ * Studio used to list projects by workspace, so colleagues in the same
+ * organization saw each other's work by default. When this layer shipped, the
+ * rule silently became "explicit share or nothing", `project_members` was
+ * empty, and three programmers sharing one workspace each woke up able to see
+ * only the one or two projects they personally owned. To them, their saved
+ * work had disappeared — and a 404 is a very convincing impression of deleted
+ * data. Nothing had been deleted. The question being asked had changed.
+ *
+ * So there is now a third source. Being in a project's workspace grants a
+ * baseline role, configurable per workspace, and `null` restores the strict
+ * explicit-share-only behaviour for an installation that wants it.
+ *
+ * Three things this deliberately does NOT do:
+ *
+ *   · it never crosses a workspace boundary — cross-organization isolation
+ *     was never the bug and is not relaxed by a single line here;
+ *   · it never overrides an explicit membership row, in either direction. An
+ *     owner who demotes a colleague to `viewer` has made a decision, and a
+ *     baseline that quietly promoted them back to `editor` would make the
+ *     share dialog a lie;
+ *   · it never grants ownership. Ownership is a column on the project.
+ */
+export type RoleSource = "owner" | "member" | "workspace" | "none";
+
+export interface WorkspaceAccessPolicy {
+  /**
+   * What a workspace colleague gets on a project nobody has explicitly shared
+   * with them. `null` means nothing at all — strict, explicit-share-only.
+   *
+   * The default is `editor` because that is the closest honest reconstruction
+   * of what these users had before this layer existed: everyone in the
+   * installation could open and change everything. `editor` is already a
+   * reduction from that (it withholds `project.transfer`, `project.delete`,
+   * `project.manage_members` and `lock.force_release`, which stay with the
+   * owner), and a workspace that wants a tighter floor can say so.
+   */
+  defaultRole: ProjectRole | null;
+}
+
+export const DEFAULT_WORKSPACE_ACCESS: WorkspaceAccessPolicy = {
+  defaultRole: "editor",
+};
+
+export function workspaceAccessPolicy(
+  overrides?: Partial<WorkspaceAccessPolicy> | null,
+): WorkspaceAccessPolicy {
+  const p = { ...DEFAULT_WORKSPACE_ACCESS };
+  if (!overrides) return p;
+  if ("defaultRole" in overrides) {
+    const v = overrides.defaultRole;
+    // `owner` is never grantable this way, and an unrecognised string must
+    // close the door rather than open it
+    if (v === null) p.defaultRole = null;
+    else if (isProjectRole(v) && v !== "owner") p.defaultRole = v;
+    else p.defaultRole = null;
+  }
+  return p;
+}
+
+/**
+ * The one statement of role precedence. SQL implements the same order inside
+ * `rescript_project_role`; this is the readable copy the tests pin, and the
+ * one the Studio uses to explain to a user WHY they have the access they have.
+ */
+export function resolveProjectRole(args: {
+  isOwner: boolean;
+  memberRole: ProjectRole | null;
+  /** is the actor in the same workspace as the project? */
+  sameWorkspace: boolean;
+  workspace: WorkspaceAccessPolicy;
+}): { role: ProjectRole | null; source: RoleSource } {
+  if (args.isOwner) return { role: "owner", source: "owner" };
+  if (args.memberRole && isProjectRole(args.memberRole)) {
+    return { role: args.memberRole, source: "member" };
+  }
+  if (args.sameWorkspace && args.workspace.defaultRole) {
+    return { role: args.workspace.defaultRole, source: "workspace" };
+  }
+  return { role: null, source: "none" };
+}
+
+/** How the UI explains where someone's access came from. */
+export function roleSourceNote(source: RoleSource, workspaceName?: string | null): string | null {
+  switch (source) {
+    case "owner": return "You own this project.";
+    case "member": return "This project was shared with you.";
+    case "workspace":
+      return workspaceName
+        ? `You have this access because you are a member of ${workspaceName}.`
+        : "You have this access because you are a member of this workspace.";
+    case "none": return null;
+  }
 }
 
 /** Roles that can hold the edit lock — the shortlist the UI offers "Edit" to. */

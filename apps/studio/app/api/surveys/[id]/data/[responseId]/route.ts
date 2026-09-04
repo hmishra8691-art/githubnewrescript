@@ -4,7 +4,7 @@ import { loadQualityDefinition } from "@/lib/qualityDef";
 import { flattenVariables, rowToState, validateQuestion } from "@rescript/engine";
 import { missingResponseMigration, RESPONSE_MIGRATION_MESSAGE } from "@/lib/responseData";
 import { recountQuotas } from "@/lib/quotaRecount";
-import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
+import { isFailure, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 

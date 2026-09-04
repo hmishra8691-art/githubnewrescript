@@ -24,7 +24,23 @@
  * this module computes.
  */
 
-export type LockStatus = "free" | "held" | "stale" | "released" | "expired";
+/**
+ * `orphaned` is the status that P0-8 was missing.
+ *
+ * A lock used to be judged live purely by the age of its heartbeat, which
+ * meant a lock whose OWNER WAS NO LONGER SIGNED IN still blocked the whole
+ * team until the stale timer ran out. That is not a hypothetical: production
+ * had two of them, held by sessions that were logged out and expired
+ * respectively. Nobody was at those keyboards; the heartbeat had simply not
+ * been quiet for long enough yet.
+ *
+ * So liveness now asks two questions, not one — is the heartbeat recent, AND
+ * is the session that owns this lock still able to act? A lock fails the
+ * second test the instant its session ends, and `orphaned` says so precisely:
+ * takeable, like `stale`, but for a reason the banner can state honestly
+ * rather than implying the holder wandered off.
+ */
+export type LockStatus = "free" | "held" | "stale" | "orphaned" | "released" | "expired";
 
 /** What the database stores per project (§16, §35). */
 export interface LockRecord {
@@ -44,6 +60,16 @@ export interface LockRecord {
    * every caller.
    */
   section?: string | null;
+  /**
+   * Is the session that holds this lock still able to act?
+   *
+   * Supplied by whoever read the lock, because only they can join to
+   * `user_sessions`. `undefined` means "not checked" and is treated as alive,
+   * so a caller that cannot answer the question degrades to the old
+   * heartbeat-only behaviour rather than releasing locks it knows nothing
+   * about. `false` means the session is gone and the lock is orphaned.
+   */
+  holderSessionLive?: boolean;
   /** display only: who to name in the banner without a second query */
   lockedByName?: string | null;
   lockedByUserCode?: string | null;
@@ -94,11 +120,25 @@ export function lockStatus(lock: LockRecord | null, policy: LockPolicy, nowMs = 
   if (lock.status === "revoked") return "released";
   if (lock.expiresAt && Date.parse(lock.expiresAt) <= nowMs) return "expired";
   if (secondsSince(lock.createdAt, nowMs) >= policy.maxHoldSeconds) return "expired";
+  /*
+   * Before the clock: a lock is only as alive as the session holding it.
+   * Checked ahead of staleness because it is the stronger fact — a signed-out
+   * holder is gone now, not in three minutes — and because it gives the
+   * banner a truthful reason instead of accusing someone of idling.
+   */
+  if (lock.holderSessionLive === false) return "orphaned";
   if (secondsSince(lock.lastHeartbeatAt, nowMs) >= policy.staleAfterSeconds) return "stale";
   return "held";
 }
 
-/** Is anybody actually holding this project right now? */
+/**
+ * Is anybody actually holding this project right now?
+ *
+ * "Held" is the only status that blocks another editor. `stale`, `orphaned`,
+ * `expired` and `released` are all takeable — that single definition is what
+ * keeps §17's "do not create permanent edit locks" true no matter which way a
+ * holder disappeared.
+ */
 export function lockIsLive(lock: LockRecord | null, policy: LockPolicy, nowMs = Date.now()): boolean {
   return lockStatus(lock, policy, nowMs) === "held";
 }
@@ -158,10 +198,21 @@ export function decideEdit(args: {
   }
   const status = lockStatus(lock, policy, nowMs);
   if (!lock || status !== "held") {
+    /*
+     * Nobody holds the lock — including, apparently, this session, which
+     * thought it did.
+     *
+     * Every message in this function states only the FACT. The reassurance a
+     * refused save needs ("your changes are still here") is added once, by
+     * the save path, because that is the only caller who knows there were
+     * unsaved changes at all — `decideEdit` also answers for a page that has
+     * merely gone read-only, where promising to keep changes nobody made
+     * would be noise.
+     */
     return {
       allowed: false,
       reason: "lock_not_held",
-      message: "You are not in edit mode. Enter edit mode before saving changes.",
+      message: "This session is not currently holding the edit lock for the project.",
     };
   }
   if (lock.lockedBySessionId === sessionId) {
@@ -195,7 +246,7 @@ export function lockBanner(
   nowMs = Date.now(),
 ): { tone: "free" | "mine" | "other" | "stale"; title: string; detail?: string } {
   const status = lockStatus(lock, policy, nowMs);
-  if (!lock || (status !== "held" && status !== "stale")) {
+  if (!lock || (status !== "held" && status !== "stale" && status !== "orphaned")) {
     return { tone: "free", title: "Project available for editing." };
   }
   const who = lock.lockedByName ?? lock.lockedByUserCode ?? "Another user";
@@ -203,6 +254,18 @@ export function lockBanner(
   const quiet = Math.round(secondsSince(lock.lastHeartbeatAt, nowMs));
   if (lock.lockedBySessionId === sessionId && status === "held") {
     return { tone: "mine", title: "You are editing this project.", detail: `Since ${since}.` };
+  }
+  /*
+   * Orphaned reads as "stale" to the UI — both mean takeable — but says the
+   * true reason. Telling a colleague that someone "left this open" when they
+   * actually signed out sends them to ask a question that has no answer.
+   */
+  if (status === "orphaned") {
+    return {
+      tone: "stale",
+      title: `${who} is no longer signed in.`,
+      detail: `They were editing since ${since}. Their session has ended, so this project is available for editing.`,
+    };
   }
   if (status === "stale") {
     return {

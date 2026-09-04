@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { can, lockBanner, lockStatus, type LockRecord } from "@rescript/access";
 import { supabaseService } from "@/lib/authServer";
-import { audit, isFailure, notifyProject, requireProject, requireProjectFor, requireUser } from "@/lib/guard";
+import { audit, isFailure, loadLock, notifyProject, requireProject, requireProjectFor, requireUser } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -24,27 +24,17 @@ export const dynamic = "force-dynamic";
  * decides inside a row lock. This route decides only WHO MAY ASK.
  */
 
-async function readLock(surveyId: string): Promise<LockRecord | null> {
-  const db = supabaseService();
-  const { data } = await db
-    .from("project_edit_locks")
-    .select("survey_id, locked_by_user_id, locked_by_session_id, status, section, created_at, last_heartbeat_at, expires_at")
-    .eq("survey_id", surveyId).maybeSingle();
-  if (!data) return null;
-  const { data: who } = await db.from("profiles").select("full_name, user_code").eq("id", data.locked_by_user_id).maybeSingle();
-  return {
-    surveyId: data.survey_id,
-    lockedByUserId: data.locked_by_user_id,
-    lockedBySessionId: data.locked_by_session_id,
-    status: data.status as LockRecord["status"],
-    section: data.section,
-    createdAt: data.created_at,
-    lastHeartbeatAt: data.last_heartbeat_at,
-    expiresAt: data.expires_at,
-    lockedByName: who?.full_name ?? null,
-    lockedByUserCode: who?.user_code ?? null,
-  };
-}
+/*
+ * The lock is read through the gate's `loadLock`, not with a query of this
+ * route's own. There used to be a private `readLock` here that selected the
+ * row and looked up the holder's name — correct at the time, and exactly the
+ * kind of duplicate that goes wrong later: when a lock's liveness started
+ * depending on whether the holding session is still active (P0-8), a second
+ * copy of the read would have had to learn that independently, and the copy
+ * that did not would keep handing out a lock the rest of the app considered
+ * dead.
+ */
+const readLock = loadLock;
 
 /** The lock as the client needs to see it: state, holder, and my own standing. */
 function shape(lock: LockRecord | null, sessionId: string, policy: Parameters<typeof lockStatus>[1]) {
@@ -53,7 +43,9 @@ function shape(lock: LockRecord | null, sessionId: string, policy: Parameters<ty
     status,
     mine: !!lock && lock.lockedBySessionId === sessionId && status === "held",
     banner: lockBanner(lock, sessionId, policy),
-    heldBy: lock && (status === "held" || status === "stale")
+    // "orphaned" names a holder too — the banner says whose session ended, and
+    // the panel offers to take the lock rather than leaving a blank
+    heldBy: lock && (status === "held" || status === "stale" || status === "orphaned")
       ? {
           userId: lock.lockedByUserId,
           name: lock.lockedByName,
@@ -123,7 +115,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const r = (Array.isArray(data) ? data[0] : data) as {
       acquired: boolean; locked_by_user_id: string | null; locked_by_name: string | null;
       locked_by_code: string | null; created_at: string | null; last_heartbeat_at: string | null;
-      was_stale: boolean;
+      was_stale: boolean; was_orphaned: boolean;
     };
     const lock = await readLock(params.id);
 
@@ -143,9 +135,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     await audit({
       action: "lock.acquired", userId: user.userId, sessionId: user.sessionId,
       surveyId: params.id, customerId: user.customerId,
-      detail: { section, tookOverStaleLock: !!r.was_stale },
+      detail: {
+        section,
+        tookOverStaleLock: !!r.was_stale,
+        // told apart from `was_stale` deliberately: taking a lock from someone
+        // who wandered off and taking one from someone who signed out are
+        // different events, and only the first is worth anyone's attention
+        tookOverOrphanedLock: !!r.was_orphaned,
+      },
     });
-    // whoever was waiting for this project wants to know it is now taken
+    /*
+     * Only a STALE takeover is announced. The previous holder was still
+     * signed in and may well be coming back to a project they can no longer
+     * edit, so they need to hear it. An orphaned lock belonged to a session
+     * that has ended — there is nobody to tell, and a notification saying a
+     * colleague took a project you already left is noise.
+     */
     if (r.was_stale) {
       await notifyProject({
         surveyId: params.id, action: "lock.acquired", exceptUserId: user.userId,

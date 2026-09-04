@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  decideLogin, decideThrottle, parseIdentifier, sessionStatus,
+  decideLogin, decideThrottle, parseIdentifier, requestedTakeover, sessionStatus,
   type SessionRecord,
 } from "@rescript/access";
 import {
@@ -28,10 +28,24 @@ export const dynamic = "force-dynamic";
  *      simultaneous logins cannot both succeed, and the loser is told which
  *      device holds the account and when it will be released.
  *
- * The requirement is explicit that the first session must NOT be silently
- * invalidated. It is not: a takeover happens only when `allowForceTakeover`
- * has been switched on for the workspace, and then it is audited as a
- * takeover rather than as an ordinary sign-in.
+ * MOVING BETWEEN DEVICES (§12, P0-2). The default is now that the newest
+ * sign-in wins. There is still exactly one active session per account — the
+ * unique partial index sees to that, not this code — but the session that
+ * loses is the OLD one, not the person at the keyboard. Refusing the second
+ * machine was the production bug: users were signing out on one computer
+ * before they could sign in on another, and when they forgot, the account was
+ * unreachable for fifteen minutes.
+ *
+ * None of it is silent. The displaced session is ended with
+ * `ended_reason = 'taken_over'`, its edit locks are released so an abandoned
+ * browser cannot hold a project hostage, the event is audited as a takeover
+ * rather than an ordinary sign-in, and the old browser is told exactly what
+ * happened on its next heartbeat instead of discovering it at the next save.
+ *
+ * A workspace that wants the strict behaviour sets `allowForceTakeover` to
+ * false — and even then this route does not dead-end, because §12 requires the
+ * new session to work: the 409 carries `canConfirmTakeover`, and a retry
+ * carrying `force: true` is the person consenting to end their other session.
  */
 export async function POST(req: NextRequest) {
   let body: any;
@@ -80,6 +94,28 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  /*
+   * Something that is neither an email address nor a User ID says so plainly.
+   *
+   * Production has two failed sign-ins for the identifier "Athank" — somebody
+   * typing their own first name into a box labelled "User ID or email" and
+   * being told their credentials do not match, which is both true and
+   * completely unhelpful. Answering specifically here is NOT an account
+   * enumeration oracle: no account can have this shape, so the reply reveals
+   * nothing about who exists. It is still counted as a failed attempt, so it
+   * cannot be used to probe for free.
+   */
+  if (identifier.kind === "unknown") {
+    await recordAttempt({ identifier: rawIdentifier, ipHash, success: false, reason: "malformed_identifier" });
+    return NextResponse.json(
+      {
+        error: "That is not an email address or a User ID. Sign in with the email address you registered, or your User ID (it looks like USR-10001).",
+        code: "malformed_identifier",
+      },
+      { status: 400 },
+    );
+  }
+
   /* ---------------------------------------------------------- 2. password */
   // "no such account" and "wrong password" answer identically: the difference
   // is an account-enumeration oracle
@@ -112,7 +148,12 @@ export async function POST(req: NextRequest) {
     p_stale_seconds: policies.session.staleAfterSeconds,
     p_absolute_seconds: policies.session.absoluteLifetimeSeconds,
     p_lifetime_seconds: policies.session.absoluteLifetimeSeconds,
-    p_force: policies.session.allowForceTakeover,
+    /*
+     * Either the workspace allows it by policy, or this person has been shown
+     * the conflict and said yes. The second half is what keeps strict mode
+     * from becoming the dead end §12 forbids.
+     */
+    p_force: policies.session.allowForceTakeover || requestedTakeover(body),
     p_user_agent: req.headers.get("user-agent")?.slice(0, 500) ?? null,
     p_ip_hash: ipHash,
     p_device_label: device,
@@ -155,6 +196,13 @@ export async function POST(req: NextRequest) {
       {
         error: decision.kind === "blocked" ? decision.message : "This account is already logged in elsewhere.",
         code: "session_conflict",
+        /*
+         * The way out. Without this the screen is a wall: correct password,
+         * no entry, come back in fifteen minutes. The client shows a "Sign in
+         * here and end the other session" button that repeats this request
+         * with `force: true`.
+         */
+        canConfirmTakeover: true,
         existingSession: {
           device: result.blocking_device,
           since: existing.createdAt,

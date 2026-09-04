@@ -14,6 +14,7 @@ import { ListFillPanel } from "./ListFillPanel";
 import { CollabBar, ReadOnlyNotice } from "./CollabBar";
 import { CollaboratorsPanel } from "./CollaboratorsPanel";
 import { NotesPanel, ActivityPanel } from "./NotesPanel";
+import { DiagnosticsPanel } from "./DiagnosticsPanel";
 import { useCollab } from "@/lib/useCollab";
 import { useSession } from "@/lib/useSession";
 import { DesignsPanel } from "./DesignsPanel";
@@ -62,11 +63,42 @@ const NAV: { key: Tab; label: string; icon: string }[] = [
 ];
 
 /**
+ * Hand the user their own work as a file.
+ *
+ * The escape hatch behind every "not saved" state. §24 forbids discarding
+ * unsaved changes when a save is refused, and the honest way to keep that
+ * promise through anything — a conflict, an ended session, a browser about to
+ * be closed by someone who has run out of patience — is to let them take the
+ * draft with them. It is the same JSON the JSON tab shows and the same shape
+ * the importer accepts, so nothing about it is a dead end.
+ */
+function downloadDraft(def: SurveyDefinition, code: string) {
+  const blob = new Blob([JSON.stringify(def, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${code || "survey"}-unsaved-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "")}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // revoked on a later tick: revoking synchronously races the download in
+  // some browsers and silently produces an empty file
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/**
  * The save indicator is the honest answer to "is my work safe?".
  *
  * It reports the DRAFT autosave, not the version — that is what protects a
  * refresh — and says plainly when autosave is unavailable rather than showing
  * a reassuring tick over unsaved work.
+ *
+ * Every failure state here obeys one rule (§24): NOTHING it offers throws the
+ * user's work away without them choosing it in so many words. The conflict
+ * state used to offer a single "Reload" button, which would have loaded the
+ * newer server draft straight over the top of whatever was in the editor —
+ * the exact thing the P0 spec forbids. It now offers to hand the work back as
+ * a file first, and names the destructive option for what it is.
  */
 function SaveIndicator() {
   const s = useStudio();
@@ -99,14 +131,70 @@ function SaveIndicator() {
           ⚠ Autosave off — use Save version
         </span>
       );
-    case "conflict":
-      // deliberately loud and deliberately terminal: autosave has stopped, and
-      // the one safe action is to reload, because this editor is behind
+    /*
+     * SOMEBODY ELSE HAS THE LOCK, OR THIS SESSION LOST IT.
+     *
+     * Not a conflict and not terminal. The draft is intact, autosave is still
+     * running, and the collaboration poll takes the lock back as soon as the
+     * project is free — so the honest report is "waiting", with the work
+     * offered as a file for anyone who would rather not wait.
+     */
+    case "lock_lost":
+      return (
+        <span className="save-state warn" data-testid="save-state" title={st.message}>
+          ⚠ Not saved — {st.heldByName ? `${st.heldByName} is editing` : "no edit lock"}. Your changes are still here
+          {st.recoverable ? " and will save when editing returns to you" : ""}.{" "}
+          <button className="btn small" style={{ marginLeft: 6 }} data-testid="save-retry"
+            onClick={() => void s.flushDraft()}>Try again</button>
+          <button className="btn small" style={{ marginLeft: 4 }} data-testid="save-download"
+            onClick={() => downloadDraft(s.def, s.def.meta.code ?? "")}>Download my copy</button>
+        </span>
+      );
+
+    /*
+     * The session ended mid-edit. Signing back in happens in ANOTHER TAB on
+     * purpose: navigating this one away is what would destroy the draft, and
+     * this is precisely the moment the user has the most to lose.
+     */
+    case "signed_out":
       return (
         <span className="save-state err" data-testid="save-state" title={st.message}>
-          ⚠ Changed elsewhere — not saved.{" "}
-          <button className="btn small" style={{ marginLeft: 6 }}
-            onClick={() => window.location.reload()}>Reload</button>
+          ⚠ Not saved — {st.message}{" "}
+          <strong>Your changes are still on this screen.</strong>{" "}
+          <a className="btn small" style={{ marginLeft: 6 }} href="/login" target="_blank" rel="noreferrer"
+            data-testid="save-signin">Sign in (new tab)</a>
+          <button className="btn small" style={{ marginLeft: 4 }} data-testid="save-retry"
+            onClick={() => void s.flushDraft()}>Then save again</button>
+          <button className="btn small" style={{ marginLeft: 4 }} data-testid="save-download"
+            onClick={() => downloadDraft(s.def, s.def.meta.code ?? "")}>Download my copy</button>
+        </span>
+      );
+
+    case "conflict":
+      /*
+       * Deliberately loud, and autosave has stopped — writing again is the
+       * one thing that would overwrite whatever is newer on the server.
+       *
+       * What it must NOT do is offer only "Reload". Reloading fetches the
+       * newer draft and paints it over everything in this editor; for someone
+       * who has been working for twenty minutes that is the data loss the
+       * whole P0 list is about. So the work comes back as a file first, and
+       * the destructive choice is spelled out as discarding.
+       */
+      return (
+        <span className="save-state err" data-testid="save-state" title={st.message}>
+          ⚠ Changed elsewhere — not saved. Nothing was overwritten.{" "}
+          <button className="btn small" style={{ marginLeft: 6 }} data-testid="save-download"
+            onClick={() => downloadDraft(s.def, s.def.meta.code ?? "")}>Download my copy</button>
+          <button className="btn small" style={{ marginLeft: 4 }} data-testid="save-discard"
+            title="Loads the newer version from the server. Anything you have changed here since will be lost."
+            onClick={() => {
+              if (window.confirm(
+                "Load the newer version from the server?\n\n"
+                + "The changes you have made in this editor since the conflict will be discarded. "
+                + "Download your copy first if you are not sure.",
+              )) window.location.reload();
+            }}>Discard mine and reload</button>
         </span>
       );
     case "clean":
@@ -136,13 +224,6 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
    *     work out, rather than deciding for them.
    */
   const session = useSession();
-  /*
-   * The collaboration poll drives presence, the lock and read-only mode. The
-   * section is reported so a future section-level lock (§18) already has the
-   * information it needs — today it only annotates "editing Survey Flow" in
-   * the banner and the audit trail.
-   */
-  const collab = useCollab(collaboration ? s.surveyDbId : null, { section: null });
   // ?tab=data lets the dashboard link straight to a survey's responses
   const [exportOpen, setExportOpen] = React.useState(false);
   const [tab, setTab] = React.useState<Tab>(() => {
@@ -151,6 +232,31 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
     return (NAV.some((n) => n.key === t) ? t : "questions") as Tab;
   });
   React.useEffect(() => { s.setGoToTab((t) => setTab(t as Tab)); }, [s]);
+
+  /*
+   * The collaboration poll drives presence, the lock and read-only mode. The
+   * section is reported so a future section-level lock (§18) already has the
+   * information it needs — today it only annotates "editing Survey Flow" in
+   * the banner and the audit trail.
+   *
+   * INTENT COMES FROM THE TAB, and that is what removed the "Enter edit mode"
+   * step. Someone on the Questions tab is there to change questions, so the
+   * poll asks for the lock and gets it if the project is free; someone on the
+   * Activity or Data tab is not, so it never touches the lock and cannot take
+   * editing away from a colleague by looking at a response table. The
+   * acquisition itself is still the atomic claim in SQL, so "ask for it
+   * automatically" cannot produce two editors — a client that asks while
+   * somebody else holds it is simply refused and goes read-only naming them.
+   *
+   * The old flow — open a project, find it read-only, hunt for a button — is
+   * what the P0 report describes as "the project became read-only
+   * unexpectedly" and "my changes did not persist".
+   */
+  const collab = useCollab(collaboration ? s.surveyDbId : null, {
+    section: null,
+    intent: EDITING_TABS.has(tab) ? "edit" : "view",
+  });
+
   const [saving, setSaving] = React.useState(false);
   const savingRef = React.useRef(false);
   const [publishState, setPublishState] = React.useState<
@@ -421,11 +527,22 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
     if (!collaboration) { s.setReadOnly(false); return; }
     if (collab.status !== "ready" || !collab.state) return;
     const { me, lock } = collab.state;
+    /*
+     * The reason has to be actionable, and the three cases send the user to
+     * three different places. Naming the role alone was the unhelpful version:
+     * a colleague whose access came from a workspace default would be told
+     * "your role on this project is viewer" and go looking for themselves in a
+     * member list that has never mentioned them (P0-1).
+     */
     const reason = !me.canEdit
-      ? `Your role on this project (${me.role}) does not allow changes.`
+      ? me.roleSource === "workspace"
+        ? `${me.roleSourceNote ?? "Your workspace grants you read access to this project."} That does not include editing — ask the owner to share it with you directly.`
+        : `Your role on this project (${me.role}) does not allow changes.`
       : lock.heldBy && !lock.mine
-        ? `${lock.heldBy.name} is editing this project. You have read-only access until the editing lock is released.`
-        : "You are in view mode. Enter edit mode to make changes.";
+        ? lock.heldBy.sessionLive === false
+          ? `${lock.heldBy.name} left this project open but is no longer signed in. Editing will become available in a moment.`
+          : `${lock.heldBy.name} is editing this project. You have read-only access until the editing lock is released.`
+        : "Preparing edit mode…";
     s.setReadOnly(me.readOnly, reason);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collab.status, collab.state?.me.readOnly, collab.state?.lock.heldBy?.userId, collab.state?.me.role, s.surveyDbId]);
@@ -568,7 +685,18 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           {tab === "json" && <JsonPanel />}
           {tab === "collaborators" && <CollaboratorsPanel canShare={!!collab.state?.me.canShare} />}
           {tab === "notes" && <NotesPanel canComment={!!collab.state?.me.canComment} canResolve={!!collab.state?.me.canComment} />}
-          {tab === "activity" && <ActivityPanel />}
+          {tab === "activity" && (
+            <>
+              <ActivityPanel />
+              {/*
+                * Diagnostics live under Activity because that is where somebody
+                * already goes to ask "what happened to this project" — and the
+                * panel renders nothing at all when diagnostics are switched
+                * off, so this costs a signed-out or production viewer nothing.
+                */}
+              {collaboration && <DiagnosticsPanel />}
+            </>
+          )}
         </main>
         <aside className="rightpanel">
           <PropertiesPanel />

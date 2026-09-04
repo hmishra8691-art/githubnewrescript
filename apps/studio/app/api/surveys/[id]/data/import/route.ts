@@ -4,7 +4,7 @@ import { loadQualityDefinition } from "@/lib/qualityDef";
 import { parseDelimited, suggestMapping, validateImportRows, type ColumnMapping, type ImportMode, type PreparedRow } from "@rescript/engine";
 import { parseEnvironment, missingResponseMigration, RESPONSE_MIGRATION_MESSAGE } from "@/lib/responseData";
 import { recountQuotas } from "@/lib/quotaRecount";
-import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
+import { isFailure, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;

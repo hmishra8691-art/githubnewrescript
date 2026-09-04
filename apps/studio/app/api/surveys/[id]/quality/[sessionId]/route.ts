@@ -3,7 +3,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { loadQualityDefinition, missingMigration } from "@/lib/qualityDef";
 import { flattenVariables } from "@rescript/engine";
 import { RESPONSE_COLUMNS, assessAndStore } from "@rescript/quality/server";
-import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
+import { isFailure, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 

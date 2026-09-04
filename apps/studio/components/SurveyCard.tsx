@@ -20,6 +20,8 @@ export interface SurveyRow {
   current_version_id: string | null;
   /* collaboration — present once accounts exist, absent in the sandbox */
   myRole?: string;
+  /** owner | member | workspace — why this user can see this project */
+  roleSource?: string;
   owner?: { userId: string; name: string | null; userCode: string | null; isMe: boolean } | null;
   collaborators?: number;
   version?: string | null;

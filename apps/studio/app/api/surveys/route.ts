@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
   const rows = (mine ?? []) as {
     survey_id: string; code: string; title: string; status: string; updated_at: string;
     owner_id: string | null; owner_name: string | null; owner_code: string | null;
-    my_role: string; collaborators: number;
+    my_role: string; role_source: string; collaborators: number;
     editing_user_id: string | null; editing_name: string | null; editing_since: string | null;
     current_version: string | null;
   }[];
@@ -67,6 +67,14 @@ export async function GET(req: NextRequest) {
     created_by: r.owner_id,
     // collaboration additions
     myRole: r.my_role,
+    /*
+     * WHERE the role came from, which the dashboard needs in order to tell
+     * "shared with me" from "my team's". Before workspace roles existed the
+     * two were the same thing, so the role alone was enough; now a colleague's
+     * project and a deliberately-shared project can both read `editor`, and
+     * lumping them together makes the shared list useless (P0-1).
+     */
+    roleSource: r.role_source,
     owner: r.owner_id ? { userId: r.owner_id, name: r.owner_name, userCode: r.owner_code, isMe: r.owner_id === user.userId } : null,
     collaborators: r.collaborators,
     version: r.current_version,

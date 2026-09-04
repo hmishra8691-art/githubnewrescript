@@ -100,8 +100,29 @@ console.log("\n§1–2 — signup, the generated user code, and the first accoun
   eq("the name and organization from signup are stored", [p1.full_name, p1.organization], ["John Smith", "Miures Research"]);
   eq("the first account adopts the existing workspace", p1.customer_id, legacy);
 
+  /*
+   * P0-1. The trigger used to hand every owner-less survey to the first
+   * account that signed up, and this test used to assert it did.
+   *
+   * That was the bug in its most literal form: on the live installation it
+   * gave one administrator ownership of twelve projects other people had
+   * built, and those people could no longer see their own work. Attributing a
+   * project to its `created_by` is evidence; attributing it to whoever
+   * registered first is a guess, and a guess about ownership is not something
+   * to make on a customer's production data.
+   *
+   * Owner-less projects stay owner-less — and, crucially, are NOT lost: the
+   * workspace baseline role keeps them visible to the whole workspace, which
+   * the next two assertions pin.
+   */
   const { rows: adopted } = await db.query("select count(*)::int n from public.surveys where owner_id = $1", [john]);
-  eq("and takes ownership of the projects that predate accounts", adopted[0].n, 2);
+  eq("P0-1: the first account does NOT seize projects that predate accounts", adopted[0].n, 0);
+
+  const { rows: stillVisible } = await db.query("select code from public.rescript_my_projects($1) order by code", [john]);
+  eq("but nothing is lost — the workspace can still see them", stillVisible.map((r) => r.code), ["OLD1", "OLD2"]);
+  eq("and they are reported as workspace access, not as ownership",
+    (await db.query("select role_source from public.rescript_my_projects($1) order by code", [john])).rows[0].role_source,
+    "workspace");
 
   const sarah = await signup("sarah@company.com", { full_name: "Sarah Lee", organization: "Miures Research" });
   const p2 = await profileOf(sarah);
@@ -260,10 +281,38 @@ console.log("\n§11–12, §23 — who holds what role");
   const survey = await mkSurvey(cust, "P1", john);
 
   eq("the owner is the owner", (await db.query("select public.rescript_project_role($1,$2) r", [john, survey])).rows[0].r, "owner");
-  eq("a stranger has no role at all", (await db.query("select public.rescript_project_role($1,$2) r", [sarah, survey])).rows[0].r, null);
+
+  /*
+   * P0-1. Sarah is in John's own organization, and this assertion used to
+   * read "a stranger has no role at all" — expecting null.
+   *
+   * A colleague is not a stranger, and treating her as one is what produced
+   * the P0. The guard answers 404 for a role of null, so three programmers
+   * sharing one workspace each saw only the projects they personally owned and
+   * concluded their saved work had been deleted. Dave, below, is the actual
+   * stranger, and the boundary that matters is still exactly where it was.
+   */
+  eq("P0-1: a colleague in the same workspace gets the baseline role",
+    (await db.query("select public.rescript_project_role($1,$2) r", [sarah, survey])).rows[0].r, "editor");
+  eq("...reported as workspace access so the UI can explain it",
+    (await db.query("select role_source from public.rescript_project_access($1,$2)", [sarah, survey])).rows[0].role_source,
+    "workspace");
+  eq("...and a workspace can switch it off entirely",
+    await (async () => {
+      await db.query(
+        "insert into public.access_settings (customer_id, policy) values ($1, '{\"workspace\":{\"defaultRole\":null}}'::jsonb) "
+        + "on conflict (customer_id) do update set policy = excluded.policy", [cust]);
+      const r = (await db.query("select public.rescript_project_role($1,$2) r", [sarah, survey])).rows[0].r;
+      await db.query("delete from public.access_settings where customer_id = $1", [cust]);
+      return r;
+    })(),
+    null);
 
   await db.query("insert into public.project_members (survey_id, user_id, role, added_by) values ($1,$2,'reviewer',$3)", [survey, sarah, john]);
-  eq("a shared user holds exactly the role they were given", (await db.query("select public.rescript_project_role($1,$2) r", [sarah, survey])).rows[0].r, "reviewer");
+  eq("an explicit share beats the baseline, including downwards", (await db.query("select public.rescript_project_role($1,$2) r", [sarah, survey])).rows[0].r, "reviewer");
+  eq("...and says it came from a share, not the workspace",
+    (await db.query("select role_source from public.rescript_project_access($1,$2)", [sarah, survey])).rows[0].role_source,
+    "member");
 
   await db.query("update public.project_members set role='programmer' where survey_id=$1 and user_id=$2", [survey, sarah]);
   eq("changing the role changes the answer", (await db.query("select public.rescript_project_role($1,$2) r", [sarah, survey])).rows[0].r, "programmer");

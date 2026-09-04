@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sessionStatus, type SessionRecord } from "@rescript/access";
-import { loadPolicies, sessionIdFrom, supabaseService } from "@/lib/authServer";
+import { clearSessionCookie, loadPolicies, sessionIdFrom, supabaseService } from "@/lib/authServer";
 
 export const dynamic = "force-dynamic";
 
@@ -19,16 +19,40 @@ export const dynamic = "force-dynamic";
  * session was revoked or expired finds out within one interval and can show
  * the login screen instead of failing the next real action.
  */
+/**
+ * A 401 from here also THROWS THE COOKIE AWAY (P0-3).
+ *
+ * The heartbeat is usually the first thing to notice a session has ended, so
+ * it is usually the first thing that can stop the stale cookie from
+ * convincing the rest of the app that somebody is signed in. Leaving the
+ * cookie in place was what let an expired session bounce between `/` and
+ * `/login` forever.
+ */
+function ended(status: string) {
+  const res = NextResponse.json({ status, alive: false, signedOut: true }, { status: 401 });
+  clearSessionCookie(res);
+  return res;
+}
+
 export async function POST(req: NextRequest) {
   const sessionId = sessionIdFrom(req);
-  if (!sessionId) return NextResponse.json({ status: "none" }, { status: 401 });
+  if (!sessionId) return NextResponse.json({ status: "none", alive: false }, { status: 401 });
 
   const db = supabaseService();
-  const { data: row } = await db
+  const { data: row, error } = await db
     .from("user_sessions")
-    .select("id, user_id, status, created_at, last_seen_at, expires_at")
+    .select("id, user_id, status, created_at, last_seen_at, expires_at, ended_reason")
     .eq("id", sessionId).maybeSingle();
-  if (!row) return NextResponse.json({ status: "unknown" }, { status: 401 });
+  if (error) {
+    /*
+     * Could not reach the database. Emphatically NOT a sign-out: answering
+     * 401 here would turn a momentary blip into every open tab throwing its
+     * user back to the login screen at once.
+     */
+    console.error("[rescript:auth] heartbeat lookup failed", { error: error.message });
+    return NextResponse.json({ status: "unavailable", alive: true }, { status: 503 });
+  }
+  if (!row) return ended("unknown");
 
   const { data: profile } = await db.from("profiles").select("customer_id").eq("id", row.user_id).maybeSingle();
   const policies = await loadPolicies(profile?.customer_id ?? null);
@@ -54,8 +78,29 @@ export async function POST(req: NextRequest) {
   const status = sessionStatus(record, policies.session);
   const alive = status === "active" || status === "idle";
 
+  if (!alive) {
+    /*
+     * "Taken over" is reported as itself rather than as an expiry. Someone
+     * who just signed in on their laptop and sees "your session expired
+     * after a period of inactivity" on the desktop learns nothing and
+     * suspects a bug; "you signed in on another device" is the truth and
+     * needs no support ticket.
+     */
+    const res = NextResponse.json(
+      {
+        status: row.ended_reason === "taken_over" ? "taken_over" : status,
+        alive: false,
+        signedOut: true,
+        endedReason: row.ended_reason ?? null,
+      },
+      { status: 401, headers: { "cache-control": "no-store" } },
+    );
+    clearSessionCookie(res);
+    return res;
+  }
+
   return NextResponse.json(
     { status, alive, heartbeatSeconds: policies.session.heartbeatSeconds },
-    { status: alive ? 200 : 401, headers: { "cache-control": "no-store" } },
+    { status: 200, headers: { "cache-control": "no-store" } },
   );
 }

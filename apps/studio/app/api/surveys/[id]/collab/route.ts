@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   activePresence, activityFor, avatarHue, can, capabilitiesOf, initialsOf,
-  lockBanner, lockStatus, roleSummary,
-  type LockRecord, type PresenceEntry,
+  lockBanner, lockStatus, roleSourceNote, roleSummary,
+  type PresenceEntry,
 } from "@rescript/access";
 import { supabaseService } from "@/lib/authServer";
-import { isFailure, requireProject, type ProjectContext } from "@/lib/guard";
+import { isFailure, loadLock, requireProject, type ProjectContext } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -71,20 +71,59 @@ async function handle(req: NextRequest, ctx: ProjectContext, report: boolean) {
     if (editing) {
       // one heartbeat, not two round trips: if the client believes it is
       // editing, this is also the lock's liveness signal (§17)
-      await db.rpc("rescript_heartbeat_lock", {
+      const { data: alive } = await db.rpc("rescript_heartbeat_lock", {
         p_survey: surveyId, p_session: user.sessionId,
         p_max_hold_seconds: user.policies.lock.maxHoldSeconds, p_section: section,
       });
+
+      /*
+       * KEEPING THE EDITOR EDITING, WITHOUT A BUTTON.
+       *
+       * The heartbeat says this session does not hold the lock. Before, that
+       * left the user in read-only until they noticed a banner and clicked
+       * "Enter edit mode" — which is the reported "the project went read-only
+       * on its own" and, worse, "my changes stopped saving": someone typing
+       * into a project whose lock they had silently lost.
+       *
+       * So the same round trip that discovers the lock is missing tries to
+       * take it. Three things make that safe rather than a land-grab:
+       *
+       *   · it only runs for a client that says it is EDITING. A reviewer
+       *     reading the project polls with editing=0 and never takes a lock
+       *     away from anyone;
+       *   · `requireProject` has already established this user may edit, and
+       *     `rescript_acquire_lock` re-checks the whole takeable predicate
+       *     inside the row lock, so a live editor is never displaced;
+       *   · a refusal is not an error. The lock read below sees whoever won
+       *     and the client goes read-only naming them, in this same response.
+       */
+      if (!alive && can(role, "survey.edit")) {
+        await db.rpc("rescript_acquire_lock", {
+          p_survey: surveyId,
+          p_user: user.userId,
+          p_session: user.sessionId,
+          p_stale_seconds: user.policies.lock.staleAfterSeconds,
+          p_max_hold_seconds: user.policies.lock.maxHoldSeconds,
+          p_section: section,
+        });
+      }
     }
     // opportunistic cleanup: whoever looks at the project tidies up the locks
-    // the clock has ended, so a stale lock needs no scheduler to disappear
+    // the clock — or a sign-out — has ended, so a lock nobody is behind needs
+    // no scheduler to disappear
     await db.rpc("rescript_expire_locks", { p_stale_seconds: user.policies.lock.staleAfterSeconds });
   }
 
-  const [lockRes, presenceRes, commentRes] = await Promise.all([
-    db.from("project_edit_locks")
-      .select("survey_id, locked_by_user_id, locked_by_session_id, status, section, created_at, last_heartbeat_at, expires_at")
-      .eq("survey_id", surveyId).maybeSingle(),
+  /*
+   * The lock comes from the gate's shared loader, which resolves the holder's
+   * name and — the part that matters for P0-8 — whether the holder's session
+   * is still live. This route used to read the row itself and fall back to a
+   * profiles lookup when the holder was not in the presence list; that was one
+   * of three private copies of "read the lock", and the copies are exactly how
+   * a liveness rule ends up applied in two places out of three.
+   */
+  const [lock, presenceRes, commentRes] = await Promise.all([
+    loadLock(surveyId),
     db.rpc("rescript_project_presence", {
       p_survey: surveyId, p_within_seconds: user.policies.presence.presentWithinSeconds,
     }),
@@ -92,33 +131,6 @@ async function handle(req: NextRequest, ctx: ProjectContext, report: boolean) {
       .select("id", { count: "exact", head: true })
       .eq("survey_id", surveyId).is("resolved_at", null).is("deleted_at", null),
   ]);
-
-  let lock: LockRecord | null = null;
-  if (lockRes.data) {
-    const holder = (presenceRes.data as { user_id: string; full_name: string; user_code: string }[] | null)
-      ?.find((p) => p.user_id === lockRes.data!.locked_by_user_id);
-    let name = holder?.full_name ?? null;
-    let code = holder?.user_code ?? null;
-    if (!name) {
-      // the holder may not be "present" — they can hold a lock while their
-      // browser is quiet, and the banner still has to name them
-      const { data: who } = await db.from("profiles").select("full_name, user_code").eq("id", lockRes.data.locked_by_user_id).maybeSingle();
-      name = who?.full_name ?? null;
-      code = who?.user_code ?? null;
-    }
-    lock = {
-      surveyId: lockRes.data.survey_id,
-      lockedByUserId: lockRes.data.locked_by_user_id,
-      lockedBySessionId: lockRes.data.locked_by_session_id,
-      status: lockRes.data.status as LockRecord["status"],
-      section: lockRes.data.section,
-      createdAt: lockRes.data.created_at,
-      lastHeartbeatAt: lockRes.data.last_heartbeat_at,
-      expiresAt: lockRes.data.expires_at,
-      lockedByName: name,
-      lockedByUserCode: code,
-    };
-  }
 
   const rawPresence = ((presenceRes.data ?? []) as {
     user_id: string; session_id: string; user_code: string; full_name: string;
@@ -144,6 +156,15 @@ async function handle(req: NextRequest, ctx: ProjectContext, report: boolean) {
     me: {
       userId: user.userId, userCode: user.userCode, name: user.fullName,
       sessionId: user.sessionId, role, roleSummary: roleSummary(role),
+      /*
+       * Where the role came from, so the read-only notice can say something
+       * the user can act on. "You have viewer access because your workspace
+       * grants it" points at an administrator; "your role on this project is
+       * viewer" sends them to an owner who never granted them anything and
+       * cannot find them in the member list (P0-1).
+       */
+      roleSource: ctx.roleSource,
+      roleSourceNote: roleSourceNote(ctx.roleSource),
       viaAdmin: ctx.viaAdmin,
       capabilities: capabilitiesOf(role),
       canEdit: can(role, "survey.edit"),
@@ -163,10 +184,11 @@ async function handle(req: NextRequest, ctx: ProjectContext, report: boolean) {
       status,
       mine: iHoldLock,
       banner: lockBanner(lock, user.sessionId, user.policies.lock),
-      heldBy: lock && (status === "held" || status === "stale")
+      heldBy: lock && (status === "held" || status === "stale" || status === "orphaned")
         ? {
             userId: lock.lockedByUserId, name: lock.lockedByName, userCode: lock.lockedByUserCode,
             since: lock.createdAt, lastActive: lock.lastHeartbeatAt, section: lock.section ?? null,
+            sessionLive: lock.holderSessionLive ?? true,
           }
         : null,
     },

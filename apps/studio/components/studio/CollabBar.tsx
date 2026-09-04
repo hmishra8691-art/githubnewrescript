@@ -214,25 +214,55 @@ export function ReadOnlyNotice({
   if (!collab || !collab.me.readOnly) return null;
   const { lock, me } = collab;
   const holder = lock.heldBy;
+  /*
+   * A lock whose holder has signed out belongs to nobody (P0-8). Naming them
+   * as "currently editing" would send a colleague off to ask a question that
+   * has no answer, and the project is in fact about to become available.
+   */
+  const holderIsPresent = !!holder && lock.status === "held" && holder.sessionLive !== false;
 
   return (
     <div className="readonly-banner" data-testid="readonly-notice">
       <span aria-hidden="true">🔒</span>
       <span>
-        {holder && !lock.mine ? (
+        {holderIsPresent && !lock.mine ? (
           <>
-            <strong>{holder.name}</strong> is editing this project (since {clock(holder.since)}). You can view
+            <strong>{holder!.name}</strong> is editing this project (since {clock(holder!.since)}). You can view
             everything, but changes are unavailable until the editing lock is released.
           </>
+        ) : holder && !lock.mine ? (
+          <>
+            <strong>{holder.name}</strong> left this project open but is no longer signed in, so editing is
+            becoming available again. Nothing of theirs is lost — their work was saved as they went.
+          </>
         ) : !me.canEdit ? (
-          <>You have <strong>{me.role}</strong> access to this project. {me.roleSummary}</>
+          <>
+            {/*
+              * WHERE the access came from, not just what it is (P0-1).
+              *
+              * This used to read "You have viewer access to this project" and
+              * stop there. A colleague whose access came from a workspace
+              * default would go looking for themselves in a member list that
+              * has never mentioned them, conclude the sharing was broken, and
+              * ask the owner to fix something the owner cannot see. Naming the
+              * workspace points at a setting an administrator can change, and
+              * naming a share points at the person who made it.
+              */}
+            You have <strong>{me.role}</strong> access to this project. {me.roleSummary}
+            {me.roleSourceNote ? <> {me.roleSourceNote}</> : null}
+            {me.roleSource === "workspace"
+              ? <> To make changes, ask the project’s owner to share it with you directly.</>
+              : null}
+          </>
         ) : (
-          <>You are viewing this project. Enter edit mode to make changes.</>
+          // the collaboration poll is already asking for the lock; this is the
+          // moment before it answers, not a workflow step to complete
+          <>Preparing edit mode…{me.roleSourceNote ? <> {me.roleSourceNote}</> : null}</>
         )}
       </span>
-      {me.canEdit && (!holder || lock.status !== "held") && (
+      {me.canEdit && (!holderIsPresent || lock.mine) && (
         <button type="button" className="btn small primary" data-testid="readonly-enter" data-ro-ok disabled={busy === "acquire"} onClick={onEnter}>
-          {busy === "acquire" ? "Starting…" : "Enter edit mode"}
+          {busy === "acquire" ? "Starting…" : "Take editing"}
         </button>
       )}
     </div>

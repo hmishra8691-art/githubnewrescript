@@ -44,14 +44,28 @@ export function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // already signed in and heading for the login screen: send them home rather
-  // than showing a form they do not need
-  if (hasCookie && (pathname === "/login" || pathname === "/signup")) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/";
-    url.search = "";
-    return NextResponse.redirect(url);
-  }
+  /*
+   * THE REDIRECT THAT USED TO LIVE HERE IS GONE. It was half of P0-3 and all
+   * of P0-4.
+   *
+   * It sent any cookie-holder away from `/login` to `/`, on the reasonable-
+   * sounding grounds that a signed-in user does not need a sign-in form. But
+   * this file cannot tell a signed-in user from someone holding a cookie for
+   * a session that ended hours ago — it runs at the edge, with no database —
+   * and for that second person it was a trap:
+   *
+   *     /  →  page loads  →  /api/auth/me 401  →  /login  →  HERE  →  /  →  …
+   *
+   * an infinite loop, and no way to reach the login form by typing the URL
+   * either. Two changes retire it. The API now DELETES the cookie whenever it
+   * finds the session dead (`failAndSignOut` in lib/guard.ts), so a stale
+   * cookie stops existing the first time anything is asked of it; and the
+   * "you are already signed in" bounce moved to the login page itself, which
+   * is a server component and can actually check.
+   *
+   * The rule this leaves behind: middleware may redirect on the ABSENCE of a
+   * cookie, never on its presence. Absence is a fact it can verify.
+   */
 
   return NextResponse.next();
 }

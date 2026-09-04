@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   can, capabilitiesOf, decideAccess, isProjectRole, PROJECT_ROLES, GRANTABLE_ROLES, EDITING_ROLES,
-  sessionStatus, sessionAuthorizes, sessionBlocksLogin, decideLogin, sessionPolicy, DEFAULT_SESSION_POLICY,
+  resolveProjectRole, roleSourceNote, workspaceAccessPolicy, DEFAULT_WORKSPACE_ACCESS,
+  sessionStatus, sessionAuthorizes, sessionBlocksLogin, decideLogin, requestedTakeover,
+  sessionPolicy, DEFAULT_SESSION_POLICY,
   decideThrottle, throttlePolicy, formatUserCode, isUserCode, parseIdentifier, deviceLabelFrom,
   lockStatus, lockIsLive, lockAvailableTo, decideEdit, lockBanner, lockPolicy,
   activePresence, activityFor, presencePolicy, initialsOf, avatarHue,
@@ -110,6 +112,125 @@ test("EDITING_ROLES is derived, so a new writing role cannot be forgotten", () =
   assert.deepEqual(EDITING_ROLES, PROJECT_ROLES.filter((r) => can(r, "survey.edit")));
 });
 
+/* ============================================================ workspace access */
+
+/*
+ * P0-1 and P0-5. Access used to mean "own it, or be added to it", and nothing
+ * else. `project_members` was empty in production, so a workspace of three
+ * programmers each saw only what they personally owned and the guard answered
+ * 404 for the rest — which looks exactly like deleted data. These tests pin
+ * both halves: colleagues can see their team's work again, AND none of the
+ * boundaries that were doing real work got relaxed to achieve it.
+ */
+
+const ws = (defaultRole: Parameters<typeof workspaceAccessPolicy>[0]) => workspaceAccessPolicy(defaultRole);
+
+test("P0-1: a workspace colleague gets a baseline role on a project nobody shared", () => {
+  const r = resolveProjectRole({
+    isOwner: false, memberRole: null, sameWorkspace: true, workspace: DEFAULT_WORKSPACE_ACCESS,
+  });
+  assert.equal(r.role, "editor", "the closest honest reconstruction of what they had before accounts existed");
+  assert.equal(r.source, "workspace", "and the UI can say why, which is the difference between a rule and a mystery");
+});
+
+test("P0-1: a colleague in ANOTHER workspace still gets nothing", () => {
+  const r = resolveProjectRole({
+    isOwner: false, memberRole: null, sameWorkspace: false, workspace: DEFAULT_WORKSPACE_ACCESS,
+  });
+  assert.equal(r.role, null, "cross-organization isolation was never the bug and must not be relaxed");
+  assert.equal(r.source, "none");
+});
+
+test("an explicit share beats the baseline — in BOTH directions", () => {
+  // downwards: an owner who deliberately restricts a colleague to viewer has
+  // made a decision, and a baseline that promoted them back to editor would
+  // make the sharing dialog a lie
+  const down = resolveProjectRole({
+    isOwner: false, memberRole: "viewer", sameWorkspace: true, workspace: DEFAULT_WORKSPACE_ACCESS,
+  });
+  assert.equal(down.role, "viewer");
+  assert.equal(down.source, "member");
+
+  // upwards: a share of `editor` still reads as a share where the baseline is
+  // only `reviewer`, so revoking it actually revokes something
+  const up = resolveProjectRole({
+    isOwner: false, memberRole: "editor", sameWorkspace: true, workspace: ws({ defaultRole: "reviewer" }),
+  });
+  assert.equal(up.role, "editor");
+  assert.equal(up.source, "member");
+});
+
+test("ownership outranks everything", () => {
+  const r = resolveProjectRole({
+    isOwner: true, memberRole: "viewer", sameWorkspace: true, workspace: ws({ defaultRole: null }),
+  });
+  assert.equal(r.role, "owner");
+  assert.equal(r.source, "owner");
+});
+
+test("a workspace can switch the baseline off entirely", () => {
+  const off = ws({ defaultRole: null });
+  assert.equal(off.defaultRole, null);
+  const r = resolveProjectRole({ isOwner: false, memberRole: null, sameWorkspace: true, workspace: off });
+  assert.equal(r.role, null, "strict explicit-share-only is still available");
+  assert.equal(r.source, "none");
+});
+
+test("a nonsense or dangerous baseline closes the door rather than opening it", () => {
+  assert.equal(ws({ defaultRole: "superuser" as never }).defaultRole, null, "an unknown role grants nothing");
+  assert.equal(ws({ defaultRole: "owner" }).defaultRole, null, "a workspace cannot grant itself ownership");
+  assert.equal(ws({ defaultRole: "" as never }).defaultRole, null);
+  assert.equal(ws(null).defaultRole, "editor", "absent settings mean the default, not nothing");
+  assert.equal(ws({}).defaultRole, "editor", "and neither does an empty object turn it off");
+});
+
+test("the baseline is a role, so the capability table still decides what it can do", () => {
+  // the point of a capability model: lowering the baseline to reviewer removes
+  // editing without anybody writing `role === "reviewer"` anywhere
+  const r = resolveProjectRole({
+    isOwner: false, memberRole: null, sameWorkspace: true, workspace: ws({ defaultRole: "reviewer" }),
+  });
+  assert.equal(can(r.role, "project.read"), true);
+  assert.equal(can(r.role, "survey.edit"), false);
+  assert.equal(can(r.role, "project.transfer"), false);
+});
+
+test("a workspace baseline never carries the owner-only powers", () => {
+  const r = resolveProjectRole({
+    isOwner: false, memberRole: null, sameWorkspace: true, workspace: DEFAULT_WORKSPACE_ACCESS,
+  });
+  for (const c of ["project.transfer", "project.delete", "project.manage_members", "lock.force_release"] as const) {
+    assert.equal(can(r.role, c), false, `${c} stays with the owner`);
+  }
+});
+
+test("a refusal knows whether to blame a share or a workspace setting", () => {
+  const actor = { userId: "u1", customerId: "c1", isPlatformAdmin: false };
+  const d = decideAccess(actor, "viewer", "survey.edit", "workspace");
+  assert.equal(d.allowed, false);
+  assert.equal(d.reason, "insufficient_role");
+  assert.equal(d.source, "workspace", "so the message can point at a setting an administrator can change");
+
+  const granted = decideAccess(actor, "editor", "survey.edit", "workspace");
+  assert.equal(granted.allowed, true);
+  assert.equal(granted.reason, "workspace");
+
+  // and a caller that does not know the source still behaves exactly as before
+  const legacy = decideAccess(actor, "editor", "survey.edit");
+  assert.equal(legacy.allowed, true);
+  assert.equal(legacy.reason, "member");
+  assert.equal(decideAccess(actor, "owner", "project.delete").reason, "owner");
+  assert.equal(decideAccess(actor, null, "project.read").reason, "not_a_member");
+});
+
+test("the provenance is explained in words, because a role name is not a reason", () => {
+  assert.match(roleSourceNote("workspace", "Acme Research") ?? "", /member of Acme Research/);
+  assert.match(roleSourceNote("workspace") ?? "", /member of this workspace/);
+  assert.match(roleSourceNote("member") ?? "", /shared with you/);
+  assert.match(roleSourceNote("owner") ?? "", /own this project/);
+  assert.equal(roleSourceNote("none"), null, "no access needs no explanation of access");
+});
+
 /* ============================================================ sessions */
 
 const session = (over: Partial<SessionRecord> = {}): SessionRecord => ({
@@ -170,15 +291,48 @@ test("logout and revocation are recorded states, not inferred ones", () => {
   assert.equal(sessionBlocksLogin(session({ status: "logged_out" }), p, T0), false, "and logout frees the account at once");
 });
 
-test("§4: a second login is refused while the first session lives, with a message that helps", () => {
-  const p = DEFAULT_SESSION_POLICY;
+/*
+ * §12 REPLACED §4's ANSWER HERE, and this test replaced the one that pinned
+ * the old one.
+ *
+ * The original test asserted that a second device is refused. That WAS the
+ * requirement, and it was the P0: a researcher moving from a desktop to a
+ * laptop was told to go and sign out on the machine they had walked away
+ * from, or wait fifteen minutes. §12 now says "the user must be able to move
+ * from System A to System B and continue working with the same account", and
+ * this is what that means at the level of one decision.
+ *
+ * The exclusivity has NOT been dropped. One session per account still holds —
+ * enforced by a unique partial index, not by this function. What changed is
+ * which session loses.
+ */
+test("§12: moving to a second device gets you in, and displaces the old session", () => {
+  const existing = session({ lastSeenAt: at(0), deviceLabel: "Chrome on Windows" });
+  const d = decideLogin(existing, DEFAULT_SESSION_POLICY, T0 + 60_000);
+  assert.equal(d.kind, "takeover", "the person at the keyboard wins, not the abandoned browser");
+  if (d.kind !== "takeover") return;
+  assert.equal(d.existing.sessionId, existing.sessionId, "and the caller is told which session to end");
+});
+
+test("strict mode still refuses — but never dead-ends (§12)", () => {
+  const p = sessionPolicy({ allowForceTakeover: false });
   const existing = session({ lastSeenAt: at(0), deviceLabel: "Chrome on Windows" });
   const d = decideLogin(existing, p, T0 + 60_000);
   assert.equal(d.kind, "blocked");
   if (d.kind !== "blocked") return;
-  assert.match(d.message, /already logged in on another device/);
-  assert.match(d.message, /Chrome on Windows/, "it names the device so the user knows where to look");
-  assert.match(d.message, /released automatically after 15 minutes/, "and how to recover if that machine is gone");
+  assert.equal(d.canConfirmTakeover, true, "§12: the new session must still be able to work");
+  assert.match(d.message, /already signed in/);
+  assert.match(d.message, /Chrome on Windows/, "it names the device so the user knows what they are ending");
+  assert.match(d.message, /unsaved work there will not be saved/, "and what it costs");
+});
+
+test("consent to displace the other session is read from one place", () => {
+  assert.equal(requestedTakeover({ force: true }), true);
+  assert.equal(requestedTakeover({ endOtherSession: true }), true, "either spelling");
+  assert.equal(requestedTakeover({ force: "true" }), true, "a form post sends strings");
+  assert.equal(requestedTakeover({}), false);
+  assert.equal(requestedTakeover(null), false);
+  assert.equal(requestedTakeover({ force: "yes please" }), false, "only an explicit truth counts");
 });
 
 test("§5: after logout the next login is allowed", () => {
@@ -190,11 +344,27 @@ test("no session at all is simply allowed", () => {
   assert.equal(decideLogin(null, DEFAULT_SESSION_POLICY).kind, "allowed");
 });
 
-test("takeover happens only when it has been explicitly switched on", () => {
+test("the takeover default is a setting, both ways", () => {
   const existing = session({ lastSeenAt: at(0) });
-  assert.equal(decideLogin(existing, DEFAULT_SESSION_POLICY, T0 + 60_000).kind, "blocked", "default is to refuse");
-  const p = sessionPolicy({ allowForceTakeover: true });
-  assert.equal(decideLogin(existing, p, T0 + 60_000).kind, "takeover", "and only a setting changes that");
+  assert.equal(
+    decideLogin(existing, DEFAULT_SESSION_POLICY, T0 + 60_000).kind, "takeover",
+    "the platform default lets a person move machines",
+  );
+  assert.equal(
+    decideLogin(existing, sessionPolicy({ allowForceTakeover: false }), T0 + 60_000).kind, "blocked",
+    "a workspace that wants confirmation can have it",
+  );
+});
+
+test("a session already past the clock needs no takeover at all", () => {
+  // 16 minutes of silence with a 15-minute stale threshold: nobody is there,
+  // so this is an ordinary login and nothing is displaced
+  const existing = session({ lastSeenAt: at(0) });
+  assert.equal(decideLogin(existing, DEFAULT_SESSION_POLICY, T0 + 16 * 60_000).kind, "allowed");
+  assert.equal(
+    decideLogin(existing, sessionPolicy({ allowForceTakeover: false }), T0 + 16 * 60_000).kind, "allowed",
+    "and strict mode does not invent a conflict either",
+  );
 });
 
 test("a nonsensical policy cannot make the state machine incoherent", () => {
@@ -266,6 +436,54 @@ test("a lock is held while its heartbeat is fresh, and stale once it stops", () 
   assert.equal(lockIsLive(l, p, T0 + 60_000), true);
   assert.equal(lockStatus(l, p, T0 + 4 * 60_000), "stale", "a crashed editor does not hold a project forever");
   assert.equal(lockIsLive(l, p, T0 + 4 * 60_000), false);
+});
+
+/*
+ * P0-8. The old rule judged a lock by its heartbeat alone, which cannot see
+ * that the person holding it signed out ninety seconds ago. A fresh heartbeat
+ * from a session that no longer exists is not evidence of anybody working.
+ */
+test("P0-8: a lock whose session has ended is orphaned, however fresh its heartbeat", () => {
+  const p = lockPolicy();
+  const justBeat = lock({ lastHeartbeatAt: at(0), holderSessionLive: false });
+  assert.equal(lockStatus(justBeat, p, T0 + 1000), "orphaned");
+  assert.equal(lockIsLive(justBeat, p, T0 + 1000), false, "so it blocks nobody");
+  assert.equal(lockAvailableTo(justBeat, "someoneElse", p, T0 + 1000), true, "and anyone may take it");
+});
+
+test("P0-8: an unchecked holder session is assumed live, so nothing is released by ignorance", () => {
+  const p = lockPolicy();
+  // `holderSessionLive` absent = the caller could not answer the question.
+  // Defaulting to "dead" would let a caller that forgot to join release
+  // everybody's locks, which is a far worse failure than the one being fixed.
+  const unknown = lock({ lastHeartbeatAt: at(0) });
+  assert.equal(unknown.holderSessionLive, undefined);
+  assert.equal(lockStatus(unknown, p, T0 + 1000), "held");
+  assert.equal(lockAvailableTo(unknown, "someoneElse", p, T0 + 1000), false);
+});
+
+test("P0-8: an orphaned lock is explained as a sign-out, not as idling", () => {
+  const p = lockPolicy();
+  const orphan = lock({ lastHeartbeatAt: at(0), holderSessionLive: false, lockedByName: "John Smith" });
+  const b = lockBanner(orphan, "someoneElse", p, T0 + 1000);
+  assert.equal(b.tone, "stale", "the UI treats it as takeable");
+  assert.match(b.title, /John Smith is no longer signed in/);
+  assert.match(b.detail ?? "", /available for editing/);
+  // and it must NOT accuse them of wandering off
+  assert.doesNotMatch(b.title, /left this project open/);
+
+  const idled = lock({ lastHeartbeatAt: at(0), holderSessionLive: true });
+  assert.match(lockBanner(idled, "someoneElse", p, T0 + 5 * 60_000).title, /left this project open/,
+    "an actually-idle editor still reads as idle");
+});
+
+test("P0-8: a save is refused without discarding anything, and says which", () => {
+  const p = lockPolicy();
+  const orphan = lock({ lockedBySessionId: "sOther", lockedByUserId: "uOther", holderSessionLive: false });
+  const v = decideEdit({ canEdit: true, lock: orphan, sessionId: "sMine", userId: "uMine", policy: p, nowMs: T0 + 1000 });
+  assert.equal(v.allowed, false);
+  if (v.allowed) return;
+  assert.equal(v.reason, "lock_not_held", "an orphaned lock is nobody's, so this is not 'locked_by_other'");
 });
 
 test("no lock, a released lock and an expired lock are all free", () => {

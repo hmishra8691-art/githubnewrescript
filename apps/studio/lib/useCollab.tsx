@@ -36,16 +36,24 @@ export interface CollabState {
   me: {
     userId: string; userCode: string; name: string; sessionId: string;
     role: string | null; roleSummary: string; viaAdmin: boolean;
+    /** owner / member / workspace — why this user has the access they have (P0-1) */
+    roleSource: "owner" | "member" | "workspace" | "none";
+    roleSourceNote: string | null;
     capabilities: string[];
     canEdit: boolean; canShare: boolean; canManageMembers: boolean;
     canForceRelease: boolean; canComment: boolean;
     readOnly: boolean;
   };
   lock: {
-    status: "free" | "held" | "stale" | "released" | "expired";
+    status: "free" | "held" | "stale" | "orphaned" | "released" | "expired";
     mine: boolean;
     banner: { tone: "free" | "mine" | "other" | "stale"; title: string; detail?: string };
-    heldBy: { userId: string; name: string | null; userCode: string | null; since: string; lastActive: string; section: string | null } | null;
+    heldBy: {
+      userId: string; name: string | null; userCode: string | null;
+      since: string; lastActive: string; section: string | null;
+      /** false when the holder has signed out — the lock is theirs in name only */
+      sessionLive: boolean;
+    } | null;
   };
   presence: CollabPresence[];
   openComments: number;
@@ -54,33 +62,74 @@ export interface CollabState {
 
 export type CollabStatus = "loading" | "ready" | "denied" | "error";
 
-export function useCollab(surveyId: string | null, opts: { section?: string | null } = {}) {
+export function useCollab(
+  surveyId: string | null,
+  opts: {
+    section?: string | null;
+    /**
+     * What this client is here to DO.
+     *
+     * `"edit"` means "put me in edit mode if the project is free" — which is
+     * what somebody who opened a survey to work on it wants, and what they
+     * used to have to ask for by finding a button. `"view"` never touches the
+     * lock, so a reviewer reading a project cannot take editing away from
+     * anyone by opening it.
+     */
+    intent?: "edit" | "view";
+  } = {},
+) {
   const [state, setState] = React.useState<CollabState | null>(null);
   const [status, setStatus] = React.useState<CollabStatus>("loading");
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState<null | "acquire" | "release" | "force" | "request">(null);
 
   /**
-   * What this client BELIEVES about its own edit mode, kept in a ref.
+   * WHETHER THIS CLIENT WANTS TO BE EDITING — which is not the same as whether
+   * it is, and conflating the two was a bug.
    *
-   * It is sent to the server so the poll can double as the lock heartbeat, and
-   * it is only ever a claim — the server's `readOnly` is what the UI obeys. A
-   * client that thinks it is editing while the server disagrees simply stops
-   * being sent lock heartbeats and falls back to read-only.
+   * This ref used to be set from `data.lock.mine`: the client told the server
+   * "I am editing" only once it already held the lock. Combined with a server
+   * that acquires the lock for a client that says it is editing, that is a
+   * deadlock — the flag could never turn on by itself, so a user who opened a
+   * free project sat in read-only until they found the button, typed into a
+   * form that was not going to save, or both.
+   *
+   * Intent and possession are now separate. This is the intent, and it is a
+   * request; `holdsRef` is the possession, and only the server decides it.
    */
-  const editingRef = React.useRef(false);
+  const wantsEditRef = React.useRef(opts.intent === "edit");
+  const holdsRef = React.useRef(false);
+
+  // a change of intent (switching to an editing tab, say) takes effect on the
+  // next tick without remounting the hook
+  React.useEffect(() => {
+    if (opts.intent === "edit") wantsEditRef.current = true;
+    if (opts.intent === "view") wantsEditRef.current = false;
+  }, [opts.intent]);
 
   const poll = React.useCallback(async (report: boolean) => {
     if (!surveyId) return;
     const qs = new URLSearchParams();
-    if (editingRef.current) qs.set("editing", "1");
+    if (wantsEditRef.current) qs.set("editing", "1");
     if (opts.section) qs.set("section", opts.section);
     try {
       const res = await fetch(`/api/surveys/${surveyId}/collab?${qs}`, {
         method: report ? "POST" : "GET",
         cache: "no-store",
       });
-      if (res.status === 401) { setStatus("denied"); setError("Your session has ended."); return; }
+      if (res.status === 401) {
+        /*
+         * The session has ended. `denied` stops the polling, shows a banner
+         * and — critically — does NOT navigate. Anything in the editor is
+         * unsaved work, and throwing the page away to show a login form would
+         * destroy it (§24). The server has already cleared the cookie, so
+         * signing back in is one click and lands on a working login screen.
+         */
+        const j = await res.json().catch(() => ({}));
+        setStatus("denied");
+        setError(j?.error ?? "Your session has ended.");
+        return;
+      }
       if (res.status === 403 || res.status === 404) {
         const j = await res.json().catch(() => ({}));
         setStatus("denied");
@@ -89,15 +138,30 @@ export function useCollab(surveyId: string | null, opts: { section?: string | nu
       }
       if (!res.ok) { setStatus("error"); return; }
       const data = (await res.json()) as CollabState;
-      // the server is the authority on whether we are editing
-      editingRef.current = data.lock.mine;
+
+      // possession: the server's word, never inferred
+      holdsRef.current = data.lock.mine;
+
+      /*
+       * Somebody else is genuinely in there. Stop asking on every tick — the
+       * server would refuse each attempt harmlessly, but the user's answer is
+       * now a decision rather than a retry ("request access", or take over a
+       * lock the policy allows), so the UI stops pretending it is about to
+       * get in. Wanting to edit resumes the moment the project is free again.
+       */
+      if (!data.lock.mine && data.lock.status === "held" && data.lock.heldBy?.sessionLive) {
+        wantsEditRef.current = false;
+      } else if (opts.intent === "edit" && !data.lock.mine) {
+        wantsEditRef.current = true;
+      }
+
       setState(data);
       setStatus("ready");
       setError(null);
     } catch {
       /* transient: keep the last known state rather than blanking the UI */
     }
-  }, [surveyId, opts.section]);
+  }, [surveyId, opts.section, opts.intent]);
 
   React.useEffect(() => { void poll(true); }, [poll]);
 
@@ -116,7 +180,9 @@ export function useCollab(surveyId: string | null, opts: { section?: string | nu
   React.useEffect(() => {
     if (!surveyId) return;
     const release = () => {
-      if (!editingRef.current) return;
+      // only give back a lock we actually hold; "wanted to edit" is not a
+      // reason to send a release nobody asked for
+      if (!holdsRef.current) return;
       try {
         fetch(`/api/surveys/${surveyId}/lock`, {
           method: "POST", keepalive: true,
@@ -142,8 +208,14 @@ export function useCollab(surveyId: string | null, opts: { section?: string | nu
         body: JSON.stringify({ action, section: opts.section ?? null, ...extra }),
       });
       const data = await res.json().catch(() => ({}));
-      if (action === "acquire") editingRef.current = !!data?.acquired;
-      if (action === "release" || action === "force_release") editingRef.current = false;
+      /*
+       * An explicit click is an explicit intent, and it overrides the
+       * "somebody else has it, stop asking" rule above — that rule exists to
+       * stop a background poll churning, not to stop a person trying.
+       */
+      if (action === "acquire") { wantsEditRef.current = true; holdsRef.current = !!data?.acquired; }
+      if (action === "force_release") wantsEditRef.current = true;
+      if (action === "release") { wantsEditRef.current = false; holdsRef.current = false; }
       // read the shared state back straight away, so the banner and the
       // presence list update in the same interaction rather than one tick later
       await poll(true);

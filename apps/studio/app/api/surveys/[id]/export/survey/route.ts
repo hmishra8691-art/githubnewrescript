@@ -4,7 +4,7 @@ import {
   exportSurveyDocx, exportSurveyJsonConfigured,
   EXPORT_PRESETS, ALL_FIELDS, type ExportFields,
 } from "@rescript/exporters";
-import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
+import { isFailure, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 

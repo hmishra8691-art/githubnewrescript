@@ -3,7 +3,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { loadQualityDefinition } from "@/lib/qualityDef";
 import { parseEnvironment, missingResponseMigration, RESPONSE_MIGRATION_MESSAGE } from "@/lib/responseData";
 import { generateQuotaFromData, recountQuotas } from "@/lib/quotaRecount";
-import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
+import { isFailure, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 

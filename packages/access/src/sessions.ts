@@ -11,6 +11,13 @@
  * "active" is a claim with an expiry date rather than a flag: a session stays
  * active only while it keeps saying so.
  *
+ * ONE ACTIVE SESSION IS NOT THE SAME AS ONE ALLOWED DEVICE. The revised §12
+ * separates them: the account may still have exactly one live session, but a
+ * person signing in from a second machine gets it, and the first session is
+ * ended — audited, with its edit locks released, and with the old browser
+ * told on its next heartbeat. Refusing the second machine was the bug (P0-2),
+ * not the feature.
+ *
  *     ACTIVE ──no heartbeat for idleAfter──▶ IDLE
  *       │                                     │
  *       │                        no heartbeat for staleAfter
@@ -57,10 +64,34 @@ export interface SessionPolicy {
   /** hard ceiling from login, however active the session is */
   absoluteLifetimeSeconds: number;
   /**
-   * May a login displace a live session belonging to the same user? The
-   * requirement says NO by default and "do not silently invalidate the first
-   * session unless an administrator or explicit security setting allows it",
-   * which is precisely what this switch is.
+   * May a login displace a live session belonging to the same user?
+   *
+   * This default was `false` and it was wrong in practice. The original
+   * requirement said "do not silently invalidate the first session", and the
+   * literal reading produced the P0 that replaced it: a researcher who moved
+   * from their desk to a laptop was refused entry to their own account and
+   * had to wait out a 15-minute stale timer. The revised requirement (§12) is
+   * explicit — "the user must be able to move from System A to System B and
+   * continue working with the same account", and "if the product requirement
+   * remains strictly one active session per account, the previous session may
+   * be invalidated when the new session is created. However, the new session
+   * MUST still work correctly."
+   *
+   * So the default is now: the newest login wins. Exclusivity is still real —
+   * there is still exactly one active session per account, still enforced by
+   * a unique partial index rather than by this flag — but the loser of that
+   * contest is the OLD session, not the person standing at the keyboard.
+   *
+   * Nothing about it is silent. The displaced session is ended with
+   * `ended_reason = 'taken_over'`, its edit locks are released so it cannot
+   * hold the project hostage from a browser nobody is looking at, the event
+   * is audited, and the old browser is told what happened on its next
+   * heartbeat rather than discovering it at the next save.
+   *
+   * A workspace that genuinely needs the strict behaviour can still set this
+   * to false in its access settings — but see `decideLogin`: even then, the
+   * refusal must never be the last word, because §12 requires the new session
+   * to work.
    */
   allowForceTakeover: boolean;
 }
@@ -70,7 +101,7 @@ export const DEFAULT_SESSION_POLICY: SessionPolicy = {
   idleAfterSeconds: 5 * 60,
   staleAfterSeconds: 15 * 60,
   absoluteLifetimeSeconds: 12 * 60 * 60,
-  allowForceTakeover: false,
+  allowForceTakeover: true,
 };
 
 /** Merge stored settings over the defaults, ignoring anything nonsensical. */
@@ -159,7 +190,21 @@ export function sessionStatusHint(st: SessionStatus, policy: SessionPolicy): str
  */
 export type LoginDecision =
   | { kind: "allowed" }
-  | { kind: "blocked"; existing: SessionRecord; status: SessionStatus; message: string }
+  /**
+   * Strict mode only: there is a live session elsewhere and the policy will
+   * not displace it without being asked. This is NOT a dead end — §12 requires
+   * the new session to work — so it always carries `canConfirmTakeover`, and
+   * the login screen turns it into "Sign in here and end the other session".
+   * The person, not the policy, does the invalidating, which is exactly what
+   * "do not SILENTLY invalidate the first session" asks for.
+   */
+  | {
+      kind: "blocked";
+      existing: SessionRecord;
+      status: SessionStatus;
+      message: string;
+      canConfirmTakeover: true;
+    }
   | { kind: "takeover"; existing: SessionRecord };
 
 export function decideLogin(
@@ -171,17 +216,32 @@ export function decideLogin(
   if (!sessionBlocksLogin(existing, policy, nowMs)) return { kind: "allowed" };
   if (policy.allowForceTakeover) return { kind: "takeover", existing };
   const status = sessionStatus(existing, policy, nowMs);
-  const where = existing.deviceLabel ? ` (${existing.deviceLabel})` : "";
+  const where = existing.deviceLabel ? ` on ${existing.deviceLabel}` : "";
   return {
     kind: "blocked",
     existing,
     status,
+    canConfirmTakeover: true,
     message:
-      `This account is already logged in on another device or session${where}. `
-      + "Please log out from the active session before logging in here. "
-      + `If that device is no longer available, the session is released automatically after `
-      + `${Math.round(policy.staleAfterSeconds / 60)} minutes without activity.`,
+      `This account is already signed in${where}`
+      + `${status === "idle" ? ", though it has been idle" : ""}. `
+      + "You can sign in here and end that session — any unsaved work there will not be saved.",
   };
+}
+
+/**
+ * Did the caller explicitly ask to displace the other session?
+ *
+ * One place decides it so the login route, the tests and any future client
+ * agree on what counts as consent. A body flag is enough: consent is a UI
+ * affordance, not a security boundary — the account's own password has
+ * already been verified by the time this is asked, and the only thing being
+ * "protected" is the account holder's other browser from themselves.
+ */
+export function requestedTakeover(body: unknown): boolean {
+  if (!body || typeof body !== "object") return false;
+  const v = (body as Record<string, unknown>).force ?? (body as Record<string, unknown>).endOtherSession;
+  return v === true || v === "true" || v === 1;
 }
 
 /* ------------------------------------------------------------ login throttle */

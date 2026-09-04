@@ -6,7 +6,7 @@ import {
   countResponses, parseEnvironment, queryResponses, responseCounts,
   missingResponseMigration, RESPONSE_MIGRATION_MESSAGE, type ResponseQuery,
 } from "@/lib/responseData";
-import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
+import { isFailure, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 

@@ -1,11 +1,12 @@
 import "server-only";
 import { NextResponse, type NextRequest } from "next/server";
 import {
-  can, decideAccess, decideEdit, isProjectRole, sessionAuthorizes, sessionStatus,
-  type Actor, type Capability, type LockRecord, type ProjectRole, type SessionRecord,
-  type AuditEvent,
+  can, decideAccess, decideEdit, isProjectRole, lockStatus, sessionAuthorizes, sessionStatus,
+  ROLE_LABEL,
+  type Actor, type Capability, type LockRecord, type ProjectRole, type RoleSource,
+  type SessionRecord, type AuditEvent,
 } from "@rescript/access";
-import { loadPolicies, sessionIdFrom, supabaseService, type AccessPolicies } from "./authServer";
+import { clearSessionCookie, loadPolicies, sessionIdFrom, supabaseService, type AccessPolicies } from "./authServer";
 
 /**
  * THE GATE. Every authenticated request in the Studio passes through here.
@@ -44,6 +45,34 @@ const fail = (body: Record<string, unknown>, status: number): GuardFailure => ({
   response: NextResponse.json(body, { status }),
 });
 
+/**
+ * A refusal that also DELETES THE SESSION COOKIE. This is the root fix for
+ * P0-3 and P0-4.
+ *
+ * The redirect loop went like this. A session expires. The browser still has
+ * the cookie, because nothing ever took it away. The edge middleware sees a
+ * cookie, concludes the visitor is signed in, and lets them onto `/`. The page
+ * calls `/api/auth/me`, gets 401, and sends them to `/login`. The middleware
+ * sees the same cookie again and bounces them back to `/`. Round and round,
+ * and typing `/login` by hand does not escape it either — which is P0-4.
+ *
+ * There were two ways to break the cycle. One is to teach the middleware to
+ * validate sessions, which it cannot do: it runs at the edge with no database.
+ * The other is to make the cookie's presence MEAN something again, by having
+ * whoever discovers the session is dead throw it away. That is this function,
+ * and it fixes the loop for every entry point at once rather than for the one
+ * screen somebody remembered to patch.
+ *
+ * Only for refusals that mean "this session is finished". A 403 for an
+ * insufficient role must keep the cookie: that user is perfectly signed in and
+ * signing them out for opening the wrong project would be its own bug.
+ */
+const failAndSignOut = (body: Record<string, unknown>, status: number): GuardFailure => {
+  const response = NextResponse.json({ ...body, signedOut: true }, { status });
+  clearSessionCookie(response);
+  return { response };
+};
+
 export function isFailure<T>(v: T | GuardFailure): v is GuardFailure {
   return !!v && typeof v === "object" && "response" in (v as object);
 }
@@ -71,19 +100,30 @@ export async function requireUser(req: NextRequest): Promise<AuthedUser | GuardF
   const db = supabaseService();
   const { data: row, error } = await db
     .from("user_sessions")
-    .select("id, user_id, status, created_at, last_seen_at, expires_at, device_label")
+    .select("id, user_id, status, created_at, last_seen_at, expires_at, device_label, ended_reason")
     .eq("id", sessionId)
     .maybeSingle();
-  if (error || !row) return fail({ error: "Your session is no longer valid.", code: "unknown_session" }, 401);
+  if (error) {
+    /*
+     * The database could not be reached. That is NOT evidence the session is
+     * invalid, and clearing the cookie here would sign people out over a
+     * blip — so this answers 503 and keeps the cookie. Distinguishing
+     * "cannot check" from "checked, and it is dead" is the difference
+     * between a hiccup and a mass logout.
+     */
+    console.error("[rescript:auth] session lookup failed", { error: error.message });
+    return fail({ error: "Cannot verify your session right now. Please try again.", code: "session_unavailable" }, 503);
+  }
+  if (!row) return failAndSignOut({ error: "Your session is no longer valid.", code: "unknown_session" }, 401);
 
   const { data: profile } = await db
     .from("profiles")
     .select("id, email, full_name, user_code, customer_id, role, status")
     .eq("id", row.user_id)
     .maybeSingle();
-  if (!profile) return fail({ error: "This account no longer exists.", code: "no_account" }, 401);
+  if (!profile) return failAndSignOut({ error: "This account no longer exists.", code: "no_account" }, 401);
   if (profile.status !== "active") {
-    return fail({ error: "This account has been disabled. Contact your administrator.", code: "account_disabled" }, 403);
+    return failAndSignOut({ error: "This account has been disabled. Contact your administrator.", code: "account_disabled" }, 403);
   }
 
   const policies = await loadPolicies(profile.customer_id ?? null);
@@ -99,13 +139,17 @@ export async function requireUser(req: NextRequest): Promise<AuthedUser | GuardF
   if (!sessionAuthorizes(record, policies.session)) {
     const st = sessionStatus(record, policies.session);
     // the exact status matters to the login screen: "expired" invites a fresh
-    // sign-in, "revoked" should say an administrator ended it
-    return fail(
+    // sign-in, "revoked" should say an administrator ended it, and a session
+    // displaced by a login elsewhere should say THAT rather than blaming a
+    // timeout the user did not experience
+    const takenOver = row.ended_reason === "taken_over";
+    return failAndSignOut(
       {
-        error: st === "revoked" ? "This session was ended by an administrator."
+        error: takenOver ? "You signed in on another device, so this session was ended."
+          : st === "revoked" ? "This session was ended by an administrator."
           : st === "logged_out" ? "You have been signed out."
           : "Your session has expired. Please sign in again.",
-        code: `session_${st}`,
+        code: takenOver ? "session_taken_over" : `session_${st}`,
       },
       401,
     );
@@ -140,6 +184,8 @@ export interface ProjectContext {
   user: AuthedUser;
   surveyId: string;
   role: ProjectRole | null;
+  /** owner / explicit share / workspace baseline — what the UI explains (P0-1) */
+  roleSource: RoleSource;
   /** the capability was granted by platform-admin duties, not by membership */
   viaAdmin: boolean;
   survey: { id: string; code: string; title: string; status: string; owner_id: string | null; customer_id: string | null; locked: boolean };
@@ -182,9 +228,23 @@ export async function requireProjectFor(
     .maybeSingle();
   if (!survey) return fail({ error: "Unknown project." }, 404);
 
-  const { data: roleRaw } = await db.rpc("rescript_project_role", { p_user: user.userId, p_survey: surveyId });
-  const role = isProjectRole(roleRaw) ? roleRaw : null;
-  const decision = decideAccess(user, role, capability);
+  /*
+   * One call answers both "what may they do" and "why do they have it".
+   * The provenance is not decoration: a refusal that says "your workspace's
+   * default role is reviewer" points at a setting an administrator can
+   * change, where "your role is reviewer" sends the user to ask an owner who
+   * never granted them anything and cannot find them in the member list.
+   */
+  const { data: accessRaw } = await db.rpc("rescript_project_access", { p_user: user.userId, p_survey: surveyId });
+  const accessRow = (Array.isArray(accessRaw) ? accessRaw[0] : accessRaw) as
+    | { project_role: string | null; role_source: string | null }
+    | null
+    | undefined;
+  const role = isProjectRole(accessRow?.project_role) ? accessRow!.project_role as ProjectRole : null;
+  const roleSource = (["owner", "member", "workspace", "none"] as const).includes(accessRow?.role_source as never)
+    ? (accessRow!.role_source as RoleSource)
+    : role ? "member" : "none";
+  const decision = decideAccess(user, role, capability, roleSource);
 
   if (!decision.allowed) {
     if (decision.reason === "not_a_member") {
@@ -193,9 +253,12 @@ export async function requireProjectFor(
     }
     return fail(
       {
-        error: `Your role on this project (${role}) does not allow this.`,
+        error: roleSource === "workspace"
+          ? `Your workspace grants ${ROLE_LABEL[role!].toLowerCase()} access to projects it does not own, which does not allow this. Ask the project's owner to share it with you directly.`
+          : `Your role on this project (${ROLE_LABEL[role!] ?? role}) does not allow this.`,
         code: "insufficient_role",
         role,
+        roleSource,
         capability,
       },
       403,
@@ -208,7 +271,7 @@ export async function requireProjectFor(
     return fail({ error: "This project has been locked by its owner and cannot be changed.", code: "project_locked" }, 423);
   }
 
-  return { user, surveyId, role, viaAdmin: decision.viaAdmin, survey: survey as ProjectContext["survey"] };
+  return { user, surveyId, role, roleSource, viaAdmin: decision.viaAdmin, survey: survey as ProjectContext["survey"] };
 }
 
 const WRITE_CAPABILITIES = new Set<Capability>([
@@ -243,34 +306,54 @@ export async function requireEditRight(
   return requireEditRightFor(ctx, capability);
 }
 
+/**
+ * THE ONE PLACE A LOCK IS READ.
+ *
+ * Every route that cares about the lock — the gate, the lock endpoint, the
+ * collaboration poll, the diagnostics view — goes through here, because the
+ * lock's liveness now depends on a fact none of them could see for
+ * themselves: whether the session holding it is still active (P0-8). Three
+ * hand-rolled reads would have meant three chances for one of them to keep
+ * judging a lock by its heartbeat alone, and the one that forgot would be the
+ * one blocking somebody's afternoon.
+ *
+ * `rescript_lock_for` also folds in the holder's name, which the previous
+ * version fetched with a second query on every single poll.
+ */
+export async function loadLock(surveyId: string): Promise<LockRecord | null> {
+  const db = supabaseService();
+  const { data } = await db.rpc("rescript_lock_for", { p_survey: surveyId });
+  const row = (Array.isArray(data) ? data[0] : data) as
+    | {
+        survey_id: string; locked_by_user_id: string; locked_by_session_id: string;
+        status: string; section: string | null; created_at: string;
+        last_heartbeat_at: string; expires_at: string | null;
+        locked_by_name: string | null; locked_by_code: string | null;
+        holder_session_live: boolean;
+      }
+    | null
+    | undefined;
+  if (!row) return null;
+  return {
+    surveyId: row.survey_id,
+    lockedByUserId: row.locked_by_user_id,
+    lockedBySessionId: row.locked_by_session_id,
+    status: row.status as LockRecord["status"],
+    section: row.section,
+    createdAt: row.created_at,
+    lastHeartbeatAt: row.last_heartbeat_at,
+    expiresAt: row.expires_at,
+    holderSessionLive: row.holder_session_live,
+    lockedByName: row.locked_by_name,
+    lockedByUserCode: row.locked_by_code,
+  };
+}
+
 export async function requireEditRightFor(
   ctx: ProjectContext,
   capability: Capability = "survey.edit",
 ): Promise<EditRight | GuardFailure> {
-  const db = supabaseService();
-  const { data: lockRow } = await db
-    .from("project_edit_locks")
-    .select("survey_id, locked_by_user_id, locked_by_session_id, status, section, created_at, last_heartbeat_at, expires_at")
-    .eq("survey_id", ctx.surveyId)
-    .maybeSingle();
-
-  let lock: LockRecord | null = null;
-  if (lockRow) {
-    const { data: holder } = await db
-      .from("profiles").select("full_name, user_code").eq("id", lockRow.locked_by_user_id).maybeSingle();
-    lock = {
-      surveyId: lockRow.survey_id,
-      lockedByUserId: lockRow.locked_by_user_id,
-      lockedBySessionId: lockRow.locked_by_session_id,
-      status: lockRow.status as LockRecord["status"],
-      section: lockRow.section,
-      createdAt: lockRow.created_at,
-      lastHeartbeatAt: lockRow.last_heartbeat_at,
-      expiresAt: lockRow.expires_at,
-      lockedByName: holder?.full_name ?? null,
-      lockedByUserCode: holder?.user_code ?? null,
-    };
-  }
+  const lock = await loadLock(ctx.surveyId);
 
   const verdict = decideEdit({
     canEdit: can(ctx.role, capability),
@@ -290,14 +373,29 @@ export async function requireEditRightFor(
         detail: { targetName: verdict.heldBy.lockedByName, targetUserCode: verdict.heldBy.lockedByUserCode },
       });
     }
+    /*
+     * `keepChanges` is a contract with the client, not a hint (§24). Every
+     * refusal from this gate is recoverable — the project still exists, the
+     * user is still signed in, and the draft in their editor is still the
+     * newest version of their work. The client must not reset, reload,
+     * redirect or overwrite on any of them.
+     *
+     * `recoverable` says whether taking the lock back is even possible from
+     * here: a viewer who lacks the capability cannot, and telling them to
+     * "try again" would be a loop with no exit.
+     */
     return fail(
       {
         error: verdict.message,
         code: verdict.reason,
+        keepChanges: true,
+        recoverable: verdict.reason !== "no_capability",
+        lockStatus: lockStatus(lock, ctx.user.policies.lock),
         lock: lock
           ? {
               userId: lock.lockedByUserId, name: lock.lockedByName, userCode: lock.lockedByUserCode,
               since: lock.createdAt, lastActive: lock.lastHeartbeatAt,
+              sessionLive: lock.holderSessionLive ?? true,
             }
           : null,
       },

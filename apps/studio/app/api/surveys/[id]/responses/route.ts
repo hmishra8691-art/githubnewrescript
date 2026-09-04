@@ -3,7 +3,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
 import { responsesToCSV, exportResponsesXlsx, inDataset, QUALITY_CSV_COLUMNS, qualityCsvCells, type DatasetFilter, type QualityExportRow } from "@rescript/exporters";
 import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
-import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
+import { isFailure, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 

@@ -34,6 +34,31 @@ export type SaveState =
    * retrying would be the very thing that loses work.
    */
   | { kind: "conflict"; message: string; serverRevision: number | null }
+  /**
+   * THE SAVE WAS REFUSED BECAUSE THIS SESSION NO LONGER HOLDS THE PROJECT —
+   * not because anybody's work disagrees. Distinct from `conflict`, and that
+   * distinction is a bug fix.
+   *
+   * Both arrive as HTTP 409, and this store used to treat every 409 as a
+   * revision conflict. So an editor who lost the lock for a moment — which is
+   * exactly what happens when the same person signs in from a second machine
+   * (P0-2) — was told "this survey was changed somewhere else", which was
+   * false, and had autosave permanently blocked until they reloaded the page,
+   * which is where the reports of "I signed in on my laptop and then could
+   * not save at all" come from.
+   *
+   * Nothing is overwritten and nothing is discarded: the draft in this editor
+   * is still the newest version of the work. `recoverable` says whether taking
+   * editing back is possible from here, so the UI can offer a button rather
+   * than an apology.
+   */
+  | { kind: "lock_lost"; message: string; recoverable: boolean; heldByName: string | null }
+  /**
+   * The session ended mid-edit. Also NOT data loss, and the message must say
+   * so first: the person's fear on reading any of this is that their work is
+   * gone (§24).
+   */
+  | { kind: "signed_out"; message: string }
   /** the draft columns are missing — migration 0003 has not been applied */
   | { kind: "unavailable"; message: string };
 
@@ -55,9 +80,11 @@ export interface StudioState {
   /**
    * READ-ONLY MODE (§19).
    *
-   * True whenever this session does not hold the project's edit lock — which
-   * is the default, and stays true for a viewer, a reviewer, and an editor who
-   * has not entered edit mode or whose lock was taken away.
+   * True whenever this session does not hold the project's edit lock — the
+   * starting assumption, and the settled state for a viewer, a reviewer, and
+   * an editor whose lock a colleague holds or took away. An edit-capable user
+   * who opens a free project leaves it within one collaboration tick, without
+   * pressing anything.
    *
    * It is a MIRROR of the server's answer, refreshed by the collaboration
    * poll, never a decision made here. `update` and `replace` refuse while it
@@ -138,9 +165,18 @@ export function StudioProvider({
   surveyDbId: string;
   versionId: string | null;
   /**
-   * Start read-only. The editor opens in View mode by default: entering edit
-   * mode is a deliberate act that takes the lock (§38), and defaulting the
-   * other way would have the first person to open a project silently claim it.
+   * Start read-only, and stay that way until the SERVER says otherwise.
+   *
+   * This is a safe default, not a workflow: the collaboration poll asks for
+   * the lock as soon as the editor mounts on an editing tab and clears this
+   * within a tick if the project is free. What it prevents is the window in
+   * between — a client that assumed it could edit, let someone type, and then
+   * discovered at save time that a colleague had the lock.
+   *
+   * It used to be a workflow, and that was the bug: the editor opened in view
+   * mode and waited for the user to find an "Enter edit mode" button, which
+   * reads as "the project became read-only on its own" and, for anyone who
+   * started typing first, as "my changes did not persist".
    */
   readOnly?: boolean;
   /** when the loaded draft was last autosaved, if it came from a draft */
@@ -244,7 +280,14 @@ export function StudioProvider({
           setSaveState({ kind: "unavailable", message: d.error ?? "autosave unavailable" });
           return false;
         }
-        if (r.status === 409) {
+        /*
+         * A 409 is two completely different events and they must not be
+         * confused (see the `lock_lost` note on SaveState). The revision
+         * conflict is the one that carries `conflict: true`; a lock refusal
+         * carries `keepChanges` and a lock `code`. Discriminating on the body
+         * rather than the status is the fix.
+         */
+        if (r.status === 409 && d.conflict === true) {
           console.warn("[rescript:save] draft REFUSED (stale)", { surveyId: surveyDbId, baseRevision, serverRevision: d.revision, ms: Date.now() - startedAt });
           blocked.current = true;
           setSaveState({
@@ -252,6 +295,38 @@ export function StudioProvider({
             message: d.error ?? "this survey changed elsewhere; your save was refused",
             serverRevision: typeof d.revision === "number" ? d.revision : null,
           });
+          return false;
+        }
+        if (r.status === 409 || (r.status === 403 && d.code === "no_capability")) {
+          console.warn("[rescript:save] draft REFUSED (lock)", { surveyId: surveyDbId, code: d.code, ms: Date.now() - startedAt });
+          /*
+           * Autosave is NOT blocked here. The lock is very often coming back
+           * — the collaboration poll re-acquires it as soon as it is free —
+           * and a save that succeeds thirty seconds later without the user
+           * doing anything is the outcome they want. Blocking would turn a
+           * momentary hiccup into a dead editor needing a reload, which is
+           * the P0-2 behaviour being removed.
+           */
+          setSaveState({
+            kind: "lock_lost",
+            message: d.error ?? "This session is not currently holding the edit lock for the project.",
+            recoverable: d.recoverable !== false,
+            heldByName: d.lock?.name ?? null,
+          });
+          return false;
+        }
+        if (r.status === 401 || d.signedOut === true) {
+          console.warn("[rescript:save] draft REFUSED (session)", { surveyId: surveyDbId, code: d.code });
+          setSaveState({
+            kind: "signed_out",
+            message: d.error ?? "Your session has ended, so this save was not accepted.",
+          });
+          return false;
+        }
+        if (r.status === 423) {
+          // the owner froze the project. Not recoverable by this user, and not
+          // a conflict — their work is intact and they need to be told why.
+          setSaveState({ kind: "error", message: d.error ?? "This project has been locked by its owner and cannot be changed." });
           return false;
         }
         if (!r.ok) {
@@ -331,6 +406,9 @@ export function StudioProvider({
     const unsaved = () =>
       saveState.kind === "dirty" || saveState.kind === "saving" ||
       saveState.kind === "error" || saveState.kind === "conflict" ||
+      // a refused save is unsaved work, and these two are the states where
+      // the user is most likely to close the tab believing it went through
+      saveState.kind === "lock_lost" || saveState.kind === "signed_out" ||
       (saveState.kind === "unavailable" && dirty);
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       if (!unsaved()) return;
@@ -358,9 +436,17 @@ export function StudioProvider({
 
   const touched = () => {
     setDirty(true);
-    // a conflict is terminal until reload — an edit made after it must not
-    // relabel the header "Unsaved changes" as if autosave were still running
-    setSaveState((prev) => (prev.kind === "conflict" ? prev : { kind: "dirty" }));
+    /*
+     * A conflict is terminal until reload, and a signed-out session cannot be
+     * recovered by typing — an edit made after either must not relabel the
+     * header "Unsaved changes" as if autosave were still running.
+     *
+     * `lock_lost` deliberately is NOT sticky: it usually resolves itself
+     * within one poll, autosave keeps trying, and going back to "Unsaved
+     * changes" is the truth while it does.
+     */
+    setSaveState((prev) =>
+      prev.kind === "conflict" || prev.kind === "signed_out" ? prev : { kind: "dirty" });
     scheduleDraftSave();
   };
 
@@ -398,7 +484,7 @@ export function StudioProvider({
     },
     update(mutator) {
       if (readOnlyRef.current) {
-        showToast(readOnlyReasonRef.current ?? "This project is read-only — enter edit mode to make changes.", "err");
+        showToast(readOnlyReasonRef.current ?? "This project is read-only. Your changes have not been made.", "err");
         return;
       }
       const label = nextLabel.current ?? "edit";
@@ -414,7 +500,7 @@ export function StudioProvider({
     },
     replace(next) {
       if (readOnlyRef.current) {
-        showToast(readOnlyReasonRef.current ?? "This project is read-only — enter edit mode to make changes.", "err");
+        showToast(readOnlyReasonRef.current ?? "This project is read-only. Your changes have not been made.", "err");
         return;
       }
       const label = nextLabel.current ?? "replace survey";

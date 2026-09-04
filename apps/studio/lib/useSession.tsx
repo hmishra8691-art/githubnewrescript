@@ -54,8 +54,16 @@ const REASONS: Record<string, string> = {
   session_revoked: "An administrator ended this session.",
   session_logged_out: "You have been signed out.",
   session_expired: "Your session expired after a period of inactivity.",
+  /*
+   * §12's other side. Telling somebody who signed in on their laptop thirty
+   * seconds ago that their desktop session "expired after a period of
+   * inactivity" reads as a bug and produces a support ticket; saying what
+   * actually happened produces an "oh, right".
+   */
+  session_taken_over: "You signed in on another device, so this session was ended.",
   account_disabled: "This account has been disabled.",
   unknown_session: "Your session is no longer valid.",
+  session_unavailable: "",
   no_session: "",
 };
 
@@ -72,7 +80,13 @@ export function useSession(options: { redirectOnSignOut?: boolean } = {}) {
         setState({ kind: "signed_out", reason: REASONS[j?.code] ?? j?.error, code: j?.code });
         return;
       }
-      if (!r.ok) return; // a transient failure is not a sign-out
+      /*
+       * A transient failure is not a sign-out — and 503 is now explicitly
+       * that: the gate answers 503 when it could not REACH the database, as
+       * opposed to 401 when it checked and the session is gone. Treating
+       * "cannot check" as "signed out" would empty every open tab on a blip.
+       */
+      if (!r.ok) return;
       setState({ kind: "signed_in", user: (await r.json()) as SessionUser });
     } catch {
       /* offline: keep whatever we had rather than throwing the user out */

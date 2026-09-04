@@ -24,12 +24,34 @@ const SORTS: { key: SortKey; label: string }[] = [
 /**
  * MY PROJECTS (§36, §37).
  *
- * Split into what I own and what was shared with me, because those are
- * different relationships and a flat list hides the fact a researcher checks
- * first. Every other control — search, status filter, sort — applies across
- * both, so the split is presentational and nothing goes missing from it.
+ * Split by RELATIONSHIP, because a flat list hides the fact a researcher
+ * checks first. Every other control — search, status filter, sort — applies
+ * across all of them, so the split is presentational and nothing goes missing
+ * from it.
+ *
+ * There are three relationships, not two, and the third is the visible half of
+ * the P0-1 fix. "Shared with me" now means somebody deliberately added me;
+ * projects I can reach because I am in the workspace that owns them are their
+ * own group. Before workspace access existed, a colleague's project was simply
+ * invisible — which is what "my saved projects disappeared" turned out to
+ * mean — and merging them into the shared list would make that list useless
+ * the moment a team has more than a handful of projects.
  */
-type Ownership = "all" | "mine" | "shared";
+type Ownership = "all" | "mine" | "shared" | "workspace";
+
+/*
+ * Read from `roleSource`, with a fallback for a server that predates it: an
+ * older API sends no source, and treating that as "shared" keeps the old
+ * two-way split working rather than emptying the lists. The failure being
+ * fixed here is projects going missing; reintroducing it in the bucketing
+ * would be a poor joke.
+ */
+const relationshipOf = (s: SurveyRow): Ownership =>
+  s.roleSource === "owner" || (!s.roleSource && s.myRole === "owner")
+    ? "mine"
+    : s.roleSource === "workspace"
+      ? "workspace"
+      : "shared";
 
 export default function Dashboard() {
   const session = useSession({ redirectOnSignOut: true });
@@ -141,8 +163,7 @@ export default function Dashboard() {
     if (!surveys) return null;
     const q = search.trim().toLowerCase();
     let rows = surveys.filter((s2) => {
-      if (ownership === "mine" && s2.myRole !== "owner") return false;
-      if (ownership === "shared" && s2.myRole === "owner") return false;
+      if (ownership !== "all" && relationshipOf(s2) !== ownership) return false;
       return true;
     }).filter((s2) => {
       if (statusFilter !== "all" && s2.status !== statusFilter) return false;
@@ -230,13 +251,14 @@ export default function Dashboard() {
           ["all", "All projects"],
           ["mine", "My projects"],
           ["shared", "Shared with me"],
+          ["workspace", "My team\u2019s projects"],
         ] as [Ownership, string][]).map(([key, label]) => {
           const n = key === "all"
             ? surveys?.length ?? 0
-            : surveys?.filter((x) => (key === "mine" ? x.myRole === "owner" : x.myRole && x.myRole !== "owner")).length ?? 0;
-          // "Shared with me" is hidden until something actually is, so a solo
-          // user never sees an empty tab asking to be clicked
-          if (key === "shared" && n === 0 && ownership !== "shared") return null;
+            : surveys?.filter((x) => relationshipOf(x) === key).length ?? 0;
+          // the two secondary tabs are hidden until something is actually in
+          // them, so a solo user never sees an empty tab asking to be clicked
+          if ((key === "shared" || key === "workspace") && n === 0 && ownership !== key) return null;
           return (
             <button key={key} className={`own-pill ${ownership === key ? "on" : ""}`}
               data-testid={`dash-own-${key}`} onClick={() => setOwnership(key)}>

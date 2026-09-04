@@ -5,7 +5,8 @@ import type { NextRequest, NextResponse } from "next/server";
 import {
   sessionPolicy, throttlePolicy, deviceLabelFrom,
   type SessionPolicy, type ThrottlePolicy, type LockPolicy, type PresencePolicy,
-  lockPolicy, presencePolicy,
+  type WorkspaceAccessPolicy,
+  lockPolicy, presencePolicy, workspaceAccessPolicy,
 } from "@rescript/access";
 
 /**
@@ -36,11 +37,45 @@ import {
 
 const SESSION_COOKIE = "rescript_session";
 
+/**
+ * EVERY DATABASE READ IS UNCACHED, AND THIS IS NOT A PERFORMANCE OPINION.
+ *
+ * Next's App Router patches the global `fetch` and, in this version, caches
+ * GET requests in the Data Cache by default — with no expiry. supabase-js
+ * uses that same global `fetch`, so `requireUser`'s session lookup was being
+ * served from a cache: a test that revoked a session and then made four
+ * requests through four different endpoints reached the database exactly
+ * once, and every subsequent request was answered from the first result.
+ *
+ * That is a security bug, not a slow cache. It means:
+ *
+ *   · an administrator's "revoke session" (§9) would not take effect, though
+ *     the screen would say it had;
+ *   · an EXPIRED session would keep authorizing requests indefinitely;
+ *   · and a role or membership change would not apply either.
+ *
+ * `export const dynamic = "force-dynamic"` on the route handlers is not
+ * enough — it governs the route's own caching, and the fetch underneath it
+ * kept its default. The reliable place to say "never cache this" is the
+ * client that issues it, once, here, rather than in fifty call sites where
+ * one will be missed.
+ *
+ * It also cost the guard nothing: the whole point of re-reading the session
+ * row on every request is that a revoke takes effect immediately rather than
+ * at the next login, and a cached read quietly gave back exactly the property
+ * that re-reading was there to provide.
+ */
+const uncachedFetch: typeof fetch = (input, init) =>
+  fetch(input as never, { ...(init ?? {}), cache: "no-store" });
+
 export function supabaseService() {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new Error("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not configured");
-  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  return createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { fetch: uncachedFetch },
+  });
 }
 
 /**
@@ -54,7 +89,12 @@ function supabaseAuthClient() {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_ANON_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new Error("SUPABASE_URL / SUPABASE_ANON_KEY not configured");
-  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  // uncached for the same reason as `supabaseService`, and more sharply: a
+  // cached password check is a cached authentication decision
+  return createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false },
+    global: { fetch: uncachedFetch },
+  });
 }
 
 /* ------------------------------------------------------------ hashing */
@@ -126,6 +166,7 @@ export interface AccessPolicies {
   throttle: ThrottlePolicy;
   lock: LockPolicy;
   presence: PresencePolicy;
+  workspace: WorkspaceAccessPolicy;
 }
 
 /**
@@ -137,6 +178,26 @@ export interface AccessPolicies {
  * settings row falls back to the documented defaults rather than failing a
  * login.
  */
+/**
+ * One stored settings document, five independent policies.
+ *
+ * The document is read NAMESPACED — `{ "session": {...}, "lock": {...} }` —
+ * with the old flat shape still honoured underneath it. That is a fix, not
+ * decoration: session, lock and presence each define a `heartbeatSeconds`, so
+ * under the flat shape an administrator who set one heartbeat silently set all
+ * three. Nothing had been written to this table yet, so the collision never
+ * reached a user, but §7 promises these are independently configurable and
+ * under the flat reading they were not.
+ *
+ * The flat fallback stays because a settings document written by an older
+ * admin screen must not change meaning under this deploy.
+ */
+function section(raw: Record<string, unknown>, key: string): Record<string, unknown> {
+  const ns = raw[key];
+  const nested = ns && typeof ns === "object" && !Array.isArray(ns) ? (ns as Record<string, unknown>) : {};
+  return { ...raw, ...nested };
+}
+
 export async function loadPolicies(customerId: string | null): Promise<AccessPolicies> {
   let raw: Record<string, unknown> = {};
   try {
@@ -147,10 +208,24 @@ export async function loadPolicies(customerId: string | null): Promise<AccessPol
     /* the defaults are correct and safe; a settings read must never block a login */
   }
   return {
-    session: sessionPolicy(raw as never),
-    throttle: throttlePolicy(raw as never),
-    lock: lockPolicy(raw as never),
-    presence: presencePolicy(raw as never),
+    session: sessionPolicy(section(raw, "session") as never),
+    throttle: throttlePolicy(section(raw, "throttle") as never),
+    lock: lockPolicy(section(raw, "lock") as never),
+    presence: presencePolicy(section(raw, "presence") as never),
+    /*
+     * Read from its own namespace only. Unlike the others this one has no
+     * sensible flat spelling — a bare `defaultRole` key in a document that
+     * also configures sessions and locks would be anybody's guess — so the
+     * flat form it accepts is the explicit `workspaceDefaultRole`, matching
+     * what `rescript_workspace_default_role` looks for in SQL.
+     */
+    workspace: workspaceAccessPolicy(
+      raw.workspace && typeof raw.workspace === "object"
+        ? (raw.workspace as never)
+        : "workspaceDefaultRole" in raw
+          ? ({ defaultRole: raw.workspaceDefaultRole } as never)
+          : null,
+    ),
   };
 }
 

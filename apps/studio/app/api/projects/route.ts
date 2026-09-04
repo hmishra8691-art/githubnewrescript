@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { avatarHue, initialsOf, ROLE_LABEL } from "@rescript/access";
+import { avatarHue, initialsOf, roleSourceNote, ROLE_LABEL } from "@rescript/access";
 import { supabaseService } from "@/lib/authServer";
 import { isFailure, requireUser } from "@/lib/guard";
 
@@ -33,7 +33,8 @@ export async function GET(req: NextRequest) {
 
   const rows = ((data ?? []) as {
     survey_id: string; code: string; title: string; status: string; updated_at: string;
-    owner_id: string; owner_name: string; owner_code: string; my_role: string;
+    owner_id: string; owner_name: string; owner_code: string;
+    my_role: string; role_source: string;
     collaborators: number; editing_user_id: string | null; editing_name: string | null;
     editing_since: string | null; current_version: string | null; response_count: number;
   }[]).map((r) => ({
@@ -50,6 +51,8 @@ export async function GET(req: NextRequest) {
     },
     myRole: r.my_role,
     myRoleLabel: ROLE_LABEL[r.my_role as keyof typeof ROLE_LABEL] ?? r.my_role,
+    roleSource: r.role_source,
+    roleSourceNote: roleSourceNote(r.role_source as never),
     collaborators: r.collaborators,
     version: r.current_version,
     responses: r.response_count,
@@ -64,12 +67,30 @@ export async function GET(req: NextRequest) {
       : null,
   }));
 
-  const owned = rows.filter((r) => r.myRole === "owner");
-  const shared = rows.filter((r) => r.myRole !== "owner");
+  /*
+   * THREE buckets, not two, and the third is the fix for P0-1.
+   *
+   * "Shared with me" now means what it says — somebody deliberately added me.
+   * Projects I can reach because I am in the workspace that owns them are
+   * their own group, because they answer a different question ("what is my
+   * team working on") and because lumping them in with real shares would make
+   * the share list useless the moment a workspace has more than a handful of
+   * projects.
+   *
+   * `shared` is still computed as "not owned, not workspace" rather than
+   * "role_source === 'member'" so that a source this build does not recognise
+   * degrades into the visible list instead of disappearing — the failure mode
+   * being fixed here is projects going missing, and it would be a poor joke to
+   * reintroduce it in the bucketing.
+   */
+  const owned = rows.filter((r) => r.roleSource === "owner");
+  const workspace = rows.filter((r) => r.roleSource === "workspace");
+  const shared = rows.filter((r) => r.roleSource !== "owner" && r.roleSource !== "workspace");
 
   return NextResponse.json({
     owned,
     shared,
+    workspace,
     recent: [...rows].sort((a, b) => Date.parse(b.lastModified) - Date.parse(a.lastModified)).slice(0, 6),
     total: rows.length,
   }, { headers: { "cache-control": "no-store" } });

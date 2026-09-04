@@ -904,6 +904,36 @@ body.flow-dragging .flow-dropzone { height: 26px; }
 .save-state.dirty { color: var(--amber); background: color-mix(in srgb, var(--amber) 10%, transparent); }
 .save-state.err { color: var(--red); background: color-mix(in srgb, var(--red) 9%, transparent); }
 .save-state.warn { color: var(--amber); background: color-mix(in srgb, var(--amber) 10%, transparent); }
+/* the refused-save states carry buttons and a sentence, so they need to wrap
+   rather than push the rest of the header off the edge of the screen */
+.save-state { max-width: 60ch; white-space: normal; }
+.save-state.saving, .save-state.dirty, .save-state.ok { white-space: nowrap; }
+
+/* ---------- session & save diagnostics (§27) ---------- */
+.diag { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 12px; }
+.diag-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.diag-badge {
+  font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px;
+}
+.diag-badge.ok { color: var(--green); background: color-mix(in srgb, var(--green) 10%, transparent); }
+.diag-badge.warn { color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); }
+.diag-body { margin-top: 10px; }
+.diag-note { font-size: 12.5px; color: var(--subtle); max-width: 70ch; }
+.diag-body h4 {
+  margin: 16px 0 6px; font-size: 12px; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--subtle);
+}
+.diag-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.diag-table th, .diag-table td {
+  text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.diag-table th { font-weight: 500; color: var(--subtle); width: 16em; }
+.diag-table td { font-variant-numeric: tabular-nums; word-break: break-word; }
+.diag-yes { color: var(--green); font-weight: 600; }
+.diag-no { color: var(--red); font-weight: 600; }
+.diag-null { color: var(--subtle); }
+.diag-me td { background: var(--tint); }
 
 .publish-bar {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
