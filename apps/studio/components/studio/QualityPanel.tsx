@@ -27,13 +27,21 @@ const SEV_COLOR: Record<string, string> = { low: "#94a3b8", medium: "#f0b429", h
 
 interface Row {
   sessionId: string; status: string; startedAt: string | null; completedAt: string | null; durationSec: number | null;
-  assessed: boolean; qualityScore: number | null; riskScore: number | null; classification: string | null; recommendation: string | null;
+  assessed: boolean; configHash: string | null; computedAt: string | null;
+  qualityScore: number | null; riskScore: number | null; classification: string | null; recommendation: string | null;
   categories: Record<string, number>; flags: { ruleId: string; category: string; severity: string; title: string }[];
   clusterId: string | null; clusterSize: number; reasons: string[];
   reviewStatus: string | null; reviewReason: string | null; reviewedAt: string | null; reviewedBy: string | null;
 }
+interface ConfigSummary {
+  enabled: boolean; strictness: string; profile: string | null; bands: { review: number; suspicious: number; highlySuspicious: number; critical: number };
+  rulesOn: number; rulesTotal: number; rulesCustomised: number; customRules: number; telemetryOff: string[]; maxPeers: number; configHash: string;
+}
 interface Payload {
   enabled: boolean; strictness: string | null; total: number;
+  config: ConfigSummary | null; source: "draft" | "version" | null; revision: number | null; savedAt: string | null; version: string | null;
+  live: { version: string; versionId: string; config: ConfigSummary } | null;
+  staleAssessed: number;
   byClass: Record<string, number>; byReview: Record<string, number>; signals: Record<string, number>; histogram: number[];
   clusters: { id: string; size: number }[]; rows: Row[]; error?: string; migration?: string;
 }
@@ -49,24 +57,34 @@ export function QualityPanel({ include }: { include: Include }) {
   const [sort, setSort] = React.useState<"risk" | "quality" | "time">("risk");
   const [open, setOpen] = React.useState<string | null>(null);
 
+  /*
+   * The page reads the settings from the server, because that is what the
+   * engine reads. An edit made a moment ago may still be inside the autosave
+   * debounce, so the pending draft is flushed FIRST — otherwise the dashboard
+   * showed the settings from before the edit and looked like it had not saved.
+   */
   const load = React.useCallback(async () => {
     setError(null);
     try {
-      const r = await fetch(`/api/surveys/${s.surveyDbId}/quality?include=${include}`);
+      if (s.saveState.kind === "dirty" || s.saveState.kind === "saving") await s.flushDraft();
+      const r = await fetch(`/api/surveys/${s.surveyDbId}/quality?include=${include}`, { cache: "no-store" });
       const j = await r.json();
       if (!r.ok) { setError(j.error ?? `Server returned ${r.status}`); setData(null); return; }
       setData(j);
     } catch { setError("Could not load quality data."); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.surveyDbId, include]);
   React.useEffect(() => { void load(); }, [load]);
 
   const recompute = async () => {
     setBusy(true);
     try {
-      await s.flushDraft();
-      const r = await fetch(`/api/surveys/${s.surveyDbId}/quality/recompute`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ include }) });
+      const saved = await s.flushDraft();
+      if (!saved && s.saveState.kind !== "clean" && s.saveState.kind !== "saved") { setError("Your latest settings could not be saved, so nothing was re-assessed. See the save status in the header."); return; }
+      const r = await fetch(`/api/surveys/${s.surveyDbId}/quality/recompute`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ include }), cache: "no-store" });
       const j = await r.json();
       if (!r.ok) setError(j.error ?? "Recompute failed");
+      else console.info("[rescript:quality] recompute", j);
       await load();
     } finally { setBusy(false); }
   };
@@ -95,8 +113,9 @@ export function QualityPanel({ include }: { include: Include }) {
   const maxHist = Math.max(1, ...data.histogram);
   return (
     <div data-testid="quality-panel">
+      <ConfigCard data={data} include={include} busy={busy} onRecompute={recompute} onSettings={() => s.goToTab?.("settings")} />
       {!data.enabled && (
-        <div className="chip warn" style={{ marginBottom: 10 }} data-testid="quality-disabled-note">
+        <div className="chip warn qd-note" data-testid="quality-disabled-note">
           Quality checks are off for this survey — enable them under Survey settings → Quality checks. Responses finished while off are unscored; “Re-assess” scores them with the current settings.
         </div>
       )}
@@ -169,7 +188,12 @@ export function QualityPanel({ include }: { include: Include }) {
             {rows.map((r) => (
               <tr key={r.sessionId} style={{ cursor: "pointer" }} data-testid="q-row" onClick={() => setOpen(r.sessionId)}>
                 <td className="mono">{r.sessionId.slice(0, 8)}{r.status !== "complete" ? <span className="muted"> · {r.status}</span> : ""}</td>
-                <td><span className="chip" style={{ borderColor: CLASS_COLOR[r.classification ?? "UNSCORED"], color: CLASS_COLOR[r.classification ?? "UNSCORED"] }}>{fmtClass(r.classification)}</span></td>
+                <td>
+                  <span className="chip" style={{ borderColor: CLASS_COLOR[r.classification ?? "UNSCORED"], color: CLASS_COLOR[r.classification ?? "UNSCORED"] }}>{fmtClass(r.classification)}</span>
+                  {r.assessed && data.config && r.configHash !== data.config.configHash && (
+                    <div className="qd-stale" title={`Assessed ${r.computedAt ? new Date(r.computedAt).toLocaleString() : ""} with settings ${r.configHash ?? "(older build)"} — current settings are ${data.config.configHash}`} data-testid="q-row-stale">older settings</div>
+                  )}
+                </td>
                 <td><Score value={r.qualityScore} invert /></td>
                 <td><Score value={r.riskScore} /></td>
                 <td>{r.durationSec ?? ""}</td>
@@ -185,6 +209,59 @@ export function QualityPanel({ include }: { include: Include }) {
 
       {open && <ReviewDrawer sessionId={open} onClose={() => setOpen(null)} onChanged={load} />}
     </div>
+  );
+}
+
+/**
+ * The settings in effect — what the engine reads for this survey right now —
+ * with where they came from (autosaved draft rev N / version X), so the page
+ * always states the persisted configuration rather than implying it. Plus the
+ * two gaps worth knowing about: responses assessed under older settings, and a
+ * live link still running an older version's settings.
+ */
+function ConfigCard({ data, include, busy, onRecompute, onSettings }: { data: Payload; include: Include; busy: boolean; onRecompute(): void; onSettings(): void }) {
+  const c = data.config;
+  if (!c) return null;
+  const when = data.savedAt ? new Date(data.savedAt).toLocaleString() : null;
+  const liveDiffers = data.live && data.live.config.configHash !== c.configHash;
+  return (
+    <>
+      <div className="card qd-config" data-testid="q-config" data-config-hash={c.configHash}>
+        <div>
+          <div className="qd-config-title">Quality settings in effect</div>
+          <div className="qd-config-facts">
+            <span className={`chip ${c.enabled ? "on" : "warn"}`} data-testid="q-config-enabled">{c.enabled ? "enabled" : "disabled"}</span>
+            <span className="chip" data-testid="q-config-strictness">{c.strictness.replace("_", " ")} strictness</span>
+            {c.profile && <span className="chip">profile: {c.profile}</span>}
+            <span className="chip" data-testid="q-config-rules">{c.rulesOn} of {c.rulesTotal} rules on{c.rulesCustomised ? ` · ${c.rulesCustomised} customised` : ""}</span>
+            <span className="chip" data-testid="q-config-custom">{c.customRules} custom rule{c.customRules === 1 ? "" : "s"}</span>
+            <span className="chip" data-testid="q-config-bands">bands {c.bands.review} / {c.bands.suspicious} / {c.bands.highlySuspicious} / {c.bands.critical}</span>
+            {c.telemetryOff.length > 0 && <span className="chip warn">not recording: {c.telemetryOff.join(", ")}</span>}
+            <span className="chip mono" title="Fingerprint of these settings — the same value is written on every assessment made with them">{c.configHash}</span>
+          </div>
+          <div className="qd-config-source" data-testid="q-config-source">
+            {data.source === "draft"
+              ? <>From the autosaved draft{typeof data.revision === "number" ? ` (rev ${data.revision})` : ""}{when ? `, saved ${when}` : ""}. Test links and re-assessment use these settings.</>
+              : <>From saved version {data.version ?? ""}{typeof data.revision === "number" ? ` (rev ${data.revision})` : ""} — no unsaved draft.</>}
+            {data.live && (
+              <> Live link runs v{data.live.version}: {data.live.config.enabled ? `${data.live.config.strictness.replace("_", " ")} strictness, ${data.live.config.rulesOn} rules` : "quality checks off"}
+                {liveDiffers ? <strong> — different from the settings above; Save version and Publish to apply them to live respondents.</strong> : " — same settings."}</>
+            )}
+          </div>
+        </div>
+        <div className="qd-config-actions">
+          <button className="btn small" onClick={onSettings} data-testid="q-config-edit">Edit settings</button>
+          {data.staleAssessed > 0 && (
+            <button className="btn small primary" disabled={busy} onClick={onRecompute} data-testid="q-config-stale" title="These responses were scored before the settings changed">
+              {busy ? "Re-assessing…" : `↻ Re-assess ${data.staleAssessed} scored with older settings`}
+            </button>
+          )}
+        </div>
+      </div>
+      {include === "live" && liveDiffers && data.total > 0 && (
+        <div className="chip warn qd-note" data-testid="q-live-gap">New live responses are scored with the published version's settings (v{data.live!.version}) until you publish. “Re-assess” applies the settings above to the responses already collected.</div>
+      )}
+    </>
   );
 }
 

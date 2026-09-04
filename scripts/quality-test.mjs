@@ -80,6 +80,42 @@ assert.equal(d.quality.customRules[0].minClass, "HIGHLY_SUSPICIOUS");
 assert.equal(d.quality.customRules[0].when.children[0].source.kind, "calculation", "custom rules test calc.SYSTEM_* metrics");
 console.log("✔ Survey settings → Quality checks: toggle, strictness, bands, rule override, telemetry, custom rule all persist in def.quality");
 
+/* ------------------------------------------------ 1b. save status, saved-rule display, layout */
+// the settings panel states the draft's save state beside the controls (the sandbox has no database row)
+assert.match(await page.textContent('[data-testid="quality-save-state"]'), /Sandbox/);
+// a custom rule over calc.SYSTEM_* displays as that metric, not as the "pick a question" placeholder
+{
+  const selected = await page.$eval('[data-testid="qcustom-rule"] select.ref-select', (el) => el.options[el.selectedIndex]?.textContent ?? "");
+  assert.match(selected, /SYSTEM_DURATION_RATIO/, `custom-rule source shows the saved metric (got "${selected}")`);
+}
+// the "Re-assess" button keeps its label inside its box and clear of the help text
+{
+  const btn = await page.$('[data-testid="q-preview-impact"]');
+  const fits = await btn.evaluate((el) => el.scrollWidth <= el.clientWidth + 1);
+  assert.ok(fits, "the Re-assess button is not narrower than its label");
+  const b = await btn.boundingBox();
+  const help = await page.$('[data-testid="q-preview-impact"] ~ .qs-help');
+  const hb = await help.boundingBox();
+  assert.ok(hb.y >= b.y + b.height - 1 || hb.x >= b.x + b.width - 1, "help text does not overlap the button");
+}
+// no horizontal overflow anywhere in the settings panel
+{
+  const overflow = await page.$eval('[data-testid="quality-settings"]', (root) => {
+    const right = root.getBoundingClientRect().right + 1;
+    return [...root.querySelectorAll("*")].filter((el) => el.getBoundingClientRect().right > right && getComputedStyle(el).position !== "absolute")
+      .slice(0, 6).map((el) => `${el.tagName}.${el.className} right=${Math.round(el.getBoundingClientRect().right)} vs ${Math.round(right)} "${(el.textContent || "").slice(0, 40)}"`);
+  });
+  assert.deepEqual(overflow, [], "no element extends past the panel's right edge");
+}
+// clearing a numeric field does not snap to a default while typing; the stored value survives a reload of the panel
+await page.fill('[data-testid="qband-review"]', "15");
+await h.goTab("Questions");
+await h.goTab("Survey Settings");
+assert.equal(await page.inputValue('[data-testid="qband-review"]'), "15", "band value re-rendered from def.quality after leaving and returning");
+assert.equal(await page.inputValue('[data-testid="quality-strictness"]'), "strict");
+assert.equal(await page.isChecked('[data-testid="qtel-clipboard"]'), false);
+console.log("✔ settings panel: save state shown, saved SYSTEM_* rule displayed as itself, Re-assess button/help text laid out without overlap, values survive leaving and returning");
+
 // applying a built-in profile
 await h.goTab("Survey Settings");
 await page.selectOption('[data-testid="quality-profile-select"]', "b2b_relaxed");
@@ -214,25 +250,34 @@ const rowsDb = {
   "10476aaa11112222": { status: "complete", quality: assessment({ qualityScore: 62, riskScore: 55, classification: "SUSPICIOUS", recommendation: "REVIEW BEFORE INCLUSION", categories: { duplicate: 30, device: 15 }, flags: badFlags.slice(3, 5), reasons: badFlags.slice(3, 5).map((f) => `${f.title}: ${f.observed}.`), cluster: { clusterId: "c_deadbeef", similarityScore: 91, similarSessionIds: ["10482aaa11112222", "10477bbb11112222"], clusterRisk: 72, size: 3, sharedSignals: ["device signature"] } }), review: null },
   "10477bbb11112222": { status: "complete", quality: assessment({ qualityScore: 70, riskScore: 22, classification: "REVIEW", recommendation: "REVIEW BEFORE INCLUSION", categories: { device: 15 }, flags: [badFlags[4]], reasons: [`${badFlags[4].title}: ${badFlags[4].observed}.`], cluster: { clusterId: "c_deadbeef", similarityScore: 60, similarSessionIds: ["10482aaa11112222"], clusterRisk: 72, size: 3, sharedSignals: ["device signature"] } }), review: null },
   "20001ccc11112222": { status: "complete", quality: assessment({}), review: "KEEP" },
-  "20002ddd11112222": { status: "complete", quality: assessment({}), review: null },
+  "20002ddd11112222": { status: "complete", quality: assessment({}), review: null, olderSettings: true },
   "20003eee11112222": { status: "screened", quality: null, review: null },
 };
 const compact = (sid, r) => {
   const a = r.quality;
   return { sessionId: sid, status: r.status, startedAt: "2026-09-03T10:00:00Z", completedAt: "2026-09-03T10:05:00Z", durationSec: a?.system?.SYSTEM_TOTAL_DURATION ?? 300, assessed: !!a,
+    configHash: a ? (r.olderSettings ? "0ld5e771" : CONFIG_HASH) : null, computedAt: a?.computedAt ?? null,
     qualityScore: a?.qualityScore ?? null, riskScore: a?.riskScore ?? null, classification: a?.classification ?? null, recommendation: a?.recommendation ?? null,
     categories: a?.categories ?? {}, flags: (a?.flags ?? []).map((f) => ({ ruleId: f.ruleId, category: f.category, severity: f.severity, title: f.title })),
     clusterId: a?.cluster?.clusterId ?? null, clusterSize: a?.cluster?.size ?? 1, reasons: a?.reasons ?? [],
     reviewStatus: r.review, reviewReason: r.reviewReason ?? null, reviewedAt: r.review ? "2026-09-03T11:00:00Z" : null, reviewedBy: r.review ? "researcher" : null };
 };
 const patches = [];
+const CONFIG_HASH = "a1b2c3d4";
 const summaryPayload = () => {
   const rows = Object.entries(rowsDb).map(([sid, r]) => compact(sid, r));
   const byClass = { CLEAN: 0, REVIEW: 0, SUSPICIOUS: 0, HIGHLY_SUSPICIOUS: 0, CRITICAL: 0, UNSCORED: 0 };
   const byReview = { KEEP: 0, REMOVE: 0, REVIEW_LATER: 0, NONE: 0 };
   const signals = {}; const histogram = new Array(10).fill(0);
   for (const r of rows) { byClass[r.classification ?? "UNSCORED"]++; byReview[r.reviewStatus ?? "NONE"]++; for (const c of new Set(r.flags.map((f) => f.category))) signals[c] = (signals[c] ?? 0) + 1; if (r.riskScore !== null) histogram[Math.min(9, Math.floor(r.riskScore / 10))]++; }
-  return { enabled: true, strictness: "standard", bands: { review: 20, suspicious: 40, highlySuspicious: 60, critical: 80 }, source: "draft", total: rows.length, byClass, byReview, signals, histogram, clusters: [{ id: "c_deadbeef", size: 3 }], rows };
+  const bands = { review: 20, suspicious: 40, highlySuspicious: 60, critical: 80 };
+  return {
+    enabled: true, strictness: "standard", bands, source: "draft", revision: 120, savedAt: "2026-09-04T12:36:47Z", version: "1.3",
+    config: { enabled: true, strictness: "standard", profile: "Consumer Research — Standard", bands, rulesOn: 52, rulesTotal: 64, rulesCustomised: 2, customRules: 1, telemetryOff: ["clipboard"], maxPeers: 3000, configHash: CONFIG_HASH },
+    live: { version: "1.2", versionId: "v12", config: { enabled: false, strictness: "standard", profile: null, bands, rulesOn: 0, rulesTotal: 64, rulesCustomised: 0, customRules: 0, telemetryOff: [], maxPeers: 3000, configHash: "ffffffff" } },
+    staleAssessed: rows.filter((r) => r.assessed && r.configHash !== CONFIG_HASH).length,
+    total: rows.length, byClass, byReview, signals, histogram, clusters: [{ id: "c_deadbeef", size: 3 }], rows,
+  };
 };
 const dataRequests = [];
 await page.route("**/api/surveys/*/quality/**", async (route) => {
@@ -274,6 +319,24 @@ await page.waitForSelector("table.grid th:has-text('Risk')");
 await page.click('[data-testid="data-view-quality"]');
 await page.waitForSelector('[data-testid="quality-panel"]');
 assert.equal(await page.textContent('[data-testid="q-total"]'), "6");
+// the settings in effect are stated from the persisted configuration, with their source
+assert.match(await page.textContent('[data-testid="q-config-enabled"]'), /enabled/);
+assert.match(await page.textContent('[data-testid="q-config-strictness"]'), /standard strictness/);
+assert.match(await page.textContent('[data-testid="q-config-rules"]'), /52 of 64 rules on · 2 customised/);
+assert.match(await page.textContent('[data-testid="q-config-custom"]'), /1 custom rule/);
+assert.match(await page.textContent('[data-testid="q-config-bands"]'), /20 \/ 40 \/ 60 \/ 80/);
+assert.match(await page.textContent('[data-testid="q-config-source"]'), /autosaved draft \(rev 120\)/);
+assert.match(await page.textContent('[data-testid="q-config-source"]'), /Live link runs v1\.2: quality checks off/);
+assert.equal(await page.getAttribute('[data-testid="q-config"]', "data-config-hash"), CONFIG_HASH);
+// one response was assessed under other settings: it is marked, counted, and re-assessable
+assert.equal((await page.$$('[data-testid="q-row-stale"]')).length, 1, "the row assessed with older settings is marked");
+assert.match(await page.textContent('[data-testid="q-config-stale"]'), /Re-assess 1 scored with older settings/);
+assert.ok(!(await page.$('[data-testid="q-live-gap"]')), "the live-link gap is not shown over TEST data");
+await page.click('[data-testid="quality-panel"] >> xpath=ancestor::*[contains(@class,"data") or self::div][1] >> text=Live data').catch(() => page.click("text=Live data"));
+await page.waitForSelector('[data-testid="q-live-gap"]');
+assert.match(await page.textContent('[data-testid="q-live-gap"]'), /published version's settings \(v1\.2\)/, "the live-link settings gap is called out over LIVE data");
+await page.click("text=Test data");
+await page.waitForSelector('[data-testid="q-total"]');
 assert.equal(await page.textContent('[data-testid="q-class-CLEAN"] div:nth-child(2)'), "2");
 assert.equal(await page.textContent('[data-testid="q-class-HIGHLY_SUSPICIOUS"] div:nth-child(2)'), "1");
 assert.equal(await page.textContent('[data-testid="q-class-UNSCORED"] div:nth-child(2)'), "1");

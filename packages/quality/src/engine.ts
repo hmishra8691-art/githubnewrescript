@@ -5,7 +5,8 @@ import type {
   Benchmarks, FlagDraft, HistoryRecord, PeerRecord, QualityAssessment, QualityInput, ResponseRecord, ResponseTelemetry,
   RuleContext, SystemVars,
 } from "./types.js";
-import { RULE_BY_ID } from "./catalogue.js";
+import { RULE_BY_ID, RULES } from "./catalogue.js";
+import { fnv1a } from "./metrics.js";
 import { computeBenchmarks, pageSeconds, questionSeconds, totalBenchmark, totalSeconds } from "./benchmarks.js";
 import { timingRules } from "./rules/timing.js";
 import { matrixRules, matrixSignature } from "./rules/matrix.js";
@@ -39,6 +40,77 @@ export function resolveConfig(def: SurveyDefinition): QualityConfig {
 
 function presetLevel(s: Strictness): Exclude<Strictness, "custom"> {
   return s === "custom" ? "standard" : s;
+}
+
+/** JSON with every object's keys sorted, so the same settings always serialise the same way. */
+function canonical(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (v && typeof v === "object") {
+    return `{${Object.keys(v as Record<string, unknown>).sort().map((k) => `${JSON.stringify(k)}:${canonical((v as Record<string, unknown>)[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(v) ?? "null";
+}
+
+/**
+ * A short, stable fingerprint of the resolved quality settings.
+ *
+ * Written onto every assessment (`configHash`) and computed again from the
+ * settings now saved, so three things can be compared without guesswork: what
+ * the editor shows, what the database holds, and what the engine actually ran
+ * with. Two configs with the same values give the same hash whatever the key
+ * order; any change to a rule, threshold, band, telemetry switch or custom
+ * rule changes it. `profile` is informational and deliberately excluded —
+ * applying a profile then editing nothing else must not read as a change.
+ */
+export function configFingerprint(config: QualityConfig): string {
+  const { profile: _profile, ...rest } = config;
+  void _profile;
+  return fnv1a(canonical(rest));
+}
+
+/**
+ * The rules that would run under these settings, before telemetry
+ * availability is known: the preset for the strictness, with per-rule
+ * overrides applied. What the runtime and Studio log as "enabled checks".
+ */
+export function enabledRuleIds(config: QualityConfig): string[] {
+  const level = presetLevel(config.strictness);
+  return RULES.filter((r) => config.rules[r.id]?.enabled ?? r.enabledIn[level]).map((r) => r.id);
+}
+
+/** A compact, loggable description of a survey's quality settings. */
+export interface QualityConfigSummary {
+  enabled: boolean;
+  strictness: Strictness;
+  profile: string | null;
+  bands: QualityConfig["bands"];
+  /** built-in rules that run (preset + overrides), and how many carry overrides */
+  rulesOn: number;
+  rulesTotal: number;
+  rulesCustomised: number;
+  /** custom IF/THEN rules, enabled ones only */
+  customRules: number;
+  /** telemetry categories switched off */
+  telemetryOff: string[];
+  maxPeers: number;
+  configHash: string;
+}
+
+export function summarizeConfig(def: SurveyDefinition): QualityConfigSummary {
+  const config = resolveConfig(def);
+  return {
+    enabled: config.enabled,
+    strictness: config.strictness,
+    profile: config.profile ?? null,
+    bands: config.bands,
+    rulesOn: enabledRuleIds(config).length,
+    rulesTotal: RULES.length,
+    rulesCustomised: Object.values(config.rules).filter((s) => s && Object.keys(s).length > 0).length,
+    customRules: config.customRules.filter((r) => r.enabled).length,
+    telemetryOff: (["timing", "focus", "clipboard", "navigation", "interaction", "device", "network"] as const).filter((k) => config.telemetry[k] === false),
+    maxPeers: config.maxPeers,
+    configHash: configFingerprint(config),
+  };
 }
 
 export function makeContext(input: QualityInput, config: QualityConfig, bench: Benchmarks): RuleContext {
@@ -247,6 +319,7 @@ export function assess(input: QualityInput): QualityAssessment {
     computedAt: now,
     strictness: config.strictness,
     enabled: config.enabled,
+    configHash: configFingerprint(config),
     qualityScore: sys.SYSTEM_QUALITY_SCORE,
     riskScore: sys.SYSTEM_FRAUD_RISK_SCORE,
     classification: cls,

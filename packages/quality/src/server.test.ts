@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { SurveyDefinition } from "@rescript/schema";
-import { assessAndStore, clientIp, deviceHashFrom, hashIdentifier, loadPeers, recomputeSurvey, rowToPeer, rowToResponse } from "./server.js";
+import { assessAndStore, clientIp, deviceHashFrom, hashIdentifier, loadPeers, recomputeSurvey, resolveRunDefinition, rowToPeer, rowToResponse } from "./server.js";
 
 /**
  * A minimal in-memory stand-in for the Supabase query builder: enough of the
@@ -118,4 +118,34 @@ test("recomputeSurvey assesses every finished response, stamps shared cluster id
   for (const r of ring) assert.ok(["SUSPICIOUS", "HIGHLY_SUSPICIOUS", "CRITICAL"].includes(r.quality.classification), r.quality.reasons.join(" | "));
   for (const r of rows.slice(0, 10)) assert.equal(r.quality.system.SYSTEM_CLUSTER_ID, null, r.quality.reasons.join(" | "));
   assert.ok((res.byClass.CLEAN ?? 0) >= 8, JSON.stringify(res.byClass));
+});
+
+test("resolveRunDefinition: a test session is graded with the draft it ran, a live session with its version, ?v= with the requested version", async () => {
+  const versionDef = { ...def, quality: { ...def.quality, enabled: false, strictness: "standard" } };
+  const draftDef = { ...def, quality: { ...def.quality, enabled: true, strictness: "strict" } };
+  const db = fakeDb({
+    surveys: [{ id: "S1", draft_definition: draftDef, revision: 120 }, { id: "S2", draft_definition: null, revision: 7 }, { id: "S3", draft_definition: { meta: "broken" }, revision: 9 }],
+    survey_versions: [{ id: "V1", definition: versionDef }],
+  });
+  // test session, no ?v= → the draft (strict, enabled) — what the test link served
+  const t = await resolveRunDefinition(db, { survey_id: "S1", version_id: "V1", is_test: true }, { source: "draft", versionId: "V1", revision: 120 });
+  assert.equal(t.source, "draft"); assert.equal(t.def?.quality.strictness, "strict"); assert.equal(t.def?.quality.enabled, true); assert.equal(t.revision, 120); assert.equal(t.versionId, "V1");
+  // an old runner sends no hint: still the draft
+  const t2 = await resolveRunDefinition(db, { survey_id: "S1", version_id: "V1", is_test: true }, undefined);
+  assert.equal(t2.source, "draft");
+  // ?v= requested → the version, even though a draft exists
+  const r = await resolveRunDefinition(db, { survey_id: "S1", version_id: "V1", is_test: true }, { source: "requested", versionId: "V1" });
+  assert.equal(r.source, "version"); assert.equal(r.def?.quality.enabled, false); assert.match(r.note ?? "", /requested/);
+  // live session → the version it is recorded against, whatever the draft says
+  const l = await resolveRunDefinition(db, { survey_id: "S1", version_id: "V1", is_test: false }, undefined);
+  assert.equal(l.source, "version"); assert.equal(l.def?.quality.strictness, "standard");
+  // no draft → the version
+  const n = await resolveRunDefinition(db, { survey_id: "S2", version_id: "V1", is_test: true }, { source: "current" });
+  assert.equal(n.source, "version"); assert.equal(n.note, undefined);
+  // a draft that does not parse → the version, with the reason
+  const b = await resolveRunDefinition(db, { survey_id: "S3", version_id: "V1", is_test: true }, { source: "draft" });
+  assert.equal(b.source, "version"); assert.match(b.note ?? "", /draft does not parse/);
+  // the hint cannot point at a definition the survey does not own: only the row's version is loaded
+  const x = await resolveRunDefinition(db, { survey_id: "S1", version_id: "V1", is_test: true }, { source: "requested", versionId: "SOMEBODY_ELSES" });
+  assert.equal(x.versionId, "V1");
 });

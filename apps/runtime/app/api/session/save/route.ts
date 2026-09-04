@@ -3,7 +3,8 @@ import { supabaseAdmin } from "@/lib/admin";
 import { qualitySalt } from "@/lib/session";
 import { SurveyDefinition } from "@rescript/schema";
 import { quotaIncrements, type ResponseState } from "@rescript/engine";
-import { assessAndStore, deviceHashFrom, RESPONSE_COLUMNS } from "@rescript/quality/server";
+import { assessAndStore, deviceHashFrom, resolveRunDefinition, RESPONSE_COLUMNS } from "@rescript/quality/server";
+import { configFingerprint, enabledRuleIds, resolveConfig, summarizeConfig } from "@rescript/quality";
 
 export const dynamic = "force-dynamic";
 
@@ -44,10 +45,12 @@ export async function POST(req: NextRequest) {
   const validStatus = ["in_progress", "complete", "screened", "quota_full", "terminated"];
   const newStatus = validStatus.includes(status) ? status : "in_progress";
 
-  // the definition decides what telemetry may be kept
-  const { data: ver } = await db.from("survey_versions").select("definition").eq("id", existing.version_id).single();
-  const parsed = ver ? SurveyDefinition.safeParse(ver.definition) : null;
-  const def = parsed?.success ? parsed.data : null;
+  // the definition decides what telemetry may be kept and which checks run —
+  // it must be the one this session is actually running: a TEST session runs
+  // the autosaved draft, not the version its row is recorded against (see
+  // resolveRunDefinition in @rescript/quality/server)
+  const run = await resolveRunDefinition(db, existing, body?.build);
+  const def = run.def;
   const tcfg = def?.quality?.telemetry;
   const keepTelemetry = telemetry && typeof telemetry === "object" && telemetry.v === 1 ? sanitizeTelemetry(telemetry, tcfg) : undefined;
   const deviceHash = tcfg?.device === false ? null : deviceHashFrom(qualitySalt(existing.survey_id), keepTelemetry?.device ?? null);
@@ -84,20 +87,32 @@ export async function POST(req: NextRequest) {
       await db.from("respondents").update({ status: newStatus }).eq("id", existing.respondent_id);
     }
     // the quality engine, on the final state of the row
+    const summary = def ? summarizeConfig(def) : null;
+    // §3 — what the engine is about to receive, so the saved settings and the
+    // executed settings can be compared line for line with the Studio's log
+    console.info("[rescript:quality] config", JSON.stringify({
+      surveyId: existing.survey_id, sessionId: sessionId.slice(0, 8), isTest: !!existing.is_test, status: newStatus,
+      definition: { source: run.source, versionId: run.versionId, revision: run.revision, hint: body?.build?.source ?? null, note: run.note },
+      config: summary ? { hash: summary.configHash, enabled: summary.enabled, strictness: summary.strictness, profile: summary.profile, rulesOn: summary.rulesOn, rulesCustomised: summary.rulesCustomised, customRules: summary.customRules, telemetryOff: summary.telemetryOff, bands: summary.bands } : null,
+      enabledChecks: def ? enabledRuleIds(resolveConfig(def)) : [],
+      at: new Date().toISOString(),
+    }));
     if (def?.quality?.enabled) {
       try {
         const { data: row } = (await db.from("responses").select(RESPONSE_COLUMNS + ", survey_id").eq("id", existing.id).single()) as { data: any };
         if (row) {
           const a = await assessAndStore(db, def, row);
           quality = { classification: a.classification, riskScore: a.riskScore, qualityScore: a.qualityScore };
-          console.info("[rescript:quality] assessed", { sessionId: sessionId.slice(0, 8), classification: a.classification, risk: a.riskScore, quality: a.qualityScore, flags: a.flags.length, peers: a.benchmarks.peers });
+          console.info("[rescript:quality] assessed", JSON.stringify({ surveyId: existing.survey_id, sessionId: sessionId.slice(0, 8), configHash: a.configHash, strictness: a.strictness, classification: a.classification, risk: a.riskScore, quality: a.qualityScore, flags: a.flags.length, peers: a.benchmarks.peers, computedAt: a.computedAt }));
         }
       } catch (e) {
         console.error("[rescript:quality] assessment failed (answers saved)", { sessionId: sessionId.slice(0, 8), error: (e as Error).message });
       }
+    } else if (def) {
+      console.info("[rescript:quality] skipped — quality checks are off in the definition this session ran", JSON.stringify({ surveyId: existing.survey_id, sessionId: sessionId.slice(0, 8), source: run.source, versionId: run.versionId }));
     }
   }
-  return NextResponse.json({ ok: true, quality });
+  return NextResponse.json({ ok: true, quality, definition: { source: run.source, versionId: run.versionId, configHash: def ? configFingerprint(resolveConfig(def)) : null } });
 }
 
 /**

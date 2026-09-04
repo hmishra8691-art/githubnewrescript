@@ -55,6 +55,29 @@ Server glue `@rescript/quality/server`: `loadPeers`, `assessAndStore`, `recomput
 
 Studio routes: `GET /api/surveys/:id/quality?include=` (dashboard payload), `GET|PATCH|POST /quality/:sessionId` (full assessment + decision + re-assess), `POST /quality/recompute` (draft settings → all responses, final clusters), `GET|POST|DELETE /quality/profiles`, `POST /quality/purge` (retention).
 
+## 4b. Which settings run where — and how to prove it
+
+`def.quality` autosaves with the survey draft (`surveys.draft_definition`) and is cut into every version. Three readers, one rule:
+
+| reader | definition used |
+|---|---|
+| Data → Quality dashboard, `POST …/quality/recompute`, per-response re-assess | the autosaved **draft** when one exists, else the current version (`lib/qualityDef.ts`) |
+| TEST session (`/t/…`) | the build the link resolved (`decideTestBuild`): `?v=` version → **draft** → current version. The save route resolves the same way (`resolveRunDefinition`) from the runner's `build` hint — a draft-run session used to be graded with the draft's *base version* settings, which is how a switched-on check never fired |
+| LIVE session (`/s/…`) | the **published** version pinned by the live deployment — settings reach live respondents only after Save version + Publish; the dashboard says so when the live version's settings differ |
+
+Every assessment carries `configHash` — `configFingerprint(config)`, an fnv1a of the canonical JSON of the resolved settings (profile name excluded). The dashboard payload carries the fingerprint of the settings saved now, so it can list "N scored with older settings" and offer a re-assess; each row shows *older settings* when its hash differs. `summarizeConfig(def)` (enabled, strictness, profile, bands, rules on / customised, custom rules, telemetry off, maxPeers, hash) is what the routes log:
+
+```
+[rescript:quality] config            runtime save route, on the final save — surveyId, session, isTest, definition {source, versionId, revision, hint}, config {hash, …}, enabledChecks[], at
+[rescript:quality] assessed          … configHash, strictness, classification, risk, quality, flags, peers, computedAt
+[rescript:quality] skipped           the definition this session ran has quality off
+[rescript:quality] recompute config  Studio recompute — same shape, plus version/revision/savedAt of the settings source
+[rescript:quality] recompute done    configHash, ms, results by mode
+[rescript:draft] saved               the autosave that wrote the settings (surveyId, baseRevision → newRevision)
+```
+
+UI ⇄ saved ⇄ executed: the settings panel footer prints the on-screen fingerprint, the dashboard prints the persisted one, the runtime log prints the executed one. They must match; if they do not, the `definition.source` in the runtime log says which definition was loaded.
+
 ## 5. Dashboard & review — Data → Quality
 
 Totals by classification (clickable filters), fraud-risk histogram, signal chips per category, decisions, coordinated clusters, search, sort. Row → review drawer: Quality score, Fraud risk, classification, recommendation (`INCLUDE` / `REVIEW BEFORE INCLUSION` / `LIKELY EXCLUDE`), signal groups, every flag as *what happened / expected / why it matters / points / related questions & respondents*, answers, telemetry summary (contents never stored), decision history. **KEEP / REMOVE / REVIEW LATER** with a reason → `responses.review_*` + a `response_reviews` audit row; *undo* clears. REMOVE never deletes.
@@ -69,4 +92,4 @@ Hashed IP and device only (salted per survey; `QUALITY_HASH_SALT`); clipboard le
 
 ## 8. Tests
 
-`packages/quality/src/engine.test.ts` (30) — every rule family, benchmarks vs estimate, strictness presets, rule overrides, bands, custom rules over `calc.SYSTEM_*`, similarity weighting, coordinated cluster across a survey, explainability shape. `server.test.ts` (4) — hashes, peers, store, recompute with cluster ids. `scripts/quality-test.mjs` — settings UI → `def.quality`, attention check, live event collector (visits, back, latency, paste lengths only, device, switches), dashboard, review drawer, decisions + audit, dataset selector + export links.
+`packages/quality/src/engine.test.ts` (31 — incl. config fingerprint stability/change detection) — every rule family, benchmarks vs estimate, strictness presets, rule overrides, bands, custom rules over `calc.SYSTEM_*`, similarity weighting, coordinated cluster across a survey, explainability shape. `server.test.ts` (4) — hashes, peers, store, recompute with cluster ids. `scripts/quality-test.mjs` — settings UI → `def.quality` (+ save state, SYSTEM_* rule display, no-overlap layout, values survive leaving the tab), attention check, live event collector (visits, back, latency, paste lengths only, device, switches), dashboard (+ settings-in-effect card, older-settings markers, live gap), review drawer, decisions + audit, dataset selector + export links.

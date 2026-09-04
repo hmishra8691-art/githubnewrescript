@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { SurveyDefinition } from "@rescript/schema";
-import { assess, assessSurvey } from "./engine.js";
+import { assess, assessSurvey, configFingerprint, enabledRuleIds, resolveConfig, summarizeConfig } from "./engine.js";
 import type { PeerRecord, ResponseRecord, ResponseTelemetry } from "./types.js";
 import { RULES } from "./catalogue.js";
 import { noisyOr, classify } from "./score.js";
@@ -211,6 +211,27 @@ test("a careful human respondent is CLEAN with no flags", () => {
   assert.equal(a.system.SYSTEM_ATTENTION_PASSED, 1);
   assert.ok(a.system.SYSTEM_TOTAL_DURATION! > 200);
   assert.ok(a.benchmarks.peers >= 8 && a.benchmarks.medianDurationSec !== null, "peers give a median benchmark");
+});
+
+test("config fingerprint: stable across key order, blind to the profile label, changed by any setting; written onto the assessment", () => {
+  const base = resolveConfig(def());
+  const same = resolveConfig(def({ strictness: "standard", enabled: true, profile: "Consumer Research — Standard" } as any));
+  assert.equal(configFingerprint(base), configFingerprint(same), "profile name does not count");
+  const reordered = JSON.parse(JSON.stringify({ ...base, bands: { critical: 80, review: 20, highlySuspicious: 60, suspicious: 40 } }));
+  assert.equal(configFingerprint(reordered), configFingerprint(base), "key order does not count");
+  assert.notEqual(configFingerprint(resolveConfig(def({ enabled: true, strictness: "strict" }))), configFingerprint(base));
+  assert.notEqual(configFingerprint(resolveConfig(def({ enabled: true, bands: { review: 15 } }))), configFingerprint(base));
+  assert.notEqual(configFingerprint(resolveConfig(def({ enabled: true, rules: { "timing.overall_speeding": { params: { ratio: 0.55 } } } }))), configFingerprint(base));
+  assert.notEqual(configFingerprint(resolveConfig(def({ enabled: true, telemetry: { clipboard: false } }))), configFingerprint(base));
+  assert.notEqual(configFingerprint(resolveConfig(def({ enabled: false }))), configFingerprint(base));
+  const a = assess({ def: def(), response: response(), peers: peers(12) });
+  assert.equal(a.configHash, configFingerprint(base), "the assessment carries the fingerprint it ran with");
+  // the summary says what would run
+  const sum = summarizeConfig(def({ enabled: true, rules: { "timing.uniform": { enabled: false } } }));
+  assert.equal(sum.rulesCustomised, 1);
+  assert.equal(sum.rulesOn, enabledRuleIds(resolveConfig(def())).length - 1);
+  assert.equal(sum.rulesTotal, RULES.length);
+  assert.ok(enabledRuleIds(resolveConfig(def({ enabled: true, strictness: "very_strict" }))).length > enabledRuleIds(resolveConfig(def({ enabled: true, strictness: "relaxed" }))).length);
 });
 
 test("disabled engine assesses nothing but still records SYSTEM_* metadata", () => {

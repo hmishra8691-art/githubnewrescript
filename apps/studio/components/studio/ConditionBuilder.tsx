@@ -14,6 +14,7 @@ import {
   duplicateAt, setOperatorAt, groupSelection, ungroupAt, validateLogicTree,
   OPERATOR_LABEL, OPERATOR_HINT, setGroupConnector,
 } from "@rescript/engine";
+import { SYSTEM_VARIABLE_HELP } from "@rescript/quality";
 import { useStudio } from "./store";
 import { ExpressionEditor } from "./ExpressionEditor";
 
@@ -158,6 +159,21 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
             {s.def.calculations.map((c) => (
               <option key={c.id} value={`calculation:${c.targetVariable}`}>{c.targetVariable}</option>
             ))}
+          </optgroup>
+        )}
+        {/* the quality engine's SYSTEM_* metrics — what custom quality rules
+            test; without this group a saved `calc.SYSTEM_DURATION_RATIO` rule
+            displayed as "— pick a question —" and looked unsaved */}
+        <optgroup label="Quality metrics (calc.SYSTEM_*)">
+          {SYSTEM_VARIABLE_HELP.map((v) => (
+            <option key={v.name} value={`calculation:${v.name}`} title={v.hint}>{v.name}</option>
+          ))}
+        </optgroup>
+        {/* a source this build does not list still displays as itself, never as
+            the placeholder — the rule stays readable and a re-save keeps it */}
+        {rule.source.kind !== "question" && rule.source.kind !== "option" && !knownSource(sourceValue, s.def) && (
+          <optgroup label="Other">
+            <option value={sourceValue}>{rule.source.kind}: {rule.source.ref}</option>
           </optgroup>
         )}
         {/* every embedded field declared anywhere in the flow, with its type —
@@ -616,4 +632,15 @@ export function ConditionSummary({ value }: { value: Condition | undefined }) {
  *  engine's phrasing so the editor and the export never disagree. */
 export function conditionToText(c: Condition | undefined, def: any): string {
   return conditionSummary(def, c);
+}
+
+/** Is this `kind:ref` source offered by one of the select's groups? */
+function knownSource(value: string, def: { calculations: { targetVariable: string }[]; flow: unknown[] }): boolean {
+  if (value.startsWith("loop:")) return ["loop:label", "loop:code", "loop:index"].includes(value);
+  if (value.startsWith("calculation:")) {
+    const ref = value.slice("calculation:".length);
+    return def.calculations.some((c) => c.targetVariable === ref) || SYSTEM_VARIABLE_HELP.some((v) => v.name === ref);
+  }
+  if (value.startsWith("embedded:")) return embeddedCatalog(def as any).some((e) => `embedded:${e.name}` === value);
+  return false;
 }

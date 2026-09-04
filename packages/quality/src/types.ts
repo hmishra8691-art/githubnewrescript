@@ -218,6 +218,50 @@ export interface SystemVars {
   SYSTEM_HIGH_SEVERITY_FLAGS: number;
 }
 
+/**
+ * The SYSTEM_* variables a researcher can test in a custom rule, with the
+ * unit or range each carries — one list, shared by the settings help table and
+ * the condition builder's "Quality metrics" source group, so a rule saved as
+ * `calc.SYSTEM_DURATION_RATIO` is displayed as exactly that when reopened.
+ */
+export const SYSTEM_VARIABLE_HELP: { name: keyof SystemVars; hint: string }[] = [
+  { name: "SYSTEM_DURATION_RATIO", hint: "total time ÷ benchmark (0.3 = 70% faster than median)" },
+  { name: "SYSTEM_TOTAL_DURATION", hint: "seconds" },
+  { name: "SYSTEM_MEDIAN_DURATION", hint: "benchmark seconds" },
+  { name: "SYSTEM_ATTENTION_FAILED", hint: "checks failed" },
+  { name: "SYSTEM_ATTENTION_PASSED", hint: "checks passed" },
+  { name: "SYSTEM_SPEEDER_SCORE", hint: "0–100" },
+  { name: "SYSTEM_STRAIGHTLINE_SCORE", hint: "0–100" },
+  { name: "SYSTEM_ATTENTION_SCORE", hint: "0–100" },
+  { name: "SYSTEM_CONSISTENCY_SCORE", hint: "0–100" },
+  { name: "SYSTEM_OPENEND_SCORE", hint: "0–100" },
+  { name: "SYSTEM_NAVIGATION_SCORE", hint: "0–100" },
+  { name: "SYSTEM_BOT_SCORE", hint: "0–100" },
+  { name: "SYSTEM_DUPLICATE_SCORE", hint: "0–100" },
+  { name: "SYSTEM_PATTERN_SCORE", hint: "0–100" },
+  { name: "SYSTEM_CLUSTER_SCORE", hint: "0–100" },
+  { name: "SYSTEM_DEVICE_SCORE", hint: "0–100" },
+  { name: "SYSTEM_INTERACTION_SCORE", hint: "0–100" },
+  { name: "SYSTEM_SCREENER_SCORE", hint: "0–100" },
+  { name: "SYSTEM_SIMILARITY_SCORE", hint: "0–100 vs closest peer" },
+  { name: "SYSTEM_CLUSTER_RISK_SCORE", hint: "0–100" },
+  { name: "SYSTEM_NETWORK_RISK", hint: "0–100 (provider hook)" },
+  { name: "SYSTEM_PASTE_COUNT", hint: "pastes" },
+  { name: "SYSTEM_PASTE_CHARS", hint: "pasted characters" },
+  { name: "SYSTEM_COPY_COUNT", hint: "copies" },
+  { name: "SYSTEM_TAB_SWITCH_COUNT", hint: "tab switches" },
+  { name: "SYSTEM_TOTAL_OUT_OF_FOCUS_TIME", hint: "seconds out of focus" },
+  { name: "SYSTEM_BACK_COUNT", hint: "back moves" },
+  { name: "SYSTEM_RELOAD_COUNT", hint: "reloads" },
+  { name: "SYSTEM_DEVICE_TYPE", hint: "desktop / tablet / mobile" },
+  { name: "SYSTEM_BROWSER", hint: "browser name" },
+  { name: "SYSTEM_OS", hint: "operating system" },
+  { name: "SYSTEM_TIMEZONE", hint: "IANA timezone" },
+  { name: "SYSTEM_LOCALE", hint: "locale" },
+  { name: "SYSTEM_FLAG_COUNT", hint: "flags raised" },
+  { name: "SYSTEM_HIGH_SEVERITY_FLAGS", hint: "high / critical flags" },
+];
+
 export interface ClusterInfo {
   clusterId: string | null;
   similarityScore: number;
@@ -233,6 +277,14 @@ export interface QualityAssessment {
   computedAt: string;
   strictness: Strictness;
   enabled: boolean;
+  /**
+   * Fingerprint of the resolved `def.quality` this assessment was computed
+   * with (see `configFingerprint`). The dashboard compares it with the
+   * fingerprint of the settings now saved, so a response scored under older
+   * settings is visibly "older settings" rather than silently mixed in.
+   * Absent on assessments written before the field existed.
+   */
+  configHash?: string;
   qualityScore: number;
   riskScore: number;
   classification: QualityClass;

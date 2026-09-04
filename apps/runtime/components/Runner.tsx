@@ -71,7 +71,7 @@ function brandingVars(b: Branding): React.CSSProperties {
   } as React.CSSProperties;
 }
 
-async function persist(mode: string, session: RunnerProps["session"], state: ResponseState, done: boolean, telemetry?: ResponseTelemetry | null) {
+async function persist(mode: string, session: RunnerProps["session"], state: ResponseState, done: boolean, telemetry?: ResponseTelemetry | null, build?: RunnerProps["build"]) {
   if (!session || mode === "preview") return;
   try {
     const body = JSON.stringify({
@@ -88,6 +88,11 @@ async function persist(mode: string, session: RunnerProps["session"], state: Res
       // durations only (see lib/telemetry.ts); the server runs the engine on
       // the final save
       telemetry: telemetry ?? undefined,
+      // which build this test session is running (draft / requested version /
+      // current version), so the server assesses it with the settings the
+      // respondent actually ran — a draft-run session is recorded against the
+      // draft's base version, whose settings may be older
+      build: build ? { source: build.source, versionId: build.versionId, revision: build.revision } : undefined,
     });
     if (done && typeof navigator !== "undefined" && navigator.sendBeacon) {
       // the completion save must survive the redirect that follows it
@@ -281,7 +286,7 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
         redirectUrl: nav.redirectUrl,
       });
       telemetryRef.current?.submitted();
-      await persist(mode, session, state, true, telemetryRef.current?.data ?? null);
+      await persist(mode, session, state, true, telemetryRef.current?.data ?? null, build);
       if (nav.redirectUrl && mode === "live") {
         // "new window" keeps the completion page in place behind the panel's
         // own page — some panels require the survey tab to stay open
@@ -290,7 +295,7 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
       }
     } else {
       notePage(nav.steps, nav.stepIndex, "next");
-      persist(mode, session, state, false, telemetryRef.current?.data ?? null);
+      persist(mode, session, state, false, telemetryRef.current?.data ?? null, build);
       window.scrollTo({ top: 0 });
     }
     force();

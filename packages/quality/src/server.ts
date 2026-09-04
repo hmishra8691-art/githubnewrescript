@@ -157,3 +157,60 @@ export function parseDefinition(json: unknown): SurveyDefinition | null {
   const p = SurveyDefinition.safeParse(json);
   return p.success ? p.data : null;
 }
+
+/* ------------------------------------------------------------ which definition ran */
+
+/** The runner's description of the build a TEST session is running (see runtime `TestBuildInfo`). */
+export interface RunBuildHint { source?: unknown; versionId?: unknown; revision?: unknown }
+
+export interface ResolvedRunDefinition {
+  def: SurveyDefinition | null;
+  /** where the definition came from */
+  source: "draft" | "version";
+  /** the version the response row is recorded against */
+  versionId: string;
+  /** the survey row's revision when the draft was used */
+  revision: number | null;
+  /** why the version was used although a draft exists (diagnostics) */
+  note?: string;
+}
+
+/**
+ * Which definition is a session running — the one its quality assessment
+ * (and its telemetry switches) must come from.
+ *
+ * A LIVE session runs the version its deployment pinned; the response row
+ * records that version, so it is loaded.
+ *
+ * A TEST session runs the latest saved state (`decideTestBuild`): the
+ * autosaved DRAFT whenever one exists, though the row can only record the
+ * draft's base version. Grading it with that version's settings meant the
+ * tester ran the draft's questionnaire while the engine used the previous
+ * version's quality settings — a check switched on in the draft never fired,
+ * and if the version had quality off nothing was assessed at all. So a test
+ * session resolves the way the link did: the requested version when the
+ * runner says one was asked for (`?v=`), otherwise the draft, otherwise the
+ * version on the row. The hint only chooses between the survey's own stored
+ * definitions; a draft that does not parse falls back to the version and says so.
+ */
+export async function resolveRunDefinition(
+  db: any,
+  existing: { survey_id: string; version_id: string; is_test: boolean },
+  hint: RunBuildHint | null | undefined,
+): Promise<ResolvedRunDefinition> {
+  const requested = hint && typeof hint === "object" && hint.source === "requested";
+  let note: string | undefined;
+  if (existing.is_test && !requested) {
+    const { data: survey } = await db.from("surveys").select("draft_definition, revision").eq("id", existing.survey_id).maybeSingle();
+    if (survey?.draft_definition) {
+      const parsed = SurveyDefinition.safeParse(survey.draft_definition);
+      if (parsed.success) return { def: parsed.data, source: "draft", versionId: existing.version_id, revision: typeof survey.revision === "number" ? survey.revision : null };
+      note = `draft does not parse: ${parsed.error.issues.slice(0, 3).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`;
+    }
+  } else if (existing.is_test && requested) {
+    note = "a specific version was requested with ?v=";
+  }
+  const { data: ver } = await db.from("survey_versions").select("definition").eq("id", existing.version_id).single();
+  const parsed = ver ? SurveyDefinition.safeParse(ver.definition) : null;
+  return { def: parsed?.success ? parsed.data : null, source: "version", versionId: existing.version_id, revision: null, note };
+}

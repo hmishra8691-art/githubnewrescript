@@ -1,15 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { loadQualityDefinition, missingMigration } from "@/lib/qualityDef";
-import type { QualityAssessment } from "@rescript/quality";
+import { SurveyDefinition } from "@rescript/schema";
+import { summarizeConfig, type QualityAssessment, type QualityConfigSummary } from "@rescript/quality";
 
 export const dynamic = "force-dynamic";
 
 /**
- * The Quality dashboard's data: counts by classification, review decision and
- * signal category, the fraud-risk distribution, and one compact row per
- * finished response. The full assessment of one response comes from
- * `./[sessionId]`.
+ * The Quality dashboard's data: the settings in effect (and where they come
+ * from), counts by classification, review decision and signal category, the
+ * fraud-risk distribution, and one compact row per finished response. The
+ * full assessment of one response comes from `./[sessionId]`.
+ *
+ * Every row carries the fingerprint of the settings it was assessed with, and
+ * the payload carries the fingerprint of the settings saved now, so the
+ * dashboard can say "N responses were scored under older settings" instead of
+ * mixing them in silently.
  */
 export interface QualityRow {
   sessionId: string;
@@ -18,6 +24,9 @@ export interface QualityRow {
   completedAt: string | null;
   durationSec: number | null;
   assessed: boolean;
+  /** fingerprint of the settings this assessment ran with (absent on older assessments) */
+  configHash: string | null;
+  computedAt: string | null;
   qualityScore: number | null;
   riskScore: number | null;
   classification: string | null;
@@ -33,17 +42,52 @@ export interface QualityRow {
   reviewedBy: string | null;
 }
 
+export interface QualityPayload {
+  enabled: boolean;
+  strictness: string | null;
+  bands: QualityConfigSummary["bands"] | null;
+  /** the settings the dashboard, recompute and test sessions use */
+  config: QualityConfigSummary | null;
+  source: "draft" | "version" | null;
+  revision: number | null;
+  /** when the settings source was last written */
+  savedAt: string | null;
+  version: string | null;
+  /** what the LIVE link is running — its version and the quality settings in it */
+  live: { version: string; versionId: string; config: QualityConfigSummary } | null;
+  total: number;
+  /** finished responses assessed with settings other than the current ones */
+  staleAssessed: number;
+  byClass: Record<string, number>;
+  byReview: Record<string, number>;
+  signals: Record<string, number>;
+  histogram: number[];
+  clusters: { id: string; size: number }[];
+  rows: QualityRow[];
+}
+
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const db = supabaseAdmin();
   const include = req.nextUrl.searchParams.get("include") ?? "live";
   const isTest = include === "test";
 
   const loaded = await loadQualityDefinition(db, params.id);
-  const config = "def" in loaded ? loaded.def.quality : null;
+  if (!("def" in loaded) && loaded.status === 422) return NextResponse.json({ error: loaded.error }, { status: 422 });
+  const config = "def" in loaded ? summarizeConfig(loaded.def) : null;
+
+  // what the live link actually runs — the published version, which may be
+  // behind the saved settings until the programmer publishes
+  let live: QualityPayload["live"] = null;
+  const { data: dep } = await db.from("deployments").select("version_id, survey_versions(version, definition)").eq("survey_id", params.id).eq("mode", "live").eq("active", true).maybeSingle();
+  if (dep?.version_id) {
+    const ver = Array.isArray(dep.survey_versions) ? dep.survey_versions[0] : (dep.survey_versions as { version?: string; definition?: unknown } | null);
+    const parsed = ver?.definition ? SurveyDefinition.safeParse(ver.definition) : null;
+    if (parsed?.success) live = { version: String(ver?.version ?? "?"), versionId: dep.version_id as string, config: summarizeConfig(parsed.data) };
+  }
 
   let q = db
     .from("responses")
-    .select("session_id, status, started_at, completed_at, quality, review_status, review_reason, reviewed_at, reviewed_by, is_test")
+    .select("session_id, status, started_at, completed_at, quality, quality_computed_at, review_status, review_reason, reviewed_at, reviewed_by, is_test")
     .eq("survey_id", params.id)
     .neq("status", "in_progress")
     .order("started_at", { ascending: false })
@@ -63,6 +107,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       sessionId: r.session_id, status: r.status, startedAt: r.started_at, completedAt: r.completed_at,
       durationSec: a?.system?.SYSTEM_TOTAL_DURATION ?? (started && done ? Math.round((done - started) / 1000) : null),
       assessed: !!a,
+      configHash: a?.configHash ?? null,
+      computedAt: a?.computedAt ?? r.quality_computed_at ?? null,
       qualityScore: a?.qualityScore ?? null, riskScore: a?.riskScore ?? null,
       classification: a?.classification ?? null, recommendation: a?.recommendation ?? null,
       categories: a?.categories ?? {},
@@ -78,22 +124,31 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const signals: Record<string, number> = {};
   const histogram = new Array(10).fill(0);
   const clusters = new Map<string, number>();
+  let staleAssessed = 0;
   for (const r of rows) {
     byClass[r.classification ?? "UNSCORED"] = (byClass[r.classification ?? "UNSCORED"] ?? 0) + 1;
     byReview[r.reviewStatus ?? "NONE"] = (byReview[r.reviewStatus ?? "NONE"] ?? 0) + 1;
     for (const c of new Set(r.flags.map((f) => f.category))) signals[c] = (signals[c] ?? 0) + 1;
     if (r.riskScore !== null) histogram[Math.min(9, Math.floor(r.riskScore / 10))]++;
     if (r.clusterId) clusters.set(r.clusterId, (clusters.get(r.clusterId) ?? 0) + 1);
+    if (r.assessed && config && r.configHash !== config.configHash) staleAssessed++;
   }
 
-  return NextResponse.json({
+  const payload: QualityPayload = {
     enabled: !!config?.enabled,
     strictness: config?.strictness ?? null,
     bands: config?.bands ?? null,
+    config,
     source: "def" in loaded ? loaded.source : null,
+    revision: "def" in loaded ? loaded.revision : null,
+    savedAt: "def" in loaded ? loaded.draftUpdatedAt : null,
+    version: "def" in loaded ? loaded.version : null,
+    live,
     total: rows.length,
+    staleAssessed,
     byClass, byReview, signals, histogram,
     clusters: [...clusters.entries()].map(([id, size]) => ({ id, size })).sort((a, b) => b.size - a.size),
     rows,
-  });
+  };
+  return NextResponse.json(payload, { headers: { "cache-control": "no-store" } });
 }
