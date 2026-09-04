@@ -35,12 +35,13 @@ export async function POST(req: NextRequest) {
   const db = supabaseAdmin();
   const { data: existing } = await db
     .from("responses")
-    .select("id, survey_id, version_id, status, respondent_id, is_test")
+    .select("id, survey_id, version_id, status, respondent_id, is_test, respondent_code, deleted_at")
     .eq("session_id", sessionId)
     .maybeSingle();
   if (!existing) return NextResponse.json({ error: "unknown session" }, { status: 404 });
+  if (existing.deleted_at) return NextResponse.json({ error: "this response was deleted by the survey owner" }, { status: 410 });
   if (existing.status !== "in_progress")
-    return NextResponse.json({ ok: true, note: "session already finalized" });
+    return NextResponse.json({ ok: true, note: "session already finalized", environment: existing.is_test ? "TEST" : "LIVE", respondentCode: existing.respondent_code ?? null });
 
   const validStatus = ["in_progress", "complete", "screened", "quota_full", "terminated"];
   const newStatus = validStatus.includes(status) ? status : "in_progress";
@@ -63,15 +64,25 @@ export async function POST(req: NextRequest) {
     embedded: embedded ?? {},
     flags: flags ?? [],
     completed_at: completed ? new Date().toISOString() : null,
+    last_saved_at: new Date().toISOString(),
   };
   if (keepTelemetry) { update.telemetry = keepTelemetry; if (deviceHash) update.device_hash = deviceHash; }
-  const { error } = await db.from("responses").update(update).eq("session_id", sessionId);
-  if (error) return NextResponse.json({ error: "save failed" }, { status: 500 });
+  let { error } = await db.from("responses").update(update).eq("session_id", sessionId).eq("status", "in_progress");
+  if (error && /last_saved_at/.test(error.message)) {
+    // migration 0006 not applied yet — the column is a convenience, not the save
+    delete update.last_saved_at;
+    ({ error } = await db.from("responses").update(update).eq("session_id", sessionId).eq("status", "in_progress"));
+  }
+  if (error) {
+    console.error("[rescript:save] write failed", JSON.stringify({ sessionId: sessionId.slice(0, 8), error: error.message }));
+    return NextResponse.json({ error: "save failed" }, { status: 500 });
+  }
 
-  // Finalize: increment quota counts + respondent status (live sessions only)
+  // Finalize: quota counts for THIS environment (test and live are counted
+  // apart — migration 0006; before it, the two-argument call counts live only)
   let quality: { classification: string; riskScore: number; qualityScore: number } | null = null;
   if (completed && newStatus !== "in_progress") {
-    if (!existing.is_test && def && newStatus === "complete") {
+    if (def && newStatus === "complete") {
       const state = {
         answers: answers ?? {},
         calculated: calculated ?? {},
@@ -80,7 +91,8 @@ export async function POST(req: NextRequest) {
       } as unknown as ResponseState;
       const cells = quotaIncrements(def, state);
       if (cells.length) {
-        await db.rpc("increment_quota_counts", { p_survey_id: existing.survey_id, p_cells: cells });
+        const { error: qErr } = await db.rpc("increment_quota_counts", { p_survey_id: existing.survey_id, p_cells: cells, p_test: !!existing.is_test });
+        if (qErr && !existing.is_test) await db.rpc("increment_quota_counts", { p_survey_id: existing.survey_id, p_cells: cells });
       }
     }
     if (existing.respondent_id) {
@@ -112,7 +124,13 @@ export async function POST(req: NextRequest) {
       console.info("[rescript:quality] skipped — quality checks are off in the definition this session ran", JSON.stringify({ surveyId: existing.survey_id, sessionId: sessionId.slice(0, 8), source: run.source, versionId: run.versionId }));
     }
   }
-  return NextResponse.json({ ok: true, quality, definition: { source: run.source, versionId: run.versionId, configHash: def ? configFingerprint(resolveConfig(def)) : null } });
+  return NextResponse.json({
+    ok: true, quality,
+    environment: existing.is_test ? "TEST" : "LIVE",
+    respondentCode: existing.respondent_code ?? null,
+    status: newStatus,
+    definition: { source: run.source, versionId: run.versionId, configHash: def ? configFingerprint(resolveConfig(def)) : null },
+  });
 }
 
 /**

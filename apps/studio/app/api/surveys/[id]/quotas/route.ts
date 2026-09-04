@@ -1,19 +1,37 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
+import { parseEnvironment } from "@/lib/responseData";
 
 export const dynamic = "force-dynamic";
 
-/** Live quota counts for the dashboard. */
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+/**
+ * Quota counts for one environment.
+ *
+ * `?environment=TEST|LIVE|ALL` — required. The counters are keyed by
+ * environment (migration 0006), so a test run cannot make a live cell look
+ * full and the Quotas panel always says which dataset it is showing. Before
+ * that migration every counter was live's, so a database without the
+ * `is_test` column answers as LIVE and says so.
+ */
+export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+  const environment = parseEnvironment(req.nextUrl.searchParams.get("environment") ?? "LIVE");
+  if (!environment) return NextResponse.json({ error: "environment must be TEST, LIVE or ALL" }, { status: 400 });
   const db = supabaseAdmin();
-  const { data } = await db
-    .from("quota_counts")
-    .select("quota_id, cell_id, count")
-    .eq("survey_id", params.id);
+  let q = db.from("quota_counts").select("quota_id, cell_id, count, is_test").eq("survey_id", params.id);
+  if (environment === "TEST") q = q.eq("is_test", true);
+  else if (environment === "LIVE") q = q.eq("is_test", false);
+  let { data, error } = (await q) as { data: { quota_id: string; cell_id: string; count: number }[] | null; error: { message: string } | null };
+  let perEnvironment = true;
+  if (error && /is_test/.test(error.message)) {
+    // migration 0006 not applied: one shared counter, which is live's
+    perEnvironment = false;
+    ({ data, error } = (await db.from("quota_counts").select("quota_id, cell_id, count").eq("survey_id", params.id)) as typeof data extends never ? never : { data: { quota_id: string; cell_id: string; count: number }[] | null; error: { message: string } | null });
+  }
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   const counts: Record<string, Record<string, number>> = {};
   for (const r of data ?? []) {
     counts[r.quota_id] = counts[r.quota_id] ?? {};
-    counts[r.quota_id][r.cell_id] = r.count;
+    counts[r.quota_id][r.cell_id] = (counts[r.quota_id][r.cell_id] ?? 0) + r.count;
   }
-  return NextResponse.json({ counts });
+  return NextResponse.json({ counts, environment, perEnvironment }, { headers: { "cache-control": "no-store" } });
 }

@@ -30,8 +30,15 @@ import type { ResponseTelemetry } from "@rescript/quality";
 export interface RunnerProps {
   definition: SurveyDefinition;
   mode: "live" | "test" | "preview";
-  /** server session bootstrap (absent in preview mode) */
-  session?: { sessionId: string; seed: number; surveyDbId: string; versionDbId: string };
+  /** a session already minted server-side (legacy path; the pages now use sessionBoot) */
+  session?: { sessionId: string; seed: number; surveyDbId: string; versionDbId: string; respondentCode?: string | null };
+  /**
+   * How to obtain the response row: the runner POSTs /api/session/start once
+   * it is running, and after a reload hands back the session id it kept in
+   * sessionStorage so the same row is resumed (answers and position restored)
+   * instead of a fresh one being written. Absent in preview mode.
+   */
+  sessionBoot?: { client: string; study: string; mode: "test" | "live"; token?: string; requestedVersionId?: string | null; seed?: number; surveyDbId: string; versionDbId: string };
   quotaCounts?: QuotaCounts;
   urlParams?: Record<string, string>;
   /**
@@ -71,8 +78,19 @@ function brandingVars(b: Branding): React.CSSProperties {
   } as React.CSSProperties;
 }
 
-async function persist(mode: string, session: RunnerProps["session"], state: ResponseState, done: boolean, telemetry?: ResponseTelemetry | null, build?: RunnerProps["build"]) {
-  if (!session || mode === "preview") return;
+type SaveOutcome = { ok: true; response?: any } | { ok: false; error: string; status?: number } | { ok: true; skipped: true };
+
+/**
+ * Save the response state. Every save carries the WHOLE state (answers,
+ * position, telemetry), so a lost intermediate save costs nothing once the
+ * next one lands — the final save is the one that must land, and it is
+ * awaited, retried, and confirmed by the server before the respondent sees
+ * the thank-you page (see handleNext). The old code fired a sendBeacon AND a
+ * fetch for the completion and awaited neither's result: the engine could run
+ * twice, and a failed completion still showed "Thank you".
+ */
+async function persist(mode: string, session: RunnerProps["session"], state: ResponseState, done: boolean, telemetry?: ResponseTelemetry | null, build?: RunnerProps["build"]): Promise<SaveOutcome> {
+  if (!session || mode === "preview") return { ok: true, skipped: true };
   try {
     const body = JSON.stringify({
       sessionId: session.sessionId,
@@ -94,28 +112,74 @@ async function persist(mode: string, session: RunnerProps["session"], state: Res
       // draft's base version, whose settings may be older
       build: build ? { source: build.source, versionId: build.versionId, revision: build.revision } : undefined,
     });
-    if (done && typeof navigator !== "undefined" && navigator.sendBeacon) {
-      // the completion save must survive the redirect that follows it
-      const ok = navigator.sendBeacon("/api/session/save", new Blob([body], { type: "application/json" }));
-      if (ok) {
-        // still await a normal fetch so the quality engine has run before a redirect fires
-        await fetch("/api/session/save", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: true }).catch(() => {});
-        return;
-      }
-    }
-    await fetch("/api/session/save", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body,
-      keepalive: done,
-    });
-  } catch {
-    /* offline tolerant — retried on next transition */
+    // keepalive lets the completion save outlive a redirect that follows it
+    const r = await fetch("/api/session/save", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: done, cache: "no-store" });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, error: j.error ?? `save failed (${r.status})`, status: r.status };
+    return { ok: true, response: j };
+  } catch (e) {
+    // offline tolerant for intermediate saves — the next save carries everything
+    return { ok: false, error: (e as Error).message || "network error" };
   }
 }
 
-export function Runner({ definition: def, mode, session, quotaCounts: initialCounts, urlParams, build, startAt, seedAnswers }: RunnerProps) {
+/** The final save, retried with backoff: three attempts before the respondent is told. */
+async function persistFinal(mode: string, session: RunnerProps["session"], state: ResponseState, telemetry: ResponseTelemetry | null, build: RunnerProps["build"]): Promise<SaveOutcome> {
+  let last: SaveOutcome = { ok: false, error: "not attempted" };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    last = await persist(mode, session, state, true, telemetry, build);
+    if (last.ok) return last;
+    // a 4xx will not change on retry (unknown/finalised session); a network error or 5xx might
+    if (last.status && last.status < 500) return last;
+    await new Promise((res) => setTimeout(res, 600 * (attempt + 1)));
+  }
+  return last;
+}
+
+const SESSION_KEY = (mode: string, surveyDbId: string) => `rescript:session:${mode}:${surveyDbId}`;
+
+export function Runner({ definition: def, mode, session: initialSession, sessionBoot, quotaCounts: initialCounts, urlParams, build, startAt, seedAnswers }: RunnerProps) {
   const [, force] = React.useReducer((x: number) => x + 1, 0);
+  /**
+   * The response row this run writes to. With `sessionBoot` it is obtained
+   * (or resumed) from /api/session/start before the first page renders —
+   * the seed drives randomisation, so nothing can be shown until it is
+   * known. `saved` holds a resumed row's answers and position.
+   */
+  const [session, setSession] = React.useState<RunnerProps["session"] | undefined>(initialSession);
+  const [bootError, setBootError] = React.useState<string | null>(null);
+  const [bootAttempt, setBootAttempt] = React.useState(0);
+  const savedRef = React.useRef<{ answers: Record<string, unknown>; calculated: Record<string, unknown>; embedded: Record<string, unknown>; flags: unknown[]; stepIndex: number } | null>(null);
+  const [resumed, setResumed] = React.useState(false);
+  /** the final save's state: pending → saving → saved | failed (with Retry) */
+  const [finalSave, setFinalSave] = React.useState<{ kind: "idle" } | { kind: "saving" } | { kind: "saved" } | { kind: "failed"; error: string }>({ kind: "idle" });
+  const booting = !!sessionBoot && !session && !bootError;
+
+  React.useEffect(() => {
+    if (!sessionBoot || session) return;
+    let cancelled = false;
+    const key = SESSION_KEY(sessionBoot.mode, sessionBoot.surveyDbId);
+    let resume: string | null = null;
+    try { resume = window.sessionStorage.getItem(key); } catch { /* storage unavailable */ }
+    (async () => {
+      try {
+        const r = await fetch("/api/session/start", {
+          method: "POST", headers: { "content-type": "application/json" }, cache: "no-store",
+          body: JSON.stringify({ client: sessionBoot.client, study: sessionBoot.study, mode: sessionBoot.mode, token: sessionBoot.token, requestedVersionId: sessionBoot.requestedVersionId ?? null, resume }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!r.ok || !j.session) { setBootError(j.error ?? `The survey could not be started (${r.status}).`); return; }
+        try { window.sessionStorage.setItem(key, j.session.sessionId); } catch { /* ignore */ }
+        if (j.resumed && j.saved) { savedRef.current = j.saved; setResumed(true); }
+        setSession({ ...j.session, seed: sessionBoot.seed ?? j.session.seed });
+      } catch (e) {
+        if (!cancelled) setBootError((e as Error).message || "The survey could not be started.");
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionBoot, bootAttempt]);
   const stateRef = React.useRef<ResponseState | null>(null);
   const [steps, setSteps] = React.useState<RuntimeStep[]>([]);
   const [errors, setErrors] = React.useState<ReturnType<typeof validatePage>>([]);
@@ -149,6 +213,8 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
    *  preview mode just re-seeds locally. */
   const restart = () => {
     if (mode === "test") {
+      // a restart is a NEW attempt: forget the row so the reload mints another
+      if (sessionBoot) { try { window.sessionStorage.removeItem(SESSION_KEY(sessionBoot.mode, sessionBoot.surveyDbId)); } catch { /* ignore */ } }
       window.location.reload();
       return;
     }
@@ -158,8 +224,9 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
     setEpoch((e) => e + 1);
   };
 
-  // init once per session epoch
+  // init once per session epoch — and not before the row is known
   React.useEffect(() => {
+    if (sessionBoot && !session) return;
     const state = createResponseState(def, {
       sessionId: session?.sessionId,
       seed: session?.seed,
@@ -195,17 +262,45 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
     const r = runScripts(def, state, "on_load");
     setLogs(r.logs);
     const nav = start(def, state, counts, startAt ? { startAt } : {});
-    notePage(nav.steps, state.stepIndex, telemetryRef.current.data.navigation.reloads > 0 ? "reload" : "start");
+    /*
+     * Resume: the row's answers come back, the flow is recompiled with them
+     * (branches depend on answers) and the position is restored, clamped in
+     * case the survey got shorter since. Only in_progress rows resume — a
+     * finished one starts a new attempt.
+     */
+    const saved = savedRef.current;
+    if (saved) {
+      Object.assign(state.answers, saved.answers ?? {});
+      Object.assign(state.calculated, saved.calculated ?? {});
+      Object.assign(state.embedded, saved.embedded ?? {});
+      state.flags = [...(saved.flags as never[] ?? [])];
+      const steps2 = compileFlow(def, state, counts);
+      state.stepIndex = Math.max(0, Math.min(saved.stepIndex ?? 0, steps2.length - 1));
+      nav.steps = steps2;
+      savedRef.current = null;
+    }
+    notePage(nav.steps, state.stepIndex, saved || telemetryRef.current.data.navigation.reloads > 0 ? "reload" : "start");
     setStartNote(
       nav.startAt && !nav.startAt.found
         ? "This block is not reachable with the current test values — its display logic (or an enclosing branch) hides it — so the preview starts at the first page instead."
         : null,
     );
     setSteps(nav.steps);
-    if (nav.done) setEnded({ status: nav.endStatus ?? "complete", redirectUrl: nav.redirectUrl });
+    if (nav.done) {
+      // ended before the first page (quota full, screened by embedded data):
+      // still a finished response — record it like any other completion
+      setEnded({ status: nav.endStatus ?? "complete", redirectUrl: nav.redirectUrl });
+      if (session && mode !== "preview") {
+        setFinalSave({ kind: "saving" });
+        void persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build).then((out) => {
+          setFinalSave(out.ok ? { kind: "saved" } : { kind: "failed", error: out.error });
+          force();
+        });
+      }
+    }
     force();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [epoch]);
+  }, [epoch, session]);
 
   /**
    * Live preview: the Studio pushes the definition on every edit, so the
@@ -225,7 +320,17 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
   }, [def]);
 
   const state = stateRef.current;
-  if (!state) return null;
+  if (bootError) {
+    return (
+      <div className="rs-shell"><div className="rs-card rs-end" data-testid="rs-boot-error">
+        <h2>{bootError}</h2>
+        <button type="button" className="rs-btn" style={{ marginTop: 18 }} onClick={() => { setBootError(null); setBootAttempt((n) => n + 1); }}>Try again</button>
+      </div></div>
+    );
+  }
+  if (booting || !state) {
+    return <div className="rs-shell"><div className="rs-card rs-end" data-testid="rs-booting"><h2>Loading survey…</h2></div></div>;
+  }
 
   const step = steps[state.stepIndex];
   const pageStep = step?.kind === "page" ? step : null;
@@ -286,7 +391,17 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
         redirectUrl: nav.redirectUrl,
       });
       telemetryRef.current?.submitted();
-      await persist(mode, session, state, true, telemetryRef.current?.data ?? null, build);
+      setFinalSave({ kind: "saving" });
+      force();
+      const out = await persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build);
+      if (!out.ok) {
+        console.warn("[rescript:save] completion NOT saved", { session: session?.sessionId.slice(0, 8), error: out.error });
+        setFinalSave({ kind: "failed", error: out.error });
+        force();
+        return;
+      }
+      setFinalSave({ kind: "saved" });
+      if (sessionBoot) { try { window.sessionStorage.removeItem(SESSION_KEY(sessionBoot.mode, sessionBoot.surveyDbId)); } catch { /* ignore */ } }
       if (nav.redirectUrl && mode === "live") {
         // "new window" keeps the completion page in place behind the panel's
         // own page — some panels require the survey tab to stay open
@@ -295,9 +410,22 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
       }
     } else {
       notePage(nav.steps, nav.stepIndex, "next");
-      persist(mode, session, state, false, telemetryRef.current?.data ?? null, build);
+      void persist(mode, session, state, false, telemetryRef.current?.data ?? null, build).then((o) => {
+        if (!o.ok) console.warn("[rescript:save] page save failed — the next save carries everything", { session: session?.sessionId.slice(0, 8), error: o.error });
+      });
       window.scrollTo({ top: 0 });
     }
+    force();
+  };
+
+  /** Retry a failed completion save: same state, same session, same row. */
+  const retryFinalSave = async () => {
+    if (!state) return;
+    setFinalSave({ kind: "saving" });
+    force();
+    const out = await persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build);
+    setFinalSave(out.ok ? { kind: "saved" } : { kind: "failed", error: out.error });
+    if (out.ok && sessionBoot) { try { window.sessionStorage.removeItem(SESSION_KEY(sessionBoot.mode, sessionBoot.surveyDbId)); } catch { /* ignore */ } }
     force();
   };
 
@@ -310,8 +438,16 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
     window.scrollTo({ top: 0 });
   };
 
-  const content = ended ? (
-    <div className="rs-card rs-end">
+  const content = ended && finalSave.kind === "failed" ? (
+    <div className="rs-card rs-end" data-testid="rs-save-failed">
+      <h2>Your answers have not been saved yet</h2>
+      <p style={{ color: "var(--rs-subtle)" }}>The connection to the server failed ({finalSave.error}). Nothing has been lost — please try again.</p>
+      <button type="button" className="rs-btn" style={{ marginTop: 18 }} onClick={retryFinalSave}>Retry saving</button>
+    </div>
+  ) : ended && finalSave.kind === "saving" ? (
+    <div className="rs-card rs-end" data-testid="rs-saving"><h2>Saving your answers…</h2></div>
+  ) : ended ? (
+    <div className="rs-card rs-end" data-testid="rs-ended" data-saved={finalSave.kind === "saved" || mode === "preview" ? "1" : "0"}>
       {ended.message ? (
         <h2 dangerouslySetInnerHTML={{ __html: resolvePiping(ended.message, ctx) }} />
       ) : (

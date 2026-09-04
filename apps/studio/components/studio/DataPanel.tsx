@@ -2,6 +2,7 @@
 import React from "react";
 import { useStudio } from "./store";
 import { QualityPanel } from "./QualityPanel";
+import { ResponseManager } from "./ResponseManager";
 
 /**
  * Response data browser (requirement §23/§26) — test and live sessions,
@@ -61,7 +62,7 @@ export function DataPanel() {
   const [error, setError] = React.useState<string | null>(null);
   const [open, setOpen] = React.useState<string | null>(null);
   const [onlyAnswered, setOnlyAnswered] = React.useState(true);
-  const [view, setView] = React.useState<"responses" | "quality">("responses");
+  const [view, setView] = React.useState<"responses" | "manage" | "quality">("responses");
   const [dataset, setDataset] = React.useState<Dataset>("all");
   const [exclude, setExclude] = React.useState<string[]>(["SUSPICIOUS", "HIGHLY_SUSPICIOUS", "CRITICAL"]);
   const [meta, setMeta] = React.useState<{ total: number; included: number } | null>(null);
@@ -113,24 +114,33 @@ export function DataPanel() {
         <h2 style={{ margin: 0, fontSize: 17 }}>Data</h2>
         <div className="row" style={{ gap: 4, marginLeft: 12 }} data-testid="data-view">
           <button className={`btn small ${view === "responses" ? "primary" : ""}`} data-testid="data-view-responses" onClick={() => setView("responses")}>Responses</button>
+          <button className={`btn small ${view === "manage" ? "primary" : ""}`} data-testid="data-view-manage" onClick={() => setView("manage")}>Manage</button>
           <button className={`btn small ${view === "quality" ? "primary" : ""}`} data-testid="data-view-quality" onClick={() => setView("quality")}>Quality</button>
         </div>
         <span className="grow" />
-        <div className="row" style={{ gap: 4 }}>
-          {(["test", "live", "all"] as Include[]).map((k) => (
-            <button key={k}
-              className={`btn small ${include === k ? "primary" : ""}`}
-              onClick={() => setInclude(k)}>
-              {k === "test" ? "Test data" : k === "live" ? "Live data" : "All"}
-            </button>
-          ))}
-        </div>
-        <button className="btn small" onClick={() => void load()}>↻ refresh</button>
-        <a className="btn small" href={csvHref} target="_blank" data-testid="export-csv">⬇ CSV</a>
-        <a className="btn small" href={xlsxHref} target="_blank" data-testid="export-xlsx" title="Main Data + Response Quality sheets">⬇ XLSX (data + quality)</a>
+        {view !== "manage" && (
+          <>
+            <div className="row" style={{ gap: 4 }}>
+              {(["test", "live", "all"] as Include[]).map((k) => (
+                <button key={k}
+                  className={`btn small ${include === k ? "primary" : ""}`}
+                  onClick={() => setInclude(k)}>
+                  {k === "test" ? "Test data" : k === "live" ? "Live data" : "All"}
+                </button>
+              ))}
+            </div>
+            <button className="btn small" onClick={() => void load()}>↻ refresh</button>
+            <a className="btn small" href={csvHref} target="_blank" data-testid="export-csv">⬇ CSV</a>
+            <a className="btn small" href={xlsxHref} target="_blank" data-testid="export-xlsx" title="Main Data + Response Quality sheets">⬇ XLSX (data + quality)</a>
+          </>
+        )}
       </div>
 
-      {view === "quality" ? <QualityPanel include={include} /> : (
+      {view === "manage" ? (
+        <ResponseManager
+          environment={include === "test" ? "TEST" : include === "live" ? "LIVE" : "ALL"}
+          onEnvironment={(e) => setInclude(e === "TEST" ? "test" : e === "LIVE" ? "live" : "all")} />
+      ) : view === "quality" ? <QualityPanel include={include} /> : (
       <>
       <div className="row" style={{ marginBottom: 10, flexWrap: "wrap", gap: 6, alignItems: "center" }} data-testid="dataset-selector">
         <span className="muted" style={{ fontSize: 11 }}>Dataset for table &amp; exports:</span>

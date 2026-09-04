@@ -1,8 +1,6 @@
 import { loadDeployment, BLOCKING_STATUSES } from "@/lib/deployment";
-import { createSession, loadQuotaCounts } from "@/lib/session";
+import { loadQuotaCounts } from "@/lib/session";
 import { Runner } from "@/components/Runner";
-import { headers } from "next/headers";
-import { clientIp } from "@rescript/quality/server";
 
 export const dynamic = "force-dynamic";
 
@@ -45,27 +43,24 @@ export default async function SurveyPage({
     );
   }
 
-  const ua = headers().get("user-agent") ?? undefined;
-  const session = await createSession(dep, {
-    ip: clientIp(headers()),
-    isTest: false,
-    respondentToken: searchParams.token,
-    userAgent: ua,
-  });
-  if ("error" in session) {
-    return (
-      <div className="rs-shell"><div className="rs-card rs-end"><h2>{session.error}</h2></div></div>
-    );
-  }
+  /*
+   * The response row is minted by the runner through /api/session/start —
+   * not here. Creating it during the server render wrote one row per visit
+   * (refreshes, crawlers, a respondent reloading mid-survey), which is where
+   * the orphan in_progress rows came from. The runner also resumes its own
+   * row after a reload, so a refresh keeps the answers instead of restarting.
+   */
   const quotaCounts = await loadQuotaCounts(dep.surveyId, false);
 
   return (
     <Runner
       definition={dep.definition}
       mode="live"
-      session={{
-        sessionId: session.sessionId,
-        seed: session.seed,
+      sessionBoot={{
+        client: params.client,
+        study: params.study,
+        mode: "live",
+        token: searchParams.token,
         surveyDbId: dep.surveyId,
         versionDbId: dep.versionId,
       }}

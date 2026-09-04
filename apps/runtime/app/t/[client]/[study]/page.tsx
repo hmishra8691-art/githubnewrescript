@@ -1,8 +1,6 @@
 import { loadTestBuild } from "@/lib/deployment";
-import { createSession, loadQuotaCounts } from "@/lib/session";
+import { loadQuotaCounts } from "@/lib/session";
 import { Runner } from "@/components/Runner";
-import { headers } from "next/headers";
-import { clientIp } from "@rescript/quality/server";
 
 export const dynamic = "force-dynamic";
 
@@ -59,30 +57,21 @@ export default async function TestSurveyPage({
 
   const { dep, build } = res;
 
-  /**
-   * Test mode is for the programmer, so it must work for every access mode.
-   * Unique-link and invitation surveys demand a respondent token; without one
-   * the session refused to start and the tester saw a dead end that looked
-   * like a bug. In test, a throwaway token is minted instead.
-   */
-  const session = await createSession(dep, {
-    isTest: true,
-    ip: clientIp(headers()),
-    userAgent: headers().get("user-agent") ?? undefined,
-    respondentToken: searchParams.token,
-    allowTokenless: true,
-  });
-  if ("error" in session) {
-    return <div className="rs-shell"><div className="rs-card rs-end"><h2>{session.error}</h2></div></div>;
-  }
+  // the row is minted (or resumed) by the runner via /api/session/start —
+  // see the live page for why; test mode mints a throwaway respondent for
+  // unique-link and invitation surveys so every access mode can be tested
   const quotaCounts = await loadQuotaCounts(dep.surveyId, true);
   return (
     <Runner
       definition={dep.definition}
       mode="test"
-      session={{
-        sessionId: session.sessionId,
-        seed: searchParams.seed ? Number(searchParams.seed) : session.seed,
+      sessionBoot={{
+        client: params.client,
+        study: params.study,
+        mode: "test",
+        token: searchParams.token,
+        requestedVersionId: requested,
+        seed: searchParams.seed ? Number(searchParams.seed) : undefined,
         surveyDbId: dep.surveyId,
         versionDbId: dep.versionId,
       }}
