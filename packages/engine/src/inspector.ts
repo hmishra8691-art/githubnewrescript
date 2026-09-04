@@ -6,6 +6,7 @@ import { flattenVariables } from "./flatten.js";
 import { evaluateCondition, type EvalTrace } from "./evaluate.js";
 import { explainOptions, type OptionPipelineTrace } from "./carryforward.js";
 import { quotaStatus, type QuotaCounts, type QuotaCellStatus } from "./quotas.js";
+import { listFillLoopItems, pendingListFills, unusedListFillDestinations } from "./listFill.js";
 
 /**
  * Programmer inspector (requirements §24–25): a full snapshot of the
@@ -29,10 +30,50 @@ export interface InspectorSnapshot {
    */
   optionPipelines: { questionId: string; code: string; trace: OptionPipelineTrace }[];
   quotas: QuotaCellStatus[];
+  /**
+   * What each List Fill has allocated to THIS respondent, and what is still
+   * waiting to run (§32). A tester's first question about a List Fill is
+   * "why did I get that one" — so the items are shown next to the reason,
+   * with every option's fate available behind it.
+   */
+  listFills: {
+    listFillId: string;
+    name: string;
+    /** allocated already: the items, read back from the stored variables */
+    items: { code: string; label: string; position: number }[];
+    /** true when this list is due to run but has not yet */
+    pending: boolean;
+    /** destinations left unfilled, and the rule that applies to each */
+    unusedDestinations: { questionId: string; rule: string }[];
+  }[];
   status: string;
   seed: number;
   stepIndex: number;
   totalSteps: number;
+}
+
+/**
+ * Each List Fill's state for this respondent.
+ *
+ * Read from the variables the allocation wrote, never re-decided — the
+ * inspector must show what happened, and deciding again here would both
+ * report a different answer and consume sample capacity.
+ */
+function listFillReport(def: SurveyDefinition, state: ResponseState): InspectorSnapshot["listFills"] {
+  const pending = new Set(pendingListFills(def, state).map((lf) => lf.id));
+  const unused = unusedListFillDestinations(def, state);
+  return def.listFills.map((lf) => {
+    const items = listFillLoopItems(def, state, lf.id).map((it, i) => ({ ...it, position: i + 1 }));
+    return {
+      listFillId: lf.id,
+      name: lf.name ?? lf.id,
+      items,
+      pending: pending.has(lf.id),
+      unusedDestinations: lf.destinations
+        .filter((d) => unused.has(d.questionId))
+        .map((d) => ({ questionId: d.questionId, rule: unused.get(d.questionId)! })),
+    };
+  });
 }
 
 export function inspect(
@@ -105,6 +146,7 @@ export function inspect(
     displayLogicResults,
     optionPipelines,
     quotas: quotaStatus(def, state, quotaCounts),
+    listFills: listFillReport(def, state),
     status: state.status,
     seed: state.seed,
     stepIndex: state.stepIndex,

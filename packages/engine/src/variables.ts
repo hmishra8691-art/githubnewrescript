@@ -1,4 +1,5 @@
 import type { SurveyDefinition, Question, VariableDef, FlowNode } from "@rescript/schema";
+import { listFillVariableNames } from "./listFill.js";
 import { fieldDataType } from "./fields.js";
 
 /**
@@ -416,6 +417,48 @@ export function buildVariableDictionary(def: SurveyDefinition): VariableDef[] {
       valueLabels: {},
       notes: ed.source,
     });
+  }
+  /*
+   * List Fill variables (§23, §34).
+   *
+   * They are declared here, from the configuration, rather than discovered
+   * from data — so the dictionary, the CSV and XLSX exports and the SPSS
+   * labels all carry a column for every allocated position from the moment
+   * the list is configured, before a single respondent has run. A column that
+   * only appears once someone happens to be allocated to it is how an export
+   * silently changes shape between waves.
+   */
+  for (const lf of def.listFills) {
+    const source = lf.source.kind === "question"
+      ? def.questions.find((q) => q.id === (lf.source as { questionId: string }).questionId)
+      : undefined;
+    const codes = lf.options.length
+      ? lf.options.map((o) => String(o.code))
+      : (source?.options ?? []).map((o) => String(o.code));
+    const labels: Record<string, string> = {};
+    for (const code of codes) {
+      const opt = lf.options.find((o) => String(o.code) === code);
+      labels[code] = opt?.label ?? source?.options.find((o) => String(o.code) === code)?.label ?? code;
+    }
+    for (const v of listFillVariableNames(lf)) {
+      const positional = v.position != null ? ` — item ${v.position}` : "";
+      out.push({
+        name: v.name,
+        label: `${lf.label ?? lf.name ?? lf.id} (List Fill)${positional}${
+          v.kind === "code" ? " code" : v.kind === "count" ? " — number allocated" : v.kind === "position" ? " position" : ""
+        }`,
+        dataType: v.kind === "count" || v.kind === "position" ? "numeric" : "text",
+        responseType: "list_fill",
+        derived: true,
+        hidden: true,
+        // an item column's possible values are the option codes, so a
+        // frequency table of "what did respondents get" is available directly
+        valueCodes: v.kind === "code" ? codes : [],
+        valueLabels: v.kind === "code" ? labels : {},
+        sourceQuestion: source?.code,
+        notes: `List Fill "${lf.name ?? lf.id}" — ${lf.selection.method}, ${lf.tracking.sampleLevel ? "sample-level allocation" : "per respondent"}`,
+      });
+    }
   }
   // system variables
   for (const [name, label] of [

@@ -16,6 +16,10 @@ import {
   applyPunches,
   answerKey,
   questionDependencies,
+  pendingListFills,
+  decideListFill,
+  listFillVariables,
+  applyListFillDestinations,
   type ResponseState,
   type RuntimeStep,
   type QuotaCounts,
@@ -134,6 +138,80 @@ async function persistFinal(mode: string, session: RunnerProps["session"], state
     await new Promise((res) => setTimeout(res, 600 * (attempt + 1)));
   }
   return last;
+}
+
+/**
+ * Run any List Fill whose source has just become available (§1, §38).
+ *
+ * LIVE AND TEST go to the server, which decides with the pinned definition
+ * and claims the slot atomically — the client is told the answer, it does not
+ * compute one. PREVIEW has no session and no sample, so it runs the identical
+ * pure engine in the browser against empty counters: the same code path the
+ * builder's simulator uses, which is why a preview and a live respondent with
+ * the same answers and the same counters get the same list.
+ *
+ * Returns the ids of the lists that allocated, so the caller knows the state
+ * changed and the flow must be recompiled (a `listFill` loop source expands
+ * from the result).
+ */
+async function runListFills(
+  def: SurveyDefinition,
+  state: ResponseState,
+  mode: string,
+  session: RunnerProps["session"],
+  build: RunnerProps["build"],
+  onTrace?: (line: string) => void,
+): Promise<string[]> {
+  const due = pendingListFills(def, state);
+  if (!due.length) return [];
+
+  if (mode === "preview" || !session) {
+    const ran: string[] = [];
+    for (const lf of due) {
+      const res = decideListFill({ def, listFill: lf, state });
+      Object.assign(state.calculated, listFillVariables(lf, res));
+      applyListFillDestinations(lf, res, state);
+      ran.push(lf.id);
+      onTrace?.(`[list fill] ${res.name}: ${res.trace.reason}`);
+    }
+    return ran;
+  }
+
+  try {
+    const r = await fetch("/api/session/listfill", {
+      method: "POST", headers: { "content-type": "application/json" }, cache: "no-store",
+      body: JSON.stringify({
+        sessionId: session.sessionId,
+        listFillIds: due.map((lf) => lf.id),
+        answers: state.answers, calculated: state.calculated, embedded: state.embedded, flags: state.flags,
+        build: build ? { source: build.source, versionId: build.versionId, revision: build.revision } : undefined,
+      }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !Array.isArray(j.allocations)) {
+      // Do NOT allocate locally as a fallback: only the server's claim can
+      // honour a cap, and inventing an item here is how two respondents end
+      // up sharing the last slot. The list simply has not run yet, and the
+      // next page submit will try again.
+      onTrace?.(`[list fill] not allocated — ${j.error ?? `server error (${r.status})`}`);
+      return [];
+    }
+    const ran: string[] = [];
+    for (const a of j.allocations) {
+      const lf = def.listFills.find((x) => x.id === a.listFillId);
+      if (!lf) continue;
+      Object.assign(state.calculated, a.variables ?? {});
+      // the confirmed items are the truth, so the destinations are written
+      // from those rather than from anything decided in the browser
+      applyListFillDestinations(lf, { listFillId: lf.id, name: a.name, items: a.items ?? [], preference: [], trace: a.trace }, state);
+      ran.push(lf.id);
+      if (a.trace?.reason) onTrace?.(`[list fill] ${a.name}: ${a.trace.reason}`);
+    }
+    return ran;
+  } catch (e) {
+    onTrace?.(`[list fill] not allocated — ${(e as Error).message || "network error"}`);
+    return [];
+  }
 }
 
 const SESSION_KEY = (mode: string, surveyDbId: string) => `rescript:session:${mode}:${surveyDbId}`;
@@ -380,6 +458,19 @@ export function Runner({ definition: def, mode, session: initialSession, session
       return;
     }
     setErrors([]);
+    /*
+     * List Fill runs HERE — after the page's answers are valid and before the
+     * flow moves. That order matters: the allocation is what a later branch,
+     * a repeat block or a destination question depends on, so deciding it
+     * after navigation would show the respondent a page built from an item
+     * they had not been given yet.
+     */
+    const allocated = await runListFills(def, state, mode, session, build, (line) => setLogs((l) => [...l, line]));
+    if (allocated.length && mode !== "live") {
+      console.info("[rescript:listfill] allocated", allocated.map((id) => ({
+        id, items: def.listFills.find((lf) => lf.id === id)?.name ?? id,
+      })));
+    }
     telemetryRef.current?.leavePage();
     const nav = advance(def, state, counts);
     setSteps(nav.steps);

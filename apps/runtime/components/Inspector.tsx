@@ -122,6 +122,35 @@ export function Inspector({ snap, logs }: { snap: InspectorSnapshot; logs: strin
         </div>
       ))}
 
+      {snap.listFills.length > 0 && (
+        <>
+          <h3>List Fill</h3>
+          {snap.listFills.map((lf) => (
+            <div key={lf.listFillId} style={{ marginBottom: 6 }} data-testid={`insp-listfill-${lf.listFillId}`}>
+              <div>
+                <span className="k">{lf.name}</span>{" "}
+                {lf.items.length ? (
+                  lf.items.map((it) => (
+                    <span key={it.position} className="true" style={{ marginRight: 6 }}>
+                      {it.position}. {it.code}{it.label !== it.code ? ` (${it.label})` : ""}
+                    </span>
+                  ))
+                ) : lf.pending ? (
+                  <span style={{ opacity: 0.6 }}>due to run — its source is ready but it has not allocated yet</span>
+                ) : (
+                  <span style={{ opacity: 0.5 }}>nothing allocated</span>
+                )}
+              </div>
+              {lf.unusedDestinations.length > 0 && (
+                <div style={{ opacity: 0.7 }}>
+                  unused destinations: {lf.unusedDestinations.map((d) => `${d.questionId} → ${d.rule}`).join(", ")}
+                </div>
+              )}
+            </div>
+          ))}
+        </>
+      )}
+
       <h3>Flat variables</h3>
       <table><tbody>
         {Object.entries(snap.flatVariables).map(([k, v]) => (

@@ -3,6 +3,7 @@ import { Condition } from "./conditions.js";
 import { Question } from "./question.js";
 import { FlowNode, LogicFlow, EmbeddedDataType } from "./flow.js";
 import { QualityConfig } from "./quality.js";
+import { ListFill } from "./listFill.js";
 
 /** Named display-logic rules that can target anything (requirement §6). */
 export const DisplayRule = z.object({
@@ -235,6 +236,12 @@ export const SurveyDefinition = z.object({
   deployment: DeploymentConfig.default({}),
   /** Response quality & fraud detection settings (`@rescript/quality`). */
   quality: QualityConfig.default({}),
+  /**
+   * Advanced List Fill / allocation objects (`docs/LIST-FILL.md`). First-class
+   * and versioned with the survey, so a deployment always allocates with the
+   * configuration its pinned version carries.
+   */
+  listFills: z.array(ListFill).default([]),
   meta_extensions: z.record(z.any()).optional(),
 });
 export type SurveyDefinition = z.infer<typeof SurveyDefinition>;

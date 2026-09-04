@@ -12,7 +12,7 @@ import {
   type LogicPath,
   editableCondition, canonicalCondition, pathKey, appendTo, replaceAt, removeAt,
   duplicateAt, setOperatorAt, groupSelection, ungroupAt, validateLogicTree,
-  OPERATOR_LABEL, OPERATOR_HINT, setGroupConnector,
+  OPERATOR_LABEL, OPERATOR_HINT, setGroupConnector, listFillVariableNames,
 } from "@rescript/engine";
 import { SYSTEM_VARIABLE_HELP } from "@rescript/quality";
 import { useStudio } from "./store";
@@ -159,6 +159,20 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
             {s.def.calculations.map((c) => (
               <option key={c.id} value={`calculation:${c.targetVariable}`}>{c.targetVariable}</option>
             ))}
+          </optgroup>
+        )}
+        {/* List Fill results are ordinary calculated variables, so a
+            condition on "which brand was this respondent allocated" is built
+            with the same builder as everything else — no separate List Fill
+            logic language (§24) */}
+        {s.def.listFills.length > 0 && (
+          <optgroup label="List Fill results">
+            {s.def.listFills.flatMap((lf) => listFillVariableNames(lf as never)
+              .filter((v) => v.kind === "code" || v.kind === "count")
+              .slice(0, 12)
+              .map((v) => (
+                <option key={v.name} value={`calculation:${v.name}`}>{v.name}</option>
+              )))}
           </optgroup>
         )}
         {/* the quality engine's SYSTEM_* metrics — what custom quality rules
@@ -635,11 +649,13 @@ export function conditionToText(c: Condition | undefined, def: any): string {
 }
 
 /** Is this `kind:ref` source offered by one of the select's groups? */
-function knownSource(value: string, def: { calculations: { targetVariable: string }[]; flow: unknown[] }): boolean {
+function knownSource(value: string, def: { calculations: { targetVariable: string }[]; flow: unknown[]; listFills?: unknown[] }): boolean {
   if (value.startsWith("loop:")) return ["loop:label", "loop:code", "loop:index"].includes(value);
   if (value.startsWith("calculation:")) {
     const ref = value.slice("calculation:".length);
-    return def.calculations.some((c) => c.targetVariable === ref) || SYSTEM_VARIABLE_HELP.some((v) => v.name === ref);
+    if (def.calculations.some((c) => c.targetVariable === ref)) return true;
+    if (SYSTEM_VARIABLE_HELP.some((v) => v.name === ref)) return true;
+    return (def.listFills ?? []).some((lf) => listFillVariableNames(lf as never).some((v) => v.name === ref));
   }
   if (value.startsWith("embedded:")) return embeddedCatalog(def as any).some((e) => `embedded:${e.name}` === value);
   return false;

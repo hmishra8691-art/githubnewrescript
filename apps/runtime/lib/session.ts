@@ -90,17 +90,33 @@ export async function createSession(
   return { sessionId, seed, respondentId };
 }
 
-export async function loadQuotaCounts(surveyId: string, includeTest: boolean): Promise<QuotaCounts> {
+/**
+ * The quota counters for ONE environment.
+ *
+ * `isTest` is the environment being run, not a widening flag: a test session
+ * is closed by test counters and a live session by live ones (migration
+ * 0006). This used to ignore the argument and sum both, which meant a busy
+ * test link could close a live quota — the one thing the response-management
+ * work said must never happen. The unfiltered read stays only as the
+ * fallback for a database where 0006 has not been applied.
+ */
+export async function loadQuotaCounts(surveyId: string, isTest: boolean): Promise<QuotaCounts> {
   const db = supabaseAdmin();
-  const { data } = await db
+  let { data, error } = (await db
     .from("quota_counts")
     .select("quota_id, cell_id, count")
-    .eq("survey_id", surveyId);
+    .eq("survey_id", surveyId)
+    .eq("is_test", isTest)) as { data: { quota_id: string; cell_id: string; count: number }[] | null; error: { message: string } | null };
+  if (error && /is_test/.test(error.message)) {
+    ({ data } = (await db
+      .from("quota_counts")
+      .select("quota_id, cell_id, count")
+      .eq("survey_id", surveyId)) as typeof data extends never ? never : { data: { quota_id: string; cell_id: string; count: number }[] | null });
+  }
   const counts: QuotaCounts = {};
   for (const row of data ?? []) {
     counts[row.quota_id] = counts[row.quota_id] ?? {};
     counts[row.quota_id][row.cell_id] = row.count;
   }
-  void includeTest;
   return counts;
 }

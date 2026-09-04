@@ -19,7 +19,12 @@ export interface QuotaCellStatus {
   matchesRespondent: boolean;
 }
 
-function effectiveLimit(q: Quota, cellLimit: number, limitType: "count" | "percent"): number {
+/**
+ * A cell's limit in respondents. Exported because List Fill's quota-aware
+ * allocation must read a cell's capacity exactly as `checkQuotas` does — one
+ * definition of "full", not two that can drift.
+ */
+export function effectiveLimit(q: Quota, cellLimit: number, limitType: "count" | "percent"): number {
   if (limitType === "percent") {
     const total = q.targetTotal ?? 0;
     return Math.floor((cellLimit / 100) * total);

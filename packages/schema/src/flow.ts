@@ -76,7 +76,9 @@ export type FlowNode =
       source:
         | { kind: "question"; questionId: string; filter?: "selected" | "displayed" | "all" }
         | { kind: "static"; items: { code: string; label: string }[] }
-        | { kind: "design"; designId: string };
+        | { kind: "design"; designId: string }
+        /** one iteration per item a List Fill allocated to this respondent */
+        | { kind: "listFill"; listFillId: string };
       /** Inside the loop, {{loop.code}} / {{loop.label}} / {{loop.index}} pipe in. */
       loopVar: string;
       randomizeIterations?: boolean;
@@ -194,6 +196,7 @@ export const FlowNode: z.ZodType<FlowNode> = z.lazy(() =>
           items: z.array(z.object({ code: z.string(), label: z.string() })),
         }),
         z.object({ kind: z.literal("design"), designId: z.string() }),
+        z.object({ kind: z.literal("listFill"), listFillId: z.string() }),
       ]),
       loopVar: z.string(),
       randomizeIterations: z.boolean().optional(),

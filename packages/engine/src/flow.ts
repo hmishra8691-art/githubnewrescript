@@ -10,6 +10,7 @@ import { checkQuotas, type QuotaCounts } from "./quotas.js";
 import { applyEmbeddedField, type EmbeddedField } from "./embedded.js";
 import { prefillQuestions } from "./setExpression.js";
 import { resolveUrlTemplate } from "./redirect.js";
+import { listFillLoopItems, listFillHiddenDestinations } from "./listFill.js";
 
 /**
  * Survey Flow interpreter (requirement §7).
@@ -129,11 +130,13 @@ export function compileFlow(
         }
         case "loop": {
           let items: { code: string; label: string }[] = [];
-          if (node.source.kind === "static") {
-            items = node.source.items;
-          } else if (node.source.kind === "question") {
-            const src = getQuestion(def, node.source.questionId);
-            const answer = state.answers[node.source.questionId];
+          // bound once so TypeScript keeps the narrowing through the branches
+          const source = node.source;
+          if (source.kind === "static") {
+            items = source.items;
+          } else if (source.kind === "question") {
+            const src = getQuestion(def, source.questionId);
+            const answer = state.answers[source.questionId];
             const codes = Array.isArray(answer)
               ? answer
               : answer == null
@@ -141,7 +144,7 @@ export function compileFlow(
                 : typeof answer === "object"
                   ? Object.keys(answer)
                   : [answer];
-            if (node.source.filter === "all" && src) {
+            if (source.filter === "all" && src) {
               items = src.options.map((o) => ({ code: String(o.code), label: o.label }));
             } else {
               items = codes.map((c) => {
@@ -149,13 +152,21 @@ export function compileFlow(
                 return { code: String(c), label: opt?.label ?? String(c) };
               });
             }
-          } else if (node.source.kind === "design") {
-            const design = def.designs.find((d) => d.id === node.source.kind);
+          } else if (source.kind === "design") {
+            const design = def.designs.find((d) => d.id === source.designId);
             const rows = design?.file?.rows ?? [];
             items = rows.map((r, i) => ({
               code: String((r as any).task ?? i + 1),
               label: `Task ${i + 1}`,
             }));
+          } else if (source.kind === "listFill") {
+            // One iteration per item a List Fill ALREADY allocated to this
+            // respondent. The flow never decides an allocation: it recompiles
+            // after every answer, and re-deciding would both hand out
+            // different items and consume sample capacity again. The
+            // allocation is made once, atomically, and lands in
+            // `state.calculated` as LISTFILL_* — this reads it back.
+            items = listFillLoopItems(def, state, source.listFillId);
           }
           if (node.randomizeIterations) {
             items = seededShuffle(items, subSeed(state.seed, `loop:${node.id}`));
@@ -230,12 +241,17 @@ export function visibleQuestions(
     if (rule.action === "show") shownByRules.set(rule.target.ref, holds);
     else if (holds) hiddenByRules.add(rule.target.ref);
   }
+  // a List Fill destination that received no item, configured to disappear
+  // (§17). Only the rules that REMOVE the question act here; `disable` and
+  // `blank` leave it on the page and are the renderer's business.
+  const unusedDestinations = listFillHiddenDestinations(def, state);
   return step.questionIds
     .map((id) => getQuestion(def, id))
     .filter((q): q is Question => !!q)
     .filter((q) => q.type !== "hidden" && q.type !== "calculated" && q.type !== "embedded_data" && !q.settings.hidden)
     .filter((q) => evaluateCondition(q.displayLogic, ctx))
     .filter((q) => !hiddenByRules.has(q.id))
+    .filter((q) => !unusedDestinations.has(q.id))
     .filter((q) => (shownByRules.has(q.id) ? shownByRules.get(q.id)! : true));
 }
 

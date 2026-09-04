@@ -95,6 +95,24 @@ export async function POST(req: NextRequest) {
         if (qErr && !existing.is_test) await db.rpc("increment_quota_counts", { p_survey_id: existing.survey_id, p_cells: cells });
       }
     }
+    /*
+     * List Fill (migration 0007). A completed interview CONFIRMS its claims,
+     * moving them into `completed_count` — which is the number a list capped
+     * on completes is judged by, and the reporting split between in-progress
+     * and finished for every other list.
+     *
+     * Anything else RELEASES them. A respondent who screened out or hit a
+     * quota did not consume a slot of "150 interviews about Apple", and
+     * leaving the claim behind would close an option that is not actually
+     * full. Neither call can fail the save: the answers are the data, and
+     * `rescript_recount_listfill` can rebuild the counters from the
+     * allocations at any time.
+     */
+    if (def?.listFills?.length) {
+      const fn = newStatus === "complete" ? "rescript_complete_listfill" : "rescript_release_listfill";
+      const { error: lfErr } = await db.rpc(fn, { p_survey: existing.survey_id, p_session: sessionId });
+      if (lfErr) console.error(`[rescript:listfill] ${fn} failed`, { sessionId: sessionId.slice(0, 8), status: newStatus, error: lfErr.message });
+    }
     if (existing.respondent_id) {
       await db.from("respondents").update({ status: newStatus }).eq("id", existing.respondent_id);
     }

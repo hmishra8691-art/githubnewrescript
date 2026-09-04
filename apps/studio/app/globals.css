@@ -1200,3 +1200,12 @@ p.qs-help { margin: -2px 0 10px; }
 .rm-import-controls .btn, .rm-import-controls .select { flex: none; }
 .rm-import-summary { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 6px; }
 .rm-import textarea.ta { font-size: 12px; }
+
+/* ---------- List Fill: the option grid is wide (limits + live counts), so it
+   scrolls inside its own pane rather than stretching the panel ---------- */
+.lf-grid { font-size: 12px; min-width: 860px; }
+.lf-grid th, .lf-grid td { padding: 4px 6px; }
+.lf-grid td .count-input, .lf-grid td input { font-size: 11.5px; }
+.lf-grid tr[data-status="FULL"] td:first-child { border-left: 2px solid var(--red); }
+.lf-grid tr[data-status="TARGET_REACHED"] td:first-child,
+.lf-grid tr[data-status="NEAR_CAP"] td:first-child { border-left: 2px solid var(--accent); }

@@ -10,6 +10,7 @@ import { FlowPanel } from "./FlowPanel";
 import { LogicPanel, CalcPanel } from "./LogicPanel";
 import { VariablesPanel } from "./VariablesPanel";
 import { QuotasPanel } from "./QuotasPanel";
+import { ListFillPanel } from "./ListFillPanel";
 import { DesignsPanel } from "./DesignsPanel";
 import { BrandingPanel, ScriptsPanel } from "./BrandingPanel";
 import { VersionsPanel } from "./VersionsPanel";
@@ -19,7 +20,7 @@ import { runtimeBaseUrl } from "@/lib/runtime-url";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
-  | "quotas" | "designs" | "branding" | "scripts" | "data" | "versions" | "json"
+  | "quotas" | "listfill" | "designs" | "branding" | "scripts" | "data" | "versions" | "json"
   | "settings";
 
 const NAV: { key: Tab; label: string; icon: string }[] = [
@@ -30,6 +31,7 @@ const NAV: { key: Tab; label: string; icon: string }[] = [
   { key: "variables", label: "Variables", icon: "𝑥" },
   { key: "calculations", label: "Calculations", icon: "∑" },
   { key: "quotas", label: "Quotas", icon: "◔" },
+  { key: "listfill", label: "List Fill", icon: "⇲" },
   { key: "designs", label: "Design Generators", icon: "⚗" },
   { key: "branding", label: "Branding", icon: "◩" },
   { key: "scripts", label: "Scripts", icon: "{}" },
@@ -122,6 +124,7 @@ function StudioShell() {
   const counts: Partial<Record<Tab, number>> = {
     questions: s.def.questions.length,
     quotas: s.def.quotas.length,
+    listfill: s.def.listFills.length,
     calculations: s.def.calculations.length,
     designs: s.def.designs.length,
     scripts: s.def.scripts.length,
@@ -429,6 +432,7 @@ function StudioShell() {
           {tab === "variables" && <VariablesPanel />}
           {tab === "calculations" && <CalcPanel />}
           {tab === "quotas" && <QuotasPanel />}
+          {tab === "listfill" && <ListFillPanel />}
           {tab === "designs" && <DesignsPanel />}
           {tab === "branding" && <BrandingPanel />}
           {tab === "scripts" && <ScriptsPanel />}

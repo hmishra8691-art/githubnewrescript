@@ -404,7 +404,11 @@ console.log("✔ KEEP / REMOVE / REVIEW LATER: stored with a reason, listed in t
 await page.click('[data-testid="data-view-responses"]');
 await page.waitForSelector('[data-testid="dataset-select"]');
 await page.selectOption('[data-testid="dataset-select"]', "clean");
-await page.waitForSelector('[data-testid="dataset-count"]');
+// wait on the NUMBER, not on the chip: the chip appears as soon as the
+// dataset is not "all", still carrying the previous fetch's totals, so
+// asserting on its presence reads the count from before the filter landed
+await page.waitForFunction(() => /3 of 6/.test(document.querySelector('[data-testid="dataset-count"]')?.textContent ?? ""),
+  null, { timeout: 15000 });
 assert.match(await page.textContent('[data-testid="dataset-count"]'), /3 of 6/, "clean = KEEP + unreviewed CLEAN (the removed one is out; screened unscored counts as clean)");
 assert.ok(dataRequests.some((q) => q.includes("dataset=clean")), "the dataset filter is sent to the server");
 const csv = await page.getAttribute('[data-testid="export-csv"]', "href");
