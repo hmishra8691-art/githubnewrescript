@@ -4,6 +4,7 @@ import {
   exportSurveyDocx, exportSurveyJsonConfigured,
   EXPORT_PRESETS, ALL_FIELDS, type ExportFields,
 } from "@rescript/exporters";
+import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,9 @@ export const dynamic = "force-dynamic";
  * an export can never be produced from a definition the runtime would refuse.
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireProject(req, params.id, "project.read");
+  if (isFailure(gate)) return gate.response;
+
   // A definition is a few hundred KB at the very outside; anything larger is
   // not a survey, and both the schema parse and the docx build run
   // synchronously, so an unbounded body is an easy way to tie up the server.

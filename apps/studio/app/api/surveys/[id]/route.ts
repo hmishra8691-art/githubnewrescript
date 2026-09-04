@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { SURVEY_STATUSES, isSurveyStatus } from "@/lib/status";
+import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireProject(req, params.id, "project.read");
+  if (isFailure(gate)) return gate.response;
+
   const db = supabaseAdmin();
   const { data: survey, error } = await db
     .from("surveys")
@@ -28,6 +32,9 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 
 /** Change the project's lifecycle status (see lib/status.ts). */
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireEditRight(req, params.id, "survey.edit");
+  if (isFailure(gate)) return gate.response;
+
   const body = await req.json().catch(() => ({}));
   const status = String(body.status ?? "");
   if (!isSurveyStatus(status)) {
@@ -69,7 +76,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   return NextResponse.json({ ok: true, status });
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireProject(req, params.id, "project.delete");
+  if (isFailure(gate)) return gate.response;
+
   const db = supabaseAdmin();
   await db.from("surveys").update({ current_version_id: null }).eq("id", params.id);
   const { error } = await db.from("surveys").delete().eq("id", params.id);

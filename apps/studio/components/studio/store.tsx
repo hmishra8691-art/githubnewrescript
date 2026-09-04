@@ -52,6 +52,22 @@ export interface StudioState {
    * stored against the old codes — so once this is true, codes freeze.
    */
   hasResponses: boolean;
+  /**
+   * READ-ONLY MODE (§19).
+   *
+   * True whenever this session does not hold the project's edit lock — which
+   * is the default, and stays true for a viewer, a reviewer, and an editor who
+   * has not entered edit mode or whose lock was taken away.
+   *
+   * It is a MIRROR of the server's answer, refreshed by the collaboration
+   * poll, never a decision made here. `update` and `replace` refuse while it
+   * is set, and the autosave will not run — so a client that somehow keeps
+   * editing cannot silently queue a write that the backend is going to reject
+   * anyway. The backend refusing is what makes it safe; this makes it kind.
+   */
+  readOnly: boolean;
+  readOnlyReason: string | null;
+  setReadOnly(readOnly: boolean, reason?: string | null): void;
   update(mutator: (draft: SurveyDefinition) => void): void;
   /**
    * Undo / redo across every edit that went through `update` or `replace`
@@ -115,11 +131,18 @@ export const useStudio = () => {
 const AUTOSAVE_DEBOUNCE_MS = 900;
 
 export function StudioProvider({
-  initial, surveyDbId, versionId, draftSavedAt, revision: initialRevision, children,
+  initial, surveyDbId, versionId, draftSavedAt, revision: initialRevision,
+  readOnly: initialReadOnly, children,
 }: {
   initial: SurveyDefinition;
   surveyDbId: string;
   versionId: string | null;
+  /**
+   * Start read-only. The editor opens in View mode by default: entering edit
+   * mode is a deliberate act that takes the lock (§38), and defaulting the
+   * other way would have the first person to open a project silently claim it.
+   */
+  readOnly?: boolean;
   /** when the loaded draft was last autosaved, if it came from a draft */
   draftSavedAt?: string | null;
   /** the row revision this editor loaded; null before migration 0004 */
@@ -137,8 +160,23 @@ export function StudioProvider({
   const [hasResponses, setHasResponses] = React.useState(false);
   const [revision, setRevision] = React.useState<number | null>(initialRevision ?? null);
   const [unguarded, setUnguarded] = React.useState(false);
+  const [readOnly, setReadOnlyState] = React.useState(initialReadOnly ?? true);
+  const [readOnlyReason, setReadOnlyReason] = React.useState<string | null>(null);
+  /* refs, because `update` and the autosave read this from closures that were
+     created before the poll changed it */
+  const readOnlyRef = React.useRef(readOnly);
+  readOnlyRef.current = readOnly;
+  const readOnlyReasonRef = React.useRef(readOnlyReason);
+  readOnlyReasonRef.current = readOnlyReason;
   const goToTabRef = React.useRef<((tab: string) => void) | undefined>(undefined);
   const toastTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  /* a standalone raiser: `value.toast` cannot be called from inside the object
+     literal that defines it */
+  const showToast = React.useCallback((msg: string, kind: "ok" | "err" = "ok") => {
+    setToastMsg({ msg, kind });
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToastMsg(null), 3500);
+  }, []);
 
   /**
    * Undo history.
@@ -174,6 +212,13 @@ export function StudioProvider({
     // A conflict means this editor is behind. Writing again would overwrite
     // whatever is newer, so autosave stops until the programmer resolves it.
     if (blocked.current) return false;
+    /*
+     * Never autosave without the lock. The route refuses it (409) regardless,
+     * but attempting it would flip the header into an error state on every
+     * debounce tick for a viewer who happened to trigger a mutation — noise
+     * that describes a client bug rather than anything the user can act on.
+     */
+    if (readOnlyRef.current) return false;
     // the exact object being sent — compared after the round trip, so a save
     // that lands while newer edits exist never reports "all changes saved"
     const sent = latest.current;
@@ -339,7 +384,23 @@ export function StudioProvider({
      * so one ⌘Z would appear to do nothing. The ref is kept in step on every
      * render and on every mutation below, which makes it the safe source.
      */
+    readOnly,
+    readOnlyReason,
+    setReadOnly(next, reason) {
+      setReadOnlyState(next);
+      setReadOnlyReason(next ? reason ?? null : null);
+      // leaving read-only clears a stale "refused" toast; entering it stops
+      // the debounced save that an in-flight edit may already have scheduled
+      if (next && autosaveTimer.current) {
+        clearTimeout(autosaveTimer.current);
+        autosaveTimer.current = null;
+      }
+    },
     update(mutator) {
+      if (readOnlyRef.current) {
+        showToast(readOnlyReasonRef.current ?? "This project is read-only — enter edit mode to make changes.", "err");
+        return;
+      }
       const label = nextLabel.current ?? "edit";
       nextLabel.current = null;
       const prev = latest.current;
@@ -352,6 +413,10 @@ export function StudioProvider({
       touched();
     },
     replace(next) {
+      if (readOnlyRef.current) {
+        showToast(readOnlyReasonRef.current ?? "This project is read-only — enter edit mode to make changes.", "err");
+        return;
+      }
       const label = nextLabel.current ?? "replace survey";
       nextLabel.current = null;
       const prev = latest.current;
@@ -415,11 +480,7 @@ export function StudioProvider({
         serverRevision,
       });
     },
-    toast(msg, kind = "ok") {
-      setToastMsg({ msg, kind });
-      if (toastTimer.current) clearTimeout(toastTimer.current);
-      toastTimer.current = setTimeout(() => setToastMsg(null), 3500);
-    },
+    toast(msg, kind = "ok") { showToast(msg, kind); },
   };
 
   /**

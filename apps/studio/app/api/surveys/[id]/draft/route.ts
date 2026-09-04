@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
 import { droppedFieldPaths } from "@rescript/engine";
+import { audit, isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +37,9 @@ const NEEDS_MIGRATION =
   "Autosave needs supabase/migrations/0003_draft_definitions.sql applied. Your work is safe — use Save version until then.";
 
 export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireEditRight(req, params.id, "survey.edit");
+  if (isFailure(gate)) return gate.response;
+
   const body = await req.json().catch(() => null);
   if (!body?.definition) {
     return NextResponse.json({ error: "definition required" }, { status: 400 });
@@ -117,6 +121,35 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
         );
       }
       console.info("[rescript:draft] saved", JSON.stringify({ surveyId: params.id, baseRevision, newRevision: row.revision, dropped: dropped.length }));
+
+      /*
+       * §25 wants "Survey Modified" in the activity log, and the autosave is
+       * where modification actually happens — but it fires every second while
+       * someone types, and a row per keystroke would bury every other event in
+       * the log and make it useless for the question it exists to answer.
+       *
+       * So one marker per editing SESSION per project: the first save records
+       * it, and subsequent saves by the same session do not. "John started
+       * editing at 10:32" (the lock) plus "John modified the survey" plus
+       * "John released the lock at 10:52" is the story a researcher needs;
+       * eleven hundred identical rows in between is not.
+       */
+      void (async () => {
+        const { count } = await db
+          .from("audit_logs")
+          .select("id", { count: "exact", head: true })
+          .eq("survey_id", params.id)
+          .eq("session_id", gate.user.sessionId)
+          .eq("action", "survey.modified");
+        if (!count) {
+          await audit({
+            action: "survey.modified", userId: gate.user.userId, sessionId: gate.user.sessionId,
+            surveyId: params.id, customerId: gate.user.customerId,
+            detail: { summary: "autosaved changes", fromRevision: baseRevision },
+          });
+        }
+      })();
+
       return NextResponse.json({
         ok: true,
         savedAt: row.draft_updated_at ?? new Date().toISOString(),
@@ -158,7 +191,10 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   });
 }
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireProject(req, params.id, "project.read");
+  if (isFailure(gate)) return gate.response;
+
   const db = supabaseAdmin();
   const full = await db
     .from("surveys")
@@ -183,7 +219,10 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 /** Discard the draft and fall back to the current version. */
-export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireEditRight(req, params.id, "survey.edit");
+  if (isFailure(gate)) return gate.response;
+
   const db = supabaseAdmin();
   const { error } = await db
     .from("surveys")

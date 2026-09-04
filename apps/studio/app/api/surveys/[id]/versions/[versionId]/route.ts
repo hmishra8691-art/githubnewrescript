@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
+import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: { id: string; versionId: string } },
 ) {
+  const gate = await requireProject(req, params.id, "project.read");
+  if (isFailure(gate)) return gate.response;
+
   const db = supabaseAdmin();
   const { data, error } = await db
     .from("survey_versions")
@@ -20,9 +24,12 @@ export async function GET(
 
 /** Restore: make this version the current one (definition returned for editing). */
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: { id: string; versionId: string } },
 ) {
+  const gate = await requireEditRight(req, params.id, "survey.save_version");
+  if (isFailure(gate)) return gate.response;
+
   const db = supabaseAdmin();
   const { data, error } = await db
     .from("survey_versions")

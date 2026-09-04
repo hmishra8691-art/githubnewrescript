@@ -7,6 +7,11 @@ import { newSurveyDefinition } from "@/lib/defaults";
  * Editor sandbox: the full Studio running on an in-memory definition with no
  * database. Used for developing and E2E-testing the authoring experience.
  *
+ * `?collab=1` turns the collaboration layer on (presence, the edit lock,
+ * read-only mode). It is OFF by default here because the fixture has no
+ * session: the poll would answer 401 and leave the editor read-only for a
+ * reason that has nothing to do with what these suites are testing.
+ *
  * `?dbid=<id>` points it at a survey row, which makes the autosave path real:
  * the id "sandbox" deliberately short-circuits persistence, so without this
  * the one thing that most needs testing — that edits actually reach the
@@ -29,6 +34,7 @@ export default function SandboxPage() {
       surveyDbId={dbid}
       versionId={null}
       revision={rev === null ? null : Number(rev)}
+      collaboration={params.get("collab") === "1"}
     />
   );
 }

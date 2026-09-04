@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
+import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +14,10 @@ export const dynamic = "force-dynamic";
  * bug rather than a deliberate safety property. This endpoint feeds the banner
  * that makes the gap obvious and offers a one-click publish.
  */
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireProject(req, params.id, "project.read");
+  if (isFailure(gate)) return gate.response;
+
   const db = supabaseAdmin();
   const { data, error } = await db
     .from("deployments")

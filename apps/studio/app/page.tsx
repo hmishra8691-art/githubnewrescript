@@ -5,6 +5,7 @@ import {
   SurveyCard, SurveyCardSkeleton, STATUS_META,
   type SurveyRow, type SurveyStats, type Contributor,
 } from "@/components/SurveyCard";
+import { useSession } from "@/lib/useSession";
 
 type SortKey =
   | "updated" | "created" | "name_az" | "name_za"
@@ -20,7 +21,19 @@ const SORTS: { key: SortKey; label: string }[] = [
   { key: "questions_desc", label: "Most questions" },
 ];
 
+/**
+ * MY PROJECTS (§36, §37).
+ *
+ * Split into what I own and what was shared with me, because those are
+ * different relationships and a flat list hides the fact a researcher checks
+ * first. Every other control — search, status filter, sort — applies across
+ * both, so the split is presentational and nothing goes missing from it.
+ */
+type Ownership = "all" | "mine" | "shared";
+
 export default function Dashboard() {
+  const session = useSession({ redirectOnSignOut: true });
+  const [ownership, setOwnership] = React.useState<Ownership>("all");
   const [surveys, setSurveys] = React.useState<SurveyRow[] | null>(null);
   const [stats, setStats] = React.useState<Record<string, SurveyStats>>({});
   const [contributors, setContributors] = React.useState<Record<string, Contributor>>({});
@@ -128,6 +141,10 @@ export default function Dashboard() {
     if (!surveys) return null;
     const q = search.trim().toLowerCase();
     let rows = surveys.filter((s2) => {
+      if (ownership === "mine" && s2.myRole !== "owner") return false;
+      if (ownership === "shared" && s2.myRole === "owner") return false;
+      return true;
+    }).filter((s2) => {
       if (statusFilter !== "all" && s2.status !== statusFilter) return false;
       const n = stats[s2.id]?.responseCount ?? 0;
       if (responseFilter === "has" && n === 0) return false;
@@ -162,12 +179,34 @@ export default function Dashboard() {
       live: surveys?.filter((x) => x.status === "live").length ?? 0,
       responses: list.reduce((a, b) => a + (b.liveResponseCount ?? 0), 0),
     };
-  }, [surveys, stats]);
+  }, [surveys, stats, ownership]);
 
   return (
     <div className="dash">
-      <h1><span className="logo-mark">R</span> Rescript Studio</h1>
-      <p className="muted">Professional survey programming &amp; runtime platform — JSON-driven, versioned, extensible.</p>
+      <div className="row" style={{ alignItems: "flex-start", flexWrap: "wrap" }}>
+        <div>
+          <h1><span className="logo-mark">R</span> Rescript Studio</h1>
+          <p className="muted" style={{ marginTop: -4 }}>
+            {session.state.kind === "signed_in"
+              ? <>Welcome, {session.state.user.name.split(" ")[0]} — your User ID is <span className="mono">{session.state.user.userCode}</span></>
+              : "Professional survey programming & runtime platform."}
+          </p>
+        </div>
+        <span className="grow" />
+        {session.state.kind === "signed_in" && (
+          <div className="row" style={{ gap: 6 }} data-testid="dash-account">
+            {!!session.state.user.unread && (
+              <a className="btn small" href="/profile" title="You have unread notifications">
+                {session.state.user.unread} new
+              </a>
+            )}
+            <a className="btn small" href="/profile">Profile</a>
+            <a className="btn small" href="/security">Security</a>
+            {session.state.user.isPlatformAdmin && <a className="btn small" href="/admin">Administration</a>}
+            <button className="btn small" data-testid="dash-signout" onClick={() => void session.signOut()}>Sign out</button>
+          </div>
+        )}
+      </div>
 
       <div className="dash-toolbar">
         <button className="btn primary" onClick={() => setCreating(true)}>+ New survey</button>
@@ -184,6 +223,27 @@ export default function Dashboard() {
           <option value="has">Has responses</option>
           <option value="none">No responses</option>
         </select>
+      </div>
+
+      <div className="dash-filters" data-testid="dash-ownership">
+        {([
+          ["all", "All projects"],
+          ["mine", "My projects"],
+          ["shared", "Shared with me"],
+        ] as [Ownership, string][]).map(([key, label]) => {
+          const n = key === "all"
+            ? surveys?.length ?? 0
+            : surveys?.filter((x) => (key === "mine" ? x.myRole === "owner" : x.myRole && x.myRole !== "owner")).length ?? 0;
+          // "Shared with me" is hidden until something actually is, so a solo
+          // user never sees an empty tab asking to be clicked
+          if (key === "shared" && n === 0 && ownership !== "shared") return null;
+          return (
+            <button key={key} className={`own-pill ${ownership === key ? "on" : ""}`}
+              data-testid={`dash-own-${key}`} onClick={() => setOwnership(key)}>
+              {label} <span className="n">{n}</span>
+            </button>
+          );
+        })}
       </div>
 
       <div className="dash-filters">

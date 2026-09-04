@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { parseEnvironment } from "@/lib/responseData";
+import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,9 @@ export const dynamic = "force-dynamic";
  * rather than failing the panel.
  */
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireProject(req, params.id, "responses.read");
+  if (isFailure(gate)) return gate.response;
+
   const environment = parseEnvironment(req.nextUrl.searchParams.get("environment") ?? "LIVE");
   if (!environment) return NextResponse.json({ error: "environment must be TEST, LIVE or ALL" }, { status: 400 });
 
@@ -65,6 +69,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
  * one transaction. It never invents or removes an allocation.
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireProject(req, params.id, "responses.manage");
+  if (isFailure(gate)) return gate.response;
+
   let body: any = {};
   try { body = await req.json(); } catch { /* optional */ }
   const environment = parseEnvironment(body?.environment);

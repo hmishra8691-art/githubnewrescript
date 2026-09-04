@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { runtimeBaseUrl } from "@/lib/runtime-url";
+import { audit, isFailure, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
 /** Deploy a specific version to /s/<client>/<study> (live) or /t/... (test). */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireProject(req, params.id, "deploy.manage");
+  if (isFailure(gate)) return gate.response;
+
   const body = await req.json().catch(() => null);
   const { versionId, clientSlug, studySlug, mode } = body ?? {};
   if (!versionId || !clientSlug || !studySlug || !["test", "live"].includes(mode))
@@ -42,9 +46,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  await db.from("audit_logs").insert({
-    action: "survey.deploy", entity: "deployment", entity_id: `${clientSlug}/${studySlug}`,
-    detail: { survey_id: params.id, version_id: versionId, mode },
+  await audit({
+    action: "deployment.completed", userId: gate.user.userId, sessionId: gate.user.sessionId,
+    surveyId: params.id, customerId: gate.user.customerId,
+    entity: "deployment", entityId: `${clientSlug}/${studySlug}`,
+    detail: { mode, versionId, clientSlug, studySlug },
   });
 
   const base = runtimeBaseUrl();

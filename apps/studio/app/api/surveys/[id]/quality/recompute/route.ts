@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { loadQualityDefinition, missingMigration } from "@/lib/qualityDef";
 import { recomputeSurvey } from "@rescript/quality/server";
 import { enabledRuleIds, resolveConfig, summarizeConfig } from "@rescript/quality";
+import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,9 @@ export const dynamic = "force-dynamic";
  * config fingerprint — so the caller can check them against what it saved.
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireProject(req, params.id, "responses.manage");
+  if (isFailure(gate)) return gate.response;
+
   let body: any = {};
   try { body = await req.json(); } catch { /* optional */ }
   const include = body?.include === "test" ? "test" : body?.include === "all" ? "all" : "live";

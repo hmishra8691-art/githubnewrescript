@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@rescript/access": "workspace:*",
     "@rescript/designs": "workspace:*",
     "@rescript/engine": "workspace:*",
     "@rescript/exporters": "workspace:*",

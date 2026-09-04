@@ -4,6 +4,7 @@ import { loadQualityDefinition } from "@/lib/qualityDef";
 import { flattenVariables, rowToState, validateQuestion } from "@rescript/engine";
 import { missingResponseMigration, RESPONSE_MIGRATION_MESSAGE } from "@/lib/responseData";
 import { recountQuotas } from "@/lib/quotaRecount";
+import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +23,10 @@ export const dynamic = "force-dynamic";
  * it is stored — the same `validateQuestion` the runtime uses, so an edit can
  * never put a value in the database that the survey itself would reject.
  */
-export async function GET(_req: NextRequest, { params }: { params: { id: string; responseId: string } }) {
+export async function GET(req: NextRequest, { params }: { params: { id: string; responseId: string } }) {
+  const gate = await requireProject(req, params.id, "responses.read");
+  if (isFailure(gate)) return gate.response;
+
   const db = supabaseAdmin();
   const loaded = await loadQualityDefinition(db, params.id);
   if (!("def" in loaded)) return NextResponse.json({ error: loaded.error }, { status: loaded.status });
@@ -63,6 +67,9 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string;
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string; responseId: string } }) {
+  const gate = await requireProject(req, params.id, "responses.manage");
+  if (isFailure(gate)) return gate.response;
+
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
   if (!body?.answers || typeof body.answers !== "object" || Array.isArray(body.answers)) {
@@ -131,7 +138,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     p_answers: merged,
     p_calculated: null,
     p_changes: changes,
-    p_by: typeof body?.by === "string" ? body.by.slice(0, 200) : "researcher",
+    p_by: gate.user.fullName || gate.user.userCode,
     p_reason: typeof body?.reason === "string" ? body.reason.slice(0, 1000) : null,
   });
   if (error) {
@@ -157,11 +164,14 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: { id: string; responseId: string } }) {
+  const gate = await requireProject(req, params.id, "responses.manage");
+  if (isFailure(gate)) return gate.response;
+
   const db = supabaseAdmin();
   const purge = req.nextUrl.searchParams.get("purge") === "1";
   const restore = req.nextUrl.searchParams.get("restore") === "1";
   const reason = req.nextUrl.searchParams.get("reason");
-  const by = req.nextUrl.searchParams.get("by") ?? "researcher";
+  const by = gate.user.fullName || gate.user.userCode;
 
   const { data: row } = await db.from("responses").select("id, respondent_code, is_test, deleted_at").eq("survey_id", params.id).eq("id", params.responseId).maybeSingle();
   if (!row) return NextResponse.json({ error: "not found" }, { status: 404 });

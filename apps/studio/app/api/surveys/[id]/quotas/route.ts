@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { parseEnvironment } from "@/lib/responseData";
+import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,9 @@ export const dynamic = "force-dynamic";
  * `is_test` column answers as LIVE and says so.
  */
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireProject(req, params.id, "responses.read");
+  if (isFailure(gate)) return gate.response;
+
   const environment = parseEnvironment(req.nextUrl.searchParams.get("environment") ?? "LIVE");
   if (!environment) return NextResponse.json({ error: "environment must be TEST, LIVE or ALL" }, { status: 400 });
   const db = supabaseAdmin();

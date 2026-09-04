@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { loadQualityDefinition, missingMigration } from "@/lib/qualityDef";
 import { flattenVariables } from "@rescript/engine";
 import { RESPONSE_COLUMNS, assessAndStore } from "@rescript/quality/server";
+import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +14,10 @@ export const dynamic = "force-dynamic";
  * decision — KEEP / REMOVE / REVIEW_LATER / CLEAR — as data plus an audit row.
  * Nothing is ever deleted here.
  */
-export async function GET(_req: NextRequest, { params }: { params: { id: string; sessionId: string } }) {
+export async function GET(req: NextRequest, { params }: { params: { id: string; sessionId: string } }) {
+  const gate = await requireProject(req, params.id, "responses.read");
+  if (isFailure(gate)) return gate.response;
+
   const db = supabaseAdmin();
   const { data: row, error } = (await db.from("responses").select(RESPONSE_COLUMNS + ", survey_id, seed").eq("survey_id", params.id).eq("session_id", params.sessionId).maybeSingle()) as { data: any; error: { message: string } | null };
   if (error) {
@@ -54,12 +58,16 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string;
 const DECISIONS = ["KEEP", "REMOVE", "REVIEW_LATER", "CLEAR"] as const;
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string; sessionId: string } }) {
+  const gate = await requireProject(req, params.id, "responses.manage");
+  if (isFailure(gate)) return gate.response;
+
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
   const decision = String(body?.decision ?? "");
   if (!DECISIONS.includes(decision as any)) return NextResponse.json({ error: "decision must be KEEP, REMOVE, REVIEW_LATER or CLEAR" }, { status: 400 });
   const reason = typeof body?.reason === "string" ? body.reason.slice(0, 1000) : null;
-  const by = typeof body?.by === "string" ? body.by.slice(0, 200) : "researcher";
+  // the signed-in reviewer, not a literal: §25 needs the log to name a person
+  const by = gate.user.fullName || gate.user.userCode;
 
   const db = supabaseAdmin();
   const { data: row } = await db.from("responses").select("id, quality").eq("survey_id", params.id).eq("session_id", params.sessionId).maybeSingle();
@@ -84,7 +92,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 }
 
 /** Re-assess this one response against current peers and the current settings. */
-export async function POST(_req: NextRequest, { params }: { params: { id: string; sessionId: string } }) {
+export async function POST(req: NextRequest, { params }: { params: { id: string; sessionId: string } }) {
+  const gate = await requireProject(req, params.id, "responses.manage");
+  if (isFailure(gate)) return gate.response;
+
   const db = supabaseAdmin();
   const loaded = await loadQualityDefinition(db, params.id);
   if (!("def" in loaded)) return NextResponse.json({ error: loaded.error }, { status: loaded.status });

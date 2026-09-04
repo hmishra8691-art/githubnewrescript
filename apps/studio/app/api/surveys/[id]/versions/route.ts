@@ -2,10 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
 import { buildVariableDictionary, nextVersion } from "@rescript/engine";
+import { audit, isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireProject(req, params.id, "project.read");
+  if (isFailure(gate)) return gate.response;
+
   const db = supabaseAdmin();
   const { data, error } = await db
     .from("survey_versions")
@@ -18,6 +22,9 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 
 /** Save a new version (requirement §12). Versions are immutable snapshots. */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireEditRight(req, params.id, "survey.save_version");
+  if (isFailure(gate)) return gate.response;
+
   const body = await req.json().catch(() => null);
   if (!body?.definition) return NextResponse.json({ error: "definition required" }, { status: 400 });
 
@@ -93,6 +100,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         definition: def,
         label: body.label ?? null,
         notes: body.notes ?? null,
+        // §27: every version names its author, so the version list can say
+        // "2.1 — Sarah Lee" instead of leaving a team to guess
+        created_by: gate.user.userId,
       })
       .select("id, version")
       .single();
@@ -194,9 +204,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       );
     }
   }
-  await db.from("audit_logs").insert({
-    action: "survey.version.save", entity: "survey_version", entity_id: ver.id,
-    detail: { survey_id: params.id, version, label: body.label ?? null },
+  await audit({
+    action: "version.created", userId: gate.user.userId, sessionId: gate.user.sessionId,
+    surveyId: params.id, customerId: gate.user.customerId,
+    entity: "survey_version", entityId: ver.id,
+    detail: { version, label: body.label ?? null },
   });
   return NextResponse.json({
     id: ver.id, version: ver.version, variables: def.variables.length, revision: newRevision,

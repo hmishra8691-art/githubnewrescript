@@ -232,53 +232,71 @@ state = await page.$eval('[data-testid="preset-state"]', (e) => e.textContent);
 assert.match(state, /Custom/, `an edited preset is honestly labelled Custom: ${state}`);
 console.log("✔ editing a preset reports “Custom” rather than pretending");
 
-/* the Word document — a real request through the real route */
+/*
+ * The Word export, as a REQUEST.
+ *
+ * The bytes are no longer inspected here: `packages/exporters` already asserts
+ * that `exportSurveyDocx` produces a real zip with content, which is where a
+ * pure function belongs, and duplicating it through a browser proved nothing
+ * extra. What only this test can prove is that the dialog sends what the
+ * programmer selected — the format and the exact field set.
+ */
+const docxReq = page.waitForRequest((r) => r.url().includes("/export/survey") && r.method() === "POST");
 const docxRes = page.waitForResponse((r) => r.url().includes("/export/survey") && r.request().method() === "POST");
 await page.click('[data-testid="do-export"]');
+const sentDocx = (await docxReq).postDataJSON();
+assert.equal(sentDocx.format, "docx", "the chosen format is sent");
+assert.ok(sentDocx.definition?.questions?.length, "with the live editor state, not a stale copy");
+assert.equal(sentDocx.fields.blockName, true, "and the ticked fields");
+console.log("✔ the Word export sends the live definition and the selected fields");
+
+/*
+ * And the export route is now BEHIND AUTHORIZATION.
+ *
+ * This fixture has no session — it drives the Studio with no project row — so
+ * the honest answer from the route is 401. That is the assertion worth making:
+ * an endpoint that renders a project must not answer an unauthenticated
+ * caller, and before the accounts layer it did.
+ */
 const res = await docxRes;
-assert.equal(res.status(), 200, `the export route answered: ${res.status()}`);
-assert.match(res.headers()["content-type"], /wordprocessingml\.document/, "it is a Word document");
-// Playwright cannot read the body of a response the browser turned into a
-// download, so fetch the same route again from the page to inspect the bytes
-const probe = await page.evaluate(async () => {
-  const defJson = JSON.parse(document.querySelector("textarea.code")?.value ?? "null");
-  const r = await fetch(`/api/surveys/sandbox/export/survey`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ definition: defJson, format: "docx", fields: { questionId: true, questionText: true, options: true, blockName: true, blockOrder: true } }),
-  });
-  const buf = new Uint8Array(await r.arrayBuffer());
-  return { status: r.status, len: buf.length, magic: String.fromCharCode(buf[0], buf[1]) };
-});
-assert.equal(probe.status, 200);
-assert.equal(probe.magic, "PK", "a real docx is a zip archive");
-assert.ok(probe.len > 4000, `with content: ${probe.len} bytes`);
-console.log(`✔ Word export returned a ${(probe.len / 1024).toFixed(1)}KB .docx from the live editor state`);
+assert.equal(res.status(), 401, `an unauthenticated export must be refused, got ${res.status()}`);
+console.log("✔ the export route refuses a caller with no session (accounts layer)");
 
 /* the JSON export, through the same configuration */
 await page.waitForTimeout(400);
-await page.click('[data-testid="export-survey"]');
-await page.waitForSelector('[data-testid="export-dialog"]');
+/*
+ * The dialog is still open: the export was refused, and a dialog that closed
+ * on failure would throw away the programmer's field selection along with the
+ * error. Reopen it only if it actually closed.
+ */
+if (!(await page.$('[data-testid="export-dialog"]'))) {
+  await page.click('[data-testid="export-survey"]');
+  await page.waitForSelector('[data-testid="export-dialog"]');
+}
 await page.click('[data-testid="preset-full"]');
 await page.click('[data-testid="fmt-json"] input');
 await page.waitForTimeout(150);
-const jsonRes = page.waitForResponse((r) => r.url().includes("/export/survey") && r.request().method() === "POST");
+const jsonReq = page.waitForRequest((r) => r.url().includes("/export/survey") && r.method() === "POST");
 await page.click('[data-testid="do-export"]');
-const jres = await jsonRes;
-assert.equal(jres.status(), 200);
-assert.match(jres.headers()["content-type"], /application\/json/);
-// and read the content through a second identical request
-const doc = await page.evaluate(async () => {
-  const defJson = JSON.parse(document.querySelector("textarea.code")?.value ?? "null");
-  const all = ["questionId","questionText","questionType","options","validation","required",
-    "displayLogic","skipLogic","branchLogic","optionLogic","piping","randomization",
-    "blockName","pageBreaks","blockOrder","flowElements","embeddedData"];
-  const r = await fetch(`/api/surveys/sandbox/export/survey`, {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ definition: defJson, format: "json",
-      fields: Object.fromEntries(all.map((f) => [f, true])) }),
-  });
-  return r.json();
+const sentJson = (await jsonReq).postDataJSON();
+assert.equal(sentJson.format, "json", "the JSON format is sent");
+assert.equal(sentJson.fields.branchLogic, true, "with the Full preset's fields");
+
+/*
+ * The exported document, built by the REAL exporter from the EXACT definition
+ * the editor put on the wire.
+ *
+ * The route only wraps this pure function, and the fixture has no session to
+ * call it with — so running it here loses nothing and gains something: the
+ * assertions below now pin the editor's own output rather than a round trip,
+ * and they fail if the dialog sends a stale definition.
+ */
+const { exportSurveyJsonConfigured, ALL_FIELDS } = await import("../packages/exporters/dist/index.js");
+// the route computes `complete` from the field set before calling the
+// exporter, so the same derivation is applied here rather than assumed
+const doc = exportSurveyJsonConfigured(sentJson.definition, sentJson.fields, {
+  version: sentJson.definition.meta.version,
+  complete: ALL_FIELDS.every((f) => sentJson.fields[f]),
 });
 assert.equal(doc.complete, true, "a full export is complete");
 assert.ok(doc.definition, "and carries the canonical definition");
@@ -299,6 +317,16 @@ assert.equal(doc.definition.questions.length, 4, "including edits never saved as
 console.log("✔ both exports are built from what is on screen, not from the last saved version");
 
 /* ------------------------------- regressions from the adversarial review */
+
+/*
+ * The export dialog is still open — it stays open on a refused export so the
+ * error and the field selection are both still there. Close it, or its modal
+ * backdrop swallows every click that follows.
+ */
+if (await page.$('[data-testid="export-dialog"]')) {
+  await page.click(".modal-back", { position: { x: 5, y: 5 } });
+  await page.waitForSelector('[data-testid="export-dialog"]', { state: "detached" });
+}
 
 // leaving a group must put the block BEFORE the End node, not after it
 await page.click(".leftnav >> text=Survey Flow");

@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { loadQualityDefinition, missingMigration } from "@/lib/qualityDef";
 import { SurveyDefinition } from "@rescript/schema";
 import { summarizeConfig, type QualityAssessment, type QualityConfigSummary } from "@rescript/quality";
+import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -67,6 +68,9 @@ export interface QualityPayload {
 }
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireProject(req, params.id, "responses.read");
+  if (isFailure(gate)) return gate.response;
+
   const db = supabaseAdmin();
   const include = req.nextUrl.searchParams.get("include") ?? "live";
   const isTest = include === "test";

@@ -6,6 +6,7 @@ import {
   countResponses, parseEnvironment, queryResponses, responseCounts,
   missingResponseMigration, RESPONSE_MIGRATION_MESSAGE, type ResponseQuery,
 } from "@/lib/responseData";
+import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +25,9 @@ export const dynamic = "force-dynamic";
  * never mix", and it sits in front of the database rather than in the UI.
  */
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireProject(req, params.id, "responses.read");
+  if (isFailure(gate)) return gate.response;
+
   const sp = req.nextUrl.searchParams;
   const environment = parseEnvironment(sp.get("environment"));
   if (!environment) return NextResponse.json({ error: "environment must be TEST, LIVE or ALL" }, { status: 400 });
@@ -61,6 +65,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireProject(req, params.id, "responses.read");
+  if (isFailure(gate)) return gate.response;
+
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
   const environment = parseEnvironment(body?.environment);

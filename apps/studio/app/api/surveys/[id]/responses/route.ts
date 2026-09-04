@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
 import { responsesToCSV, exportResponsesXlsx, inDataset, QUALITY_CSV_COLUMNS, qualityCsvCells, type DatasetFilter, type QualityExportRow } from "@rescript/exporters";
 import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
+import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +23,9 @@ function parseDataset(raw: string | null): DatasetFilter {
 
 /** Response data export (CSV / JSON / XLSX) + summary counts. */
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireProject(req, params.id, "responses.read");
+  if (isFailure(gate)) return gate.response;
+
   const db = supabaseAdmin();
   const format = req.nextUrl.searchParams.get("format") ?? "summary";
   // include=live|test|all ("test=1" kept for backwards compatibility)

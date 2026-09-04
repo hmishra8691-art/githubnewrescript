@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { loadQualityDefinition, missingMigration } from "@/lib/qualityDef";
+import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -10,6 +11,9 @@ export const dynamic = "force-dynamic";
  * behavioural detail behind them does not outlive its purpose.
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireProject(req, params.id, "responses.manage");
+  if (isFailure(gate)) return gate.response;
+
   let body: any = {};
   try { body = await req.json(); } catch { /* optional */ }
   const db = supabaseAdmin();

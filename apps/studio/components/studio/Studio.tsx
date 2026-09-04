@@ -11,6 +11,11 @@ import { LogicPanel, CalcPanel } from "./LogicPanel";
 import { VariablesPanel } from "./VariablesPanel";
 import { QuotasPanel } from "./QuotasPanel";
 import { ListFillPanel } from "./ListFillPanel";
+import { CollabBar, ReadOnlyNotice } from "./CollabBar";
+import { CollaboratorsPanel } from "./CollaboratorsPanel";
+import { NotesPanel, ActivityPanel } from "./NotesPanel";
+import { useCollab } from "@/lib/useCollab";
+import { useSession } from "@/lib/useSession";
 import { DesignsPanel } from "./DesignsPanel";
 import { BrandingPanel, ScriptsPanel } from "./BrandingPanel";
 import { VersionsPanel } from "./VersionsPanel";
@@ -21,7 +26,20 @@ import { runtimeBaseUrl } from "@/lib/runtime-url";
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
   | "quotas" | "listfill" | "designs" | "branding" | "scripts" | "data" | "versions" | "json"
+  | "collaborators" | "notes" | "activity"
   | "settings";
+
+/**
+ * The tabs whose controls must be inert in read-only mode (§19).
+ *
+ * Everything else stays live on purpose: a reviewer reads responses, browses
+ * versions, and leaves internal notes without holding the edit lock — those
+ * are the point of the role, not a loophole.
+ */
+const EDITING_TABS = new Set<Tab>([
+  "questions", "settings", "flow", "logic", "variables", "calculations",
+  "quotas", "listfill", "designs", "branding", "scripts", "json",
+]);
 
 const NAV: { key: Tab; label: string; icon: string }[] = [
   { key: "questions", label: "Questions", icon: "▤" },
@@ -38,6 +56,9 @@ const NAV: { key: Tab; label: string; icon: string }[] = [
   { key: "data", label: "Data", icon: "▦" },
   { key: "versions", label: "Versions & Deploy", icon: "⎌" },
   { key: "json", label: "JSON", icon: "≡" },
+  { key: "collaborators", label: "Collaborators", icon: "◉" },
+  { key: "notes", label: "Internal notes", icon: "✎" },
+  { key: "activity", label: "Activity", icon: "⏱" },
 ];
 
 /**
@@ -100,8 +121,28 @@ function SaveIndicator() {
   }
 }
 
-function StudioShell() {
+function StudioShell({ collaboration }: { collaboration: boolean }) {
   const s = useStudio();
+  /*
+   * NOT `redirectOnSignOut`. Two reasons, and the second is the important one:
+   *
+   *   - the middleware already sends a visitor with no session to /login, so a
+   *     second client-side redirect is redundant, and it fires on the
+   *     `/sandbox` fixture, which has no session by design.
+   *   - navigating away from the editor because a heartbeat came back 401
+   *     would discard whatever is unsaved. §28 says warn before leaving with
+   *     unsaved changes; silently leaving is the opposite of that. So an
+   *     expired session shows a banner here and lets the programmer copy their
+   *     work out, rather than deciding for them.
+   */
+  const session = useSession();
+  /*
+   * The collaboration poll drives presence, the lock and read-only mode. The
+   * section is reported so a future section-level lock (§18) already has the
+   * information it needs — today it only annotates "editing Survey Flow" in
+   * the banner and the audit trail.
+   */
+  const collab = useCollab(collaboration ? s.surveyDbId : null, { section: null });
   // ?tab=data lets the dashboard link straight to a survey's responses
   const [exportOpen, setExportOpen] = React.useState(false);
   const [tab, setTab] = React.useState<Tab>(() => {
@@ -364,6 +405,36 @@ function StudioShell() {
     }
   };
 
+  /*
+   * THE handover from server truth to editor behaviour.
+   *
+   * Every poll, the server's verdict is pushed into the store, which refuses
+   * `update`/`replace` and stops the autosave while it holds. So losing the
+   * lock — to a stale timeout, an owner's takeover, or a role change — drops
+   * this editor into read-only within one interval, with no refresh (§38),
+   * instead of letting it keep accepting edits that the backend will reject.
+   *
+   * The sandbox has no project row and no lock, so it stays editable: it is a
+   * fixture for the browser suites, not a real project.
+   */
+  React.useEffect(() => {
+    if (!collaboration) { s.setReadOnly(false); return; }
+    if (collab.status !== "ready" || !collab.state) return;
+    const { me, lock } = collab.state;
+    const reason = !me.canEdit
+      ? `Your role on this project (${me.role}) does not allow changes.`
+      : lock.heldBy && !lock.mine
+        ? `${lock.heldBy.name} is editing this project. You have read-only access until the editing lock is released.`
+        : "You are in view mode. Enter edit mode to make changes.";
+    s.setReadOnly(me.readOnly, reason);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collab.status, collab.state?.me.readOnly, collab.state?.lock.heldBy?.userId, collab.state?.me.role, s.surveyDbId]);
+
+  /* read-only AND on a tab that edits the survey: the controls go inert */
+  const roPanel = collaboration && collab.readOnly && EDITING_TABS.has(tab);
+  /* saving a version or a test build IS a change, whatever tab you are on */
+  const roWrite = collaboration && collab.readOnly;
+
   const live = publishState?.find((p) => p.mode === "live");
   const liveIsBehind = !!live && live.version !== s.def.meta.version;
 
@@ -379,7 +450,8 @@ function StudioShell() {
         <span className="spacer" />
         <button className="btn" onClick={preview} disabled={saving}
           title="Full-page preview of the survey you are editing right now">▶ Preview</button>
-        <button className="btn" onClick={testSurvey} disabled={saving} data-testid="test-survey"
+        <button className="btn" onClick={testSurvey} disabled={saving || roWrite} data-testid="test-survey"
+          {...(roWrite ? { title: "Enter edit mode to save a test build" } : {})}
           title={lastTest
             ? `Saves your latest changes as a new version and opens exactly that. Last test build: v${lastTest.version}${lastTest.revision != null ? ` (rev ${lastTest.revision})` : ""}`
             : "Saves your latest changes as a new version, deploys it to the test link and opens exactly that version with the inspector"}>
@@ -389,7 +461,21 @@ function StudioShell() {
         <button className="btn" data-testid="export-survey" onClick={() => setExportOpen(true)}
           title="Export the survey you are editing as Word or JSON">⬇ Export</button>
         <button className="btn" onClick={() => setTab("data")} title="Browse test and live responses">▦ Data</button>
-        <button className="btn primary" disabled={saving} onClick={() => save()}
+        {session.state.kind === "signed_in" && (
+          <span className="row" style={{ gap: 6 }} data-testid="studio-user">
+            <span
+              className="avatar sm"
+              style={{ background: `hsl(${[...session.state.user.userId].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0)} 62% 45%)` }}
+              title={`${session.state.user.name} · ${session.state.user.userCode}`}
+              aria-hidden="true"
+            >
+              {session.state.user.name.trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase() || "?"}
+            </span>
+            <a className="btn" href="/profile" title={`${session.state.user.name} (${session.state.user.userCode})`}>Account</a>
+          </span>
+        )}
+        <button className="btn primary" disabled={saving || roWrite} onClick={() => save()}
+          {...(roWrite ? { title: "Enter edit mode to save a version" } : {})}
           title="Save an immutable snapshot; the next version number is assigned by the server">
           {saving ? "Saving…" : "Save version"}
         </button>
@@ -404,12 +490,43 @@ function StudioShell() {
           <span className="grow" />
           <a className="btn small" target="_blank" rel="noreferrer"
             href={`${runtimeBaseUrl()}/s/${live!.client_slug}/${live!.study_slug}`}>open live link</a>
-          <button className="btn small primary" disabled={saving} onClick={publishLive}>
+          <button className="btn small primary" disabled={saving || roWrite} onClick={publishLive}>
             Publish v{s.def.meta.version} to live
           </button>
         </div>
       )}
-      <div className="ide-body">
+      {session.state.kind === "signed_out" && collaboration && (
+        <div className="lockbar other" data-testid="session-ended">
+          <span aria-hidden="true">⚠</span>
+          <span className="lb-title">
+            {session.state.reason || "Your session has ended."} Anything unsaved is still on this page.
+          </span>
+          <span className="grow" />
+          <a className="btn small primary" href="/login">Sign in again</a>
+        </div>
+      )}
+      {collaboration && (
+        <CollabBar
+          collab={collab.state}
+          readOnly={collab.readOnly}
+          busy={collab.busy}
+          onEnter={async () => {
+            const r = await collab.enterEditMode();
+            if (!r.ok) s.toast(r.error, "err");
+          }}
+          onExit={async () => { await collab.exitEditMode(); }}
+          onForce={async (reason) => {
+            const r = await collab.forceRelease(reason);
+            s.toast(r.ok ? "Edit lock released." : r.error, r.ok ? "ok" : "err");
+          }}
+          onRequest={async (message) => {
+            const r = await collab.requestAccess(message);
+            s.toast(r.ok ? "The current editor has been asked for access." : r.error, r.ok ? "ok" : "err");
+          }}
+          onOpenPanel={(panel) => setTab(panel)}
+        />
+      )}
+      <div className={`ide-body ${collab.readOnly && s.surveyDbId !== "sandbox" ? "is-readonly" : ""}`}>
         <nav className="leftnav">
           {NAV.map((n) => (
             <button key={n.key} className={`nav-item ${tab === n.key ? "active" : ""}`} onClick={() => setTab(n.key)}>
@@ -419,7 +536,17 @@ function StudioShell() {
             </button>
           ))}
         </nav>
-        <main className="center">
+        <main className={`center${roPanel ? " ro" : ""}`} data-readonly={roPanel ? "1" : "0"}>
+          {collaboration && !["collaborators", "notes", "activity", "data"].includes(tab) && (
+            <ReadOnlyNotice
+              collab={collab.state}
+              busy={collab.busy}
+              onEnter={async () => {
+                const r = await collab.enterEditMode();
+                if (!r.ok) s.toast(r.error, "err");
+              }}
+            />
+          )}
           {tab === "questions" && <QuestionsPanel />}
           {tab === "settings" && (
             <div style={{ maxWidth: 620 }}>
@@ -439,6 +566,9 @@ function StudioShell() {
           {tab === "data" && <DataPanel />}
           {tab === "versions" && <VersionsPanel />}
           {tab === "json" && <JsonPanel />}
+          {tab === "collaborators" && <CollaboratorsPanel canShare={!!collab.state?.me.canShare} />}
+          {tab === "notes" && <NotesPanel canComment={!!collab.state?.me.canComment} canResolve={!!collab.state?.me.canComment} />}
+          {tab === "activity" && <ActivityPanel />}
         </main>
         <aside className="rightpanel">
           <PropertiesPanel />
@@ -448,8 +578,19 @@ function StudioShell() {
   );
 }
 
-export function Studio({ definition, surveyDbId, versionId, draftSavedAt, revision }: {
+export function Studio({ definition, surveyDbId, versionId, draftSavedAt, revision, collaboration = true }: {
   definition: SurveyDefinition; surveyDbId: string; versionId: string | null;
+  /**
+   * Whether this editor participates in presence, the edit lock and read-only
+   * mode. On by default — a real project always does.
+   *
+   * The `/sandbox` fixture turns it OFF: it drives the Studio with no session
+   * and no project row, so a collaboration poll would answer 401 and leave the
+   * editor permanently read-only for reasons that have nothing to do with
+   * collaboration. The fixture opts back in with `?collab=1`, which is how the
+   * collaboration suite exercises this layer.
+   */
+  collaboration?: boolean;
   /** set when the loaded definition came from an autosaved draft */
   draftSavedAt?: string | null;
   /** the row revision this editor loaded on top of */
@@ -457,8 +598,9 @@ export function Studio({ definition, surveyDbId, versionId, draftSavedAt, revisi
 }) {
   return (
     <StudioProvider initial={definition} surveyDbId={surveyDbId} versionId={versionId}
-      draftSavedAt={draftSavedAt} revision={revision}>
-      <StudioShell />
+      draftSavedAt={draftSavedAt} revision={revision}
+      readOnly={collaboration}>
+      <StudioShell collaboration={collaboration} />
     </StudioProvider>
   );
 }

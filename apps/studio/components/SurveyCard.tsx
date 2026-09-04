@@ -18,7 +18,22 @@ export interface SurveyRow {
   created_at: string;
   updated_at: string;
   current_version_id: string | null;
+  /* collaboration — present once accounts exist, absent in the sandbox */
+  myRole?: string;
+  owner?: { userId: string; name: string | null; userCode: string | null; isMe: boolean } | null;
+  collaborators?: number;
+  version?: string | null;
+  /** who holds the edit lock at this moment, if anyone */
+  editing?: { userId: string; name: string | null; since: string | null; isMe: boolean } | null;
 }
+
+/** a stable colour per person, matching the presence avatars elsewhere */
+const hueOf = (id: string) => [...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
+const initials = (name: string | null | undefined) => {
+  const parts = (name ?? "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  return parts.length === 1 ? parts[0].slice(0, 2).toUpperCase() : (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+};
 
 export interface SurveyStats {
   questionCount: number | null;
@@ -108,6 +123,31 @@ export function SurveyCard({ survey, stats, contributors, loading, onOpen, onRes
           <span className="dot" />{meta.label}
         </span>
       </div>
+
+      {/* who is responsible, what I may do, and whether it is busy right now */}
+      {(survey.owner || survey.myRole || survey.editing) && (
+        <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 8 }} data-testid="card-collab">
+          {survey.owner && (
+            <span className="card-editing" title={`Owner: ${survey.owner.name ?? "unknown"}${survey.owner.userCode ? ` (${survey.owner.userCode})` : ""}`}>
+              <span className="avatar sm" style={{ background: `hsl(${hueOf(survey.owner.userId)} 62% 45%)` }} aria-hidden="true">
+                {initials(survey.owner.name)}
+              </span>
+              <span className="muted">{survey.owner.isMe ? "You own this" : survey.owner.name}</span>
+            </span>
+          )}
+          {survey.myRole && survey.myRole !== "owner" && (
+            <span className="chip card-role" data-testid="card-role">{survey.myRole.replace("_", " ")}</span>
+          )}
+          {survey.collaborators ? <span className="chip card-role">{survey.collaborators} shared</span> : null}
+          {survey.editing && (
+            <span className="card-editing" data-testid="card-editing"
+              title={survey.editing.since ? `Editing since ${new Date(survey.editing.since).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : undefined}>
+              <span className="presence-dot editing" />
+              <strong>{survey.editing.isMe ? "You are editing" : `${survey.editing.name} is editing`}</strong>
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="stat-row">
         <Stat label="Questions" value={v(stats?.questionCount)}

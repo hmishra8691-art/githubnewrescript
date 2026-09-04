@@ -783,14 +783,14 @@ body.flow-dragging .flow-dropzone { height: 26px; }
 .dash-filters {
   display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 14px;
 }
-.filter-pill {
+.filter-pill, .own-pill {
   font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap;
   padding: 4px 11px; border-radius: 999px;
   border: 1px solid var(--border); background: var(--panel); color: var(--text);
 }
-.filter-pill:hover { border-color: var(--accent); }
-.filter-pill.on { border-color: var(--accent); background: var(--tint); color: var(--accent); font-weight: 600; }
-.filter-pill .n { opacity: .6; margin-left: 3px; font-variant-numeric: tabular-nums; }
+.filter-pill:hover, .own-pill:hover { border-color: var(--accent); }
+.filter-pill.on, .own-pill.on { border-color: var(--accent); background: var(--tint); color: var(--accent); font-weight: 600; }
+.filter-pill .n, .own-pill .n { opacity: .6; margin-left: 3px; font-variant-numeric: tabular-nums; }
 .dash-summary { font-size: 12px; font-variant-numeric: tabular-nums; }
 
 .survey-card {
@@ -1209,3 +1209,173 @@ p.qs-help { margin: -2px 0 10px; }
 .lf-grid tr[data-status="FULL"] td:first-child { border-left: 2px solid var(--red); }
 .lf-grid tr[data-status="TARGET_REACHED"] td:first-child,
 .lf-grid tr[data-status="NEAR_CAP"] td:first-child { border-left: 2px solid var(--accent); }
+
+/* ============================================================================
+   ACCOUNTS & COLLABORATION
+   Presence, the edit-lock banner, read-only chrome, and the auth screens.
+   ========================================================================== */
+
+/* ---------- auth screens (login / signup / forgot) ---------- */
+.auth-shell {
+  min-height: 100vh; display: grid; place-items: center;
+  padding: 32px 20px; background: var(--bg);
+}
+.auth-card {
+  width: 100%; max-width: 420px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 14px; padding: 28px 28px 24px;
+  box-shadow: 0 1px 2px rgba(16, 32, 46, .04), 0 8px 24px rgba(16, 32, 46, .06);
+}
+.auth-card.wide { max-width: 520px; }
+.auth-brand { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--subtle); font-weight: 700; }
+.auth-title { font-size: 21px; margin: 6px 0 4px; }
+.auth-sub { color: var(--subtle); font-size: 13px; margin: 0 0 20px; }
+.auth-field { margin-bottom: 14px; }
+.auth-field > label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 5px; }
+.auth-field .input { width: 100%; padding: 9px 11px; font-size: 14px; }
+.auth-field .hint { font-size: 11px; color: var(--subtle); margin-top: 4px; }
+.auth-field.bad .input { border-color: var(--red); }
+.auth-field .err { font-size: 11.5px; color: var(--red); margin-top: 4px; }
+.auth-actions { margin-top: 18px; display: grid; gap: 10px; }
+.auth-actions .btn { width: 100%; justify-content: center; padding: 10px 14px; font-size: 14px; }
+.auth-alt { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--subtle); display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.auth-note { border-radius: 8px; padding: 10px 12px; font-size: 12.5px; line-height: 1.5; margin-bottom: 16px; }
+.auth-note.err { background: #fdecec; border: 1px solid #f3c2c2; color: #8f1d1d; }
+.auth-note.ok { background: #eaf6ee; border: 1px solid #bfe3ca; color: #1d6b34; }
+.auth-note.info { background: var(--tint); border: 1px solid var(--border); color: var(--text); }
+.auth-note strong { font-weight: 700; }
+.auth-note .btn { margin-top: 8px; }
+
+/* the generated User ID, shown once and prominently — it is the one thing on
+   the signup form the person did not choose and will need to quote */
+.usercode-badge {
+  display: inline-flex; align-items: baseline; gap: 8px;
+  font-family: var(--mono); font-size: 19px; font-weight: 700; letter-spacing: .04em;
+  background: var(--tint); border: 1px dashed var(--accent); color: var(--accent);
+  border-radius: 8px; padding: 8px 14px; margin: 4px 0 2px;
+}
+.usercode-badge small { font-family: var(--sans); font-size: 10.5px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--subtle); }
+
+/* ---------- presence ---------- */
+.presence-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.avatar {
+  width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 10.5px; font-weight: 700; color: #fff; flex: 0 0 auto;
+  box-shadow: 0 0 0 2px var(--panel);
+}
+.avatar.sm { width: 21px; height: 21px; font-size: 9px; }
+.avatar.lg { width: 34px; height: 34px; font-size: 12.5px; }
+.avatar-stack { display: flex; }
+.avatar-stack .avatar + .avatar { margin-left: -7px; }
+.presence-person { display: flex; align-items: center; gap: 7px; }
+.presence-person .who { line-height: 1.15; }
+.presence-person .nm { font-size: 12px; font-weight: 600; }
+.presence-person .act { font-size: 10.5px; color: var(--subtle); }
+.presence-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); flex: 0 0 auto; }
+.presence-dot.editing { background: var(--amber); box-shadow: 0 0 0 3px rgba(217, 138, 26, .18); }
+.presence-dot.idle { background: var(--border); }
+
+/* ---------- the edit-lock banner ---------- */
+.lockbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 7px 14px; font-size: 12.5px; border-bottom: 1px solid var(--border);
+  background: var(--panel2);
+}
+.lockbar .lb-title { font-weight: 600; }
+.lockbar .lb-detail { color: var(--subtle); }
+.lockbar.mine { background: #eaf6ee; border-bottom-color: #bfe3ca; }
+.lockbar.mine .lb-title { color: #1d6b34; }
+.lockbar.other { background: #fdf3e6; border-bottom-color: #f0d9b5; }
+.lockbar.other .lb-title { color: #8a5510; }
+.lockbar.stale { background: #fdf3e6; border-bottom-color: #f0d9b5; }
+.lockbar.free { background: var(--tint); }
+.lockbar .grow { flex: 1 1 auto; }
+.lock-icon { font-size: 13px; }
+
+/* read-only chrome: unmistakable without being shouty, and it must survive
+   inside the Studio's own panels as well as at the top of the page */
+.readonly-banner {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: #fdf3e6; border: 1px solid #f0d9b5; color: #8a5510;
+  border-radius: 8px; padding: 9px 12px; font-size: 12.5px; margin-bottom: 12px;
+}
+.readonly-banner .btn { margin-left: auto; }
+.ide-body.is-readonly .center input:not([type="checkbox"]):not([type="radio"]),
+.ide-body.is-readonly .center textarea,
+.ide-body.is-readonly .center select { background: var(--panel2); }
+/* the editing controls are DISABLED server-side too; this is the visible half */
+.ide-body.is-readonly [data-editing-control] { opacity: .45; pointer-events: none; }
+
+/* ---------- collaborators panel ---------- */
+.collab-group { margin-bottom: 14px; }
+.collab-group > h4 { margin: 0 0 2px; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--subtle); }
+.collab-group > .desc { font-size: 11px; color: var(--subtle); margin: 0 0 8px; }
+.collab-row {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--panel); margin-bottom: 6px;
+}
+.collab-row .who { flex: 1 1 auto; line-height: 1.3; min-width: 0; }
+.collab-row .nm { font-weight: 600; font-size: 13px; }
+.collab-row .meta { font-size: 11px; color: var(--subtle); }
+.collab-row .mono { font-family: var(--mono); }
+.collab-row.is-me { border-color: var(--accent); }
+.collab-invite { border-style: dashed; }
+
+/* ---------- internal notes ---------- */
+.note-thread { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; background: var(--panel); }
+.note-thread.resolved { opacity: .62; }
+.note { display: flex; gap: 9px; margin-bottom: 8px; }
+.note:last-child { margin-bottom: 0; }
+.note .body { flex: 1 1 auto; min-width: 0; }
+.note .head { display: flex; gap: 7px; align-items: baseline; flex-wrap: wrap; }
+.note .nm { font-weight: 600; font-size: 12.5px; }
+.note .when { font-size: 10.5px; color: var(--subtle); }
+.note .text { font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.note-replies { margin-left: 30px; padding-left: 10px; border-left: 2px solid var(--border); }
+.note-anchor { font-size: 10.5px; }
+
+/* ---------- activity log ---------- */
+.activity-list { display: flex; flex-direction: column; gap: 0; }
+.activity-row { display: flex; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 12.5px; align-items: baseline; }
+.activity-row:last-child { border-bottom: 0; }
+.activity-row .at { font-family: var(--mono); font-size: 11px; color: var(--subtle); white-space: nowrap; flex: 0 0 auto; }
+.activity-row .what { flex: 1 1 auto; }
+.activity-row .cat { flex: 0 0 auto; }
+
+/* ---------- account / admin tables ---------- */
+.acct-shell { max-width: 1080px; margin: 0 auto; padding: 26px 22px 60px; }
+.acct-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+.acct-head h1 { font-size: 20px; margin: 0; }
+.acct-nav { display: flex; gap: 4px; margin-bottom: 18px; flex-wrap: wrap; }
+.acct-nav a, .acct-nav button {
+  font: inherit; font-size: 12.5px; padding: 6px 12px; border-radius: 7px;
+  border: 1px solid transparent; background: none; color: var(--subtle); cursor: pointer;
+}
+.acct-nav a.active, .acct-nav button.active { background: var(--panel); border-color: var(--border); color: var(--text); font-weight: 600; }
+.kv { display: grid; grid-template-columns: minmax(140px, max-content) 1fr; gap: 8px 18px; font-size: 13px; align-items: baseline; }
+.kv dt { color: var(--subtle); font-size: 12px; }
+.kv dd { margin: 0; }
+.kv dd.mono { font-family: var(--mono); }
+.locked-field { display: inline-flex; align-items: center; gap: 6px; }
+.locked-field .why { font-size: 10.5px; color: var(--subtle); }
+
+/* ---------- project card additions ---------- */
+.card-editing { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; }
+.card-role { font-size: 10.5px; }
+
+/* Read-only editing panels (§19).
+   The store refuses the edit and the backend refuses the request; this is the
+   visible third of the same answer, so a reviewer sees inert controls instead
+   of typing into a field that silently discards it. `data-ro-ok` opts a
+   control back in — the "Enter edit mode" button lives inside the pane it is
+   about to unlock. */
+.center.ro input:not([data-ro-ok]),
+.center.ro textarea:not([data-ro-ok]),
+.center.ro select:not([data-ro-ok]),
+.center.ro button:not([data-ro-ok]),
+.center.ro [contenteditable="true"]:not([data-ro-ok]) {
+  pointer-events: none;
+  opacity: .55;
+}
+.center.ro [contenteditable="true"] { background: var(--panel2); }
+.center.ro .readonly-banner,
+.center.ro .readonly-banner * { pointer-events: auto; opacity: 1; }

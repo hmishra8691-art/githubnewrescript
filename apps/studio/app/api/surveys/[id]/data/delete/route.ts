@@ -4,6 +4,7 @@ import { loadQualityDefinition } from "@/lib/qualityDef";
 import { Condition } from "@rescript/schema";
 import { matchingResponseIds, parseEnvironment, missingResponseMigration, RESPONSE_MIGRATION_MESSAGE } from "@/lib/responseData";
 import { recountQuotas } from "@/lib/quotaRecount";
+import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -27,12 +28,15 @@ export const dynamic = "force-dynamic";
  * permanently and only ever touches rows that are already soft-deleted.
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireProject(req, params.id, "responses.manage");
+  if (isFailure(gate)) return gate.response;
+
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
   const environment = parseEnvironment(body?.environment);
   if (!environment) return NextResponse.json({ error: "environment must be TEST, LIVE or ALL" }, { status: 400 });
   const action = body?.action === "restore" ? "restore" : body?.action === "purge" ? "purge" : "delete";
-  const by = typeof body?.by === "string" ? body.by.slice(0, 200) : "researcher";
+  const by = gate.user.fullName || gate.user.userCode;
   const reason = typeof body?.reason === "string" ? body.reason.slice(0, 1000) : null;
 
   const db = supabaseAdmin();

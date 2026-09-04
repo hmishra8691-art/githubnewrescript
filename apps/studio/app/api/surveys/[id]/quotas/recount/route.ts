@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { loadQualityDefinition } from "@/lib/qualityDef";
 import { parseEnvironment, missingResponseMigration, RESPONSE_MIGRATION_MESSAGE } from "@/lib/responseData";
 import { generateQuotaFromData, recountQuotas } from "@/lib/quotaRecount";
+import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +27,9 @@ export const dynamic = "force-dynamic";
  * counters.
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireProject(req, params.id, "responses.manage");
+  if (isFailure(gate)) return gate.response;
+
   let body: any = {};
   try { body = await req.json(); } catch { /* optional */ }
   const environment = parseEnvironment(body?.environment);

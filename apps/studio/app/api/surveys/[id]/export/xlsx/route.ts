@@ -2,11 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
 import { exportVariableDictionaryXlsx } from "@rescript/exporters";
+import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
 /** One-click "Export Variable Dictionary" (requirement §10). */
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireProject(req, params.id, "responses.export");
+  if (isFailure(gate)) return gate.response;
+
   const db = supabaseAdmin();
   const versionId = req.nextUrl.searchParams.get("versionId");
 

@@ -4,6 +4,7 @@ import { loadQualityDefinition } from "@/lib/qualityDef";
 import { parseDelimited, suggestMapping, validateImportRows, type ColumnMapping, type ImportMode, type PreparedRow } from "@rescript/engine";
 import { parseEnvironment, missingResponseMigration, RESPONSE_MIGRATION_MESSAGE } from "@/lib/responseData";
 import { recountQuotas } from "@/lib/quotaRecount";
+import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -28,6 +29,9 @@ export const maxDuration = 60;
  * answers, so a three-column file changes three answers.
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireProject(req, params.id, "responses.manage");
+  if (isFailure(gate)) return gate.response;
+
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
   const environment = parseEnvironment(body?.environment);
@@ -142,7 +146,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     p_test: isTest,
     p_mode: mode,
     p_rows: payload,
-    p_by: typeof body?.by === "string" ? body.by.slice(0, 200) : "researcher",
+    p_by: gate.user.fullName || gate.user.userCode,
   });
   if (error) {
     if (/IMPORT_DUPLICATE/.test(error.message)) {

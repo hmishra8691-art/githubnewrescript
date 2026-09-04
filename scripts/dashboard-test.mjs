@@ -45,10 +45,34 @@ const CONTRIBUTORS = {
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 1280, height: 1000 }, deviceScaleFactor: 2 });
+// the middleware redirects a visitor with no session cookie straight to /login
+// before any route interception gets a chance to answer
+await ctx.addCookies([{ name: "rescript_session", value: "dashboard-test-session-0000", url: "http://localhost:3000" }]);
 const page = await ctx.newPage();
 page.on("pageerror", (e) => console.error("PAGE ERROR:", e.message));
 
 let patched = null;
+/*
+ * The dashboard is behind a session now, and signs a visitor out to /login
+ * when `/api/auth/me` refuses. This fixture supplies one, so the test keeps
+ * exercising what it is about — the project cards — rather than the redirect.
+ */
+await page.route("**/api/auth/me", (route) => route.fulfill({
+  status: 200, contentType: "application/json",
+  body: JSON.stringify({
+    userId: "u-test", userCode: "USR-10000", name: "Test Researcher",
+    email: "test@example.com", platformRole: "programmer", isPlatformAdmin: false,
+    sessionId: "sess-test", unread: 0,
+    policies: {
+      heartbeatSeconds: 300, lockHeartbeatSeconds: 20, presenceHeartbeatSeconds: 15,
+      idleAfterSeconds: 300, staleAfterSeconds: 900, lockStaleAfterSeconds: 180,
+    },
+  }),
+}));
+await page.route("**/api/auth/heartbeat", (route) => route.fulfill({
+  status: 200, contentType: "application/json", body: JSON.stringify({ status: "active", alive: true }),
+}));
+
 await page.route("**/api/surveys", async (route) => {
   if (route.request().method() !== "GET") return route.continue();
   await route.fulfill({
