@@ -12,6 +12,10 @@ import {
 } from "@rescript/engine";
 import { useStudio, uid } from "./store";
 import { OptionalCondition } from "./ConditionBuilder";
+import { AutoPunchRows } from "./AutoPunchEditor";
+
+/** Option-level rules (a literal code set) are edited by AutoPunchRows, not the set chain. */
+const isOptionLevel = (r: PunchRule) => r.source.kind === "codes";
 
 /**
  * Visual masking: which options a question shows, computed from other
@@ -483,13 +487,20 @@ function PunchRules({ q, patch, sources }: {
 
   return (
     <div className="mb-punch">
-      <h3 className="sec" style={{ marginTop: 16 }}>Auto-select (punching)</h3>
+      <h3 className="sec" style={{ marginTop: 16 }}>Auto punch (option → option)</h3>
+      <p className="muted" style={{ fontSize: 11, marginTop: -4 }}>
+        “If an option is selected elsewhere, select / deselect / show / hide an option here.”
+        Also listed survey-wide in the Logic tab.
+      </p>
+      <AutoPunchRows q={q} />
+
+      <h3 className="sec" style={{ marginTop: 16 }}>Auto-select from a set (punching)</h3>
       <p className="muted" style={{ fontSize: 11, marginTop: -4 }}>
         Tick options in this question from another question&apos;s answers. Codes that match
         carry across; use a mapping when the two lists number things differently.
       </p>
 
-      {rules.map((rule, i) => (
+      {rules.filter((r) => !isOptionLevel(r)).map((rule) => { const i = rules.indexOf(rule); return (
         <div key={rule.id} className="card mb-punch-card" data-testid="punch-rule" style={{ padding: 10 }}>
           <div className="row" style={{ flexWrap: "wrap", marginBottom: 6 }}>
             <span className="flabel" style={{ margin: 0 }}>FOR EACH option in</span>
@@ -499,6 +510,10 @@ function PunchRules({ q, patch, sources }: {
               onChange={(e) => setRule(i, { action: e.target.value as PunchRule["action"] })}>
               <option value="select">select it here</option>
               <option value="deselect">unselect it here</option>
+              <option value="show">show it here</option>
+              <option value="hide">hide it here</option>
+              <option value="enable">enable it here</option>
+              <option value="disable">disable it here</option>
             </select>
             <select className="select" style={{ width: 120 }} data-testid="punch-recompute"
               title="Whether a respondent's own edit may be overwritten later"
@@ -552,7 +567,7 @@ function PunchRules({ q, patch, sources }: {
           <OptionalCondition label="Only when" value={rule.when}
             onChange={(when) => setRule(i, { when })} />
         </div>
-      ))}
+      ); })}
 
       <button className="btn small" data-testid="punch-add" disabled={sources.length === 0}
         onClick={addRule}>+ auto-selection rule</button>

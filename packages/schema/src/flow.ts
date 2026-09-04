@@ -31,6 +31,8 @@ export type FlowNode =
       id: string;
       title?: string;
       showTitle?: boolean;
+      /** image / video / YouTube / Drive URL shown under the block name (engine `resolveMediaUrl`) */
+      mediaUrl?: string;
       questionIds: string[];
       visibleIf?: Condition;
     }
@@ -46,6 +48,7 @@ export type FlowNode =
       id: string;
       title?: string;
       showTitle?: boolean;
+      mediaUrl?: string;
       children: FlowNode[];
       visibleIf?: Condition;
     }
@@ -133,6 +136,8 @@ export const FlowNode: z.ZodType<FlowNode> = z.lazy(() =>
        * the Studio — it exists for the programmer first.
        */
       showTitle: z.boolean().optional(),
+      /** Block media: an image, video, YouTube or Google Drive URL shown under the name. */
+      mediaUrl: z.string().optional(),
       questionIds: z.array(z.string()),
       visibleIf: Condition.optional(),
     }),
@@ -148,6 +153,7 @@ export const FlowNode: z.ZodType<FlowNode> = z.lazy(() =>
       id: z.string(),
       title: z.string().optional(),
       showTitle: z.boolean().optional(),
+      mediaUrl: z.string().optional(),
       children: z.array(FlowNode),
       visibleIf: Condition.optional(),
     }),

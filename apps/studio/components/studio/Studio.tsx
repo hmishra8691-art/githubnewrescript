@@ -2,6 +2,7 @@
 import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
 import { StudioProvider, useStudio } from "./store";
+import { openPreview, pushPreview, previewWindowOpen, setPreviewDefinition, setPreviewRevision } from "./previewWindow";
 import { ExportDialog } from "./ExportDialog";
 import { QuestionsPanel } from "./QuestionsPanel";
 import { PropertiesPanel, SurveySettings } from "./PropertiesPanel";
@@ -199,41 +200,28 @@ function StudioShell() {
    * Now the open window is remembered and the current definition is pushed on
    * every change, debounced.
    */
-  const previewWin = React.useRef<Window | null>(null);
-
-  const pushPreview = React.useCallback(() => {
-    const win = previewWin.current;
-    if (!win || win.closed) return;
-    win.postMessage({ type: "rescript:preview", definition: defRef.current }, "*");
-  }, []);
-
-  // the preview tab announces itself when it mounts or reloads
+  // the window handle and the entry point (whole survey / a block) live in
+  // previewWindow.ts so the block headers in the Questions panel share them
   React.useEffect(() => {
     const onReady = (e: MessageEvent) => {
-      if (e.data?.type === "rescript:preview-ready") pushPreview();
+      if (e.data?.type === "rescript:preview-ready") pushPreview(defRef.current);
     };
     window.addEventListener("message", onReady);
     return () => window.removeEventListener("message", onReady);
-  }, [pushPreview]);
+  }, []);
 
   // and every subsequent edit follows it across
   React.useEffect(() => {
-    if (!previewWin.current || previewWin.current.closed) return;
-    const t = setTimeout(pushPreview, 250);
+    setPreviewDefinition(s.def);
+    if (!previewWindowOpen()) return;
+    const t = setTimeout(() => pushPreview(defRef.current), 250);
     return () => clearTimeout(t);
-  }, [s.def, pushPreview]);
+  }, [s.def]);
 
   const preview = () => {
-    const base = runtimeBaseUrl();
-    const win = window.open(`${base}/preview`, "rescript_preview");
-    if (!win) return;
-    previewWin.current = win;
-    win.focus();
-    // the tab may already be open and past its ready message
-    let n = 0;
-    const t = setInterval(() => { pushPreview(); if (++n > 6) clearInterval(t); }, 400);
+    if (!openPreview(runtimeBaseUrl(), defRef.current, {})) return;
     // persist what is being previewed, so a crash mid-test loses nothing
-    void s.flushDraft();
+    void s.flushDraft().then(() => setPreviewRevision(s.currentRevision()));
   };
 
   /** The build the last Test Survey click produced — shown beside the button. */

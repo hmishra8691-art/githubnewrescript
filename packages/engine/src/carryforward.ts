@@ -15,7 +15,7 @@ import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition, withOption, withLegacyOptionLoop } from "./evaluate.js";
 import { getQuestion } from "./state.js";
 import { resolvePiping, registerDisplayedOptionsResolver } from "./piping.js";
-import { evaluateSetExpr } from "./setExpression.js";
+import { evaluateSetExpr, LIST_ACTIONS } from "./setExpression.js";
 import { seededShuffle, subSeed, mulberry32 } from "./random.js";
 
 /**
@@ -750,6 +750,65 @@ function applyMask<T extends ItemWithLogic & { flags?: string[]; code: string | 
   return out;
 }
 
+/**
+ * SHOW / HIDE / ENABLE / DISABLE from this question's punch rules, evaluated
+ * with the same condition evaluator as everything else. HIDE removes; SHOW
+ * puts a programmed option back even when an earlier stage dropped it (the
+ * programmer asked for it by name); DISABLE / ENABLE set `meta.disabled`,
+ * which every choice renderer honours — the option is on screen, greyed and
+ * unpickable, and a disabled option that was ticked stays ticked (this stage
+ * never writes answers).
+ */
+function applyListPunches(
+  q: Question,
+  items: Option[],
+  ctx: EvalContext,
+  rec: Recorder | null,
+): Option[] {
+  const hide = new Set<string>();
+  const show = new Set<string>();
+  const disable = new Set<string>();
+  const enable = new Set<string>();
+  for (const rule of q.punches ?? []) {
+    if (!LIST_ACTIONS.has(rule.action)) continue;
+    if (rule.when && !evaluateCondition(rule.when, ctx)) continue;
+    const codes = evaluateSetExpr(rule.source, ctx, { target: q });
+    const map = new Map(rule.mapping.map((m) => [String(m.from), m.to]));
+    const bucket = { hide, show, disable, enable }[rule.action as "hide" | "show" | "disable" | "enable"];
+    for (const c of codes) bucket.add(String(map.has(String(c)) ? map.get(String(c))! : c));
+  }
+  if (!hide.size && !show.size && !disable.size && !enable.size) return items;
+
+  const before = items;
+  const reasons = new Map<string, string>();
+  let out = items.filter((o) => {
+    if (hide.has(String(o.code)) && !show.has(String(o.code))) {
+      reasons.set(String(o.code), "hidden by an auto punch rule");
+      return false;
+    }
+    return true;
+  });
+  // SHOW restores a programmed option an earlier stage removed, in its programmed slot
+  const present = new Set(out.map((o) => String(o.code)));
+  const restored = q.options.filter((o) => show.has(String(o.code)) && !present.has(String(o.code)));
+  if (restored.length) {
+    const order = new Map(q.options.map((o, i) => [String(o.code), i]));
+    out = [...out, ...restored].sort(
+      (a, b) => (order.get(String(a.code)) ?? 1e9) - (order.get(String(b.code)) ?? 1e9),
+    );
+  }
+  if (disable.size || enable.size) {
+    out = out.map((o) => {
+      const k = String(o.code);
+      if (enable.has(k)) return o.meta?.disabled ? { ...o, meta: { ...o.meta, disabled: false } } : o;
+      if (disable.has(k)) return { ...o, meta: { ...(o.meta ?? {}), disabled: true } };
+      return o;
+    });
+  }
+  record(rec, "autoPunch", "Auto punch (show / hide / enable / disable)", before, out, reasons);
+  return out;
+}
+
 /** "Always Show" options may be shuffled, but never dropped by "show only N". */
 function alwaysShowCodes<T extends ItemWithLogic>(items: T[]): Set<string> {
   return new Set(items.filter(isAlwaysShow).map((i) => String(i.code)));
@@ -878,6 +937,13 @@ function runOptions(
   // 4b — the mask: a nested set expression over other questions' answers
   if (q.mask) {
     options = applyMask(q, options, ctx, rec);
+  }
+
+  // 4c — option-level auto punch rules that act on the LIST: SHOW / HIDE /
+  //      ENABLE / DISABLE (autoPunch.ts). SELECT & co. act on the answer and
+  //      are the flow interpreter's business, not the list's.
+  if (q.punches?.some((r) => LIST_ACTIONS.has(r.action))) {
+    options = applyListPunches(q, options, ctx, rec);
   }
 
   // 5 — reusable list operations

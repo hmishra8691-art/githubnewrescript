@@ -4,6 +4,7 @@ import type { Option } from "@rescript/schema";
 import type { QRProps } from "../QuestionRenderer";
 import { StarRating } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
+import { SafeImage, MediaEmbed } from "../Media";
 import { useOptions, useChoice, activate, colsClass, metaText } from "./shared";
 
 /**
@@ -42,7 +43,7 @@ export function IconSelect(p: QRProps) {
             <div className="rs-iconopt-icon">
               {o.imageUrl
                 // eslint-disable-next-line @next/next/no-img-element
-                ? <img src={o.imageUrl} alt="" />
+                ? <SafeImage src={o.imageUrl} alt="" />
                 : <span aria-hidden>{icon || "◻"}</span>}
             </div>
             <div className="rs-iconopt-label" dangerouslySetInnerHTML={{ __html: o.label }} />
@@ -74,7 +75,7 @@ export function ListSelect(p: QRProps) {
             <span className={`rs-listrow-mark ${multi ? "box" : "dot"}`} aria-hidden>{sel ? (multi ? "✓" : "●") : ""}</span>
             {o.imageUrl && (
               // eslint-disable-next-line @next/next/no-img-element
-              <img className="rs-listrow-img" src={o.imageUrl} alt="" />
+              <SafeImage className="rs-listrow-img" src={o.imageUrl} alt="" />
             )}
             <div className="rs-listrow-body">
               <div className="rs-listrow-title">
@@ -130,7 +131,7 @@ export function RichCards(p: QRProps) {
             {badge && o.imageUrl && <span className="rs-badge rs-richcard-badge">{badge}</span>}
             {o.imageUrl && (
               // eslint-disable-next-line @next/next/no-img-element
-              <img className="rs-richcard-img" src={o.imageUrl} alt="" />
+              <SafeImage className="rs-richcard-img" src={o.imageUrl} alt="" />
             )}
             <div className="rs-richcard-body">
               <div className="rs-richcard-title">
@@ -197,7 +198,7 @@ export function PairwiseChoice(p: QRProps) {
         onClick={() => pick(o)} onKeyDown={activate(() => pick(o))}>
         {o.imageUrl && (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={o.imageUrl} alt="" />
+          <SafeImage src={o.imageUrl} alt="" />
         )}
         <div className="rs-pair-title" dangerouslySetInnerHTML={{ __html: o.label }} />
         {desc && <div className="rs-pair-desc" dangerouslySetInnerHTML={{ __html: desc }} />}
@@ -232,7 +233,7 @@ export function MultiCarousel(p: QRProps) {
         <div className={`rs-cardopt rs-carousel-card ${sel ? "selected" : ""}`} data-code={String(o.code)} onClick={() => pick(o)}>
           {o.imageUrl && (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={o.imageUrl} alt="" />
+            <SafeImage src={o.imageUrl} alt="" />
           )}
           <div className="rs-cardopt-title" dangerouslySetInnerHTML={{ __html: o.label }} />
           {desc && <div className="rs-cardopt-desc" dangerouslySetInnerHTML={{ __html: desc }} />}

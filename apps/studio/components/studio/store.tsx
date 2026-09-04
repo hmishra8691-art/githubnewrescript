@@ -83,6 +83,8 @@ export interface StudioState {
   hasConflict(): boolean;
   /** flush any pending autosave now; resolves when the draft is stored */
   flushDraft(): Promise<boolean>;
+  /** the revision right now — for code that runs after an await */
+  currentRevision(): number | null;
   /**
    * The revision this editor is working on top of. Sent with every write so
    * the server can refuse one that is behind; null means migration 0004 is
@@ -395,6 +397,7 @@ export function StudioProvider({
       setSaveState({ kind: "clean", savedAt: new Date().toISOString() });
     },
     flushDraft,
+    currentRevision: () => revisionRef.current,
     hasConflict: () => blocked.current,
     toast(msg, kind = "ok") {
       setToastMsg({ msg, kind });

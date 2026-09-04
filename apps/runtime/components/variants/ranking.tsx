@@ -4,6 +4,7 @@ import type { Option } from "@rescript/schema";
 import { tournamentStep, type TournamentCode, type TournamentDuel } from "@rescript/engine";
 import type { QRProps } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
+import { SafeImage, MediaEmbed } from "../Media";
 import { useOptions, activate, seedFor, setSide, getSide } from "./shared";
 import { useTapOrDrag, DragGhost } from "./dragdrop";
 
@@ -118,7 +119,7 @@ export function Tournament(p: QRProps) {
         onClick={() => record(c)}>
         {o?.imageUrl && (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={o.imageUrl} alt="" draggable={false} />
+          <SafeImage src={o.imageUrl} alt="" draggable={false} />
         )}
         <span className="rs-tour-side-label" dangerouslySetInnerHTML={{ __html: o?.label ?? String(c) }} />
         <span className="rs-tour-pick">Prefer this</span>

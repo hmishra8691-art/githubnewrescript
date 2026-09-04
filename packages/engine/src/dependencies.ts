@@ -259,3 +259,83 @@ export function describeCycle(def: SurveyDefinition, cycle: string[]): string {
   const codes = cycle.map((id) => def.questions.find((q) => q.id === id)?.code ?? id);
   return `Circular dependency detected between ${codes.join(" → ")} → ${codes[0]}.`;
 }
+
+/* ------------------------------------------------------------ blocks */
+
+export interface BlockDependencies {
+  /** the block's own questions, in order */
+  questions: Question[];
+  /** earlier (out-of-block) questions the block reads — display logic, piping, masks, punches, branch conditions … */
+  dependsOn: Question[];
+  /** ids referenced that are not questions in this survey (dangling) */
+  unknown: string[];
+}
+
+/**
+ * What "Preview block" needs to know before it can start the real runtime at
+ * a block: which questions outside the block the block's behaviour depends
+ * on. A block whose display logic reads Q1, whose text pipes Q2, whose options
+ * are masked by Q3 or whose enclosing branch tests Q4 cannot be previewed
+ * faithfully with those unanswered — so the preview offers to set test values
+ * for exactly these.
+ *
+ * The block is a flow node id: a `block` container, a lone `page`, or a
+ * `section`. Every page under it counts. Conditions on the block itself, on
+ * its pages and on every container between it and the flow root are included;
+ * the block's own questions are not (answering them is what the preview is for).
+ */
+export function blockDependencies(def: SurveyDefinition, blockId: string): BlockDependencies {
+  const byId = new Map(def.questions.map((q) => [q.id, q]));
+  const inBlock: string[] = [];
+  const refs = new Set<string>();
+
+  // the containers around the block, so branch / loop / block conditions count
+  const path: any[] = [];
+  let found: any = null;
+  const find = (nodes: any[]): boolean => {
+    for (const n of nodes ?? []) {
+      if (n?.id === blockId) { found = n; return true; }
+      path.push(n);
+      const kids = [
+        ...(n?.children ?? []),
+        ...((n?.branches ?? []).flatMap((b: any) => b.children ?? [])),
+        ...(n?.otherwise ?? []),
+      ];
+      if (kids.length && find(kids)) return true;
+      path.pop();
+    }
+    return false;
+  };
+  find(def.flow as any[]);
+  if (!found) return { questions: [], dependsOn: [], unknown: [] };
+
+  for (const container of path) {
+    conditionRefs(def, container.visibleIf, refs);
+    for (const b of container.branches ?? []) conditionRefs(def, b.when, refs);
+    if (container.type === "loop" && container.source?.kind === "question") refs.add(container.source.questionId);
+  }
+
+  const collect = (n: any) => {
+    conditionRefs(def, n?.visibleIf, refs);
+    if (n?.type === "page") inBlock.push(...(n.questionIds ?? []));
+    for (const b of n?.branches ?? []) { conditionRefs(def, b.when, refs); for (const c of b.children ?? []) collect(c); }
+    for (const c of n?.children ?? []) collect(c);
+    for (const c of n?.otherwise ?? []) collect(c);
+  };
+  collect(found);
+
+  const questions = inBlock.map((id) => byId.get(id)).filter((q): q is Question => !!q);
+  for (const q of questions) for (const d of questionDependencies(def, q)) refs.add(d);
+
+  const own = new Set(inBlock);
+  const dependsOn: Question[] = [];
+  const unknown: string[] = [];
+  const order = orderIndex(def);
+  for (const id of refs) {
+    if (own.has(id)) continue;
+    const q = byId.get(id);
+    if (q) dependsOn.push(q); else unknown.push(id);
+  }
+  dependsOn.sort((a, b) => (order[a.id] ?? 1e9) - (order[b.id] ?? 1e9));
+  return { questions, dependsOn, unknown };
+}

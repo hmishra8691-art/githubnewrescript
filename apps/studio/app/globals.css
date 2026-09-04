@@ -1016,3 +1016,11 @@ body.flow-dragging .flow-dropzone { height: 26px; }
   padding: 6px 9px; border-radius: 6px; background: var(--tint);
   border-left: 3px solid var(--accent);
 }
+
+/* ---- auto punch editor (AutoPunchEditor.tsx) */
+.ap-rule { margin-bottom: 8px; }
+.ap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; align-items: end; }
+.ap-grid .f { margin-bottom: 0; }
+.ap-grid .f > span { font-size: 11px; color: var(--muted); display: block; margin-bottom: 2px; }
+.ap-add { margin-top: 8px; }
+.block-media-row { border-top: 1px dashed var(--border); }

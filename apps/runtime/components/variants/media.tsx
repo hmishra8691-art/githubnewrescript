@@ -3,6 +3,8 @@ import React from "react";
 import type { QRProps } from "../QuestionRenderer";
 import { StarRating } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
+import { MediaEmbed } from "../Media";
+import { resolveMediaUrl } from "@rescript/engine";
 import { useOptions } from "./shared";
 import { uploadFile, liveSessionId, filesOf, commitFiles, fmtSize, tooBig } from "./upload";
 
@@ -41,6 +43,26 @@ function Stimulus({
         No media configured — set the video or audio URL in the editor.
       </div>
     );
+  }
+  /*
+   * Playback tracking needs an HTML5 <video>. A YouTube / Vimeo / Drive link
+   * is embedded through the shared resolver instead — it plays, but the
+   * player's timeline is not observable from here, so the "must finish" gate
+   * and the timestamps are unavailable and the editor is told so (lintCounts).
+   */
+  const media = resolveMediaUrl(url);
+  if (media.kind === "embed") {
+    return (
+      <div data-testid="media-el-embed">
+        <MediaEmbed url={url} className="rs-media-el" />
+        <div className="rs-media-note rs-media-note-small">
+          Embedded players cannot report playback position — use a direct .mp4 / .webm URL for timeline questions.
+        </div>
+      </div>
+    );
+  }
+  if (media.kind === "unsupported") {
+    return <div className="rs-media-note" data-testid="media-unsupported">{media.reason}</div>;
   }
   const h = (fn?: (el: HTMLVideoElement) => void) => (e: React.SyntheticEvent<HTMLVideoElement>) =>
     fn?.(e.currentTarget);

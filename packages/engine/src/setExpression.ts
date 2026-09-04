@@ -5,7 +5,7 @@ import { SET_OPERATOR_LABEL } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition } from "./evaluate.js";
 import { codesFrom } from "./carryforward.js";
-import { getQuestion, getQuestionByCodeOrVar } from "./state.js";
+import { getQuestion, getQuestionByCodeOrVar, type AnswerValue } from "./state.js";
 
 /**
  * The set-expression engine: evaluate a nested set tree, and read or write it
@@ -120,6 +120,9 @@ function dedupe(codes: (string | number)[]): (string | number)[] {
 
 /* ================================================================ punching */
 
+/** Actions that change the option LIST rather than the answer (autoPunch.ts owns those). */
+export const LIST_ACTIONS: ReadonlySet<PunchRule["action"]> = new Set(["show", "hide", "enable", "disable"]);
+
 export interface PunchResult {
   /** Codes to tick in the question the rule belongs to. */
   select: (string | number)[];
@@ -129,6 +132,15 @@ export interface PunchResult {
   unmatched: (string | number)[];
   /** True when any rule asked to recompute on every visit. */
   recomputeAlways: boolean;
+  /** A `clear` rule fired: the answer is to be emptied (before any select). */
+  clear: boolean;
+  /**
+   * A `set_value` rule fired: the answer becomes exactly these values — the
+   * rule's source codes, mapped — replacing whatever was there. The codes are
+   * not required to be options: `set_value` is how a numeric or text answer
+   * is written by logic too.
+   */
+  setValue: (string | number)[] | null;
 }
 
 /**
@@ -152,13 +164,25 @@ export function resolvePunches(
   const deselect: (string | number)[] = [];
   const unmatched: (string | number)[] = [];
   let recomputeAlways = false;
+  let clear = false;
+  let setValue: (string | number)[] | null = null;
 
   for (const rule of q.punches ?? []) {
+    // show / hide / enable / disable shape the option LIST, not the answer —
+    // the option pipeline (carryforward.ts) reads those; see autoPunch.ts
+    if (LIST_ACTIONS.has(rule.action)) continue;
     if (rule.when && !evaluateCondition(rule.when, ctx)) continue;
     if (rule.recompute === "always") recomputeAlways = true;
 
+    if (rule.action === "clear") { clear = true; continue; }
+
     const sourceCodes = evaluateSetExpr(rule.source, ctx, { target: q });
     const map = new Map(rule.mapping.map((m) => [key(m.from), m.to]));
+
+    if (rule.action === "set_value") {
+      setValue = sourceCodes.map((c) => (map.has(key(c)) ? map.get(key(c))! : c));
+      continue;
+    }
 
     for (const code of sourceCodes) {
       const mapped = map.has(key(code)) ? map.get(key(code))! : code;
@@ -166,7 +190,14 @@ export function resolvePunches(
         if (!rule.ignoreUnmatched) unmatched.push(code);
         continue;
       }
-      (rule.action === "deselect" ? deselect : select).push(mapped);
+      // rules apply in order: a later rule on the same code wins
+      if (rule.action === "deselect") {
+        remove(select, mapped);
+        deselect.push(mapped);
+      } else {
+        remove(deselect, mapped);
+        select.push(mapped);
+      }
     }
   }
 
@@ -175,6 +206,8 @@ export function resolvePunches(
     deselect: dedupe(deselect),
     unmatched: dedupe(unmatched),
     recomputeAlways,
+    clear,
+    setValue,
   };
 }
 
@@ -568,14 +601,29 @@ export function applyPunches(
   if (!q.punches?.length) return null;
 
   const result = resolvePunches(q, ctx);
-  if (result.select.length === 0 && result.deselect.length === 0) return null;
+  const nothing = result.select.length === 0 && result.deselect.length === 0 && !result.clear && !result.setValue;
+  if (nothing) return null;
 
   const key = answerKeyFor(q);
-  const existing = ctx.state.answers[key];
+  let existing: unknown = ctx.state.answers[key];
   const answered = existing !== undefined;
   if (answered && !result.recomputeAlways) return null;
 
   const multi = Array.isArray(existing) || isMultiValued(q);
+
+  // `set_value` replaces the answer outright; `clear` empties it. Either may
+  // be followed by selects in the same pass, which then apply on top.
+  if (result.setValue) {
+    const v: unknown = multi ? result.setValue : result.setValue[0];
+    ctx.state.answers[key] = v as AnswerValue;
+    existing = v;
+    if (result.select.length === 0 && result.deselect.length === 0) return { key, value: v };
+  } else if (result.clear) {
+    delete ctx.state.answers[key];
+    existing = undefined;
+    if (result.select.length === 0) return { key, value: undefined };
+  }
+
   if (multi) {
     // punching only ever targets choice questions, whose arrays hold codes
     const current: (string | number)[] = Array.isArray(existing) ? ([...existing] as (string | number)[]) : [];
@@ -597,6 +645,10 @@ export function applyPunches(
 }
 
 const key0 = (c: string | number) => String(c);
+
+function remove(list: (string | number)[], code: string | number): void {
+  for (let i = list.length - 1; i >= 0; i--) if (String(list[i]) === String(code)) list.splice(i, 1);
+}
 
 /** Whether a question holds several codes at once. */
 function isMultiValued(q: Question): boolean {

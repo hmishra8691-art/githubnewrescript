@@ -5,6 +5,7 @@ import {
   lintSurveyLogic, questionLogicSummary, detectLogicCycles, describeCycle,
   validateFlowStructure, type LogicIssue,
 } from "@rescript/engine";
+import { AutoPunchPanel } from "./AutoPunchEditor";
 import { useStudio, uid } from "./store";
 import { ConditionEditor, conditionToText, OptionalCondition } from "./ConditionBuilder";
 
@@ -181,6 +182,9 @@ export function LogicPanel() {
 
       <h3 className="sec">What is dynamic in this survey</h3>
       <LogicSummaryList />
+
+      <h3 className="sec">Auto punch (option → option)</h3>
+      <AutoPunchPanel />
 
       <h3 className="sec">Display rules (show/hide anything)</h3>
       <p className="muted" style={{ fontSize: 12 }}>

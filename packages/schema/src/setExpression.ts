@@ -114,12 +114,26 @@ export const PunchMapping = z.object({
 });
 export type PunchMapping = z.infer<typeof PunchMapping>;
 
+/**
+ * What a punch does to the codes it resolves. `select` / `deselect` write the
+ * answer; `clear` empties it; `show` / `hide` / `enable` / `disable` act on
+ * the option LIST (through the option pipeline, so they compose with masks
+ * and option logic); `set_value` is `select` that also replaces a single
+ * answer. The union is open on purpose — an action is data, and the runtime
+ * applies whichever it knows.
+ */
+export const PunchAction = z.enum([
+  "select", "deselect", "clear", "set_value",
+  "show", "hide", "enable", "disable",
+]);
+export type PunchAction = z.infer<typeof PunchAction>;
+
 export const PunchRule = z.object({
   id: z.string(),
   label: z.string().optional(),
   /** Which codes to punch. */
   source: SetExpr,
-  action: z.enum(["select", "deselect"]).default("select"),
+  action: PunchAction.default("select"),
   /**
    * Source code → this question's code. Empty means "the same code", which is
    * the common case: option lists that were built to line up.

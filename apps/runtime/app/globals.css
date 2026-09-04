@@ -76,6 +76,7 @@ body {
 }
 .rs-option:hover { border-color: var(--rs-primary); }
 .rs-option.selected { border-color: var(--rs-primary); background: color-mix(in srgb, var(--rs-primary) 7%, var(--rs-surface)); }
+.rs-option.disabled { opacity: .5; cursor: not-allowed; } .rs-option.disabled:hover { border-color: var(--rs-border); }
 /* Scope the control sizing to the radio/checkbox itself. Written as a bare
    `.rs-option input` it also matched the "Other (please specify)" box nested
    in the same label, and at (0,1,1) it outranked `.rs-input` — squashing that

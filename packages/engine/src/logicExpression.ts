@@ -355,6 +355,25 @@ export function parseLogicExpression(
       // a bare reference: the natural reading depends on what it points at
       return bareCondition(source, question);
     }
+    /*
+     * `Q1.A IS SELECTED`, `Q1.A = SELECTED`, `Q1.A IS NOT SELECTED`, `Q1.A
+     * SELECTED`: the spelled-out form of the `Q1.A` shorthand. Without this the
+     * words parsed as "Q1 equals the text SELECTED", which is never what a
+     * programmer who writes it means.
+     */
+    if (source.optionCode != null) {
+      const SELECTED_WORDS = ["selected", "checked", "chosen", "ticked", "picked"];
+      const nextIsSelectedWord = SELECTED_WORDS.some((w) => isWord(peek(), w));
+      if ((operator === "eq" || operator === "ne") && nextIsSelectedWord) {
+        at += 1;
+        return { type: "rule", source: strip(source), operator: operator === "eq" ? "selected" : "notSelected", value: source.optionCode };
+      }
+      if (operator === "selected" || operator === "notSelected") {
+        const p = peek();
+        const endsHere = !p || (p.kind === "punct" && [")", ",", "]"].includes(p.text)) || isWord(p, "and") || isWord(p, "or") || isWord(p, "then");
+        if (endsHere) return { type: "rule", source: strip(source), operator, value: source.optionCode };
+      }
+    }
     if (NO_OPERAND.includes(operator)) {
       return { type: "rule", source: strip(source), operator };
     }

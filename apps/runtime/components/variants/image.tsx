@@ -2,6 +2,7 @@
 import React from "react";
 import type { QRProps } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
+import { SafeImage, MediaEmbed } from "../Media";
 import { activate } from "./shared";
 
 /**
@@ -205,7 +206,7 @@ export function Annotate(p: QRProps) {
 
       <div className="rs-annot-stage" ref={wrapRef}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className="rs-annot-img" src={img} alt="" draggable={false} />
+        <SafeImage className="rs-annot-img" src={img} alt="" draggable={false} imageOnly />
         <canvas className="rs-annot-canvas" ref={canvasRef} width={box.w || 1} height={box.h || 1} aria-hidden />
         <div
           className={`rs-annot-surface tool-${tool}`}

@@ -26,12 +26,14 @@ export function useChoice(p: QRProps, multi: boolean, options: Option[]) {
     ? (Array.isArray(p.value) ? (p.value as (string | number)[]) : p.value == null ? [] : [p.value as string | number])
     : p.value == null ? [] : [p.value as string | number];
   const isSelected = (o: Option) => vals.some((v) => String(v) === String(o.code));
+  /** disabled by a DISABLE auto punch rule (`meta.disabled`, set by the option pipeline) */
+  const isDisabled = (o: Option) => !!o.meta?.disabled;
   const pick = (o: Option) => {
-    if (p.q.settings.readOnly) return;
+    if (p.q.settings.readOnly || isDisabled(o)) return;
     if (multi) p.onChange(toggleMultiValue(vals, o.code, options, p.q.settings.maxSelections));
     else p.onChange(isSelected(o) ? null : o.code);
   };
-  return { vals, isSelected, pick };
+  return { vals, isSelected, isDisabled, pick };
 }
 
 /** Keyboard activation for a clickable non-button element. */

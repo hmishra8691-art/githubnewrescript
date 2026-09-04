@@ -1,5 +1,7 @@
 "use client";
 import React from "react";
+import { MediaUrlInput } from "../MediaUrlInput";
+import { resolveMediaUrl } from "@rescript/engine";
 import { registerVariantSettings, type VariantSettingsProps } from "./registry";
 import { CountInput } from "../CountInput";
 
@@ -14,11 +16,14 @@ import { CountInput } from "../CountInput";
 function MediaUrl({ q, patchSettings, hint }: VariantSettingsProps & { hint?: string }) {
   return (
     <>
-      <label className="f"><span>Video / audio URL</span>
-        <input className="input" value={q.settings.mediaUrl ?? ""}
-          placeholder="https://…/clip.mp4"
-          data-testid="media-url"
-          onChange={(e) => patchSettings({ mediaUrl: e.target.value || undefined })} /></label>
+      <MediaUrlInput label="Video / audio URL" testId="media-url" placeholder="https://…/clip.mp4"
+        value={q.settings.mediaUrl} onChange={(v) => patchSettings({ mediaUrl: v })} />
+      {resolveMediaUrl(q.settings.mediaUrl).kind === "embed" && (
+        <div className="chip warn" data-testid="media-embed-warn">
+          Embedded players (YouTube, Vimeo, Drive) cannot report playback position — the “must finish”
+          gate and timestamps need a direct .mp4 / .webm URL.
+        </div>
+      )}
       {!q.settings.mediaUrl && (
         <div className="chip warn" data-testid="media-no-url">
           {hint ?? "Without a clip the respondent sees a note instead of a player."}

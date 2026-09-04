@@ -4,6 +4,7 @@ import type { Option } from "@rescript/schema";
 import { toggleMultiValue } from "@rescript/engine";
 import type { QRProps } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
+import { SafeImage, MediaEmbed } from "../Media";
 import { useOptions, activate } from "./shared";
 
 /**
@@ -61,7 +62,7 @@ export function Regions(p: QRProps) {
         <div className="rs-regions-stage" role={multi ? "group" : "radiogroup"}
           aria-label="Select a region of the image">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img className="rs-regions-img" src={img} alt="" draggable={false} />
+          <SafeImage className="rs-regions-img" src={img} alt="" draggable={false} imageOnly />
           {drawn.map((o, i) => {
             const r = regionOf(o)!;
             const on = isOn(o);

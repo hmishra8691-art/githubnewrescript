@@ -28,9 +28,13 @@ export type RuntimeStep =
       title?: string;
       /** resolved: page → enclosing block → branding.layout.showBlockTitles */
       showTitle: boolean;
+      /** block media, resolved page → enclosing block */
+      mediaUrl?: string;
       questionIds: string[];
       loop?: LoopContext | null;
       sectionPath: string[];
+      /** ids of every enclosing flow node — block, section, branch, loop … — outermost first */
+      nodePath: string[];
     }
   | { kind: "embedded_data"; nodeId: string; fields: EmbeddedField[] }
   | { kind: "quota_check"; nodeId: string; quotaIds: string[]; onFull: { kind: string; url?: string } }
@@ -61,14 +65,19 @@ export function compileFlow(
    * pages individually.
    */
   const surveyDefault = def.branding?.layout?.showBlockTitles ?? true;
+  // the container nodes around the node being walked (see RuntimeStep.nodePath)
+  const nodePath: string[] = [];
   const walk = (
     nodes: FlowNode[],
     loop: LoopContext | null,
     sectionPath: string[],
     blockTitle?: string,
     blockShowTitle?: boolean,
+    blockMedia?: string,
   ): void => {
     for (const node of nodes) {
+      if (node.type !== "page") nodePath.push(node.id);
+      try {
       switch (node.type) {
         case "page": {
           if (!evaluateCondition(node.visibleIf, ctxFor(loop))) break;
@@ -77,9 +86,11 @@ export function compileFlow(
             pageId: loop ? `${node.id}@${loop.code}` : node.id,
             title: node.title ?? blockTitle,
             showTitle: node.showTitle ?? blockShowTitle ?? surveyDefault,
+            mediaUrl: node.mediaUrl ?? blockMedia,
             questionIds: node.questionIds,
             loop,
             sectionPath,
+            nodePath: [...nodePath],
           });
           break;
         }
@@ -93,6 +104,7 @@ export function compileFlow(
             // a section groups pages for reporting; a block also names them
             node.type === "block" ? (node.title ?? blockTitle) : blockTitle,
             node.type === "block" ? (node.showTitle ?? blockShowTitle) : blockShowTitle,
+            node.type === "block" ? (node.mediaUrl ?? blockMedia) : blockMedia,
           );
           break;
         }
@@ -188,6 +200,9 @@ export function compileFlow(
           });
           break;
       }
+      } finally {
+        if (node.type !== "page") nodePath.pop();
+      }
     }
   };
 
@@ -267,6 +282,8 @@ export interface NavigationResult {
   redirectNewWindow?: boolean;
   triggeredSkips: { questionId: string; ruleId: string }[];
   quotaFull?: string[];
+  /** set when `start()` was asked to begin at a block */
+  startAt?: { blockId: string; found: boolean };
 }
 
 /** Evaluate skip logic for questions on the submitted page. */
@@ -352,9 +369,23 @@ export function advance(
     }
   }
 
-  // move forward through non-page steps
+  return moveForward(def, state, quotaCounts, idx + 1, triggeredSkips);
+}
+
+/**
+ * Walk forward from `idx` to the next page with something to show, executing
+ * every non-page step on the way (embedded data, quota checks, redirects,
+ * ends). Shared by `advance` and `start`.
+ */
+function moveForward(
+  def: SurveyDefinition,
+  state: ResponseState,
+  quotaCounts: QuotaCounts,
+  idx: number,
+  triggeredSkips: NavigationResult["triggeredSkips"],
+): NavigationResult {
+  let steps = compileFlow(def, state, quotaCounts);
   let guard = 0;
-  idx++;
   while (guard++ < 10000) {
     steps = compileFlow(def, state, quotaCounts); // re-resolve (answers/embedded may change)
     if (idx >= steps.length) {
@@ -446,10 +477,53 @@ export function start(
   def: SurveyDefinition,
   state: ResponseState,
   quotaCounts: QuotaCounts = {},
+  opts: StartOptions = {},
 ): NavigationResult {
   state.stepIndex = -1;
-  const res = advanceFrom(def, state, quotaCounts, -1);
-  return res;
+  if (opts.startAt) {
+    const at = findBlockStart(def, state, quotaCounts, opts.startAt);
+    if (at < 0) {
+      return {
+        ...moveForward(def, state, quotaCounts, 0, []),
+        startAt: { blockId: opts.startAt, found: false },
+      };
+    }
+    // no page precedes the start: nothing to run skip logic for, so step
+    // straight into the block's first page, running whatever embedded-data or
+    // quota steps sit inside the block before it
+    return { ...moveForward(def, state, quotaCounts, at, []), startAt: { blockId: opts.startAt, found: true } };
+  }
+  return advanceFrom(def, state, quotaCounts, -1);
+}
+
+export interface StartOptions {
+  /**
+   * Begin at the first page of this block / section (a flow node id) instead
+   * of the survey's first page — "Preview block". The rest of the survey runs
+   * exactly as it would have: the same compiled flow, the same logic, piping,
+   * masking, page breaks and punching, just entered later. Answers to earlier
+   * questions may be seeded into `state.answers` beforehand.
+   */
+  startAt?: string;
+}
+
+/**
+ * Index of the first step inside `blockId`, with the flow compiled against the
+ * current answers; -1 when the block is not reachable — hidden by its own
+ * display logic, inside a branch that does not match, or simply not a node.
+ */
+export function findBlockStart(
+  def: SurveyDefinition,
+  state: ResponseState,
+  quotaCounts: QuotaCounts,
+  blockId: string,
+): number {
+  const steps = compileFlow(def, state, quotaCounts);
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i];
+    if (s.kind === "page" && (s.nodePath.includes(blockId) || s.pageId === blockId || s.pageId.startsWith(`${blockId}@`))) return i;
+  }
+  return -1;
 }
 
 function advanceFrom(

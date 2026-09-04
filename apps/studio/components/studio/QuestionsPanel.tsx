@@ -9,8 +9,16 @@ import { VariantPickerModal, VariantSwitcher, createFromVariant } from "./Varian
 import { RichTextEditor } from "./RichTextEditor";
 import { OptionLogicEditor } from "./OptionLogicEditor";
 import { OptionPreview } from "./OptionPreview";
+import { usePreviewBlock } from "./PreviewBlock";
+import { MediaUrlInput } from "./MediaUrlInput";
+
+/** Variants whose stimulus IS `settings.mediaUrl` (their own settings edit it). */
+const MEDIA_OWNING = new Set(["videorating", "videotimeline", "watchtime", "audiorec", "base:media_timeline"]);
 import { InsertPipingButton } from "./PipingPicker";
-import { FIELD_TYPES, nextCode, resequenceQuestionCodes } from "@rescript/engine"; // also registers builtin question types
+import {
+  FIELD_TYPES, nextCode, resequenceQuestionCodes,
+  parsePastedOptions, planPaste, optionsToPaste, type PasteMode,
+} from "@rescript/engine"; // also registers builtin question types
 import { isEmptyOptionLogic } from "@rescript/schema";
 import { useStudio, uid } from "./store";
 import {
@@ -70,6 +78,22 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
   const [showAll, setShowAll] = React.useState(false);
   const [pasteOpen, setPasteOpen] = React.useState(false);
   const [pasteText, setPasteText] = React.useState("");
+  /**
+   * Paste box modes. REPLACE is the default: the box opens showing the list
+   * as it is (`code<TAB>label`), so what you see is what you get after
+   * import; options named by code or label keep their identity — codes,
+   * flags, images, logic — so nothing that refers to them breaks. APPEND is
+   * the explicit "add these after what I have" choice.
+   */
+  const [pasteMode, setPasteMode] = React.useState<PasteMode>("replace");
+  const openPaste = () => {
+    if (!pasteOpen) {
+      setPasteText(options.some((o) => o.label.trim()) ? optionsToPaste(options) : "");
+      setPasteMode("replace");
+    }
+    setPasteOpen((v) => !v);
+  };
+  const pastePlan = React.useMemo(() => planPaste(options, pasteText, pasteMode), [options, pasteText, pasteMode]);
   const [logicOpen, setLogicOpen] = React.useState<string | null>(null);
   const pendingFocus = React.useRef<number | null>(null);
   const rootRef = React.useRef<HTMLDivElement>(null);
@@ -139,9 +163,9 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
   };
 
   const importPaste = () => {
-    const parsed = parsePastedOptions(pasteText, Number(nextCode(options)));
-    if (parsed.length === 0) return;
-    onChange([...options, ...(parsed as Option[])]);
+    if (parsePastedOptions(pasteText, 1).length === 0) return;
+    onChange(pastePlan.options);
+    if (pastePlan.removed > 0) onAfterDelete?.();
     setFilter("");
     setShowAll(true);
     setPasteText("");
@@ -198,9 +222,10 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
               onInsert={(tok) => set(i, { label: `${options[i].label}${tok}` })} />
           )}
           {showImage && (
-            <input className="input" style={{ width: 180 }} placeholder="image URL"
-              value={o.imageUrl ?? ""}
-              onChange={(e) => set(i, { imageUrl: e.target.value || undefined })} />
+            <div style={{ width: 200 }}>
+              <MediaUrlInput compact placeholder="image URL" testId={`option-image-${i}`}
+                value={o.imageUrl} onChange={(v) => set(i, { imageUrl: v })} />
+            </div>
           )}
           {metaFields.map((mf) => {
             const cur = o.meta?.[mf.key];
@@ -301,22 +326,47 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
         <button className="btn small" data-testid="add-option" onClick={() => insertAfter(options.length - 1)}>
           + option <span className="muted" style={{ fontSize: 10 }}>(or press Enter)</span>
         </button>
-        <button className="btn small" onClick={() => setPasteOpen((v) => !v)}>
+        <button className="btn small" data-testid="toggle-paste" onClick={openPaste}>
           {pasteOpen ? "hide paste box" : "📋 paste options"}
         </button>
       </div>
       {pasteOpen && (
-        <div className="paste-box">
-          <textarea className="ta" data-testid="paste-box"
-            placeholder={"Paste options here — one per line.\nNumbering (1. / 1)) and bullets (- * •) are cleaned automatically.\nUse code<TAB>label to set codes."}
+        <div className="paste-box" data-testid="paste-panel">
+          <div className="row" style={{ alignItems: "center", gap: 10 }}>
+            <span className="muted" style={{ fontSize: 11 }}>On import:</span>
+            <label className="row" style={{ gap: 4, fontSize: 12 }}>
+              <input type="radio" name={`paste-mode-${questionId ?? "x"}`} data-testid="paste-mode-replace"
+                checked={pasteMode === "replace"} onChange={() => setPasteMode("replace")} />
+              Replace the list
+            </label>
+            <label className="row" style={{ gap: 4, fontSize: 12 }}>
+              <input type="radio" name={`paste-mode-${questionId ?? "x"}`} data-testid="paste-mode-append"
+                checked={pasteMode === "append"} onChange={() => { setPasteMode("append"); if (pasteText === optionsToPaste(options)) setPasteText(""); }} />
+              Append to the list
+            </label>
+          </div>
+          <textarea className="ta" data-testid="paste-box" rows={Math.min(14, Math.max(4, pasteText.split("\n").length + 1))}
+            placeholder={pasteMode === "append"
+              ? "Paste the options to ADD — one per line.\nNumbering (1. / 1)) and bullets (- * •) are cleaned automatically.\nUse code<TAB>label to set codes."
+              : "Paste the new list here — one per line. This REPLACES the options above.\nKeep code<TAB>label lines to keep an option's code (and everything that refers to it)."}
             value={pasteText}
             onChange={(e) => setPasteText(e.target.value)} />
-          <div className="row">
-            <button className="btn small primary" data-testid="import-options" onClick={importPaste}>
-              Import {parsePastedOptions(pasteText, 1).length || ""} option{parsePastedOptions(pasteText, 1).length === 1 ? "" : "s"}
+          <div className="row" style={{ alignItems: "center" }}>
+            <button className="btn small primary" data-testid="import-options" onClick={importPaste}
+              disabled={parsePastedOptions(pasteText, 1).length === 0}>
+              {pasteMode === "replace" ? "Replace" : "Append"} {parsePastedOptions(pasteText, 1).length || ""} option{parsePastedOptions(pasteText, 1).length === 1 ? "" : "s"}
             </button>
-            <span className="muted" style={{ fontSize: 11 }}>handles 500+ options without freezing (list is windowed)</span>
+            <span className="muted" style={{ fontSize: 11 }} data-testid="paste-summary">
+              {pasteMode === "replace"
+                ? `keeps ${pastePlan.kept} · adds ${pastePlan.added} · removes ${pastePlan.removed}`
+                : `adds ${pastePlan.added} after the existing ${options.length}`}
+            </span>
           </div>
+          {pasteMode === "replace" && pastePlan.removed > 0 && (
+            <div className="muted" style={{ fontSize: 11, color: "var(--warn, #b45309)" }} data-testid="paste-removes">
+              ⚠ Removes option{pastePlan.removed === 1 ? "" : "s"} {pastePlan.removedCodes.map(String).join(", ")} — any logic, piping or masking that names them will be flagged by the linter.
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -597,6 +647,11 @@ export function QuestionEditor({ q }: { q: Question }) {
             <option value="0">optional</option><option value="1">required</option>
           </select></label>
       </div>
+      {!MEDIA_OWNING.has(variantDef?.renderer ?? `base:${q.type}`) && (
+        <MediaUrlInput label="Media — shown under the question text (image, video, YouTube or Google Drive URL)"
+          testId="question-media" value={q.settings.mediaUrl}
+          onChange={(v) => patchSettings({ mediaUrl: v })} />
+      )}
 
       {feats.options && has("options") && (
         <>
@@ -826,22 +881,9 @@ function EscapeCloses({ onClose }: { onClose: () => void }) {
   return null;
 }
 
-/** Parse pasted option lists: strips numbering (1. / 1) ), bullets (- * •)
- *  and supports "code<TAB>label" lines. */
-export function parsePastedOptions(text: string, startCode: number): Option[] {
-  return text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .map((line, i) => {
-      const tab = line.split("\t");
-      if (tab.length >= 2 && tab[0].trim()) {
-        return { code: tab[0].trim(), label: tab.slice(1).join(" ").trim(), flags: [] as any[] };
-      }
-      const cleaned = line.replace(/^\s*(\d{1,4}[.)]|[-*•‣▪])\s+/, "").trim();
-      return { code: String(startCode + i), label: cleaned || line, flags: [] as any[] };
-    });
-}
+// `parsePastedOptions` now lives in the engine (optionsPaste.ts) beside the
+// replace/append planner; re-exported so existing imports keep working.
+export { parsePastedOptions };
 
 /**
  * The subtle bar between questions.
@@ -877,6 +919,7 @@ export function QuestionsPanel() {
   const [pickerAt, setPickerAt] = React.useState<{ pageId: string; pos: number } | null>(null);
   const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({});
   const [menuFor, setMenuFor] = React.useState<string | null>(null);
+  const { previewBlock, modal: previewBlockModal } = usePreviewBlock();
   const [moveFor, setMoveFor] = React.useState<string | null>(null);
   const selected = s.def.questions.find((q) => q.id === s.selectedQuestionId);
   const pages = listPages(s.def.flow as any[]);
@@ -948,6 +991,12 @@ export function QuestionsPanel() {
     s.update((d) => {
       const b = blockIn(d, blockId);
       if (b) b.node.title = title || undefined;
+    });
+  const [mediaFor, setMediaFor] = React.useState<string | null>(null);
+  const setBlockMedia = (blockId: string, url: string | undefined) =>
+    s.update((d) => {
+      const b = blockIn(d, blockId);
+      if (b) (b.node as any).mediaUrl = url || undefined;
     });
 
   /**
@@ -1306,6 +1355,9 @@ export function QuestionsPanel() {
               <span className="chip" data-testid="block-title-hidden"
                 title="Respondents will not see this block's name — change it in the ••• menu">name hidden</span>
             )}
+            <button className="btn small" data-testid="block-preview"
+              title="Open the real runtime starting at this block — with the latest saved state"
+              onClick={() => previewBlock(b.id, b.title || `Block ${pi + 1}`)}>▶ Preview block</button>
             {!isCollapsed && (
               <button className="btn small" data-testid="block-close"
                 title="Close this block — collapses it and closes any open question inside"
@@ -1350,6 +1402,11 @@ export function QuestionsPanel() {
                         onClick={() => { setMenuFor(null); mergeUp(b.id); }}>⇧ Merge into block above</button>
                     )}
                     <div className="menu-sep" />
+                    <button className="menu-item" data-testid="block-media-toggle"
+                      onClick={() => { setMenuFor(null); setMediaFor(mediaFor === b.id ? null : b.id); }}>
+                      🖼 {(b.node as any).mediaUrl ? "Edit block media" : "Add block media (image / video / URL)"}
+                    </button>
+                    <div className="menu-sep" />
                     <button className="menu-item danger"
                       onClick={() => { setMenuFor(null); deleteBlock(b.id); }}>Delete block…</button>
                   </div>
@@ -1358,6 +1415,13 @@ export function QuestionsPanel() {
             </div>
           </div>
 
+          {(mediaFor === b.id || (!isCollapsed && (b.node as any).mediaUrl)) && (
+            <div className="block-media-row" data-testid="block-media-row" style={{ padding: "6px 12px 2px" }}>
+              <MediaUrlInput compact testId="block-media" label="Block media — shown under the block name"
+                value={(b.node as any).mediaUrl}
+                onChange={(v) => setBlockMedia(b.id, v)} />
+            </div>
+          )}
           {!isCollapsed && (
             <div className="block-body">
               {n === 0 && (
@@ -1455,6 +1519,7 @@ export function QuestionsPanel() {
       )}
 
       {moveFor && <MoveQuestionModal qid={moveFor} onClose={() => setMoveFor(null)} />}
+      {previewBlockModal}
 
       {s.def.questions.length === 0 && blocks.length === 0 && (
         <p className="muted">Start by adding a block, then put questions inside it.</p>

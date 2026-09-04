@@ -11,6 +11,13 @@ import { Runner } from "@/components/Runner";
 export default function PreviewPage() {
   const [def, setDef] = React.useState<SurveyDefinition | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  /**
+   * "Preview block": the Studio also sends `startAt` (a flow node id) and
+   * `answers` (test values for the questions the block depends on). Both are
+   * fixed for the life of the preview — the Runner is keyed on them so a new
+   * block preview starts fresh while ordinary live edits keep the position.
+   */
+  const [entry, setEntry] = React.useState<{ startAt?: string; answers?: Record<string, unknown>; revision?: number | null } | null>(null);
 
   React.useEffect(() => {
     const tryLoad = (raw: unknown) => {
@@ -19,7 +26,12 @@ export default function PreviewPage() {
       else setError(parsed.error.issues.slice(0, 5).map((i) => `${i.path.join(".")}: ${i.message}`).join("\n"));
     };
     const onMsg = (e: MessageEvent) => {
-      if (e.data?.type === "rescript:preview" && e.data.definition) tryLoad(e.data.definition);
+      if (e.data?.type === "rescript:preview" && e.data.definition) {
+        tryLoad(e.data.definition);
+        if (e.data.startAt !== undefined || e.data.answers !== undefined) {
+          setEntry({ startAt: e.data.startAt || undefined, answers: e.data.answers ?? undefined, revision: e.data.revision ?? null });
+        }
+      }
     };
     window.addEventListener("message", onMsg);
     // NOTE: an earlier build read a "rescript_preview_definition" key from
@@ -55,17 +67,41 @@ export default function PreviewPage() {
   const saved = def.meta.updatedAt
     ? new Date(def.meta.updatedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
     : null;
+  const blockTitle = entry?.startAt ? findNodeTitle(def.flow as any[], entry.startAt) : null;
+  const seeded = entry?.answers ? Object.keys(entry.answers).filter((k) => entry.answers![k] !== undefined && entry.answers![k] !== "").length : 0;
   return (
     <>
       <div className="rs-preview-bar" data-testid="preview-bar">
-        <strong>Preview</strong>
-        <span>{def.meta.code} · v{def.meta.version}</span>
+        <strong>{entry?.startAt ? "Preview block" : "Preview"}</strong>
+        {entry?.startAt && <span data-testid="preview-block">{blockTitle || entry.startAt}</span>}
+        <span>{def.meta.code} · v{def.meta.version}{entry?.revision != null ? ` · rev ${entry.revision}` : ""}</span>
         <span>{saved ? `saved ${saved}` : "unsaved draft"}</span>
+        {seeded > 0 && <span data-testid="preview-seeded">{seeded} test value{seeded === 1 ? "" : "s"}</span>}
         <span className="rs-preview-live">live — follows your edits</span>
       </div>
       {/* deliberately not keyed on the definition: the Studio pushes edits live
-          and remounting on each one would restart the respondent every keystroke */}
-      <Runner definition={def} mode="preview" />
+          and remounting on each one would restart the respondent every keystroke.
+          It IS keyed on the entry point, so a new block preview starts over. */}
+      <Runner
+        key={`${entry?.startAt ?? ""}|${JSON.stringify(entry?.answers ?? null)}`}
+        definition={def}
+        mode="preview"
+        startAt={entry?.startAt}
+        seedAnswers={entry?.answers}
+      />
     </>
   );
+}
+
+/** The title of a flow node by id, wherever it sits — for the preview bar. */
+function findNodeTitle(nodes: any[], id: string): string | null {
+  for (const n of nodes ?? []) {
+    if (n?.id === id) return n.title ?? ""; // "" = found, untitled
+    for (const kids of [n?.children, n?.otherwise, ...(n?.branches ?? []).map((b: any) => b.children)]) {
+      if (!kids) continue;
+      const t = findNodeTitle(kids, id);
+      if (t !== null) return t;
+    }
+  }
+  return null;
 }

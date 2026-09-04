@@ -13,6 +13,9 @@ import {
   resolvePiping,
   runScripts,
   inspect,
+  applyPunches,
+  answerKey,
+  questionDependencies,
   type ResponseState,
   type RuntimeStep,
   type QuotaCounts,
@@ -20,6 +23,7 @@ import {
 } from "@rescript/engine";
 import { QuestionRenderer } from "./QuestionRenderer";
 import { Inspector } from "./Inspector";
+import { MediaEmbed, SafeImage } from "./Media";
 
 export interface RunnerProps {
   definition: SurveyDefinition;
@@ -35,6 +39,15 @@ export interface RunnerProps {
    * saved, instead of discovering it question by question.
    */
   build?: { source: "requested" | "draft" | "current"; version: string; versionId: string; revision: number | null; draftUpdatedAt?: string | null };
+  /**
+   * "Preview block": start at this flow node instead of the first page. Same
+   * compiled flow, same logic, piping, masking, page breaks and punching —
+   * only the entry point moves. `seedAnswers` are answers to earlier questions
+   * (keyed by question id) the tester supplied so the block's dependencies
+   * behave as they would mid-survey.
+   */
+  startAt?: string;
+  seedAnswers?: Record<string, unknown>;
 }
 
 function brandingVars(b: Branding): React.CSSProperties {
@@ -79,7 +92,7 @@ async function persist(mode: string, session: RunnerProps["session"], state: Res
   }
 }
 
-export function Runner({ definition: def, mode, session, quotaCounts: initialCounts, urlParams, build }: RunnerProps) {
+export function Runner({ definition: def, mode, session, quotaCounts: initialCounts, urlParams, build, startAt, seedAnswers }: RunnerProps) {
   const [, force] = React.useReducer((x: number) => x + 1, 0);
   const stateRef = React.useRef<ResponseState | null>(null);
   const [steps, setSteps] = React.useState<RuntimeStep[]>([]);
@@ -98,6 +111,7 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
    * tool you reach for, so it is now behind a toggle and the survey gets the
    * full page until you ask for it.
    */
+  const [startNote, setStartNote] = React.useState<string | null>(null);
   const canDebug = mode === "test" || mode === "preview";
   const [debug, setDebug] = React.useState(false);
   const showInspector = canDebug && debug;
@@ -139,9 +153,20 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
     // test and preview only: the live state, for the inspector's consumers and
     // the browser suites — the same object, so it is never stale
     if (mode !== "live" && typeof window !== "undefined") (window as any).__rescriptState = state;
+    if (seedAnswers) {
+      for (const [id, v] of Object.entries(seedAnswers)) {
+        if (v === undefined || v === null || v === "") continue;
+        state.answers[id] = v as never;
+      }
+    }
     const r = runScripts(def, state, "on_load");
     setLogs(r.logs);
-    const nav = start(def, state, counts);
+    const nav = start(def, state, counts, startAt ? { startAt } : {});
+    setStartNote(
+      nav.startAt && !nav.startAt.found
+        ? "This block is not reachable with the current test values — its display logic (or an enclosing branch) hides it — so the preview starts at the first page instead."
+        : null,
+    );
     setSteps(nav.steps);
     if (nav.done) setEnded({ status: nav.endStatus ?? "complete", redirectUrl: nav.redirectUrl });
     force();
@@ -281,8 +306,16 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
           {resolvePiping(pageStep.title, ctx)}
         </h1>
       )}
+      {pageStep.mediaUrl && (
+        <div className="rs-block-media" data-testid="rs-block-media">
+          <MediaEmbed url={pageStep.mediaUrl} title={pageStep.title} />
+        </div>
+      )}
       {errors.length > 0 && (
         <div className="rs-error-banner">Please review the highlighted questions below.</div>
+      )}
+      {startNote && (
+        <div className="rs-error-banner" data-testid="rs-start-note" style={{ background: "#fff7e6", color: "#7a4b00", borderColor: "#f0c36d" }}>{startNote}</div>
       )}
       {questions.map((q) => {
         const key = pageStep.loop ? `${q.id}@${pageStep.loop.code}` : q.id;
@@ -298,6 +331,18 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
             errors={errors.filter((e) => e.questionId === q.id).map((e) => e.message)}
             onChange={(v) => {
               setAnswer(def, state, q.id, v, pageStep.loop);
+              /*
+               * Auto punch on the SAME page: "if Q1.A is selected → select
+               * Q2.B" with Q1 and Q2 side by side must react as the respondent
+               * clicks, not on the next page arrival. Only questions whose punch
+               * rules read the question just answered are recomputed, with the
+               * same applyPunches the flow interpreter uses on arrival.
+               */
+              for (const other of questions) {
+                if (other.id === q.id || !other.punches?.length) continue;
+                if (!questionDependencies(def, other).has(q.id)) continue;
+                applyPunches(other, ctx, (qq) => answerKey(qq.id, pageStep.loop ?? null));
+              }
               const r = runScripts(def, state, "on_change", { scopeRef: q.id, loop: pageStep.loop });
               if (r.logs.length) setLogs((l) => [...l, ...r.logs]);
               force();
@@ -331,7 +376,7 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
             <div dangerouslySetInnerHTML={{ __html: resolvePiping(b.headerHtml, ctx) }} />
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
-            b.logoUrl && <img src={b.logoUrl} alt="logo" />
+            b.logoUrl && <SafeImage src={b.logoUrl} alt="logo" imageOnly />
           )}
         </div>
       )}

@@ -2,6 +2,7 @@
 import React from "react";
 import type { QRProps } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
+import { SafeImage, MediaEmbed } from "../Media";
 import { useOptions, useRows, useChoice, activate, colsClass, metaText, dropTargetAt } from "./shared";
 
 /**
@@ -57,7 +58,7 @@ export function FlipCards(p: QRProps) {
                 {badge && <span className="rs-badge rs-flip-badge">{badge}</span>}
                 {o.imageUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img className="rs-flip-img" src={o.imageUrl} alt="" draggable={false} />
+                  <SafeImage className="rs-flip-img" src={o.imageUrl} alt="" draggable={false} />
                 ) : (
                   <div className="rs-flip-icon" aria-hidden>{icon || "◻"}</div>
                 )}
@@ -203,7 +204,7 @@ export function CardSort(p: QRProps) {
             onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
             {image && (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={image} alt="" draggable={false} />
+              <SafeImage src={image} alt="" draggable={false} />
             )}
             <div className="rs-cardsort-label" dangerouslySetInnerHTML={{ __html: current.label }} />
             {desc && <div className="rs-cardsort-desc" dangerouslySetInnerHTML={{ __html: desc }} />}

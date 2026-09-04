@@ -2,6 +2,7 @@
 import React from "react";
 import type { QRProps } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
+import { SafeImage, MediaEmbed } from "../Media";
 import { useOptions, useRows, activate, metaText } from "./shared";
 
 /**
@@ -84,7 +85,7 @@ export function CarouselJudge(p: QRProps) {
         <div className="rs-judge-card" data-row={rc}>
           {image && (
             // eslint-disable-next-line @next/next/no-img-element
-            <img className="rs-judge-img" src={image} alt="" draggable={false} />
+            <SafeImage className="rs-judge-img" src={image} alt="" draggable={false} />
           )}
           <div className="rs-judge-title" dangerouslySetInnerHTML={{ __html: row.label }} />
           {desc && <div className="rs-judge-desc" dangerouslySetInnerHTML={{ __html: desc }} />}
@@ -205,7 +206,7 @@ export function CompareCarousel(p: QRProps) {
                 data-code={String(o.code)} data-side={k === 0 ? "a" : "b"}>
                 {o.imageUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={o.imageUrl} alt="" draggable={false} />
+                  <SafeImage src={o.imageUrl} alt="" draggable={false} />
                 ) : (
                   <div className="rs-comparecar-noimg" aria-hidden>🖼</div>
                 )}

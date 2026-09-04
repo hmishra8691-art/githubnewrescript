@@ -4,6 +4,7 @@ import { pickArm, sanitizeHtml } from "@rescript/engine";
 import type { QRProps } from "../QuestionRenderer";
 import { SingleSelect } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
+import { SafeImage, MediaEmbed } from "../Media";
 import { getSide, rng, seedFor, setSide, useOptions, useRows } from "./shared";
 
 /**
@@ -169,7 +170,7 @@ export function ReactionTime(p: QRProps) {
           <div className="rs-iat-stim" data-testid="iat-stimulus" data-row={String(current.code)}>
             {current.meta?.image ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={String(current.meta.image)} alt={current.label.replace(/<[^>]*>/g, "")} />
+              <SafeImage src={String(current.meta.image)} alt={current.label.replace(/<[^>]*>/g, "")} />
             ) : (
               <span dangerouslySetInnerHTML={{ __html: current.label }} />
             )}
@@ -190,7 +191,7 @@ export function ReactionTime(p: QRProps) {
 }
 
 /* ------------------------------------------------------- A/B experiment */
-const VIDEO_RE = /\.(mp4|webm|ogg|ogv|mov|m4v)(\?|#|$)/i;
+
 
 export function ExperimentArm(p: QRProps) {
   const arms = p.q.settings.arms ?? [];
@@ -234,13 +235,10 @@ export function ExperimentArm(p: QRProps) {
           Arm: {String(arm.code)} ({arm.label})
         </div>
       )}
-      {media && (VIDEO_RE.test(media) ? (
-        // eslint-disable-next-line jsx-a11y/media-has-caption
-        <video className="rs-experiment-media" src={media} controls data-testid="experiment-video" />
-      ) : (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img className="rs-experiment-media" src={media} alt={arm.label} data-testid="experiment-image" />
-      ))}
+      {media && (
+        // image, direct video, YouTube or Drive — one resolver decides
+        <MediaEmbed className="rs-experiment-media" url={media} title={arm.label} />
+      )}
       {arm.html && (
         <div className="rs-experiment-html" data-testid="experiment-html"
           dangerouslySetInnerHTML={{ __html: sanitizeHtml(arm.html) }} />

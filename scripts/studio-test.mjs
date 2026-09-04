@@ -57,14 +57,20 @@ active = await page.evaluate(() => document.activeElement?.dataset?.oidx);
 assert.equal(active, "2", "Backspace should refocus the previous option");
 console.log("✔ Backspace on empty option removes it and refocuses");
 
-// --- paste box: numbered + bulleted lines cleaned
+// --- paste box: opens showing the current list (Replace is the default);
+//     Append adds cleaned numbered/bulleted lines after it
 await page.click(".qcard.selected >> text=📋 paste options");
+const prefilled = await page.inputValue('[data-testid="paste-box"]');
+assert.equal(prefilled.split("\n").length, 3, "the paste box opens with the existing options");
+assert.match(prefilled, /^1\tApple\n/, "as code<TAB>label lines");
+assert.ok(await page.isChecked('[data-testid="paste-mode-replace"]'), "Replace is the default");
+await page.click('[data-testid="paste-mode-append"]');
 await page.fill('[data-testid="paste-box"]', "1. Mango\n2) Grapes\n- Papaya\n• Kiwi");
 await page.click('[data-testid="import-options"]');
 labels = await page.$$eval(".qcard.selected input[data-oidx]", (els) =>
   els.map((e) => e.value));
 assert.deepEqual(labels, ["Apple", "Banana", "Orange", "Mango", "Grapes", "Papaya", "Kiwi"]);
-console.log("✔ paste box imports and cleans numbered/bulleted options");
+console.log("✔ paste box shows the current list, and Append imports cleaned numbered/bulleted options after it");
 
 // --- rich text: bold a word, verify it lands in the stored definition
 await page.click(".qcard.selected .rte-surface");

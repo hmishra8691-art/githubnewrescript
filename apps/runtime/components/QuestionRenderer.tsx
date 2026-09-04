@@ -15,6 +15,7 @@ import {
   type LoopContext,
 } from "@rescript/engine";
 import { variantRenderers } from "./variants/registry";
+import { MediaEmbed, SafeImage } from "./Media";
 // side-effect: every family registers its renderers
 import "./variants";
 
@@ -92,13 +93,14 @@ export function SingleSelect(p: QRProps) {
       {filtered.map((o) => {
         const sel = String(p.value) === String(o.code);
         return (
-          <label key={String(o.code)} className={`rs-option ${sel ? "selected" : ""}`}>
+          <label key={String(o.code)} className={`rs-option ${sel ? "selected" : ""} ${o.meta?.disabled ? "disabled" : ""}`}>
             <input
               type="radio"
               name={p.q.id}
+              value={String(o.code)}
               checked={sel}
               onChange={() => p.onChange(o.code)}
-              disabled={p.q.settings.readOnly}
+              disabled={p.q.settings.readOnly || !!o.meta?.disabled}
             />
             <span className="lbl" dangerouslySetInnerHTML={{ __html: o.label }} />
             {OTHER(o) && sel && (
@@ -136,14 +138,14 @@ export function MultiSelect(p: QRProps) {
           vals.length >= p.q.settings.maxSelections;
         return (
           <label key={String(o.code)}
-            className={`rs-option ${sel ? "selected" : ""}`}
+            className={`rs-option ${sel ? "selected" : ""} ${o.meta?.disabled ? "disabled" : ""}`}
             title={atMax ? `You have already chosen ${p.q.settings.maxSelections}.` : undefined}
             style={atMax ? { opacity: 0.5 } : undefined}>
             {/* At the cap the engine silently ignored the click, so the last
                 option — conventionally "Other" — looked broken. Disabling the
                 control says so instead of failing quietly. */}
-            <input type="checkbox" checked={sel} onChange={() => toggle(o)}
-              disabled={p.q.settings.readOnly || atMax} />
+            <input type="checkbox" value={String(o.code)} checked={sel} onChange={() => toggle(o)}
+              disabled={p.q.settings.readOnly || atMax || !!o.meta?.disabled} />
             <span className="lbl" dangerouslySetInnerHTML={{ __html: o.label }} />
             {OTHER(o) && sel && (
               <input
@@ -741,7 +743,7 @@ export function ImageSelect(p: QRProps & { multi?: boolean; ranking?: boolean })
           <div key={String(o.code)} className={`rs-imgopt ${sel ? "selected" : ""}`} onClick={() => click(o)}>
             {o.imageUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={o.imageUrl} alt={o.label.replace(/<[^>]*>/g, "")} />
+              <SafeImage src={o.imageUrl} alt={o.label.replace(/<[^>]*>/g, "")} />
             ) : (
               <div style={{ height: 110, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--rs-border)" }}>🖼</div>
             )}
@@ -1104,7 +1106,7 @@ export function ChoiceCards(p: QRProps & { multi: boolean }) {
             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(o); } }}>
             {o.imageUrl && (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={o.imageUrl} alt="" />
+              <SafeImage src={o.imageUrl} alt=""/>
             )}
             <div className="rs-cardopt-title" dangerouslySetInnerHTML={{ __html: o.label }} />
             {desc && <div className="rs-cardopt-desc" dangerouslySetInnerHTML={{ __html: desc }} />}
@@ -1368,7 +1370,7 @@ export function SwipeDeck(p: QRProps) {
         >
           {img && (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={img} alt="" draggable={false} />
+            <SafeImage src={img} alt="" draggable={false}/>
           )}
           <div className="rs-swipe-label" dangerouslySetInnerHTML={{ __html: current.label }} />
           {verdict && (
@@ -1515,7 +1517,7 @@ export function CarouselSelect(p: QRProps) {
           onClick={() => p.onChange(selected ? null : o.code)}>
           {o.imageUrl && (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={o.imageUrl} alt="" />
+            <SafeImage src={o.imageUrl} alt=""/>
           )}
           <div className="rs-cardopt-title" dangerouslySetInnerHTML={{ __html: o.label }} />
           {desc && <div className="rs-cardopt-desc" dangerouslySetInnerHTML={{ __html: desc }} />}
@@ -1570,7 +1572,7 @@ export function HotspotClick(p: QRProps) {
     <div>
       <div className="rs-hotspot" onClick={onClick} role="img" aria-label="Click to place a point">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={img} alt="" draggable={false} />
+        <SafeImage src={img} alt="" draggable={false} imageOnly />
         {pts.map((pt, i) => (
           <span key={i} className="rs-hotspot-pin"
             style={{ left: `${pt.x}%`, top: `${pt.y}%` }}
@@ -1606,7 +1608,7 @@ export function CompareImages(p: QRProps) {
             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); p.onChange(sel ? null : o.code); } }}>
             {o.imageUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={o.imageUrl} alt="" style={{ height: 220 }} />
+              <SafeImage src={o.imageUrl} alt="" style={{ height: 220 }}/>
             ) : (
               <div className="rs-compare-noimg">🖼</div>
             )}
@@ -1639,7 +1641,7 @@ export function Categorize(p: QRProps) {
             <div key={rc} className={`rs-catcard ${vals[rc] !== undefined ? "assigned" : ""}`}>
               {img && (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={img} alt="" />
+                <SafeImage src={img} alt=""/>
               )}
               <div className="rs-catcard-label" dangerouslySetInnerHTML={{ __html: row.label }} />
               <div className="rs-catcard-buckets">
@@ -1687,6 +1689,13 @@ function CustomComponent(p: QRProps) {
     />
   );
 }
+
+/**
+ * Renderers that display `settings.mediaUrl` themselves as their stimulus
+ * (the media family tracks playback on it); every other question shows the
+ * media under its text through one MediaEmbed.
+ */
+const MEDIA_OWNING_RENDERERS = new Set(["videorating", "videotimeline", "watchtime", "audiorec", "base:media_timeline"]);
 
 /* ------------------------------------------------------------------ shell */
 export function QuestionRenderer(p: QRProps) {
@@ -1786,6 +1795,11 @@ export function QuestionRenderer(p: QRProps) {
         {p.q.required && <span className="rs-required">*</span>}
       </p>
       {instruction && <p className="rs-qinstruction" dangerouslySetInnerHTML={{ __html: instruction }} />}
+      {p.q.settings.mediaUrl && !MEDIA_OWNING_RENDERERS.has(variantDef?.renderer ?? `base:${p.q.type}`) && (
+        <div className="rs-qmedia" data-testid="rs-qmedia">
+          <MediaEmbed url={p.q.settings.mediaUrl} title={p.q.text.replace(/<[^>]*>/g, "")} />
+        </div>
+      )}
       {p.q.customHtml && p.q.type !== "custom_component" && (
         <div dangerouslySetInnerHTML={{ __html: resolvePiping(p.q.customHtml, ctx) }} />
       )}

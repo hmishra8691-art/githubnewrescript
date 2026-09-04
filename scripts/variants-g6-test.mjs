@@ -587,9 +587,13 @@ pv = await h.preview([made.stimulus.id], (d) => {
   arms[0].mediaUrl = "https://example.invalid/stimulus.png";
 });
 const st = `[data-qid="${made.stimulus.id}"]`;
-await pv.waitForSelector(`${st} [data-testid="experiment-image"]`);
+// example.invalid never loads: the image element gives way to the graceful
+// "Unable to load image" note, which still names the URL it tried
+const imgOrNote = `${st} [data-testid="media-image"], ${st} [data-testid="media-broken"]`;
+await pv.waitForSelector(imgOrNote);
 assert.equal(await h.answerOf(pv, made.stimulus.id), "S1");
-assert.match(await pv.getAttribute(`${st} [data-testid="experiment-image"]`, "src"), /stimulus\.png/);
+const shown = await pv.$eval(imgOrNote, (el) => el.getAttribute("src") ?? el.getAttribute("title"));
+assert.match(shown, /stimulus\.png/);
 await pv.close();
 
 pv = await h.preview([made.stimulus.id], (d) => {
@@ -597,7 +601,7 @@ pv = await h.preview([made.stimulus.id], (d) => {
   arms[0].weight = 0; arms[1].weight = 1; arms[2].weight = 0;
   arms[1].mediaUrl = "https://example.invalid/clip.mp4";
 });
-await pv.waitForSelector(`${st} [data-testid="experiment-video"]`);
+await pv.waitForSelector(`${st} [data-testid="media-video"], ${st} [data-testid="media-broken"]`);
 assert.equal(await h.answerOf(pv, made.stimulus.id), "S2", "a video stimulus renders as a video");
 await pv.close();
 console.log("✔ random stimulus: the assigned arm's image or video is what shows");

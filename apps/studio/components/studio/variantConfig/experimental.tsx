@@ -1,5 +1,6 @@
 "use client";
 import React from "react";
+import { MediaUrlInput } from "../MediaUrlInput";
 import type { Question } from "@rescript/schema";
 import { registerVariantSettings } from "./registry";
 import { CountInput } from "../CountInput";
@@ -156,13 +157,10 @@ registerVariantSettings("experiment", ({ q, patchSettings }) => {
             <button className="btn small danger" data-testid={`arm-remove-${i}`}
               onClick={() => write(arms.filter((_, j) => j !== i))}>×</button>
           </div>
-          <label className="f" style={{ marginBottom: 6 }}>
-            <span>Media URL (image or video)</span>
-            <input className="input" data-testid={`arm-media-${i}`}
-              placeholder="https://…"
-              value={a.mediaUrl ?? ""}
-              onChange={(e) => setAt(i, { mediaUrl: e.target.value || undefined })} />
-          </label>
+          <div style={{ marginBottom: 6 }}>
+            <MediaUrlInput compact label="Media URL (image, video, YouTube or Drive)" testId={`arm-media-${i}`}
+              placeholder="https://…" value={a.mediaUrl} onChange={(v) => setAt(i, { mediaUrl: v })} />
+          </div>
           <label className="f" style={{ marginBottom: 0 }}>
             <span>HTML shown for this arm</span>
             <textarea className="ta" style={{ minHeight: 60 }} data-testid={`arm-html-${i}`}
