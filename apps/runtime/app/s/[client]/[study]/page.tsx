@@ -2,6 +2,7 @@ import { loadDeployment, BLOCKING_STATUSES } from "@/lib/deployment";
 import { createSession, loadQuotaCounts } from "@/lib/session";
 import { Runner } from "@/components/Runner";
 import { headers } from "next/headers";
+import { clientIp } from "@rescript/quality/server";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +47,7 @@ export default async function SurveyPage({
 
   const ua = headers().get("user-agent") ?? undefined;
   const session = await createSession(dep, {
+    ip: clientIp(headers()),
     isTest: false,
     respondentToken: searchParams.token,
     userAgent: ua,

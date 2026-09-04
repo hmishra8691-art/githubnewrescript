@@ -13,6 +13,9 @@ importers:
       '@rescript/engine':
         specifier: workspace:*
         version: link:../../packages/engine
+      '@rescript/quality':
+        specifier: workspace:*
+        version: link:../../packages/quality
       '@rescript/schema':
         specifier: workspace:*
         version: link:../../packages/schema
@@ -56,6 +59,9 @@ importers:
       '@rescript/exporters':
         specifier: workspace:*
         version: link:../../packages/exporters
+      '@rescript/quality':
+        specifier: workspace:*
+        version: link:../../packages/quality
       '@rescript/schema':
         specifier: workspace:*
         version: link:../../packages/schema
@@ -131,6 +137,22 @@ importers:
       exceljs:
         specifier: ^4.4.0
         version: 4.4.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.20.1
+        version: 22.20.1
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+
+  packages/quality:
+    dependencies:
+      '@rescript/engine':
+        specifier: workspace:*
+        version: link:../engine
+      '@rescript/schema':
+        specifier: workspace:*
+        version: link:../schema
     devDependencies:
       '@types/node':
         specifier: ^22.20.1

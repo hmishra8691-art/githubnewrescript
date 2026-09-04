@@ -11,6 +11,7 @@ import { OptionLogicEditor } from "./OptionLogicEditor";
 import { OptionPreview } from "./OptionPreview";
 import { usePreviewBlock } from "./PreviewBlock";
 import { MediaUrlInput } from "./MediaUrlInput";
+import { AttentionCheckEditor } from "./AttentionCheckEditor";
 
 /** Variants whose stimulus IS `settings.mediaUrl` (their own settings edit it). */
 const MEDIA_OWNING = new Set(["videorating", "videotimeline", "watchtime", "audiorec", "base:media_timeline"]);
@@ -651,6 +652,9 @@ export function QuestionEditor({ q }: { q: Question }) {
         <MediaUrlInput label="Media — shown under the question text (image, video, YouTube or Google Drive URL)"
           testId="question-media" value={q.settings.mediaUrl}
           onChange={(v) => patchSettings({ mediaUrl: v })} />
+      )}
+      {(q.options.length > 0 || q.type === "open_text" || q.type === "long_text" || q.type === "numeric") && (
+        <AttentionCheckEditor q={q} patch={patch} />
       )}
 
       {feats.options && has("options") && (

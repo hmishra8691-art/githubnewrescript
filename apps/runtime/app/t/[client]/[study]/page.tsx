@@ -1,6 +1,8 @@
 import { loadTestBuild } from "@/lib/deployment";
 import { createSession, loadQuotaCounts } from "@/lib/session";
 import { Runner } from "@/components/Runner";
+import { headers } from "next/headers";
+import { clientIp } from "@rescript/quality/server";
 
 export const dynamic = "force-dynamic";
 
@@ -65,6 +67,8 @@ export default async function TestSurveyPage({
    */
   const session = await createSession(dep, {
     isTest: true,
+    ip: clientIp(headers()),
+    userAgent: headers().get("user-agent") ?? undefined,
     respondentToken: searchParams.token,
     allowTokenless: true,
   });

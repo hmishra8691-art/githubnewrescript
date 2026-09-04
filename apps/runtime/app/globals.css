@@ -480,3 +480,4 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
   border: 1px solid #4b5563; background: none; color: #e5e7eb;
 }
 .rs-debug-toggle.on { background: #2563eb; border-color: #2563eb; color: #fff; }
+.rs-disclosure { font-size: .78em; color: var(--rs-subtle); text-align: center; margin-top: 8px; }

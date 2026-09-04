@@ -2,6 +2,12 @@ import "server-only";
 import { supabaseAdmin } from "./admin";
 import type { LoadedDeployment } from "./deployment";
 import type { QuotaCounts } from "@rescript/engine";
+import { hashIdentifier } from "@rescript/quality/server";
+
+/** Per-survey salt for pseudonymous identifiers (QUALITY_HASH_SALT env, else the survey id). */
+export function qualitySalt(surveyId: string): string {
+  return `${process.env.QUALITY_HASH_SALT ?? "rescript"}:${surveyId}`;
+}
 
 export async function createSession(
   dep: LoadedDeployment,
@@ -9,6 +15,8 @@ export async function createSession(
     isTest: boolean;
     respondentToken?: string;
     userAgent?: string;
+    /** the client IP — hashed with the survey's salt before storage, never stored raw */
+    ip?: string | null;
     /**
      * Test mode only: mint a throwaway respondent for unique-link and
      * invitation surveys instead of refusing the session. Without this a
@@ -64,6 +72,10 @@ export async function createSession(
     await db.from("respondents").update({ status: "started" }).eq("id", r.id);
   }
 
+  // network telemetry is opt-out per survey; the hash is salted per survey so
+  // the same address never yields the same value across studies
+  const telemetry = dep.definition.quality?.telemetry;
+  const ipHash = telemetry?.network === false ? null : hashIdentifier(qualitySalt(dep.surveyId), opts.ip ?? null);
   const { error } = await db.from("responses").insert({
     survey_id: dep.surveyId,
     version_id: dep.versionId,
@@ -72,6 +84,7 @@ export async function createSession(
     is_test: opts.isTest,
     seed,
     user_agent: opts.userAgent?.slice(0, 500) ?? null,
+    ip_hash: ipHash,
   });
   if (error) return { error: "Could not start the survey session." };
   return { sessionId, seed, respondentId };

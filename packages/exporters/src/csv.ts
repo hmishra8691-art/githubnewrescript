@@ -43,6 +43,8 @@ const SYSTEM_COLUMNS = [
 export function responsesToCSV(
   def: SurveyDefinition,
   states: ResponseStateLike[],
+  /** optional per-row extra columns (e.g. the quality summary), same order as `states` */
+  extra?: { columns: readonly string[]; cells: (index: number) => unknown[] },
 ): string {
   const dict = buildVariableDictionary(def);
   const varNames: string[] = [];
@@ -54,8 +56,8 @@ export function responsesToCSV(
     varNames.push(v.name);
   }
 
-  const lines: string[] = [csvLine([...SYSTEM_COLUMNS, ...varNames])];
-  for (const state of states) {
+  const lines: string[] = [csvLine([...SYSTEM_COLUMNS, ...varNames, ...(extra?.columns ?? [])])];
+  states.forEach((state, i) => {
     const flat = flattenVariables(def, state as any);
     const cells: unknown[] = [
       state.respondentId ?? "",
@@ -64,9 +66,10 @@ export function responsesToCSV(
       state.startedAt,
       state.status,
       ...varNames.map((name) => flat[name]),
+      ...(extra ? extra.cells(i) : []),
     ];
     lines.push(csvLine(cells));
-  }
+  });
   return lines.join("\n") + "\n";
 }
 

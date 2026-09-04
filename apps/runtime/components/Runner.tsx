@@ -24,6 +24,8 @@ import {
 import { QuestionRenderer } from "./QuestionRenderer";
 import { Inspector } from "./Inspector";
 import { MediaEmbed, SafeImage } from "./Media";
+import { createTelemetryCollector, type TelemetryCollector } from "@/lib/telemetry";
+import type { ResponseTelemetry } from "@rescript/quality";
 
 export interface RunnerProps {
   definition: SurveyDefinition;
@@ -69,23 +71,38 @@ function brandingVars(b: Branding): React.CSSProperties {
   } as React.CSSProperties;
 }
 
-async function persist(mode: string, session: RunnerProps["session"], state: ResponseState, done: boolean) {
+async function persist(mode: string, session: RunnerProps["session"], state: ResponseState, done: boolean, telemetry?: ResponseTelemetry | null) {
   if (!session || mode === "preview") return;
   try {
+    const body = JSON.stringify({
+      sessionId: session.sessionId,
+      status: state.status,
+      stepIndex: state.stepIndex,
+      answers: state.answers,
+      calculated: state.calculated,
+      embedded: state.embedded,
+      flags: state.flags,
+      completed: done,
+      surveyDbId: session.surveyDbId,
+      // behavioural metadata for the quality engine — derived counts and
+      // durations only (see lib/telemetry.ts); the server runs the engine on
+      // the final save
+      telemetry: telemetry ?? undefined,
+    });
+    if (done && typeof navigator !== "undefined" && navigator.sendBeacon) {
+      // the completion save must survive the redirect that follows it
+      const ok = navigator.sendBeacon("/api/session/save", new Blob([body], { type: "application/json" }));
+      if (ok) {
+        // still await a normal fetch so the quality engine has run before a redirect fires
+        await fetch("/api/session/save", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: true }).catch(() => {});
+        return;
+      }
+    }
     await fetch("/api/session/save", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        sessionId: session.sessionId,
-        status: state.status,
-        stepIndex: state.stepIndex,
-        answers: state.answers,
-        calculated: state.calculated,
-        embedded: state.embedded,
-        flags: state.flags,
-        completed: done,
-        surveyDbId: session.surveyDbId,
-      }),
+      body,
+      keepalive: done,
     });
   } catch {
     /* offline tolerant — retried on next transition */
@@ -112,6 +129,12 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
    * full page until you ask for it.
    */
   const [startNote, setStartNote] = React.useState<string | null>(null);
+  /** the quality engine's event collector — derived behavioural metadata only */
+  const telemetryRef = React.useRef<TelemetryCollector | null>(null);
+  const notePage = (allSteps: RuntimeStep[], index: number, via: "start" | "next" | "back" | "reload" | "jump") => {
+    const st = allSteps[index];
+    if (st?.kind === "page") telemetryRef.current?.enterPage(st.pageId, index, st.questionIds, via);
+  };
   const canDebug = mode === "test" || mode === "preview";
   const [debug, setDebug] = React.useState(false);
   const showInspector = canDebug && debug;
@@ -159,9 +182,15 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
         state.answers[id] = v as never;
       }
     }
+    // event collector: honours the survey's telemetry switches; a preview
+    // collects too (so testers can see it in the inspector) but never posts
+    telemetryRef.current?.dispose();
+    telemetryRef.current = createTelemetryCollector(def.quality?.telemetry, session?.sessionId);
+    if (mode !== "live" && typeof window !== "undefined") (window as any).__rescriptTelemetry = telemetryRef.current.data;
     const r = runScripts(def, state, "on_load");
     setLogs(r.logs);
     const nav = start(def, state, counts, startAt ? { startAt } : {});
+    notePage(nav.steps, state.stepIndex, telemetryRef.current.data.navigation.reloads > 0 ? "reload" : "start");
     setStartNote(
       nav.startAt && !nav.startAt.found
         ? "This block is not reachable with the current test values — its display logic (or an enclosing branch) hides it — so the preview starts at the first page instead."
@@ -241,6 +270,7 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
       return;
     }
     setErrors([]);
+    telemetryRef.current?.leavePage();
     const nav = advance(def, state, counts);
     setSteps(nav.steps);
     if (nav.done) {
@@ -250,7 +280,8 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
         message: endStep?.kind === "end" ? endStep.message : undefined,
         redirectUrl: nav.redirectUrl,
       });
-      await persist(mode, session, state, true);
+      telemetryRef.current?.submitted();
+      await persist(mode, session, state, true, telemetryRef.current?.data ?? null);
       if (nav.redirectUrl && mode === "live") {
         // "new window" keeps the completion page in place behind the panel's
         // own page — some panels require the survey tab to stay open
@@ -258,14 +289,17 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
         else window.location.href = nav.redirectUrl;
       }
     } else {
-      persist(mode, session, state, false);
+      notePage(nav.steps, nav.stepIndex, "next");
+      persist(mode, session, state, false, telemetryRef.current?.data ?? null);
       window.scrollTo({ top: 0 });
     }
     force();
   };
 
   const handleBack = () => {
-    goBack(def, state, counts);
+    telemetryRef.current?.leavePage();
+    const nav = goBack(def, state, counts);
+    notePage(nav.steps, nav.stepIndex, "back");
     setErrors([]);
     force();
     window.scrollTo({ top: 0 });
@@ -331,6 +365,7 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
             errors={errors.filter((e) => e.questionId === q.id).map((e) => e.message)}
             onChange={(v) => {
               setAnswer(def, state, q.id, v, pageStep.loop);
+              telemetryRef.current?.answerChanged(q.id);
               /*
                * Auto punch on the SAME page: "if Q1.A is selected → select
                * Q2.B" with Q1 and Q2 side by side must react as the respondent
@@ -389,6 +424,9 @@ export function Runner({ definition: def, mode, session, quotaCounts: initialCou
       {content}
       {b.footerHtml && (
         <div className="rs-footer" dangerouslySetInnerHTML={{ __html: resolvePiping(b.footerHtml, ctx) }} />
+      )}
+      {def.quality?.enabled && def.quality.telemetry?.disclosure && (
+        <div className="rs-footer rs-disclosure" data-testid="rs-quality-disclosure">{def.quality.telemetry.disclosure}</div>
       )}
       {mode !== "live" && <div className="rs-testbadge">{mode.toUpperCase()} MODE</div>}
     </div>

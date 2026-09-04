@@ -2,6 +2,7 @@ import { z } from "zod";
 import { Condition } from "./conditions.js";
 import { Question } from "./question.js";
 import { FlowNode, LogicFlow, EmbeddedDataType } from "./flow.js";
+import { QualityConfig } from "./quality.js";
 
 /** Named display-logic rules that can target anything (requirement §6). */
 export const DisplayRule = z.object({
@@ -232,6 +233,8 @@ export const SurveyDefinition = z.object({
     }))
     .default([]),
   deployment: DeploymentConfig.default({}),
+  /** Response quality & fraud detection settings (`@rescript/quality`). */
+  quality: QualityConfig.default({}),
   meta_extensions: z.record(z.any()).optional(),
 });
 export type SurveyDefinition = z.infer<typeof SurveyDefinition>;

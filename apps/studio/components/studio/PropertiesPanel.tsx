@@ -7,6 +7,7 @@ import { resolveVariant, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript
 import { useStudio, selectedQuestion, uid } from "./store";
 import { OptionalCondition, ConditionEditor } from "./ConditionBuilder";
 import { MaskingBuilder } from "./MaskingBuilder";
+import { QualitySettings } from "./QualitySettings";
 
 /** Context-aware validation (req §6/§19): only offer rules that make sense
  *  for the question type. */
@@ -374,6 +375,8 @@ export function SurveySettings() {
           onChange={(e) => s.update((d) => { d.deployment.access.allowRetake = e.target.checked; })} />
         Allow a respondent to retake the survey
       </label>
+
+      <QualitySettings />
 
       <p className="muted" style={{ fontSize: 11 }}>
         Changes here autosave to your draft. They reach respondents only when you save a version

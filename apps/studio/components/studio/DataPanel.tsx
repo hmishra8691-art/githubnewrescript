@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import { useStudio } from "./store";
+import { QualityPanel } from "./QualityPanel";
 
 /**
  * Response data browser (requirement §23/§26) — test and live sessions,
@@ -18,7 +19,18 @@ interface Row {
   durationSec: number | null;
   flags: string[];
   vars: Record<string, unknown>;
+  quality?: { classification: string; qualityScore: number; riskScore: number; flags: number } | null;
+  review?: string | null;
 }
+
+/**
+ * Which responses form the dataset shown and exported (the hand-off to
+ * analysis): everything, the clean dataset (KEEP + unreviewed CLEAN, REMOVED
+ * out), or everything except the chosen classifications (and REMOVED).
+ */
+type Dataset = "all" | "clean" | "custom";
+const ALL_CLASSES = ["CLEAN", "REVIEW", "SUSPICIOUS", "HIGHLY_SUSPICIOUS", "CRITICAL"];
+const CLASS_TONE: Record<string, string> = { CLEAN: "on", REVIEW: "", SUSPICIOUS: "warn", HIGHLY_SUSPICIOUS: "warn", CRITICAL: "warn" };
 
 interface Summary {
   in_progress: number; complete: number; screened: number;
@@ -49,6 +61,11 @@ export function DataPanel() {
   const [error, setError] = React.useState<string | null>(null);
   const [open, setOpen] = React.useState<string | null>(null);
   const [onlyAnswered, setOnlyAnswered] = React.useState(true);
+  const [view, setView] = React.useState<"responses" | "quality">("responses");
+  const [dataset, setDataset] = React.useState<Dataset>("all");
+  const [exclude, setExclude] = React.useState<string[]>(["SUSPICIOUS", "HIGHLY_SUSPICIOUS", "CRITICAL"]);
+  const [meta, setMeta] = React.useState<{ total: number; included: number } | null>(null);
+  const datasetParam = dataset === "custom" ? `custom:${exclude.join(",")}` : dataset;
 
   const load = React.useCallback(async () => {
     setError(null);
@@ -56,7 +73,7 @@ export function DataPanel() {
     try {
       const [sumRes, dataRes] = await Promise.all([
         fetch(`/api/surveys/${s.surveyDbId}/responses?format=summary`),
-        fetch(`/api/surveys/${s.surveyDbId}/responses?format=json&include=${include}`),
+        fetch(`/api/surveys/${s.surveyDbId}/responses?format=json&include=${include}&dataset=${encodeURIComponent(datasetParam)}`),
       ]);
       const sum = await sumRes.json();
       const data = await dataRes.json();
@@ -68,11 +85,12 @@ export function DataPanel() {
       setSummary(sum);
       setColumns(data.columns ?? []);
       setRows(data.rows ?? []);
+      setMeta(typeof data.total === "number" ? { total: data.total, included: data.included ?? data.rows?.length ?? 0 } : null);
     } catch {
       setError("Could not load responses.");
       setRows([]);
     }
-  }, [s.surveyDbId, include]);
+  }, [s.surveyDbId, include, datasetParam]);
 
   React.useEffect(() => {
     void load();
@@ -84,13 +102,19 @@ export function DataPanel() {
     return columns.filter((c) => rows.some((r) => fmtVal(r.vars[c]) !== ""));
   }, [columns, rows, onlyAnswered]);
 
-  const csvHref = `/api/surveys/${s.surveyDbId}/responses?format=csv&include=${include}`;
+  const hasQuality = !!rows?.some((r) => r.quality);
+  const csvHref = `/api/surveys/${s.surveyDbId}/responses?format=csv&include=${include}&dataset=${encodeURIComponent(datasetParam)}${hasQuality || dataset !== "all" ? "&quality=1" : ""}`;
+  const xlsxHref = `/api/surveys/${s.surveyDbId}/responses?format=xlsx&include=${include}&dataset=${encodeURIComponent(datasetParam)}&quality=1`;
   const active = include === "test" ? summary?.test : include === "live" ? summary?.live : null;
 
   return (
     <div>
       <div className="row" style={{ marginBottom: 14, flexWrap: "wrap" }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>Data</h2>
+        <div className="row" style={{ gap: 4, marginLeft: 12 }} data-testid="data-view">
+          <button className={`btn small ${view === "responses" ? "primary" : ""}`} data-testid="data-view-responses" onClick={() => setView("responses")}>Responses</button>
+          <button className={`btn small ${view === "quality" ? "primary" : ""}`} data-testid="data-view-quality" onClick={() => setView("quality")}>Quality</button>
+        </div>
         <span className="grow" />
         <div className="row" style={{ gap: 4 }}>
           {(["test", "live", "all"] as Include[]).map((k) => (
@@ -102,7 +126,25 @@ export function DataPanel() {
           ))}
         </div>
         <button className="btn small" onClick={() => void load()}>↻ refresh</button>
-        <a className="btn small" href={csvHref} target="_blank">⬇ CSV</a>
+        <a className="btn small" href={csvHref} target="_blank" data-testid="export-csv">⬇ CSV</a>
+        <a className="btn small" href={xlsxHref} target="_blank" data-testid="export-xlsx" title="Main Data + Response Quality sheets">⬇ XLSX (data + quality)</a>
+      </div>
+
+      {view === "quality" ? <QualityPanel include={include} /> : (
+      <>
+      <div className="row" style={{ marginBottom: 10, flexWrap: "wrap", gap: 6, alignItems: "center" }} data-testid="dataset-selector">
+        <span className="muted" style={{ fontSize: 11 }}>Dataset for table &amp; exports:</span>
+        <select className="select" style={{ width: 300 }} data-testid="dataset-select" value={dataset} onChange={(e) => setDataset(e.target.value as Dataset)}>
+          <option value="all">All responses (removed included)</option>
+          <option value="clean">Clean dataset — approved + unreviewed CLEAN; removed out</option>
+          <option value="custom">Custom — exclude selected classifications</option>
+        </select>
+        {dataset === "custom" && ALL_CLASSES.map((c) => (
+          <label key={c} className={`chip ${exclude.includes(c) ? "warn" : ""}`} style={{ cursor: "pointer" }}>
+            <input type="checkbox" checked={exclude.includes(c)} onChange={(e) => setExclude((x) => e.target.checked ? [...x, c] : x.filter((y) => y !== c))} /> exclude {c.replace("_", " ")}
+          </label>
+        ))}
+        {meta && dataset !== "all" && <span className="chip" data-testid="dataset-count">{meta.included} of {meta.total} in this dataset</span>}
       </div>
 
       {summary && (
@@ -146,7 +188,7 @@ export function DataPanel() {
             <table className="grid">
               <thead>
                 <tr>
-                  <th>Session</th><th>Status</th><th>Started</th><th>Secs</th>
+                  <th>Session</th><th>Status</th>{hasQuality && <><th>Quality</th><th>Risk</th><th>Class</th><th>Decision</th></>}<th>Started</th><th>Secs</th>
                   {shownColumns.map((c) => <th key={c}>{c}</th>)}
                 </tr>
               </thead>
@@ -156,6 +198,14 @@ export function DataPanel() {
                     onClick={() => setOpen(open === r.sessionId ? null : r.sessionId)}>
                     <td>{r.sessionId.slice(0, 8)}{r.isTest ? " ·test" : ""}</td>
                     <td><span className={`chip ${STATUS_CHIP[r.status] ?? ""}`}>{r.status}</span></td>
+                    {hasQuality && (
+                      <>
+                        <td>{r.quality?.qualityScore ?? ""}</td>
+                        <td>{r.quality?.riskScore ?? ""}</td>
+                        <td>{r.quality ? <span className={`chip ${CLASS_TONE[r.quality.classification] ?? ""}`}>{r.quality.classification.replace("_", " ")}</span> : ""}</td>
+                        <td>{r.review ? <span className={`chip ${r.review === "KEEP" ? "on" : "warn"}`}>{r.review.replace("_", " ")}</span> : ""}</td>
+                      </>
+                    )}
                     <td>{r.startedAt ? new Date(r.startedAt).toLocaleString() : ""}</td>
                     <td>{r.durationSec ?? ""}</td>
                     {shownColumns.map((c) => <td key={c}>{fmtVal(r.vars[c])}</td>)}
@@ -193,6 +243,8 @@ export function DataPanel() {
             );
           })()}
         </>
+      )}
+      </>
       )}
     </div>
   );

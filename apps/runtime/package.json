@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@rescript/engine": "workspace:*",
+    "@rescript/quality": "workspace:*",
     "@rescript/schema": "workspace:*",
     "@supabase/supabase-js": "^2.45.4",
     "next": "^14.2.21",

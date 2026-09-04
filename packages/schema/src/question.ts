@@ -2,6 +2,7 @@ import { z } from "zod";
 import { Condition } from "./conditions.js";
 import { ListOperation, OptionLogic } from "./optionLogic.js";
 import { OptionMask, PunchRule } from "./setExpression.js";
+import { AttentionCheck } from "./quality.js";
 
 /**
  * Question model.
@@ -459,6 +460,13 @@ export const Question = z.object({
    * ever reads state that already exists.
    */
   punches: z.array(PunchRule).default([]),
+
+  /**
+   * Response-quality role. An attention check is an ordinary question that the
+   * quality engine also grades: the answer is compared with `expected` and a
+   * miss becomes an explained flag (`@rescript/quality`, category "attention").
+   */
+  attentionCheck: AttentionCheck.optional(),
 
   displayLogic: Condition.optional(),
   skipLogic: z.array(SkipRule).default([]),
