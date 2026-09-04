@@ -81,6 +81,14 @@ export interface StudioState {
    * version right over newer work.
    */
   hasConflict(): boolean;
+  /**
+   * Record that the server refused a write because this editor is behind.
+   * The draft autosave sets this itself on a 409; cutting a VERSION can be
+   * refused the same way, and must land the editor in the same terminal
+   * state — otherwise the programmer keeps clicking a button that will never
+   * work and is told only by a toast that fades.
+   */
+  noteConflict(serverRevision: number | null, message?: string): void;
   /** flush any pending autosave now; resolves when the draft is stored */
   flushDraft(): Promise<boolean>;
   /** the revision right now — for code that runs after an await */
@@ -399,6 +407,14 @@ export function StudioProvider({
     flushDraft,
     currentRevision: () => revisionRef.current,
     hasConflict: () => blocked.current,
+    noteConflict(serverRevision, message) {
+      blocked.current = true;
+      setSaveState({
+        kind: "conflict",
+        message: message ?? "this survey changed elsewhere; your save was refused",
+        serverRevision,
+      });
+    },
     toast(msg, kind = "ok") {
       setToastMsg({ msg, kind });
       if (toastTimer.current) clearTimeout(toastTimer.current);

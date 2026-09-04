@@ -161,14 +161,45 @@ function StudioShell() {
     try {
       // make sure the draft on the server matches what we are about to version
       await s.flushDraft();
-      console.debug("[rescript:save] version start", { surveyId: s.surveyDbId, baseRevision, label });
+      /*
+       * ASK AGAIN, AFTER THE FLUSH.
+       *
+       * The check above catches an editor that ALREADY knew it was behind.
+       * But a tab that has been sitting idle knows nothing: it has no pending
+       * autosave, so `hasConflict()` is false, and the flush on this very line
+       * is the first write in hours — the moment the conflict is discovered.
+       * The old code awaited that flush and ignored what it learned, then went
+       * on to cut a version; and the version route forces past the database's
+       * revision guard on purpose (`p_base_revision: -1`), so this tab's
+       * hours-old definition became the current version over newer work. The
+       * guard has to read the fact at the moment the fact is known.
+       */
+      if (s.hasConflict()) {
+        console.warn("[rescript:save] version REFUSED (this editor is behind)", { surveyId: s.surveyDbId, baseRevision, serverRevision: s.currentRevision(), ms: Date.now() - startedAt });
+        s.toast(
+          "This survey was changed elsewhere while this tab was open, so nothing was saved. " +
+          "Reload to pick up the newer work — any unsaved edits in this tab will be lost.",
+          "err",
+        );
+        return null;
+      }
+      console.debug("[rescript:save] version start", { surveyId: s.surveyDbId, baseRevision, flushedRevision: s.currentRevision(), label });
       const r = await fetch(`/api/surveys/${s.surveyDbId}/versions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ definition: defRef.current, label }),
+        // the revision this editor is working on top of, so the DATABASE can
+        // refuse the finalize too — the client's check is the fast path, not
+        // the guarantee
+        body: JSON.stringify({ definition: defRef.current, label, baseRevision: s.currentRevision() }),
         cache: "no-store",
       });
       const d = await r.json().catch(() => ({}));
+      if (r.status === 409) {
+        console.warn("[rescript:save] version REFUSED by the server (stale)", { surveyId: s.surveyDbId, baseRevision, serverRevision: d.revision, ms: Date.now() - startedAt });
+        s.noteConflict(typeof d.revision === "number" ? d.revision : null, d.error);
+        s.toast(d.error ?? "This survey changed elsewhere, so nothing was saved. Reload before saving again.", "err");
+        return null;
+      }
       if (!r.ok) {
         console.warn("[rescript:save] version FAILED", { surveyId: s.surveyDbId, baseRevision, status: r.status, error: d.error, ms: Date.now() - startedAt });
         s.toast(d.error ?? "save failed", "err");

@@ -57,6 +57,13 @@ async function studioWithServer(opts = {}) {
     server.events.push("version");
     if (opts.failVersions) return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "database unavailable" }) });
     const body = JSON.parse(route.request().postData());
+    // the real route refuses a cut from an editor that is behind (the DB guard);
+    // -1 / null still forces, for the sandbox and older builds
+    if (typeof body.baseRevision === "number" && body.baseRevision >= 0 && body.baseRevision !== server.revision) {
+      server.rejectedVersions = (server.rejectedVersions ?? 0) + 1;
+      return route.fulfill({ status: 409, contentType: "application/json",
+        body: JSON.stringify({ error: "This survey was changed elsewhere after your editor loaded it, so no version was cut.", conflict: true, revision: server.revision }) });
+    }
     server.versions.push(body.definition);
     server.revision += 1;
     server.draft = null;
@@ -187,6 +194,68 @@ const toastText = (page) => page.$eval(".toast", (e) => e.textContent).catch(() 
   await page.waitForTimeout(400);
   assert.equal(server.versions.length, versionsBefore, "Save version is refused too — an older state never overwrites a newer one");
   console.log("✔ an editor behind the server refuses to save or test; only Reload gets it moving again");
+  await context.close();
+}
+
+/* ===== 5b. the conflict is discovered BY the flush inside Save, not before */
+{
+  /*
+   * The case §5 does not cover, and the one that actually bit: a tab left
+   * open while the survey moved on elsewhere. It has no pending autosave, so
+   * it knows nothing — `hasConflict()` is false — and the flush inside
+   * `save()` is the first write in hours. The old code awaited that flush,
+   * ignored what it learned, and cut a version anyway; the version route
+   * forced past the database's revision guard, so the stale definition became
+   * the current version.
+   */
+  const { context, page, server } = await studioWithServer();
+  await addQuestion(page, "Q1");
+  await settle(page);
+  assert.equal(server.rejected, 0, "the editor starts in sync");
+  const versionsBefore = server.versions.length;
+  assert.doesNotMatch(await saveState(page), /changed elsewhere/i, "and does not yet know anything is wrong");
+
+  // the survey moves on elsewhere — this tab is told nothing
+  server.revision += 5;
+
+  await page.click("text=Save version");
+  await page.waitForSelector(".toast");
+  assert.match(await toastText(page), /changed elsewhere.*unsaved edits in this tab will be lost/i,
+    "the refusal says what reloading costs");
+  assert.equal(server.versions.length, versionsBefore, "NO version was cut from the stale state");
+  assert.match(await saveState(page), /changed elsewhere/i, "and the editor is now visibly in conflict, not just toasted");
+
+  // Test Survey must not get through either — it saves a version first
+  await page.click('[data-testid="test-survey"]');
+  await page.waitForTimeout(400);
+  assert.equal(server.versions.length, versionsBefore, "Test Survey cannot cut one either");
+  assert.equal(server.deploys.length, 0, "and nothing was deployed");
+  console.log("✔ a conflict discovered by the flush inside Save stops the version cut — a stale tab cannot overwrite newer work");
+  await context.close();
+}
+
+/* ===== 5c. the server refuses a stale cut even if the client waves it through */
+{
+  const { context, page, server } = await studioWithServer();
+  await addQuestion(page, "Q1");
+  await settle(page);
+  const versionsBefore = server.versions.length;
+  // the client's own draft flush succeeds, then the row moves under it: only
+  // the baseRevision travelling with the POST can catch this
+  await page.evaluate(() => {
+    const orig = window.fetch;
+    window.fetch = (u, o) => {
+      if (String(u).includes("/draft")) return Promise.resolve(new Response(JSON.stringify({ ok: true, savedAt: new Date().toISOString(), revision: 1 }), { status: 200, headers: { "content-type": "application/json" } }));
+      return orig(u, o);
+    };
+  });
+  server.revision = 99;
+  await page.click("text=Save version");
+  await page.waitForSelector(".toast");
+  assert.equal(server.versions.length, versionsBefore, "the server refused it");
+  assert.ok((server.rejectedVersions ?? 0) >= 1, "and refused it on the revision the POST carried");
+  assert.match(await toastText(page), /changed elsewhere/i);
+  console.log("✔ the version POST carries the editor's revision, so the server refuses a stale cut on its own");
   await context.close();
 }
 

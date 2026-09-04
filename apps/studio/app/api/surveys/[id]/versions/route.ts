@@ -35,6 +35,35 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const db = supabaseAdmin();
 
+  /*
+   * The revision the editor is working on top of, when it can tell us.
+   *
+   * Cutting a version is explicit intent — but intent about the state THIS
+   * editor is holding. It was never meant to overwrite work the editor has
+   * not seen, and forcing past the revision guard unconditionally is how an
+   * hours-old tab's definition became a survey's current version. So the
+   * guard is applied when the client supplies a revision, and only falls back
+   * to forcing (-1) when it cannot: the sandbox, or a build that predates
+   * this field.
+   */
+  const baseRevision = Number.isFinite(body?.baseRevision) ? Number(body.baseRevision) : null;
+
+  // cheap pre-check, so the common stale case does not create an orphan
+  // snapshot at all; the RPC below is what actually guarantees it
+  if (baseRevision !== null) {
+    const { data: cur } = await db.from("surveys").select("revision").eq("id", params.id).maybeSingle();
+    if (cur && typeof cur.revision === "number" && cur.revision !== baseRevision) {
+      console.warn("[rescript:version] REFUSED stale cut", JSON.stringify({ surveyId: params.id, baseRevision, serverRevision: cur.revision }));
+      return NextResponse.json({
+        error:
+          "This survey was changed elsewhere after your editor loaded it, so no version was cut — " +
+          "saving would have replaced that newer work with this editor's older state.",
+        conflict: true,
+        revision: cur.revision,
+      }, { status: 409 });
+    }
+  }
+
   // The editor cannot know which versions exist (after restoring an older one
   // its number is behind), so the next version is resolved here, from storage.
   const { data: existingVersions } = await db
@@ -106,12 +135,30 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const rpc = await db.rpc("rescript_finalize_version", {
     p_survey_id: params.id,
     p_version_id: ver.id,
-    p_base_revision: -1,
+    p_base_revision: baseRevision ?? -1,
   });
   if (!rpc.error) {
     const row = Array.isArray(rpc.data) ? rpc.data[0] : rpc.data;
+    /*
+     * The guarded call matched nothing: the revision moved between the
+     * pre-check and now. The survey is NOT pointed at the row we just
+     * inserted, so that row is an orphan snapshot — remove it rather than
+     * leave a version in the panel that nothing ever used.
+     */
+    if (!row && baseRevision !== null) {
+      await db.from("survey_versions").delete().eq("id", ver.id);
+      const { data: cur } = await db.from("surveys").select("revision").eq("id", params.id).maybeSingle();
+      console.warn("[rescript:version] REFUSED stale cut (race)", JSON.stringify({ surveyId: params.id, baseRevision, serverRevision: cur?.revision ?? null, discardedVersion: version }));
+      return NextResponse.json({
+        error:
+          "This survey was changed elsewhere while your version was being written, so no version was cut. " +
+          "Reload to pick up the newer work.",
+        conflict: true,
+        revision: cur?.revision ?? null,
+      }, { status: 409 });
+    }
     newRevision = row?.revision ?? null;
-    console.info("[rescript:version] cut", JSON.stringify({ surveyId: params.id, versionId: ver.id, version, newRevision, questions: def.questions.length }));
+    console.info("[rescript:version] cut", JSON.stringify({ surveyId: params.id, versionId: ver.id, version, baseRevision, newRevision, questions: def.questions.length }));
     await db.from("surveys").update({ title: def.meta.title }).eq("id", params.id);
   }
 
