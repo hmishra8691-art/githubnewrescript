@@ -11,6 +11,7 @@ import {
   type PipeProperty,
   type PipeToken,
 } from "@rescript/engine";
+import { useLoopScope } from "./loopScope";
 import { useStudio } from "./store";
 
 /**
@@ -69,12 +70,23 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
     if (kind === "question" && !props.some((p) => p.value === property)) setProperty("label");
   }, [ref, kind]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /*
+   * The loops around the question being edited, innermost first. Their
+   * reference columns are offered by name; a loop the question is not inside
+   * is not, because {{loop.X}} would be empty there.
+   */
+  const loopScope = useLoopScope();
+  const [loopTarget, setLoopTarget] = React.useState<string>("");   // "" = innermost, else an outer loopVar
+  const scopedLoop = loopTarget ? loopScope.find((l) => l.loopVar === loopTarget) : loopScope[0];
+
   const token: Omit<PipeToken, "raw" | "text"> =
     kind === "expr"
       ? { kind: "expr", ref: expr, property: "value" }
       : kind === "question"
         ? { kind, ref, rowCode: rowCode || undefined, property, format }
-        : { kind, ref, property: "value", format };
+        : kind === "loop"
+          ? { kind, ref, property: "value", format, scope: loopTarget || undefined }
+          : { kind, ref, property: "value", format };
 
   const text = serializePipeToken(token);
   const multiValued =
@@ -152,13 +164,34 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
         </label>
       )}
       {kind === "loop" && (
-        <label className="f"><span>Loop property</span>
-          <select className="select" value={ref} onChange={(e) => setRef(e.target.value)}>
-            <option value="label">label</option>
-            <option value="code">code</option>
-            <option value="index">index</option>
-          </select>
-        </label>
+        <>
+          {loopScope.length > 1 && (
+            <label className="f"><span>Which loop</span>
+              <select className="select" data-testid="pipe-loop-scope" value={loopTarget} onChange={(e) => { setLoopTarget(e.target.value); setRef("label"); }}>
+                <option value="">{loopScope[0].loopVar} (innermost)</option>
+                {loopScope.slice(1).map((l) => <option key={l.id} value={l.loopVar}>{l.loopVar} (outer)</option>)}
+              </select>
+            </label>
+          )}
+          <label className="f"><span>Loop property</span>
+            <select className="select" data-testid="pipe-loop-ref" value={ref} onChange={(e) => setRef(e.target.value)}>
+              <option value="label">item label</option>
+              <option value="code">item code</option>
+              <option value="index">position (1, 2, …)</option>
+              <option value="count">number of iterations</option>
+              {(scopedLoop?.references?.columns ?? []).length > 0 && (
+                <optgroup label={`Reference columns of “${scopedLoop!.loopVar}”`}>
+                  {scopedLoop!.references!.columns.map((c) => (
+                    <option key={c.name} value={c.name}>{c.name}{c.description ? ` — ${c.description}` : ""}</option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
+          </label>
+          {loopScope.length === 0 && (
+            <p className="muted" style={{ fontSize: 11 }}>This question is not inside a loop, so a loop token here will render empty.</p>
+          )}
+        </>
       )}
       {kind === "expr" && (
         <label className="f"><span>Expression</span>

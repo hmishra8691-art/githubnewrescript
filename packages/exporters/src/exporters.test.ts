@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import ExcelJS from "exceljs";
 import { SurveyDefinition } from "@rescript/schema";
-import { buildVariableDictionary } from "@rescript/engine";
+import { buildVariableDictionary, createResponseState, runCalculations } from "@rescript/engine";
 import {
   exportVariableDictionaryXlsx,
   exportSurveyJson,
@@ -243,4 +243,99 @@ test("variableDictionaryToCSV lists every variable", () => {
   assert.ok(lines[0].startsWith("Variable,Label,Question"));
   // value labels rendered as "1=Male; 2=Female"
   assert.ok(csv.includes("1=Male; 2=Female"));
+});
+
+/* ============================================================ loops (§37, §38) */
+
+function loopSurvey() {
+  return SurveyDefinition.parse({
+    meta: { id: "sl", code: "SL", title: "Loop export", version: "1.0" },
+    questions: [
+      { id: "q2", code: "Q2", variableName: "Q2", type: "multi_select", text: "Brands",
+        options: [{ code: 1, label: "Apple" }, { code: 3, label: "Google" }, { code: 5, label: "Xiaomi" }] },
+      { id: "q7", code: "Q7", variableName: "Q7", type: "numeric", text: "Rate {{loop.label}}" },
+    ],
+    flow: [
+      { type: "page", id: "p1", questionIds: ["q2"] },
+      {
+        type: "loop", id: "LOOP_001", loopVar: "brand",
+        source: { kind: "question", questionId: "q2", filter: "selected" },
+        references: {
+          columns: [{ name: "Brand_Nickname" }, { name: "Product_ID" }, { name: "Category" }],
+          values: {
+            "1": { Brand_Nickname: "APPLE", Product_ID: "PROD_001", Category: "Smartphone" },
+            "3": { Brand_Nickname: "GOOGLE", Product_ID: "PROD_003", Category: "Smartphone" },
+            "5": { Brand_Nickname: "XIAOMI", Product_ID: "PROD_005", Category: "Smartphone" },
+          },
+        },
+        children: [{ type: "page", id: "p7", questionIds: ["q7"] }],
+      },
+      { type: "end", id: "e", status: "complete" },
+    ],
+  });
+}
+
+test("§37: the XLSX dictionary gains a Loops sheet relating Loop → Item → Reference → Question", async () => {
+  const buf = await exportVariableDictionaryXlsx(loopSurvey());
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf as any);
+  const sheet = wb.getWorksheet("Loops");
+  assert.ok(sheet, "a survey with a loop has a Loops sheet");
+  const header = (sheet!.getRow(1).values as unknown[]).slice(1);
+  assert.deepEqual(header, [
+    "Loop ID", "Loop", "Source", "Iteration", "Item", "Item Code", "Reference Column", "Reference Value",
+    "Reference Type", "Question Variable", "Data Type", "Loop Variable",
+  ]);
+  const rows: unknown[][] = [];
+  sheet!.eachRow((r, i) => { if (i > 1) rows.push((r.values as unknown[]).slice(1)); });
+  const apple = rows.find((r) => r[3] === 1 && r[6] === "Product_ID");
+  assert.ok(apple, "iteration 1 has a Product_ID row");
+  assert.equal(apple![0], "LOOP_001");
+  assert.equal(apple![5], "1", "position 1 in source order is Apple");
+  assert.equal(apple![7], "PROD_001");
+  assert.equal(apple![9], "Q7_1", "and names the question variable for that iteration");
+  assert.equal(apple![11], "LOOP_BRAND_ITEM_1_PRODUCT_ID");
+  assert.ok(rows.some((r) => r[11] === "LOOP_BRAND_COUNT"));
+
+  // the Variables sheet carries the scope columns too
+  const vars = wb.getWorksheet("Variables")!;
+  const vh = (vars.getRow(1).values as unknown[]).slice(1);
+  assert.ok(vh.includes("Loop") && vh.includes("Iteration") && vh.includes("Reference"));
+
+  // and a survey with no loop still exports exactly the three sheets it always did
+  const plain = SurveyDefinition.parse({ meta: { id: "p", code: "P", title: "P", version: "1.0" }, questions: [], flow: [] });
+  const wb2 = new ExcelJS.Workbook();
+  await wb2.xlsx.load(await exportVariableDictionaryXlsx(plain) as any);
+  assert.deepEqual(wb2.worksheets.map((w) => w.name), ["Variables", "Survey", "Questions"]);
+});
+
+test("loop iterations reach the CSV — which they never did before", () => {
+  const def = loopSurvey();
+  const state = createResponseState(def, { seed: 1 });
+  state.answers.q2 = [3, 5];
+  runCalculations(def, state, "on_change");
+  state.answers["q7@3"] = 8;
+  state.answers["q7@5"] = 2;
+  const csv = responsesToCSV(def, [state]);
+  const [header, row] = csv.trim().split("\n").map((l) => l.split(","));
+  const col = (name: string) => row[header.indexOf(name)];
+  assert.ok(header.includes("Q7_1") && header.includes("Q7_2") && header.includes("Q7_3"), "positional columns are declared");
+  assert.equal(col("Q7_1"), "8", "Google ran first (source order of the selected)");
+  assert.equal(col("Q7_2"), "2");
+  assert.equal(col("Q7_3"), "", "an unfilled position is empty, not missing");
+  assert.equal(col("LOOP_BRAND_ITEM_1_CODE"), "3");
+  assert.equal(col("LOOP_BRAND_ITEM_1_BRAND_NICKNAME"), "GOOGLE");
+  assert.equal(col("LOOP_BRAND_COUNT"), "2");
+});
+
+test("§38: the JSON export carries the loop with its references, self-contained, and nothing on Q2", () => {
+  const def = loopSurvey();
+  const json = JSON.parse(JSON.stringify(def));
+  const loop = json.flow.find((n: any) => n.type === "loop");
+  assert.deepEqual(loop.references.columns.map((c: any) => c.name), ["Brand_Nickname", "Product_ID", "Category"]);
+  assert.equal(loop.references.values["1"].Product_ID, "PROD_001");
+  const q2 = json.questions.find((q: any) => q.id === "q2");
+  assert.equal(JSON.stringify(q2).includes("PROD_001"), false, "the source question carries none of it");
+  // and it round-trips through the schema unchanged
+  assert.deepEqual(SurveyDefinition.parse(json).flow, def.flow);
 });

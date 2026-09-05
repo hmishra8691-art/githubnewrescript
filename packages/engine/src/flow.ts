@@ -2,7 +2,8 @@ import type { FlowNode, SurveyDefinition, Question, SkipRule } from "@rescript/s
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition } from "./evaluate.js";
 import type { LoopContext, ResponseState } from "./state.js";
-import { getQuestion, answerKey } from "./state.js";
+import { getQuestion, answerKey, loopKeySuffix } from "./state.js";
+import { loopContexts, loopVariables } from "./loops.js";
 import { seededShuffle, subSeed } from "./random.js";
 import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
@@ -10,7 +11,7 @@ import { checkQuotas, type QuotaCounts } from "./quotas.js";
 import { applyEmbeddedField, type EmbeddedField } from "./embedded.js";
 import { prefillQuestions } from "./setExpression.js";
 import { resolveUrlTemplate } from "./redirect.js";
-import { listFillLoopItems, listFillHiddenDestinations } from "./listFill.js";
+import { listFillHiddenDestinations } from "./listFill.js";
 
 /**
  * Survey Flow interpreter (requirement §7).
@@ -84,7 +85,7 @@ export function compileFlow(
           if (!evaluateCondition(node.visibleIf, ctxFor(loop))) break;
           steps.push({
             kind: "page",
-            pageId: loop ? `${node.id}@${loop.code}` : node.id,
+            pageId: `${node.id}${loopKeySuffix(loop)}`,
             title: node.title ?? blockTitle,
             showTitle: node.showTitle ?? blockShowTitle ?? surveyDefault,
             mediaUrl: node.mediaUrl ?? blockMedia,
@@ -129,58 +130,25 @@ export function compileFlow(
           break;
         }
         case "loop": {
-          let items: { code: string; label: string }[] = [];
-          // bound once so TypeScript keeps the narrowing through the branches
-          const source = node.source;
-          if (source.kind === "static") {
-            items = source.items;
-          } else if (source.kind === "question") {
-            const src = getQuestion(def, source.questionId);
-            const answer = state.answers[source.questionId];
-            const codes = Array.isArray(answer)
-              ? answer
-              : answer == null
-                ? []
-                : typeof answer === "object"
-                  ? Object.keys(answer)
-                  : [answer];
-            if (source.filter === "all" && src) {
-              items = src.options.map((o) => ({ code: String(o.code), label: o.label }));
-            } else {
-              items = codes.map((c) => {
-                const opt = src?.options.find((o) => String(o.code) === String(c));
-                return { code: String(c), label: opt?.label ?? String(c) };
-              });
-            }
-          } else if (source.kind === "design") {
-            const design = def.designs.find((d) => d.id === source.designId);
-            const rows = design?.file?.rows ?? [];
-            items = rows.map((r, i) => ({
-              code: String((r as any).task ?? i + 1),
-              label: `Task ${i + 1}`,
-            }));
-          } else if (source.kind === "listFill") {
-            // One iteration per item a List Fill ALREADY allocated to this
-            // respondent. The flow never decides an allocation: it recompiles
-            // after every answer, and re-deciding would both hand out
-            // different items and consume sample capacity again. The
-            // allocation is made once, atomically, and lands in
-            // `state.calculated` as LISTFILL_* — this reads it back.
-            items = listFillLoopItems(def, state, source.listFillId);
+          /*
+           * Which items, in what order, how many, and what each knows about
+           * itself is decided in ONE place — `loopContexts` in loops.ts — and
+           * the Studio's simulator and the runtime inspector call the same
+           * function. `loop` (the enclosing iteration, if this loop is nested)
+           * becomes each context's `parent`, so the children below are walked
+           * with the full stack rather than with the innermost item alone.
+           *
+           * Before this, an inner loop's context simply REPLACED the outer
+           * one: every outer iteration wrote the inner loop's answers to the
+           * same `q@<innerCode>` key and the last one won. The keys are now
+           * the whole path, `q@<outer>@<inner>` (see `loopKeySuffix`), which a
+           * single loop still spells `q@<code>` — so nothing already stored
+           * moves.
+           */
+          const contexts = loopContexts(def, state, node, loop, quotaCounts);
+          for (const iterLoop of contexts) {
+            walk(node.children, iterLoop, sectionPath, blockTitle, blockShowTitle, blockMedia);
           }
-          if (node.randomizeIterations) {
-            items = seededShuffle(items, subSeed(state.seed, `loop:${node.id}`));
-          }
-          if (node.maxIterations != null) items = items.slice(0, node.maxIterations);
-          items.forEach((item, i) => {
-            const iterLoop: LoopContext = {
-              loopVar: node.loopVar,
-              code: item.code,
-              label: item.label,
-              index: i + 1,
-            };
-            walk(node.children, iterLoop, sectionPath, blockTitle);
-          });
           break;
         }
         case "embedded_data":
@@ -261,6 +229,15 @@ export function runCalculations(
   state: ResponseState,
   trigger: "on_change" | "on_page_submit" | "on_complete",
 ): void {
+  /*
+   * The loop variables first (§24): LOOP_<VAR>_COUNT, _ITEM_<n>, _ITEM_<n>_CODE
+   * and one per reference column. They are a pure function of the answers and
+   * the definition, recomputed here on every trigger so a calculation, a
+   * condition or a script can read `LOOP_BRAND_COUNT` the moment Q2 is
+   * answered — and so `flattenVariables` below can place each iteration's
+   * answers in their positional export columns.
+   */
+  Object.assign(state.calculated, loopVariables(def, state));
   const flat = flattenVariables(def, state);
   const resolver = (n: string) => (n in flat ? flat[n] : state.calculated[n]);
   const names = () => [...Object.keys(flat), ...Object.keys(state.calculated)];

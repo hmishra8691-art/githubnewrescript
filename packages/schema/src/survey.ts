@@ -175,6 +175,17 @@ export const VariableDef = z.object({
   columnId: z.string().optional(),
   optionCode: z.string().optional(),
   notes: z.string().optional(),
+  /*
+   * LOOP SCOPE (§36, §37). A variable produced by a loop — an iteration of a
+   * question inside it, or one of the loop's own LOOP_* variables — says which
+   * loop, which iteration and, for a reference value, which column. The
+   * dictionary UI groups by `loopId` so a loop's references read as belonging
+   * to the loop rather than as more survey-wide fields.
+   */
+  loopId: z.string().optional(),
+  loopVar: z.string().optional(),
+  iteration: z.number().optional(),
+  referenceColumn: z.string().optional(),
 });
 export type VariableDef = z.infer<typeof VariableDef>;
 

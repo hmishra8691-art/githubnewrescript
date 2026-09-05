@@ -1,6 +1,6 @@
 import type { SurveyDefinition, Question, Option } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
-import { getQuestionByCodeOrVar } from "./state.js";
+import { findLoopScope, getQuestionByCodeOrVar, lookupAnswer, loopValue } from "./state.js";
 import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
 import { escapeHtml } from "./html.js";
@@ -106,12 +106,31 @@ function renderToken(t: PipeToken, ctx: EvalContext): string {
     return v == null ? "" : escapeHtml(String(v));
   }
   if (t.kind === "loop") {
-    const l = ctx.loop;
+    const l = findLoopScope(ctx.loop, t.scope);
     if (!l) return "";
-    return t.ref === "code" ? l.code : t.ref === "index" ? String(l.index) : l.label;
+    const v = loopValue(l, t.ref || "label");
+    // escaped like every other branch — this was the one pipe that was not,
+    // and a reference column is programmer-entered text landing in HTML
+    return v == null ? "" : escapeHtml(String(v));
   }
 
   const q = getQuestionByCodeOrVar(ctx.def, t.ref);
+  /*
+   * `{{brand.Category}}` — an OUTER loop addressed by its loopVar (§32). The
+   * parser cannot tell a loopVar from a question code, so it parses this as a
+   * question token; here, where the loop stack is known, a ref that is no
+   * question but IS the name of a loop on the stack is the loop. A ref that is
+   * neither renders "" exactly as an unknown question always has.
+   */
+  if (!q && t.kind === "question") {
+    const scoped = findLoopScope(ctx.loop, t.ref);
+    if (scoped) {
+      // the "property" is whatever followed the dot — a reference column name
+      // is not one of the question properties, and that is fine here
+      const v = loopValue(scoped, String(t.property));
+      return v == null ? "" : escapeHtml(String(v));
+    }
+  }
   if (!q) {
     // fall back to flat variable map (covers calculated & embedded by name)
     const flat = flattenVariables(ctx.def, ctx.state);
@@ -123,9 +142,9 @@ function renderToken(t: PipeToken, ctx: EvalContext): string {
       : escapeHtml(String(v));
   }
 
-  const loopKey = ctx.loop ? `${q.id}@${ctx.loop.code}` : null;
-  let value: unknown =
-    (loopKey ? ctx.state.answers[loopKey] : undefined) ?? ctx.state.answers[q.id];
+  // this iteration's answer first, then each enclosing iteration's, then the
+  // survey-level one — the one rule for every loop-scoped read
+  let value: unknown = lookupAnswer(ctx.state.answers, q.id, ctx.loop);
 
   if (t.rowCode != null && value && typeof value === "object" && !Array.isArray(value)) {
     value = (value as Record<string, unknown>)[t.rowCode];

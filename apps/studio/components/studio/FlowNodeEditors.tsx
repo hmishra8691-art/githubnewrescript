@@ -7,6 +7,7 @@ import {
 } from "@rescript/engine";
 import { useStudio, uid } from "./store";
 import { OptionalCondition, ConditionEditor, conditionToText } from "./ConditionBuilder";
+import { LoopEditor } from "./LoopEditor";
 
 /**
  * The property editors for each kind of flow element.
@@ -473,72 +474,10 @@ export function NodeEditor({ node, onChange }: { node: FlowNode; onChange(n: Flo
         </div>
       );
 
-    case "loop": {
-      const src = node.source;
-      return (
-        <div>
-          <div className="row" style={{ flexWrap: "wrap" }}>
-            <span className="flabel" style={{ margin: 0 }}>loop over</span>
-            <select className="select" value={src.kind}
-              onChange={(e) => {
-                const kind = e.target.value;
-                onChange({
-                  ...node,
-                  source: kind === "question"
-                    ? { kind: "question", questionId: s.def.questions[0]?.id ?? "", filter: "selected" }
-                    : kind === "design"
-                      ? { kind: "design", designId: s.def.designs[0]?.id ?? "" }
-                      : { kind: "static", items: [] },
-                });
-              }}>
-              <option value="question">question answers</option>
-              <option value="static">static list</option>
-              <option value="design">design tasks</option>
-            </select>
-            {src.kind === "question" && (
-              <>
-                <select className="select" value={src.questionId}
-                  onChange={(e) => onChange({ ...node, source: { ...src, questionId: e.target.value } })}>
-                  {s.def.questions.map((q) => <option key={q.id} value={q.id}>{q.code}</option>)}
-                </select>
-                <select className="select" value={src.filter ?? "selected"}
-                  onChange={(e) => onChange({ ...node, source: { ...src, filter: e.target.value as any } })}>
-                  <option value="selected">selected</option>
-                  <option value="displayed">displayed</option>
-                  <option value="all">all</option>
-                </select>
-              </>
-            )}
-            <label className="row" style={{ gap: 4 }}>var
-              <input className="input mono" style={{ width: 90 }} value={node.loopVar}
-                onChange={(e) => onChange({ ...node, loopVar: e.target.value })} /></label>
-            <label className="row" style={{ gap: 4, fontSize: 12 }}>
-              <input type="checkbox" checked={node.randomizeIterations ?? false}
-                onChange={(e) => onChange({ ...node, randomizeIterations: e.target.checked })} /> randomize
-            </label>
-          </div>
-          {src.kind === "static" && (
-            <div style={{ marginTop: 6 }}>
-              {src.items.map((it, i) => (
-                <div key={i} className="opt-row">
-                  <input className="input code-input" value={it.code}
-                    onChange={(e) => onChange({ ...node, source: { ...src, items: src.items.map((x, j) => (j === i ? { ...x, code: e.target.value } : x)) } })} />
-                  <input className="input grow" value={it.label}
-                    onChange={(e) => onChange({ ...node, source: { ...src, items: src.items.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)) } })} />
-                  <button className="btn small danger" onClick={() =>
-                    onChange({ ...node, source: { ...src, items: src.items.filter((_, j) => j !== i) } })}>×</button>
-                </div>
-              ))}
-              <button className="btn small" onClick={() =>
-                onChange({ ...node, source: { ...src, items: [...src.items, { code: String(src.items.length + 1), label: "" }] } })}>+ item</button>
-            </div>
-          )}
-          <p className="muted" style={{ fontSize: 11 }}>
-            Inside the loop, pipe with {"{{loop.label}} {{loop.code}} {{loop.index}}"}; answers store per-iteration.
-          </p>
-        </div>
-      );
-    }
+    case "loop":
+      // the loop has its own editor — source, filters, count, order, the
+      // loop-scoped reference table and the simulator (LoopEditor.tsx)
+      return <LoopEditor node={node} onChange={onChange as never} />;
 
     case "embedded_data":
       return <EmbeddedDataEditor node={node} onChange={onChange} />;

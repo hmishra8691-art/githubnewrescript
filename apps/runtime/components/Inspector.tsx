@@ -17,11 +17,36 @@ export function Inspector({ snap, logs }: { snap: InspectorSnapshot; logs: strin
         <tr><td className="k">step</td><td>{snap.stepIndex + 1} / {snap.totalSteps}</td></tr>
         <tr><td className="k">page</td><td>{snap.page?.pageId ?? "—"} {snap.page?.title ? `(${snap.page.title})` : ""}</td></tr>
         <tr><td className="k">section</td><td>{snap.page?.sectionPath.join(" › ") || "—"}</td></tr>
-        {snap.loop && (
-          <tr><td className="k">loop</td><td>{snap.loop.loopVar} = {snap.loop.code} “{snap.loop.label}” (#{snap.loop.index})</td></tr>
-        )}
         <tr><td className="k">seed</td><td>{snap.seed}</td></tr>
       </tbody></table>
+
+      {snap.loops?.length > 0 && (
+        <>
+          {/*
+            * LOOP DEBUG (§35). One block per enclosing loop, innermost first,
+            * showing exactly the context the block is being run with — the
+            * reference values here are what {{loop.X}} resolves to on this page.
+            */}
+          <h3>Loop debug</h3>
+          {snap.loops.map((l, depth) => (
+            <table key={`${l.loopId}-${l.code}`} data-testid="loop-debug" data-loop={l.loopVar} style={depth ? { opacity: 0.85 } : undefined}><tbody>
+              <tr><td className="k">loop</td><td>{l.loopVar}{l.loopId ? <span style={{ opacity: 0.6 }}> · {l.loopId}</span> : null}{depth > 0 ? <span style={{ opacity: 0.6 }}> (outer)</span> : null}</td></tr>
+              <tr><td className="k">iteration</td><td data-testid="loop-iteration">{l.index} / {l.count}</td></tr>
+              <tr><td className="k">current item</td><td data-testid="loop-item">{l.label}</td></tr>
+              <tr><td className="k">item code</td><td>{l.code}</td></tr>
+              {Object.keys(l.references).length > 0 ? (
+                <tr><td className="k">references</td><td>
+                  {Object.entries(l.references).map(([k, v]) => (
+                    <div key={k} data-testid="loop-ref" data-ref={k}><span style={{ opacity: 0.7 }}>{k}</span> = <Val v={v} /></div>
+                  ))}
+                </td></tr>
+              ) : (
+                <tr><td className="k">references</td><td style={{ opacity: 0.5 }}>none declared on this loop</td></tr>
+              )}
+            </tbody></table>
+          ))}
+        </>
+      )}
 
       <h3>Display logic</h3>
       <table><tbody>

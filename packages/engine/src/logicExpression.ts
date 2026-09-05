@@ -1,5 +1,5 @@
 import type {
-  Condition, ConditionGroup, ConditionRule, ComparisonOperator,
+  Condition, ConditionGroup, ConditionRule, ComparisonOperator, FlowNode,
   Question, SurveyDefinition,
 } from "@rescript/schema";
 import { getQuestionByCodeOrVar } from "./state.js";
@@ -195,6 +195,20 @@ export interface ParseResult {
  */
 type DraftSource = ConditionRule["source"] & { optionCode?: string };
 
+/** Every loopVar in the flow — what lets `brand.Category` name the outer loop. */
+function loopVarsIn(nodes: FlowNode[]): string[] {
+  const out: string[] = [];
+  for (const n of nodes) {
+    if (n.type === "loop") { out.push(n.loopVar); out.push(...loopVarsIn(n.children)); }
+    else if (n.type === "section" || n.type === "block" || n.type === "randomizer") out.push(...loopVarsIn(n.children));
+    else if (n.type === "branch") {
+      for (const b of n.branches) out.push(...loopVarsIn(b.children));
+      if (n.otherwise) out.push(...loopVarsIn(n.otherwise));
+    }
+  }
+  return out;
+}
+
 /* ================================================================ parsing */
 
 /**
@@ -245,7 +259,33 @@ export function parseLogicExpression(
       return { source: { kind: "embedded", ref: segments.slice(1).join(".") }, segments };
     }
     if (ns === "loop") {
+      // loop.code / loop.label / loop.index / loop.count / loop.<ReferenceColumn>
       return { source: { kind: "loop", ref: segments[1] ?? "code" }, segments };
+    }
+    /*
+     * The requirement's spelling of the current item (§19, §27):
+     * CURRENT_ITEM.Category, CURRENT_ITEM_CODE, LOOP_INDEX, LOOP_COUNT. Aliases
+     * of loop.*, parsed to the same source the evaluator already understands.
+     */
+    if (head === "CURRENT_ITEM") {
+      return { source: { kind: "loop", ref: segments[1] ?? "label" }, segments };
+    }
+    const fixedAlias: Record<string, string> = {
+      CURRENT_ITEM_CODE: "code", CURRENT_ITEM_LABEL: "label", LOOP_INDEX: "index", LOOP_COUNT: "count",
+    };
+    if (fixedAlias[head] && segments.length === 1) {
+      return { source: { kind: "loop", ref: fixedAlias[head] }, segments };
+    }
+    /*
+     * `brand.Category` — an OUTER loop addressed by its loopVar (§32). A loop's
+     * name is only taken as such when no question has that code, so a survey
+     * with a question called `brand` keeps meaning the question.
+     */
+    if (segments.length >= 2 && !getQuestionByCodeOrVar(def, head)) {
+      const loopVars = new Set(loopVarsIn(def.flow));
+      if (loopVars.has(head)) {
+        return { source: { kind: "loop", ref: segments[1], scope: head }, segments };
+      }
     }
     if (ns === "quota") {
       return { source: { kind: "quota", ref: segments.slice(1).join(".") }, segments };
@@ -555,7 +595,7 @@ function referenceText(def: SurveyDefinition, rule: ConditionRule): string {
   const { source } = rule;
   if (source.kind === "calculation") return `calc.${source.ref}`;
   if (source.kind === "embedded") return `ed.${source.ref}`;
-  if (source.kind === "loop") return `loop.${source.ref || "code"}`;
+  if (source.kind === "loop") return `${source.scope ?? "loop"}.${source.ref || "code"}`;
   if (source.kind === "quota") return `quota.${source.ref}`;
   if (source.kind === "option") return `@option.${source.ref || "code"}`;
 

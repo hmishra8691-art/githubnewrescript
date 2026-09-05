@@ -47,8 +47,18 @@ export type PipeFormat =
 
 export interface PipeToken {
   kind: PipeKind;
-  /** question code / variable name / calc name / embedded field / expression */
+  /**
+   * question code / variable name / calc name / embedded field / expression —
+   * or, for `loop`, `code` / `label` / `index` / `count` / a reference column
+   */
   ref: string;
+  /**
+   * For `loop` inside nested loops: the loopVar of the loop meant. Absent is
+   * the innermost. Serialises as `{{<scope>.<ref>}}`, which the parser reads
+   * back as a question token — the runtime tells them apart by whether a
+   * question of that code exists, and the Studio builder by knowing the loops.
+   */
+  scope?: string;
   /** matrix or composite row */
   rowCode?: string;
   property: PipeProperty;
@@ -127,6 +137,22 @@ export function parsePipeBody(raw: string, text = `{{${raw}}}`): PipeToken | nul
   if (body.startsWith("loop.")) {
     return { kind: "loop", ref: body.slice(5), property: "value", format, joiner, raw, text };
   }
+  /*
+   * The requirement's spelling of the current item (§19, §21): `{{CURRENT_ITEM}}`,
+   * `{{CURRENT_ITEM.Product_ID}}`, `{{CURRENT_ITEM_CODE}}`, `{{CURRENT_ITEM_LABEL}}`,
+   * `{{LOOP_INDEX}}`, `{{LOOP_COUNT}}`. Aliases of `loop.*`, not a second
+   * mechanism — they parse to the same token the runtime already resolves.
+   */
+  const alias = body.match(/^CURRENT_ITEM(?:\.([A-Za-z_][A-Za-z0-9_]*))?$/);
+  if (alias) {
+    return { kind: "loop", ref: alias[1] ?? "label", property: "value", format, joiner, raw, text };
+  }
+  const fixedAlias: Record<string, string> = {
+    CURRENT_ITEM_CODE: "code", CURRENT_ITEM_LABEL: "label", LOOP_INDEX: "index", LOOP_COUNT: "count",
+  };
+  if (fixedAlias[body]) {
+    return { kind: "loop", ref: fixedAlias[body], property: "value", format, joiner, raw, text };
+  }
 
   const m = body.match(/^([A-Za-z0-9_]+)(?:\[([^\]]+)\])?(?:\.([A-Za-z_]+))?$/);
   if (!m) return null;
@@ -153,7 +179,8 @@ export function serializePipeToken(t: Omit<PipeToken, "raw" | "text">): string {
       body = `ed.${t.ref}`;
       break;
     case "loop":
-      body = `loop.${t.ref}`;
+      // a scoped token names the outer loop by its loopVar: {{brand.Category}}
+      body = t.scope ? `${t.scope}.${t.ref}` : `loop.${t.ref}`;
       break;
     case "expr":
       body = `expr: ${t.ref}`;

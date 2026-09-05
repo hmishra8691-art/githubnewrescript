@@ -139,11 +139,25 @@ export const ConditionSource = z.object({
   kind: z
     .enum(["question", "variable", "embedded", "calculation", "quota", "loop", "option"])
     .default("question"),
-  /** Question id (e.g. "q_brand") or variable / field name. */
+  /**
+   * Question id (e.g. "q_brand") or variable / field name.
+   *
+   * For `kind: "loop"` — the current iteration — `ref` is `code`, `label`,
+   * `index`, `count`, or the NAME OF ONE OF THE LOOP'S REFERENCE COLUMNS
+   * (`Category`, `Product_ID`, …). Which columns exist is decided by the loop
+   * the rule sits inside, not by this schema, so `loop.Category = "Smartphone"`
+   * is an ordinary rule with `ref: "Category"`.
+   */
   ref: z.string(),
   /** For composite / matrix questions: which row & column cell to read. */
   rowCode: z.string().optional(),
   columnId: z.string().optional(),
+  /**
+   * For `kind: "loop"` inside NESTED loops: the `loopVar` of the loop meant.
+   * Absent means the innermost loop, which is what a rule written inside a
+   * single loop has always meant, so nothing existing changes.
+   */
+  scope: z.string().optional(),
 });
 export type ConditionSource = z.infer<typeof ConditionSource>;
 

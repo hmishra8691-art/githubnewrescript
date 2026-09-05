@@ -2,6 +2,7 @@ import type { Question, ValidationRule, SurveyDefinition } from "@rescript/schem
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition } from "./evaluate.js";
 import { effectiveQuestion } from "./carryforward.js";
+import { answerKey, lookupAnswer } from "./state.js";
 import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
 import { validateFieldValue } from "./fields.js";
@@ -124,9 +125,10 @@ export function validateQuestion(
       const chosen = (Array.isArray(value) ? value : [value]).map(String);
       if (chosen.some((c) => otherCodes.includes(c))) {
         const answers = ctx.state.answers as Record<string, unknown>;
-        const raw =
-          (ctx.loop ? answers[`${q.id}@${ctx.loop.code}__other`] : undefined) ??
-          answers[`${q.id}__other`];
+        // the iteration's own "other" text, then the enclosing iterations',
+        // then the plain one — same rule as every other loop-scoped read
+        const raw = lookupAnswer(answers as never, `${q.id}__other`, ctx.loop) ??
+          answers[`${answerKey(q.id, ctx.loop)}__other`];
         const text = typeof raw === "string" ? raw.trim() : raw;
         if (isEmpty(text)) push("Please say what “Other” is before continuing.");
       }
@@ -428,8 +430,7 @@ export function validatePage(
 ): ValidationError[] {
   const errors: ValidationError[] = [];
   for (const q of questions) {
-    const loopKey = ctx.loop ? `${q.id}@${ctx.loop.code}` : q.id;
-    const value = ctx.state.answers[loopKey] ?? ctx.state.answers[q.id];
+    const value = lookupAnswer(ctx.state.answers, q.id, ctx.loop);
     errors.push(...validateQuestion(def, q, value, ctx));
   }
   return errors;

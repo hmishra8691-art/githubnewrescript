@@ -186,10 +186,18 @@ export function elementSummary(node: any, def: SurveyDefinition): string {
     case "loop": {
       const src = node.source;
       const over = src?.kind === "question"
-        ? (def.questions.find((q) => q.id === src.questionId)?.code ?? src.questionId)
+        ? `${def.questions.find((q) => q.id === src.questionId)?.code ?? src.questionId} (${src.filter ?? "selected"})`
         : src?.kind === "static" ? `${src.items?.length ?? 0} static items`
+        : src?.kind === "listFill" ? `List Fill ${def.listFills?.find((l: any) => l.id === src.listFillId)?.name ?? src.listFillId}`
+        : src?.kind === "count" ? (typeof src.count === "number" ? `${src.count} iterations` : `a count from ${src.count?.ref}`)
+        : src?.kind === "variable" ? `the list in ${src.ref}`
         : "a design file";
-      return `loop over ${over} as {{${node.loopVar}}}`;
+      const refs = node.references?.columns?.length
+        ? `; references: ${node.references.columns.map((c: any) => c.name).join(", ")}`
+        : "";
+      // the syntax the runtime actually resolves — this used to advertise
+      // {{loopVar}}, which the parser has never accepted
+      return `loop over ${over} as {{loop.label}}${refs}`;
     }
     case "embedded_data":
       return (node.fields ?? []).map((f: any) => `${f.name} (${f.source})`).join(", ") || "no fields";

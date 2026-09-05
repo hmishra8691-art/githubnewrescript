@@ -1,7 +1,7 @@
 import type { Condition, ConditionRule, SurveyDefinition } from "@rescript/schema";
 import { isOptionValueRef } from "@rescript/schema";
 import type { LoopContext, ResponseState } from "./state.js";
-import { getQuestionByCodeOrVar } from "./state.js";
+import { findLoopScope, getQuestionByCodeOrVar, lookupAnswer, loopValue } from "./state.js";
 
 /**
  * The option currently under evaluation. Present whenever a condition is
@@ -57,13 +57,18 @@ export function resolveSourceValue(rule: ConditionRule, ctx: EvalContext): unkno
       return state.embedded[source.ref] ?? null;
     case "calculation":
       return state.calculated[source.ref] ?? null;
-    case "loop":
-      if (!ctx.loop) return null;
-      return source.ref === "code"
-        ? ctx.loop.code
-        : source.ref === "label"
-          ? ctx.loop.label
-          : ctx.loop.index;
+    case "loop": {
+      /*
+       * `scope` names an enclosing loop by its loopVar when loops nest; absent
+       * means the innermost, which is what every rule written inside a single
+       * loop has always meant. `ref` is code/label/index/count or the name of
+       * one of THAT loop's reference columns — `loop.Category = "Smartphone"`
+       * reads the item's own row of the loop's own table and nothing else.
+       */
+      const l = findLoopScope(ctx.loop, source.scope);
+      if (!l) return null;
+      return loopValue(l, source.ref || "code");
+    }
     case "quota": {
       const counts = ctx.quotaCounts?.[source.ref];
       if (!counts) return null;
@@ -74,11 +79,10 @@ export function resolveSourceValue(rule: ConditionRule, ctx: EvalContext): unkno
     default: {
       const q = getQuestionByCodeOrVar(ctx.def, source.ref);
       const baseId = q?.id ?? source.ref;
-      // loop-local answer takes precedence
-      const loopKey = ctx.loop ? `${baseId}@${ctx.loop.code}` : null;
+      // loop-local answer takes precedence, then each enclosing iteration's,
+      // then the survey-level one — see answerLookupKeys
       let val =
-        (loopKey != null ? state.answers[loopKey] : undefined) ??
-        state.answers[baseId] ??
+        lookupAnswer(state.answers, baseId, ctx.loop) ??
         state.calculated[source.ref] ??
         state.embedded[source.ref] ??
         null;

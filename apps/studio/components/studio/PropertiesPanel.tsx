@@ -6,6 +6,7 @@ import { validateExpression, lintPipingTokens, lintQuestionLogic, listOperationS
 import { resolveVariant, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript/schema";
 import { useStudio, selectedQuestion, uid } from "./store";
 import { OptionalCondition, ConditionEditor } from "./ConditionBuilder";
+import { LoopScopeProvider, loopsAroundQuestion } from "./loopScope";
 import { MaskingBuilder } from "./MaskingBuilder";
 import { QualitySettings } from "./QualitySettings";
 
@@ -416,10 +417,22 @@ export function PropertiesPanel() {
   const exprError =
     q.type === "calculated" && q.settings.expression ? validateExpression(q.settings.expression) : null;
   const logicIssues = lintQuestionLogic(s.def, q);
+  /*
+   * The loops this question sits inside, so its display logic, skip logic and
+   * piping picker can offer the loops' reference columns — and only theirs.
+   */
+  const loopScope = loopsAroundQuestion(s.def, q.id);
 
   return (
+    <LoopScopeProvider loops={loopScope}>
     <div>
       <h2>{q.code} properties</h2>
+      {loopScope.length > 0 && (
+        <div className="chip" data-testid="in-loop-chip" style={{ marginBottom: 6 }} title={`Inside loop${loopScope.length > 1 ? "s" : ""}: ${loopScope.map((l) => l.loopVar).join(" › ")}. Answers are stored per iteration; {{loop.…}} pipes the current item.`}>
+          in loop “{loopScope[0].loopVar}”{loopScope.length > 1 ? ` (nested in ${loopScope.slice(1).map((l) => l.loopVar).join(", ")})` : ""}
+          {loopScope[0].references?.columns.length ? ` · references: ${loopScope[0].references.columns.map((c) => c.name).join(", ")}` : ""}
+        </div>
+      )}
       {pipingProblems.map((p, i) => <div key={i} className="chip warn" style={{ marginBottom: 6 }}>{p}</div>)}
       {exprError && <div className="chip warn" style={{ marginBottom: 6 }}>expr: {exprError}</div>}
       {/* Only errors are shown here. Warnings ("operator has no value set")
@@ -696,5 +709,6 @@ export function PropertiesPanel() {
         <textarea className="ta" value={q.notes ?? ""}
           onChange={(e) => patch({ notes: e.target.value || undefined })} /></label>
     </div>
+    </LoopScopeProvider>
   );
 }

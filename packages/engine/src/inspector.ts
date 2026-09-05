@@ -15,7 +15,23 @@ import { listFillLoopItems, pendingListFills, unusedListFillDestinations } from 
 
 export interface InspectorSnapshot {
   page: { index: number; pageId: string; title?: string; sectionPath: string[] } | null;
+  /** the innermost iteration, as before — the full stack is in `loops` */
   loop: { loopVar: string; code: string; label: string; index: number } | null;
+  /**
+   * THE LOOP DEBUG BLOCK (§35): every enclosing iteration, innermost first,
+   * with its id, "n of N", the current item, and every reference value — so
+   * the programmer can verify the exact context reaching the block. The
+   * references shown are precisely what `{{loop.X}}` would resolve to.
+   */
+  loops: {
+    loopId: string;
+    loopVar: string;
+    index: number;
+    count: number;
+    code: string;
+    label: string;
+    references: Record<string, string | number | boolean | null>;
+  }[];
   visibleQuestionIds: string[];
   answers: Record<string, unknown>;
   flatVariables: Record<string, unknown>;
@@ -135,6 +151,16 @@ export function inspect(
         }
       : null,
     loop: pageStep?.loop ?? null,
+    loops: (() => {
+      const out: InspectorSnapshot["loops"] = [];
+      for (let l = pageStep?.loop ?? null; l; l = l.parent ?? null) {
+        out.push({
+          loopId: l.loopId ?? "", loopVar: l.loopVar, index: l.index, count: l.count ?? 0,
+          code: l.code, label: l.label, references: { ...(l.references ?? {}) },
+        });
+      }
+      return out;
+    })(),
     visibleQuestionIds: pageStep
       ? visibleQuestions(def, pageStep, state, quotaCounts).map((q) => q.id)
       : [],

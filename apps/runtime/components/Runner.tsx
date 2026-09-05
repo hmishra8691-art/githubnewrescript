@@ -584,7 +584,8 @@ export function Runner({ definition: def, mode, session: initialSession, session
         <div className="rs-error-banner" data-testid="rs-start-note" style={{ background: "#fff7e6", color: "#7a4b00", borderColor: "#f0c36d" }}>{startNote}</div>
       )}
       {questions.map((q) => {
-        const key = pageStep.loop ? `${q.id}@${pageStep.loop.code}` : q.id;
+        // the full iteration path, so nested loops key separately (see loopKeySuffix)
+        const key = answerKey(q.id, pageStep.loop ?? null);
         return (
           <QuestionRenderer
             key={key}
@@ -593,7 +594,13 @@ export function Runner({ definition: def, mode, session: initialSession, session
             state={state}
             loop={pageStep.loop ?? null}
             value={state.answers[key]}
-            otherValue={(state.answers[`${q.id}__other`] as string) ?? ""}
+            /*
+             * "Other, specify" text is PER ITERATION, like the answer it belongs
+             * to. This read `${q.id}__other` for every iteration while validation
+             * read the loop-scoped key — so the text a respondent typed for Apple
+             * showed up again under Google, and the validator could not see it.
+             */
+            otherValue={(state.answers[`${key}__other`] as string) ?? ""}
             errors={errors.filter((e) => e.questionId === q.id).map((e) => e.message)}
             onChange={(v) => {
               setAnswer(def, state, q.id, v, pageStep.loop);
@@ -615,7 +622,7 @@ export function Runner({ definition: def, mode, session: initialSession, session
               force();
             }}
             onOtherChange={(t) => {
-              state.answers[`${q.id}__other`] = t;
+              state.answers[`${key}__other`] = t;
               force();
             }}
           />

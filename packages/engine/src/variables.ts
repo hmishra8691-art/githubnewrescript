@@ -1,4 +1,8 @@
 import type { SurveyDefinition, Question, VariableDef, FlowNode } from "@rescript/schema";
+import {
+  directChildLoops, directQuestionIdsInLoop, loopNodes, loopVariableNames, maxLoopIterations,
+  possibleLoopItems, type LoopFlowNode,
+} from "./loops.js";
 import { listFillVariableNames } from "./listFill.js";
 import { fieldDataType } from "./fields.js";
 
@@ -389,8 +393,67 @@ export function questionVariables(
 export function buildVariableDictionary(def: SurveyDefinition): VariableDef[] {
   const loc = pageLocator(def);
   const out: VariableDef[] = [];
+
+  /*
+   * QUESTIONS INSIDE A LOOP ARE DECLARED ONCE PER ITERATION (§29, §37) —
+   * `Q7_1 … Q7_N`, N being the most iterations the definition allows — so the
+   * export has the same columns before the first respondent and after the
+   * last. A question inside a loop used to get one plain `Q7` row, which no
+   * answer ever filled, while its real values sat under names the dictionary
+   * had never heard of and were dropped from every CSV.
+   *
+   * A loop whose size the definition cannot know (a count from a variable, a
+   * list from a variable) keeps the plain row, annotated, so the question at
+   * least appears; its answers remain reachable by code and the lint says why
+   * there are no positional columns.
+   */
+  const loopOf = new Map<string, { chain: LoopFlowNode[]; positions: number[][] }>();
+  const declareLoop = (node: LoopFlowNode, chain: LoopFlowNode[], positionsSoFar: number[][]) => {
+    const max = maxLoopIterations(def, node);
+    const positions: number[][] = [];
+    if (max != null) {
+      for (const prefix of positionsSoFar.length ? positionsSoFar : [[]]) {
+        for (let n = 1; n <= max; n++) positions.push([...prefix, n]);
+      }
+    }
+    for (const qid of directQuestionIdsInLoop(node)) loopOf.set(qid, { chain: [...chain, node], positions });
+    for (const child of directChildLoops(node)) declareLoop(child, [...chain, node], positions);
+  };
+  for (const { node, ancestors } of loopNodes(def)) {
+    if (ancestors.length === 0) declareLoop(node, [], []);
+  }
+
   for (const q of def.questions) {
-    out.push(...questionVariables(q, loc.get(q.id), def.questions));
+    const inLoop = loopOf.get(q.id);
+    if (!inLoop || inLoop.positions.length === 0) {
+      const base = questionVariables(q, loc.get(q.id), def.questions);
+      if (inLoop) {
+        const innermost = inLoop.chain[inLoop.chain.length - 1];
+        for (const v of base) {
+          v.loopId = innermost.id; v.loopVar = innermost.loopVar;
+          v.notes = `${v.notes ? `${v.notes} — ` : ""}inside loop "${innermost.loopVar}", whose size is not fixed by the definition: stored per iteration, no positional columns declared`;
+        }
+      }
+      out.push(...base);
+      continue;
+    }
+    const innermost = inLoop.chain[inLoop.chain.length - 1];
+    for (const pos of inLoop.positions) {
+      const suffix = pos.map((n) => `_${n}`).join("");
+      // the SAME variable shapes as outside a loop, renamed per position, so a
+      // multi-select still exports its 0/1 columns and a matrix its rows
+      const renamed = { ...q, variableName: `${q.variableName}${suffix}` } as typeof q;
+      for (const v of questionVariables(renamed, loc.get(q.id), def.questions)) {
+        out.push({
+          ...v,
+          loopId: innermost.id,
+          loopVar: innermost.loopVar,
+          iteration: pos[pos.length - 1],
+          label: `${v.label} (${inLoop.chain.map((l, i) => `${l.loopVar} ${pos[i]}`).join(", ")})`,
+          notes: `${v.notes ? `${v.notes} — ` : ""}iteration ${pos.join(".")} of loop "${inLoop.chain.map((l) => l.loopVar).join(" › ")}"`,
+        });
+      }
+    }
   }
   for (const calc of def.calculations) {
     out.push({
@@ -460,6 +523,43 @@ export function buildVariableDictionary(def: SurveyDefinition): VariableDef[] {
       });
     }
   }
+  /*
+   * THE LOOPS' OWN VARIABLES (§24, §36). LOOP_<VAR>_COUNT, _ITEM_n, _ITEM_n_CODE
+   * and one per reference column — declared from the definition like the List
+   * Fill columns above, and carrying `loopId` / `referenceColumn` so the
+   * dictionary can show a reference as belonging to its loop rather than as a
+   * survey-wide field (§36).
+   */
+  for (const { node, ancestors } of loopNodes(def)) {
+    if (ancestors.length) continue; // nested loops' variables are per outer item, not positional
+    const items = possibleLoopItems(def, node) ?? [];
+    const codes = items.map((i) => i.code);
+    const labels = Object.fromEntries(items.map((i) => [i.code, i.label]));
+    const srcQ = node.source.kind === "question" ? def.questions.find((q) => q.id === (node.source as { questionId: string }).questionId) : undefined;
+    for (const v of loopVariableNames(def, node)) {
+      const col = v.referenceColumn ? node.references?.columns.find((c) => c.name === v.referenceColumn) : undefined;
+      out.push({
+        name: v.name,
+        label: `Loop "${node.loopVar}"${v.iteration != null ? ` — item ${v.iteration}` : ""}${
+          v.referenceColumn ? ` ${v.referenceColumn}` : /_CODE$/.test(v.name) ? " code" : v.iteration == null ? " — number of iterations" : ""
+        }`,
+        dataType: v.dataType === "number" ? "numeric" : v.dataType === "boolean" ? "boolean" : "text",
+        responseType: "loop",
+        derived: true,
+        hidden: true,
+        valueCodes: /_CODE$/.test(v.name) ? codes : [],
+        valueLabels: /_CODE$/.test(v.name) ? labels : {},
+        sourceQuestion: srcQ?.code,
+        loopId: node.id,
+        loopVar: node.loopVar,
+        iteration: v.iteration,
+        referenceColumn: v.referenceColumn,
+        notes: v.referenceColumn
+          ? `Reference column "${v.referenceColumn}"${col?.dataType ? ` (${col.dataType})` : ""} of loop "${node.loopVar}" — belongs to this loop only${col?.description ? `: ${col.description}` : ""}`
+          : `Loop "${node.loopVar}" over ${describeLoopSource(def, node)}`,
+      });
+    }
+  }
   // system variables
   for (const [name, label] of [
     ["RESP_ID", "Respondent ID"],
@@ -495,4 +595,20 @@ export function lintVariables(def: SurveyDefinition): string[] {
     seen.set(v.name, owner);
   }
   return problems;
+}
+
+/** "Q2 (selected)", "a static list of 5", "List Fill lf1" — for a dictionary note. */
+export function describeLoopSource(def: SurveyDefinition, node: LoopFlowNode): string {
+  const s = node.source;
+  switch (s.kind) {
+    case "question": {
+      const q = def.questions.find((x) => x.id === s.questionId);
+      return `${q?.code ?? s.questionId} (${s.filter ?? "selected"})`;
+    }
+    case "static": return `a static list of ${s.items.length}`;
+    case "design": return `design file ${s.designId}`;
+    case "listFill": return `List Fill ${def.listFills.find((l) => l.id === s.listFillId)?.name ?? s.listFillId}`;
+    case "count": return typeof s.count === "number" ? `${s.count} iterations` : `a count from ${s.count.ref}`;
+    case "variable": return `the list in ${s.ref}`;
+  }
 }

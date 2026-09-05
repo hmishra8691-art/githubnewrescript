@@ -1,5 +1,6 @@
 import type { SurveyDefinition, Question } from "@rescript/schema";
-import type { ResponseState } from "./state.js";
+import { loopKeySuffix, type LoopContext, type ResponseState } from "./state.js";
+import { directChildLoops, directQuestionIdsInLoop, loopNodes, loopVariablePrefix, type LoopFlowNode } from "./loopModel.js";
 
 export type FlatVars = Record<string, unknown>;
 
@@ -19,13 +20,30 @@ export type FlatVars = Record<string, unknown>;
 export function flattenVariables(def: SurveyDefinition, state: ResponseState): FlatVars {
   const out: FlatVars = {};
 
+  /*
+   * LOOP ITERATIONS LAND IN POSITIONAL COLUMNS — `Q7_1`, `Q7_2`, … — the
+   * columns the dictionary declares up front (§29, §37). Position n's item is
+   * read from `LOOP_<VAR>_ITEM_n_CODE`, which `runCalculations` writes into
+   * `state.calculated` on every trigger and which is stored with the response,
+   * so an export of a finished response needs no re-resolution.
+   *
+   * This replaces the `Q7_<code>` naming, which never reached an export at all
+   * (the dictionary did not know those names) and collided with a multi-select's
+   * own `Q7_<optionCode>` flag columns. The old spelling is kept ONLY as a
+   * fallback for a response stored before the loop variables existed, so those
+   * rows keep flattening to what they flattened to before.
+   */
+  const placed = placeLoopAnswers(def, state, out);
+
   for (const q of def.questions) {
-    // collect all answer entries for this question (plain + loop-suffixed)
+    // every answer entry for this question (plain + loop-suffixed)
     const entries = Object.entries(state.answers).filter(
       ([k]) => k === q.id || k.startsWith(`${q.id}@`),
     );
     for (const [key, value] of entries) {
-      const loopSuffix = key.includes("@") ? `_${key.split("@")[1]}` : "";
+      if (placed.has(key)) continue;
+      // legacy fallback for loop answers whose loop variables are absent
+      const loopSuffix = key.includes("@") ? `_${key.split("@").slice(1).join("_")}` : "";
       flattenQuestion(q, value, `${q.variableName}${loopSuffix}`, out);
     }
     const other = state.answers[`${q.id}__other`];
@@ -226,4 +244,53 @@ function flattenQuestion(q: Question, value: unknown, varName: string, out: Flat
     default:
       out[varName] = value;
   }
+}
+
+/* ------------------------------------------------------------ loops */
+
+/**
+ * Place every loop-scoped answer in its positional column and return the
+ * answer keys that were placed, so the caller can skip them.
+ *
+ * Works from the loop VARIABLES rather than from the answer keys: position n
+ * is whatever `LOOP_<VAR>_ITEM_n_CODE` says ran n-th, which is how a randomised
+ * loop still exports as `Q7_1..Q7_N` with the `_CODE` column saying which item
+ * each position held. Nested loops recurse with the outer position prefixed:
+ * `Q9_2_1` is the first inner iteration of the second outer one, and the inner
+ * loop's own variables are prefixed by the outer item (`loopVariablePrefix`).
+ */
+function placeLoopAnswers(def: SurveyDefinition, state: ResponseState, out: FlatVars): Set<string> {
+  const placed = new Set<string>();
+  const byId = new Map(def.questions.map((q) => [q.id, q]));
+
+  const place = (node: LoopFlowNode, parent: LoopContext | null, positionPrefix: string) => {
+    const prefix = loopVariablePrefix(node, parent);
+    const count = Number(state.calculated[`${prefix}_COUNT`]);
+    if (!Number.isFinite(count)) return; // no loop variables: legacy fallback applies
+    const questionIds = directQuestionIdsInLoop(node);
+    const children = directChildLoops(node);
+    for (let n = 1; n <= count; n++) {
+      const code = state.calculated[`${prefix}_ITEM_${n}_CODE`];
+      if (code == null) continue;
+      const ctx: LoopContext = { loopVar: node.loopVar, loopId: node.id, code: String(code), label: "", index: n, parent };
+      const suffix = loopKeySuffix(ctx);
+      const position = `${positionPrefix}_${n}`;
+      for (const qid of questionIds) {
+        const q = byId.get(qid);
+        if (!q) continue;
+        const key = `${qid}${suffix}`;
+        if (state.answers[key] === undefined) continue;
+        flattenQuestion(q, state.answers[key], `${q.variableName}${position}`, out);
+        placed.add(key);
+        const other = state.answers[`${key}__other`];
+        if (other !== undefined) { out[`${q.variableName}${position}_other`] = other; placed.add(`${key}__other`); }
+      }
+      for (const child of children) place(child, ctx, position);
+    }
+  };
+
+  for (const { node, ancestors } of loopNodes(def)) {
+    if (ancestors.length === 0) place(node, null, "");
+  }
+  return placed;
 }

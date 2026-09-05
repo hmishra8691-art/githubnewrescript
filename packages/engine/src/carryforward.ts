@@ -13,7 +13,7 @@ import type {
 import { LIST_OPS_WITH_SOURCES } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition, withOption, withLegacyOptionLoop } from "./evaluate.js";
-import { getQuestion } from "./state.js";
+import { getQuestion, lookupAnswer, loopKeySuffix } from "./state.js";
 import { resolvePiping, registerDisplayedOptionsResolver } from "./piping.js";
 import { evaluateSetExpr, LIST_ACTIONS } from "./setExpression.js";
 import { seededShuffle, subSeed, mulberry32 } from "./random.js";
@@ -75,9 +75,7 @@ export function codesFrom(
 ): (string | number)[] {
   const src = getQuestion(ctx.def, sourceQuestionId);
   if (!src) return [];
-  const loopKey = ctx.loop ? `${src.id}@${ctx.loop.code}` : null;
-  const answer =
-    (loopKey ? ctx.state.answers[loopKey] : undefined) ?? ctx.state.answers[src.id];
+  const answer = lookupAnswer(ctx.state.answers, src.id, ctx.loop);
   const selected = Array.isArray(answer)
     ? answer
     : answer == null
@@ -122,8 +120,7 @@ export function codesFrom(
 function isAnswered(questionId: string, ctx: EvalContext): boolean {
   const q = getQuestion(ctx.def, questionId);
   if (!q) return false;
-  const loopKey = ctx.loop ? `${q.id}@${ctx.loop.code}` : null;
-  const a = (loopKey ? ctx.state.answers[loopKey] : undefined) ?? ctx.state.answers[q.id];
+  const a = lookupAnswer(ctx.state.answers, q.id, ctx.loop);
   if (a === null || a === undefined || a === "") return false;
   if (Array.isArray(a)) return a.length > 0;
   if (typeof a === "object") return Object.keys(a).length > 0;
@@ -895,7 +892,7 @@ function runOptions(
   ctx: EvalContext,
   rec: Recorder | null,
 ): Option[] {
-  const seedKey = ctx.loop ? `@${ctx.loop.code}` : "";
+  const seedKey = loopKeySuffix(ctx.loop);
   const seed = subSeed(ctx.state.seed, `rand:${q.id}${seedKey}`);
 
   // 1 — source
@@ -1009,7 +1006,7 @@ function runOptions(
 }
 
 function runRows(q: Question, ctx: EvalContext): QuestionRow[] {
-  const seedKey = ctx.loop ? `@${ctx.loop.code}` : "";
+  const seedKey = loopKeySuffix(ctx.loop);
   let rows: QuestionRow[] = [];
   if (q.carryForward && q.carryForward.into === "rows") {
     rows = carriedOptions(q.carryForward, ctx).map((o) => ({
@@ -1044,7 +1041,7 @@ function runRows(q: Question, ctx: EvalContext): QuestionRow[] {
 }
 
 export function effectiveQuestion(q: Question, ctx: EvalContext): EffectiveQuestionView {
-  const seedKey = ctx.loop ? `@${ctx.loop.code}` : "";
+  const seedKey = loopKeySuffix(ctx.loop);
   const options = runOptions(q, ctx, null);
   const rows = runRows(q, ctx);
 

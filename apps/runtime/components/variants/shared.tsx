@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { Option } from "@rescript/schema";
-import { effectiveQuestion, toggleMultiValue } from "@rescript/engine";
+import { answerKey, effectiveQuestion, toggleMultiValue } from "@rescript/engine";
 import type { QRProps } from "../QuestionRenderer";
 import { ctxOf } from "../QuestionRenderer";
 
@@ -82,7 +82,8 @@ export function metaText(o: { meta?: Record<string, unknown> }, key: string): st
 
 /** Side answers (`<id>__rt`, `<id>__passed`) — stored beside the answer, like `__other`. */
 export function sideKey(p: QRProps, suffix: string): string {
-  return p.loop ? `${p.q.id}@${p.loop.code}__${suffix}` : `${p.q.id}__${suffix}`;
+  // the full iteration path, so a nested loop's side answers key separately
+  return `${answerKey(p.q.id, p.loop)}__${suffix}`;
 }
 export function setSide(p: QRProps, suffix: string, v: unknown): void {
   (p.state.answers as Record<string, unknown>)[sideKey(p, suffix)] = v;

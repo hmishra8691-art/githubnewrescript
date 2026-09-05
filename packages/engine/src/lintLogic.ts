@@ -16,6 +16,7 @@ import {
 import { getQuestionByCodeOrVar } from "./state.js";
 import { PIPE_TOKEN_RE, parsePipeBody } from "./pipingTokens.js";
 import { describeCycle, detectLogicCycles, orderIndex } from "./dependencies.js";
+import { loopNodes, possibleLoopItems, questionIdsInLoop } from "./loops.js";
 
 /**
  * Logic configuration linting (reqs §30–31).
@@ -485,6 +486,7 @@ function lintQuestionLogicUnsafe(def: SurveyDefinition, q: Question): LogicIssue
 export function lintSurveyLogic(def: SurveyDefinition): LogicIssue[] {
   const issues: LogicIssue[] = [];
   for (const q of def.questions ?? []) issues.push(...lintQuestionLogic(def, q));
+  issues.push(...lintLoops(def));
   try {
     for (const cycle of detectLogicCycles(def)) {
       issues.push({
@@ -497,6 +499,147 @@ export function lintSurveyLogic(def: SurveyDefinition): LogicIssue[] {
     }
   } catch {
     /* an unanalysable graph is already reported per question */
+  }
+  return issues;
+}
+
+/* ============================================================ loops */
+
+/**
+ * LOOP LINT (§34's "debug before deployment", from the definition alone).
+ *
+ * The mistakes a loop can carry that nothing at runtime would ever announce:
+ * a reference name that a token or rule spells but the loop does not declare
+ * (renders empty, silently — the failure this lint exists for); a required
+ * column with a hole in it; a source question asked AFTER the loop that
+ * iterates over it; two nested loops with one name; a fixed count larger than
+ * the source can ever supply. Errors block a release; warnings are shown.
+ */
+export function lintLoops(def: SurveyDefinition): LogicIssue[] {
+  const issues: LogicIssue[] = [];
+  const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
+  const BUILTIN = new Set(["code", "label", "index", "count"]);
+  const questionIndex = new Map<string, number>();
+  const seen: string[] = [];
+  const positionOf = (nodes: (typeof def.flow)[number][]) => {
+    for (const n of nodes) {
+      if (n.type === "page") for (const id of n.questionIds) { if (!questionIndex.has(id)) questionIndex.set(id, seen.push(id) - 1); }
+      else if ("children" in n && Array.isArray((n as any).children)) positionOf((n as any).children);
+      else if (n.type === "branch") { for (const b of n.branches) positionOf(b.children); if (n.otherwise) positionOf(n.otherwise); }
+    }
+  };
+  positionOf(def.flow);
+
+  const walk = (nodes: (typeof def.flow)[number][], ancestors: Extract<(typeof def.flow)[number], { type: "loop" }>[]) => {
+    for (const n of nodes) {
+      if (n.type === "loop") {
+        const at = `flow.${n.id}`;
+        const push = (level: LogicIssue["level"], path: string, message: string) => issues.push({ level, path: `${at}.${path}`, message });
+        const columns = n.references?.columns ?? [];
+        const names = new Set(columns.map((c) => c.name));
+
+        if (!IDENT.test(n.loopVar)) push("error", "loopVar", `Loop "${n.id}": the name "${n.loopVar}" must be an identifier — it prefixes LOOP_… variables and can be piped as {{${n.loopVar}.label}}.`);
+        if (ancestors.some((a) => a.loopVar === n.loopVar)) push("error", "loopVar", `Loop "${n.loopVar}" is nested inside another loop with the same name — {{${n.loopVar}.label}} could mean either.`);
+
+        // column names
+        const dup = columns.map((c) => c.name).filter((c, i, a) => a.indexOf(c) !== i);
+        for (const d of [...new Set(dup)]) push("error", "references.columns", `Loop "${n.loopVar}": reference column "${d}" is declared twice.`);
+        for (const c of columns) {
+          if (!IDENT.test(c.name)) push("error", "references.columns", `Loop "${n.loopVar}": "${c.name}" cannot be a reference column name — use letters, digits and underscores.`);
+          if (BUILTIN.has(c.name)) push("error", "references.columns", `Loop "${n.loopVar}": "${c.name}" is what the item itself is called; a column cannot shadow it.`);
+        }
+
+        // required values present for every item the source can produce
+        const items = possibleLoopItems(def, n);
+        if (items) {
+          for (const c of columns.filter((c) => c.required)) {
+            const missing = items.filter((it) => { const v = n.references?.values?.[it.code]?.[c.name]; return v === undefined || v === null || v === ""; });
+            if (missing.length) push("warning", `references.values.${c.name}`, `Loop "${n.loopVar}": required column "${c.name}" has no value for ${missing.length === items.length ? "any item" : missing.map((m) => m.label || m.code).join(", ")}.`);
+          }
+          // values for codes the source cannot produce are not wrong (the source may grow) but worth a word
+          const known = new Set(items.map((i) => i.code));
+          const stray = Object.keys(n.references?.values ?? {}).filter((c) => !known.has(c));
+          if (stray.length && n.source.kind !== "variable") push("warning", "references.values", `Loop "${n.loopVar}": reference rows for ${stray.join(", ")} match no item the source produces.`);
+        } else if (n.source.kind === "variable" || (n.source.kind === "count" && typeof n.source.count !== "number")) {
+          push("warning", "source", `Loop "${n.loopVar}": its size is not known from the definition, so no positional export columns (Q_1, Q_2, …) can be declared for questions inside it; their answers are stored per iteration and reachable by code.`);
+        }
+
+        // the source question must be asked before the loop
+        if (n.source.kind === "question") {
+          const q = def.questions.find((x) => x.id === (n.source as { questionId: string }).questionId);
+          if (!q) push("error", "source", `Loop "${n.loopVar}" iterates over a question that does not exist.`);
+          else {
+            const firstInside = questionIdsInLoop(n).map((id) => questionIndex.get(id) ?? Infinity).reduce((a, b) => Math.min(a, b), Infinity);
+            const srcAt = questionIndex.get(q.id);
+            if (srcAt != null && srcAt > firstInside) push("error", "source", `Loop "${n.loopVar}" iterates over ${q.code}, which is asked after the loop — it will have no answer yet.`);
+            if (["selected", "notSelected"].includes(n.source.filter ?? "selected") && !q.options.length) push("warning", "source", `Loop "${n.loopVar}" filters ${q.code} by selection, but ${q.code} has no options.`);
+          }
+        }
+        if (n.source.kind === "listFill" && !def.listFills.some((l) => l.id === (n.source as { listFillId: string }).listFillId)) push("error", "source", `Loop "${n.loopVar}" iterates over a List Fill that does not exist.`);
+
+        // count vs what the source can supply
+        const count = n.count ?? (n.maxIterations != null ? { mode: "max" as const, value: n.maxIterations } : undefined);
+        if (count && typeof count.value === "number" && items && (count.mode === "exact" || count.mode === "min") && count.value > items.length) {
+          push("warning", "count", `Loop "${n.loopVar}" wants ${count.mode === "exact" ? "exactly" : "at least"} ${count.value} iterations but the source has ${items.length} items.`);
+        }
+        if (n.order && (n.order.kind === "priority" || n.order.kind === "weightedRandom")) {
+          if (!n.order.column) push("error", "order", `Loop "${n.loopVar}": ordering by a reference column needs a column.`);
+          else if (!names.has(n.order.column)) push("error", "order", `Loop "${n.loopVar}" orders by "${n.order.column}", which is not one of its reference columns.`);
+        }
+
+        // rules and tokens inside the loop that name a column the loop lacks
+        const inScope = [n, ...ancestors];
+        const checkRef = (source: { kind?: string; ref: string; scope?: string }, where: string) => {
+          if (source.kind !== "loop") return;
+          const target = source.scope ? inScope.find((l) => l.loopVar === source.scope) : n;
+          if (source.scope && !target) return push("error", where, `"${source.scope}.${source.ref}" names a loop this is not inside of.`);
+          const cols = new Set((target!.references?.columns ?? []).map((c) => c.name));
+          if (!BUILTIN.has(source.ref) && !cols.has(source.ref)) {
+            push("error", where, `"${source.scope ?? "loop"}.${source.ref}" — loop "${target!.loopVar}" has no reference column "${source.ref}"${cols.size ? ` (it has ${[...cols].join(", ")})` : ""}. It would read as empty.`);
+          }
+        };
+        const walkCond = (c: Condition | undefined, where: string) => {
+          if (!c) return;
+          if (c.type === "rule") checkRef(c.source as never, where);
+          else for (const ch of c.children) walkCond(ch, where);
+        };
+        walkCond(n.eligibleIf, "eligibleIf");
+        walkCond(n.invalidIf, "invalidIf");
+        for (const qid of questionIdsInLoop(n)) {
+          const q = def.questions.find((x) => x.id === qid);
+          if (!q) continue;
+          walkCond(q.displayLogic as Condition | undefined, `${q.code}.displayLogic`);
+          for (const text of [q.text, q.instruction ?? ""]) {
+            for (const m of text.matchAll(PIPE_TOKEN_RE)) {
+              const t = parsePipeBody(m[1]);
+              if (!t) continue;
+              if (t.kind === "loop") checkRef({ kind: "loop", ref: t.ref, scope: t.scope }, `${q.code}.text`);
+              else if (t.kind === "question" && !getQuestionByCodeOrVar(def, t.ref) && inScope.some((l) => l.loopVar === t.ref)) {
+                checkRef({ kind: "loop", ref: String(t.property), scope: t.ref }, `${q.code}.text`);
+              }
+            }
+          }
+        }
+
+        walk(n.children, [...ancestors, n]);
+      } else if ("children" in n && Array.isArray((n as any).children)) {
+        walk((n as any).children, ancestors);
+      } else if (n.type === "branch") {
+        for (const b of n.branches) walk(b.children, ancestors);
+        if (n.otherwise) walk(n.otherwise, ancestors);
+      }
+    }
+  };
+  walk(def.flow, []);
+
+  // a loop token OUTSIDE every loop renders empty — say so where it is written
+  const inside = new Set(loopNodes(def).flatMap((l) => questionIdsInLoop(l.node)));
+  for (const q of def.questions) {
+    if (inside.has(q.id)) continue;
+    for (const m of `${q.text} ${q.instruction ?? ""}`.matchAll(PIPE_TOKEN_RE)) {
+      const t = parsePipeBody(m[1]);
+      if (t?.kind === "loop") issues.push({ level: "warning", questionId: q.id, questionCode: q.code, path: "text", message: `${q.code} pipes ${m[0]} but is not inside a loop, so it will render empty.` });
+    }
   }
   return issues;
 }

@@ -1409,3 +1409,18 @@ p.qs-help { margin: -2px 0 10px; }
 .center.ro [contenteditable="true"] { background: var(--panel2); }
 .center.ro .readonly-banner,
 .center.ro .readonly-banner * { pointer-events: auto; opacity: 1; }
+
+/* ---------- loop editor (for-each / repeating block) ---------- */
+.loop-editor .flabel { font-size: 12px; }
+.loop-refs {
+  margin-top: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: color-mix(in srgb, var(--tint) 40%, var(--panel));
+}
+.loop-ref-table { border-collapse: collapse; font-size: 12.5px; margin-top: 8px; }
+.loop-ref-table th, .loop-ref-table td {
+  text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border); vertical-align: top;
+}
+.loop-ref-table thead th { background: var(--panel); position: sticky; top: 0; }
+.loop-ref-table .input.invalid { border-color: var(--red); }
+.loop-editor .select.small { font-size: 11px; padding: 2px 4px; height: 24px; }
+.loop-sim-iter { background: var(--panel); border-radius: 4px; }

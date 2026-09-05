@@ -15,6 +15,7 @@ import {
   OPERATOR_LABEL, OPERATOR_HINT, setGroupConnector, listFillVariableNames,
 } from "@rescript/engine";
 import { SYSTEM_VARIABLE_HELP } from "@rescript/quality";
+import { useLoopScope } from "./loopScope";
 import { useStudio } from "./store";
 import { ExpressionEditor } from "./ExpressionEditor";
 
@@ -125,6 +126,7 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
   const sourceValue =
     rule.source.kind === "question" ? `q:${rule.source.ref}`
       : rule.source.kind === "option" ? `o:${rule.source.ref || "code"}`
+        : rule.source.kind === "loop" && rule.source.scope ? `loopscope:${rule.source.scope}:${rule.source.ref}`
         : `${rule.source.kind}:${rule.source.ref}`;
 
   const pickSource = (raw: string) => {
@@ -132,8 +134,22 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
     const ref = rest.join(":");
     if (kind === "q") return setSource({ kind: "question", ref });
     if (kind === "o") return setSource({ kind: "option", ref: ref || "code" });
+    if (kind === "loopscope") {
+      // an OUTER loop, named by its loopVar (§32)
+      const [scope, ...r] = rest;
+      return setSource({ kind: "loop", ref: r.join(":"), scope });
+    }
+    if (kind === "loop") return setSource({ kind: "loop", ref, scope: undefined });
     setSource({ kind: kind as any, ref });
   };
+
+  /*
+   * THE LOOPS THIS RULE SITS INSIDE (innermost first). Their reference columns
+   * are offered as sources; a loop the rule is not inside is not, because that
+   * value would always be empty here. The columns are whatever each loop
+   * declared — nothing in this file knows what they are called.
+   */
+  const loopScope = useLoopScope();
 
   return (
     <div className="cond-rule">
@@ -185,7 +201,7 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
         </optgroup>
         {/* a source this build does not list still displays as itself, never as
             the placeholder — the rule stays readable and a re-save keeps it */}
-        {rule.source.kind !== "question" && rule.source.kind !== "option" && !knownSource(sourceValue, s.def) && (
+        {rule.source.kind !== "question" && rule.source.kind !== "option" && !knownSource(sourceValue, s.def, loopScope) && (
           <optgroup label="Other">
             <option value={sourceValue}>{rule.source.kind}: {rule.source.ref}</option>
           </optgroup>
@@ -201,11 +217,27 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
             ))}
           </optgroup>
         )}
-        <optgroup label="Loop">
-          <option value="loop:label">loop label</option>
-          <option value="loop:code">loop code</option>
-          <option value="loop:index">loop index</option>
+        <optgroup label={loopScope[0] ? `Current item (loop “${loopScope[0].loopVar}”)` : "Loop"}>
+          <option value="loop:label">current item — label</option>
+          <option value="loop:code">current item — code</option>
+          <option value="loop:index">current item — position (LOOP_INDEX)</option>
+          <option value="loop:count">loop — number of iterations (LOOP_COUNT)</option>
+          {(loopScope[0]?.references?.columns ?? []).map((c) => (
+            <option key={c.name} value={`loop:${c.name}`} title={c.description}>
+              current item — {c.name}{c.dataType && c.dataType !== "text" ? ` (${c.dataType})` : ""}
+            </option>
+          ))}
         </optgroup>
+        {loopScope.slice(1).map((outer) => (
+          <optgroup key={outer.id} label={`Outer loop “${outer.loopVar}”`}>
+            <option value={`loopscope:${outer.loopVar}:label`}>{outer.loopVar} — label</option>
+            <option value={`loopscope:${outer.loopVar}:code`}>{outer.loopVar} — code</option>
+            <option value={`loopscope:${outer.loopVar}:index`}>{outer.loopVar} — position</option>
+            {(outer.references?.columns ?? []).map((c) => (
+              <option key={c.name} value={`loopscope:${outer.loopVar}:${c.name}`}>{outer.loopVar} — {c.name}</option>
+            ))}
+          </optgroup>
+        ))}
       </select>
       {q && (q.rows.length > 0 || q.columns.length > 0) && (
         <>
@@ -649,8 +681,22 @@ export function conditionToText(c: Condition | undefined, def: any): string {
 }
 
 /** Is this `kind:ref` source offered by one of the select's groups? */
-function knownSource(value: string, def: { calculations: { targetVariable: string }[]; flow: unknown[]; listFills?: unknown[] }): boolean {
-  if (value.startsWith("loop:")) return ["loop:label", "loop:code", "loop:index"].includes(value);
+function knownSource(
+  value: string,
+  def: { calculations: { targetVariable: string }[]; flow: unknown[]; listFills?: unknown[] },
+  loopScope: { loopVar: string; references?: { columns: { name: string }[] } }[] = [],
+): boolean {
+  if (value.startsWith("loopscope:")) {
+    const [, scope, ...rest] = value.split(":");
+    const outer = loopScope.find((l) => l.loopVar === scope);
+    const ref = rest.join(":");
+    return !!outer && (["label", "code", "index", "count"].includes(ref) || (outer.references?.columns ?? []).some((c) => c.name === ref));
+  }
+  if (value.startsWith("loop:")) {
+    const ref = value.slice(5);
+    return ["label", "code", "index", "count"].includes(ref)
+      || (loopScope[0]?.references?.columns ?? []).some((c) => c.name === ref);
+  }
   if (value.startsWith("calculation:")) {
     const ref = value.slice("calculation:".length);
     if (def.calculations.some((c) => c.targetVariable === ref)) return true;
