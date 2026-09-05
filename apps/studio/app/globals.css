@@ -1424,3 +1424,44 @@ p.qs-help { margin: -2px 0 10px; }
 .loop-ref-table .input.invalid { border-color: var(--red); }
 .loop-editor .select.small { font-size: 11px; padding: 2px 4px; height: 24px; }
 .loop-sim-iter { background: var(--panel); border-radius: 4px; }
+
+/* ------------------------------------------------------------ quota dashboard */
+.qd-summary { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin-bottom: 8px; }
+.qd-stat { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.qd-stat.wide { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 10px; }
+.qd-stat.wide .qd-bar { flex: 1; margin-top: 0; }
+.qd-stat-n { font-size: 22px; font-weight: 650; line-height: 1.1; }
+.qd-stat-n.near { color: var(--amber); }
+.qd-stat-n.full { color: var(--red); }
+.qd-stat-l { font-size: 11px; color: var(--subtle); text-transform: uppercase; letter-spacing: .05em; }
+.qd-toolbar { margin: 6px 0 12px; }
+.qd-search { flex: 1; min-width: 220px; }
+.qd-state { display: inline-block; border-radius: 999px; padding: 1px 9px; font-size: 10.5px; font-weight: 650; letter-spacing: .04em; border: 1px solid var(--border); background: var(--panel2); color: var(--subtle); white-space: nowrap; }
+.qd-state.active { color: var(--green); border-color: var(--green); background: #eaf6ee; }
+.qd-state.near { color: var(--amber); border-color: var(--amber); background: #fdf3e6; }
+.qd-state.full { color: #fff; border-color: var(--red); background: var(--red); }
+.qd-state.unlimited { color: var(--accent2); border-color: var(--accent2); background: var(--tint); }
+.qd-state.inactive { color: var(--subtle); border-style: dashed; }
+.qd-card.editing { border-color: var(--accent); box-shadow: 0 0 0 2px var(--tint); }
+.qd-source { font-size: 12.5px; margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.qd-total { display: grid; grid-template-columns: auto minmax(120px, 1fr) auto auto auto; gap: 10px; align-items: center; margin: 10px 0 6px; font-size: 12.5px; }
+.qd-bar.qbar { height: 12px; border-radius: 6px; margin-top: 0; }
+.qd-bar.qbar > div.near { background: var(--amber); }
+.qd-bar.qbar > div.unlimited { background: repeating-linear-gradient(45deg, var(--panel2), var(--panel2) 6px, var(--border) 6px, var(--border) 12px); }
+.qd-cells { display: flex; flex-direction: column; gap: 6px; }
+.qd-cell { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--bg); }
+.qd-cell.bad { border-color: var(--red); }
+.qd-cell-head { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.qd-cond { font-size: 11.5px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.qd-cell-body { display: grid; grid-template-columns: auto minmax(120px, 1fr) auto; gap: 10px; align-items: center; margin-top: 6px; font-size: 12.5px; }
+.qd-count { font-weight: 650; }
+.qd-cell-nums { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 6px; font-size: 11.5px; color: var(--subtle); align-items: center; }
+.qd-cell-nums label { display: inline-flex; align-items: center; gap: 4px; }
+.qd-issues { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.qd-foot { margin-top: 8px; font-size: 11px; display: flex; gap: 6px; flex-wrap: wrap; }
+.qd-trow td { background: var(--panel2); }
+.qd-tcell td { font-size: 12px; }
+.qd-detail { max-width: 860px; width: min(860px, 94vw); max-height: 88vh; overflow: auto; }
+.qd-history { padding-left: 18px; font-size: 12.5px; }
+.qd-history li { margin-bottom: 6px; }
+.card.qd-focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--tint); }

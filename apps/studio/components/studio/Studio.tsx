@@ -9,7 +9,7 @@ import { PropertiesPanel, SurveySettings } from "./PropertiesPanel";
 import { FlowPanel } from "./FlowPanel";
 import { LogicPanel, CalcPanel } from "./LogicPanel";
 import { VariablesPanel } from "./VariablesPanel";
-import { QuotasPanel } from "./QuotasPanel";
+import { QuotaDashboard } from "./QuotaDashboard";
 import { ListFillPanel } from "./ListFillPanel";
 import { CollabBar, ReadOnlyNotice } from "./CollabBar";
 import { CollaboratorsPanel } from "./CollaboratorsPanel";
@@ -646,7 +646,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
       <div className={`ide-body ${collab.readOnly && s.surveyDbId !== "sandbox" ? "is-readonly" : ""}`}>
         <nav className="leftnav">
           {NAV.map((n) => (
-            <button key={n.key} className={`nav-item ${tab === n.key ? "active" : ""}`} onClick={() => setTab(n.key)}>
+            <button key={n.key} className={`nav-item ${tab === n.key ? "active" : ""}`} onClick={() => { if (n.key === tab || s.canLeaveTab()) setTab(n.key); }}>
               <span style={{ width: 16, textAlign: "center" }}>{n.icon}</span>
               {n.label}
               {counts[n.key] != null && <span className="nav-count">{counts[n.key]}</span>}
@@ -675,7 +675,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           {tab === "logic" && <LogicPanel />}
           {tab === "variables" && <VariablesPanel />}
           {tab === "calculations" && <CalcPanel />}
-          {tab === "quotas" && <QuotasPanel />}
+          {tab === "quotas" && <QuotaDashboard />}
           {tab === "listfill" && <ListFillPanel />}
           {tab === "designs" && <DesignsPanel />}
           {tab === "branding" && <BrandingPanel />}

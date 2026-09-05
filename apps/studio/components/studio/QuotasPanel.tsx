@@ -20,8 +20,14 @@ type Env = "TEST" | "LIVE";
  * cells with ordinary conditions, so the runtime routes on them without
  * knowing where they came from.
  */
-export function QuotasPanel() {
+export function QuotasPanel({ focusQuotaId }: { focusQuotaId?: string } = {}) {
   const s = useStudio();
+  // opened from the dashboard's "Edit Logic": bring that quota into view once
+  React.useEffect(() => {
+    if (!focusQuotaId) return;
+    const el = document.querySelector(`[data-quota-logic-id="${focusQuotaId}"]`);
+    if (el) { el.scrollIntoView({ block: "start" }); el.classList.add("qd-focus"); }
+  }, [focusQuotaId]);
   const [counts, setCounts] = React.useState<Record<string, Record<string, number>>>({});
   const [env, setEnv] = React.useState<Env>("TEST");
   const [perEnvironment, setPerEnvironment] = React.useState(true);
@@ -134,7 +140,7 @@ export function QuotasPanel() {
         </div>
       )}
       {s.def.quotas.map((qt, qi) => (
-        <div key={qt.id} className="card">
+        <div key={qt.id} className="card" data-quota-logic-id={qt.id} data-testid="quota-logic-card">
           <div className="row" style={{ marginBottom: 8 }}>
             <input className="input" style={{ width: 220 }} value={qt.name}
               onChange={(e) => s.update((d) => { d.quotas[qi].name = e.target.value; })} />

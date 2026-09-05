@@ -39,9 +39,19 @@ export const QuotaCell = z.object({
   id: z.string(),
   label: z.string(),
   when: Condition,
+  /** The MAXIMUM: once `count >= limit` the cell is full and a hard quota routes on it. */
   limit: z.number(),
   limitType: z.enum(["count", "percent"]).default("count"),
+  /**
+   * The desired number of completes for this cell (same unit as `limit`),
+   * optional and informational: the dashboard shows "remaining to target" next
+   * to "remaining to maximum" and warns when the two are inconsistent. The
+   * engine routes on `limit` alone, so a cell without a target behaves exactly
+   * as every cell always has.
+   */
+  target: z.number().optional(),
 });
+export type QuotaCell = z.infer<typeof QuotaCell>;
 
 export const Quota = z.object({
   id: z.string(),

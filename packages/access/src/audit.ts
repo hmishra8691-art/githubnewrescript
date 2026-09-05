@@ -71,6 +71,11 @@ export const AUDIT_EVENTS = [
   "responses.deleted",
   "responses.imported",
 
+  /* quota management (the dashboard records each numeric change with before/after) */
+  "quota.created",
+  "quota.modified",
+  "quota.deleted",
+
   /* collaboration */
   "comment.created",
   "comment.resolved",
@@ -154,6 +159,13 @@ export function describeEvent(r: AuditRow): string {
     case "survey.modified": return `${who} modified the survey${d.summary ? ` — ${str(d.summary)}` : ""}`;
     case "survey.saved": return `${who} saved the survey`;
     case "version.created": return `${who} created version ${str(d.version) || "?"}`;
+    case "quota.created": return `${who} created quota “${str(d.quotaName) || str(d.quotaId)}”`;
+    case "quota.modified": {
+      const changes = d.changes && typeof d.changes === "object" ? Object.entries(d.changes as Record<string, { before: unknown; after: unknown }>) : [];
+      const shown = changes.slice(0, 3).map(([k, v]) => `${k}: ${str(v?.before ?? "—")} → ${str(v?.after ?? "—")}`).join(", ");
+      return `${who} changed quota “${str(d.quotaName) || str(d.quotaId)}”${shown ? ` — ${shown}${changes.length > 3 ? ", …" : ""}` : ""}`;
+    }
+    case "quota.deleted": return `${who} deleted quota “${str(d.quotaName) || str(d.quotaId)}”${d.cells != null ? ` (${str(d.cells)} cells; response data kept)` : ""}`;
     case "version.restored": return `${who} restored version ${str(d.version) || "?"}`;
     case "deployment.started": return `${who} started a ${str(d.mode) || ""} deployment`.replace("  ", " ");
     case "deployment.completed": return `${who} completed a ${str(d.mode) || ""} deployment`.replace("  ", " ");
@@ -177,7 +189,7 @@ export function auditCategory(action: string): AuditCategory {
   if (action.startsWith("lock.")) return "editing";
   if (action.startsWith("comment.")) return "collaboration";
   if (action.startsWith("responses.")) return "data";
-  if (action.startsWith("survey.") || action.startsWith("version.") || action.startsWith("deployment.")) return "survey";
+  if (action.startsWith("survey.") || action.startsWith("version.") || action.startsWith("deployment.") || action.startsWith("quota.")) return "survey";
   return "access";
 }
 

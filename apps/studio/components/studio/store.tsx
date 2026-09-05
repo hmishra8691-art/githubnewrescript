@@ -113,6 +113,13 @@ export interface StudioState {
   /** switch the centre panel — lets one panel point at another */
   goToTab?(tab: string): void;
   setGoToTab(fn: (tab: string) => void): void;
+  /**
+   * A panel with unsaved local edits (the Quota Dashboard's inline edit, for
+   * one) registers a guard; the leftnav asks it before switching tabs and the
+   * guard may refuse. Null when nothing is pending.
+   */
+  setLeaveGuard(fn: (() => boolean) | null): void;
+  canLeaveTab(): boolean;
   replace(def: SurveyDefinition): void;
   select(questionId: string | null): void;
   markSaved(versionId: string, revision?: number | null): void;
@@ -205,6 +212,7 @@ export function StudioProvider({
   const readOnlyReasonRef = React.useRef(readOnlyReason);
   readOnlyReasonRef.current = readOnlyReason;
   const goToTabRef = React.useRef<((tab: string) => void) | undefined>(undefined);
+  const leaveGuardRef = React.useRef<(() => boolean) | null>(null);
   const toastTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   /* a standalone raiser: `value.toast` cannot be called from inside the object
      literal that defines it */
@@ -462,6 +470,8 @@ export function StudioProvider({
     hasResponses,
     goToTab: (tab) => goToTabRef.current?.(tab),
     setGoToTab(fn) { goToTabRef.current = fn; },
+    setLeaveGuard(fn) { leaveGuardRef.current = fn; },
+    canLeaveTab: () => (leaveGuardRef.current ? leaveGuardRef.current() : true),
     /**
      * `latest.current` is the previous definition, not `setDef`'s argument.
      *
