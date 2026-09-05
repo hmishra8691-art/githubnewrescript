@@ -1,0 +1,669 @@
+{
+  "id": "design_maxdiff_features",
+  "kind": "maxdiff",
+  "name": "Feature importance MaxDiff",
+  "version": 1,
+  "seed": 20260902,
+  "config": {
+    "items": [
+      "Battery life",
+      "Camera quality",
+      "Price",
+      "Screen quality",
+      "Brand reputation",
+      "5G / connectivity",
+      "Software updates",
+      "Privacy & security",
+      "Repairability",
+      "Ecosystem integration",
+      "Customer support",
+      "Resale value"
+    ],
+    "itemsPerTask": 5,
+    "tasks": 9,
+    "versions": 2
+  },
+  "file": {
+    "format": "json",
+    "columns": [
+      "version",
+      "task",
+      "position",
+      "item_index",
+      "item_label"
+    ],
+    "rows": [
+      {
+        "version": 1,
+        "task": 1,
+        "position": 1,
+        "item_index": 11,
+        "item_label": "Customer support"
+      },
+      {
+        "version": 1,
+        "task": 1,
+        "position": 2,
+        "item_index": 4,
+        "item_label": "Screen quality"
+      },
+      {
+        "version": 1,
+        "task": 1,
+        "position": 3,
+        "item_index": 2,
+        "item_label": "Camera quality"
+      },
+      {
+        "version": 1,
+        "task": 1,
+        "position": 4,
+        "item_index": 12,
+        "item_label": "Resale value"
+      },
+      {
+        "version": 1,
+        "task": 1,
+        "position": 5,
+        "item_index": 7,
+        "item_label": "Software updates"
+      },
+      {
+        "version": 1,
+        "task": 2,
+        "position": 1,
+        "item_index": 5,
+        "item_label": "Brand reputation"
+      },
+      {
+        "version": 1,
+        "task": 2,
+        "position": 2,
+        "item_index": 1,
+        "item_label": "Battery life"
+      },
+      {
+        "version": 1,
+        "task": 2,
+        "position": 3,
+        "item_index": 8,
+        "item_label": "Privacy & security"
+      },
+      {
+        "version": 1,
+        "task": 2,
+        "position": 4,
+        "item_index": 9,
+        "item_label": "Repairability"
+      },
+      {
+        "version": 1,
+        "task": 2,
+        "position": 5,
+        "item_index": 10,
+        "item_label": "Ecosystem integration"
+      },
+      {
+        "version": 1,
+        "task": 3,
+        "position": 1,
+        "item_index": 11,
+        "item_label": "Customer support"
+      },
+      {
+        "version": 1,
+        "task": 3,
+        "position": 2,
+        "item_index": 9,
+        "item_label": "Repairability"
+      },
+      {
+        "version": 1,
+        "task": 3,
+        "position": 3,
+        "item_index": 3,
+        "item_label": "Price"
+      },
+      {
+        "version": 1,
+        "task": 3,
+        "position": 4,
+        "item_index": 6,
+        "item_label": "5G / connectivity"
+      },
+      {
+        "version": 1,
+        "task": 3,
+        "position": 5,
+        "item_index": 2,
+        "item_label": "Camera quality"
+      },
+      {
+        "version": 1,
+        "task": 4,
+        "position": 1,
+        "item_index": 7,
+        "item_label": "Software updates"
+      },
+      {
+        "version": 1,
+        "task": 4,
+        "position": 2,
+        "item_index": 6,
+        "item_label": "5G / connectivity"
+      },
+      {
+        "version": 1,
+        "task": 4,
+        "position": 3,
+        "item_index": 8,
+        "item_label": "Privacy & security"
+      },
+      {
+        "version": 1,
+        "task": 4,
+        "position": 4,
+        "item_index": 3,
+        "item_label": "Price"
+      },
+      {
+        "version": 1,
+        "task": 4,
+        "position": 5,
+        "item_index": 12,
+        "item_label": "Resale value"
+      },
+      {
+        "version": 1,
+        "task": 5,
+        "position": 1,
+        "item_index": 3,
+        "item_label": "Price"
+      },
+      {
+        "version": 1,
+        "task": 5,
+        "position": 2,
+        "item_index": 5,
+        "item_label": "Brand reputation"
+      },
+      {
+        "version": 1,
+        "task": 5,
+        "position": 3,
+        "item_index": 4,
+        "item_label": "Screen quality"
+      },
+      {
+        "version": 1,
+        "task": 5,
+        "position": 4,
+        "item_index": 1,
+        "item_label": "Battery life"
+      },
+      {
+        "version": 1,
+        "task": 5,
+        "position": 5,
+        "item_index": 10,
+        "item_label": "Ecosystem integration"
+      },
+      {
+        "version": 1,
+        "task": 6,
+        "position": 1,
+        "item_index": 2,
+        "item_label": "Camera quality"
+      },
+      {
+        "version": 1,
+        "task": 6,
+        "position": 2,
+        "item_index": 8,
+        "item_label": "Privacy & security"
+      },
+      {
+        "version": 1,
+        "task": 6,
+        "position": 3,
+        "item_index": 6,
+        "item_label": "5G / connectivity"
+      },
+      {
+        "version": 1,
+        "task": 6,
+        "position": 4,
+        "item_index": 4,
+        "item_label": "Screen quality"
+      },
+      {
+        "version": 1,
+        "task": 6,
+        "position": 5,
+        "item_index": 5,
+        "item_label": "Brand reputation"
+      },
+      {
+        "version": 1,
+        "task": 7,
+        "position": 1,
+        "item_index": 7,
+        "item_label": "Software updates"
+      },
+      {
+        "version": 1,
+        "task": 7,
+        "position": 2,
+        "item_index": 1,
+        "item_label": "Battery life"
+      },
+      {
+        "version": 1,
+        "task": 7,
+        "position": 3,
+        "item_index": 11,
+        "item_label": "Customer support"
+      },
+      {
+        "version": 1,
+        "task": 7,
+        "position": 4,
+        "item_index": 12,
+        "item_label": "Resale value"
+      },
+      {
+        "version": 1,
+        "task": 7,
+        "position": 5,
+        "item_index": 9,
+        "item_label": "Repairability"
+      },
+      {
+        "version": 1,
+        "task": 8,
+        "position": 1,
+        "item_index": 4,
+        "item_label": "Screen quality"
+      },
+      {
+        "version": 1,
+        "task": 8,
+        "position": 2,
+        "item_index": 10,
+        "item_label": "Ecosystem integration"
+      },
+      {
+        "version": 1,
+        "task": 8,
+        "position": 3,
+        "item_index": 8,
+        "item_label": "Privacy & security"
+      },
+      {
+        "version": 1,
+        "task": 8,
+        "position": 4,
+        "item_index": 11,
+        "item_label": "Customer support"
+      },
+      {
+        "version": 1,
+        "task": 8,
+        "position": 5,
+        "item_index": 3,
+        "item_label": "Price"
+      },
+      {
+        "version": 1,
+        "task": 9,
+        "position": 1,
+        "item_index": 10,
+        "item_label": "Ecosystem integration"
+      },
+      {
+        "version": 1,
+        "task": 9,
+        "position": 2,
+        "item_index": 9,
+        "item_label": "Repairability"
+      },
+      {
+        "version": 1,
+        "task": 9,
+        "position": 3,
+        "item_index": 7,
+        "item_label": "Software updates"
+      },
+      {
+        "version": 1,
+        "task": 9,
+        "position": 4,
+        "item_index": 5,
+        "item_label": "Brand reputation"
+      },
+      {
+        "version": 1,
+        "task": 9,
+        "position": 5,
+        "item_index": 2,
+        "item_label": "Camera quality"
+      },
+      {
+        "version": 2,
+        "task": 1,
+        "position": 1,
+        "item_index": 10,
+        "item_label": "Ecosystem integration"
+      },
+      {
+        "version": 2,
+        "task": 1,
+        "position": 2,
+        "item_index": 12,
+        "item_label": "Resale value"
+      },
+      {
+        "version": 2,
+        "task": 1,
+        "position": 3,
+        "item_index": 1,
+        "item_label": "Battery life"
+      },
+      {
+        "version": 2,
+        "task": 1,
+        "position": 4,
+        "item_index": 4,
+        "item_label": "Screen quality"
+      },
+      {
+        "version": 2,
+        "task": 1,
+        "position": 5,
+        "item_index": 6,
+        "item_label": "5G / connectivity"
+      },
+      {
+        "version": 2,
+        "task": 2,
+        "position": 1,
+        "item_index": 7,
+        "item_label": "Software updates"
+      },
+      {
+        "version": 2,
+        "task": 2,
+        "position": 2,
+        "item_index": 3,
+        "item_label": "Price"
+      },
+      {
+        "version": 2,
+        "task": 2,
+        "position": 3,
+        "item_index": 8,
+        "item_label": "Privacy & security"
+      },
+      {
+        "version": 2,
+        "task": 2,
+        "position": 4,
+        "item_index": 1,
+        "item_label": "Battery life"
+      },
+      {
+        "version": 2,
+        "task": 2,
+        "position": 5,
+        "item_index": 2,
+        "item_label": "Camera quality"
+      },
+      {
+        "version": 2,
+        "task": 3,
+        "position": 1,
+        "item_index": 6,
+        "item_label": "5G / connectivity"
+      },
+      {
+        "version": 2,
+        "task": 3,
+        "position": 2,
+        "item_index": 12,
+        "item_label": "Resale value"
+      },
+      {
+        "version": 2,
+        "task": 3,
+        "position": 3,
+        "item_index": 9,
+        "item_label": "Repairability"
+      },
+      {
+        "version": 2,
+        "task": 3,
+        "position": 4,
+        "item_index": 11,
+        "item_label": "Customer support"
+      },
+      {
+        "version": 2,
+        "task": 3,
+        "position": 5,
+        "item_index": 5,
+        "item_label": "Brand reputation"
+      },
+      {
+        "version": 2,
+        "task": 4,
+        "position": 1,
+        "item_index": 11,
+        "item_label": "Customer support"
+      },
+      {
+        "version": 2,
+        "task": 4,
+        "position": 2,
+        "item_index": 6,
+        "item_label": "5G / connectivity"
+      },
+      {
+        "version": 2,
+        "task": 4,
+        "position": 3,
+        "item_index": 7,
+        "item_label": "Software updates"
+      },
+      {
+        "version": 2,
+        "task": 4,
+        "position": 4,
+        "item_index": 8,
+        "item_label": "Privacy & security"
+      },
+      {
+        "version": 2,
+        "task": 4,
+        "position": 5,
+        "item_index": 10,
+        "item_label": "Ecosystem integration"
+      },
+      {
+        "version": 2,
+        "task": 5,
+        "position": 1,
+        "item_index": 5,
+        "item_label": "Brand reputation"
+      },
+      {
+        "version": 2,
+        "task": 5,
+        "position": 2,
+        "item_index": 12,
+        "item_label": "Resale value"
+      },
+      {
+        "version": 2,
+        "task": 5,
+        "position": 3,
+        "item_index": 2,
+        "item_label": "Camera quality"
+      },
+      {
+        "version": 2,
+        "task": 5,
+        "position": 4,
+        "item_index": 1,
+        "item_label": "Battery life"
+      },
+      {
+        "version": 2,
+        "task": 5,
+        "position": 5,
+        "item_index": 3,
+        "item_label": "Price"
+      },
+      {
+        "version": 2,
+        "task": 6,
+        "position": 1,
+        "item_index": 3,
+        "item_label": "Price"
+      },
+      {
+        "version": 2,
+        "task": 6,
+        "position": 2,
+        "item_index": 6,
+        "item_label": "5G / connectivity"
+      },
+      {
+        "version": 2,
+        "task": 6,
+        "position": 3,
+        "item_index": 4,
+        "item_label": "Screen quality"
+      },
+      {
+        "version": 2,
+        "task": 6,
+        "position": 4,
+        "item_index": 9,
+        "item_label": "Repairability"
+      },
+      {
+        "version": 2,
+        "task": 6,
+        "position": 5,
+        "item_index": 7,
+        "item_label": "Software updates"
+      },
+      {
+        "version": 2,
+        "task": 7,
+        "position": 1,
+        "item_index": 9,
+        "item_label": "Repairability"
+      },
+      {
+        "version": 2,
+        "task": 7,
+        "position": 2,
+        "item_index": 12,
+        "item_label": "Resale value"
+      },
+      {
+        "version": 2,
+        "task": 7,
+        "position": 3,
+        "item_index": 2,
+        "item_label": "Camera quality"
+      },
+      {
+        "version": 2,
+        "task": 7,
+        "position": 4,
+        "item_index": 4,
+        "item_label": "Screen quality"
+      },
+      {
+        "version": 2,
+        "task": 7,
+        "position": 5,
+        "item_index": 8,
+        "item_label": "Privacy & security"
+      },
+      {
+        "version": 2,
+        "task": 8,
+        "position": 1,
+        "item_index": 10,
+        "item_label": "Ecosystem integration"
+      },
+      {
+        "version": 2,
+        "task": 8,
+        "position": 2,
+        "item_index": 1,
+        "item_label": "Battery life"
+      },
+      {
+        "version": 2,
+        "task": 8,
+        "position": 3,
+        "item_index": 5,
+        "item_label": "Brand reputation"
+      },
+      {
+        "version": 2,
+        "task": 8,
+        "position": 4,
+        "item_index": 7,
+        "item_label": "Software updates"
+      },
+      {
+        "version": 2,
+        "task": 8,
+        "position": 5,
+        "item_index": 11,
+        "item_label": "Customer support"
+      },
+      {
+        "version": 2,
+        "task": 9,
+        "position": 1,
+        "item_index": 3,
+        "item_label": "Price"
+      },
+      {
+        "version": 2,
+        "task": 9,
+        "position": 2,
+        "item_index": 6,
+        "item_label": "5G / connectivity"
+      },
+      {
+        "version": 2,
+        "task": 9,
+        "position": 3,
+        "item_index": 2,
+        "item_label": "Camera quality"
+      },
+      {
+        "version": 2,
+        "task": 9,
+        "position": 4,
+        "item_index": 12,
+        "item_label": "Resale value"
+      },
+      {
+        "version": 2,
+        "task": 9,
+        "position": 5,
+        "item_index": 10,
+        "item_label": "Ecosystem integration"
+      }
+    ],
+    "generatedAt": "2026-09-01T00:00:00.000Z"
+  }
+}

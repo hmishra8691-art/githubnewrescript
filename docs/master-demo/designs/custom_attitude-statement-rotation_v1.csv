@@ -1,0 +1,7 @@
+version,row,statement,component,level,block,stimulus
+1,1,Sustainability influences which brands I buy,Convenience,1,1,text
+1,2,I prefer to pay for products outright rather than subscribe,Value,3,1,text
+1,3,I trust digital banks as much as traditional banks,Trust,1,2,text
+1,4,Technology makes my daily life easier,Convenience,3,2,text
+1,5,I upgrade my devices as soon as a new model is released,Value,3,3,text
+1,6,I worry about how companies use my data,Trust,1,3,text

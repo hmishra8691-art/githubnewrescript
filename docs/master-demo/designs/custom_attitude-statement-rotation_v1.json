@@ -1,0 +1,119 @@
+{
+  "id": "design_custom_statements",
+  "kind": "custom",
+  "name": "Attitude statement rotation",
+  "version": 1,
+  "seed": 20260903,
+  "config": {
+    "rows": 6,
+    "columnsSpec": [
+      {
+        "name": "statement",
+        "kind": "random_level",
+        "levels": [
+          "Technology makes my daily life easier",
+          "I worry about how companies use my data",
+          "I prefer to pay for products outright rather than subscribe",
+          "I trust digital banks as much as traditional banks",
+          "I upgrade my devices as soon as a new model is released",
+          "Sustainability influences which brands I buy"
+        ]
+      },
+      {
+        "name": "component",
+        "kind": "random_level",
+        "levels": [
+          "Convenience",
+          "Trust",
+          "Value"
+        ]
+      },
+      {
+        "name": "level",
+        "kind": "random_int",
+        "min": 1,
+        "max": 3
+      },
+      {
+        "name": "block",
+        "kind": "block",
+        "blockSize": 2
+      },
+      {
+        "name": "stimulus",
+        "kind": "constant",
+        "value": "text"
+      }
+    ],
+    "versions": 1
+  },
+  "file": {
+    "format": "json",
+    "columns": [
+      "version",
+      "row",
+      "statement",
+      "component",
+      "level",
+      "block",
+      "stimulus"
+    ],
+    "rows": [
+      {
+        "version": 1,
+        "row": 1,
+        "statement": "Sustainability influences which brands I buy",
+        "component": "Convenience",
+        "level": 1,
+        "block": 1,
+        "stimulus": "text"
+      },
+      {
+        "version": 1,
+        "row": 2,
+        "statement": "I prefer to pay for products outright rather than subscribe",
+        "component": "Value",
+        "level": 3,
+        "block": 1,
+        "stimulus": "text"
+      },
+      {
+        "version": 1,
+        "row": 3,
+        "statement": "I trust digital banks as much as traditional banks",
+        "component": "Trust",
+        "level": 1,
+        "block": 2,
+        "stimulus": "text"
+      },
+      {
+        "version": 1,
+        "row": 4,
+        "statement": "Technology makes my daily life easier",
+        "component": "Convenience",
+        "level": 3,
+        "block": 2,
+        "stimulus": "text"
+      },
+      {
+        "version": 1,
+        "row": 5,
+        "statement": "I upgrade my devices as soon as a new model is released",
+        "component": "Value",
+        "level": 3,
+        "block": 3,
+        "stimulus": "text"
+      },
+      {
+        "version": 1,
+        "row": 6,
+        "statement": "I worry about how companies use my data",
+        "component": "Trust",
+        "level": 1,
+        "block": 3,
+        "stimulus": "text"
+      }
+    ],
+    "generatedAt": "2026-09-01T00:00:00.000Z"
+  }
+}

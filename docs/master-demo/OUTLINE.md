@@ -1,0 +1,471 @@
+# Master Demo — 2026 Consumer Technology, Finance & Digital Lifestyle Study — outline
+
+Code `MASTER_DEMO_2026` · version 1.0 · 149 respondent-facing questions, 160 questions in total, 1177 variables · lint issues: 0
+
+Every block title is programmer-facing (block titles are hidden from respondents). `[DEMO: …]` notes say what each question demonstrates.
+
+- 🔗 Embedded data: PANEL_ID (url), SOURCE (url), WAVE (static), SAMPLE_TYPE (expression)
+- **01_Introduction**
+  - Page `p_intro_welcome` — Welcome
+    - `INFO1` **INFO_WELCOME** (html) — 2026 Consumer Technology, Finance &amp; Digital Lifestyle StudyThank you for taking part. This study asks abou
+      - [DEMO: Embedded data piping] PANEL_ID and SOURCE are captured from the URL by the embedded_data flow node and piped with {{ed.X}}.
+    - `Q1` **CONSENT** (single_select, required, skip logic) — Do you agree to participate in this research study?
+      - [DEMO: Termination logic] Skip rule → terminate with status 'screened' when 2 is chosen.
+    - `Q2` **PARTICIPATION_OK** (single_select, required, skip logic) — Please confirm that you are completing this survey yourself and will answer honestly.
+      - [DEMO: Participation confirmation] Second gate; also demonstrates two terminating rules on one page.
+  - Page `p_intro_about` — About you
+    - `Q3` **AGE** (numeric, required, validation) — How old are you?
+      - [DEMO: Numeric range validation + termination] minValue/maxValue 18–100, integer rule; under-18 is handled by the schema bound. AGE feeds the AGE_GROUP calculation and the age quotas.
+    - `Q4` **COUNTRY** (dropdown, required) — Which country do you live in?
+      - [DEMO: Dropdown + other-specify] 'Other country' opens a text field (COUNTRY_other). Drives option-level visibility of REGION.
+    - `Q5` **REGION** (dropdown, required, display logic) — Which region do you live in?
+      - [DEMO: Display logic + option-level visibility] Shown only for 4 countries; each option is visible only for its own country (option.visibleIf).
+    - `Q6` **CITY** (open_text, required, validation) — Which city or town do you live in?
+      - [DEMO: Text validation] min_length / max_length.
+  - Page `p_intro_contact` — Contact details
+    - `Q7` **EMAIL** (open_text, required, validation) — What is your email address?
+      - [DEMO: Email validation] kind 'email' + the text.email variant.
+    - `Q8` **CONTACT_OK** (single_select, required) — May we contact you about follow-up studies?
+      - [DEMO: Conditional required] Drives PHONE's visibility and its conditional required rule.
+    - `Q9` **PHONE** (open_text, display logic, validation) — What phone number may we reach you on?
+      - [DEMO: Display logic + conditional required + regex] Required only when CONTACT_OK = Yes; pattern validation.
+- **02_Screening**
+  - Page `p_screen_1` — Screening
+    - `Q11` **DEVICES** (multi_select, required, skip logic) — Which of the following devices do you personally own or use at least weekly?
+      - [DEMO: Multi-select with 12 options + exclusive 'None' + termination] None terminates (no product ownership). Selected devices drive later display logic (wearables, smart home).
+    - `Q12` **PURCHASE_ROLE** (single_select, required) — When technology is bought in your household, what is your role?
+      - [DEMO: Screening] No-say respondents are not terminated but are excluded from the pricing block by display logic.
+  - Page `p_screen_2` — Screening — role
+    - `Q13` **USE_TYPE** (single_select, required) — Do you use these devices mainly for personal purposes, for work, or both?
+      - [DEMO: Branching driver] The BRANCH node after screening routes Consumer / Business / Both to different blocks using this and EMPLOYMENT together.
+    - `Q14` **ATTENTION_CHECK** (single_select, required) — This is an attention check. Please select “Agree” to continue.
+      - [DEMO: Attention check] Graded by the quality engine; a miss becomes an explained flag, not a termination.
+- **03_Demographics**
+  - Page `p_demo_core` — Demographics
+    - `Q15` **GENDER** (single_select, required) — How do you describe your gender?
+      - [DEMO: Quota driver] GENDER feeds quota_gender and the Gender × Age combined quota.
+    - `Q10` **EMPLOYMENT** (single_select, required, skip logic) — Which of these best describes your current employment status?
+      - [DEMO: Skip logic → page] Retired / unemployed / student skip the work-profile page (industry, job level, company size) entirely.
+    - `Q19` **EDUCATION** (single_select, required) — What is the highest level of education you have completed?
+    - `Q18` **INCOME** (dropdown, required) — What is your total annual household income before tax?
+      - [DEMO: Display-logic driver] Income ≥ $100k (codes 5–8) unlocks the investment questions in the finance page.
+    - `H1` **AGE_GROUP** (calculated) — Derived age group
+      - [DEMO: Hidden derived variable] Text calculation used by the age quotas and the Gender × Age cells.
+    - `H2` **ELIGIBLE_FLAG** (calculated) — Hidden eligibility flag
+      - [DEMO: Hidden eligibility flag] Executes although never displayed — visibility ≠ execution.
+  - Page `p_demo_work` — Work profile
+    - `Q20` **INDUSTRY** (dropdown, required, display logic) — Which industry do you work in?
+      - [DEMO: Display logic] Shown to employed respondents only (EMPLOYMENT in 1–3).
+    - `Q21` **JOB_LEVEL** (single_select, required, display logic) — Which best describes your level in your organisation?
+    - `Q22` **COMPANY_SIZE** (single_select, required, display logic) — Roughly how many people work at your organisation?
+      - [DEMO: AND display logic] Employed AND uses devices for work.
+  - Page `p_demo_household` — Household
+    - `Q16` **HH_SIZE** (numeric, required, validation) — Including yourself, how many people live in your household?
+    - `Q17` **HH_CHILDREN** (numeric, required, validation) — How many of them are children under 18?
+      - [DEMO: Cross-question validation] custom_expression compares this answer (`value`) with HH_SIZE.
+    - `Q26` **FIN_PRODUCTS** (multi_select, required) — Which of these financial products or services do you currently use?
+      - [DEMO: Multi-select with 13 options] Feeds N_FIN_PRODUCTS calculation and the finance display logic.
+  - Page `p_demo_dates` — Recent purchase
+    - `Q23` **LAST_PURCHASE_DATE** (date, required) — When did you buy your most recent technology device?
+      - [DEMO: Date question + date bounds] minDate/maxDate; cross-checked against WARRANTY_END by a custom script.
+    - `Q24` **WARRANTY_END** (date) — When does its warranty end (your best estimate)?
+      - [DEMO: Cross-question date validation via custom JavaScript] The on_submit script blocks the page when this is before LAST_PURCHASE_DATE.
+    - `Q25` **SHOP_TIME** (time) — At what time of day do you usually shop online?
+      - [DEMO: Time question]
+  - ⛔ Quota check quota_gender, quota_age, quota_gender_age → terminate
+  - Page `p_quota_cell` — Quota cell (test visibility)
+    - `Q121` **QUOTA_CELL** (single_select, auto-punch) — Sample cell (auto-populated from gender × age, read only)
+      - [DEMO: Quota flag as a visible read-only variable] Mirrors the Gender × Age quota cells so testers can see which cell they fell into. The quotas themselves are enforced by the quota_check node after demographics.
+    - `H7` **QUOTA_FLAG** (calculated) — Hidden quota flag
+      - [DEMO: Hidden quota flag] Text key of the combined quota cell, e.g. 1_25-34.
+- **04_Technology_Usage**
+  - Page `p_tech_usage` — Technology usage
+    - `Q27` **HOURS_ONLINE** (slider, required) — On a typical day, how many hours do you spend online (excluding work)?
+      - [DEMO: Slider with step and end labels]
+    - `Q28` **ACTIVITY** (matrix_single, required, randomized) — How often do you do each of the following?
+      - [DEMO: Matrix single-select + row randomization] 8 rows × 6-point frequency scale; rows shuffled per respondent (seeded).
+    - `Q29` **APPS** (multi_dropdown, required) — Which of these app categories have you used in the past month?
+      - [DEMO: Multi-select dropdown + max selections]
+    - `Q30` **FORM_FACTOR** (image_select, required) — Which phone form factor appeals to you most?
+      - [DEMO: Image-based single choice] Inline SVG data URIs so the demo has no external assets.
+  - Page `p_tech_priorities` — Priorities
+    - `Q31` **PRIORITY_RANK** (ranking, required, randomized) — Rank your top 3 priorities when choosing a new device.
+      - [DEMO: Ranking (top-N) + randomized options] Ranked-first condition drives a follow-up open end.
+    - `Q32` **NPS_DEVICE** (nps, required) — How likely are you to recommend your main device to a friend or colleague?
+      - [DEMO: NPS] Feeds the NPS_SEGMENT calculation and a conditional open end.
+  - Page `p_tech_spend` — Spending
+    - `Q33` **MONTHLY_SPEND** (numeric, required, validation) — Roughly how much do you spend per month on technology (devices, apps, subscriptions)?
+      - [DEMO: Numeric currency + piping source] MONTHLY_SPEND is piped inside the brand loop together with loop references (§41).
+    - `Q34` **SUB_SPEND** (numeric, required, validation) — Of that, how much goes on subscriptions (streaming, cloud, software)?
+      - [DEMO: Cross-question validation] value ≤ MONTHLY_SPEND.
+    - `Q35` **HW_SPEND** (numeric, required, validation) — And how much goes on hardware (averaged per month)?
+      - [DEMO: Cross-question validation] SUB_SPEND + HW_SPEND ≤ MONTHLY_SPEND (the §43 pattern).
+    - `Q36` **SPEND_SPLIT** (allocation, required) — What percentage of your technology spend goes to each category? (must total 100%)
+      - [DEMO: Allocation / constant sum] sumTarget 100.
+    - `Q37` **PCT_ONLINE** (numeric, required, validation) — What percentage of your technology purchases do you make online?
+      - [DEMO: Percentage]
+  - Page `p_tech_spend_12m` — Spending — 12 months
+    - `Q38` **SPEND_12M** (numeric_list) — Over the past 12 months, roughly how much did you spend on each of the following?
+      - [DEMO: Numeric list] One currency field per row; summed by the TOTAL_SPEND_12M calculation.
+    - `Q39` **BUDGET_NEXT** (numeric, required, validation) — What is your total technology budget for the next 12 months?
+      - [DEMO: Logical validation] Compares against a derived value (12 × SUB_SPEND).
+  - Page `p_tech_sat` — Device satisfaction
+    - `Q40` **WATCH_SAT** (single_select, required, display logic) — How satisfied are you with your smartwatch or fitness tracker?
+      - [DEMO: Skip pattern 'no product → skip satisfaction'] Shown only to wearable owners.
+    - `Q41` **SMARTHOME_SAT** (single_select, required, display logic) — How satisfied are you with your smart-home setup overall?
+      - [DEMO: OR display logic] Smart speaker OR security camera owners.
+    - `Q42` **INVEST_TYPES** (multi_select, required, display logic) — Which of these investments do you hold?
+      - [DEMO: Nested AND/OR display logic] income ≥ $100k AND (uses investment app OR crypto exchange).
+  - ⑂ **Branch br_use_type**
+    - Consumer: personal use, or Both while not working
+      - **04a_Consumer_Section**
+        - Page `p_consumer` — Consumer section
+          - `Q43` **CONSUMER_FOCUS** (single_select, required) — Which personal activity matters most to you when choosing technology?
+            - [DEMO: Branch — Consumer path]
+    - Business: work use only
+      - **04b_Business_Section**
+        - Page `p_business` — Business section
+          - `Q44` **BUSINESS_FUNCTION** (single_select, required) — Which business function do you mainly use technology for?
+            - [DEMO: Branch — Business path]
+          - `Q45` **COMPANY_DEVICES** (numeric, required, validation) — How many devices does your employer provide to you?
+    - otherwise
+      - **04c_Combined_Section**
+        - Page `p_combined` — Combined section
+          - `Q43` **CONSUMER_FOCUS** (single_select, required) — Which personal activity matters most to you when choosing technology?
+            - [DEMO: Branch — Consumer path]
+          - `Q44` **BUSINESS_FUNCTION** (single_select, required) — Which business function do you mainly use technology for?
+            - [DEMO: Branch — Business path]
+          - `Q46` **WORK_LIFE_BLEND** (single_select, required) — How well do your personal and work technology fit together?
+            - [DEMO: Branch — Both path (combined section)]
+- **05_Brand_Selection**
+  - Page `p_brand_unaided` — Unaided awareness
+    - `Q47` **UNAIDED** (text_list) — Which technology brands come to mind first? List up to five.
+      - [DEMO: Text list] Unaided awareness; UNAIDED_b1…b5.
+  - Page `p_brand_aware` — Aided awareness
+    - `Q48` **BRANDS_AWARE** (multi_select, required, randomized) — Which of these technology brands have you heard of?
+      - [DEMO: Multi-select, 12 brands, randomized, exclusive None] The awareness universe for every later brand list.
+  - Page `p_brand_used` — Brands used & trusted
+    - `Q49` **BRANDS_USED** (multi_select, required, display logic, mask) — Which of these brands have you personally used in the past 12 months?
+      - [DEMO: Option masking (display only aware brands)] The full brand list is programmed here and masked to the BRANDS_AWARE selection, so the loops over this question know every code they can meet. THIS IS THE LOOP SOURCE for LOOP_001 (selected), LOOP_003 (not selected) and the List Fill.
+    - `Q50` **BRANDS_TRUSTED** (multi_select, required, display logic, carry-forward) — Which 2 to 5 of these brands do you trust the most?
+      - [DEMO: Min/max selection validation + display logic on a calculation] Select 2–5; shown only when N_AWARE ≥ 2.
+  - Page `p_brand_fav` — Favourite brand
+    - `Q51` **FAV_BRAND** (single_select, required, display logic, carry-forward) — You said you have used {{BRANDS_USED.labels|and}}. Which is your favourite?
+      - [DEMO: Multi-select piping with a format modifier] {{BRANDS_USED.labels|and}} → 'Apple, Google and Samsung'.
+    - `Q52` **FAV_WHY** (long_text, required, display logic, validation) — Why is {{FAV_BRAND}} your favourite?
+      - [DEMO: Basic piping + open end] {{FAV_BRAND}} pipes the selected label.
+  - Page `p_brand_grids` — Brand grids
+    - `Q53` **BRAND_AGREE** (matrix_single, required, display logic, carry-forward) — How much do you agree that each brand offers good value for money?
+      - [DEMO: Carry-forward into matrix rows] Rows = used brands, 5-point agreement scale. BRAND_AGREE_<code>.
+    - `Q54` **BRAND_ASSOC** (matrix_multi, display logic, carry-forward) — Which of these words do you associate with each brand? (select all that apply)
+      - [DEMO: Matrix multi-select] BRAND_ASSOC_<brand>_<attr> 0/1 flags.
+  - Page `p_brand_grids_2` — Brand grids (2)
+    - `Q55` **YEARS_USED** (matrix_numeric, required, display logic, carry-forward) — For how many years have you used each brand?
+      - [DEMO: Matrix numeric + custom-logic 'invalid' detection] A script flags any brand whose years exceed the respondent's AGE — those brands feed LOOP_005 (invalid-item loop).
+    - `Q56` **CHANNEL** (matrix_dropdown, required, display logic, carry-forward) — Where did you most recently buy from each brand?
+      - [DEMO: Matrix dropdown]
+    - `Q57` **ONE_WORD** (matrix_text, display logic, carry-forward) — In one word, how would you describe each brand?
+      - [DEMO: Matrix text]
+  - Page `p_brand_detail_gate` — Detail gate
+    - `Q58` **DETAIL_INTEREST** (single_select, required, skip logic) — Would you be willing to answer a few more detailed questions about the brands you use?
+      - [DEMO: Skip logic → block] 'No' skips the List Fill, list-operation and loop blocks and lands on 11_Loop_Count.
+    - `H3` **LF_SOURCE_LIST** (hidden) — Hidden List Fill candidate list (trusted ∩ used, written by script)
+      - [DEMO: Hidden List Fill source] A hidden multi-code question whose answer is set by the 'Build hidden list source' script (used ∩ trusted). LF_TRUST reads it as its candidate list.
+- **06_List_Fill**
+  - Page `p_lf_destinations` — List Fill destinations (hidden)
+    - `H4` **LF_BRAND_1** (hidden) — List Fill destination 1 (allocated brand code)
+      - [DEMO: List Fill destination] Receives position 1 of LF_BRAND_EVAL as its answer.
+    - `H5` **LF_BRAND_2** (hidden) — List Fill destination 2 (allocated brand code)
+      - [DEMO: List Fill destination] Position 2; blank when only one item was allocated.
+    - `H6` **LF_TOPIC** (hidden) — Randomly assigned deep-dive topic
+      - [DEMO: Random List Fill destination] LF_TOPIC assigns one of six topics at random (no sample tracking).
+  - Page `p_lf_eval` — List Fill evaluation
+    - `Q59` **LF_SAT_1** (single_select, required, display logic) — Thinking about {{LISTFILL_BRAND_EVAL_1}}, how satisfied are you overall?
+      - [DEMO: List Fill piping] {{LISTFILL_BRAND_EVAL_1}} is the label allocated to position 1 (priority → cap → quota → random fallback).
+    - `Q60` **LF_SAT_2** (single_select, required, display logic) — And {{LISTFILL_BRAND_EVAL_2}} — how satisfied are you overall?
+      - [DEMO: List Fill count-aware display] Only when two items were allocated (count = min(2, N_BRANDS_USED)).
+    - `Q61` **TOPIC_OPEN** (long_text, required, display logic) — You have been assigned the topic “{{LISTFILL_TOPIC_1}}”. What is the one thing technology brands should improv
+      - [DEMO: Randomized List Fill piping] The topic is allocated from a static list with method 'random'.
+    - `Q62` **TRUST_PICK** (single_select, required, display logic) — Of the brands you both use and trust, {{LISTFILL_TRUST_1}} was chosen for you. Would you buy from {{LISTFILL_T
+      - [DEMO: List Fill from a hidden source] LF_TRUST's candidates come from the hidden LF_SOURCE_LIST question a script filled.
+  - 🔁 **LOOP_LF — for each List-Fill-allocated brand** — loopVar `lfbrand`, source {"kind":"listFill","listFillId":"lf_brand_eval"}, references [Tier, Segment]
+    - Page `p_lf_loop` — List Fill loop page
+      - `Q63` **LF_NPS** (nps, required) — How likely are you to recommend {{loop.label}} ({{loop.Tier}} tier, {{loop.Segment}} segment)?
+        - [DEMO: Loop over List Fill items + loop-scoped references] LOOP_LF iterates the allocated brands; Tier/Segment exist ONLY in LOOP_LF's table — LOOP_001 has different columns for the same brands.
+      - `Q64` **LF_WHY** (long_text) — What is the main reason for your score for {{loop.label}}?
+        - [DEMO: Open end inside a List Fill loop]
+- **07_List_Operations**
+  - Page `p_listops_1` — List operations (1)
+    - `Q65` **CURIOUS_BRAND** (single_select, required, display logic, list ops) — Of the brands you know but have not used, which are you most curious about?
+      - [DEMO: List operation — DIFFERENCE] The full brand universe is programmed, then the pipeline keeps aware(selected) − used(selected). Shown only when the result is non-empty (N_AWARE_NOT_USED ≥ 1).
+    - `Q66` **CONSIDER** (multi_select, display logic, list ops) — Which of these brands would you consider for your next purchase?
+      - [DEMO: List operation — UNION + DEDUPE] used ∪ trusted, duplicates removed.
+  - Page `p_listops_2` — List operations (2)
+    - `Q67` **CORE_BRAND** (single_select, required, display logic, list ops) — Which of the brands you both use and trust would you call your core brand?
+      - [DEMO: List operation — INTERSECT] used ∩ trusted.
+    - `Q68` **NEVER_SEEN** (multi_select, display logic, list ops) — Which of these brands had you never heard of before today?
+      - [DEMO: List operation — REMAINING] Keeps the brands that appear in no source list — here, everything the respondent did not tick in BRANDS_AWARE.
+  - Page `p_listops_3` — List operations (3)
+    - `Q69` **SORTED_PICK** (single_select, required, display logic, carry-forward) — From this alphabetical list of the brands you use, which has the best customer service?
+      - [DEMO: Ordered list] settings.optionOrder = 'az' sorts the carried list; the programmed order is never modified.
+    - `Q70` **RANDOM_THREE** (single_select, required, display logic, carry-forward, randomized) — Of these three brands (chosen at random from those you know), which would you research first?
+      - [DEMO: Randomized list — pick N] Shuffle and present only 3 of the aware brands.
+    - `Q71` **MASKED_SET** (multi_select, display logic, mask) — Which of these brands would you recommend to a friend?
+      - [DEMO: Nested set expression (mask)] (used ∪ consider) ∩ aware — brackets the sequential pipeline cannot express.
+    - `Q72` **PRIORITIZED_PICK** (single_select, required, display logic, carry-forward) — Which brand would you buy from tomorrow?
+      - [DEMO: List logic — PRIORITIZE] The favourite brand floats to the top of the carried list.
+- **08_Loop_Demo — LOOP_001 (FOR EACH selected brand in BRANDS_USED)**
+  - 🔁 **LOOP_001 — selected brands** — loopVar `brand`, source {"kind":"question","questionId":"q_used","filter":"selected"}, order {"kind":"selection"}, count {"mode":"max","value":{"kind":"variable","ref":"LOOP_CAP"}}, references [Brand_Nickname, Product_ID, Client_Code, Category, Internal_Name, Region, Product_Type]
+    - **Block 2 — repeated per brand**
+      - Page `p_l1_a` — Brand evaluation (a)
+        - `Q73` **L1_FAMILIAR** (single_select, required) — How familiar are you with {{CURRENT_ITEM}}?
+          - [DEMO: LOOP_001 — CURRENT_ITEM piping] Repeats once per brand selected in BRANDS_USED; answers export as L1_FAMILIAR_1…N with LOOP_BRAND_ITEM_n_CODE as the join key.
+        - `Q74` **L1_FREQ** (single_select, required) — How frequently do you use {{CURRENT_ITEM}} products or services? (brand {{LOOP_INDEX}} of {{LOOP_COUNT}})
+          - [DEMO: LOOP_INDEX / LOOP_COUNT piping]
+        - `Q75` **L1_SAT** (slider, required) — Please rate {{CURRENT_ITEM.Brand_Nickname}}, product {{CURRENT_ITEM.Product_ID}}, in the {{CURRENT_ITEM.Catego
+          - [DEMO: LOOP REFERENCES — several columns in one sentence] Brand_Nickname, Product_ID and Category are read from LOOP_001's own reference table.
+      - Page `p_l1_b` — Brand evaluation (b)
+        - `Q76` **L1_WHY** (long_text, required) — Why do you use {{CURRENT_ITEM}}?
+          - [DEMO: Open end inside a loop] Exported per iteration.
+        - `Q77` **L1_NPS** (nps, required) — How likely are you to buy from {{CURRENT_ITEM}} again?
+        - `Q78` **L1_ATTR** (matrix_single, required) — As a {{CURRENT_ITEM.Product_Type}} company headquartered in {{CURRENT_ITEM.Region}}, how does {{CURRENT_ITEM}}
+          - [DEMO: References Product_Type + Region in question text; matrix inside a loop]
+      - Page `p_l1_c` — Brand evaluation (c)
+        - `Q79` **L1_PHONE_OS_SAT** (single_select, required, display logic) — How satisfied are you with the software updates on your {{CURRENT_ITEM}} smartphone?
+          - [DEMO: Display logic on a loop reference] loop.Category = 'Smartphone' — only smartphone brands see this iteration question.
+        - `Q80` **L1_SPEND_RATE** (slider, required) — Earlier you said you spend about {{MONTHLY_SPEND}} per month on technology. Given that, how good value is {{CU
+          - [DEMO §41: Question piping + loop piping + calculated/previous answer in one text] MONTHLY_SPEND (earlier answer), CURRENT_ITEM.* (loop references), FAV_BRAND (earlier answer).
+        - `Q81` **L1_RECOMMEND** (single_select, required) — Would you recommend {{CURRENT_ITEM}} to a friend?
+        - `Q82` **L1_CATEGORY** (single_select, auto-punch) — Category classification for {{CURRENT_ITEM}} (auto-populated from the loop's reference data — read only)
+          - [DEMO: Auto-punch from loop context / reference values + read-only field] Three punch rules keyed on loop.Category; the respondent sees the result but cannot change it.
+      - 🔁 **LOOP_002 — features (nested inside LOOP_001)** — loopVar `feature`, source {"kind":"static","items":[{"code":"battery","label":"Battery life"},{"code":"camera","label":"Camera"},{"code":"price","label":"Price"},{"code":"design","label":"Design"},{"code":"support","label":"Customer support"}]}, order {"kind":"priority","column":"Weight","direction":"desc"}, count {"mode":"max","value":3}, references [Feature_Group, Weight]
+        - Page `p_l2` — Feature rating
+          - `Q83` **L2_FEATURE** (slider, required) — Rate {{brand.label}} on {{feature.label}} ({{feature.Feature_Group}} group).
+            - [DEMO: NESTED LOOP piping] {{brand.label}} = outer item, {{feature.label}} = inner item, {{feature.Feature_Group}} = inner loop's reference. Exports as L2_FEATURE_<outer>_<inner>.
+          - `Q84` **L2_REASON** (single_select, required) — Is {{loop.label}} a reason you chose {{brand.Brand_Nickname}}?
+            - [DEMO: Nested loop — innermost via {{loop.*}}, outer via its loopVar] References of the outer loop (Brand_Nickname) and inner loop do not collide.
+- **09_Loop_Not_Selected — LOOP_003 (FOR EACH NOT-selected brand)**
+  - 🔁 **LOOP_003 — brands aware of but not used** — loopVar `nonuser`, source {"kind":"question","questionId":"q_used","filter":"notSelected"}, order {"kind":"random"}, count {"mode":"max","value":3}, references [Reason_Prompt]
+    - **Block 3 — repeated per non-used brand**
+      - Page `p_l3` — Non-user evaluation
+        - `Q85` **L3_WHY_NOT** (multi_select, required) — Why haven't you used {{CURRENT_ITEM}} in the past year?
+          - [DEMO: LOOP_003 — FOR EACH NOT-SELECTED brand] Source filter 'notSelected' on BRANDS_USED (aware but not used); at most 3 iterations in random order.
+        - `Q86` **L3_TRY** (single_select, required) — How likely are you to try {{CURRENT_ITEM}} in the next 12 months?
+        - `Q87` **L3_CONVINCE** (long_text) — {{loop.Reason_Prompt}}
+          - [DEMO: A whole question text from a reference column] LOOP_003's table carries a per-brand prompt (Reason_Prompt).
+- **10_Loop_Invalid — LOOP_004 (filter 'invalid') + LOOP_005 (script-detected invalid answers)**
+  - 🔁 **LOOP_004 — brands flagged invalid (market exit)** — loopVar `exited`, source {"kind":"question","questionId":"q_aware","filter":"invalid"}, references [Market_Status, Exit_Year]
+    - Page `p_l4` — Market-exit awareness
+      - `Q88` **L4_EXIT_AWARE** (single_select, required) — {{CURRENT_ITEM}} has stopped selling consumer devices in several markets since {{loop.Exit_Year}}. Were you aw
+        - [DEMO: LOOP_004 — filter 'invalid'] Items are invalid when LOOP_004's invalidIf holds: loop.Market_Status = 'exited' (its own reference column). Here that marks Huawei and LG.
+      - `Q89` **L4_EXIT_EFFECT** (single_select, required) — Does that change how you feel about {{CURRENT_ITEM}}?
+  - 🔁 **LOOP_005 — implausible years-used entries (set by script)** — loopVar `badyears`, source {"kind":"variable","ref":"INVALID_BRANDS"}, count {"mode":"max","value":3}, references [Brand]
+    - Page `p_l5` — Correct an implausible entry
+      - `Q90` **L5_FIX_YEARS** (numeric, required, validation) — You entered {{loop.label}} years for {{loop.Brand}}, which is more than your age ({{AGE}}). Please re-enter th
+        - [DEMO: LOOP_005 — invalid items defined by custom logic] The years-used script writes INVALID_BRANDS as [{code, label: years}]; the loop source is that variable ({{loop.label}} = years entered) and the loop's own reference table supplies the Brand name.
+- **11_Loop_Count — LOOP_006 (FOR i = 1 TO N_PRODUCTS)**
+  - Page `p_l6_count` — How many products?
+    - `Q91` **N_PRODUCTS** (numeric, required, validation) — How many individual technology products would you like to tell us about in detail? (1–5)
+      - [DEMO: LOOP_006 — FOR i = 1 TO N_PRODUCTS] The loop's source is {kind:'count', count:{kind:'question', ref:'q_n_products'}}: answering 5 runs the block five times.
+  - 🔁 **LOOP_006 — runs N_PRODUCTS times** — loopVar `product`, source {"kind":"count","count":{"kind":"question","ref":"q_n_products"}}, count {"mode":"max","value":5}
+    - Page `p_l6` — Product detail
+      - `Q92` **L6_TYPE** (dropdown, required) — Product {{LOOP_INDEX}} of {{LOOP_COUNT}}: what type of product is it?
+        - [DEMO: LOOP_INDEX in a count loop]
+      - `Q93` **L6_NAME** (open_text, required) — What is the brand and model of product {{LOOP_INDEX}}?
+      - `Q94` **L6_PRICE** (numeric, required) — Roughly how much did product {{LOOP_INDEX}} cost?
+      - `Q95` **L6_SAT** (slider, required) — How satisfied are you with product {{LOOP_INDEX}}?
+- **12_Randomization**
+  - Page `p_rand_1` — Randomized options
+    - `Q96` **RAND_ANCHOR** (multi_select, required, randomized) — Which of these features do you use on your phone at least weekly?
+      - [DEMO: Randomized options with anchors] 10 shuffled options; None/Other anchored to the bottom.
+    - `Q97` **RAND_ROTATE** (single_select, required, randomized) — Which of these payment methods do you use most often?
+      - [DEMO: Rotation] method 'rotate' — order preserved, start point varies per respondent.
+  - Page `p_rand_2` — Randomized rows & picks
+    - `Q98` **RAND_HALF** (matrix_single, required, randomized) — How much do you agree with each statement?
+      - [DEMO: reverse_half] Half the sample sees the statements in reverse order.
+    - `Q99` **RAND_PICK** (multi_select, randomized) — Which of these five features would you pay extra for?
+      - [DEMO: Randomize N from a list] pick 5 of 12.
+  - Page `p_rand_3` — Conditional & grouped randomization
+    - `Q100` **RAND_COND** (single_select, required, randomized) — Which streaming service would you keep if you could keep only one?
+      - [DEMO: Conditional randomization] Options shuffle only for respondents under 35; everyone else sees the programmed order.
+    - `Q101` **RAND_GROUPS** (single_select, required, randomized) — Which of these best describes your attitude to new technology?
+      - [DEMO: Grouped randomization] Shuffle within groups; groups stay in place.
+  - Page `p_rand_experiment` — Message experiment
+    - `Q102` **MESSAGE_ARM** (experiment) — Please read the following message.
+      - [DEMO: Randomized experiment arms] Each respondent is assigned A or B (seeded); MESSAGE_ARM stores the arm and drives the next question's piping and display.
+    - `Q103` **MESSAGE_REACT** (single_select, required, display logic) — How convincing did you find the message you just read?
+  - 🎲 **Randomized blocks — show 2 of 3** (show 2)
+    - **12a_Attitude_Privacy**
+      - Page `p_att_privacy` — Attitudes — privacy
+        - `Q104` **ATT_PRIVACY** (single_select, required) — How concerned are you about how technology companies use your personal data?
+          - [DEMO: Randomized block A] One of three blocks shown in random order (2 of 3).
+    - **12b_Attitude_Sustainability**
+      - Page `p_att_sustain` — Attitudes — sustainability
+        - `Q105` **ATT_SUSTAIN** (single_select, required) — How important is a brand's environmental record when you buy technology?
+          - [DEMO: Randomized block B]
+    - **12c_Attitude_AI**
+      - Page `p_att_ai` — Attitudes — AI
+        - `Q106` **ATT_AI** (single_select, required) — How comfortable are you with AI features in your everyday devices?
+          - [DEMO: Randomized block C]
+- **13_Calculations**
+  - Page `p_calc_summary` — Calculated summary
+    - `Q107` **CALC_SUMMARY** (composite) — Here is a summary of what you told us (calculated, read only).
+      - [DEMO: Read-only calculated fields] Every column has an `expression`; the cells are computed live and are never editable.
+    - `Q108` **CALC_CONFIRM** (single_select, required) — Your total technology spend over the last 12 months works out to about {{calc.TOTAL_SPEND_12M}}, and your aver
+      - [DEMO: Calculated-variable piping] {{calc.TOTAL_SPEND_12M}} and {{calc.AVG_BRAND_RATING}} come from the calculations list.
+    - `Q109` **CORRECTED_TOTAL** (numeric, required, display logic, validation) — What should the 12-month total be?
+      - [DEMO: Conditional required] Required only when the respondent disagreed with the calculation.
+    - `H8` **HIDDEN_SCORE** (calculated) — Hidden score
+      - [DEMO: Hidden score] Mean of the loop ratings L1_SAT_1…N (positional loop variables).
+  - Page `p_calc_segments` — Segments & auto-punch
+    - `Q110` **SCORE_BAND** (single_select, required) — Based on your answers we would describe you as a “{{calc.TECH_SEGMENT}}” (engagement score {{calc.ENGAGEMENT_S
+      - [DEMO: Weighted score + text segment] ENGAGEMENT_SCORE is a weighted() calculation; TECH_SEGMENT is an if() chain over it.
+    - `Q111` **AUTO_SEGMENT** (single_select, auto-punch) — Spend segment (auto-populated, read only)
+      - [DEMO: Auto-punch from a previous numeric answer] Three punch rules with `when` conditions on MONTHLY_SPEND.
+    - `Q112` **FAV_BRAND_MIRROR** (single_select, display logic, auto-punch) — Favourite brand (auto-populated from your earlier answer)
+      - [DEMO: Auto-punch by reference] The favourite brand's code is copied into this question (same codes, no mapping).
+    - `Q113` **OS_FAMILY** (single_select, display logic, auto-punch) — Ecosystem (auto-populated with a mapped value)
+      - [DEMO: Auto-punch with a mapping] FAV_BRAND code → ecosystem code (Apple → ios, Samsung → android, …).
+    - `Q114` **LF_BRAND_MIRROR** (single_select, display logic, auto-punch) — Allocated evaluation brand (auto-populated from List Fill)
+      - [DEMO: Auto-punch from a List Fill result] Reads the hidden destination LF_BRAND_1.
+    - `Q115` **HEAVY_USER_FLAG** (single_select, auto-punch) — Heavy digital user (auto-populated from a calculation)
+      - [DEMO: Auto-punch from a calculation] when ENGAGEMENT_SCORE ≥ 60.
+- **14_Validation**
+  - Page `p_val_1` — Validation (1)
+    - `Q116` **TOP3_CONCERNS** (multi_select, required) — Select exactly three concerns you have about technology.
+      - [DEMO: Exact selection count] minSelections = maxSelections = 3.
+    - `Q117` **POSTCODE** (open_text, required, validation) — What is your postal / ZIP code?
+      - [DEMO: Regex validation]
+    - `Q118` **DEVICES_COUNT** (numeric, required, validation) — How many connected devices are in your home in total?
+      - [DEMO: Logical validation against a count()] value ≥ count(DEVICES).
+  - Page `p_val_2` — Validation (2)
+    - `Q119` **FEEDBACK_SHORT** (open_text, required, validation) — In a few words, what is the best thing about your main device?
+      - [DEMO: Text length validation]
+    - `Q120` **UPGRADE_WINDOW** (composite) — When do you plan your next upgrade window?
+      - [DEMO: Multi-column date pair + custom JavaScript validation] The on_submit script rejects To < From.
+- **15_Conjoint**
+  - Page `p_cbc` — Conjoint *(conditional)*
+    - `INFO2` **INFO_CONJOINT** (html) — Next you will see 9 sets of three smartphone offers. In each set, choose the one you would buy — or none of th
+    - `Q122` **CBC** (conjoint_task, required, display logic) — Which of these would you choose?
+      - [DEMO: CONJOINT] Renders the tasks of design 'design_conjoint_phone' (4 attributes, 3 alternatives + None, 8 tasks + 1 holdout, 2 versions, seed 20260901). Shown only to decision-makers (PURCHASE_ROLE 1–2).
+  - Page `p_cbc_follow` — Conjoint follow-up
+    - `Q123` **CBC_DRIVER** (single_select, required, display logic) — Which single attribute mattered most in the choices you just made?
+    - `Q124` **CBC_WHY** (long_text, display logic) — Why did {{CBC_DRIVER}} matter most?
+      - [DEMO: Piping a single-select label into an open end]
+- **16_MaxDiff_and_Custom_Design**
+  - Page `p_maxdiff` — MaxDiff
+    - `Q125` **MD** (maxdiff_task, required) — For each set, pick the feature that matters MOST and the one that matters LEAST when buying a phone.
+      - [DEMO: MAXDIFF] 12 items, 5 per task, 9 tasks, 2 versions (design_maxdiff_features, seed 20260902).
+  - Page `p_maxdiff_follow` — MaxDiff follow-up
+    - `Q126` **MD_TOP3** (ranking, required) — Overall, rank the three features that matter most to you.
+      - [DEMO: MaxDiff follow-up with the same item list]
+  - 🔁 **LOOP_007 — custom design rows (statement rotation)** — loopVar `task`, source {"kind":"design","designId":"design_custom_statements"}, count {"mode":"max","value":3}, references [Statement, Component, Level]
+    - Page `p_cd` — Statement task
+      - `Q127` **CD_AGREE** (single_select, required) — Statement: “{{loop.Statement}}” ({{loop.Component}} · intensity level {{loop.Level}}). How much do you agree?
+        - [DEMO: CUSTOM DESIGN loop] LOOP_007 iterates the rows of design_custom_statements; the statement text, component and level are carried as LOOP_007 references keyed by task number.
+      - `Q128` **CD_WHY** (long_text, display logic) — Why do you feel that way about “{{loop.Statement}}”?
+        - [DEMO: Display logic on a numeric loop reference] Only for level-3 statements.
+- **17_Specialised_Question_Types**
+  - Page `p_spec_grid` — Multi-column grid
+    - `Q129` **PRODGRID** (composite, required) — For each product you own, tell us a bit more.
+      - [DEMO §40: Complex multi-column question] One logical question, five response types (single / multi / dropdown / text / numeric), each column its own variable stem and validation; rows shown only for owned devices.
+    - `Q130` **TIMESPLIT** (custom_table, required) — Split 100% of your weekly screen time across devices, for weekdays and weekends.
+      - [DEMO: Constant-sum grid] Each row must total 100 (settings.rowSum + sumTarget).
+  - Page `p_spec_repeat` — Repeating group
+    - `Q131` **SUBSCRIPTION** (repeating_group) — List the paid digital subscriptions you have (add as many as apply).
+      - [DEMO: Repeating group] Respondent-driven repetition (1–8 entries).
+  - Page `p_spec_media` — Images & media
+    - `Q132` **HOTSPOT** (hotspot) — Click the area of this device that you touch most often.
+      - [DEMO: Hotspot] Stores click coordinates HOTSPOT_1_X/Y.
+    - `Q133` **ANNOTATE** (annotation) — Mark anything you would change about this concept design (pin + comment, or draw).
+      - [DEMO: Annotation] Pins and strokes on a stimulus image.
+    - `Q134` **COLOUR_RANK** (image_ranking, required) — Rank these colour finishes from most to least appealing.
+      - [DEMO: Image ranking]
+    - `Q135` **RECEIPT** (upload) — Optionally, upload a photo or screenshot of your most recent technology receipt.
+      - [DEMO: File upload] Optional; RECEIPT_URL / RECEIPT_NAME / RECEIPT_SIZE.
+    - `Q136` **AD_REACTION** (media_timeline, display logic) — Watch this short clip and tap a reaction whenever you feel one.
+      - [DEMO: Media timeline] Timestamped reactions (public-domain sample clip); shown to respondents online ≥ 2 h/day.
+  - Page `p_spec_variants` — Adaptive & variants
+    - `Q137` **ADAPTIVE_Q** (single_select, required) — Which of these would most improve your experience with technology?
+      - [DEMO: Adaptive question] Text and options change with the first matching condition (business users / heavy spenders).
+    - `Q138` **SWIPE_STATEMENT** (single_select, required) — “I would pay more for a device that is easy to repair.”
+      - [DEMO: Presentation variant] Same single_select response model, swipe presentation.
+    - `Q139` **SURVEY_STARS** (single_select, required) — How would you rate the design of the products you saw in this survey?
+      - [DEMO: Star-rating variant]
+- **18_Open_Ends**
+  - Page `p_oe_1` — Open ends (1)
+    - `Q140` **OE_IMPROVE** (long_text, required) — What would most improve your experience with your main device?
+    - `Q141` **OE_BRAND_PERCEPTION** (long_text, display logic) — How would you describe {{FAV_BRAND}} to someone who has never heard of it?
+      - [DEMO: Piped, conditional open end]
+    - `Q142` **OE_DETRACTOR** (long_text, required, display logic) — You gave your main device a {{NPS_DEVICE}} out of 10. What would it take to make that a 9 or 10?
+      - [DEMO: Conditional open end] Detractors only (NPS ≤ 6); pipes the numeric answer.
+  - Page `p_oe_2` — Open ends (2)
+    - `Q143` **OE_RANK_FIRST** (long_text, display logic) — You ranked “{{PRIORITY_RANK.first}}” as your top priority. Why?
+      - [DEMO: Ranking piping] {{PRIORITY_RANK.first}} pipes the #1-ranked label.
+    - `Q144` **OE_SUGGEST** (open_text, validation) — One suggestion for technology brands in 2026:
+    - `Q145` **OE_FINANCE** (long_text, display logic) — How has digital banking changed the way you manage money?
+- **19_Final**
+  - Page `p_final` — Final questions
+    - `Q146` **SURVEY_SAT** (single_select, required) — How was your experience completing this survey?
+    - `Q147` **RECONTACT** (single_select, required) — Would you be willing to be re-contacted for a follow-up interview?
+    - `Q148` **RECONTACT_EMAIL** (open_text, display logic, validation) — Please confirm the best email address to reach you on.
+      - [DEMO: Conditional required + email validation]
+    - `Q149` **FINAL_COMMENTS** (long_text) — Any final comments?
+- 🏁 End `end_complete` (complete)
+- 🏁 End `end_screened` (screened)
+- 🏁 End `end_quota_full` (quota_full)
+
+## Calculations
+
+- `N_AWARE` = `count(BRANDS_AWARE) - BRANDS_AWARE_98` (on_change) — [DEMO: Number of selected options] Excludes the exclusive None code.
+- `N_BRANDS_USED` = `count(BRANDS_USED)` (on_change)
+- `N_AWARE_NOT_USED` = `N_AWARE - N_BRANDS_USED` (on_change) — [DEMO: Calculation on calculations] Reads two other calculated variables.
+- `N_FIN_PRODUCTS` = `count(FIN_PRODUCTS) - FIN_PRODUCTS_98` (on_page_submit)
+- `TOTAL_SPEND_12M` = `sum(SPEND_12M_*)` (on_page_submit) — [DEMO: Sum with wildcard] Q_phone + Q_computer + Q_wearable + Q_accessory.
+- `ANNUAL_SPEND` = `MONTHLY_SPEND * 12` (on_page_submit)
+- `PCT_SUBSCRIPTIONS` = `round(pct(SUB_SPEND, MONTHLY_SPEND), 1)` (on_page_submit) — [DEMO: Percentage calculation]
+- `AVG_BRAND_RATING` = `round(avg(L1_SAT_*), 1)` (on_page_submit) — [DEMO: Average of loop-iteration answers] L1_SAT_1…N are the positional loop variables.
+- `ENGAGEMENT_SCORE` = `round(weighted(min(HOURS_ONLINE, 10) * 10, 0.4, count(APPS) * 100 / 15, 0.3, N_BRANDS_USED * 100 / 12, 0.3), 0)` (on_page_submit) — [DEMO: Weighted score] 40% hours online, 30% app breadth, 30% brand breadth.
+- `TECH_SEGMENT` = `if(ENGAGEMENT_SCORE >= 70, 'Digital Native', if(ENGAGEMENT_SCORE >= 40, 'Connected Mainstream', 'Selective User'))` (on_page_submit) — [DEMO: Text segment from a score]
+- `NPS_SEGMENT` = `if(NPS_DEVICE >= 9, 'promoter', if(NPS_DEVICE >= 7, 'passive', 'detractor'))` (on_page_submit)
+- `LF_EVAL_COUNT` = `min(2, N_BRANDS_USED)` (on_change) — [DEMO: Dynamic List Fill count] LF_BRAND_EVAL's count reads this variable.
+- `TOTAL_SCORE` = `sum(L1_NPS_*)` (on_page_submit) — [DEMO: Total score]
+
+## Quotas
+
+- **Gender 50/50** (hard, base 300): Male 50% = 50%; Female 50% = 50%
+- **Age groups** (hard, base 300): 18–24 = 20% = 20%; 25–34 = 30% = 30%; 35–44 = 25% = 25%; 45+ = 25% = 25%
+- **Gender × Age (combined cells)** (hard): Male 18-24 = 30; Male 25-34 = 45; Male 35-44 = 38; Male 45+ = 37; Female 18-24 = 30; Female 25-34 = 45; Female 35-44 = 37; Female 45+ = 38
+- **Soft quota — North America (flag only)** (soft, base 300): US + Canada ≤ 60% = 60%
+
+## List Fills
+
+- **BRAND_EVAL** — Brand evaluation allocation (priority → cap → quota → random fallback)
+  - source {"kind":"question","questionId":"q_used","take":"selected"}, count {"kind":"calculation","ref":"LF_EVAL_COUNT"}, method priority_quota, after maximum random_fallback, fallback random_eligible
+  - options: Apple p1 max 150 target 150; Samsung p2 max 75 target 75; Google p3 max 50 target 50; Xiaomi p4; OnePlus p5; Sony; Microsoft; Amazon; Huawei; Lenovo; Dell; LG
+  - destinations: h_lf_brand_1@1, h_lf_brand_2@2
+- **TOPIC** — Random deep-dive topic (no sample tracking)
+  - source {"kind":"static","items":[{"code":"privacy","label":"privacy"},{"code":"sustainability","label":"sustainability"},{"code":"repairability","label":"repairability"},{"code":"pricing","label":"pricing"},{"code":"customer_service","label":"customer service"},{"code":"innovation","label":"innovation"}]}, count {"kind":"fixed","n":1}, method random, after maximum next_priority, fallback random_eligible
+  - options: 
+  - destinations: h_lf_topic@1
+- **TRUST** — One brand from the hidden used ∩ trusted list
+  - source {"kind":"question","questionId":"h_lf_source","take":"selected"}, count {"kind":"fixed","n":1}, method balanced_random, after maximum next_priority, fallback balanced_eligible
+  - options: Apple target 25; Samsung target 25; Google target 25; Xiaomi target 25; OnePlus target 25; Sony target 25; Microsoft target 25; Amazon target 25; Huawei target 25; Lenovo target 25; Dell target 25; LG target 25
+  - destinations: piping only
+
+## Scripts
+
+- **On load — stamp build tag and log embedded data** — survey / on_load
+- **On change — dynamic spend band text** — question q_monthly_spend / on_change
+- **On submit — build hidden List Fill source (used ∩ trusted)** — page p_brand_used / on_submit
+- **On submit — detect implausible years-used (feeds LOOP_005)** — page p_brand_grids_2 / on_submit
+- **On submit — warranty end must not precede purchase (custom validation)** — page p_demo_dates / on_submit
+- **On submit — upgrade window To ≥ From** — page p_val_2 / on_submit
+- **On submit — loop & reference inspection (LOOP_001 page a)** — page p_l1_a / on_submit
+- **On submit — final page flags** — page p_final / on_submit
+
+## Designs
+
+- **Smartphone CBC 2026** (conjoint, v1, seed 20260901) — 72 rows, columns version, task, alt, is_holdout, Brand tier, Price, Battery life, Warranty, none_option → `designs/conjoint_smartphone-cbc-2026_v1.csv`
+- **Feature importance MaxDiff** (maxdiff, v1, seed 20260902) — 90 rows, columns version, task, position, item_index, item_label → `designs/maxdiff_feature-importance-maxdiff_v1.csv`
+- **Attitude statement rotation** (custom, v1, seed 20260903) — 6 rows, columns version, row, statement, component, level, block, stimulus → `designs/custom_attitude-statement-rotation_v1.csv`

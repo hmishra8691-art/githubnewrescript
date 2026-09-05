@@ -472,7 +472,8 @@ export function Runner({ definition: def, mode, session: initialSession, session
       })));
     }
     telemetryRef.current?.leavePage();
-    const nav = advance(def, state, counts);
+    // name the page being left: a List Fill decided just above may have added steps before it
+    const nav = advance(def, state, counts, { fromPageId: pageStep.pageId });
     setSteps(nav.steps);
     if (nav.done) {
       const endStep = nav.steps[nav.stepIndex];

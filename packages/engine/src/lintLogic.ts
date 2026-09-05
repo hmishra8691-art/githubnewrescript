@@ -16,7 +16,8 @@ import {
 import { getQuestionByCodeOrVar } from "./state.js";
 import { PIPE_TOKEN_RE, parsePipeBody } from "./pipingTokens.js";
 import { describeCycle, detectLogicCycles, orderIndex } from "./dependencies.js";
-import { loopNodes, possibleLoopItems, questionIdsInLoop } from "./loops.js";
+import { loopNodes, loopVariableNames, maxLoopIterations, possibleLoopItems, questionIdsInLoop } from "./loops.js";
+import { listFillVariableNames } from "./listFill.js";
 
 /**
  * Logic configuration linting (reqs §30–31).
@@ -312,6 +313,20 @@ function lintListOps(ops: ListOperation[] | undefined, ctx: Ctx): void {
   });
 }
 
+/** Names a bare `{{NAME}}` pipe can reach besides questions — see lintPiping. */
+function bareNameResolves(def: SurveyDefinition, q: Question, name: string): boolean {
+  if ((def.calculations ?? []).some((c) => c.targetVariable === name)) return true;
+  if ((def.embeddedData ?? []).some((e) => e.name === name)) return true;
+  for (const lf of def.listFills ?? []) {
+    if (listFillVariableNames(lf).some((v) => v.name === name)) return true;
+  }
+  for (const { node } of loopNodes(def)) {
+    if (node.loopVar === name && questionIdsInLoop(node).includes(q.id)) return true;
+    if (loopVariableNames(def, node).some((v) => v.name === name)) return true;
+  }
+  return false;
+}
+
 function lintPiping(text: string | undefined, path: string, ctx: Ctx): void {
   if (!text || !text.includes("{{")) return;
   for (const m of text.matchAll(PIPE_TOKEN_RE)) {
@@ -333,7 +348,17 @@ function lintPiping(text: string | undefined, path: string, ctx: Ctx): void {
     if (t.kind !== "question") continue;
     const src = getQuestionByCodeOrVar(ctx.def, t.ref);
     if (!src) {
-      ctx.push({ level: "error", path, message: `Pipes from “${t.ref}”, which does not exist.` });
+      /*
+       * A bare {{NAME}} that is not a question still resolves at runtime when
+       * NAME is something the flat variable map carries — a calculation, a
+       * List Fill variable (LISTFILL_X_1), a loop variable (LOOP_BRAND_COUNT),
+       * an embedded field — or when it is the loopVar of an enclosing loop
+       * ({{brand.label}} inside a nested loop; lintLoops checks those). Only a
+       * name that resolves nowhere is an error.
+       */
+      if (!bareNameResolves(ctx.def, ctx.q, t.ref)) {
+        ctx.push({ level: "error", path, message: `Pipes from “${t.ref}”, which does not exist.` });
+      }
       continue;
     }
     if ((ctx.order[src.id] ?? 0) > (ctx.order[ctx.q.id] ?? 0)) {
@@ -560,7 +585,8 @@ export function lintLoops(def: SurveyDefinition): LogicIssue[] {
           const known = new Set(items.map((i) => i.code));
           const stray = Object.keys(n.references?.values ?? {}).filter((c) => !known.has(c));
           if (stray.length && n.source.kind !== "variable") push("warning", "references.values", `Loop "${n.loopVar}": reference rows for ${stray.join(", ")} match no item the source produces.`);
-        } else if (n.source.kind === "variable" || (n.source.kind === "count" && typeof n.source.count !== "number")) {
+        } else if (maxLoopIterations(def, n) === null && (n.source.kind === "variable" || (n.source.kind === "count" && typeof n.source.count !== "number"))) {
+          // a literal `count: { mode: "max" }` bounds an open-ended source, and the dictionary declares that many columns
           push("warning", "source", `Loop "${n.loopVar}": its size is not known from the definition, so no positional export columns (Q_1, Q_2, …) can be declared for questions inside it; their answers are stored per iteration and reachable by code.`);
         }
 

@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import { THEME_PRESETS } from "@/lib/defaults";
+import { SURVEY_TEMPLATES, findSurveyTemplate } from "@rescript/templates";
 import {
   SurveyCard, SurveyCardSkeleton, STATUS_META,
   type SurveyRow, type SurveyStats, type Contributor,
@@ -69,6 +70,7 @@ export default function Dashboard() {
   const [title, setTitle] = React.useState("");
   const [code, setCode] = React.useState("");
   const [theme, setTheme] = React.useState<string>("");
+  const [template, setTemplate] = React.useState<string>("");
   const [error, setError] = React.useState<string | null>(null);
   const [deleting, setDeleting] = React.useState<SurveyRow | null>(null);
   const [confirmText, setConfirmText] = React.useState("");
@@ -123,8 +125,17 @@ export default function Dashboard() {
   const create = async () => {
     setError(null);
     const preset = THEME_PRESETS.find((t) => t.name === theme);
-    const body: Record<string, unknown> = { title: title || "Untitled survey", code: code || undefined };
-    if (preset) {
+    const tpl = findSurveyTemplate(template);
+    const body: Record<string, unknown> = { title: title || tpl?.name || "Untitled survey", code: code || undefined };
+    if (tpl) {
+      /*
+       * A survey template is a complete, programmed definition (questions,
+       * flow, loops, List Fills, designs, scripts…). The server re-stamps
+       * meta.id / code / title, so only the content travels.
+       */
+      const built = tpl.build("tmp");
+      body.definition = { ...built, branding: preset ? { ...built.branding, ...preset.branding } : built.branding };
+    } else if (preset) {
       body.definition = {
         meta: { id: "tmp", code: code || "SURVEY", title: title || "Untitled survey", version: "1.0" },
         branding: preset.branding,
@@ -361,9 +372,14 @@ export default function Dashboard() {
               <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Customer Study 2026" /></label>
             <label className="f"><span>Survey code</span>
               <input className="input mono" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} placeholder="STUDY_001" /></label>
-            <label className="f"><span>Template / theme</span>
+            <label className="f"><span>Start from</span>
+              <select className="select" data-testid="new-survey-template" value={template} onChange={(e) => setTemplate(e.target.value)}>
+                <option value="">Blank survey</option>
+                {SURVEY_TEMPLATES.map((t) => <option key={t.key} value={t.key}>{t.name} — {t.description}</option>)}
+              </select></label>
+            <label className="f"><span>Theme</span>
               <select className="select" value={theme} onChange={(e) => setTheme(e.target.value)}>
-                <option value="">Blank</option>
+                <option value="">Default</option>
                 {THEME_PRESETS.map((t) => <option key={t.name} value={t.name}>{t.name} — {t.description}</option>)}
               </select></label>
             <div className="row" style={{ justifyContent: "flex-end" }}>

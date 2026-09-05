@@ -1,0 +1,858 @@
+{
+  "id": "design_conjoint_phone",
+  "kind": "conjoint",
+  "name": "Smartphone CBC 2026",
+  "version": 1,
+  "seed": 20260901,
+  "config": {
+    "attributes": [
+      {
+        "name": "Brand tier",
+        "levels": [
+          "Premium brand",
+          "Mainstream brand",
+          "Value brand"
+        ]
+      },
+      {
+        "name": "Price",
+        "levels": [
+          "$399",
+          "$599",
+          "$799",
+          "$999"
+        ]
+      },
+      {
+        "name": "Battery life",
+        "levels": [
+          "1 day",
+          "2 days",
+          "3 days"
+        ]
+      },
+      {
+        "name": "Warranty",
+        "levels": [
+          "1 year",
+          "2 years",
+          "3 years + accidental damage"
+        ]
+      }
+    ],
+    "tasks": 8,
+    "alternativesPerTask": 3,
+    "noneOption": true,
+    "holdoutTasks": 1,
+    "versions": 2
+  },
+  "file": {
+    "format": "json",
+    "columns": [
+      "version",
+      "task",
+      "alt",
+      "is_holdout",
+      "Brand tier",
+      "Price",
+      "Battery life",
+      "Warranty",
+      "none_option"
+    ],
+    "rows": [
+      {
+        "version": 1,
+        "task": 1,
+        "alt": 1,
+        "is_holdout": 0,
+        "Brand tier": "Premium brand",
+        "Price": "$799",
+        "Battery life": "2 days",
+        "Warranty": "2 years",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 1,
+        "alt": 2,
+        "is_holdout": 0,
+        "Brand tier": "Mainstream brand",
+        "Price": "$599",
+        "Battery life": "1 day",
+        "Warranty": "1 year",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 1,
+        "alt": 3,
+        "is_holdout": 0,
+        "Brand tier": "Value brand",
+        "Price": "$999",
+        "Battery life": "3 days",
+        "Warranty": "3 years + accidental damage",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 1,
+        "alt": 4,
+        "is_holdout": 0,
+        "none_option": 1,
+        "Brand tier": "",
+        "Price": "",
+        "Battery life": "",
+        "Warranty": ""
+      },
+      {
+        "version": 1,
+        "task": 2,
+        "alt": 1,
+        "is_holdout": 0,
+        "Brand tier": "Mainstream brand",
+        "Price": "$399",
+        "Battery life": "2 days",
+        "Warranty": "3 years + accidental damage",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 2,
+        "alt": 2,
+        "is_holdout": 0,
+        "Brand tier": "Premium brand",
+        "Price": "$799",
+        "Battery life": "1 day",
+        "Warranty": "1 year",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 2,
+        "alt": 3,
+        "is_holdout": 0,
+        "Brand tier": "Value brand",
+        "Price": "$399",
+        "Battery life": "3 days",
+        "Warranty": "2 years",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 2,
+        "alt": 4,
+        "is_holdout": 0,
+        "none_option": 1,
+        "Brand tier": "",
+        "Price": "",
+        "Battery life": "",
+        "Warranty": ""
+      },
+      {
+        "version": 1,
+        "task": 3,
+        "alt": 1,
+        "is_holdout": 0,
+        "Brand tier": "Mainstream brand",
+        "Price": "$999",
+        "Battery life": "2 days",
+        "Warranty": "1 year",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 3,
+        "alt": 2,
+        "is_holdout": 0,
+        "Brand tier": "Value brand",
+        "Price": "$599",
+        "Battery life": "1 day",
+        "Warranty": "3 years + accidental damage",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 3,
+        "alt": 3,
+        "is_holdout": 0,
+        "Brand tier": "Premium brand",
+        "Price": "$799",
+        "Battery life": "3 days",
+        "Warranty": "2 years",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 3,
+        "alt": 4,
+        "is_holdout": 0,
+        "none_option": 1,
+        "Brand tier": "",
+        "Price": "",
+        "Battery life": "",
+        "Warranty": ""
+      },
+      {
+        "version": 1,
+        "task": 4,
+        "alt": 1,
+        "is_holdout": 0,
+        "Brand tier": "Value brand",
+        "Price": "$599",
+        "Battery life": "3 days",
+        "Warranty": "2 years",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 4,
+        "alt": 2,
+        "is_holdout": 0,
+        "Brand tier": "Mainstream brand",
+        "Price": "$999",
+        "Battery life": "1 day",
+        "Warranty": "1 year",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 4,
+        "alt": 3,
+        "is_holdout": 0,
+        "Brand tier": "Premium brand",
+        "Price": "$399",
+        "Battery life": "2 days",
+        "Warranty": "3 years + accidental damage",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 4,
+        "alt": 4,
+        "is_holdout": 0,
+        "none_option": 1,
+        "Brand tier": "",
+        "Price": "",
+        "Battery life": "",
+        "Warranty": ""
+      },
+      {
+        "version": 1,
+        "task": 5,
+        "alt": 1,
+        "is_holdout": 0,
+        "Brand tier": "Value brand",
+        "Price": "$599",
+        "Battery life": "2 days",
+        "Warranty": "1 year",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 5,
+        "alt": 2,
+        "is_holdout": 0,
+        "Brand tier": "Premium brand",
+        "Price": "$799",
+        "Battery life": "1 day",
+        "Warranty": "2 years",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 5,
+        "alt": 3,
+        "is_holdout": 0,
+        "Brand tier": "Mainstream brand",
+        "Price": "$399",
+        "Battery life": "3 days",
+        "Warranty": "3 years + accidental damage",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 5,
+        "alt": 4,
+        "is_holdout": 0,
+        "none_option": 1,
+        "Brand tier": "",
+        "Price": "",
+        "Battery life": "",
+        "Warranty": ""
+      },
+      {
+        "version": 1,
+        "task": 6,
+        "alt": 1,
+        "is_holdout": 0,
+        "Brand tier": "Value brand",
+        "Price": "$999",
+        "Battery life": "3 days",
+        "Warranty": "2 years",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 6,
+        "alt": 2,
+        "is_holdout": 0,
+        "Brand tier": "Premium brand",
+        "Price": "$999",
+        "Battery life": "2 days",
+        "Warranty": "3 years + accidental damage",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 6,
+        "alt": 3,
+        "is_holdout": 0,
+        "Brand tier": "Mainstream brand",
+        "Price": "$799",
+        "Battery life": "1 day",
+        "Warranty": "1 year",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 6,
+        "alt": 4,
+        "is_holdout": 0,
+        "none_option": 1,
+        "Brand tier": "",
+        "Price": "",
+        "Battery life": "",
+        "Warranty": ""
+      },
+      {
+        "version": 1,
+        "task": 7,
+        "alt": 1,
+        "is_holdout": 0,
+        "Brand tier": "Value brand",
+        "Price": "$599",
+        "Battery life": "1 day",
+        "Warranty": "3 years + accidental damage",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 7,
+        "alt": 2,
+        "is_holdout": 0,
+        "Brand tier": "Mainstream brand",
+        "Price": "$399",
+        "Battery life": "2 days",
+        "Warranty": "2 years",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 7,
+        "alt": 3,
+        "is_holdout": 0,
+        "Brand tier": "Premium brand",
+        "Price": "$999",
+        "Battery life": "3 days",
+        "Warranty": "1 year",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 7,
+        "alt": 4,
+        "is_holdout": 0,
+        "none_option": 1,
+        "Brand tier": "",
+        "Price": "",
+        "Battery life": "",
+        "Warranty": ""
+      },
+      {
+        "version": 1,
+        "task": 8,
+        "alt": 1,
+        "is_holdout": 0,
+        "Brand tier": "Mainstream brand",
+        "Price": "$799",
+        "Battery life": "3 days",
+        "Warranty": "2 years",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 8,
+        "alt": 2,
+        "is_holdout": 0,
+        "Brand tier": "Premium brand",
+        "Price": "$399",
+        "Battery life": "1 day",
+        "Warranty": "3 years + accidental damage",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 8,
+        "alt": 3,
+        "is_holdout": 0,
+        "Brand tier": "Value brand",
+        "Price": "$599",
+        "Battery life": "2 days",
+        "Warranty": "1 year",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 8,
+        "alt": 4,
+        "is_holdout": 0,
+        "none_option": 1,
+        "Brand tier": "",
+        "Price": "",
+        "Battery life": "",
+        "Warranty": ""
+      },
+      {
+        "version": 1,
+        "task": 9,
+        "alt": 1,
+        "is_holdout": 1,
+        "Brand tier": "Value brand",
+        "Price": "$999",
+        "Battery life": "3 days",
+        "Warranty": "3 years + accidental damage",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 9,
+        "alt": 2,
+        "is_holdout": 1,
+        "Brand tier": "Premium brand",
+        "Price": "$599",
+        "Battery life": "1 day",
+        "Warranty": "1 year",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 9,
+        "alt": 3,
+        "is_holdout": 1,
+        "Brand tier": "Mainstream brand",
+        "Price": "$399",
+        "Battery life": "2 days",
+        "Warranty": "2 years",
+        "none_option": 0
+      },
+      {
+        "version": 1,
+        "task": 9,
+        "alt": 4,
+        "is_holdout": 1,
+        "none_option": 1,
+        "Brand tier": "",
+        "Price": "",
+        "Battery life": "",
+        "Warranty": ""
+      },
+      {
+        "version": 2,
+        "task": 1,
+        "alt": 1,
+        "is_holdout": 0,
+        "Brand tier": "Mainstream brand",
+        "Price": "$799",
+        "Battery life": "2 days",
+        "Warranty": "2 years",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 1,
+        "alt": 2,
+        "is_holdout": 0,
+        "Brand tier": "Value brand",
+        "Price": "$599",
+        "Battery life": "1 day",
+        "Warranty": "1 year",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 1,
+        "alt": 3,
+        "is_holdout": 0,
+        "Brand tier": "Premium brand",
+        "Price": "$799",
+        "Battery life": "3 days",
+        "Warranty": "3 years + accidental damage",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 1,
+        "alt": 4,
+        "is_holdout": 0,
+        "none_option": 1,
+        "Brand tier": "",
+        "Price": "",
+        "Battery life": "",
+        "Warranty": ""
+      },
+      {
+        "version": 2,
+        "task": 2,
+        "alt": 1,
+        "is_holdout": 0,
+        "Brand tier": "Mainstream brand",
+        "Price": "$399",
+        "Battery life": "2 days",
+        "Warranty": "2 years",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 2,
+        "alt": 2,
+        "is_holdout": 0,
+        "Brand tier": "Premium brand",
+        "Price": "$999",
+        "Battery life": "3 days",
+        "Warranty": "1 year",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 2,
+        "alt": 3,
+        "is_holdout": 0,
+        "Brand tier": "Value brand",
+        "Price": "$399",
+        "Battery life": "1 day",
+        "Warranty": "3 years + accidental damage",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 2,
+        "alt": 4,
+        "is_holdout": 0,
+        "none_option": 1,
+        "Brand tier": "",
+        "Price": "",
+        "Battery life": "",
+        "Warranty": ""
+      },
+      {
+        "version": 2,
+        "task": 3,
+        "alt": 1,
+        "is_holdout": 0,
+        "Brand tier": "Premium brand",
+        "Price": "$799",
+        "Battery life": "3 days",
+        "Warranty": "1 year",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 3,
+        "alt": 2,
+        "is_holdout": 0,
+        "Brand tier": "Value brand",
+        "Price": "$999",
+        "Battery life": "2 days",
+        "Warranty": "2 years",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 3,
+        "alt": 3,
+        "is_holdout": 0,
+        "Brand tier": "Mainstream brand",
+        "Price": "$599",
+        "Battery life": "1 day",
+        "Warranty": "3 years + accidental damage",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 3,
+        "alt": 4,
+        "is_holdout": 0,
+        "none_option": 1,
+        "Brand tier": "",
+        "Price": "",
+        "Battery life": "",
+        "Warranty": ""
+      },
+      {
+        "version": 2,
+        "task": 4,
+        "alt": 1,
+        "is_holdout": 0,
+        "Brand tier": "Premium brand",
+        "Price": "$599",
+        "Battery life": "1 day",
+        "Warranty": "3 years + accidental damage",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 4,
+        "alt": 2,
+        "is_holdout": 0,
+        "Brand tier": "Mainstream brand",
+        "Price": "$999",
+        "Battery life": "3 days",
+        "Warranty": "2 years",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 4,
+        "alt": 3,
+        "is_holdout": 0,
+        "Brand tier": "Value brand",
+        "Price": "$799",
+        "Battery life": "2 days",
+        "Warranty": "1 year",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 4,
+        "alt": 4,
+        "is_holdout": 0,
+        "none_option": 1,
+        "Brand tier": "",
+        "Price": "",
+        "Battery life": "",
+        "Warranty": ""
+      },
+      {
+        "version": 2,
+        "task": 5,
+        "alt": 1,
+        "is_holdout": 0,
+        "Brand tier": "Value brand",
+        "Price": "$399",
+        "Battery life": "3 days",
+        "Warranty": "3 years + accidental damage",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 5,
+        "alt": 2,
+        "is_holdout": 0,
+        "Brand tier": "Mainstream brand",
+        "Price": "$399",
+        "Battery life": "1 day",
+        "Warranty": "2 years",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 5,
+        "alt": 3,
+        "is_holdout": 0,
+        "Brand tier": "Premium brand",
+        "Price": "$799",
+        "Battery life": "2 days",
+        "Warranty": "1 year",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 5,
+        "alt": 4,
+        "is_holdout": 0,
+        "none_option": 1,
+        "Brand tier": "",
+        "Price": "",
+        "Battery life": "",
+        "Warranty": ""
+      },
+      {
+        "version": 2,
+        "task": 6,
+        "alt": 1,
+        "is_holdout": 0,
+        "Brand tier": "Value brand",
+        "Price": "$599",
+        "Battery life": "3 days",
+        "Warranty": "3 years + accidental damage",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 6,
+        "alt": 2,
+        "is_holdout": 0,
+        "Brand tier": "Premium brand",
+        "Price": "$999",
+        "Battery life": "2 days",
+        "Warranty": "1 year",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 6,
+        "alt": 3,
+        "is_holdout": 0,
+        "Brand tier": "Mainstream brand",
+        "Price": "$599",
+        "Battery life": "1 day",
+        "Warranty": "2 years",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 6,
+        "alt": 4,
+        "is_holdout": 0,
+        "none_option": 1,
+        "Brand tier": "",
+        "Price": "",
+        "Battery life": "",
+        "Warranty": ""
+      },
+      {
+        "version": 2,
+        "task": 7,
+        "alt": 1,
+        "is_holdout": 0,
+        "Brand tier": "Premium brand",
+        "Price": "$399",
+        "Battery life": "3 days",
+        "Warranty": "1 year",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 7,
+        "alt": 2,
+        "is_holdout": 0,
+        "Brand tier": "Value brand",
+        "Price": "$799",
+        "Battery life": "1 day",
+        "Warranty": "2 years",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 7,
+        "alt": 3,
+        "is_holdout": 0,
+        "Brand tier": "Mainstream brand",
+        "Price": "$999",
+        "Battery life": "2 days",
+        "Warranty": "3 years + accidental damage",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 7,
+        "alt": 4,
+        "is_holdout": 0,
+        "none_option": 1,
+        "Brand tier": "",
+        "Price": "",
+        "Battery life": "",
+        "Warranty": ""
+      },
+      {
+        "version": 2,
+        "task": 8,
+        "alt": 1,
+        "is_holdout": 0,
+        "Brand tier": "Value brand",
+        "Price": "$999",
+        "Battery life": "3 days",
+        "Warranty": "1 year",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 8,
+        "alt": 2,
+        "is_holdout": 0,
+        "Brand tier": "Mainstream brand",
+        "Price": "$799",
+        "Battery life": "2 days",
+        "Warranty": "2 years",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 8,
+        "alt": 3,
+        "is_holdout": 0,
+        "Brand tier": "Premium brand",
+        "Price": "$399",
+        "Battery life": "1 day",
+        "Warranty": "3 years + accidental damage",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 8,
+        "alt": 4,
+        "is_holdout": 0,
+        "none_option": 1,
+        "Brand tier": "",
+        "Price": "",
+        "Battery life": "",
+        "Warranty": ""
+      },
+      {
+        "version": 2,
+        "task": 9,
+        "alt": 1,
+        "is_holdout": 1,
+        "Brand tier": "Mainstream brand",
+        "Price": "$599",
+        "Battery life": "3 days",
+        "Warranty": "2 years",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 9,
+        "alt": 2,
+        "is_holdout": 1,
+        "Brand tier": "Value brand",
+        "Price": "$399",
+        "Battery life": "1 day",
+        "Warranty": "3 years + accidental damage",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 9,
+        "alt": 3,
+        "is_holdout": 1,
+        "Brand tier": "Premium brand",
+        "Price": "$599",
+        "Battery life": "2 days",
+        "Warranty": "1 year",
+        "none_option": 0
+      },
+      {
+        "version": 2,
+        "task": 9,
+        "alt": 4,
+        "is_holdout": 1,
+        "none_option": 1,
+        "Brand tier": "",
+        "Price": "",
+        "Battery life": "",
+        "Warranty": ""
+      }
+    ],
+    "generatedAt": "2026-09-01T00:00:00.000Z"
+  }
+}

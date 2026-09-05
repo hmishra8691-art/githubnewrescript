@@ -316,7 +316,8 @@ function findStepIndexForTarget(
   if (target.kind === "block" || target.kind === "section") {
     for (let i = fromIndex + 1; i < steps.length; i++) {
       const s = steps[i];
-      if (s.kind === "page" && s.sectionPath.includes(target.ref ?? "")) return i;
+      // a block / section is addressed by id (nodePath); the title match is kept for rules written against it
+      if (s.kind === "page" && (s.nodePath.includes(target.ref ?? "") || s.sectionPath.includes(target.ref ?? ""))) return i;
     }
   }
   if (target.kind === "end" || target.kind === "terminate") {
@@ -335,10 +336,23 @@ export function advance(
   def: SurveyDefinition,
   state: ResponseState,
   quotaCounts: QuotaCounts = {},
+  opts: { /** the pageId of the page being submitted, when the caller knows it */ fromPageId?: string } = {},
 ): NavigationResult {
+  /*
+   * Know WHICH page is being left, not just its index. Submitting a page can
+   * change the steps in front of it — a List Fill decided on this submit gives
+   * a listFill-sourced loop its items, a calculation changes a loop's count —
+   * and after that the old index points at a different page. The Runner passes
+   * the page it showed; otherwise the page at the stored index is taken, which
+   * is right whenever nothing has shifted yet. Either way the page is found
+   * again by id, so "next" keeps meaning the page after THIS one.
+   */
+  const leaving = compileFlow(def, state, quotaCounts)[state.stepIndex];
+  const leavingPageId = opts.fromPageId ?? (leaving?.kind === "page" ? leaving.pageId : null);
   runCalculations(def, state, "on_page_submit");
   let steps = compileFlow(def, state, quotaCounts);
-  let idx = Math.min(state.stepIndex, steps.length - 1);
+  const relocated = leavingPageId ? steps.findIndex((s) => s.kind === "page" && s.pageId === leavingPageId) : -1;
+  let idx = relocated >= 0 ? relocated : Math.min(state.stepIndex, steps.length - 1);
   const triggeredSkips: NavigationResult["triggeredSkips"] = [];
 
   const current = steps[idx];
@@ -474,6 +488,9 @@ export function start(
 ): NavigationResult {
   state.stepIndex = -1;
   if (opts.startAt) {
+    // seeded answers stand for pages already submitted, so the values those
+    // submits would have derived (calculations, loop variables) exist too
+    runCalculations(def, state, "on_page_submit");
     const at = findBlockStart(def, state, quotaCounts, opts.startAt);
     if (at < 0) {
       return {
