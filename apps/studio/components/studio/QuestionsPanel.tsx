@@ -12,6 +12,9 @@ import { OptionPreview } from "./OptionPreview";
 import { usePreviewBlock } from "./PreviewBlock";
 import { MediaUrlInput } from "./MediaUrlInput";
 import { AttentionCheckEditor } from "./AttentionCheckEditor";
+import { Icon } from "../ui/Icon";
+import { useCanvas } from "../canvas/CanvasContext";
+import { LiveView } from "../canvas/LiveView";
 
 /** Variants whose stimulus IS `settings.mediaUrl` (their own settings edit it). */
 const MEDIA_OWNING = new Set(["videorating", "videotimeline", "watchtime", "audiorec", "base:media_timeline"]);
@@ -580,6 +583,7 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
 
 export function QuestionEditor({ q }: { q: Question }) {
   const s = useStudio();
+  const mode = useCanvas()?.mode ?? "standard";
   const pendingResequenceNote = React.useRef<number | null>(null);
   React.useEffect(() => {
     const n = pendingResequenceNote.current;
@@ -622,6 +626,13 @@ export function QuestionEditor({ q }: { q: Question }) {
 
   return (
     <div>
+      {/* Two views of ONE question, inside the editor the programmer already
+          has open. Switching changes what is drawn in this card and nothing
+          else — no navigation, no reload, and no second copy of the question:
+          both views mutate the same definition through the same store. */}
+      <QuestionViewSwitch q={q} />
+      {mode === "live" ? <LiveView q={q} /> : (
+      <>
       <div className="row" style={{ marginBottom: 12 }}>
         <label className="f" style={{ width: 90, marginBottom: 0 }}><span>Code</span>
           <input className="input mono" value={q.code} onChange={(e) => patch({ code: e.target.value })} /></label>
@@ -861,7 +872,54 @@ export function QuestionEditor({ q }: { q: Question }) {
           <textarea className="ta code" value={q.customHtml ?? ""}
             onChange={(e) => patch({ customHtml: e.target.value || undefined })} /></label>
       )}
+      </>
+      )}
     </div>
+  );
+}
+
+/**
+ * Standard / Live View — a per-question switch, not application navigation.
+ *
+ * It belongs to the question currently open, so opening another one starts in
+ * Standard again; neither view is privileged and neither can be skipped past.
+ * The mode lives in the canvas context because the property panel, which is a
+ * sibling column in the Studio shell, has to know about it too.
+ */
+function QuestionViewSwitch({ q }: { q: Question }) {
+  const canvas = useCanvas();
+  React.useEffect(() => { canvas?.attach(q.id); }, [q.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!canvas) return null;
+  return (
+    <div className="qview" data-testid="question-view-switch">
+      <div className="lc-seg" role="group" aria-label="Question view">
+        <button className={canvas.mode === "standard" ? "on" : ""} data-testid="view-standard"
+          onClick={() => { canvas.setMode("standard"); canvas.select(null); }}
+          title="The full programming interface">
+          <Icon name="settings" size={14} /> Standard
+        </button>
+        <button className={canvas.mode === "live" ? "on" : ""} data-testid="view-live"
+          onClick={() => canvas.setMode("live")}
+          title="The question as a respondent sees it — click any part to program it">
+          <Icon name="sparkle" size={14} /> Live View
+        </button>
+      </div>
+      <span className="grow" />
+      <SaveChip />
+    </div>
+  );
+}
+
+/** The existing save state, shown where the editing happens. */
+function SaveChip() {
+  const s = useStudio();
+  const k = s.saveState.kind;
+  const label = k === "saving" ? "Saving…" : k === "saved" || k === "clean" ? "Saved"
+    : k === "dirty" ? "Editing" : k;
+  return (
+    <span className={`lc-save ${k}`} data-testid="question-save-state">
+      {k === "saved" || k === "clean" ? "✓ " : ""}{label}
+    </span>
   );
 }
 

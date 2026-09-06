@@ -430,10 +430,8 @@ await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
 await page.waitForSelector(".leftnav");
 const nav = await page.$$eval(".leftnav .nav-item", (es) => es.map((e) => [...e.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join("").trim()));
 // the 17 existing tabs keep their order; Data Analytics sits next to Data (in
-// the Results group) and the Live Canvas next to Questions — both additions,
-// neither displacing anything that was already there
-assert.deepEqual(nav.filter((t) => t !== "Data Analytics" && t !== "Live Canvas"), ["Questions", "Survey Settings", "Survey Flow", "Logic", "Variables", "Calculations", "Quotas", "List Fill", "Design Generators", "Branding", "Scripts", "Data", "Versions & Deploy", "JSON", "Collaborators", "Internal notes", "Activity"]);
-assert.equal(nav[nav.indexOf("Questions") + 1], "Live Canvas", "the Live Canvas follows Questions");
+// the Results group) — an addition that displaces nothing already there
+assert.deepEqual(nav.filter((t) => t !== "Data Analytics"), ["Questions", "Survey Settings", "Survey Flow", "Logic", "Variables", "Calculations", "Quotas", "List Fill", "Design Generators", "Branding", "Scripts", "Data", "Versions & Deploy", "JSON", "Collaborators", "Internal notes", "Activity"]);
 assert.equal(nav.filter((t) => t === "Data Analytics").length, 1);
 assert.equal(nav[nav.indexOf("Data") + 1], "Data Analytics", "Data Analytics follows Data");
 assert.match(await page.$eval('[data-testid="nav-analytics"]', (e) => e.getAttribute("href")), /^\/analytics/);

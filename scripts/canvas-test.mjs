@@ -1,15 +1,16 @@
 /**
- * LIVE QUESTION CANVAS — browser checks.
+ * LIVE VIEW — the Questions editor's second mode. Browser checks.
  *
- * The canvas renders questions with the respondent's own renderer
- * (@rescript/renderer, imported by both apps), so most of what there is to
- * verify is that the authoring layer on top of it addresses the right schema
- * object, that editing writes through the one store, and that simulation runs
- * the real engine rather than a preview-only imitation.
+ * The Live View is not a place. It is a view of the question the programmer
+ * already has open, inside the Questions screen, drawn by the respondent's own
+ * renderer (@rescript/renderer, imported by both apps). So what there is to
+ * verify is that it lives where it should, that both views edit the one
+ * definition, that the authoring layer addresses the right schema object, and
+ * that simulation runs the real engine rather than an imitation of it.
  *
- * Everything here drives the sandbox Studio with the Master Demo loaded, which
- * is the widest set of question types the platform has: 35 types including
- * every matrix family, ranking, allocation, hotspot, conjoint and MaxDiff.
+ * Everything drives the sandbox Studio with the Master Demo loaded — the
+ * widest set of question types the platform has: 35 types including every
+ * matrix family, ranking, allocation, hotspot, conjoint and MaxDiff.
  *
  *   node scripts/canvas-test.mjs            (studio dev server on 3000)
  */
@@ -22,7 +23,6 @@ let passed = 0;
 const ok = (m) => { console.log("  ok  ", m); passed++; };
 
 const def = buildMasterDemoSurvey("sandbox");
-const byCode = Object.fromEntries(def.questions.map((q) => [q.code, q]));
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 1560, height: 1000 } });
@@ -48,313 +48,348 @@ await page.$eval("textarea.code", (el, v) => {
 }, JSON.stringify(def));
 await page.click('button:has-text("validate & apply")');
 await page.waitForTimeout(900);
+await page.click(".leftnav >> text=Questions");
+await page.waitForSelector('[data-testid="qcard"]');
 
-const open = async (code) => {
-  await page.fill('[data-testid="canvas-filter"]', code);
-  await page.waitForTimeout(220);
-  const item = await page.$(`[data-testid="canvas-qitem"][data-qid="${byCode[code].id}"]`);
-  assert.ok(item, `question ${code} listed on the canvas`);
-  await item.click();
-  await page.waitForTimeout(450);
+/**
+ * Drag one structure row onto another.
+ *
+ * Not page.dragTo: that scrolls the destination into view *between* the press
+ * and the first move, so the browser hit-tests the grab point against content
+ * that has since slid under it and starts the drag on the wrong row. Here the
+ * whole list is framed first, so nothing moves once the mouse is down.
+ */
+const dragStruct = async (kind, fromCode, toCode) => {
+  await page.$eval(`[data-testid="live-struct-${kind}s"]`, (el) => el.scrollIntoView({ block: "center" }));
+  await page.waitForTimeout(250);
+  const grip = page.locator(`[data-testid="live-struct-${kind}"][data-code="${fromCode}"] [data-testid="live-grip-${kind}"]`);
+  const target = page.locator(`[data-testid="live-struct-${kind}"][data-code="${toCode}"]`);
+  const a = await grip.boundingBox();
+  const b = await target.boundingBox();
+  await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 16 });
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+  await page.mouse.up();
 };
-const kind = () => page.$eval('[data-testid="element-panel"]', (e) => e.getAttribute("data-kind"));
+
+/** Open a question by its code, in the Questions screen, where it lives. */
+const openQ = async (code) => {
+  const card = page.locator('[data-testid="qcard"]').filter({ has: page.locator(`.mono:text-is("${code}")`) }).first();
+  await card.scrollIntoViewIfNeeded();
+  if (!(await page.$('[data-testid="question-view-switch"]')) ||
+      !(await card.locator('[data-testid="question-view-switch"]').count())) {
+    await card.click();
+  }
+  await page.waitForTimeout(500);
+};
+const live = async () => { await page.click('[data-testid="view-live"]'); await page.waitForTimeout(700); };
+const standard = async () => { await page.click('[data-testid="view-standard"]'); await page.waitForTimeout(500); };
+const kind = () => page.$eval('[data-testid="element-panel"]', (e) => e.getAttribute("data-kind")).catch(() => null);
 const title = () => page.$eval('[data-testid="element-panel-title"]', (e) => e.textContent.trim());
-const stageText = () => page.$eval('[data-testid="canvas-stage"]', (e) => e.textContent);
 const anchors = (sel) => page.$$eval(`[data-testid="canvas-stage"] ${sel}`, (es) => es.map((e) => e.getAttribute("data-rs-id")));
 
-console.log("\nTHE CANVAS TAB");
-await page.click(".leftnav >> text=Live Canvas");
-await page.waitForSelector('[data-testid="canvas-panel"]', { timeout: 20000 });
-ok("the Live Canvas tab opens");
+/* -------------------------------------------------- §1 no separate place */
 
-assert.equal(await page.$$eval('[data-testid="canvas-qitem"]', (es) => es.length), def.questions.length);
-ok(`every question is reachable without leaving the canvas (${def.questions.length})`);
+console.log("\nTHE LIVE VIEW IS INSIDE THE QUESTIONS EDITOR (§1, §2, §39)");
+// text nodes only — the count badges are separate elements
+const navLabels = await page.$$eval(".leftnav .nav-item", (es) =>
+  es.map((e) => [...e.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join("").trim()));
+assert.equal(navLabels.some((t) => /Live Canvas|Live View/i.test(t)), false,
+  `no Live View entry in the navigation, got: ${navLabels.join(" | ")}`);
+ok("there is no separate Live Canvas tab, page or navigation item");
 
-assert.equal(await page.$$eval(".rightpanel", (es) => es.length), 0,
-  "the question-level Properties panel steps aside for the contextual one");
-ok("one property panel at a time — the contextual one owns the canvas");
+assert.deepEqual(
+  navLabels.filter((t) => t !== "Data Analytics"),
+  ["Questions", "Survey Settings", "Survey Flow", "Logic", "Variables", "Calculations", "Quotas", "List Fill",
+   "Design Generators", "Branding", "Scripts", "Data", "Versions & Deploy", "JSON", "Collaborators", "Internal notes", "Activity"],
+  "the navigation is exactly what it was before the Live View existed",
+);
+ok("the Studio's 17 tabs are unchanged, in their original order");
 
-/* ------------------------------------------------- §12 every question type */
+await openQ("Q11"); // multi_select, 15 options
+assert.ok(await page.$('[data-testid="question-view-switch"]'), "the switch is in the question editor");
+ok("opening a question offers Standard / Live View inside its own editor (§2)");
 
-console.log("\nEVERY QUESTION TYPE RENDERS (§12, §44)");
+assert.ok(await page.$('.rightpanel'), "the Studio's property panel is still there");
+ok("the existing right-hand property panel is retained, not replaced (§24)");
+
+/* ------------------------------------------------- §3, §23 standard first */
+
+console.log("\nSTANDARD MODE IS UNCHANGED AND IS THE DEFAULT (§3, §40)");
+assert.equal(await page.$('[data-testid="live-view"]'), null, "the live view is not showing yet");
+assert.ok(await page.$('.opt-row'), "the existing option editor is what a question opens on");
+ok("a question opens in Standard mode with the existing programming UI intact");
+
+const stdSections = await page.$eval(".rightpanel", (e) => e.textContent);
+for (const s of ["Display logic", "Skip logic", "Randomization", "Validation rules", "Custom code"]) {
+  assert.ok(stdSections.includes(s), `${s} is still offered`);
+}
+ok("every question-level programming section is still reachable (§18, §28)");
+
+/* --------------------------------------------------- §4, §5 the live view */
+
+console.log("\nLIVE VIEW RENDERS THE QUESTION IN PLACE (§4, §5, §6)");
+await live();
+assert.ok(await page.$('[data-testid="live-view"]'), "the live view opened");
+assert.equal(page.url().includes("/sandbox"), true, "and did so without navigating anywhere");
+ok("Live View renders inside the same screen — no page navigation (§4)");
+
+const opts = await anchors('[data-rs-el="option"]');
+assert.ok(opts.length >= 10, `the real options are rendered, found ${opts.length}`);
+ok(`the question renders with all ${opts.length} of its options, by the respondent's renderer`);
+
+/* --------------------------------------------- §26 every question type */
+
+console.log("\nEVERY QUESTION TYPE GETS A LIVE VIEW (§26)");
 const seen = new Map();
 for (const q of def.questions) if (!seen.has(q.type)) seen.set(q.type, q.code);
 const failures = [];
 for (const [type, code] of seen) {
-  await open(code);
-  const html = await page.$eval('[data-testid="canvas-stage"]', (e) => e.innerHTML);
+  await standard().catch(() => {});
+  await openQ(code);
+  await live();
   const anchored = await page.$$eval('[data-testid="canvas-stage"] [data-rs-el="question"]', (es) => es.length);
-  if (html.length < 40 || anchored !== 1) failures.push(`${type} (${code})`);
+  const html = await page.$eval('[data-testid="canvas-stage"]', (e) => e.innerHTML).catch(() => "");
+  if (anchored !== 1 || html.length < 40) failures.push(`${type} (${code})`);
 }
 assert.deepEqual(failures, [], `every type renders and is addressable; failed: ${failures.join(", ")}`);
-ok(`all ${seen.size} question types in the Master Demo render on the canvas and expose the question anchor`);
+ok(`all ${seen.size} question types render in the Live View and expose the question anchor`);
 
-/* --------------------------------------------- §5–7 selection and editing */
+/* ------------------------------------------ §8–§11, §25 one definition */
 
-console.log("\nSELECTING AND EDITING ELEMENTS (§5, §6, §7)");
-await open("Q11"); // multi_select, 15 options
-assert.equal(await kind(), "question");
-ok("opening a question selects the question itself");
-
-await page.click('[data-testid="canvas-stage"] [data-rs-el="text"]');
-await page.waitForTimeout(250);
-assert.equal(await kind(), "text");
-ok("clicking the question text selects the text, not the question");
-
+console.log("\nBOTH MODES EDIT THE SAME QUESTION (§8, §11, §25, §37)");
+await openQ("Q11");
+await live();
 await page.click('[data-testid="canvas-stage"] [data-rs-el="option"][data-rs-id="3"]');
-await page.waitForTimeout(250);
+await page.waitForTimeout(300);
 assert.equal(await kind(), "option");
 assert.match(await title(), /^Option: /);
-ok("clicking an option selects that option and the panel switches to option properties");
+ok("clicking an option selects it and the property panel becomes an option panel (§9, §10, §24)");
 
-const before = await page.inputValue('[data-testid="opt-label"]');
-await page.fill('[data-testid="opt-label"]', "Desktop PC (edited)");
-await page.waitForTimeout(400);
-const optText = await page.$eval('[data-testid="canvas-stage"] [data-rs-el="option"][data-rs-id="3"]', (e) => e.textContent.trim());
-assert.equal(optText, "Desktop PC (edited)", `the canvas re-rendered with the new label, got "${optText}"`);
-ok("editing the label in the panel updates the live canvas immediately (§3, §35)");
+await page.fill('[data-testid="opt-label"]', "Desktop PC");
+await page.waitForTimeout(450);
+assert.equal(
+  await page.$eval('[data-testid="canvas-stage"] [data-rs-el="option"][data-rs-id="3"]', (e) => e.textContent.trim()),
+  "Desktop PC", "the rendered question redrew with the new label");
+ok("editing in the panel updates the Live View immediately (§25)");
 
-await page.click('[data-testid="canvas-stage"] [data-rs-el="question"]');
-await page.waitForTimeout(200);
-await page.click('[data-testid="canvas-stage"] [data-rs-el="option"][data-rs-id="3"]');
-await page.waitForTimeout(250);
-assert.equal(await page.inputValue('[data-testid="opt-label"]'), "Desktop PC (edited)");
-ok("the panel and the canvas read one definition — reselecting shows the edit");
+await standard();
+const stdLabels = await page.$$eval(".opt-row input.grow", (es) => es.map((e) => e.value));
+assert.ok(stdLabels.includes("Desktop PC"), `Standard's option editor shows it too, got ${stdLabels.slice(0, 4).join(", ")}`);
+ok("the change made in Live View is already in the Standard editor (§10, §37)");
 
-// and it reaches the survey JSON, which is the actual source of truth (§47)
+// and the other direction
+const i = stdLabels.indexOf("Desktop PC");
+await page.$$eval(".opt-row input.grow", (es, idx) => {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+  setter.call(es[idx], "Desktop workstation");
+  es[idx].dispatchEvent(new Event("input", { bubbles: true }));
+}, i);
+await page.waitForTimeout(450);
+await live();
+assert.equal(
+  await page.$eval('[data-testid="canvas-stage"] [data-rs-el="option"][data-rs-id="3"]', (e) => e.textContent.trim()),
+  "Desktop workstation", "the Live View picked up the Standard edit");
+ok("a Standard edit appears in the Live View without any sync step (§9)");
+
+// and it is the survey's own JSON that changed, not a preview copy
 await page.click(".leftnav >> text=JSON");
 await page.waitForSelector("textarea.code");
-const json = await page.$eval("textarea.code", (e) => e.value);
-assert.ok(json.includes("Desktop PC (edited)"), "the canvas edit is in the survey JSON");
-ok("canvas edits land in the survey JSON, not a parallel format (§47)");
-await page.click(".leftnav >> text=Live Canvas");
-await page.waitForSelector('[data-testid="canvas-panel"]');
+assert.ok((await page.$eval("textarea.code", (e) => e.value)).includes("Desktop workstation"));
+ok("both modes write to the one survey definition, visible in the JSON (§37)");
+await page.click(".leftnav >> text=Questions");
+await page.waitForSelector('[data-testid="qcard"]');
 
-/* ----------------------------------------------------- §8–11 grid / matrix */
+/* --------------------------------------------- §14–§16 grid and matrix */
 
-console.log("\nGRID AND MATRIX (§8, §9, §10, §11)");
-await open("Q28"); // matrix_single with its own rows
+console.log("\nGRID / MATRIX ROWS, COLUMNS AND CELLS (§14, §15, §16)");
+await openQ("Q28"); // matrix_single with its own rows
+await live();
 const rows = await anchors('[data-rs-el="row"]');
 const cols = await anchors('[data-rs-el="column"]');
 const cells = await anchors('[data-rs-el="cell"]');
-assert.ok(rows.length > 0, "rows are addressable");
-assert.ok(cols.length > 0, "columns are addressable");
-assert.ok(cells.length >= rows.length, "every intersection is addressable");
-ok(`the matrix exposes ${new Set(rows).size} rows, ${cols.length} columns and ${cells.length} cells`);
+assert.ok(rows.length && cols.length && cells.length >= rows.length);
+ok(`the matrix renders ${new Set(rows).size} rows, ${cols.length} columns and ${cells.length} addressable cells`);
 
-/* The row LABEL selects the row; a cell inside the same row selects the cell.
-   Most-specific-wins is what makes a grid programmable at all. */
 await page.click(`[data-testid="canvas-stage"] td.rowlabel[data-rs-el="row"][data-rs-id="${rows[0]}"]`);
-await page.waitForTimeout(250);
+await page.waitForTimeout(300);
 assert.equal(await kind(), "row");
 assert.match(await title(), /^Row: /);
-ok("clicking a row label selects the row and offers row properties (§9)");
+ok("clicking a row label selects the row and offers row properties (§15)");
 
-await page.fill('[data-testid="row-label"]', "Product A (edited)");
-await page.waitForTimeout(400);
-assert.ok((await stageText()).includes("Product A (edited)"), "the matrix redrew with the new row label");
-ok("renaming a row from the panel redraws the matrix immediately");
+await page.fill('[data-testid="row-label"]', "Streaming video");
+await page.waitForTimeout(450);
+assert.ok((await page.$eval('[data-testid="canvas-stage"]', (e) => e.textContent)).includes("Streaming video"));
+ok("renaming a row redraws the matrix immediately");
 
 await page.click(`[data-testid="canvas-stage"] [data-rs-el="column"][data-rs-id="${cols[1]}"]`);
-await page.waitForTimeout(250);
+await page.waitForTimeout(300);
 assert.equal(await kind(), "column");
 assert.match(await title(), /^Column: /);
-ok("clicking a column header selects the column (§10)");
+ok("clicking a column header selects the column (§16)");
 
 await page.click(`[data-testid="canvas-stage"] [data-rs-el="cell"][data-rs-id="${cells[2]}"]`);
-await page.waitForTimeout(250);
+await page.waitForTimeout(300);
 assert.equal(await kind(), "cell");
-assert.ok(await page.$('[data-testid="cell-goto-row"]'), "a cell offers its row");
-assert.ok(await page.$('[data-testid="cell-goto-column"]'), "a cell offers its column");
-ok("a cell is inspectable and cross-references the row and column that own it (§11)");
+assert.ok(await page.$('[data-testid="cell-goto-row"]') && await page.$('[data-testid="cell-goto-column"]'));
+ok("a cell is inspectable and refers to the row and column that own it (§27)");
 
-await page.click('[data-testid="cell-goto-row"]');
-await page.waitForTimeout(250);
-assert.equal(await kind(), "row");
-ok("a cell hands off to the side that actually carries the programming");
+/* --------------------------------------------- §12, §13 add and reorder */
 
-/* A matrix whose rows come from carry-forward has no rows of its own: the
-   authoring view must still show them, because a question sourced from another
-   question is exactly the case where seeing the structure matters most. */
-await open("Q54"); // matrix_multi, rows carried from an earlier question
-const carried = await anchors('[data-rs-el="row"]');
-assert.ok(carried.length > 0, "carry-forward rows are drawn and addressable while authoring");
-ok(`carry-forward supplies ${carried.length} rows and every one of them is selectable (§23)`);
-
-/* ------------------------------------------- §14, §15 structure operations */
-
-console.log("\nADDING AND REORDERING (§14, §15)");
-await open("Q11");
-const optCount = () => page.$$eval('[data-testid="struct-option"]', (es) => es.length);
-const n0 = await optCount();
-await page.click('[data-testid="add-option"]');
-await page.waitForTimeout(450);
-assert.equal(await optCount(), n0 + 1, "an option was added");
-const added = (await anchors('[data-rs-el="option"]')).slice(-1)[0];
-assert.ok(await page.$(`[data-testid="canvas-stage"] [data-rs-el="option"][data-rs-id="${added}"]`),
-  "the new option is in the rendered question, not just the list");
-assert.equal(await kind(), "option");
-ok("Add option puts a real option into the live render and selects it (§14)");
-
-const codes = () => page.$$eval('[data-testid="struct-option"]', (es) => es.map((e) => e.getAttribute("data-code")));
-const withAdded = await codes();
-
-// reorder: drag the last option to the top, and check the RENDER follows
-const lastCode = withAdded[withAdded.length - 1];
-await page.locator(`[data-testid="struct-option"][data-code="${lastCode}"]`)
-  .dragTo(page.locator('[data-testid="struct-option"]').first());
+console.log("\nADDING AND REORDERING FROM THE LIVE VIEW (§12, §13)");
+await openQ("Q11");
+await live();
+const count = () => page.$$eval('[data-testid="live-struct-option"]', (es) => es.length);
+const codes = () => page.$$eval('[data-testid="live-struct-option"]', (es) => es.map((e) => e.getAttribute("data-code")));
+const n0 = await count();
+await page.click('[data-testid="live-add-option"]');
 await page.waitForTimeout(500);
-const reordered = await codes();
-assert.equal(reordered[0], lastCode, `dragging moved ${lastCode} to the top, got ${reordered[0]} (was ${withAdded.join(",")})`);
-const renderOrder = await anchors('[data-rs-el="option"]');
-assert.equal(renderOrder[0], reordered[0], "the rendered question shows the new order too");
-ok("drag-and-drop reordering updates the definition and the live render (§15)");
+assert.equal(await count(), n0 + 1);
+const added = (await codes()).slice(-1)[0];
+assert.ok(await page.$(`[data-testid="canvas-stage"] [data-rs-el="option"][data-rs-id="${added}"]`),
+  "the new option is in the rendered question, not only in a list");
+assert.equal(await kind(), "option");
+ok("Add option puts a real option into the rendered question and selects it (§12)");
 
-// and delete the one that was added, not whichever happens to be first
-await page.click(`[data-testid="struct-option"][data-code="${reordered[0]}"] [data-testid="del-option"]`);
+await dragStruct("option", added, (await codes())[0]);
+await page.waitForTimeout(500);
+assert.equal((await codes())[0], added, "dragging moved it to the top");
+assert.equal((await anchors('[data-rs-el="option"]'))[0], added, "and the rendered order followed");
+ok("drag-and-drop reordering updates the definition and the render together (§13)");
+
+await page.click(`[data-testid="live-struct-option"][data-code="${added}"] [data-testid="live-del-option"]`);
 await page.waitForTimeout(450);
-assert.equal(await optCount(), n0, "the added option was removed again");
-assert.equal((await codes()).includes(reordered[0]), false, "and it is the one that went");
-ok("deleting an element from the canvas removes it from the definition");
+assert.equal(await count(), n0);
+ok("and the option can be deleted again from the same place");
 
-/* --------------------------------------- §16, §18, §21 element-level logic */
+/* ---------------------------------------- §17, §19 element-level logic */
 
-console.log("\nPROGRAMMING FROM THE SELECTED ELEMENT (§16, §18, §21, §23)");
-await open("Q11");
+console.log("\nLOGIC FROM THE SELECTED ELEMENT (§17, §19)");
 await page.click('[data-testid="canvas-stage"] [data-rs-el="option"][data-rs-id="2"]');
-await page.waitForTimeout(250);
+await page.waitForTimeout(300);
 assert.ok(await page.$('[data-testid="option-logic"]'), "the option logic editor is right there");
-ok("selecting an option offers option logic without a detour (§16, §18)");
+ok("selecting an option offers its logic without leaving the question (§17)");
 
-// hide it outright and watch the canvas mark it
 await page.click('[data-testid="option-logic"] >> text=Always hide');
 await page.waitForTimeout(600);
-assert.ok(await page.$('[data-testid="option-hidden-note"]'), "the panel says it is hidden");
-const veils = await page.$$eval(".lc-hidden-veil", (es) => es.length);
-assert.ok(veils >= 1, `the canvas marks it hidden, found ${veils} markers`);
+assert.ok(await page.$('[data-testid="option-hidden-note"]'), "the panel reports it as hidden");
+assert.ok((await page.$$eval(".lc-hidden-veil", (es) => es.length)) >= 1, "the render marks it");
 assert.ok(await page.$('[data-testid="canvas-stage"] [data-rs-el="option"][data-rs-id="2"]'),
-  "and it is still on the canvas so it can still be programmed");
-ok("logic takes effect immediately, and a hidden element stays inspectable (§21, §23)");
+  "and it stays on the canvas so it can still be programmed");
+ok("logic applies immediately and the element stays inspectable (§19, §26 authoring state)");
 
-// simulation evaluates it for real: the option is gone
-await page.click('[data-testid="mode-simulate"]');
+await page.click('[data-testid="live-simulate"]');
 await page.waitForTimeout(600);
 assert.equal(await page.$('[data-testid="canvas-stage"] [data-rs-el="option"][data-rs-id="2"]'), null,
-  "the respondent does not see the hidden option");
-ok("Simulation hides what the logic hides — the authoring view is the only place it survives (§24, §43)");
+  "the respondent does not see it");
+ok("Simulation evaluates the logic for real — the runtime state, not the programming state (§19, §20)");
 
-await page.click('[data-testid="mode-author"]');
+await page.click('[data-testid="live-author"]');
 await page.waitForTimeout(400);
 await page.click('[data-testid="canvas-stage"] [data-rs-el="option"][data-rs-id="2"]');
-await page.waitForTimeout(250);
-await page.click('[data-testid="option-logic"] >> text=Always show');
-await page.waitForTimeout(500);
-ok("the logic can be taken off again from the same place");
-
-/* ------------------------------------------------------- §22 indicators */
-
-console.log("\nPROGRAMMING INDICATORS (§22)");
-await open("Q11");
-const flagsOn = await page.$$eval('[data-testid="lc-flag"]', (es) => es.length);
-await page.uncheck('[data-testid="toggle-flags"]');
 await page.waitForTimeout(300);
-const flagsOff = await page.$$eval('[data-testid="lc-flag"]', (es) => es.length);
-assert.ok(flagsOn > 0, "elements carrying programming are marked");
-assert.equal(flagsOff, 0, "and the marks can be turned off");
-await page.check('[data-testid="toggle-flags"]');
-ok(`${flagsOn} elements marked as carrying programming, and the marks are optional`);
+await page.click('[data-testid="option-logic"] >> text=Always show');
+await page.waitForTimeout(450);
+ok("the logic can be removed from the same place");
 
-/* ------------------------------------------------------ §24–§26 simulation */
+/* ------------------------------------- §21 device preview and debug */
 
-console.log("\nSIMULATION (§24, §25, §26, §29)");
-await open("Q20"); // dropdown with display logic upstream
-const hasSim = await page.$('[data-testid="canvas-simulator"]');
-if (hasSim) ok("questions with dependencies offer sample answers");
+console.log("\nDEVICE PREVIEW AND DEBUG (§21)");
+for (const d of ["mobile", "tablet", "desktop"]) {
+  await page.click(`[data-testid="live-${d}"]`);
+  await page.waitForTimeout(300);
+  assert.ok(await page.$('[data-testid="canvas-stage"] [data-rs-el="option"]'), `${d} still renders options`);
+}
+ok("Desktop / Tablet / Mobile all render and stay programmable, inside the question editor");
 
-// piping shows as a chip while authoring
-const piped = def.questions.find((q) => q.text.includes("{{") && q.type !== "html");
-if (piped) {
-  await open(piped.code);
-  const chips = await page.$$eval(".lc-pipe", (es) => es.length);
-  assert.ok(chips > 0, "an unresolved piping token is shown as a chip, not silently dropped");
-  ok(`piping is visible while authoring (${piped.code}) (§26)`);
+await page.click('[data-testid="live-debug"]');
+await page.waitForTimeout(500);
+assert.ok(await page.$('[data-testid="live-debug-panel"]'), "Debug opens the engine's own pipeline view");
+ok("Debug remains available and shows how the engine builds the list");
+await page.click('[data-testid="live-debug"]');
+
+/* -------------------------------------- §29–§32 loops, piping, validation */
+
+console.log("\nLOOP CONTEXT, PIPING AND VALIDATION (§29, §30, §31, §32)");
+const looped = def.questions.find((q) => q.text.includes("{{") && q.type !== "html" && q.options.length > 0)
+  ?? def.questions.find((q) => q.text.includes("{{") && q.type !== "html");
+await openQ(looped.code);
+await live();
+assert.ok((await page.$$eval(".lc-pipe", (es) => es.length)) > 0,
+  "an unresolved piping token is shown as a chip rather than silently dropped");
+ok(`piping is previewed while authoring (${looped.code}) (§31)`);
+
+const loopQ = def.questions.find((q) => {
+  const flow = JSON.stringify(def.flow ?? []);
+  const at = flow.indexOf(`"${q.id}"`);
+  return at > 0 && flow.lastIndexOf('"loop"', at) > 0;
+});
+if (loopQ) {
+  await openQ(loopQ.code);
+  await live();
+  if (await page.$('[data-testid="loop-iteration"]')) {
+    const items = await page.$$eval('[data-testid="loop-iteration"] option', (es) => es.length);
+    assert.ok(items > 0, "the loop's items are offered");
+    ok(`a looped question previews per iteration (${loopQ.code}, ${items} items) (§29)`);
+    if (await page.$('[data-testid="loop-references"]')) {
+      ok("the loop's reference columns can be simulated (§30)");
+    }
+  }
 }
 
-// and a content block pipes through customHtml, which its renderer draws
-const htmlPiped = def.questions.find((q) => q.type === "html" && (q.customHtml ?? q.text).includes("{{"));
-if (htmlPiped) {
-  await open(htmlPiped.code);
-  assert.ok(await page.$$eval(".lc-pipe", (es) => es.length) > 0, "a content block's piping is marked too");
-  ok(`content blocks pipe through customHtml and are marked as well (${htmlPiped.code})`);
-}
-
-// validation comes from the real validator
-await open("Q3"); // numeric with bounds
-await page.click('[data-testid="mode-simulate"]');
+await openQ("Q3"); // numeric with bounds
+await live();
+await page.click('[data-testid="live-simulate"]');
 await page.waitForTimeout(500);
 const numInput = await page.$('[data-testid="canvas-stage"] input');
 if (numInput) {
   await numInput.fill("5");
   await page.waitForTimeout(600);
-  const msgs = await page.$$eval('[data-testid="canvas-stage"] .rs-error-msg', (es) => es.map((e) => e.textContent));
-  ok(`simulation runs the real validator (${msgs.length} message${msgs.length === 1 ? "" : "s"} for an out-of-range age) (§29)`);
+  const msgs = await page.$$eval('[data-testid="canvas-stage"] .rs-error-msg', (es) => es.length);
+  ok(`Simulation runs the real validator (${msgs} message${msgs === 1 ? "" : "s"} for an out-of-range age) (§32)`);
 }
-await page.click('[data-testid="mode-author"]');
+await page.click('[data-testid="live-author"]');
 
-/* --------------------------------------------------------- §31 responsive */
+/* ------------------------------------------- §34, §35, §39 state and save */
 
-console.log("\nRESPONSIVE PREVIEW (§31, §32)");
-await open("Q11");
-for (const d of ["mobile", "tablet", "desktop"]) {
-  await page.click(`[data-testid="canvas-${d}"]`);
-  await page.waitForTimeout(350);
-  const w = await page.$eval(".lc-frame", (e) => e.getBoundingClientRect().width);
-  assert.ok(w > 100, `${d} frame has a width`);
-  assert.ok(await page.$('[data-testid="canvas-stage"] [data-rs-el="option"]'), `${d} still renders options`);
-}
-ok("desktop / tablet / mobile all render, and stay programmable in each");
+console.log("\nSAVE, UNDO AND PER-QUESTION MODE (§34, §35, §39)");
+assert.ok(await page.$('[data-testid="question-save-state"]'), "the existing save state is shown in the editor");
+ok("the existing save pipeline reports its state where the editing happens (§34)");
 
-await page.click('[data-testid="canvas-mobile"]');
+await openQ("Q11");
+assert.equal(await page.$eval('[data-testid="view-standard"]', (e) => e.className), "on",
+  "a newly opened question starts in Standard");
+ok("the mode belongs to the question, not the application — each opens in Standard (§39, §40)");
+
+await live();
+await page.click('[data-testid="canvas-stage"] [data-rs-el="option"][data-rs-id="1"]');
 await page.waitForTimeout(300);
-await page.click('[data-testid="canvas-stage"] [data-rs-el="option"][data-rs-id="1"]');
-await page.waitForTimeout(250);
-assert.equal(await kind(), "option");
-ok("selection works at mobile width too (§31)");
-await page.click('[data-testid="canvas-desktop"]');
-
-/* ------------------------------------------------------- §33, §34 save/undo */
-
-console.log("\nSAVE STATE AND UNDO (§33, §34)");
-await open("Q11");
-await page.click('[data-testid="canvas-stage"] [data-rs-el="option"][data-rs-id="1"]');
-await page.waitForTimeout(250);
-const label0 = await page.inputValue('[data-testid="opt-label"]');
 await page.fill('[data-testid="opt-label"]', "Undo me");
 await page.waitForTimeout(400);
-await page.keyboard.press("Escape");
-await page.click('[data-testid="canvas-toolbar"]');
+await page.click('[data-testid="live-toolbar"]');
 await page.keyboard.press("Control+z");
 await page.waitForTimeout(500);
-const after = await page.$eval('[data-testid="canvas-stage"] [data-rs-el="option"][data-rs-id="1"]', (e) => e.textContent.trim());
-assert.notEqual(after, "Undo me", "undo reverted the canvas edit");
-ok(`undo works on canvas edits through the existing history (back to "${after}")`);
+assert.notEqual(
+  await page.$eval('[data-testid="canvas-stage"] [data-rs-el="option"][data-rs-id="1"]', (e) => e.textContent.trim()),
+  "Undo me", "undo reverted the Live View edit");
+ok("undo works on Live View edits through the existing history (§35)");
 
-assert.ok(await page.$('[data-testid="canvas-save-state"]'), "the save state is visible where the editing happens");
-ok("the existing save pipeline reports its state on the canvas (§34)");
+/* ------------------------------------------------------------ regressions */
 
-/* ------------------------------------------------------------ no regressions */
+console.log("\nTHE REST OF THE QUESTIONS SCREEN IS UNTOUCHED");
+await standard();
+assert.equal(await page.$('[data-testid="live-view"]'), null, "the live view is gone again");
+assert.ok(await page.$(".opt-row"), "the existing option editor is back");
+assert.ok(await page.$('[data-testid="close-question"]'), "Done still closes the question");
+ok("switching back restores the Standard editor exactly as it was (§23)");
 
-console.log("\nTHE REST OF THE STUDIO IS UNTOUCHED");
-await page.click(".leftnav >> text=Questions");
-await page.waitForSelector('[data-testid="qcard"]');
-ok("the Questions tab still lists question cards exactly as before");
-await page.click('[data-testid="qcard"]');
-await page.waitForTimeout(400);
-assert.ok(await page.$(".rightpanel"), "and its Properties panel is back");
-ok("the original editor and its properties panel are unchanged");
+assert.ok(await page.$('[data-testid="add-question-top"]'), "questions can still be added");
+assert.ok(await page.$('[data-testid="add-block"]'), "blocks can still be added");
+ok("blocks, pages and question creation are unchanged");
 
 assert.deepEqual(errors.filter((e) => !/ResizeObserver/.test(e)), [], `no page errors: ${errors.join(" | ")}`);
 ok("no uncaught errors anywhere in the session");
 
-console.log(`\nALL ${passed} CANVAS CHECKS PASSED`);
+console.log(`\nALL ${passed} LIVE VIEW CHECKS PASSED`);
 await browser.close();

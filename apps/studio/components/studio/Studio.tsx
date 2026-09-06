@@ -5,7 +5,7 @@ import { StudioProvider, useStudio } from "./store";
 import { openPreview, pushPreview, previewWindowOpen, setPreviewDefinition, setPreviewRevision } from "./previewWindow";
 import { ExportDialog } from "./ExportDialog";
 import { QuestionsPanel } from "./QuestionsPanel";
-import { CanvasPanel } from "../canvas/CanvasPanel";
+import { CanvasProvider } from "../canvas/CanvasContext";
 import { PropertiesPanel, SurveySettings } from "./PropertiesPanel";
 import { FlowPanel } from "./FlowPanel";
 import { LogicPanel, CalcPanel } from "./LogicPanel";
@@ -27,7 +27,7 @@ import { runtimeBaseUrl } from "@/lib/runtime-url";
 import { Icon, type IconName } from "@/components/ui/Icon";
 
 type Tab =
-  | "questions" | "canvas" | "flow" | "logic" | "variables" | "calculations"
+  | "questions" | "flow" | "logic" | "variables" | "calculations"
   | "quotas" | "listfill" | "designs" | "branding" | "scripts" | "data" | "versions" | "json"
   | "collaborators" | "notes" | "activity"
   | "settings";
@@ -40,7 +40,7 @@ type Tab =
  * are the point of the role, not a loophole.
  */
 const EDITING_TABS = new Set<Tab>([
-  "questions", "canvas", "settings", "flow", "logic", "variables", "calculations",
+  "questions", "settings", "flow", "logic", "variables", "calculations",
   "quotas", "listfill", "designs", "branding", "scripts", "json",
 ]);
 
@@ -52,10 +52,6 @@ const EDITING_TABS = new Set<Tab>([
  */
 const NAV: { key: Tab; label: string; icon: IconName; group: string }[] = [
   { key: "questions", label: "Questions", icon: "questions", group: "Programming" },
-  // the Live Question Canvas: the same questions, programmed while looking at
-  // them. Additive — the Questions tab above is unchanged and still the place
-  // for blocks, pages and bulk editing.
-  { key: "canvas", label: "Live Canvas", icon: "sparkle", group: "Programming" },
   { key: "settings", label: "Survey Settings", icon: "settings", group: "Programming" },
   { key: "flow", label: "Survey Flow", icon: "flow", group: "Programming" },
   { key: "logic", label: "Logic", icon: "logic", group: "Programming" },
@@ -662,6 +658,13 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           onOpenPanel={(panel) => setTab(panel)}
         />
       )}
+      {/* The centre column and the right panel are siblings, so the question
+          editor cannot tell the property panel which element is selected.
+          The provider sits above both and carries exactly that — the view the
+          open question is in, and what is selected inside it. It holds no
+          question data: the definition remains the store's, and there is one
+          of it. */}
+      <CanvasProvider>
       <div className={`ide-body ${collab.readOnly && s.surveyDbId !== "sandbox" ? "is-readonly" : ""}`}>
         <nav className="leftnav" aria-label="Studio">
           {NAV.map((n, i) => (
@@ -694,7 +697,6 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
             />
           )}
           {tab === "questions" && <QuestionsPanel />}
-          {tab === "canvas" && <CanvasPanel />}
           {tab === "settings" && (
             <div style={{ maxWidth: 620 }}>
               <h2 style={{ margin: "0 0 14px", fontSize: 17 }}>Survey settings</h2>
@@ -728,16 +730,11 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
             </>
           )}
         </main>
-        {/* The Canvas tab carries its own contextual panel — the properties it
-            shows depend on which ELEMENT is selected, not just which question —
-            so the question-level panel would be a second, conflicting answer to
-            the same question. Every other tab is untouched. */}
-        {tab !== "canvas" && (
-          <aside className="rightpanel">
-            <PropertiesPanel />
-          </aside>
-        )}
+        <aside className="rightpanel">
+          <PropertiesPanel />
+        </aside>
       </div>
+      </CanvasProvider>
     </div>
   );
 }

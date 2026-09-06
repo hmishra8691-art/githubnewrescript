@@ -5,6 +5,8 @@ import type { Question, ValidationRule, SkipRule, ListOperation, ListSource } fr
 import { validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary } from "@rescript/engine";
 import { resolveVariant, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript/schema";
 import { useStudio, selectedQuestion, uid } from "./store";
+import { useCanvas } from "../canvas/CanvasContext";
+import { ElementPanel } from "../canvas/ElementPanel";
 import { OptionalCondition, ConditionEditor } from "./ConditionBuilder";
 import { LoopScopeProvider, loopsAroundQuestion } from "./loopScope";
 import { MaskingBuilder } from "./MaskingBuilder";
@@ -390,6 +392,23 @@ export function SurveySettings() {
 export function PropertiesPanel() {
   const s = useStudio();
   const q = selectedQuestion(s);
+  const canvas = useCanvas();
+
+  /*
+   * CONTEXTUAL, NOT SEPARATE.
+   *
+   * This is the same panel it has always been. When the programmer selects an
+   * element in the Live View — an option, a row, a column, a cell — it offers
+   * that element's properties instead of the question's, because showing every
+   * property of every element at once is precisely what makes a matrix hard to
+   * program. Selecting the question, or working in Standard view, gives back
+   * the full question interface below, unchanged.
+   */
+  const elementSel = canvas?.selected;
+  if (q && canvas?.mode === "live" && elementSel && elementSel.questionId === q.id && elementSel.type !== "question") {
+    return <ElementPanel q={q} sel={elementSel} ann={canvas.annotations} onSelect={canvas.select} />;
+  }
+
   if (!q) {
     return (
       <div>
