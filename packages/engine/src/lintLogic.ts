@@ -18,6 +18,7 @@ import { PIPE_TOKEN_RE, parsePipeBody } from "./pipingTokens.js";
 import { describeCycle, detectLogicCycles, orderIndex } from "./dependencies.js";
 import { loopNodes, loopVariableNames, maxLoopIterations, possibleLoopItems, questionIdsInLoop } from "./loops.js";
 import { listFillVariableNames } from "./listFill.js";
+import { buildVariableDictionary } from "./variables.js";
 
 /**
  * Logic configuration linting (reqs §30–31).
@@ -665,13 +666,21 @@ export function lintStructure(def: SurveyDefinition): LogicIssue[] {
     }
   }
 
-  /* --- variables nothing ever reads --------------------------------- */
+  /*
+   * --- variables nothing ever reads ---------------------------------
+   *
+   * A name here that the survey does not PRODUCE is a different problem —
+   * a stale override — and `lintVariables` says so precisely. Reporting it
+   * twice, once inaccurately ("nothing reads it"), sends the programmer
+   * looking for a reader instead of a rename.
+   */
+  const produced = new Set(buildVariableDictionary(def).map((v) => v.name));
   const spoken = JSON.stringify({
     q: def.questions, f: def.flow, c: def.calculations, ql: def.quotas,
     s: def.scripts, dr: def.displayRules, lf: def.listFills,
   });
   for (const v of def.variables ?? []) {
-    if (!v.name || spoken.includes(v.name)) continue;
+    if (!v.name || spoken.includes(v.name) || !produced.has(v.name)) continue;
     issues.push({
       level: "warning", path: `variables.${v.name}`,
       message: `Variable ${v.name} is declared but nothing reads it — no logic, piping, calculation, quota or script mentions it.`,

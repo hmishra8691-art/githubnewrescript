@@ -5,3 +5,4 @@ export * from "./exportConfig.js";
 export * from "./docx.js";
 export * from "./surveyJson.js";
 export * from "./responseQuality.js";
+export * from "./spreadsheetImport.js";

@@ -1,7 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SurveyDefinition, cond } from "@rescript/schema";
-import { lintStructure, runQualityCheck, describeQualityCheck } from "./index.js";
+import {
+  lintStructure, runQualityCheck, describeQualityCheck,
+  buildVariableDictionary, buildDerivedVariables, unknownVariableOverrides,
+} from "./index.js";
 
 /**
  * WAVE 2 — the checks a survey should not be able to deploy without.
@@ -220,4 +223,45 @@ test("an End nothing reaches at all is still reported", () => {
   });
   const structure = runQualityCheck(def).areas.find((a) => a.key === "structure");
   assert.equal(structure?.warnings, 1, "no skip rule jumps to it, so it is genuinely stranded");
+});
+
+/* ------------------------------------------- §29 variable dictionary overrides */
+
+test("a programmer's variable label wins over the derived one, and only where given", () => {
+  const def = make({
+    variables: [{
+      name: "A", label: "Preferred pack (recoded)", dataType: "text", responseType: "single",
+      valueCodes: [], valueLabels: { "1": "Blue pack", "2": "Red pack" },
+    }],
+  });
+  const derived = buildDerivedVariables(def).find((v) => v.name === "A");
+  const shown = buildVariableDictionary(def).find((v) => v.name === "A");
+  assert.ok(derived && shown);
+  assert.notEqual(derived.label, "Preferred pack (recoded)", "the derived label is untouched");
+  assert.equal(shown.label, "Preferred pack (recoded)");
+  assert.equal(shown.valueLabels["1"], "Blue pack");
+  assert.equal(shown.dataType, derived.dataType, "an override cannot change what the answers are");
+  assert.equal(shown.questionCode, derived.questionCode, "nor where they come from");
+});
+
+test("an override with nothing to say changes nothing", () => {
+  const def = make({
+    variables: [{ name: "A", label: "", dataType: "text", responseType: "single", valueCodes: [], valueLabels: {} }],
+  });
+  assert.deepEqual(
+    buildVariableDictionary(def).find((v) => v.name === "A"),
+    buildDerivedVariables(def).find((v) => v.name === "A"),
+  );
+});
+
+test("an override for a variable the survey no longer produces is reported, not conjured", () => {
+  const def = make({
+    variables: [{ name: "GONE", label: "Old name", dataType: "text", responseType: "single", valueCodes: [], valueLabels: {} }],
+  });
+  assert.equal(buildVariableDictionary(def).some((v) => v.name === "GONE"), false,
+    "an override must never invent a column");
+  assert.deepEqual(unknownVariableOverrides(def), ["GONE"]);
+  const vars = runQualityCheck(def).areas.find((a) => a.key === "variables");
+  assert.equal(vars?.status, "fail");
+  assert.match(vars.issues[0].message, /does not match anything this survey produces/);
 });

@@ -1686,3 +1686,12 @@ p.qs-help { margin: -2px 0 10px; }
 .qc-mark-pass { background: rgba(28, 122, 85, .12); color: var(--success, #1c7a55); }
 .qc-mark-warn { background: rgba(180, 116, 26, .14); color: var(--warning, #b4741a); }
 .qc-mark-fail { background: rgba(192, 57, 47, .12); color: var(--danger, #c0392f); }
+
+/* ==== Variable dictionary overrides ==== */
+.grid tr.var-edited td { background: color-mix(in srgb, var(--brand) 5%, transparent); }
+.var-edit {
+  display: grid; gap: 10px; padding: 12px 14px;
+  background: var(--surface-2, #f4f4f8); border-radius: 8px;
+}
+.var-edit .f { display: grid; gap: 4px; font-size: 13px; }
+.var-edit .f > span { color: var(--text-2, #555); }

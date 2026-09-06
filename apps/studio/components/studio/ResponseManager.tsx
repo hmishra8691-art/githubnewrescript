@@ -871,13 +871,20 @@ function ImportDialog({ surveyDbId, environment, onClose, onDone }: {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [fileName, setFileName] = React.useState<string | null>(null);
+  /** a workbook is sent as bytes, not text — see onFile */
+  const [xlsxBase64, setXlsxBase64] = React.useState<string | null>(null);
+  const [sheet, setSheet] = React.useState<string | null>(null);
 
   const runPreview = async (mapping?: Record<string, unknown>) => {
     setBusy(true); setError(null);
     try {
       const r = await fetch(`/api/surveys/${surveyDbId}/data/import`, {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ environment, stage: "preview", format, text, mode, mapping }),
+        body: JSON.stringify(
+          xlsxBase64
+            ? { environment, stage: "preview", xlsxBase64, sheet: sheet ?? undefined, mode, mapping }
+            : { environment, stage: "preview", format, text, mode, mapping },
+        ),
       });
       const j = await r.json();
       if (!r.ok) { setError(j.error ?? `Could not read the file (${r.status})`); setPreview(null); return; }
@@ -903,10 +910,28 @@ function ImportDialog({ surveyDbId, environment, onClose, onDone }: {
 
   const onFile = async (f: File) => {
     setFileName(f.name);
-    setFormat(/\.json$/i.test(f.name) ? "json" : "csv");
-    const t = await f.text();
-    setText(t);
     setPreview(null);
+    setSheet(null);
+    /*
+     * A workbook is bytes, not text. Reading one with `f.text()` — which is
+     * what happened before .xlsx was accepted at all — yields the zip
+     * container as mojibake and a parse error that blames the file. It is
+     * base64'd and parsed on the server, where the spreadsheet library
+     * already lives.
+     */
+    if (/\.xlsx?$|\.xlsm$/i.test(f.name)) {
+      const buf = new Uint8Array(await f.arrayBuffer());
+      let bin = "";
+      for (let i = 0; i < buf.length; i += 0x8000) {
+        bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+      }
+      setXlsxBase64(btoa(bin));
+      setText("");
+      return;
+    }
+    setXlsxBase64(null);
+    setFormat(/\.json$/i.test(f.name) ? "json" : "csv");
+    setText(await f.text());
   };
 
   const sum = preview?.summary;
@@ -922,7 +947,7 @@ function ImportDialog({ surveyDbId, environment, onClose, onDone }: {
           <button className="btn small" onClick={onClose}>Close</button>
         </div>
         <p className="qs-help">
-          CSV, TSV or JSON. A file exported from this survey maps itself; anything else is matched by variable name, question code
+          Excel, CSV, TSV or JSON. A file exported from this survey maps itself; anything else is matched by variable name, question code
           or question text. Existing respondent ids are <strong>updated in place</strong> — never duplicated — and an update
           changes only the columns the file contains. Nothing is written until you confirm the preview.
         </p>
@@ -930,25 +955,44 @@ function ImportDialog({ surveyDbId, environment, onClose, onDone }: {
         <div className="rm-import-controls">
           <label className="btn small" style={{ cursor: "pointer" }}>
             Choose file…
-            <input type="file" accept=".csv,.tsv,.txt,.json" style={{ display: "none" }} data-testid="rm-import-file"
+            <input type="file" accept=".csv,.tsv,.txt,.json,.xlsx,.xlsm" style={{ display: "none" }} data-testid="rm-import-file"
               onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); }} />
           </label>
           {fileName && <span className="chip mono">{fileName}</span>}
-          <select className="select" style={{ width: 110 }} value={format} onChange={(e) => { setFormat(e.target.value as never); setPreview(null); }}>
-            <option value="csv">CSV / TSV</option><option value="json">JSON</option>
-          </select>
+          {/* a workbook picks its own sheet; a file with several says which,
+              and lets the user choose another without re-exporting */}
+          {xlsxBase64 && preview?.sheets?.length > 1 && (
+            <select className="select" style={{ width: 170 }} data-testid="rm-import-sheet"
+              value={sheet ?? preview.sheet ?? ""}
+              onChange={(e) => { setSheet(e.target.value); setPreview(null); }}>
+              {preview.sheets.map((name: string) => <option key={name} value={name}>{name}</option>)}
+            </select>
+          )}
+          {!xlsxBase64 && (
+            <select className="select" style={{ width: 110 }} value={format} onChange={(e) => { setFormat(e.target.value as never); setPreview(null); }}>
+              <option value="csv">CSV / TSV</option><option value="json">JSON</option>
+            </select>
+          )}
           <select className="select" style={{ width: 190 }} data-testid="rm-import-mode" value={mode} onChange={(e) => { setMode(e.target.value as never); setPreview(null); }}>
             <option value="upsert">Upsert — update or create</option>
             <option value="create">Create new responses only</option>
             <option value="update">Update existing only</option>
           </select>
           <span className="grow" />
-          <button className="btn small primary" data-testid="rm-import-preview" disabled={!text.trim() || busy} onClick={() => void runPreview()}>
+          <button className="btn small primary" data-testid="rm-import-preview" disabled={(!text.trim() && !xlsxBase64) || busy} onClick={() => void runPreview()}>
             {busy && !preview ? "Reading…" : "Validate & preview"}
           </button>
         </div>
-        <textarea className="ta mono" rows={preview ? 3 : 8} data-testid="rm-import-text" placeholder="…or paste the rows here"
-          value={text} onChange={(e) => { setText(e.target.value); setPreview(null); }} />
+        {xlsxBase64 ? (
+          <p className="qs-help" data-testid="rm-import-workbook">
+            Reading <strong>{fileName}</strong>
+            {preview?.sheet ? <> — sheet <strong>{preview.sheet}</strong>{preview.sheets?.length > 1 ? ` of ${preview.sheets.length}` : ""}</> : null}.
+            The first row with headings is used as the header row, so a title above the table is fine.
+          </p>
+        ) : (
+          <textarea className="ta mono" rows={preview ? 3 : 8} data-testid="rm-import-text" placeholder="…or paste the rows here"
+            value={text} onChange={(e) => { setText(e.target.value); setPreview(null); }} />
+        )}
 
         {error && <div className="chip warn qd-note" data-testid="rm-import-error">{error}</div>}
 

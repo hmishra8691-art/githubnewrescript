@@ -4,7 +4,8 @@ import { loadQualityDefinition } from "@/lib/qualityDef";
 import { parseDelimited, suggestMapping, validateImportRows, type ColumnMapping, type ImportMode, type PreparedRow } from "@rescript/engine";
 import { parseEnvironment, missingResponseMigration, RESPONSE_MIGRATION_MESSAGE } from "@/lib/responseData";
 import { recountQuotas } from "@/lib/quotaRecount";
-import { isFailure, requireProject } from "@/lib/guard";
+import { parseSpreadsheet } from "@rescript/exporters";
+import { audit, isFailure, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -50,6 +51,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (body?.stage !== "commit") {
     let rows: Record<string, unknown>[] = [];
     let headers: string[] = [];
+    /** named only when the rows came from a workbook, so the preview can say which sheet */
+    let sheetInfo: { sheetName: string; sheetNames: string[] } | null = null;
     if (typeof body?.text === "string" && body.text.trim()) {
       if (body?.format === "json") {
         try {
@@ -64,11 +67,26 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         headers = parsed.headers;
         rows = parsed.rows;
       }
+    } else if (typeof body?.xlsxBase64 === "string" && body.xlsxBase64) {
+      /*
+       * A workbook, parsed HERE rather than in the browser: exceljs is a
+       * server dependency already (it writes every export), and shipping a
+       * spreadsheet parser into the Studio bundle to read a file that is
+       * about to be posted anyway would be paying twice.
+       */
+      try {
+        const parsed = await parseSpreadsheet(Buffer.from(body.xlsxBase64, "base64"), { sheet: body?.sheet });
+        headers = parsed.headers;
+        rows = parsed.rows;
+        sheetInfo = { sheetName: parsed.sheetName, sheetNames: parsed.sheetNames };
+      } catch (e) {
+        return NextResponse.json({ error: `that workbook could not be read: ${(e as Error).message}` }, { status: 422 });
+      }
     } else if (Array.isArray(body?.rows)) {
       rows = body.rows;
       headers = [...new Set(rows.flatMap((r) => Object.keys(r ?? {})))];
     } else {
-      return NextResponse.json({ error: "give the file's text (CSV/TSV/JSON) or a rows array" }, { status: 400 });
+      return NextResponse.json({ error: "give the file's text (CSV/TSV/JSON), a workbook, or a rows array" }, { status: 400 });
     }
     if (!rows.length) return NextResponse.json({ error: "no data rows were found in the file" }, { status: 422 });
     if (rows.length > 20000) return NextResponse.json({ error: `this file has ${rows.length} rows; import at most 20 000 at a time` }, { status: 413 });
@@ -105,6 +123,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       ok: true, stage: "preview", environment, mode,
       mapping: preview.mapping, headers, unmapped: preview.unmapped,
       summary: { ...preview.summary, willCreate, willUpdate },
+      ...(sheetInfo ? { sheet: sheetInfo.sheetName, sheets: sheetInfo.sheetNames } : {}),
       issues: preview.issues.slice(0, 500),
       issuesTruncated: preview.issues.length > 500,
       /** the rows to hand back to `stage: "commit"` unchanged */

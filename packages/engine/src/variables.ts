@@ -390,7 +390,57 @@ export function questionVariables(
 }
 
 /** Build the full dictionary for a survey definition. */
+/**
+ * WHAT THE PROGRAMMER SAID ABOUT A VARIABLE, OVER WHAT THE SURVEY IMPLIES.
+ *
+ * The dictionary is derived: a name, a label and a set of value labels fall
+ * out of the question that produces them, which is right almost always and
+ * occasionally wrong. A grid row labelled "I would recommend it to a friend"
+ * is a fine question and a terrible column header; a 1–5 scale exported as
+ * "1".."5" needs its words back before anyone can read a crosstab.
+ *
+ * `def.variables` is where a programmer says so. It has been in the schema
+ * since the first release and NOTHING read it — the dictionary was rebuilt
+ * from the questions every time and the overrides were silently discarded,
+ * which is why "variable management" was read-only. Overrides are matched by
+ * name, apply to exports and analysis because both read this dictionary, and
+ * never invent a variable: an override for a name the survey does not produce
+ * is reported by `lintVariables` rather than conjuring a column.
+ */
+function applyOverrides(def: SurveyDefinition, derived: VariableDef[]): VariableDef[] {
+  const overrides = new Map((def.variables ?? []).map((v) => [v.name, v]));
+  if (overrides.size === 0) return derived;
+  return derived.map((v) => {
+    const o = overrides.get(v.name);
+    if (!o) return v;
+    /*
+     * Only the fields a programmer is allowed to restate, and only the ones
+     * they actually filled in. Everything structural stays derived, so an
+     * override can never lie about where a variable comes from or what shape
+     * its answers are — and an override that says nothing leaves the entry
+     * byte-identical, which is what makes "is this row edited?" answerable.
+     */
+    const out = { ...v };
+    if (o.label?.trim()) out.label = o.label;
+    if (Object.keys(o.valueLabels ?? {}).length) out.valueLabels = { ...v.valueLabels, ...o.valueLabels };
+    if (o.hidden === true) out.hidden = true;
+    if (o.notes?.trim()) out.notes = o.notes;
+    return out;
+  });
+}
+
+/** Variable names an override mentions that the survey does not produce. */
+export function unknownVariableOverrides(def: SurveyDefinition): string[] {
+  const produced = new Set(buildDerivedVariables(def).map((v) => v.name));
+  return (def.variables ?? []).map((v) => v.name).filter((n) => n && !produced.has(n));
+}
+
 export function buildVariableDictionary(def: SurveyDefinition): VariableDef[] {
+  return applyOverrides(def, buildDerivedVariables(def));
+}
+
+/** The dictionary the survey implies, before any programmer override. */
+export function buildDerivedVariables(def: SurveyDefinition): VariableDef[] {
   const loc = pageLocator(def);
   const out: VariableDef[] = [];
 
@@ -587,6 +637,11 @@ export function buildVariableDictionary(def: SurveyDefinition): VariableDef[] {
 export function lintVariables(def: SurveyDefinition): string[] {
   const seen = new Map<string, string>();
   const problems: string[] = [];
+  for (const name of unknownVariableOverrides(def)) {
+    problems.push(
+      `Variable override "${name}" does not match anything this survey produces — it may have been renamed. The override is ignored.`,
+    );
+  }
   for (const v of buildVariableDictionary(def)) {
     const owner = v.questionCode ?? v.responseType;
     if (seen.has(v.name) && seen.get(v.name) !== owner) {
