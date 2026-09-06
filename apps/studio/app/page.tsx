@@ -3,7 +3,7 @@ import React from "react";
 import { THEME_PRESETS } from "@/lib/defaults";
 import { SURVEY_TEMPLATES, findSurveyTemplate } from "@rescript/templates";
 import {
-  SurveyCard, SurveyCardSkeleton, STATUS_META,
+  SurveyCard, SurveyCardSkeleton, STATUS_META, relativeTime,
   type SurveyRow, type SurveyStats, type Contributor,
 } from "@/components/SurveyCard";
 import { useSession } from "@/lib/useSession";
@@ -208,12 +208,50 @@ export default function Dashboard() {
 
   const totals = React.useMemo(() => {
     const list = Object.values(stats);
+    const sum = (k: keyof SurveyStats) => list.reduce((a, b) => a + (Number(b[k] ?? 0) || 0), 0);
     return {
       surveys: surveys?.length ?? 0,
       live: surveys?.filter((x) => x.status === "live").length ?? 0,
-      responses: list.reduce((a, b) => a + (b.liveResponseCount ?? 0), 0),
+      responses: sum("liveResponseCount"),
+      test: sum("testResponseCount"),
+      completes: sum("completeCount"),
+      questions: sum("questionCount"),
     };
   }, [surveys, stats, ownership]);
+
+  /**
+   * THE RIGHT-HAND RAIL: the same facts the cards below already carry, read
+   * across the whole workspace instead of one project at a time. Everything
+   * here is derived from the rows and statistics the dashboard has already
+   * loaded — there is no second request and no number that is not also true
+   * on a card.
+   */
+
+  /** the project a "take me to the data" shortcut should open: most recently touched */
+  const latest = React.useMemo(
+    () => (surveys?.length ? [...surveys].sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0] : null),
+    [surveys],
+  );
+
+  /** what actually happened last, across every project — edits and responses interleaved */
+  const activity = React.useMemo(() => {
+    if (!surveys) return null;
+    const events: { id: string; at: string; kind: "response" | "edit"; survey: SurveyRow }[] = [];
+    for (const s2 of surveys) {
+      events.push({ id: `${s2.id}-edit`, at: s2.updated_at, kind: "edit", survey: s2 });
+      const last = stats[s2.id]?.lastResponseAt;
+      if (last) events.push({ id: `${s2.id}-resp`, at: last, kind: "response", survey: s2 });
+    }
+    return events.sort((a, b) => b.at.localeCompare(a.at)).slice(0, 6);
+  }, [surveys, stats]);
+
+  /** the portfolio at a glance: how many projects sit in each lifecycle status */
+  const byStatus = React.useMemo(() => {
+    if (!surveys?.length) return [];
+    return Object.keys(STATUS_META)
+      .map((key) => ({ key, meta: STATUS_META[key], n: surveys.filter((x) => x.status === key).length }))
+      .filter((r) => r.n > 0);
+  }, [surveys]);
 
   return (
     <div className="dash">
@@ -225,13 +263,22 @@ export default function Dashboard() {
           <h1>Your research workspace</h1>
           <p className="sub">Program surveys, collect and clean responses, analyse results and publish reports — in one place.</p>
         </div>
-        <div className="hero-metrics" aria-label="Workspace summary">
-          <div className="metric"><span className="metric-v">{surveys ? totals.surveys : <span className="sk sk-num" />}</span><span className="metric-l">Projects</span></div>
-          <div className="metric"><span className="metric-v">{surveys ? totals.live : <span className="sk sk-num" />}</span><span className="metric-l">Live</span></div>
-          <div className="metric"><span className="metric-v">{surveys ? totals.responses.toLocaleString() : <span className="sk sk-num" />}</span><span className="metric-l">Live responses</span></div>
-          <div className="metric"><span className="metric-v">{surveys ? Object.values(stats).reduce((a, b) => a + (b.questionCount ?? 0), 0).toLocaleString() : <span className="sk sk-num" />}</span><span className="metric-l">Questions</span></div>
-        </div>
       </section>
+
+      {/* the workspace in six numbers, all summed from the statistics the cards
+          below show per project — a band rather than a corner, so the first
+          screen answers "how much is going on here" before any scrolling */}
+      <div className="hero-metrics" aria-label="Workspace summary" data-testid="dash-metrics">
+        <div className="metric"><span className="metric-v">{surveys ? totals.surveys : <span className="sk sk-num" />}</span><span className="metric-l">Projects</span></div>
+        <div className="metric"><span className="metric-v">{surveys ? totals.live : <span className="sk sk-num" />}</span><span className="metric-l">Live</span></div>
+        <div className="metric"><span className="metric-v">{surveys ? totals.responses.toLocaleString() : <span className="sk sk-num" />}</span><span className="metric-l">Live responses</span></div>
+        <div className="metric"><span className="metric-v">{surveys ? totals.test.toLocaleString() : <span className="sk sk-num" />}</span><span className="metric-l">Test responses</span></div>
+        <div className="metric"><span className="metric-v">{surveys ? totals.completes.toLocaleString() : <span className="sk sk-num" />}</span><span className="metric-l">Completes</span></div>
+        <div className="metric"><span className="metric-v">{surveys ? totals.questions.toLocaleString() : <span className="sk sk-num" />}</span><span className="metric-l">Questions</span></div>
+      </div>
+
+      <div className="dash-body">
+      <div className="dash-main">
 
       <div className="dash-toolbar">
         <button className="btn primary" onClick={() => setCreating(true)}><Icon name="plus" size={16} /> New survey</button>
@@ -309,6 +356,7 @@ export default function Dashboard() {
           <div className="empty-icon"><Icon name="layers" size={22} /></div>
           <h3>No surveys yet — create your first one.</h3>
           <p className="muted">Start from a blank survey or the Master Demo template; everything you program here can be tested, published and analysed.</p>
+          <button className="btn primary" onClick={() => setCreating(true)}><Icon name="plus" size={16} /> New survey</button>
         </div>
       )}
       {visible?.length === 0 && (surveys?.length ?? 0) > 0 && (
@@ -327,6 +375,80 @@ export default function Dashboard() {
           onStatus={(status) => setStatus(s.id, status)}
           onDelete={() => { setDeleting(s); setConfirmText(""); }} />
       ))}
+      </div>
+
+      <aside className="dash-rail" aria-label="Workspace overview" data-testid="dash-rail">
+        <section className="rail-card">
+          <h2>Quick actions</h2>
+          <div className="qa">
+            <button className="qa-item" onClick={() => setCreating(true)} data-testid="qa-new">
+              <span className="qa-ico"><Icon name="plus" size={17} /></span>
+              <span><span className="qa-t">New survey</span><span className="qa-s">Blank or from a template</span></span>
+            </button>
+            <a className="qa-item" href="/analytics" data-testid="qa-analytics">
+              <span className="qa-ico"><Icon name="analytics" size={17} /></span>
+              <span><span className="qa-t">Data Analytics</span><span className="qa-s">Analyse, chart and report</span></span>
+            </a>
+            {latest && (
+              <>
+                <a className="qa-item" href={`/studio/${latest.id}?tab=data`} data-testid="qa-data">
+                  <span className="qa-ico"><Icon name="clean" size={17} /></span>
+                  <span><span className="qa-t">Data &amp; cleaning</span><span className="qa-s">{latest.code} · responses and quality</span></span>
+                </a>
+                <a className="qa-item" href={`/studio/${latest.id}?tab=quotas`} data-testid="qa-quotas">
+                  <span className="qa-ico"><Icon name="quotas" size={17} /></span>
+                  <span><span className="qa-t">Quotas</span><span className="qa-s">{latest.code} · fill and capacity</span></span>
+                </a>
+              </>
+            )}
+          </div>
+        </section>
+
+        {byStatus.length > 0 && (
+          <section className="rail-card">
+            <h2>Project status</h2>
+            <div className="pf-bar" aria-hidden="true">
+              {byStatus.map((r) => (
+                <span key={r.key} className={`pf-seg ${r.meta.tone}`} style={{ flexGrow: r.n }} title={`${r.meta.label}: ${r.n}`} />
+              ))}
+            </div>
+            <ul className="pf-list">
+              {byStatus.map((r) => (
+                <li key={r.key}>
+                  <button className="pf-row" title={r.meta.hint}
+                    onClick={() => { setOwnership("all"); setStatusFilter(r.key); }}>
+                    <span className={`status-pill ${r.meta.tone}`}><span className="dot" />{r.meta.label}</span>
+                    <span className="grow" />
+                    <span className="pf-n">{r.n}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {activity && activity.length > 0 && (
+          <section className="rail-card">
+            <h2>Recent activity</h2>
+            <ul className="act">
+              {activity.map((e) => (
+                <li key={e.id}>
+                  <a className="act-row" href={`/studio/${e.survey.id}${e.kind === "response" ? "?tab=data" : ""}`}>
+                    <span className={`act-ico ${e.kind}`}><Icon name={e.kind === "response" ? "data" : "questions"} size={14} /></span>
+                    <span className="act-body">
+                      <span className="act-t">{e.survey.title}</span>
+                      <span className="act-s">
+                        {e.kind === "response" ? "Last response" : "Programming updated"} · {relativeTime(e.at)}
+                      </span>
+                    </span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </aside>
+      </div>
 
       {deleting && (
         <div className="modal-back" onClick={() => setDeleting(null)}>

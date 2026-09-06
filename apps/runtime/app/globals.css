@@ -171,10 +171,19 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 }
 
 /* ---------- Inspector (test mode) ---------- */
-.rs-with-inspector { display: grid; grid-template-columns: 1fr 380px; gap: 0; min-height: 100vh; }
+/* 100vh here would add the sticky bars' height on top of a full viewport and
+   make the page scroll for no reason — measure from below them instead */
+.rs-with-inspector {
+  display: grid; grid-template-columns: 1fr 380px; gap: 0;
+  min-height: calc(100vh - var(--rs-stack-top, 0px) - var(--rs-toolbar-h, 0px));
+}
+/* the inspector is sticky too, so it parks under the toolbar rather than
+   sliding its first rows beneath it (--rs-toolbar-h is measured by the Runner) */
 .rs-inspector {
   background: #0b1220; color: #cbd5e1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px; padding: 16px; overflow-y: auto; max-height: 100vh; position: sticky; top: 0;
+  font-size: 12px; padding: 16px; overflow-y: auto; position: sticky;
+  --rs-stack-h: calc(var(--rs-stack-top, 0px) + var(--rs-toolbar-h, 0px));
+  top: var(--rs-stack-h); max-height: calc(100vh - var(--rs-stack-h));
 }
 .rs-inspector h3 { color: #7dd3fc; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; margin: 18px 0 6px; }
 .rs-inspector h3:first-child { margin-top: 0; }
@@ -253,13 +262,19 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 }
 .rs-devicebar button { font: inherit; border: none; border-radius: 999px; padding: 3px 12px; cursor: pointer; background: transparent; color: #cbd5e1; }
 .rs-devicebar button.on { background: #38bdf8; color: #06202e; font-weight: 700; }
-.rs-viewport { margin: 14px auto 24px; background: var(--rs-bg, #f8fafc); }
+/* The framed previews scroll inside their own frame. Sizing them against the
+   space the sticky toolbar leaves keeps the whole frame on screen, so the page
+   itself barely scrolls and the toolbar is never pushed off. */
+.rs-viewport {
+  margin: 14px auto 24px; background: var(--rs-bg, #f8fafc);
+  --rs-frame-h: calc(100vh - var(--rs-stack-top, 0px) - var(--rs-toolbar-h, 0px) - 46px);
+}
 .rs-viewport.mobile {
-  max-width: 392px; min-height: 740px; max-height: 82vh; overflow-y: auto;
+  max-width: 392px; min-height: 560px; height: var(--rs-frame-h); max-height: 820px; overflow-y: auto;
   border: 11px solid #0b1220; border-radius: 36px; box-shadow: 0 16px 48px rgba(0, 0, 0, .35);
 }
 .rs-viewport.tablet {
-  max-width: 780px; min-height: 700px; max-height: 82vh; overflow-y: auto;
+  max-width: 780px; min-height: 560px; height: var(--rs-frame-h); max-height: 900px; overflow-y: auto;
   border: 13px solid #0b1220; border-radius: 24px; box-shadow: 0 16px 48px rgba(0, 0, 0, .3);
 }
 .rs-viewport .rs-shell { padding-top: 14px; }
@@ -443,7 +458,7 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 
 /* ---------- preview identification bar ---------- */
 .rs-preview-bar {
-  position: sticky; top: 0; z-index: 20;
+  position: sticky; top: 0; z-index: 21;
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
   padding: 6px 16px; font-size: 12px;
   background: #111827; color: #e5e7eb;
@@ -451,12 +466,19 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-preview-bar strong { letter-spacing: .06em; text-transform: uppercase; font-size: 10.5px; }
 .rs-preview-live { margin-left: auto; opacity: .75; }
 
-/* ---------- preview / test toolbar (Phase 5) ---------- */
+/* ---------- preview / test toolbar (Phase 5) ----------
+   The testing controls (device widths, Debug) must stay reachable however far
+   down a long survey the programmer has scrolled, so the toolbar is sticky.
+   It sticks BELOW whatever banner the host page puts above it: the preview
+   page sets `--rs-stack-top` to its identification bar's height. Both bars
+   used to stick to top:0, so scrolling slid the toolbar underneath the banner
+   and the device / Debug buttons vanished. */
 .rs-toolbar {
-  position: sticky; top: 0; z-index: 19;
-  display: flex; align-items: center; gap: 10px;
+  position: sticky; top: var(--rs-stack-top, 0px); z-index: 20;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 6px 14px; font-size: 12px;
   background: #1f2937; color: #e5e7eb;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .06), 0 6px 16px -10px rgba(0, 0, 0, .55);
 }
 .rs-toolbar-build {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
@@ -468,7 +490,13 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 }
 .rs-toolbar-pos { opacity: .8; }
 .rs-toolbar-gap { flex: 1; }
-.rs-toolbar .rs-devicebar { display: flex; gap: 2px; background: none; padding: 0; border: none; }
+/* inside the toolbar the device switch is a plain segmented control — it must
+   not keep the standalone bar's own `position: sticky`, which would let it
+   drift out of the row it belongs to */
+.rs-toolbar .rs-devicebar {
+  position: static; display: flex; gap: 2px; background: none;
+  padding: 0; margin: 0; border: none; box-shadow: none; width: auto;
+}
 .rs-toolbar .rs-devicebar button {
   font: inherit; font-size: 13px; cursor: pointer; padding: 2px 7px;
   border-radius: 5px; border: 1px solid transparent; background: none; color: #e5e7eb;

@@ -112,7 +112,7 @@ All keep their historical class names, so existing markup is restyled in place.
 
 **Product header (`.apph`)** — used on the Dashboard, Data Analytics and the account pages: brand, *Projects* / *Data Analytics*, optional breadcrumbs (`.crumbs`), account area (unread bell, Profile, Security, Administration for admins, visible Sign out, avatar pill opening a menu with name, user code, *● Online*, Profile / Security & sessions / Projects / Administration / Sign out).
 
-**Dashboard** — greeting eyebrow (`Good morning, Ana · USR-…`), gradient page title, four metric tiles (Projects, Live, Live responses, Questions) with skeletons while loading, the existing toolbar, filter pills and survey cards (18px title, 24px stat values, status pill), and a real empty state.
+**Dashboard** — greeting eyebrow (`Good morning, Ana · USR-…`), gradient page title, then a full-width band of six metric tiles (Projects, Live, Live responses, Test responses, Completes, Questions) with skeletons while loading. Below it `.dash-body` is a two-column grid: `.dash-main` carries the existing toolbar, ownership and status pills and survey cards; `.dash-rail` (316px, sticky, `.rail-card`) carries Quick actions (`.qa-*`), Project status (`.pf-*`, a proportional bar plus per-status counts that set the status filter) and Recent activity (`.act-*`, edits and last responses interleaved). Every rail number is derived from the rows and statistics the page has already loaded — no second request, nothing that is not also true on a card. The rail narrows at 1300px and drops below the list at 1080px; the metric band goes 3-up at 900px and 2-up at 620px.
 
 **Account pages** — `AccountHeader` renders the product header, then an *Account* eyebrow, 28px title, an identity pill (avatar, name, code, Online) and underline tabs (Profile / Security / Administration · Back to projects · Sign out).
 
@@ -135,4 +135,30 @@ All keep their historical class names, so existing markup is restyled in place.
 
 ## 6. Review tooling
 
-`node scripts/ui-shots.mjs [outDir]` captures the login, dashboard, every major Studio panel with the Master Demo loaded, the properties panel with a condition builder open, Data → Quality / Manage, the analytics home / result / reports and the profile page (dev servers on 3000 / 3001). Compare an output directory against a previous run when changing shared styles.
+`node scripts/ui-shots.mjs [outDir]` captures the login, dashboard, every major Studio panel with the Master Demo loaded, the properties panel with a condition builder open, Data → Quality / Manage, the analytics home / result / reports, the profile page, and the runtime testing toolbar scrolled deep into a survey (desktop and mobile frames). Dev servers on 3000 / 3001. Compare an output directory against a previous run when changing shared styles.
+
+---
+
+## 7. The runtime testing toolbar
+
+Preview and Test Survey run the real runtime with a slim toolbar on top: mode,
+build, page position, the Desktop / Tablet / Mobile switch and Debug. A
+programmer scrolling into a long survey must keep all of it, so the toolbar is
+`position: sticky` — and it is one member of a **sticky stack**:
+
+| custom property | set by | meaning |
+|---|---|---|
+| `--rs-stack-top` | the preview page (measured banner height) | how far down the toolbar sticks |
+| `--rs-toolbar-h` | the Runner (measured toolbar height) | how much room the toolbar occupies |
+
+Both are measured with a `ResizeObserver` rather than hard-coded, because both
+rows wrap on a narrow window. `--rs-stack-top` is what stops the toolbar from
+sliding *underneath* the preview banner (they both used to stick at `top: 0`,
+and the banner's higher z-index won — which is how the device and Debug
+buttons disappeared on scroll). `--rs-toolbar-h` keeps the sticky inspector and
+the framed device previews sized to the space below the toolbar, so nothing
+hides beneath it and the framed previews no longer make the page scroll on top
+of their own internal scroll.
+
+Anything else placed above the Runner should publish its height as
+`--rs-stack-top` the same way.

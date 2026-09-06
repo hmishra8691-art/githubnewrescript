@@ -83,5 +83,15 @@ await page.click('[data-testid="ax-tab-reports"]'); await shot("14-analytics-rep
 await page.route("**/api/auth/sessions**", (r) => json(r, { sessions: [] }));
 await page.route("**/api/notifications**", (r) => json(r, { notifications: [] }));
 await page.goto(`${STUDIO}/profile`, { waitUntil: "networkidle" }); await shot("15-profile", { full: true });
+
+// 6. the testing toolbar, scrolled deep into the survey — it must still be there
+const RUNTIME = process.env.RUNTIME_URL ?? "http://localhost:3001";
+try {
+  await page.goto(`${RUNTIME}/preview`, { waitUntil: "networkidle" });
+  await page.evaluate((d) => window.postMessage({ type: "rescript:preview", definition: d }, "*"), buildMasterDemoSurvey("sandbox"));
+  await page.waitForSelector('[data-testid="runtime-toolbar"]', { timeout: 20000 });
+  await page.evaluate(() => window.scrollTo(0, 900)); await shot("16-testing-toolbar-scrolled");
+  await page.click('[aria-label="mobile viewport"]'); await page.waitForTimeout(400); await shot("17-testing-toolbar-mobile");
+} catch { console.log("  (runtime on 3001 not reachable — skipped the toolbar shots)"); }
 await browser.close();
 console.log(`done → ${OUT}`);

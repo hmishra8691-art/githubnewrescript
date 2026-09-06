@@ -286,6 +286,31 @@ export function Runner({ definition: def, mode, session: initialSession, session
   const [debug, setDebug] = React.useState(false);
   const showInspector = canDebug && debug;
 
+  /**
+   * THE TESTING TOOLBAR IS A STICKY STACK, AND EVERYTHING BELOW IT NEEDS TO
+   * KNOW HOW TALL IT IS.
+   *
+   * The toolbar sticks under whatever banner the host page puts above it
+   * (`--rs-stack-top`, set by the preview page). Its own height then has to
+   * reach the inspector — which is sticky too — and the device frames, or the
+   * first 45px of each would sit underneath it. Measuring beats hard-coding:
+   * the row wraps on a narrow window and the build/position chips come and go.
+   */
+  const toolbarRef = React.useRef<HTMLDivElement | null>(null);
+  React.useEffect(() => {
+    const el = toolbarRef.current;
+    const root = document.documentElement;
+    if (!el) { root.style.removeProperty("--rs-toolbar-h"); return; }
+    const measure = () => root.style.setProperty("--rs-toolbar-h", `${Math.round(el.getBoundingClientRect().height)}px`);
+    measure();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    ro?.observe(el);
+    window.addEventListener("resize", measure);
+    return () => { ro?.disconnect(); window.removeEventListener("resize", measure); root.style.removeProperty("--rs-toolbar-h"); };
+    // no dependency list on purpose: the toolbar is not in the tree during the
+    // boot render, so a fixed list would leave the height unmeasured for good
+  });
+
   /** Restart the test session (req: test links must be repeatable).
    *  Test mode reloads the URL so the server issues a fresh session id;
    *  preview mode just re-seeds locally. */
@@ -680,7 +705,7 @@ export function Runner({ definition: def, mode, session: initialSession, session
    * slim toolbar and the optional inspector, so what you test is what ships.
    */
   const toolbar = (
-    <div className="rs-toolbar" data-testid="runtime-toolbar">
+    <div className="rs-toolbar" data-testid="runtime-toolbar" ref={toolbarRef}>
       <span className="rs-toolbar-mode">{mode.toUpperCase()}</span>
       {build && (
         <span className="rs-toolbar-build" data-testid="test-build"

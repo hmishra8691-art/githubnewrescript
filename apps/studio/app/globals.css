@@ -514,8 +514,9 @@ body.flow-dragging .flow-dropzone { height: 26px; }
 .toast.err { border-color: var(--red); color: var(--red); }
 .toast.ok { border-color: var(--green); }
 
-/* dashboard */
-.dash { max-width: 1080px; margin: 0 auto; padding: 40px 20px; }
+/* dashboard — the shell (width, padding, hero, metric band, rail) lives in
+   design-system.css; this rule used to re-declare a narrower max-width and win
+   by source order, which is why the page had margins instead of content */
 .dash h1 { display: flex; align-items: center; gap: 12px; }
 .logo-mark { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), #9333ea); display: inline-flex; align-items: center; justify-content: center; font-weight: 800; color: white; }
 
@@ -666,9 +667,10 @@ body.flow-dragging .flow-dropzone { height: 26px; }
 .dash-toolbar {
   display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 20px 0 10px;
 }
-.dash-search { flex: 1 1 240px; max-width: 380px; }
-/* the base .select is width:100%, which pushed each of these onto its own row */
-.dash-toolbar .select { width: auto; flex: 0 0 auto; min-width: 150px; }
+.dash-search { flex: 1 1 200px; max-width: 380px; min-width: 0; }
+/* the base .select is width:100%, which pushed each of these onto its own row.
+   They may SHRINK though: the project list is a column now, not the page. */
+.dash-toolbar .select { width: auto; flex: 0 1 auto; min-width: 140px; }
 .dash-filters {
   display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 14px;
 }

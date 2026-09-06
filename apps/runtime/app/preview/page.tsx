@@ -19,6 +19,27 @@ export default function PreviewPage() {
    */
   const [entry, setEntry] = React.useState<{ startAt?: string; answers?: Record<string, unknown>; revision?: number | null } | null>(null);
 
+  /**
+   * The identification banner and the Runner's testing toolbar are two sticky
+   * rows in one stack. Publishing the banner's measured height as
+   * `--rs-stack-top` is what lets the toolbar park directly beneath it instead
+   * of sliding underneath it and taking the device / Debug buttons with it.
+   * Measured rather than hard-coded because the banner wraps to two lines on a
+   * narrow window.
+   */
+  const barRef = React.useRef<HTMLDivElement | null>(null);
+  React.useEffect(() => {
+    const el = barRef.current;
+    const root = document.documentElement;
+    if (!el) { root.style.removeProperty("--rs-stack-top"); return; }
+    const measure = () => root.style.setProperty("--rs-stack-top", `${Math.round(el.getBoundingClientRect().height)}px`);
+    measure();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    ro?.observe(el);
+    window.addEventListener("resize", measure);
+    return () => { ro?.disconnect(); window.removeEventListener("resize", measure); root.style.removeProperty("--rs-stack-top"); };
+  });
+
   React.useEffect(() => {
     const tryLoad = (raw: unknown) => {
       const parsed = SurveyDefinition.safeParse(raw);
@@ -71,7 +92,7 @@ export default function PreviewPage() {
   const seeded = entry?.answers ? Object.keys(entry.answers).filter((k) => entry.answers![k] !== undefined && entry.answers![k] !== "").length : 0;
   return (
     <>
-      <div className="rs-preview-bar" data-testid="preview-bar">
+      <div className="rs-preview-bar" data-testid="preview-bar" ref={barRef}>
         <strong>{entry?.startAt ? "Preview block" : "Preview"}</strong>
         {entry?.startAt && <span data-testid="preview-block">{blockTitle || entry.startAt}</span>}
         <span>{def.meta.code} · v{def.meta.version}{entry?.revision != null ? ` · rev ${entry.revision}` : ""}</span>
