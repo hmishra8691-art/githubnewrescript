@@ -652,6 +652,11 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
               {counts[n.key] != null && <span className="nav-count">{counts[n.key]}</span>}
             </button>
           ))}
+          {/* Data Analytics is its own top-level workspace (§1); this is a link out, not a Studio tab — nothing here changes. */}
+          <a className="nav-item" href={s.surveyDbId ? `/analytics?survey=${encodeURIComponent(s.surveyDbId)}` : "/analytics"} data-testid="nav-analytics" title="Open Data Analytics for this survey">
+            <span style={{ width: 16, textAlign: "center" }}>◍</span>
+            Data Analytics
+          </a>
         </nav>
         <main className={`center${roPanel ? " ro" : ""}`} data-readonly={roPanel ? "1" : "0"}>
           {collaboration && !["collaborators", "notes", "activity", "data"].includes(tab) && (

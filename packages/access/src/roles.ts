@@ -96,6 +96,12 @@ export const CAPABILITIES = [
   "project.transfer",         // hand ownership to someone else
   "project.delete",
   "project.lock_settings",    // freeze the project, change its collaboration settings
+
+  /* analytics & reporting (§29): computed over response data, never a second copy of it */
+  "analytics.read",           // open the Data Analytics workspace, run analyses, view saved charts / reports
+  "analytics.edit",           // save, modify and delete analyses, charts, segments, filters, reports, dashboards, themes
+  "analytics.publish",        // publish a report version, create / revoke share links
+  "analytics.export",         // generate PowerPoint / Excel downloads
 ] as const;
 export type Capability = (typeof CAPABILITIES)[number];
 
@@ -119,6 +125,7 @@ const GRANTS: Record<ProjectRole, Capability[]> = {
     "comment.create", "comment.resolve",
     "lock.acquire", "lock.request",
     "project.share",
+    "analytics.read", "analytics.edit", "analytics.publish", "analytics.export",
   ],
 
   programmer: [
@@ -127,6 +134,7 @@ const GRANTS: Record<ProjectRole, Capability[]> = {
     "survey.edit", "survey.save_version",
     "comment.create", "comment.resolve",
     "lock.acquire", "lock.request",
+    "analytics.read", "analytics.edit", "analytics.export",
   ],
 
   reviewer: [
@@ -134,11 +142,13 @@ const GRANTS: Record<ProjectRole, Capability[]> = {
     "responses.read", "responses.export",
     "comment.create", "comment.resolve",
     "lock.request",
+    "analytics.read", "analytics.export",
   ],
 
   viewer: [
     "project.read", "project.read_members",
     "responses.read",
+    "analytics.read",
   ],
 
   test_user: [
@@ -153,6 +163,7 @@ const GRANTS: Record<ProjectRole, Capability[]> = {
     "deploy.manage",
     "comment.create",
     "lock.request",
+    "analytics.read", "analytics.export",
   ],
 };
 

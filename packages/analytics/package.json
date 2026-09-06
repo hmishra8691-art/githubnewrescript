@@ -1,0 +1,33 @@
+{
+  "name": "@rescript/analytics",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./export": {
+      "types": "./dist/export/index.d.ts",
+      "default": "./dist/export/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test dist/stats/*.test.js dist/analyses/*.test.js dist/export/*.test.js"
+  },
+  "dependencies": {
+    "@rescript/engine": "workspace:*",
+    "@rescript/schema": "workspace:*",
+    "exceljs": "^4.4.0",
+    "pptxgenjs": "^4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^5.6.3",
+    "@rescript/designs": "workspace:*"
+  }
+}

@@ -232,6 +232,7 @@ export default function Dashboard() {
                 {session.state.user.unread} new
               </a>
             )}
+            <a className="btn small" href="/analytics" data-testid="dash-analytics">Data Analytics</a>
             <a className="btn small" href="/profile">Profile</a>
             <a className="btn small" href="/security">Security</a>
             {session.state.user.isPlatformAdmin && <a className="btn small" href="/admin">Administration</a>}

@@ -24,7 +24,7 @@ import { NextResponse, type NextRequest } from "next/server";
  * to sign in to answer a survey.
  */
 
-const PUBLIC_PATHS = ["/login", "/signup", "/forgot", "/reset", "/sandbox"];
+const PUBLIC_PATHS = ["/login", "/signup", "/forgot", "/reset", "/sandbox", "/share"];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;

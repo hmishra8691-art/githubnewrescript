@@ -76,6 +76,21 @@ export const AUDIT_EVENTS = [
   "quota.modified",
   "quota.deleted",
 
+  /* analytics & reporting (§30) */
+  "analytics.analysis_created",
+  "analytics.analysis_modified",
+  "analytics.analysis_deleted",
+  "analytics.chart_created",
+  "analytics.chart_modified",
+  "analytics.report_created",
+  "analytics.report_modified",
+  "analytics.report_published",
+  "analytics.report_shared",
+  "analytics.share_revoked",
+  "analytics.share_accessed",
+  "analytics.export_generated",
+  "analytics.report_downloaded",
+
   /* collaboration */
   "comment.created",
   "comment.resolved",
@@ -166,6 +181,19 @@ export function describeEvent(r: AuditRow): string {
       return `${who} changed quota “${str(d.quotaName) || str(d.quotaId)}”${shown ? ` — ${shown}${changes.length > 3 ? ", …" : ""}` : ""}`;
     }
     case "quota.deleted": return `${who} deleted quota “${str(d.quotaName) || str(d.quotaId)}”${d.cells != null ? ` (${str(d.cells)} cells; response data kept)` : ""}`;
+    case "analytics.analysis_created": return `${who} created analysis “${str(d.name)}”${d.kind ? ` (${str(d.kind)})` : ""}`;
+    case "analytics.analysis_modified": return `${who} modified analysis “${str(d.name)}”${d.version ? ` → v${str(d.version)}` : ""}`;
+    case "analytics.analysis_deleted": return `${who} deleted analysis “${str(d.name)}”`;
+    case "analytics.chart_created": return `${who} saved chart “${str(d.name)}”`;
+    case "analytics.chart_modified": return `${who} modified chart “${str(d.name)}”`;
+    case "analytics.report_created": return `${who} created report “${str(d.name)}”`;
+    case "analytics.report_modified": return `${who} modified report “${str(d.name)}”`;
+    case "analytics.report_published": return `${who} published report “${str(d.name)}” v${str(d.version) || "?"}${d.mode ? ` (${str(d.mode)})` : ""}`;
+    case "analytics.report_shared": return `${who} shared report “${str(d.name)}” (${str(d.access) || "link"}${d.permission ? `, ${str(d.permission)}` : ""})`;
+    case "analytics.share_revoked": return `${who} revoked a share link for “${str(d.name)}”`;
+    case "analytics.share_accessed": return `A shared report “${str(d.name)}” was opened${d.viewer ? ` by ${str(d.viewer)}` : ""}`;
+    case "analytics.export_generated": return `${who} generated a ${str(d.format || "").toUpperCase()} export of “${str(d.name)}”`;
+    case "analytics.report_downloaded": return `A ${str(d.format || "").toUpperCase()} of “${str(d.name)}” was downloaded${d.viewer ? ` by ${str(d.viewer)}` : " from a share link"}`;
     case "version.restored": return `${who} restored version ${str(d.version) || "?"}`;
     case "deployment.started": return `${who} started a ${str(d.mode) || ""} deployment`.replace("  ", " ");
     case "deployment.completed": return `${who} completed a ${str(d.mode) || ""} deployment`.replace("  ", " ");
@@ -188,7 +216,7 @@ export function auditCategory(action: string): AuditCategory {
   if (action.startsWith("session.") || action.startsWith("account.")) return "session";
   if (action.startsWith("lock.")) return "editing";
   if (action.startsWith("comment.")) return "collaboration";
-  if (action.startsWith("responses.")) return "data";
+  if (action.startsWith("responses.") || action.startsWith("analytics.")) return "data";
   if (action.startsWith("survey.") || action.startsWith("version.") || action.startsWith("deployment.") || action.startsWith("quota.")) return "survey";
   return "access";
 }
