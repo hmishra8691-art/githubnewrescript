@@ -73,10 +73,10 @@ export function ExpressionField({ value, dataType, onChange, placeholder }: {
             {check.ok ? "valid" : check.error}
           </span>
         )}
-        {check?.ok && check.resultNote && <span className="muted" style={{ fontSize: 11 }}>{check.resultNote}</span>}
+        {check?.ok && check.resultNote && <span className="muted" style={{ fontSize: 12.5 }}>{check.resultNote}</span>}
       </div>
       {rewritten && (
-        <div className="muted mono expr-normalized" style={{ fontSize: 11 }}>
+        <div className="muted mono expr-normalized" style={{ fontSize: 12.5 }}>
           reads as: {rewritten}
         </div>
       )}
@@ -89,7 +89,7 @@ export function ExpressionField({ value, dataType, onChange, placeholder }: {
                 <button key={q.id} className="ep-key" title={q.text.replace(/<[^>]*>/g, "").slice(0, 60)}
                   onClick={() => insert(q.variableName)}>{q.variableName}</button>
               ))}
-              {s.def.questions.length === 0 && <span className="muted" style={{ fontSize: 11 }}>no questions yet</span>}
+              {s.def.questions.length === 0 && <span className="muted" style={{ fontSize: 12.5 }}>no questions yet</span>}
             </div>
           </div>
           {embeddedCatalog(s.def).length > 0 && (
@@ -150,7 +150,7 @@ export function EmbeddedDataEditor({ node, onChange }: {
 
   return (
     <div className="ed-editor">
-      <p className="muted" style={{ fontSize: 11, marginTop: 0 }}>
+      <p className="muted" style={{ fontSize: 12.5, marginTop: 0 }}>
         Captured values become variables you can use in any logic, in piping and in
         redirect URLs. The type decides how the value is read — an Integer
         <code> score</code> compares as a number, so 9 is less than 80 rather than after it.
@@ -205,7 +205,7 @@ export function EmbeddedDataEditor({ node, onChange }: {
                 </label>
               )}
               {(f.source === "url" || f.source === "panel") && (
-                <p className="muted" style={{ fontSize: 11, margin: "2px 0 6px" }}>
+                <p className="muted" style={{ fontSize: 12.5, margin: "2px 0 6px" }}>
                   Read from <code>?{f.name || "name"}=…</code> when the respondent arrives.
                 </p>
               )}
@@ -320,20 +320,20 @@ export function RedirectEditor({ node, onChange }: {
           {check.ok ? (check.warning ?? "valid URL") : check.error}
         </span>
         {check.tokens.length > 0 && (
-          <span className="muted" style={{ fontSize: 11 }} data-testid="redirect-tokens">
+          <span className="muted" style={{ fontSize: 12.5 }} data-testid="redirect-tokens">
             carries {check.tokens.length} value{check.tokens.length === 1 ? "" : "s"}: {check.tokens.join(" ")}
           </span>
         )}
       </div>
 
       <div className="row" style={{ marginTop: 8, gap: 16 }}>
-        <label className="row" style={{ gap: 5, fontSize: 12 }}>
+        <label className="row" style={{ gap: 5, fontSize: 13 }}>
           <input type="radio" name={`win_${node.id}`} checked={!node.newWindow}
             data-testid="redirect-same-window"
             onChange={() => onChange({ ...node, newWindow: undefined })} />
           Open in same window
         </label>
-        <label className="row" style={{ gap: 5, fontSize: 12 }}>
+        <label className="row" style={{ gap: 5, fontSize: 13 }}>
           <input type="radio" name={`win_${node.id}`} checked={!!node.newWindow}
             data-testid="redirect-new-window"
             onChange={() => onChange({ ...node, newWindow: true })} />
@@ -358,7 +358,7 @@ export function NodeEditor({ node, onChange }: { node: FlowNode; onChange(n: Flo
           <div className="row" style={{ marginBottom: 6 }}>
             <input className="input" style={{ width: 220 }} value={node.title ?? ""}
               placeholder="Page title" onChange={(e) => onChange({ ...node, title: e.target.value })} />
-            <span className="muted mono" style={{ fontSize: 11 }}>{node.id}</span>
+            <span className="muted mono" style={{ fontSize: 12.5 }}>{node.id}</span>
           </div>
           <div className="flabel">Questions on this page</div>
           {node.questionIds.map((qid, i) => {
@@ -415,7 +415,7 @@ export function NodeEditor({ node, onChange }: { node: FlowNode; onChange(n: Flo
               placeholder="Randomizer" onChange={(e) => onChange({ ...node, title: e.target.value || undefined })} />
           </label>
           <div className="row" style={{ flexWrap: "wrap" }}>
-            <label className="row" style={{ gap: 6, fontSize: 12 }}>
+            <label className="row" style={{ gap: 6, fontSize: 13 }}>
               show
               <input className="input" style={{ width: 64 }} type="number" min={1}
                 data-testid="randomizer-show"
@@ -423,13 +423,13 @@ export function NodeEditor({ node, onChange }: { node: FlowNode; onChange(n: Flo
                 onChange={(e) => onChange({ ...node, show: e.target.value === "" ? undefined : Number(e.target.value) })} />
               of {node.children.length}, in random order
             </label>
-            <label className="row" style={{ gap: 4, fontSize: 12 }}>
+            <label className="row" style={{ gap: 4, fontSize: 13 }}>
               <input type="checkbox" checked={node.evenPresentation ?? false}
                 onChange={(e) => onChange({ ...node, evenPresentation: e.target.checked || undefined })} />
               even presentation
             </label>
           </div>
-          <p className="muted" style={{ fontSize: 11 }}>
+          <p className="muted" style={{ fontSize: 12.5 }}>
             Anything can go inside: blocks, groups, even another randomizer. Drag it onto
             this card, or use <em>+ Add element</em> inside it.
           </p>
@@ -459,7 +459,7 @@ export function NodeEditor({ node, onChange }: { node: FlowNode; onChange(n: Flo
               </div>
               <ConditionEditor value={b.when} onChange={(when) =>
                 onChange({ ...node, branches: node.branches.map((x, j) => (j === i ? { ...x, when } : x)) })} />
-              <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+              <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
                 THEN run what is nested under “{b.label || conditionToText(b.when, s.def) || "this path"}” below.
               </div>
             </div>

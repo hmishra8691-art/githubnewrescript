@@ -79,7 +79,7 @@ export function ShareDialog({ api, report, onClose, onCreated }: { api: AxApi; r
   return (
     <div className="modal-back" onClick={onClose}><div className="modal" onClick={(e) => e.stopPropagation()} data-testid="ax-share-dialog">
       <h2>Share “{report.name}”</h2>
-      {!report.published_version ? <div className="ax-warnings">Publish a version first — a share link always shows a published snapshot, never the editable draft.</div> : <div className="muted" style={{ fontSize: 12 }}>Viewers get the read-only presentation of published version {report.published_version}. Editing the report later does not change what they see until you republish.</div>}
+      {!report.published_version ? <div className="ax-warnings">Publish a version first — a share link always shows a published snapshot, never the editable draft.</div> : <div className="muted" style={{ fontSize: 13 }}>Viewers get the read-only presentation of published version {report.published_version}. Editing the report later does not change what they see until you republish.</div>}
       <div className="flabel" style={{ marginTop: 10 }}>Sharing</div>
       <div className="ax-toggles"><label className="ax-toggle"><input type="radio" checked={access === "private"} onChange={() => setAccess("private")} /> Private (project members only)</label><label className="ax-toggle"><input type="radio" checked={access === "users"} onChange={() => setAccess("users")} /> Specific users</label><label className="ax-toggle"><input type="radio" checked={access === "link"} onChange={() => setAccess("link")} /> Anyone with the link</label></div>
       {access === "users" && <label className="ax-field"><span>Emails or user IDs (comma separated) — they sign in to view</span><textarea className="ta" rows={2} value={emails} onChange={(e) => setEmails(e.target.value)} placeholder="client@example.com, colleague@example.com" /></label>}
@@ -195,7 +195,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
       {creating && <div className="card row"><input className="input" autoFocus placeholder={`${creating === "report" ? "Report" : "Dashboard"} name`} value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && create()} data-testid="ax-report-name" /><button className="btn primary small" onClick={create} data-testid="ax-report-create">Create</button><button className="btn small" onClick={() => setCreating(null)}>Cancel</button></div>}
       {error && <div className="ax-error">{error}</div>}
       <div className="ax-cards">
-        {items.map((r) => <div key={r.id} className="card selectable" onClick={() => openReport(r)} data-testid="ax-report-card"><div className="card-title">{r.kind === "dashboard" ? "▦" : "▤"} {r.name}</div><div className="muted" style={{ fontSize: 12 }}>{r.kind} · {r.mode} · {r.published_version ? `published v${r.published_version}` : "not published"} · updated {timeAgo(r.updated_at)}</div></div>)}
+        {items.map((r) => <div key={r.id} className="card selectable" onClick={() => openReport(r)} data-testid="ax-report-card"><div className="card-title">{r.kind === "dashboard" ? "▦" : "▤"} {r.name}</div><div className="muted" style={{ fontSize: 13 }}>{r.kind} · {r.mode} · {r.published_version ? `published v${r.published_version}` : "not published"} · updated {timeAgo(r.updated_at)}</div></div>)}
         {!items.length && <div className="muted">No reports yet. Create one, then add saved analyses as charts, tables and KPIs.</div>}
       </div>
     </div>
@@ -225,12 +225,12 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
           <div className="ax-addlist">{isDash
             ? (["kpi", "chart", "table", "text", "filter"] as DashboardWidget["type"][]).map((t) => <button key={t} className="btn small" onClick={() => addWidget(t)} disabled={t !== "text" && t !== "filter" && !analyses.length}>{t}</button>)
             : (["cover", "executive_summary", "section", "chart", "table", "kpi", "insights", "text"] as ReportBlock["type"][]).map((t) => <button key={t} className="btn small" onClick={() => addBlock(t)} disabled={["chart", "table", "kpi", "insights", "executive_summary"].includes(t) && !analyses.length} data-testid={`ax-add-${t}`}>{t.replace("_", " ")}</button>)}</div>
-          {!analyses.length && <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>Save an analysis first to add charts, tables and KPIs.</div>}
+          {!analyses.length && <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>Save an analysis first to add charts, tables and KPIs.</div>}
           <div className="flabel" style={{ marginTop: 12 }}>Order (drag to reorder)</div>
           <ol className="ax-order">{items_.map((b) => <li key={b.id} draggable onDragStart={() => { dragId.current = b.id; }} onDragOver={(e) => e.preventDefault()} onDrop={() => onDrop(b.id)} className={editing === b.id ? "on" : ""} onClick={() => setEditing(b.id)} data-testid="ax-order-item"><span className="ax-order-type">{b.type.replace("_", " ")}</span> {("title" in b && b.title) || ("analysisId" in b && b.analysisId ? analyses.find((a) => a.id === b.analysisId)?.name : "") || ""}</li>)}</ol>
           {!isDash && <>
             <div className="flabel" style={{ marginTop: 12 }}>Viewer segment switching</div>
-            <div className="muted" style={{ fontSize: 11 }}>Segments a shared viewer may switch between (from analyses with segments). Empty = all available.</div>
+            <div className="muted" style={{ fontSize: 12.5 }}>Segments a shared viewer may switch between (from analyses with segments). Empty = all available.</div>
             <div className="ax-chips">{[...new Set(Object.values(results).flatMap((r) => r.segments?.map((s) => s.name) ?? []))].map((s) => { const on = rd.viewerSegments?.includes(s); return <button key={s} type="button" className={`ax-chip ${on ? "on" : ""}`} onClick={() => { setDef({ ...rd, viewerSegments: on ? (rd.viewerSegments ?? []).filter((x) => x !== s) : [...(rd.viewerSegments ?? []), s] }); setDirty(true); }}>{s}</button>; })}</div>
             <div className="flabel" style={{ marginTop: 12 }}>Branding</div>
             <label className="ax-field"><span>Header</span><input className="input small" value={rd.branding?.header ?? ""} onChange={(e) => { setDef({ ...rd, branding: { ...rd.branding, header: e.target.value } }); setDirty(true); }} /></label>
@@ -248,7 +248,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
       {editing && items_.find((b) => b.id === editing) && <BlockEditor block={items_.find((b) => b.id === editing)!} analyses={analyses} onChange={(nb) => { setItems(items_.map((b) => (b.id === nb.id ? nb : b))); void ensure([(nb as { analysisId?: string }).analysisId, ...(((nb as { analysisIds?: string[] }).analysisIds) ?? [])]); }} onClose={() => setEditing(null)} />}
       {share && <ShareDialog api={api} report={open} onClose={() => setShare(false)} onCreated={onChange} />}
       {exp && <ExportDialog api={api} reportId={open.id} themes={themes} versions={publishedVersions} onClose={() => setExp(false)} />}
-      <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>{surveyTitle}</div>
+      <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>{surveyTitle}</div>
     </div>
   );
 }

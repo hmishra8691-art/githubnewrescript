@@ -74,12 +74,12 @@ export function ExportDialog({ onClose }: { onClose(): void }) {
           <label className={`move-opt fmt ${format === "docx" ? "on" : ""}`}>
             <input type="radio" name="fmt" checked={format === "docx"} onChange={() => setFormat("docx")} />
             <span><strong>Word (.docx)</strong><br />
-              <span className="muted" style={{ fontSize: 11 }}>for review, QA and client handover</span></span>
+              <span className="muted" style={{ fontSize: 12.5 }}>for review, QA and client handover</span></span>
           </label>
           <label className={`move-opt fmt ${format === "json" ? "on" : ""}`} data-testid="fmt-json">
             <input type="radio" name="fmt" checked={format === "json"} onChange={() => setFormat("json")} />
             <span><strong>JSON (.json)</strong><br />
-              <span className="muted" style={{ fontSize: 11 }}>the structured definition</span></span>
+              <span className="muted" style={{ fontSize: 12.5 }}>the structured definition</span></span>
           </label>
         </div>
 
@@ -115,7 +115,7 @@ export function ExportDialog({ onClose }: { onClose(): void }) {
         </div>
 
         {format === "json" && count < ALL_FIELDS.length && (
-          <p className="muted" style={{ fontSize: 11.5, marginBottom: 0 }}>
+          <p className="muted" style={{ fontSize: 13, marginBottom: 0 }}>
             A filtered JSON export is for reading, not for re-importing — it is missing
             fields the survey needs. Choose <em>Full export</em> for a file that round-trips.
           </p>

@@ -202,7 +202,7 @@ export default function ProfilePage() {
           onChange={(e) => setDraft((d) => ({ ...d, [field]: e.target.value }))}
         />
         {problems[field] && (
-          <span style={{ display: "block", fontSize: 11.5, color: "var(--red)", marginTop: 3 }}>
+          <span style={{ display: "block", fontSize: 13, color: "var(--red)", marginTop: 3 }}>
             {problems[field]}
           </span>
         )}
@@ -277,7 +277,7 @@ export default function ProfilePage() {
               <dt>Current session status</dt>
               <dd>
                 <span className="chip on">{data.currentSession?.status ?? "unknown"}</span>{" "}
-                <a href="/security" style={{ fontSize: 12 }}>Manage sessions</a>
+                <a href="/security" style={{ fontSize: 13 }}>Manage sessions</a>
               </dd>
             </dl>
           </div>
@@ -294,7 +294,7 @@ export default function ProfilePage() {
 
           <div className="card">
             <strong>Change password</strong>
-            <p className="muted" style={{ fontSize: 12.5, margin: "4px 0 12px" }}>
+            <p className="muted" style={{ fontSize: 13.5, margin: "4px 0 12px" }}>
               Your current password is required — so a session left open on someone else&rsquo;s
               machine cannot be used to lock you out of your own account.
             </p>

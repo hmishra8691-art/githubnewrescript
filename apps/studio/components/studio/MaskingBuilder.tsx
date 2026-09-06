@@ -58,7 +58,7 @@ function SetRow({ node, sources, onChange, onRemove, onBracket, canBracket }: {
       <div className="mb-bracket" data-testid="mask-bracket">
         <div className="mb-bracket-head">
           <span className="mb-badge">GROUP</span>
-          <span className="muted" style={{ fontSize: 11 }}>evaluated first</span>
+          <span className="muted" style={{ fontSize: 12.5 }}>evaluated first</span>
           <span className="grow" />
           <button className="btn small danger" title="Remove this bracket and everything in it"
             onClick={onRemove}>×</button>
@@ -266,7 +266,7 @@ function SetExpressionPane({ expr, onChange }: {
         <div key={i} className="xe-warn" data-testid="mask-warning">⚠ {w.message}</div>
       ))}
       {result.errors.length > 0 && (
-        <div className="muted" style={{ fontSize: 11 }}>
+        <div className="muted" style={{ fontSize: 12.5 }}>
           The saved mask is unchanged until this reads correctly.
         </div>
       )}
@@ -299,7 +299,7 @@ function SourcePicker({ sources, onInsert }: {
             );
           }))}
         {sources.length === 0 && (
-          <span className="muted" style={{ fontSize: 11 }}>
+          <span className="muted" style={{ fontSize: 12.5 }}>
             No other questions to draw options from yet.
           </span>
         )}
@@ -355,7 +355,7 @@ export function MaskingBuilder({ q, patch }: {
 
   return (
     <div className="masking-builder" data-testid="masking-builder">
-      <p className="muted" style={{ fontSize: 11, marginTop: 0 }}>
+      <p className="muted" style={{ fontSize: 12.5, marginTop: 0 }}>
         Build this question&apos;s option list from other questions&apos; answers. Sets combine
         with UNION (either), INTERSECTION (both) and DIFFERENCE (the first but not the
         second); brackets decide what is evaluated first.
@@ -423,7 +423,7 @@ export function MaskingBuilder({ q, patch }: {
                 <option value="disable">Show all, allow only these</option>
               </select>
             </label>
-            <label className="row" style={{ gap: 5, fontSize: 12, alignSelf: "flex-end" }}>
+            <label className="row" style={{ gap: 5, fontSize: 13, alignSelf: "flex-end" }}>
               <input type="checkbox" data-testid="mask-keep-always"
                 checked={mask?.keepAlwaysShow ?? true}
                 onChange={(e) => patch({ mask: { ...mask!, keepAlwaysShow: e.target.checked } })} />
@@ -431,7 +431,7 @@ export function MaskingBuilder({ q, patch }: {
             </label>
           </div>
           {protectedOptions.length > 0 && (mask?.keepAlwaysShow ?? true) && (
-            <div className="muted" style={{ fontSize: 11 }} data-testid="mask-protected">
+            <div className="muted" style={{ fontSize: 12.5 }} data-testid="mask-protected">
               Kept whatever the mask returns: {protectedOptions.map((o) =>
                 o.label.replace(/<[^>]*>/g, "")).join(", ")}
             </div>
@@ -488,14 +488,14 @@ function PunchRules({ q, patch, sources }: {
   return (
     <div className="mb-punch">
       <h3 className="sec" style={{ marginTop: 16 }}>Auto punch (option → option)</h3>
-      <p className="muted" style={{ fontSize: 11, marginTop: -4 }}>
+      <p className="muted" style={{ fontSize: 12.5, marginTop: -4 }}>
         “If an option is selected elsewhere, select / deselect / show / hide an option here.”
         Also listed survey-wide in the Logic tab.
       </p>
       <AutoPunchRows q={q} />
 
       <h3 className="sec" style={{ marginTop: 16 }}>Auto-select from a set (punching)</h3>
-      <p className="muted" style={{ fontSize: 11, marginTop: -4 }}>
+      <p className="muted" style={{ fontSize: 12.5, marginTop: -4 }}>
         Tick options in this question from another question&apos;s answers. Codes that match
         carry across; use a mapping when the two lists number things differently.
       </p>

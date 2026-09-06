@@ -150,7 +150,7 @@ export function ScriptsPanel() {
       <div className="row" style={{ marginBottom: 14 }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>Custom Scripts</h2>
       </div>
-      <p className="muted" style={{ fontSize: 12 }}>
+      <p className="muted" style={{ fontSize: 13 }}>
         Scripts run in the runtime&apos;s controlled host with this API:{" "}
         <code>get(ref) set(ref, v) getCalc/setCalc getEmbedded/setEmbedded expr(&quot;Q1+Q2&quot;) pipe(&quot;{"{{Q1}}"}&quot;)
         flag(name) log(...) error(msg, ref) loop</code>. Events: on_load, on_change, on_submit, on_validate, on_complete.
@@ -174,7 +174,7 @@ export function ScriptsPanel() {
               <option value="on_submit">on_submit</option><option value="on_validate">on_validate</option>
               <option value="on_complete">on_complete</option>
             </select>
-            <label className="row" style={{ gap: 4, fontSize: 12 }}>
+            <label className="row" style={{ gap: 4, fontSize: 13 }}>
               <input type="checkbox" checked={sc.enabled}
                 onChange={(e) => s.update((d) => { d.scripts[i].enabled = e.target.checked; })} /> enabled
             </label>

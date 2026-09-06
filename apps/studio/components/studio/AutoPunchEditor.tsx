@@ -87,7 +87,7 @@ function SimpleRow({ target, rule, onChange, onMove, onRemove }: {
   return (
     <div className="card ap-rule" data-testid="ap-rule" style={{ padding: 10 }}>
       <div className="row" style={{ alignItems: "center", marginBottom: 6 }}>
-        <span className="muted mono" style={{ fontSize: 11 }} data-testid="ap-rule-text">{formatPunchExpression(s.def, target, rule)}</span>
+        <span className="muted mono" style={{ fontSize: 12.5 }} data-testid="ap-rule-text">{formatPunchExpression(s.def, target, rule)}</span>
         <span className="grow" />
         <button className={`btn small ${mode === "simple" ? "primary" : ""}`} data-testid="ap-mode-simple"
           disabled={!simple} title={simple ? "" : "This rule's condition is more than one option — edit it as an expression"}
@@ -154,7 +154,7 @@ function SimpleRow({ target, rule, onChange, onMove, onRemove }: {
         <div>
           {!simple && rule.when && (
             <details style={{ marginBottom: 6 }}>
-              <summary className="muted" style={{ fontSize: 11, cursor: "pointer" }}>Condition, in the visual builder</summary>
+              <summary className="muted" style={{ fontSize: 12.5, cursor: "pointer" }}>Condition, in the visual builder</summary>
               <ConditionEditor value={rule.when} onChange={(when) => { s.labelNextEdit?.("edit auto punch rule"); onChange({ ...rule, when }); }} />
             </details>
           )}
@@ -163,17 +163,17 @@ function SimpleRow({ target, rule, onChange, onMove, onRemove }: {
             onBlur={applyExpression}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); applyExpression(); } }} />
           <div className="row" style={{ alignItems: "center" }}>
-            <span className="muted" style={{ fontSize: 11 }}>
+            <span className="muted" style={{ fontSize: 12.5 }}>
               IF &lt;condition&gt; THEN SELECT / DESELECT / SHOW / HIDE / ENABLE / DISABLE Q.option[, Q.option] · CLEAR Q — condition: {conditionText}
             </span>
             <span className="grow" />
             <button className="btn small primary" data-testid="ap-apply" onClick={applyExpression}>Apply</button>
           </div>
-          {err && <div className="xe-error" data-testid="ap-error" style={{ color: "var(--danger, #b91c1c)", fontSize: 12 }}>{err}</div>}
+          {err && <div className="xe-error" data-testid="ap-error" style={{ color: "var(--danger, #b91c1c)", fontSize: 13 }}>{err}</div>}
         </div>
       )}
       {LIST_ACTIONS.has(rule.action) && (
-        <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+        <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
           Changes what the respondent sees in {target.code}; the answer itself is untouched.
         </div>
       )}
@@ -259,13 +259,13 @@ function AddRule({ defaultTarget }: { defaultTarget?: Question }) {
     <div className="ap-add" data-testid="ap-add">
       <div className="row" style={{ alignItems: "center" }}>
         <button className="btn small" data-testid="ap-add-simple" disabled={qs.length === 0} onClick={addSimple}>+ auto punch rule</button>
-        <span className="muted" style={{ fontSize: 11 }}>or type one:</span>
+        <span className="muted" style={{ fontSize: 12.5 }}>or type one:</span>
         <input className="input mono grow" data-testid="ap-add-expression" placeholder={example} value={text}
           onChange={(e) => { setText(e.target.value); setErr(null); }}
           onKeyDown={(e) => { if (e.key === "Enter") addExpression(); }} />
         <button className="btn small primary" data-testid="ap-add-apply" disabled={!text.trim()} onClick={addExpression}>Add</button>
       </div>
-      {err && <div data-testid="ap-add-error" style={{ color: "var(--danger, #b91c1c)", fontSize: 12, marginTop: 4 }}>{err}</div>}
+      {err && <div data-testid="ap-add-error" style={{ color: "var(--danger, #b91c1c)", fontSize: 13, marginTop: 4 }}>{err}</div>}
     </div>
   );
 }
@@ -277,13 +277,13 @@ export function AutoPunchPanel() {
   const all = allPunchRules(s.def);
   return (
     <div data-testid="auto-punch-panel">
-      <p className="muted" style={{ fontSize: 12 }}>
+      <p className="muted" style={{ fontSize: 13 }}>
         “If an option is selected in one question, automatically select (or deselect, show, hide,
         enable, disable) an option in another.” Rules are stored on the question they fill and
         run when that question is reached — or immediately when both are on the same page. The
         condition is ordinary survey logic: AND / OR / NOT and brackets all work.
       </p>
-      {all.length === 0 && <div className="muted" style={{ fontSize: 12, margin: "6px 0" }} data-testid="ap-empty">No auto punch rules yet.</div>}
+      {all.length === 0 && <div className="muted" style={{ fontSize: 13, margin: "6px 0" }} data-testid="ap-empty">No auto punch rules yet.</div>}
       {all.map(({ target, rule }) => (
         <SimpleRow key={rule.id} target={target} rule={rule}
           onChange={(next) => ops.replaceRule(target.id, next)}

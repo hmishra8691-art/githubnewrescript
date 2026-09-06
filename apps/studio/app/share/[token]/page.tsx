@@ -65,7 +65,7 @@ export default function SharePage({ params }: { params: { token: string } }) {
     <div className="ax-share-page" data-testid="ax-share-view">
       <ReportView title={rep.title} subtitle={rep.subtitle} blocks={rep.widgets ? undefined : rep.blocks} widgets={rep.widgets ?? undefined} crossFilter={!!rep.crossFilter} results={data.results} theme={data.theme} mode="snapshot" version={data.version} publishedAt={data.publishedAt} branding={rep.branding} viewerSegments={rep.viewerSegments}
         toolbar={<>
-          {data.dataset?.responses != null && <span className="muted" style={{ fontSize: 12 }}>{data.dataset.responses} responses</span>}
+          {data.dataset?.responses != null && <span className="muted" style={{ fontSize: 13 }}>{data.dataset.responses} responses</span>}
           {data.permission === "download" && <><button className="btn small" disabled={busy} onClick={() => download("pptx")} data-testid="ax-share-ppt">Download PPT</button><button className="btn small" disabled={busy} onClick={() => download("xlsx")} data-testid="ax-share-xlsx">Download Excel</button></>}
         </>} />
       <div className="ax-share-foot muted">Read-only view of a published report snapshot · Powered by Rescript Analytics</div>

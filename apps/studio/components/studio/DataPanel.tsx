@@ -143,7 +143,7 @@ export function DataPanel() {
       ) : view === "quality" ? <QualityPanel include={include} /> : (
       <>
       <div className="row" style={{ marginBottom: 10, flexWrap: "wrap", gap: 6, alignItems: "center" }} data-testid="dataset-selector">
-        <span className="muted" style={{ fontSize: 11 }}>Dataset for table &amp; exports:</span>
+        <span className="muted" style={{ fontSize: 12.5 }}>Dataset for table &amp; exports:</span>
         <select className="select" style={{ width: 300 }} data-testid="dataset-select" value={dataset} onChange={(e) => setDataset(e.target.value as Dataset)}>
           <option value="all">All responses (removed included)</option>
           <option value="clean">Clean dataset — approved + unreviewed CLEAN; removed out</option>
@@ -173,7 +173,7 @@ export function DataPanel() {
         </div>
       )}
 
-      <p className="muted" style={{ fontSize: 12 }}>
+      <p className="muted" style={{ fontSize: 13 }}>
         Every run of the Test Survey link is stored here, flattened into the programmed variables —
         the same shape the CSV export produces. Test sessions never count toward quotas.
       </p>
@@ -189,7 +189,7 @@ export function DataPanel() {
 
       {!!rows?.length && (
         <>
-          <label className="row" style={{ gap: 6, fontSize: 12, marginBottom: 8 }}>
+          <label className="row" style={{ gap: 6, fontSize: 13, marginBottom: 8 }}>
             <input type="checkbox" checked={onlyAnswered}
               onChange={(e) => setOnlyAnswered(e.target.checked)} />
             hide columns with no data ({columns.length - shownColumns.length} hidden)

@@ -32,7 +32,7 @@ export function VariablesPanel() {
       {problems.map((p, i) => (
         <div key={i} className="chip warn" style={{ marginBottom: 8 }}>{p}</div>
       ))}
-      <p className="muted" style={{ fontSize: 12 }}>
+      <p className="muted" style={{ fontSize: 13 }}>
         Generated automatically from the programmed survey — always in sync. Saved into every version
         snapshot; the Excel export reflects the exact programmed state.
       </p>

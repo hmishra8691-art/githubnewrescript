@@ -27,7 +27,7 @@ registerVariantSettings("tournament", ({ q, patchSettings }) => {
           onChange={(v) => patchSettings({ tournamentTopN: v, maxSelections: v })}
         />
       </label>
-      <span className="muted" style={{ fontSize: 11, alignSelf: "flex-end", paddingBottom: 7 }}>
+      <span className="muted" style={{ fontSize: 12.5, alignSelf: "flex-end", paddingBottom: 7 }}>
         Leave empty to rank every item ({cap} item{cap === 1 ? "" : "s"} ≈{" "}
         {estimateDuels(cap)} duels). Set it and the duels stop as soon as the
         top N can no longer change — “find my top 3 of 20” costs a fraction of

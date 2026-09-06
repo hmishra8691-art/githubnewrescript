@@ -660,7 +660,7 @@ export function OptionalCondition({ label, value, onChange, perOption, hint }: {
           </button>
         )}
       </div>
-      {hint && !value && <div className="muted" style={{ fontSize: 11, marginTop: -2 }}>{hint}</div>}
+      {hint && !value && <div className="muted" style={{ fontSize: 12.5, marginTop: -2 }}>{hint}</div>}
       {value && <ConditionEditor value={value} onChange={onChange} perOption={perOption} />}
     </div>
   );

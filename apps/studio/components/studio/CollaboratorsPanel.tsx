@@ -161,7 +161,7 @@ export function CollaboratorsPanel({ canShare }: { canShare: boolean }) {
       {canShare && (
         <div className="card" data-testid="share-box">
           <div className="flabel">Share this project</div>
-          <p className="muted" style={{ fontSize: 11.5, marginTop: 0 }}>
+          <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
             Enter an email address or a User ID (for example <span className="mono">USR-10482</span>). Colleagues can find
             their own User ID on their profile page.
           </p>
@@ -180,7 +180,7 @@ export function CollaboratorsPanel({ canShare }: { canShare: boolean }) {
               {busy === "lookup" ? "Looking…" : "Find"}
             </button>
           </div>
-          <p className="muted" style={{ fontSize: 11, marginBottom: 0 }}>
+          <p className="muted" style={{ fontSize: 12.5, marginBottom: 0 }}>
             {data.grantableRoles.find((r) => r.value === role)?.description}
           </p>
 
@@ -190,22 +190,22 @@ export function CollaboratorsPanel({ canShare }: { canShare: boolean }) {
                 <>
                   <div className="row">
                     <span className="chip on">User found</span>
-                    <strong style={{ fontSize: 13 }}>{lookup.user.name}</strong>
+                    <strong style={{ fontSize: 14 }}>{lookup.user.name}</strong>
                     <span className="mono muted">{lookup.user.userCode}</span>
-                    <span className="muted" style={{ fontSize: 11.5 }}>{lookup.user.email}</span>
+                    <span className="muted" style={{ fontSize: 13 }}>{lookup.user.email}</span>
                   </div>
                   {lookup.alreadyHasAccess && (
-                    <p className="muted" style={{ fontSize: 11.5 }}>
+                    <p className="muted" style={{ fontSize: 13 }}>
                       Already has access as <strong>{lookup.currentRole}</strong>. Sharing again changes their role.
                     </p>
                   )}
                   {lookup.differentOrganization && (
-                    <p className="muted" style={{ fontSize: 11.5 }}>
+                    <p className="muted" style={{ fontSize: 13 }}>
                       This person is in a different organization. Sharing is what grants them access — they cannot see your
                       other projects.
                     </p>
                   )}
-                  {lookup.user.disabled && <p style={{ fontSize: 11.5, color: "var(--red)" }}>Their account is disabled.</p>}
+                  {lookup.user.disabled && <p style={{ fontSize: 13, color: "var(--red)" }}>Their account is disabled.</p>}
                   <button className="btn small primary" data-testid="share-submit" disabled={busy === "share" || lookup.user.disabled} onClick={() => void doShare()}>
                     {busy === "share" ? "Sharing…" : lookup.alreadyHasAccess ? "Change their role" : "Share project"}
                   </button>
@@ -213,7 +213,7 @@ export function CollaboratorsPanel({ canShare }: { canShare: boolean }) {
               ) : (
                 <>
                   <div className="row"><span className="chip warn">Not found</span></div>
-                  <p className="muted" style={{ fontSize: 11.5 }}>{lookup.note}</p>
+                  <p className="muted" style={{ fontSize: 13 }}>{lookup.note}</p>
                   {lookup.invitable && (
                     <button className="btn small primary" data-testid="share-invite" disabled={busy === "share"} onClick={() => void doShare()}>
                       {busy === "share" ? "Inviting…" : "Send project invitation"}
@@ -259,7 +259,7 @@ export function CollaboratorsPanel({ canShare }: { canShare: boolean }) {
                   </select>
                   {transferTo === m.userId ? (
                     <>
-                      <span className="muted" style={{ fontSize: 11 }}>Make them the owner? You become an Editor.</span>
+                      <span className="muted" style={{ fontSize: 12.5 }}>Make them the owner? You become an Editor.</span>
                       <button className="btn small danger" data-testid="transfer-confirm" onClick={() => void transfer(m.userId)}>Yes, transfer</button>
                       <button className="btn small" onClick={() => setTransferTo(null)}>Cancel</button>
                     </>
@@ -307,7 +307,7 @@ export function CollaboratorsPanel({ canShare }: { canShare: boolean }) {
       )}
 
       {!canShare && (
-        <p className="muted" style={{ fontSize: 12 }}>
+        <p className="muted" style={{ fontSize: 13 }}>
           Only the project owner and editors can share this project.
         </p>
       )}

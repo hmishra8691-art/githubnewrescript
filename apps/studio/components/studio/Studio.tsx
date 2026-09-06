@@ -23,6 +23,7 @@ import { VersionsPanel } from "./VersionsPanel";
 import { JsonPanel } from "./JsonPanel";
 import { DataPanel } from "./DataPanel";
 import { runtimeBaseUrl } from "@/lib/runtime-url";
+import { Icon, type IconName } from "@/components/ui/Icon";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
@@ -42,24 +43,30 @@ const EDITING_TABS = new Set<Tab>([
   "quotas", "listfill", "designs", "branding", "scripts", "json",
 ]);
 
-const NAV: { key: Tab; label: string; icon: string }[] = [
-  { key: "questions", label: "Questions", icon: "▤" },
-  { key: "settings", label: "Survey Settings", icon: "⚙" },
-  { key: "flow", label: "Survey Flow", icon: "⇉" },
-  { key: "logic", label: "Logic", icon: "⑂" },
-  { key: "variables", label: "Variables", icon: "𝑥" },
-  { key: "calculations", label: "Calculations", icon: "∑" },
-  { key: "quotas", label: "Quotas", icon: "◔" },
-  { key: "listfill", label: "List Fill", icon: "⇲" },
-  { key: "designs", label: "Design Generators", icon: "⚗" },
-  { key: "branding", label: "Branding", icon: "◩" },
-  { key: "scripts", label: "Scripts", icon: "{}" },
-  { key: "data", label: "Data", icon: "▦" },
-  { key: "versions", label: "Versions & Deploy", icon: "⎌" },
-  { key: "json", label: "JSON", icon: "≡" },
-  { key: "collaborators", label: "Collaborators", icon: "◉" },
-  { key: "notes", label: "Internal notes", icon: "✎" },
-  { key: "activity", label: "Activity", icon: "⏱" },
+/*
+ * The sidebar. Every tab the Studio has always had, in the same order, now
+ * grouped so a programmer can find "the thing that edits the survey" versus
+ * "the thing that ships it" at a glance. Grouping is presentation: keys,
+ * order within the list and the click behaviour are unchanged.
+ */
+const NAV: { key: Tab; label: string; icon: IconName; group: string }[] = [
+  { key: "questions", label: "Questions", icon: "questions", group: "Programming" },
+  { key: "settings", label: "Survey Settings", icon: "settings", group: "Programming" },
+  { key: "flow", label: "Survey Flow", icon: "flow", group: "Programming" },
+  { key: "logic", label: "Logic", icon: "logic", group: "Programming" },
+  { key: "variables", label: "Variables", icon: "variables", group: "Programming" },
+  { key: "calculations", label: "Calculations", icon: "calc", group: "Programming" },
+  { key: "quotas", label: "Quotas", icon: "quotas", group: "Programming" },
+  { key: "listfill", label: "List Fill", icon: "listfill", group: "Programming" },
+  { key: "designs", label: "Design Generators", icon: "designs", group: "Research tools" },
+  { key: "branding", label: "Branding", icon: "branding", group: "Research tools" },
+  { key: "scripts", label: "Scripts", icon: "scripts", group: "Research tools" },
+  { key: "data", label: "Data", icon: "data", group: "Results" },
+  { key: "versions", label: "Versions & Deploy", icon: "versions", group: "Management" },
+  { key: "json", label: "JSON", icon: "json", group: "Management" },
+  { key: "collaborators", label: "Collaborators", icon: "collaborators", group: "Management" },
+  { key: "notes", label: "Internal notes", icon: "notes", group: "Management" },
+  { key: "activity", label: "Activity", icon: "activity", group: "Management" },
 ];
 
 /**
@@ -558,26 +565,33 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
   return (
     <div className="ide">
       <div className="topbar">
-        <a href="/" className="logo-mark" style={{ width: 26, height: 26, fontSize: 14 }}>R</a>
-        <span className="title">{s.def.meta.title}</span>
-        <span className="ver" title="Version number of the last saved version, and the row revision every save is based on">
-          {s.def.meta.code} · v{s.def.meta.version}{s.revision != null && <span className="muted"> · rev {s.revision}</span>}
-        </span>
+        <a href="/" className="logo-mark" style={{ width: 30, height: 30, fontSize: 15 }} title="Dashboard">R</a>
+        <div className="ctx" data-testid="project-context">
+          <span className="ctx-title title">{s.def.meta.title}</span>
+          <span className="ctx-meta">
+            <span className="mono">{s.def.meta.code}</span>
+            <span className="ctx-sep">·</span>
+            <span className="ver" title="Version number of the last saved version, and the row revision every save is based on">
+              v{s.def.meta.version}{s.revision != null && <span className="muted"> · rev {s.revision}</span>}
+            </span>
+            {live && <><span className="ctx-sep">·</span><span className={`badge ${liveIsBehind ? "warning" : "success"}`} title={liveIsBehind ? `Live link runs v${live.version}` : "Live link is on this version"}>Live v{live.version}</span></>}
+          </span>
+        </div>
         <SaveIndicator />
         <span className="spacer" />
         <button className="btn" onClick={preview} disabled={saving}
-          title="Full-page preview of the survey you are editing right now">▶ Preview</button>
+          title="Full-page preview of the survey you are editing right now"><Icon name="play" size={15} /> Preview</button>
         <button className="btn" onClick={testSurvey} disabled={saving || roWrite} data-testid="test-survey"
           {...(roWrite ? { title: "Enter edit mode to save a test build" } : {})}
           title={lastTest
             ? `Saves your latest changes as a new version and opens exactly that. Last test build: v${lastTest.version}${lastTest.revision != null ? ` (rev ${lastTest.revision})` : ""}`
             : "Saves your latest changes as a new version, deploys it to the test link and opens exactly that version with the inspector"}>
-          {saving ? "Saving…" : "🧪 Test Survey"}
+          <Icon name="flask" size={15} /> {saving ? "Saving…" : "Test Survey"}
         </button>
-        <a className="btn" href={`/api/surveys/${s.surveyDbId}/export/xlsx`} target="_blank">⬇ Variables .xlsx</a>
+        <a className="btn" href={`/api/surveys/${s.surveyDbId}/export/xlsx`} target="_blank"><Icon name="download" size={15} /> Variables .xlsx</a>
         <button className="btn" data-testid="export-survey" onClick={() => setExportOpen(true)}
-          title="Export the survey you are editing as Word or JSON">⬇ Export</button>
-        <button className="btn" onClick={() => setTab("data")} title="Browse test and live responses">▦ Data</button>
+          title="Export the survey you are editing as Word or JSON"><Icon name="export" size={15} /> Export</button>
+        <button className="btn" onClick={() => setTab("data")} title="Browse test and live responses"><Icon name="data" size={15} /> Data</button>
         {session.state.kind === "signed_in" && (
           <span className="row" style={{ gap: 6 }} data-testid="studio-user">
             <span
@@ -644,19 +658,24 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
         />
       )}
       <div className={`ide-body ${collab.readOnly && s.surveyDbId !== "sandbox" ? "is-readonly" : ""}`}>
-        <nav className="leftnav">
-          {NAV.map((n) => (
-            <button key={n.key} className={`nav-item ${tab === n.key ? "active" : ""}`} onClick={() => { if (n.key === tab || s.canLeaveTab()) setTab(n.key); }}>
-              <span style={{ width: 16, textAlign: "center" }}>{n.icon}</span>
-              {n.label}
-              {counts[n.key] != null && <span className="nav-count">{counts[n.key]}</span>}
-            </button>
+        <nav className="leftnav" aria-label="Studio">
+          {NAV.map((n, i) => (
+            <React.Fragment key={n.key}>
+              {(i === 0 || NAV[i - 1].group !== n.group) && <div className="nav-group">{n.group}</div>}
+              <button className={`nav-item ${tab === n.key ? "active" : ""}`} aria-current={tab === n.key ? "page" : undefined} onClick={() => { if (n.key === tab || s.canLeaveTab()) setTab(n.key); }}>
+                <Icon name={n.icon} />
+                {n.label}
+                {counts[n.key] != null && <span className="nav-count">{counts[n.key]}</span>}
+              </button>
+              {/* Data Analytics is its own top-level workspace; this is a link out, not a Studio tab — nothing here changes. */}
+              {n.key === "data" && (
+                <a className="nav-item" href={s.surveyDbId ? `/analytics?survey=${encodeURIComponent(s.surveyDbId)}` : "/analytics"} data-testid="nav-analytics" title="Open Data Analytics for this survey">
+                  <Icon name="analytics" />
+                  Data Analytics
+                </a>
+              )}
+            </React.Fragment>
           ))}
-          {/* Data Analytics is its own top-level workspace (§1); this is a link out, not a Studio tab — nothing here changes. */}
-          <a className="nav-item" href={s.surveyDbId ? `/analytics?survey=${encodeURIComponent(s.surveyDbId)}` : "/analytics"} data-testid="nav-analytics" title="Open Data Analytics for this survey">
-            <span style={{ width: 16, textAlign: "center" }}>◍</span>
-            Data Analytics
-          </a>
         </nav>
         <main className={`center${roPanel ? " ro" : ""}`} data-readonly={roPanel ? "1" : "0"}>
           {collaboration && !["collaborators", "notes", "activity", "data"].includes(tab) && (

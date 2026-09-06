@@ -110,14 +110,14 @@ export function VariantPickerModal({ onPick, onClose }: {
               data-testid={`picker-variant-${v.id}`} data-status={v.status}
               style={{ padding: "10px 14px", opacity: v.status === "stable" ? 1 : 0.55 }}
               onClick={() => v.status === "stable" && onPick(v)}>
-              <div className="card-title" style={{ fontSize: 13 }}>
+              <div className="card-title" style={{ fontSize: 14 }}>
                 {v.name}
                 {v.status === "planned" && <span className="chip">coming soon</span>}
                 {v.status === "stable" && (
                   <span className="chip" title="response data model">{v.responseModel.replace("_", " ")}</span>
                 )}
               </div>
-              <div style={{ color: "var(--subtle)", fontSize: 12, marginTop: 2 }}>{v.description}</div>
+              <div style={{ color: "var(--subtle)", fontSize: 13, marginTop: 2 }}>{v.description}</div>
             </div>
           ))}
         </div>

@@ -264,7 +264,7 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
             onChange={(e) => set({ loopVar: e.target.value.replace(/[^A-Za-z0-9_]/g, "") })} />
         </label>
       </div>
-      <p className="muted" style={{ fontSize: 11, margin: "4px 0 10px" }}>
+      <p className="muted" style={{ fontSize: 12.5, margin: "4px 0 10px" }}>
         {src.kind === "question" && (FILTERS.find((f) => f.value === (src.filter ?? "selected"))?.hint ?? "")}
         {src.kind === "listFill" && "one iteration per item the List Fill allocated to this respondent; the reference table below is this loop’s own, keyed by the allocated codes."}
         {src.kind === "count" && "items 1…N — a plain numeric iteration."}
@@ -349,7 +349,7 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
       </div>
       {node.order?.kind === "custom" && items && (
         <div style={{ marginBottom: 10 }}>
-          <span className="muted" style={{ fontSize: 11 }}>Codes in the order wanted (comma-separated); anything unlisted follows in source order.</span>
+          <span className="muted" style={{ fontSize: 12.5 }}>Codes in the order wanted (comma-separated); anything unlisted follows in source order.</span>
           <input className="input mono" style={{ width: "100%" }} value={(node.order.custom ?? []).join(", ")}
             onChange={(e) => set({ order: { ...node.order!, custom: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) } })} />
         </div>
@@ -358,8 +358,8 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
       {/* ------------------------------------------------ references */}
       <div className="loop-refs" data-testid="loop-references">
         <div className="row" style={{ alignItems: "baseline" }}>
-          <strong style={{ fontSize: 13 }}>Loop references</strong>
-          <span className="muted" style={{ fontSize: 11, marginLeft: 8 }}>
+          <strong style={{ fontSize: 14 }}>Loop references</strong>
+          <span className="muted" style={{ fontSize: 12.5, marginLeft: 8 }}>
             columns this loop defines for its items — {sourceQuestion ? `${sourceQuestion.code} itself is not changed` : "scoped to this loop only"}
           </span>
           <span className="grow" />
@@ -368,19 +368,19 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
 
         {importOpen && (
           <div className="loop-import" style={{ margin: "8px 0" }}>
-            <textarea className="input mono" data-testid="loop-import-text" rows={5} style={{ width: "100%", fontSize: 12 }}
+            <textarea className="input mono" data-testid="loop-import-text" rows={5} style={{ width: "100%", fontSize: 13 }}
               placeholder={"Code\tBrand_Nickname\tProduct_ID\n1\tAPPLE\tPROD_001\n3\tGOOGLE\tPROD_003\n\n— or a JSON object keyed by code, or an array of rows. Save an Excel sheet as CSV first."}
               value={importText} onChange={(e) => setImportText(e.target.value)} />
             <div className="row" style={{ gap: 6 }}>
               <button className="btn small primary" data-testid="loop-import-apply" onClick={importRows}>Import into this loop</button>
-              <span className="muted" style={{ fontSize: 11 }}>first column (or one named code) is the item code; every other header becomes a reference column here</span>
+              <span className="muted" style={{ fontSize: 12.5 }}>first column (or one named code) is the item code; every other header becomes a reference column here</span>
             </div>
-            {importNote && <div className="muted" data-testid="loop-import-note" style={{ fontSize: 11, marginTop: 4 }}>{importNote}</div>}
+            {importNote && <div className="muted" data-testid="loop-import-note" style={{ fontSize: 12.5, marginTop: 4 }}>{importNote}</div>}
           </div>
         )}
 
         {items === null && (
-          <p className="muted" style={{ fontSize: 11 }}>
+          <p className="muted" style={{ fontSize: 12.5 }}>
             This source’s items are not known until the survey runs, so the table is keyed by code — add rows for the codes you expect.
           </p>
         )}
@@ -405,7 +405,7 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
                       <select className="select small" value={c.dataType ?? "text"} onChange={(e) => patchColumn(c.name, { dataType: e.target.value as LoopReferenceColumn["dataType"] })}>
                         <option value="text">text</option><option value="number">number</option><option value="boolean">yes/no</option>
                       </select>
-                      <label className="muted" style={{ fontSize: 11 }}>
+                      <label className="muted" style={{ fontSize: 12.5 }}>
                         <input type="checkbox" checked={!!c.required} onChange={(e) => patchColumn(c.name, { required: e.target.checked })} /> required
                       </label>
                     </div>
@@ -421,7 +421,7 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
                     </select>
                     <button className="btn small primary" data-testid="loop-ref-add" onClick={addColumn}>+ Add Reference Column</button>
                   </div>
-                  {colError && <div className="muted" data-testid="loop-ref-error" style={{ color: "var(--red)", fontSize: 11 }}>{colError}</div>}
+                  {colError && <div className="muted" data-testid="loop-ref-error" style={{ color: "var(--red)", fontSize: 12.5 }}>{colError}</div>}
                 </th>
               </tr>
             </thead>
@@ -446,12 +446,12 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
                 </tr>
               ))}
               {items && items.length === 0 && (
-                <tr><td colSpan={columns.length + 3} className="muted" style={{ fontSize: 11 }}>The source has no items yet.</td></tr>
+                <tr><td colSpan={columns.length + 3} className="muted" style={{ fontSize: 12.5 }}>The source has no items yet.</td></tr>
               )}
             </tbody>
           </table>
         </div>
-        <p className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+        <p className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>
           Inside the loop, pipe with <code>{"{{loop.label}}"}</code>, <code>{"{{loop.code}}"}</code>, <code>{"{{loop.index}}"}</code>, <code>{"{{loop.count}}"}</code>
           {columns.length ? <>, <code>{`{{loop.${columns[0].name}}}`}</code>{columns.length > 1 ? "…" : ""}</> : null}
           {" "}(or <code>{"{{CURRENT_ITEM.Column}}"}</code>). Conditions: <code>loop.{columns[0]?.name ?? "Column"} = "…"</code>.
@@ -463,15 +463,15 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
       <div className="loop-sim" data-testid="loop-simulator" style={{ marginTop: 12 }}>
         <div className="row">
           <button className="btn small" data-testid="loop-sim-toggle" onClick={() => setSimOpen((v) => !v)}>{simOpen ? "▾" : "▸"} Loop simulator</button>
-          <span className="muted" style={{ fontSize: 11, marginLeft: 8 }}>what this loop does for a respondent who answers as below — the runtime’s own resolution, not a mock</span>
+          <span className="muted" style={{ fontSize: 12.5, marginLeft: 8 }}>what this loop does for a respondent who answers as below — the runtime’s own resolution, not a mock</span>
         </div>
         {simOpen && (
           <div style={{ marginTop: 8 }}>
             {src.kind === "question" && sourceQuestion && (
               <div className="row" style={{ flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
-                <span className="muted" style={{ fontSize: 11 }}>{sourceQuestion.code} selected:</span>
+                <span className="muted" style={{ fontSize: 12.5 }}>{sourceQuestion.code} selected:</span>
                 {sourceQuestion.options.map((o) => (
-                  <label key={String(o.code)} className="row" style={{ gap: 3, fontSize: 12 }}>
+                  <label key={String(o.code)} className="row" style={{ gap: 3, fontSize: 13 }}>
                     <input type="checkbox" data-testid="loop-sim-option" data-code={String(o.code)} checked={simCodes.includes(String(o.code))}
                       onChange={(e) => setSimCodes((cs) => (e.target.checked ? [...cs, String(o.code)] : cs.filter((c) => c !== String(o.code))))} />
                     {o.label}
@@ -481,9 +481,9 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
             )}
             {simulation && (
               <div data-testid="loop-sim-result">
-                <div style={{ fontSize: 12, marginBottom: 4 }}><strong>{simulation.count}</strong> iteration{simulation.count === 1 ? "" : "s"}</div>
+                <div style={{ fontSize: 13, marginBottom: 4 }}><strong>{simulation.count}</strong> iteration{simulation.count === 1 ? "" : "s"}</div>
                 {simulation.iterations.map((it) => (
-                  <div key={it.index} className="loop-sim-iter" data-testid="loop-sim-iteration" style={{ fontSize: 12, padding: "4px 8px", borderLeft: "2px solid var(--border)", marginBottom: 4 }}>
+                  <div key={it.index} className="loop-sim-iter" data-testid="loop-sim-iteration" style={{ fontSize: 13, padding: "4px 8px", borderLeft: "2px solid var(--border)", marginBottom: 4 }}>
                     <div><strong>Iteration {it.index}</strong> — item = {it.label} <span className="mono muted">({it.code})</span></div>
                     {simulation.columns.length > 0 && (
                       <div className="muted" style={{ paddingLeft: 10 }}>
@@ -492,7 +492,7 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
                     )}
                   </div>
                 ))}
-                {simulation.count === 0 && <div className="muted" style={{ fontSize: 12 }}>No iterations for these answers.</div>}
+                {simulation.count === 0 && <div className="muted" style={{ fontSize: 13 }}>No iterations for these answers.</div>}
               </div>
             )}
           </div>
@@ -529,7 +529,7 @@ function CountValueField({ value, onChange, label }: { value: LoopCountValue; on
       ) : (
         <input className="input mono" style={{ width: 140 }} placeholder="name" value={value.ref} onChange={(e) => onChange({ ...value, ref: e.target.value })} />
       )}
-      {label ? <span className="muted" style={{ fontSize: 11 }}>{label}</span> : null}
+      {label ? <span className="muted" style={{ fontSize: 12.5 }}>{label}</span> : null}
     </span>
   );
 }

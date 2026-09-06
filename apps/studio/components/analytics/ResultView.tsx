@@ -103,7 +103,7 @@ export function ResultView(p: ResultViewProps) {
       <div className="ax-result-head">
         <div>
           <div className="ax-result-title">{r.name}</div>
-          <div className="muted" style={{ fontSize: 12 }} data-testid="ax-base">n = {r.base.n}{r.base.weightedN !== r.base.n ? ` · weighted n = ${r.base.weightedN}` : ""} · {r.base.filtered} of {r.base.total} responses in scope · computed {new Date(r.computedAt).toLocaleTimeString()}</div>
+          <div className="muted" style={{ fontSize: 13 }} data-testid="ax-base">n = {r.base.n}{r.base.weightedN !== r.base.n ? ` · weighted n = ${r.base.weightedN}` : ""} · {r.base.filtered} of {r.base.total} responses in scope · computed {new Date(r.computedAt).toLocaleTimeString()}</div>
         </div>
         <span className="grow" />
         {p.actions}
@@ -126,7 +126,7 @@ export function ResultView(p: ResultViewProps) {
       )}
       {tab === "tables" && <div className="ax-tables">{r.tables.map((t) => <div key={t.id} className="card"><div className="card-title">{t.title}</div><ResultTableView table={t} /></div>)}{!r.tables.length && <div className="muted">This analysis produced no tables.</div>}</div>}
       {tab === "tests" && <div className="card">{r.tests.length ? <table className="ax-table"><thead><tr><th>Test</th><th className="num">Statistic</th><th>df</th><th>p-value</th><th>Effect size</th><th>Note</th></tr></thead><tbody>{r.tests.map((t, i) => <tr key={i}><td>{t.test.replace(/_/g, " ")}</td><td className="num">{t.statistic == null ? "—" : t.statistic.toFixed(3)}</td><td>{Array.isArray(t.df) ? t.df.map((d) => Math.round(d * 10) / 10).join(", ") : t.df == null ? "" : Math.round(t.df * 10) / 10}</td><td className={t.p != null && t.p < 0.05 ? "ax-sig-p" : ""}>{t.p == null ? "—" : t.p < 0.001 ? "< .001" : t.p.toFixed(3)}</td><td>{t.effectSize ? `${t.effectSize.name} = ${t.effectSize.value?.toFixed(3) ?? "—"}` : ""}</td><td className="muted">{t.note ?? ""}</td></tr>)}</tbody></table> : <div className="muted">No statistical tests for this analysis.</div>}</div>}
-      {tab === "insights" && <div className="card"><ul className="ax-insights">{r.insights.map((s, i) => <li key={i}>{s}</li>)}</ul>{!r.insights.length && <div className="muted">No insights were generated.</div>}<div className="muted" style={{ fontSize: 11, marginTop: 8 }}>Every statement above is computed from the tables of this analysis (n = {r.base.n}).</div></div>}
+      {tab === "insights" && <div className="card"><ul className="ax-insights">{r.insights.map((s, i) => <li key={i}>{s}</li>)}</ul>{!r.insights.length && <div className="muted">No insights were generated.</div>}<div className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>Every statement above is computed from the tables of this analysis (n = {r.base.n}).</div></div>}
     </div>
   );
 }

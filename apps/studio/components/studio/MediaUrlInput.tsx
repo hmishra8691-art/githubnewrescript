@@ -37,7 +37,7 @@ export function MediaUrlInput({ value, onChange, placeholder, compact, testId, l
       {input}
       {verdict && (
         <span className="muted" data-testid={`${testId ?? "media-url"}-verdict`} data-tone={verdict.tone}
-          style={{ fontSize: 11, color: verdict.tone === "bad" ? "var(--danger, #b91c1c)" : undefined }}>
+          style={{ fontSize: 12.5, color: verdict.tone === "bad" ? "var(--danger, #b91c1c)" : undefined }}>
           {verdict.tone === "bad" ? "⚠ " : "✓ "}{verdict.text}
         </span>
       )}

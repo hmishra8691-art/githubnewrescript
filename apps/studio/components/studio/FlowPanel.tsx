@@ -339,7 +339,7 @@ function BlockCard({ node }: { node: FlowNode }) {
             <div key={p.node.id} className="fc-page">
               {pages.length > 1 && <span className="page-badge">PAGE {pi + 1}</span>}
               {p.node.questionIds.length === 0 && (
-                <span className="muted" style={{ fontSize: 12 }}>empty</span>
+                <span className="muted" style={{ fontSize: 13 }}>empty</span>
               )}
               {p.node.questionIds.map((qid: string) => {
                 const q = s.def.questions.find((x) => x.id === qid);
@@ -686,7 +686,7 @@ export function FlowPanel() {
               onClick={() => ops.insert("page", endTarget(flow))}>+ Add block</button>
           </div>
 
-          <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+          <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
             The survey runs top to bottom. Grab a card by its <strong>⠿</strong> handle and drop it
             on any highlighted line — between elements, or onto a group, randomizer or branch path to
             put it inside. Everything nested travels with it. <strong>Esc</strong> cancels a drag;

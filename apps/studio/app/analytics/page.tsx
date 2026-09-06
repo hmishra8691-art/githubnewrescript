@@ -3,6 +3,7 @@ import React from "react";
 import { can, isProjectRole } from "@rescript/access";
 import { useSession } from "@/lib/useSession";
 import { AnalyticsWorkspace, type WsTab } from "@/components/analytics/AnalyticsWorkspace";
+import { AppHeader } from "@/components/ui/AppHeader";
 
 /**
  * /analytics — THE DATA ANALYTICS TAB (§1, §2). A top-level destination beside
@@ -37,26 +38,17 @@ export default function AnalyticsPage() {
 
   return (
     <div className="dash ax-page" data-testid="ax-page">
-      <div className="row" style={{ alignItems: "flex-start", flexWrap: "wrap" }}>
-        <div>
-          <h1><span className="logo-mark">R</span> Rescript Studio <span className="muted" style={{ fontWeight: 400, fontSize: 16 }}>/ Data Analytics</span></h1>
-        </div>
-        <span className="grow" />
-        <div className="row" style={{ gap: 6 }}>
-          <a className="btn small" href="/">Dashboard</a>
-          {survey && <a className="btn small" href={`/studio/${survey.id}`}>Survey Programming</a>}
-          {survey && <a className="btn small" href={`/studio/${survey.id}?tab=data`}>Data</a>}
-          <a className="btn small" href="/profile">Profile</a>
-          {session.state.kind === "signed_in" && <button className="btn small" onClick={() => void session.signOut()}>Sign out</button>}
-        </div>
-      </div>
-      <div className="row" style={{ margin: "10px 0 14px", flexWrap: "wrap" }}>
-        <label className="ax-field" style={{ minWidth: 320 }}><span>Survey</span>
+      <AppHeader active="analytics" user={session.state.kind === "signed_in" ? session.state.user : null} onSignOut={() => void session.signOut()}
+        crumbs={survey ? <span className="crumbs"><a href="/">Projects</a><span className="sep">/</span><a href={`/studio/${survey.id}`}>{survey.title}</a><span className="sep">/</span><span className="here">Data Analytics</span></span> : undefined} />
+      <div className="row" style={{ margin: "18px 0 16px", flexWrap: "wrap", gap: 14 }}>
+        <label className="ax-field" style={{ minWidth: 340 }}><span>Survey</span>
           <select className="select" value={surveyId} onChange={(e) => setSurveyId(e.target.value)} data-testid="ax-survey">
             {(surveys ?? []).map((s) => <option key={s.id} value={s.id}>{s.title} ({s.code}){s.version ? ` · v${s.version}` : ""}</option>)}
           </select>
         </label>
-        {survey && <span className="muted" style={{ fontSize: 12 }}>Your role: {survey.myRole}</span>}
+        {survey && <span className="badge neutral" style={{ alignSelf: "flex-end", marginBottom: 6 }}>Your role: {survey.myRole}</span>}
+        <span className="grow" />
+        {survey && <span className="row" style={{ gap: 6, alignSelf: "flex-end" }}><a className="btn" href={`/studio/${survey.id}`}>Survey Programming</a><a className="btn" href={`/studio/${survey.id}?tab=data`}>Data</a></span>}
       </div>
       {error && <div className="ax-error">{error}</div>}
       {surveys && !surveys.length && <div className="card">You have no surveys yet. Create one from the <a href="/">dashboard</a>, collect responses, and come back to analyse them.</div>}

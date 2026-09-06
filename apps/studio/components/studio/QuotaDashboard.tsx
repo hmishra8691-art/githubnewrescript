@@ -272,7 +272,7 @@ export function QuotaDashboard() {
       <div data-testid="quota-logic-mode">
         <div className="row" style={{ marginBottom: 10 }}>
           <button className="btn small" data-testid="quota-back-to-dashboard" onClick={() => { setMode({ kind: "dashboard" }); void refresh(); }}>← Back to dashboard</button>
-          <span className="muted" style={{ fontSize: 12 }}>Quota Logic Builder — conditions, cells, modes and actions. Numbers can also be changed from the dashboard.</span>
+          <span className="muted" style={{ fontSize: 13 }}>Quota Logic Builder — conditions, cells, modes and actions. Numbers can also be changed from the dashboard.</span>
         </div>
         <QuotasPanel focusQuotaId={mode.focusQuotaId} />
       </div>
@@ -315,7 +315,7 @@ export function QuotaDashboard() {
           <span className="mono" data-testid="quota-utilization">{sum.utilization == null ? "no maximums configured" : `${sum.utilization}%`}</span>
         </div>
       </div>
-      <div className="muted" style={{ fontSize: 11.5, marginBottom: 10 }}>
+      <div className="muted" style={{ fontSize: 13, marginBottom: 10 }}>
         Counts are <strong>{env === "TEST" ? "test" : "live"}</strong> completes from the response data{fetchedAt ? ` · refreshed ${relative(fetchedAt)}` : ""} · auto-refreshes every 30 s.
         {loadError && <span className="chip warn" style={{ marginLeft: 8 }} data-testid="quota-load-error">{loadError}</span>}
       </div>
@@ -325,12 +325,12 @@ export function QuotaDashboard() {
       <div className="row qd-toolbar" style={{ flexWrap: "wrap" }}>
         <button className="btn primary small" data-testid="quota-create" onClick={createQuota}>+ Create Quota</button>
         <input className="input qd-search" data-testid="quota-search" placeholder="Search quotas — name, question, variable, cell, condition…" value={search} onChange={(e) => setSearch(e.target.value)} />
-        <label className="row" style={{ gap: 4 }}><span className="muted" style={{ fontSize: 11.5 }}>Filter</span>
+        <label className="row" style={{ gap: 4 }}><span className="muted" style={{ fontSize: 13 }}>Filter</span>
           <select className="select" data-testid="quota-filter" value={filter} onChange={(e) => setFilter(e.target.value as QuotaFilter)}>
             <option value="all">All</option><option value="active">Active</option><option value="near_full">Near full</option>
             <option value="full">Full</option><option value="inactive">Inactive</option><option value="unlimited">Unlimited</option>
           </select></label>
-        <label className="row" style={{ gap: 4 }}><span className="muted" style={{ fontSize: 11.5 }}>Sort</span>
+        <label className="row" style={{ gap: 4 }}><span className="muted" style={{ fontSize: 13 }}>Sort</span>
           <select className="select" data-testid="quota-sort" value={sort} onChange={(e) => setSort(e.target.value as QuotaSort)}>
             <option value="status">Status (needs attention first)</option><option value="name">Quota name</option><option value="question">Question</option>
             <option value="current">Current count</option><option value="remaining">Remaining</option><option value="pct">% filled</option><option value="updated">Last updated</option>
@@ -346,7 +346,7 @@ export function QuotaDashboard() {
       {dash.quotas.length === 0 && (
         <div className="card" data-testid="quota-empty">
           <div className="card-title">No quotas yet</div>
-          <div className="muted" style={{ fontSize: 12.5 }}>Create a quota, then define its cells and conditions in the Logic Builder. Add a <em>quota check</em> node to the Survey Flow to enforce it.</div>
+          <div className="muted" style={{ fontSize: 13.5 }}>Create a quota, then define its cells and conditions in the Logic Builder. Add a <em>quota check</em> node to the Survey Flow to enforce it.</div>
         </div>
       )}
       {dash.quotas.length > 0 && rows.length === 0 && <div className="card muted" data-testid="quota-no-match">No quotas match “{search}” with the current filter.</div>}
@@ -383,7 +383,7 @@ export function QuotaDashboard() {
                 </div>
               )}
               {(refs.quotaChecks.length > 0 || refs.listFills.some((l) => l.explicit)) && (
-                <label className="row" style={{ gap: 6, fontSize: 12.5 }}>
+                <label className="row" style={{ gap: 6, fontSize: 13.5 }}>
                   <input type="checkbox" checked={deleting.removeRefs} onChange={(e) => setDeleting({ ...deleting, removeRefs: e.target.checked })} />
                   Also remove its id from those quota check nodes and List Fills (leaves no broken reference)
                 </label>
@@ -421,7 +421,7 @@ function QuotaCard(p: {
       <div className="row" style={{ alignItems: "flex-start" }}>
         <div className="grow">
           <div className="card-title">
-            <span className="muted mono" style={{ fontSize: 12 }}>{p.index}.</span>
+            <span className="muted mono" style={{ fontSize: 13 }}>{p.index}.</span>
             {draft ? (
               <input className="input" data-testid="quota-edit-name" value={draft.name} style={{ width: 260 }} onChange={(e) => p.setDraft({ ...draft, name: e.target.value })} />
             ) : <span data-testid="quota-name">{row.name}</span>}
@@ -461,7 +461,7 @@ function QuotaCard(p: {
       </div>
 
       {draft && usesPercent && (
-        <label className="row" style={{ gap: 6, marginTop: 8, fontSize: 12.5 }}>
+        <label className="row" style={{ gap: 6, marginTop: 8, fontSize: 13.5 }}>
           <span className="muted">Target total (base for % cells)</span>
           <input className="input mono" data-testid="quota-edit-target-total" style={{ width: 90 }} inputMode="numeric" value={draft.targetTotal} onChange={(e) => p.setDraft({ ...draft, targetTotal: e.target.value })} />
         </label>
@@ -483,7 +483,7 @@ function QuotaCard(p: {
             issues={p.issues?.errors.filter((e) => e.cellId === c.cellId) ?? []}
             onChange={(patch) => { if (!draft) return; p.setDraft({ ...draft, cells: draft.cells.map((x) => (x.cellId === c.cellId ? { ...x, ...patch } : x)) }); }} />
         ))}
-        {row.cells.length === 0 && <div className="muted" style={{ fontSize: 12 }}>No cells yet — open the Logic Builder to add cells and their conditions.</div>}
+        {row.cells.length === 0 && <div className="muted" style={{ fontSize: 13 }}>No cells yet — open the Logic Builder to add cells and their conditions.</div>}
       </div>
       {complex && !draft && (
         <button className="btn small" data-testid="quota-expand" onClick={p.onToggle}>{p.expanded ? "Collapse ▲" : `Expand ▼ (${row.cells.length} cells)`}</button>
@@ -497,7 +497,7 @@ function QuotaCard(p: {
             <div key={`w${i}`} className="chip warn qd-note" data-testid="quota-overcap-warning">{w.message}</div>
           ))}
           {p.issues.errors.length === 0 && p.issues.warnings.length > 0 && !p.overCapAccepted && (
-            <label className="row" style={{ gap: 6, fontSize: 12.5 }} data-testid="quota-overcap-accept">
+            <label className="row" style={{ gap: 6, fontSize: 13.5 }} data-testid="quota-overcap-accept">
               <input type="checkbox" checked={p.overCapAccepted} onChange={(e) => p.setOverCapAccepted(e.target.checked)} />
               I understand — save anyway (no responses will be changed)
             </label>
@@ -574,7 +574,7 @@ function TableView(p: { rows: QuotaRow[]; expanded: Set<string>; onToggle: (id: 
             return (
               <React.Fragment key={row.id}>
                 <tr className="qd-trow" data-testid="quota-table-row" data-quota-id={row.id}>
-                  <td style={{ fontFamily: "var(--sans)", fontWeight: 600 }}>{row.name}<div className="muted" style={{ fontSize: 11 }}>{row.mode} · {row.cells.length} cells{row.dimensions >= 2 ? ` · ${row.dimensions}-dim` : ""}</div></td>
+                  <td style={{ fontFamily: "var(--sans)", fontWeight: 600 }}>{row.name}<div className="muted" style={{ fontSize: 12.5 }}>{row.mode} · {row.cells.length} cells{row.dimensions >= 2 ? ` · ${row.dimensions}-dim` : ""}</div></td>
                   <td>{row.sources.map((s) => s.code).join(" + ") || "—"}</td>
                   <td className="muted">all</td><td className="muted">—</td>
                   <td>—</td><td>{row.maximum ?? "∞"}</td><td>{row.current}</td><td>{row.remaining ?? "—"}</td><td>{fmtPct(row.pct)}</td>
@@ -590,7 +590,7 @@ function TableView(p: { rows: QuotaRow[]; expanded: Set<string>; onToggle: (id: 
                   <tr key={c.cellId} className="qd-tcell" data-testid="quota-table-cell">
                     <td className="muted">↳</td><td></td>
                     <td style={{ fontFamily: "var(--sans)" }}>{c.label}</td>
-                    <td className="muted" style={{ fontFamily: "var(--sans)", fontSize: 11.5 }}>{c.condition}</td>
+                    <td className="muted" style={{ fontFamily: "var(--sans)", fontSize: 13 }}>{c.condition}</td>
                     <td>{c.targetCount ?? "—"}</td><td>{c.maximum > 0 ? c.maximum : "∞"}</td><td>{c.current}</td><td>{c.remainingToMaximum ?? "—"}</td>
                     <td><div className="row" style={{ gap: 6 }}><Bar pct={c.pct} state={c.state} /><span>{fmtPct(c.pct)}</span></div></td>
                     <td><span className={stateChipClass(c.state)}>{QUOTA_STATE_LABEL[c.state]}</span></td><td></td>
@@ -640,19 +640,19 @@ function QuotaDetail({ row, env, onClose, onLogic }: { row: QuotaRow | undefined
           <thead><tr><th>Cell</th><th>Condition</th><th>Target</th><th>Maximum</th><th>Current</th><th>Remaining</th><th>Status</th></tr></thead>
           <tbody>
             {row.cells.map((c) => (
-              <tr key={c.cellId}><td style={{ fontFamily: "var(--sans)" }}>{c.label}</td><td style={{ fontFamily: "var(--sans)", fontSize: 11.5 }}>{c.condition}</td>
+              <tr key={c.cellId}><td style={{ fontFamily: "var(--sans)" }}>{c.label}</td><td style={{ fontFamily: "var(--sans)", fontSize: 13 }}>{c.condition}</td>
                 <td>{c.targetCount ?? "—"}</td><td>{c.maximum > 0 ? c.maximum : "∞"}</td><td>{c.current}</td><td>{c.remainingToMaximum ?? "—"}</td>
                 <td><span className={stateChipClass(c.state)}>{QUOTA_STATE_LABEL[c.state]}</span></td></tr>
             ))}
           </tbody>
         </table>
         <h4 style={{ margin: "12px 0 6px" }}>Change history</h4>
-        {history == null ? <div className="muted">Loading…</div> : history.length === 0 ? <div className="muted" style={{ fontSize: 12 }}>No recorded changes yet (changes made from this dashboard are recorded with who, when, before and after).</div> : (
+        {history == null ? <div className="muted">Loading…</div> : history.length === 0 ? <div className="muted" style={{ fontSize: 13 }}>No recorded changes yet (changes made from this dashboard are recorded with who, when, before and after).</div> : (
           <ul className="qd-history" data-testid="quota-history">
             {history.map((h) => (
               <li key={String(h.id)}><span className="muted mono">{new Date(h.createdAt).toLocaleString()}</span> — {h.text}
                 {h.detail?.changes != null && typeof h.detail.changes === "object" && (
-                  <div className="mono" style={{ fontSize: 11 }}>
+                  <div className="mono" style={{ fontSize: 12.5 }}>
                     {Object.entries(h.detail.changes as Record<string, { before: unknown; after: unknown }>).map(([k, v]) => (
                       <div key={k}>{k}: {String(v?.before ?? "—")} → {String(v?.after ?? "—")}</div>
                     ))}

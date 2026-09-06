@@ -10,12 +10,12 @@ export function SegmentsPanel({ api, variables, items, kind, onChange }: { api: 
   const [editing, setEditing] = React.useState<Row | null>(null);
   const [name, setName] = React.useState("");
   const [description, setDescription] = React.useState("");
-  const [color, setColor] = React.useState("#2563eb");
+  const [color, setColor] = React.useState("#4f46e5");
   const [cond, setCond] = React.useState<Condition>(emptyCondition());
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const list = items.filter((s) => s.kind === kind);
-  const start = (s?: Row) => { setEditing(s ?? { id: null }); setName(s?.name ?? ""); setDescription(s?.description ?? ""); setColor(s?.color ?? "#2563eb"); setCond((s?.condition as Condition) ?? emptyCondition()); setError(null); };
+  const start = (s?: Row) => { setEditing(s ?? { id: null }); setName(s?.name ?? ""); setDescription(s?.description ?? ""); setColor(s?.color ?? "#4f46e5"); setCond((s?.condition as Condition) ?? emptyCondition()); setError(null); };
   const save = async () => {
     if (!name.trim()) return setError("Give it a name.");
     if (isEmptyCondition(cond)) return setError("Add at least one condition.");
@@ -27,7 +27,7 @@ export function SegmentsPanel({ api, variables, items, kind, onChange }: { api: 
     <div className="ax-panel" data-testid={`ax-${kind}s`}>
       <div className="row" style={{ marginBottom: 10 }}>
         <h2 style={{ margin: 0 }}>{kind === "segment" ? "Segments" : "Saved filters"}</h2>
-        <span className="muted" style={{ fontSize: 12 }}>{kind === "segment" ? "Reusable respondent groups, available in every analysis, chart, table, report and dashboard." : "Reusable conditions applied before an analysis runs."}</span>
+        <span className="muted" style={{ fontSize: 13 }}>{kind === "segment" ? "Reusable respondent groups, available in every analysis, chart, table, report and dashboard." : "Reusable conditions applied before an analysis runs."}</span>
         <span className="grow" />
         <button className="btn primary small" onClick={() => start()} data-testid={`ax-new-${kind}`}>+ New {label}</button>
       </div>
@@ -46,10 +46,10 @@ export function SegmentsPanel({ api, variables, items, kind, onChange }: { api: 
       <div className="ax-cards">
         {list.map((s) => (
           <div key={s.id} className="card ax-seg-card" data-testid="ax-segment-card">
-            <div className="card-title">{kind === "segment" && <span className="ax-dot" style={{ background: s.color ?? "#2563eb" }} />}{s.name}</div>
-            {s.description && <div className="muted" style={{ fontSize: 12 }}>{s.description}</div>}
+            <div className="card-title">{kind === "segment" && <span className="ax-dot" style={{ background: s.color ?? "#4f46e5" }} />}{s.name}</div>
+            {s.description && <div className="muted" style={{ fontSize: 13 }}>{s.description}</div>}
             <div className="ax-summary" style={{ marginTop: 6 }}>{conditionText(s.condition as Condition, variables) || "—"}</div>
-            <div className="card-actions" style={{ marginTop: 8 }}><button className="btn small" onClick={() => start(s)}>Edit</button><button className="btn small danger" onClick={async () => { if (confirm(`Delete ${label} “${s.name}”? Saved analyses that reference it keep their inline copy.`)) { await api.remove("segments", s.id); onChange(); } }}>Delete</button><span className="grow" /><span className="muted" style={{ fontSize: 11 }}>updated {new Date(s.updated_at).toLocaleDateString()}</span></div>
+            <div className="card-actions" style={{ marginTop: 8 }}><button className="btn small" onClick={() => start(s)}>Edit</button><button className="btn small danger" onClick={async () => { if (confirm(`Delete ${label} “${s.name}”? Saved analyses that reference it keep their inline copy.`)) { await api.remove("segments", s.id); onChange(); } }}>Delete</button><span className="grow" /><span className="muted" style={{ fontSize: 12.5 }}>updated {new Date(s.updated_at).toLocaleDateString()}</span></div>
           </div>
         ))}
         {!list.length && !editing && <div className="muted">No {label}s yet.</div>}

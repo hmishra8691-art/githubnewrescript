@@ -135,7 +135,7 @@ function RegionSettings({ q, patch, patchSettings }: VariantSettingsProps) {
                   border: `2px ${isActive ? "solid" : "dashed"} var(--accent, #2563eb)`,
                   background: isActive ? "rgb(37 99 235 / 22%)" : "rgb(37 99 235 / 10%)",
                   borderRadius: 4, pointerEvents: "none",
-                  fontSize: 10, color: "#0f172a", lineHeight: 1.2, padding: 2,
+                  fontSize: 11.5, color: "#0f172a", lineHeight: 1.2, padding: 2,
                 }}>
                 {i + 1}
               </div>

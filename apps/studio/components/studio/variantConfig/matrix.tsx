@@ -35,13 +35,13 @@ export function starterSumColumns(q: Question): QuestionColumn[] {
 }
 
 registerVariantSettings("starmatrix", ({ q, patchSettings }) => (
-  <label className="row" style={{ gap: 6, fontSize: 12 }}>
+  <label className="row" style={{ gap: 6, fontSize: 13 }}>
     Stars per row
     <CountInput min={2} max={10} width={80} allowEmpty={false}
       data-testid="starmatrix-max"
       value={q.settings.maxValue ?? 5}
       onChange={(v) => patchSettings({ maxValue: v ?? 5 })} />
-    <span className="muted" style={{ fontSize: 11 }}>
+    <span className="muted" style={{ fontSize: 12.5 }}>
       each row stores a number 1–{q.settings.maxValue ?? 5}, exactly like a numeric matrix
     </span>
   </label>
@@ -50,21 +50,21 @@ registerVariantSettings("starmatrix", ({ q, patchSettings }) => (
 registerVariantSettings("summatrix", ({ q, patch, patchSettings }) => (
   <>
     <div className="row" style={{ gap: 12, flexWrap: "wrap" }}>
-      <label className="row" style={{ gap: 6, fontSize: 12 }}>
+      <label className="row" style={{ gap: 6, fontSize: 13 }}>
         Row total
         <CountInput min={1} width={90} allowEmpty={false}
           data-testid="summatrix-target"
           value={q.settings.sumTarget ?? 100}
           onChange={(v) => patchSettings({ sumTarget: v ?? 100 })} />
       </label>
-      <label className="row" style={{ gap: 6, fontSize: 12 }}>
+      <label className="row" style={{ gap: 6, fontSize: 13 }}>
         Unit
         <input className="input" style={{ width: 90 }} placeholder="e.g. %"
           data-testid="summatrix-unit"
           value={q.settings.sumUnit ?? ""}
           onChange={(e) => patchSettings({ sumUnit: e.target.value || undefined })} />
       </label>
-      <span className="muted" style={{ fontSize: 11 }}>
+      <span className="muted" style={{ fontSize: 12.5 }}>
         every row must spread exactly {q.settings.sumTarget ?? 100}
         {q.settings.sumUnit ?? ""} across the columns
       </span>

@@ -95,7 +95,7 @@ export function FilterBuilder({ value, onChange, variables, depth = 0 }: { value
         <button className="btn small" type="button" disabled={!vars.length} onClick={() => vars[0] && onChange({ ...g, children: [...g.children, newRule(vars[0])] })} data-testid="ax-add-rule">+ Rule</button>
         {depth < 2 && <button className="btn small" type="button" onClick={() => onChange({ ...g, children: [...g.children, { type: "group", op: "or", children: [] }] })}>+ Group</button>}
       </div>
-      {g.children.length === 0 && <div className="muted" style={{ fontSize: 12, padding: "2px 0 6px" }}>{depth ? "Empty group — add a rule." : "No conditions — every respondent is included."}</div>}
+      {g.children.length === 0 && <div className="muted" style={{ fontSize: 13, padding: "2px 0 6px" }}>{depth ? "Empty group — add a rule." : "No conditions — every respondent is included."}</div>}
       {g.children.map((c, i) => (
         <div key={i} className="ax-group-row">
           {i > 0 && <span className="ax-conj">{g.op === "and" ? "AND" : g.op === "or" ? "OR" : "NOR"}</span>}

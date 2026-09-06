@@ -40,7 +40,7 @@ registerVariantSettings("quiz", ({ q, patchSettings }) => {
           ? "No option is marked correct — tick “correct” on the right answer above."
           : `${keyed} option${keyed === 1 ? "" : "s"} marked correct`}
       </div>
-      <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+      <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>
         Exports the chosen code plus <span className="mono">{q.variableName}_CORRECT</span> (1/0).
       </div>
     </>
@@ -73,7 +73,7 @@ registerVariantSettings("timed", ({ q, patchSettings }) => (
         advance. Untick Required, or keep the timeout on “lock”.
       </div>
     )}
-    <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+    <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>
       Exports <span className="mono">{q.variableName}_RT</span> (milliseconds from
       the question appearing to the answer) and <span className="mono">{q.variableName}_TIMEOUT</span>.
     </div>
@@ -114,7 +114,7 @@ registerVariantSettings("matching", ({ q, patch, patchSettings }) => {
           Add rows (the prompts) and options (the answers) first.
         </div>
       ) : (
-        <table className="tbl" style={{ width: "100%", fontSize: 12 }}>
+        <table className="tbl" style={{ width: "100%", fontSize: 13 }}>
           <tbody>
             {q.rows.map((r) => (
               <tr key={String(r.code)}>
@@ -138,7 +138,7 @@ registerVariantSettings("matching", ({ q, patch, patchSettings }) => {
           </tbody>
         </table>
       )}
-      <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+      <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>
         {keyed === 0
           ? "With no key the task is a free pairing exercise — nothing is scored."
           : `${keyed} of ${q.rows.length} prompts keyed; exports ${q.variableName}_CORRECT (pairs right).`}

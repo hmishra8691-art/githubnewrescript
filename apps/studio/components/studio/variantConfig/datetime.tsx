@@ -41,7 +41,7 @@ registerVariantSettings("calendar", ({ q, patchSettings }) => {
       <div className="flabel">Closed weekdays</div>
       <div className="row" style={{ flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
         {DOW.map((d, i) => (
-          <label key={d} className="row" style={{ gap: 4, fontSize: 12 }}>
+          <label key={d} className="row" style={{ gap: 4, fontSize: 13 }}>
             <input type="checkbox" data-testid={`cal-dow-${i}`}
               checked={disabled.includes(i)}
               onChange={() => toggleDow(i)} />
@@ -60,7 +60,7 @@ registerVariantSettings("calendar", ({ q, patchSettings }) => {
             patchSettings({ timeSlots: list.length ? list : undefined });
           }} />
       </label>
-      <div className="muted" style={{ fontSize: 11 }}>
+      <div className="muted" style={{ fontSize: 12.5 }}>
         {slots.length
           ? `Stores "YYYY-MM-DDTHH:mm" — the day alone is not an answer, so a required question still asks for a time.`
           : `Stores "YYYY-MM-DD".`}
@@ -88,7 +88,7 @@ registerVariantSettings("monthyear", ({ q, patchSettings }) => {
             onChange={(v) => patchSettings({ maxYear: v })} />
         </label>
       </div>
-      <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+      <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>
         Empty = {thisYear - 80}–{thisYear + 5}. Stores &quot;YYYY-MM&quot; once both selects are chosen.
       </div>
     </>

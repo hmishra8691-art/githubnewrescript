@@ -62,12 +62,12 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
       <div className="ax-ws-head">
         <div>
           <div className="ax-ws-title">Data Analytics</div>
-          <div className="muted" style={{ fontSize: 12 }}>{p.surveyTitle}{surveyVersion ? ` · survey v${surveyVersion}` : ""}</div>
+          <div className="muted" style={{ fontSize: 13 }}>{p.surveyTitle}{surveyVersion ? ` · survey v${surveyVersion}` : ""}</div>
         </div>
         <label className="ax-field" style={{ minWidth: 220 }}><span>Dataset</span><select className="select" value={env} onChange={(e) => setEnv(e.target.value as DatasetSpec["environment"])} data-testid="ax-dataset"><option value="LIVE">Production responses ({counts.LIVE ?? "…"})</option><option value="TEST">Test responses ({counts.TEST ?? "…"})</option><option value="ALL">All responses</option></select></label>
         <label className="ax-field"><span>Quality</span><select className="select" value={quality} onChange={(e) => setQuality(e.target.value as DatasetSpec["dataset"])}><option value="all">All complete responses</option><option value="clean">Clean only (quality engine)</option></select></label>
         <span className="grow" />
-        <div className="muted" style={{ fontSize: 11, textAlign: "right" }}>Analyses run server-side on stored responses.<br />Only results reach this page.</div>
+        <div className="muted" style={{ fontSize: 12.5, textAlign: "right" }}>Analyses run server-side on stored responses.<br />Only results reach this page.</div>
       </div>
       <div className="ax-ws-tabs">{TABS.map((t) => <button key={t.key} className={`ax-wstab ${tab === t.key ? "on" : ""}`} onClick={() => setTab(t.key)} data-testid={`ax-tab-${t.key}`}>{t.label}</button>)}</div>
       {error && <div className="ax-error" style={{ margin: "6px 0" }}>{error}</div>}
@@ -92,16 +92,16 @@ function Home({ home, analyses, onOpen, onNew, onTab, canEdit, api, refresh }: {
     <div className="ax-home" data-testid="ax-home">
       <div className="ax-home-col">
         <h3>Recent analyses</h3>
-        {(home?.analyses ?? []).map((a) => <div key={a.id} className="card selectable" onClick={() => onOpen(a)} data-testid="ax-home-analysis"><div className="card-title">{a.name}</div><div className="muted" style={{ fontSize: 12 }}>{ANALYSIS_KINDS.find((k) => k.kind === a.kind)?.label ?? a.kind} · v{a.version} · updated {timeAgo(a.updated_at)}</div>{canEdit && <div className="card-actions" style={{ marginTop: 6 }}><button className="btn small danger" onClick={async (e) => { e.stopPropagation(); if (confirm(`Delete analysis “${a.name}”? Charts linked to it are removed; reports keep their published snapshots.`)) { await api.remove("analyses", a.id); await refresh(); } }}>Delete</button></div>}</div>)}
+        {(home?.analyses ?? []).map((a) => <div key={a.id} className="card selectable" onClick={() => onOpen(a)} data-testid="ax-home-analysis"><div className="card-title">{a.name}</div><div className="muted" style={{ fontSize: 13 }}>{ANALYSIS_KINDS.find((k) => k.kind === a.kind)?.label ?? a.kind} · v{a.version} · updated {timeAgo(a.updated_at)}</div>{canEdit && <div className="card-actions" style={{ marginTop: 6 }}><button className="btn small danger" onClick={async (e) => { e.stopPropagation(); if (confirm(`Delete analysis “${a.name}”? Charts linked to it are removed; reports keep their published snapshots.`)) { await api.remove("analyses", a.id); await refresh(); } }}>Delete</button></div>}</div>)}
         {home && !home.analyses.length && <div className="muted">No analyses yet — start with a quick action.</div>}
         {!home && <div className="muted">Loading…</div>}
       </div>
       <div className="ax-home-col">
         <h3>Saved reports</h3>
-        {(home?.reports ?? []).map((r) => <div key={r.id} className="card selectable" onClick={() => onTab("reports")}><div className="card-title">{r.kind === "dashboard" ? "▦" : "▤"} {r.name}</div><div className="muted" style={{ fontSize: 12 }}>{r.mode} · {r.published_version ? `published v${r.published_version}` : "draft"} · updated {timeAgo(r.updated_at)}</div></div>)}
+        {(home?.reports ?? []).map((r) => <div key={r.id} className="card selectable" onClick={() => onTab("reports")}><div className="card-title">{r.kind === "dashboard" ? "▦" : "▤"} {r.name}</div><div className="muted" style={{ fontSize: 13 }}>{r.mode} · {r.published_version ? `published v${r.published_version}` : "draft"} · updated {timeAgo(r.updated_at)}</div></div>)}
         {home && !home.reports.length && <div className="muted">No reports yet.</div>}
         <h3 style={{ marginTop: 14 }}>Active shares</h3>
-        {(home?.shares ?? []).map((s) => <div key={s.id} className="card" onClick={() => onTab("sharing")} style={{ cursor: "pointer" }}><div className="card-title">{home?.reports.find((r) => r.id === s.report_id)?.name ?? "Report"}</div><div className="muted" style={{ fontSize: 12 }}>{s.access === "link" ? "Anyone with link" : s.access === "users" ? "Specific users" : "Private"} · {s.permission} · {s.view_count} views{s.expires_at ? ` · expires ${new Date(s.expires_at).toLocaleDateString()}` : ""}</div></div>)}
+        {(home?.shares ?? []).map((s) => <div key={s.id} className="card" onClick={() => onTab("sharing")} style={{ cursor: "pointer" }}><div className="card-title">{home?.reports.find((r) => r.id === s.report_id)?.name ?? "Report"}</div><div className="muted" style={{ fontSize: 13 }}>{s.access === "link" ? "Anyone with link" : s.access === "users" ? "Specific users" : "Private"} · {s.permission} · {s.view_count} views{s.expires_at ? ` · expires ${new Date(s.expires_at).toLocaleDateString()}` : ""}</div></div>)}
         {home && !home.shares.length && <div className="muted">Nothing shared yet.</div>}
       </div>
       <div className="ax-home-col">
@@ -118,7 +118,7 @@ function Home({ home, analyses, onOpen, onNew, onTab, canEdit, api, refresh }: {
         </div>
         <h3 style={{ marginTop: 14 }}>Analysis types</h3>
         <div className="ax-kind-mini">{ANALYSIS_KINDS.map((k) => <button key={k.kind} className="ax-chip" onClick={() => onNew(k.kind)} title={k.description}>{k.label}</button>)}</div>
-        <div className="muted" style={{ fontSize: 11, marginTop: 10 }}>{analyses.length} saved analyses in this survey.</div>
+        <div className="muted" style={{ fontSize: 12.5, marginTop: 10 }}>{analyses.length} saved analyses in this survey.</div>
       </div>
     </div>
   );
@@ -132,7 +132,7 @@ function ChartsLibrary({ api, charts, analyses, themes, refresh, onOpen }: { api
   React.useEffect(() => { for (const c of charts.slice(0, 12)) void load(c.analysis_id); }, [charts, load]);
   return (
     <div className="ax-panel" data-testid="ax-charts">
-      <div className="row" style={{ marginBottom: 10 }}><h2 style={{ margin: 0 }}>Saved charts</h2><span className="muted" style={{ fontSize: 12 }}>Each chart is linked to its analysis definition — the data is recomputed, the styling is yours.</span></div>
+      <div className="row" style={{ marginBottom: 10 }}><h2 style={{ margin: 0 }}>Saved charts</h2><span className="muted" style={{ fontSize: 13 }}>Each chart is linked to its analysis definition — the data is recomputed, the styling is yours.</span></div>
       {editing && spec && results[editing.analysis_id] && (
         <div className="card">
           <ResultView result={results[editing.analysis_id]} recommendations={results[editing.analysis_id].recommendations} spec={spec} onSpec={setSpec} theme={themes.find((t) => t.id === spec.themeId)?.theme ?? null} themes={themes}
@@ -142,8 +142,8 @@ function ChartsLibrary({ api, charts, analyses, themes, refresh, onOpen }: { api
       <div className="ax-chart-grid">
         {charts.map((c) => { const r = results[c.analysis_id]; const a = analyses.find((x) => x.id === c.analysis_id); return (
           <div key={c.id} className="card ax-chart-card" data-testid="ax-chart-card">
-            <div className="card-title">{c.name}<span className="grow" /><span className="muted" style={{ fontSize: 11 }}>style v{c.style_version}</span></div>
-            <div className="muted" style={{ fontSize: 12 }}>{a?.name ?? "analysis removed"} · {(c.spec as ChartSpec).type}</div>
+            <div className="card-title">{c.name}<span className="grow" /><span className="muted" style={{ fontSize: 12.5 }}>style v{c.style_version}</span></div>
+            <div className="muted" style={{ fontSize: 13 }}>{a?.name ?? "analysis removed"} · {(c.spec as ChartSpec).type}</div>
             {r ? <Chart result={r} spec={c.spec as ChartSpec} theme={themes.find((t) => t.id === c.theme_id)?.theme ?? null} compact /> : <div className="muted" style={{ padding: 20 }}>{a ? "Computing…" : "The linked analysis no longer exists."}</div>}
             <div className="card-actions" style={{ marginTop: 6 }}><button className="btn small" onClick={() => { setEditing(c); setSpec(c.spec as ChartSpec); }} disabled={!r}>Customize</button>{a && <button className="btn small" onClick={() => onOpen(a)}>Open analysis</button>}<button className="btn small" onClick={() => api.export({ format: "pptx", analysisId: c.analysis_id, chart: c.spec, themeId: c.theme_id })}>PPT</button><button className="btn small danger" onClick={async () => { if (confirm("Delete this saved chart?")) { await api.remove("charts", c.id); await refresh(); } }}>Delete</button></div>
           </div>); })}
@@ -185,7 +185,7 @@ function TablesLibrary({ api, analyses, onOpen, onNew }: { api: AxApi; analyses:
       {busy && <div className="muted">Computing…</div>}
       {view && (
         <div className="card">
-          <div className="row" style={{ marginBottom: 6 }}><div className="card-title">{view.title}</div><span className="grow" /><span className="muted" style={{ fontSize: 12 }}>click a column header to sort</span></div>
+          <div className="row" style={{ marginBottom: 6 }}><div className="card-title">{view.title}</div><span className="grow" /><span className="muted" style={{ fontSize: 13 }}>click a column header to sort</span></div>
           <div className="ax-table-wrap"><table className="ax-table" data-testid="ax-builder-table"><thead><tr>{view.columns.map((c) => <th key={c.key} className={c.type && c.type !== "text" ? "num sortable" : "sortable"} onClick={() => setSort(sort?.key === c.key ? { key: c.key, dir: sort.dir === 1 ? -1 : 1 } : { key: c.key, dir: -1 })}>{c.label}{sort?.key === c.key ? (sort.dir === 1 ? " ↑" : " ↓") : ""}</th>)}</tr></thead>
             <tbody>{view.rows.map((r, i) => <tr key={i}>{view.columns.map((c) => { const v = r[c.key]; const sig = r[`${c.key}__sig`]; const ct = (r.__format as string | undefined) ?? c.type; return <td key={c.key} className={typeof v === "number" ? "num" : ""}>{v == null ? "" : typeof v === "number" ? (ct === "pct" ? `${v.toFixed(c.decimals ?? 1)}%` : ct === "count" ? Math.round(v).toLocaleString() : v.toLocaleString("en-US", { maximumFractionDigits: c.decimals ?? 2 })) : String(v)}{sig ? <sup className="ax-sig">{String(sig)}</sup> : null}</td>; })}</tr>)}</tbody></table></div>
           <div className="ax-table-notes">{view.base ? `Base: n = ${view.base.n}${view.base.weightedN != null && view.base.weightedN !== view.base.n ? ` · weighted n = ${view.base.weightedN}` : ""}` : ""}{view.notes?.map((n, i) => <div key={i}>{n}</div>)}{res?.warnings.map((w, i) => <div key={`w${i}`}>⚠ {w}</div>)}</div>
@@ -201,10 +201,10 @@ function ExportsPanel({ api, reports, analyses, themes }: { api: AxApi; reports:
   const [target, setTarget] = React.useState<{ reportId?: string; analysisId?: string } | null>(null);
   return (
     <div className="ax-panel" data-testid="ax-exports">
-      <div className="row" style={{ marginBottom: 10 }}><h2 style={{ margin: 0 }}>Exports</h2><span className="muted" style={{ fontSize: 12 }}>Presentation-ready PowerPoint with native charts and tables, or structured Excel workbooks — themed with your report branding.</span></div>
+      <div className="row" style={{ marginBottom: 10 }}><h2 style={{ margin: 0 }}>Exports</h2><span className="muted" style={{ fontSize: 13 }}>Presentation-ready PowerPoint with native charts and tables, or structured Excel workbooks — themed with your report branding.</span></div>
       <div className="ax-home">
-        <div className="ax-home-col"><h3>Reports</h3>{reports.map((r) => <div key={r.id} className="card"><div className="card-title">{r.name}</div><div className="muted" style={{ fontSize: 12 }}>{r.published_version ? `published v${r.published_version}` : "draft only"}</div><div className="card-actions" style={{ marginTop: 6 }}><button className="btn primary small" onClick={() => setTarget({ reportId: r.id })}>Export…</button></div></div>)}{!reports.length && <div className="muted">No reports.</div>}</div>
-        <div className="ax-home-col"><h3>Analyses</h3>{analyses.map((a) => <div key={a.id} className="card"><div className="card-title">{a.name}</div><div className="muted" style={{ fontSize: 12 }}>{a.kind} · v{a.version}</div><div className="card-actions" style={{ marginTop: 6 }}><button className="btn small" onClick={() => setTarget({ analysisId: a.id })}>Export…</button></div></div>)}{!analyses.length && <div className="muted">No saved analyses.</div>}</div>
+        <div className="ax-home-col"><h3>Reports</h3>{reports.map((r) => <div key={r.id} className="card"><div className="card-title">{r.name}</div><div className="muted" style={{ fontSize: 13 }}>{r.published_version ? `published v${r.published_version}` : "draft only"}</div><div className="card-actions" style={{ marginTop: 6 }}><button className="btn primary small" onClick={() => setTarget({ reportId: r.id })}>Export…</button></div></div>)}{!reports.length && <div className="muted">No reports.</div>}</div>
+        <div className="ax-home-col"><h3>Analyses</h3>{analyses.map((a) => <div key={a.id} className="card"><div className="card-title">{a.name}</div><div className="muted" style={{ fontSize: 13 }}>{a.kind} · v{a.version}</div><div className="card-actions" style={{ marginTop: 6 }}><button className="btn small" onClick={() => setTarget({ analysisId: a.id })}>Export…</button></div></div>)}{!analyses.length && <div className="muted">No saved analyses.</div>}</div>
       </div>
       {target && <ExportDialog api={api} reportId={target.reportId} analysisId={target.analysisId} themes={themes} onClose={() => setTarget(null)} />}
     </div>

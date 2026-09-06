@@ -194,7 +194,7 @@ function ListOperationsEditor({ q, patch }: { q: Question; patch(p: Partial<Ques
 
   return (
     <div data-testid="list-operations">
-      <p className="muted" style={{ fontSize: 11, marginTop: -2 }}>
+      <p className="muted" style={{ fontSize: 12.5, marginTop: -2 }}>
         Set operations across any number of earlier questions — intersection, union, difference,
         remaining, dedupe, filter, sort, randomize. They run top to bottom, after the list rules
         above and before the question&apos;s own sorting and randomization.
@@ -225,7 +225,7 @@ function ListOperationsEditor({ q, patch }: { q: Question; patch(p: Partial<Ques
                   <option value="shuffle">shuffle</option><option value="rotate">rotate</option>
                   <option value="reverse_half">reverse half</option><option value="none">keep order</option>
                 </select>
-                <label className="row" style={{ gap: 4, fontSize: 12 }}>
+                <label className="row" style={{ gap: 4, fontSize: 13 }}>
                   show
                   <CountInput min={1} width={60} value={op.pick}
                     onChange={(v) => setOp(i, { pick: v })} />
@@ -233,7 +233,7 @@ function ListOperationsEditor({ q, patch }: { q: Question; patch(p: Partial<Ques
               </>
             )}
             {op.kind === "carry_forward" && (
-              <label className="row" style={{ gap: 4, fontSize: 12 }}>
+              <label className="row" style={{ gap: 4, fontSize: 13 }}>
                 <input type="checkbox" checked={op.keepOwn}
                   onChange={(e) => setOp(i, { keepOwn: e.target.checked })} /> keep own options
               </label>
@@ -327,7 +327,7 @@ export function SurveySettings() {
           onChange={(e) => s.update((d) => { d.meta.code = e.target.value; })} /></label>
 
       <h3 className="sec">Survey URL</h3>
-      <p className="muted" style={{ fontSize: 11, marginTop: -4 }}>
+      <p className="muted" style={{ fontSize: 12.5, marginTop: -4 }}>
         Must be unique across surveys — respondents get
         <span className="mono"> /s/{dep.clientSlug || "client"}/{dep.studySlug || "study-001"}</span>
       </p>
@@ -371,7 +371,7 @@ export function SurveySettings() {
         </div>
       )}
 
-      <label className="row" style={{ gap: 6, fontSize: 12, marginBottom: 8 }}>
+      <label className="row" style={{ gap: 6, fontSize: 13, marginBottom: 8 }}>
         <input type="checkbox" checked={dep.access.allowRetake ?? false}
           onChange={(e) => s.update((d) => { d.deployment.access.allowRetake = e.target.checked; })} />
         Allow a respondent to retake the survey
@@ -379,7 +379,7 @@ export function SurveySettings() {
 
       <QualitySettings />
 
-      <p className="muted" style={{ fontSize: 11 }}>
+      <p className="muted" style={{ fontSize: 12.5 }}>
         Changes here autosave to your draft. They reach respondents only when you save a version
         and publish it.
       </p>
@@ -449,7 +449,7 @@ export function PropertiesPanel() {
         </div>
       )}
       {logicIssues.length > 0 && !logicIssues.some((i) => i.level === "error") && (
-        <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>
+        <div className="muted" style={{ fontSize: 12.5, marginBottom: 6 }}>
           {logicIssues.length} logic note{logicIssues.length === 1 ? "" : "s"} — see Logic → Logic check
         </div>
       )}
@@ -494,7 +494,7 @@ export function PropertiesPanel() {
               <option value="rows">→ into rows</option>
               <option value="columns">→ into columns</option>
             </select>
-            <label className="row" style={{ gap: 4, fontSize: 12 }}>
+            <label className="row" style={{ gap: 4, fontSize: 13 }}>
               <input type="checkbox" checked={q.carryForward.keepOwn}
                 onChange={(e) => patch({ carryForward: { ...q.carryForward!, keepOwn: e.target.checked } })} />
               keep own
@@ -536,7 +536,7 @@ export function PropertiesPanel() {
               <option value="shuffle">shuffle</option><option value="rotate">rotate</option>
               <option value="reverse_half">reverse for half</option><option value="none">keep order</option>
             </select>
-            <label className="row" style={{ gap: 4, fontSize: 12 }}>
+            <label className="row" style={{ gap: 4, fontSize: 13 }}>
               show only
               <CountInput min={1} width={64}
                 title="Present N randomly chosen items (anchored items always show)"
@@ -551,7 +551,7 @@ export function PropertiesPanel() {
       </div>
       {q.randomization?.enabled && (
         <>
-          <p className="muted" style={{ fontSize: 11, margin: "4px 0 8px" }}>
+          <p className="muted" style={{ fontSize: 12.5, margin: "4px 0 8px" }}>
             Fix items in place with the <em>anchor top / anchor bottom</em> option flags —
             anchored items are never shuffled or dropped by “show only N”.
           </p>
@@ -573,7 +573,7 @@ export function PropertiesPanel() {
                   <option value="shuffle">shuffle</option><option value="rotate">rotate</option>
                   <option value="reverse_half">reverse half</option><option value="none">keep order</option>
                 </select>
-                <label className="row" style={{ gap: 4, fontSize: 12 }}>
+                <label className="row" style={{ gap: 4, fontSize: 13 }}>
                   pick
                   <CountInput min={1} width={60} value={rule.pick}
                     onChange={(v) => patch({
@@ -621,7 +621,7 @@ export function PropertiesPanel() {
       <MaskingBuilder q={q} patch={patch} />
 
       <h3 className="sec">List logic (from previous questions)</h3>
-      <p className="muted" style={{ fontSize: 11, marginTop: -2 }}>
+      <p className="muted" style={{ fontSize: 12.5, marginTop: -2 }}>
         Include / exclude / prioritize this question&apos;s options based on what an earlier
         question selected or displayed. Rules apply in order, before sorting and randomization.
         “Exclude + displayed” = show only items not yet seen.
@@ -679,11 +679,11 @@ export function PropertiesPanel() {
 
       <h3 className="sec">State</h3>
       <div className="row" style={{ flexWrap: "wrap" }}>
-        <label className="row" style={{ gap: 4, fontSize: 12 }}>
+        <label className="row" style={{ gap: 4, fontSize: 13 }}>
           <input type="checkbox" checked={q.settings.hidden}
             onChange={(e) => patch({ settings: { ...q.settings, hidden: e.target.checked } })} /> hidden
         </label>
-        <label className="row" style={{ gap: 4, fontSize: 12 }}>
+        <label className="row" style={{ gap: 4, fontSize: 13 }}>
           <input type="checkbox" checked={q.settings.readOnly}
             onChange={(e) => patch({ settings: { ...q.settings, readOnly: e.target.checked } })} /> read-only
         </label>

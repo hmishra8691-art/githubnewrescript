@@ -86,7 +86,7 @@ export function VersionsPanel() {
         <span className="grow" />
         <button className="btn small" onClick={load}>↻</button>
       </div>
-      <p className="muted" style={{ fontSize: 12 }}>
+      <p className="muted" style={{ fontSize: 13 }}>
         Every save creates an immutable snapshot. A deployed URL is pinned to one version — editing
         later never touches a live survey until you redeploy.
       </p>
@@ -153,7 +153,7 @@ export function VersionsPanel() {
             <div className="row">
               <span className={`chip ${d.mode === "live" ? "on" : "warn"}`}>{d.mode}</span>
               <a href={url} target="_blank" className="mono">{url}</a>
-              <span className="muted mono" style={{ fontSize: 11 }}>
+              <span className="muted mono" style={{ fontSize: 12.5 }}>
                 v{versions.find((v) => v.id === d.version_id)?.version ?? "?"}
               </span>
             </div>

@@ -104,7 +104,7 @@ export function QualityPanel({ include }: { include: Include }) {
     return (
       <div className="card" style={{ borderColor: "var(--red)" }} data-testid="quality-error">
         <strong style={{ color: "var(--red)" }}>{error}</strong>
-        {/migration/i.test(error) && <p className="muted" style={{ fontSize: 12 }}>Run <span className="mono">supabase/migrations/0005_response_quality.sql</span> on the database, then refresh.</p>}
+        {/migration/i.test(error) && <p className="muted" style={{ fontSize: 13 }}>Run <span className="mono">supabase/migrations/0005_response_quality.sql</span> on the database, then refresh.</p>}
       </div>
     );
   }
@@ -123,37 +123,37 @@ export function QualityPanel({ include }: { include: Include }) {
       {/* ------------------------------------------------------ header */}
       <div className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "stretch" }} data-testid="quality-summary">
         <div className="card" style={{ padding: 10, minWidth: 150 }}>
-          <div className="muted" style={{ fontSize: 11 }}>Total responses</div>
+          <div className="muted" style={{ fontSize: 12.5 }}>Total responses</div>
           <div style={{ fontSize: 22, fontWeight: 600 }} data-testid="q-total">{data.total.toLocaleString()}</div>
-          <div className="muted" style={{ fontSize: 11 }}>{data.strictness ? `${data.strictness} strictness` : ""}</div>
+          <div className="muted" style={{ fontSize: 12.5 }}>{data.strictness ? `${data.strictness} strictness` : ""}</div>
         </div>
         {[...CLASSES, "UNSCORED"].map((c) => (
           <button key={c} className="card" data-testid={`q-class-${c}`} onClick={() => setFilter((f) => ({ ...f, cls: f.cls === c ? null : c }))}
             style={{ padding: 10, minWidth: 120, textAlign: "left", cursor: "pointer", borderColor: filter.cls === c ? CLASS_COLOR[c] : undefined, borderWidth: filter.cls === c ? 2 : 1 }}>
-            <div className="muted" style={{ fontSize: 11 }}><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 4, background: CLASS_COLOR[c], marginRight: 5 }} />{fmtClass(c)}</div>
+            <div className="muted" style={{ fontSize: 12.5 }}><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 4, background: CLASS_COLOR[c], marginRight: 5 }} />{fmtClass(c)}</div>
             <div style={{ fontSize: 20, fontWeight: 600 }}>{(data.byClass[c] ?? 0).toLocaleString()}</div>
           </button>
         ))}
         <div className="card" style={{ padding: 10, minWidth: 180 }}>
-          <div className="muted" style={{ fontSize: 11 }}>Fraud-risk distribution</div>
+          <div className="muted" style={{ fontSize: 12.5 }}>Fraud-risk distribution</div>
           <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 40 }} data-testid="q-histogram">
             {data.histogram.map((n, i) => (
               <div key={i} title={`${i * 10}–${i * 10 + 9}: ${n}`} style={{ flex: 1, height: `${Math.max(2, (n / maxHist) * 100)}%`, background: i < 2 ? CLASS_COLOR.CLEAN : i < 4 ? CLASS_COLOR.REVIEW : i < 6 ? CLASS_COLOR.SUSPICIOUS : i < 8 ? CLASS_COLOR.HIGHLY_SUSPICIOUS : CLASS_COLOR.CRITICAL, borderRadius: 2 }} />
             ))}
           </div>
-          <div className="muted" style={{ fontSize: 10, display: "flex", justifyContent: "space-between" }}><span>0</span><span>risk</span><span>100</span></div>
+          <div className="muted" style={{ fontSize: 11.5, display: "flex", justifyContent: "space-between" }}><span>0</span><span>risk</span><span>100</span></div>
         </div>
       </div>
 
       <div className="row" style={{ flexWrap: "wrap", gap: 6, margin: "10px 0" }} data-testid="q-signals">
-        <span className="muted" style={{ fontSize: 11 }}>Signals:</span>
+        <span className="muted" style={{ fontSize: 12.5 }}>Signals:</span>
         {Object.entries(data.signals).sort((a, b) => b[1] - a[1]).map(([cat, n]) => (
           <button key={cat} className={`chip ${filter.signal === cat ? "on" : ""}`} style={{ cursor: "pointer" }} data-testid={`q-signal-${cat}`}
             onClick={() => setFilter((f) => ({ ...f, signal: f.signal === cat ? null : cat }))}>{CATEGORY_LABELS[cat] ?? cat} {n}</button>
         ))}
-        {!Object.keys(data.signals).length && <span className="muted" style={{ fontSize: 11 }}>none</span>}
+        {!Object.keys(data.signals).length && <span className="muted" style={{ fontSize: 12.5 }}>none</span>}
         <span className="grow" />
-        <span className="muted" style={{ fontSize: 11 }}>Decisions:</span>
+        <span className="muted" style={{ fontSize: 12.5 }}>Decisions:</span>
         {(["KEEP", "REMOVE", "REVIEW_LATER", "NONE"] as const).map((d) => (
           <button key={d} className={`chip ${filter.review === d ? "on" : ""}`} style={{ cursor: "pointer" }} data-testid={`q-review-${d}`}
             onClick={() => setFilter((f) => ({ ...f, review: f.review === d ? null : d }))}>{d === "NONE" ? "undecided" : d.replace("_", " ").toLowerCase()} {data.byReview[d] ?? 0}</button>
@@ -162,7 +162,7 @@ export function QualityPanel({ include }: { include: Include }) {
 
       {data.clusters.length > 0 && (
         <div className="row" style={{ flexWrap: "wrap", gap: 6, marginBottom: 10 }} data-testid="q-clusters">
-          <span className="muted" style={{ fontSize: 11 }}>Coordinated clusters:</span>
+          <span className="muted" style={{ fontSize: 12.5 }}>Coordinated clusters:</span>
           {data.clusters.slice(0, 12).map((c) => (
             <button key={c.id} className={`chip ${filter.cluster === c.id ? "on" : "warn"}`} style={{ cursor: "pointer" }} data-testid="q-cluster"
               onClick={() => setFilter((f) => ({ ...f, cluster: f.cluster === c.id ? null : c.id }))}>{c.id.slice(2, 8)} · {c.size} responses</button>
@@ -176,7 +176,7 @@ export function QualityPanel({ include }: { include: Include }) {
           <option value="risk">highest risk first</option><option value="quality">lowest quality first</option><option value="time">newest first</option>
         </select>
         {(filter.cls || filter.signal || filter.review || filter.cluster || filter.q) && <button className="btn small" onClick={() => setFilter({ cls: null, signal: null, review: null, cluster: null, q: "" })}>clear filters</button>}
-        <span className="muted" style={{ fontSize: 11 }}>{rows.length} of {data.total}</span>
+        <span className="muted" style={{ fontSize: 12.5 }}>{rows.length} of {data.total}</span>
         <span className="grow" />
         <button className="btn small" data-testid="q-recompute" disabled={busy} onClick={recompute}>{busy ? "Re-assessing…" : "↻ Re-assess all"}</button>
       </div>
@@ -204,7 +204,7 @@ export function QualityPanel({ include }: { include: Include }) {
             ))}
           </tbody>
         </table>
-        {!rows.length && <p className="muted" style={{ fontSize: 12 }}>No responses match.</p>}
+        {!rows.length && <p className="muted" style={{ fontSize: 13 }}>No responses match.</p>}
       </div>
 
       {open && <ReviewDrawer sessionId={open} onClose={() => setOpen(null)} onChanged={load} />}
@@ -274,7 +274,7 @@ function Score({ value, invert }: { value: number | null; invert?: boolean }) {
       <span style={{ width: 46, height: 6, background: "var(--panel2)", borderRadius: 3, overflow: "hidden", display: "inline-block" }}>
         <span style={{ display: "block", width: `${value}%`, height: "100%", background: color }} />
       </span>
-      <span className="mono" style={{ fontSize: 12 }}>{value}</span>
+      <span className="mono" style={{ fontSize: 13 }}>{value}</span>
     </span>
   );
 }
@@ -354,15 +354,15 @@ export function ReviewDrawer({ sessionId, onClose, onChanged }: { sessionId: str
 
                 {tab === "reasons" && (
                   <div data-testid="review-reasons">
-                    {a.flags.length === 0 && <p className="muted" style={{ fontSize: 12 }}>No flags. {a.notMeasured?.length ? `Not measured: ${a.notMeasured.join(", ")}.` : ""}</p>}
+                    {a.flags.length === 0 && <p className="muted" style={{ fontSize: 13 }}>No flags. {a.notMeasured?.length ? `Not measured: ${a.notMeasured.join(", ")}.` : ""}</p>}
                     <ol style={{ paddingLeft: 18, margin: 0 }}>
                       {[...a.flags].sort((x: any, y: any) => (y.riskPoints + y.qualityPenalty) - (x.riskPoints + x.qualityPenalty)).map((f: any, i: number) => (
-                        <li key={i} style={{ marginBottom: 8, fontSize: 12 }} data-testid="review-flag">
+                        <li key={i} style={{ marginBottom: 8, fontSize: 13 }} data-testid="review-flag">
                           <div><strong>{f.title}</strong> <span className="chip" style={{ borderColor: SEV_COLOR[f.severity], color: SEV_COLOR[f.severity] }}>{f.severity}</span> <span className="muted">+{f.riskPoints} risk · −{f.qualityPenalty} quality · {CATEGORY_LABELS[f.category] ?? f.category}</span></div>
                           <div><span className="muted">What happened:</span> {f.observed}{f.expected ? <> <span className="muted">· expected</span> {f.expected}</> : null}</div>
                           <div><span className="muted">Why it matters:</span> {f.explanation}</div>
                           {(f.questionIds?.length || f.relatedSessionIds?.length) ? (
-                            <div className="muted" style={{ fontSize: 11 }}>
+                            <div className="muted" style={{ fontSize: 12.5 }}>
                               {f.questionIds?.length ? `Questions: ${f.questionIds.map((id: string) => s.def.questions.find((q) => q.id === id)?.code ?? id).join(", ")}` : ""}
                               {f.relatedSessionIds?.length ? ` · Related respondents: ${f.relatedSessionIds.map((x: string) => x.slice(0, 8)).join(", ")}` : ""}
                             </div>
@@ -371,7 +371,7 @@ export function ReviewDrawer({ sessionId, onClose, onChanged }: { sessionId: str
                       ))}
                     </ol>
                     {a.cluster?.clusterId && <div className="chip warn" style={{ marginTop: 6 }}>Cluster {a.cluster.clusterId.slice(2, 8)} · {a.cluster.size} responses · risk {a.cluster.clusterRisk} · shares {a.cluster.sharedSignals.join(", ") || "similar answers"}</div>}
-                    {a.notMeasured?.length ? <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>Not measured (telemetry off or unavailable): {a.notMeasured.join(", ")}.</div> : null}
+                    {a.notMeasured?.length ? <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>Not measured (telemetry off or unavailable): {a.notMeasured.join(", ")}.</div> : null}
                   </div>
                 )}
                 {tab === "answers" && (
@@ -382,7 +382,7 @@ export function ReviewDrawer({ sessionId, onClose, onChanged }: { sessionId: str
                   </div>
                 )}
                 {tab === "telemetry" && (
-                  <div style={{ fontSize: 12 }} data-testid="review-telemetry">
+                  <div style={{ fontSize: 13 }} data-testid="review-telemetry">
                     {!d.telemetry ? <p className="muted">No telemetry recorded for this response.</p> : (
                       <table className="grid"><tbody>
                         <tr><td>Total duration</td><td>{a.system?.SYSTEM_TOTAL_DURATION ?? "—"} s (benchmark {a.system?.SYSTEM_MEDIAN_DURATION ?? "—"} s, ratio {a.system?.SYSTEM_DURATION_RATIO ?? "—"})</td></tr>
@@ -392,14 +392,14 @@ export function ReviewDrawer({ sessionId, onClose, onChanged }: { sessionId: str
                         <tr><td>Interaction</td><td>{d.telemetry.interaction?.pointerEvents ?? 0} pointer · {d.telemetry.interaction?.keyEvents ?? 0} key · {d.telemetry.interaction?.scrollEvents ?? 0} scroll events</td></tr>
                         <tr><td>Device</td><td>{d.telemetry.device ? `${d.telemetry.device.type} · ${d.telemetry.device.browser} on ${d.telemetry.device.os} · ${d.telemetry.device.screen} · ${d.telemetry.device.timezone} · ${d.telemetry.device.locale}${d.telemetry.device.webdriver ? " · WEBDRIVER" : ""}` : "—"}</td></tr>
                         <tr><td>Signatures</td><td>device {d.hashes?.device ?? "—"}… · ip {d.hashes?.ip ?? "—"}… (salted hashes)</td></tr>
-                        <tr><td>Navigation</td><td className="mono" style={{ fontSize: 11 }}>{(d.telemetry.navigation?.sequence ?? []).join(" ")}</td></tr>
+                        <tr><td>Navigation</td><td className="mono" style={{ fontSize: 12.5 }}>{(d.telemetry.navigation?.sequence ?? []).join(" ")}</td></tr>
                         {d.telemetry.disabled?.length ? <tr><td>Not recorded</td><td>{d.telemetry.disabled.join(", ")}</td></tr> : null}
                       </tbody></table>
                     )}
                   </div>
                 )}
                 {tab === "history" && (
-                  <div style={{ fontSize: 12 }} data-testid="review-history">
+                  <div style={{ fontSize: 13 }} data-testid="review-history">
                     {!d.reviews?.length ? <p className="muted">No decisions yet.</p> : (
                       <table className="grid"><thead><tr><th>When</th><th>Decision</th><th>By</th><th>Reason</th></tr></thead>
                         <tbody>{d.reviews.map((r: any, i: number) => <tr key={i}><td>{new Date(r.decided_at).toLocaleString()}</td><td>{r.decision}</td><td>{r.decided_by}</td><td>{r.reason ?? ""}</td></tr>)}</tbody></table>
@@ -408,14 +408,14 @@ export function ReviewDrawer({ sessionId, onClose, onChanged }: { sessionId: str
                 )}
               </>
             ) : (
-              <p className="muted" style={{ fontSize: 12 }}>This response has not been assessed (quality checks were off when it finished, or the migration was missing). Click re-assess.</p>
+              <p className="muted" style={{ fontSize: 13 }}>This response has not been assessed (quality checks were off when it finished, or the migration was missing). Click re-assess.</p>
             )}
 
             {/* ------------------------------------------------ decision */}
             <div className="card" style={{ padding: 10, marginTop: 10 }} data-testid="review-decision">
               <div className="row" style={{ alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                <strong style={{ fontSize: 12 }}>Your decision:</strong>
-                {d.review?.status ? <span className={`chip ${d.review.status === "KEEP" ? "on" : "warn"}`} data-testid="review-current">{d.review.status.replace("_", " ")}{d.review.reason ? ` — ${d.review.reason}` : ""}{d.review.at ? ` · ${new Date(d.review.at).toLocaleString()}` : ""}</span> : <span className="muted" style={{ fontSize: 12 }}>none yet</span>}
+                <strong style={{ fontSize: 13 }}>Your decision:</strong>
+                {d.review?.status ? <span className={`chip ${d.review.status === "KEEP" ? "on" : "warn"}`} data-testid="review-current">{d.review.status.replace("_", " ")}{d.review.reason ? ` — ${d.review.reason}` : ""}{d.review.at ? ` · ${new Date(d.review.at).toLocaleString()}` : ""}</span> : <span className="muted" style={{ fontSize: 13 }}>none yet</span>}
                 <span className="grow" />
                 <input className="input" style={{ width: 260 }} placeholder="reason (optional)" data-testid="review-reason" value={reason} onChange={(e) => setReason(e.target.value)} />
                 <button className="btn small" style={{ borderColor: CLASS_COLOR.CLEAN, color: CLASS_COLOR.CLEAN }} disabled={busy} data-testid="review-keep" onClick={() => decide("KEEP")}>KEEP</button>
@@ -423,7 +423,7 @@ export function ReviewDrawer({ sessionId, onClose, onChanged }: { sessionId: str
                 <button className="btn small" disabled={busy} data-testid="review-later" onClick={() => decide("REVIEW_LATER")}>REVIEW LATER</button>
                 {d.review?.status && <button className="btn small ghost" disabled={busy} data-testid="review-clear" onClick={() => decide("CLEAR")}>undo</button>}
               </div>
-              <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>REMOVE excludes this response from clean datasets and exports marked clean. The raw response is never deleted and the decision can be undone; every decision is kept in the audit trail.</div>
+              <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>REMOVE excludes this response from clean datasets and exports marked clean. The raw response is never deleted and the decision can be undone; every decision is kept in the audit trail.</div>
             </div>
           </>
         )}
@@ -435,9 +435,9 @@ export function ReviewDrawer({ sessionId, onClose, onChanged }: { sessionId: str
 function Big({ label, value, sub, color }: { label: string; value: string; sub?: string; color: string }) {
   return (
     <div style={{ minWidth: 150 }}>
-      <div className="muted" style={{ fontSize: 11 }}>{label}</div>
+      <div className="muted" style={{ fontSize: 12.5 }}>{label}</div>
       <div style={{ fontSize: 20, fontWeight: 600, color }}>{value}</div>
-      {sub && <div className="muted" style={{ fontSize: 11 }}>{sub}</div>}
+      {sub && <div className="muted" style={{ fontSize: 12.5 }}>{sub}</div>}
     </div>
   );
 }

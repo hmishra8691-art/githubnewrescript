@@ -126,7 +126,7 @@ export function MoveQuestionModal({ qid, onClose }: { qid: string; onClose(): vo
       <div className="modal move-modal" role="dialog" aria-label="Move question" data-testid="move-question"
         onClick={(e) => e.stopPropagation()}>
         <h3 style={{ margin: "0 0 4px" }}>Move {q.code}</h3>
-        <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+        <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
           {q.text.replace(/<[^>]*>/g, "").slice(0, 90) || "(untitled question)"}
         </p>
 
@@ -138,7 +138,7 @@ export function MoveQuestionModal({ qid, onClose }: { qid: string; onClose(): vo
                 onChange={() => setBlockId(b.id)} />
               <span className="block-badge">BLOCK {i + 1}</span>
               <span className="grow">{b.title || <span className="muted">untitled</span>}</span>
-              <span className="muted" style={{ fontSize: 11 }}>
+              <span className="muted" style={{ fontSize: 12.5 }}>
                 {blockSize(b)} q{b.pages.length > 1 ? ` · ${b.pages.length} pages` : ""}
                 {b.id === currentBlock?.id ? " · current" : ""}
               </span>

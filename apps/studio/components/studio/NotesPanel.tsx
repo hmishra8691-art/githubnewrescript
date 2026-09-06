@@ -123,13 +123,13 @@ export function NotesPanel({ canComment, canResolve }: { canComment: boolean; ca
         <h2 style={{ margin: 0, fontSize: 17 }}>Internal notes</h2>
         {data.openCount > 0 && <span className="chip warn">{data.openCount} open</span>}
         <span className="grow" />
-        <label className="row" style={{ gap: 5, fontSize: 12 }}>
+        <label className="row" style={{ gap: 5, fontSize: 13 }}>
           <input type="checkbox" checked={showResolved} data-testid="notes-show-resolved" onChange={(e) => setShowResolved(e.target.checked)} />
           show resolved
         </label>
         <button className="btn small" onClick={() => void load()}>↻ refresh</button>
       </div>
-      <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+      <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
         These notes are for the project team only. They are never shown to respondents and never appear in the survey.
       </p>
 
@@ -152,11 +152,11 @@ export function NotesPanel({ canComment, canResolve }: { canComment: boolean; ca
           </div>
         </div>
       ) : (
-        <p className="muted" style={{ fontSize: 12 }}>Your role on this project cannot add notes.</p>
+        <p className="muted" style={{ fontSize: 13 }}>Your role on this project cannot add notes.</p>
       )}
 
       {data.threads.length === 0 && (
-        <p className="muted" style={{ fontSize: 12 }} data-testid="notes-empty">
+        <p className="muted" style={{ fontSize: 13 }} data-testid="notes-empty">
           No notes yet. {canComment ? "Anything the team should know about this project goes here." : ""}
         </p>
       )}
@@ -274,7 +274,7 @@ export function ActivityPanel() {
         <button className="btn small" onClick={() => void load()}>↻ refresh</button>
       </div>
 
-      {shown.length === 0 && <p className="muted" style={{ fontSize: 12 }} data-testid="activity-empty">Nothing recorded yet.</p>}
+      {shown.length === 0 && <p className="muted" style={{ fontSize: 13 }} data-testid="activity-empty">Nothing recorded yet.</p>}
 
       {[...byDay.entries()].map(([day, list]) => (
         <div key={day} style={{ marginBottom: 14 }}>
@@ -284,7 +284,7 @@ export function ActivityPanel() {
               <div className="activity-row" key={String(e.id)} data-testid="activity-row" data-action={e.action}>
                 <span className="at">{new Date(e.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
                 <span className="what">{e.text}</span>
-                <span className="cat chip" style={{ fontSize: 10 }}>{CATEGORY_LABEL[e.category] ?? e.category}</span>
+                <span className="cat chip" style={{ fontSize: 11.5 }}>{CATEGORY_LABEL[e.category] ?? e.category}</span>
               </div>
             ))}
           </div>

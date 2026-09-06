@@ -273,8 +273,9 @@ export interface ReportTheme {
 
 export const DEFAULT_THEME: ReportTheme = {
   name: "Rescript",
-  colors: { primary: "#2563eb", secondary: "#0f172a", accent: "#f59e0b", background: "#ffffff", text: "#16202e", subtle: "#64748b",
-    palette: ["#2563eb", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#06b6d4", "#f97316", "#84cc16", "#ec4899", "#64748b"] },
+  // brand-aligned: Electric Indigo first, Cyan second, then a balanced categorical ramp
+  colors: { primary: "#4f46e5", secondary: "#131a2b", accent: "#06b6d4", background: "#ffffff", text: "#131a2b", subtle: "#6b7690",
+    palette: ["#4f46e5", "#06b6d4", "#f59e0b", "#10b981", "#f43f5e", "#8b5cf6", "#f97316", "#84cc16", "#ec4899", "#64748b"] },
   fontFamily: "Inter, system-ui, sans-serif",
   chart: { gridLines: true, dataLabels: true, decimals: 0 },
   typography: { baseSize: 12, titleSize: 16 },

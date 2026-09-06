@@ -144,7 +144,7 @@ export default function SecurityPage() {
       <AccountHeader active="security" user={user} onSignOut={signOut} />
 
       {policy && (
-        <p className="muted" style={{ fontSize: 13, lineHeight: 1.55, maxWidth: 720 }}>
+        <p className="muted" style={{ fontSize: 14, lineHeight: 1.55, maxWidth: 720 }}>
           {policy.singleSession
             ? "This platform allows one active session per account."
             : "You can be signed in on more than one device at a time."}{" "}
@@ -198,7 +198,7 @@ export default function SecurityPage() {
                     </td>
                     <td>
                       <div>{STATUS_WORDS[s.status] ?? s.status}</div>
-                      {s.hint && <div className="muted" style={{ fontSize: 11 }}>{s.hint}</div>}
+                      {s.hint && <div className="muted" style={{ fontSize: 12.5 }}>{s.hint}</div>}
                     </td>
                     <td>{s.device || "Unrecognised device"}</td>
                     <td>{whenLabel(s.loginAt)}</td>
@@ -223,7 +223,7 @@ export default function SecurityPage() {
                           {busyId === s.sessionId ? "Revoking…" : isArmed ? "Confirm?" : "Revoke"}
                         </button>
                       ) : (
-                        <span className="muted" style={{ fontSize: 11 }}>
+                        <span className="muted" style={{ fontSize: 12.5 }}>
                           {s.endedReason ? `Ended (${s.endedReason})` : "Already ended"}
                         </span>
                       )}

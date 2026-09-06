@@ -12,7 +12,7 @@ export function SharingPanel({ api, shares, reports, onChange }: { api: AxApi; s
   const act = async (fn: () => Promise<unknown>) => { setError(null); try { await fn(); onChange(); } catch (e) { setError((e as Error).message); } };
   return (
     <div className="ax-panel" data-testid="ax-sharing">
-      <div className="row" style={{ marginBottom: 10 }}><h2 style={{ margin: 0 }}>Manage shared reports</h2><span className="muted" style={{ fontSize: 12 }}>Every link shows a published, read-only snapshot. Revoking takes effect immediately.</span></div>
+      <div className="row" style={{ marginBottom: 10 }}><h2 style={{ margin: 0 }}>Manage shared reports</h2><span className="muted" style={{ fontSize: 13 }}>Every link shows a published, read-only snapshot. Revoking takes effect immediately.</span></div>
       {error && <div className="ax-error">{error}</div>}
       <table className="ax-table" data-testid="ax-shares-table">
         <thead><tr><th>Report</th><th>Shared with</th><th>Type</th><th>Permission</th><th>Version</th><th>Status</th><th>Expires</th><th className="num">Views</th><th>Actions</th></tr></thead>

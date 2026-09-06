@@ -124,7 +124,7 @@ export function CollabBar({
 
       {/* ------------------------------------------------ the actions */}
       {!me.canEdit && (
-        <span className="muted" style={{ fontSize: 11.5 }} data-testid="collab-cannot-edit">
+        <span className="muted" style={{ fontSize: 13 }} data-testid="collab-cannot-edit">
           Your role cannot change this project.
         </span>
       )}
@@ -174,7 +174,7 @@ export function CollabBar({
       {me.canForceRelease && !lock.mine && (tone === "other" || tone === "stale") && (
         confirmForce ? (
           <>
-            <span className="muted" style={{ fontSize: 11.5 }}>
+            <span className="muted" style={{ fontSize: 13 }}>
               Release {lock.heldBy?.name}&apos;s lock? Their unsaved changes stay unsaved.
             </span>
             <button

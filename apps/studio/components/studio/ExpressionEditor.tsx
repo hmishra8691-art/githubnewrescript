@@ -271,7 +271,7 @@ export function ExpressionEditor({ value, onChange, perOption }: {
             <RefBranch key={n.token} node={n} depth={0} onInsert={insert} />
           ))}
           {filtered.length === 0 && (
-            <span className="muted" style={{ fontSize: 11 }}>nothing matches “{filter}”</span>
+            <span className="muted" style={{ fontSize: 12.5 }}>nothing matches “{filter}”</span>
           )}
         </div>
       </div>

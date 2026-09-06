@@ -37,7 +37,7 @@ export function AttentionCheckEditor({ q, patch }: { q: Question; patch(p: Parti
 
   return (
     <div data-testid="attention-check">
-      <label className="row" style={{ gap: 6, fontSize: 12, marginBottom: 6 }}>
+      <label className="row" style={{ gap: 6, fontSize: 13, marginBottom: 6 }}>
         <input type="checkbox" data-testid="attention-toggle" checked={!!ac}
           onChange={(e) => { s.labelNextEdit?.(e.target.checked ? "mark as attention check" : "unmark attention check"); patch({ attentionCheck: e.target.checked ? { kind: "explicit", expected: [], severity: "high", riskPoints: 25, qualityPenalty: 20 } : undefined }); }} />
         <strong>Attention check</strong>
@@ -50,7 +50,7 @@ export function AttentionCheckEditor({ q, patch }: { q: Question; patch(p: Parti
               <select className="select" data-testid="attention-kind" value={ac.kind} onChange={(e) => setAc({ kind: e.target.value as AttentionCheck["kind"] })}>
                 {KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}
               </select>
-              <span className="muted" style={{ fontSize: 11 }}>{KINDS.find((k) => k.value === ac.kind)?.hint}</span></label>
+              <span className="muted" style={{ fontSize: 12.5 }}>{KINDS.find((k) => k.value === ac.kind)?.hint}</span></label>
             <label className="f" style={{ width: 110 }}><span>Severity</span>
               <select className="select" value={ac.severity} onChange={(e) => setAc({ severity: e.target.value as Severity })}>{SEVERITIES.map((sv) => <option key={sv}>{sv}</option>)}</select></label>
             <label className="f" style={{ width: 110 }}><span>Fraud risk points</span>

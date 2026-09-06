@@ -91,7 +91,7 @@ export function ReportView(p: ReportViewProps) {
               {w.type === "kpi" && (r ? <Chart result={r} spec={{ type: r.chart.kpis && r.chart.kpis.length === 1 ? "gauge" : "kpi_card", options: { showBase: false } }} theme={theme} height={Math.max(120, w.h * 60 - 30)} /> : w.analysisId ? <Missing id={w.analysisId} /> : null)}
               {w.type === "chart" && w.analysisId && (r ? renderChart(w.analysisId, w.chart ?? { type: r.recommendedCharts[0] ?? "bar_vertical", options: {} }, Math.max(160, w.h * 60 - 30)) : <Missing id={w.analysisId} />)}
               {w.type === "table" && w.analysisId && (r ? <ResultTableView table={r.tables[0]} dense maxRows={Math.max(4, w.h * 2)} /> : <Missing id={w.analysisId} />)}
-              {w.type === "filter" && <div className="muted" style={{ fontSize: 12 }}>Segment switch: use the selector in the bar above.</div>}
+              {w.type === "filter" && <div className="muted" style={{ fontSize: 13 }}>Segment switch: use the selector in the bar above.</div>}
             </div>;
           })}
         </div>

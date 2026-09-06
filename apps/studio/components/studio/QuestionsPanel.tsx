@@ -198,7 +198,7 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
         <div className="row" style={{ marginBottom: 6 }}>
           <input className="input" style={{ maxWidth: 260 }} placeholder={`search ${options.length} options…`}
             value={filter} onChange={(e) => { setFilter(e.target.value); setShowAll(false); }} />
-          <span className="muted" style={{ fontSize: 11 }}>
+          <span className="muted" style={{ fontSize: 12.5 }}>
             showing {visible.length} of {total}{f ? " matching" : ""}
           </span>
           {total > visible.length && (
@@ -237,7 +237,7 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
             };
             if (mf.kind === "check") {
               return (
-                <label key={mf.key} className="row" style={{ gap: 4, fontSize: 11 }} title={mf.label}>
+                <label key={mf.key} className="row" style={{ gap: 4, fontSize: 12.5 }} title={mf.label}>
                   <input type="checkbox" checked={!!cur} data-testid={`option-meta-${mf.key}-${i}`}
                     onChange={(e) => setMeta(e.target.checked)} />
                   {mf.label}
@@ -325,7 +325,7 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
       })}
       <div className="row">
         <button className="btn small" data-testid="add-option" onClick={() => insertAfter(options.length - 1)}>
-          + option <span className="muted" style={{ fontSize: 10 }}>(or press Enter)</span>
+          + option <span className="muted" style={{ fontSize: 11.5 }}>(or press Enter)</span>
         </button>
         <button className="btn small" data-testid="toggle-paste" onClick={openPaste}>
           {pasteOpen ? "hide paste box" : "📋 paste options"}
@@ -334,13 +334,13 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
       {pasteOpen && (
         <div className="paste-box" data-testid="paste-panel">
           <div className="row" style={{ alignItems: "center", gap: 10 }}>
-            <span className="muted" style={{ fontSize: 11 }}>On import:</span>
-            <label className="row" style={{ gap: 4, fontSize: 12 }}>
+            <span className="muted" style={{ fontSize: 12.5 }}>On import:</span>
+            <label className="row" style={{ gap: 4, fontSize: 13 }}>
               <input type="radio" name={`paste-mode-${questionId ?? "x"}`} data-testid="paste-mode-replace"
                 checked={pasteMode === "replace"} onChange={() => setPasteMode("replace")} />
               Replace the list
             </label>
-            <label className="row" style={{ gap: 4, fontSize: 12 }}>
+            <label className="row" style={{ gap: 4, fontSize: 13 }}>
               <input type="radio" name={`paste-mode-${questionId ?? "x"}`} data-testid="paste-mode-append"
                 checked={pasteMode === "append"} onChange={() => { setPasteMode("append"); if (pasteText === optionsToPaste(options)) setPasteText(""); }} />
               Append to the list
@@ -357,14 +357,14 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
               disabled={parsePastedOptions(pasteText, 1).length === 0}>
               {pasteMode === "replace" ? "Replace" : "Append"} {parsePastedOptions(pasteText, 1).length || ""} option{parsePastedOptions(pasteText, 1).length === 1 ? "" : "s"}
             </button>
-            <span className="muted" style={{ fontSize: 11 }} data-testid="paste-summary">
+            <span className="muted" style={{ fontSize: 12.5 }} data-testid="paste-summary">
               {pasteMode === "replace"
                 ? `keeps ${pastePlan.kept} · adds ${pastePlan.added} · removes ${pastePlan.removed}`
                 : `adds ${pastePlan.added} after the existing ${options.length}`}
             </span>
           </div>
           {pasteMode === "replace" && pastePlan.removed > 0 && (
-            <div className="muted" style={{ fontSize: 11, color: "var(--warn, #b45309)" }} data-testid="paste-removes">
+            <div className="muted" style={{ fontSize: 12.5, color: "var(--warn, #b45309)" }} data-testid="paste-removes">
               ⚠ Removes option{pastePlan.removed === 1 ? "" : "s"} {pastePlan.removedCodes.map(String).join(", ")} — any logic, piping or masking that names them will be flagged by the linter.
             </div>
           )}
@@ -418,11 +418,11 @@ function ColumnEditor({ q, onChange }: { q: Question; onChange(cols: QuestionCol
             )}
             <input className="input" style={{ width: 110 }} placeholder="width e.g. 120px"
               value={c.width ?? ""} onChange={(e) => set(i, { width: e.target.value || undefined })} />
-            <label className="row" style={{ gap: 4, fontSize: 12 }}>
+            <label className="row" style={{ gap: 4, fontSize: 13 }}>
               <input type="checkbox" checked={c.readOnly}
                 onChange={(e) => set(i, { readOnly: e.target.checked })} /> read-only
             </label>
-            <label className="row" style={{ gap: 4, fontSize: 12 }}>
+            <label className="row" style={{ gap: 4, fontSize: 13 }}>
               required
               <input type="checkbox"
                 checked={c.validation.some((v) => v.kind === "required")}
@@ -487,7 +487,7 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
     <>
       <h3 className="sec">Fields — each row is its own typed, validated variable</h3>
       {rows.length === 0 && (
-        <p className="muted" style={{ fontSize: 12 }}>
+        <p className="muted" style={{ fontSize: 13 }}>
           No fields yet. Add labeled fields below (recommended), or keep the legacy
           numbered list via <em>item count</em>.
         </p>
@@ -508,7 +508,7 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
                 onChange={(e) => setRow(i, { fieldType: e.target.value as any })}>
                 {FIELD_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
               </select>
-              <label className="row" style={{ gap: 4, fontSize: 12 }}>
+              <label className="row" style={{ gap: 4, fontSize: 13 }}>
                 <input type="checkbox" checked={r.required ?? false} data-testid={`field-required-${i}`}
                   onChange={(e) => setRow(i, { required: e.target.checked })} /> required
               </label>
@@ -530,13 +530,13 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
                 onClick={() => setCondOpen(condOpen === i ? null : i)}>
                 {r.visibleIf ? "⑂ shown when…" : "⑂ show when"}
               </button>
-              <label className="row" style={{ gap: 4, fontSize: 12 }}>
+              <label className="row" style={{ gap: 4, fontSize: 13 }}>
                 {isNum ? "min value" : "min length"}
                 <input className="input" style={{ width: 76 }} type="number"
                   value={String(getBound(r, boundMin))}
                   onChange={(e) => setBound(i, boundMin, e.target.value)} />
               </label>
-              <label className="row" style={{ gap: 4, fontSize: 12 }}>
+              <label className="row" style={{ gap: 4, fontSize: 13 }}>
                 {isNum ? "max value" : "max length"}
                 <input className="input" style={{ width: 76 }} type="number"
                   value={String(getBound(r, boundMax))}
@@ -566,7 +566,7 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
           + field
         </button>
         {rows.length === 0 && (
-          <label className="row" style={{ gap: 6, fontSize: 12 }}>
+          <label className="row" style={{ gap: 6, fontSize: 13 }}>
             legacy item count
             <CountInput min={1} allowEmpty={false} width={80}
               value={q.settings.listCount ?? 3}
@@ -692,7 +692,7 @@ export function QuestionEditor({ q }: { q: Question }) {
                 {q.options.length} options — use {q.options.length >= 16 ? 4 : 3} columns?
               </button>
             )}
-            <span className="muted" style={{ fontSize: 11, alignSelf: "flex-end", paddingBottom: 7 }}>
+            <span className="muted" style={{ fontSize: 12.5, alignSelf: "flex-end", paddingBottom: 7 }}>
               sorting never changes the programmed order; randomization is configured in the right panel
             </span>
           </div>
@@ -728,12 +728,12 @@ export function QuestionEditor({ q }: { q: Question }) {
                   };
                 }),
               })} />
-          <p className="muted" style={{ fontSize: 11, marginTop: -2 }}>
+          <p className="muted" style={{ fontSize: 12.5, marginTop: -2 }}>
             Row flags anchor a statement to the top or bottom of the grid — anchored rows
             are never moved by row randomization (Properties → Randomization → scope “rows”).
           </p>
           {q.carryForward?.into === "rows" && (
-            <p className="muted" style={{ fontSize: 12 }}>
+            <p className="muted" style={{ fontSize: 13 }}>
               Rows are carried forward from {s.def.questions.find((x) => x.id === q.carryForward?.sourceQuestionId)?.code ?? "?"} —
               static rows above are {q.carryForward.keepOwn ? "appended" : "ignored"}.
             </p>
@@ -775,7 +775,7 @@ export function QuestionEditor({ q }: { q: Question }) {
       )}
 
       {q.options.some((o) => o.flags?.includes("other_specify")) && (
-        <label className="row" style={{ gap: 8, fontSize: 12.5 }} data-testid="other-specify-required">
+        <label className="row" style={{ gap: 8, fontSize: 13.5 }} data-testid="other-specify-required">
           <input type="checkbox"
             checked={!q.settings.otherSpecifyOptional}
             onChange={(e) => patchSettings({ otherSpecifyOptional: e.target.checked ? undefined : true })} />
@@ -1304,7 +1304,7 @@ export function QuestionsPanel() {
           <div style={{ marginTop: 14 }} onClick={(e) => e.stopPropagation()}>
             <QuestionEditor q={selected} />
             <div className="row qcard-foot">
-              <span className="muted" style={{ fontSize: 11 }}>Changes save automatically.</span>
+              <span className="muted" style={{ fontSize: 12.5 }}>Changes save automatically.</span>
               <span className="grow" />
               <button className="btn primary" data-testid="close-question-bottom"
                 title="Done editing — close this question (Esc)"
@@ -1466,7 +1466,7 @@ export function QuestionsPanel() {
                       <input className="input page-title" placeholder="Page heading (optional)"
                         value={pg.node.title ?? ""}
                         onChange={(e) => renamePage(b.id, pgi, e.target.value)} />
-                      <span className="muted" style={{ fontSize: 11 }}>
+                      <span className="muted" style={{ fontSize: 12.5 }}>
                         {ids.length} question{ids.length === 1 ? "" : "s"}
                       </span>
                     </div>
@@ -1497,7 +1497,7 @@ export function QuestionsPanel() {
         <div className="block warn-block">
           <div className="block-head">
             <span className="block-badge" style={{ background: "var(--amber)" }}>NOT IN ANY BLOCK</span>
-            <span className="muted" style={{ fontSize: 11 }}>
+            <span className="muted" style={{ fontSize: 12.5 }}>
               these never display — move them into a block
             </span>
           </div>

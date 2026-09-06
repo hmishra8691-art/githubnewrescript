@@ -157,7 +157,7 @@ export function ResponseManager({ environment, onEnvironment }: { environment: E
       <div className="card" style={{ borderColor: "var(--red)" }} data-testid="rm-error">
         <strong style={{ color: "var(--red)" }}>{error}</strong>
         {/0006|migration/i.test(error) && (
-          <p className="muted" style={{ fontSize: 12 }}>
+          <p className="muted" style={{ fontSize: 13 }}>
             Run <span className="mono">supabase/migrations/0006_response_management.sql</span> on the database, then reload. Until
             then the Responses and Quality views keep working read-only.
           </p>
@@ -235,7 +235,7 @@ export function ResponseManager({ environment, onEnvironment }: { environment: E
             <button className="btn small primary" data-testid="rm-find" disabled={match?.busy} onClick={findMatching}>
               {match?.busy ? "Counting…" : "Find matching responses"}
             </button>
-            {filter && <span className="muted" style={{ fontSize: 11 }}>{conditionToText(filter, s.def)}</span>}
+            {filter && <span className="muted" style={{ fontSize: 12.5 }}>{conditionToText(filter, s.def)}</span>}
             <span className="grow" />
             {filter && <button className="btn small" onClick={() => { setFilter(null); setMatch(null); }}>Clear filter</button>}
           </div>
@@ -243,7 +243,7 @@ export function ResponseManager({ environment, onEnvironment }: { environment: E
           {typeof match?.total === "number" && (
             <div className="rm-found" data-testid="rm-found">
               <strong>{match.total} response{match.total === 1 ? "" : "s"} found</strong>
-              <span className="muted" style={{ fontSize: 11 }}>
+              <span className="muted" style={{ fontSize: 12.5 }}>
                 in {environment === "ALL" ? "test and live" : environment.toLowerCase()} data
                 {match.exact ? "" : " · part of this filter was evaluated by the survey engine"}
               </span>
@@ -256,7 +256,7 @@ export function ResponseManager({ environment, onEnvironment }: { environment: E
               )}
             </div>
           )}
-          {page?.filterNote && <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>{page.filterNote}</div>}
+          {page?.filterNote && <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>{page.filterNote}</div>}
         </div>
       )}
 
@@ -357,7 +357,7 @@ export function ResponseManager({ environment, onEnvironment }: { environment: E
       {/* ------------------------------------------------------ pagination */}
       {page && page.total > 0 && (
         <div className="rm-pager" data-testid="rm-pager">
-          <span className="muted" style={{ fontSize: 12 }}>
+          <span className="muted" style={{ fontSize: 13 }}>
             {pageFrom}–{pageTo} of {page.total}{page.exact ? "" : " matching"}
           </span>
           <span className="grow" />
@@ -584,7 +584,7 @@ function ResponseEditor({ surveyDbId, def, responseId, onClose, onSaved }: {
             )}
             {issues.length > 0 && (
               <div className="card rm-issues" data-testid="rm-editor-issues">
-                <strong style={{ color: "var(--red)", fontSize: 12 }}>Not saved — the survey does not accept this:</strong>
+                <strong style={{ color: "var(--red)", fontSize: 13 }}>Not saved — the survey does not accept this:</strong>
                 <ul>{issues.map((i, n) => <li key={n}>{i.code ? <span className="mono">{i.code}</span> : null} {i.message}</li>)}</ul>
               </div>
             )}
@@ -611,7 +611,7 @@ function ResponseEditor({ surveyDbId, def, responseId, onClose, onSaved }: {
                 <div className="rm-editor-foot">
                   <input className="input" style={{ maxWidth: 320 }} data-testid="rm-editor-reason" placeholder="Why (kept in the history)" value={reason} onChange={(e) => setReason(e.target.value)} />
                   <span className="grow" />
-                  {dirty && <span className="muted" style={{ fontSize: 11 }}>{Object.keys(draft).length} answer{Object.keys(draft).length === 1 ? "" : "s"} changed</span>}
+                  {dirty && <span className="muted" style={{ fontSize: 12.5 }}>{Object.keys(draft).length} answer{Object.keys(draft).length === 1 ? "" : "s"} changed</span>}
                   <button className="btn small" onClick={() => setDraft({})} disabled={!dirty || busy}>Discard</button>
                   <button className="btn small primary" data-testid="rm-editor-save" onClick={save} disabled={!dirty || busy || !!rec.deletedAt}>
                     {busy ? "Saving…" : "Save changes"}
@@ -821,7 +821,7 @@ function ConfirmDelete({ confirm, environment, bin, onChange, onCancel, onRun }:
         <h2 style={{ fontSize: 15, marginTop: 0 }}>
           {restoring ? "Restore" : purging ? "Delete permanently" : "Delete"} {confirm.count === 1 ? confirm.label : `${confirm.count} responses`}?
         </h2>
-        <p style={{ fontSize: 13 }}>
+        <p style={{ fontSize: 14 }}>
           {restoring ? <>They will return to the <strong>{environment}</strong> dataset and be counted again.</>
             : purging ? <>This removes {confirm.count === 1 ? "the response" : `${confirm.count} responses`} from the database for good. Only responses already in the recycle bin can be removed this way, and it cannot be undone.</>
               : <>
@@ -1036,7 +1036,7 @@ function ImportDialog({ surveyDbId, environment, onClose, onDone }: {
             )}
 
             <div className="row" style={{ marginTop: 10 }}>
-              <span className="muted" style={{ fontSize: 11 }}>
+              <span className="muted" style={{ fontSize: 12.5 }}>
                 {canCommit ? `${sum.valid} row${sum.valid === 1 ? "" : "s"} ready — ${sum.willCreate} created, ${sum.willUpdate} updated, in one transaction.` : "Nothing to import yet."}
               </span>
               <span className="grow" />

@@ -17,7 +17,7 @@ registerVariantSettings("chat", ({ q, patchSettings }) => (
         value={q.settings.chatDelayMs}
         onChange={(v) => patchSettings({ chatDelayMs: v })} />
     </label>
-    <div className="muted" style={{ fontSize: 11 }}>
+    <div className="muted" style={{ fontSize: 12.5 }}>
       Empty = 600ms. The pause is when the typing indicator shows; 0 asks the
       next question instantly.
     </div>
@@ -28,7 +28,7 @@ registerVariantSettings("chat", ({ q, patchSettings }) => (
         : `${q.rows.length} prompt${q.rows.length === 1 ? "" : "s"}, asked one at a time`}
     </div>
     {q.required && (
-      <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+      <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>
         Required means every prompt must be answered — the ordinary grid rule.
       </div>
     )}

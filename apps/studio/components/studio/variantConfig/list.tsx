@@ -22,21 +22,21 @@ export function RepeatBounds({ q, patchSettings }: VariantSettingsProps): React.
   return (
     <>
       <div className="row" style={{ gap: 12, flexWrap: "wrap" }}>
-        <label className="row" style={{ gap: 6, fontSize: 12 }}>
+        <label className="row" style={{ gap: 6, fontSize: 13 }}>
           Fewest entries
           <CountInput min={0} width={80} allowEmpty={false}
             data-testid="repeat-min"
             value={min}
             onChange={(v) => patchSettings({ minRepeats: v ?? 0 })} />
         </label>
-        <label className="row" style={{ gap: 6, fontSize: 12 }}>
+        <label className="row" style={{ gap: 6, fontSize: 13 }}>
           Most entries
           <CountInput min={Math.max(1, min)} width={80} allowEmpty={false}
             data-testid="repeat-max"
             value={max}
             onChange={(v) => patchSettings({ maxRepeats: v ?? 1 })} />
         </label>
-        <span className="muted" style={{ fontSize: 11 }}>
+        <span className="muted" style={{ fontSize: 12.5 }}>
           variables are VAR_1_&lt;field&gt; … VAR_{max}_&lt;field&gt; plus VAR_N
         </span>
       </div>

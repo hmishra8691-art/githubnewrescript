@@ -69,7 +69,7 @@ registerVariantSettings("attention", ({ q, patch, patchSettings }) => {
   return (
     <>
       <h3 className="sec">Attention check</h3>
-      <div className="muted" style={{ fontSize: 11, marginBottom: 8 }}>
+      <div className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>
         Put the trap in the question text (“select Somewhat agree to show you are
         reading”). The respondent sees an ordinary single select — that is the point.
       </div>
@@ -82,12 +82,12 @@ registerVariantSettings("attention", ({ q, patch, patchSettings }) => {
           {q.options.map((o) => {
             const code = String(o.code);
             return (
-              <label key={code} className="row" style={{ gap: 6, fontSize: 12, marginBottom: 3 }}>
+              <label key={code} className="row" style={{ gap: 6, fontSize: 13, marginBottom: 3 }}>
                 <input type="checkbox" data-testid={`attention-expected-${code}`}
                   checked={expected.includes(code)}
                   onChange={() => toggleCode(code)} />
                 <span>{o.label.replace(/<[^>]*>/g, "")}</span>
-                <span className="muted mono" style={{ fontSize: 11 }}>{code}</span>
+                <span className="muted mono" style={{ fontSize: 12.5 }}>{code}</span>
               </label>
             );
           })}
@@ -115,7 +115,7 @@ registerVariantSettings("attention", ({ q, patch, patchSettings }) => {
             : "Waiting to write the termination rule…"}
         </div>
       )}
-      <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+      <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>
         Exports the chosen code plus <span className="mono">{q.variableName}_PASSED</span> (1/0).
       </div>
     </>
@@ -132,7 +132,7 @@ registerVariantSettings("experiment", ({ q, patchSettings }) => {
   return (
     <>
       <h3 className="sec">Experiment arms</h3>
-      <div className="muted" style={{ fontSize: 11, marginBottom: 8 }}>
+      <div className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>
         One arm is assigned per respondent from their seed, so the same
         respondent always sees the same arm and the assignment is reproducible.
         A weight of 0 parks an arm without deleting it.
@@ -167,7 +167,7 @@ registerVariantSettings("experiment", ({ q, patchSettings }) => {
               value={a.html ?? ""}
               onChange={(e) => setAt(i, { html: e.target.value || undefined })} />
           </label>
-          <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+          <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
             {total > 0
               ? `${Math.round(((a.weight == null ? 1 : Math.max(0, a.weight)) / total) * 100)}% of respondents`
               : "no positive weights — the arms split evenly"}

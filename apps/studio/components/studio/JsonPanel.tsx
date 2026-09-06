@@ -46,7 +46,7 @@ export function JsonPanel() {
     <div>
       <div className="row" style={{ marginBottom: 14 }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>Survey JSON</h2>
-        <span className="muted" style={{ fontSize: 12 }}>the complete, reconstructable definition</span>
+        <span className="muted" style={{ fontSize: 13 }}>the complete, reconstructable definition</span>
         <span className="grow" />
         <label className="btn small">
           import .json

@@ -46,7 +46,7 @@ function LogicCheck() {
           </button>
         )}
         {errors.length === 0 && warnings.length === 0 && (
-          <span className="muted" style={{ fontSize: 12 }}>All logic references resolve.</span>
+          <span className="muted" style={{ fontSize: 13 }}>All logic references resolve.</span>
         )}
       </div>
       {cycles.map((c, i) => (
@@ -71,7 +71,7 @@ function LogicSummaryList() {
     .map((q) => ({ q, lines: questionLogicSummary(s.def, q) }))
     .filter((r) => r.lines.length > 0);
   if (rows.length === 0)
-    return <p className="muted" style={{ fontSize: 12 }}>No dynamic content configured yet.</p>;
+    return <p className="muted" style={{ fontSize: 13 }}>No dynamic content configured yet.</p>;
   return (
     <div>
       {rows.map(({ q, lines }) => (
@@ -187,7 +187,7 @@ export function LogicPanel() {
       <AutoPunchPanel />
 
       <h3 className="sec">Display rules (show/hide anything)</h3>
-      <p className="muted" style={{ fontSize: 12 }}>
+      <p className="muted" style={{ fontSize: 13 }}>
         Question-level display &amp; skip logic lives on each question (right panel). Rules here can
         additionally target any question from one place.
       </p>
@@ -253,7 +253,7 @@ export function CalcPanel() {
     <div>
       <div className="row" style={{ marginBottom: 14 }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>Calculations</h2>
-        <span className="muted" style={{ fontSize: 12 }}>
+        <span className="muted" style={{ fontSize: 13 }}>
           Calc DSL: + − × ÷ %, sum() avg() min() max() count() countif() pct() weighted() if() round(),
           wildcards like sum(ALLOC_*)
         </span>

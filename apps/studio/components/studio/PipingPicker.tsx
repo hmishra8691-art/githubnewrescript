@@ -101,7 +101,7 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
   return (
     <div className="pipe-picker" role="dialog" aria-label="Insert piped text">
       <div className="row" style={{ marginBottom: 8 }}>
-        <strong style={{ fontSize: 13 }}>Insert piped text</strong>
+        <strong style={{ fontSize: 14 }}>Insert piped text</strong>
         <span className="grow" />
         <button className="btn small" onClick={onClose}>×</button>
       </div>
@@ -189,7 +189,7 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
             </select>
           </label>
           {loopScope.length === 0 && (
-            <p className="muted" style={{ fontSize: 11 }}>This question is not inside a loop, so a loop token here will render empty.</p>
+            <p className="muted" style={{ fontSize: 12.5 }}>This question is not inside a loop, so a loop token here will render empty.</p>
           )}
         </>
       )}

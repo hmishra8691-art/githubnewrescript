@@ -273,14 +273,14 @@ export default function AdminPage() {
                       <tr key={s.sessionId} data-session-id={s.sessionId}>
                         <td>
                           <div>{s.user.name || "—"}</div>
-                          <div className="mono muted" style={{ fontSize: 11 }}>{s.user.userCode}</div>
+                          <div className="mono muted" style={{ fontSize: 12.5 }}>{s.user.userCode}</div>
                         </td>
                         <td>{s.user.email || "—"}</td>
                         <td>{whenLabel(s.loginTime)}</td>
                         <td>{whenLabel(s.lastActivity)}</td>
                         <td>
                           <div>{STATUS_WORDS[s.status] ?? s.status}</div>
-                          {s.hint && <div className="muted" style={{ fontSize: 11 }}>{s.hint}</div>}
+                          {s.hint && <div className="muted" style={{ fontSize: 12.5 }}>{s.hint}</div>}
                         </td>
                         <td>{s.device || "Unrecognised device"}</td>
                         <td style={{ whiteSpace: "nowrap" }}>
@@ -288,7 +288,7 @@ export default function AdminPage() {
                             <span className="row" style={{ gap: 6 }}>
                               <input
                                 className="input"
-                                style={{ width: 150, fontSize: 11.5 }}
+                                style={{ width: 150, fontSize: 13 }}
                                 placeholder="Reason (optional)"
                                 autoFocus
                                 value={reason}
@@ -369,7 +369,7 @@ export default function AdminPage() {
                       <tr key={a.userId} data-user-id={a.userId}>
                         <td>
                           <div>{a.name || "—"}</div>
-                          <div className="mono muted" style={{ fontSize: 11 }}>{a.userCode}</div>
+                          <div className="mono muted" style={{ fontSize: 12.5 }}>{a.userCode}</div>
                         </td>
                         <td>{a.email || "—"}</td>
                         <td>{a.organization || <span className="muted">—</span>}</td>
@@ -393,7 +393,7 @@ export default function AdminPage() {
                             {a.accountStatus}
                           </span>
                           {locked && (
-                            <div className="muted" style={{ fontSize: 11 }}>
+                            <div className="muted" style={{ fontSize: 12.5 }}>
                               Locked until {whenLabel(a.lockedUntil)}
                             </div>
                           )}
@@ -403,7 +403,7 @@ export default function AdminPage() {
                           {a.session ? (
                             <>
                               <div>{STATUS_WORDS[a.session.status] ?? a.session.status}</div>
-                              <div className="muted" style={{ fontSize: 11 }}>
+                              <div className="muted" style={{ fontSize: 12.5 }}>
                                 {a.session.device || "Unrecognised device"}
                               </div>
                             </>

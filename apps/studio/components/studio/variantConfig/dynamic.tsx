@@ -55,7 +55,7 @@ registerVariantSettings("adaptive", ({ q, patchSettings }) => {
   return (
     <>
       <h3 className="sec">Adaptive alternatives</h3>
-      <div className="muted" style={{ fontSize: 11, marginBottom: 8 }}>
+      <div className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>
         The question text above is the DEFAULT stem — it is what a respondent
         sees when no alternative matches. Each alternative can replace the stem,
         the instruction and the option list. The first one whose condition holds
@@ -103,7 +103,7 @@ registerVariantSettings("adaptive", ({ q, patchSettings }) => {
                 setAt(i, { options: parsed.length ? parsed : undefined });
               }} />
           </label>
-          <div className="muted" style={{ fontSize: 11 }}>
+          <div className="muted" style={{ fontSize: 12.5 }}>
             {alt.options?.length
               ? `${alt.options.length} options replace the list — masks, list logic and randomization still apply to them.`
               : "Empty = the question's own options."}

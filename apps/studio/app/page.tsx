@@ -7,6 +7,8 @@ import {
   type SurveyRow, type SurveyStats, type Contributor,
 } from "@/components/SurveyCard";
 import { useSession } from "@/lib/useSession";
+import { AppHeader, greeting } from "@/components/ui/AppHeader";
+import { Icon } from "@/components/ui/Icon";
 
 type SortKey =
   | "updated" | "created" | "name_az" | "name_za"
@@ -215,34 +217,24 @@ export default function Dashboard() {
 
   return (
     <div className="dash">
-      <div className="row" style={{ alignItems: "flex-start", flexWrap: "wrap" }}>
+      <AppHeader active="dashboard" user={session.state.kind === "signed_in" ? session.state.user : null} onSignOut={() => void session.signOut()} />
+
+      <section className="hero" data-testid="dash-hero">
         <div>
-          <h1><span className="logo-mark">R</span> Rescript Studio</h1>
-          <p className="muted" style={{ marginTop: -4 }}>
-            {session.state.kind === "signed_in"
-              ? <>Welcome, {session.state.user.name.split(" ")[0]} — your User ID is <span className="mono">{session.state.user.userCode}</span></>
-              : "Professional survey programming & runtime platform."}
-          </p>
+          <div className="eyebrow">{session.state.kind === "signed_in" ? <>{greeting(session.state.user.name)} · <span className="mono">{session.state.user.userCode}</span></> : "Professional survey programming & runtime platform"}</div>
+          <h1>Your research workspace</h1>
+          <p className="sub">Program surveys, collect and clean responses, analyse results and publish reports — in one place.</p>
         </div>
-        <span className="grow" />
-        {session.state.kind === "signed_in" && (
-          <div className="row" style={{ gap: 6 }} data-testid="dash-account">
-            {!!session.state.user.unread && (
-              <a className="btn small" href="/profile" title="You have unread notifications">
-                {session.state.user.unread} new
-              </a>
-            )}
-            <a className="btn small" href="/analytics" data-testid="dash-analytics">Data Analytics</a>
-            <a className="btn small" href="/profile">Profile</a>
-            <a className="btn small" href="/security">Security</a>
-            {session.state.user.isPlatformAdmin && <a className="btn small" href="/admin">Administration</a>}
-            <button className="btn small" data-testid="dash-signout" onClick={() => void session.signOut()}>Sign out</button>
-          </div>
-        )}
-      </div>
+        <div className="hero-metrics" aria-label="Workspace summary">
+          <div className="metric"><span className="metric-v">{surveys ? totals.surveys : <span className="sk sk-num" />}</span><span className="metric-l">Projects</span></div>
+          <div className="metric"><span className="metric-v">{surveys ? totals.live : <span className="sk sk-num" />}</span><span className="metric-l">Live</span></div>
+          <div className="metric"><span className="metric-v">{surveys ? totals.responses.toLocaleString() : <span className="sk sk-num" />}</span><span className="metric-l">Live responses</span></div>
+          <div className="metric"><span className="metric-v">{surveys ? Object.values(stats).reduce((a, b) => a + (b.questionCount ?? 0), 0).toLocaleString() : <span className="sk sk-num" />}</span><span className="metric-l">Questions</span></div>
+        </div>
+      </section>
 
       <div className="dash-toolbar">
-        <button className="btn primary" onClick={() => setCreating(true)}>+ New survey</button>
+        <button className="btn primary" onClick={() => setCreating(true)}><Icon name="plus" size={16} /> New survey</button>
         <input className="input dash-search" placeholder="Search surveys…"
           aria-label="Search surveys" value={search}
           onChange={(e) => setSearch(e.target.value)} />
@@ -312,7 +304,13 @@ export default function Dashboard() {
       {surveys === null && !error && (
         <>{[0, 1, 2].map((i) => <SurveyCardSkeleton key={i} />)}</>
       )}
-      {surveys?.length === 0 && <p className="muted">No surveys yet — create your first one.</p>}
+      {surveys?.length === 0 && (
+        <div className="empty" data-testid="dash-empty">
+          <div className="empty-icon"><Icon name="layers" size={22} /></div>
+          <h3>No surveys yet — create your first one.</h3>
+          <p className="muted">Start from a blank survey or the Master Demo template; everything you program here can be tested, published and analysed.</p>
+        </div>
+      )}
       {visible?.length === 0 && (surveys?.length ?? 0) > 0 && (
         <p className="muted">
           No surveys match this filter.{" "}
@@ -334,7 +332,7 @@ export default function Dashboard() {
         <div className="modal-back" onClick={() => setDeleting(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h2>Delete “{deleting.title}”?</h2>
-            <p className="muted" style={{ fontSize: 13 }}>
+            <p className="muted" style={{ fontSize: 14 }}>
               This permanently deletes the survey project, <strong>all its versions, deployments,
               test sessions and collected responses</strong>. Live links stop working immediately.
               This cannot be undone — export the data first if you need it.

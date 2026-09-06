@@ -137,7 +137,7 @@ export function ListFillPanel() {
           {busy ? "Recounting…" : "↻ Recount from allocations"}
         </button>
       </div>
-      <p className="muted" style={{ fontSize: 12 }}>
+      <p className="muted" style={{ fontSize: 13 }}>
         A List Fill takes a list — usually what a respondent selected — and allocates one or more items to them by
         priority, target and capacity, then writes the result into destination questions and{" "}
         <code>{"{{LISTFILL_…}}"}</code> variables. Counts shown are <strong>{env === "TEST" ? "test" : "live"}</strong>{" "}
@@ -153,7 +153,7 @@ export function ListFillPanel() {
 
       {s.def.listFills.length === 0 && (
         <div className="card" style={{ padding: 14 }} data-testid="lf-empty">
-          <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+          <p className="muted" style={{ margin: 0, fontSize: 13 }}>
             No List Fill yet. Add one, choose the question whose answers feed it, then set each option&apos;s priority and
             limits in the grid.
           </p>
@@ -235,7 +235,7 @@ export function ListFillPanel() {
                       <td className="mono">{done[row.code] ?? 0}</td>
                       <td className="mono">{row.remaining === null ? "∞" : row.remaining}</td>
                       <td>
-                        <span className={`chip ${STATUS_TONE[row.status] ?? ""}`} style={{ fontSize: 10 }}>{row.status.replace(/_/g, " ").toLowerCase()}</span>
+                        <span className={`chip ${STATUS_TONE[row.status] ?? ""}`} style={{ fontSize: 11.5 }}>{row.status.replace(/_/g, " ").toLowerCase()}</span>
                         {row.maximum != null && <div className="qbar" style={{ marginTop: 4 }}><div className={pct >= 100 ? "full" : ""} style={{ width: `${Math.min(100, pct)}%` }} /></div>}
                       </td>
                       <td>
@@ -251,7 +251,7 @@ export function ListFillPanel() {
                   );
                 })}
                 {!status.rows.length && (
-                  <tr><td colSpan={11} className="muted" style={{ fontSize: 12 }}>
+                  <tr><td colSpan={11} className="muted" style={{ fontSize: 13 }}>
                     No options configured. Use “add every option from the source” below, then set priorities and limits.
                   </td></tr>
                 )}
@@ -268,7 +268,7 @@ export function ListFillPanel() {
                 })}>
                 + add every option from the source
               </button>
-              <span className="muted" style={{ fontSize: 11 }}>
+              <span className="muted" style={{ fontSize: 12.5 }}>
                 Priority is not a quota: a lower number is tried first, and target / maximum decide when to move on.
               </span>
             </div>
@@ -294,7 +294,7 @@ export function ListFillPanel() {
                     all eligible
                   </label>
                 </div>
-                <p className="muted" style={{ fontSize: 11, marginTop: 0 }}>
+                <p className="muted" style={{ fontSize: 12.5, marginTop: 0 }}>
                   {METHODS.find((m) => m.value === lf.selection.method)?.hint}
                 </p>
 
@@ -357,7 +357,7 @@ export function ListFillPanel() {
                   </label>
                 </div>
                 {lf.tracking.countOnCompleteOnly && (
-                  <p className="muted" style={{ fontSize: 11 }}>
+                  <p className="muted" style={{ fontSize: 12.5 }}>
                     Counting completes means in-progress sessions do not close an option, so slightly more respondents than
                     the target may be given it while they are still answering. Screen-outs give their slot back.
                   </p>
@@ -412,13 +412,13 @@ export function ListFillPanel() {
                 <div className="flabel" style={{ marginTop: 12 }}>variables this List Fill creates</div>
                 <div className="qs-chips">
                   {listFillVariableNames(lf).slice(0, 24).map((v) => (
-                    <span key={v.name} className="chip mono" style={{ fontSize: 10 }}>{v.name}</span>
+                    <span key={v.name} className="chip mono" style={{ fontSize: 11.5 }}>{v.name}</span>
                   ))}
                 </div>
 
                 {/* ---------------------------------------- simulator */}
                 <div className="flabel" style={{ marginTop: 14 }}>simulate</div>
-                <p className="muted" style={{ fontSize: 11, marginTop: 0 }}>
+                <p className="muted" style={{ fontSize: 12.5, marginTop: 0 }}>
                   Runs the real allocation engine against the {env === "TEST" ? "test" : "live"} counters shown above.
                   Nothing is written and no slot is claimed.
                 </p>
@@ -454,7 +454,7 @@ export function ListFillPanel() {
 
                 {sim?.listFillId === lf.id && sim.kind === "one" && (
                   <div className="card" style={{ padding: 10, marginTop: 8 }} data-testid={`lf-trace-${lf.id}`}>
-                    <div className="row"><strong style={{ fontSize: 12 }}>{sim.trace.reason}</strong></div>
+                    <div className="row"><strong style={{ fontSize: 13 }}>{sim.trace.reason}</strong></div>
                     <table className="grid" style={{ marginTop: 8 }}>
                       <thead><tr><th>option</th><th>priority</th><th>allocated</th><th>left</th><th>outcome</th></tr></thead>
                       <tbody>
@@ -464,7 +464,7 @@ export function ListFillPanel() {
                             <td className="mono">{o.priority ?? "—"}</td>
                             <td className="mono">{o.current}</td>
                             <td className="mono">{o.remaining === null ? "∞" : o.remaining}</td>
-                            <td style={{ fontSize: 11 }}>
+                            <td style={{ fontSize: 12.5 }}>
                               {o.position != null
                                 ? <span className="chip on">item {o.position}{o.selectedBy ? ` — ${o.selectedBy}` : ""}</span>
                                 : <span className="muted">{explainRejection(o)}</span>}
@@ -474,7 +474,7 @@ export function ListFillPanel() {
                       </tbody>
                     </table>
                     <div className="flabel" style={{ marginTop: 8 }}>every decision, in order</div>
-                    <ol className="muted" style={{ fontSize: 11, marginTop: 0, paddingLeft: 18 }}>
+                    <ol className="muted" style={{ fontSize: 12.5, marginTop: 0, paddingLeft: 18 }}>
                       {sim.trace.steps.map((line, li) => <li key={li}>{line}</li>)}
                     </ol>
                   </div>
@@ -482,7 +482,7 @@ export function ListFillPanel() {
 
                 {sim?.listFillId === lf.id && sim.kind === "many" && (
                   <div className="card" style={{ padding: 10, marginTop: 8 }} data-testid={`lf-sim-result-${lf.id}`}>
-                    <div style={{ fontSize: 12, marginBottom: 6 }}>
+                    <div style={{ fontSize: 13, marginBottom: 6 }}>
                       {sim.draws} respondents, starting from the counts above.
                       {sim.empty > 0 && <> <strong>{sim.empty}</strong> would get nothing — every option was full.</>}
                     </div>

@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import type { SessionUser } from "@/lib/useSession";
+import { AppHeader } from "@/components/ui/AppHeader";
 
 /**
  * THE CHROME ON TOP OF THE ACCOUNT SCREENS.
@@ -53,10 +54,16 @@ export function AccountHeader({ active, user, onSignOut }: AccountHeaderProps) {
 
   return (
     <>
+      {/* the same product header as the Dashboard and Data Analytics, so the
+          account area never feels like a different application */}
+      <AppHeader active="account" user={user} onSignOut={onSignOut} />
       <div className="acct-head">
-        <h1>{TITLES[active]}</h1>
+        <div>
+          <div className="eyebrow">Account</div>
+          <h1>{TITLES[active]}</h1>
+        </div>
         {user && (
-          <span className="row" style={{ gap: 9 }}>
+          <span className="acct-who">
             <span
               className="avatar lg"
               style={{ background: `hsl(${hue} 62% 45%)` }}
@@ -65,10 +72,10 @@ export function AccountHeader({ active, user, onSignOut }: AccountHeaderProps) {
             >
               {initialsOf(user.name)}
             </span>
-            <span style={{ lineHeight: 1.25 }}>
-              <span style={{ display: "block", fontSize: 13, fontWeight: 600 }}>{user.name}</span>
-              <span className="mono muted" style={{ display: "block", fontSize: 11.5 }}>
-                {user.userCode}
+            <span style={{ lineHeight: 1.3 }}>
+              <span style={{ display: "block", fontSize: 15, fontWeight: 600 }}>{user.name}</span>
+              <span className="mono muted" style={{ display: "block", fontSize: 13 }}>
+                {user.userCode} <span className="acct-online"><span className="dot" /> Online</span>
               </span>
             </span>
           </span>

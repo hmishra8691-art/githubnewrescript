@@ -429,10 +429,12 @@ ok("dashboard header keeps Profile / Security / Sign out and gains Data Analytic
 await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
 await page.waitForSelector(".leftnav");
 const nav = await page.$$eval(".leftnav .nav-item", (es) => es.map((e) => [...e.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join("").trim()));
-assert.deepEqual(nav.slice(0, 17), ["Questions", "Survey Settings", "Survey Flow", "Logic", "Variables", "Calculations", "Quotas", "List Fill", "Design Generators", "Branding", "Scripts", "Data", "Versions & Deploy", "JSON", "Collaborators", "Internal notes", "Activity"]);
-assert.match(nav[17], /Data Analytics/);
+// the 17 existing tabs keep their order; the Data Analytics link sits next to Data (in the Results group)
+assert.deepEqual(nav.filter((t) => t !== "Data Analytics"), ["Questions", "Survey Settings", "Survey Flow", "Logic", "Variables", "Calculations", "Quotas", "List Fill", "Design Generators", "Branding", "Scripts", "Data", "Versions & Deploy", "JSON", "Collaborators", "Internal notes", "Activity"]);
+assert.equal(nav.filter((t) => t === "Data Analytics").length, 1);
+assert.equal(nav[nav.indexOf("Data") + 1], "Data Analytics", "Data Analytics follows Data");
 assert.match(await page.$eval('[data-testid="nav-analytics"]', (e) => e.getAttribute("href")), /^\/analytics/);
-ok("Studio left nav: all 17 existing tabs unchanged, Data Analytics link added at the end");
+ok("Studio left nav: all 17 existing tabs unchanged, Data Analytics link added beside Data");
 
 console.log(`\nALL ${passed} CHECKS PASSED · audit events recorded by the fake backend: ${[...new Set(store.audit)].join(", ")}`);
 await browser.close();

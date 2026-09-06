@@ -86,7 +86,7 @@ export function OptionPreview({ q }: { q: Question }) {
           )}
 
           {deps.length === 0 ? (
-            <p className="muted" style={{ fontSize: 12 }}>
+            <p className="muted" style={{ fontSize: 13 }}>
               This question’s options don’t depend on any earlier answer — the list below is what
               every respondent sees.
             </p>
@@ -95,7 +95,7 @@ export function OptionPreview({ q }: { q: Question }) {
               <div className="flabel">Simulate answers</div>
               {deps.map((d) => (
                 <div key={d.id} className="row" style={{ flexWrap: "wrap", marginBottom: 6 }}>
-                  <span className="mono" style={{ width: 60, fontSize: 12 }}>{d.code}</span>
+                  <span className="mono" style={{ width: 60, fontSize: 13 }}>{d.code}</span>
                   {d.options.length === 0 && (
                     <input className="input" style={{ width: 160 }} placeholder="value"
                       value={String(answers[d.id]?.[0] ?? "")}
@@ -123,9 +123,9 @@ export function OptionPreview({ q }: { q: Question }) {
                     <tr key={i}>
                       <td className="k">{st.label}</td>
                       <td>
-                        <span className="mono" style={{ fontSize: 11 }}>{st.after.join(", ") || "—"}</span>
+                        <span className="mono" style={{ fontSize: 12.5 }}>{st.after.join(", ") || "—"}</span>
                         {st.removed.length > 0 && (
-                          <div className="muted" style={{ fontSize: 11 }}>
+                          <div className="muted" style={{ fontSize: 12.5 }}>
                             removed {st.removed.map((r) => r.code).join(", ")}
                           </div>
                         )}
@@ -151,7 +151,7 @@ export function OptionPreview({ q }: { q: Question }) {
                         {st.pinned && <span className="chip">pinned</span>}
                         {st.moved && <span className="chip">moved {st.moved}</span>}
                         {st.status === "hidden" && (
-                          <div className="muted" style={{ fontSize: 11 }}>
+                          <div className="muted" style={{ fontSize: 12.5 }}>
                             {st.stage}: {st.reason}
                           </div>
                         )}

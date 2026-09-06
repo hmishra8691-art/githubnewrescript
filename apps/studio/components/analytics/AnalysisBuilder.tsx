@@ -60,7 +60,7 @@ function VariablePicker({ variables, selected, onChange, roles, max, label }: { 
         <input className="input small" placeholder="Search variables…" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: 200 }} />
         <label className="ax-toggle"><input type="checkbox" checked={onlyFit} onChange={(e) => setOnlyFit(e.target.checked)} /> Only suitable types</label>
         <span className="grow" />
-        <span className="muted" style={{ fontSize: 12 }}>{selected.length} selected{max ? ` (max ${max})` : ""}</span>
+        <span className="muted" style={{ fontSize: 13 }}>{selected.length} selected{max ? ` (max ${max})` : ""}</span>
       </div>
       <div className="ax-varlist">
         {[...groups.entries()].map(([g, vs]) => (
@@ -85,7 +85,7 @@ function DropZone({ label, items, onChange, variables, hint }: { label: string; 
     <div className={`ax-drop ${over ? "over" : ""}`} onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)} onDrop={(e) => { e.preventDefault(); setOver(false); const n = e.dataTransfer.getData("text/variable"); if (n && !items.includes(n)) onChange([...items, n]); }} data-testid={`ax-drop-${label.toLowerCase()}`}>
       <div className="ax-drop-label">{label}</div>
       {items.map((n) => <span key={n} className="ax-pill">{variables.find((v) => v.name === n)?.label ?? n}<button onClick={() => onChange(items.filter((x) => x !== n))}>×</button></span>)}
-      {!items.length && <span className="muted" style={{ fontSize: 12 }}>{hint ?? "Drag a variable here"}</span>}
+      {!items.length && <span className="muted" style={{ fontSize: 13 }}>{hint ?? "Drag a variable here"}</span>}
     </div>
   );
 }
@@ -118,11 +118,11 @@ function Options({ def, set, variables }: { def: AnalysisDefinition; set: (o: Re
     case "brand": return <>{varSel("image", "Image attributes (multi-select over brands)", ["multi"], true)}</>;
     case "text": return <><label className="ax-field"><span>Themes (name: keyword, keyword; one per line)</span><textarea className="ta" rows={4} value={((o.themes as { name: string; keywords: string[] }[] | undefined) ?? []).map((t) => `${t.name}: ${t.keywords.join(", ")}`).join("\n")} onChange={(e) => set({ themes: e.target.value.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => { const [n, k = ""] = l.split(":"); return { name: n.trim(), keywords: k.split(",").map((x) => x.trim()).filter(Boolean) }; }) })} placeholder={"Service: service, support, staff\nPrice: expensive, cheap, value"} /></label>{varSel("by", "Sentiment by", ["categorical"])}{num("topN", "Top words", "30")}</>;
     case "quality": return <>{num("speedSeconds", "Speeder threshold (seconds; blank = 40% of median)")}</>;
-    case "weighting": return <div className="muted" style={{ fontSize: 12 }}>Set rim targets in the Weighting section below; this analysis reports the weighting diagnostics and the weighted vs unweighted profile.</div>;
+    case "weighting": return <div className="muted" style={{ fontSize: 13 }}>Set rim targets in the Weighting section below; this analysis reports the weighting diagnostics and the weighted vs unweighted profile.</div>;
     case "conjoint": return <><label className="ax-toggle"><input type="checkbox" checked={!!o.includeHoldouts} onChange={(e) => set({ includeHoldouts: e.target.checked })} /> Include holdout tasks in estimation</label><label className="ax-field"><span>Price attribute (for WTP)</span><input className="input small" value={(o.priceAttribute as string | undefined) ?? ""} onChange={(e) => set({ priceAttribute: e.target.value || undefined })} placeholder="auto-detect" /></label><label className="ax-field"><span>Scenario profiles (JSON: [{"{"}name, levels{"}"}])</span><textarea className="ta" rows={3} value={o.scenario ? JSON.stringify(o.scenario) : ""} onChange={(e) => { try { set({ scenario: e.target.value ? JSON.parse(e.target.value) : undefined }); } catch { /* keep typing */ } }} placeholder='[{"name":"Product A","levels":{"Price":"$20","Brand":"Alpha"}}]' /></label></>;
     case "maxdiff": return <>{varSel("by", "Compare by", ["categorical"])}</>;
     case "segmentation": return <>{alpha}</>;
-    case "reliability": case "ranking": case "allocation": return <div className="muted" style={{ fontSize: 12 }}>No additional options.</div>;
+    case "reliability": case "ranking": case "allocation": return <div className="muted" style={{ fontSize: 13 }}>No additional options.</div>;
     default: return null;
   }
 }
@@ -247,7 +247,7 @@ export function AnalysisBuilder(p: BuilderProps) {
       <div className="ax-builder-foot">
         {error && <span className="ax-error" data-testid="ax-error">{error}</span>}
         {msg && <span className="ax-ok" data-testid="ax-msg">{msg}</span>}
-        <span className="muted" style={{ fontSize: 12 }}>{kindInfo.label} · {def.kind === "crosstab" ? `${(def.rows ?? []).length} rows × ${(def.columns ?? []).length} columns` : `${def.variables.length} variable${def.variables.length === 1 ? "" : "s"}`}{!isEmptyCondition(filter) ? " · filtered" : ""}{segmentsChosen.length ? ` · ${segmentsChosen.length} segments` : ""}{def.weighting ? " · weighted" : ""} · {def.dataset.environment === "LIVE" ? "Production" : def.dataset.environment === "TEST" ? "Test" : "All"} data{saved ? ` · saved v${saved.version}` : ""}</span>
+        <span className="muted" style={{ fontSize: 13 }}>{kindInfo.label} · {def.kind === "crosstab" ? `${(def.rows ?? []).length} rows × ${(def.columns ?? []).length} columns` : `${def.variables.length} variable${def.variables.length === 1 ? "" : "s"}`}{!isEmptyCondition(filter) ? " · filtered" : ""}{segmentsChosen.length ? ` · ${segmentsChosen.length} segments` : ""}{def.weighting ? " · weighted" : ""} · {def.dataset.environment === "LIVE" ? "Production" : def.dataset.environment === "TEST" ? "Test" : "All"} data{saved ? ` · saved v${saved.version}` : ""}</span>
         <span className="grow" />
         {step > 0 && step < 5 && <button className="btn small" onClick={() => setStep(step - 1)}>Back</button>}
         {step < 4 && <button className="btn small" onClick={() => setStep(step + 1)}>Next</button>}
@@ -269,10 +269,10 @@ export function WeightingEditor({ value, onChange, variables }: { value: Analysi
       </div>
       {rim.map((r, i) => { const v = variables.find((x) => x.name === r.variable); const sum = Object.values(r.targets).reduce((a, b) => a + b, 0); return (
         <div key={r.variable} className="ax-rim" data-testid="ax-rim">
-          <div className="row" style={{ marginBottom: 4 }}><strong>{v?.label ?? r.variable}</strong><span className={`muted ${Math.abs(sum - 100) > 0.5 ? "ax-error" : ""}`} style={{ fontSize: 12 }}>targets sum to {sum.toFixed(1)}%</span><span className="grow" /><button className="btn small" onClick={() => onChange(rim.length === 1 && !value?.variable ? null : { ...value!, rim: rim.filter((_, j) => j !== i) })}>Remove</button></div>
+          <div className="row" style={{ marginBottom: 4 }}><strong>{v?.label ?? r.variable}</strong><span className={`muted ${Math.abs(sum - 100) > 0.5 ? "ax-error" : ""}`} style={{ fontSize: 13 }}>targets sum to {sum.toFixed(1)}%</span><span className="grow" /><button className="btn small" onClick={() => onChange(rim.length === 1 && !value?.variable ? null : { ...value!, rim: rim.filter((_, j) => j !== i) })}>Remove</button></div>
           <div className="ax-rim-cells">{(v?.categories ?? Object.keys(r.targets).map((c) => ({ code: c, label: c }))).map((c) => <label key={c.code} className="ax-field"><span>{c.label}</span><input className="input small" type="number" step={0.1} value={r.targets[c.code] ?? ""} onChange={(e) => onChange({ ...value!, rim: rim.map((x, j) => (j === i ? { ...x, targets: { ...x.targets, [c.code]: Number(e.target.value) } } : x)) })} /></label>)}</div>
         </div>); })}
-      {!value && <div className="muted" style={{ fontSize: 12 }}>Unweighted. Add rim targets (e.g. gender 49 / 51) or pick a weight variable; tables and charts then report weighted n.</div>}
+      {!value && <div className="muted" style={{ fontSize: 13 }}>Unweighted. Add rim targets (e.g. gender 49 / 51) or pick a weight variable; tables and charts then report weighted n.</div>}
     </div>
   );
 }

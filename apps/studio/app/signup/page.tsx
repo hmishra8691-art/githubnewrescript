@@ -109,7 +109,7 @@ export default function SignupPage() {
             {done.user.userCode}
             <small>YOUR USER ID</small>
           </div>
-          <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 8 }}>
+          <p className="muted" style={{ fontSize: 13.5, lineHeight: 1.5, marginTop: 8 }}>
             This is the ID colleagues use to share projects with you. Keep it somewhere handy —
             you can sign in with it or with your email address.
           </p>

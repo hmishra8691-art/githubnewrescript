@@ -28,7 +28,7 @@ registerVariantSettings("chipallocation", ({ q, patchSettings }) => {
           onChange={(v) => patchSettings({ chipValue: v })}
         />
       </label>
-      <span className="muted" style={{ fontSize: 11, alignSelf: "flex-end", paddingBottom: 7 }}>
+      <span className="muted" style={{ fontSize: 12.5, alignSelf: "flex-end", paddingBottom: 7 }}>
         {chips} chip{chips === 1 ? "" : "s"} of {chipValue}
         {q.settings.sumUnit ?? ""} to distribute across {q.options.length} item
         {q.options.length === 1 ? "" : "s"}.

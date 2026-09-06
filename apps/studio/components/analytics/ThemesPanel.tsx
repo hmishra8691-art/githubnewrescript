@@ -26,7 +26,7 @@ export function ThemesPanel({ api, items, onChange }: { api: AxApi; items: Row[]
     <div className="ax-panel" data-testid="ax-themes">
       <div className="row" style={{ marginBottom: 10 }}>
         <h2 style={{ margin: 0 }}>Report themes</h2>
-        <span className="muted" style={{ fontSize: 12 }}>Company or client branding for charts, reports, PowerPoint and Excel — independent of the survey's respondent-facing branding.</span>
+        <span className="muted" style={{ fontSize: 13 }}>Company or client branding for charts, reports, PowerPoint and Excel — independent of the survey's respondent-facing branding.</span>
         <span className="grow" />
         <button className="btn primary small" onClick={() => start()} data-testid="ax-new-theme">+ New theme</button>
       </div>
@@ -59,8 +59,8 @@ export function ThemesPanel({ api, items, onChange }: { api: AxApi; items: Row[]
         </div>
       )}
       <div className="ax-cards">
-        <div className="card ax-theme-card"><ThemeSwatch theme={DEFAULT_THEME} /><div className="card-title">Rescript default</div><div className="muted" style={{ fontSize: 12 }}>Built-in theme used when none is chosen.</div></div>
-        {items.map((t) => <div key={t.id} className="card ax-theme-card" data-testid="ax-theme-card"><ThemeSwatch theme={t.theme as ReportTheme} /><div className="card-title">{t.name}</div><div className="muted" style={{ fontSize: 12 }}>{t.survey_id ? "This survey" : "Workspace"} · {(t.theme as ReportTheme).fontFamily?.split(",")[0]}</div><div className="card-actions" style={{ marginTop: 8 }}><button className="btn small" onClick={() => start(t)}>Edit</button><button className="btn small danger" onClick={async () => { if (confirm(`Delete theme “${t.name}”?`)) { await api.remove("themes", t.id); onChange(); } }}>Delete</button></div></div>)}
+        <div className="card ax-theme-card"><ThemeSwatch theme={DEFAULT_THEME} /><div className="card-title">Rescript default</div><div className="muted" style={{ fontSize: 13 }}>Built-in theme used when none is chosen.</div></div>
+        {items.map((t) => <div key={t.id} className="card ax-theme-card" data-testid="ax-theme-card"><ThemeSwatch theme={t.theme as ReportTheme} /><div className="card-title">{t.name}</div><div className="muted" style={{ fontSize: 13 }}>{t.survey_id ? "This survey" : "Workspace"} · {(t.theme as ReportTheme).fontFamily?.split(",")[0]}</div><div className="card-actions" style={{ marginTop: 8 }}><button className="btn small" onClick={() => start(t)}>Edit</button><button className="btn small danger" onClick={async () => { if (confirm(`Delete theme “${t.name}”?`)) { await api.remove("themes", t.id); onChange(); } }}>Delete</button></div></div>)}
       </div>
     </div>
   );
@@ -77,11 +77,11 @@ function ThemePreview({ theme }: { theme: ReportTheme }) {
     <div className="ax-theme-preview" style={{ fontFamily: theme.fontFamily, color: c.text, background: c.background }}>
       <div style={{ background: theme.cover?.background ?? c.primary, color: theme.cover?.textColor ?? "#fff", padding: "18px 16px", borderRadius: 8, textAlign: theme.cover?.layout === "center" ? "center" : "left" }}>
         {theme.logoUrl && <img src={theme.logoUrl} alt="" style={{ height: 24, marginBottom: 8, display: "block", marginLeft: theme.cover?.layout === "center" ? "auto" : 0, marginRight: theme.cover?.layout === "center" ? "auto" : 0 }} />}
-        <div style={{ fontSize: 18, fontWeight: 700, fontFamily: theme.headingFontFamily ?? theme.fontFamily }}>Report title</div><div style={{ fontSize: 12, opacity: 0.85 }}>Cover slide preview</div>
+        <div style={{ fontSize: 18, fontWeight: 700, fontFamily: theme.headingFontFamily ?? theme.fontFamily }}>Report title</div><div style={{ fontSize: 13, opacity: 0.85 }}>Cover slide preview</div>
       </div>
       <div style={{ marginTop: 10, fontWeight: 700, fontSize: theme.typography?.titleSize ?? 16 }}>Chart title<div style={{ width: 40, height: 3, background: c.primary, marginTop: 3 }} /></div>
       <svg viewBox="0 0 220 80" width="100%" style={{ marginTop: 6 }}>{[62, 48, 35, 22].map((h, i) => <rect key={i} x={10 + i * 52} y={72 - h} width={38} height={h} rx={2} fill={c.palette[i % c.palette.length]} />)}{[62, 48, 35, 22].map((h, i) => <text key={i} x={29 + i * 52} y={68 - h} textAnchor="middle" fontSize={9} fill={c.text}>{h}%</text>)}</svg>
-      <div style={{ fontSize: 10, color: c.subtle }}>{theme.footer ?? "Footer text"} · n = 438</div>
+      <div style={{ fontSize: 11.5, color: c.subtle }}>{theme.footer ?? "Footer text"} · n = 438</div>
     </div>
   );
 }

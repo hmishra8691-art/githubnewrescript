@@ -97,7 +97,7 @@ export function OptionLogicEditor({ title, logic, visibleIf, onChange }: {
   return (
     <div className="option-logic" data-testid="option-logic">
       <div className="row" style={{ marginBottom: 8 }}>
-        <strong style={{ fontSize: 12 }}>{title}</strong>
+        <strong style={{ fontSize: 13 }}>{title}</strong>
         <span className="grow" />
         {!isEmptyOptionLogic(logic) && (
           <button className="btn small danger" onClick={() => onChange({ logic: undefined })}>
@@ -123,7 +123,7 @@ export function OptionLogicEditor({ title, logic, visibleIf, onChange }: {
           </label>
         ))}
       </div>
-      <div className="muted" style={{ fontSize: 11, marginBottom: 8 }}>
+      <div className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>
         {VISIBILITY.find((v) => v.value === l.visibility)?.hint}
       </div>
 
@@ -168,7 +168,7 @@ export function OptionLogicEditor({ title, logic, visibleIf, onChange }: {
             onChange={(r) => setLogic({ carryForward: r })} />
           <SourceRuleEditor title="Carry back" direction="back" rule={l.carryBack}
             onChange={(r) => setLogic({ carryBack: r })} />
-          <div className="muted" style={{ fontSize: 11 }}>
+          <div className="muted" style={{ fontSize: 12.5 }}>
             Carry back reads a question asked later; while it is unanswered the rule is skipped,
             so the option is never hidden by a question the respondent hasn’t reached.
           </div>

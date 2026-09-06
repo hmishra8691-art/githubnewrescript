@@ -22,7 +22,7 @@ function ConfigField({ field, value, onChange }: {
         <label className="f"><span>{field.label}</span>
           <input className="input" style={{ width: 120 }} type="number" value={value == null ? "" : String(value)}
             onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))} />
-          {field.help && <div className="muted" style={{ fontSize: 11 }}>{field.help}</div>}
+          {field.help && <div className="muted" style={{ fontSize: 12.5 }}>{field.help}</div>}
         </label>
       );
     case "boolean":
@@ -203,7 +203,7 @@ export function DesignsPanel() {
       <div className="row" style={{ marginBottom: 14 }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>Research Design Generators</h2>
       </div>
-      <p className="muted" style={{ fontSize: 12 }}>
+      <p className="muted" style={{ fontSize: 13 }}>
         Generate versioned, seeded design files (Conjoint, MaxDiff, custom). Reference them from a
         <em> Conjoint tasks</em> / <em>MaxDiff tasks</em> question, or loop over tasks in the Survey Flow.
         New methodologies plug in via <code>designGeneratorRegistry.register()</code>.
@@ -230,7 +230,7 @@ export function DesignsPanel() {
             <strong>{d.name}</strong>
             <span className="qtype-badge">{d.kind}</span>
             <span className="chip">v{d.version}</span>
-            <span className="muted mono" style={{ fontSize: 11 }}>
+            <span className="muted mono" style={{ fontSize: 12.5 }}>
               seed {d.seed} · {d.file?.rows.length ?? 0} rows · {d.file?.generatedAt?.slice(0, 19) ?? "not generated"}
             </span>
             <span className="grow" />

@@ -71,7 +71,7 @@ function TestValuesDialog({ title, deps, onClose, onPreview }: {
     <div className="modal-back" onClick={onClose}>
       <div className="modal" role="dialog" aria-modal="true" data-testid="preview-block-dialog" onClick={(e) => e.stopPropagation()}>
         <h2 style={{ fontSize: 16 }}>Preview “{title}”</h2>
-        <p className="muted" style={{ fontSize: 12, marginTop: -6 }}>
+        <p className="muted" style={{ fontSize: 13, marginTop: -6 }}>
           This block depends on {deps.length} earlier question{deps.length === 1 ? "" : "s"} — its logic, piping,
           masking or auto punch reads them. Set test values so the block behaves as it would mid-survey,
           or preview with them unanswered.
@@ -79,7 +79,7 @@ function TestValuesDialog({ title, deps, onClose, onPreview }: {
         <div style={{ display: "grid", gap: 10, margin: "12px 0" }}>
           {deps.map((q) => (
             <div key={q.id} className="card" style={{ padding: 10 }} data-testid="preview-dep">
-              <div style={{ fontSize: 12, marginBottom: 6 }}>
+              <div style={{ fontSize: 13, marginBottom: 6 }}>
                 <span className="mono" style={{ fontWeight: 600 }}>{q.code}</span>
                 <span className="muted"> · {strip(q.text).slice(0, 80) || q.variableName}</span>
               </div>

@@ -105,7 +105,7 @@ export function QuotasPanel({ focusQuotaId }: { focusQuotaId?: string } = {}) {
         <button className="btn small" data-testid="quota-recount" disabled={!!busy} onClick={recount}>{busy === "recount" ? "Recounting…" : "↻ Recount from data"}</button>
         <button className="btn small" data-testid="quota-generate-open" disabled={!!busy} onClick={() => setGenOpen((o) => !o)}>+ Generate from data</button>
       </div>
-      <p className="muted" style={{ fontSize: 12 }}>
+      <p className="muted" style={{ fontSize: 13 }}>
         Counts shown are <strong>{env === "TEST" ? "test" : "live"}</strong> responses. Hard quotas terminate when full (add a
         <em> quota check</em> node in the Survey Flow to enforce mid-survey); soft quotas only flag. Percent limits use the
         quota&apos;s target total. Multi-dimensional quotas = one cell per crossing (e.g. Male × 18–24).
@@ -119,7 +119,7 @@ export function QuotasPanel({ focusQuotaId }: { focusQuotaId?: string } = {}) {
       {genOpen && (
         <div className="card" style={{ padding: 12 }} data-testid="quota-generate">
           <div className="flabel">Generate one quota per question, from the {env === "TEST" ? "test" : "live"} responses</div>
-          <p className="muted" style={{ fontSize: 11, marginTop: 0 }}>
+          <p className="muted" style={{ fontSize: 12.5, marginTop: 0 }}>
             One cell per distinct answer, with the number of completed responses that gave it as the starting limit. Cells use
             the ordinary condition builder afterwards, so you can merge or edit them.
           </p>
