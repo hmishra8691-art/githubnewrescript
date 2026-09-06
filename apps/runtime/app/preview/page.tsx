@@ -20,6 +20,22 @@ export default function PreviewPage() {
   const [entry, setEntry] = React.useState<{ startAt?: string; answers?: Record<string, unknown>; revision?: number | null } | null>(null);
 
   /**
+   * The preview's own query string, handed to the survey as its URL
+   * parameters.
+   *
+   * A survey that reads `?PANEL_ID=…` or `?REGION=uk` could not be previewed
+   * with those values at all: the preview passed no parameters, so every
+   * embedded field sourced from the URL came back empty and the piping,
+   * branching and quotas that depend on them behaved as if the respondent had
+   * arrived bare. Read once, on mount — a preview's URL does not change under
+   * it, and re-reading would restart the interview.
+   */
+  const [urlParams] = React.useState<Record<string, string>>(() => {
+    if (typeof window === "undefined") return {};
+    return Object.fromEntries(new URLSearchParams(window.location.search).entries());
+  });
+
+  /**
    * The identification banner and the Runner's testing toolbar are two sticky
    * rows in one stack. Publishing the banner's measured height as
    * `--rs-stack-top` is what lets the toolbar park directly beneath it instead
@@ -109,6 +125,7 @@ export default function PreviewPage() {
         mode="preview"
         startAt={entry?.startAt}
         seedAnswers={entry?.answers}
+        urlParams={urlParams}
       />
     </>
   );

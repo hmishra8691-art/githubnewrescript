@@ -6,12 +6,35 @@ import { answerKey, lookupAnswer } from "./state.js";
 import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
 import { validateFieldValue } from "./fields.js";
+import { createScriptCtx, runScript, type ScriptRunResult } from "./scripts.js";
+
+/**
+ * Whether a failed check stops the respondent.
+ *
+ * Everything the engine raises is an "error" unless a rule asks to be a
+ * "warning": the page still submits, the message is still shown. That
+ * distinction lives here rather than in the runtime so the preview, the
+ * inspector and the live interview cannot disagree about what blocks.
+ */
+export type ValidationSeverity = "error" | "warning";
 
 export interface ValidationError {
   questionId: string;
   columnId?: string;
   rowCode?: string;
   message: string;
+  /** absent means "error" — every caller that predates severity still blocks */
+  severity?: ValidationSeverity;
+}
+
+/** The checks that actually stop the page. */
+export function blockingErrors(errors: ValidationError[]): ValidationError[] {
+  return errors.filter((e) => (e.severity ?? "error") === "error");
+}
+
+/** The checks that are worth saying but must not stop anyone. */
+export function warnings(errors: ValidationError[]): ValidationError[] {
+  return errors.filter((e) => e.severity === "warning");
 }
 
 function isEmpty(v: unknown): boolean {
@@ -27,55 +50,100 @@ function ruleError(rule: ValidationRule, fallback: string): string {
   return rule.message ?? fallback;
 }
 
+/** An ISO date, or the name of something in scope that holds one. */
+function dateBound(raw: unknown, ctx: EvalContext): number | null {
+  if (raw == null || raw === "") return null;
+  const direct = Date.parse(String(raw));
+  if (!Number.isNaN(direct)) return direct;
+  const flat = flattenVariables(ctx.def, ctx.state);
+  const resolved = flat[String(raw)];
+  if (resolved == null) return null;
+  const t = Date.parse(String(resolved));
+  return Number.isNaN(t) ? null : t;
+}
+
+function asDate(value: unknown): number | null {
+  const t = Date.parse(String(value));
+  return Number.isNaN(t) ? null : t;
+}
+
+/**
+ * Loose enough for the world's numbering plans, strict enough to catch a
+ * typo: digits, with the punctuation people actually type, and at least
+ * seven of them. Anything narrower rejects a legitimate foreign number,
+ * which is worse than accepting a bad one.
+ */
+const PHONE_RE = /^[+()\-.\s\d]{7,}$/;
+
 function checkScalarRules(
   rules: ValidationRule[],
   value: unknown,
   ctx: EvalContext,
-  push: (msg: string) => void,
+  push: (msg: string, severity: ValidationSeverity) => void,
 ): void {
   for (const rule of rules) {
     if (rule.when && !evaluateCondition(rule.when, ctx)) continue;
+    const sev: ValidationSeverity = rule.severity ?? "error";
+    const fail = (m: string) => push(m, sev);
     switch (rule.kind) {
       case "required":
-        if (isEmpty(value)) push(ruleError(rule, "This question is required."));
+        if (isEmpty(value)) fail(ruleError(rule, "This question is required."));
         break;
       case "min_value":
         if (!isEmpty(value) && Number(value) < Number(rule.value))
-          push(ruleError(rule, `Value must be at least ${rule.value}.`));
+          fail(ruleError(rule, `Value must be at least ${rule.value}.`));
         break;
       case "max_value":
         if (!isEmpty(value) && Number(value) > Number(rule.value))
-          push(ruleError(rule, `Value must be at most ${rule.value}.`));
+          fail(ruleError(rule, `Value must be at most ${rule.value}.`));
         break;
       case "min_length":
         if (!isEmpty(value) && String(value).length < Number(rule.value))
-          push(ruleError(rule, `Please enter at least ${rule.value} characters.`));
+          fail(ruleError(rule, `Please enter at least ${rule.value} characters.`));
         break;
       case "max_length":
         if (!isEmpty(value) && String(value).length > Number(rule.value))
-          push(ruleError(rule, `Please enter at most ${rule.value} characters.`));
+          fail(ruleError(rule, `Please enter at most ${rule.value} characters.`));
         break;
       case "min_selections":
         if (Array.isArray(value) && value.length < Number(rule.value))
-          push(ruleError(rule, `Select at least ${rule.value}.`));
+          fail(ruleError(rule, `Select at least ${rule.value}.`));
         break;
       case "max_selections":
         if (Array.isArray(value) && value.length > Number(rule.value))
-          push(ruleError(rule, `Select at most ${rule.value}.`));
+          fail(ruleError(rule, `Select at most ${rule.value}.`));
         break;
       case "pattern":
         try {
           if (!isEmpty(value) && !new RegExp(String(rule.value)).test(String(value)))
-            push(ruleError(rule, "Invalid format."));
+            fail(ruleError(rule, "Invalid format."));
         } catch { /* bad regex — ignore */ }
         break;
       case "email":
         if (!isEmpty(value) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value)))
-          push(ruleError(rule, "Please enter a valid email address."));
+          fail(ruleError(rule, "Please enter a valid email address."));
         break;
+      case "phone":
+        if (!isEmpty(value) && (!PHONE_RE.test(String(value)) || (String(value).match(/\d/g)?.length ?? 0) < 7))
+          fail(ruleError(rule, "Please enter a valid phone number."));
+        break;
+      case "date_min": {
+        const bound = dateBound(rule.value, ctx);
+        const got = isEmpty(value) ? null : asDate(value);
+        if (bound != null && got != null && got < bound)
+          fail(ruleError(rule, `Please choose a date on or after ${new Date(bound).toISOString().slice(0, 10)}.`));
+        break;
+      }
+      case "date_max": {
+        const bound = dateBound(rule.value, ctx);
+        const got = isEmpty(value) ? null : asDate(value);
+        if (bound != null && got != null && got > bound)
+          fail(ruleError(rule, `Please choose a date on or before ${new Date(bound).toISOString().slice(0, 10)}.`));
+        break;
+      }
       case "integer":
         if (!isEmpty(value) && !Number.isInteger(Number(value)))
-          push(ruleError(rule, "Please enter a whole number."));
+          fail(ruleError(rule, "Please enter a whole number."));
         break;
       case "custom_expression": {
         const flat = flattenVariables(ctx.def, ctx.state);
@@ -84,8 +152,29 @@ function checkScalarRules(
             resolver: (n) => (n === "value" ? value : flat[n]),
             names: () => Object.keys(flat),
           });
-          if (!ok) push(ruleError(rule, "Invalid answer."));
+          if (!ok) fail(ruleError(rule, "Invalid answer."));
         } catch { /* invalid expression — skip */ }
+        break;
+      }
+      case "custom_script": {
+        /*
+         * The rule names a script in `def.scripts`; the script decides. It
+         * reads the answer under test as `value` and reports by calling
+         * `ctx.error(...)` — the same call an on_validate script makes, so a
+         * programmer writes one kind of validation script, not two.
+         *
+         * Until this existed the kind was accepted by the schema, asserted in
+         * a unit test, and fell through `default: break` — so the rule always
+         * passed. That is why it is implemented here rather than lint-warned.
+         */
+        const ref = String(rule.value ?? "");
+        const script = ctx.def.scripts.find((s) => s.id === ref || s.name === ref);
+        if (!script) break;
+        const run: ScriptRunResult = { logs: [], errors: [] };
+        const sctx = createScriptCtx(ctx.def, ctx.state, ctx.loop ?? null, run);
+        const outcome = runScript(script.code, { ...sctx, value } as never, run);
+        for (const e of run.errors) fail(e.message);
+        if (outcome.failed) fail(ruleError(rule, "This answer could not be checked."));
         break;
       }
       default:
@@ -142,6 +231,27 @@ export function validateQuestion(
     if (q.settings.maxValue != null && Number(value) > q.settings.maxValue)
       push(`Value must be at most ${q.settings.maxValue}.`);
   }
+  /*
+   * DATE BOUNDS FROM SETTINGS.
+   *
+   * `minDate` / `maxDate` / `disabledWeekdays` were enforced only by the date
+   * picker, so going Back, resuming a session or posting a crafted save wrote
+   * an out-of-range date that every later calculation then trusted. The
+   * renderer still narrows what is easy to pick; this is what makes it true.
+   */
+  if (!isEmpty(value) && (q.type === "date" || q.type === "datetime")) {
+    const got = asDate(value);
+    const lo = dateBound(q.settings.minDate, ctx);
+    const hi = dateBound(q.settings.maxDate, ctx);
+    if (got != null && lo != null && got < lo)
+      push(`Please choose a date on or after ${new Date(lo).toISOString().slice(0, 10)}.`);
+    if (got != null && hi != null && got > hi)
+      push(`Please choose a date on or before ${new Date(hi).toISOString().slice(0, 10)}.`);
+    const blocked = q.settings.disabledWeekdays;
+    if (got != null && blocked?.length && blocked.includes(new Date(got).getUTCDay()))
+      push("That day of the week is not available — please choose another date.");
+  }
+
   if (Array.isArray(value)) {
     if (q.settings.minSelections != null && value.length < q.settings.minSelections && !isEmpty(value))
       push(`Select at least ${q.settings.minSelections}.`);
@@ -208,17 +318,50 @@ export function validateQuestion(
   // sum_* rules for allocation-like values
   for (const rule of q.validation) {
     if (rule.when && !evaluateCondition(rule.when, ctx)) continue;
+    const severity = rule.severity ?? "error";
     if (["sum_equals", "sum_max", "sum_min"].includes(rule.kind) && value && typeof value === "object" && !Array.isArray(value)) {
       const total = Object.values(value as Record<string, unknown>).reduce(
         (a: number, b) => a + (Number(b) || 0),
         0,
       );
       if (rule.kind === "sum_equals" && total !== Number(rule.value))
-        push(ruleError(rule, `Total must equal ${rule.value}.`));
+        push(ruleError(rule, `Total must equal ${rule.value}.`), { severity });
       if (rule.kind === "sum_max" && total > Number(rule.value))
-        push(ruleError(rule, `Total must be at most ${rule.value}.`));
+        push(ruleError(rule, `Total must be at most ${rule.value}.`), { severity });
       if (rule.kind === "sum_min" && total < Number(rule.value))
-        push(ruleError(rule, `Total must be at least ${rule.value}.`));
+        push(ruleError(rule, `Total must be at least ${rule.value}.`), { severity });
+    }
+
+    /*
+     * COLUMN TOTALS — the counterpart of `settings.rowSum`.
+     *
+     * A grid that allocates down a column ("split 100 points across these
+     * brands, for each of these occasions") had no rule: the engine could
+     * total a row and nothing else, so the check was written by hand in a
+     * custom expression or not at all. `ref` names one column; without it
+     * every editable column is held to the same total.
+     */
+    if (rule.kind.startsWith("column_sum") && (q.type === "composite" || q.type === "custom_table")) {
+      /*
+       * A grid nobody has touched is not a failed total — it is an unanswered
+       * optional question, and telling a respondent their empty columns do not
+       * add up is the same mistake the row-sum rule already avoids.
+       */
+      if (isEmpty(value) && !q.required) continue;
+      const view = effectiveQuestion(q, ctx);
+      const cells = (value ?? {}) as Record<string, Record<string, unknown>>;
+      const cols = view.columns.filter((c) => !c.readOnly && !c.expression && (!rule.ref || c.id === rule.ref));
+      for (const col of cols) {
+        const total = view.rows.reduce((a, r) => a + (Number(cells?.[String(r.code)]?.[col.id]) || 0), 0);
+        const label = col.label.replace(/<[^>]*>/g, "");
+        const target = Number(rule.value);
+        if (rule.kind === "column_sum_equals" && total !== target)
+          push(ruleError(rule, `“${label}” must total ${target} (currently ${total}).`), { columnId: col.id, severity });
+        if (rule.kind === "column_sum_max" && total > target)
+          push(ruleError(rule, `“${label}” must total at most ${target} (currently ${total}).`), { columnId: col.id, severity });
+        if (rule.kind === "column_sum_min" && total < target)
+          push(ruleError(rule, `“${label}” must total at least ${target} (currently ${total}).`), { columnId: col.id, severity });
+      }
     }
   }
 
@@ -235,7 +378,7 @@ export function validateQuestion(
   if (richTextValue != null) {
     checkScalarRules(
       q.validation.filter((r) => LENGTH_KINDS.includes(r.kind)),
-      richTextValue, ctx, (m) => push(m),
+      richTextValue, ctx, (m, sev) => push(m, { severity: sev }),
     );
   }
   // A from–to pair (Numeric Range, Dual / Range Slider) declares the
@@ -263,7 +406,7 @@ export function validateQuestion(
     ),
     value,
     ctx,
-    (m) => push(m),
+    (m, sev) => push(m, { severity: sev }),
   );
 
   // composite: per-column validation over visible rows
@@ -274,8 +417,8 @@ export function validateQuestion(
       for (const col of view.columns) {
         const cellValue = cells?.[String(row.code)]?.[col.id];
         if (col.readOnly || col.expression) continue;
-        checkScalarRules(col.validation, cellValue, ctx, (m) =>
-          push(`${row.label} — ${col.label}: ${m}`, { rowCode: String(row.code), columnId: col.id }),
+        checkScalarRules(col.validation, cellValue, ctx, (m, sev) =>
+          push(`${row.label} — ${col.label}: ${m}`, { rowCode: String(row.code), columnId: col.id, severity: sev }),
         );
         if (col.min != null && !isEmpty(cellValue) && Number(cellValue) < col.min)
           push(`${row.label} — ${col.label}: minimum ${col.min}.`, { rowCode: String(row.code), columnId: col.id });
@@ -302,8 +445,8 @@ export function validateQuestion(
         const typeErr = validateFieldValue(ft, v);
         if (typeErr) push(`${label}: ${typeErr}`, { rowCode: rc });
       }
-      checkScalarRules(row.validation ?? [], v, ctx, (m) =>
-        push(`${label}: ${m}`, { rowCode: rc }),
+      checkScalarRules(row.validation ?? [], v, ctx, (m, sev) =>
+        push(`${label}: ${m}`, { rowCode: rc, severity: sev }),
       );
     }
   }

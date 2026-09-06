@@ -43,6 +43,15 @@ export interface ResolvedMedia {
 const IMAGE_EXT = /\.(jpe?g|png|gif|webp|avif|svg|bmp)$/i;
 const VIDEO_EXT: Record<string, string> = {
   mp4: "video/mp4", m4v: "video/mp4", webm: "video/webm", ogg: "video/ogg", ogv: "video/ogg", mov: "video/quicktime",
+  /*
+   * Audio plays through the same <video> element — a media stimulus is a
+   * media stimulus, and the browser draws controls either way. Listing the
+   * extensions is what matters: without them an .mp3 fell past every branch
+   * to the "no extension, assume a CDN image" default at the bottom of
+   * `resolveMediaUrl`, and an audio clip rendered as a broken image.
+   */
+  mp3: "audio/mpeg", m4a: "audio/mp4", aac: "audio/aac", wav: "audio/wav",
+  oga: "audio/ogg", opus: "audio/ogg", flac: "audio/flac", weba: "audio/webm",
 };
 
 /** Hosts we are willing to put in an iframe. Anything else is never embedded. */

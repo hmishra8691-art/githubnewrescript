@@ -4,6 +4,7 @@ import type { Question, Option, SurveyDefinition, QuestionColumn } from "@rescri
 import { resolveVariant } from "@rescript/schema";
 import {
   effectiveQuestion,
+  resolveQuestionMedia,
   resolvePiping,
   evaluateExpression,
   flattenVariables,
@@ -1701,8 +1702,57 @@ function CustomComponent(p: QRProps) {
  */
 const MEDIA_OWNING_RENDERERS = new Set(["videorating", "videotimeline", "watchtime", "audiorec", "base:media_timeline"]);
 
+/**
+ * The question with its media URLs piped.
+ *
+ * Every variant reads `q.settings.imageUrl` / `mediaUrl` straight off the
+ * question, so resolving the tokens once here is what makes a personalised
+ * stimulus work everywhere at once — a hotspot image, a video, a pack shot —
+ * rather than in whichever renderer someone remembered to change. Option
+ * images are piped in the engine's own pipeline, beside their labels.
+ */
+function withPipedMedia(p: QRProps, ctx: EvalContext): QRProps {
+  const media = resolveQuestionMedia(p.q, ctx);
+  if (media.imageUrl === p.q.settings.imageUrl && media.mediaUrl === p.q.settings.mediaUrl) return p;
+  return { ...p, q: { ...p.q, settings: { ...p.q.settings, ...media } } };
+}
+
+/**
+ * A question's own script, for every question type.
+ *
+ * `customJs` ran only for `custom_component`; on any other type it was saved,
+ * shown in the properties panel and silently discarded. It now runs against
+ * the rendered card for whatever question carries it, with the same small api
+ * the custom component gets — read the answer, write the answer — so a
+ * programmer can attach behaviour to an ordinary question without inventing a
+ * component around it.
+ */
+function QuestionScript(p: QRProps) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  const valueRef = React.useRef(p.value);
+  valueRef.current = p.value;
+  React.useEffect(() => {
+    const el = ref.current?.parentElement;
+    if (!el || !p.q.customJs) return;
+    try {
+      // eslint-disable-next-line no-new-func
+      const fn = new Function("el", "api", p.q.customJs);
+      fn(el, {
+        getValue: () => valueRef.current,
+        setValue: (v: unknown) => p.onChange(v),
+        question: { id: p.q.id, code: p.q.code, type: p.q.type },
+      });
+    } catch (e) {
+      console.error(`[rescript:script] question ${p.q.code}`, e);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.q.id]);
+  return <div ref={ref} hidden data-testid="rs-question-script" />;
+}
+
 /* ------------------------------------------------------------------ shell */
-export function QuestionRenderer(p: QRProps) {
+export function QuestionRenderer(props: QRProps) {
+  const p = withPipedMedia(props, ctxOf(props));
   const ctx = ctxOf(p);
   const text = resolvePiping(p.q.text, ctx);
   const instruction = p.q.instruction ? resolvePiping(p.q.instruction, ctx) : null;
@@ -1808,6 +1858,7 @@ export function QuestionRenderer(p: QRProps) {
         <div dangerouslySetInnerHTML={{ __html: resolvePiping(p.q.customHtml, ctx) }} />
       )}
       {body}
+      {p.q.customJs && p.q.type !== "custom_component" && <QuestionScript {...p} />}
       {p.errors.map((e, i) => (
         <div key={i} className="rs-error-msg">{e}</div>
       ))}

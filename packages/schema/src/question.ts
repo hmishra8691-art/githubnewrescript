@@ -135,12 +135,34 @@ export const ValidationRule = z.object({
     "sum_min",
     "pattern", // regex
     "email",
+    "phone",
+    "date_min", // value is an ISO date (or a variable name resolving to one)
+    "date_max",
+    /**
+     * Grid totals down a COLUMN, across every visible row — the counterpart of
+     * `settings.rowSum`, which totals across a row. `ref` names the column;
+     * omitted, every column is held to the same total.
+     */
+    "column_sum_equals",
+    "column_sum_max",
+    "column_sum_min",
     "integer",
     "custom_expression", // calc-engine expression that must evaluate truthy
-    "custom_script", // registered script id
+    "custom_script", // id or name of a script in def.scripts; it calls ctx.error()
   ]),
   value: z.any().optional(),
   message: z.string().optional(),
+  /** Which column a `column_sum_*` rule totals. */
+  ref: z.string().optional(),
+  /**
+   * Whether failing this rule stops the respondent.
+   *
+   * "error" (the default, and how every rule behaved before this existed)
+   * blocks the page. "warning" shows the message and lets them continue — the
+   * soft check a researcher wants for "that is unusually high, are you sure?"
+   * without making a legitimate answer impossible to give.
+   */
+  severity: z.enum(["error", "warning"]).optional(),
   /** Only enforce when the condition holds. */
   when: Condition.optional(),
 });

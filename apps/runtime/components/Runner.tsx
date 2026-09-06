@@ -12,6 +12,9 @@ import {
   validatePage,
   resolvePiping,
   runScripts,
+  allEmbeddedFields,
+  blockingErrors,
+  warnings,
   inspect,
   applyPunches,
   answerKey,
@@ -263,6 +266,8 @@ export function Runner({ definition: def, mode, session: initialSession, session
   const [errors, setErrors] = React.useState<ReturnType<typeof validatePage>>([]);
   const [ended, setEnded] = React.useState<{ status: string; message?: string; redirectUrl?: string } | null>(null);
   const [logs, setLogs] = React.useState<string[]>([]);
+  /** the warning set the respondent has already been shown on this page */
+  const ackWarnRef = React.useRef<string | null>(null);
   const [counts] = React.useState<QuotaCounts>(initialCounts ?? {});
   const [device, setDevice] = React.useState<"desktop" | "tablet" | "mobile">("desktop");
   const [epoch, setEpoch] = React.useState(0);
@@ -339,13 +344,17 @@ export function Runner({ definition: def, mode, session: initialSession, session
           .map((e) => [e.name, urlParams![e.name]]),
       ),
     });
-    // also capture flow-declared url embedded fields
-    for (const node of def.flow) {
-      if (node.type === "embedded_data") {
-        for (const f of node.fields) {
-          if (f.source === "url" && urlParams?.[f.name] != null) state.embedded[f.name] = urlParams[f.name];
-        }
-      }
+    /*
+     * Also capture flow-declared url embedded fields — from ANYWHERE in the
+     * flow. This used to walk `def.flow` one level deep, so an embedded-data
+     * node inside a block, a branch or a loop never captured its parameter:
+     * the field existed, the URL carried the value, and the survey behaved as
+     * if the respondent had arrived without it. `allEmbeddedFields` is the
+     * engine's own recursive walker, which the piping picker and the variable
+     * dictionary already use — so all three now agree on what is declared.
+     */
+    for (const f of allEmbeddedFields(def)) {
+      if (f.source === "url" && urlParams?.[f.name] != null) state.embedded[f.name] = urlParams[f.name];
     }
     stateRef.current = state;
     // test and preview only: the live state, for the inspector's consumers and
@@ -364,6 +373,22 @@ export function Runner({ definition: def, mode, session: initialSession, session
     if (mode !== "live" && typeof window !== "undefined") (window as any).__rescriptTelemetry = telemetryRef.current.data;
     const r = runScripts(def, state, "on_load");
     setLogs(r.logs);
+    /*
+     * The survey's own script, from Branding → custom JavaScript. It was
+     * stored, edited and never executed. It runs once per session, after
+     * on_load scripts, with no arguments — it is page-level glue (a pixel, a
+     * class on the shell, a listener), and anything that touches the response
+     * belongs in a real script with a ctx.
+     */
+    if (def.branding.customJs) {
+      try {
+        // eslint-disable-next-line no-new-func
+        new Function(def.branding.customJs)();
+      } catch (e) {
+        console.error("[rescript:script] survey custom JS", e);
+        if (mode !== "live") setLogs((l) => [...l, `[survey JS] ERROR: ${e instanceof Error ? e.message : String(e)}`]);
+      }
+    }
     const nav = start(def, state, counts, startAt ? { startAt } : {});
     /*
      * Resume: the row's answers come back, the flow is recompiled with them
@@ -475,13 +500,39 @@ export function Runner({ definition: def, mode, session: initialSession, session
   const handleNext = async () => {
     if (!pageStep) return;
     const errs = validatePage(def, questions, ctx);
+    /*
+     * on_validate runs FIRST and on its own: it is the event whose whole
+     * purpose is to add errors, and it was the one event `runScripts` was
+     * never called with — so every validation script ever written on this
+     * platform did nothing. on_submit still runs after it, for the work a
+     * page does on the way out.
+     */
+    const validateRes = runScripts(def, state, "on_validate", { scopeRef: pageStep.pageId.split("@")[0], loop: pageStep.loop });
     const scriptRes = runScripts(def, state, "on_submit", { scopeRef: pageStep.pageId.split("@")[0], loop: pageStep.loop });
-    setLogs((l) => [...l, ...scriptRes.logs]);
-    const allErrs = [...errs, ...scriptRes.errors.map((e) => ({ questionId: e.questionRef ?? "", message: e.message }))];
-    if (allErrs.length > 0) {
+    setLogs((l) => [...l, ...validateRes.logs, ...scriptRes.logs]);
+    const fromScripts = [...validateRes.errors, ...scriptRes.errors]
+      .map((e) => ({ questionId: e.questionRef ?? "", message: e.message }));
+    const allErrs = [...errs, ...fromScripts];
+    const blocking = blockingErrors(allErrs);
+    if (blocking.length > 0) {
       setErrors(allErrs);
       return;
     }
+    /*
+     * Warnings are shown once and then let go. A soft check exists to make a
+     * respondent look again ("that is unusually high — are you sure?"), not
+     * to make a legitimate answer impossible, so the first Next surfaces them
+     * and the second proceeds. The acknowledgement is keyed to the messages
+     * themselves, so changing the answer and re-triggering warns again.
+     */
+    const soft = warnings(allErrs);
+    const softKey = soft.map((w) => `${w.questionId}:${w.message}`).join("|");
+    if (soft.length > 0 && ackWarnRef.current !== softKey) {
+      ackWarnRef.current = softKey;
+      setErrors(soft);
+      return;
+    }
+    ackWarnRef.current = null;
     setErrors([]);
     /*
      * List Fill runs HERE — after the page's answers are valid and before the
@@ -501,6 +552,14 @@ export function Runner({ definition: def, mode, session: initialSession, session
     const nav = advance(def, state, counts, { fromPageId: pageStep.pageId });
     setSteps(nav.steps);
     if (nav.done) {
+      /*
+       * on_complete: the last event a survey can act on, and the other one
+       * that never fired. It runs before the final save, so anything it
+       * writes — a computed variable, a flag, a status field — is part of the
+       * response that is persisted rather than a change nobody records.
+       */
+      const completeRes = runScripts(def, state, "on_complete");
+      if (completeRes.logs.length) setLogs((l) => [...l, ...completeRes.logs]);
       const endStep = nav.steps[nav.stepIndex];
       setEnded({
         status: nav.endStatus ?? "complete",
@@ -656,11 +715,11 @@ export function Runner({ definition: def, mode, session: initialSession, session
       })}
       <div className="rs-nav">
         {b.buttons.showBack && state.stepIndex > 0 ? (
-          <button type="button" className={`rs-btn secondary ${b.buttons.style}`} onClick={handleBack}>
+          <button type="button" data-testid="rs-back" className={`rs-btn secondary ${b.buttons.style}`} onClick={handleBack}>
             {b.buttons.backLabel}
           </button>
         ) : <span />}
-        <button type="button" className={`rs-btn ${b.buttons.style}`} onClick={handleNext}>
+        <button type="button" data-testid="rs-next" className={`rs-btn ${b.buttons.style}`} onClick={handleNext}>
           {pageIndexAmongPages >= totalPages ? b.buttons.submitLabel : b.buttons.nextLabel}
         </button>
       </div>

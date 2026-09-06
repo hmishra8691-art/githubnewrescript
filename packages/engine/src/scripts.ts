@@ -9,11 +9,39 @@ import { loopContexts, loopNodes } from "./loops.js";
 /**
  * Custom script host (requirement §13).
  *
- * Scripts receive a controlled `ctx` API — they never touch the database,
- * network, or globals directly. On the server they are additionally executed
- * inside `node:vm` with a frozen sandbox; in the browser they run as a
- * plain Function scoped to the ctx object only.
+ * Scripts receive a controlled `ctx` API and reach the survey only through it.
+ * They run as a Function whose parameter list SHADOWS the globals a script has
+ * no business touching — `window`, `document`, `fetch`, `XMLHttpRequest`,
+ * `globalThis`, `process`, `require`, `eval`, `Function`, the timers and the
+ * storage APIs are all bound to `undefined` inside the body, so reaching for
+ * one gets nothing rather than the real thing.
+ *
+ * What this is NOT: it is not a security boundary against a hostile script,
+ * and it is not time-boxed — an infinite loop in a survey script hangs the
+ * page it runs on. (The header here used to claim `node:vm` with a frozen
+ * sandbox and time-boxing; none of that existed, which is a worse position
+ * than saying plainly what the limits are.) Scripts are written by the
+ * survey's own programmers, who already have edit rights; the shadowing is
+ * there to stop an accident, not an attacker.
  */
+
+/**
+ * Globals a survey script must not reach. Shadowing beats deleting: the
+ * identifiers still resolve, so a typo throws a clear TypeError instead of
+ * silently hitting the real API.
+ *
+ * `eval` and `import` are absent on purpose — neither is a legal parameter
+ * name in strict mode, so neither can be shadowed this way. Say so rather
+ * than list them and imply a guarantee that is not there.
+ */
+const DENIED_GLOBALS = [
+  "window", "document", "globalThis", "self", "top", "parent", "frames",
+  "fetch", "XMLHttpRequest", "WebSocket", "EventSource", "navigator",
+  "localStorage", "sessionStorage", "indexedDB", "caches",
+  "process", "require", "module", "exports",
+  "Function", "setTimeout", "setInterval", "queueMicrotask",
+  "postMessage", "open", "alert", "confirm", "prompt",
+];
 
 export interface ScriptCtx {
   /** read an answer by question id / code / variable name */
@@ -56,8 +84,10 @@ export interface ScriptCtx {
   getLoopAnswer(ref: string, itemCode: string, scope?: string): unknown;
   /** console-style log captured by the inspector */
   log(...args: unknown[]): void;
-  /** register a validation error (on_validate scripts) */
+  /** register a validation error (on_validate scripts, custom_script rules) */
   error(message: string, questionRef?: string): void;
+  /** the answer under test, when this script is running as a validation rule */
+  value?: unknown;
 }
 
 /** What a script sees of one iteration — a plain object, never the live context. */
@@ -155,15 +185,25 @@ export function createScriptCtx(
   };
 }
 
-/** Execute one script body against a ctx. Time-boxed on the server. */
-export function runScript(code: string, ctx: ScriptCtx): ScriptRunResult {
-  const result: ScriptRunResult = { logs: [], errors: [] };
+/**
+ * Execute one script body against a ctx.
+ *
+ * `into` is the result the ctx was built with. Without it this function
+ * returned a FRESH result while `ctx.log` and `ctx.error` wrote into the
+ * caller's — so the returned `logs`/`errors` were always empty and every
+ * caller that read them (the per-script name prefix below, among others)
+ * quietly did nothing.
+ */
+export function runScript(code: string, ctx: ScriptCtx, into?: ScriptRunResult): ScriptRunResult {
+  const result: ScriptRunResult = into ?? { logs: [], errors: [] };
   try {
     // eslint-disable-next-line no-new-func
     const fn = new Function(
       "ctx",
+      ...DENIED_GLOBALS,
       `"use strict";\nconst { get, set, getCalc, setCalc, getEmbedded, setEmbedded, expr, pipe, flag, loop, log, error, `
-        + `getCurrentLoopItem, getCurrentLoopIndex, getLoopCount, getCurrentLoopReference, getLoopItems, getLoopAnswer } = ctx;\n${code}`,
+        + `getCurrentLoopItem, getCurrentLoopIndex, getLoopCount, getCurrentLoopReference, getLoopItems, getLoopAnswer } = ctx;\n`
+        + `const value = ctx.value;\n${code}`,
     );
     fn(ctx);
   } catch (e) {
@@ -183,10 +223,11 @@ export function runScripts(
   for (const script of def.scripts) {
     if (!script.enabled || script.event !== event) continue;
     if (script.scope !== "survey" && script.ref !== opts?.scopeRef) continue;
-    const ctx = createScriptCtx(def, state, opts?.loop ?? null, combined);
-    const r = runScript(script.code, ctx);
-    combined.logs.push(...r.logs.map((l) => `[${script.name}] ${l}`));
-    combined.errors.push(...r.errors);
+    const own: ScriptRunResult = { logs: [], errors: [] };
+    const ctx = createScriptCtx(def, state, opts?.loop ?? null, own);
+    const r = runScript(script.code, ctx, own);
+    combined.logs.push(...own.logs.map((l) => `[${script.name}] ${l}`));
+    combined.errors.push(...own.errors);
     if (r.failed) combined.logs.push(`[${script.name}] ERROR: ${r.failed}`);
   }
   return combined;

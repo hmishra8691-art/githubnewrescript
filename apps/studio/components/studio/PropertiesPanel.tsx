@@ -20,15 +20,20 @@ export function validationKindsFor(qtype: string): ValidationRule["kind"][] {
   if (["numeric", "slider", "nps", "matrix_numeric"].includes(qtype))
     return ["required", "min_value", "max_value", "integer", "custom_expression"];
   if (["open_text", "long_text", "text_list"].includes(qtype))
-    return ["required", "min_length", "max_length", "pattern", "email", "custom_expression"];
+    return ["required", "min_length", "max_length", "pattern", "email", "phone", "custom_expression", "custom_script"];
   if (qtype === "numeric_list")
     return ["required", "min_value", "max_value", "integer", "custom_expression"];
   if (qtype === "allocation")
     return ["required", "sum_equals", "sum_max", "sum_min", "custom_expression"];
-  if (["single_select", "dropdown", "date", "time", "ranking", "image_ranking"].includes(qtype))
-    return ["required", "custom_expression"];
-  if (qtype.startsWith("matrix") || qtype === "composite" || qtype === "custom_table")
-    return ["required", "min_selections", "max_selections", "custom_expression"];
+  if (["date", "datetime"].includes(qtype))
+    return ["required", "date_min", "date_max", "custom_expression", "custom_script"];
+  if (["single_select", "dropdown", "time", "ranking", "image_ranking"].includes(qtype))
+    return ["required", "custom_expression", "custom_script"];
+  if (qtype === "composite" || qtype === "custom_table")
+    return ["required", "min_selections", "max_selections",
+      "column_sum_equals", "column_sum_max", "column_sum_min", "custom_expression", "custom_script"];
+  if (qtype.startsWith("matrix"))
+    return ["required", "min_selections", "max_selections", "custom_expression", "custom_script"];
   return VALIDATION_KINDS.map((k) => k.value);
 }
 
@@ -45,9 +50,28 @@ const VALIDATION_KINDS: { value: ValidationRule["kind"]; label: string; hasValue
   { value: "sum_min", label: "sum ≥", hasValue: true },
   { value: "pattern", label: "regex pattern", hasValue: true },
   { value: "email", label: "email", hasValue: false },
+  { value: "phone", label: "phone number", hasValue: false },
+  { value: "date_min", label: "date on or after", hasValue: true },
+  { value: "date_max", label: "date on or before", hasValue: true },
+  { value: "column_sum_equals", label: "column total =", hasValue: true },
+  { value: "column_sum_max", label: "column total ≤", hasValue: true },
+  { value: "column_sum_min", label: "column total ≥", hasValue: true },
   { value: "integer", label: "whole number", hasValue: false },
   { value: "custom_expression", label: "expression (calc DSL)", hasValue: true },
+  { value: "custom_script", label: "script (by name)", hasValue: true },
 ];
+
+/** What the value box is asking for, per kind — a hint beats a guess. */
+const VALUE_HINT: Partial<Record<ValidationRule["kind"], string>> = {
+  date_min: "2026-01-01, or a variable holding a date",
+  date_max: "2026-12-31, or a variable holding a date",
+  column_sum_equals: "100",
+  column_sum_max: "100",
+  column_sum_min: "0",
+  custom_script: "the script's name",
+  custom_expression: "value > 0",
+  pattern: "^[A-Z]{2}\\d{4}$",
+};
 
 function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question>): void }) {
   const qVariant = resolveVariant(q.variant);
@@ -70,14 +94,45 @@ function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question
             </select>
             {kind?.hasValue && (
               <input className="input grow mono" value={String(v.value ?? "")}
+                placeholder={VALUE_HINT[v.kind] ?? ""}
+                data-testid="validation-value"
                 onChange={(e) => patch({
                   validation: q.validation.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)),
                 })} />
             )}
-            <input className="input grow" placeholder="error message (optional)" value={v.message ?? ""}
+            {/* which column a column-total rule adds up; blank = every column */}
+            {v.kind.startsWith("column_sum") && (
+              <select className="select" style={{ width: 120 }} value={v.ref ?? ""}
+                data-testid="validation-column"
+                title="Which column to total — every column when left blank"
+                onChange={(e) => patch({
+                  validation: q.validation.map((x, j) => (j === i ? { ...x, ref: e.target.value || undefined } : x)),
+                })}>
+                <option value="">every column</option>
+                {q.columns.map((c) => <option key={c.id} value={c.id}>{c.label || c.id}</option>)}
+              </select>
+            )}
+            <input className="input grow" placeholder="message (optional)" value={v.message ?? ""}
               onChange={(e) => patch({
                 validation: q.validation.map((x, j) => (j === i ? { ...x, message: e.target.value || undefined } : x)),
               })} />
+            {/*
+              * Blocks, or only warns. A soft check is how a researcher says
+              * "that is unusual, look again" without making a legitimate
+              * answer impossible to give — the respondent sees it once and
+              * the next click goes through.
+              */}
+            <select className="select" style={{ width: 92 }} value={v.severity ?? "error"}
+              data-testid="validation-severity"
+              title="Blocks the page, or shows a message and lets the respondent continue"
+              onChange={(e) => patch({
+                validation: q.validation.map((x, j) => (j === i
+                  ? { ...x, severity: e.target.value === "warning" ? "warning" as const : undefined }
+                  : x)),
+              })}>
+              <option value="error">blocks</option>
+              <option value="warning">warns</option>
+            </select>
             <button className="btn small danger"
               onClick={() => patch({ validation: q.validation.filter((_, j) => j !== i) })}>×</button>
           </div>

@@ -981,10 +981,17 @@ function runOptions(
     }
   }
 
-  // 9 — piping inside labels
-  options = options.map((o) =>
-    o.label.includes("{{") ? { ...o, label: resolvePiping(o.label, ctx) } : o,
-  );
+  // 9 — piping inside labels AND option images
+  //
+  // The image is as personal as the words beside it: "show each respondent
+  // the pack shot for the brand they named" is an ordinary requirement, and
+  // until the URL was piped there was no way to express it.
+  options = options.map((o) => {
+    let next = o;
+    if (o.label.includes("{{")) next = { ...next, label: resolvePiping(o.label, ctx) };
+    if (o.imageUrl?.includes("{{")) next = { ...next, imageUrl: resolvePiping(o.imageUrl, ctx) };
+    return next;
+  });
 
   if (rec) {
     options.forEach((o, i) => {
@@ -1038,6 +1045,22 @@ function runRows(q: Question, ctx: EvalContext): QuestionRow[] {
   return rows.map((r) =>
     r.label.includes("{{") ? { ...r, label: resolvePiping(r.label, ctx) } : r,
   );
+}
+
+/**
+ * The question's own media, with piping resolved.
+ *
+ * Kept beside `effectiveQuestion` because it answers the same kind of
+ * question — "what does this respondent actually get?" — and because the
+ * renderer reads `q.settings` directly for the stimulus, so there is nowhere
+ * else that every caller already passes through.
+ */
+export function resolveQuestionMedia(
+  q: Question,
+  ctx: EvalContext,
+): { imageUrl?: string; mediaUrl?: string } {
+  const pipe = (u?: string) => (u && u.includes("{{") ? resolvePiping(u, ctx) : u);
+  return { imageUrl: pipe(q.settings.imageUrl), mediaUrl: pipe(q.settings.mediaUrl) };
 }
 
 export function effectiveQuestion(q: Question, ctx: EvalContext): EffectiveQuestionView {
