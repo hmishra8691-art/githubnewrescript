@@ -3,6 +3,7 @@ import React from "react";
 import type { QRProps } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { useRows } from "./shared";
+import { anchor } from "../authoring";
 
 /**
  * slider family renderers — see docs/VARIANT-BATCH.md.
@@ -92,14 +93,14 @@ export function RangeSlider(p: QRProps) {
         />
         <input
           type="range" className="rs-rangeslider-input lo"
-          data-row={loCode} aria-label={`${plain(loRow.label)} (lower bound)`}
+          data-row={loCode} {...anchor("row", loCode)} aria-label={`${plain(loRow.label)} (lower bound)`}
           min={min} max={max} step={step} value={lo}
           disabled={p.q.settings.readOnly}
           onChange={(e) => setLo(Number(e.target.value))}
         />
         <input
           type="range" className="rs-rangeslider-input hi"
-          data-row={hiCode} aria-label={`${plain(hiRow.label)} (upper bound)`}
+          data-row={hiCode} {...anchor("row", hiCode)} aria-label={`${plain(hiRow.label)} (upper bound)`}
           min={min} max={max} step={step} value={hi}
           disabled={p.q.settings.readOnly}
           onChange={(e) => setHi(Number(e.target.value))}
@@ -183,7 +184,7 @@ export function SliderMatrix(p: QRProps) {
       <>
         <input
           type="range" className={`rs-slidermatrix-input ${stored == null ? "untouched" : ""}`}
-          data-row={rc} aria-label={label}
+          data-row={rc} {...anchor("row", rc)} aria-label={label}
           min={min} max={max} step={step} value={shown}
           disabled={p.q.settings.readOnly}
           onChange={(e) => setRow(rc, Number(e.target.value))}
@@ -206,7 +207,7 @@ export function SliderMatrix(p: QRProps) {
         {rows.map((r) => {
           const rc = String(r.code);
           return (
-            <div key={rc} className="rs-slidermatrix-gridrow" data-rowfor={rc}>
+            <div key={rc} className="rs-slidermatrix-gridrow" data-rowfor={rc} {...anchor("row", rc)}>
               <span className="rs-slidermatrix-label" dangerouslySetInnerHTML={{ __html: r.label }} />
               {row(rc, plain(r.label))}
             </div>
@@ -225,7 +226,7 @@ export function SliderMatrix(p: QRProps) {
       {rows.map((r) => {
         const rc = String(r.code);
         return (
-          <div key={rc} className="rs-slidermatrix-item" data-rowfor={rc}>
+          <div key={rc} className="rs-slidermatrix-item" data-rowfor={rc} {...anchor("row", rc)}>
             <div className="rs-slidermatrix-label" dangerouslySetInnerHTML={{ __html: r.label }} />
             <div className="rs-slidermatrix-line">{row(rc, plain(r.label))}</div>
           </div>

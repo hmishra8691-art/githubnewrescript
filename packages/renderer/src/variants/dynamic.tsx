@@ -5,6 +5,7 @@ import type { QRProps } from "../QuestionRenderer";
 import { ctxOf } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { activate, colsClass, useChoice } from "./shared";
+import { anchor } from "../authoring";
 
 /**
  * Dynamic / Adaptive family — Adaptive Question / Scale.
@@ -68,7 +69,7 @@ export function AdaptiveQuestion(p: QRProps) {
           const sel = isSelected(o);
           return (
             <div key={String(o.code)} className={`rs-option ${sel ? "selected" : ""}`}
-              role="radio" aria-checked={sel} tabIndex={0} data-code={String(o.code)}
+              role="radio" aria-checked={sel} tabIndex={0} data-code={String(o.code)} {...anchor("option", String(o.code))}
               onClick={() => pick(o)} onKeyDown={activate(() => pick(o))}>
               <span className={`rs-adaptive-mark ${sel ? "on" : ""}`} aria-hidden />
               <span className="lbl" dangerouslySetInnerHTML={{ __html: o.label }} />

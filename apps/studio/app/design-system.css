@@ -240,6 +240,9 @@ input[type="range"] { accent-color: var(--c-primary); }
 .crumbs .here { color: var(--c-text); font-weight: 600; }
 
 .ide-body { display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--rightpanel-w); min-height: 0; }
+/* the Live Canvas brings its own contextual panel, so the shell gives it the
+   whole width rather than leaving an empty properties column beside it */
+.ide-body:not(:has(> .rightpanel)) { grid-template-columns: var(--sidebar-w) minmax(0, 1fr); }
 @media (max-width: 1500px) { .ide-body { grid-template-columns: 216px minmax(0, 1fr) 390px; } }
 @media (max-width: 1180px) { .ide-body { grid-template-columns: 200px minmax(0, 1fr) 340px; } }
 

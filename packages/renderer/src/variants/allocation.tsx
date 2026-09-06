@@ -3,6 +3,7 @@ import React from "react";
 import type { QRProps } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { useOptions } from "./shared";
+import { anchor } from "../authoring";
 
 /**
  * allocation family renderers — see docs/VARIANT-BATCH.md.
@@ -62,11 +63,11 @@ export function SliderAllocation(p: QRProps) {
         const code = String(o.code);
         const v = Number(vals[code]) || 0;
         return (
-          <div key={code} className="rs-sliderallocation-row" data-rowfor={code}>
+          <div key={code} className="rs-sliderallocation-row" data-rowfor={code} {...anchor("row", code)}>
             <span className="rs-sliderallocation-label" dangerouslySetInnerHTML={{ __html: o.label }} />
             <input
               type="range" className="rs-sliderallocation-input"
-              data-code={code} aria-label={plain(o.label)}
+              data-code={code} {...anchor("option", code)} aria-label={plain(o.label)}
               min={0} max={max} step={step} value={v}
               disabled={p.q.settings.readOnly}
               onChange={(e) => set(code, Number(e.target.value))}

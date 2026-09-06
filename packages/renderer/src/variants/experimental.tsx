@@ -6,6 +6,7 @@ import { SingleSelect } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { SafeImage, MediaEmbed } from "../Media";
 import { getSide, rng, seedFor, setSide, useOptions, useRows } from "./shared";
+import { anchor } from "../authoring";
 
 /**
  * Experimental / Behavioral family.
@@ -138,7 +139,7 @@ export function ReactionTime(p: QRProps) {
     <div className="rs-iat" data-testid="iat" data-phase={phase}>
       <div className="rs-iat-cats">
         {options.map((o, i) => (
-          <button key={String(o.code)} type="button" className="rs-iat-cat" data-code={String(o.code)}
+          <button key={String(o.code)} type="button" className="rs-iat-cat" data-code={String(o.code)} {...anchor("option", String(o.code))}
             disabled={!current || phase !== "stimulus"}
             onClick={() => respond(o.code)}>
             <span className="rs-iat-key" aria-hidden>{hints[i]}</span>
@@ -156,7 +157,7 @@ export function ReactionTime(p: QRProps) {
                 const rc = String(r.code);
                 const o = options.find((x) => String(x.code) === String(vals[rc]));
                 return (
-                  <span key={rc} className="rs-iat-chip" data-row={rc}>
+                  <span key={rc} className="rs-iat-chip" data-row={rc} {...anchor("row", rc)}>
                     {r.label.replace(/<[^>]*>/g, "")} → {o?.label.replace(/<[^>]*>/g, "") ?? "?"}
                     {nonLive && rts[rc] != null && <em> {rts[rc]}ms</em>}
                   </span>
@@ -167,7 +168,7 @@ export function ReactionTime(p: QRProps) {
         ) : phase === "fixation" ? (
           <div className="rs-iat-fixation" data-testid="iat-fixation" aria-hidden>+</div>
         ) : (
-          <div className="rs-iat-stim" data-testid="iat-stimulus" data-row={String(current.code)}>
+          <div className="rs-iat-stim" data-testid="iat-stimulus" data-row={String(current.code)} {...anchor("row", String(current.code))}>
             {current.meta?.image ? (
               // eslint-disable-next-line @next/next/no-img-element
               <SafeImage src={String(current.meta.image)} alt={current.label.replace(/<[^>]*>/g, "")} />

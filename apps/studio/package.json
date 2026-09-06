@@ -15,6 +15,7 @@
     "@rescript/engine": "workspace:*",
     "@rescript/exporters": "workspace:*",
     "@rescript/quality": "workspace:*",
+    "@rescript/renderer": "workspace:*",
     "@rescript/schema": "workspace:*",
     "@rescript/templates": "workspace:*",
     "@supabase/supabase-js": "^2.45.4",

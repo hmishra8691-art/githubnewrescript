@@ -3,6 +3,7 @@ import React from "react";
 import type { QRProps } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { useOptions, useRows, activate, colsClass, usePointerDrag, dropTargetAt } from "./shared";
+import { anchor } from "../authoring";
 
 /**
  * Drag & Drop family — three ways to answer with a pointer, each storing
@@ -121,7 +122,7 @@ export function DragBuckets(p: QRProps) {
       key={rc}
       type="button"
       className={`rs-dd-chip ${held === rc ? "held" : ""} ${inBucket ? "placed" : ""}`}
-      data-row={rc}
+      data-row={rc} {...anchor("row", rc)}
       aria-pressed={held === rc}
       {...dragProps(rc)}
       // the pool and the buckets have their own click handlers; a tap on a
@@ -154,7 +155,7 @@ export function DragBuckets(p: QRProps) {
           const mine = rows.filter((r) => String(vals[String(r.code)]) === code);
           return (
             <div key={code} className={`rs-dd-bucket ${held ? "armed" : ""}`}
-              data-drop={`bucket-${code}`} data-code={code}
+              data-drop={`bucket-${code}`} data-code={code} {...anchor("option", code)}
               role="button" tabIndex={0}
               aria-label={`Bucket ${plain(o.label)}`}
               onClick={() => { if (held) { assign(held, o.code); setHeld(null); } }}
@@ -310,7 +311,7 @@ export function DragScale(p: QRProps) {
             return (
               <button key={rc} type="button"
                 className="rs-dd-chip on-scale"
-                data-row={rc} data-value={x.v}
+                data-row={rc} {...anchor("row", rc)} data-value={x.v}
                 aria-label={`${plain(x.r.label)}: ${x.v}. Arrow keys to move, Enter to remove.`}
                 style={{
                   left: `${x.pct}%`,
@@ -353,7 +354,7 @@ export function DragScale(p: QRProps) {
             return (
               <button key={rc} type="button"
                 className={`rs-dd-chip ${held === rc ? "held" : ""}`}
-                data-row={rc} aria-pressed={held === rc}
+                data-row={rc} {...anchor("row", rc)} aria-pressed={held === rc}
                 aria-label={`${plain(r.label)}: not placed. Arrow keys to place on the scale.`}
                 {...dragProps(rc)}
                 onClick={(e) => e.stopPropagation()}
@@ -459,7 +460,7 @@ export function ChipAllocation(p: QRProps) {
           const code = String(o.code);
           const n = chipsOf(code);
           return (
-            <div key={code} className={`rs-ca-item ${n > 0 ? "filled" : ""}`} data-drop={`item-${code}`} data-code={code}>
+            <div key={code} className={`rs-ca-item ${n > 0 ? "filled" : ""}`} data-drop={`item-${code}`} data-code={code} {...anchor("option", code)}>
               <div className="rs-ca-item-head">
                 <span className="rs-ca-item-label" dangerouslySetInnerHTML={{ __html: o.label }} />
                 <span className="rs-ca-item-val" data-testid={`chipalloc-value-${code}`}>

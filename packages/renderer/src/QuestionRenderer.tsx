@@ -16,6 +16,7 @@ import {
 } from "@rescript/engine";
 import { variantRenderers } from "./variants/registry";
 import { MediaEmbed, SafeImage } from "./Media";
+import { anchor, cellAnchor } from "./authoring";
 // side-effect: every family registers its renderers
 import "./variants";
 
@@ -93,7 +94,7 @@ export function SingleSelect(p: QRProps) {
       {filtered.map((o) => {
         const sel = String(p.value) === String(o.code);
         return (
-          <label key={String(o.code)} className={`rs-option ${sel ? "selected" : ""} ${o.meta?.disabled ? "disabled" : ""}`}>
+          <label key={String(o.code)} className={`rs-option ${sel ? "selected" : ""} ${o.meta?.disabled ? "disabled" : ""}`} {...anchor("option", o.code)}>
             <input
               type="radio"
               name={p.q.id}
@@ -137,7 +138,7 @@ export function MultiSelect(p: QRProps) {
           p.q.settings.maxSelections != null &&
           vals.length >= p.q.settings.maxSelections;
         return (
-          <label key={String(o.code)}
+          <label key={String(o.code)} {...anchor("option", o.code)}
             className={`rs-option ${sel ? "selected" : ""} ${o.meta?.disabled ? "disabled" : ""}`}
             title={atMax ? `You have already chosen ${p.q.settings.maxSelections}.` : undefined}
             style={atMax ? { opacity: 0.5 } : undefined}>
@@ -180,7 +181,7 @@ export function Dropdown(p: QRProps) {
     >
       <option value="">— Select —</option>
       {options.map((o) => (
-        <option key={String(o.code)} value={String(o.code)}>{o.label.replace(/<[^>]*>/g, "")}</option>
+        <option key={String(o.code)} value={String(o.code)} {...anchor("option", o.code)}>{o.label.replace(/<[^>]*>/g, "")}</option>
       ))}
     </select>
     {otherSelected && (
@@ -256,7 +257,7 @@ export function MultiDropdown(p: QRProps) {
           </span>
         )}
         {selectedOpts.map((o) => (
-          <span key={String(o.code)} className="rs-msd-chip">
+          <span key={String(o.code)} className="rs-msd-chip" {...anchor("option", o.code)}>
             {plain(o.label)}
             <button
               type="button"
@@ -301,6 +302,7 @@ export function MultiDropdown(p: QRProps) {
               return (
                 <div
                   key={String(o.code)}
+                  {...anchor("option", o.code)}
                   className={`rs-msd-item ${disabled ? "disabled" : ""}`}
                   role="option"
                   aria-selected={sel}
@@ -488,7 +490,7 @@ export function ListInput(p: QRProps & { numeric: boolean }) {
           const v = vals[rc];
           const err = p.errors.find((e) => e.startsWith(row.label.replace(/<[^>]*>/g, "")));
           return (
-            <div key={rc}>
+            <div key={rc} {...anchor("row", rc)}>
               <div className="rs-field-row">
                 <span className="flab">
                   <span dangerouslySetInnerHTML={{ __html: row.label }} />
@@ -585,6 +587,7 @@ export function Nps(p: QRProps) {
           <button
             key={n}
             type="button"
+            {...anchor("scalepoint", n)}
             className={String(p.value) === String(n) ? "selected" : ""}
             onClick={() => p.onChange(n)}
           >
@@ -662,7 +665,7 @@ export function Ranking(p: QRProps) {
         const o = options.find((x) => String(x.code) === String(code));
         if (!o) return null;
         return (
-          <div key={String(code)} className="rs-rank-item">
+          <div key={String(code)} className="rs-rank-item" {...anchor("option", code)}>
             <span className="rs-rank-num">{i + 1}</span>
             <span dangerouslySetInnerHTML={{ __html: o.label }} />
             <span className="rs-rank-btns">
@@ -676,6 +679,7 @@ export function Ranking(p: QRProps) {
       {unranked.map((o) => (
         <div
           key={String(o.code)}
+          {...anchor("option", o.code)}
           className={`rs-rank-item ${full ? "rs-rank-locked" : ""}`}
           style={{ cursor: full ? "not-allowed" : "pointer", opacity: full ? 0.45 : 0.85 }}
           aria-disabled={full}
@@ -701,7 +705,7 @@ export function Allocation(p: QRProps) {
   return (
     <div style={{ maxWidth: 460 }}>
       {options.map((o) => (
-        <div key={String(o.code)} className="rs-alloc-row">
+        <div key={String(o.code)} className="rs-alloc-row" {...anchor("option", o.code)}>
           <span className="lbl" dangerouslySetInnerHTML={{ __html: o.label }} />
           <NumberField
             min={0}
@@ -740,7 +744,7 @@ export function ImageSelect(p: QRProps & { multi?: boolean; ranking?: boolean })
         const idx = vals.findIndex((v) => String(v) === String(o.code));
         const sel = idx >= 0;
         return (
-          <div key={String(o.code)} className={`rs-imgopt ${sel ? "selected" : ""}`} onClick={() => click(o)}>
+          <div key={String(o.code)} className={`rs-imgopt ${sel ? "selected" : ""}`} onClick={() => click(o)} {...anchor("option", o.code)}>
             {o.imageUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <SafeImage src={o.imageUrl} alt={o.label.replace(/<[^>]*>/g, "")} />
@@ -774,7 +778,7 @@ export function Matrix(p: QRProps) {
             <th className="rowlabel"></th>
             {type === "matrix_numeric" || type === "matrix_text" || type === "matrix_dropdown"
               ? <th>{view.columns[0]?.label ?? "Answer"}</th>
-              : colOpts.map((o) => <th key={String(o.code)} dangerouslySetInnerHTML={{ __html: o.label }} />)}
+              : colOpts.map((o) => <th key={String(o.code)} {...anchor("column", o.code)} dangerouslySetInnerHTML={{ __html: o.label }} />)}
           </tr>
         </thead>
         <tbody>
@@ -782,11 +786,11 @@ export function Matrix(p: QRProps) {
             const rc = String(row.code);
             const rowVal = vals[rc];
             return (
-              <tr key={rc}>
-                <td className="rowlabel" dangerouslySetInnerHTML={{ __html: row.label }} />
+              <tr key={rc} {...anchor("row", rc)}>
+                <td className="rowlabel" {...anchor("row", rc)} dangerouslySetInnerHTML={{ __html: row.label }} />
                 {type === "matrix_single" &&
                   colOpts.map((o) => (
-                    <td key={String(o.code)}>
+                    <td key={String(o.code)} {...cellAnchor(rc, o.code)}>
                       <input type="radio" name={`${p.q.id}_${rc}`}
                         checked={String(rowVal) === String(o.code)}
                         onChange={() => setRow(rc, o.code)} />
@@ -797,7 +801,7 @@ export function Matrix(p: QRProps) {
                     const arr = (Array.isArray(rowVal) ? rowVal : []) as (string | number)[];
                     const on = arr.some((v) => String(v) === String(o.code));
                     return (
-                      <td key={String(o.code)}>
+                      <td key={String(o.code)} {...cellAnchor(rc, o.code)}>
                         <input type="checkbox" checked={on}
                           onChange={() => setRow(rc, toggleMultiValue(arr, o.code, colOpts))} />
                       </td>
@@ -823,7 +827,7 @@ export function Matrix(p: QRProps) {
                       onChange={(e) => setRow(rc, e.target.value || null)}>
                       <option value="">—</option>
                       {colOpts.map((o) => (
-                        <option key={String(o.code)} value={String(o.code)}>{o.label.replace(/<[^>]*>/g, "")}</option>
+                        <option key={String(o.code)} value={String(o.code)} {...anchor("option", o.code)}>{o.label.replace(/<[^>]*>/g, "")}</option>
                       ))}
                     </select>
                   </td>
@@ -887,7 +891,7 @@ function CompositeCell({
           onChange={(e) => onChange(e.target.value || null)}>
           <option value="">—</option>
           {col.options.map((o) => (
-            <option key={String(o.code)} value={String(o.code)}>{o.label.replace(/<[^>]*>/g, "")}</option>
+            <option key={String(o.code)} value={String(o.code)} {...anchor("option", o.code)}>{o.label.replace(/<[^>]*>/g, "")}</option>
           ))}
         </select>
       );
@@ -897,7 +901,7 @@ function CompositeCell({
           value={Array.isArray(value) ? (value as unknown[]).map(String) : []}
           onChange={(e) => onChange(Array.from(e.target.selectedOptions).map((o) => o.value))}>
           {col.options.map((o) => (
-            <option key={String(o.code)} value={String(o.code)}>{o.label.replace(/<[^>]*>/g, "")}</option>
+            <option key={String(o.code)} value={String(o.code)} {...anchor("option", o.code)}>{o.label.replace(/<[^>]*>/g, "")}</option>
           ))}
         </select>
       );
@@ -939,17 +943,17 @@ export function Composite(p: QRProps) {
           <tr>
             <th className="rowlabel"></th>
             {view.columns.map((c) => (
-              <th key={c.id} style={c.width ? { width: c.width } : undefined}
+              <th key={c.id} {...anchor("column", c.id)} style={c.width ? { width: c.width } : undefined}
                 dangerouslySetInnerHTML={{ __html: c.label }} />
             ))}
           </tr>
         </thead>
         <tbody>
           {view.rows.map((row) => (
-            <tr key={String(row.code)}>
+            <tr key={String(row.code)} {...anchor("row", row.code)}>
               <td className="rowlabel" dangerouslySetInnerHTML={{ __html: row.label }} />
               {view.columns.map((c) => (
-                <td key={c.id}>
+                <td key={c.id} {...cellAnchor(String(row.code), c.id)}>
                   <CompositeCell col={c} p={p}
                     value={vals[String(row.code)]?.[c.id]}
                     onChange={(v) => setCell(String(row.code), c.id, v)} />
@@ -1065,7 +1069,7 @@ export function ChoiceButtons(p: QRProps & { multi: boolean }) {
         {filtered.map((o) => {
           const sel = vals.some((v) => String(v) === String(o.code));
           return (
-            <button key={String(o.code)} type="button"
+            <button key={String(o.code)} type="button" {...anchor("option", o.code)}
               className={`rs-choicebtn ${sel ? "selected" : ""}`}
               aria-pressed={sel}
               onClick={() => pick(o)}>
@@ -1097,7 +1101,7 @@ export function ChoiceCards(p: QRProps & { multi: boolean }) {
         const sel = vals.some((v) => String(v) === String(o.code));
         const desc = (o.meta?.description as string) ?? "";
         return (
-          <div key={String(o.code)}
+          <div key={String(o.code)} {...anchor("option", o.code)}
             className={`rs-cardopt ${sel ? "selected" : ""}`}
             role={p.multi ? "checkbox" : "radio"}
             aria-checked={sel}
@@ -1186,7 +1190,7 @@ export function EmojiRating(p: QRProps) {
       {faces.map((e, i) => {
         const score = min + i;
         return (
-          <button key={score} type="button"
+          <button key={score} type="button" {...anchor("scalepoint", score)}
             className={val === score ? "on" : ""}
             aria-label={`${score} of ${max}`}
             title={String(score)}
@@ -1247,7 +1251,7 @@ export function SearchableSingle(p: QRProps) {
           <div className="rs-msd-list" role="listbox">
             {filtered.length === 0 && <div style={{ padding: 8, color: "var(--rs-subtle)" }}>No matches</div>}
             {filtered.map((o) => (
-              <div key={String(o.code)}
+              <div key={String(o.code)} {...anchor("option", o.code)}
                 className="rs-msd-item"
                 role="option"
                 aria-selected={String(o.code) === String(p.value)}
@@ -1431,7 +1435,7 @@ export function DragRank(p: QRProps) {
         const o = options.find((x) => String(x.code) === String(code));
         if (!o) return null;
         return (
-          <div key={String(code)}
+          <div key={String(code)} {...anchor("option", code)}
             className={`rs-rank-item rs-dragrow ${overIdx === i ? "dragover" : ""} ${dragIdx === i ? "dragging" : ""}`}
             draggable
             onDragStart={(e) => { setDragIdx(i); e.dataTransfer.effectAllowed = "move"; }}
@@ -1476,11 +1480,11 @@ export function SemanticDifferential(p: QRProps) {
             const rc = String(row.code);
             const [left, right] = row.label.split("|").map((x) => x.trim());
             return (
-              <tr key={rc}>
-                <td className="rowlabel" style={{ textAlign: "right" }}
+              <tr key={rc} {...anchor("row", rc)}>
+                <td className="rowlabel" style={{ textAlign: "right" }} {...anchor("row", rc)}
                   dangerouslySetInnerHTML={{ __html: left ?? row.label }} />
                 {view.options.map((o) => (
-                  <td key={String(o.code)}>
+                  <td key={String(o.code)} {...cellAnchor(rc, o.code)}>
                     <label style={{ display: "block", cursor: "pointer", padding: 2 }} title={o.label.replace(/<[^>]*>/g, "")}>
                       <input type="radio" name={`${p.q.id}_${rc}`}
                         checked={String(vals[rc]) === String(o.code)}
@@ -1601,7 +1605,7 @@ export function CompareImages(p: QRProps) {
       {options.map((o) => {
         const sel = String(p.value) === String(o.code);
         return (
-          <div key={String(o.code)}
+          <div key={String(o.code)} {...anchor("option", o.code)}
             className={`rs-cardopt rs-compare-card ${sel ? "selected" : ""}`}
             role="radio" aria-checked={sel} tabIndex={0}
             onClick={() => p.onChange(sel ? null : o.code)}
@@ -1638,7 +1642,7 @@ export function Categorize(p: QRProps) {
           const rc = String(row.code);
           const img = (row.meta?.image as string) ?? undefined;
           return (
-            <div key={rc} className={`rs-catcard ${vals[rc] !== undefined ? "assigned" : ""}`}>
+            <div key={rc} {...anchor("row", rc)} className={`rs-catcard ${vals[rc] !== undefined ? "assigned" : ""}`}>
               {img && (
                 // eslint-disable-next-line @next/next/no-img-element
                 <SafeImage src={img} alt=""/>
@@ -1648,7 +1652,7 @@ export function Categorize(p: QRProps) {
                 {view.options.map((o) => {
                   const sel = String(vals[rc]) === String(o.code);
                   return (
-                    <button key={String(o.code)} type="button"
+                    <button key={String(o.code)} type="button" {...anchor("option", o.code)}
                       className={`rs-bucket ${sel ? "on" : ""}`}
                       onClick={() => setRow(rc, sel ? undefined : o.code)}>
                       <span dangerouslySetInnerHTML={{ __html: o.label }} />
@@ -1780,23 +1784,23 @@ export function QuestionRenderer(p: QRProps) {
     case "custom_component": body = <CustomComponent {...p} />; break;
     case "html":
       return (
-        <div className="rs-card" data-qid={p.q.id}>
-          <div dangerouslySetInnerHTML={{ __html: resolvePiping(p.q.customHtml ?? p.q.text, ctx) }} />
+        <div className="rs-card" data-qid={p.q.id} {...anchor("question", p.q.id)}>
+          <div {...anchor("text")} dangerouslySetInnerHTML={{ __html: resolvePiping(p.q.customHtml ?? p.q.text, ctx) }} />
         </div>
       );
     default: body = <TextInput {...p} />;
   }
 
   return (
-    <div className="rs-card" data-qid={p.q.id}>
+    <div className="rs-card" data-qid={p.q.id} {...anchor("question", p.q.id)}>
       {p.q.customCss && <style dangerouslySetInnerHTML={{ __html: p.q.customCss }} />}
-      <p className="rs-qtext">
+      <p className="rs-qtext" {...anchor("text")}>
         <span dangerouslySetInnerHTML={{ __html: text }} />
         {p.q.required && <span className="rs-required">*</span>}
       </p>
-      {instruction && <p className="rs-qinstruction" dangerouslySetInnerHTML={{ __html: instruction }} />}
+      {instruction && <p className="rs-qinstruction" {...anchor("instruction")} dangerouslySetInnerHTML={{ __html: instruction }} />}
       {p.q.settings.mediaUrl && !MEDIA_OWNING_RENDERERS.has(variantDef?.renderer ?? `base:${p.q.type}`) && (
-        <div className="rs-qmedia" data-testid="rs-qmedia">
+        <div className="rs-qmedia" data-testid="rs-qmedia" {...anchor("media")}>
           <MediaEmbed url={p.q.settings.mediaUrl} title={p.q.text.replace(/<[^>]*>/g, "")} />
         </div>
       )}

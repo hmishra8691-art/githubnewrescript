@@ -4,6 +4,7 @@ import type { Option } from "@rescript/schema";
 import type { QRProps } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { useOptions, useRows } from "./shared";
+import { anchor } from "../authoring";
 
 /**
  * Swipe / Gesture family — card decks that store an ordinary single-select
@@ -107,7 +108,7 @@ function DeckSummary({ p, testid }: { p: QRProps; testid: string }) {
         const rc = String(r.code);
         const o = options.find((x) => String(x.code) === String(vals[rc]));
         return (
-          <button key={rc} type="button" className="rs-swipex-chip" data-row={rc}
+          <button key={rc} type="button" className="rs-swipex-chip" data-row={rc} {...anchor("row", rc)}
             title="Judge this card again"
             onClick={() => { const next = { ...vals }; delete next[rc]; p.onChange(next); }}>
             <span dangerouslySetInnerHTML={{ __html: r.label }} />
@@ -157,7 +158,7 @@ export function SwipeRate(p: QRProps) {
     <div className="rs-swipex-scale" role="group" aria-label="Rating">
       {options.map((o) => (
         <button key={String(o.code)} type="button" className="rs-swipex-step"
-          data-code={String(o.code)}
+          data-code={String(o.code)} {...anchor("option", String(o.code))}
           disabled={rowCode == null}
           aria-label={plain(o.label)}
           onClick={() => rowCode && judge(rowCode, o.code)}>
@@ -175,7 +176,7 @@ export function SwipeRate(p: QRProps) {
       {current ? (
         <div className="rs-swipex-stack">
           <div className="rs-swipex-card"
-            data-row={String(current.code)}
+            data-row={String(current.code)} {...anchor("row", String(current.code))}
             {...swipeProps}
             style={{
               ...swipeProps.style,
@@ -248,7 +249,7 @@ export function Swipe4(p: QRProps) {
     if (!o) return <span className="rs-sw4-arrow empty" aria-hidden />;
     return (
       <button type="button" className={`rs-sw4-arrow ${d} ${activeDir === d ? "active" : ""}`}
-        data-dir={d} data-code={String(o.code)} data-testid={`swipe4-${d}`}
+        data-dir={d} data-code={String(o.code)} {...anchor("option", String(o.code))} data-testid={`swipe4-${d}`}
         disabled={!current}
         aria-label={`${plain(o.label)} (swipe ${d})`}
         onClick={() => current && judge(String(current.code), o.code)}>
@@ -269,7 +270,7 @@ export function Swipe4(p: QRProps) {
           <div className="rs-sw4-left">{arrow("left")}</div>
           <div className="rs-sw4-mid">
             <div className="rs-swipex-card"
-              data-row={String(current.code)}
+              data-row={String(current.code)} {...anchor("row", String(current.code))}
               {...swipeProps}
               style={{
                 ...swipeProps.style,

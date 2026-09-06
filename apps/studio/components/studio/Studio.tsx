@@ -5,6 +5,7 @@ import { StudioProvider, useStudio } from "./store";
 import { openPreview, pushPreview, previewWindowOpen, setPreviewDefinition, setPreviewRevision } from "./previewWindow";
 import { ExportDialog } from "./ExportDialog";
 import { QuestionsPanel } from "./QuestionsPanel";
+import { CanvasPanel } from "../canvas/CanvasPanel";
 import { PropertiesPanel, SurveySettings } from "./PropertiesPanel";
 import { FlowPanel } from "./FlowPanel";
 import { LogicPanel, CalcPanel } from "./LogicPanel";
@@ -26,7 +27,7 @@ import { runtimeBaseUrl } from "@/lib/runtime-url";
 import { Icon, type IconName } from "@/components/ui/Icon";
 
 type Tab =
-  | "questions" | "flow" | "logic" | "variables" | "calculations"
+  | "questions" | "canvas" | "flow" | "logic" | "variables" | "calculations"
   | "quotas" | "listfill" | "designs" | "branding" | "scripts" | "data" | "versions" | "json"
   | "collaborators" | "notes" | "activity"
   | "settings";
@@ -39,7 +40,7 @@ type Tab =
  * are the point of the role, not a loophole.
  */
 const EDITING_TABS = new Set<Tab>([
-  "questions", "settings", "flow", "logic", "variables", "calculations",
+  "questions", "canvas", "settings", "flow", "logic", "variables", "calculations",
   "quotas", "listfill", "designs", "branding", "scripts", "json",
 ]);
 
@@ -51,6 +52,10 @@ const EDITING_TABS = new Set<Tab>([
  */
 const NAV: { key: Tab; label: string; icon: IconName; group: string }[] = [
   { key: "questions", label: "Questions", icon: "questions", group: "Programming" },
+  // the Live Question Canvas: the same questions, programmed while looking at
+  // them. Additive — the Questions tab above is unchanged and still the place
+  // for blocks, pages and bulk editing.
+  { key: "canvas", label: "Live Canvas", icon: "sparkle", group: "Programming" },
   { key: "settings", label: "Survey Settings", icon: "settings", group: "Programming" },
   { key: "flow", label: "Survey Flow", icon: "flow", group: "Programming" },
   { key: "logic", label: "Logic", icon: "logic", group: "Programming" },
@@ -689,6 +694,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
             />
           )}
           {tab === "questions" && <QuestionsPanel />}
+          {tab === "canvas" && <CanvasPanel />}
           {tab === "settings" && (
             <div style={{ maxWidth: 620 }}>
               <h2 style={{ margin: "0 0 14px", fontSize: 17 }}>Survey settings</h2>
@@ -722,9 +728,15 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
             </>
           )}
         </main>
-        <aside className="rightpanel">
-          <PropertiesPanel />
-        </aside>
+        {/* The Canvas tab carries its own contextual panel — the properties it
+            shows depend on which ELEMENT is selected, not just which question —
+            so the question-level panel would be a second, conflicting answer to
+            the same question. Every other tab is untouched. */}
+        {tab !== "canvas" && (
+          <aside className="rightpanel">
+            <PropertiesPanel />
+          </aside>
+        )}
       </div>
     </div>
   );

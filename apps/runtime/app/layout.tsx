@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import "@rescript/renderer/questions.css";
 import "./globals.css";
 
 export const metadata: Metadata = {

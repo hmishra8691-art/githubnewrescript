@@ -4,6 +4,7 @@ import type { QRProps } from "../QuestionRenderer";
 import { SingleSelect } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { activate, getSide, metaText, rng, seedFor, setSide, useOptions, useRows } from "./shared";
+import { anchor } from "../authoring";
 
 /**
  * Gamified / Assessment family — Quiz, Timed Question, Matching.
@@ -57,7 +58,7 @@ export function Quiz(p: QRProps) {
           ].filter(Boolean).join(" ");
           const explanation = metaText(o, "explanation");
           return (
-            <div key={code} className={cls} data-code={code}
+            <div key={code} className={cls} data-code={code} {...anchor("option", code)}
               role="radio" aria-checked={sel} aria-disabled={locked}
               tabIndex={locked ? -1 : 0}
               onClick={() => pick(o.code)} onKeyDown={activate(() => pick(o.code))}>
@@ -309,7 +310,7 @@ export function Matching(p: QRProps) {
             const rowAnswer = r.meta?.answer;
             const ok = reveal ? String(rowAnswer) === answers.get(rc) : null;
             return (
-              <div key={rc} data-row={rc}
+              <div key={rc} data-row={rc} {...anchor("row", rc)}
                 className={`rs-matching-item left ${on ? "matched" : ""} ${activeRow === rc ? "active" : ""} ${ok == null ? "" : ok ? "ok" : "bad"}`}
                 role="button" aria-pressed={activeRow === rc} tabIndex={0}
                 onClick={() => clickRow(rc)} onKeyDown={activate(() => clickRow(rc))}>
@@ -324,7 +325,7 @@ export function Matching(p: QRProps) {
             const code = String(o.code);
             const owner = takenBy.get(code);
             return (
-              <div key={code} data-code={code}
+              <div key={code} data-code={code} {...anchor("option", code)}
                 className={`rs-matching-item rcol ${owner ? "matched" : ""}`}
                 role="button" aria-pressed={!!owner} tabIndex={0}
                 onClick={() => clickOption(code)} onKeyDown={activate(() => clickOption(code))}>

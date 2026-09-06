@@ -7,6 +7,7 @@ import { MediaEmbed } from "../Media";
 import { resolveMediaUrl } from "@rescript/engine";
 import { useOptions } from "./shared";
 import { uploadFile, liveSessionId, filesOf, commitFiles, fmtSize, tooBig } from "./upload";
+import { anchor } from "../authoring";
 
 /**
  * Video / Audio family: Video Rating, Video Hotspot / Timeline, Watch-Time
@@ -208,7 +209,7 @@ export function VideoTimeline(p: QRProps) {
             style={{ left: `${Math.min(100, (m.t / span) * 100)}%` }}
             data-mark={i}
             data-t={m.t}
-            data-code={m.code == null ? "" : String(m.code)}
+            data-code={m.code == null ? "" : String(m.code)} {...anchor("option", m.code == null ? "" : String(m.code))}
             title={`${labelOf(m)} at ${mmss(m.t)} — click to jump here`}
             aria-label={`${labelOf(m)} at ${mmss(m.t)} — jump here`}
             onClick={() => seek(m.t)}>
@@ -228,7 +229,7 @@ export function VideoTimeline(p: QRProps) {
           options.map((o) => (
             <button key={String(o.code)} type="button"
               className="rs-tl-opt" disabled={ro}
-              data-code={String(o.code)}
+              data-code={String(o.code)} {...anchor("option", String(o.code))}
               onClick={() => add(o.code)}>
               <span dangerouslySetInnerHTML={{ __html: o.label }} />
             </button>
@@ -239,7 +240,7 @@ export function VideoTimeline(p: QRProps) {
       {marks.length > 0 && (
         <ul className="rs-tl-list" data-testid="timeline-list">
           {marks.map((m, i) => (
-            <li key={`${m.t}-${i}`} data-row={i}>
+            <li key={`${m.t}-${i}`} data-row={i} {...anchor("row", i)}>
               <button type="button" className="rs-tl-jump" onClick={() => seek(m.t)}>{mmss(m.t)}</button>
               <span className="rs-tl-label">{labelOf(m)}</span>
               <button type="button" className="rs-tl-x" data-testid={`timeline-remove-${i}`}

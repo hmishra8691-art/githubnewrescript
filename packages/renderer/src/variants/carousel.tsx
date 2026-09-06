@@ -4,6 +4,7 @@ import type { QRProps } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { SafeImage, MediaEmbed } from "../Media";
 import { useOptions, useRows, activate, metaText } from "./shared";
+import { anchor } from "../authoring";
 
 /**
  * Carousel family.
@@ -82,7 +83,7 @@ export function CarouselJudge(p: QRProps) {
       <div className="rs-carousel-row">
         <button type="button" className="rs-carousel-nav" disabled={i === 0}
           onClick={() => setIdx(i - 1)} aria-label="Previous">‹</button>
-        <div className="rs-judge-card" data-row={rc}>
+        <div className="rs-judge-card" data-row={rc} {...anchor("row", rc)}>
           {image && (
             // eslint-disable-next-line @next/next/no-img-element
             <SafeImage className="rs-judge-img" src={image} alt="" draggable={false} />
@@ -101,7 +102,7 @@ export function CarouselJudge(p: QRProps) {
                   <button key={String(o.code)} type="button"
                     className={`rs-judge-btn ${on ? "on" : ""}`}
                     role="radio" aria-checked={on}
-                    data-row={rc} data-code={String(o.code)}
+                    data-row={rc} {...anchor("row", rc)} data-code={String(o.code)} {...anchor("option", String(o.code))}
                     onClick={() => judge(on ? null : o.code, !on)}>
                     <span dangerouslySetInnerHTML={{ __html: o.label }} />
                   </button>
@@ -114,18 +115,18 @@ export function CarouselJudge(p: QRProps) {
             <div className="rs-judge-slider">
               <span className="rs-judge-end">{p.q.settings.sliderLeftLabel ?? min}</span>
               <input type="range" min={min} max={max} step={p.q.settings.step ?? 1}
-                data-row={rc} data-testid={`judge-slider-${rc}`}
+                data-row={rc} {...anchor("row", rc)} data-testid={`judge-slider-${rc}`}
                 aria-label={`Your rating of ${row.label.replace(/<[^>]*>/g, "")}`}
                 value={unjudged(value) ? Math.round((min + max) / 2) : Number(value)}
                 onChange={(e) => judge(Number(e.target.value), false)} />
               <span className="rs-judge-end">{p.q.settings.sliderRightLabel ?? max}</span>
-              <span className="rs-judge-val" data-row={rc}>{unjudged(value) ? "—" : String(value)}</span>
+              <span className="rs-judge-val" data-row={rc} {...anchor("row", rc)}>{unjudged(value) ? "—" : String(value)}</span>
             </div>
           )}
 
           {mode === "text" && (
             <textarea className="rs-input rs-judge-text" rows={3}
-              data-row={rc} data-testid={`judge-text-${rc}`}
+              data-row={rc} {...anchor("row", rc)} data-testid={`judge-text-${rc}`}
               aria-label={`Your comment on ${row.label.replace(/<[^>]*>/g, "")}`}
               placeholder={p.q.settings.placeholder ?? "Your thoughts on this item…"}
               value={value == null ? "" : String(value)}
@@ -143,7 +144,7 @@ export function CarouselJudge(p: QRProps) {
               <span key={String(r.code)}
                 className={`dot ${j === i ? "on" : ""} ${done ? "picked" : ""}`}
                 role="button" tabIndex={0}
-                data-row={String(r.code)}
+                data-row={String(r.code)} {...anchor("row", String(r.code))}
                 aria-label={`${r.label.replace(/<[^>]*>/g, "")}${done ? " — judged" : ""}`}
                 title={done ? "judged ✓" : "not judged yet"}
                 onClick={() => setIdx(j)} onKeyDown={activate(() => setIdx(j))}>
@@ -203,7 +204,7 @@ export function CompareCarousel(p: QRProps) {
             const price = metaText(o, "price");
             return (
               <div key={String(o.code)} className={`rs-comparecar-side ${sel ? "selected" : ""}`}
-                data-code={String(o.code)} data-side={k === 0 ? "a" : "b"}>
+                data-code={String(o.code)} {...anchor("option", String(o.code))} data-side={k === 0 ? "a" : "b"}>
                 {o.imageUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <SafeImage src={o.imageUrl} alt="" draggable={false} />
@@ -214,7 +215,7 @@ export function CompareCarousel(p: QRProps) {
                 {desc && <div className="rs-comparecar-desc" dangerouslySetInnerHTML={{ __html: desc }} />}
                 {price && <div className="rs-comparecar-price">{price}</div>}
                 <button type="button" className={`rs-richcard-select ${sel ? "on" : ""}`}
-                  role="radio" aria-checked={sel} data-code={String(o.code)}
+                  role="radio" aria-checked={sel} data-code={String(o.code)} {...anchor("option", String(o.code))}
                   onClick={() => pick(o.code)}>
                   {sel ? "Chosen ✓" : "Choose this"}
                 </button>

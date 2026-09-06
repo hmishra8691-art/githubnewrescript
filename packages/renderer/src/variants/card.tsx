@@ -4,6 +4,7 @@ import type { QRProps } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { SafeImage, MediaEmbed } from "../Media";
 import { useOptions, useRows, useChoice, activate, colsClass, metaText, dropTargetAt } from "./shared";
+import { anchor } from "../authoring";
 
 /**
  * Cards family.
@@ -48,7 +49,7 @@ export function FlipCards(p: QRProps) {
         const plain = o.label.replace(/<[^>]*>/g, "");
         return (
           <div key={code} className={`rs-flipcard ${flipped ? "flipped" : ""} ${sel ? "selected" : ""}`}
-            data-code={code} data-flipped={flipped ? "1" : undefined}>
+            data-code={code} {...anchor("option", code)} data-flipped={flipped ? "1" : undefined}>
             <div className="rs-flipcard-inner">
               {/* front: a disclosure — click or Enter opens the detail side */}
               <div className="rs-flipface front" role="button" tabIndex={flipped ? -1 : 0}
@@ -81,7 +82,7 @@ export function FlipCards(p: QRProps) {
                 )}
                 <div className="rs-flip-actions">
                   <button type="button" className={`rs-richcard-select ${sel ? "on" : ""}`}
-                    role="radio" aria-checked={sel} data-code={code} tabIndex={flipped ? 0 : -1}
+                    role="radio" aria-checked={sel} data-code={code} {...anchor("option", code)} tabIndex={flipped ? 0 : -1}
                     data-testid={`flip-select-${code}`}
                     onClick={() => { pick(o); setOpen(null); }}>
                     {sel ? "Selected ✓" : "Select"}
@@ -193,7 +194,7 @@ export function CardSort(p: QRProps) {
       <div className="rs-cardsort-stack">
         {remaining[1] && <div className="rs-cardsort-card behind" aria-hidden />}
         {current ? (
-          <div className="rs-cardsort-card" data-row={String(current.code)}
+          <div className="rs-cardsort-card" data-row={String(current.code)} {...anchor("row", String(current.code))}
             data-testid="cardsort-card"
             style={{
               transform: `translateX(${drag.x}px) rotate(${tilt}deg)`,
@@ -227,7 +228,7 @@ export function CardSort(p: QRProps) {
           return (
             <div key={pc} className={`rs-cardsort-pile ${expanded ? "open" : ""}`} data-drop={pc}>
               <button type="button" className="rs-cardsort-pilebtn"
-                data-code={pc} data-testid={`cardsort-pile-${pc}`}
+                data-code={pc} {...anchor("option", pc)} data-testid={`cardsort-pile-${pc}`}
                 disabled={!current}
                 aria-label={`Put this card in ${o.label.replace(/<[^>]*>/g, "")}`}
                 onClick={() => current && assign(String(current.code), o.code)}>
@@ -246,7 +247,7 @@ export function CardSort(p: QRProps) {
                   {held.length === 0 && <li className="rs-judge-hint">empty</li>}
                   {held.map((r) => (
                     <li key={String(r.code)}>
-                      <button type="button" data-row={String(r.code)}
+                      <button type="button" data-row={String(r.code)} {...anchor("row", String(r.code))}
                         title="take this card back" onClick={() => takeBack(String(r.code))}>
                         <span dangerouslySetInnerHTML={{ __html: r.label }} /> ×
                       </button>

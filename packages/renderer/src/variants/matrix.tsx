@@ -6,6 +6,7 @@ import type { QRProps } from "../QuestionRenderer";
 import { NumberField, ctxOf } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { useOptions, useRows, activate, usePointerDrag, dropTargetAt } from "./shared";
+import { anchor, cellAnchor } from "../authoring";
 
 /**
  * Grid / Matrix family — the presentations that were "coming soon".
@@ -70,7 +71,7 @@ export function StarMatrix(p: QRProps) {
         const shown = hover?.row === rc ? hover.n : val;
         const plain = row.label.replace(/<[^>]*>/g, "");
         return (
-          <div key={rc} className={`rs-starmatrix-row ${val ? "rated" : ""}`} data-row={rc}>
+          <div key={rc} className={`rs-starmatrix-row ${val ? "rated" : ""}`} data-row={rc} {...anchor("row", rc)}>
             <span className="rs-starmatrix-label" dangerouslySetInnerHTML={{ __html: row.label }} />
             <span className="rs-starmatrix-stars" role="radiogroup" aria-label={plain}
               onMouseLeave={() => setHover(null)}>
@@ -154,7 +155,7 @@ export function SumMatrix(p: QRProps) {
           <tr>
             <th className="rowlabel" />
             {columns.map((c) => (
-              <th key={c.id} style={c.width ? { width: c.width } : undefined}
+              <th key={c.id} {...anchor("column", c.id)} style={c.width ? { width: c.width } : undefined}
                 dangerouslySetInnerHTML={{ __html: c.label }} />
             ))}
             <th className="rs-summatrix-th-total">Total</th>
@@ -167,10 +168,10 @@ export function SumMatrix(p: QRProps) {
             const state = total === target ? "ok" : total > target ? "over" : "under";
             const plain = row.label.replace(/<[^>]*>/g, "");
             return (
-              <tr key={rc} data-row={rc}>
+              <tr key={rc} data-row={rc} {...anchor("row", rc)}>
                 <td className="rowlabel" dangerouslySetInnerHTML={{ __html: row.label }} />
                 {columns.map((c) => (
-                  <td key={c.id} data-row={rc} data-col={c.id}>
+                  <td key={c.id} data-row={rc} data-col={c.id} {...cellAnchor(rc, c.id)}>
                     <NumberField className="rs-input" min={c.min ?? 0} max={c.max}
                       ariaLabel={`${plain} — ${c.label.replace(/<[^>]*>/g, "")}`}
                       readOnly={p.q.settings.readOnly || c.readOnly}
@@ -249,7 +250,7 @@ export function DragMatrix(p: QRProps) {
     return (
       <span key={rc}
         className={`rs-dragchip ${isPicked ? "picked" : ""} ${drag?.payload === rc ? "dragging" : ""}`}
-        data-row={rc}
+        data-row={rc} {...anchor("row", rc)}
         role="button"
         tabIndex={0}
         aria-pressed={isPicked}
@@ -300,7 +301,7 @@ export function DragMatrix(p: QRProps) {
             <div key={code}
               className={`rs-dragcol ${picked ? "armed" : ""}`}
               data-drop={code}
-              data-code={code}
+              data-code={code} {...anchor("option", code)}
               role="button"
               tabIndex={0}
               aria-label={`Place the chosen item in ${o.label.replace(/<[^>]*>/g, "")}`}

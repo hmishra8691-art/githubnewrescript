@@ -6,6 +6,7 @@ import type { QRProps } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { SafeImage, MediaEmbed } from "../Media";
 import { useOptions, activate } from "./shared";
+import { anchor } from "../authoring";
 
 /**
  * Region / Area Selection (hotspot.regions).
@@ -74,7 +75,7 @@ export function Regions(p: QRProps) {
                 aria-checked={on}
                 aria-label={plain(o.label)}
                 tabIndex={ro ? -1 : 0}
-                data-code={String(o.code)}
+                data-code={String(o.code)} {...anchor("option", String(o.code))}
                 onClick={() => pick(o)}
                 onKeyDown={activate(() => pick(o))}>
                 <span className="rs-region-tag">
@@ -100,7 +101,7 @@ export function Regions(p: QRProps) {
               <button key={String(o.code)} type="button"
                 className={`rs-region-chip ${on ? "on" : ""}`}
                 aria-pressed={on}
-                data-code={String(o.code)}
+                data-code={String(o.code)} {...anchor("option", String(o.code))}
                 onClick={() => pick(o)}>
                 <span dangerouslySetInnerHTML={{ __html: o.label }} />
               </button>

@@ -3,6 +3,7 @@ import React from "react";
 import type { QRProps } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { useRows } from "./shared";
+import { anchor } from "../authoring";
 
 /**
  * Conversational family — Chat-Based Question.
@@ -99,7 +100,7 @@ export function ChatQuestion(p: QRProps) {
           return (
             <React.Fragment key={rc}>
               <div className="rs-chat-row in">
-                <div className="rs-chat-bubble in" data-row={rc}
+                <div className="rs-chat-bubble in" data-row={rc} {...anchor("row", rc)}
                   dangerouslySetInnerHTML={{ __html: r.label }} />
               </div>
               {hasReply && (

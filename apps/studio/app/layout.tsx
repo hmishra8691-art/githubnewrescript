@@ -1,4 +1,7 @@
 import type { Metadata, Viewport } from "next";
+// the renderer's own stylesheet, so a question drawn on the Live Canvas is
+// painted by exactly the rules that paint it for a respondent
+import "@rescript/renderer/questions.css";
 import "./globals.css";
 
 export const metadata: Metadata = {

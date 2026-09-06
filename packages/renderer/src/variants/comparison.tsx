@@ -4,6 +4,7 @@ import type { QRProps } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { SafeImage, MediaEmbed } from "../Media";
 import { useOptions, useRows, metaText } from "./shared";
+import { anchor } from "../authoring";
 
 /**
  * Comparison family — Multi-Item / Attribute Comparison (`attrcompare`).
@@ -51,7 +52,7 @@ export function AttributeCompare(p: QRProps) {
     const sel = String(p.value) === String(o.code);
     return (
       <button type="button" className={`rs-richcard-select ${sel ? "on" : ""}`}
-        aria-pressed={sel} data-code={String(o.code)}
+        aria-pressed={sel} data-code={String(o.code)} {...anchor("option", String(o.code))}
         data-testid={`attr-choose-${String(o.code)}`}
         aria-label={`Choose ${o.label.replace(/<[^>]*>/g, "")}`}
         onClick={() => pick(o.code)}>
@@ -78,7 +79,7 @@ export function AttributeCompare(p: QRProps) {
               {options.map((o) => {
                 const sel = String(p.value) === String(o.code);
                 return (
-                  <th key={String(o.code)} scope="col" className={sel ? "chosen" : ""} data-code={String(o.code)}>
+                  <th key={String(o.code)} scope="col" className={sel ? "chosen" : ""} data-code={String(o.code)} {...anchor("option", String(o.code))}>
                     {o.imageUrl && (
                       // eslint-disable-next-line @next/next/no-img-element
                       <SafeImage src={o.imageUrl} alt="" draggable={false} />
@@ -101,14 +102,14 @@ export function AttributeCompare(p: QRProps) {
             {rows.map((r) => {
               const rc = String(r.code);
               return (
-                <tr key={rc} data-row={rc}>
+                <tr key={rc} data-row={rc} {...anchor("row", rc)}>
                   <th scope="row" className="attr" dangerouslySetInnerHTML={{ __html: r.label }} />
                   {options.map((o) => {
                     const sel = String(p.value) === String(o.code);
                     const txt = cellText(o, rc);
                     return (
                       <td key={String(o.code)} className={sel ? "chosen" : ""}
-                        data-row={rc} data-code={String(o.code)}>
+                        data-row={rc} {...anchor("row", rc)} data-code={String(o.code)} {...anchor("option", String(o.code))}>
                         {txt || <span className="rs-judge-hint">—</span>}
                       </td>
                     );

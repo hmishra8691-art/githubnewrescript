@@ -25,9 +25,9 @@ import {
   type QuotaCounts,
   type InspectorSnapshot,
 } from "@rescript/engine";
-import { QuestionRenderer } from "./QuestionRenderer";
+import { QuestionRenderer } from "@rescript/renderer";
 import { Inspector } from "./Inspector";
-import { MediaEmbed, SafeImage } from "./Media";
+import { MediaEmbed, SafeImage } from "@rescript/renderer";
 import { createTelemetryCollector, type TelemetryCollector } from "@/lib/telemetry";
 import type { ResponseTelemetry } from "@rescript/quality";
 

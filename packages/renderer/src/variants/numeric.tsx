@@ -4,6 +4,7 @@ import type { QRProps } from "../QuestionRenderer";
 import { NumberField } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { useRows } from "./shared";
+import { anchor } from "../authoring";
 
 /**
  * numeric family renderers — see docs/VARIANT-BATCH.md.
@@ -37,7 +38,7 @@ export function NumericRange(p: QRProps) {
         return (
           <React.Fragment key={code}>
             {i === 1 && <span className="rs-numrange-dash" aria-hidden>—</span>}
-            <label className="rs-numrange-field" data-row={code}>
+            <label className="rs-numrange-field" data-row={code} {...anchor("row", code)}>
               <span className="rs-numrange-lbl" dangerouslySetInnerHTML={{ __html: row.label }} />
               <NumberField
                 className="rs-input sm"

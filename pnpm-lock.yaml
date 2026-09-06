@@ -16,6 +16,9 @@ importers:
       '@rescript/quality':
         specifier: workspace:*
         version: link:../../packages/quality
+      '@rescript/renderer':
+        specifier: workspace:*
+        version: link:../../packages/renderer
       '@rescript/schema':
         specifier: workspace:*
         version: link:../../packages/schema
@@ -68,6 +71,9 @@ importers:
       '@rescript/quality':
         specifier: workspace:*
         version: link:../../packages/quality
+      '@rescript/renderer':
+        specifier: workspace:*
+        version: link:../../packages/renderer
       '@rescript/schema':
         specifier: workspace:*
         version: link:../../packages/schema
@@ -200,6 +206,25 @@ importers:
       '@types/node':
         specifier: ^22.20.1
         version: 22.20.1
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+
+  packages/renderer:
+    dependencies:
+      '@rescript/engine':
+        specifier: workspace:*
+        version: link:../engine
+      '@rescript/schema':
+        specifier: workspace:*
+        version: link:../schema
+      react:
+        specifier: ^18.3.1
+        version: 18.3.1
+    devDependencies:
+      '@types/react':
+        specifier: ^18.3.12
+        version: 18.3.31
       typescript:
         specifier: ^5.6.3
         version: 5.9.3

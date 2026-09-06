@@ -6,6 +6,7 @@ import { StarRating } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { SafeImage, MediaEmbed } from "../Media";
 import { useOptions, useChoice, activate, colsClass, metaText } from "./shared";
+import { anchor } from "../authoring";
 
 /**
  * Single Select and Multi Select families — the presentations that were
@@ -38,7 +39,7 @@ export function IconSelect(p: QRProps) {
         return (
           <div key={String(o.code)} className={`rs-iconopt ${sel ? "selected" : ""}`}
             role={multi ? "checkbox" : "radio"} aria-checked={sel} tabIndex={0}
-            data-code={String(o.code)}
+            data-code={String(o.code)} {...anchor("option", String(o.code))}
             onClick={() => pick(o)} onKeyDown={activate(() => pick(o))}>
             <div className="rs-iconopt-icon">
               {o.imageUrl
@@ -70,7 +71,7 @@ export function ListSelect(p: QRProps) {
         return (
           <div key={String(o.code)} className={`rs-listrow ${sel ? "selected" : ""}`}
             role={multi ? "checkbox" : "radio"} aria-checked={sel} tabIndex={0}
-            data-code={String(o.code)}
+            data-code={String(o.code)} {...anchor("option", String(o.code))}
             onClick={() => pick(o)} onKeyDown={activate(() => pick(o))}>
             <span className={`rs-listrow-mark ${multi ? "box" : "dot"}`} aria-hidden>{sel ? (multi ? "✓" : "●") : ""}</span>
             {o.imageUrl && (
@@ -124,7 +125,7 @@ export function RichCards(p: QRProps) {
         return (
           <div key={String(o.code)} className={`rs-richcard ${sel ? "selected" : ""}`}
             role={multi ? "checkbox" : "radio"} aria-checked={sel} tabIndex={0}
-            data-code={String(o.code)}
+            data-code={String(o.code)} {...anchor("option", String(o.code))}
             onClick={() => pick(o)} onKeyDown={activate(() => pick(o))}>
             {/* over the image when there is one; inline beside the title when there is not,
                 so it never covers the product's name */}
@@ -165,7 +166,7 @@ export function StatementChoice(p: QRProps) {
         return (
           <div key={String(o.code)} className={`rs-statement ${sel ? "selected" : ""}`}
             role={multi ? "checkbox" : "radio"} aria-checked={sel} tabIndex={0}
-            data-code={String(o.code)}
+            data-code={String(o.code)} {...anchor("option", String(o.code))}
             onClick={() => pick(o)} onKeyDown={activate(() => pick(o))}>
             <span className="rs-statement-n">{String.fromCharCode(65 + (i % 26))}</span>
             <blockquote className="rs-statement-text" dangerouslySetInnerHTML={{ __html: o.label }} />
@@ -194,7 +195,7 @@ export function PairwiseChoice(p: QRProps) {
     const desc = metaText(o, "description");
     return (
       <div className={`rs-pair-side ${which} ${sel ? "selected" : ""}`} role="radio" aria-checked={sel} tabIndex={0}
-        data-code={String(o.code)}
+        data-code={String(o.code)} {...anchor("option", String(o.code))}
         onClick={() => pick(o)} onKeyDown={activate(() => pick(o))}>
         {o.imageUrl && (
           // eslint-disable-next-line @next/next/no-img-element
@@ -230,7 +231,7 @@ export function MultiCarousel(p: QRProps) {
     <div className="rs-carousel" data-multi>
       <div className="rs-carousel-row">
         <button type="button" className="rs-carousel-nav" disabled={i === 0} onClick={() => setIdx(i - 1)} aria-label="Previous">‹</button>
-        <div className={`rs-cardopt rs-carousel-card ${sel ? "selected" : ""}`} data-code={String(o.code)} onClick={() => pick(o)}>
+        <div className={`rs-cardopt rs-carousel-card ${sel ? "selected" : ""}`} data-code={String(o.code)} {...anchor("option", String(o.code))} onClick={() => pick(o)}>
           {o.imageUrl && (
             // eslint-disable-next-line @next/next/no-img-element
             <SafeImage src={o.imageUrl} alt="" />

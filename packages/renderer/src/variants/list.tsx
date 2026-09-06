@@ -6,6 +6,7 @@ import type { QRProps } from "../QuestionRenderer";
 import { NumberField, ctxOf } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { useRows } from "./shared";
+import { anchor, cellAnchor } from "../authoring";
 
 /**
  * List / Form Fields family — the presentations that were "coming soon".
@@ -290,7 +291,7 @@ export function Spreadsheet(p: QRProps) {
             <th className="rs-sheet-n" aria-label="Row" />
             <th className="rowlabel">Row</th>
             {columns.map((c) => (
-              <th key={c.id} style={c.width ? { width: c.width } : undefined}
+              <th key={c.id} {...anchor("column", c.id)} style={c.width ? { width: c.width } : undefined}
                 dangerouslySetInnerHTML={{ __html: c.label }} />
             ))}
           </tr>
@@ -300,11 +301,11 @@ export function Spreadsheet(p: QRProps) {
             const rc = String(row.code);
             const plain = row.label.replace(/<[^>]*>/g, "");
             return (
-              <tr key={rc} data-row={rc}>
+              <tr key={rc} data-row={rc} {...anchor("row", rc)}>
                 <th className="rs-sheet-n" scope="row">{r + 1}</th>
                 <td className="rowlabel" dangerouslySetInnerHTML={{ __html: row.label }} />
                 {columns.map((c, ci) => (
-                  <td key={c.id} data-row={rc} data-col={c.id}
+                  <td key={c.id} data-row={rc} data-col={c.id} {...cellAnchor(rc, c.id)}
                     onKeyDown={(e) => onKeyDown(e, r, ci)}>
                     <SheetCell col={c} label={`${plain} — ${c.label.replace(/<[^>]*>/g, "")}`}
                       readOnly={!!p.q.settings.readOnly}

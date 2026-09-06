@@ -7,6 +7,7 @@ import { registerVariantRenderer } from "./registry";
 import { SafeImage, MediaEmbed } from "../Media";
 import { useOptions, activate, seedFor, setSide, getSide } from "./shared";
 import { useTapOrDrag, DragGhost } from "./dragdrop";
+import { anchor } from "../authoring";
 
 /**
  * Ranking family — two ways to produce the same `rank_order` array of codes
@@ -99,7 +100,7 @@ export function Tournament(p: QRProps) {
           {step.ranking.map((c, i) => {
             const o = optOf(c);
             return (
-              <li key={String(c)} className="rs-tour-rank" data-code={String(c)}>
+              <li key={String(c)} className="rs-tour-rank" data-code={String(c)} {...anchor("option", String(c))}>
                 <span className="rs-tour-num">{i + 1}</span>
                 <span dangerouslySetInnerHTML={{ __html: o?.label ?? String(c) }} />
               </li>
@@ -115,7 +116,7 @@ export function Tournament(p: QRProps) {
     const o = optOf(c);
     return (
       <button type="button" className={`rs-tour-side ${which}`}
-        data-code={String(c)} data-testid={`duel-${which}`}
+        data-code={String(c)} {...anchor("option", String(c))} data-testid={`duel-${which}`}
         onClick={() => record(c)}>
         {o?.imageUrl && (
           // eslint-disable-next-line @next/next/no-img-element
@@ -228,7 +229,7 @@ export function RankBuckets(p: QRProps) {
     return (
       <button type="button" key={code}
         className={`rs-dd-chip ${held === code ? "held" : ""} ${inSlot ? "placed" : ""}`}
-        data-code={code} aria-pressed={held === code}
+        data-code={code} {...anchor("option", code)} aria-pressed={held === code}
         {...dragProps(code)}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={activate(() => setHeld((h) => (h === code ? null : code)))}>
