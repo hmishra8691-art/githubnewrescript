@@ -512,6 +512,7 @@ export function lintSurveyLogic(def: SurveyDefinition): LogicIssue[] {
   const issues: LogicIssue[] = [];
   for (const q of def.questions ?? []) issues.push(...lintQuestionLogic(def, q));
   issues.push(...lintLoops(def));
+  issues.push(...lintStructure(def));
   try {
     for (const cycle of detectLogicCycles(def)) {
       issues.push({
@@ -525,6 +526,158 @@ export function lintSurveyLogic(def: SurveyDefinition): LogicIssue[] {
   } catch {
     /* an unanalysable graph is already reported per question */
   }
+  return issues;
+}
+
+/* ======================================================= structure */
+
+/**
+ * THE CHECKS THAT ARE NOT ABOUT LOGIC.
+ *
+ * Everything above asks "does this rule make sense?". These ask the questions
+ * a programmer asks before a release — is anything stranded, is anything
+ * unanswerable, does everything a quota or a design refers to still exist —
+ * and they were the gap that let a survey deploy with a question nobody could
+ * ever be shown.
+ */
+export function lintStructure(def: SurveyDefinition): LogicIssue[] {
+  const issues: LogicIssue[] = [];
+
+  /* --- a question that is in the survey but on no page -------------- */
+  const placed = new Set<string>();
+  const walk = (nodes: any[]) => {
+    for (const n of nodes ?? []) {
+      if (n?.type === "page") for (const id of n.questionIds ?? []) placed.add(id);
+      if (n?.children) walk(n.children);
+      if (n?.branches) for (const b of n.branches) walk(b.children);
+      if (n?.otherwise) walk(n.otherwise);
+    }
+  };
+  walk(def.flow as any[]);
+  for (const q of def.questions ?? []) {
+    if (placed.has(q.id)) continue;
+    /*
+     * A hidden or calculated question is not asked, so it does not need a
+     * page — it is filled by the engine. Every other type on no page is
+     * unreachable: it exports a column that can never hold an answer, and
+     * anything piping from it resolves to nothing, for every respondent.
+     */
+    if (["hidden", "calculated", "embedded_data"].includes(q.type)) continue;
+    issues.push({
+      level: "error", questionId: q.id, questionCode: q.code, path: "flow",
+      message: `${q.code} is not on any page, so no respondent can ever be asked it. Move it into a block or delete it.`,
+    });
+  }
+
+  /* --- a question that asks for a choice and offers none ------------ */
+  const NEEDS_OPTIONS = [
+    "single_select", "multi_select", "dropdown", "multi_dropdown",
+    "image_select", "image_ranking", "ranking", "allocation",
+  ];
+  const NEEDS_ROWS = ["matrix_single", "matrix_multi", "matrix_numeric", "matrix_text", "matrix_dropdown"];
+  for (const q of def.questions ?? []) {
+    const supplied = !!q.carryForward || (q.listLogic?.length ?? 0) > 0 || (q.optionPipeline?.length ?? 0) > 0;
+    if (NEEDS_OPTIONS.includes(q.type) && q.options.length === 0 && !supplied) {
+      issues.push({
+        level: "error", questionId: q.id, questionCode: q.code, path: "options",
+        message: `${q.code} is a ${q.type.replace(/_/g, " ")} with no options, and nothing supplies them. A respondent would see an empty question.`,
+      });
+    }
+    if (NEEDS_ROWS.includes(q.type) && q.rows.length === 0 && !q.carryForward) {
+      issues.push({
+        level: "error", questionId: q.id, questionCode: q.code, path: "rows",
+        message: `${q.code} is a grid with no rows, and nothing supplies them.`,
+      });
+    }
+    const blank = q.options.filter((o) => !String(o.label ?? "").replace(/<[^>]*>/g, "").trim());
+    if (blank.length) {
+      issues.push({
+        level: "warning", questionId: q.id, questionCode: q.code,
+        optionCode: String(blank[0].code), path: "options",
+        message: `${q.code} has ${blank.length} option${blank.length === 1 ? "" : "s"} with no label — ${blank.map((o) => o.code).join(", ")}.`,
+      });
+    }
+  }
+
+  /* --- quotas that cannot do what they say -------------------------- */
+  for (const quota of def.quotas ?? []) {
+    if (!quota.cells.length) {
+      issues.push({
+        level: "warning", path: `quotas.${quota.id}`,
+        message: `Quota “${quota.name}” has no cells, so it can never fill or route anyone.`,
+      });
+      continue;
+    }
+    const zero = quota.cells.filter((c) => !(c.limit > 0));
+    if (zero.length) {
+      issues.push({
+        level: "error", path: `quotas.${quota.id}`,
+        message: `Quota “${quota.name}”: ${zero.length} cell${zero.length === 1 ? " has" : "s have"} a limit of zero, so ${zero.length === 1 ? "it is" : "they are"} full before fielding starts.`,
+      });
+    }
+    /* percentage limits are per cell, and they need a base to be a percentage of */
+    const pct = quota.cells.filter((c) => c.limitType === "percent");
+    if (pct.length) {
+      const total = pct.reduce((a, c) => a + (c.limit ?? 0), 0);
+      if (total > 100.5) {
+        issues.push({
+          level: "warning", path: `quotas.${quota.id}`,
+          message: `Quota “${quota.name}” allocates ${Math.round(total)}% across its cells — more than the whole sample.`,
+        });
+      }
+      if (quota.targetTotal == null) {
+        issues.push({
+          level: "error", path: `quotas.${quota.id}`,
+          message: `Quota “${quota.name}” uses percentage limits but has no total sample size, so a percentage has nothing to be a percentage of.`,
+        });
+      }
+    }
+    const seen = new Map<string, string>();
+    for (const c of quota.cells) {
+      const key = JSON.stringify(c.when);
+      const first = seen.get(key);
+      if (first) {
+        issues.push({
+          level: "warning", path: `quotas.${quota.id}`,
+          message: `Quota “${quota.name}”: cells “${first}” and “${c.label}” have identical conditions, so every respondent counts against both.`,
+        });
+      } else seen.set(key, c.label);
+    }
+  }
+
+  /* --- a design a question renders, that the survey does not have ---- */
+  const designIds = new Set((def.designs ?? []).map((d: any) => d.id));
+  for (const q of def.questions ?? []) {
+    if (!["conjoint_task", "maxdiff_task"].includes(q.type)) continue;
+    const ref = (q.settings as any)?.designRef;
+    if (!ref) {
+      issues.push({
+        level: "error", questionId: q.id, questionCode: q.code, path: "settings.designId",
+        message: `${q.code} renders tasks from a design file, but no design is selected.`,
+      });
+      continue;
+    }
+    if (!designIds.has(ref)) {
+      issues.push({
+        level: "error", questionId: q.id, questionCode: q.code, path: "settings.designRef",
+        message: `${q.code} refers to design “${ref}”, which is not in this survey. Generate it again or point the question at an existing design.`,
+      });
+    }
+  }
+
+  /* --- variables nothing ever reads --------------------------------- */
+  const spoken = JSON.stringify({
+    q: def.questions, f: def.flow, c: def.calculations, ql: def.quotas,
+    s: def.scripts, dr: def.displayRules, lf: def.listFills,
+  });
+  for (const v of def.variables ?? []) {
+    if (!v.name || spoken.includes(v.name)) continue;
+    issues.push({
+      level: "warning", path: `variables.${v.name}`,
+      message: `Variable ${v.name} is declared but nothing reads it — no logic, piping, calculation, quota or script mentions it.`,
+    });
+  }
+
   return issues;
 }
 

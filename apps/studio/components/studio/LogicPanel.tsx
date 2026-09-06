@@ -3,7 +3,8 @@ import React from "react";
 import type { FlowNode } from "@rescript/schema";
 import {
   lintSurveyLogic, questionLogicSummary, detectLogicCycles, describeCycle,
-  validateFlowStructure, type LogicIssue,
+  validateFlowStructure, runQualityCheck, describeQualityCheck,
+  type LogicIssue, type QualityCheckResult,
 } from "@rescript/engine";
 import { AutoPunchPanel } from "./AutoPunchEditor";
 import { useStudio, uid } from "./store";
@@ -58,6 +59,80 @@ function LogicCheck() {
           onClick={() => i.questionId && s.select(i.questionId)}>
           {i.level === "error" ? "✕" : "!"} <strong>{i.questionCode ?? "?"}</strong> {i.path}
           {i.optionCode ? ` [${i.optionCode}]` : ""} — {i.message}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * RUN QUALITY CHECK.
+ *
+ * The lint above runs constantly and lives in one panel, which is why a
+ * survey could deploy with a broken piping token: nobody had to look. This is
+ * the deliberate act — one button, one verdict per area, and a plain answer
+ * to "can this go out?".
+ *
+ * It is on demand rather than live because that is what makes the answer mean
+ * something: a result carries the moment it was taken, and re-running it is
+ * how a programmer signs off.
+ */
+function QualityCheckPanel() {
+  const s = useStudio();
+  const [result, setResult] = React.useState<QualityCheckResult | null>(null);
+  const [open, setOpen] = React.useState<string | null>(null);
+  const run = () => {
+    const r = runQualityCheck(s.def);
+    setResult(r);
+    setOpen(r.areas.find((a) => a.status === "fail")?.key ?? null);
+  };
+
+  const mark = (st: string) => (st === "pass" ? "✓" : st === "warn" ? "!" : "✕");
+
+  return (
+    <div data-testid="quality-check">
+      <div className="row" style={{ marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+        <button className="btn primary" data-testid="run-quality-check" onClick={run}>
+          Run quality check
+        </button>
+        {result && (
+          <>
+            <span className={`badge ${result.deployable ? "success" : "danger"}`} data-testid="qc-verdict">
+              {result.deployable ? "Ready to deploy" : "Not ready to deploy"}
+            </span>
+            <span className="muted" style={{ fontSize: 13 }} data-testid="qc-summary">
+              {describeQualityCheck(result)} Checked at{" "}
+              {new Date(result.checkedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}.
+            </span>
+          </>
+        )}
+        {!result && (
+          <span className="muted" style={{ fontSize: 13 }}>
+            Ten areas, from the definition alone — no responses needed.
+          </span>
+        )}
+      </div>
+
+      {result?.areas.map((a) => (
+        <div key={a.key} className={`card qc-area qc-${a.status}`} data-testid="qc-area" data-area={a.key}
+          data-status={a.status} style={{ padding: "9px 12px", marginBottom: 6 }}>
+          <div className="row" style={{ gap: 8, cursor: a.issues.length ? "pointer" : undefined }}
+            onClick={() => a.issues.length && setOpen(open === a.key ? null : a.key)}>
+            <span className={`qc-mark qc-mark-${a.status}`} aria-hidden>{mark(a.status)}</span>
+            <strong style={{ fontSize: 14 }}>{a.label}</strong>
+            <span className="grow" />
+            {a.errors > 0 && <span className="chip warn">{a.errors} problem{a.errors === 1 ? "" : "s"}</span>}
+            {a.warnings > 0 && <span className="chip">{a.warnings} warning{a.warnings === 1 ? "" : "s"}</span>}
+            {a.issues.length === 0 && <span className="muted" style={{ fontSize: 12.5 }}>{a.note}</span>}
+          </div>
+          {open === a.key && a.issues.map((i, k) => (
+            <div key={k} className={`chip ${i.level === "error" ? "warn" : ""}`}
+              style={{ marginTop: 5, cursor: i.questionId ? "pointer" : undefined }}
+              onClick={() => i.questionId && s.select(i.questionId)}>
+              {i.level === "error" ? "✕" : "!"}{" "}
+              {i.questionCode && <strong>{i.questionCode} </strong>}{i.message}
+            </div>
+          ))}
         </div>
       ))}
     </div>
@@ -176,6 +251,11 @@ export function LogicPanel() {
       <div className="row" style={{ marginBottom: 14 }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>Logic</h2>
       </div>
+
+      {/* the deliberate, whole-survey verdict comes first: it is what a
+          programmer opens this panel to get before a release */}
+      <h3 className="sec">Quality check</h3>
+      <QualityCheckPanel />
 
       <h3 className="sec">Logic check</h3>
       <LogicCheck />

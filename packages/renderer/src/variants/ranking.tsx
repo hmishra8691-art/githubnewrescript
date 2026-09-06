@@ -120,7 +120,7 @@ export function Tournament(p: QRProps) {
         onClick={() => record(c)}>
         {o?.imageUrl && (
           // eslint-disable-next-line @next/next/no-img-element
-          <SafeImage src={o.imageUrl} alt="" draggable={false} />
+          <SafeImage src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} draggable={false} />
         )}
         <span className="rs-tour-side-label" dangerouslySetInnerHTML={{ __html: o?.label ?? String(c) }} />
         <span className="rs-tour-pick">Prefer this</span>

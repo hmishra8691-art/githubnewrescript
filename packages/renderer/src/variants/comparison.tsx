@@ -82,7 +82,7 @@ export function AttributeCompare(p: QRProps) {
                   <th key={String(o.code)} scope="col" className={sel ? "chosen" : ""} data-code={String(o.code)} {...anchor("option", String(o.code))}>
                     {o.imageUrl && (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <SafeImage src={o.imageUrl} alt="" draggable={false} />
+                      <SafeImage src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} draggable={false} />
                     )}
                     <span className="rs-attr-item" dangerouslySetInnerHTML={{ __html: o.label }} />
                     {metaText(o, "badge") && <span className="rs-badge">{metaText(o, "badge")}</span>}

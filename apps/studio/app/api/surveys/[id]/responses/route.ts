@@ -3,7 +3,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
 import { responsesToCSV, exportResponsesXlsx, inDataset, QUALITY_CSV_COLUMNS, qualityCsvCells, type DatasetFilter, type QualityExportRow } from "@rescript/exporters";
 import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
-import { isFailure, requireProject } from "@/lib/guard";
+import { audit, isFailure, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +34,21 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     (req.nextUrl.searchParams.get("test") === "1" ? "all" : "live");
   const dataset = parseDataset(req.nextUrl.searchParams.get("dataset"));
   const withQuality = req.nextUrl.searchParams.get("quality") === "1";
+
+  /*
+   * A download is recorded; the summary count on the header is not. The line
+   * between them is whether rows leave the platform — that is the event a
+   * data-protection question is actually about, and it was not written down
+   * anywhere.
+   */
+  if (format !== "summary") {
+    await audit({
+      action: "responses.exported", userId: gate.user.userId, sessionId: gate.user.sessionId,
+      surveyId: params.id, customerId: gate.user.customerId,
+      entity: "responses", entityId: null,
+      detail: { format, dataset, include, quality: withQuality },
+    });
+  }
 
   if (format === "summary") {
     const { data } = await db

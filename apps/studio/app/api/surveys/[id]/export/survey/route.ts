@@ -4,7 +4,7 @@ import {
   exportSurveyDocx, exportSurveyJsonConfigured,
   EXPORT_PRESETS, ALL_FIELDS, type ExportFields,
 } from "@rescript/exporters";
-import { isFailure, requireProject } from "@/lib/guard";
+import { audit, isFailure, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -68,8 +68,17 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const version = typeof payload?.version === "string" ? payload.version : def.meta.version;
   const stem = `${def.meta.code}_v${version}`.replace(/[^A-Za-z0-9._-]+/g, "_");
 
+  /* what left, in which shape — the same record for both formats */
+  const record = (format: "json" | "docx") => audit({
+    action: "survey.exported", userId: gate.user.userId, sessionId: gate.user.sessionId,
+    surveyId: params.id, customerId: gate.user.customerId,
+    entity: "survey", entityId: params.id,
+    detail: { format, version, complete, fields: ALL_FIELDS.filter((f) => chosen[f]).length },
+  });
+
   if (payload?.format === "json") {
     const doc = exportSurveyJsonConfigured(def, chosen, { version, complete });
+    await record("json");
     return new NextResponse(JSON.stringify(doc, null, 2), {
       headers: {
         "content-type": "application/json; charset=utf-8",
@@ -79,6 +88,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   const buf = await exportSurveyDocx(def, chosen, { version });
+  await record("docx");
   return new NextResponse(new Uint8Array(buf), {
     headers: {
       "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",

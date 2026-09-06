@@ -403,3 +403,72 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 }
 
 .rs-disclosure { font-size: .78em; color: var(--rs-subtle); text-align: center; margin-top: 8px; }
+
+/* ================================================================
+   ACCESSIBILITY
+
+   These rules were missing entirely from the respondent-facing
+   stylesheet: there was no visible focus ring anywhere in a survey,
+   no reduced-motion honouring, and no high-contrast handling. A
+   keyboard respondent could not see where they were, which makes a
+   long grid unusable rather than merely awkward.
+
+   Everything here is expressed through the existing brand tokens, so
+   a survey's own colours carry into its focus state instead of a
+   browser default that may not contrast with the theme.
+   ================================================================ */
+
+/* One ring, on anything focusable inside a survey. `:focus-visible`
+   so a mouse click does not draw it, a keyboard tab does. */
+.rs-shell :is(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 3px solid var(--rs-primary);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* Controls the renderers hide behind a styled label still have to show
+   focus — the label is what the respondent sees, so it carries the ring. */
+.rs-shell input[type="radio"]:focus-visible + *,
+.rs-shell input[type="checkbox"]:focus-visible + *,
+.rs-shell :is(.rs-opt, .rs-card-opt, .rs-bucket, .rs-rank-item):has(:focus-visible) {
+  outline: 3px solid var(--rs-primary);
+  outline-offset: 2px;
+}
+
+/* Say it to a screen reader without showing it to anyone else. */
+.rs-sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* A skip link that appears only when it is focused: the first tab stop
+   of a long grid page should be "go to the questions", not the 60th
+   cell of the previous one. */
+.rs-skip {
+  position: absolute; left: 8px; top: -60px; z-index: 30;
+  padding: 10px 16px; border-radius: var(--rs-radius);
+  background: var(--rs-primary); color: #fff; font-weight: 600;
+  text-decoration: none; transition: top .12s ease;
+}
+.rs-skip:focus { top: 8px; }
+
+/* An error is announced by role="alert"; it should also be visible as
+   more than colour, for the same reason. */
+.rs-error-msg::before { content: "! "; font-weight: 700; }
+
+@media (prefers-reduced-motion: reduce) {
+  .rs-shell *, .rs-shell *::before, .rs-shell *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .rs-shell {
+    --rs-border: currentColor;
+    --rs-subtle: inherit;
+  }
+  .rs-shell :is(.rs-opt, .rs-card, .rs-rank-item, input, select, textarea) { border-width: 2px; }
+}

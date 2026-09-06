@@ -106,6 +106,12 @@ export const Option = z.object({
   /** Optional distinct export/analysis value; defaults to code. */
   value: z.union([z.string(), z.number()]).optional(),
   imageUrl: z.string().optional(),
+  /**
+   * What a screen reader says for this option's image. Defaults to the
+   * option's own label, which is right almost always — set it when the
+   * picture says something the label does not.
+   */
+  imageAlt: z.string().optional(),
   flags: z.array(OptionFlag).default([]),
   /** Show this option only when the condition holds. */
   visibleIf: Condition.optional(),
@@ -446,10 +452,23 @@ export const Question = z.object({
        * custom_table can opt in.
        */
       rowSum: z.boolean().optional(),
+      /**
+       * What assistive technology is told about this question.
+       *
+       * `altText` describes the stimulus — the image or video under the
+       * question text. Without it a stimulus is announced as nothing at all:
+       * `SafeImage` defaults to `alt=""`, which is correct for decoration and
+       * wrong for the thing the question is about. It is authored per
+       * question because only the programmer knows whether the picture
+       * carries the meaning or merely decorates it.
+       */
       accessibility: z
         .object({
           ariaLabel: z.string().optional(),
           describedBy: z.string().optional(),
+          altText: z.string().optional(),
+          /** the stimulus is decorative — announce nothing, deliberately */
+          decorative: z.boolean().optional(),
         })
         .optional(),
     })

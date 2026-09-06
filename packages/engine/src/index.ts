@@ -16,6 +16,7 @@ export * from "./dependencies.js";
 export * from "./renumber.js";
 export * from "./questionCount.js";
 export * from "./lintLogic.js";
+export * from "./qualityCheck.js";
 export * from "./logicSummary.js";
 export * from "./flow.js";
 export * from "./flowTree.js";

@@ -1673,3 +1673,16 @@ p.qs-help { margin: -2px 0 10px; }
 .lc-flags { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px; margin-bottom: 6px; }
 .lc-flag-row { display: flex; align-items: center; gap: 7px; font-size: 13.5px; color: var(--c-text-2); cursor: pointer; }
 .lc-more { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--c-border); }
+
+/* ==== Run Quality Check ==== */
+.qc-area { border-left: 3px solid var(--border); }
+.qc-area.qc-pass { border-left-color: var(--success, #1c7a55); }
+.qc-area.qc-warn { border-left-color: var(--warning, #b4741a); }
+.qc-area.qc-fail { border-left-color: var(--danger, #c0392f); }
+.qc-mark {
+  display: inline-grid; place-items: center; width: 20px; height: 20px;
+  border-radius: 50%; font-size: 12px; font-weight: 700; flex: none;
+}
+.qc-mark-pass { background: rgba(28, 122, 85, .12); color: var(--success, #1c7a55); }
+.qc-mark-warn { background: rgba(180, 116, 26, .14); color: var(--warning, #b4741a); }
+.qc-mark-fail { background: rgba(192, 57, 47, .12); color: var(--danger, #c0392f); }

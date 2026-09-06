@@ -59,12 +59,18 @@ export function SafeImage({ src, imageOnly, onBroken, alt = "", className, style
 }
 
 export function MediaEmbed({
-  url, className, style, title, controls = true, autoPlay, muted, loop, onEnded,
+  url, className, style, title, alt, controls = true, autoPlay, muted, loop, onEnded,
 }: {
   url: string | null | undefined;
   className?: string;
   style?: React.CSSProperties;
   title?: string;
+  /**
+   * What a screen reader says about this media. Falls back to `title` — the
+   * question's own text — rather than to the empty string, so a stimulus is
+   * never announced as an unnamed image. Pass "" deliberately for decoration.
+   */
+  alt?: string;
   controls?: boolean;
   autoPlay?: boolean;
   muted?: boolean;
@@ -73,11 +79,11 @@ export function MediaEmbed({
 }) {
   const media = React.useMemo(() => resolveMediaUrl(url), [url]);
   if (!url) return null;
-  return <ResolvedView media={media} className={className} style={style} title={title} controls={controls} autoPlay={autoPlay} muted={muted} loop={loop} onEnded={onEnded} />;
+  return <ResolvedView media={media} className={className} style={style} title={title} alt={alt} controls={controls} autoPlay={autoPlay} muted={muted} loop={loop} onEnded={onEnded} />;
 }
 
-function ResolvedView({ media, className, style, title, controls, autoPlay, muted, loop, onEnded }: {
-  media: ResolvedMedia; className?: string; style?: React.CSSProperties; title?: string;
+function ResolvedView({ media, className, style, title, alt, controls, autoPlay, muted, loop, onEnded }: {
+  media: ResolvedMedia; className?: string; style?: React.CSSProperties; title?: string; alt?: string;
   controls?: boolean; autoPlay?: boolean; muted?: boolean; loop?: boolean; onEnded?: () => void;
 }) {
   const [broken, setBroken] = React.useState(false);
@@ -89,13 +95,14 @@ function ResolvedView({ media, className, style, title, controls, autoPlay, mute
       if (broken) return <MediaNote className={cls} style={style} text="Unable to load image" data-testid="media-broken" title={media.url} />;
       return (
         // eslint-disable-next-line @next/next/no-img-element
-        <img className={cls} style={style} src={media.url} alt={title ?? ""} loading="lazy" referrerPolicy="no-referrer"
+        <img className={cls} style={style} src={media.url} alt={alt ?? title ?? ""} loading="lazy" referrerPolicy="no-referrer"
           onError={() => setBroken(true)} data-media-provider={media.provider} data-testid="media-image" />
       );
     case "video":
       if (broken) return <MediaNote className={cls} style={style} text="Unable to load video" data-testid="media-broken" title={media.url} />;
       return (
         <video className={cls} style={style} src={media.url} controls={controls} autoPlay={autoPlay} muted={muted} loop={loop}
+          aria-label={alt ?? title ?? undefined}
           playsInline preload="metadata" onEnded={onEnded} onError={() => setBroken(true)} data-media-provider={media.provider} data-testid="media-video">
           {media.mimeType && <source src={media.url} type={media.mimeType} />}
         </video>

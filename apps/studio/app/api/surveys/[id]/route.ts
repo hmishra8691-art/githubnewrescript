@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { SURVEY_STATUSES, isSurveyStatus } from "@/lib/status";
-import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
+import { audit, isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -81,8 +81,23 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   if (isFailure(gate)) return gate.response;
 
   const db = supabaseAdmin();
+  /*
+   * Read the name BEFORE the row goes: after the delete there is nothing left
+   * to describe it with, and "someone deleted project 4f2c…" is not an audit
+   * entry anybody can act on. `project.deleted` has been in the event
+   * vocabulary since the collaboration wave; this is the first thing to emit
+   * it — a hard delete of an entire project left no trace at all.
+   */
+  const { data: doomed } = await db
+    .from("surveys").select("code, title").eq("id", params.id).maybeSingle();
   await db.from("surveys").update({ current_version_id: null }).eq("id", params.id);
   const { error } = await db.from("surveys").delete().eq("id", params.id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  await audit({
+    action: "project.deleted", userId: gate.user.userId, sessionId: gate.user.sessionId,
+    surveyId: null, customerId: gate.user.customerId,
+    entity: "survey", entityId: params.id,
+    detail: { code: doomed?.code ?? null, title: doomed?.title ?? null },
+  });
   return NextResponse.json({ ok: true });
 }

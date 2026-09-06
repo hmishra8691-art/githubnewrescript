@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
 import { exportVariableDictionaryXlsx } from "@rescript/exporters";
-import { isFailure, requireProject } from "@/lib/guard";
+import { audit, isFailure, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +30,17 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
   const buf = await exportVariableDictionaryXlsx(parsed.data);
   const fname = `${parsed.data.meta.code}_v${ver.version}_variables.xlsx`;
+  /*
+   * Data leaving the platform is recorded. `responses.export` gated this
+   * route from the day it was written and nothing was ever written down, so
+   * "who took a copy of this study, and when" had no answer.
+   */
+  await audit({
+    action: "survey.exported", userId: gate.user.userId, sessionId: gate.user.sessionId,
+    surveyId: params.id, customerId: gate.user.customerId,
+    entity: "survey_version", entityId: ver.id,
+    detail: { format: "xlsx", kind: "variable dictionary", version: ver.version },
+  });
   return new NextResponse(new Uint8Array(buf), {
     headers: {
       "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

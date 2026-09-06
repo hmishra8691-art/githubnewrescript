@@ -207,7 +207,7 @@ export function CompareCarousel(p: QRProps) {
                 data-code={String(o.code)} {...anchor("option", String(o.code))} data-side={k === 0 ? "a" : "b"}>
                 {o.imageUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <SafeImage src={o.imageUrl} alt="" draggable={false} />
+                  <SafeImage src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} draggable={false} />
                 ) : (
                   <div className="rs-comparecar-noimg" aria-hidden>🖼</div>
                 )}

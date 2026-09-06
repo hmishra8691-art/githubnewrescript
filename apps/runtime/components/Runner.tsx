@@ -659,15 +659,20 @@ export function Runner({ definition: def, mode, session: initialSession, session
       )}
       {pageStep.mediaUrl && (
         <div className="rs-block-media" data-testid="rs-block-media">
-          <MediaEmbed url={pageStep.mediaUrl} title={pageStep.title} />
+          <MediaEmbed url={pageStep.mediaUrl} title={pageStep.title} alt={pageStep.title ?? "Block media"} />
         </div>
       )}
       {errors.length > 0 && (
-        <div className="rs-error-banner">Please review the highlighted questions below.</div>
+        <div className="rs-error-banner" role="status" aria-live="polite">
+          {blockingErrors(errors).length > 0
+            ? "Please review the highlighted questions below."
+            : "Please check the highlighted answers — you can continue if they are right."}
+        </div>
       )}
       {startNote && (
         <div className="rs-error-banner" data-testid="rs-start-note" style={{ background: "#fff7e6", color: "#7a4b00", borderColor: "#f0c36d" }}>{startNote}</div>
       )}
+      <div id="rs-questions" tabIndex={-1}>
       {questions.map((q) => {
         // the full iteration path, so nested loops key separately (see loopKeySuffix)
         const key = answerKey(q.id, pageStep.loop ?? null);
@@ -713,6 +718,7 @@ export function Runner({ definition: def, mode, session: initialSession, session
           />
         );
       })}
+      </div>
       <div className="rs-nav">
         {b.buttons.showBack && state.stepIndex > 0 ? (
           <button type="button" data-testid="rs-back" className={`rs-btn secondary ${b.buttons.style}`} onClick={handleBack}>
@@ -728,6 +734,12 @@ export function Runner({ definition: def, mode, session: initialSession, session
 
   const shell = (
     <div className={`rs-shell rs-${b.layout.cardStyle}`} style={brandingVars(b)}>
+      {/*
+        * The first tab stop on any page. Without it, a keyboard respondent
+        * on page 7 of a grid tabs through the whole toolbar and progress
+        * chrome before reaching a question — every time.
+        */}
+      <a className="rs-skip" href="#rs-questions" data-testid="rs-skip">Skip to the questions</a>
       {b.customCss && <style dangerouslySetInnerHTML={{ __html: b.customCss }} />}
       {(b.logoUrl || b.headerHtml) && (
         <div className={`rs-header ${b.logoPosition}`}>

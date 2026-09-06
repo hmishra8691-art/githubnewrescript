@@ -70,6 +70,17 @@ export const AUDIT_EVENTS = [
   "responses.modified",
   "responses.deleted",
   "responses.imported",
+  /*
+   * Reading data OUT is the event a security review asks about, and it was
+   * the one nothing recorded: the survey export, the variable dictionary and
+   * every response download left no trace at all, while the capability that
+   * gates them (`responses.export`) suggested otherwise. Purge is here for
+   * the same reason — it is the only irreversible thing a project owner can
+   * do to their own data.
+   */
+  "responses.exported",
+  "responses.purged",
+  "survey.exported",
 
   /* quota management (the dashboard records each numeric change with before/after) */
   "quota.created",
@@ -200,6 +211,9 @@ export function describeEvent(r: AuditRow): string {
     case "responses.modified": return `${who} edited response data${d.count ? ` (${str(d.count)} rows)` : ""}`;
     case "responses.deleted": return `${who} deleted response data${d.count ? ` (${str(d.count)} rows)` : ""}`;
     case "responses.imported": return `${who} imported response data${d.count ? ` (${str(d.count)} rows)` : ""}`;
+    case "responses.exported": return `${who} exported response data${d.format ? ` as ${str(d.format).toUpperCase()}` : ""}${d.dataset ? ` (${str(d.dataset)})` : ""}`;
+    case "responses.purged": return `${who} permanently purged response data${d.count ? ` (${str(d.count)} rows)` : ""}`;
+    case "survey.exported": return `${who} exported the survey${d.format ? ` as ${str(d.format).toUpperCase()}` : ""}`;
 
     case "comment.created": return `${who} left an internal note`;
     case "comment.resolved": return `${who} resolved a note`;

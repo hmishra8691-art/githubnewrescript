@@ -59,7 +59,7 @@ export function FlipCards(p: QRProps) {
                 {badge && <span className="rs-badge rs-flip-badge">{badge}</span>}
                 {o.imageUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <SafeImage className="rs-flip-img" src={o.imageUrl} alt="" draggable={false} />
+                  <SafeImage className="rs-flip-img" src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} draggable={false} />
                 ) : (
                   <div className="rs-flip-icon" aria-hidden>{icon || "◻"}</div>
                 )}

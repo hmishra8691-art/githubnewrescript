@@ -748,7 +748,7 @@ export function ImageSelect(p: QRProps & { multi?: boolean; ranking?: boolean })
           <div key={String(o.code)} className={`rs-imgopt ${sel ? "selected" : ""}`} onClick={() => click(o)} {...anchor("option", o.code)}>
             {o.imageUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <SafeImage src={o.imageUrl} alt={o.label.replace(/<[^>]*>/g, "")} />
+              <SafeImage src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
             ) : (
               <div style={{ height: 110, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--rs-border)" }}>🖼</div>
             )}
@@ -1111,7 +1111,7 @@ export function ChoiceCards(p: QRProps & { multi: boolean }) {
             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(o); } }}>
             {o.imageUrl && (
               // eslint-disable-next-line @next/next/no-img-element
-              <SafeImage src={o.imageUrl} alt=""/>
+              <SafeImage src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
             )}
             <div className="rs-cardopt-title" dangerouslySetInnerHTML={{ __html: o.label }} />
             {desc && <div className="rs-cardopt-desc" dangerouslySetInnerHTML={{ __html: desc }} />}
@@ -1522,7 +1522,7 @@ export function CarouselSelect(p: QRProps) {
           onClick={() => p.onChange(selected ? null : o.code)}>
           {o.imageUrl && (
             // eslint-disable-next-line @next/next/no-img-element
-            <SafeImage src={o.imageUrl} alt=""/>
+            <SafeImage src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
           )}
           <div className="rs-cardopt-title" dangerouslySetInnerHTML={{ __html: o.label }} />
           {desc && <div className="rs-cardopt-desc" dangerouslySetInnerHTML={{ __html: desc }} />}
@@ -1613,7 +1613,7 @@ export function CompareImages(p: QRProps) {
             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); p.onChange(sel ? null : o.code); } }}>
             {o.imageUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <SafeImage src={o.imageUrl} alt="" style={{ height: 220 }}/>
+              <SafeImage src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} style={{ height: 220 }}/>
             ) : (
               <div className="rs-compare-noimg">🖼</div>
             )}
@@ -1754,6 +1754,12 @@ function QuestionScript(p: QRProps) {
 export function QuestionRenderer(props: QRProps) {
   const p = withPipedMedia(props, ctxOf(props));
   const ctx = ctxOf(p);
+  /*
+   * `settings.accessibility` has been in the schema, and in the properties
+   * panel, since the variant batch — and no renderer had ever read it. It is
+   * read here, once, for every question type.
+   */
+  const a11y = p.q.settings.accessibility;
   const text = resolvePiping(p.q.text, ctx);
   const instruction = p.q.instruction ? resolvePiping(p.q.instruction, ctx) : null;
 
@@ -1834,7 +1840,15 @@ export function QuestionRenderer(props: QRProps) {
     case "custom_component": body = <CustomComponent {...p} />; break;
     case "html":
       return (
-        <div className="rs-card" data-qid={p.q.id} {...anchor("question", p.q.id)}>
+        <div
+      className="rs-card"
+      data-qid={p.q.id}
+      role="group"
+      aria-label={a11y?.ariaLabel}
+      aria-describedby={a11y?.describedBy ?? (p.errors.length ? `${p.q.id}__err` : undefined)}
+      aria-invalid={p.errors.length > 0 || undefined}
+      {...anchor("question", p.q.id)}
+    >
           <div {...anchor("text")} dangerouslySetInnerHTML={{ __html: resolvePiping(p.q.customHtml ?? p.q.text, ctx) }} />
         </div>
       );
@@ -1842,7 +1856,15 @@ export function QuestionRenderer(props: QRProps) {
   }
 
   return (
-    <div className="rs-card" data-qid={p.q.id} {...anchor("question", p.q.id)}>
+    <div
+      className="rs-card"
+      data-qid={p.q.id}
+      role="group"
+      aria-label={a11y?.ariaLabel}
+      aria-describedby={a11y?.describedBy ?? (p.errors.length ? `${p.q.id}__err` : undefined)}
+      aria-invalid={p.errors.length > 0 || undefined}
+      {...anchor("question", p.q.id)}
+    >
       {p.q.customCss && <style dangerouslySetInnerHTML={{ __html: p.q.customCss }} />}
       <p className="rs-qtext" {...anchor("text")}>
         <span dangerouslySetInnerHTML={{ __html: text }} />
@@ -1851,7 +1873,18 @@ export function QuestionRenderer(props: QRProps) {
       {instruction && <p className="rs-qinstruction" {...anchor("instruction")} dangerouslySetInnerHTML={{ __html: instruction }} />}
       {p.q.settings.mediaUrl && !MEDIA_OWNING_RENDERERS.has(variantDef?.renderer ?? `base:${p.q.type}`) && (
         <div className="rs-qmedia" data-testid="rs-qmedia" {...anchor("media")}>
-          <MediaEmbed url={p.q.settings.mediaUrl} title={p.q.text.replace(/<[^>]*>/g, "")} />
+          {/*
+            * The stimulus is described by what the programmer wrote, and only
+            * silently when they said it is decorative. Falling back to the
+            * question text is better than the empty alt this used to emit:
+            * a respondent on a screen reader was told there was an image and
+            * nothing about it.
+            */}
+          <MediaEmbed
+            url={p.q.settings.mediaUrl}
+            title={p.q.text.replace(/<[^>]*>/g, "")}
+            alt={a11y?.decorative ? "" : (a11y?.altText ?? p.q.text.replace(/<[^>]*>/g, ""))}
+          />
         </div>
       )}
       {p.q.customHtml && p.q.type !== "custom_component" && (
@@ -1859,9 +1892,14 @@ export function QuestionRenderer(props: QRProps) {
       )}
       {body}
       {p.q.customJs && p.q.type !== "custom_component" && <QuestionScript {...p} />}
-      {p.errors.map((e, i) => (
-        <div key={i} className="rs-error-msg">{e}</div>
-      ))}
+      {/* announced when it appears, and named by the question that owns it */}
+      {p.errors.length > 0 && (
+        <div id={`${p.q.id}__err`} role="alert">
+          {p.errors.map((e, i) => (
+            <div key={i} className="rs-error-msg">{e}</div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

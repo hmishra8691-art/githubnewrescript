@@ -4,7 +4,7 @@ import { loadQualityDefinition } from "@/lib/qualityDef";
 import { Condition } from "@rescript/schema";
 import { matchingResponseIds, parseEnvironment, missingResponseMigration, RESPONSE_MIGRATION_MESSAGE } from "@/lib/responseData";
 import { recountQuotas } from "@/lib/quotaRecount";
-import { isFailure, requireProject } from "@/lib/guard";
+import { audit, isFailure, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -116,6 +116,23 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const r = await recountQuotas(db, undefined, params.id, isTest).catch(() => null);
     if (r) quotas[isTest ? "TEST" : "LIVE"] = r;
   }
+  /*
+   * A console line is not an audit trail: it is not queryable, it is not
+   * attributable after a redeploy, and it is not what the Activity tab reads.
+   * Purge in particular is the one irreversible operation on a project's own
+   * data — it recorded nothing until now.
+   */
+  await audit({
+    action: action === "purge" ? "responses.purged" : "responses.deleted",
+    userId: gate.user.userId, sessionId: gate.user.sessionId,
+    surveyId: params.id, customerId: gate.user.customerId,
+    entity: "responses", entityId: null,
+    detail: {
+      operation: action, environment, reason: reason ?? null,
+      count: typeof affected === "number" ? affected : ids.length,
+      sample: codes.slice(0, 5),
+    },
+  });
   console.info("[rescript:data] bulk", JSON.stringify({ surveyId: params.id, environment, action, affected, by, reason, sample: codes.slice(0, 5) }));
   return NextResponse.json({ ok: true, action, affected: typeof affected === "number" ? affected : ids.length, respondentCodes: codes.slice(0, 200), quotas });
 }
