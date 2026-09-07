@@ -39,6 +39,15 @@ export const AUDIT_EVENTS = [
   "account.enabled",
   "account.unlocked",
   "account.role_changed",
+  /*
+   * The workspace access policy — session timeouts, lockout thresholds, the
+   * baseline role. `public.access_settings` has been read on every login
+   * since 0008 and was written by nothing but the SQL editor, so there was
+   * no event for changing it. It belongs here because it is the one setting
+   * whose wrong value locks colleagues out of their own accounts: "who
+   * shortened the session lifetime to five minutes" has to be answerable.
+   */
+  "workspace.access_policy_changed",
 
   /* projects */
   "project.created",
@@ -168,6 +177,8 @@ export function describeEvent(r: AuditRow): string {
     case "project.opened": return `${who} opened this project${d.readOnly ? " (read-only)" : ""}`;
     case "project.deleted": return `${who} deleted this project`;
     case "project.shared": return `${who} shared this project with ${target}${role ? ` as ${role}` : ""}`;
+    case "workspace.access_policy_changed":
+      return `${who} changed the workspace access policy${d.summary ? ` — ${str(d.summary)}` : ""}`;
     case "project.access_removed": return `${who} removed ${target}'s access`;
     case "project.permission_changed": return `${who} changed ${target}'s role to ${role}`;
     case "project.ownership_transferred": return `${who} transferred ownership to ${target}`;
@@ -228,6 +239,8 @@ export type AuditCategory = "identity" | "session" | "access" | "editing" | "sur
 export function auditCategory(action: string): AuditCategory {
   if (action.startsWith("user.")) return "identity";
   if (action.startsWith("session.") || action.startsWith("account.")) return "session";
+  // a workspace-wide policy is an access decision, not a per-account one
+  if (action.startsWith("workspace.")) return "access";
   if (action.startsWith("lock.")) return "editing";
   if (action.startsWith("comment.")) return "collaboration";
   if (action.startsWith("responses.") || action.startsWith("analytics.")) return "data";

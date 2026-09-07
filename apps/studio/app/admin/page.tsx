@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import { AccountHeader } from "@/components/AccountHeader";
+import { AccessPolicyPanel } from "@/components/AccessPolicyPanel";
 import { api, useSession } from "@/lib/useSession";
 
 /**
@@ -81,7 +82,7 @@ function whenLabel(iso: string | null | undefined): string {
 
 export default function AdminPage() {
   const { state, signOut } = useSession({ redirectOnSignOut: true });
-  const [tab, setTab] = React.useState<"sessions" | "accounts">("sessions");
+  const [tab, setTab] = React.useState<"sessions" | "accounts" | "access">("sessions");
 
   const [sessions, setSessions] = React.useState<AdminSessionsPayload | null>(null);
   const [accounts, setAccounts] = React.useState<AccountsPayload | null>(null);
@@ -230,10 +231,23 @@ export default function AdminPage() {
         >
           Accounts
         </button>
+        {/* §7: the settings table that was read on every login and written by
+            nothing. It belongs behind the same door as accounts — a session
+            timeout decides whether a colleague is signed out mid-edit. */}
+        <button
+          type="button"
+          data-testid="admin-tab-access"
+          className={tab === "access" ? "active" : undefined}
+          onClick={() => { setTab("access"); setNote(null); }}
+        >
+          Access policy
+        </button>
       </div>
 
       {error && <div className="auth-note err">{error}</div>}
       {note && !error && <div className="auth-note ok">{note}</div>}
+
+      {tab === "access" && <AccessPolicyPanel />}
 
       {tab === "sessions" && (
         <>
