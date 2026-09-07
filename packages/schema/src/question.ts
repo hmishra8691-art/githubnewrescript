@@ -101,6 +101,22 @@ export const OptionFlag = z.enum([
 ]);
 
 export const Option = z.object({
+  /**
+   * Stable internal id (§33). OPTIONAL, and that is not laziness.
+   *
+   * Every survey definition already in the database was written without one.
+   * A required field makes `SurveyDefinition.safeParse` fail on all of them —
+   * and the runtime returns null on a parse failure, so a live survey would go
+   * dark. Optional means old definitions keep parsing; `ensureElementIds`
+   * fills the gaps.
+   *
+   * The id does NOT replace `code`. Code is the platform's join key: stored
+   * answers, export column names, quota cells, List Fill counters and the
+   * variable dictionary are all keyed by it, and several of those live outside
+   * the definition in tables nothing can rewrite. The id is the thing that
+   * survives a code being renumbered — a second name, not a replacement.
+   */
+  id: z.string().optional(),
   code: z.union([z.string(), z.number()]),
   label: z.string(),
   /** Optional distinct export/analysis value; defaults to code. */
@@ -128,6 +144,13 @@ export const Option = z.object({
 export type Option = z.infer<typeof Option>;
 
 export const ValidationRule = z.object({
+  /**
+   * Stable internal id (§42). Validation rules were addressed by array index
+   * everywhere — `validation.map((x, j) => j === i ? … : x)` — so reordering
+   * them silently repointed anything that referred to one, and nothing could
+   * refer to one at all.
+   */
+  id: z.string().optional(),
   kind: z.enum([
     "required",
     "min_value",
@@ -264,6 +287,8 @@ export const QuestionColumn = z.object({
 export type QuestionColumn = z.infer<typeof QuestionColumn>;
 
 export const QuestionRow = z.object({
+  /** Stable internal id (§34). Optional for the same reason as `Option.id`. */
+  id: z.string().optional(),
   code: z.union([z.string(), z.number()]),
   label: z.string(),
   visibleIf: Condition.optional(),

@@ -2,6 +2,7 @@ import "server-only";
 import { supabaseAdmin } from "./admin";
 import { SurveyDefinition } from "@rescript/schema";
 import { decideTestBuild, versionIdToFetch, type TestBuild } from "@rescript/engine";
+import { ensureElementIds } from "@rescript/engine";
 
 export interface LoadedDeployment {
   deploymentId: string;
@@ -64,13 +65,27 @@ export async function loadDeployment(
 
   const parsed = SurveyDefinition.safeParse(ver.definition);
   if (!parsed.success) return null;
+  /*
+   * STABLE ELEMENT IDS, presented on read (§31–49).
+   *
+   * A published version is FROZEN by a database trigger (0012) — deliberately,
+   * because a deployed link is pinned to that snapshot. So a version cut
+   * before ids existed can never be rewritten to have them, and the only way
+   * it can present them is to derive them here, every time.
+   *
+   * `ensureElementIds` is deterministic, so this gives the same answer on
+   * every request and on every server — which is the whole reason the
+   * backfill is derived rather than minted. A random id here would change
+   * under a respondent mid-session.
+   */
+  const definition = ensureElementIds(parsed.data).def;
 
   return {
     deploymentId: dep.id,
     surveyId: dep.survey_id,
     versionId: dep.version_id,
     mode: dep.mode,
-    definition: parsed.data,
+    definition,
     surveyStatus: (survey?.status as string) ?? "live",
   };
 }
@@ -127,7 +142,7 @@ export async function loadTestBuild(
     ? (() => {
         const parsed = SurveyDefinition.safeParse(survey.draft_definition);
         return parsed.success
-          ? { ok: true as const, definition: parsed.data, updatedAt: (survey.draft_updated_at as string | null) ?? null }
+          ? { ok: true as const, definition: ensureElementIds(parsed.data).def, updatedAt: (survey.draft_updated_at as string | null) ?? null }
           : { ok: false as const, error: parsed.error.issues.slice(0, 3).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") };
       })()
     : null;
@@ -144,7 +159,7 @@ export async function loadTestBuild(
     else {
       const parsed = SurveyDefinition.safeParse(ver.definition);
       version = parsed.success
-        ? { ok: true, id: ver.id, surveyId: ver.survey_id, version: ver.version, definition: parsed.data }
+        ? { ok: true, id: ver.id, surveyId: ver.survey_id, version: ver.version, definition: ensureElementIds(parsed.data).def }
         : { ok: false, error: `stored definition does not match the schema: ${parsed.error.issues.slice(0, 3).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}` };
     }
   }

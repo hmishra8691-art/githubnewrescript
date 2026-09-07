@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
-import { droppedFieldPaths } from "@rescript/engine";
+import { droppedFieldPaths, ensureElementIds } from "@rescript/engine";
 import { audit, isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -75,16 +75,36 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   const dropped = droppedFieldPaths(body.definition, parsed.data);
   const droppedFields = dropped.length > 0 ? dropped : undefined;
 
+  /*
+   * STABLE ELEMENT IDS (§31–49), backfilled here.
+   *
+   * This is the right boundary for three reasons. It is the only
+   * high-frequency MUTABLE write — published versions are frozen by a database
+   * trigger and cannot be rewritten at all — so every actively edited survey
+   * backfills itself within a second of the next keystroke. It runs AFTER
+   * `safeParse`, so it operates on defaulted data. And it runs AFTER
+   * `droppedFieldPaths`, which matters: that check asks whether anything the
+   * CLIENT sent failed to survive, and ids we add here were never sent, so
+   * adding them before the comparison would be fine — but adding them after
+   * keeps the check answering exactly the question it was written to answer.
+   *
+   * Deterministic, so an old published version backfilled on read gets the
+   * same ids this draft got. Idempotent, so a survey that already has them
+   * pays a walk and nothing else.
+   */
+  const withIds = ensureElementIds(parsed.data);
+  const definition = withIds.def;
+
   const db = supabaseAdmin();
   const baseRevision = Number.isFinite(body?.baseRevision) ? Number(body.baseRevision) : null;
 
   if (baseRevision !== null) {
     const { data, error } = await db.rpc("rescript_save_draft", {
       p_survey_id: params.id,
-      p_definition: parsed.data,
+      p_definition: definition,
       p_base_revision: baseRevision,
       p_base_version_id: body.baseVersionId ?? null,
-      p_title: parsed.data.meta.title,
+      p_title: definition.meta.title,
     });
 
     if (error && !guardMissing(error.message)) {
@@ -168,10 +188,10 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   const { error } = await db
     .from("surveys")
     .update({
-      draft_definition: parsed.data,
+      draft_definition: definition,
       draft_updated_at: new Date().toISOString(),
       draft_base_version_id: body.baseVersionId ?? null,
-      title: parsed.data.meta.title,
+      title: definition.meta.title,
       updated_at: new Date().toISOString(),
     })
     .eq("id", params.id);

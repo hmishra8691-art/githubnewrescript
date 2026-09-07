@@ -5,6 +5,7 @@ import { evaluateExpression } from "./calc.js";
 import { resolvePiping } from "./piping.js";
 import { answerKey, findLoopScope, getQuestionByCodeOrVar, lookupAnswer, loopValue } from "./state.js";
 import { loopContexts, loopNodes } from "./loops.js";
+import { elementIndex, type ElementRef } from "./elementIds.js";
 
 /**
  * Custom script host (requirement §13).
@@ -82,6 +83,25 @@ export interface ScriptCtx {
   getCurrentLoopReference(name: string, scope?: string): unknown;
   getLoopItems(scope?: string): LoopItemView[];
   getLoopAnswer(ref: string, itemCode: string, scope?: string): unknown;
+  /*
+   * ADDRESSING ELEMENTS BY THEIR STABLE ID (§46).
+   *
+   * Until now a script could reach a QUESTION — by id, code or variable name,
+   * all three accepted — and nothing below it. There was no way to ask what an
+   * option's label is, which rows a grid has, or what a group contains, so
+   * every script that needed one hard-coded a code and broke when the list was
+   * renumbered.
+   *
+   * These return PLAIN COPIES, not live definition objects. A script that
+   * mutated the definition would change what every other respondent on the
+   * same server sees, which is not a facility anybody asked for.
+   */
+  getElement(id: string): ElementView | null;
+  getQuestion(ref: string): ElementView | null;
+  getOption(id: string): ElementView | null;
+  getRow(id: string): ElementView | null;
+  getColumn(id: string): ElementView | null;
+  getGroup(id: string): ElementView | null;
   /** console-style log captured by the inspector */
   log(...args: unknown[]): void;
   /** register a validation error (on_validate scripts, custom_script rules) */
@@ -97,6 +117,21 @@ export interface LoopItemView {
   index: number;
   count: number;
   references: Record<string, unknown>;
+}
+
+/**
+ * What a script sees of an element. A copy, and only the fields a script has
+ * any business reading — no conditions, no nested logic, nothing that would
+ * let a script rewrite the questionnaire it is running inside.
+ */
+export interface ElementView {
+  kind: string;
+  id: string;
+  /** code for options and rows, question code for a question */
+  code?: string | number;
+  label?: string;
+  /** the id of the element that owns this one */
+  parentId?: string;
 }
 
 export interface ScriptRunResult {
@@ -115,7 +150,34 @@ export function createScriptCtx(
   const viewOf = (l: LoopContext): LoopItemView => ({
     code: l.code, label: l.label, index: l.index, count: l.count ?? 0, references: { ...(l.references ?? {}) },
   });
+  /*
+   * Built once per script run and cached, because a script in a loop calls
+   * these per iteration and walking the whole definition each time would turn
+   * a lookup into a scan.
+   */
+  let index: Map<string, ElementRef> | null = null;
+  const lookup = (id: string, kind?: string): ElementView | null => {
+    index ??= elementIndex(def);
+    const hit = index.get(id);
+    if (!hit) return null;
+    if (kind && hit.kind !== kind) return null;
+    const el = hit.element as { code?: string | number };
+    return {
+      kind: hit.kind, id: hit.id, code: el?.code, label: hit.label, parentId: hit.parentId,
+    };
+  };
+
   return {
+    getElement: (id) => lookup(id),
+    /* a question stays addressable the three ways it always was */
+    getQuestion(ref) {
+      const q = getQuestionByCodeOrVar(def, ref);
+      return q ? { kind: "question", id: q.id, code: q.code, label: q.code } : null;
+    },
+    getOption: (id) => lookup(id, "option"),
+    getRow: (id) => lookup(id, "row"),
+    getColumn: (id) => lookup(id, "column"),
+    getGroup: (id) => lookup(id, "group"),
     get(ref) {
       return lookupAnswer(state.answers, refToId(ref), loop) ?? null;
     },
@@ -202,7 +264,8 @@ export function runScript(code: string, ctx: ScriptCtx, into?: ScriptRunResult):
       "ctx",
       ...DENIED_GLOBALS,
       `"use strict";\nconst { get, set, getCalc, setCalc, getEmbedded, setEmbedded, expr, pipe, flag, loop, log, error, `
-        + `getCurrentLoopItem, getCurrentLoopIndex, getLoopCount, getCurrentLoopReference, getLoopItems, getLoopAnswer } = ctx;\n`
+        + `getCurrentLoopItem, getCurrentLoopIndex, getLoopCount, getCurrentLoopReference, getLoopItems, getLoopAnswer, `
+        + `getElement, getQuestion, getOption, getRow, getColumn, getGroup } = ctx;\n`
         + `const value = ctx.value;\n${code}`,
     );
     fn(ctx);

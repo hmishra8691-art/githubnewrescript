@@ -149,6 +149,8 @@ export type ListFillCount = z.infer<typeof ListFillCount>;
  * special case.
  */
 export const ListFillOption = z.object({
+  /** Stable internal id (§41). Optional — see `Option.id`. */
+  id: z.string().optional(),
   /** the option code in the source list */
   code: z.string(),
   /** label override; otherwise the source question's own label is used */
@@ -198,6 +200,8 @@ export type UnusedDestinationRule = z.infer<typeof UnusedDestinationRule>;
  * follows `whenUnused`.
  */
 export const ListFillDestination = z.object({
+  /** Stable internal id (§41). Optional — see `Option.id`. */
+  id: z.string().optional(),
   /** the question that receives this position's item */
   questionId: z.string(),
   /** 1-based position in the final list; absent = this entry's own index */

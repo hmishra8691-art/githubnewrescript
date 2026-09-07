@@ -159,7 +159,13 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
    */
   const insertAfter = (i: number) => {
     const next = [...options];
-    next.splice(i + 1, 0, { code: nextCode(options), label: "", flags: [] } as Option);
+    /*
+     * A MINTED id, not a derived one (§43). An element created here gets an id
+     * that was never a function of its code or its position, so renaming or
+     * renumbering it later cannot move it. `ensureElementIds` only derives ids
+     * for elements that predate this — it never overwrites one that exists.
+     */
+    next.splice(i + 1, 0, { id: uid("opt"), code: nextCode(options), label: "", flags: [] } as Option);
     pendingFocus.current = i + 1;
     onChange(next);
   };
@@ -194,15 +200,21 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
     if (parsed.length === 0) return;
     const next = [...options];
     next[i] = { ...next[i], label: parsed[0].label, code: options[i].label ? next[i].code : parsed[0].code };
-    next.splice(i + 1, 0, ...(parsed.slice(1) as Option[]));
+    next.splice(i + 1, 0, ...(parsed.slice(1).map((o) => ({ ...o, id: uid("opt") })) as Option[]));
     pendingFocus.current = i + parsed.length - 1;
     setShowAll(true); // the pasted rows must be mounted for focus to land
     onChange(next);
   };
 
+  /*
+   * The paste box builds a whole new option list. Options it CARRIED OVER keep
+   * their ids (planPaste preserves the objects it matched); options it created
+   * have none, so they are minted here rather than left to be derived from a
+   * code later.
+   */
   const importPaste = () => {
     if (parsePastedOptions(pasteText, 1).length === 0) return;
-    onChange(pastePlan.options);
+    onChange(pastePlan.options.map((o) => (o.id ? o : { ...o, id: uid("opt") })));
     if (pastePlan.removed > 0) onAfterDelete?.();
     setFilter("");
     setShowAll(true);
@@ -595,6 +607,7 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
         <button className="btn small" onClick={() =>
           patch({
             rows: [...rows, {
+              id: uid("row"),
               code: `f${rows.length + 1}`, label: `Field ${rows.length + 1}`, flags: [],
               fieldType: q.type === "numeric_list" ? "number" : "text",
               validation: [], required: false,

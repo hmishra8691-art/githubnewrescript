@@ -2,6 +2,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
 import { newSurveyDefinition } from "@/lib/defaults";
 import { Studio } from "@/components/studio/Studio";
+import { ensureElementIds } from "@rescript/engine";
 
 export const dynamic = "force-dynamic";
 
@@ -63,7 +64,13 @@ export default async function StudioPage({ params }: { params: { id: string } })
     } else {
       const parsed = SurveyDefinition.safeParse(ver.definition);
       if (parsed.success) {
-        definition = parsed.data;
+        /*
+         * Element ids presented on read, for the same reason as the runtime:
+         * a version cut before ids existed is frozen and can never be
+         * rewritten. Deterministic, so the editor and the runtime agree about
+         * what every element is called.
+         */
+        definition = ensureElementIds(parsed.data).def;
         versionId = ver.id;
       } else {
         loadError =
@@ -86,7 +93,7 @@ export default async function StudioPage({ params }: { params: { id: string } })
   if (survey.draft_definition) {
     const draft = SurveyDefinition.safeParse(survey.draft_definition);
     if (draft.success) {
-      definition = draft.data;
+      definition = ensureElementIds(draft.data).def;
       draftSavedAt = (survey.draft_updated_at as string) ?? null;
     } else {
       loadError =
