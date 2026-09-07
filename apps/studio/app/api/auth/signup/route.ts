@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { createAccount, deviceOf, ipHashOf, loadPolicies, setSessionCookie, supabaseService } from "@/lib/authServer";
 import { audit } from "@/lib/guard";
@@ -92,6 +93,38 @@ export async function POST(req: NextRequest) {
   });
   const result = (Array.isArray(loginRows) ? loginRows[0] : loginRows) as { outcome: string; session_id: string | null };
 
+  /*
+   * THE INVITATION, IN TWO WAYS — the strong one first (§22, 0017).
+   *
+   * 1. THE TOKEN, when the link was followed. It was mailed to the invitee
+   *    and to nobody else, so it is the only proof of the offer this platform
+   *    actually has: signup does not verify an email address, so an address
+   *    alone means whoever typed it. `rescript_accept_invitation` grants the
+   *    one invitation the hash names and marks it spent in the same
+   *    statement, so a forwarded link cannot be replayed.
+   *
+   *    A stale or unknown token grants nothing and is NOT an error. The
+   *    account has already been created by this point, and failing here would
+   *    turn "your invitation expired" into "your account could not be
+   *    created" — a far worse answer to a problem the person can fix by
+   *    asking for another link.
+   *
+   * 2. THE ADDRESS, as before, for invitations sent to someone who then signs
+   *    up without following the link. Unchanged so that nobody already
+   *    invited is stranded by this migration, and weaker for exactly the
+   *    reason above.
+   */
+  const inviteToken = typeof body?.invite === "string" ? body.invite.trim() : "";
+  let acceptedByToken: { survey_id?: string; role?: string } | null = null;
+  if (inviteToken.length >= 20) {
+    const inviteHash = createHash("sha256").update(inviteToken).digest("hex");
+    const { data: accepted } = await db.rpc("rescript_accept_invitation", {
+      p_user: created.userId,
+      p_token_hash: inviteHash,
+    });
+    acceptedByToken = (Array.isArray(accepted) ? accepted[0] : accepted) ?? null;
+  }
+
   // any project invitation already waiting for this address becomes real (§22)
   const { data: claimed } = await db.rpc("rescript_claim_invitations", { p_user: created.userId });
 
@@ -112,7 +145,15 @@ export async function POST(req: NextRequest) {
       isPlatformAdmin: profile.role === "platform_admin",
       createdAt: profile.created_at,
     },
-    invitationsClaimed: Number(claimed ?? 0),
+    /*
+     * Both counts, separately: the caller can say "you have joined Brand
+     * Tracker" for the invitation that was PROVEN by a link, and mention the
+     * address-matched ones without conflating the two.
+     */
+    invitationsClaimed: Number(claimed ?? 0) + (acceptedByToken ? 1 : 0),
+    invitationAccepted: acceptedByToken
+      ? { surveyId: acceptedByToken.survey_id ?? null, role: acceptedByToken.role ?? null }
+      : null,
     signedIn: result?.outcome === "created",
   });
   if (result?.session_id) setSessionCookie(res, result.session_id, policies.session.absoluteLifetimeSeconds);

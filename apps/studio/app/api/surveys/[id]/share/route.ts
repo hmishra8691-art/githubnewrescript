@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { GRANTABLE_ROLES, isProjectRole, parseIdentifier, ROLE_LABEL } from "@rescript/access";
 import { newInvitationToken, supabaseService } from "@/lib/authServer";
@@ -156,16 +157,44 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   /*
-   * The token is what links account creation to this grant (§22). It is
-   * unguessable and single-use: `rescript_claim_invitations` marks it accepted,
-   * so knowing an email address is not enough to inherit access and a leaked
-   * link cannot be replayed.
+   * THE TOKEN IS NOW THE CREDENTIAL, AND ONLY ITS HASH IS STORED (0017).
+   *
+   * The comment that used to be here said the token was "unguessable and
+   * single-use, so knowing an email address is not enough to inherit access".
+   * None of that was true. The token was generated, put in the link, stored in
+   * plaintext — and read by nothing: `/signup` called
+   * `Boolean(searchParams.get("invite"))` to change a line of copy and threw
+   * the value away, and the grant was made by `rescript_claim_invitations`,
+   * which matches on the account's EMAIL ADDRESS. Since nothing verifies an
+   * address at signup, an invitation was claimable by whoever registered as
+   * the invitee.
+   *
+   * So: the token goes in the link and NEVER into the database. The row keeps
+   * a SHA-256 hash, hashed here exactly as a password reset is, and
+   * `rescript_accept_invitation` claims the invitation the hash identifies —
+   * single-use, in one statement, so a forwarded link is inert.
+   *
+   * The email path stays for sign-in, so an invitation sent before someone had
+   * an account still takes effect when they arrive (§22). It is as strong as
+   * an unverified address, which is to say not very; the strong path is the
+   * link, and email verification is its own piece of work.
    */
   const token = newInvitationToken();
+  const tokenHash = createHash("sha256").update(token).digest("hex");
   const { data: invitation, error } = await db
     .from("project_invitations")
     .upsert(
-      { survey_id: params.id, email: identifier.value, role, token, invited_by: user.userId },
+      {
+        survey_id: params.id, email: identifier.value, role,
+        token_hash: tokenHash,
+        /*
+         * Explicitly null, not merely omitted: re-inviting somebody upserts
+         * onto an existing row, which may be a pre-0017 row still carrying a
+         * plaintext token. Leaving it would keep that credential alive.
+         */
+        token: null,
+        invited_by: user.userId,
+      },
       { onConflict: "survey_id,email" },
     )
     .select("id, expires_at")

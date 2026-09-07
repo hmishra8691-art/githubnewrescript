@@ -38,16 +38,34 @@ export default function SignupPage() {
   const [busy, setBusy] = React.useState(false);
   const [done, setDone] = React.useState<SignedUp | null>(null);
   const [invited, setInvited] = React.useState(false);
+  const [inviteToken, setInviteToken] = React.useState<string | null>(null);
   const [copied, setCopied] = React.useState(false);
 
   /*
-   * The invitation token is read only to explain what is about to happen. It
-   * is deliberately not sent with the form: the server matches waiting
+   * THE INVITATION TOKEN IS SENT WITH THE FORM (0017).
+   *
+   * It used to be read only to change a line of copy, and this comment used
+   * to explain why it was deliberately withheld: "the server matches waiting
    * invitations by email address, so a token pasted in by hand cannot grant
-   * access to a project that was never offered to this address.
+   * access to a project that was never offered to this address."
+   *
+   * That had it backwards. The token IS the offer — it was mailed to the
+   * invitee and to nobody else — while the address proves nothing, because
+   * signup does not verify one. Withholding the token meant the only check
+   * was "did you type the invited address", which anybody can do.
+   *
+   * So it travels with the form now, and the server redeems it against
+   * `rescript_accept_invitation`, which grants that one invitation and marks
+   * it spent. A token that names nothing is ignored rather than refused: it
+   * must not be possible to fail to create an account because a link was
+   * stale.
    */
   React.useEffect(() => {
-    setInvited(Boolean(new URLSearchParams(window.location.search).get("invite")));
+    try {
+      const t = new URLSearchParams(window.location.search).get("invite");
+      setInviteToken(t && t.length >= 20 ? t : null);
+      setInvited(Boolean(t));
+    } catch { setInvited(false); }
   }, []);
 
   React.useEffect(() => {
@@ -68,7 +86,7 @@ export default function SignupPage() {
     setProblems({});
     const res = await api<SignedUp>("/api/auth/signup", {
       method: "POST",
-      json: { name, email, password, confirmPassword, organization, jobTitle },
+      json: { name, email, password, confirmPassword, organization, jobTitle, invite: inviteToken },
     });
     setBusy(false);
     if (res.ok) {
