@@ -16,6 +16,40 @@ import { Icon } from "../ui/Icon";
 import { useCanvas } from "../canvas/CanvasContext";
 import { LiveView } from "../canvas/LiveView";
 
+/**
+ * BLOCK COMMANDS — one identifier per action, on the button that performs it.
+ *
+ * The five block actions were already five separate closures calling five
+ * different mutations; there was no shared callback and no string-dispatch to
+ * collide in. What there was no way to do was TELL THEM APART from outside:
+ * "+ Add block" appeared twice with one `data-testid` between the two,
+ * "split block" and "⤵" both split but only one was addressable, and
+ * "📋 paste options" — which belongs to the option list, not to blocks — sits
+ * a few pixels from "+ option" and is instantiated once per matrix column, so
+ * an unscoped `[data-testid="toggle-paste"]` hits whichever mounted first.
+ *
+ * A stable `data-command` on each control means a test, a keyboard map or a
+ * future integration names the action it wants rather than a position or a
+ * label, and a regression that swaps two handlers becomes a failing assertion
+ * instead of a bug report six weeks later.
+ *
+ * PASTE IS DELIBERATELY IN THIS LIST even though it is not a block action, so
+ * that "paste is not a block command" is written down somewhere a reader will
+ * find it.
+ */
+export const BLOCK_COMMANDS = {
+  ADD_BLOCK: "add-block",
+  SPLIT_BLOCK: "split-block",
+  SPLIT_BLOCK_AT_BREAK: "split-block-at-break",
+  DUPLICATE_BLOCK: "duplicate-block",
+  DELETE_BLOCK: "delete-block",
+  MERGE_BLOCK_UP: "merge-block-up",
+  ADD_PAGE_BREAK: "add-page-break",
+  REMOVE_PAGE_BREAK: "remove-page-break",
+  /** the option list's paste box — NOT a block action, and never was */
+  PASTE_OPTIONS: "paste-options",
+} as const;
+
 /** Variants whose stimulus IS `settings.mediaUrl` (their own settings edit it). */
 const MEDIA_OWNING = new Set(["videorating", "videotimeline", "watchtime", "audiorec", "base:media_timeline"]);
 import { InsertPipingButton } from "./PipingPicker";
@@ -26,7 +60,7 @@ import {
 import { isEmptyOptionLogic } from "@rescript/schema";
 import { useStudio, uid } from "./store";
 import {
-  type PageRef, type BlockRef, listPages, listBlocks, wrapBlock, unwrapIfSingle,
+  type PageRef, type BlockRef, listPages, listBlocks, wrapBlock, unwrapIfSingle, newBlockNode,
 } from "./blockModel";
 import { MoveQuestionModal } from "./MoveQuestion";
 
@@ -330,7 +364,7 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
         <button className="btn small" data-testid="add-option" onClick={() => insertAfter(options.length - 1)}>
           + option <span className="muted" style={{ fontSize: 11.5 }}>(or press Enter)</span>
         </button>
-        <button className="btn small" data-testid="toggle-paste" onClick={openPaste}>
+        <button className="btn small" data-testid="toggle-paste" data-command={BLOCK_COMMANDS.PASTE_OPTIONS} onClick={openPaste}>
           {pasteOpen ? "hide paste box" : "📋 paste options"}
         </button>
       </div>
@@ -966,7 +1000,7 @@ function InsertBar({
       </button>
       <button className="btn small" onClick={onPick} title="Pick a question type from the full library">▾ type…</button>
       {onPageBreak && (
-        <button className="btn small ghost" data-testid="add-page-break" onClick={onPageBreak}
+        <button className="btn small ghost" data-testid="add-page-break" data-command={BLOCK_COMMANDS.ADD_PAGE_BREAK} onClick={onPageBreak}
           title="Start a new respondent page here — the block stays one block">
           ⎯ Page break
         </button>
@@ -1031,16 +1065,43 @@ export function QuestionsPanel() {
    * mental model, not of data: "Block" is what a page has always been, and
    * calling it one stops page breaks looking like questions.
    */
+
+  /**
+   * ADD A BLOCK — at the end of the survey, in front of the End node.
+   *
+   * THE BUG THIS REPLACES, because it is worth not reintroducing. The old
+   * version found the last PAGE via `listPages` and inserted a sibling next to
+   * it. `listPages` walks recursively, and a `PageRef.parent` is the array the
+   * page actually sits in — which, the moment any block has a page break, is
+   * that block's `children`. So "+ Add block" appended a page INSIDE the last
+   * block: the block count did not change, a second PAGE BREAK row appeared,
+   * and the button had silently performed a page-break action under an Add
+   * Block label. Nested in a group, a branch or a loop it was worse — the new
+   * block landed inside the branch path, visible only to some respondents.
+   *
+   * Worse still, the page it created was unreachable: the insert bar is
+   * rendered per existing question and the empty-block bar keys off the whole
+   * block's count, so a 0-question page inside a non-empty block got no
+   * "+ Question" control at all, and `containerSlots` returns [] for `block`
+   * so the Flow panel could not move or delete it either. The only way out was
+   * "remove page break".
+   *
+   * That is almost certainly the "Add Block opens Paste" report: nothing
+   * appeared to happen, and the next control anybody reaches for is
+   * "📋 paste options", which sits beside "+ option" in the selected
+   * question. Paste was never wired to this button — see the note by
+   * BLOCK_COMMANDS below.
+   *
+   * The fix is to stop deriving the insertion point from a page at all. A new
+   * block goes at the TOP LEVEL, before the End node, which is exactly what
+   * the Survey Flow tab's own "+ Add block" already did (`endTarget`) — two
+   * buttons with one label now do one thing.
+   */
   const addBlock = () => {
-    const id = uid("page");
     s.update((d) => {
-      const all = listPages(d.flow as any[]);
-      const node = { type: "page", id, title: undefined, questionIds: [] };
-      if (all.length === 0) (d.flow as any[]).unshift(node);
-      else {
-        const last = all[all.length - 1];
-        last.parent.splice(last.parent.indexOf(last.node) + 1, 0, node);
-      }
+      const flow = d.flow as any[];
+      const at = flow.findIndex((n) => n?.type === "end");
+      flow.splice(at < 0 ? flow.length : at, 0, newBlockNode());
     });
     s.toast("Block added");
   };
@@ -1216,16 +1277,48 @@ export function QuestionsPanel() {
     s.toast("New block started");
   };
 
-  /** Split a single-page block into two blocks after position pos. */
+  /**
+   * SPLIT A BLOCK at a question — everything from here down becomes a block.
+   *
+   * Had the same defect as `addBlock`: it spliced into the PAGE's parent
+   * array, so splitting a question inside a block that had page breaks put the
+   * "new block" into that block's `children` and produced another page break
+   * while toasting "Block split".
+   *
+   * It now works at block level, and it means the same thing as the "split
+   * block" control on a page break: this page's tail AND every page below it
+   * in the block leave together. Anything else would be a split that left half
+   * the block on the far side of the new one.
+   */
   const splitBlock = (pageId: string, pos: number) => {
     s.update((d) => {
-      for (const pg of listPages(d.flow as any[])) {
-        if (pg.node.id !== pageId) continue;
-        const moved = pg.node.questionIds.slice(pos);
-        pg.node.questionIds = pg.node.questionIds.slice(0, pos);
-        pg.parent.splice(pg.index + 1, 0, { type: "page", id: uid("page"), questionIds: moved });
+      const b = listBlocks(d.flow as any[]).find((x) => x.pages.some((p) => p.node.id === pageId));
+      if (!b) return;
+      const pi = b.pages.findIndex((p) => p.node.id === pageId);
+      const page: any = b.pages[pi].node;
+      const moved = (page.questionIds ?? []).slice(pos);
+      /* nothing to move is not a split — leave the flow exactly as it was */
+      if (!moved.length) return;
+      page.questionIds = page.questionIds.slice(0, pos);
+
+      const tailPage: any = { type: "page", id: uid("page"), questionIds: moved };
+
+      if (!b.wrapped) {
+        /* a bare page: the new block is simply its next sibling */
+        b.parent.splice(b.parent.indexOf(b.node) + 1, 0, tailPage);
         return;
       }
+
+      /* wrapped: the tail page and every page after it leave the wrapper */
+      const kids: any[] = b.node.children;
+      const below = b.pages.slice(pi + 1).map((p) => p.node as any);
+      for (const p of below) kids.splice(kids.indexOf(p), 1);
+      const tail = [tailPage, ...below];
+      const node = tail.length === 1
+        ? tail[0]
+        : { type: "block", id: uid("block"), children: tail };
+      b.parent.splice(b.parent.indexOf(b.node) + 1, 0, node);
+      unwrapIfSingle(b);
     });
     s.toast("Block split");
   };
@@ -1349,6 +1442,7 @@ export function QuestionsPanel() {
           )}
           {canSplit && indexInPage > 0 && indexInPage < pageSize && (
             <button className="btn small" title="Start a new block here"
+              data-testid="split-block" data-command={BLOCK_COMMANDS.SPLIT_BLOCK}
               onClick={(e) => { e.stopPropagation(); splitBlock(pageId, indexInPage); }}>⤵</button>
           )}
           {isSelected && (
@@ -1381,7 +1475,8 @@ export function QuestionsPanel() {
         <span className="chip">{s.def.questions.length} question{s.def.questions.length === 1 ? "" : "s"}</span>
         <span className="chip">{blocks.length} block{blocks.length === 1 ? "" : "s"}</span>
         <span className="grow" />
-        <button className="btn" onClick={addBlock} data-testid="add-block">+ Add block</button>
+        <button className="btn" onClick={addBlock}
+          data-testid="add-block" data-command={BLOCK_COMMANDS.ADD_BLOCK}>+ Add block</button>
         <button className="btn primary" data-testid="add-question-top" onClick={() => {
           const last = blocks[blocks.length - 1]?.pages.slice(-1)[0];
           setPickerAt(last ? { pageId: last.node.id, pos: last.node.questionIds.length } : { pageId: "", pos: 0 });
@@ -1441,6 +1536,7 @@ export function QuestionsPanel() {
                     <button className="menu-item" disabled={pi === blocks.length - 1}
                       onClick={() => { setMenuFor(null); moveBlock(b.id, 1); }}>↓ Move block down</button>
                     <button className="menu-item"
+                      data-command={BLOCK_COMMANDS.DUPLICATE_BLOCK} data-testid="duplicate-block"
                       onClick={() => { setMenuFor(null); duplicateBlock(b.id); }}>⧉ Duplicate block</button>
                     <div className="menu-sep" />
                     <div className="menu-label">Block name for respondents</div>
@@ -1461,6 +1557,7 @@ export function QuestionsPanel() {
                     })}
                     {pi > 0 && blocks[pi - 1].parent === b.parent && (
                       <button className="menu-item"
+                        data-command={BLOCK_COMMANDS.MERGE_BLOCK_UP} data-testid="merge-block-up"
                         onClick={() => { setMenuFor(null); mergeUp(b.id); }}>⇧ Merge into block above</button>
                     )}
                     <div className="menu-sep" />
@@ -1470,6 +1567,7 @@ export function QuestionsPanel() {
                     </button>
                     <div className="menu-sep" />
                     <button className="menu-item danger"
+                      data-command={BLOCK_COMMANDS.DELETE_BLOCK} data-testid="delete-block"
                       onClick={() => { setMenuFor(null); deleteBlock(b.id); }}>Delete block…</button>
                   </div>
                 </>
@@ -1509,10 +1607,10 @@ export function QuestionsPanel() {
                         onClick={() => movePageBreak(b.id, pgi - 1, -1)}>↑</button>
                       <button className="btn small" title="Move the break down one question"
                         onClick={() => movePageBreak(b.id, pgi - 1, 1)}>↓</button>
-                      <button className="btn small" data-testid="break-to-block"
+                      <button className="btn small" data-testid="break-to-block" data-command={BLOCK_COMMANDS.SPLIT_BLOCK_AT_BREAK}
                         title="Make this page and everything below it a separate block"
                         onClick={() => splitBlockAtBreak(b.id, pgi - 1)}>split block</button>
-                      <button className="btn small danger" data-testid="remove-page-break"
+                      <button className="btn small danger" data-testid="remove-page-break" data-command={BLOCK_COMMANDS.REMOVE_PAGE_BREAK}
                         title="Remove this break — the two pages become one"
                         onClick={() => removePageBreak(b.id, pgi - 1)}>×</button>
                       <span className="pb-line" />
@@ -1549,7 +1647,8 @@ export function QuestionsPanel() {
         );
       })}
 
-      <button className="btn add-block-btn" onClick={addBlock}>+ Add block</button>
+      <button className="btn add-block-btn" onClick={addBlock}
+        data-testid="add-block-footer" data-command={BLOCK_COMMANDS.ADD_BLOCK}>+ Add block</button>
 
       {unplaced.length > 0 && (
         <div className="block warn-block">
