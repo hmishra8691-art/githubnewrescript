@@ -126,6 +126,10 @@ const LOCK_EXEMPT = {
     "writes a workspace-level reusable profile, not the survey definition",
   "surveys/[id]/quality/profiles/route.ts DELETE":
     "deletes a workspace-level reusable profile, scoped to the caller's own workspace",
+  "surveys/[id]/tests/route.ts POST":
+    "runs and edits the QA test suite (\u00a755/\u00a756), which is not the questionnaire. Needing to take editing "
+    + "away from a colleague in order to check whether their change broke path C would defeat the point of "
+    + "having a regression suite — and a run writes only its own result rows",
   "surveys/[id]/quotas/audit/route.ts POST":
     "writes an audit_logs row and nothing else — the quota change itself went through the ordinary "
     + "definition autosave, which does hold the lock. Requiring it here would mean an editor who has "

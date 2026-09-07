@@ -8,6 +8,7 @@ import { QuestionsPanel } from "./QuestionsPanel";
 import { CanvasProvider } from "../canvas/CanvasContext";
 import { PropertiesPanel, SurveySettings } from "./PropertiesPanel";
 import { FlowPanel } from "./FlowPanel";
+import { TestsPanel } from "./TestsPanel";
 import { LogicPanel, CalcPanel } from "./LogicPanel";
 import { VariablesPanel } from "./VariablesPanel";
 import { QuotaDashboard } from "./QuotaDashboard";
@@ -31,7 +32,7 @@ import { Icon, type IconName } from "@/components/ui/Icon";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
-  | "quotas" | "listfill" | "designs" | "branding" | "scripts" | "data" | "fieldwork"
+  | "quotas" | "listfill" | "designs" | "branding" | "scripts" | "tests" | "data" | "fieldwork"
   | "distribution" | "project" | "versions" | "json"
   | "collaborators" | "notes" | "activity"
   | "settings";
@@ -66,6 +67,13 @@ const NAV: { key: Tab; label: string; icon: IconName; group: string }[] = [
   { key: "designs", label: "Design Generators", icon: "designs", group: "Research tools" },
   { key: "branding", label: "Branding", icon: "branding", group: "Research tools" },
   { key: "scripts", label: "Scripts", icon: "scripts", group: "Research tools" },
+  /*
+   * §55/§56. In Research tools rather than Programming, and deliberately NOT
+   * in EDITING_TABS: a reviewer checking whether a programmer's change broke
+   * path C must not have to take the edit lock away from them to do it. The
+   * route gates it on `survey.edit` without the lock, for the same reason.
+   */
+  { key: "tests", label: "Tests", icon: "check", group: "Research tools" },
   { key: "data", label: "Data", icon: "data", group: "Results" },
   /*
    * Not in EDITING_TABS: a fieldwork manager watching supplier delivery is
@@ -731,6 +739,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           )}
           {tab === "flow" && <FlowPanel />}
           {tab === "logic" && <LogicPanel />}
+          {tab === "tests" && <TestsPanel />}
           {tab === "variables" && <VariablesPanel />}
           {tab === "calculations" && <CalcPanel />}
           {tab === "quotas" && <QuotaDashboard />}

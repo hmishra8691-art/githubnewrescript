@@ -521,17 +521,20 @@ ok("dashboard header keeps Profile / Security / Sign out and gains Data Analytic
 await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
 await page.waitForSelector(".leftnav");
 const nav = await page.$$eval(".leftnav .nav-item", (es) => es.map((e) => [...e.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join("").trim()));
-// the 17 existing tabs keep their order; Data Analytics and Fieldwork (§23)
+// the 17 existing tabs keep their order; Data Analytics, Fieldwork (§23) and
+// Tests (§55/§56) are additions that displace nothing already there
+// Data Analytics and Fieldwork (§23)
 // sit next to Data, in the Results group — additions that displace nothing
 // already there, which is what this assertion is for
-assert.deepEqual(nav.filter((t) => !["Data Analytics", "Fieldwork", "Distribution", "Project"].includes(t)), ["Questions", "Survey Settings", "Survey Flow", "Logic", "Variables", "Calculations", "Quotas", "List Fill", "Design Generators", "Branding", "Scripts", "Data", "Versions & Deploy", "JSON", "Collaborators", "Internal notes", "Activity"]);
+assert.deepEqual(nav.filter((t) => !["Data Analytics", "Fieldwork", "Distribution", "Project", "Tests"].includes(t)), ["Questions", "Survey Settings", "Survey Flow", "Logic", "Variables", "Calculations", "Quotas", "List Fill", "Design Generators", "Branding", "Scripts", "Data", "Versions & Deploy", "JSON", "Collaborators", "Internal notes", "Activity"]);
 assert.equal(nav.indexOf("Fieldwork"), nav.indexOf("Data Analytics") + 1, "Fieldwork belongs beside Data in Results");
 assert.equal(nav.indexOf("Distribution"), nav.indexOf("Versions & Deploy") - 1, "Distribution belongs beside Versions & Deploy in Management");
 assert.equal(nav.indexOf("Project"), nav.indexOf("Distribution") - 1, "Project belongs at the top of Management");
 assert.equal(nav.filter((t) => t === "Data Analytics").length, 1);
 assert.equal(nav[nav.indexOf("Data") + 1], "Data Analytics", "Data Analytics follows Data");
 assert.match(await page.$eval('[data-testid="nav-analytics"]', (e) => e.getAttribute("href")), /^\/analytics/);
-ok("Studio left nav: all 17 existing tabs unchanged, Data Analytics link added beside Data");
+assert.equal(nav[nav.indexOf("Scripts") + 1], "Tests", "Tests follows Scripts in Research tools");
+ok("Studio left nav: all 17 existing tabs unchanged, Data Analytics and Tests added");
 
 console.log(`\nALL ${passed} CHECKS PASSED · audit events recorded by the fake backend: ${[...new Set(store.audit)].join(", ")}`);
 await browser.close();

@@ -99,13 +99,26 @@ assert.equal(navLabels.some((t) => /Live Canvas|Live View/i.test(t)), false,
   `no Live View entry in the navigation, got: ${navLabels.join(" | ")}`);
 ok("there is no separate Live Canvas tab, page or navigation item");
 
+/*
+ * The original 17 tabs, in their original order, with every LATER addition
+ * filtered out — that is what this assertion is for: the Live View must not
+ * have displaced anything, and neither must anything since.
+ *
+ * The filter list had fallen behind. Fieldwork (§23), Project and
+ * Distribution (§24, §60) were added in later sessions and this suite was
+ * never re-run, so it had been failing silently for exactly the reason
+ * `scripts/auth-guard-audit.mjs` had — nothing runs it. Adding to this list
+ * is the price of a new tab, and the assertion is worth keeping precisely
+ * because it makes that price visible.
+ */
+const SINCE_LIVE_VIEW = ["Data Analytics", "Fieldwork", "Project", "Distribution", "Tests"];
 assert.deepEqual(
-  navLabels.filter((t) => t !== "Data Analytics"),
+  navLabels.filter((t) => !SINCE_LIVE_VIEW.includes(t)),
   ["Questions", "Survey Settings", "Survey Flow", "Logic", "Variables", "Calculations", "Quotas", "List Fill",
    "Design Generators", "Branding", "Scripts", "Data", "Versions & Deploy", "JSON", "Collaborators", "Internal notes", "Activity"],
   "the navigation is exactly what it was before the Live View existed",
 );
-ok("the Studio's 17 tabs are unchanged, in their original order");
+ok("the Studio's original 17 tabs are unchanged, in their original order");
 
 await openQ("Q11"); // multi_select, 15 options
 assert.ok(await page.$('[data-testid="question-view-switch"]'), "the switch is in the question editor");
