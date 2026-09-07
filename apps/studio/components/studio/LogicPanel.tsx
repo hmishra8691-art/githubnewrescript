@@ -4,7 +4,9 @@ import type { FlowNode } from "@rescript/schema";
 import {
   lintSurveyLogic, questionLogicSummary, detectLogicCycles, describeCycle,
   validateFlowStructure, runQualityCheck, describeQualityCheck,
-  type LogicIssue, type QualityCheckResult,
+  displayRuleTargets, unresolvableDisplayRules,
+  buildLogicFlow, logicFlowText, unreachableLogicNodes,
+  type LogicIssue, type QualityCheckResult, type DisplayRuleTarget,
 } from "@rescript/engine";
 import { AutoPunchPanel } from "./AutoPunchEditor";
 import { useStudio, uid } from "./store";
@@ -234,6 +236,186 @@ function deriveLogicFlowText(s: ReturnType<typeof useStudio>): string {
   return lines.join("\n");
 }
 
+/**
+ * WHAT A DISPLAY RULE POINTS AT.
+ *
+ * Three selects rather than one, because the target has three parts and
+ * squashing them into a single question list is precisely what made six of
+ * the seven target kinds unreachable: the engine has always resolved them,
+ * and this panel could only ever write `kind: "question"`.
+ *
+ * The kind comes first because it decides what the other two can offer, and
+ * changing it clears the rest — a rule that says "option" while still holding
+ * a page id would be saved happily and do nothing.
+ */
+const TARGET_KINDS: { kind: DisplayRuleTarget["kind"]; label: string; hint: string }[] = [
+  { kind: "question", label: "Question", hint: "one question on its page" },
+  { kind: "page", label: "Page", hint: "every question on that page" },
+  { kind: "block", label: "Block", hint: "every page inside the block" },
+  { kind: "section", label: "Section", hint: "every page inside the section" },
+  { kind: "option", label: "Option", hint: "one answer option" },
+  { kind: "row", label: "Grid row", hint: "one row of a grid" },
+  { kind: "column", label: "Column", hint: "one column of a composite question" },
+];
+
+function RuleTargetPicker({ index }: { index: number }) {
+  const s = useStudio();
+  const rule = s.def.displayRules[index];
+  const targets = React.useMemo(() => displayRuleTargets(s.def), [s.def]);
+  const kind = rule.target.kind;
+  const forKind = targets.filter((t) => t.kind === kind);
+  const chosen = forKind.find((t) => t.ref === rule.target.ref);
+  const needsItem = kind === "option" || kind === "row" || kind === "column";
+
+  return (
+    <>
+      <select
+        className="select" style={{ width: 118 }} value={kind}
+        data-testid={`dr-kind-${index}`}
+        onChange={(e) =>
+          s.update((d) => {
+            /* the ref and subRef cannot survive a kind change — see above */
+            d.displayRules[index].target = { kind: e.target.value as typeof kind, ref: "" };
+          })
+        }
+      >
+        {TARGET_KINDS.map((k) => <option key={k.kind} value={k.kind}>{k.label}</option>)}
+      </select>
+
+      <select
+        className="select grow" value={rule.target.ref}
+        data-testid={`dr-ref-${index}`}
+        onChange={(e) =>
+          s.update((d) => {
+            d.displayRules[index].target = { kind, ref: e.target.value };
+          })
+        }
+      >
+        <option value="">— {kind} —</option>
+        {forKind.map((t) => <option key={`${t.kind}:${t.ref}`} value={t.ref}>{t.label}</option>)}
+      </select>
+
+      {needsItem && (
+        <select
+          className="select" style={{ width: 170 }} value={rule.target.subRef ?? ""}
+          data-testid={`dr-sub-${index}`}
+          disabled={!chosen?.items?.length}
+          onChange={(e) =>
+            s.update((d) => {
+              d.displayRules[index].target = { kind, ref: rule.target.ref, subRef: e.target.value };
+            })
+          }
+        >
+          {/* an item rule with nothing named is ignored by the engine on
+              purpose, so the picker says so rather than looking complete */}
+          <option value="">— none (rule ignored) —</option>
+          {(chosen?.items ?? []).map((it) => (
+            <option key={it.subRef} value={it.subRef}>{it.label}</option>
+          ))}
+        </select>
+      )}
+    </>
+  );
+}
+
+/**
+ * Rules that cannot fire.
+ *
+ * A named rule outlives whatever it pointed at — delete the question and the
+ * rule stays, looking correct. Nothing else in the survey looks wrong
+ * afterwards, which is why this is stated here as well as inside the quality
+ * check.
+ */
+function DeadRuleNotice() {
+  const s = useStudio();
+  const dead = React.useMemo(() => unresolvableDisplayRules(s.def), [s.def]);
+  if (!dead.length) return null;
+  return (
+    <div className="card" style={{ padding: 10, borderColor: "var(--amber)" }} data-testid="dr-dead">
+      <div className="flabel">THESE RULES CANNOT FIRE</div>
+      {dead.map((d, i) => (
+        <div key={`${d.rule.id}-${i}`} style={{ fontSize: 12.5 }}>
+          <strong>{d.rule.label?.trim() || d.rule.id}</strong> {d.reason}
+          {d.level === "warning" ? " (may be intentional)" : ""}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * THE DECISION GRAPH.
+ *
+ * The tree above shows the survey's SHAPE — what nests inside what. This
+ * shows its PATHS, which is a different question and the one a skip rule is
+ * written to answer. The two views are worth having side by side because the
+ * tree structurally cannot draw a jump: a skip rule out of Q3 that lands on
+ * Q9 is invisible in a nested outline, and it is exactly the thing that gets
+ * a survey wrong.
+ *
+ * Generated, never stored. `def.logicFlow` was a hand-written graph that
+ * nothing read; whatever positions it holds are merged back in, and its
+ * labels are regenerated so they cannot describe a survey that has since
+ * changed.
+ */
+function DecisionGraph() {
+  const s = useStudio();
+  const [perQuestion, setPerQuestion] = React.useState(true);
+  const graph = React.useMemo(
+    () => buildLogicFlow(s.def, { questions: perQuestion }),
+    [s.def, perQuestion],
+  );
+  const text = React.useMemo(() => logicFlowText(graph), [graph]);
+  const orphans = React.useMemo(() => unreachableLogicNodes(graph), [graph]);
+
+  const download = () => {
+    const blob = new Blob([text], { type: "text/plain" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${s.def.meta.code || "survey"}-decision-graph.txt`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  return (
+    <div data-testid="decision-graph">
+      <p className="muted" style={{ fontSize: 13 }}>
+        Every path a respondent can take, including the jumps the tree above cannot draw. Derived from the
+        flow, the branch conditions and the skip rules — so it cannot disagree with what the survey does.
+      </p>
+      <div className="row" style={{ marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+        <span className="chip" data-testid="dg-counts">
+          {graph.nodes.length} node{graph.nodes.length === 1 ? "" : "s"} · {graph.edges.length} path
+          {graph.edges.length === 1 ? "" : "s"}
+        </span>
+        <label className="qs-check" style={{ margin: 0 }}>
+          <input
+            type="checkbox" checked={perQuestion} data-testid="dg-per-question"
+            onChange={(e) => setPerQuestion(e.target.checked)}
+          />
+          {/* the page-level map is the one a client reads; per-question is the
+              one a programmer debugs a skip rule in */}
+          <span>one node per question</span>
+        </label>
+        <button className="btn small" onClick={download}>download .txt</button>
+        <button className="btn small" onClick={() => {
+          navigator.clipboard.writeText(text);
+          s.toast("Decision graph copied");
+        }}>copy</button>
+      </div>
+      {orphans.length > 0 && (
+        <div className="card" style={{ padding: 10, borderColor: "var(--amber)" }} data-testid="dg-orphans">
+          <div className="flabel">NOTHING REACHES THESE</div>
+          {/* reachability here follows the EDGES, so a page reached only by a
+              skip rule counts as reached — unlike a walk in document order */}
+          {orphans.map((n) => <div key={n.id} style={{ fontSize: 12.5 }}>{n.label ?? n.id}</div>)}
+        </div>
+      )}
+      <pre className="logic-pre">{text || "(nothing programmed yet)"}</pre>
+    </div>
+  );
+}
+
 export function LogicPanel() {
   const s = useStudio();
   const logicText = deriveLogicFlowText(s);
@@ -268,9 +450,12 @@ export function LogicPanel() {
 
       <h3 className="sec">Display rules (show/hide anything)</h3>
       <p className="muted" style={{ fontSize: 13 }}>
-        Question-level display &amp; skip logic lives on each question (right panel). Rules here can
-        additionally target any question from one place.
+        Question-level display &amp; skip logic lives on each question (right panel). A rule here can
+        target a whole <strong>page, section or block</strong>, a single <strong>question</strong>, or one
+        <strong> option, grid row or column</strong> — from one place, without editing what it points at.
+        <strong> HIDE beats SHOW</strong>, and a SHOW rule whose condition is false hides its target.
       </p>
+      <DeadRuleNotice />
       {s.def.displayRules.map((r, i) => (
         <div key={r.id} className="card" style={{ padding: 10 }}>
           <div className="row" style={{ marginBottom: 6 }}>
@@ -280,11 +465,7 @@ export function LogicPanel() {
               onChange={(e) => s.update((d) => { d.displayRules[i].action = e.target.value as any; })}>
               <option value="show">SHOW</option><option value="hide">HIDE</option>
             </select>
-            <select className="select grow" value={r.target.ref}
-              onChange={(e) => s.update((d) => { d.displayRules[i].target = { kind: "question", ref: e.target.value }; })}>
-              <option value="">— target question —</option>
-              {s.def.questions.map((q) => <option key={q.id} value={q.id}>{q.code}</option>)}
-            </select>
+            <RuleTargetPicker index={i} />
             <button className="btn small danger"
               onClick={() => s.update((d) => { d.displayRules.splice(i, 1); })}>×</button>
           </div>
@@ -313,6 +494,9 @@ export function LogicPanel() {
         }}>copy</button>
       </div>
       <pre className="logic-pre">{logicText || "(empty flow)"}</pre>
+
+      <h3 className="sec">Decision graph (derived)</h3>
+      <DecisionGraph />
     </div>
   );
 }

@@ -17,6 +17,7 @@ import { getQuestion, lookupAnswer, loopKeySuffix } from "./state.js";
 import { resolvePiping, registerDisplayedOptionsResolver } from "./piping.js";
 import { evaluateSetExpr, LIST_ACTIONS } from "./setExpression.js";
 import { seededShuffle, subSeed, mulberry32 } from "./random.js";
+import { hasDisplayRulesFor, ruleVerdict, visibleByRules } from "./displayRules.js";
 
 /**
  * THE OPTION PIPELINE.
@@ -375,6 +376,46 @@ function applyEligibility<T extends ItemWithLogic>(
   });
   record(rec, "eligibility", "Eligibility rules", afterHide, afterEligible, reasons);
   return afterEligible;
+}
+
+/* ------------------------------------------------- named survey-level rules */
+
+/**
+ * The survey's named display rules, for the items inside a question (§6).
+ *
+ * Placed immediately after eligibility rather than at the end of the pipeline,
+ * because a named rule is the same KIND of statement as `visibleIf` — "this
+ * option is for these respondents" — and belongs where the other statements of
+ * that kind are resolved. The consequence is deliberate: a later union or
+ * carry-forward stage can reintroduce a code this stage removed, exactly as it
+ * can one that eligibility removed. If that ever surprises anybody, the
+ * pipeline trace names the stage that took it out and the stage that put it
+ * back, which is the answer they actually need.
+ *
+ * A pinned option (`always_show`) survives a SHOW rule that does not hold and
+ * is still removed by a HIDE rule that does — see `ruleVerdict`.
+ */
+function applyNamedRules<T extends ItemWithLogic>(
+  q: Question,
+  kind: "option" | "row",
+  items: T[],
+  ctx: EvalContext,
+  rec: Recorder | null,
+): T[] {
+  if (!hasDisplayRulesFor(ctx.def, kind)) return items;
+  const reasons = new Map<string, string>();
+  const kept = items.filter((i) => {
+    const v = ruleVerdict(ctx.def, kind, q.id, ctx, i.code);
+    if (v.visible) return true;
+    if (v.by === "show" && isAlwaysShow(i)) return true;
+    reasons.set(
+      String(i.code),
+      v.by === "hide" ? "A named display rule hides it" : "A named display rule's SHOW condition is false",
+    );
+    return false;
+  });
+  record(rec, "named_rules", "Named display rules", items, kept, reasons);
+  return kept;
 }
 
 /* -------------------------------------------------------------- list logic */
@@ -928,6 +969,9 @@ function runOptions(
   // 2 + 3 — always hidden, then eligibility
   options = applyEligibility(options, ctx, rec, pos);
 
+  // 3b — the survey's named display rules for this question's options (§6)
+  options = applyNamedRules(q, "option", options, ctx, rec);
+
   // 4 — previous-answer list logic
   options = applyListLogic(q.listLogic ?? [], options, ctx, rec);
 
@@ -1030,6 +1074,7 @@ function runRows(q: Question, ctx: EvalContext): QuestionRow[] {
   // rows share the option-logic model, minus the list-operation stages
   const pos = makePos(rows);
   rows = applyEligibility(rows, ctx, null, pos);
+  rows = applyNamedRules(q, "row", rows, ctx, null);
   rows = applyPrioritization(rows, ctx, null, pos);
   if (q.randomization?.enabled && q.randomization.scope === "rows") {
     const cfg = activeRandomization(q.randomization, ctx);
@@ -1070,6 +1115,15 @@ export function effectiveQuestion(q: Question, ctx: EvalContext): EffectiveQuest
 
   // --- columns (composite / matrix)
   let columns = q.columns.filter((c) => evaluateCondition(c.visibleIf, ctx));
+  /*
+   * A column is addressed by its `id`, not a code — the schema says so
+   * (`subRef: option code / row code / column id`) and a composite question's
+   * columns have no codes to address. There is no pinning for columns, so
+   * unlike options and rows the verdict is a plain boolean.
+   */
+  if (hasDisplayRulesFor(ctx.def, "column")) {
+    columns = columns.filter((c) => visibleByRules(ctx.def, "column", q.id, ctx, c.id));
+  }
   columns = columns.map((c) => {
     let col = c;
     if (c.carryForward) {

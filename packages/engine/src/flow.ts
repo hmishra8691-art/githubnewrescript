@@ -12,6 +12,7 @@ import { applyEmbeddedField, type EmbeddedField } from "./embedded.js";
 import { prefillQuestions } from "./setExpression.js";
 import { resolveUrlTemplate } from "./redirect.js";
 import { listFillHiddenDestinations } from "./listFill.js";
+import { containerVisibleByRules, visibleByRules } from "./displayRules.js";
 
 /**
  * Survey Flow interpreter (requirement §7).
@@ -83,6 +84,14 @@ export function compileFlow(
       switch (node.type) {
         case "page": {
           if (!evaluateCondition(node.visibleIf, ctxFor(loop))) break;
+          /*
+           * The page's own `visibleIf` first, then the survey-level rules that
+           * name it. Two layers on purpose: `visibleIf` belongs to the page and
+           * travels with it, a named rule belongs to the survey and can be
+           * added without editing the page — "hide the pricing pages in the
+           * pilot" is one rule, not an edit to every page.
+           */
+          if (!containerVisibleByRules(def, node, ctxFor(loop))) break;
           steps.push({
             kind: "page",
             pageId: `${node.id}${loopKeySuffix(loop)}`,
@@ -99,6 +108,14 @@ export function compileFlow(
         case "section":
         case "block": {
           if (!evaluateCondition(node.visibleIf, ctxFor(loop))) break;
+          /*
+           * Hiding a container hides everything inside it, including pages that
+           * would have passed their own rules. That is the whole point of
+           * naming a block — and it is why `unresolvableDisplayRules` reports a
+           * rule whose `block` id is actually a section: the two read the same
+           * in a rule list and behave very differently here.
+           */
+          if (!containerVisibleByRules(def, node, ctxFor(loop))) break;
           walk(
             node.children,
             loop,
@@ -236,14 +253,6 @@ export function visibleQuestions(
   quotaCounts?: QuotaCounts,
 ): Question[] {
   const ctx: EvalContext = { def, state, loop: step.loop, quotaCounts };
-  const hiddenByRules = new Set<string>();
-  const shownByRules = new Map<string, boolean>();
-  for (const rule of def.displayRules) {
-    if (rule.target.kind !== "question") continue;
-    const holds = evaluateCondition(rule.when, ctx);
-    if (rule.action === "show") shownByRules.set(rule.target.ref, holds);
-    else if (holds) hiddenByRules.add(rule.target.ref);
-  }
   // a List Fill destination that received no item, configured to disappear
   // (§17). Only the rules that REMOVE the question act here; `disable` and
   // `blank` leave it on the page and are the renderer's business.
@@ -253,9 +262,14 @@ export function visibleQuestions(
     .filter((q): q is Question => !!q)
     .filter((q) => q.type !== "hidden" && q.type !== "calculated" && q.type !== "embedded_data" && !q.settings.hidden)
     .filter((q) => evaluateCondition(q.displayLogic, ctx))
-    .filter((q) => !hiddenByRules.has(q.id))
     .filter((q) => !unusedDestinations.has(q.id))
-    .filter((q) => (shownByRules.has(q.id) ? shownByRules.get(q.id)! : true));
+    /*
+     * The named survey-level rules (§6), now shared with pages, sections,
+     * blocks and the item pipeline — see `displayRules.ts` for the precedence.
+     * The semantics here are unchanged: HIDE beats SHOW, and the last SHOW
+     * rule decides.
+     */
+    .filter((q) => visibleByRules(def, "question", q.id, ctx));
 }
 
 /** Run calculations whose trigger matches; write into state.calculated. */

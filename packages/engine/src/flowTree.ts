@@ -163,6 +163,27 @@ export function subtreeIds(node: FlowNode): string[] {
   return out;
 }
 
+/**
+ * Every node in the flow, by id.
+ *
+ * Lives here rather than in the caller because the knowledge it needs — which
+ * node types own which child lists, and that a `block` keeps its pages outside
+ * `containerSlots` — is already settled in this file. A second walker
+ * elsewhere is a second place to forget the block.
+ */
+export function flowNodeIndex(flow: FlowNode[]): Map<string, FlowNode> {
+  const out = new Map<string, FlowNode>();
+  const walk = (nodes: FlowNode[]): void => {
+    for (const n of nodes) {
+      out.set(n.id, n);
+      for (const slot of containerSlots(n)) walk(readSlot(n, slot) ?? []);
+      if (n.type === "block") walk(n.children);
+    }
+  };
+  walk(flow);
+  return out;
+}
+
 /* ---------------------------------------------------------- nesting rules */
 
 /**

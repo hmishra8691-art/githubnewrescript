@@ -449,6 +449,9 @@ export const LogicFlowEdge = z.object({
   label: z.string().optional(),
 });
 
+export type LogicFlowNode = z.infer<typeof LogicFlowNode>;
+export type LogicFlowEdge = z.infer<typeof LogicFlowEdge>;
+
 export const LogicFlow = z.object({
   nodes: z.array(LogicFlowNode).default([]),
   edges: z.array(LogicFlowEdge).default([]),

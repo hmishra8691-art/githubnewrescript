@@ -2,6 +2,7 @@ import type { SurveyDefinition } from "@rescript/schema";
 import { lintSurveyLogic, type LogicIssue } from "./lintLogic.js";
 import { lintVariables } from "./variables.js";
 import { validateFlowStructure } from "./flowTree.js";
+import { unresolvableDisplayRules } from "./displayRules.js";
 
 /**
  * RUN QUALITY CHECK — one answer to "is this survey fit to field?".
@@ -73,7 +74,7 @@ const AREA_LABELS: Record<string, string> = {
 
 const AREA_NOTES: Record<string, string> = {
   questions: "Every question has something to answer, and no option is unlabelled.",
-  logic: "Every condition names something that exists, with an operator its source supports, and nothing depends on itself.",
+  logic: "Every condition names something that exists, with an operator its source supports, nothing depends on itself, and every named display rule still points at something.",
   piping: "Every token resolves to a question, calculation or embedded field that exists and is answered first.",
   loops: "Every loop has a source it can iterate, and every reference name it uses is declared.",
   structure: "Every question is on a page, and the flow nests legally.",
@@ -186,6 +187,24 @@ export function runQualityCheck(def: SurveyDefinition): QualityCheckResult {
       collected.push({ level: f.level, path: "flow", message: f.message });
     }
   } catch { /* already reported per question */ }
+
+  /*
+   * Named display rules that can never fire (§6).
+   *
+   * Worth its own pass because these rules are the one part of the
+   * programming with no visible home: a question's own logic is on the
+   * question, a skip rule is beside the answer it reads, but a named rule
+   * lives in a list in the Logic panel and survives the deletion of whatever
+   * it pointed at. Nothing else in the survey looks wrong afterwards.
+   */
+  for (const dead of unresolvableDisplayRules(def)) {
+    const name = dead.rule.label?.trim() ? `“${dead.rule.label.trim()}”` : dead.rule.id;
+    collected.push({
+      level: dead.level,
+      path: "displayRules",
+      message: `Display rule ${name} ${dead.reason}.`,
+    });
+  }
 
   collected.push(...deploymentIssues(def));
 
