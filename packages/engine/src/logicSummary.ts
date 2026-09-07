@@ -91,7 +91,32 @@ export function conditionSummary(def: SurveyDefinition, c: Condition | undefined
 
   const { source, operator } = c;
   let subject: string;
-  if (source.kind === "option") {
+  if (source.count) {
+    /*
+     * A count rule reads as the number it is, not as the question it counts.
+     * "Q1 selected count of 3 chosen options >= 2" is what a programmer needs
+     * to see in a collapsed rule list; "Q1 >= 2" would be a lie about what is
+     * being compared.
+     */
+    const spec = source.count;
+    const q = getQuestionByCodeOrVar(def, source.ref);
+    const noun = spec.scope === "rows" ? "rows" : spec.scope === "columns" ? "columns" : "options";
+    const of = spec.of === "notSelected" ? "not selected"
+      : spec.of === "visible" ? "shown"
+        : spec.of;
+    const scopeText = spec.only?.length
+      ? `${spec.only.length} of ${(q?.code ?? source.ref)}'s ${noun}`
+      : spec.group
+        ? `${q?.code ?? source.ref} group ${spec.group}`
+        : `${q?.code ?? source.ref} ${noun}`;
+    const resp = spec.responseIn?.length
+      ? ` answering ${spec.responseIn.map((r) => {
+        const o = (q?.options ?? []).find((x) => String(x.code) === String(r));
+        return stripHtml(o?.label ?? String(r));
+      }).join(" or ")}`
+      : "";
+    subject = `count of ${of} ${scopeText}${resp}`;
+  } else if (source.kind === "option") {
     subject = `this option's ${source.ref || "code"}`;
   } else if (source.kind === "calculation") {
     subject = `calculated ${source.ref}`;
@@ -111,10 +136,22 @@ export function conditionSummary(def: SurveyDefinition, c: Condition | undefined
     }
   }
 
+  /*
+   * The question whose OPTION LABELS name the comparison value — so
+   * `Q1 = 3` reads as `Q1 is "Neutral"`.
+   *
+   * A count rule has no such question: its value is a NUMBER. Looking it up
+   * turned "count of rows rated Good or Very good is at least 3" into
+   * "…at least Neutral", which is not a small cosmetic slip — it is a rule
+   * summary that says something the rule does not do, in the one place a
+   * reviewer reads instead of the JSON.
+   */
   const src =
-    source.kind === "question" || source.kind === "variable"
-      ? getQuestionByCodeOrVar(def, source.ref)
-      : undefined;
+    source.count
+      ? undefined
+      : source.kind === "question" || source.kind === "variable"
+        ? getQuestionByCodeOrVar(def, source.ref)
+        : undefined;
   const word = OPERATOR_WORDS[operator] ?? operator;
 
   if (VALUELESS_OPERATORS.includes(operator)) return `${subject} ${word}`;

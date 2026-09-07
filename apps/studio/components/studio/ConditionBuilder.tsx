@@ -18,6 +18,7 @@ import { SYSTEM_VARIABLE_HELP } from "@rescript/quality";
 import { useLoopScope } from "./loopScope";
 import { useStudio } from "./store";
 import { ExpressionEditor } from "./ExpressionEditor";
+import { CountEditor, COUNT_OPERATORS, scopesFor } from "./CountEditor";
 
 /**
  * Recursive visual condition builder — arbitrary AND/OR/NOT nesting with
@@ -106,12 +107,52 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
   const needsValue2 = TWO_VALUE_OPERATORS.includes(rule.operator);
   const usesOption = isOptionValueRef(rule.value);
 
+  /*
+   * COUNTING CHANGES THE LEFT-HAND SIDE, SO IT CHANGES THE OPERATORS.
+   *
+   * A count is a number. "contains", "ranked first" and "matches regex" are
+   * meaningless against it, and offering them is how a programmer builds a
+   * rule that can never be true. The six comparisons plus `between` are
+   * exactly the set the brief asks for, and they were already implemented —
+   * nothing new was added to the operator union.
+   */
+  const counting = !!rule.source.count;
+
   // only offer operators that make sense for the chosen source (req §7)
   const allowed: ComparisonOperator[] =
-    rule.source.kind === "question" && q
-      ? operatorsForQuestion(q)
-      : (Object.keys(OPERATOR_LABELS) as ComparisonOperator[]);
+    counting
+      ? COUNT_OPERATORS
+      : rule.source.kind === "question" && q
+        ? operatorsForQuestion(q)
+        : (Object.keys(OPERATOR_LABELS) as ComparisonOperator[]);
   const operatorChoices = allowed.includes(rule.operator) ? allowed : [rule.operator, ...allowed];
+
+  /**
+   * Turn counting on or off for this rule.
+   *
+   * On: the value becomes a number, and the operator moves to ">=" unless it
+   * already compares numerically — so the rule is valid the instant it is
+   * switched, rather than sitting in an impossible state until the programmer
+   * notices.
+   *
+   * Off: the count is dropped and the rule is an ordinary one again. The
+   * operator is left alone, because ">= 2" against an answer is a legitimate
+   * rule and second-guessing it would throw away a deliberate edit.
+   */
+  const setCounting = (on: boolean) => {
+    if (!on) {
+      const { count: _drop, ...source } = rule.source;
+      return onChange({ ...rule, source });
+    }
+    const scope = scopesFor(q)[0];
+    onChange({
+      ...rule,
+      source: { ...rule.source, count: { of: "selected", scope } as never },
+      operator: COUNT_OPERATORS.includes(rule.operator) ? rule.operator : "gte",
+      value: Number(rule.value) || 1,
+      value2: undefined,
+    });
+  };
 
   const setSource = (patch: Partial<ConditionRule["source"]>) =>
     onChange({ ...rule, source: { ...rule.source, ...patch } });
@@ -239,7 +280,30 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
           </optgroup>
         ))}
       </select>
-      {q && (q.rows.length > 0 || q.columns.length > 0) && (
+      {/*
+        * THE COUNT TOGGLE, on the rule itself.
+        *
+        * Offered only for a question source, because a count is a count of a
+        * question's options, rows or columns — there is nothing to count in a
+        * calculated variable or an embedded field, and a control that appears
+        * and then refuses is worse than one that is not there.
+        */}
+      {rule.source.kind === "question" && rule.source.ref && (
+        <button
+          type="button"
+          className={`btn small ${counting ? "primary" : "ghost"}`}
+          data-testid="toggle-count"
+          data-command="toggle-count"
+          title={counting
+            ? "Compare the answer itself instead of how many qualify"
+            : "Compare HOW MANY options, rows or columns qualify"}
+          onClick={() => setCounting(!counting)}
+        >∑ count</button>
+      )}
+      {/* a count reads the whole collection, so a single row or column is not
+          the thing being asked about — the subset picker inside the count
+          editor is where narrowing happens */}
+      {!counting && q && (q.rows.length > 0 || q.columns.length > 0) && (
         <>
           {q.rows.length > 0 && (
             <select className="select" value={rule.source.rowCode ?? ""}
@@ -262,7 +326,16 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
         {operatorChoices.map((o) => <option key={o} value={o}>{OPERATOR_LABELS[o] ?? o}</option>)}
       </select>
 
-      {needsValue && (
+      {/* a count is compared against a NUMBER — never against an option code,
+          which is what the option dropdown below would offer */}
+      {needsValue && counting ? (
+        <input
+          className="input" type="number" min={0} style={{ maxWidth: 90 }}
+          data-testid="count-value" aria-label="How many"
+          value={String(rule.value ?? "")}
+          onChange={(e) => onChange({ ...rule, value: e.target.value === "" ? undefined : Number(e.target.value) })}
+        />
+      ) : needsValue && (
         usesOption ? (
           <span className="chip pipe-chip" title="Compares against the option this rule is attached to">
             this option’s {(rule.value as any).$option}
@@ -297,6 +370,9 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
           onChange={(e) => onChange({ ...rule, value2: e.target.value })} />
       )}
       </div>
+      {/* the count's own controls, on their own line: what to count, over
+          what, narrowed to what, and a plain reading of the result */}
+      {counting && <CountEditor rule={rule} onChange={onChange} />}
       <div className="cond-rule-actions">
         <button className="btn small danger" title="Remove this condition" onClick={onRemove}>×</button>
       </div>

@@ -57,11 +57,11 @@ export function JsonPanel() {
         <button className="btn small" onClick={() => { navigator.clipboard.writeText(text); s.toast("JSON copied"); }}>copy</button>
         {editing ? (
           <>
-            <button className="btn small primary" onClick={apply}>validate &amp; apply</button>
-            <button className="btn small" onClick={() => { setEditing(false); setError(null); }}>cancel</button>
+            <button className="btn small primary" data-testid="json-apply" onClick={apply}>validate &amp; apply</button>
+            <button className="btn small" data-testid="json-cancel" onClick={() => { setEditing(false); setError(null); }}>cancel</button>
           </>
         ) : (
-          <button className="btn small" onClick={() => setEditing(true)}>edit</button>
+          <button className="btn small" data-testid="json-edit" onClick={() => setEditing(true)}>edit</button>
         )}
       </div>
       {error && <pre className="logic-pre" style={{ color: "var(--red)" }}>{error}</pre>}

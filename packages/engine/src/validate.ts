@@ -75,7 +75,16 @@ function asDate(value: unknown): number | null {
  */
 const PHONE_RE = /^[+()\-.\s\d]{7,}$/;
 
-function checkScalarRules(
+/**
+ * One item's validation rules against one value.
+ *
+ * Exported because count conditions ask the same question of a single grid
+ * row or column cell ("how many rows hold an answer that fails their own
+ * validation?"). Two implementations of "does this rule accept this value"
+ * would drift, and the one that drifted would be the one nobody was looking
+ * at.
+ */
+export function checkScalarRules(
   rules: ValidationRule[],
   value: unknown,
   ctx: EvalContext,

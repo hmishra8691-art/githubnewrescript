@@ -2,6 +2,7 @@ import type { Condition, ConditionRule, SurveyDefinition } from "@rescript/schem
 import { isOptionValueRef } from "@rescript/schema";
 import type { LoopContext, ResponseState } from "./state.js";
 import { findLoopScope, getQuestionByCodeOrVar, lookupAnswer, loopValue } from "./state.js";
+import { evaluateCount } from "./countCondition.js";
 
 /**
  * The option currently under evaluation. Present whenever a condition is
@@ -40,6 +41,24 @@ export interface EvalTrace {
 export function resolveSourceValue(rule: ConditionRule, ctx: EvalContext): unknown {
   const { source } = rule;
   const { state } = ctx;
+
+  /*
+   * A COUNT IS A SOURCE, NOT AN OPERATOR.
+   *
+   * This one line is the whole integration. Because the count resolves to the
+   * rule's LEFT-HAND VALUE, every comparison operator already applies to it
+   * (eq / ne / gt / gte / lt / lte / between), every AND-OR-NOT group already
+   * nests it, and every caller of `evaluateCondition` already supports it —
+   * display and skip logic, masking, option / row / column logic, eligibility,
+   * auto select, auto punch, list logic, list operations, branching, loop
+   * conditions, quota cells and validation `when` clauses. None of them needed
+   * a change, which is the point: one count engine, not twelve.
+   *
+   * `evaluateCount` returns null rather than 0 for a question it cannot
+   * resolve, so a count against a deleted question FAILS its comparison
+   * instead of quietly satisfying `<= 5`.
+   */
+  if (source.count) return evaluateCount(source, ctx);
 
   switch (source.kind) {
     case "option": {

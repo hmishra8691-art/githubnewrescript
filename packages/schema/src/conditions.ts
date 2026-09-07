@@ -133,6 +133,116 @@ export const OPERATORS_BY_KIND: Record<string, ComparisonOperator[]> = {
   date: ["dateBefore", "dateAfter", "dateEquals", "dateBetween", "answered", "unanswered"],
 };
 
+/* ========================================================== count conditions
+ *
+ * "Show Q2 if at least 2 of Q1's options are selected."
+ *
+ * THE DESIGN DECISION, because it is the whole reason this feature is small:
+ * A COUNT IS A SOURCE, NOT AN OPERATOR. The rule stays an ordinary
+ * `ConditionRule` — what changes is that its LEFT-HAND VALUE resolves to a
+ * number instead of to an answer.
+ *
+ *   { type: "rule",
+ *     source: { kind: "question", ref: "q_brands",
+ *               count: { of: "selected", scope: "options" } },
+ *     operator: "gte",
+ *     value: 2 }
+ *
+ * Three things fall out of that, all of them free:
+ *
+ *   · EVERY comparison operator already works on it — eq, ne, gt, lt, gte,
+ *     lte and between. No new operators, so nothing that reads the operator
+ *     union has to learn anything.
+ *   · EVERY place that nests conditions already nests these — arbitrary
+ *     AND / OR / NOT, because a count rule is a rule.
+ *   · EVERY caller of `evaluateCondition` gets it at once: display rules,
+ *     skip logic, masking, option / row / column logic, eligibility, auto
+ *     select and auto punch, list logic, list operations, branching, loop
+ *     conditions, quota cells and validation `when` clauses. There is exactly
+ *     one implementation, which is the requirement — not one per feature.
+ *
+ * Had this been added as an operator (`countGte`, `countEq`, …) it would have
+ * been six operators × the places that switch on operators, and a seventh the
+ * day somebody wants `between`.
+ */
+
+/**
+ * WHAT is being counted.
+ *
+ * `valid` / `invalid` mean what validation means: an item holding an answer
+ * that passes, or fails, the validation rules attached to THAT item. An
+ * unanswered item is neither — it is missing, which is a different question
+ * and `notSelected` already answers it. Where an item has no validation of
+ * its own (a plain multi-select option), `valid` is simply "selected" and
+ * `invalid` is always zero; that is stated rather than quietly fudged.
+ *
+ * `eligible` / `visible` / `hidden` are read from the option pipeline, so they
+ * reflect masking, carry-forward, list operations and named display rules —
+ * the same list the respondent is actually shown.
+ */
+export const CountOf = z.enum([
+  "selected",
+  "notSelected",
+  "valid",
+  "invalid",
+  "eligible",
+  "visible",
+  "hidden",
+  /** items satisfying `where`, or — on a grid — answering with `responseIn` */
+  "matching",
+]);
+export type CountOf = z.infer<typeof CountOf>;
+
+/** WHICH collection is being counted over. */
+export const CountScope = z.enum(["options", "rows", "columns"]);
+export type CountScope = z.infer<typeof CountScope>;
+
+export interface CountSpec {
+  of: CountOf;
+  scope: CountScope;
+  /**
+   * Count only these codes (options / rows) or column ids — the subset case:
+   * "at least 2 of A, C and E". Absent counts the whole collection.
+   */
+  only?: (string | number)[];
+  /**
+   * Count only members of this option group, by group id. Groups are the
+   * other half of this work; a count that names a group nobody has created
+   * counts nothing, which is the honest answer rather than silently counting
+   * everything.
+   */
+  group?: string;
+  /**
+   * GRID / MATRIX: count rows whose answer is one of these column codes.
+   * "Count rows rated Good or Very Good >= 3" is
+   * `{ of: "matching", scope: "rows", responseIn: ["4", "5"] }`.
+   * For a multi-response grid a row matches when it holds ANY of them.
+   */
+  responseIn?: (string | number)[];
+  /**
+   * The general escape hatch: a condition evaluated once per item, with that
+   * item in scope as the option under test — so `{ $option: "code" }` and
+   * option-level sources work exactly as they do in option logic.
+   */
+  where?: Condition;
+}
+
+/**
+ * `where` is a Condition, and a Condition contains sources, and a source
+ * contains this — so the reference is lazy. The thunk is not called until
+ * something is parsed, by which time every binding is in place.
+ */
+export const CountSpec: z.ZodType<CountSpec, z.ZodTypeDef, unknown> = z.lazy(() =>
+  z.object({
+    of: CountOf.default("selected"),
+    scope: CountScope.default("options"),
+    only: z.array(z.union([z.string(), z.number()])).optional(),
+    group: z.string().optional(),
+    responseIn: z.array(z.union([z.string(), z.number()])).optional(),
+    where: Condition.optional(),
+  }),
+) as unknown as z.ZodType<CountSpec, z.ZodTypeDef, unknown>;
+
 /** What a rule reads from: a question's answer, a named variable,
  *  an embedded-data field, a calculated value, or quota state. */
 export const ConditionSource = z.object({
@@ -158,6 +268,12 @@ export const ConditionSource = z.object({
    * single loop has always meant, so nothing existing changes.
    */
   scope: z.string().optional(),
+  /**
+   * Count instead of read (see the block above). When present, the rule's
+   * left-hand value is a NUMBER — how many items of `ref` qualify — and every
+   * ordinary comparison operator applies to it.
+   */
+  count: CountSpec.optional(),
 });
 export type ConditionSource = z.infer<typeof ConditionSource>;
 
@@ -238,6 +354,45 @@ export const cond = {
       value,
       value2,
     };
+  },
+  /**
+   * A count rule. `cond.count("q_brands", "gte", 2)` reads as it sounds.
+   *
+   * The convenience wrappers below are the UI's "minimum selections" and
+   * "maximum selections" boxes — they are not a second mechanism, they are
+   * this one with the operator filled in, which is why a rule built either way
+   * is indistinguishable afterwards.
+   */
+  count(
+    ref: string,
+    operator: ComparisonOperator,
+    value: number,
+    spec: Partial<CountSpec> = {},
+    extra?: Partial<ConditionSource>,
+  ): ConditionRule {
+    return {
+      type: "rule",
+      source: {
+        kind: "question",
+        ref,
+        ...extra,
+        count: { of: "selected", scope: "options", ...spec } as CountSpec,
+      },
+      operator,
+      value,
+    };
+  },
+  /** "at least N" */
+  minCount(ref: string, n: number, spec?: Partial<CountSpec>): ConditionRule {
+    return cond.count(ref, "gte", n, spec);
+  },
+  /** "no more than N" */
+  maxCount(ref: string, n: number, spec?: Partial<CountSpec>): ConditionRule {
+    return cond.count(ref, "lte", n, spec);
+  },
+  /** "exactly N" — deliberately distinct from `minCount`, per the brief */
+  exactCount(ref: string, n: number, spec?: Partial<CountSpec>): ConditionRule {
+    return cond.count(ref, "eq", n, spec);
   },
   and(...children: Condition[]): ConditionGroup {
     return { type: "group", op: "and", children };
