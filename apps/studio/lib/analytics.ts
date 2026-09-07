@@ -23,7 +23,7 @@ import { loadQualityDefinition } from "./qualityDef";
  * response `updated_at`, so new data or a definition change invalidates it.
  */
 
-const COLUMNS = "id, session_id, respondent_code, respondent_id, status, is_test, answers, calculated, embedded, flags, seed, started_at, completed_at, quality";
+const COLUMNS = "id, session_id, respondent_code, respondent_id, status, is_test, answers, calculated, embedded, flags, seed, started_at, completed_at, quality, sample_source";
 const CHUNK = 1000;
 const MAX_ROWS = 250_000;
 

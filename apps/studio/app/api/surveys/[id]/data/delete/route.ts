@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
  * Bulk delete / restore / purge.
  *
  *   POST { environment, ids: [...] }                  the rows the researcher ticked
- *   POST { environment, filter, search?, statuses?, confirmCount }
+ *   POST { environment, filter, search?, statuses?, sampleSources?, confirmCount }
  *                                                     everything matching a condition
  *   POST { ..., action: "restore" | "purge" }
  *
@@ -61,7 +61,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
     ids = owned.map((r) => r.id);
     codes = owned.map((r) => r.respondent_code ?? r.id);
-  } else if (body?.filter || body?.search || body?.statuses) {
+  } else if (body?.filter || body?.search || body?.statuses || body?.sampleSources) {
     let filter = null;
     if (body?.filter) {
       const parsed = Condition.safeParse(body.filter);
@@ -75,6 +75,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         surveyId: params.id, environment, filter,
         search: typeof body?.search === "string" ? body.search : undefined,
         statuses: Array.isArray(body?.statuses) ? body.statuses.map(String) : undefined,
+        /*
+         * §23 — the source filter must be honoured HERE, not only in the
+         * count. A filter the grid applies and this route ignores is how
+         * "delete the 40 from this one bad supplier" becomes "delete
+         * everything"; the confirmCount guard would catch it, but as a
+         * baffling refusal rather than as the filter working.
+         */
+        sampleSources: Array.isArray(body?.sampleSources) ? body.sampleSources.map(String) : undefined,
         from: body?.from, to: body?.to,
         deleted: action !== "delete",
       });

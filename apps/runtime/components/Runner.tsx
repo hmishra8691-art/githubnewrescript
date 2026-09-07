@@ -255,7 +255,14 @@ export function Runner({ definition: def, mode, session: initialSession, session
       try {
         const r = await fetch("/api/session/start", {
           method: "POST", headers: { "content-type": "application/json" }, cache: "no-store",
-          body: JSON.stringify({ client: sessionBoot.client, study: sessionBoot.study, mode: sessionBoot.mode, token: sessionBoot.token, requestedVersionId: sessionBoot.requestedVersionId ?? null, resume }),
+          /*
+           * The query string goes with the request so the response row can
+           * record which supplier sent this respondent (§23). It is sent once,
+           * at session start, because that is the only moment it exists — by
+           * page two the parameter is gone and no later request can recover
+           * it. The server decides which parameter is the source.
+           */
+          body: JSON.stringify({ client: sessionBoot.client, study: sessionBoot.study, mode: sessionBoot.mode, token: sessionBoot.token, requestedVersionId: sessionBoot.requestedVersionId ?? null, resume, urlParams: urlParams ?? null }),
         });
         const j = await r.json().catch(() => ({}));
         if (cancelled) return;

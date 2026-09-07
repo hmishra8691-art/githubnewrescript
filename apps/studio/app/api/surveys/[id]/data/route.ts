@@ -42,6 +42,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     surveyId: params.id,
     environment,
     statuses: sp.getAll("status").flatMap((s) => s.split(",")).map((s) => s.trim()).filter(Boolean),
+    // §23 — repeatable, like `status`, so the grid can show two suppliers side by side
+    sampleSources: sp.getAll("source").flatMap((s) => s.split(",")).map((s) => s.trim()).filter(Boolean),
     search: sp.get("search") ?? undefined,
     from: sp.get("from") ?? undefined,
     to: sp.get("to") ?? undefined,
@@ -89,6 +91,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       surveyId: params.id, environment, filter,
       search: typeof body?.search === "string" ? body.search : undefined,
       statuses: Array.isArray(body?.statuses) ? body.statuses.map(String) : undefined,
+      sampleSources: Array.isArray(body?.sampleSources) ? body.sampleSources.map(String) : undefined,
       from: body?.from, to: body?.to, deleted: !!body?.deleted,
     });
     console.info("[rescript:data] count", JSON.stringify({ surveyId: params.id, environment, total: res.total, exact: res.exact }));

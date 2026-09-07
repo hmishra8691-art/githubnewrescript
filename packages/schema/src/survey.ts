@@ -214,6 +214,19 @@ export const DeploymentConfig = z.object({
   languages: z.array(z.string()).default(["en"]),
   activeFrom: z.string().optional(),
   activeUntil: z.string().optional(),
+  /*
+   * SAMPLE SOURCE CAPTURE (§23). Which URL parameter carries the supplier and
+   * their own respondent id. Both are optional: the runtime accepts the
+   * conventional names (`src`, `source`, `panel`, `pid`, `rid`, …) without any
+   * configuration, and these override that when a supplier insists on a name
+   * of their own. See `resolveSampleSource` in `@rescript/engine`.
+   */
+  sample: z
+    .object({
+      sourceParam: z.string().optional(),
+      respondentParam: z.string().optional(),
+    })
+    .default({}),
 });
 export type DeploymentConfig = z.infer<typeof DeploymentConfig>;
 

@@ -23,12 +23,13 @@ import { BrandingPanel, ScriptsPanel } from "./BrandingPanel";
 import { VersionsPanel } from "./VersionsPanel";
 import { JsonPanel } from "./JsonPanel";
 import { DataPanel } from "./DataPanel";
+import { FieldworkPanel } from "./FieldworkPanel";
 import { runtimeBaseUrl, surveyBaseUrl } from "@/lib/runtime-url";
 import { Icon, type IconName } from "@/components/ui/Icon";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
-  | "quotas" | "listfill" | "designs" | "branding" | "scripts" | "data" | "versions" | "json"
+  | "quotas" | "listfill" | "designs" | "branding" | "scripts" | "data" | "fieldwork" | "versions" | "json"
   | "collaborators" | "notes" | "activity"
   | "settings";
 
@@ -63,6 +64,12 @@ const NAV: { key: Tab; label: string; icon: IconName; group: string }[] = [
   { key: "branding", label: "Branding", icon: "branding", group: "Research tools" },
   { key: "scripts", label: "Scripts", icon: "scripts", group: "Research tools" },
   { key: "data", label: "Data", icon: "data", group: "Results" },
+  /*
+   * Not in EDITING_TABS: a fieldwork manager watching supplier delivery is
+   * reading response data, and must not need the edit lock to do it — the
+   * same reasoning that keeps Data and Versions live for a reviewer.
+   */
+  { key: "fieldwork", label: "Fieldwork", icon: "chart", group: "Results" },
   { key: "versions", label: "Versions & Deploy", icon: "versions", group: "Management" },
   { key: "json", label: "JSON", icon: "json", group: "Management" },
   { key: "collaborators", label: "Collaborators", icon: "collaborators", group: "Management" },
@@ -715,6 +722,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           {tab === "branding" && <BrandingPanel />}
           {tab === "scripts" && <ScriptsPanel />}
           {tab === "data" && <DataPanel />}
+          {tab === "fieldwork" && <FieldworkPanel />}
           {tab === "versions" && <VersionsPanel />}
           {tab === "json" && <JsonPanel />}
           {tab === "collaborators" && <CollaboratorsPanel canShare={!!collab.state?.me.canShare} />}

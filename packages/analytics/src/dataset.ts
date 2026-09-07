@@ -24,6 +24,8 @@ export interface AnalyticsRow extends ResponseRow {
   completed_at?: string | null;
   quality?: { classification?: string; qualityScore?: number; riskScore?: number; flags?: unknown } | null;
   review_status?: string | null;
+  /** §23 — the supplier this respondent came from (migration 0012). */
+  sample_source?: string | null;
 }
 
 export type VariableRole = "categorical" | "multi" | "numeric" | "scale" | "text" | "date" | "system" | "complex";
@@ -127,6 +129,19 @@ const SYSTEM_VARIABLES: VariableMeta[] = [
   { name: "_started_date", label: "Start date", role: "date", derived: true, hidden: false },
   { name: "_started_week", label: "Start week", role: "categorical", derived: true, hidden: false },
   { name: "_started_month", label: "Start month", role: "categorical", derived: true, hidden: false },
+  /*
+   * §23. Deliberately WITHOUT a fixed category list: the suppliers are
+   * whatever the links in the field actually carried, and enumerating them
+   * here would mean a source nobody declared disappeared from the banner —
+   * which is precisely the source a researcher most needs to see. The
+   * crosstab derives the categories from the data, as it does for
+   * `_started_week`.
+   *
+   * This is the dimension that answers the questions fieldwork is judged on:
+   * incidence by supplier, and whether one source's answers look different
+   * from everyone else's.
+   */
+  { name: "_sample_source", label: "Sample source", role: "categorical", derived: true, hidden: false },
   { name: "_quality_class", label: "Quality classification", role: "categorical", derived: true, hidden: false },
   { name: "_quality_score", label: "Quality score", role: "numeric", derived: true, hidden: false },
   { name: "_risk_score", label: "Risk score", role: "numeric", derived: true, hidden: false },
@@ -201,6 +216,14 @@ export function rowToCase(def: SurveyDefinition, row: AnalyticsRow): Case {
   vars._started_date = started ? started.toISOString().slice(0, 10) : null;
   vars._started_week = started ? isoWeek(started) : null;
   vars._started_month = started ? started.toISOString().slice(0, 7) : null;
+  /*
+   * "(none)" rather than null: a respondent who arrived on a link with no
+   * source is a real case with a real answer to "where did this come from",
+   * and a null would drop them out of every source banner — making the
+   * columns sum to less than the base for no visible reason. Same label the
+   * fieldwork table and the Data filter use.
+   */
+  vars._sample_source = row.sample_source ?? "(none)";
   vars._quality_class = q?.classification ?? null;
   vars._quality_score = q?.qualityScore ?? null;
   vars._risk_score = q?.riskScore ?? null;

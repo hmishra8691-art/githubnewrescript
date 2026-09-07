@@ -36,7 +36,17 @@ export interface QualityLike {
 }
 
 export interface QualityExportRow {
-  state: ResponseStateLike & { completedAt?: string | null; isTest?: boolean };
+  state: ResponseStateLike & {
+    completedAt?: string | null;
+    isTest?: boolean;
+    /*
+     * §23 — the supplier this respondent came from. Not part of the answer
+     * state (it is a fact about the invitation, not a response), so it rides
+     * alongside it here, the same way `isTest` and `completedAt` do.
+     */
+    sampleSource?: string | null;
+    sampleSourceRespondent?: string | null;
+  };
   quality: QualityLike | null;
   review: { status: string | null; reason?: string | null; by?: string | null; at?: string | null };
 }
@@ -96,7 +106,14 @@ export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityEx
   /* ---------------------------------------------------------- Main Data */
   const main = wb.addWorksheet("Main Data");
   const qualityCols = opts.qualityColumns ? ["QUALITY_STATUS", "QUALITY_SCORE", "FRAUD_RISK_SCORE", "RESPONSE_STATUS"] : [];
-  const header = ["Response ID", "Status", "Start Time", "End Time", ...varNames, ...qualityCols];
+  /*
+   * §23 — present only when the data actually has a supplier dimension, so a
+   * study fielded through one open link exports exactly the columns it always
+   * did. Appended last, after the quality columns, for the same reason: a
+   * client's tab script that reads column N must keep reading column N.
+   */
+  const sampleCols = rows.some((r) => r.state.sampleSource) ? [...SAMPLE_COLUMNS] : [];
+  const header = ["Response ID", "Status", "Start Time", "End Time", ...varNames, ...qualityCols, ...sampleCols];
   main.columns = header.map((h) => ({ header: h, key: h, width: Math.min(40, Math.max(12, h.length + 2)) }));
   const included = rows.filter((r) => inDataset(r, filter));
   for (const r of included) {
@@ -106,6 +123,7 @@ export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityEx
     if (opts.qualityColumns) {
       line.push(r.quality?.classification ?? "UNSCORED", r.quality?.qualityScore ?? "", r.quality?.riskScore ?? "", r.review.status === "REMOVE" ? "REMOVED" : r.review.status === "KEEP" ? "KEPT" : r.review.status === "REVIEW_LATER" ? "REVIEW_LATER" : "ACTIVE");
     }
+    if (sampleCols.length) line.push(...sampleCells(r));
     main.addRow(line);
   }
   styleHeader(main);
@@ -159,6 +177,19 @@ export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityEx
   styleHeader(info);
 
   return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+/**
+ * §23 columns, for whichever exporter is asked for them.
+ *
+ * SAMPLE_SOURCE is what every source-level table in a fieldwork report is
+ * grouped by; SAMPLE_SOURCE_RESPONDENT is the supplier's own id, which is
+ * what a reconciliation file ("here are the 400 we billed you for — which
+ * completed?") has to be matched on.
+ */
+export const SAMPLE_COLUMNS = ["SAMPLE_SOURCE", "SAMPLE_SOURCE_RESPONDENT"] as const;
+export function sampleCells(row: QualityExportRow): string[] {
+  return [row.state.sampleSource ?? "", row.state.sampleSourceRespondent ?? ""];
 }
 
 /** CSV columns appended to the main data when quality columns are requested. */

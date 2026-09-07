@@ -34,6 +34,7 @@ const STATUS_CHIP: Record<string, string> = { complete: "on", in_progress: "", s
 interface Rec {
   id: string; respondentCode: string | null; sessionId: string; respondentId: string | null;
   status: string; environment: "TEST" | "LIVE"; revision: number; source: string;
+  sampleSource: string | null; sampleSourceRespondent: string | null;
   startedAt: string | null; completedAt: string | null; updatedAt: string | null;
   deletedAt: string | null; deletedBy: string | null; deletionReason: string | null;
   answers: Record<string, unknown>; calculated: Record<string, unknown>; embedded: Record<string, unknown>;
@@ -67,6 +68,16 @@ export function ResponseManager({ environment, onEnvironment }: { environment: E
   const [search, setSearch] = React.useState("");
   const [searchLive, setSearchLive] = React.useState("");
   const [statuses, setStatuses] = React.useState<string[]>([]);
+  /*
+   * §23 — filter by supplier. `sourceOptions` is what the fieldwork data
+   * actually contains (not the declared list): a source that arrived
+   * undeclared is exactly the one somebody needs to look at, and it must be
+   * selectable here. The control renders only when there is a supplier
+   * dimension to filter on, so a study fielded through one open link sees the
+   * toolbar it has always had.
+   */
+  const [sourceFilter, setSourceFilter] = React.useState<string[]>([]);
+  const [sourceOptions, setSourceOptions] = React.useState<string[]>([]);
   const [bin, setBin] = React.useState(false);
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const [openId, setOpenId] = React.useState<string | null>(null);
@@ -90,6 +101,7 @@ export function ResponseManager({ environment, onEnvironment }: { environment: E
       const qs = new URLSearchParams({ environment, limit: String(limit), offset: String(offset), sort: sort.field, dir: sort.dir });
       if (search.trim()) qs.set("search", search.trim());
       for (const st of statuses) qs.append("status", st);
+      for (const src of sourceFilter) qs.append("source", src);
       if (bin) qs.set("deleted", "1");
       const r = await fetch(`/api/surveys/${s.surveyDbId}/data?${qs}`, { cache: "no-store" });
       const j = await r.json();
@@ -97,11 +109,33 @@ export function ResponseManager({ environment, onEnvironment }: { environment: E
       setPage(j);
     } catch (e) { setError((e as Error).message || "Could not load responses."); }
     finally { setLoading(false); }
-  }, [s.surveyDbId, environment, limit, offset, sort, search, statuses, bin]);
+  }, [s.surveyDbId, environment, limit, offset, sort, search, statuses, sourceFilter, bin]);
   React.useEffect(() => { void load(); }, [load]);
 
   // the environment changing is a different dataset: nothing carries over
   React.useEffect(() => { setSelected(new Set()); setOffset(0); setMatch(null); }, [environment, bin]);
+
+  /*
+   * Which sources this environment's data contains. One RPC, and it is
+   * deliberately re-read when the environment changes rather than merged:
+   * the live suppliers and whatever a programmer typed into a test link are
+   * different lists, and offering one in the other's dataset would produce a
+   * filter that always answers zero.
+   */
+  React.useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/surveys/${s.surveyDbId}/sample-sources?environment=${environment}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d) => {
+        if (cancelled) return;
+        const codes = Array.from(new Set(((d.stats ?? []) as { code: string }[]).map((x) => x.code))).sort();
+        setSourceOptions(codes);
+        // a source that is no longer in this dataset cannot stay selected
+        setSourceFilter((prev) => prev.filter((c) => codes.includes(c)));
+      })
+      .catch(() => { if (!cancelled) setSourceOptions([]); });
+    return () => { cancelled = true; };
+  }, [s.surveyDbId, environment]);
 
   const say = (text: string, ok = true) => { setToast({ text, ok }); setTimeout(() => setToast(null), 6000); };
 
@@ -110,7 +144,7 @@ export function ResponseManager({ environment, onEnvironment }: { environment: E
     try {
       const r = await fetch(`/api/surveys/${s.surveyDbId}/data`, {
         method: "POST", headers: { "content-type": "application/json" }, cache: "no-store",
-        body: JSON.stringify({ environment, filter, search: search.trim() || undefined, statuses: statuses.length ? statuses : undefined, deleted: bin }),
+        body: JSON.stringify({ environment, filter, search: search.trim() || undefined, statuses: statuses.length ? statuses : undefined, sampleSources: sourceFilter.length ? sourceFilter : undefined, deleted: bin }),
       });
       const j = await r.json();
       if (!r.ok) { setMatch({ busy: false, error: j.error ?? `Server returned ${r.status}` }); return; }
@@ -123,7 +157,7 @@ export function ResponseManager({ environment, onEnvironment }: { environment: E
     if (!confirm) return;
     const action = bin ? (confirm.purge ? "purge" : "restore") : "delete";
     const body: Record<string, unknown> = { environment, action, reason: confirm.reason || undefined };
-    if (confirm.kind === "filter") { body.filter = filter; body.search = search.trim() || undefined; body.statuses = statuses.length ? statuses : undefined; body.confirmCount = confirm.count; }
+    if (confirm.kind === "filter") { body.filter = filter; body.search = search.trim() || undefined; body.statuses = statuses.length ? statuses : undefined; body.sampleSources = sourceFilter.length ? sourceFilter : undefined; body.confirmCount = confirm.count; }
     else body.ids = confirm.ids;
     setConfirm(null);
     try {
@@ -206,6 +240,14 @@ export function ResponseManager({ environment, onEnvironment }: { environment: E
           <option value="">Any status</option>
           {STATUSES.map((st) => <option key={st} value={st}>{st.replace("_", " ")}</option>)}
         </select>
+        {sourceOptions.length > 0 && (
+          <select className="select" style={{ width: 160 }} data-testid="rm-source"
+            value={sourceFilter.length === 1 ? sourceFilter[0] : ""}
+            onChange={(e) => { setSourceFilter(e.target.value ? [e.target.value] : []); setOffset(0); }}>
+            <option value="">Any source</option>
+            {sourceOptions.map((c) => <option key={c} value={c}>{c === "(none)" ? "no source" : c}</option>)}
+          </select>
+        )}
         <select className="select" style={{ width: 165 }} value={`${sort.field}:${sort.dir}`}
           onChange={(e) => { const [f, d] = e.target.value.split(":"); setSort({ field: f as Sort["field"], dir: d as "asc" | "desc" }); }}>
           <option value="started_at:desc">Newest first</option>
@@ -319,6 +361,12 @@ export function ResponseManager({ environment, onEnvironment }: { environment: E
                     {r.respondentCode ?? r.sessionId.slice(0, 10)}
                   </button>
                   {r.source !== "runtime" && <span className="chip" title={`This response was ${r.source === "import" ? "imported" : "edited by hand"}`}>{r.source}</span>}
+                  {r.sampleSource && (
+                    <span className="chip" data-testid="rm-row-source"
+                      title={`Sample source: ${r.sampleSource}${r.sampleSourceRespondent ? ` — their respondent id ${r.sampleSourceRespondent}` : ""}`}>
+                      {r.sampleSource}
+                    </span>
+                  )}
                 </td>
                 <td><span className={`chip ${STATUS_CHIP[r.status] ?? ""}`}>{r.status.replace("_", " ")}</span></td>
                 {environment === "ALL" && <td><span className={`chip ${r.environment === "TEST" ? "warn" : "on"}`}>{r.environment}</span></td>}

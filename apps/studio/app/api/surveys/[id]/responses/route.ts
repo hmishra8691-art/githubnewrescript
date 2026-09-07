@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
-import { responsesToCSV, exportResponsesXlsx, inDataset, QUALITY_CSV_COLUMNS, qualityCsvCells, type DatasetFilter, type QualityExportRow } from "@rescript/exporters";
+import { responsesToCSV, exportResponsesXlsx, inDataset, QUALITY_CSV_COLUMNS, qualityCsvCells, SAMPLE_COLUMNS, sampleCells, type DatasetFilter, type QualityExportRow } from "@rescript/exporters";
 import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
 import { audit, isFailure, requireProject } from "@/lib/guard";
 
@@ -73,13 +73,18 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   if (!parsed?.success) return NextResponse.json({ error: "definition invalid" }, { status: 500 });
 
   let query = db.from("responses")
-    .select("session_id, respondent_id, status, seed, answers, calculated, embedded, flags, started_at, completed_at, is_test, quality, review_status, review_reason, reviewed_by, reviewed_at")
+    .select("session_id, respondent_id, status, seed, answers, calculated, embedded, flags, started_at, completed_at, is_test, quality, review_status, review_reason, reviewed_by, reviewed_at, sample_source, sample_source_respondent")
     .eq("survey_id", params.id);
   if (include === "live") query = query.eq("is_test", false);
   else if (include === "test") query = query.eq("is_test", true);
   let { data: resp, error: qerr } = (await query.order("started_at")) as { data: any[] | null; error: { message: string } | null };
-  if (qerr && /quality|review_status|does not exist|schema cache/i.test(qerr.message)) {
-    // migration 0005 not applied yet: serve the data without quality columns
+  if (qerr && /quality|review_status|sample_source|does not exist|schema cache/i.test(qerr.message)) {
+    /*
+     * A column the database has not got yet — migration 0005 (quality) or
+     * 0012 (sample source). Serve the data without them rather than refusing
+     * the export: a researcher who cannot download their responses because a
+     * migration is pending has lost the study, not a column.
+     */
     let q2 = db.from("responses")
       .select("session_id, respondent_id, status, seed, answers, calculated, embedded, flags, started_at, completed_at, is_test")
       .eq("survey_id", params.id);
@@ -89,7 +94,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   }
   // the dataset filter (REMOVED never in a clean dataset; raw rows untouched)
   const exportRows: QualityExportRow[] = (resp ?? []).map((r: any) => ({
-    state: { sessionId: r.session_id, respondentId: r.respondent_id ?? undefined, surveyVersion: ver!.version, startedAt: r.started_at, completedAt: r.completed_at, status: r.status, answers: r.answers ?? {}, embedded: r.embedded ?? {}, calculated: r.calculated ?? {}, isTest: !!r.is_test },
+    state: { sessionId: r.session_id, respondentId: r.respondent_id ?? undefined, surveyVersion: ver!.version, startedAt: r.started_at, completedAt: r.completed_at, status: r.status, answers: r.answers ?? {}, embedded: r.embedded ?? {}, calculated: r.calculated ?? {}, isTest: !!r.is_test, sampleSource: r.sample_source ?? null, sampleSourceRespondent: r.sample_source_respondent ?? null },
     quality: r.quality ?? null,
     review: { status: r.review_status ?? null, reason: r.review_reason ?? null, by: r.reviewed_by ?? null, at: r.reviewed_at ?? null },
   }));
@@ -136,6 +141,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         completedAt: raw?.completed_at ?? null,
         durationSec: raw?.quality?.system?.SYSTEM_TOTAL_DURATION ?? (started && done ? Math.round((done - started) / 1000) : null),
         flags: st.flags,
+        sampleSource: raw?.sample_source ?? null,
+        sampleSourceRespondent: raw?.sample_source_respondent ?? null,
         vars: flattenVariables(parsed.data, st as any),
         quality: raw?.quality ? { classification: raw.quality.classification, qualityScore: raw.quality.qualityScore, riskScore: raw.quality.riskScore, flags: raw.quality.flags?.length ?? 0 } : null,
         review: raw?.review_status ?? null,
@@ -144,7 +151,30 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     return NextResponse.json({ version: ver!.version, columns, rows, dataset: dataset.kind, total: exportRows.length, included: rows.length });
   }
 
-  const csv = responsesToCSV(parsed.data, states as any, withQuality ? { columns: QUALITY_CSV_COLUMNS, cells: (i) => qualityCsvCells(kept[i]) } : undefined);
+  /*
+   * The two optional column sets are COMPOSED, not chosen between. `extra`
+   * takes one block, so a quality export used to be able to carry the quality
+   * columns or nothing — adding the source columns as a second caller would
+   * have silently dropped whichever came second.
+   */
+  const withSample = kept.some((r) => r.state.sampleSource);
+  const extraColumns = [
+    ...(withQuality ? QUALITY_CSV_COLUMNS : []),
+    ...(withSample ? SAMPLE_COLUMNS : []),
+  ];
+  const csv = responsesToCSV(
+    parsed.data,
+    states as any,
+    extraColumns.length
+      ? {
+          columns: extraColumns,
+          cells: (i) => [
+            ...(withQuality ? qualityCsvCells(kept[i]) : []),
+            ...(withSample ? sampleCells(kept[i]) : []),
+          ],
+        }
+      : undefined,
+  );
   return new NextResponse(csv, {
     headers: {
       "content-type": "text/csv; charset=utf-8",

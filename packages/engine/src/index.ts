@@ -18,6 +18,7 @@ export * from "./questionCount.js";
 export * from "./lintLogic.js";
 export * from "./qualityCheck.js";
 export * from "./designVersion.js";
+export * from "./sampleSource.js";
 export * from "./logicSummary.js";
 export * from "./flow.js";
 export * from "./flowTree.js";

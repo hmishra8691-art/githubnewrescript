@@ -35,7 +35,7 @@ export function parseEnvironment(raw: string | null | undefined): Environment | 
 const ROW_COLUMNS =
   "id, session_id, respondent_code, respondent_id, status, is_test, environment, revision, source, " +
   "answers, calculated, embedded, flags, seed, started_at, completed_at, updated_at, last_saved_at, " +
-  "deleted_at, deleted_by, deletion_reason, quality, review_status";
+  "deleted_at, deleted_by, deletion_reason, quality, review_status, sample_source, sample_source_respondent";
 
 /** Columns the filter engine needs, and nothing more (chunked scans stay small). */
 const FILTER_COLUMNS = "id, session_id, respondent_code, respondent_id, status, answers, calculated, embedded, flags, seed, started_at";
@@ -51,6 +51,13 @@ export interface ResponseQuery {
   filter?: Condition | null;
   from?: string;
   to?: string;
+  /**
+   * §23 — which sample sources to include. `(none)` selects the rows that
+   * arrived with no source at all, which is a real fieldwork answer ("how
+   * much of this came from the client's own list?") and not the same as no
+   * filter.
+   */
+  sampleSources?: string[];
   /** the recycle bin instead of the live dataset */
   deleted?: boolean;
   sort?: { field: "started_at" | "completed_at" | "updated_at" | "respondent_code" | "status"; dir: "asc" | "desc" };
@@ -67,6 +74,9 @@ export interface ResponseRecord {
   environment: "TEST" | "LIVE";
   revision: number;
   source: string;
+  /** §23 — the supplier this respondent came from, and their id for them */
+  sampleSource: string | null;
+  sampleSourceRespondent: string | null;
   startedAt: string | null;
   completedAt: string | null;
   updatedAt: string | null;
@@ -128,6 +138,26 @@ function narrowable(clauses: PrefilterClause[]): PrefilterClause[] {
   return clauses.filter((c) => c.kind !== "hasKey");
 }
 
+/**
+ * The label for "arrived with no sample source".
+ *
+ * The same string the `rescript_source_stats` function groups those rows
+ * under, so the fieldwork table and the Data filter cannot disagree about
+ * what that bucket is called.
+ */
+export const NO_SAMPLE_SOURCE = "(none)";
+
+/**
+ * A value inside PostgREST's `in.(…)` list.
+ *
+ * Supplier codes are chosen by people and arrive from URLs, so one will
+ * eventually contain a comma or a quote. Unquoted, that value silently
+ * becomes two list entries and the filter answers the wrong question.
+ */
+function quoteForIn(v: string): string {
+  return `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
 function baseQuery(db: SupabaseClient, q: ResponseQuery, columns: string, count: boolean) {
   let sel = db.from("responses").select(columns, count ? { count: "exact" } : undefined).eq("survey_id", q.surveyId);
   // ENVIRONMENT — the whole point of this module
@@ -136,6 +166,19 @@ function baseQuery(db: SupabaseClient, q: ResponseQuery, columns: string, count:
   if (q.deleted) sel = sel.not("deleted_at", "is", null);
   else sel = sel.is("deleted_at", null);
   if (q.statuses?.length) sel = sel.in("status", q.statuses);
+  /*
+   * A source filter names values, and one of them may be the absence of a
+   * value. `(none)` is the label the fieldwork report uses for that, so it is
+   * accepted here too and turned into the null predicate it means — a
+   * literal `in ("(none)")` would match nothing and quietly answer zero.
+   */
+  if (q.sampleSources?.length) {
+    const named = q.sampleSources.filter((v) => v !== NO_SAMPLE_SOURCE);
+    const wantsNone = q.sampleSources.length !== named.length;
+    if (wantsNone && named.length) sel = sel.or(`sample_source.is.null,sample_source.in.(${named.map(quoteForIn).join(",")})`);
+    else if (wantsNone) sel = sel.is("sample_source", null);
+    else sel = sel.in("sample_source", named);
+  }
   if (q.from) sel = sel.gte("started_at", q.from);
   if (q.to) sel = sel.lte("started_at", q.to);
   return sel;
@@ -247,6 +290,8 @@ function toRecord(def: SurveyDefinition, r: any): ResponseRecord {
     environment: r.environment ?? (r.is_test ? "TEST" : "LIVE"),
     revision: typeof r.revision === "number" ? r.revision : 0,
     source: r.source ?? "runtime",
+    sampleSource: r.sample_source ?? null,
+    sampleSourceRespondent: r.sample_source_respondent ?? null,
     startedAt: r.started_at ?? null,
     completedAt: r.completed_at ?? null,
     updatedAt: r.updated_at ?? null,
