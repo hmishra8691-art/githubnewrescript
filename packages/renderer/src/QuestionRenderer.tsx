@@ -990,6 +990,18 @@ function DesignTasks(p: QRProps) {
   const tasks = [...new Set(rows.map((r) => String(r.task)))];
   const vals = (p.value ?? {}) as Record<string, unknown>;
   const isMaxdiff = p.q.type === "maxdiff_task";
+  /*
+   * Whether this design is anchored is a property of the DESIGN, not of the
+   * question — the generator decides it and the analysis has to agree — so it
+   * is read from the design's own config, which is the schema's declared home
+   * for generator configuration. An imported design that says nothing is
+   * standard, which is what every design before this was.
+   */
+  const anchorCfg = (design.config ?? {}) as { anchored?: boolean; anchorPrompt?: string };
+  const anchored = isMaxdiff && anchorCfg.anchored === true;
+  const anchorPrompt =
+    (anchorCfg.anchorPrompt ?? "").trim() ||
+    "Thinking about the items in this set, how many of them are important to you?";
   const attrCols = design.file.columns.filter(
     (c) => !["version", "task", "alt", "is_holdout", "none_option", "position", "item_index", "item_label"].includes(c),
   );
@@ -1061,12 +1073,59 @@ function DesignTasks(p: QRProps) {
                 </tbody>
               </table>
             </div>
+            {isMaxdiff && anchored && (
+              /*
+               * ANCHORED (DUAL-RESPONSE) MAXDIFF (§17).
+               *
+               * Best-worst scaling is purely relative: an item can top the
+               * ranking and still matter to nobody. This follow-up places an
+               * absolute threshold at utility zero, so the analysis can say
+               * which items clear the bar. It is asked per task, immediately
+               * under the set it refers to — "these" has to mean the items
+               * the respondent is still looking at.
+               */
+              <div className="rs-anchor" style={{ marginTop: 12 }}>
+                <div style={{ marginBottom: 6 }}>{anchorPrompt}</div>
+                <div role="radiogroup" aria-label={anchorPrompt} style={{ display: "flex", flexWrap: "wrap", gap: 14 }}>
+                  {ANCHOR_CHOICES.map((choice) => {
+                    const cur = (vals[t] ?? {}) as { anchor?: string };
+                    return (
+                      <label key={choice.value} className="rs-anchor-choice" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <input
+                          type="radio" name={`${p.q.id}_${t}_anchor`}
+                          value={choice.value}
+                          checked={cur.anchor === choice.value}
+                          data-testid={`md-anchor-${t}-${choice.value}`}
+                          onChange={() => p.onChange({ ...vals, [t]: { ...(vals[t] as object ?? {}), anchor: choice.value } })}
+                        />
+                        <span>{choice.label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         );
       })}
     </div>
   );
 }
+
+/**
+ * The dual-response scale.
+ *
+ * Three points rather than a rating, because that is what identifies the
+ * anchor without adding a scale to model: "all" says every item in the set
+ * beat the threshold, "none" says none did, and "some" — the common answer —
+ * says the best one did and the worst one did not. Each is a constraint the
+ * choice model can use directly.
+ */
+export const ANCHOR_CHOICES: { value: string; label: string }[] = [
+  { value: "all", label: "All of them are important to me" },
+  { value: "some", label: "Some of them are" },
+  { value: "none", label: "None of them are" },
+];
 
 /* ------------------------------------------- variant renderers (families) */
 

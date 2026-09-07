@@ -200,6 +200,37 @@ export function validateQuestion(
   }
 
   /*
+   * ANCHORED MAXDIFF: the follow-up is part of the answer (§17).
+   *
+   * A set the respondent chose best and worst in, but skipped the anchor on,
+   * looks complete — `isEmpty` recurses into the object and finds two values.
+   * The anchor would then be missing for that task and the utility scale
+   * would be identified by however many respondents happened to answer it,
+   * with nothing on screen to say so.
+   *
+   * Only for a task the respondent actually engaged with: nagging about the
+   * anchor on a set they have not touched would put the follow-up before the
+   * question it follows. And only for anchored designs, which are new — no
+   * existing survey's validation changes.
+   */
+  if (q.type === "maxdiff_task" && !isEmpty(value) && typeof value === "object") {
+    const design = def.designs?.find((d) => d.id === q.settings.designRef);
+    if ((design?.config as { anchored?: boolean } | undefined)?.anchored) {
+      const tasks = value as Record<string, { best?: unknown; worst?: unknown; anchor?: unknown }>;
+      const missing = Object.entries(tasks)
+        .filter(([, t]) => t && typeof t === "object" && (t.best != null || t.worst != null) && isEmpty(t.anchor))
+        .map(([taskId]) => taskId);
+      if (missing.length) {
+        push(
+          missing.length === 1
+            ? `Please also answer the follow-up question for set ${missing[0]}.`
+            : `Please also answer the follow-up question for sets ${missing.join(", ")}.`,
+        );
+      }
+    }
+  }
+
+  /*
    * Other (specify): selecting it is not an answer until the respondent says
    * what "other" is. A blank specify was reaching the data — enforced here in
    * the engine, so the runtime, the preview and the inspector agree, and so

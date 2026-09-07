@@ -8,6 +8,8 @@ import {
   explainOptions,
   setAnswer,
   visibleQuestions,
+  validateQuestion,
+  buildVariableDictionary,
   visibleByRules,
   ruleVerdict,
   hasDisplayRulesFor,
@@ -320,4 +322,85 @@ test("hasDisplayRulesFor is per-kind, so the option pipeline pays nothing for pa
   assert.equal(hasDisplayRulesFor(def, "option"), false);
   assert.equal(hasDisplayRulesFor(def, "row"), false);
   assert.equal(hasDisplayRulesFor(def, "column"), false);
+});
+
+/* ================================ anchored MaxDiff validation (§17) */
+
+test("an anchored MaxDiff set answered without its follow-up is incomplete", () => {
+  const def = SurveyDefinition.parse({
+    meta: { id: "mv", code: "MV", title: "Anchor validation", version: "1.0" },
+    designs: [{
+      id: "d1", kind: "maxdiff", name: "MD",
+      config: { items: ["A", "B", "C", "D"], itemsPerTask: 3, anchored: true },
+      file: { format: "json", columns: ["version", "task", "item_index", "item_label"], rows: [
+        { version: 1, task: 1, item_index: 1, item_label: "A" },
+        { version: 1, task: 1, item_index: 2, item_label: "B" },
+        { version: 1, task: 1, item_index: 3, item_label: "C" },
+      ] },
+    }],
+    questions: [{ id: "q_md", code: "Q1", variableName: "MD", type: "maxdiff_task", text: "Best/worst", settings: { designRef: "d1" } }],
+    flow: [{ type: "page", id: "p1", questionIds: ["q_md"] }],
+  });
+  const state = createResponseState(def, { sessionId: "t", seed: 1 });
+  const ctx = { def, state, loop: null };
+  const q = def.questions[0];
+
+  const bare = validateQuestion(def, q, { 1: { best: "1", worst: "3" } }, ctx as never);
+  assert.equal(bare.length, 1);
+  assert.match(bare[0].message, /follow-up question for set 1/);
+
+  const whole = validateQuestion(def, q, { 1: { best: "1", worst: "3", anchor: "some" } }, ctx as never);
+  assert.deepEqual(whole, []);
+});
+
+test("an untouched set is not nagged about its follow-up", () => {
+  // the follow-up follows the question; asking for it first is backwards
+  const def = SurveyDefinition.parse({
+    meta: { id: "mv2", code: "MV2", title: "Anchor validation", version: "1.0" },
+    designs: [{
+      id: "d1", kind: "maxdiff", name: "MD",
+      config: { items: ["A", "B", "C", "D"], anchored: true },
+      file: { format: "json", columns: ["version", "task", "item_index"], rows: [{ version: 1, task: 1, item_index: 1 }] },
+    }],
+    questions: [{ id: "q_md", code: "Q1", variableName: "MD", type: "maxdiff_task", text: "x", settings: { designRef: "d1" } }],
+    flow: [{ type: "page", id: "p1", questionIds: ["q_md"] }],
+  });
+  const state = createResponseState(def, { sessionId: "t", seed: 1 });
+  const q = def.questions[0];
+  assert.deepEqual(validateQuestion(def, q, { 1: { best: "1", worst: "2", anchor: "all" }, 2: {} }, { def, state, loop: null } as never), []);
+});
+
+test("a STANDARD MaxDiff is validated exactly as before", () => {
+  const def = SurveyDefinition.parse({
+    meta: { id: "mv3", code: "MV3", title: "Standard", version: "1.0" },
+    designs: [{
+      id: "d1", kind: "maxdiff", name: "MD",
+      config: { items: ["A", "B", "C", "D"] },
+      file: { format: "json", columns: ["version", "task", "item_index"], rows: [{ version: 1, task: 1, item_index: 1 }] },
+    }],
+    questions: [{ id: "q_md", code: "Q1", variableName: "MD", type: "maxdiff_task", text: "x", required: true, settings: { designRef: "d1" } }],
+    flow: [{ type: "page", id: "p1", questionIds: ["q_md"] }],
+  });
+  const state = createResponseState(def, { sessionId: "t", seed: 1 });
+  const q = def.questions[0];
+  assert.deepEqual(validateQuestion(def, q, { 1: { best: "1", worst: "2" } }, { def, state, loop: null } as never), []);
+});
+
+test("the anchor variable is declared only when the design is anchored", () => {
+  const build = (anchored: boolean) => SurveyDefinition.parse({
+    meta: { id: "va", code: "VA", title: "Anchor variable", version: "1.0" },
+    designs: [{
+      id: "d1", kind: "maxdiff", name: "MD",
+      config: anchored ? { items: ["A", "B"], anchored: true } : { items: ["A", "B"] },
+      file: { format: "json", columns: ["version", "task", "item_index"], rows: [{ version: 1, task: 1, item_index: 1 }] },
+    }],
+    questions: [{ id: "q_md", code: "Q1", variableName: "MD", type: "maxdiff_task", text: "x", settings: { designRef: "d1" } }],
+    flow: [{ type: "page", id: "p1", questionIds: ["q_md"] }],
+  });
+  const names = (anchored: boolean) => buildVariableDictionary(build(anchored)).map((v) => v.name);
+  assert.ok(names(true).includes("MD_ANCHOR"), names(true).join(", "));
+  assert.ok(!names(false).includes("MD_ANCHOR"));
+  /* and the codes are the three the renderer offers */
+  const v = buildVariableDictionary(build(true)).find((x) => x.name === "MD_ANCHOR")!;
+  assert.deepEqual(v.valueCodes, ["all", "some", "none"]);
 });

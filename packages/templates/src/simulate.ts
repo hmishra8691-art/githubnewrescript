@@ -96,11 +96,22 @@ export function defaultAnswer(def: SurveyDefinition, q: Question, ctx: { state: 
       return out;
     }
     case "maxdiff_task": {
-      const d = def.designs.find((x) => x.id === s.designRef); const out: Record<string, { best: string; worst: string }> = {};
+      const d = def.designs.find((x) => x.id === s.designRef);
+      const out: Record<string, { best: string; worst: string; anchor?: string }> = {};
       for (const r of d?.file?.rows ?? []) {
         if (String(r.version ?? "1") !== "1") continue;
         const t = String(r.task); const idx = String(r.item_index);
         if (!out[t]) out[t] = { best: idx, worst: idx }; else out[t].worst = idx;
+      }
+      /*
+       * An anchored design asks a follow-up per task (§17). A headless
+       * respondent that skips it leaves the question incomplete, so the
+       * simulation would report a required-answer failure for a survey that
+       * is programmed correctly. "some" is the honest default: it is the
+       * modal answer and the one that constrains least.
+       */
+      if ((d?.config as { anchored?: boolean } | undefined)?.anchored) {
+        for (const t of Object.keys(out)) out[t].anchor = "some";
       }
       return out;
     }

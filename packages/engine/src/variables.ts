@@ -63,6 +63,15 @@ export function questionVariables(
   q: Question,
   loc?: { pageId: string; sectionId?: string },
   all?: Question[],
+  /**
+   * The survey's design files. Needed only by anchored MaxDiff (§17), whose
+   * extra variable is a property of the DESIGN rather than of the question —
+   * the generator decides whether a follow-up is asked. Optional so that
+   * every existing caller, including the question-type registry's hook, keeps
+   * working; a caller that does not pass it simply describes a standard
+   * MaxDiff question, which is what every design before this was.
+   */
+  designs?: { id: string; config?: Record<string, unknown> }[],
 ): VariableDef[] {
   const rows = dictionaryRows(q, all);
   const base = {
@@ -301,6 +310,26 @@ export function questionVariables(
        */
       push({ name: `${q.variableName}_VERSION`, label: `${q.code} — design version shown`, dataType: "text",
         notes: "The design block this respondent answered. Derived from their response seed, so it is reproducible from the stored response." });
+      /*
+       * ANCHORED MAXDIFF (§17): one dual-response answer per task, and it is
+       * DATA, not a rendering detail. Without a declared variable the anchor
+       * would be stored inside the task answer and invisible to the variable
+       * dictionary, the exports and anybody reading the data outside this
+       * platform — which is how a question a respondent answered comes to be
+       * missing from the file the client receives.
+       */
+      if (q.type === "maxdiff_task") {
+        const design = designs?.find((d) => d.id === q.settings.designRef);
+        if ((design?.config as { anchored?: boolean } | undefined)?.anchored) {
+          push({
+            name: `${q.variableName}_ANCHOR`,
+            label: `${q.code} — anchor (all / some / none important)`,
+            dataType: "text",
+            valueCodes: ["all", "some", "none"],
+            notes: "The dual-response follow-up asked after each set, one column per task at export. Places the utility scale's zero point.",
+          });
+        }
+      }
       break;
     }
     case "annotation": {
@@ -487,7 +516,7 @@ export function buildDerivedVariables(def: SurveyDefinition): VariableDef[] {
   for (const q of def.questions) {
     const inLoop = loopOf.get(q.id);
     if (!inLoop || inLoop.positions.length === 0) {
-      const base = questionVariables(q, loc.get(q.id), def.questions);
+      const base = questionVariables(q, loc.get(q.id), def.questions, def.designs);
       if (inLoop) {
         const innermost = inLoop.chain[inLoop.chain.length - 1];
         for (const v of base) {
@@ -504,7 +533,7 @@ export function buildDerivedVariables(def: SurveyDefinition): VariableDef[] {
       // the SAME variable shapes as outside a loop, renamed per position, so a
       // multi-select still exports its 0/1 columns and a matrix its rows
       const renamed = { ...q, variableName: `${q.variableName}${suffix}` } as typeof q;
-      for (const v of questionVariables(renamed, loc.get(q.id), def.questions)) {
+      for (const v of questionVariables(renamed, loc.get(q.id), def.questions, def.designs)) {
         out.push({
           ...v,
           loopId: innermost.id,
