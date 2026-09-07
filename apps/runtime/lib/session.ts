@@ -75,12 +75,30 @@ export async function createSession(
     sampleSource?: string | null;
     sampleSourceRespondent?: string | null;
   },
-): Promise<{ sessionId: string; seed: number; respondentId?: string } | { error: string }> {
+): Promise<
+  | {
+      sessionId: string;
+      seed: number;
+      respondentId?: string;
+      /**
+       * §24: the embedded data this respondent was uploaded with — the
+       * columns of the client's list that were not an email, an id or a name
+       * (region, store, plan, language). `respondents.embedded` has existed
+       * since the first migration and nothing has ever read it, so an
+       * invitation list's own fields were silently dropped. They are handed
+       * back here so the runner can seed them, which is what makes an
+       * invitation list able to carry sample data at all.
+       */
+      respondentEmbedded?: Record<string, unknown>;
+    }
+  | { error: string }
+> {
   const db = supabaseAdmin();
   const sessionId = crypto.randomUUID().replace(/-/g, "");
   const seed = Math.floor(Math.random() * 2 ** 31);
 
   let respondentId: string | undefined;
+  let respondentEmbedded: Record<string, unknown> | undefined;
   const access = dep.definition.deployment.access;
   if (access.mode === "unique_links" || access.mode === "invitation") {
     if (!opts.respondentToken && opts.isTest && opts.allowTokenless) {
@@ -90,6 +108,13 @@ export async function createSession(
         .insert({
           survey_id: dep.surveyId,
           status: "started",
+          /*
+           * §24: a throwaway belongs to the TEST list. Before migration 0013
+           * the column did not exist and every throwaway landed in whatever
+           * list the runtime looked in — which is the leak the environment
+           * predicate below closes.
+           */
+          is_test: true,
           meta: { test: true, createdBy: "test-runtime" },
         })
         .select("id")
@@ -109,16 +134,42 @@ export async function createSession(
       return { sessionId, seed, respondentId };
     }
     if (!opts.respondentToken) return { error: "This survey requires a personal invitation link." };
-    const { data: r } = await db
+    /*
+     * THE ENVIRONMENT IS PART OF THE LOOKUP (§24, migration 0013).
+     *
+     * A respondent list belongs to one environment, for the same reason a
+     * quota counter does: the natural way to test a unique-link survey is to
+     * upload a few rows from the client's own file, and without this
+     * predicate those test interviews would consume the client's real
+     * tokens — marking real people as having answered, and refusing them
+     * when they arrive. `is_test` defaults to false, so a database on which
+     * 0013 has not run keeps behaving exactly as it did.
+     */
+    let lookup = await db
       .from("respondents")
-      .select("id, status")
+      .select("id, status, embedded")
       .eq("survey_id", dep.surveyId)
       .eq("token", opts.respondentToken)
+      .eq("is_test", opts.isTest)
       .maybeSingle();
+    if (lookup.error && /is_test/.test(lookup.error.message ?? "")) {
+      // pre-0013: no environment column to match on
+      lookup = await db
+        .from("respondents")
+        .select("id, status, embedded")
+        .eq("survey_id", dep.surveyId)
+        .eq("token", opts.respondentToken)
+        .maybeSingle();
+    }
+    const r = lookup.data;
     if (!r) return { error: "Invalid invitation link." };
     if (!access.allowRetake && ["complete", "screened", "quota_full", "terminated"].includes(r.status))
       return { error: "This invitation link has already been used." };
     respondentId = r.id;
+    const fromList = (r as { embedded?: unknown }).embedded;
+    if (fromList && typeof fromList === "object" && !Array.isArray(fromList)) {
+      respondentEmbedded = fromList as Record<string, unknown>;
+    }
     await db.from("respondents").update({ status: "started" }).eq("id", r.id);
   }
 
@@ -138,7 +189,7 @@ export async function createSession(
     ...sampleColumns(opts),
   });
   if (insErr) return insErr;
-  return { sessionId, seed, respondentId };
+  return { sessionId, seed, respondentId, respondentEmbedded };
 }
 
 /**

@@ -115,5 +115,12 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     ok: true, resumed: false,
     session: { sessionId: session.sessionId, seed: session.seed, surveyDbId: d.surveyId, versionDbId: d.versionId, respondentCode: made?.respondent_code ?? null, respondentId: session.respondentId ?? null },
+    /*
+     * §24 — the fields this respondent's row on the invitation list carries.
+     * Sent separately from `session` because it is not identity: it is data
+     * the survey will pipe and branch on, and it belongs with `saved` in the
+     * runner's boot.
+     */
+    respondentEmbedded: session.respondentEmbedded ?? null,
   });
 }

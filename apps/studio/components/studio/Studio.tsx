@@ -24,12 +24,14 @@ import { VersionsPanel } from "./VersionsPanel";
 import { JsonPanel } from "./JsonPanel";
 import { DataPanel } from "./DataPanel";
 import { FieldworkPanel } from "./FieldworkPanel";
+import { DistributionPanel } from "./DistributionPanel";
 import { runtimeBaseUrl, surveyBaseUrl } from "@/lib/runtime-url";
 import { Icon, type IconName } from "@/components/ui/Icon";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
-  | "quotas" | "listfill" | "designs" | "branding" | "scripts" | "data" | "fieldwork" | "versions" | "json"
+  | "quotas" | "listfill" | "designs" | "branding" | "scripts" | "data" | "fieldwork"
+  | "distribution" | "versions" | "json"
   | "collaborators" | "notes" | "activity"
   | "settings";
 
@@ -70,6 +72,12 @@ const NAV: { key: Tab; label: string; icon: IconName; group: string }[] = [
    * same reasoning that keeps Data and Versions live for a reviewer.
    */
   { key: "fieldwork", label: "Fieldwork", icon: "chart", group: "Results" },
+  /*
+   * §24. Beside Versions & Deploy, because sending a study is the step after
+   * shipping it — and gated on `deploy.manage` at the route, not here: the
+   * roles separate the programmer who edits from the manager who sends.
+   */
+  { key: "distribution", label: "Distribution", icon: "share", group: "Management" },
   { key: "versions", label: "Versions & Deploy", icon: "versions", group: "Management" },
   { key: "json", label: "JSON", icon: "json", group: "Management" },
   { key: "collaborators", label: "Collaborators", icon: "collaborators", group: "Management" },
@@ -723,6 +731,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           {tab === "scripts" && <ScriptsPanel />}
           {tab === "data" && <DataPanel />}
           {tab === "fieldwork" && <FieldworkPanel />}
+          {tab === "distribution" && <DistributionPanel />}
           {tab === "versions" && <VersionsPanel />}
           {tab === "json" && <JsonPanel />}
           {tab === "collaborators" && <CollaboratorsPanel canShare={!!collab.state?.me.canShare} />}

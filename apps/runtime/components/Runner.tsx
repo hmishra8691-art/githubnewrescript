@@ -235,6 +235,8 @@ export function Runner({ definition: def, mode, session: initialSession, session
   const [bootError, setBootError] = React.useState<string | null>(null);
   const [bootAttempt, setBootAttempt] = React.useState(0);
   const savedRef = React.useRef<{ answers: Record<string, unknown>; calculated: Record<string, unknown>; embedded: Record<string, unknown>; flags: unknown[]; stepIndex: number } | null>(null);
+  /** §24: embedded data from this respondent's row on the invitation list. */
+  const respondentEmbeddedRef = React.useRef<Record<string, unknown> | null>(null);
   const [resumed, setResumed] = React.useState(false);
   /** answers that were only in this browser until now */
   const [recovered, setRecovered] = React.useState(false);
@@ -286,6 +288,15 @@ export function Runner({ definition: def, mode, session: initialSession, session
           };
           setResumed(true);
           setRecovered(true);
+        }
+        /*
+         * §24 — the fields the invitation list carries for this person. Kept
+         * in a ref rather than state because the init effect below reads it
+         * once, while building the response state, and a second render just
+         * to deliver it would re-seed a survey already in progress.
+         */
+        if (j.respondentEmbedded && typeof j.respondentEmbedded === "object") {
+          respondentEmbeddedRef.current = j.respondentEmbedded as Record<string, unknown>;
         }
         setSession({ ...j.session, seed: sessionBoot.seed ?? j.session.seed });
       } catch (e) {
@@ -387,6 +398,28 @@ export function Runner({ definition: def, mode, session: initialSession, session
      * engine's own recursive walker, which the piping picker and the variable
      * dictionary already use — so all three now agree on what is declared.
      */
+    /*
+     * §24 — the invitation list's own fields, applied BEFORE the URL's.
+     *
+     * A respondent invited by a personal link may arrive with data the client
+     * supplied about them: their region, their store, their plan, their
+     * language. Only DECLARED fields are taken: an upload can contain any
+     * column at all, and letting an arbitrary spreadsheet heading create a
+     * variable would mean a typo in a client's file silently inventing one.
+     *
+     * The URL still wins over this, which is the existing precedence
+     * (definition default, then URL) left alone — and it is the right way
+     * round for the one case that matters: a link built for a specific
+     * respondent that also carries an explicit parameter is a link somebody
+     * constructed on purpose.
+     */
+    if (respondentEmbeddedRef.current) {
+      const declared = new Set(allEmbeddedFields(def).map((f) => f.name));
+      for (const e of def.embeddedData) declared.add(e.name);
+      for (const [k, v] of Object.entries(respondentEmbeddedRef.current)) {
+        if (declared.has(k) && v != null && v !== "") state.embedded[k] = v as never;
+      }
+    }
     for (const f of allEmbeddedFields(def)) {
       if (f.source === "url" && urlParams?.[f.name] != null) state.embedded[f.name] = urlParams[f.name];
     }

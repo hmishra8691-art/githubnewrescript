@@ -435,11 +435,20 @@ export function SurveySettings() {
             onChange={(e) => s.update((d) => { d.deployment.access.password = e.target.value; })} /></label>
       )}
 
+      {/*
+        * This used to be a warning that no invitation screen existed, and
+        * that the live link would therefore refuse everyone. It now points at
+        * the screen (§24). The substance that remains true is worth keeping:
+        * a personal-link survey has nobody who can take it until a list has
+        * been uploaded, and Test Survey works regardless because it mints a
+        * throwaway token.
+        */}
       {(mode === "unique_links" || mode === "invitation") && (
-        <div className="chip warn" style={{ marginBottom: 10 }}>
-          Each respondent needs their own token. There is no invitation-management screen yet, so
-          the live link will refuse everyone until tokens exist in the <span className="mono">respondents</span>{" "}
-          table. <strong>Test Survey still works</strong> — it mints a throwaway token for you.
+        <div className="chip qd-note" style={{ marginBottom: 10 }} data-testid="access-personal-note">
+          Each respondent needs their own link. Upload the list under{" "}
+          <strong>Distribution</strong>, where each person&apos;s link is minted and can be downloaded for sending.
+          Until somebody is on the list the live link has nobody to admit; <strong>Test Survey still works</strong> —
+          it mints a throwaway token for you.
         </div>
       )}
 
