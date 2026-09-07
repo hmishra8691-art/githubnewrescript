@@ -12,6 +12,8 @@ import { AutoPunchPanel } from "./AutoPunchEditor";
 import { useStudio, uid } from "./store";
 import { ConditionEditor, conditionToText, OptionalCondition } from "./ConditionBuilder";
 import { NamedExpressionsPanel } from "./NamedExpressionsPanel";
+import { LogicTracePanel } from "./LogicTracePanel";
+import { lintCalculations } from "@rescript/engine";
 
 /**
  * Survey-wide logic check (reqs §30–31): every broken reference, dead option
@@ -451,6 +453,15 @@ export function LogicPanel() {
         * above Auto punch and Display rules specifically, because those are
         * the two that most often repeat the same condition three times.
         */}
+      {/*
+        * The trace sits with the rest of the logic tooling and above the rules
+        * it explains. It was runtime-only before — a programmer had to launch
+        * a session and answer their way to the question to see why a rule
+        * fired, which is why nobody did.
+        */}
+      <h3 className="sec">Logic trace</h3>
+      <LogicTracePanel />
+
       <h3 className="sec">Named expressions</h3>
       <NamedExpressionsPanel />
 
@@ -531,6 +542,17 @@ export function CalcPanel() {
           wildcards like sum(ALLOC_*)
         </span>
       </div>
+
+      {/*
+        * Calculations were absent from the dependency graph entirely, so a
+        * calc-to-calc cycle went unreported and — worse, because it looks like
+        * it works — a calculation reading one declared BELOW it silently used
+        * the previous value. `runCalculations` iterates the array in order.
+        */}
+      {lintCalculations(s.def).map((p) => (
+        <div key={p} className="chip warn qd-note" data-testid="calc-problem">{p}</div>
+      ))}
+
       {s.def.calculations.map((c, i) => (
         <div key={c.id} className="card" style={{ padding: 12 }}>
           <div className="row" style={{ marginBottom: 6 }}>

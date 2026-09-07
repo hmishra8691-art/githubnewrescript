@@ -1,7 +1,7 @@
 import type { SurveyDefinition, EmbeddedDataType, FlowNode } from "@rescript/schema";
 import type { ResponseState } from "./state.js";
 import { flattenVariables } from "./flatten.js";
-import { evaluateExpression, validateExpression } from "./calc.js";
+import { CALC_FUNCTION_NAMES, evaluateExpression, validateExpression } from "./calc.js";
 
 /**
  * Typed embedded data (reqs §12–15).
@@ -243,11 +243,13 @@ export function checkEmbeddedExpression(
   return { ok: unknownRefs.length === 0, unknownRefs, resultNote: note, error: unknownRefs.length ? `unknown reference${unknownRefs.length > 1 ? "s" : ""}: ${unknownRefs.join(", ")}` : undefined };
 }
 
-const FUNCTION_NAMES = new Set([
-  "sum", "avg", "mean", "min", "max", "count", "countif", "pct", "percent",
-  "weighted", "round", "abs", "floor", "ceil", "sqrt", "pow", "if", "coalesce",
-  "len", "concat", "contains", "number", "text", "and", "or", "not",
-]);
+/*
+ * The engine's own list, plus the three boolean keywords the tokenizer treats
+ * as operators. This was a hand-written duplicate that drifted the moment a
+ * function was added to calc.ts — `upper`, `trim`, `substring` and the rest
+ * would have been reported here as unknown VARIABLES.
+ */
+const FUNCTION_NAMES = new Set([...CALC_FUNCTION_NAMES, "and", "or", "not"]);
 
 /** Variable names an expression reads (function names and strings excluded). */
 export function referencedNames(src: string): string[] {

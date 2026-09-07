@@ -8,6 +8,7 @@ import type {
 import { setExprSources } from "./setExpression.js";
 import { getQuestionByCodeOrVar } from "./state.js";
 import { pipeTokensIn } from "./pipingTokens.js";
+import { referencedNames } from "./embedded.js";
 
 /**
  * Dependency tracking (reqs §27, §31–32).
@@ -338,4 +339,111 @@ export function blockDependencies(def: SurveyDefinition, blockId: string): Block
   }
   dependsOn.sort((a, b) => (order[a.id] ?? 1e9) - (order[b.id] ?? 1e9));
   return { questions, dependsOn, unknown };
+}
+
+/* ==================================================== calculations (§45, §46)
+ *
+ * THE GAP THIS CLOSES. `dependencyGraph` is question→question: its node set is
+ * `def.questions` and it drops every edge whose target is not one, so
+ * calculations were invisible to `detectLogicCycles` entirely. Two
+ * consequences, both silent:
+ *
+ *   CALC_A = CALC_B + 1
+ *   CALC_B = CALC_A * 2      ← a cycle nothing reported
+ *
+ * and, worse because it looks like it works:
+ *
+ *   TOTAL   = SUBTOTAL * 1.2   ← declared FIRST
+ *   SUBTOTAL = Q1 + Q2
+ *
+ * `runCalculations` iterates `def.calculations` in ARRAY ORDER, once per
+ * trigger. So TOTAL is computed from a SUBTOTAL that has not been calculated
+ * yet — null on the first pass — and the answer depends on the order somebody
+ * happened to add the rows in. That is not a cycle and no existing check
+ * could see it.
+ */
+
+/** Which calculated variables does this expression read? */
+function calcReads(def: SurveyDefinition, expression: string): string[] {
+  const targets = new Set((def.calculations ?? []).map((c) => c.targetVariable));
+  return [...new Set(referencedNames(expression ?? ""))].filter((n) => targets.has(n));
+}
+
+/** targetVariable → the calculated variables it reads. */
+export function calculationGraph(def: SurveyDefinition): Record<string, string[]> {
+  const g: Record<string, string[]> = {};
+  for (const c of def.calculations ?? []) {
+    g[c.targetVariable] = calcReads(def, c.expression);
+  }
+  return g;
+}
+
+/** Cycles among calculations, each as the chain that closes the loop. */
+export function calculationCycles(def: SurveyDefinition): string[][] {
+  const g = calculationGraph(def);
+  const state = new Map<string, 0 | 1 | 2>();
+  const stack: string[] = [];
+  const seen = new Set<string>();
+  const out: string[][] = [];
+
+  const walk = (name: string): void => {
+    const st = state.get(name) ?? 0;
+    if (st === 2) return;
+    if (st === 1) {
+      const from = stack.indexOf(name);
+      const chain = [...stack.slice(from), name];
+      const key = [...chain].slice(0, -1).sort().join("|");
+      if (!seen.has(key)) { seen.add(key); out.push(chain); }
+      return;
+    }
+    state.set(name, 1);
+    stack.push(name);
+    for (const next of g[name] ?? []) walk(next);
+    stack.pop();
+    state.set(name, 2);
+  };
+  for (const name of Object.keys(g)) walk(name);
+  return out;
+}
+
+/**
+ * Calculations whose answer depends on the order they were declared in.
+ *
+ * Reported separately from cycles because it is a different failure: a cycle
+ * can never produce an answer, while this produces one that is wrong on the
+ * first pass and right afterwards — which is the harder kind to notice.
+ */
+export function calculationOrderProblems(def: SurveyDefinition): string[] {
+  const list = def.calculations ?? [];
+  const position = new Map(list.map((c, i) => [c.targetVariable, i]));
+  const cyclic = new Set(calculationCycles(def).flat());
+  const out: string[] = [];
+
+  list.forEach((c, i) => {
+    if (cyclic.has(c.targetVariable)) return;   // reported as a cycle instead
+    for (const read of calcReads(def, c.expression)) {
+      const at = position.get(read);
+      if (at !== undefined && at > i) {
+        out.push(
+          `${c.targetVariable} reads ${read}, which is calculated after it. `
+          + `Calculations run in the order they are listed, so ${c.targetVariable} will use the `
+          + `PREVIOUS value of ${read} — move ${read} above it.`,
+        );
+      }
+    }
+  });
+  return out;
+}
+
+/** Everything wrong with this survey's calculations, in one list (§46). */
+export function lintCalculations(def: SurveyDefinition): string[] {
+  const out: string[] = [];
+  for (const chain of calculationCycles(def)) {
+    out.push(
+      `Circular calculations: ${chain.join(" → ")}. `
+      + "Each one waits for the next, so none of them can produce a value.",
+    );
+  }
+  out.push(...calculationOrderProblems(def));
+  return out;
 }

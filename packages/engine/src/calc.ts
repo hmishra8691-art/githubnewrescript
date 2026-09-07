@@ -400,6 +400,24 @@ function evalNode(n: Node, o: CalcOptions, depth = 0, budget?: { steps: number }
   }
 }
 
+/**
+ * Every function this engine implements.
+ *
+ * Exported because two other places need to know the list and both had their
+ * own copy: `embedded.ts` kept a hand-written duplicate to tell a function
+ * name from a variable name, and the logic expression parser needs to know
+ * which identifiers introduce a call. Three lists, nothing keeping them in
+ * step — so a function added here was invisible to the other two, which is
+ * exactly what happened to `upper`, `trim` and the rest.
+ */
+export const CALC_FUNCTION_NAMES: readonly string[] = [
+  "sum", "avg", "mean", "average", "min", "max", "count", "countif",
+  "pct", "percent", "weighted", "round", "abs", "floor", "ceil", "ceiling",
+  "sqrt", "pow", "if", "coalesce", "len", "length", "concat", "contains",
+  "number", "text", "upper", "lower", "trim", "substring", "substr",
+  "replace", "startswith", "endswith",
+];
+
 const parseCache = new Map<string, Node>();
 
 export function evaluateExpression(expression: string, opts: CalcOptions): CalcValue {
