@@ -402,6 +402,21 @@ export function SurveySettings() {
               d.deployment.studySlug = e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-");
             })} /></label>
       </div>
+      {/* white labelling stops at CSS unless the domain in the address bar
+          changes too; the field existed and nothing read it */}
+      <label className="f"><span>Custom domain (optional)</span>
+        <input className="input mono" value={dep.customDomain ?? ""} data-testid="custom-domain"
+          placeholder="survey.acme.com"
+          onChange={(e) => s.update((d) => {
+            d.deployment.customDomain = e.target.value.trim().replace(/^https?:\/\//i, "").replace(/\/.*$/, "") || undefined;
+          })} /></label>
+      {dep.customDomain && (
+        <p className="muted" style={{ fontSize: 12.5, marginTop: -4 }}>
+          Respondent links will use <span className="mono">https://{dep.customDomain}</span>. Point it
+          at the runtime in DNS, with a certificate, before you deploy — the platform builds the link,
+          it cannot make the domain resolve.
+        </p>
+      )}
 
       <h3 className="sec">Who can take this survey</h3>
       <label className="f"><span>Access mode</span>

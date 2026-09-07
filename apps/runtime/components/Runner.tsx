@@ -31,6 +31,10 @@ import {
 import { QuestionRenderer } from "@rescript/renderer";
 import { Inspector } from "./Inspector";
 import { MediaEmbed, SafeImage } from "@rescript/renderer";
+import {
+  readResume, writeResume, clearResume, resumeLink,
+  cachePending, readPending, clearPending, RESUME_MAX_AGE_DAYS,
+} from "@/lib/resume";
 import { createTelemetryCollector, type TelemetryCollector } from "@/lib/telemetry";
 import type { ResponseTelemetry } from "@rescript/quality";
 
@@ -41,9 +45,10 @@ export interface RunnerProps {
   session?: { sessionId: string; seed: number; surveyDbId: string; versionDbId: string; respondentCode?: string | null };
   /**
    * How to obtain the response row: the runner POSTs /api/session/start once
-   * it is running, and after a reload hands back the session id it kept in
-   * sessionStorage so the same row is resumed (answers and position restored)
-   * instead of a fresh one being written. Absent in preview mode.
+   * it is running, and hands back the session id it kept (localStorage, or a
+   * `?r=` resume link — see lib/resume.ts) so the same row is resumed,
+   * answers and position restored, instead of a fresh one being written.
+   * Absent in preview mode.
    */
   sessionBoot?: { client: string; study: string; mode: "test" | "live"; token?: string; requestedVersionId?: string | null; seed?: number; surveyDbId: string; versionDbId: string };
   quotaCounts?: QuotaCounts;
@@ -217,7 +222,6 @@ async function runListFills(
   }
 }
 
-const SESSION_KEY = (mode: string, surveyDbId: string) => `rescript:session:${mode}:${surveyDbId}`;
 
 export function Runner({ definition: def, mode, session: initialSession, sessionBoot, quotaCounts: initialCounts, urlParams, build, startAt, seedAnswers }: RunnerProps) {
   const [, force] = React.useReducer((x: number) => x + 1, 0);
@@ -232,6 +236,8 @@ export function Runner({ definition: def, mode, session: initialSession, session
   const [bootAttempt, setBootAttempt] = React.useState(0);
   const savedRef = React.useRef<{ answers: Record<string, unknown>; calculated: Record<string, unknown>; embedded: Record<string, unknown>; flags: unknown[]; stepIndex: number } | null>(null);
   const [resumed, setResumed] = React.useState(false);
+  /** answers that were only in this browser until now */
+  const [recovered, setRecovered] = React.useState(false);
   /** the final save's state: pending → saving → saved | failed (with Retry) */
   const [finalSave, setFinalSave] = React.useState<{ kind: "idle" } | { kind: "saving" } | { kind: "saved" } | { kind: "failed"; error: string }>({ kind: "idle" });
   const booting = !!sessionBoot && !session && !bootError;
@@ -239,9 +245,12 @@ export function Runner({ definition: def, mode, session: initialSession, session
   React.useEffect(() => {
     if (!sessionBoot || session) return;
     let cancelled = false;
-    const key = SESSION_KEY(sessionBoot.mode, sessionBoot.surveyDbId);
-    let resume: string | null = null;
-    try { resume = window.sessionStorage.getItem(key); } catch { /* storage unavailable */ }
+    /*
+     * The pointer now outlives the tab, and can arrive in a link — see
+     * lib/resume.ts. It also expires, so a months-old in_progress row is
+     * not silently stitched back onto.
+     */
+    const resume = readResume(sessionBoot.mode, sessionBoot.surveyDbId);
     (async () => {
       try {
         const r = await fetch("/api/session/start", {
@@ -251,8 +260,26 @@ export function Runner({ definition: def, mode, session: initialSession, session
         const j = await r.json().catch(() => ({}));
         if (cancelled) return;
         if (!r.ok || !j.session) { setBootError(j.error ?? `The survey could not be started (${r.status}).`); return; }
-        try { window.sessionStorage.setItem(key, j.session.sessionId); } catch { /* ignore */ }
+        writeResume(sessionBoot.mode, sessionBoot.surveyDbId, j.session.sessionId);
         if (j.resumed && j.saved) { savedRef.current = j.saved; setResumed(true); }
+        /*
+         * A page whose save never reached the server. It is newer than
+         * anything the server has for this session by definition — the cache
+         * is cleared the moment a save is acknowledged — so it is merged over
+         * the resumed state rather than under it.
+         */
+        const pending = readPending(j.session.sessionId);
+        if (pending) {
+          savedRef.current = {
+            answers: { ...(j.saved?.answers ?? {}), ...pending.answers },
+            calculated: { ...(j.saved?.calculated ?? {}), ...pending.calculated },
+            embedded: { ...(j.saved?.embedded ?? {}), ...pending.embedded },
+            flags: (pending.flags ?? j.saved?.flags ?? []) as never[],
+            stepIndex: Math.max(pending.stepIndex ?? 0, j.saved?.stepIndex ?? 0),
+          };
+          setResumed(true);
+          setRecovered(true);
+        }
         setSession({ ...j.session, seed: sessionBoot.seed ?? j.session.seed });
       } catch (e) {
         if (!cancelled) setBootError((e as Error).message || "The survey could not be started.");
@@ -322,7 +349,7 @@ export function Runner({ definition: def, mode, session: initialSession, session
   const restart = () => {
     if (mode === "test") {
       // a restart is a NEW attempt: forget the row so the reload mints another
-      if (sessionBoot) { try { window.sessionStorage.removeItem(SESSION_KEY(sessionBoot.mode, sessionBoot.surveyDbId)); } catch { /* ignore */ } }
+      if (sessionBoot) clearResume(sessionBoot.mode, sessionBoot.surveyDbId);
       window.location.reload();
       return;
     }
@@ -371,6 +398,19 @@ export function Runner({ definition: def, mode, session: initialSession, session
     telemetryRef.current?.dispose();
     telemetryRef.current = createTelemetryCollector(def.quality?.telemetry, session?.sessionId);
     if (mode !== "live" && typeof window !== "undefined") (window as any).__rescriptTelemetry = telemetryRef.current.data;
+    /*
+     * The resume machinery, for the test suites — the same seam
+     * `__rescriptState` and `__rescriptTelemetry` already use, and for the
+     * same reason: these are decisions about a respondent's own browser
+     * storage, and a test that re-implements them is testing itself. Never
+     * exposed in a live interview.
+     */
+    if (mode !== "live" && typeof window !== "undefined") {
+      (window as any).__rescriptResume = {
+        readResume, writeResume, clearResume, resumeLink,
+        cachePending, readPending, clearPending, RESUME_MAX_AGE_DAYS,
+      };
+    }
     const r = runScripts(def, state, "on_load");
     setLogs(r.logs);
     /*
@@ -411,7 +451,11 @@ export function Runner({ definition: def, mode, session: initialSession, session
     setStartNote(
       nav.startAt && !nav.startAt.found
         ? "This block is not reachable with the current test values — its display logic (or an enclosing branch) hides it — so the preview starts at the first page instead."
-        : null,
+        : recovered
+          ? "We have put your answers back — the last page you filled in had not reached us, and it was still on this device."
+          : resumed
+            ? "Welcome back. Your answers were saved, and you are where you left off."
+            : null,
     );
     setSteps(nav.steps);
     if (nav.done) {
@@ -577,7 +621,7 @@ export function Runner({ definition: def, mode, session: initialSession, session
         return;
       }
       setFinalSave({ kind: "saved" });
-      if (sessionBoot) { try { window.sessionStorage.removeItem(SESSION_KEY(sessionBoot.mode, sessionBoot.surveyDbId)); } catch { /* ignore */ } }
+      if (sessionBoot) clearResume(sessionBoot.mode, sessionBoot.surveyDbId);
       if (nav.redirectUrl && mode === "live") {
         // "new window" keeps the completion page in place behind the panel's
         // own page — some panels require the survey tab to stay open
@@ -586,8 +630,27 @@ export function Runner({ definition: def, mode, session: initialSession, session
       }
     } else {
       notePage(nav.steps, nav.stepIndex, "next");
+      /*
+       * Cache first, then save, then clear.
+       *
+       * "The next save carries everything" was true only while the tab
+       * stayed open: a respondent who lost connection and reloaded lost the
+       * page. The cache is written before the attempt and removed when the
+       * server acknowledges, so what survives a reload is exactly the work
+       * the server has not got.
+       */
+      if (session && mode !== "preview") {
+        cachePending(session.sessionId, {
+          answers: state.answers as Record<string, unknown>,
+          calculated: state.calculated as Record<string, unknown>,
+          embedded: state.embedded as Record<string, unknown>,
+          flags: state.flags,
+          stepIndex: state.stepIndex,
+        });
+      }
       void persist(mode, session, state, false, telemetryRef.current?.data ?? null, build).then((o) => {
-        if (!o.ok) console.warn("[rescript:save] page save failed — the next save carries everything", { session: session?.sessionId.slice(0, 8), error: o.error });
+        if (o.ok) { if (session) clearPending(session.sessionId); return; }
+        console.warn("[rescript:save] page save failed — kept locally and replayed on the next save", { session: session?.sessionId.slice(0, 8), error: o.error });
       });
       window.scrollTo({ top: 0 });
     }
@@ -601,7 +664,10 @@ export function Runner({ definition: def, mode, session: initialSession, session
     force();
     const out = await persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build);
     setFinalSave(out.ok ? { kind: "saved" } : { kind: "failed", error: out.error });
-    if (out.ok && sessionBoot) { try { window.sessionStorage.removeItem(SESSION_KEY(sessionBoot.mode, sessionBoot.surveyDbId)); } catch { /* ignore */ } }
+    if (out.ok && sessionBoot) {
+      clearResume(sessionBoot.mode, sessionBoot.surveyDbId);
+      if (session) clearPending(session.sessionId);
+    }
     force();
   };
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
-import { runtimeBaseUrl } from "@/lib/runtime-url";
+import { runtimeBaseUrl, surveyBaseUrl } from "@/lib/runtime-url";
 import { audit, isFailure, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -53,7 +53,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     detail: { mode, versionId, clientSlug, studySlug },
   });
 
-  const base = runtimeBaseUrl();
+  /*
+   * The link handed back is the one a respondent would follow, so it honours
+   * the survey's own domain when it has one. The deployment row still points
+   * at the platform runtime — a custom domain is a front door, not a second
+   * deployment.
+   */
+  const base = surveyBaseUrl(body?.customDomain ?? null) || runtimeBaseUrl();
   const url = `${base}/${mode === "test" ? "t" : "s"}/${clientSlug}/${studySlug}`;
   return NextResponse.json({ ok: true, url });
 }

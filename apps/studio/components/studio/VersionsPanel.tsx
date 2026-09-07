@@ -2,7 +2,7 @@
 import React from "react";
 import { SurveyDefinition } from "@rescript/schema";
 import { useStudio } from "./store";
-import { runtimeBaseUrl } from "@/lib/runtime-url";
+import { runtimeBaseUrl, surveyBaseUrl } from "@/lib/runtime-url";
 
 interface VersionRow { id: string; version: string; label: string | null; notes: string | null; created_at: string }
 interface DeploymentRow { id: string; client_slug: string; study_slug: string; mode: string; version_id: string; active: boolean }
@@ -77,7 +77,13 @@ export function VersionsPanel() {
     else s.toast(d.error ?? "deploy failed", "err");
   };
 
-  const runtimeBase = runtimeBaseUrl();
+  /*
+   * Respondent links honour the survey's own domain when it has one; the
+   * default is still the platform runtime. `customDomain` was dead schema
+   * until this — the panel showed a link the setting said should be different.
+   */
+  const runtimeBase = surveyBaseUrl(s.def.deployment.customDomain);
+  const platformBase = runtimeBaseUrl();
 
   return (
     <div>
@@ -90,6 +96,14 @@ export function VersionsPanel() {
         Every save creates an immutable snapshot. A deployed URL is pinned to one version — editing
         later never touches a live survey until you redeploy.
       </p>
+      {s.def.deployment.customDomain && (
+        <p className="muted" style={{ fontSize: 13 }} data-testid="custom-domain-note">
+          Respondent links use <strong className="mono">{runtimeBase.replace(/^https?:\/\//, "")}</strong>,
+          this survey&apos;s own domain. It must point at{" "}
+          <span className="mono">{platformBase.replace(/^https?:\/\//, "")}</span> in DNS with a
+          certificate in place, or the links will not resolve for respondents.
+        </p>
+      )}
 
       <h3 className="sec">Version history</h3>
       <div className="table-wrap">

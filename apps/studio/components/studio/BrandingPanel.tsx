@@ -18,6 +18,82 @@ function Color({ label, value, onChange }: { label: string; value: string; onCha
   );
 }
 
+/**
+ * WORKSPACE THEMES.
+ *
+ * The built-in presets are Rescript's; these are the client's. `public.themes`
+ * and `Branding.themeId` have been in the data model since the first
+ * migration with no route, loader or UI attached — so a house style was
+ * re-entered by hand on every study and drifted between them. Saved here,
+ * applied to any survey in the workspace.
+ */
+function WorkspaceThemes() {
+  const s = useStudio();
+  const [themes, setThemes] = React.useState<{ id: string; name: string; branding: unknown }[]>([]);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const disabled = s.surveyDbId === "sandbox";
+
+  const load = React.useCallback(async () => {
+    if (disabled) return;
+    try {
+      const r = await fetch(`/api/surveys/${s.surveyDbId}/themes`, { cache: "no-store" });
+      if (!r.ok) return; // a workspace with no themes yet is not an error worth showing
+      const j = await r.json();
+      setThemes(j.themes ?? []);
+    } catch { /* offline — the presets still work */ }
+  }, [s.surveyDbId, disabled]);
+  React.useEffect(() => { void load(); }, [load]);
+
+  const saveCurrent = async () => {
+    const name = window.prompt("Save this look as a workspace theme. Name it:", s.def.meta.title)?.trim();
+    if (!name) return;
+    setBusy(true); setError(null);
+    try {
+      const r = await fetch(`/api/surveys/${s.surveyDbId}/themes`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name, branding: s.def.branding }),
+      });
+      const j = await r.json();
+      if (!r.ok) { setError(j.error ?? `Could not save (${r.status})`); return; }
+      s.toast(j.replaced ? `Theme "${name}" updated` : `Theme "${name}" saved to this workspace`);
+      await load();
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  };
+
+  const apply = (id: string) => {
+    const t = themes.find((x) => x.id === id);
+    if (!t) return;
+    s.labelNextEdit("apply theme");
+    /*
+     * The theme is written INTO the definition, and `themeId` records where
+     * it came from. Not a live reference: a survey already in field must not
+     * change appearance because somebody edited a theme, and a version
+     * snapshot has to carry the look it was fielded with.
+     */
+    s.update((d) => { d.branding = Branding.parse({ ...(t.branding as object), themeId: t.id }); });
+    s.toast(`Applied "${t.name}"`);
+  };
+
+  if (disabled) return null;
+  return (
+    <div className="row" style={{ gap: 8 }} data-testid="workspace-themes">
+      {themes.length > 0 && (
+        <select className="select" style={{ width: 200 }} value="" data-testid="apply-workspace-theme"
+          onChange={(e) => { if (e.target.value) apply(e.target.value); }}>
+          <option value="">Apply workspace theme…</option>
+          {themes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+      )}
+      <button className="btn" disabled={busy} onClick={() => void saveCurrent()} data-testid="save-workspace-theme">
+        {busy ? "Saving…" : "Save as workspace theme"}
+      </button>
+      {error && <span className="chip warn" data-testid="theme-error">{error}</span>}
+    </div>
+  );
+}
+
 /** Branding / theming (requirement §19) + presets (§20). */
 export function BrandingPanel() {
   const s = useStudio();
@@ -39,7 +115,14 @@ export function BrandingPanel() {
           <option value="">Apply preset theme…</option>
           {THEME_PRESETS.map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
         </select>
+        <WorkspaceThemes />
       </div>
+      {b.themeId && (
+        <p className="muted" style={{ fontSize: 12.5, marginTop: -6 }} data-testid="theme-origin">
+          This survey&apos;s look came from a workspace theme. Editing anything below changes only
+          this survey — save it again as a theme to share the change.
+        </p>
+      )}
 
       <h3 className="sec">Identity</h3>
       <div className="row" style={{ flexWrap: "wrap" }}>

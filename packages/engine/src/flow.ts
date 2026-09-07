@@ -112,8 +112,43 @@ export function compileFlow(
         }
         case "randomizer": {
           const seed = subSeed(state.seed, `flow:${node.id}`);
+          /*
+           * EVEN PRESENTATION.
+           *
+           * `show: N of M` with a plain shuffle gives each child an equal
+           * chance per respondent, which is not the same thing as showing
+           * each child equally often — over 100 respondents one concept can
+           * appear 20 times and another 5, and a monadic design built on that
+           * is unbalanced in exactly the way its author was trying to avoid.
+           *
+           * `evenPresentation` has been in the schema and the flow editor
+           * since randomizers existed and `compileFlow` never read it: the
+           * setting was accepted, stored, and silently ignored. It now
+           * ROTATES the starting point through the children by respondent —
+           * a Latin-square style offset — so consecutive respondents take
+           * successive windows and, across the sample, every child is shown
+           * about the same number of times. The offset comes from the seed,
+           * so it is stable for a respondent and reproducible from the
+           * stored response.
+           *
+           * (True counter-based balancing — "show whichever child has been
+           * seen least" — needs the atomic server-side claim List Fill uses,
+           * and belongs with the same machinery. This is the honest middle:
+           * markedly more even than a shuffle, with no shared state.)
+           */
           let children = seededShuffle(node.children, seed);
-          if (node.show != null) children = children.slice(0, node.show);
+          if (node.show != null && node.show < children.length) {
+            if (node.evenPresentation) {
+              const offset = Math.abs(subSeed(state.seed, `even:${node.id}`)) % node.children.length;
+              const inOrder = node.children;
+              children = Array.from({ length: node.show }, (_, i) => inOrder[(offset + i) % inOrder.length]);
+              // the WINDOW is rotated for balance; the order within it is
+              // still rolled, so position effects are not baked in
+              children = seededShuffle(children, seed);
+            } else {
+              children = children.slice(0, node.show);
+            }
+          }
           walk(children, loop, sectionPath, blockTitle);
           break;
         }

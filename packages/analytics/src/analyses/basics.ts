@@ -46,6 +46,26 @@ export function descriptive(def: AnalysisDefinition, ds: Dataset, totalCases: nu
         const vals = numericColumn(ds, name).filter((x): x is number => x != null);
         const bins = histogram(vals, opt(def, "bins", 10));
         chart = { categories: bins.map((b) => b.label), series: [{ name: label, values: bins.map((b) => b.count) }] };
+        /*
+         * THE POINTS A DISTRIBUTION CHART NEEDS.
+         *
+         * `box_plot`, `violin`, `raincloud`, `beeswarm` and `strip` all read
+         * `chart.points`, and this runner recommended box_plot while emitting
+         * none — so choosing the chart it suggested rendered "No data to
+         * chart". The catalogue was writing cheques the analysis did not
+         * honour. Every value is carried (capped, because a chart of 50 000
+         * dots is neither faster nor more informative than a chart of 2 000),
+         * with x as the variable's position so several numerics plot side by
+         * side.
+         */
+        const POINT_CAP = 2000;
+        const step = vals.length > POINT_CAP ? Math.ceil(vals.length / POINT_CAP) : 1;
+        chart.points = vals
+          .filter((_, i) => i % step === 0)
+          .map((v) => ({ x: 0, y: v, label, group: label }));
+        if (step > 1) {
+          warnings.push(`Distribution charts show every ${step}${step === 2 ? "nd" : step === 3 ? "rd" : "th"} case (${Math.ceil(vals.length / step)} of ${vals.length}) — the statistics above use all of them.`);
+        }
         recommended.push("histogram", "box_plot", "density", "mean_ci");
       }
     } else if (meta.role === "categorical" || meta.role === "multi" || meta.role === "scale") {

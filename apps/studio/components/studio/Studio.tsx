@@ -23,7 +23,7 @@ import { BrandingPanel, ScriptsPanel } from "./BrandingPanel";
 import { VersionsPanel } from "./VersionsPanel";
 import { JsonPanel } from "./JsonPanel";
 import { DataPanel } from "./DataPanel";
-import { runtimeBaseUrl } from "@/lib/runtime-url";
+import { runtimeBaseUrl, surveyBaseUrl } from "@/lib/runtime-url";
 import { Icon, type IconName } from "@/components/ui/Icon";
 
 type Tab =
@@ -462,6 +462,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
         versionId,
         clientSlug: dep.clientSlug || "client",
         studySlug: dep.studySlug || "study-001",
+        customDomain: dep.customDomain ?? null,
         mode: "test",
       }),
       cache: "no-store",
@@ -506,6 +507,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
         versionId,
         clientSlug: dep.clientSlug || "client",
         studySlug: dep.studySlug || "study-001",
+        customDomain: dep.customDomain ?? null,
         mode: "live",
       }),
       cache: "no-store",
@@ -621,7 +623,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           publish.
           <span className="grow" />
           <a className="btn small" target="_blank" rel="noreferrer"
-            href={`${runtimeBaseUrl()}/s/${live!.client_slug}/${live!.study_slug}`}>open live link</a>
+            href={`${surveyBaseUrl(s.def.deployment.customDomain)}/s/${live!.client_slug}/${live!.study_slug}`}>open live link</a>
           <button className="btn small primary" disabled={saving || roWrite} onClick={publishLive}>
             Publish v{s.def.meta.version} to live
           </button>
