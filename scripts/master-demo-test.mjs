@@ -19,6 +19,7 @@
  */
 import { openHarness, assert } from "./lib/variantHarness.mjs";
 import { buildMasterDemoSurvey, MASTER_DEMO_TEST_PATHS, simulateRespondent } from "../packages/templates/dist/index.js";
+import { openPreview } from "./lib/preview.mjs";
 
 let passed = 0;
 const ok = (msg) => { passed++; console.log(`  ok   ${msg}`); };
@@ -104,14 +105,11 @@ const A = MASTER_DEMO_TEST_PATHS.find((p) => p.id === "A");
 const sim = simulateRespondent(def, { answers: A.answers, seed: A.seed });
 const seedAnswers = Object.fromEntries(Object.entries(sim.state.answers).filter(([k]) => !k.includes("@")));
 
-const runPreview = async (startAt) => {
-  const pv = await h.browser.newPage({ viewport: { width: 1000, height: 1200 } });
-  pv.on("pageerror", (e) => console.error("RUNTIME PAGE ERROR:", e.message));
-  await pv.goto(`${process.env.RUNTIME_URL ?? "http://localhost:3001"}/preview`, { waitUntil: "networkidle" });
-  await pv.evaluate(({ d, startAt, answers }) => window.postMessage({ type: "rescript:preview", definition: d, startAt, answers }, "*"), { d: def, startAt, answers: seedAnswers });
-  await pv.waitForSelector("[data-qid]", { timeout: 90000 });
-  return pv;
-};
+const runPreview = (startAt) =>
+  openPreview(h.browser, process.env.RUNTIME_URL ?? "http://localhost:3001",
+    { definition: def, startAt, answers: seedAnswers },
+    // the master demo is the heaviest definition in the corpus; it earns its budget
+    { viewport: { width: 1000, height: 1200 }, timeout: 90_000 });
 const textOf = (pv, qid) => pv.$eval(`[data-qid="${qid}"]`, (e) => e.textContent.replace(/\s+/g, " ").trim());
 const stateOf = (pv) => pv.evaluate(() => { const st = window.__rescriptState; return st ? { answers: { ...st.answers }, calculated: { ...st.calculated } } : null; });
 

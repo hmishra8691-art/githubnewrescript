@@ -15,6 +15,7 @@ import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/i
 import assert from "node:assert/strict";
 import { registerBuiltinDesignGenerators } from "../packages/designs/dist/index.js";
 import { designGeneratorRegistry } from "../packages/schema/dist/index.js";
+import { sendPreview } from "./lib/preview.mjs";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
 const RUNTIME = process.env.RUNTIME_URL ?? "http://localhost:3001";
@@ -62,8 +63,7 @@ const versionsSeen = new Set();
 const conceptsSeen = new Set();
 for (let attempt = 0; attempt < 8; attempt++) {
   await page.goto(`${RUNTIME}/preview`, { waitUntil: "networkidle" });
-  await page.evaluate((d) => window.postMessage({ type: "rescript:preview", definition: d }, "*"), def);
-  await page.waitForSelector('[data-qid="q_cj"] table');
+  await sendPreview(page, { definition: def }, { selector: '[data-qid="q_cj"] table' });
 
   const shown = await page.evaluate(() => {
     const state = window.__rescriptState;

@@ -6,6 +6,7 @@
  *   STUDIO_URL=http://localhost:3000 RUNTIME_URL=http://localhost:3001 node scripts/autopunch-media-test.mjs
  */
 import { openHarness, assert } from "./lib/variantHarness.mjs";
+import { sendPreview } from "./lib/preview.mjs";
 
 const h = await openHarness();
 const { page } = h;
@@ -41,8 +42,7 @@ const openPreview = async (entry = {}) => {
   const pv = await h.browser.newPage({ viewport: { width: 1000, height: 1000 } });
   pv.on("pageerror", (e) => console.error("RUNTIME PAGE ERROR:", e.message));
   await pv.goto(`${runtime}/preview`, { waitUntil: "networkidle" });
-  await pv.evaluate(([d, e]) => window.postMessage({ type: "rescript:preview", definition: d, ...e }, "*"), [def, entry]);
-  await pv.waitForSelector("[data-qid], [data-testid='rs-start-note']");
+  await sendPreview(pv, { definition: def, ...entry }, { selector: "[data-qid], [data-testid='rs-start-note']" });
   return pv;
 };
 const tick = async (pv, qid, code) => pv.click(`[data-qid="${qid}"] input[value="${code}"], [data-qid="${qid}"] [data-code="${code}"]`);

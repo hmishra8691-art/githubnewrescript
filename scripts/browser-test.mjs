@@ -8,6 +8,7 @@
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
 import assert from "node:assert/strict";
 import { SurveyDefinition } from "../packages/schema/dist/index.js";
+import { sendPreview } from "./lib/preview.mjs";
 
 const def = SurveyDefinition.parse({
   meta: { id: "bt1", code: "BT1", title: "Browser Test", version: "1.0" },
@@ -96,10 +97,7 @@ page.on("pageerror", (e) => console.error("PAGE ERROR:", e.message));
 // pushed definition, so it was removed. Injecting the real way also means this
 // harness exercises the real path.)
 await page.goto("http://localhost:3001/preview", { waitUntil: "networkidle" });
-await page.evaluate((d) => {
-  window.postMessage({ type: "rescript:preview", definition: d }, "*");
-}, def);
-await page.waitForSelector(".rs-msd-control", { timeout: 15000 });
+await sendPreview(page, { definition: def }, { selector: ".rs-msd-control" });
 console.log("✔ preview loaded the definition; multi-select dropdown rendered");
 
 // open dropdown, search, select

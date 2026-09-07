@@ -8,6 +8,7 @@
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
 import assert from "node:assert/strict";
+import { sendPreview } from "./lib/preview.mjs";
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1700, height: 1100 } });
@@ -232,8 +233,7 @@ await (async () => {
     ],
   };
   await p.goto("http://localhost:3001/preview", { waitUntil: "networkidle" });
-  await p.evaluate((d) => window.postMessage({ type: "rescript:preview", definition: d }, "*"), def);
-  await p.waitForSelector(".rs-card");
+  await sendPreview(p, { definition: def }, { selector: ".rs-card" });
 
   // no inspector until asked for — the survey gets the whole page
   let inspectorOpen = await p.$$eval(".rs-inspector", (els) => els.length);

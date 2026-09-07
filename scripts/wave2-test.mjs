@@ -11,6 +11,7 @@
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
 import assert from "node:assert/strict";
 import { buildMasterDemoSurvey } from "../packages/templates/dist/index.js";
+import { sendPreview } from "./lib/preview.mjs";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
 const RUNTIME = process.env.RUNTIME_URL ?? "http://localhost:3001";
@@ -119,8 +120,7 @@ const a11y = {
 };
 
 await page.goto(`${RUNTIME}/preview`, { waitUntil: "networkidle" });
-await page.evaluate((d) => window.postMessage({ type: "rescript:preview", definition: d }, "*"), a11y);
-await page.waitForSelector('[data-qid="q1"]');
+await sendPreview(page, { definition: a11y }, { selector: '[data-qid="q1"]' });
 
 assert.equal(await page.getAttribute('[data-testid="rs-qmedia"] img', "alt"),
   "Three product packs side by side",

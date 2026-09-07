@@ -15,6 +15,7 @@
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
 import assert from "node:assert/strict";
+import { sendPreview } from "./lib/preview.mjs";
 
 const RUNTIME = process.env.RUNTIME_URL ?? "http://localhost:3001";
 let passed = 0;
@@ -55,8 +56,7 @@ page.on("pageerror", (e) => errors.push(String(e)));
 
 const load = async (def) => {
   await page.goto(`${RUNTIME}/preview`, { waitUntil: "networkidle" });
-  await page.evaluate((d) => window.postMessage({ type: "rescript:preview", definition: d }, "*"), def);
-  await page.waitForSelector('[data-qid="q_md"]');
+  await sendPreview(page, { definition: def }, { selector: '[data-qid="q_md"]' });
 };
 
 /* ================================================== standard: no follow-up */

@@ -13,6 +13,7 @@
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
 import assert from "node:assert/strict";
+import { sendPreview } from "./lib/preview.mjs";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
 let passed = 0;
@@ -260,8 +261,7 @@ const pv = await browser.newPage({ viewport: { width: 900, height: 900 } });
 pv.on("pageerror", (e) => errors.push(`runtime: ${e.message}`));
 await pv.goto(`${RUNTIME}/preview`, { waitUntil: "networkidle" });
 const current = await readDef();
-await pv.evaluate((d) => window.postMessage({ type: "rescript:preview", definition: d }, "*"), current);
-await pv.waitForSelector("[data-qid], [data-testid='rs-start-note']");
+await sendPreview(pv, { definition: current }, { selector: "[data-qid], [data-testid='rs-start-note']" });
 await pv.waitForTimeout(400);
 
 const rendered = await pv.$$eval(

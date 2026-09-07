@@ -19,6 +19,7 @@
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
 import assert from "node:assert/strict";
+import { sendPreview } from "./lib/preview.mjs";
 
 const RUNTIME = process.env.RUNTIME_URL ?? "http://localhost:3001";
 let passed = 0;
@@ -95,10 +96,7 @@ page.on("pageerror", (e) => errors.push(String(e)));
 /** Load the preview harness with this definition and a REGION url parameter. */
 const load = async (params = "REGION=uk") => {
   await page.goto(`${RUNTIME}/preview?${params}`, { waitUntil: "networkidle" });
-  await page.evaluate((d) => {
-    window.postMessage({ type: "rescript:preview", definition: d }, "*");
-  }, def);
-  await page.waitForSelector('[data-qid="q_pack"]', { timeout: 15000 });
+  await sendPreview(page, { definition: def }, { selector: '[data-qid="q_pack"]' });
 };
 
 await load();

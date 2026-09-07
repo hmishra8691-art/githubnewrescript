@@ -10,6 +10,7 @@
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
 import assert from "node:assert/strict";
+import { sendPreview } from "./lib/preview.mjs";
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1700, height: 1150 } });
@@ -106,8 +107,7 @@ const preview = await browser.newPage({ viewport: { width: 900, height: 900 } })
 preview.on("pageerror", (e) => console.error("PREVIEW ERROR:", e.message));
 const show = async (def) => {
   await preview.goto("http://localhost:3001/preview", { waitUntil: "networkidle" });
-  await preview.evaluate((d) => window.postMessage({ type: "rescript:preview", definition: d }, "*"), def);
-  await preview.waitForSelector(".rs-option");
+  await sendPreview(preview, { definition: def }, { selector: ".rs-option" });
 };
 await show(await readDef());
 assert.equal(await preview.textContent('[data-testid="rs-block-title"]'), "Relationship and familiarity");

@@ -20,6 +20,7 @@
  *   STUDIO_URL=http://localhost:3000 RUNTIME_URL=http://localhost:3001 node scripts/loop-test.mjs
  */
 import { openHarness, assert } from "./lib/variantHarness.mjs";
+import { openPreview } from "./lib/preview.mjs";
 
 const h = await openHarness();
 const { page } = h;
@@ -229,14 +230,9 @@ console.log("\nSTUDIO — a question inside the loop can build logic on the loop
 
 console.log("\nRUNTIME — a preview respondent runs the loop");
 
-const runPreview = async (def) => {
-  const pv = await h.browser.newPage({ viewport: { width: 1000, height: 1100 } });
-  pv.on("pageerror", (e) => console.error("RUNTIME PAGE ERROR:", e.message));
-  await pv.goto(`${process.env.RUNTIME_URL ?? "http://localhost:3001"}/preview`, { waitUntil: "networkidle" });
-  await pv.evaluate((d) => window.postMessage({ type: "rescript:preview", definition: d }, "*"), def);
-  await pv.waitForSelector("[data-qid]");
-  return pv;
-};
+const runPreview = (def) =>
+  openPreview(h.browser, process.env.RUNTIME_URL ?? "http://localhost:3001",
+    { definition: def }, { viewport: { width: 1000, height: 1100 } });
 const stateOf = (pv) => pv.evaluate(() => {
   const st = window.__rescriptState;
   return st ? { answers: { ...st.answers }, calculated: { ...st.calculated } } : null;

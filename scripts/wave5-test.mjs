@@ -10,6 +10,7 @@
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
 import assert from "node:assert/strict";
+import { sendPreview } from "./lib/preview.mjs";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
 const RUNTIME = process.env.RUNTIME_URL ?? "http://localhost:3001";
@@ -41,8 +42,7 @@ await page.route("**/api/auth/me", (r) => r.fulfill({
 console.log("\nCOMING BACK TO AN UNFINISHED SURVEY (§25, §49)");
 
 await page.goto(`${RUNTIME}/preview`, { waitUntil: "networkidle" });
-await page.evaluate((d) => window.postMessage({ type: "rescript:preview", definition: d }, "*"), def);
-await page.waitForSelector('[data-qid="q1"]');
+await sendPreview(page, { definition: def }, { selector: '[data-qid="q1"]' });
 await page.waitForFunction(() => !!window.__rescriptResume);
 
 const durable = await page.evaluate(() => {
@@ -59,8 +59,7 @@ ok("the resume pointer survives the tab being closed (§25)");
 // a new browser context is a different tab AND a different session store
 const page2 = await ctx.newPage();
 await page2.goto(`${RUNTIME}/preview`, { waitUntil: "networkidle" });
-await page2.evaluate((d) => window.postMessage({ type: "rescript:preview", definition: d }, "*"), def);
-await page2.waitForFunction(() => !!window.__rescriptResume);
+await sendPreview(page2, { definition: def }, { ready: () => !!window.__rescriptResume });
 const fromNewTab = await page2.evaluate(() => window.__rescriptResume.readResume("live", "survey-1"));
 assert.equal(fromNewTab, "sess-abcdefabcdefabcdef", "a new tab should find the same unfinished response");
 await page2.close();

@@ -13,6 +13,7 @@ import fs from "node:fs";
 import { buildMasterDemoSurvey } from "../packages/templates/dist/index.js";
 import { buildDataset, runAnalysis, recommendCharts, variableMetadata } from "../packages/analytics/dist/index.js";
 import { def as synDef, synthRows } from "../packages/analytics/dist/analyses/fixture.js";
+import { sendPreview } from "./lib/preview.mjs";
 
 const OUT = process.argv[2] ?? "/tmp/ui-shots";
 fs.mkdirSync(OUT, { recursive: true });
@@ -88,8 +89,8 @@ await page.goto(`${STUDIO}/profile`, { waitUntil: "networkidle" }); await shot("
 const RUNTIME = process.env.RUNTIME_URL ?? "http://localhost:3001";
 try {
   await page.goto(`${RUNTIME}/preview`, { waitUntil: "networkidle" });
-  await page.evaluate((d) => window.postMessage({ type: "rescript:preview", definition: d }, "*"), buildMasterDemoSurvey("sandbox"));
-  await page.waitForSelector('[data-testid="runtime-toolbar"]', { timeout: 20000 });
+  await sendPreview(page, { definition: buildMasterDemoSurvey("sandbox") },
+    { selector: '[data-testid="runtime-toolbar"]', timeout: 20_000 });
   await page.evaluate(() => window.scrollTo(0, 900)); await shot("16-testing-toolbar-scrolled");
   await page.click('[aria-label="mobile viewport"]'); await page.waitForTimeout(400); await shot("17-testing-toolbar-mobile");
 } catch { console.log("  (runtime on 3001 not reachable — skipped the toolbar shots)"); }

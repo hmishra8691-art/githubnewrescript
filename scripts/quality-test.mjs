@@ -14,6 +14,7 @@
  *   STUDIO_URL=http://localhost:3000 RUNTIME_URL=http://localhost:3001 node scripts/quality-test.mjs
  */
 import { openHarness, assert } from "./lib/variantHarness.mjs";
+import { sendPreview } from "./lib/preview.mjs";
 
 const h = await openHarness();
 const { page } = h;
@@ -153,8 +154,7 @@ await h.loadDef(d);
 const pv = await h.browser.newPage({ viewport: { width: 1000, height: 1000 } });
 pv.on("pageerror", (e) => console.error("RUNTIME PAGE ERROR:", e.message));
 await pv.goto(`${runtime}/preview`, { waitUntil: "networkidle" });
-await pv.evaluate((dd) => window.postMessage({ type: "rescript:preview", definition: dd }, "*"), d);
-await pv.waitForSelector('[data-qid="own"]');
+await sendPreview(pv, { definition: d }, { selector: '[data-qid="own"]' });
 assert.equal(await pv.textContent('[data-testid="rs-quality-disclosure"]'), "We record timing to protect data quality.", "the disclosure shows in the runtime footer");
 await pv.waitForTimeout(700);
 await pv.click('[data-qid="own"] input[value="y"]');
@@ -208,8 +208,7 @@ d.quality.telemetry.clipboard = false;
 d.quality.telemetry.device = false;
 const pv2 = await h.browser.newPage();
 await pv2.goto(`${runtime}/preview`, { waitUntil: "networkidle" });
-await pv2.evaluate((dd) => window.postMessage({ type: "rescript:preview", definition: dd }, "*"), d);
-await pv2.waitForSelector('[data-qid="own"]');
+await sendPreview(pv2, { definition: d }, { selector: '[data-qid="own"]' });
 await pv2.evaluate(() => {
   const dt = new DataTransfer(); dt.setData("text/plain", "abc");
   document.querySelector('[data-qid="own"]').dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true }));

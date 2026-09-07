@@ -13,6 +13,7 @@
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
 import assert from "node:assert/strict";
+import { sendPreview } from "./lib/preview.mjs";
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1100, height: 1000 } });
@@ -27,10 +28,7 @@ const survey = (questions) => ({
 /** Push a definition into the preview page and wait for it to render. */
 const load = async (def) => {
   await page.goto("http://localhost:3001/preview", { waitUntil: "networkidle" });
-  await page.evaluate((d) => {
-    window.postMessage({ type: "rescript:preview", definition: d }, "*");
-  }, def);
-  await page.waitForSelector(".rs-card", { timeout: 8000 });
+  await sendPreview(page, { definition: def }, { selector: ".rs-card" });
   await page.waitForTimeout(200);
 };
 

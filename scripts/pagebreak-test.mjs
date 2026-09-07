@@ -11,6 +11,7 @@
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
 import assert from "node:assert/strict";
+import { sendPreview } from "./lib/preview.mjs";
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1700, height: 1100 } });
@@ -207,8 +208,7 @@ const def2 = {
 };
 
 await p2.goto("http://localhost:3001/preview", { waitUntil: "networkidle" });
-await p2.evaluate((d) => window.postMessage({ type: "rescript:preview", definition: d }, "*"), def2);
-await p2.waitForSelector(".rs-card");
+await sendPreview(p2, { definition: def2 }, { selector: ".rs-card" });
 
 let text = await p2.evaluate(() => document.body.innerText);
 assert.match(text, /First question/, "page 1 asks Q1");
