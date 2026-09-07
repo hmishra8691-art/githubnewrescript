@@ -3,6 +3,7 @@ import React from "react";
 import { useStudio } from "./store";
 import { surveyBaseUrl } from "@/lib/runtime-url";
 import { sampleSourceLink, SOURCE_PARAM_ALIASES, RESPONDENT_PARAM_ALIASES } from "@rescript/engine";
+import { FieldOverTime } from "./FieldOverTime";
 
 type Env = "TEST" | "LIVE";
 
@@ -53,7 +54,14 @@ interface SourceStat {
  *              themselves: starts, completes, incidence, completion rate,
  *              median duration
  *
- * A source that arrives but was never declared appears in the second half
+ * §26/§27 added a THIRD half, above both: the same field seen over TIME
+ * rather than by supplier — the curve, the pace against the close date, and
+ * what is happening this minute (`FieldOverTime`). It shares this tab rather
+ * than taking its own because "how is field going" and "who is delivering"
+ * are one question asked twice, and a fieldwork manager who has to click
+ * between them will read one and forget the other.
+ *
+ * A source that arrives but was never declared appears in the supplier half
  * marked UNDECLARED. That is not an error state to be tidied away: it is
  * either a typo in a live invitation link or traffic nobody expected, and
  * both are things a fieldwork manager needs to see today rather than discover
@@ -164,6 +172,38 @@ export function FieldworkPanel() {
   const pct = (v: number | null) => (v == null ? "—" : `${v}%`);
   const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : "—");
 
+  /*
+   * Page labels in flow order, for the drop-off table's step hints.
+   *
+   * Indicative only, and `FieldOverTime` says so on screen: a respondent's
+   * step index is a position in the flow COMPILED FOR THEM against the
+   * version they were served, so randomisation, skipped pages and anyone
+   * still in an older version can put the same number on a different page.
+   * Compiling every respondent's own flow to name their step would be a lot
+   * of work to make a hint slightly better than a hint.
+   */
+  const pageLabels = React.useMemo(() => {
+    const out: string[] = [];
+    const code = (qid: string) => s.def.questions.find((q) => q.id === qid)?.code ?? qid;
+    const walk = (nodes: unknown[]): void => {
+      for (const raw of nodes) {
+        const n = raw as {
+          type?: string; id?: string; title?: string; questionIds?: string[];
+          children?: unknown[]; branches?: { children: unknown[] }[]; otherwise?: unknown[];
+        };
+        if (n.type === "page" && n.id) {
+          const codes = (n.questionIds ?? []).map(code);
+          out.push(n.title?.trim() || (codes.length ? codes.join(", ") : n.id));
+        }
+        if (n.children) walk(n.children);
+        if (n.branches) for (const b of n.branches) walk(b.children);
+        if (n.otherwise) walk(n.otherwise);
+      }
+    };
+    walk((s.def.flow ?? []) as unknown[]);
+    return out;
+  }, [s.def]);
+
   return (
     <div>
       <div className="row" style={{ marginBottom: 14, flexWrap: "wrap" }}>
@@ -192,6 +232,13 @@ export function FieldworkPanel() {
         </div>
       )}
       {note && <div className={`chip ${note.ok ? "on" : "warn"} qd-note`} data-testid="fw-note">{note.text}</div>}
+
+      {/* --------------------------------------- §26 / §27: over time */}
+      <FieldOverTime surveyId={s.surveyDbId} env={env} pageLabels={pageLabels} />
+
+      <h3 style={{ margin: "18px 0 8px", fontSize: 14, textTransform: "uppercase", letterSpacing: ".05em", color: "var(--subtle)" }}>
+        By supplier
+      </h3>
 
       {/* ------------------------------------------------------- delivered */}
       <div className="card" style={{ padding: 0, overflowX: "auto" }} data-testid="fw-stats">
