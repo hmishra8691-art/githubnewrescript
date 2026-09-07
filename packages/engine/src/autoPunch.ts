@@ -3,6 +3,7 @@ import { cond } from "@rescript/schema";
 import { parseLogicExpression, formatCondition, type ExpressionError } from "./logicExpression.js";
 import { evaluateCondition, type EvalContext } from "./evaluate.js";
 import { evaluateSetExpr, LIST_ACTIONS } from "./setExpression.js";
+import { activePunchRules } from "./punchChain.js";
 
 /**
  * Option-level auto punching — "IF Q1.A is selected THEN SELECT Q2.B".
@@ -228,9 +229,15 @@ function findQuestion(def: SurveyDefinition, tok: string): Question | undefined 
  */
 export function listPunches(q: Question, ctx: EvalContext): { hide: Set<string>; show: Set<string>; disable: Set<string>; enable: Set<string> } {
   const out = { hide: new Set<string>(), show: new Set<string>(), disable: new Set<string>(), enable: new Set<string>() };
-  for (const rule of q.punches ?? []) {
-    if (!LIST_ACTIONS.has(rule.action)) continue;
-    if (rule.when && !evaluateCondition(rule.when, ctx)) continue;
+  /*
+   * The same list-side chain the option pipeline walks (§8, §23). This
+   * function and `applyListPunches` in `carryforward.ts` are deliberate
+   * duplicates for different callers, so they have to agree about which rules
+   * ran — which is why both go through `activePunchRules` rather than each
+   * having its own idea of what a chain is.
+   */
+  const listRules = (q.punches ?? []).filter((r) => LIST_ACTIONS.has(r.action));
+  for (const rule of activePunchRules(listRules, (r) => evaluateCondition(r.when, ctx))) {
     const codes = evaluateSetExpr(rule.source, ctx, { target: q });
     const map = new Map(rule.mapping.map((m) => [String(m.from), m.to]));
     for (const c of codes) {

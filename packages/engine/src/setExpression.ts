@@ -6,6 +6,7 @@ import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition } from "./evaluate.js";
 import { codesFrom } from "./carryforward.js";
 import { getQuestion, getQuestionByCodeOrVar, type AnswerValue } from "./state.js";
+import { activePunchRules } from "./punchChain.js";
 
 /**
  * The set-expression engine: evaluate a nested set tree, and read or write it
@@ -167,11 +168,20 @@ export function resolvePunches(
   let clear = false;
   let setValue: (string | number)[] | null = null;
 
-  for (const rule of q.punches ?? []) {
-    // show / hide / enable / disable shape the option LIST, not the answer —
-    // the option pipeline (carryforward.ts) reads those; see autoPunch.ts
-    if (LIST_ACTIONS.has(rule.action)) continue;
-    if (rule.when && !evaluateCondition(rule.when, ctx)) continue;
+  /*
+   * IF / ELSE IF / ELSE (§8, §23), resolved before anything is applied.
+   *
+   * The chain is walked over the ANSWER-side rules only. A list action
+   * (show/hide/enable/disable) belongs to the option pipeline and is chained
+   * there, on its own list — mixing the two would let a `hide` rule satisfy
+   * an `else` that a `select` rule was waiting for, and the two lists are not
+   * even evaluated at the same point in the run.
+   *
+   * `walkPunchChain` calls the predicate only for rules it REACHES, so a
+   * branch the chain has already settled is not evaluated at all.
+   */
+  const answerRules = (q.punches ?? []).filter((r) => !LIST_ACTIONS.has(r.action));
+  for (const rule of activePunchRules(answerRules, (r) => evaluateCondition(r.when, ctx))) {
     if (rule.recompute === "always") recomputeAlways = true;
 
     if (rule.action === "clear") { clear = true; continue; }

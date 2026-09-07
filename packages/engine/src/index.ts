@@ -51,3 +51,4 @@ export * from "./elementIds.js";
 export * from "./optionGroups.js";
 export * from "./calcContext.js";
 export * from "./namedExpressions.js";
+export * from "./punchChain.js";

@@ -19,6 +19,7 @@ import { evaluateSetExpr, LIST_ACTIONS } from "./setExpression.js";
 import { seededShuffle, subSeed, mulberry32 } from "./random.js";
 import { hasDisplayRulesFor, ruleVerdict, visibleByRules } from "./displayRules.js";
 import { hasOptionGroups, groupsFor, orderWithGroups } from "./optionGroups.js";
+import { activePunchRules } from "./punchChain.js";
 
 /**
  * THE OPTION PIPELINE.
@@ -808,9 +809,14 @@ function applyListPunches(
   const show = new Set<string>();
   const disable = new Set<string>();
   const enable = new Set<string>();
-  for (const rule of q.punches ?? []) {
-    if (!LIST_ACTIONS.has(rule.action)) continue;
-    if (rule.when && !evaluateCondition(rule.when, ctx)) continue;
+  /*
+   * The LIST-side chain (§8, §23), over the list actions only — the answer
+   * side chains separately in `setExpression.ts`. Two lists, two chains: a
+   * `hide` rule must not satisfy an `else` that a `select` rule was waiting
+   * for, and the two are not even evaluated at the same point in the run.
+   */
+  const listRules = (q.punches ?? []).filter((r) => LIST_ACTIONS.has(r.action));
+  for (const rule of activePunchRules(listRules, (r) => evaluateCondition(r.when, ctx))) {
     const codes = evaluateSetExpr(rule.source, ctx, { target: q });
     const map = new Map(rule.mapping.map((m) => [String(m.from), m.to]));
     const bucket = { hide, show, disable, enable }[rule.action as "hide" | "show" | "disable" | "enable"];

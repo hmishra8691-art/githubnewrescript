@@ -8,6 +8,7 @@ import {
 } from "@rescript/engine";
 import { useStudio, uid } from "./store";
 import { ConditionEditor } from "./ConditionBuilder";
+import { lintPunchChain } from "@rescript/engine";
 
 /**
  * Option-level auto punching — "if Q1 · Product A is selected → select Q2 ·
@@ -87,6 +88,38 @@ function SimpleRow({ target, rule, onChange, onMove, onRemove }: {
   return (
     <div className="card ap-rule" data-testid="ap-rule" style={{ padding: 10 }}>
       <div className="row" style={{ alignItems: "center", marginBottom: 6 }}>
+        {/*
+          * IF / ELSE IF / ELSE (§8, §23), on the rule itself.
+          *
+          * A chain is an ADJACENCY, not a new object: consecutive rules form
+          * one chain and the first match wins. So the control belongs on the
+          * rule rather than in a wrapper — and "if" is what every existing
+          * rule already is, which is why the default reads as no change.
+          *
+          * An ELSE has no condition of its own: reaching it IS the condition.
+          * The editors below are hidden for one, because a condition that is
+          * ignored is worse than no field at all.
+          */}
+        <select
+          className="select small ap-mode" data-testid="ap-chain-mode"
+          aria-label="How this rule relates to the one above"
+          value={rule.mode ?? "if"}
+          onChange={(e) => {
+            const mode = e.target.value as "if" | "else_if" | "else";
+            s.labelNextEdit?.("change auto punch chain");
+            onChange({
+              ...rule,
+              mode,
+              /* an ELSE's condition would be ignored, so it is dropped rather
+                 than left to mislead whoever reads the rule next */
+              when: mode === "else" ? undefined : rule.when,
+            });
+          }}
+        >
+          <option value="if">IF</option>
+          <option value="else_if">ELSE IF</option>
+          <option value="else">ELSE</option>
+        </select>
         <span className="muted mono" style={{ fontSize: 12.5 }} data-testid="ap-rule-text">{formatPunchExpression(s.def, target, rule)}</span>
         <span className="grow" />
         <button className={`btn small ${mode === "simple" ? "primary" : ""}`} data-testid="ap-mode-simple"
@@ -97,7 +130,30 @@ function SimpleRow({ target, rule, onChange, onMove, onRemove }: {
         <button className="btn small danger" data-testid="ap-remove" onClick={onRemove} title="Remove this rule">×</button>
       </div>
 
-      {mode === "simple" && simple ? (
+      {rule.mode === "else" ? (
+        <div className="ap-grid" data-testid="ap-else">
+          <p className="muted" style={{ fontSize: 12.5, margin: 0, gridColumn: "1 / -1" }}>
+            Runs when every rule above it in this chain failed. It has no condition of its own —
+            being reached is the condition.
+          </p>
+          <label className="f"><span>Then</span>
+            <select className="select" data-testid="ap-else-action" value={rule.action}
+              onChange={(e) => onChange({ ...rule, action: e.target.value as never })}>
+              {ACTIONS.map((a) => <option key={a} value={a}>{PUNCH_ACTION_LABELS[a]}</option>)}
+            </select></label>
+          <label className="f"><span>Options</span>
+            <select className="select" data-testid="ap-else-target" multiple
+              value={(rule.source.kind === "codes" ? rule.source.codes : []).map(String)}
+              onChange={(e) => onChange({
+                ...rule,
+                source: { kind: "codes", codes: Array.from(e.target.selectedOptions).map((o) => o.value) },
+              })}>
+              {target.options.map((o) => (
+                <option key={String(o.code)} value={String(o.code)}>{o.code}: {strip(o.label).slice(0, 30)}</option>
+              ))}
+            </select></label>
+        </div>
+      ) : mode === "simple" && simple ? (
         <div className="ap-grid" data-testid="ap-simple">
           <label className="f"><span>If question</span>
             <select className="select" data-testid="ap-source-q" value={simple.sourceQuestionId}
@@ -300,8 +356,21 @@ export function AutoPunchRows({ q }: { q: Question }) {
   const s = useStudio();
   const ops = useRuleOps();
   const rules = (q.punches ?? []).filter((r) => simpleView(r) || r.source.kind === "codes");
+  /*
+   * Chain problems the engine cannot refuse: an ELSE carrying a condition
+   * that will be ignored, an ELSE IF with none, a rule stranded after the
+   * ELSE. Each evaluates perfectly well and produces a rule that never runs,
+   * which is exactly the class of thing that has to be read rather than run.
+   */
+  const chainProblems = lintPunchChain(
+    q.punches ?? [],
+    (r, i) => `Rule ${i + 1}${r.label ? ` (${r.label})` : ""}`,
+  );
   return (
     <div data-testid="auto-punch-rows">
+      {chainProblems.map((p) => (
+        <div key={p} className="chip warn qd-note" data-testid="ap-chain-problem">{p}</div>
+      ))}
       {rules.map((rule) => (
         <SimpleRow key={rule.id} target={q} rule={rule}
           onChange={(next) => ops.replaceRule(q.id, next)}

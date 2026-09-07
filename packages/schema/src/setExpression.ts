@@ -148,6 +148,30 @@ export const PunchRule = z.object({
    */
   recompute: z.enum(["once", "always"]).default("once"),
   when: Condition.optional(),
+  /**
+   * WHERE THIS RULE SITS IN AN IF / ELSE IF / ELSE CHAIN (§8, §23).
+   *
+   *   if        an independent rule — evaluated on its own merits
+   *   else_if   only reached when every rule above it in the chain failed
+   *   else      reached when every rule above it failed; carries no condition
+   *
+   * Consecutive rules form one chain and the FIRST match wins, which is what
+   * makes "Heavy / Medium / Light" three rules instead of three rules and two
+   * hand-written negations:
+   *
+   *   if      COUNT(Q2) >= 5   →  "Heavy User"
+   *   else if COUNT(Q2) >= 3   →  "Medium User"
+   *   else                     →  "Light User"
+   *
+   * Absent means `if`, so every punch rule that exists today keeps behaving
+   * exactly as it does: independent, applied in order, last writer wins per
+   * code. A chain only exists where a programmer builds one.
+   *
+   * An `else_if` or `else` with no `if` above it starts its own chain and
+   * therefore behaves as an `if` — the alternative is a rule that silently
+   * never runs.
+   */
+  mode: z.enum(["if", "else_if", "else"]).optional(),
 });
 export type PunchRule = z.infer<typeof PunchRule>;
 
