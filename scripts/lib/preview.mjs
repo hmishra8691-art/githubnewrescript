@@ -65,7 +65,7 @@ export async function sendPreview(page, payload, opts = {}) {
     (p) => window.postMessage({ type: "rescript:preview", ...p }, "*"),
     payload,
   );
-  const rendered = async () => {
+  const matched = async () => {
     try {
       if (ready) return !!(await page.evaluate(ready));
       await page.waitForSelector(selector, { timeout: 250, state: "visible" });
@@ -79,12 +79,27 @@ export async function sendPreview(page, payload, opts = {}) {
   await post();
 
   for (;;) {
-    if (await rendered()) return page;
-
     const shown = await text();
     if (REJECTED.test(shown)) {
       throw new Error(`the preview REJECTED the definition:\n${shown.slice(0, 800)}`);
     }
+    /*
+     * THE PLACEHOLDER IS ITSELF AN `.rs-card`.
+     *
+     * So a suite waiting on a generic container — `.rs-card` is the one three
+     * of them use — matches the "Waiting for survey definition…" card and
+     * concludes the definition arrived. That is how `pagebreak` failed with
+     * the placeholder text in its assertion diff instead of a timeout: the
+     * wait was satisfied by the very screen that proves nothing was received.
+     *
+     * The page's own state therefore OUTRANKS the selector. While the
+     * placeholder is up, nothing has arrived, whatever the selector says. An
+     * empty body counts the same way — nothing has rendered at all, so
+     * re-sending costs nothing.
+     */
+    const waiting = PLACEHOLDER.test(shown) || shown.trim() === "";
+    if (!waiting && await matched()) return page;
+
     if (Date.now() >= deadline) {
       /*
        * Say what actually went wrong. A bare selector timeout sends the reader
@@ -94,17 +109,17 @@ export async function sendPreview(page, payload, opts = {}) {
       throw new Error(
         `the preview never rendered ${ready ? "its ready condition" : selector} `
         + `after ${posts} handoff(s) in ${budget}ms.\n`
-        + (PLACEHOLDER.test(shown)
+        + (waiting
           ? "The page is STILL on its placeholder, so no definition was ever accepted."
           : `The page reads:\n${shown.slice(0, 400)}`),
       );
     }
     /*
-     * Only while the placeholder is up — see the header. A page that has taken
+     * Only while nothing has arrived — see the header. A page that has taken
      * the definition is rendering, and interrupting it is how you turn slow
      * into never.
      */
-    if (PLACEHOLDER.test(shown) && Date.now() - lastPost > 2000) {
+    if (waiting && Date.now() - lastPost > 2000) {
       await post();
       posts += 1;
       lastPost = Date.now();
