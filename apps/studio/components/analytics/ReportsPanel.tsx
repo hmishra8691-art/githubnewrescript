@@ -161,6 +161,23 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
   const [editing, setEditing] = React.useState<string | null>(null);
   const [versions, setVersions] = React.useState<Row[]>([]);
   const [viewVersion, setViewVersion] = React.useState<number | null>(null);
+  /**
+   * WHICH VERSION THE BODY IS ACTUALLY SHOWING (§35).
+   *
+   * `viewVersion` is the SELECTION — it changes the instant the dropdown
+   * changes, so the control stays responsive. `shownVersion` is what has been
+   * FETCHED AND RENDERED, and it is what labels the report.
+   *
+   * They were the same state, and that was wrong in a way that matters for a
+   * versioning feature: selecting "Published v1" flipped the heading to
+   * "Snapshot · v1" synchronously while `load()` was still in flight, so for
+   * the length of that round trip the DRAFT's blocks sat under a snapshot
+   * label — the reader was told they were looking at exactly what was
+   * published while looking at unpublished edits. Splitting the two means the
+   * label and the content can never disagree: until the snapshot is in hand
+   * the body honestly reads "Live data", which is what it still is.
+   */
+  const [shownVersion, setShownVersion] = React.useState<number | null>(null);
   const [share, setShare] = React.useState(false);
   const [exp, setExp] = React.useState(false);
   const [msg, setMsg] = React.useState<string | null>(null);
@@ -176,7 +193,17 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
 
   const load = React.useCallback(async (r: Row, version?: number | null) => {
     setLoading(true); setError(null);
-    try { const res = await api.results(r.id, version ?? undefined); setResults(res.results); if (version) setDef(res.definition as ReportDefinition); } catch (e) { setError((e as Error).message); } finally { setLoading(false); }
+    try {
+      const res = await api.results(r.id, version ?? undefined);
+      setResults(res.results);
+      /*
+       * The definition and the label it is shown under are set together, in
+       * one commit, so the body is never a version other than the one it
+       * claims to be.
+       */
+      if (version) { setDef(res.definition as ReportDefinition); setShownVersion(version); }
+      else setShownVersion(null);
+    } catch (e) { setError((e as Error).message); } finally { setLoading(false); }
   }, [api]);
 
   /** Results for analyses referenced by unsaved blocks: computed server-side per analysis. */
@@ -189,7 +216,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
   }, [api, analyses, results]);
 
   const openReport = async (r: Row) => {
-    setOpen(r); setDef(r.definition as ReportDefinition); setDirty(false); setViewVersion(null); setMsg(null);
+    setOpen(r); setDef(r.definition as ReportDefinition); setDirty(false); setViewVersion(null); setShownVersion(null); setMsg(null);
     await load(r);
     const v = await api.versions("reports", r.id).catch(() => ({ versions: [] })); setVersions(v.versions);
     /*
@@ -288,7 +315,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
         <select className="select small" value={open.theme_id ?? ""} onChange={async (e) => { const r = await api.update("reports", open.id, { themeId: e.target.value || null }); setOpen(r.item); onChange(); }} title="Report theme"><option value="">Default theme</option>{themes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
         {!isDash && <select className="select small" value={open.mode} onChange={async (e) => { const r = await api.update("reports", open.id, { mode: e.target.value }); setOpen(r.item); setDef({ ...rd, mode: e.target.value as "live" | "snapshot" }); onChange(); }} title="Live reports recompute on open; snapshot reports show the published version"><option value="live">Live report</option><option value="snapshot">Snapshot report</option></select>}
         <span className="grow" />
-        {versions.length > 0 && <select className="select small" value={viewVersion ?? ""} onChange={(e) => { const v = e.target.value ? Number(e.target.value) : null; setViewVersion(v); if (v) void load(open, v); else { setDef(open.definition as ReportDefinition); void load(open); } }} data-testid="ax-version-select"><option value="">Editing draft (live data)</option>{versions.map((v) => <option key={v.version} value={v.version}>Published v{v.version} · {new Date(v.published_at).toLocaleDateString()}</option>)}</select>}
+        {versions.length > 0 && <select className="select small" value={viewVersion ?? ""} onChange={(e) => { const v = e.target.value ? Number(e.target.value) : null; setViewVersion(v); if (v) void load(open, v); else { setShownVersion(null); setDef(open.definition as ReportDefinition); void load(open); } }} data-testid="ax-version-select"><option value="">Editing draft (live data)</option>{versions.map((v) => <option key={v.version} value={v.version}>Published v{v.version} · {new Date(v.published_at).toLocaleDateString()}</option>)}</select>}
         <button className="btn small" onClick={save} disabled={!dirty} data-testid="ax-report-save">{dirty ? "Save" : "Saved"}</button>
         <button className="btn primary small" onClick={publish} data-testid="ax-report-publish">Publish {open.published_version ? `v${open.published_version + 1}` : "v1"}</button>
         {!isDash && <button className="btn small" onClick={() => setTemplatesOpen((o) => !o)} data-testid="ax-templates">Templates</button>}
@@ -363,7 +390,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
         </aside>
         <div className="ax-rb-main">
           {loading && <div className="muted" style={{ padding: 8 }}>Computing…</div>}
-          {def && <ReportView title={rd.title ?? open.name} subtitle={rd.subtitle} blocks={isDash ? undefined : rd.blocks} widgets={isDash ? dd.widgets : undefined} crossFilter={isDash ? dd.crossFilter !== false : false} results={results} theme={theme} mode={viewVersion ? "snapshot" : "live"} version={viewVersion} publishedAt={viewVersion ? versions.find((v) => v.version === viewVersion)?.published_at : undefined} branding={rd.branding} viewerSegments={rd.viewerSegments} onBlockAction={viewVersion ? undefined : onBlockAction} />}
+          {def && <ReportView title={rd.title ?? open.name} subtitle={rd.subtitle} blocks={isDash ? undefined : rd.blocks} widgets={isDash ? dd.widgets : undefined} crossFilter={isDash ? dd.crossFilter !== false : false} results={results} theme={theme} mode={shownVersion ? "snapshot" : "live"} version={shownVersion} publishedAt={shownVersion ? versions.find((v) => v.version === shownVersion)?.published_at : undefined} branding={rd.branding} viewerSegments={rd.viewerSegments} onBlockAction={viewVersion ? undefined : onBlockAction} />}
         </div>
       </div>
       {editing && items_.find((b) => b.id === editing) && <BlockEditor block={items_.find((b) => b.id === editing)!} analyses={analyses} onChange={(nb) => { setItems(items_.map((b) => (b.id === nb.id ? nb : b))); void ensure([(nb as { analysisId?: string }).analysisId, ...(((nb as { analysisIds?: string[] }).analysisIds) ?? [])]); }} onClose={() => setEditing(null)} />}
