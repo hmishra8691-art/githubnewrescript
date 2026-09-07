@@ -8,6 +8,7 @@
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
 import assert from "node:assert/strict";
+import { openPreview } from "./lib/preview.mjs";
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1700, height: 1150 } });
@@ -273,16 +274,17 @@ assert.deepEqual(punchesOf(await readDef())[0].mapping, []);
 
 /* ============================================== §22/§29: the actual runtime */
 
-const preview = await browser.newPage({ viewport: { width: 900, height: 900 } });
-preview.on("pageerror", (e) => console.error("PREVIEW ERROR:", e.message));
 const finalDef = await readDef();
-// the preview receives definitions over postMessage — the same channel the
-// Studio's Preview button uses
-await preview.goto("http://localhost:3001/preview", { waitUntil: "networkidle" });
-await preview.evaluate((d) => {
-  window.postMessage({ type: "rescript:preview", definition: d }, "*");
-}, finalDef);
-await preview.waitForSelector(".rs-option");
+// The preview receives definitions over postMessage — the same channel the
+// Studio's Preview button uses. `openPreview` keeps re-sending until the page
+// renders, because /preview only starts listening once React has hydrated and
+// a message posted a moment too early is lost with no way to notice.
+const preview = await openPreview(
+  browser,
+  "http://localhost:3001",
+  { definition: finalDef },
+  { selector: ".rs-option", viewport: { width: 900, height: 900 } },
+);
 
 /*
  * Each question renders as `.rs-card[data-qid]`, so answers go in by id rather

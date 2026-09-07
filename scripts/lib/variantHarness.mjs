@@ -15,6 +15,7 @@
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
 import assert from "node:assert/strict";
+import { openPreview } from "./preview.mjs";
 
 export { assert };
 
@@ -86,13 +87,14 @@ export async function openHarness({
     const def = await readDef();
     def.flow = [{ type: "page", id: "p1", questionIds }, { type: "end", id: "e1", status: "complete" }];
     mutateDef?.(def);
-    const pv = await browser.newPage({ viewport: { width: 1000, height: 1000 } });
-    pv.on("pageerror", (e) => console.error("RUNTIME PAGE ERROR:", e.message));
-    await pv.goto(`${runtime}/preview`, { waitUntil: "networkidle" });
-    await pv.evaluate((d) => window.postMessage({ type: "rescript:preview", definition: d }, "*"), def);
-    await pv.waitForSelector("[data-qid]");
-    // expose the live state for assertions
-    return pv;
+    /*
+     * `openPreview` re-sends the definition until the page renders. The one
+     * post this used to do could land before /preview had hydrated its
+     * `message` listener, in which case it was lost and the suite died on a
+     * selector timeout — rare on its own, reliable enough in a 54-suite run to
+     * have failed two of them. See scripts/lib/preview.mjs.
+     */
+    return openPreview(browser, runtime, { definition: def });
   };
 
   /** The runtime's current answer for a question, read from the debug snapshot. */
