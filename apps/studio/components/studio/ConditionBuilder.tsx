@@ -165,7 +165,8 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
    * a single dropdown, which is both narrower and less to explain.
    */
   const sourceValue =
-    rule.source.kind === "question" ? `q:${rule.source.ref}`
+    rule.source.kind === "rule" ? `rule:${rule.source.ref}`
+      : rule.source.kind === "question" ? `q:${rule.source.ref}`
       : rule.source.kind === "option" ? `o:${rule.source.ref || "code"}`
         : rule.source.kind === "loop" && rule.source.scope ? `loopscope:${rule.source.scope}:${rule.source.ref}`
         : `${rule.source.kind}:${rule.source.ref}`;
@@ -174,6 +175,20 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
     const [kind, ...rest] = raw.split(":");
     const ref = rest.join(":");
     if (kind === "q") return setSource({ kind: "question", ref });
+    /*
+     * A named expression already answers yes or no, so choosing one fixes the
+     * operator too — leaving "= " and an empty value would ask the programmer
+     * to compare a boolean with something, which is not a question they have.
+     */
+    if (kind === "rule") {
+      return onChange({
+        ...rule,
+        source: { kind: "rule", ref },
+        operator: "eq",
+        value: true,
+        value2: undefined,
+      });
+    }
     if (kind === "o") return setSource({ kind: "option", ref: ref || "code" });
     if (kind === "loopscope") {
       // an OUTER loop, named by its loopVar (§32)
@@ -204,6 +219,19 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
             <option value="o:label">this option’s label</option>
             <option value="o:value">this option’s value</option>
             <option value="o:index">this option’s position</option>
+          </optgroup>
+        )}
+        {/*
+          * Named expressions first, above Questions. They are the shortest and
+          * most reusable thing in the list, and a programmer who has defined
+          * one is looking for it — burying it under sixty questions is how a
+          * reusable rule gets rewritten by hand instead.
+          */}
+        {(s.def.namedExpressions ?? []).length > 0 && (
+          <optgroup label="Named expressions">
+            {(s.def.namedExpressions ?? []).map((e) => (
+              <option key={e.id} value={`rule:${e.id}`} title={e.description ?? ""}>{e.name}</option>
+            ))}
           </optgroup>
         )}
         <optgroup label="Questions">
@@ -321,14 +349,28 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
           )}
         </>
       )}
-      <select className="select op-select" value={rule.operator}
-        onChange={(e) => onChange({ ...rule, operator: e.target.value as ComparisonOperator })}>
-        {operatorChoices.map((o) => <option key={o} value={o}>{OPERATOR_LABELS[o] ?? o}</option>)}
-      </select>
+      {/*
+        * A NAMED EXPRESSION NEEDS NO OPERATOR. It already answers yes or no,
+        * so the row is just the name and an is/is-not toggle — offering
+        * "contains" or "ranked first" against a boolean would be offering a
+        * rule that cannot be true.
+        */}
+      {rule.source.kind === "rule" ? (
+        <button
+          type="button" className="btn small" data-testid="named-truth"
+          title="Match when this expression is true, or when it is not"
+          onClick={() => onChange({ ...rule, operator: "eq", value: rule.value === false })}
+        >{rule.value === false ? "is NOT true" : "is true"}</button>
+      ) : (
+        <select className="select op-select" value={rule.operator}
+          onChange={(e) => onChange({ ...rule, operator: e.target.value as ComparisonOperator })}>
+          {operatorChoices.map((o) => <option key={o} value={o}>{OPERATOR_LABELS[o] ?? o}</option>)}
+        </select>
+      )}
 
       {/* a count is compared against a NUMBER — never against an option code,
           which is what the option dropdown below would offer */}
-      {needsValue && counting ? (
+      {rule.source.kind === "rule" ? null : needsValue && counting ? (
         <input
           className="input" type="number" min={0} style={{ maxWidth: 90 }}
           data-testid="count-value" aria-label="How many"

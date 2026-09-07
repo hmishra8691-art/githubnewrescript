@@ -166,6 +166,45 @@ export const DesignReference = z.object({
 export type DesignReference = z.infer<typeof DesignReference>;
 
 /** Variable dictionary entry (requirement §9) — generated, stored for export. */
+/* ==================================================== named expressions (§34, §35)
+ *
+ * IS_HIGH_VALUE, HAS_APPLE, PREMIUM_CUSTOMER — a condition written once and
+ * referenced everywhere.
+ *
+ * THE WHOLE IMPLEMENTATION IS A NEW SOURCE KIND. A named expression is an
+ * ordinary `Condition` stored under a name; referencing one is a rule whose
+ * source is `{ kind: "rule", ref: <id> }`, and the evaluator resolves it by
+ * evaluating the stored tree in the same context. So it works in display
+ * logic, skip logic, masking, option and row logic, eligibility, auto punch,
+ * auto select, list logic, list operations, branching, loop conditions, quota
+ * cells and validation — all fourteen — without any of them being told it
+ * exists. Anything else would have been fourteen implementations of "look up
+ * a rule".
+ *
+ * It is deliberately NOT a calculation. A calculation is a stored string in
+ * the calc language, evaluated on a trigger and snapshotted into a variable;
+ * a named expression is a live predicate in the condition language, evaluated
+ * where it is used. The difference matters when the answer changes after the
+ * trigger fired.
+ *
+ * Recursion is the obvious hazard — a macro that references itself, or two
+ * that reference each other, is a hang rather than a wrong answer — so the
+ * evaluator carries a resolution stack and `lintNamedExpressions` reports
+ * cycles before deployment.
+ */
+export const NamedExpression = z.object({
+  /** Stable id. What a reference stores, so renaming is free. */
+  id: z.string(),
+  /**
+   * What a programmer types: IS_HIGH_VALUE. Upper snake case by convention
+   * rather than by rule, because it reads as a constant at the point of use.
+   */
+  name: z.string(),
+  description: z.string().optional(),
+  when: Condition,
+});
+export type NamedExpression = z.infer<typeof NamedExpression>;
+
 export const VariableDef = z.object({
   name: z.string(),
   label: z.string(),
@@ -257,6 +296,12 @@ export const SurveyDefinition = z.object({
   designs: z.array(DesignReference).default([]),
   /** Generated dictionary (kept in the JSON so exports reflect exact state). */
   variables: z.array(VariableDef).default([]),
+  /**
+   * Reusable named conditions (§34, §35). Empty by default, so every existing
+   * survey is unchanged and nothing resolves differently until a programmer
+   * writes one.
+   */
+  namedExpressions: z.array(NamedExpression).default([]),
   embeddedData: z
     .array(z.object({
       name: z.string(),

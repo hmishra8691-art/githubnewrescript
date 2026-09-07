@@ -255,7 +255,14 @@ export const ConditionSource = z.object({
      * expression text and the same evaluator that runs `Calculation.expression`
      * produces the value. One language, two places it can be written.
      */
-    .enum(["question", "variable", "embedded", "calculation", "quota", "loop", "option", "expr"])
+    /*
+     * `rule` is a NAMED EXPRESSION (§34, §35): `ref` is the id of an entry in
+     * `def.namedExpressions`, and the rule's value is that expression's own
+     * result. One definition, referenced from anywhere a condition is
+     * accepted — which is every feature, because they all call the same
+     * evaluator.
+     */
+    .enum(["question", "variable", "embedded", "calculation", "quota", "loop", "option", "expr", "rule"])
     .default("question"),
   /**
    * Question id (e.g. "q_brand") or variable / field name.

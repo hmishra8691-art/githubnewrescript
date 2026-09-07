@@ -3,6 +3,7 @@ import type {
   Question, SurveyDefinition,
 } from "@rescript/schema";
 import { getQuestionByCodeOrVar } from "./state.js";
+import { findNamedExpression } from "./namedExpressions.js";
 
 /**
  * The logic expression language: text in, canonical tree out, and back again.
@@ -459,6 +460,21 @@ export function parseLogicExpression(
 
     // namespaces first: calc.X / ed.X / embedded.X / loop.X / quota.X / @option
     const ns = head.toLowerCase();
+    /*
+     * A NAMED EXPRESSION (§34, §35): `IS_HIGH_VALUE`, or `rule.IS_HIGH_VALUE`
+     * when a question happens to share the name.
+     *
+     * Checked before questions only for the explicit `rule.` spelling; the
+     * bare name is checked AFTER questions below, so a survey that has both a
+     * question and a macro called the same thing keeps meaning the question —
+     * the same precedence a loopVar already gets.
+     */
+    if (ns === "rule" || ns === "expr" || ns === "macro") {
+      const wanted = segments.slice(1).join(".");
+      const named = findNamedExpression(def, wanted);
+      if (!named) fail(`There is no named expression “${wanted}”`, tok!.pos);
+      return { source: { kind: "rule", ref: named!.id }, segments };
+    }
     if (ns === "calc" || ns === "calculation") {
       return { source: { kind: "calculation", ref: segments.slice(1).join(".") }, segments };
     }
@@ -505,7 +521,12 @@ export function parseLogicExpression(
     }
 
     const q = getQuestionByCodeOrVar(def, head);
-    if (!q) fail(`${head} does not exist`, tok!.pos);
+    if (!q) {
+      /* a bare macro name, once nothing else has claimed it */
+      const named = segments.length === 1 ? findNamedExpression(def, head) : undefined;
+      if (named) return { source: { kind: "rule", ref: named.id }, segments };
+      fail(`${head} does not exist`, tok!.pos);
+    }
     const source: DraftSource = { kind: "question", ref: q!.id };
 
     if (segments.length > 1) {
@@ -656,6 +677,11 @@ export function parseLogicExpression(
     const operator = readOperator();
 
     if (!operator) {
+      /*
+       * A bare macro is a complete condition — `IF IS_HIGH_VALUE` needs no
+       * operator, which is the whole reason to give a condition a name.
+       */
+      if (source.kind === "rule") return { type: "rule", source: strip(source), operator: "eq", value: true };
       // a bare reference: the natural reading depends on what it points at
       return bareCondition(source, question);
     }
@@ -885,6 +911,15 @@ function referenceText(def: SurveyDefinition, rule: ConditionRule): string {
    */
   if (source.kind === "expr") return `(${source.ref})`;
   /*
+   * A macro prints as its NAME, which is the point of having one — and the
+   * name re-parses to the same id, so the round trip holds even though what
+   * is stored is the id.
+   */
+  if (source.kind === "rule") {
+    const named = findNamedExpression(def, source.ref);
+    return named?.name?.trim() || `rule.${source.ref}`;
+  }
+  /*
    * A count prints as the function call it parses from, so `COUNT(Q1) >= 2`
    * survives a trip through the visual builder and back.
    */
@@ -923,6 +958,8 @@ function ruleText(def: SurveyDefinition, rule: ConditionRule): string {
    * answered", which is not the same rule.
    */
   if (operator === "answered" && rule.source.kind === "question" && !rule.source.count) return ref;
+  /* `IS_HIGH_VALUE = true` prints as `IS_HIGH_VALUE`, which parses back to it */
+  if (rule.source.kind === "rule" && operator === "eq" && value === true) return ref;
 
   /*
    * `selected` collapses into the dotted reference, which is the shorthand

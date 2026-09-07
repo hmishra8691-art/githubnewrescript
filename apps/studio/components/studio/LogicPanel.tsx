@@ -11,6 +11,7 @@ import {
 import { AutoPunchPanel } from "./AutoPunchEditor";
 import { useStudio, uid } from "./store";
 import { ConditionEditor, conditionToText, OptionalCondition } from "./ConditionBuilder";
+import { NamedExpressionsPanel } from "./NamedExpressionsPanel";
 
 /**
  * Survey-wide logic check (reqs §30–31): every broken reference, dead option
@@ -444,6 +445,14 @@ export function LogicPanel() {
 
       <h3 className="sec">What is dynamic in this survey</h3>
       <LogicSummaryList />
+
+      {/*
+        * The named expression library sits above the rules that use it, and
+        * above Auto punch and Display rules specifically, because those are
+        * the two that most often repeat the same condition three times.
+        */}
+      <h3 className="sec">Named expressions</h3>
+      <NamedExpressionsPanel />
 
       <h3 className="sec">Auto punch (option → option)</h3>
       <AutoPunchPanel />

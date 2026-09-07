@@ -4,6 +4,7 @@ import type { LoopContext, ResponseState } from "./state.js";
 import { findLoopScope, getQuestionByCodeOrVar, lookupAnswer, loopValue } from "./state.js";
 import { evaluateCount } from "./countCondition.js";
 import { safeExpression } from "./calcContext.js";
+import { findNamedExpression } from "./namedExpressions.js";
 
 /**
  * The option currently under evaluation. Present whenever a condition is
@@ -211,6 +212,45 @@ export function resolveComparisonValue(v: unknown, ctx: EvalContext): unknown {
 }
 
 export function evaluateRule(rule: ConditionRule, ctx: EvalContext): boolean {
+  /*
+   * A NAMED EXPRESSION IS A CONDITION, NOT A VALUE (§34, §35).
+   *
+   * It is resolved here rather than in `resolveSourceValue` because what it
+   * produces is a yes/no answer, not something to compare — `IF IS_HIGH_VALUE`
+   * has no operator and needs none. An operator, if one is written, still
+   * applies: `IS_HIGH_VALUE = false` is a legitimate way to spell NOT.
+   */
+  if (rule.source.kind === "rule") {
+    const target = findNamedExpression(ctx.def, rule.source.ref);
+    /*
+     * A reference to an expression that has been deleted is FALSE, and false
+     * is the safe direction: a display rule that shows a question stops
+     * showing it, rather than showing it to everybody. `lintNamedExpressions`
+     * reports the dangling reference so it does not stay quietly false.
+     */
+    if (!target) return false;
+    if (resolving.includes(target.id)) {
+      /*
+       * Already inside this expression — a cycle. Returning false breaks it
+       * at the point of re-entry rather than recursing; the linter names the
+       * whole chain before deployment.
+       */
+      return false;
+    }
+    resolving.push(target.id);
+    let held: boolean;
+    try {
+      held = evaluateCondition(target.when, ctx);
+    } finally {
+      resolving.pop();
+    }
+    if (rule.operator === "eq" || rule.operator === "ne") {
+      const want = rule.value !== false && rule.value !== "false" && rule.value !== 0;
+      return rule.operator === "eq" ? held === want : held !== want;
+    }
+    return held;
+  }
+
   const left = resolveSourceValue(rule, ctx);
   const { operator } = rule;
   const right = resolveComparisonValue(rule.value, ctx);
@@ -438,6 +478,21 @@ export function withLegacyOptionLoop(
     loop: { loopVar: "option", code: String(o.code), label, index: 0 },
   };
 }
+
+/**
+ * Named expressions currently being resolved, innermost last.
+ *
+ * A macro that references itself, or two that reference each other, is not a
+ * wrong answer — it is an unbounded recursion that takes the page with it. The
+ * stack is module-scoped rather than threaded through `EvalContext` because
+ * evaluation is synchronous and single-threaded: there is exactly one
+ * evaluation in flight at any moment, and a context parameter would have to be
+ * passed through fourteen call sites that have no reason to know about it.
+ *
+ * It is cleared in a `finally`, so an exception thrown inside a macro cannot
+ * leave the stack poisoned for the next evaluation.
+ */
+const resolving: string[] = [];
 
 /** Evaluate any condition tree — arbitrary AND/OR/NOT nesting (req. §6). */
 export function evaluateCondition(
