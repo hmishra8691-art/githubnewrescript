@@ -17,7 +17,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test dist/stats/*.test.js dist/analyses/*.test.js dist/export/*.test.js"
+    "test": "node --test dist/*.test.js dist/stats/*.test.js dist/analyses/*.test.js dist/export/*.test.js"
   },
   "dependencies": {
     "@rescript/engine": "workspace:*",

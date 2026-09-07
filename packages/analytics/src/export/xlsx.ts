@@ -11,6 +11,7 @@ import type { AnalysisResult, ChartSpec, ExportSettings, ReportDefinition, Repor
 import { DEFAULT_EXPORT_SETTINGS, DEFAULT_THEME } from "../types.js";
 import { executiveSummary } from "../summary.js";
 import { seriesForChart } from "./shared.js";
+import { methodologyBlock, methodologyLines } from "../reportPages.js";
 
 export interface XlsxInput {
   report: Pick<ReportDefinition, "title" | "subtitle" | "blocks">;
@@ -128,6 +129,50 @@ export async function buildXlsx(input: XlsxInput): Promise<Buffer> {
       row++;
     }
     cs.columns = [{ width: 34 }, ...Array.from({ length: 10 }, () => ({ width: 16 }))];
+  }
+
+  /*
+   * §36 — a METHODOLOGY sheet, which this workbook never had.
+   *
+   * The PowerPoint export has always ended with a methodology slide and the
+   * workbook ended with a metadata sheet: what generated the file, when, and
+   * a definition hash per analysis. Provenance, not method. A client who
+   * opens the workbook rather than the deck had no way to read what the
+   * numbers rest on — which base, which weighting, which fieldwork dates —
+   * and a table read without its base is a table read wrong.
+   *
+   * Only written when the report actually says something. An empty sheet
+   * headed "Methodology" is worse than no sheet: it reads as though the
+   * question was asked and the answer was nothing.
+   */
+  if (settings.include.methodology) {
+    const authored = methodologyBlock(input.report.blocks);
+    const lines = methodologyLines(authored, { survey: (input.meta as { survey?: string } | undefined)?.survey });
+    if (lines.length) {
+      const meth = wb.addWorksheet(nameFor("methodology", "Methodology"));
+      meth.getCell(1, 1).value = authored?.title ?? "Methodology & notes";
+      meth.getCell(1, 1).font = { bold: true, size: 14, color: { argb: argb(theme.colors.primary) } };
+      lines.forEach((l, i) => {
+        const c = meth.getCell(i + 3, 1);
+        c.value = l;
+        c.alignment = { wrapText: true, vertical: "top" };
+        c.font = { name: font, size: 11 };
+      });
+      /* the warnings the analyses themselves raised — a caveat is methodology */
+      const warned = results.filter((it) => it.result.warnings.length).slice(0, 8);
+      if (warned.length) {
+        const at = lines.length + 4;
+        meth.getCell(at, 1).value = "Caveats raised by the analyses";
+        meth.getCell(at, 1).font = { bold: true, size: 11 };
+        warned.forEach((it, i) => {
+          const c = meth.getCell(at + 1 + i, 1);
+          c.value = `${it.title}: ${it.result.warnings[0]}`;
+          c.alignment = { wrapText: true, vertical: "top" };
+          c.font = { name: font, size: 10, color: { argb: "FF64748B" } };
+        });
+      }
+      meth.columns = [{ width: 110 }];
+    }
   }
 
   if (x.includeMetadata) {

@@ -76,14 +76,37 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
   const password = req.nextUrl.searchParams.get("password") ?? req.headers.get("x-share-password");
   const res = await resolve(req, params.token, password);
   if ("denied" in res) return res.denied;
-  const { r, record, user } = res;
+  const { r, record, user, db } = res;
   await record("view", user);
+
+  /*
+   * §36 — the frozen viewer-filter results, if this version has any.
+   *
+   * Read through `rescript_resolve_share_variants`, which is keyed on the
+   * TOKEN rather than on a report or a version — so this route still cannot
+   * name a version it was not issued against, and a revoked or expired share
+   * gets nothing, exactly as with `rescript_resolve_share`. The reason it is
+   * a second function and not a wider first one is that widening the first
+   * would mean dropping a function every live share link depends on.
+   *
+   * A database without migration 0014 answers with an error, which is simply
+   * "no variants" — a shared report without filter buttons, not a broken one.
+   */
+  let variants: { filters: { id: string; name: string }[]; results: Record<string, Record<string, AnalysisResult>> } | null = null;
+  if ((r.definition?.viewerFilters ?? []).length) {
+    const got = await db.rpc("rescript_resolve_share_variants", { p_token: params.token });
+    const v = got.data as { filters?: { id: string; name: string }[]; results?: Record<string, Record<string, AnalysisResult>> } | null;
+    if (v?.results && v.filters?.length) variants = { filters: v.filters, results: v.results };
+  }
   // ONLY the snapshot leaves: no analysis ids that could be used elsewhere, no dataset spec beyond its summary
   const definition = r.definition!;
   return NextResponse.json({
     report: { name: r.report_name, title: definition.title, subtitle: definition.subtitle, blocks: definition.blocks, viewerSegments: definition.viewerSegments ?? [], branding: definition.branding ?? {}, widgets: (definition as unknown as { widgets?: unknown[] }).widgets ?? null, crossFilter: (definition as unknown as { crossFilter?: boolean }).crossFilter ?? false },
     theme: r.theme ?? DEFAULT_THEME,
     results: r.snapshot,
+    /* the filters this viewer may switch to, and the answer for each — no ids they could use elsewhere */
+    viewerFilters: variants?.filters ?? [],
+    filterResults: variants?.results ?? null,
     version: r.version, publishedAt: r.published_at, mode: "snapshot",
     dataset: r.dataset ? { responses: (r.dataset as { responses?: number }).responses, surveyVersion: (r.dataset as { surveyVersion?: string }).surveyVersion, computedAt: (r.dataset as { computedAt?: string }).computedAt } : null,
     permission: r.permission,

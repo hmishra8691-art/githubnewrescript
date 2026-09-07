@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { AuditEvent, Capability } from "@rescript/access";
 import { buildPptx, buildXlsx } from "@rescript/analytics/export";
-import { DEFAULT_THEME, type AnalysisDefinition, type AnalysisResult, type ChartSpec, type ReportDefinition, type ReportTheme } from "@rescript/analytics";
+import {
+  DEFAULT_THEME, BUILT_IN_REPORT_TEMPLATES, applyTemplate, describeTemplate,
+  type AnalysisDefinition, type AnalysisResult, type ChartSpec, type ReportDefinition, type ReportTemplate, type ReportTheme,
+} from "@rescript/analytics";
 import { supabaseService } from "@/lib/authServer";
 import { audit, isFailure, requireProject, type ProjectContext } from "@/lib/guard";
 import { compute, hashPassword, loadDefinition, loadTheme, newToken, variablesPayload } from "@/lib/analytics";
@@ -24,6 +27,10 @@ export const maxDuration = 60;
  *   PATCH shares/<id>                 revoke / change expiry, access, permission (§22)
  *   GET  shares/<id>/access           access history
  *   POST export                       PowerPoint / Excel of a report (published version or live) or one analysis
+ *   GET  report-templates             built-in + workspace report shapes (§36)
+ *   POST report-templates             save this report's shape as a template
+ *   DELETE report-templates/<id>      remove a workspace template
+ *   POST reports/<id>/apply-template  lay a template over a report, keeping filled blocks
  *
  * Every branch passes `requireProject` with the analytics capability the action
  * needs; the role → capability table lives in `@rescript/access`, so a viewer
@@ -74,6 +81,43 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
     ]);
     return json({ analyses: a.data ?? [], charts: c.data ?? [], reports: r.data ?? [], shares: s.data ?? [] });
   }
+  /*
+   * §36 — REPORT TEMPLATES. A separate branch rather than a COLLECTIONS entry
+   * because the table is keyed on the CUSTOMER and not on a survey (like
+   * `analytics_themes`, and for the same reason: a house report shape belongs
+   * to the workspace, not to whichever study it was first drawn in). The
+   * generic collection paths all scope by `survey_id`, and bending them would
+   * put a survey predicate on the one table that must not have one.
+   *
+   * The built-ins are returned alongside the workspace's own, so the picker
+   * has something in it on the first day — a template feature with an empty
+   * library is a template feature nobody uses.
+   */
+  if (head === "report-templates") {
+    const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
+    const { data, error } = await db
+      .from("analytics_report_templates")
+      .select("id, name, description, template, created_at, updated_at")
+      .eq("customer_id", ctx.user.customerId ?? "")
+      .is("deleted_at", null)
+      .order("name", { ascending: true });
+    if (error) {
+      if (/analytics_report_templates|does not exist|schema cache/i.test(error.message)) {
+        return json({ templates: BUILT_IN_REPORT_TEMPLATES, available: false, note: "Saving your own report templates needs migration 0014." });
+      }
+      return bad(error.message, 500);
+    }
+    const saved = (data ?? []).map((t) => ({
+      id: t.id as string,
+      name: t.name as string,
+      description: (t.description as string) ?? undefined,
+      builtIn: false,
+      ...((t.template as object) ?? {}),
+      blocks: ((t.template as { blocks?: unknown[] })?.blocks ?? []),
+    }));
+    return json({ templates: [...BUILT_IN_REPORT_TEMPLATES, ...saved], available: true });
+  }
+
   if (head && head in COLLECTIONS) {
     const coll = COLLECTIONS[head as Collection];
     const ctx = await gate(req, surveyId, coll.read); if (isFailure(ctx)) return ctx.response;
@@ -124,15 +168,39 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
   return bad("Unknown analytics endpoint.", 404);
 }
 
-async function computeReport(db: ReturnType<typeof supabaseService>, surveyId: string, loaded: Awaited<ReturnType<typeof loadDefinition>> & { def: unknown }, report: ReportDefinition | { widgets?: { analysisId?: string }[]; blocks?: unknown[] }) {
+/**
+ * Compute every analysis a report references.
+ *
+ * `extraFilterIds` is how a REPORT-LEVEL filter and a viewer filter (§36) are
+ * applied: the ids are appended to each analysis's own `filterIds`, and
+ * `resolveSaved` already ANDs those into one condition. So "the North region
+ * report" is the same saved analyses seen through one more filter, rather
+ * than a duplicate set of analyses that has to be maintained twice — which is
+ * the mistake that makes regional reports drift from the national one.
+ */
+async function computeReport(
+  db: ReturnType<typeof supabaseService>,
+  surveyId: string,
+  loaded: Awaited<ReturnType<typeof loadDefinition>> & { def: unknown },
+  report: ReportDefinition | { widgets?: { analysisId?: string }[]; blocks?: unknown[] },
+  extraFilterIds: string[] = [],
+) {
   const ids = new Set<string>();
   for (const b of (report as ReportDefinition).blocks ?? []) { if ("analysisId" in b && b.analysisId) ids.add(b.analysisId); if ("analysisIds" in b) for (const id of b.analysisIds) ids.add(id); }
   for (const w of (report as { widgets?: { analysisId?: string }[] }).widgets ?? []) if (w.analysisId) ids.add(w.analysisId);
   if (!ids.size) return {};
+  const reportFilter = (report as ReportDefinition).filterId;
+  const applied = [...new Set([...(reportFilter ? [reportFilter] : []), ...extraFilterIds])].filter(isUuid);
   const { data } = await db.from("analytics_analyses").select("id, name, definition").in("id", [...ids]).eq("survey_id", surveyId).is("deleted_at", null);
   const results: Record<string, AnalysisResult> = {};
   for (const a of data ?? []) {
-    const def = { ...(a.definition as AnalysisDefinition), id: a.id, name: a.name as string };
+    const own = a.definition as AnalysisDefinition;
+    const def = {
+      ...own,
+      id: a.id,
+      name: a.name as string,
+      ...(applied.length ? { filterIds: [...new Set([...(own.filterIds ?? []), ...applied])] } : {}),
+    };
     results[a.id] = await compute(db, surveyId, loaded as never, def);
   }
   return results;
@@ -218,11 +286,146 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     const analysisDefs = await db.from("analytics_analyses").select("definition").in("id", Object.keys(snapshot));
     const environments = [...new Set((analysisDefs.data ?? []).map((a) => (a.definition as AnalysisDefinition).dataset?.environment).filter(Boolean))];
     const dataset = { surveyVersion: loaded.version, revision: loaded.revision, responses: first?.base.total ?? 0, environments, computedAt: new Date().toISOString() };
-    const { error } = await db.from("analytics_report_versions").insert({ report_id: itemId, survey_id: surveyId, version, definition, theme, snapshot, dataset, note: typeof body.note === "string" ? body.note : null, published_by: ctx.user.userId });
+    /*
+     * §36 — every filter a viewer is allowed to apply is computed NOW and
+     * frozen beside the base results.
+     *
+     * A shared report is a snapshot with no dataset access, deliberately: its
+     * public page cannot compose a condition or reach a response row, and
+     * that does not change. What changes is that it can hold more than one
+     * frozen answer, so switching filter in a shared report reads a
+     * pre-computed result — the same bargain switching SEGMENT has always
+     * made. The cost is paid here, once, by the person publishing, instead of
+     * on every view by a stranger.
+     */
+    const viewerFilters = (definition.viewerFilters ?? []).filter(isUuid).slice(0, 12);
+    const filterResults: Record<string, Record<string, AnalysisResult>> = {};
+    for (const filterId of viewerFilters) {
+      filterResults[filterId] = await computeReport(db, surveyId, loaded, definition, [filterId]);
+    }
+    /*
+     * The filter NAMES are frozen too. A filter renamed — or redefined — in
+     * the workspace next month must not change the labels on a report
+     * published today: a published version is a record of what was said, and
+     * that includes what the buttons said.
+     */
+    const { data: filterRows } = viewerFilters.length
+      ? await db.from("analytics_segments").select("id, name").in("id", viewerFilters).eq("survey_id", surveyId)
+      : { data: [] as { id: string; name: string }[] };
+    const variants = {
+      filters: viewerFilters.map((id) => ({ id, name: (filterRows ?? []).find((f) => f.id === id)?.name ?? "Filter" })),
+      results: filterResults,
+    };
+    const { error } = await db.from("analytics_report_versions").insert({ report_id: itemId, survey_id: surveyId, version, definition, theme, snapshot, dataset, ...(viewerFilters.length ? { variants } : {}), note: typeof body.note === "string" ? body.note : null, published_by: ctx.user.userId });
     if (error) return bad(error.message, 500);
     await db.from("analytics_reports").update({ published_version: version, updated_by: ctx.user.userId }).eq("id", itemId);
-    log(ctx, "analytics.report_published", itemId, { name: r.name, version, mode: r.mode });
-    return json({ version, publishedAt: new Date().toISOString() });
+    log(ctx, "analytics.report_published", itemId, { name: r.name, version, mode: r.mode, viewerFilters: viewerFilters.length });
+    return json({ version, publishedAt: new Date().toISOString(), viewerFilters: viewerFilters.length });
+  }
+
+  /*
+   * §36 — save the shape of THIS report as a reusable template, or lay a
+   * template over a report.
+   *
+   *   POST report-templates                   { name, description?, fromReportId? | template? }
+   *   POST reports/<id>/apply-template        { templateId }
+   */
+  if (head === "report-templates" && !itemId) {
+    const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;
+    const name = String(body.name ?? "").trim();
+    if (!name) return bad("A template needs a name.");
+    if (!ctx.user.customerId) return bad("A template belongs to a workspace, and this session has none.", 409);
+
+    let template: ReportTemplate | null = null;
+    if (typeof body.fromReportId === "string" && isUuid(body.fromReportId)) {
+      const { data: r } = await db.from("analytics_reports").select("definition, theme_id").eq("id", body.fromReportId).eq("survey_id", surveyId).is("deleted_at", null).maybeSingle();
+      if (!r) return bad("Unknown report.", 404);
+      const def = r.definition as ReportDefinition;
+      /*
+       * The STRUCTURE is saved, not the study: every analysis reference is
+       * stripped, and the block's title becomes the placeholder. A template
+       * that carried analysis ids would point at another survey's analyses
+       * the moment it was reused, which is the one thing a template must
+       * never do.
+       */
+      template = {
+        name,
+        description: typeof body.description === "string" ? body.description : undefined,
+        themeId: (r.theme_id as string) ?? null,
+        exportDefaults: def.exportDefaults,
+        blocks: (def.blocks ?? []).map((b) => {
+          if (b.type === "chart" || b.type === "table" || b.type === "kpi") {
+            const { analysisId, ...rest } = b as Record<string, unknown>;
+            return { ...rest, placeholder: (b as { title?: string }).title ?? b.type } as never;
+          }
+          if (b.type === "insights" || b.type === "executive_summary") {
+            const { analysisIds, ...rest } = b as Record<string, unknown>;
+            return { ...rest, placeholder: (b as { title?: string }).title ?? b.type } as never;
+          }
+          return b as never;
+        }),
+      };
+    } else if (body.template && typeof body.template === "object") {
+      template = { ...(body.template as ReportTemplate), name };
+    }
+    if (!template) return bad("Say which report to save the shape of, or supply a template.");
+    if (!template.blocks?.length) return bad("That report has no blocks, so there is no shape to save.");
+
+    const { data, error } = await db.from("analytics_report_templates").insert({
+      customer_id: ctx.user.customerId,
+      name,
+      description: template.description ?? null,
+      template: { blocks: template.blocks, themeId: template.themeId ?? null, exportDefaults: template.exportDefaults ?? null },
+      source_survey_id: surveyId,
+      created_by: ctx.user.userId,
+    }).select("id, name").single();
+
+    if (error) {
+      if (/analytics_report_templates|does not exist|schema cache/i.test(error.message)) {
+        return bad("Saving report templates needs migration 0014.", 503);
+      }
+      if (/duplicate|unique/i.test(error.message)) {
+        return bad(`This workspace already has a report template called “${name}”.`, 409);
+      }
+      return bad(error.message, 500);
+    }
+    log(ctx, "analytics.report_created", data.id, { name, template: true, blocks: template.blocks.length, shape: describeTemplate(template) });
+    return json({ template: { id: data.id, name: data.name, builtIn: false, blocks: template.blocks } }, 201);
+  }
+
+  if (head === "reports" && itemId && action === "apply-template") {
+    const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;
+    if (!isUuid(itemId)) return bad("Unknown report.", 404);
+    const templateId = String(body.templateId ?? "");
+    if (!templateId) return bad("templateId is required.");
+
+    let template = BUILT_IN_REPORT_TEMPLATES.find((t) => t.id === templateId) ?? null;
+    if (!template) {
+      if (!isUuid(templateId)) return bad("Unknown template.", 404);
+      const { data: t } = await db.from("analytics_report_templates").select("id, name, description, template").eq("id", templateId).eq("customer_id", ctx.user.customerId ?? "").is("deleted_at", null).maybeSingle();
+      if (!t) return bad("Unknown template.", 404);
+      template = { id: t.id as string, name: t.name as string, description: (t.description as string) ?? undefined, ...((t.template as object) ?? {}), blocks: ((t.template as { blocks?: never[] })?.blocks ?? []) };
+    }
+
+    const { data: r } = await db.from("analytics_reports").select("definition, name, theme_id").eq("id", itemId).eq("survey_id", surveyId).is("deleted_at", null).maybeSingle();
+    if (!r) return bad("Unknown report.", 404);
+
+    /*
+     * Applying a template never discards finished work: `applyTemplate`
+     * carries every block that already points at an analysis into the new
+     * shape, and appends anything the shape had no room for. Choosing a
+     * template at four in the afternoon must not be the action a person
+     * cannot undo.
+     */
+    const definition = applyTemplate(template, r.definition as ReportDefinition);
+    const { error } = await db.from("analytics_reports").update({
+      definition,
+      ...(definition.themeId ? { theme_id: definition.themeId } : {}),
+      updated_by: ctx.user.userId,
+    }).eq("id", itemId);
+    if (error) return bad(error.message, 500);
+    log(ctx, "analytics.report_modified", itemId, { name: r.name, appliedTemplate: template.name, blocks: definition.blocks.length });
+    return json({ definition, appliedTemplate: template.name });
   }
 
   if (head && head in COLLECTIONS && !itemId) {
@@ -362,6 +565,26 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 export async function DELETE(req: NextRequest, { params }: { params: { id: string; path?: string[] } }) {
   const [head, itemId] = params.path ?? [];
   const surveyId = params.id;
+
+  /*
+   * §36 — remove a workspace report template. Soft, like every other
+   * analytics delete, and scoped to the workspace rather than the survey: a
+   * template is not owned by the study it happened to be saved from, so it
+   * cannot be deleted through one either. A built-in is not deletable at all
+   * — it is code, not a row.
+   */
+  if (head === "report-templates" && itemId) {
+    const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;
+    if (!isUuid(itemId)) return bad("A built-in template cannot be removed.", 400);
+    const db2 = supabaseService();
+    const { error } = await db2.from("analytics_report_templates")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", itemId).eq("customer_id", ctx.user.customerId ?? "");
+    if (error) return bad(error.message, 500);
+    log(ctx, "analytics.report_modified", itemId, { templateRemoved: true });
+    return json({ ok: true });
+  }
+
   if (!head || !(head in COLLECTIONS) || !itemId || !isUuid(itemId)) return bad("Unknown analytics endpoint.", 404);
   const coll = COLLECTIONS[head as Collection];
   const ctx = await gate(req, surveyId, coll.write); if (isFailure(ctx)) return ctx.response;

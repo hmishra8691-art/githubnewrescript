@@ -1,5 +1,5 @@
 "use client";
-import type { AnalysisDefinition, AnalysisResult, ChartRecommendation, VariableMeta } from "@rescript/analytics";
+import type { AnalysisDefinition, AnalysisResult, ChartRecommendation, ReportTemplate, VariableMeta } from "@rescript/analytics";
 
 /** Thin client for `/api/surveys/<id>/analytics/*`. Every call is server-authorised; the client never computes. */
 export class AxApi {
@@ -22,7 +22,16 @@ export class AxApi {
   remove(coll: string, id: string) { return this.req<{ ok: true }>(`${coll}/${id}`, { method: "DELETE" }); }
   versions(coll: "analyses" | "reports", id: string) { return this.req<{ versions: Row[] }>(`${coll}/${id}/versions`); }
   results(reportId: string, version?: number) { return this.req<{ mode: "live" | "snapshot"; version?: number; definition: unknown; theme: unknown; results: Record<string, AnalysisResult>; computedAt?: string; publishedAt?: string }>(`reports/${reportId}/results${version ? `?version=${version}` : ""}`); }
-  publish(reportId: string, note?: string) { return this.req<{ version: number; publishedAt: string }>(`reports/${reportId}/publish`, { method: "POST", body: JSON.stringify({ note }) }); }
+  publish(reportId: string, note?: string) { return this.req<{ version: number; publishedAt: string; viewerFilters?: number }>(`reports/${reportId}/publish`, { method: "POST", body: JSON.stringify({ note }) }); }
+  /* §36 — report templates: the shape of a deliverable, reusable across studies */
+  reportTemplates() { return this.req<{ templates: ReportTemplate[]; available: boolean; note?: string }>("report-templates"); }
+  saveReportTemplate(body: { name: string; description?: string; fromReportId?: string; template?: unknown }) {
+    return this.req<{ template: ReportTemplate }>("report-templates", { method: "POST", body: JSON.stringify(body) });
+  }
+  removeReportTemplate(id: string) { return this.req<{ ok: true }>(`report-templates/${id}`, { method: "DELETE" }); }
+  applyReportTemplate(reportId: string, templateId: string) {
+    return this.req<{ definition: unknown; appliedTemplate: string }>(`reports/${reportId}/apply-template`, { method: "POST", body: JSON.stringify({ templateId }) });
+  }
   access(shareId: string) { return this.req<{ events: Row[] }>(`shares/${shareId}/access`); }
   async export(body: Record<string, unknown>): Promise<void> {
     const r = await fetch(`${this.base()}/export`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });

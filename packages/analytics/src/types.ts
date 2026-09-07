@@ -291,7 +291,42 @@ export type ReportBlock =
   | { id: string; type: "table"; title?: string; analysisId: string; tableId?: string; caption?: string }
   | { id: string; type: "kpi"; title?: string; analysisId: string; metric?: string }
   | { id: string; type: "insights"; title?: string; analysisIds: string[] }
-  | { id: string; type: "executive_summary"; title?: string; analysisIds: string[]; text?: string };
+  | { id: string; type: "executive_summary"; title?: string; analysisIds: string[]; text?: string }
+  /*
+   * §36 — WHERE ONE PAGE ENDS.
+   *
+   * A report has always been a flat list of blocks and a single scroll, which
+   * is fine on screen and wrong everywhere the report actually goes: printed,
+   * saved as PDF, or turned into slides. A page break is a marker rather than
+   * a container so that every existing report, every published version and
+   * both export builders keep working unchanged — they simply see one more
+   * block type — while `reportPages()` derives the pages from it for anything
+   * that needs them.
+   */
+  | { id: string; type: "page_break" }
+  /*
+   * §36 — THE METHODOLOGY, AUTHORED RATHER THAN ASSUMED.
+   *
+   * The PowerPoint export has always produced a methodology slide, from four
+   * lines of hard-coded boilerplate: who generated it, that percentages are
+   * of valid responses, how significance letters work. Every one of those is
+   * a claim about how the study was run, and only the research team knows
+   * whether it is true of THIS study — the fieldwork dates, the sample frame,
+   * the weighting, what was excluded from the clean base. This block is where
+   * they say so, and the exports use it when it is present instead of
+   * asserting the boilerplate.
+   */
+  | {
+      id: string; type: "methodology"; title?: string;
+      /** free-form rows, so a team's own methodology vocabulary survives */
+      items?: { label: string; value: string }[];
+      fieldwork?: { from?: string; to?: string };
+      sampleFrame?: string;
+      weighting?: string;
+      notes?: string;
+      /** show the standard statistical footnotes underneath the authored rows */
+      includeStandardNotes?: boolean;
+    };
 
 export interface ReportDefinition {
   title: string;
@@ -299,9 +334,63 @@ export interface ReportDefinition {
   themeId?: string | null;
   mode: "live" | "snapshot";
   blocks: ReportBlock[];
-  /** filters a shared viewer may switch — everything else is fixed */
+  /** segments a shared viewer may switch — everything else is fixed */
   viewerSegments?: string[];
+  /**
+   * §36 — SAVED FILTERS A SHARED VIEWER MAY APPLY.
+   *
+   * Ids from `analytics_segments` (kind = "filter"). Every one of them is
+   * computed AT PUBLISH TIME and frozen alongside the base results, so
+   * switching filter in a shared report reads a pre-computed answer rather
+   * than reaching the dataset — the same bargain `viewerSegments` already
+   * makes. That is the whole reason this is a list of allowed filters and not
+   * a filter builder in the viewer: a public page that can compose arbitrary
+   * conditions against live response data is a different security question,
+   * and not one a report needs to ask.
+   */
+  viewerFilters?: string[];
+  /**
+   * A filter applied to EVERY analysis in this report — "the North region
+   * report", "completes since the refresh". Merged into each analysis at
+   * compute time rather than copied into the analyses themselves, so the same
+   * saved analysis can appear in a national report and a regional one without
+   * being duplicated.
+   */
+  filterId?: string | null;
   branding?: { showLogo?: boolean; footer?: string; header?: string };
+  exportDefaults?: ExportSettings;
+}
+
+/**
+ * §36 — A REPORT TEMPLATE.
+ *
+ * The structure of a deliverable, without the study in it. A team reports the
+ * same way every time — cover, executive summary, sample profile,
+ * section-per-topic, methodology at the back — and rebuilding that block by
+ * block for every wave of every tracker is the single most repeated piece of
+ * work in reporting.
+ *
+ * A template's blocks carry no `analysisId`: applying one produces the shape
+ * and leaves the placeholders to be filled, which is why `analysisId` is
+ * optional in `TemplateBlock` and why applying a template never overwrites a
+ * block that already points at an analysis.
+ */
+export type TemplateBlock =
+  | Exclude<ReportBlock, { type: "chart" } | { type: "table" } | { type: "kpi" } | { type: "insights" } | { type: "executive_summary" }>
+  | { id: string; type: "chart"; title?: string; analysisId?: string; chart?: ChartSpec; caption?: string; placeholder?: string }
+  | { id: string; type: "table"; title?: string; analysisId?: string; tableId?: string; caption?: string; placeholder?: string }
+  | { id: string; type: "kpi"; title?: string; analysisId?: string; metric?: string; placeholder?: string }
+  | { id: string; type: "insights"; title?: string; analysisIds?: string[]; placeholder?: string }
+  | { id: string; type: "executive_summary"; title?: string; analysisIds?: string[]; text?: string; placeholder?: string };
+
+export interface ReportTemplate {
+  id?: string;
+  name: string;
+  description?: string;
+  /** a built-in template shipped with the platform, not authored here */
+  builtIn?: boolean;
+  themeId?: string | null;
+  blocks: TemplateBlock[];
   exportDefaults?: ExportSettings;
 }
 

@@ -15,6 +15,9 @@ import { downloadBlob } from "@/components/analytics/api";
 interface Payload {
   report: { name: string | null; title: string; subtitle?: string; blocks?: ReportBlock[]; widgets?: DashboardWidget[] | null; crossFilter?: boolean; viewerSegments: string[]; branding: { showLogo?: boolean; footer?: string; header?: string } };
   theme: ReportTheme; results: Record<string, AnalysisResult>; version: number; publishedAt: string; mode: "snapshot"; dataset: { responses?: number; surveyVersion?: string; computedAt?: string } | null; permission: "viewer" | "download";
+  /** §36 — allowed viewer filters and their frozen results (absent on versions published before 0014) */
+  viewerFilters?: { id: string; name: string }[];
+  filterResults?: Record<string, Record<string, AnalysisResult>> | null;
 }
 
 export default function SharePage({ params }: { params: { token: string } }) {
@@ -64,6 +67,14 @@ export default function SharePage({ params }: { params: { token: string } }) {
   return (
     <div className="ax-share-page" data-testid="ax-share-view">
       <ReportView title={rep.title} subtitle={rep.subtitle} blocks={rep.widgets ? undefined : rep.blocks} widgets={rep.widgets ?? undefined} crossFilter={!!rep.crossFilter} results={data.results} theme={data.theme} mode="snapshot" version={data.version} publishedAt={data.publishedAt} branding={rep.branding} viewerSegments={rep.viewerSegments}
+        /*
+         * §36 — the filters this link is allowed to switch, and the answer
+         * for each, both frozen at publish time. `showPages` because a
+         * shared report is the deliverable: what is on this page is what
+         * prints, and a client pressing Cmd-P is the most common way a
+         * report becomes a PDF.
+         */
+        viewerFilters={data.viewerFilters ?? []} filterResults={data.filterResults ?? null} showPages
         toolbar={<>
           {data.dataset?.responses != null && <span className="muted" style={{ fontSize: 13 }}>{data.dataset.responses} responses</span>}
           {data.permission === "download" && <><button className="btn small" disabled={busy} onClick={() => download("pptx")} data-testid="ax-share-ppt">Download PPT</button><button className="btn small" disabled={busy} onClick={() => download("xlsx")} data-testid="ax-share-xlsx">Download Excel</button></>}

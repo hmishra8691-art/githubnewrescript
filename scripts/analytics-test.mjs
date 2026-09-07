@@ -16,7 +16,7 @@
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
 import assert from "node:assert/strict";
-import { buildDataset, runAnalysis, recommendCharts, DEFAULT_THEME } from "../packages/analytics/dist/index.js";
+import { buildDataset, runAnalysis, recommendCharts, DEFAULT_THEME, BUILT_IN_REPORT_TEMPLATES, applyTemplate, reportPages } from "../packages/analytics/dist/index.js";
 import { buildPptx, buildXlsx } from "../packages/analytics/dist/export/index.js";
 import { def, synthRows } from "../packages/analytics/dist/analyses/fixture.js";
 import { variableMetadata } from "../packages/analytics/dist/dataset.js";
@@ -28,7 +28,7 @@ const SURVEY = "11111111-1111-4111-8111-111111111111";
 
 /* ------------------------------------------------------------ fake backend */
 const rows = synthRows(400);
-const store = { analyses: [], charts: [], segments: [], themes: [], reports: [], shares: [], analysisVersions: [], reportVersions: [], exports: 0, audit: [] };
+const store = { analyses: [], charts: [], segments: [], themes: [], reports: [], shares: [], analysisVersions: [], reportVersions: [], reportTemplates: [], exports: 0, audit: [] };
 const uid = () => crypto.randomUUID();
 const now = () => new Date().toISOString();
 const compute = (definition) => {
@@ -54,6 +54,26 @@ async function fakeApi(route) {
   const path = url.pathname.replace(`/api/surveys/${SURVEY}/analytics`, "").replace(/^\//, "").split("/").filter(Boolean);
   const [head, itemId, action] = path;
   const coll = (k) => store[k];
+  /* §36 — report templates, and laying one over a report */
+  if (head === "report-templates") {
+    if (m === "GET") return json(route, { templates: [...BUILT_IN_REPORT_TEMPLATES, ...store.reportTemplates], available: true });
+    if (m === "POST") {
+      const src = store.reports.find((r) => r.id === body.fromReportId);
+      const blocks = (src?.definition?.blocks ?? []).map((b) => { const { analysisId, analysisIds, ...rest } = b; return { ...rest, placeholder: b.title ?? b.type }; });
+      const t = { id: uid(), name: body.name, description: body.description, builtIn: false, blocks };
+      store.reportTemplates.push(t);
+      return json(route, { template: t }, 201);
+    }
+    if (m === "DELETE") { store.reportTemplates = store.reportTemplates.filter((t) => t.id !== itemId); return json(route, { ok: true }); }
+  }
+  if (head === "reports" && action === "apply-template" && m === "POST") {
+    const r = store.reports.find((x) => x.id === itemId);
+    const t = [...BUILT_IN_REPORT_TEMPLATES, ...store.reportTemplates].find((x) => x.id === body.templateId);
+    if (!r || !t) return json(route, { error: "Unknown template." }, 404);
+    r.definition = applyTemplate(t, r.definition);
+    store.audit.push("analytics.report_modified");
+    return json(route, { definition: r.definition, appliedTemplate: t.name });
+  }
   if (head === "variables") return json(route, { variables: variableMetadata(def).filter((v) => !v.hidden), counts: { LIVE: rows.length, TEST: 0 }, surveyVersion: "1.0", revision: 3 });
   if (head === "home") return json(route, { analyses: store.analyses.filter((a) => !a.deleted_at), charts: store.charts, reports: store.reports.filter((r) => !r.deleted_at), shares: store.shares.filter((s) => !s.revoked_at) });
   if (head === "run") { try { return json(route, { result: compute(body.definition) }); } catch (e) { return json(route, { error: e.message }, 500); } }
@@ -137,7 +157,13 @@ const ctx = await browser.newContext({ viewport: { width: 1600, height: 1100 } }
 await ctx.addCookies([{ name: "rescript_session", value: "fake", url: STUDIO }]);
 const page = await ctx.newPage();
 page.on("pageerror", (e) => console.error("PAGE ERROR:", e.message));
-page.on("dialog", (d) => d.accept());
+/*
+ * One dialog handler for the whole run. `promptAnswer` lets a test decide what
+ * a prompt() should return — Playwright allows only ONE handler, so a
+ * `page.once` alongside this one throws "already handled" rather than winning.
+ */
+let promptAnswer = "";
+page.on("dialog", (d) => d.accept(d.type() === "prompt" ? promptAnswer : undefined));
 const user = { userId: "u1", userCode: "U-0001", name: "Ana Lyst", email: "ana@example.com", platformRole: "user", isPlatformAdmin: false, sessionId: "s1", unread: 0, policies: { heartbeatSeconds: 600 } };
 await page.route("**/api/auth/me", (r) => json(r, user));
 await page.route("**/api/auth/heartbeat**", (r) => json(r, { ok: true }));
@@ -332,6 +358,72 @@ await page.waitForSelector('[data-testid="ax-report"][data-mode="snapshot"]');
 assert.match(await text('[data-testid="ax-report"] .ax-mode'), /Snapshot · v1/);
 assert.equal(await count('[data-testid="ax-report"] .ax-text'), 0);
 ok("viewing v1 shows the snapshot (6 blocks, no new paragraph) clearly labelled Snapshot");
+
+console.log("\n§7b REPORT TEMPLATES, PAGES AND THE METHODOLOGY BLOCK (§36)");
+// back to the editable draft before touching anything
+await page.selectOption('[data-testid="ax-version-select"]', "");
+await page.waitForSelector('[data-testid="ax-report"][data-mode="live"]');
+
+/* a page break is authored, and it is visible as the decision it is */
+await page.click('[data-testid="ax-add-page_break"]');
+await page.click('.modal .btn.primary:has-text("Done")');
+await page.waitForSelector('[data-testid="ax-pagebreak"]');
+ok("a page break can be added, and shows in the builder as a boundary");
+
+/* the methodology block: the team's own words, not our boilerplate */
+await page.click('[data-testid="ax-add-methodology"]');
+await page.fill('.modal input[type="date"] >> nth=0', "2026-03-02");
+await page.fill('.modal input[type="date"] >> nth=1', "2026-03-09");
+await page.fill('.modal input[placeholder^="n = 1,004"]', "n = 1,004 UK adults 18+");
+await page.fill('.modal input[placeholder^="Weighted to age"]', "Weighted to age, gender and region");
+await page.click('.modal .btn.primary:has-text("Done")');
+await page.waitForSelector('[data-testid="ax-methodology"]');
+const meth = await text('[data-testid="ax-methodology"]');
+assert.match(meth, /Fieldwork: 2026-03-02 to 2026-03-09/);
+assert.match(meth, /n = 1,004 UK adults 18\+/);
+assert.match(meth, /Weighted to age, gender and region/);
+assert.match(meth, /bases below 30 are flagged/, "the standard notes should still be offered underneath");
+ok("the methodology block renders the team's fieldwork, sample and weighting above the standard notes");
+
+await page.click('[data-testid="ax-report-save"]');
+await page.waitForSelector('[data-testid="ax-report-save"]:has-text("Saved")');
+const withMeth = store.reports[0].definition.blocks;
+assert.ok(withMeth.some((b) => b.type === "methodology" && b.sampleFrame?.startsWith("n = 1,004")));
+assert.ok(withMeth.some((b) => b.type === "page_break"));
+ok("both new block types persist in the report definition");
+
+/* the same blocks, grouped into pages by the engine the exports use */
+const pages = reportPages(withMeth);
+assert.ok(pages.length >= 3, `expected several pages, got ${pages.length}`);
+assert.ok(!pages.flatMap((p) => p.blocks).some((b) => b.type === "page_break"), "a break must not appear on a page");
+ok(`the page model derives ${pages.length} pages from the same flat block list`);
+
+/* a template lays a house shape over the report — without losing the work */
+const beforeRefs = withMeth.filter((b) => b.analysisId).map((b) => b.analysisId);
+assert.ok(beforeRefs.length >= 2);
+await page.click('[data-testid="ax-templates"]');
+await page.waitForSelector('[data-testid="ax-template-dialog"]');
+assert.ok((await count('[data-testid="ax-template-card"]')) >= 3, "the built-in templates should be offered");
+ok("the template picker offers the built-in report shapes");
+await page.click('[data-testid="ax-apply-builtin:full"]');
+await page.waitForSelector('.ax-ok:has-text("Applied")');
+const afterRefs = store.reports[0].definition.blocks.filter((b) => b.analysisId).map((b) => b.analysisId);
+for (const ref of beforeRefs) assert.ok(afterRefs.includes(ref), `applying a template lost analysis ${ref}`);
+assert.ok(store.reports[0].definition.blocks.some((b) => b.type === "section"), "the template's sections should be there");
+ok("applying a template imposes the shape and keeps every block that already had an analysis");
+
+/* and a team can save their own shape back */
+promptAnswer = "House tracker shape";
+await page.click('[data-testid="ax-templates"]');
+await page.waitForSelector('[data-testid="ax-template-dialog"]');
+await page.click('[data-testid="ax-save-template"]');
+await page.waitForSelector('.ax-ok:has-text("report template")');
+assert.equal(store.reportTemplates.length, 1);
+assert.equal(store.reportTemplates[0].name, "House tracker shape");
+assert.ok(store.reportTemplates[0].blocks.every((b) => !b.analysisId), "a saved template must not carry analysis ids");
+ok("saving this report's shape strips every analysis reference — a template is a shape, not a study");
+await page.click('[data-testid="ax-template-dialog"] .btn:has-text("Close")');
+promptAnswer = "";
 
 console.log("\n§8 SHARE — link, read-only view, downloads, revoke");
 await page.click('[data-testid="ax-report-share"]');

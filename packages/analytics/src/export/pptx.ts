@@ -17,6 +17,7 @@ import type { AnalysisResult, ChartSpec, ChartType, ExportSettings, ReportDefini
 import { DEFAULT_EXPORT_SETTINGS, DEFAULT_THEME } from "../types.js";
 import { executiveSummary } from "../summary.js";
 import { chartTitleFor, seriesForChart } from "./shared.js";
+import { methodologyBlock, methodologyLines } from "../reportPages.js";
 
 export interface ExportItem { title: string; result: AnalysisResult; chart?: ChartSpec; caption?: string; tableId?: string }
 
@@ -125,6 +126,14 @@ export async function buildPptx(input: PptxInput): Promise<Buffer> {
     if (block.type === "text") { const s = p.addSlide(); decorate(s, block.title ?? ""); s.addText(block.markdown.replace(/[#*_`>]/g, ""), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, fontSize: 12, color: text, fontFace: font, valign: "top" }); continue; }
     if (block.type === "executive_summary") { const s = p.addSlide(); decorate(s, block.title ?? "Executive summary"); const items = executiveSummary(block.analysisIds.map((id) => ({ name: input.results[id]?.name ?? id, result: input.results[id] })).filter((x) => x.result)); s.addText((block.text ? [{ text: block.text, options: { fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 8 } }] : []).concat(items.map((it) => ({ text: `${it.analysis}: ${it.headline}`, options: { bullet: true, fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 6 } as never }))), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, valign: "top" }); continue; }
     if (block.type === "insights") { const s = p.addSlide(); decorate(s, block.title ?? "Key insights"); const lines = block.analysisIds.flatMap((id) => input.results[id]?.insights ?? []); s.addText(lines.map((l) => ({ text: l, options: { bullet: true, fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 6 } })), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, valign: "top" }); continue; }
+    /*
+     * §36 — a page break is already a slide boundary here, since every block
+     * gets its own slide; it is skipped rather than rendered. The METHODOLOGY
+     * block is not rendered in place either: it is the last slide of the deck
+     * (below), where a methodology belongs and where this export has always
+     * put it.
+     */
+    if (block.type === "page_break" || block.type === "methodology") continue;
     const result = input.results[block.analysisId];
     if (!result) continue;
     if (block.type === "kpi") {
@@ -194,14 +203,26 @@ export async function buildPptx(input: PptxInput): Promise<Buffer> {
     ].map((t) => ({ ...t, options: { ...t.options, fontSize: 13, color: text, fontFace: font, paraSpaceAfter: 6 } })), { x: 0.6, y: 1.1, w: W - 1.2, h: 3.5, valign: "top" });
   }
   if (settings.include.methodology) {
-    const s = p.addSlide(); decorate(s, "Methodology & notes");
+    /*
+     * §36 — THE TEAM'S OWN METHODOLOGY, WHEN THEY HAVE WRITTEN ONE.
+     *
+     * This slide used to be four lines of boilerplate: who generated the
+     * deck, that percentages are of valid responses, and how the
+     * significance letters work. Every one of those is a claim about how the
+     * study was run, and only the research team knows whether it is true of
+     * THIS study — its fieldwork dates, its sample frame, its weighting, what
+     * was excluded from the clean base. A report can now carry a methodology
+     * block saying so, and `methodologyLines` puts the team's words above the
+     * statistical notes, falling back to exactly the old boilerplate when the
+     * report says nothing. So a deck never loses the slide it had, and a team
+     * that fills the block in stops shipping our assumptions as their method.
+     */
+    const authored = methodologyBlock(input.report.blocks);
+    const s = p.addSlide(); decorate(s, authored?.title ?? "Methodology & notes");
     const lines = [
-      input.meta?.survey ? `Survey: ${input.meta.survey}` : null,
-      `Generated ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC by Rescript Analytics${input.meta?.generatedBy ? ` for ${input.meta.generatedBy}` : ""}.`,
-      "Percentages are based on valid responses unless stated; bases below 30 are flagged.",
-      "Significance letters mark column proportions significantly higher than the lettered column (two-sided z-test, 95%).",
+      ...methodologyLines(authored, { survey: input.meta?.survey, generatedBy: input.meta?.generatedBy }),
       ...usedResults.filter((x) => x.result.warnings.length).slice(0, 4).map((x) => `${x.name}: ${x.result.warnings[0]}`),
-    ].filter(Boolean) as string[];
+    ];
     s.addText(lines.map((l) => ({ text: l, options: { bullet: true, fontSize: 11, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 6 } })), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, valign: "top" });
   }
   return (await p.write({ outputType: "nodebuffer" })) as Buffer;

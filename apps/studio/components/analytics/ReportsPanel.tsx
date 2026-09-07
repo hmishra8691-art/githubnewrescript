@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { AnalysisDefinition, AnalysisResult, ChartSpec, DashboardDefinition, DashboardWidget, ExportSettings, ReportBlock, ReportDefinition, ReportTheme } from "@rescript/analytics";
-import { CHART_CATALOG, DEFAULT_EXPORT_SETTINGS } from "@rescript/analytics";
+import { CHART_CATALOG, DEFAULT_EXPORT_SETTINGS, describeTemplate, type ReportTemplate } from "@rescript/analytics";
 import { AxApi, type Row, timeAgo } from "./api";
 import { ReportView } from "./ReportView";
 
@@ -103,7 +103,7 @@ function BlockEditor({ block, analyses, onChange, onClose }: { block: ReportBloc
   return (
     <div className="modal-back" onClick={onClose}><div className="modal" onClick={(e) => e.stopPropagation()}>
       <h2>Edit {b.type.replace("_", " ")}</h2>
-      {"title" in b || ["chart", "table", "kpi", "text", "section", "cover", "insights", "executive_summary"].includes(b.type) ? <label className="ax-field"><span>Title</span><input className="input" value={(b.title as string) ?? ""} onChange={(e) => set({ title: e.target.value })} /></label> : null}
+      {"title" in b || ["chart", "table", "kpi", "text", "section", "cover", "insights", "executive_summary", "methodology"].includes(b.type) ? <label className="ax-field"><span>Title</span><input className="input" value={(b.title as string) ?? ""} onChange={(e) => set({ title: e.target.value })} /></label> : null}
       {(b.type === "cover" || b.type === "section") && <label className="ax-field"><span>Subtitle</span><input className="input" value={(b.subtitle as string) ?? ""} onChange={(e) => set({ subtitle: e.target.value })} /></label>}
       {b.type === "cover" && <label className="ax-field"><span>Author</span><input className="input" value={(b.author as string) ?? ""} onChange={(e) => set({ author: e.target.value })} /></label>}
       {b.type === "text" && <label className="ax-field"><span>Text (markdown: #, **bold**, - lists)</span><textarea className="ta" rows={6} value={(b.markdown as string) ?? (b.text as string) ?? ""} onChange={(e) => set(b.markdown !== undefined || !("text" in b) ? { markdown: e.target.value } : { text: e.target.value })} /></label>}
@@ -112,6 +112,40 @@ function BlockEditor({ block, analyses, onChange, onClose }: { block: ReportBloc
       {(b.type === "chart" || b.type === "table") && <label className="ax-field"><span>Caption</span><input className="input" value={(b.caption as string) ?? ""} onChange={(e) => set({ caption: e.target.value })} /></label>}
       {(b.type === "insights" || b.type === "executive_summary") && <div className="ax-field"><span>Analyses</span><div className="ax-chips">{analyses.map((a) => { const ids = (b.analysisIds as string[]) ?? []; const on = ids.includes(a.id); return <button key={a.id} type="button" className={`ax-chip ${on ? "on" : ""}`} onClick={() => set({ analysisIds: on ? ids.filter((x) => x !== a.id) : [...ids, a.id] })}>{a.name}</button>; })}</div></div>}
       {b.type === "executive_summary" && <label className="ax-field"><span>Introduction</span><textarea className="ta" rows={3} value={(b.text as string) ?? ""} onChange={(e) => set({ text: e.target.value })} /></label>}
+      {/*
+        * §36 — the methodology, in the team's own words.
+        *
+        * These fields replace the four lines of boilerplate the PowerPoint
+        * export used to assert on every deck: who generated it, that
+        * percentages are of valid responses, how the significance letters
+        * work. The last two are true of how this platform computes and are
+        * kept as the "standard notes" toggle. Everything above them is a
+        * claim about THIS study — its fieldwork dates, its sample frame, its
+        * weighting — which only the research team can make, and which a
+        * client reading a table without it is reading wrong.
+        */}
+      {b.type === "methodology" && <>
+        <div className="ax-cust-grid">
+          <label className="ax-field"><span>Fieldwork from</span><input className="input" type="date" value={((b.fieldwork as { from?: string } | undefined)?.from) ?? ""} onChange={(e) => set({ fieldwork: { ...((b.fieldwork as object) ?? {}), from: e.target.value } })} /></label>
+          <label className="ax-field"><span>to</span><input className="input" type="date" value={((b.fieldwork as { to?: string } | undefined)?.to) ?? ""} onChange={(e) => set({ fieldwork: { ...((b.fieldwork as object) ?? {}), to: e.target.value } })} /></label>
+        </div>
+        <label className="ax-field"><span>Sample frame</span><input className="input" placeholder="n = 1,004 UK adults 18+, nationally representative" value={(b.sampleFrame as string) ?? ""} onChange={(e) => set({ sampleFrame: e.target.value })} /></label>
+        <label className="ax-field"><span>Weighting</span><input className="input" placeholder="Weighted to age, gender and region (ONS mid-2024)" value={(b.weighting as string) ?? ""} onChange={(e) => set({ weighting: e.target.value })} /></label>
+        <label className="ax-field"><span>Notes</span><textarea className="ta" rows={3} placeholder="Anything a reader needs to know to read these numbers correctly — what was excluded, how a derived measure was built, a caveat about one question." value={(b.notes as string) ?? ""} onChange={(e) => set({ notes: e.target.value })} /></label>
+        <div className="ax-field">
+          <span>Your own rows</span>
+          {((b.items as { label: string; value: string }[]) ?? []).map((it, i) => (
+            <div className="row" key={i} style={{ gap: 4, marginBottom: 4 }}>
+              <input className="input small" style={{ maxWidth: 160 }} placeholder="Label" value={it.label} onChange={(e) => { const items = [...((b.items as { label: string; value: string }[]) ?? [])]; items[i] = { ...items[i], label: e.target.value }; set({ items }); }} />
+              <input className="input small" placeholder="Value" value={it.value} onChange={(e) => { const items = [...((b.items as { label: string; value: string }[]) ?? [])]; items[i] = { ...items[i], value: e.target.value }; set({ items }); }} />
+              <button className="btn small ghost" onClick={() => set({ items: ((b.items as unknown[]) ?? []).filter((_, j) => j !== i) })}>×</button>
+            </div>
+          ))}
+          <button className="btn small" onClick={() => set({ items: [...(((b.items as unknown[]) ?? [])), { label: "", value: "" }] })}>+ row</button>
+        </div>
+        <label className="ax-toggle"><input type="checkbox" checked={b.includeStandardNotes !== false} onChange={(e) => set({ includeStandardNotes: e.target.checked })} /> Also show the standard statistical notes (base sizes, significance letters)</label>
+      </>}
+      {b.type === "page_break" && <p className="muted" style={{ fontSize: 13 }}>A page break has nothing to configure. It ends the page here — on screen, in print, and as a new slide in the PowerPoint export.</p>}
       {"w" in b && <div className="ax-cust-grid"><label className="ax-field"><span>Width (of 12)</span><input className="input small" type="number" min={2} max={12} value={b.w as number} onChange={(e) => set({ w: Number(e.target.value) })} /></label><label className="ax-field"><span>Height (rows)</span><input className="input small" type="number" min={2} max={10} value={b.h as number} onChange={(e) => set({ h: Number(e.target.value) })} /></label></div>}
       <div className="row" style={{ marginTop: 12 }}><span className="grow" /><button className="btn primary" onClick={onClose}>Done</button></div>
     </div></div>
@@ -133,6 +167,10 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
   const [error, setError] = React.useState<string | null>(null);
   const [creating, setCreating] = React.useState<"report" | "dashboard" | null>(null);
   const [newName, setNewName] = React.useState("");
+  /* §36 — report templates, and the saved filters a viewer may switch */
+  const [templates, setTemplates] = React.useState<ReportTemplate[]>([]);
+  const [templatesOpen, setTemplatesOpen] = React.useState(false);
+  const [savedFilters, setSavedFilters] = React.useState<Row[]>([]);
   const isDash = open?.kind === "dashboard";
   const theme = (open?.theme_id ? (themes.find((t) => t.id === open.theme_id)?.theme as ReportTheme | undefined) : undefined) ?? null;
 
@@ -150,7 +188,45 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
     }
   }, [api, analyses, results]);
 
-  const openReport = async (r: Row) => { setOpen(r); setDef(r.definition as ReportDefinition); setDirty(false); setViewVersion(null); setMsg(null); await load(r); const v = await api.versions("reports", r.id).catch(() => ({ versions: [] })); setVersions(v.versions); };
+  const openReport = async (r: Row) => {
+    setOpen(r); setDef(r.definition as ReportDefinition); setDirty(false); setViewVersion(null); setMsg(null);
+    await load(r);
+    const v = await api.versions("reports", r.id).catch(() => ({ versions: [] })); setVersions(v.versions);
+    /*
+     * §36 — the templates and the workspace's saved FILTERS (not segments:
+     * `analytics_segments` holds both, and only the filter kind can be
+     * offered to a viewer, because a segment is a breakdown of the base and
+     * a filter is a restriction of it).
+     */
+    api.reportTemplates().then((t) => setTemplates(t.templates ?? [])).catch(() => {});
+    api.list("segments", "kind=filter").then((f) => setSavedFilters(f.items ?? [])).catch(() => {});
+  };
+
+  const applyTemplateTo = async (templateId: string, name: string) => {
+    if (!open) return;
+    if (dirty && !confirm("Apply the template over unsaved changes? Blocks that already point at an analysis are kept.")) return;
+    try {
+      const r = await api.applyReportTemplate(open.id, templateId);
+      setDef(r.definition as ReportDefinition);
+      setDirty(false);
+      setTemplatesOpen(false);
+      setMsg(`Applied “${name}”. Blocks that already had an analysis were kept; the rest are placeholders waiting for one.`);
+      const fresh = await api.get("reports", open.id); setOpen(fresh.item);
+      onChange();
+    } catch (e) { setError((e as Error).message); }
+  };
+
+  const saveAsTemplate = async () => {
+    if (!open) return;
+    const name = prompt("Name this report shape, so the team can reuse it:", `${open.name} shape`);
+    if (!name?.trim()) return;
+    if (dirty) await save();
+    try {
+      await api.saveReportTemplate({ name: name.trim(), fromReportId: open.id });
+      setMsg(`Saved “${name.trim()}” as a report template for this workspace. Analysis references were stripped — a template is a shape, not a study.`);
+      const t = await api.reportTemplates(); setTemplates(t.templates ?? []);
+    } catch (e) { setError((e as Error).message); }
+  };
 
   React.useEffect(() => {
     if (pendingAdd && open && def && !isDash) {
@@ -167,7 +243,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
   const addBlock = (type: ReportBlock["type"]) => {
     if (!def || isDash) return;
     const first = analyses[0]?.id ?? "", firstName = analyses[0]?.name;
-    const b: ReportBlock = type === "cover" ? { id: uid(), type, title: (def as ReportDefinition).title } : type === "section" ? { id: uid(), type, title: "New section" } : type === "text" ? { id: uid(), type, markdown: "Write here…" } : type === "chart" ? { id: uid(), type, title: firstName, analysisId: first, chart: { type: (analyses[0]?.kind === "nps" ? "gauge" : "bar_vertical"), options: {} } } : type === "table" ? { id: uid(), type, title: firstName, analysisId: first } : type === "kpi" ? { id: uid(), type, title: firstName, analysisId: first } : type === "insights" ? { id: uid(), type, analysisIds: analyses.slice(0, 3).map((a) => a.id) } : { id: uid(), type: "executive_summary", analysisIds: analyses.slice(0, 5).map((a) => a.id) };
+    const b: ReportBlock = type === "cover" ? { id: uid(), type, title: (def as ReportDefinition).title } : type === "section" ? { id: uid(), type, title: "New section" } : type === "text" ? { id: uid(), type, markdown: "Write here…" } : type === "page_break" ? { id: uid(), type } : type === "methodology" ? { id: uid(), type, title: "Methodology", includeStandardNotes: true, items: [] } : type === "chart" ? { id: uid(), type, title: firstName, analysisId: first, chart: { type: (analyses[0]?.kind === "nps" ? "gauge" : "bar_vertical"), options: {} } } : type === "table" ? { id: uid(), type, title: firstName, analysisId: first } : type === "kpi" ? { id: uid(), type, title: firstName, analysisId: first } : type === "insights" ? { id: uid(), type, analysisIds: analyses.slice(0, 3).map((a) => a.id) } : { id: uid(), type: "executive_summary", analysisIds: analyses.slice(0, 5).map((a) => a.id) };
     setDef({ ...(def as ReportDefinition), blocks: [...(def as ReportDefinition).blocks, b] }); setDirty(true); setEditing(b.id);
     void ensure("analysisId" in b ? [b.analysisId] : "analysisIds" in b ? b.analysisIds : []);
   };
@@ -215,6 +291,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
         {versions.length > 0 && <select className="select small" value={viewVersion ?? ""} onChange={(e) => { const v = e.target.value ? Number(e.target.value) : null; setViewVersion(v); if (v) void load(open, v); else { setDef(open.definition as ReportDefinition); void load(open); } }} data-testid="ax-version-select"><option value="">Editing draft (live data)</option>{versions.map((v) => <option key={v.version} value={v.version}>Published v{v.version} · {new Date(v.published_at).toLocaleDateString()}</option>)}</select>}
         <button className="btn small" onClick={save} disabled={!dirty} data-testid="ax-report-save">{dirty ? "Save" : "Saved"}</button>
         <button className="btn primary small" onClick={publish} data-testid="ax-report-publish">Publish {open.published_version ? `v${open.published_version + 1}` : "v1"}</button>
+        {!isDash && <button className="btn small" onClick={() => setTemplatesOpen((o) => !o)} data-testid="ax-templates">Templates</button>}
         <button className="btn small" onClick={() => setShare(true)} data-testid="ax-report-share">Share</button>
         <button className="btn small" onClick={() => setExp(true)} data-testid="ax-report-export">Export</button>
       </div>
@@ -224,7 +301,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
           <div className="flabel">Add {isDash ? "widget" : "block"}</div>
           <div className="ax-addlist">{isDash
             ? (["kpi", "chart", "table", "text", "filter"] as DashboardWidget["type"][]).map((t) => <button key={t} className="btn small" onClick={() => addWidget(t)} disabled={t !== "text" && t !== "filter" && !analyses.length}>{t}</button>)
-            : (["cover", "executive_summary", "section", "chart", "table", "kpi", "insights", "text"] as ReportBlock["type"][]).map((t) => <button key={t} className="btn small" onClick={() => addBlock(t)} disabled={["chart", "table", "kpi", "insights", "executive_summary"].includes(t) && !analyses.length} data-testid={`ax-add-${t}`}>{t.replace("_", " ")}</button>)}</div>
+            : (["cover", "executive_summary", "section", "chart", "table", "kpi", "insights", "text", "methodology", "page_break"] as ReportBlock["type"][]).map((t) => <button key={t} className="btn small" onClick={() => addBlock(t)} disabled={["chart", "table", "kpi", "insights", "executive_summary"].includes(t) && !analyses.length} data-testid={`ax-add-${t}`}>{t === "page_break" ? "page break" : t.replace("_", " ")}</button>)}</div>
           {!analyses.length && <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>Save an analysis first to add charts, tables and KPIs.</div>}
           <div className="flabel" style={{ marginTop: 12 }}>Order (drag to reorder)</div>
           <ol className="ax-order">{items_.map((b) => <li key={b.id} draggable onDragStart={() => { dragId.current = b.id; }} onDragOver={(e) => e.preventDefault()} onDrop={() => onDrop(b.id)} className={editing === b.id ? "on" : ""} onClick={() => setEditing(b.id)} data-testid="ax-order-item"><span className="ax-order-type">{b.type.replace("_", " ")}</span> {("title" in b && b.title) || ("analysisId" in b && b.analysisId ? analyses.find((a) => a.id === b.analysisId)?.name : "") || ""}</li>)}</ol>
@@ -232,6 +309,50 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
             <div className="flabel" style={{ marginTop: 12 }}>Viewer segment switching</div>
             <div className="muted" style={{ fontSize: 12.5 }}>Segments a shared viewer may switch between (from analyses with segments). Empty = all available.</div>
             <div className="ax-chips">{[...new Set(Object.values(results).flatMap((r) => r.segments?.map((s) => s.name) ?? []))].map((s) => { const on = rd.viewerSegments?.includes(s); return <button key={s} type="button" className={`ax-chip ${on ? "on" : ""}`} onClick={() => { setDef({ ...rd, viewerSegments: on ? (rd.viewerSegments ?? []).filter((x) => x !== s) : [...(rd.viewerSegments ?? []), s] }); setDirty(true); }}>{s}</button>; })}</div>
+            {/*
+              * §36 — the filters a shared VIEWER may apply.
+              *
+              * Each one is computed when the report is published and frozen
+              * beside the base numbers, so a client switching filter reads a
+              * pre-computed answer rather than reaching the dataset. That is
+              * why this is a list of allowed filters and not a filter builder
+              * in the viewer — and why the count is worth knowing before
+              * publishing, since each one is a full recompute.
+              */}
+            <div className="flabel" style={{ marginTop: 12 }}>Viewer filters</div>
+            <div className="muted" style={{ fontSize: 12.5 }}>
+              Saved filters a shared viewer may apply. Each is computed at publish time and frozen, so the shared page
+              never touches response data.
+            </div>
+            <div className="ax-chips" data-testid="ax-viewer-filters">
+              {savedFilters.map((f) => {
+                const on = rd.viewerFilters?.includes(f.id);
+                return <button key={f.id} type="button" className={`ax-chip ${on ? "on" : ""}`} data-testid={`ax-vf-${f.id}`}
+                  onClick={() => { setDef({ ...rd, viewerFilters: on ? (rd.viewerFilters ?? []).filter((x) => x !== f.id) : [...(rd.viewerFilters ?? []), f.id] }); setDirty(true); }}>
+                  {f.name}
+                </button>;
+              })}
+              {!savedFilters.length && <span className="muted" style={{ fontSize: 12.5 }}>No saved filters yet — save one under Filters.</span>}
+            </div>
+            {(rd.viewerFilters?.length ?? 0) > 0 && (
+              <div className="muted" style={{ fontSize: 12 }}>
+                Publishing will compute {rd.viewerFilters!.length + 1} sets of results (the whole sample, plus each filter).
+              </div>
+            )}
+
+            {/*
+              * §36 — one filter applied to EVERY analysis in this report:
+              * "the North region report". Merged in at compute time, so the
+              * same saved analyses serve the national report and the regional
+              * one instead of being duplicated and drifting apart.
+              */}
+            <div className="flabel" style={{ marginTop: 12 }}>This whole report is filtered to</div>
+            <select className="select small" value={rd.filterId ?? ""} data-testid="ax-report-filter"
+              onChange={(e) => { setDef({ ...rd, filterId: e.target.value || null }); setDirty(true); void load(open!); }}>
+              <option value="">The whole sample</option>
+              {savedFilters.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+            </select>
+
             <div className="flabel" style={{ marginTop: 12 }}>Branding</div>
             <label className="ax-field"><span>Header</span><input className="input small" value={rd.branding?.header ?? ""} onChange={(e) => { setDef({ ...rd, branding: { ...rd.branding, header: e.target.value } }); setDirty(true); }} /></label>
             <label className="ax-field"><span>Footer</span><input className="input small" value={rd.branding?.footer ?? ""} onChange={(e) => { setDef({ ...rd, branding: { ...rd.branding, footer: e.target.value } }); setDirty(true); }} /></label>
@@ -246,6 +367,40 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
         </div>
       </div>
       {editing && items_.find((b) => b.id === editing) && <BlockEditor block={items_.find((b) => b.id === editing)!} analyses={analyses} onChange={(nb) => { setItems(items_.map((b) => (b.id === nb.id ? nb : b))); void ensure([(nb as { analysisId?: string }).analysisId, ...(((nb as { analysisIds?: string[] }).analysisIds) ?? [])]); }} onClose={() => setEditing(null)} />}
+      {templatesOpen && (
+        <div className="modal-back" onClick={() => setTemplatesOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} data-testid="ax-template-dialog">
+            <h3 style={{ marginTop: 0 }}>Report templates</h3>
+            <p className="muted" style={{ fontSize: 13 }}>
+              The shape of a deliverable, without the study in it. Applying one keeps every block that already points at
+              an analysis and leaves the rest as placeholders — so this is never the action that loses your work.
+            </p>
+            <div className="ax-cards">
+              {templates.map((t) => (
+                <div key={t.id} className="card" data-testid="ax-template-card">
+                  <div className="card-title">{t.name}{t.builtIn ? <span className="chip" style={{ marginLeft: 6 }}>built in</span> : null}</div>
+                  {t.description && <div className="muted" style={{ fontSize: 13 }}>{t.description}</div>}
+                  <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>{describeTemplate(t)}</div>
+                  <div className="row" style={{ gap: 4, marginTop: 8 }}>
+                    <button className="btn small primary" data-testid={`ax-apply-${t.id}`} onClick={() => void applyTemplateTo(t.id!, t.name)}>Apply</button>
+                    {!t.builtIn && (
+                      <button className="btn small ghost danger"
+                        onClick={async () => { if (!confirm(`Remove the template “${t.name}”?`)) return; try { await api.removeReportTemplate(t.id!); setTemplates(templates.filter((x) => x.id !== t.id)); } catch (e) { setError((e as Error).message); } }}>
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="row" style={{ marginTop: 12, gap: 6 }}>
+              <button className="btn small" onClick={() => void saveAsTemplate()} data-testid="ax-save-template">Save this report&apos;s shape</button>
+              <span className="grow" />
+              <button className="btn small" onClick={() => setTemplatesOpen(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
       {share && <ShareDialog api={api} report={open} onClose={() => setShare(false)} onCreated={onChange} />}
       {exp && <ExportDialog api={api} reportId={open.id} themes={themes} versions={publishedVersions} onClose={() => setExp(false)} />}
       <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>{surveyTitle}</div>
