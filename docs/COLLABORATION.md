@@ -152,9 +152,14 @@ because that is actionable.
 
 `scripts/auth-guard-audit.mjs` walks every exported HTTP handler and asserts
 that a guard call is its **first statement** and that its refusal is returned.
-**65 handlers checked, 0 unguarded**, with five deliberately public (sign in,
-sign up, sign out, heartbeat, password reset — each with its reason recorded
-in the script).
+**90 handlers checked, 0 unguarded**, with six deliberately public (sign in,
+sign up, sign out, heartbeat, password reset and the report share link — each
+with its reason recorded in the script).
+
+Run it with `pnpm audit:code`, or `pnpm verify` for typecheck + tests + audits
+together. That entry exists because of what happened without it: the audit sat
+unrun while routes were added, drifted to **15 failures**, and the
+documentation on this page still said zero. A lint nothing runs is a comment.
 
 This is a lint, not a behavioural test, and that is exactly why it earns its
 place: the realistic long-term failure of an authorization layer is not that
@@ -316,7 +321,7 @@ stranger or dangle.
 | --- | --- |
 | `packages/access` unit tests | **40** — the capability matrix (asserting the *negatives*), both state machines, the throttle, identifier parsing, the audit vocabulary |
 | `scripts/auth-collaboration-test.mjs` | **111** against real Postgres — signup, single session under 60-way contention, single editor under 60-way contention, stale recovery, invitations, isolation, admin |
-| `scripts/auth-guard-audit.mjs` | **65 handlers, 0 unguarded** |
+| `scripts/auth-guard-audit.mjs` | **90 handlers, 0 unguarded** (`pnpm audit:code`) |
 | `scripts/collaboration-test.mjs` | **57** browser checks — the login conflict screen, signup and the User ID, read-only mode, presence, lock takeover, sharing by User ID and email, roles, notes, activity |
 | existing suites | engine 416, quality 36, exporters 22, designs 12; browser: studio, browser, e2e-smoke, option-logic, listfill, response-data, save-integrity, flow-export, logic-builder, masking, pagebreak, dashboard, persistence, blocks |
 

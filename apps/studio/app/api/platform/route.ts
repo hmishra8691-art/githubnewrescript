@@ -52,17 +52,23 @@ const PROBES: { migration: string; what: string; table: string; column?: string 
 ];
 
 export async function GET(_req: NextRequest) {
-  const { tier } = platformTier();
   /*
    * `requireUser` rather than a bare cookie read: it is the platform's one
    * session resolver, and it applies the expiry, revocation and takeover
    * rules. A signed-out caller is not an error here — outside production this
    * endpoint is readable, which is what makes it usable while setting an
    * instance up, before there is an account to sign in with.
+   *
+   * It is the FIRST statement, before the tier is even read. That ordering is
+   * enforced by `scripts/auth-guard-audit.mjs` and the reason is not this
+   * route in particular: a handler that decides anything before authorizing
+   * has already acted on an unauthenticated request, and the audit cannot
+   * tell a harmless env-var read from a harmful one.
    */
   const resolved = await requireUser(_req);
   const user = isFailure(resolved) ? null : resolved;
   const isAdmin = !!user?.isPlatformAdmin;
+  const { tier } = platformTier();
 
   /*
    * In production this is admin-only, and the refusal is a 404 rather than a
@@ -160,10 +166,10 @@ export async function GET(_req: NextRequest) {
  * spam folder. That is a DNS problem, and it is the most common one.
  */
 export async function POST(req: NextRequest) {
-  const { tier } = platformTier();
   const resolved = await requireUser(req);
   if (isFailure(resolved)) return resolved.response;
   const user = resolved;
+  const { tier } = platformTier();
 
   if (tier === "production" && !user.isPlatformAdmin) {
     return NextResponse.json({ error: "Not available." }, { status: 404 });

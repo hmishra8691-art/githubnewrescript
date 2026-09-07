@@ -458,7 +458,7 @@ that whole team without any share at all.
 | `scripts/lock-concurrency-test.mjs` | 26 assertions under **real simultaneity** — 8 connections, 8 transactions, one winner; orphaned takeover; the schema-level guarantees |
 | `scripts/p0-session-test.mjs` | 41 browser assertions — no redirect loop, `/login` reachable with a stale cookie, every save-refusal path keeping the work, read-only enforcement, auto-acquire, diagnostics |
 | `scripts/p0-cookie-test.mjs` | 21 wire-level assertions — the cookie really is cleared, on every endpoint; 503 vs 401; **and that no read is served from a cache** |
-| `scripts/auth-guard-audit.mjs` | 66 handlers, 0 unguarded, and the edit-lock rule for write handlers |
+| `scripts/auth-guard-audit.mjs` | 90 handlers, 0 unguarded, and the edit-lock rule for write handlers (`pnpm audit:code`) |
 | `scripts/auth-collaboration-test.mjs` | 116 SQL-level assertions across the whole auth layer |
 
 Regression: all 543 package unit tests pass, and every existing browser suite —

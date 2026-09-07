@@ -8,7 +8,9 @@
     "dev:studio": "pnpm --filter @rescript/studio dev",
     "dev:runtime": "pnpm --filter @rescript/runtime dev",
     "test": "pnpm -r test",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "verify": "pnpm typecheck && pnpm test && pnpm audit:code",
+    "audit:code": "node scripts/auth-guard-audit.mjs"
   },
   "packageManager": "pnpm@10.28.0",
   "engines": {
