@@ -290,6 +290,17 @@ export function questionVariables(
     case "maxdiff_task": {
       // one choice variable per task row of the referenced design
       push({ name: `${q.variableName}_TASKS`, label: `${q.code} — task responses`, dataType: "text", notes: "One column per task expanded at export from the design file." });
+      /*
+       * WHICH VERSION (block) OF THE DESIGN THIS RESPONDENT ANSWERED.
+       *
+       * Without it a multi-version design is unanalysable: the rows a
+       * respondent saw cannot be recovered, so their choices cannot be
+       * matched to the concepts that produced them. The analysis has always
+       * looked for this column (`<VAR>_VERSION`); nothing declared or filled
+       * it until the version was actually assigned at fielding.
+       */
+      push({ name: `${q.variableName}_VERSION`, label: `${q.code} — design version shown`, dataType: "text",
+        notes: "The design block this respondent answered. Derived from their response seed, so it is reproducible from the stored response." });
       break;
     }
     case "annotation": {

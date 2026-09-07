@@ -5,6 +5,8 @@ import { resolveVariant } from "@rescript/schema";
 import {
   effectiveQuestion,
   resolveQuestionMedia,
+  designRowsFor,
+  shuffleAlternatives,
   resolvePiping,
   evaluateExpression,
   flattenVariables,
@@ -974,7 +976,17 @@ function DesignTasks(p: QRProps) {
   if (!design?.file?.rows?.length) {
     return <div className="rs-error-msg">Design file “{p.q.settings.designRef}” not generated yet.</div>;
   }
-  const rows = design.file.rows as Record<string, unknown>[];
+  const allRows = design.file.rows as Record<string, unknown>[];
+  /*
+   * THE VERSION THIS RESPONDENT ANSWERS.
+   *
+   * This used to be `String(r.version ?? "1") === "1"` — hardcoded — so a
+   * design generated in four blocks fielded only the first one, and the
+   * analysis's version lookup always fell through to "1". The engine now
+   * derives it from the response seed (designVersion.ts), which is why it
+   * survives a resume and is recoverable from the stored response.
+   */
+  const rows = designRowsFor(p.q, allRows, p.state.seed);
   const tasks = [...new Set(rows.map((r) => String(r.task)))];
   const vals = (p.value ?? {}) as Record<string, unknown>;
   const isMaxdiff = p.q.type === "maxdiff_task";
@@ -985,7 +997,14 @@ function DesignTasks(p: QRProps) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
       {tasks.map((t) => {
-        const alts = rows.filter((r) => String(r.task) === t && String(r.version ?? "1") === "1");
+        // the design fixes which concepts share a task, not the order they
+        // appear in; position effects are real, so the order is rolled per
+        // respondent per task and the None option stays last
+        const alts = shuffleAlternatives(
+          rows.filter((r) => String(r.task) === t),
+          p.state.seed,
+          `${p.q.id}:${t}`,
+        );
         return (
           <div key={t} className="rs-card" style={{ margin: 0 }}>
             <div style={{ fontWeight: 600, marginBottom: 10 }}>Task {t}</div>

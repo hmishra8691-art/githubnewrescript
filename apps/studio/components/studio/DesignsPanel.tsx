@@ -2,6 +2,7 @@
 import React from "react";
 import { designGeneratorRegistry, type DesignReference } from "@rescript/schema";
 import { registerBuiltinDesignGenerators, designToCSV, designFileName } from "@rescript/designs";
+import { designVersionCount } from "@rescript/engine";
 import { useStudio, uid } from "./store";
 
 registerBuiltinDesignGenerators();
@@ -12,9 +13,11 @@ registerBuiltinDesignGenerators();
  * more arrive as plugins via designGeneratorRegistry.register().
  */
 
-function ConfigField({ field, value, onChange }: {
+function ConfigField({ field, value, onChange, config }: {
   field: { name: string; label: string; type: string; options?: string[]; help?: string };
   value: unknown; onChange(v: unknown): void;
+  /** the whole config, so a field can offer choices drawn from another field */
+  config?: Record<string, unknown>;
 }) {
   switch (field.type) {
     case "number":
@@ -67,6 +70,72 @@ function ConfigField({ field, value, onChange }: {
           ))}
           <button className="btn small" onClick={() => onChange([...attrs, { name: `Attribute ${attrs.length + 1}`, levels: [] }])}>
             + attribute
+          </button>
+        </div>
+      );
+    }
+    /**
+     * PROHIBITIONS — pairs of levels that may never share a concept.
+     *
+     * Two dependent pickers rather than free text, because a prohibition that
+     * names a level the design does not have is silently no prohibition at
+     * all, and that is the kind of mistake nobody finds until the utilities
+     * look wrong. The choices come from the attributes above, so the pair is
+     * always expressible.
+     */
+    case "prohibitions": {
+      const pairs: { a: { attribute: string; level: string }; b: { attribute: string; level: string }; note?: string }[] =
+        Array.isArray(value) ? (value as never) : [];
+      const attrs: { name: string; levels: string[] }[] = Array.isArray(config?.attributes)
+        ? (config!.attributes as never) : [];
+      const usable = attrs.filter((a) => a.name && a.levels?.length);
+      const levelsOf = (name: string) => usable.find((a) => a.name === name)?.levels ?? [];
+      const set = (i: number, patch: Partial<typeof pairs[number]>) =>
+        onChange(pairs.map((p, j) => (j === i ? { ...p, ...patch } : p)));
+
+      if (usable.length < 2) {
+        return (
+          <div style={{ marginBottom: 10 }}>
+            <span className="flabel">{field.label}</span>
+            <p className="muted" style={{ fontSize: 12.5, margin: "2px 0 0" }}>
+              Add at least two attributes with levels first — a prohibition pairs a level of one with a level of another.
+            </p>
+          </div>
+        );
+      }
+      return (
+        <div style={{ marginBottom: 10 }} data-testid="prohibitions-editor">
+          <span className="flabel">{field.label}</span>
+          {field.help && <div className="muted" style={{ fontSize: 12.5, marginBottom: 6 }}>{field.help}</div>}
+          {pairs.map((p, i) => (
+            <div key={i} className="row proh-row" data-testid="prohibition" style={{ marginBottom: 6, flexWrap: "wrap" }}>
+              <span className="muted" style={{ fontSize: 12.5 }}>never</span>
+              <select className="select" style={{ width: 150 }} value={p.a.attribute}
+                onChange={(e) => set(i, { a: { attribute: e.target.value, level: levelsOf(e.target.value)[0] ?? "" } })}>
+                {usable.map((a) => <option key={a.name} value={a.name}>{a.name}</option>)}
+              </select>
+              <select className="select" style={{ width: 150 }} value={p.a.level}
+                onChange={(e) => set(i, { a: { ...p.a, level: e.target.value } })}>
+                {levelsOf(p.a.attribute).map((l) => <option key={l} value={l}>{l}</option>)}
+              </select>
+              <span className="muted" style={{ fontSize: 12.5 }}>with</span>
+              <select className="select" style={{ width: 150 }} value={p.b.attribute}
+                onChange={(e) => set(i, { b: { attribute: e.target.value, level: levelsOf(e.target.value)[0] ?? "" } })}>
+                {usable.map((a) => <option key={a.name} value={a.name}>{a.name}</option>)}
+              </select>
+              <select className="select" style={{ width: 150 }} value={p.b.level}
+                onChange={(e) => set(i, { b: { ...p.b, level: e.target.value } })}>
+                {levelsOf(p.b.attribute).map((l) => <option key={l} value={l}>{l}</option>)}
+              </select>
+              <button className="btn small danger" onClick={() => onChange(pairs.filter((_, j) => j !== i))}>×</button>
+            </div>
+          ))}
+          <button className="btn small" data-testid="add-prohibition"
+            onClick={() => onChange([...pairs, {
+              a: { attribute: usable[0].name, level: usable[0].levels[0] },
+              b: { attribute: usable[1].name, level: usable[1].levels[0] },
+            }])}>
+            + prohibition
           </button>
         </div>
       );
@@ -152,7 +221,7 @@ function GeneratorForm({ kind, existing, onDone }: {
             onChange={(e) => setSeed(Number(e.target.value))} /></label>
       </div>
       {plugin.configFields.map((f) => (
-        <ConfigField key={f.name} field={f} value={config[f.name]}
+        <ConfigField key={f.name} field={f} value={config[f.name]} config={config}
           onChange={(v) => setConfig((c) => ({ ...c, [f.name]: v }))} />
       ))}
       {errors.map((e, i) => <div key={i} className="chip warn" style={{ marginBottom: 6 }}>{e}</div>)}
@@ -193,6 +262,112 @@ function GeneratorForm({ kind, existing, onDone }: {
   );
 }
 
+/**
+ * BRINGING A DESIGN IN FROM OUTSIDE.
+ *
+ * Everything here could generate a design and export it, and there was no way
+ * to bring one IN: no file input anywhere in this panel. A study whose design
+ * was built in Sawtooth, JMP or by a methodologist in a spreadsheet could not
+ * be fielded on this platform at all, however ordinary that is — a client
+ * supplying the design is normal in agency work, and so is reusing last
+ * wave's.
+ *
+ * An imported design is a first-class `DesignReference` with `kind:
+ * "imported"`: it has no config and no seed to regenerate from, which is
+ * exactly true of it, and the panel says so rather than pretending it could
+ * be regenerated.
+ */
+function ImportDesign() {
+  const s = useStudio();
+  const [error, setError] = React.useState<string | null>(null);
+
+  const onFile = async (f: File) => {
+    setError(null);
+    try {
+      const text = await f.text();
+      const { columns, rows } = parseDesignCsv(text);
+      /*
+       * A design the runtime cannot read is worse than no design: the survey
+       * would field an empty task. `task` is the one column everything needs
+       * — the renderer groups by it and the analysis matches on it.
+       */
+      if (!columns.includes("task")) {
+        throw new Error("a design file needs a “task” column — that is how tasks are grouped and matched back to answers.");
+      }
+      const name = f.name.replace(/\.[^.]+$/, "");
+      s.labelNextEdit("import design");
+      s.update((d) => {
+        d.designs.push({
+          id: uid("design"), kind: "imported", name, version: 1,
+          config: { importedFrom: f.name, importedAt: new Date().toISOString() },
+          file: { format: "csv", columns, rows, generatedAt: new Date().toISOString() },
+        } as never);
+      });
+      s.toast(`Imported "${name}" — ${rows.length} rows, ${columns.length} columns. Pick it on a Conjoint or MaxDiff question.`);
+    } catch (e) {
+      setError(`That file could not be imported: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  return (
+    <>
+      <label className="btn" style={{ cursor: "pointer" }} title="Bring in a design built elsewhere — CSV or TSV">
+        ⬆ Import design file
+        <input type="file" accept=".csv,.tsv,.txt" style={{ display: "none" }} data-testid="import-design"
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); e.target.value = ""; }} />
+      </label>
+      {error && <span className="chip warn" data-testid="import-design-error">{error}</span>}
+    </>
+  );
+}
+
+/**
+ * Read a design CSV or TSV.
+ *
+ * Deliberately small and local: a design file is a rectangle of levels, and
+ * the platform's response-import parser is about mapping columns to
+ * questions, which is a different job. Numbers come back as numbers because
+ * `version`, `task`, `alt`, `is_holdout` and `none_option` are all compared
+ * numerically downstream.
+ */
+export function parseDesignCsv(text: string): { columns: string[]; rows: Record<string, unknown>[] } {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n").filter((l) => l.trim().length > 0);
+  if (lines.length < 2) throw new Error("there are no data rows under the header.");
+  const delim = (lines[0].match(/\t/g)?.length ?? 0) > (lines[0].match(/,/g)?.length ?? 0) ? "\t" : ",";
+  const split = (line: string) => {
+    /* quoted fields, because a level label may contain the delimiter */
+    const out: string[] = [];
+    let cur = ""; let quoted = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (quoted) {
+        if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+        else if (ch === '"') quoted = false;
+        else cur += ch;
+      } else if (ch === '"') quoted = true;
+      else if (ch === delim) { out.push(cur); cur = ""; }
+      else cur += ch;
+    }
+    out.push(cur);
+    return out.map((v) => v.trim());
+  };
+  const columns = split(lines[0]).filter((h) => h.length > 0);
+  if (columns.length === 0) throw new Error("the header row has no column names.");
+  const dupes = columns.filter((h, i) => columns.indexOf(h) !== i);
+  if (dupes.length) throw new Error(`the header has more than one “${dupes[0]}” column.`);
+  const rows = lines.slice(1).map((line) => {
+    const cells = split(line);
+    const row: Record<string, unknown> = {};
+    columns.forEach((h, i) => {
+      const raw = cells[i] ?? "";
+      const num = raw !== "" && Number.isFinite(Number(raw)) ? Number(raw) : null;
+      row[h] = num !== null ? num : raw;
+    });
+    return row;
+  });
+  return { columns, rows };
+}
+
 export function DesignsPanel() {
   const s = useStudio();
   const [openKind, setOpenKind] = React.useState<string | null>(null);
@@ -215,6 +390,8 @@ export function DesignsPanel() {
             + {p.label}
           </button>
         ))}
+        <span className="grow" />
+        <ImportDesign />
       </div>
 
       {(openKind || editing) && (
@@ -231,10 +408,21 @@ export function DesignsPanel() {
             <span className="qtype-badge">{d.kind}</span>
             <span className="chip">v{d.version}</span>
             <span className="muted mono" style={{ fontSize: 12.5 }}>
-              seed {d.seed} · {d.file?.rows.length ?? 0} rows · {d.file?.generatedAt?.slice(0, 19) ?? "not generated"}
+              {d.kind === "imported"
+                ? `from ${String(d.config?.importedFrom ?? "a file")}`
+                : `seed ${d.seed}`}
+              {" · "}{d.file?.rows.length ?? 0} rows
+              {" · "}{d.file?.generatedAt?.slice(0, 19) ?? "not generated"}
+              {d.file?.rows.length ? ` · ${designVersionCount(d.file.rows as Record<string, unknown>[])} version${designVersionCount(d.file.rows as Record<string, unknown>[]) === 1 ? "" : "s"}` : ""}
             </span>
             <span className="grow" />
-            <button className="btn small" onClick={() => { setOpenKind(null); setEditing(d); }}>regenerate</button>
+            {/* an imported design has no config or seed to regenerate FROM,
+                so it is not offered — importing again replaces it */}
+            {d.kind !== "imported" ? (
+              <button className="btn small" onClick={() => { setOpenKind(null); setEditing(d); }}>regenerate</button>
+            ) : (
+              <span className="chip" data-testid="design-imported" title="Brought in from a file — there is no configuration to regenerate from">imported</span>
+            )}
             {d.file && (
               <button className="btn small" onClick={() => {
                 const csv = designToCSV({ columns: d.file!.columns, rows: d.file!.rows });

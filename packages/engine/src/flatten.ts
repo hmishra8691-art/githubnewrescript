@@ -1,6 +1,7 @@
 import type { SurveyDefinition, Question } from "@rescript/schema";
 import { loopKeySuffix, type LoopContext, type ResponseState } from "./state.js";
 import { directChildLoops, directQuestionIdsInLoop, loopNodes, loopVariablePrefix, type LoopFlowNode } from "./loopModel.js";
+import { designFor, designVersionFor } from "./designVersion.js";
 
 export type FlatVars = Record<string, unknown>;
 
@@ -34,6 +35,21 @@ export function flattenVariables(def: SurveyDefinition, state: ResponseState): F
    * rows keep flattening to what they flattened to before.
    */
   const placed = placeLoopAnswers(def, state, out);
+
+  /*
+   * The design block each respondent answered.
+   *
+   * Derived from their seed rather than stored (see designVersion.ts), which
+   * is why it is written here rather than by whatever wrote the answer: it is
+   * a fact about the response, available the moment the seed is, and every
+   * export, dataset and analysis reads it through this function.
+   */
+  for (const q of def.questions) {
+    if (q.type !== "conjoint_task" && q.type !== "maxdiff_task") continue;
+    const design = designFor(def, q);
+    if (!design) continue;
+    out[`${q.variableName}_VERSION`] = designVersionFor(q, design.rows, state.seed);
+  }
 
   for (const q of def.questions) {
     // every answer entry for this question (plain + loop-suffixed)

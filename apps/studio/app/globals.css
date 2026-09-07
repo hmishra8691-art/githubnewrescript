@@ -1695,3 +1695,6 @@ p.qs-help { margin: -2px 0 10px; }
 }
 .var-edit .f { display: grid; gap: 4px; font-size: 13px; }
 .var-edit .f > span { color: var(--text-2, #555); }
+
+/* ==== Design prohibitions ==== */
+.proh-row { gap: 6px; align-items: center; padding: 6px 8px; background: var(--surface-2, #f4f4f8); border-radius: 7px; }

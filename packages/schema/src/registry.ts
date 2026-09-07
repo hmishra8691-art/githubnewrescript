@@ -43,7 +43,14 @@ export interface DesignGeneratorPlugin<C = Record<string, unknown>> {
   configFields: {
     name: string;
     label: string;
-    type: "number" | "text" | "boolean" | "select" | "list" | "attributes";
+    /**
+     * How the Studio edits this field. `prohibitions` is a pairs editor over
+     * the design's own attributes and levels — it exists because a
+     * constraint cannot be expressed as a number, a list or a piece of text,
+     * and a plugin interface with no way to say "these two may not co-occur"
+     * is why no generator in the platform had prohibitions.
+     */
+    type: "number" | "text" | "boolean" | "select" | "list" | "attributes" | "prohibitions";
     default?: unknown;
     options?: string[];
     help?: string;
