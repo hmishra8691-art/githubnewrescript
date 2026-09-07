@@ -18,6 +18,7 @@ import { resolvePiping, registerDisplayedOptionsResolver } from "./piping.js";
 import { evaluateSetExpr, LIST_ACTIONS } from "./setExpression.js";
 import { seededShuffle, subSeed, mulberry32 } from "./random.js";
 import { hasDisplayRulesFor, ruleVerdict, visibleByRules } from "./displayRules.js";
+import { hasOptionGroups, groupsFor, orderWithGroups } from "./optionGroups.js";
 
 /**
  * THE OPTION PIPELINE.
@@ -921,6 +922,37 @@ function randomizeItems<T extends { code: string | number; flags?: string[] }>(
   return [...top, ...middle, ...bottom];
 }
 
+
+/**
+ * GROUPED ORDERING, sharing the anchor handling with flat randomization.
+ *
+ * Anchors are lifted out first and put back after, exactly as
+ * `randomizeItems` does, because "anchor to the top" is a statement about the
+ * screen and not about a group — an anchored "None of the above" belongs at
+ * the bottom of the question, not at the bottom of whichever group happens to
+ * hold it.
+ */
+function groupOrder<T extends { code: string | number; label?: string; flags?: string[] }>(
+  q: Question,
+  scope: "options" | "rows" | "columns",
+  items: T[],
+  ctx: EvalContext,
+  seed: number,
+): T[] {
+  const top = items.filter((i) => isAnchoredTop(i.flags));
+  const bottom = items.filter((i) => !isAnchoredTop(i.flags) && isAnchoredBottom(i.flags));
+  const middle = items.filter((i) => !top.includes(i) && !bottom.includes(i));
+
+  const ordering = {
+    groupOrder: q.groupOrdering?.groupOrder ?? "fixed",
+    itemOrder: q.groupOrdering?.itemOrder ?? "fixed",
+    ungrouped: q.groupOrdering?.ungrouped ?? "last",
+  } as const;
+
+  const { items: placed } = orderWithGroups(middle, groupsFor(q, scope), ordering, seed, ctx);
+  return [...top, ...placed, ...bottom];
+}
+
 /* --------------------------------------------------------------- pipeline */
 
 interface RunOpts {
@@ -1011,8 +1043,23 @@ function runOptions(
     record(rec, "sort", `Sort (${q.settings.optionOrder})`, beforeSort, options, new Map());
   }
 
-  // 8 — randomization
-  if (q.randomization?.enabled && q.randomization.scope === "options") {
+  /*
+   * 8 — ORDERING: groups first, flat randomization only when there are none.
+   *
+   * Groups take precedence deliberately, and `lintOptionGroups` says so on
+   * screen when both are configured. A flat shuffle over a grouped list would
+   * move a member out of its group, which is the one thing groups exist to
+   * prevent — so the two cannot both apply, and the safe one wins.
+   *
+   * Grouping runs whether or not `randomization.enabled` is set, because the
+   * group structure IS the presented order: "Group A then Group B" is what a
+   * programmer asked for even with every order set to Fixed.
+   */
+  if (hasOptionGroups(q, "options")) {
+    const beforeGroups = options;
+    options = groupOrder(q, "options", options, ctx, seed);
+    record(rec, "randomization", "Option groups", beforeGroups, options, new Map());
+  } else if (q.randomization?.enabled && q.randomization.scope === "options") {
     const cfg = activeRandomization(q.randomization, ctx);
     if (cfg) {
       const beforeRand = options;
@@ -1076,7 +1123,9 @@ function runRows(q: Question, ctx: EvalContext): QuestionRow[] {
   rows = applyEligibility(rows, ctx, null, pos);
   rows = applyNamedRules(q, "row", rows, ctx, null);
   rows = applyPrioritization(rows, ctx, null, pos);
-  if (q.randomization?.enabled && q.randomization.scope === "rows") {
+  if (hasOptionGroups(q, "rows")) {
+    rows = groupOrder(q, "rows", rows, ctx, subSeed(ctx.state.seed, `randrows:${q.id}${seedKey}`));
+  } else if (q.randomization?.enabled && q.randomization.scope === "rows") {
     const cfg = activeRandomization(q.randomization, ctx);
     if (cfg)
       rows = randomizeItems(
@@ -1136,7 +1185,16 @@ export function effectiveQuestion(q: Question, ctx: EvalContext): EffectiveQuest
     if (col.label.includes("{{")) col = { ...col, label: resolvePiping(col.label, ctx) };
     return col;
   });
-  if (q.randomization?.enabled && q.randomization.scope === "columns") {
+  if (hasOptionGroups(q, "columns")) {
+    /* columns are addressed by id, so they are normalised to `code` the same
+       way the flat path does it below */
+    columns = groupOrder(
+      q, "columns",
+      columns.map((c) => ({ ...c, code: c.id })) as never,
+      ctx,
+      subSeed(ctx.state.seed, `randcols:${q.id}${seedKey}`),
+    ) as never;
+  } else if (q.randomization?.enabled && q.randomization.scope === "columns") {
     const cfg = activeRandomization(q.randomization, ctx);
     if (cfg) {
       columns = randomizeItems(

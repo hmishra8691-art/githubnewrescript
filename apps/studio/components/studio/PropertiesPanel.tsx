@@ -11,6 +11,7 @@ import { OptionalCondition, ConditionEditor } from "./ConditionBuilder";
 import { LoopScopeProvider, loopsAroundQuestion } from "./loopScope";
 import { MaskingBuilder } from "./MaskingBuilder";
 import { QualitySettings } from "./QualitySettings";
+import { OptionGroupsEditor } from "./OptionGroupsEditor";
 
 /** Context-aware validation (req §6/§19): only offer rules that make sense
  *  for the question type. */
@@ -611,6 +612,20 @@ export function PropertiesPanel() {
           + carry forward from another question
         </button>
       )}
+      </>)}
+
+      {/*
+        * OPTION GROUPS (§13–30), directly above Randomization on purpose.
+        *
+        * The two interact and a programmer needs to see that: when a question
+        * has groups, the group order wins and the flat randomization below is
+        * ignored, because a flat shuffle would move an item out of its group.
+        * The lint inside the groups panel says so; putting them adjacent means
+        * the setting that is being overridden is visible at the same time.
+        */}
+      {hasCap("randomization") && (<>
+      <h3 className="sec">Option groups</h3>
+      <OptionGroupsEditor q={q} patch={patch} />
       </>)}
 
       {hasCap("randomization") && (<>

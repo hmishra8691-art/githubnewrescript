@@ -197,6 +197,107 @@ export const ValidationRule = z.object({
 });
 export type ValidationRule = z.infer<typeof ValidationRule>;
 
+/* ====================================================== option groups (§13–30)
+ *
+ * THE DECISION THAT MAKES THIS SAFE: A GROUP IS A LAYER OVER THE FLAT LIST,
+ * NOT A RESTRUCTURING OF IT.
+ *
+ * `options`, `rows` and `columns` stay exactly what they were — flat arrays,
+ * addressed by `code` (options and rows) and `id` (columns). Around sixty call
+ * sites across nine packages depend on that: the four exporters, the analytics
+ * dataset builder, piping, List Fill, quota cells, validation, auto punch, the
+ * variable dictionary, the renderer. Nesting options inside groups would have
+ * meant editing every one of them, and any one missed would be a silent
+ * wrong-number rather than a crash.
+ *
+ * So a group holds MEMBER CODES and nothing else owns the options. Every
+ * existing consumer keeps reading a flat list and never learns groups exist;
+ * only the ORDERING stage — one function in the engine — reads them.
+ *
+ * This also replaces `Randomization.groups`, which was the same idea done
+ * anonymously: a flat array of code-arrays with no id, no name, no order, no
+ * logic, and no UI, whose randomization seed was its ARRAY INDEX — so
+ * reordering the groups silently re-shuffled respondents already in field.
+ * The old field still works and is still honoured; groups take precedence
+ * when both are present.
+ */
+
+/**
+ * How a list is ordered. One vocabulary for groups and for the items inside
+ * them, because "alphabetical" means the same thing at both levels — the
+ * difference is only the scope it is applied to (§23: sorting within a group
+ * must not flatten every option across groups).
+ */
+export const OptionOrder = z.enum([
+  "fixed",         // as declared
+  "random",        // seeded shuffle, stable per respondent
+  "rotate",        // start position advances per respondent (§21)
+  "flip",          // always reversed (§22)
+  "flip_random",   // reversed for half of respondents — the old reverse_half
+  "alpha_asc",     // A → Z by label
+  "alpha_desc",    // Z → A
+  "numeric_asc",   // by numeric code
+  "numeric_desc",
+  "custom",        // by each item's own `order` / declaration order
+  "priority",      // by `priority`, highest first
+]);
+export type OptionOrder = z.infer<typeof OptionOrder>;
+
+export const OptionGroup = z.object({
+  /** Stable id (§37). Also the randomization seed key, so reordering groups
+   *  no longer re-shuffles respondents who are already in field. */
+  id: z.string(),
+  name: z.string(),
+  /** Which collection this group organises. */
+  scope: z.enum(["options", "rows", "columns"]).default("options"),
+  /**
+   * The members, by option/row `code` or column `id`, in the group's own
+   * order. A code appearing in two groups belongs to the first — membership
+   * is exclusive, because an option shown twice is a broken question.
+   */
+  members: z.array(z.union([z.string(), z.number()])).default([]),
+  /** Explicit position for `custom` group order. */
+  order: z.number().optional(),
+  /** Weight for `priority` group order. */
+  priority: z.number().optional(),
+  /**
+   * Group-level display logic (§27). When this fails, every member is hidden —
+   * except a member flagged Always Show, which survives, exactly as it
+   * survives a mask. See the precedence note in the engine.
+   */
+  visibleIf: Condition.optional(),
+  /**
+   * How the items INSIDE this group are ordered. Independent of how the groups
+   * themselves are ordered (§18), and overrides the question-level default
+   * when set — so one group can be alphabetical while the rest are random.
+   */
+  itemOrder: OptionOrder.optional(),
+  /** Editor state only; the runtime ignores it. */
+  collapsed: z.boolean().optional(),
+});
+export type OptionGroup = z.infer<typeof OptionGroup>;
+
+/**
+ * The two independent switches (§18, §30).
+ *
+ * Independent on purpose: all four combinations are things survey programmers
+ * ask for. Fixed groups with random items is the common one — a questionnaire
+ * whose sections must stay in order while the items inside them rotate.
+ */
+export const GroupOrdering = z.object({
+  /** How the groups are ordered relative to each other. */
+  groupOrder: OptionOrder.default("fixed"),
+  /** Default for items within each group; a group may override it. */
+  itemOrder: OptionOrder.default("fixed"),
+  /**
+   * Where items belonging to no group go. They are kept together rather than
+   * scattered, because an option that drifts between groups run to run is
+   * indistinguishable from a bug.
+   */
+  ungrouped: z.enum(["last", "first"]).default("last"),
+});
+export type GroupOrdering = z.infer<typeof GroupOrdering>;
+
 export const Randomization = z.object({
   enabled: z.boolean().default(false),
   scope: z.enum(["options", "rows", "columns"]).default("options"),
@@ -500,6 +601,16 @@ export const Question = z.object({
     .default({}),
 
   randomization: Randomization.optional(),
+  /**
+   * Hierarchical groups over the flat option / row / column lists (§13–30).
+   *
+   * Empty by default, so every existing question is unchanged and every
+   * existing consumer of `options` keeps working — see the note above
+   * `OptionGroup`.
+   */
+  optionGroups: z.array(OptionGroup).default([]),
+  /** How groups, and items within groups, are ordered (§18). */
+  groupOrdering: GroupOrdering.optional(),
   carryForward: CarryForward.optional(),
   /** Previous-question list operations, applied in order (req §12–13). */
   listLogic: z.array(ListLogicRule).default([]),
