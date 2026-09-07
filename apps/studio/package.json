@@ -14,6 +14,7 @@
     "@rescript/designs": "workspace:*",
     "@rescript/engine": "workspace:*",
     "@rescript/exporters": "workspace:*",
+    "@rescript/mail": "workspace:*",
     "@rescript/quality": "workspace:*",
     "@rescript/renderer": "workspace:*",
     "@rescript/schema": "workspace:*",

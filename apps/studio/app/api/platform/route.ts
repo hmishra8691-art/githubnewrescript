@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireUser } from "@/lib/guard";
 import { platformInfo, platformTier } from "@/lib/platform";
+import { mailConfig, sendMail } from "@/lib/mail";
+import { testEmail } from "@rescript/mail";
 
 export const dynamic = "force-dynamic";
 
@@ -123,6 +125,102 @@ export async function GET(_req: NextRequest) {
         ? [`${missing.length} migration${missing.length === 1 ? "" : "s"} not applied — the first is ${missing[0].migration} (${missing[0].what}).`]
         : []),
     ],
-    viewer: { isPlatformAdmin: isAdmin, signedIn: !!user },
+    mail: (() => {
+      const cfg = mailConfig();
+      return {
+        configured: cfg.configured,
+        from: cfg.from || null,
+        fromBulk: cfg.fromBulk || null,
+        replyTo: cfg.replyTo,
+        /* outside production, where mail actually goes instead of to its recipient */
+        redirectTo: cfg.redirectTo,
+        /* whether a real recipient can be reached from here at all */
+        canReachRealRecipients: cfg.configured && cfg.tier === "production",
+      };
+    })(),
+    viewer: { isPlatformAdmin: isAdmin, signedIn: !!user, email: user?.email ?? null },
   }, { headers: { "cache-control": "no-store" } });
+}
+
+/**
+ * SEND YOURSELF A TEST EMAIL.
+ *
+ *   POST /api/platform  { action: "test_mail" }
+ *
+ * The one thing nobody can check by reading configuration: whether a message
+ * actually leaves. It goes to the SIGNED-IN CALLER'S OWN ADDRESS and nowhere
+ * else — not to an address in the request body, which would turn a
+ * configuration page into an open relay for sending mail from a verified
+ * domain. Signing in is therefore required even on a development instance,
+ * where the rest of this route is readable.
+ *
+ * What the test proves and what it does not is spelled out in the email
+ * itself: a key and an address that work are not a verified sending domain,
+ * and mail that reaches your own inbox can still land every respondent in a
+ * spam folder. That is a DNS problem, and it is the most common one.
+ */
+export async function POST(req: NextRequest) {
+  const { tier } = platformTier();
+  const resolved = await requireUser(req);
+  if (isFailure(resolved)) return resolved.response;
+  const user = resolved;
+
+  if (tier === "production" && !user.isPlatformAdmin) {
+    return NextResponse.json({ error: "Not available." }, { status: 404 });
+  }
+
+  const body = (await req.json().catch(() => ({}))) as { action?: string };
+  if (body.action !== "test_mail") {
+    return NextResponse.json({ error: "Unknown action." }, { status: 400 });
+  }
+  if (!user.email) {
+    return NextResponse.json({ error: "Your account has no email address to send a test to." }, { status: 400 });
+  }
+
+  const cfg = mailConfig();
+  if (!cfg.configured) {
+    return NextResponse.json({
+      error: "No mail is configured. Set RESEND_API_KEY and MAIL_FROM, then redeploy.",
+      code: "mail_not_configured",
+    }, { status: 503 });
+  }
+
+  const info = platformInfo();
+  const mail = testEmail({
+    tier: info.tier,
+    database: info.database,
+    from: cfg.from,
+    requestedBy: user.email,
+  });
+
+  const out = await sendMail({
+    to: user.email,
+    subject: mail.subject,
+    text: mail.text,
+    html: mail.html,
+    kind: "test",
+    customerId: user.customerId,
+    userId: user.userId,
+    /* no dedupeKey: pressing it twice should send twice — that is the point of a test */
+  });
+
+  if (out.sent) {
+    return NextResponse.json({
+      ok: true,
+      message: out.redirectedTo
+        ? `Sent — but this is the ${info.tier} platform, so it went to ${out.redirectedTo}.`
+        : `Sent to ${user.email}. If it does not arrive within a minute or two, check your spam folder, then your sending domain's DNS.`,
+      providerId: out.providerId,
+    });
+  }
+
+  return NextResponse.json({
+    error:
+      out.reason === "suppressed"
+        ? `This is the ${info.tier} platform and MAIL_DEV_REDIRECT is not set, so mail is suppressed rather than delivered. Set it to your own address to test.`
+        : out.reason === "invalid_recipient"
+          ? "Your account's email address does not look valid."
+          : `The provider refused it: ${"detail" in out ? out.detail : "no detail given"}`,
+    reason: out.reason,
+  }, { status: 502 });
 }

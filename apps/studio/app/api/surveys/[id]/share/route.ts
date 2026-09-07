@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { GRANTABLE_ROLES, isProjectRole, parseIdentifier, ROLE_LABEL } from "@rescript/access";
 import { newInvitationToken, supabaseService } from "@/lib/authServer";
 import { audit, isFailure, notifyProject, requireProject } from "@/lib/guard";
+import { sendMail } from "@/lib/mail";
+import { projectInvitationEmail } from "@rescript/mail";
 
 export const dynamic = "force-dynamic";
 
@@ -181,19 +183,72 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     detail: { targetEmail: identifier.value, role: ROLE_LABEL[role], invitationId: invitation?.id },
   });
 
+  const base = (process.env.STUDIO_PUBLIC_URL ?? "").trim().replace(/\/+$/, "");
+  const inviteUrl = `${base}/signup?invite=${encodeURIComponent(token)}`;
+
+  /*
+   * SEND IT — and still return the link.
+   *
+   * The link used to be returned INSTEAD of being emailed, because there was
+   * no mail transport and quietly doing nothing would have been worse than
+   * handing the inviter something they could pass on themselves. Now the
+   * platform sends it, and the link is returned as well rather than instead:
+   * an inviter who can see the URL can chase it up over Slack when the email
+   * has not arrived, and mail that reaches nobody is the normal state of a
+   * newly configured sending domain. The response says which happened.
+   */
+  const project = await db.from("surveys").select("title, code").eq("id", params.id).maybeSingle();
+  let delivery: "sent" | "not_configured" | "suppressed" | "failed" = "not_configured";
+  if (base) {
+    const mail = projectInvitationEmail({
+      inviterName: user.fullName || user.userCode || "A colleague",
+      projectTitle: project.data?.title ?? "a survey project",
+      projectCode: project.data?.code ?? "",
+      roleLabel: ROLE_LABEL[role],
+      url: inviteUrl,
+      expiresAt: invitation?.expires_at ?? null,
+      /* an existing account is being granted access; a new one has to sign up first */
+      hasAccount: false,
+    });
+    const out = await sendMail({
+      to: identifier.value,
+      subject: mail.subject,
+      text: mail.text,
+      html: mail.html,
+      kind: "project_invitation",
+      surveyId: params.id,
+      customerId: user.customerId,
+      userId: user.userId,
+      /*
+       * Keyed on the invitation row, so re-inviting the same person to the
+       * same project does not mail them again — the upsert above deliberately
+       * reuses one row per (project, email).
+       */
+      dedupeKey: invitation?.id ? `project_invitation:${invitation.id}` : undefined,
+      replyTo: user.email || undefined,
+    });
+    delivery = out.sent ? "sent" : out.reason === "not_configured" ? "not_configured" : out.reason === "suppressed" ? "suppressed" : "failed";
+  } else {
+    console.warn("[rescript:share] STUDIO_PUBLIC_URL is not set, so the invitation could not be emailed");
+  }
+
   return NextResponse.json({
     ok: true, kind: "invited",
     email: identifier.value,
     role,
     expiresAt: invitation?.expires_at,
-    /*
-     * The link is returned rather than emailed. Sending it needs SMTP on the
-     * Supabase project, and quietly doing nothing would be worse than handing
-     * the owner a link they can pass on themselves — they know how they talk
-     * to this person.
-     */
-    inviteUrl: `${process.env.STUDIO_PUBLIC_URL ?? ""}/signup?invite=${encodeURIComponent(token)}`,
-    message: `${identifier.value} has been invited as ${ROLE_LABEL[role]}. They will get access as soon as they create an account.`,
+    inviteUrl,
+    delivery,
+    message:
+      delivery === "sent"
+        ? `${identifier.value} has been invited as ${ROLE_LABEL[role]}, and the invitation has been emailed to them.`
+        : `${identifier.value} has been invited as ${ROLE_LABEL[role]}. ${
+            delivery === "not_configured"
+              ? "No mail is configured on this instance, so send them the link yourself."
+              : delivery === "suppressed"
+                ? "This is not the production platform, so no email was sent — send them the link yourself."
+                : "The email could not be sent, so send them the link yourself."
+          }`,
   });
 }
 

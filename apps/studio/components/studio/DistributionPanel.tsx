@@ -67,8 +67,10 @@ const STATUS_CHIP: Record<string, string> = {
  *             exists for — it is the answer to "who do we chase"
  *   HAND OUT  the links, as a spreadsheet or CSV, optionally only the ones
  *             that have not been sent, plus a QR code for the open link
- *   RECORD    that they went out, because this platform cannot send email and
- *             pretending otherwise would be worse than being honest
+ *   SEND      each person their own link by email (migration 0016), only ever
+ *             to those who have not had one — a second link is a second
+ *             possible interview — or RECORD that you sent them yourself,
+ *             which is what this step was before the platform could send
  *
  * A token is never chosen here. `respondents.token` is generated inside the
  * database, and the first time this code sees one is when it reads it back to
@@ -87,6 +89,13 @@ export function DistributionPanel() {
   const [search, setSearch] = React.useState("");
   const [uploadOpen, setUploadOpen] = React.useState(false);
   const [qr, setQr] = React.useState<{ svg: string; url: string } | null>(null);
+  /*
+   * Whether this instance can send at all, and whether it can reach real
+   * people. Read once from /api/platform rather than assumed: the button has
+   * to say what it will actually do, and on a staging instance what it will
+   * actually do is send everything to one address.
+   */
+  const [mail, setMail] = React.useState<{ configured: boolean; canReachRealRecipients: boolean; redirectTo: string | null } | null>(null);
 
   // the upload draft
   const [listName, setListName] = React.useState("");
@@ -114,6 +123,13 @@ export function DistributionPanel() {
       .catch(() => {});
   }, [s.surveyDbId, env, listFilter, search]);
   React.useEffect(refresh, [refresh]);
+
+  React.useEffect(() => {
+    fetch("/api/platform", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d?.mail) setMail(d.mail); })
+      .catch(() => {});
+  }, []);
 
   /* the environment is a different list entirely: nothing carries over */
   React.useEffect(() => { setListFilter(""); setPreview(null); setQr(null); }, [env]);
@@ -187,6 +203,52 @@ export function DistributionPanel() {
       setPreview(null); setText(""); setXlsxBase64(null); setFileName(null); setUploadOpen(false);
       refresh();
     }
+  };
+
+  /*
+   * §24 — email the links.
+   *
+   * `onlyUnsent` is true, always, from this button: "send this wave" means
+   * "send it to the people who have not had it". Re-sending to somebody who
+   * already has a link gives them a second one, and a second possible
+   * interview — so a deliberate re-send is a separate, confirmed action
+   * below rather than the same button pressed twice.
+   */
+  const sendInvitations = async (list: string | null, opts: { again?: boolean } = {}) => {
+    if (!mail?.configured) {
+      say("No mail is configured on this instance — download the links and send them yourself.", false);
+      return;
+    }
+    const wave = list ? `“${list}”` : "this list";
+    if (opts.again) {
+      if (!confirm(`Re-send to everybody in ${wave}, including people who already have their link?
+
+Anybody who has already been emailed will get a SECOND link. Both work, so they could answer twice.`)) return;
+    } else if (!mail.canReachRealRecipients) {
+      if (!confirm(`This is not the production platform.
+
+${mail.redirectTo ? `Every email will go to ${mail.redirectTo} instead of to the respondents.` : "Nothing will actually be delivered."}
+
+Send anyway?`)) return;
+    }
+    setBusy(true);
+    try {
+      const r = await fetch(`/api/surveys/${s.surveyDbId}/respondents/send`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ environment: env, list: list ?? undefined, onlyUnsent: !opts.again }),
+      });
+      const j = await r.json();
+      if (!r.ok) { say(j.error ?? `That failed (${r.status})`, false); return; }
+      const su = j.summary ?? {};
+      const bits = [`Emailed ${su.sent ?? 0} of ${su.total ?? 0}.`];
+      if (su.duplicate) bits.push(`${su.duplicate} already had theirs.`);
+      if (su.invalid) bits.push(`${su.invalid} had an address that is not valid.`);
+      if (su.failed) bits.push(`${su.failed} failed — they stay marked unsent, so sending again will pick them up.`);
+      if (j.note) bits.push(j.note);
+      say(bits.join(" "), (su.failed ?? 0) === 0);
+      refresh();
+    } catch (e) { say((e as Error).message, false); }
+    finally { setBusy(false); }
   };
 
   const markSent = async (list: string | null, ids?: string[]) => {
@@ -446,8 +508,25 @@ export function DistributionPanel() {
                         unsent only
                       </button>
                     )}
+                    {x.notSent > 0 && mail?.configured && (
+                      <button className="btn small primary" disabled={busy} data-testid={`ds-email-${x.listName}`}
+                        title={mail.canReachRealRecipients
+                          ? `Email their link to the ${x.notSent} who have not had one`
+                          : "This is not the production platform — see what happens before you send"}
+                        onClick={() => void sendInvitations(x.listName === "(no list)" ? null : x.listName)}>
+                        email {x.notSent}
+                      </button>
+                    )}
+                    {x.notSent === 0 && x.total > 0 && mail?.configured && (
+                      <button className="btn small ghost" disabled={busy} data-testid={`ds-again-${x.listName}`}
+                        title="Everybody here has had a link. Sending again gives them a second one."
+                        onClick={() => void sendInvitations(x.listName === "(no list)" ? null : x.listName, { again: true })}>
+                        re-send
+                      </button>
+                    )}
                     {x.notSent > 0 && (
                       <button className="btn small ghost" disabled={busy} data-testid={`ds-sent-${x.listName}`}
+                        title="Record that you sent these yourself, without emailing anything"
                         onClick={() => void markSent(x.listName === "(no list)" ? null : x.listName)}>
                         mark sent
                       </button>
@@ -467,9 +546,10 @@ export function DistributionPanel() {
         </table>
       </div>
       <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-        “Still waiting” is the number this screen exists for: invited, link sent, and they have not opened it. Nothing
-        here sends email — the platform has no mail transport, so the links come out as a file and{" "}
-        <strong>mark sent</strong> is how you record that they went.
+        “Still waiting” is the number this screen exists for: invited, link sent, and they have not opened it.{" "}
+        {mail?.configured
+          ? <>“Email” sends each person their own link and stamps them sent — only to those who have not had one, because a second link is a second possible interview. <strong>Mark sent</strong> is still there for links you sent yourself.</>
+          : <>No mail is configured on this instance, so the links come out as a file and <strong>mark sent</strong> is how you record that they went.</>}
       </p>
 
       {/* ----------------------------------------------------------- the QR */}

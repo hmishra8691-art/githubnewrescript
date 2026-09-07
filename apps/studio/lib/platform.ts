@@ -102,13 +102,11 @@ export function platformInfo(): PlatformInfo {
     authSalt: !!(process.env.AUTH_HASH_SALT ?? process.env.QUALITY_HASH_SALT),
     qualitySalt: !!process.env.QUALITY_HASH_SALT,
     /*
-     * There is no mail transport in this platform, and this is the honest
-     * place to say so rather than in a comment nobody reads: password reset,
-     * project invitations and respondent invitations all hand back a link for
-     * a human to send. `SMTP_URL` is checked so that the day one is
-     * configured, this stops claiming otherwise.
+     * Both halves, because either alone sends nothing: a key with no From
+     * address has nowhere to send from, and an address with no key has no way
+     * to send. `mailConfig()` applies the same rule.
      */
-    mail: !!(process.env.SMTP_URL ?? process.env.RESEND_API_KEY),
+    mail: !!(process.env.RESEND_API_KEY && (process.env.MAIL_FROM ?? "").trim()),
   };
 
   const warnings: string[] = [];
@@ -133,7 +131,18 @@ export function platformInfo(): PlatformInfo {
     warnings.push("AUTH_HASH_SALT is not set, so throttling hashes use a default salt shared with every other unconfigured instance.");
   }
   if (!configured.mail) {
-    warnings.push("No mail transport is configured, which is the platform's current state: invitations and password resets produce a link to send by hand.");
+    warnings.push("No mail is configured (RESEND_API_KEY and MAIL_FROM), so password resets cannot be delivered and invitations fall back to handing you a link to send by hand.");
+  }
+  /*
+   * Configured, and unable to reach anybody — the state a staging instance
+   * SHOULD be in, but worth saying out loud so nobody spends an afternoon
+   * wondering why a test never arrives.
+   */
+  if (configured.mail && tier !== "production" && !(process.env.MAIL_DEV_REDIRECT ?? "").trim()) {
+    warnings.push(`Mail is configured but this is the ${tier} platform, so nothing is delivered. Set MAIL_DEV_REDIRECT to your own address to receive it instead.`);
+  }
+  if (configured.mail && !(process.env.MAIL_FROM_INVITATIONS ?? "").trim()) {
+    warnings.push("MAIL_FROM_INVITATIONS is not set, so respondent invitations send from the same address as password resets. A survey wave that lands in spam folders can then take your password-reset delivery down with it.");
   }
   if (tier === "production" && (process.env.RESCRIPT_DIAGNOSTICS ?? "") === "1") {
     warnings.push("RESCRIPT_DIAGNOSTICS=1 in production: per-project diagnostics are readable by every project member, not only platform admins.");

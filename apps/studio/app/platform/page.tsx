@@ -28,7 +28,15 @@ interface Info {
   configured: Record<string, boolean>;
   migrations: { applied: string[]; missing: { migration: string; what: string }[]; level: string | null; complete: boolean; probed?: boolean };
   warnings: string[];
-  viewer: { isPlatformAdmin: boolean; signedIn: boolean };
+  mail?: {
+    configured: boolean;
+    from: string | null;
+    fromBulk: string | null;
+    replyTo: string | null;
+    redirectTo: string | null;
+    canReachRealRecipients: boolean;
+  };
+  viewer: { isPlatformAdmin: boolean; signedIn: boolean; email?: string | null };
 }
 
 const LABELS: Record<string, string> = {
@@ -39,12 +47,28 @@ const LABELS: Record<string, string> = {
   studioUrl: "Public Studio URL (for emailed links)",
   authSalt: "Auth hash salt",
   qualitySalt: "Quality hash salt",
-  mail: "Mail transport",
+  mail: "Mail (Resend)",
 };
 
 export default function PlatformPage() {
   const [info, setInfo] = React.useState<Info | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [testing, setTesting] = React.useState(false);
+  const [testResult, setTestResult] = React.useState<{ ok: boolean; text: string } | null>(null);
+
+  const sendTest = async () => {
+    setTesting(true); setTestResult(null);
+    try {
+      const r = await fetch("/api/platform", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "test_mail" }),
+      });
+      const j = await r.json().catch(() => ({}));
+      setTestResult({ ok: r.ok, text: r.ok ? j.message ?? "Sent." : j.error ?? `That failed (${r.status}).` });
+    } catch (e) {
+      setTestResult({ ok: false, text: (e as Error).message });
+    } finally { setTesting(false); }
+  };
 
   React.useEffect(() => {
     fetch("/api/platform", { cache: "no-store" })
@@ -122,15 +146,80 @@ export default function PlatformPage() {
               <tr key={k}>
                 <td>{LABELS[k] ?? k}</td>
                 <td>
-                  <span className={`chip ${v ? "on" : k === "mail" ? "" : "warn"}`}>{v ? "set" : "not set"}</span>
+                  <span className={`chip ${v ? "on" : "warn"}`}>{v ? "set" : "not set"}</span>
                   {k === "mail" && !v && <span className="muted" style={{ fontSize: 12.5, marginLeft: 8 }}>
-                    The platform has none: invitations and password resets hand back a link to send by hand.
+                    Password resets cannot be delivered; invitations hand back a link to send by hand.
                   </span>}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+      </div>
+
+      {/*
+        * MAIL. Configuration cannot tell you whether a message actually
+        * leaves, so this section ends with the one button that can — sending
+        * to the signed-in caller's own address, never to one typed into a
+        * box, because that would make this page a way to send mail from a
+        * verified domain to anybody.
+        */}
+      <h3 className="sec">Mail</h3>
+      <div className="card" data-testid="platform-mail">
+        {!info.mail?.configured ? (
+          <>
+            <div className="chip warn" data-testid="platform-mail-off">Not configured</div>
+            <p className="muted" style={{ fontSize: 13, marginBottom: 0 }}>
+              Password resets, project invitations and respondent invitations all fall back to handing you a link to
+              send by hand. Set <span className="mono">RESEND_API_KEY</span> and <span className="mono">MAIL_FROM</span>{" "}
+              to change that.
+            </p>
+          </>
+        ) : (
+          <>
+            <table className="grid">
+              <tbody>
+                <tr><td>Transactional from</td><td className="mono">{info.mail.from}</td></tr>
+                <tr>
+                  <td>Invitations from</td>
+                  <td className="mono">
+                    {info.mail.fromBulk}
+                    {info.mail.fromBulk === info.mail.from && (
+                      <span className="muted" style={{ fontSize: 12.5, marginLeft: 8 }}>
+                        — same address as transactional. Set MAIL_FROM_INVITATIONS to a separate subdomain so a bad
+                        survey send cannot stop your password resets arriving.
+                      </span>
+                    )}
+                  </td>
+                </tr>
+                {info.mail.replyTo && <tr><td>Reply-to</td><td className="mono">{info.mail.replyTo}</td></tr>}
+                <tr>
+                  <td>Reaches real recipients</td>
+                  <td>
+                    {info.mail.canReachRealRecipients
+                      ? <span className="chip on">yes — this is production</span>
+                      : info.mail.redirectTo
+                        ? <span className="chip warn">no — everything goes to <span className="mono">{info.mail.redirectTo}</span></span>
+                        : <span className="chip warn">no — suppressed, and no redirect address is set</span>}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div className="row" style={{ gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+              <button className="btn small primary" disabled={testing} data-testid="platform-mail-test" onClick={() => void sendTest()}>
+                {testing ? "Sending…" : `Send a test to ${info.viewer.email ?? "my address"}`}
+              </button>
+              {testResult && (
+                <span className={`chip ${testResult.ok ? "on" : "warn"}`} data-testid="platform-mail-result">{testResult.text}</span>
+              )}
+            </div>
+            <p className="muted" style={{ fontSize: 12.5, marginBottom: 0, marginTop: 8 }}>
+              A test that arrives proves the key and the address. It does <strong>not</strong> prove your DNS — until
+              SPF and DKIM are verified for the sending domain, mail to anyone outside your own organisation is likely
+              to be filtered. Check the domain in your provider&apos;s dashboard.
+            </p>
+          </>
+        )}
       </div>
 
       <h3 className="sec">Database migrations</h3>
