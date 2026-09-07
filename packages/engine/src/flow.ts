@@ -13,6 +13,7 @@ import { prefillQuestions } from "./setExpression.js";
 import { resolveUrlTemplate } from "./redirect.js";
 import { listFillHiddenDestinations } from "./listFill.js";
 import { containerVisibleByRules, visibleByRules } from "./displayRules.js";
+import { calcOptionsFor } from "./calcContext.js";
 
 /**
  * Survey Flow interpreter (requirement §7).
@@ -287,9 +288,13 @@ export function runCalculations(
    * answers in their positional export columns.
    */
   Object.assign(state.calculated, loopVariables(def, state));
+  /*
+   * The resolver comes from `calcOptionsFor` rather than being built here, so
+   * a calculation and an `expr` condition resolve names through literally the
+   * same function. Two inline copies is how one language becomes two.
+   */
   const flat = flattenVariables(def, state);
-  const resolver = (n: string) => (n in flat ? flat[n] : state.calculated[n]);
-  const names = () => [...Object.keys(flat), ...Object.keys(state.calculated)];
+  const { resolver, names } = calcOptionsFor(def, state);
   for (const calc of def.calculations) {
     if (calc.trigger !== trigger && !(trigger === "on_page_submit" && calc.trigger === "on_change")) continue;
     if (!evaluateCondition(calc.when, { def, state })) continue;

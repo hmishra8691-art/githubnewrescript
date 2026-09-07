@@ -52,7 +52,12 @@ import { getQuestionByCodeOrVar } from "./state.js";
 type TokKind = "ident" | "number" | "string" | "punct";
 interface Tok { kind: TokKind; text: string; pos: number }
 
-const PUNCT = ["(", ")", "[", "]", ",", ">=", "<=", "!=", "==", "=", ">", "<"];
+/*
+ * Two-character operators come first, so ">=" is not read as ">" followed by
+ * "=". The arithmetic four are here so an expression like `Q5 + Q6 > 100` can
+ * tokenize at all — before this they were "Unexpected character".
+ */
+const PUNCT = [">=", "<=", "!=", "==", "(", ")", "[", "]", ",", "=", ">", "<", "+", "-", "*", "/", "%"];
 
 function tokenize(src: string): { tokens: Tok[]; error?: ExpressionError } {
   const tokens: Tok[] = [];
@@ -209,6 +214,65 @@ function loopVarsIn(nodes: FlowNode[]): string[] {
   return out;
 }
 
+/* ============================================== functions in a condition
+ *
+ * `COUNT(Q2) >= 3`, `SUM(Q5, Q6, Q7) > 100`, `CONTAINS(Q10, "manager")`.
+ *
+ * TWO KINDS OF FUNCTION, AND NEITHER ONE IS A NEW ENGINE.
+ *
+ *   COUNT(...)   compiles to the `count` SOURCE — the structured count spec
+ *                the visual builder writes. So a count typed as text and a
+ *                count built by clicking are the same tree, and the count
+ *                evaluator is the only one there is.
+ *
+ *   everything   compiles to the `expr` source, whose value is produced by
+ *   else         the CALCULATION engine — the same `evaluateExpression` that
+ *                runs `Calculation.expression`. Every function it already had
+ *                (sum, avg, min, max, round, abs, len, concat, contains, …)
+ *                is therefore available in a condition on the day this lands,
+ *                and a function added there is available in both places at
+ *                once. That is the §29 requirement — new functions plug in
+ *                without rewriting the features that consume them.
+ *
+ * The alternative was a third expression language with its own function table
+ * to keep in step with the other two. The repo already has one such
+ * duplication (`embedded.ts` lists calc's functions again, with nothing
+ * keeping them in sync); a third would be a promise to get it wrong.
+ */
+
+/** Names that mean "count of a collection", handled structurally. */
+const COUNT_FUNCTIONS = new Set(["count", "counted"]);
+
+/**
+ * Names handed to the calculation engine. Kept as a list rather than "anything
+ * with a bracket after it" so a typo is a parse error naming the function
+ * instead of a rule that silently evaluates to null at run time.
+ */
+const CALC_FUNCTIONS = new Set([
+  /* numeric */
+  "sum", "avg", "average", "mean", "min", "max", "round", "abs", "floor",
+  "ceil", "ceiling", "sqrt", "pow", "pct", "percent", "weighted", "countif",
+  /* string */
+  "len", "length", "concat", "contains", "upper", "lower", "trim",
+  "substring", "substr", "replace", "startswith", "endswith",
+  /* general */
+  "if", "coalesce", "number", "text",
+]);
+
+/**
+ * Functions whose value IS a yes/no answer, so a bare call is a complete
+ * condition: `CONTAINS(Q10, "manager")` needs no comparison. A COUNT does —
+ * reading `COUNT(Q1)` alone as "> 0" would be a guess, and it is wrong as
+ * often as it is right, so that case is refused with a message instead.
+ */
+const BOOLEAN_FUNCTIONS = new Set(["contains", "startswith", "endswith"]);
+
+/** Arithmetic that turns a run of tokens into a calc expression. */
+const ARITHMETIC = new Set(["+", "-", "*", "/", "%"]);
+
+/** Words that end an arithmetic run — they belong to the condition, not to it. */
+const CALC_STOP_WORDS = new Set(["and", "or", "not", "then", "else"]);
+
 /* ================================================================ parsing */
 
 /**
@@ -238,6 +302,149 @@ export function parseLogicExpression(
   const fail: (message: string, pos?: number) => never = (message, pos) => {
     const e: ExpressionError = { message, position: pos ?? peek()?.pos };
     throw e;
+  };
+
+  /* ----------------------------------------------------------- functions */
+
+  /** The source text of tokens [from, to), as the calc engine will see it. */
+  const sliceText = (from: number, to: number): string => {
+    const parts: string[] = [];
+    for (let i = from; i < to; i++) {
+      const t = tokens[i];
+      if (t.kind === "string") { parts.push(JSON.stringify(t.text)); continue; }
+      if (t.kind === "ident") {
+        /*
+         * REFERENCES ARE NORMALISED TO VARIABLE NAMES before the calc engine
+         * sees them, because the two languages address things differently: a
+         * condition resolves a question by code, variable name OR id, while
+         * calc resolves a name in the flat variable map. Without this,
+         * `Q5 + Q6 > 100` would work only when a question's code and its
+         * variable name happen to be the same string — true in most surveys,
+         * and quietly false in the ones where somebody renamed a variable.
+         */
+        const q = getQuestionByCodeOrVar(def, t.text);
+        parts.push(q ? q.variableName : t.text);
+        continue;
+      }
+      parts.push(t.text);
+    }
+    return parts.join(" ");
+  };
+
+  /** Skip a balanced bracket pair starting at `i` (which must be "("). */
+  const matchParen = (i: number): number => {
+    let depth = 0;
+    for (let j = i; j < tokens.length; j++) {
+      const t = tokens[j];
+      if (t.kind !== "punct") continue;
+      if (t.text === "(") depth += 1;
+      else if (t.text === ")") { depth -= 1; if (depth === 0) return j; }
+    }
+    return -1;
+  };
+
+  /**
+   * `COUNT(Q1, selected, rows, only [a, b], answering [4, 5])`.
+   *
+   * The first argument is the question; the rest are optional and order-free,
+   * because a positional fifth argument nobody can read is worse than a named
+   * one. Returns the count SOURCE — the same object the visual builder writes.
+   */
+  const readCountCall = (): DraftSource => {
+    const nameTok = tokens[at];
+    at += 1;              // the function name
+    at += 1;              // "("
+    const first = peek();
+    if (!first || first.kind !== "ident") fail("COUNT needs a question", nameTok.pos);
+    const q = getQuestionByCodeOrVar(def, first!.text);
+    if (!q) fail(`${first!.text} does not exist`, first!.pos);
+    at += 1;
+
+    const spec: Record<string, unknown> = { of: "selected", scope: "options" };
+    while (peek()?.kind === "punct" && peek()!.text === ",") {
+      at += 1;
+      const t = peek();
+      if (!t) fail("COUNT( … has no closing bracket", nameTok.pos);
+      const word = t!.kind === "ident" ? t!.text.toLowerCase() : "";
+      if (["selected", "notselected", "valid", "invalid", "eligible", "visible", "hidden", "matching"].includes(word)) {
+        spec.of = word === "notselected" ? "notSelected" : word;
+        at += 1;
+      } else if (["options", "rows", "columns"].includes(word)) {
+        spec.scope = word;
+        at += 1;
+      } else if (word === "only" || word === "answering" || word === "group") {
+        at += 1;
+        const v = readOperand();
+        if (word === "group") spec.group = String(v);
+        else spec[word === "only" ? "only" : "responseIn"] = Array.isArray(v) ? v : [v];
+      } else {
+        fail(`COUNT does not understand “${t!.text}”`, t!.pos);
+      }
+    }
+    const close = peek();
+    if (!close || close.kind !== "punct" || close.text !== ")") {
+      fail("COUNT( … has no closing bracket", nameTok.pos);
+    }
+    at += 1;
+    return { kind: "question", ref: q!.id, count: spec as never };
+  };
+
+  /**
+   * Is there a function call or an arithmetic run starting here, whose VALUE is
+   * the left-hand side of a comparison?
+   *
+   * The disambiguation that matters: `(` begins a condition group almost
+   * always, and an arithmetic expression only when a comparison operator
+   * follows the closing bracket. `(A OR B) AND C` and `(Q5 + Q6) > 100` differ
+   * only in what comes after the `)`, so the lookahead is exactly that — find
+   * the matching bracket, look at the next token.
+   */
+  const calcRunEndsAt = (): number => {
+    const t = peek();
+    if (!t) return -1;
+
+    if (t.kind === "punct" && t.text === "(") {
+      const close = matchParen(at);
+      if (close < 0) return -1;
+      const after = tokens[close + 1];
+      const isComparison = !!after && after.kind === "punct"
+        && [">", "<", ">=", "<=", "=", "==", "!="].includes(after.text);
+      return isComparison ? close + 1 : -1;
+    }
+
+    if (t.kind !== "ident") return -1;
+    const name = t.text.toLowerCase();
+    const isFn = CALC_FUNCTIONS.has(name) || COUNT_FUNCTIONS.has(name);
+    if (isFn && tokens[at + 1]?.kind === "punct" && tokens[at + 1].text === "(") {
+      const close = matchParen(at + 1);
+      return close < 0 ? -1 : close + 1;
+    }
+
+    /*
+     * A bare arithmetic run: `Q5 + Q6 > 100`. Only treated as one when an
+     * arithmetic operator actually appears before the comparison — otherwise
+     * every ordinary rule would take this path.
+     */
+    let i = at;
+    let sawArithmetic = false;
+    let depth = 0;
+    while (i < tokens.length) {
+      const tk = tokens[i];
+      if (tk.kind === "punct") {
+        if (tk.text === "(") { depth += 1; i += 1; continue; }
+        if (tk.text === ")") { if (depth === 0) break; depth -= 1; i += 1; continue; }
+        if (ARITHMETIC.has(tk.text)) { sawArithmetic = true; i += 1; continue; }
+        break;                                     // a comparison, comma, or ]
+      }
+      if (tk.kind === "ident" && CALC_STOP_WORDS.has(tk.text.toLowerCase())) break;
+      /*
+       * A word that begins an operator spelling ends the run: in
+       * `Q5 + Q6 is greater than 100`, "is" is the comparison, not a term.
+       */
+      if (tk.kind === "ident" && SPELLINGS.some((sp) => sp.words[0] === tk.text.toLowerCase())) break;
+      i += 1;
+    }
+    return sawArithmetic ? i : -1;
   };
 
   /* ---------------------------------------------------------- references */
@@ -363,6 +570,63 @@ export function parseLogicExpression(
   const parsePrimary = (): Condition => {
     const t = peek();
     if (!t) fail("Expression ended early — expected a condition");
+    /*
+     * A FUNCTION CALL OR AN ARITHMETIC RUN, whose value is the left-hand side
+     * of a comparison. Checked before the bracket case below, because
+     * `(Q5 + Q6) > 100` and `(A OR B) AND C` both start with "(" and are told
+     * apart only by what follows the closing bracket.
+     */
+    const calcEnd = calcRunEndsAt();
+    if (calcEnd > at) {
+      const isCount = t!.kind === "ident" && COUNT_FUNCTIONS.has(t!.text.toLowerCase())
+        && tokens[at + 1]?.kind === "punct" && tokens[at + 1].text === "(";
+      const source: DraftSource = isCount
+        ? readCountCall()
+        : (() => {
+          /*
+           * A run that is entirely wrapped in brackets is stored WITHOUT them.
+           * The printer adds exactly one pair back, so `(Q5 + Q6) > 100`
+           * prints as itself; keeping the typed pair too would print
+           * `((Q5 + Q6)) > 100`, which re-parses to a different tree and
+           * breaks the round-trip identity the two editors depend on.
+           */
+          const wrapped = tokens[at]?.kind === "punct" && tokens[at].text === "("
+            && matchParen(at) === calcEnd - 1;
+          const text = wrapped ? sliceText(at + 1, calcEnd - 1) : sliceText(at, calcEnd);
+          at = calcEnd;
+          return { kind: "expr" as const, ref: text };
+        })();
+
+      const operator = readOperator();
+      if (!operator) {
+        /*
+         * A bare call to a function that already answers yes or no is a
+         * complete condition; anything else needs something to compare to.
+         * Reading `COUNT(Q1)` as "> 0" would be a guess, and it is wrong as
+         * often as it is right — more often it means somebody stopped typing.
+         */
+        const fname = t!.kind === "ident" ? t!.text.toLowerCase() : "";
+        if (BOOLEAN_FUNCTIONS.has(fname)) {
+          return { type: "rule", source: strip(source), operator: "eq", value: true };
+        }
+        fail("A count or calculation needs a comparison — for example COUNT(Q1) >= 2", t!.pos);
+      }
+      if (NO_OPERAND.includes(operator!)) {
+        return { type: "rule", source: strip(source), operator: operator! };
+      }
+      if (TWO_OPERANDS.includes(operator!)) {
+        const value = readOperand();
+        if (isWord(peek(), "and")) at += 1;
+        else if (peek()?.kind === "punct" && peek()!.text === ",") at += 1;
+        return { type: "rule", source: strip(source), operator: operator!, value, value2: readOperand() };
+      }
+      if (LIST_OPERAND.includes(operator!)) {
+        const value = readOperand();
+        return { type: "rule", source: strip(source), operator: operator!, value: Array.isArray(value) ? value : [value] };
+      }
+      return { type: "rule", source: strip(source), operator: operator!, value: readOperand() };
+    }
+
     if (t!.kind === "punct" && t!.text === "(") {
       at += 1;
       const inner = parseOr();
@@ -556,7 +820,8 @@ export function resolveColumnOrOption(q: Question, token: string): Resolved | nu
   const byOpt = q.options.find((o) => String(o.code) === token);
   if (byOpt) return { kind: "option", code: byOpt.code };
 
-  const cn = positional(token, "C");
+  /* `O`/`A` accepted here as well, so a scale option spelled either way reads */
+  const cn = positional(token, "C") ?? positional(token, "O") ?? positional(token, "A");
   if (cn != null) {
     if (q.columns.length) {
       const byCode = q.columns.find((c) => c.id === String(cn));
@@ -575,10 +840,30 @@ export function resolveColumnOrOption(q: Question, token: string): Resolved | nu
 const IDENT_SAFE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
 /** How a row / option / column code is written in an expression. */
-function codeToken(code: string | number, prefix: "R" | "C" | ""): string {
+function codeToken(code: string | number, prefix: "R" | "C" | "O" | ""): string {
   const s = String(code);
   if (IDENT_SAFE.test(s)) return s;
   return `${prefix}${s}`;
+}
+
+/**
+ * A count source as a `COUNT(...)` call.
+ *
+ * The argument order is the one the requirement writes — `COUNT(Q1, selected)`
+ * — and everything after the first two is a named argument, so a subset or a
+ * grid response set stays readable and stays optional. `SELECTED` is the
+ * default and is therefore not printed, which keeps the common case short.
+ */
+function countText(def: SurveyDefinition, source: ConditionRule["source"]): string {
+  const spec = source.count!;
+  const q = getQuestionByCodeOrVar(def, source.ref);
+  const args: string[] = [q?.code ?? source.ref];
+  if (spec.of !== "selected") args.push(spec.of);
+  if (spec.scope !== "options") args.push(spec.scope);
+  if (spec.only?.length) args.push(`only [${spec.only.map(operandText).join(", ")}]`);
+  if (spec.group) args.push(`group ${operandText(spec.group)}`);
+  if (spec.responseIn?.length) args.push(`answering [${spec.responseIn.map(operandText).join(", ")}]`);
+  return `COUNT(${args.join(", ")})`;
 }
 
 function operandText(v: unknown): string {
@@ -593,6 +878,17 @@ function operandText(v: unknown): string {
 /** The reference text for a rule's source. */
 function referenceText(def: SurveyDefinition, rule: ConditionRule): string {
   const { source } = rule;
+  /*
+   * A calc expression prints as itself, in brackets — `(Q5 + Q6) > 100`. The
+   * brackets are what make it re-parse as one expression rather than as the
+   * start of a condition group, which is what the round-trip identity needs.
+   */
+  if (source.kind === "expr") return `(${source.ref})`;
+  /*
+   * A count prints as the function call it parses from, so `COUNT(Q1) >= 2`
+   * survives a trip through the visual builder and back.
+   */
+  if (source.count) return countText(def, source);
   if (source.kind === "calculation") return `calc.${source.ref}`;
   if (source.kind === "embedded") return `ed.${source.ref}`;
   if (source.kind === "loop") return `${source.scope ?? "loop"}.${source.ref || "code"}`;
@@ -621,7 +917,12 @@ function ruleText(def: SurveyDefinition, rule: ConditionRule): string {
   const { operator, value, value2 } = rule;
   const q = rule.source.kind === "question" ? getQuestionByCodeOrVar(def, rule.source.ref) : undefined;
 
-  if (operator === "answered" && rule.source.kind === "question") return ref;
+  /*
+   * The bare-reference shorthand for `answered` applies to a question, not to
+   * a count of one: `COUNT(Q1)` on its own would re-parse as "the count is
+   * answered", which is not the same rule.
+   */
+  if (operator === "answered" && rule.source.kind === "question" && !rule.source.count) return ref;
 
   /*
    * `selected` collapses into the dotted reference, which is the shorthand
@@ -632,7 +933,23 @@ function ruleText(def: SurveyDefinition, rule: ConditionRule): string {
    */
   if (operator === "selected" && value != null && q) {
     const opt = q.options.find((o) => String(o.code) === String(value));
-    if (opt) return `${ref}.${codeToken(opt.code, "C")}`;
+    /*
+     * THE PREFIX DEPENDS ON WHICH SEGMENT THE OPTION IS.
+     *
+     * A numeric code is not a bare identifier, so it needs a prefix — and
+     * numeric is what `nextCode` generates for every option this platform
+     * creates, which makes this the DEFAULT case rather than an edge one.
+     * The two resolvers spell it differently and both are right: the second
+     * segment (`Q1.O2`) is read by `resolveRowOrOption`, which takes O/A for
+     * an option; the third (`Q2.R1.C2`) is read by `resolveColumnOrOption`,
+     * where a matrix's scale options ARE its columns and the prefix is C.
+     *
+     * One printer line served both and always wrote C, so `Q1.1` printed as
+     * `Q1.C1` — which re-parses as a column that does not exist. The round
+     * trip was broken for plain option codes, and had been since the printer
+     * was written.
+     */
+    if (opt) return `${ref}.${codeToken(opt.code, rule.source.rowCode != null ? "C" : "O")}`;
   }
 
   if (NO_OPERAND.includes(operator)) return `${ref} ${OPERATOR_SPELLING(operator)}`;

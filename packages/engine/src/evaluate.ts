@@ -3,6 +3,7 @@ import { isOptionValueRef } from "@rescript/schema";
 import type { LoopContext, ResponseState } from "./state.js";
 import { findLoopScope, getQuestionByCodeOrVar, lookupAnswer, loopValue } from "./state.js";
 import { evaluateCount } from "./countCondition.js";
+import { safeExpression } from "./calcContext.js";
 
 /**
  * The option currently under evaluation. Present whenever a condition is
@@ -61,6 +62,19 @@ export function resolveSourceValue(rule: ConditionRule, ctx: EvalContext): unkno
   if (source.count) return evaluateCount(source, ctx);
 
   switch (source.kind) {
+    /*
+     * A CALC EXPRESSION AS THE LEFT-HAND VALUE.
+     *
+     * `(Q5 + Q6 + Q7) > 100` is one rule whose left side is arithmetic. The
+     * arithmetic is run by the calculation engine — the same one that runs
+     * `Calculation.expression` — through the same resolver, so a name means
+     * the same thing in a condition as it does in a calculation.
+     *
+     * Never throws: a broken expression is `null`, and null fails every
+     * comparison below, so the rule is false rather than the page being blank.
+     */
+    case "expr":
+      return safeExpression(source.ref, ctx.def, ctx.state);
     case "option": {
       const o = ctx.option;
       if (!o) return null;

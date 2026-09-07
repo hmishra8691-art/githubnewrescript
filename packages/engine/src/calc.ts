@@ -227,7 +227,36 @@ export interface CalcOptions {
   names?: () => string[];
 }
 
-function evalNode(n: Node, o: CalcOptions): CalcValue {
+/**
+ * SAFETY BOUNDS (§44).
+ *
+ * This engine had none. It is a hand-written recursive-descent parser and a
+ * recursive interpreter with no depth limit, no node budget and an unbounded
+ * parse cache — and two of its callers (`piping.ts` and `scripts.ts`) invoke
+ * it without a try/catch, so a pathological expression took the page down
+ * rather than reporting a problem.
+ *
+ * The limits are generous enough that no honest expression meets them: 64
+ * levels of nesting is far past what anybody writes by hand, and 20 000
+ * evaluation steps is far past what a survey needs. What they catch is a
+ * pathological or generated expression, and they catch it as an ERROR with a
+ * message rather than as a stack overflow.
+ */
+const MAX_DEPTH = 64;
+const MAX_STEPS = 20_000;
+/** Parsed expressions kept. Bounded, because the cache was a slow leak. */
+const MAX_CACHE = 500;
+
+function evalNode(n: Node, o: CalcOptions, depth = 0, budget?: { steps: number }): CalcValue {
+  const used = budget ?? { steps: 0 };
+  if (depth > MAX_DEPTH) {
+    throw new Error(`Expression is nested more than ${MAX_DEPTH} levels deep`);
+  }
+  if ((used.steps += 1) > MAX_STEPS) {
+    throw new Error(`Expression did not finish within ${MAX_STEPS} steps`);
+  }
+  /** every recursive step carries the depth and shares the one step budget */
+  const ev = (m: Node) => evalNode(m, o, depth + 1, used);
   switch (n.k) {
     case "num": return n.v;
     case "str": return n.v;
@@ -239,15 +268,15 @@ function evalNode(n: Node, o: CalcOptions): CalcValue {
       return (v === undefined ? null : (v as CalcValue));
     }
     case "un": {
-      const a = evalNode(n.a, o);
+      const a = ev(n.a);
       if (n.op === "-") return -toNum(a);
       return !truthy(a);
     }
     case "bin": {
-      if (n.op === "and") return truthy(evalNode(n.a, o)) && truthy(evalNode(n.b, o));
-      if (n.op === "or") return truthy(evalNode(n.a, o)) || truthy(evalNode(n.b, o));
-      const a = evalNode(n.a, o);
-      const b = evalNode(n.b, o);
+      if (n.op === "and") return truthy(ev(n.a)) && truthy(ev(n.b));
+      if (n.op === "or") return truthy(ev(n.a)) || truthy(ev(n.b));
+      const a = ev(n.a);
+      const b = ev(n.b);
       switch (n.op) {
         case "+":
           if (typeof a === "string" || typeof b === "string") return String(a ?? "") + String(b ?? "");
@@ -274,12 +303,12 @@ function evalNode(n: Node, o: CalcOptions): CalcValue {
       }
     }
     case "call": {
-      const rawArgs = n.args.map((a) => evalNode(a, o));
+      const rawArgs = n.args.map((a) => ev(a));
       const flat = () => flattenArgs(rawArgs).filter((v) => v !== null && v !== "");
       const nums = () => flat().map(toNum);
       switch (n.name) {
         case "sum": return nums().reduce((a, b) => a + b, 0);
-        case "avg": case "mean": {
+        case "avg": case "mean": case "average": {
           const ns = nums();
           return ns.length ? ns.reduce((a, b) => a + b, 0) / ns.length : null;
         }
@@ -314,12 +343,12 @@ function evalNode(n: Node, o: CalcOptions): CalcValue {
         }
         case "abs": return Math.abs(toNum(rawArgs[0]));
         case "floor": return Math.floor(toNum(rawArgs[0]));
-        case "ceil": return Math.ceil(toNum(rawArgs[0]));
+        case "ceil": case "ceiling": return Math.ceil(toNum(rawArgs[0]));
         case "sqrt": return Math.sqrt(toNum(rawArgs[0]));
         case "pow": return Math.pow(toNum(rawArgs[0]), toNum(rawArgs[1]));
         case "if": return truthy(rawArgs[0]) ? rawArgs[1] ?? null : rawArgs[2] ?? null;
         case "coalesce": return rawArgs.find((v) => v !== null && v !== "") ?? null;
-        case "len": {
+        case "len": case "length": {
           const v = rawArgs[0];
           return Array.isArray(v) ? v.length : String(v ?? "").length;
         }
@@ -333,6 +362,37 @@ function evalNode(n: Node, o: CalcOptions): CalcValue {
         }
         case "number": return toNum(rawArgs[0]);
         case "text": return String(rawArgs[0] ?? "");
+
+        /*
+         * String functions (§18). They live here rather than in a new engine
+         * because this is where every other function already lives — a
+         * calculation and a condition then spell them the same way, which is
+         * the whole point of the shared language.
+         */
+        case "upper": return String(rawArgs[0] ?? "").toUpperCase();
+        case "lower": return String(rawArgs[0] ?? "").toLowerCase();
+        case "trim": return String(rawArgs[0] ?? "").trim();
+        case "substring": case "substr": {
+          const str = String(rawArgs[0] ?? "");
+          const from = Math.max(0, Math.floor(toNum(rawArgs[1])));
+          /* two args means "from here to the end", as every other language does */
+          return rawArgs.length >= 3
+            ? str.slice(from, from + Math.max(0, Math.floor(toNum(rawArgs[2]))))
+            : str.slice(from);
+        }
+        case "replace": {
+          /*
+           * Every occurrence, and a LITERAL needle — not a regex. A programmer
+           * typing replace(Q1, ".", "") means the full stop, and a silently
+           * regex-flavoured argument would quietly delete the whole string.
+           */
+          const hay = String(rawArgs[0] ?? "");
+          const needle = String(rawArgs[1] ?? "");
+          const with_ = String(rawArgs[2] ?? "");
+          return needle === "" ? hay : hay.split(needle).join(with_);
+        }
+        case "startswith": return String(rawArgs[0] ?? "").startsWith(String(rawArgs[1] ?? ""));
+        case "endswith": return String(rawArgs[0] ?? "").endsWith(String(rawArgs[1] ?? ""));
         default:
           throw new Error(`Unknown function ${n.name}()`);
       }

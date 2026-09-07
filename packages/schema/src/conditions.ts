@@ -247,7 +247,15 @@ export const CountSpec: z.ZodType<CountSpec, z.ZodTypeDef, unknown> = z.lazy(() 
  *  an embedded-data field, a calculated value, or quota state. */
 export const ConditionSource = z.object({
   kind: z
-    .enum(["question", "variable", "embedded", "calculation", "quota", "loop", "option"])
+    /*
+     * `expr` is a CALC EXPRESSION as the left-hand value — `Q5 + Q6 + Q7`,
+     * `AVERAGE(Q10, Q11, Q12)`, `LENGTH(Q10)`. It exists so the condition
+     * language can borrow the calculation engine's arithmetic and string
+     * functions instead of growing a second set of its own: `ref` holds the
+     * expression text and the same evaluator that runs `Calculation.expression`
+     * produces the value. One language, two places it can be written.
+     */
+    .enum(["question", "variable", "embedded", "calculation", "quota", "loop", "option", "expr"])
     .default("question"),
   /**
    * Question id (e.g. "q_brand") or variable / field name.
