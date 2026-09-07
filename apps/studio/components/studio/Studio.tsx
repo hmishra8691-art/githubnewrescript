@@ -25,13 +25,14 @@ import { JsonPanel } from "./JsonPanel";
 import { DataPanel } from "./DataPanel";
 import { FieldworkPanel } from "./FieldworkPanel";
 import { DistributionPanel } from "./DistributionPanel";
+import { ProjectPanel } from "./ProjectPanel";
 import { runtimeBaseUrl, surveyBaseUrl } from "@/lib/runtime-url";
 import { Icon, type IconName } from "@/components/ui/Icon";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
   | "quotas" | "listfill" | "designs" | "branding" | "scripts" | "data" | "fieldwork"
-  | "distribution" | "versions" | "json"
+  | "distribution" | "project" | "versions" | "json"
   | "collaborators" | "notes" | "activity"
   | "settings";
 
@@ -77,6 +78,14 @@ const NAV: { key: Tab; label: string; icon: IconName; group: string }[] = [
    * shipping it — and gated on `deploy.manage` at the route, not here: the
    * roles separate the programmer who edits from the manager who sends.
    */
+  /*
+   * §60. First in Management, because it is the project — the thing every
+   * other tab is about. Not in EDITING_TABS: recording a due date is not an
+   * act on the questionnaire and must not need the edit lock (the route
+   * gates it on `survey.edit` without the lock, and on
+   * `project.lock_settings` for the freeze).
+   */
+  { key: "project", label: "Project", icon: "home", group: "Management" },
   { key: "distribution", label: "Distribution", icon: "share", group: "Management" },
   { key: "versions", label: "Versions & Deploy", icon: "versions", group: "Management" },
   { key: "json", label: "JSON", icon: "json", group: "Management" },
@@ -731,6 +740,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           {tab === "scripts" && <ScriptsPanel />}
           {tab === "data" && <DataPanel />}
           {tab === "fieldwork" && <FieldworkPanel />}
+          {tab === "project" && <ProjectPanel />}
           {tab === "distribution" && <DistributionPanel />}
           {tab === "versions" && <VersionsPanel />}
           {tab === "json" && <JsonPanel />}

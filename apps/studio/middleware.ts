@@ -24,7 +24,13 @@ import { NextResponse, type NextRequest } from "next/server";
  * to sign in to answer a survey.
  */
 
-const PUBLIC_PATHS = ["/login", "/signup", "/forgot", "/reset", "/sandbox", "/share"];
+/*
+ * `/platform` (§45) is public HERE and gated in the route: it is open outside
+ * production and platform-admin-only in it. Bouncing it to a login would make
+ * it unusable in the one case it exists for — checking an instance while it is
+ * being set up, before there is an account to sign in with.
+ */
+const PUBLIC_PATHS = ["/login", "/signup", "/forgot", "/reset", "/sandbox", "/share", "/platform"];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;

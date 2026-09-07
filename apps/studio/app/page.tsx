@@ -12,7 +12,7 @@ import { Icon } from "@/components/ui/Icon";
 
 type SortKey =
   | "updated" | "created" | "name_az" | "name_za"
-  | "responses_desc" | "responses_asc" | "questions_desc";
+  | "responses_desc" | "responses_asc" | "questions_desc" | "due";
 
 const SORTS: { key: SortKey; label: string }[] = [
   { key: "updated", label: "Recently updated" },
@@ -22,6 +22,7 @@ const SORTS: { key: SortKey; label: string }[] = [
   { key: "responses_desc", label: "Most responses" },
   { key: "responses_asc", label: "Fewest responses" },
   { key: "questions_desc", label: "Most questions" },
+  { key: "due", label: "Due soonest" },
 ];
 
 /**
@@ -187,7 +188,15 @@ export default function Dashboard() {
       return (
         s2.title.toLowerCase().includes(q) ||
         s2.code.toLowerCase().includes(q) ||
-        s2.status.toLowerCase().includes(q)
+        s2.status.toLowerCase().includes(q) ||
+        /*
+         * §60 — the client and the project manager are searched too, because
+         * "everything for ACME" is the second thing anybody types into a
+         * project list and, until those fields existed, it could only work if
+         * somebody had put the client's name in the title.
+         */
+        (s2.clientName ?? "").toLowerCase().includes(q) ||
+        (s2.projectManager ?? "").toLowerCase().includes(q)
       );
     });
     const n = (id: string, k: keyof SurveyStats) => Number(stats[id]?.[k] ?? 0);
@@ -199,6 +208,17 @@ export default function Dashboard() {
         case "responses_desc": return n(b.id, "responseCount") - n(a.id, "responseCount");
         case "responses_asc": return n(a.id, "responseCount") - n(b.id, "responseCount");
         case "questions_desc": return n(b.id, "questionCount") - n(a.id, "questionCount");
+        /*
+         * §60 — soonest first, and a project with no due date goes last
+         * rather than first: an absent date is "not scheduled", and sorting it
+         * to the top of a deadline list is the one arrangement that makes the
+         * list useless.
+         */
+        case "due": {
+          const da = a.dueDate ?? "9999-12-31";
+          const dbb = b.dueDate ?? "9999-12-31";
+          return da.localeCompare(dbb) || b.updated_at.localeCompare(a.updated_at);
+        }
         case "updated":
         default: return b.updated_at.localeCompare(a.updated_at);
       }

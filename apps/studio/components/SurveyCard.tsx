@@ -27,6 +27,32 @@ export interface SurveyRow {
   version?: string | null;
   /** who holds the edit lock at this moment, if anyone */
   editing?: { userId: string; name: string | null; since: string | null; isMe: boolean } | null;
+  /* §60 — the project's own facts. Absent on a database without migration 0015. */
+  clientName?: string | null;
+  projectManager?: string | null;
+  fieldworkFrom?: string | null;
+  fieldworkTo?: string | null;
+  dueDate?: string | null;
+  locked?: boolean;
+}
+
+/**
+ * §60 — how a due date reads on a card.
+ *
+ * A date on its own makes a person do arithmetic; "3 days" does not, and the
+ * one that is already past has to be unmissable, because an overdue project
+ * nobody has noticed is the whole reason to show this at all.
+ */
+function dueLabel(due: string | null | undefined): { text: string; tone: string; title: string } | null {
+  if (!due) return null;
+  const when = Date.parse(`${due}T00:00:00`);
+  if (Number.isNaN(when)) return null;
+  const days = Math.round((when - Date.now()) / 86_400_000);
+  const on = new Date(when).toLocaleDateString();
+  if (days < 0) return { text: `${Math.abs(days)}d overdue`, tone: "warn", title: `Was due ${on}` };
+  if (days === 0) return { text: "due today", tone: "warn", title: `Due ${on}` };
+  if (days <= 7) return { text: `due in ${days}d`, tone: "warn", title: `Due ${on}` };
+  return { text: `due ${on}`, tone: "", title: `Due ${on}` };
 }
 
 /** a stable colour per person, matching the presence avatars elsewhere */
@@ -126,6 +152,32 @@ export function SurveyCard({ survey, stats, contributors, loading, onOpen, onRes
         </span>
       </div>
 
+      {/*
+        * §60 — who it is for and when it is due, on the card.
+        *
+        * These are the two questions asked of a project list ("which of these
+        * is ACME's", "what is due this week") and until the project fields
+        * existed they could only be answered by reading titles. Rendered only
+        * when set, so a workspace that does not use them sees the card it
+        * always had.
+        */}
+      {(survey.clientName || survey.dueDate || survey.fieldworkTo) && (
+        <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 8 }} data-testid="card-project">
+          {survey.clientName && (
+            <span className="chip" data-testid="card-client" title="The client this project is for">{survey.clientName}</span>
+          )}
+          {(() => {
+            const due = dueLabel(survey.dueDate);
+            return due ? <span className={`chip ${due.tone}`} data-testid="card-due" title={due.title}>{due.text}</span> : null;
+          })()}
+          {survey.fieldworkTo && !survey.dueDate && (
+            <span className="chip muted" title={`Fieldwork closes ${new Date(`${survey.fieldworkTo}T00:00:00`).toLocaleDateString()}`}>
+              in field to {new Date(`${survey.fieldworkTo}T00:00:00`).toLocaleDateString()}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* who is responsible, what I may do, and whether it is busy right now */}
       {(survey.owner || survey.myRole || survey.editing) && (
         <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 8 }} data-testid="card-collab">
@@ -141,6 +193,11 @@ export function SurveyCard({ survey, stats, contributors, loading, onOpen, onRes
             <span className="chip card-role" data-testid="card-role">{survey.myRole.replace("_", " ")}</span>
           )}
           {survey.collaborators ? <span className="chip card-role">{survey.collaborators} shared</span> : null}
+          {survey.locked && (
+            <span className="chip warn" data-testid="card-frozen" title="Frozen by its owner: nobody else can change anything on this project">
+              frozen
+            </span>
+          )}
           {survey.editing && (
             <span className="card-editing" data-testid="card-editing"
               title={survey.editing.since ? `Editing since ${new Date(survey.editing.since).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : undefined}>

@@ -524,9 +524,10 @@ const nav = await page.$$eval(".leftnav .nav-item", (es) => es.map((e) => [...e.
 // the 17 existing tabs keep their order; Data Analytics and Fieldwork (§23)
 // sit next to Data, in the Results group — additions that displace nothing
 // already there, which is what this assertion is for
-assert.deepEqual(nav.filter((t) => !["Data Analytics", "Fieldwork", "Distribution"].includes(t)), ["Questions", "Survey Settings", "Survey Flow", "Logic", "Variables", "Calculations", "Quotas", "List Fill", "Design Generators", "Branding", "Scripts", "Data", "Versions & Deploy", "JSON", "Collaborators", "Internal notes", "Activity"]);
+assert.deepEqual(nav.filter((t) => !["Data Analytics", "Fieldwork", "Distribution", "Project"].includes(t)), ["Questions", "Survey Settings", "Survey Flow", "Logic", "Variables", "Calculations", "Quotas", "List Fill", "Design Generators", "Branding", "Scripts", "Data", "Versions & Deploy", "JSON", "Collaborators", "Internal notes", "Activity"]);
 assert.equal(nav.indexOf("Fieldwork"), nav.indexOf("Data Analytics") + 1, "Fieldwork belongs beside Data in Results");
 assert.equal(nav.indexOf("Distribution"), nav.indexOf("Versions & Deploy") - 1, "Distribution belongs beside Versions & Deploy in Management");
+assert.equal(nav.indexOf("Project"), nav.indexOf("Distribution") - 1, "Project belongs at the top of Management");
 assert.equal(nav.filter((t) => t === "Data Analytics").length, 1);
 assert.equal(nav[nav.indexOf("Data") + 1], "Data Analytics", "Data Analytics follows Data");
 assert.match(await page.$eval('[data-testid="nav-analytics"]', (e) => e.getAttribute("href")), /^\/analytics/);

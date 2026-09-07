@@ -83,6 +83,40 @@ export async function GET(req: NextRequest) {
       : null,
   }));
 
+  /*
+   * §60 — the project's own facts, attached to the listing.
+   *
+   * `rescript_my_projects` decides which projects the caller may see, and its
+   * return type is deliberately not widened: replacing it would mean dropping
+   * a function this dashboard depends on, for columns the dashboard can fetch
+   * alongside. So this is a second read, keyed on the ids the caller has
+   * already been authorised for, through a function that filters by role
+   * again — passing another workspace's ids returns nothing rather than
+   * leaking a client name.
+   *
+   * Additive in the same way the statistics are: if it cannot be loaded (a
+   * database without migration 0015), the listing renders exactly as it did
+   * before, with no client and no due date rather than an error.
+   */
+  try {
+    const ids = surveys.map((x) => x.id);
+    if (ids.length) {
+      const { data: config } = await db.rpc("rescript_project_config", { p_surveys: ids });
+      const rows = (config ?? []) as Record<string, unknown>[];
+      const byId = new Map(rows.map((c) => [c.survey_id as string, c]));
+      for (const s of surveys as Record<string, unknown>[]) {
+        const c = byId.get(s.id as string);
+        if (!c) continue;
+        s.clientName = c.client_name ?? null;
+        s.projectManager = c.project_manager ?? null;
+        s.fieldworkFrom = c.fieldwork_from ?? null;
+        s.fieldworkTo = c.fieldwork_to ?? null;
+        s.dueDate = c.due_date ?? null;
+        s.locked = !!c.locked;
+      }
+    }
+  } catch { /* pre-0015: the listing is the listing, without the facts */ }
+
   /**
    * Statistics are additive: if they cannot be loaded the listing still
    * renders with names, statuses and dates, and each missing number shows as

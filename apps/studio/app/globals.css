@@ -1555,6 +1555,15 @@ p.qs-help { margin: -2px 0 10px; }
 .ax-widget-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
 @media (max-width: 900px) { .ax-dashboard { grid-template-columns: repeat(6, 1fr); } .ax-rb-body, .ax-theme-grid, .ax-xt-layout { grid-template-columns: 1fr; } }
 
+/* §45 — which deployment this is. Production shows nothing: a badge that is
+   always there is a badge nobody sees any more, and the signal is its absence. */
+.env-banner { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; padding: 5px 14px; font-size: 12.5px; line-height: 1.5; border-bottom: 1px solid rgba(0,0,0,.12); }
+.env-banner strong { text-transform: uppercase; letter-spacing: .08em; font-size: 11px; }
+.env-banner code { font-size: 11px; opacity: .8; }
+.env-staging { background: #fef3c7; color: #78350f; }
+.env-development { background: var(--panel); color: var(--subtle); }
+@media print { .env-banner { display: none; } }
+
 /* public share page */
 .ax-share-page { max-width: 1100px; margin: 24px auto; padding: 0 16px; }
 .ax-share-gate { max-width: 420px; margin: 80px auto; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 28px; text-align: center; }
