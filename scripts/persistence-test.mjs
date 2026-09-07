@@ -89,11 +89,21 @@ await page.waitForTimeout(120);
 assert.match(await saveState(), /Unsaved changes/, `dirty is announced: ${await saveState()}`);
 console.log("✔ an edit immediately reads “Unsaved changes”");
 
-/* --------------------------------- unique-link warning is honest, not silent */
-
-const warn = await page.$$eval(".chip.warn", (els) => els.map((e) => e.textContent).join(" "));
-assert.match(warn, /Test Survey still works/, `unique-link caveat is stated: ${warn.slice(0, 80)}`);
-console.log("✔ unique-link mode explains that live needs tokens but Test still works");
+/* --------------------------------- unique-link note is honest, not silent */
+/*
+ * This was `.chip.warn` until §24 built the invitation screen. The note then
+ * stopped being a warning that nothing existed and became a note pointing at
+ * Distribution, so it moved to `.chip.qd-note` — and this assertion went red
+ * for a *styling* change while the sentence it cares about was still on the
+ * screen. Asserting on the test id instead means the note can be restyled,
+ * re-worded around the edges or moved without breaking the check, and only
+ * removing the caveat itself turns it red.
+ */
+await page.waitForSelector('[data-testid="access-personal-note"]');
+const note = await page.$eval('[data-testid="access-personal-note"]', (e) => e.textContent ?? "");
+assert.match(note, /Test Survey still works/, `unique-link caveat is stated: ${note.slice(0, 80)}`);
+assert.match(note, /Distribution/, `the note says where the list goes: ${note.slice(0, 120)}`);
+console.log("✔ unique-link mode explains that live needs a list but Test still works");
 
 /* ------------------------------------------------------- the publish gap */
 

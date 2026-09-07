@@ -10,6 +10,8 @@
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "verify": "pnpm typecheck && pnpm test && pnpm audit:code",
+    "verify:browser": "node scripts/verify-browser.mjs",
+    "verify:all": "pnpm verify && pnpm verify:browser",
     "audit:code": "node scripts/auth-guard-audit.mjs"
   },
   "packageManager": "pnpm@10.28.0",

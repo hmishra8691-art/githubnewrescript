@@ -26,6 +26,7 @@
  */
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { once } from "node:events";
 
 const STUB_PORT = 4444;
@@ -89,16 +90,70 @@ stub.listen(STUB_PORT);
 await once(stub, "listening");
 console.log(`  ·    stub PostgREST on :${STUB_PORT}`);
 
+/* --------------------------------------------------------------- the build */
+
+/**
+ * This is the one suite in the corpus that needs a PRODUCTION build, because
+ * `next dev` does not run middleware and route handlers the way the deployed
+ * app does, and the whole point here is what the real response carries in its
+ * `set-cookie` header.
+ *
+ * It builds into `.next-p0` rather than `.next` (see `apps/studio/
+ * next.config.mjs`) so that a dev server running on the same tree — which is
+ * the normal state while the rest of the corpus is running — keeps its own
+ * chunks. Writing a production build over a dev server's `.next` makes that
+ * server serve 404s for its own assets, which looks like a broken app rather
+ * than a test that trod on something.
+ *
+ * It builds EVERY TIME by default. A cached build is a build of yesterday's
+ * source, and a suite that proves yesterday's source has stopped being a
+ * test. Set P0_COOKIE_REUSE_BUILD=1 when iterating on the assertions
+ * themselves, where the ~80s is worth saving and the risk is understood.
+ */
+const DIST = ".next-p0";
+const buildEnv = {
+  ...process.env,
+  NEXT_DIST_DIR: DIST,
+  SUPABASE_URL: `http://localhost:${STUB_PORT}`,
+  SUPABASE_SERVICE_ROLE_KEY: "stub-service-key-for-tests",
+};
+
+const reuse = process.env.P0_COOKIE_REUSE_BUILD === "1"
+  && existsSync(`apps/studio/${DIST}/BUILD_ID`);
+
+if (reuse) {
+  console.log(`  ·    reusing the existing ${DIST} build (P0_COOKIE_REUSE_BUILD=1)`);
+} else {
+  console.log(`  ·    building the studio into ${DIST} (~80s — this suite needs a real production build)`);
+  const build = spawn("pnpm", ["exec", "next", "build"], {
+    cwd: "apps/studio",
+    env: buildEnv,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const buildLog = [];
+  build.stdout.on("data", (d) => buildLog.push(String(d)));
+  build.stderr.on("data", (d) => buildLog.push(String(d)));
+  const [code] = await once(build, "close");
+  if (code !== 0) {
+    /*
+     * A build failure is this suite's answer, not an excuse to skip: the gate
+     * it checks cannot be correct in an app that does not compile.
+     */
+    console.error(`the studio could not be built for this suite (exit ${code}):`);
+    console.error(buildLog.join("").slice(-2000));
+    stub.close();
+    process.exit(1);
+  }
+}
+
 /* -------------------------------------------------------------- the studio */
 
 const studio = spawn("pnpm", ["exec", "next", "start", "-p", String(STUDIO_PORT)], {
   cwd: "apps/studio",
   env: {
-    ...process.env,
-    SUPABASE_URL: `http://localhost:${STUB_PORT}`,
+    ...buildEnv,
     // not a real key and never used as one: the stub does not check it, and
     // the gate only needs the client to be constructible
-    SUPABASE_SERVICE_ROLE_KEY: "stub-service-key-for-tests",
     NODE_ENV: "production",
   },
   stdio: ["ignore", "pipe", "pipe"],
