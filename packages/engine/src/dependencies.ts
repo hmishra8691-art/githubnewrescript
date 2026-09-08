@@ -135,11 +135,24 @@ export function questionDependencies(def: SurveyDefinition, q: Question): Set<st
    * "Q5 masks Q6, Q6 masks Q5" without a second cycle detector (req §31).
    */
   if (q.mask) {
-    for (const id of setExprSources(q.mask.expr)) into.add(id);
+    for (const id of setExprSources(q.mask.expr, undefined, def)) into.add(id);
     conditionRefs(def, q.mask.when, into);
   }
+  /*
+   * The same mask engine, applied to rows and columns — the identical
+   * treatment as `q.mask` above, so a row/column mask is exactly as visible
+   * to `detectLogicCycles` as an option mask is (universal masking §40).
+   */
+  if (q.rowMask) {
+    for (const id of setExprSources(q.rowMask.expr, undefined, def)) into.add(id);
+    conditionRefs(def, q.rowMask.when, into);
+  }
+  if (q.columnMask) {
+    for (const id of setExprSources(q.columnMask.expr, undefined, def)) into.add(id);
+    conditionRefs(def, q.columnMask.when, into);
+  }
   for (const rule of q.punches ?? []) {
-    for (const id of setExprSources(rule.source)) into.add(id);
+    for (const id of setExprSources(rule.source, undefined, def)) into.add(id);
     conditionRefs(def, rule.when, into);
   }
 
@@ -156,6 +169,7 @@ export function questionDependencies(def: SurveyDefinition, q: Question): Set<st
   }
   for (const c of q.columns ?? []) {
     conditionRefs(def, c.visibleIf, into);
+    optionLogicRefs(def, c.logic, into);
     if (c.carryForward) {
       into.add(c.carryForward.sourceQuestionId);
       conditionRefs(def, c.carryForward.where, into);

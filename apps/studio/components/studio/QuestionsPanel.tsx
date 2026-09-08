@@ -493,7 +493,7 @@ function ColumnEditor({ q, onChange }: { q: Question; onChange(cols: QuestionCol
         onChange([...cols, {
           id: uid("col"), label: `Column ${cols.length + 1}`, responseType: "text",
           variableStem: `${q.variableName}_C${cols.length + 1}`, options: [], validation: [],
-          readOnly: false,
+          readOnly: false, flags: [],
         }])}>
         + column
       </button>

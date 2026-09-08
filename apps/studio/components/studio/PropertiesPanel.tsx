@@ -731,7 +731,7 @@ export function PropertiesPanel() {
 
       {hasCap("list_logic") && (<>
       <h3 className="sec">Masking (dynamic option sets)</h3>
-      <MaskingBuilder q={q} patch={patch} />
+      <MaskingBuilder q={q} patch={patch} field="mask" />
 
       <h3 className="sec">List logic (from previous questions)</h3>
       <p className="muted" style={{ fontSize: 12.5, marginTop: -2 }}>
@@ -785,6 +785,22 @@ export function PropertiesPanel() {
 
       <h3 className="sec">List operations (intersection / union / difference)</h3>
       <ListOperationsEditor q={q} patch={patch} />
+      </>)}
+
+      {/*
+       * The identical mask engine, aimed at rows and columns instead of
+       * options — shown only for question types that actually have them
+       * (matrix/grid/composite), matching the universal masking brief's
+       * "the UI shows only the dimensions this question type supports."
+       */}
+      {q.rows.length > 0 && (<>
+      <h3 className="sec">Row masking (dynamic row sets)</h3>
+      <MaskingBuilder q={q} patch={patch} field="rowMask" />
+      </>)}
+
+      {q.columns.length > 0 && (<>
+      <h3 className="sec">Column masking (dynamic column sets)</h3>
+      <MaskingBuilder q={q} patch={patch} field="columnMask" />
       </>)}
 
       <h3 className="sec">Validation rules</h3>

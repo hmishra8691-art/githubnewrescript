@@ -4,6 +4,7 @@ import { SurveyDefinition, type SetExpr } from "@rescript/schema";
 import {
   evaluateSetExpr, parseSetExpression, formatSetExpression, setExpressionSummary,
   setExprSources, validateSetExpr, pipelineToSetExpr, resolvePunches, applyPunches,
+  maskingVariablesFor,
 } from "./setExpression.js";
 import { effectiveQuestion, explainOptions } from "./carryforward.js";
 import { createResponseState, answerKey } from "./state.js";
@@ -615,4 +616,208 @@ test("a survey with no mask and no punches behaves exactly as before", () => {
   assert.deepEqual(view.options.map((o) => String(o.code)),
     ["a", "b", "c", "d", "other", "none"], "every option, untouched");
   assert.deepEqual(resolvePunches(d.questions[3], { def: d, state, loop: null }).select, []);
+});
+
+/* ============================== universal masking: rows, columns, §23, §39 */
+
+/**
+ * A matrix with a row source (products) and a column source (frequencies),
+ * for the §17–§20/§43 worked example: mask the rows from one question and
+ * the columns from another, independently, on the same grid.
+ */
+const matrixDef = () =>
+  SurveyDefinition.parse({
+    meta: { id: "mx", code: "MX", title: "Matrix masking", version: "1.0" },
+    questions: [
+      {
+        id: "qp", code: "QP", variableName: "QP", type: "multi_select", text: "Products?",
+        options: [
+          { code: "a", label: "Product A" },
+          { code: "b", label: "Product B" },
+          { code: "c", label: "Product C" },
+          { code: "d", label: "Product D" },
+        ],
+      },
+      {
+        id: "qf", code: "QF", variableName: "QF", type: "multi_select", text: "Frequencies?",
+        options: [
+          { code: "never", label: "Never" },
+          { code: "rarely", label: "Rarely" },
+          { code: "often", label: "Often" },
+          { code: "always", label: "Always" },
+        ],
+      },
+      {
+        id: "qm", code: "QM", variableName: "QM", type: "matrix_single", text: "Rate each",
+        rows: [
+          { code: "a", label: "Product A" },
+          { code: "b", label: "Product B" },
+          { code: "c", label: "Product C" },
+          { code: "d", label: "Product D" },
+        ],
+        columns: [
+          { id: "never", label: "Never", responseType: "single", variableStem: "NEVER" },
+          { id: "rarely", label: "Rarely", responseType: "single", variableStem: "RARELY" },
+          { id: "often", label: "Often", responseType: "single", variableStem: "OFTEN" },
+          { id: "always", label: "Always", responseType: "single", variableStem: "ALWAYS" },
+        ],
+        options: [],
+      },
+    ],
+    flow: [
+      { type: "page", id: "p1", questionIds: ["qp", "qf", "qm"] },
+      { type: "end", id: "e1", status: "complete" },
+    ],
+  });
+
+const matrixView = (patchQm: Record<string, unknown>, answers: Record<string, unknown>) => {
+  const d = matrixDef();
+  Object.assign(d.questions[2], patchQm);
+  const state = createResponseState(d);
+  Object.assign(state.answers, answers);
+  return effectiveQuestion(d.questions[2], { def: d, state, loop: null });
+};
+
+test("§17/§22: rowMask filters matrix rows with the same set-expression engine as options", () => {
+  const rowMask = { expr: parsed("QP.Selected", matrixDef()), action: "display", keepAlwaysShow: false };
+  const view = matrixView({ rowMask }, { qp: ["a", "c"] });
+  assert.deepEqual(view.rows.map((r) => String(r.code)), ["a", "c"]);
+  // columns are untouched by a row mask
+  assert.deepEqual(view.columns.map((c) => c.id), ["never", "rarely", "often", "always"]);
+});
+
+test("§18: columnMask filters matrix columns independently of rows", () => {
+  const columnMask = { expr: parsed("QF.Selected", matrixDef()), action: "display", keepAlwaysShow: false };
+  const view = matrixView({ columnMask }, { qf: ["often", "always"] });
+  assert.deepEqual(view.columns.map((c) => c.id), ["often", "always"]);
+  // rows are untouched by a column mask
+  assert.deepEqual(view.rows.map((r) => String(r.code)), ["a", "b", "c", "d"]);
+});
+
+test("§19/§43: row and column masks apply simultaneously — the worked example", () => {
+  const rowMask = { expr: parsed("QP.Selected", matrixDef()), action: "display", keepAlwaysShow: false };
+  const columnMask = { expr: parsed("QF.Selected", matrixDef()), action: "display", keepAlwaysShow: false };
+  const view = matrixView({ rowMask, columnMask }, { qp: ["a", "c"], qf: ["often", "always"] });
+  assert.deepEqual(view.rows.map((r) => String(r.code)), ["a", "c"]);
+  assert.deepEqual(view.columns.map((c) => c.id), ["often", "always"]);
+});
+
+test("columns share the option-level logic model: always-hide and show-when work per column", () => {
+  const d = matrixDef();
+  (d.questions[2].columns[0] as any).logic = { visibility: "always_hide" };
+  (d.questions[2].columns[1] as any).logic = {
+    visibility: "show_when",
+    when: { type: "rule", source: { kind: "question", ref: "qp" }, operator: "selected", value: "a" },
+  };
+  const state = createResponseState(d);
+  state.answers.qp = ["a"];
+  const view = effectiveQuestion(d.questions[2], { def: d, state, loop: null });
+  const ids = view.columns.map((c) => c.id);
+  assert.ok(!ids.includes("never"), "always-hide removed it");
+  assert.ok(ids.includes("rarely"), "show-when's condition holds");
+});
+
+test("§40: a row mask and a column mask are graph edges too — cycles are caught the same way", () => {
+  // QP's mask reads QM's rows, and QM's rowMask reads QP back — a cycle
+  // mediated through the row dimension, exactly like §31's two-question
+  // option-mask cycle above, so it must be caught by the same detector.
+  const d = matrixDef();
+  d.questions[0].mask = { expr: parsed("QM.Selected", d), action: "display", keepAlwaysShow: true } as any;
+  d.questions[2].rowMask = { expr: parsed("QP.Selected", d), action: "display", keepAlwaysShow: true } as any;
+  const cycles = detectLogicCycles(d);
+  assert.ok(cycles.length > 0, "the rowMask edge is in the dependency graph");
+  assert.ok(
+    cycles.some((c) => c.includes("qp") && c.includes("qm")),
+    `QP ↔ QM reported: ${JSON.stringify(cycles)}`,
+  );
+});
+
+/* -------------------------------------------------- §39: empty-source fallback */
+
+test("§39: onEmptySource governs what an unanswered source falls back to", () => {
+  const showAll = maskedOptions(
+    { expr: parsed("Q5.Selected"), action: "display", onEmptySource: "show_all" },
+    {},
+  );
+  assert.deepEqual(showAll, ["a", "b", "c", "d", "other", "none"], "show_all ignores the mask entirely");
+
+  const showNone = maskedOptions(
+    { expr: parsed("Q5.Selected"), action: "display", onEmptySource: "show_none" },
+    {},
+  );
+  assert.deepEqual(showNone, [], "show_none is exactly today's keepAlwaysShow:false behavior");
+
+  const alwaysShowOnly = maskedOptions(
+    { expr: parsed("Q5.Selected"), action: "display", onEmptySource: "always_show_only" },
+    {},
+  );
+  assert.deepEqual(alwaysShowOnly, ["other", "none"], "identical to keepAlwaysShow:true");
+});
+
+test("§39: onEmptySource does nothing when the source is NOT empty", () => {
+  const shown = maskedOptions(
+    { expr: parsed("Q5.Selected"), action: "display", onEmptySource: "show_all" },
+    { q5: ["a"] },
+  );
+  assert.deepEqual(shown, ["a"], "show_all is only a fallback for an empty result, not a bypass");
+});
+
+/* --------------------------------------------------- §23: List Fill as a source */
+
+test("§23: LISTFILL(name) reads a List Fill's already-decided result, never re-decides it", () => {
+  const d = def();
+  d.listFills = [
+    { id: "lf1", name: "PICKS", source: { kind: "question", questionId: "q5" } } as any,
+  ];
+  d.questions[3].mask = {
+    expr: parsed("LISTFILL(PICKS)", d), action: "display", keepAlwaysShow: false,
+  } as any;
+  const state = createResponseState(d);
+  // Simulates List Fill having already allocated 2 items — read back, not decided here.
+  state.calculated.LISTFILL_PICKS_COUNT = 2;
+  state.calculated.LISTFILL_PICKS_1_CODE = "b";
+  state.calculated.LISTFILL_PICKS_2_CODE = "d";
+  const view = effectiveQuestion(d.questions[3], { def: d, state, loop: null });
+  assert.deepEqual(view.options.map((o) => String(o.code)), ["b", "d"]);
+});
+
+test("§23: an unallocated List Fill reads as empty, not an error", () => {
+  const d = def();
+  d.listFills = [{ id: "lf1", name: "PICKS", source: { kind: "question", questionId: "q5" } } as any];
+  const expr = parsed("LISTFILL(PICKS)", d);
+  const state = createResponseState(d);
+  assert.deepEqual(evaluateSetExpr(expr, { def: d, state, loop: null }), []);
+});
+
+/* ---------------------------------------------- §35: MASK_<CODE>_* variables */
+
+test("§35: masking variables are exposed the same way LISTFILL_* variables are", () => {
+  const d = def();
+  d.questions[3].mask = { expr: parsed("Q5.Selected"), action: "display", keepAlwaysShow: false } as any;
+  const state = createResponseState(d);
+  state.answers.q5 = ["a", "b"];
+  const vars = maskingVariablesFor(d, state);
+  assert.equal(vars.MASK_Q8_COUNT, 2);
+  assert.equal(vars.MASK_Q8_LIST, "a,b");
+  assert.equal(vars.MASK_Q8_ITEM_1, "a");
+  assert.equal(vars.MASK_Q8_ITEM_2, "b");
+  assert.equal(vars.MASK_Q8_OPERATION, "display");
+  assert.match(String(vars.MASK_Q8_SOURCE), /Q5/);
+});
+
+test("§35: a masked question inside a loop produces no MASK_* variables (documented boundary)", () => {
+  const d = def();
+  d.questions[3].mask = { expr: parsed("Q5.Selected"), action: "display", keepAlwaysShow: false } as any;
+  d.flow = [
+    {
+      type: "loop", id: "lp1", loopVar: "brand",
+      source: { kind: "static", items: [{ code: "x", label: "X" }] },
+      children: [{ type: "page", id: "p2", questionIds: ["q8"] }],
+    } as any,
+    { type: "end", id: "e1", status: "complete" },
+  ];
+  const state = createResponseState(d);
+  state.answers.q5 = ["a"];
+  const vars = maskingVariablesFor(d, state);
+  assert.equal(vars.MASK_Q8_COUNT, undefined, "loop-scoped masked questions are skipped, not wrong");
 });

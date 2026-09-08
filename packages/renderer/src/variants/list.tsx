@@ -145,6 +145,7 @@ export function fallbackSheetColumns(p: QRProps): QuestionColumn[] {
     options: [],
     validation: [],
     readOnly: false,
+    flags: [],
   }));
 }
 

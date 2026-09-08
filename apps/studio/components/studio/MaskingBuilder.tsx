@@ -45,9 +45,10 @@ const OPERATOR_HINT: Record<SetOperator, string> = {
 /* ------------------------------------------------------- one set, one row */
 
 /** A single operand: a question and which slice of it. */
-function SetRow({ node, sources, onChange, onRemove, onBracket, canBracket }: {
+function SetRow({ node, sources, listFills, onChange, onRemove, onBracket, canBracket }: {
   node: SetExpr;
   sources: { id: string; code: string; label: string }[];
+  listFills: { id: string; name: string }[];
   onChange(next: SetExpr): void;
   onRemove(): void;
   onBracket?(): void;
@@ -64,7 +65,7 @@ function SetRow({ node, sources, onChange, onRemove, onBracket, canBracket }: {
           <button className="btn small danger" title="Remove this bracket and everything in it"
             onClick={onRemove}>×</button>
         </div>
-        <SetChainEditor expr={node} sources={sources} onChange={onChange} nested />
+        <SetChainEditor expr={node} sources={sources} listFills={listFills} onChange={onChange} nested />
       </div>
     );
   }
@@ -74,7 +75,7 @@ function SetRow({ node, sources, onChange, onRemove, onBracket, canBracket }: {
       <div className="mb-row" data-testid="mask-row">
         <span className="mb-not">NOT</span>
         <div className="grow">
-          <SetRow node={node.of} sources={sources}
+          <SetRow node={node.of} sources={sources} listFills={listFills}
             onChange={(of) => onChange({ kind: "complement", of })}
             onRemove={onRemove} />
         </div>
@@ -93,6 +94,32 @@ function SetRow({ node, sources, onChange, onRemove, onBracket, canBracket }: {
             kind: "codes",
             codes: e.target.value.split(",").map((x) => x.trim()).filter(Boolean),
           })} />
+        <button className="btn small danger" onClick={onRemove}>×</button>
+      </div>
+    );
+  }
+
+  if (node.kind === "listFill") {
+    /*
+     * A List Fill's resolved output as a masking source (§23). Authored
+     * today via the expression pane (`LISTFILL(name)`, parsed by
+     * `parseSetExpression`) — this Visual-mode row exists so a tree
+     * containing one can still be read, re-pointed at a different List
+     * Fill, and removed here, the same as any other leaf.
+     */
+    return (
+      <div className="mb-row" data-testid="mask-row">
+        <span className="mb-kind">List Fill</span>
+        <select className="select mb-q grow" data-testid="mask-listfill"
+          value={listFills.some((lf) => lf.id === node.listFillId) ? node.listFillId : ""}
+          onChange={(e) => onChange({ kind: "listFill", listFillId: e.target.value })}>
+          {!listFills.some((lf) => lf.id === node.listFillId) && (
+            <option value="">— unknown List Fill —</option>
+          )}
+          {listFills.map((lf) => (
+            <option key={lf.id} value={lf.id}>{lf.name}</option>
+          ))}
+        </select>
         <button className="btn small danger" onClick={onRemove}>×</button>
       </div>
     );
@@ -133,9 +160,10 @@ function SetRow({ node, sources, onChange, onRemove, onBracket, canBracket }: {
  * Each gap edits its OWN node in the tree, so changing one operator cannot
  * move another — the same property the logic builder's connectors have.
  */
-function SetChainEditor({ expr, sources, onChange, nested }: {
+function SetChainEditor({ expr, sources, listFills, onChange, nested }: {
   expr: SetExpr | null;
   sources: { id: string; code: string; label: string }[];
+  listFills: { id: string; name: string }[];
   onChange(next: SetExpr | null): void;
   nested?: boolean;
 }) {
@@ -179,6 +207,7 @@ function SetChainEditor({ expr, sources, onChange, nested }: {
           <SetRow
             node={item}
             sources={sources}
+            listFills={listFills}
             canBracket={i + 1 < chain.items.length}
             onBracket={() => onChange(bracketSetPair(expr!, i))}
             onChange={(next) => onChange(replaceSetAt(expr!, i, next))}
@@ -311,11 +340,38 @@ function SourcePicker({ sources, onInsert }: {
 
 /* ============================================================ the panel */
 
-export function MaskingBuilder({ q, patch }: {
-  q: Question; patch(p: Partial<Question>): void;
+/** Which field on `Question` this instance of the builder edits. */
+export type MaskField = "mask" | "rowMask" | "columnMask";
+
+const FIELD_NOUN: Record<MaskField, string> = {
+  mask: "option",
+  rowMask: "row",
+  columnMask: "column",
+};
+
+/**
+ * The real, deterministic order this survey evaluates a question in (req
+ * §32) — printed here rather than a separate, simplified precedence list,
+ * so it can never disagree with `carryforward.ts`, the code that actually
+ * runs it.
+ */
+const EVALUATION_ORDER: Record<MaskField, string> = {
+  mask: "always-hidden → eligibility (always-show/hide, show/hide-when) → "
+    + "named display rules → previous-answer list logic → mask (this) → "
+    + "auto-punch show/hide → list operations (union/intersect/exclude/…) → "
+    + "prioritize → sort → group/randomize → piping",
+  rowMask: "eligibility (always-show/hide, show/hide-when) → named display "
+    + "rules → mask (this) → prioritize → group/randomize → piping",
+  columnMask: "visible-if → named display rules → eligibility (always-show/"
+    + "hide, show/hide-when) → mask (this) → group/randomize",
+};
+
+export function MaskingBuilder({ q, patch, field = "mask" }: {
+  q: Question; patch(p: Partial<Question>): void; field?: MaskField;
 }) {
   const s = useStudio();
   const [mode, setMode] = React.useState<"visual" | "expression">("visual");
+  const noun = FIELD_NOUN[field];
 
   /** Any other question with options to draw from. */
   const sources = s.def.questions
@@ -325,41 +381,52 @@ export function MaskingBuilder({ q, patch }: {
       code: x.code,
       label: stripHtmlText(x.text).slice(0, 40) || x.variableName,
     }));
+  /** List Fills whose already-decided output a mask can read (§23). */
+  const listFills = (s.def.listFills ?? []).map((lf) => ({ id: lf.id, name: lf.name ?? lf.id }));
 
-  const mask = q.mask;
+  const mask = q[field];
   const expr = mask?.expr ?? null;
 
   const setExpr = (next: SetExpr | null) => {
-    s.labelNextEdit?.("edit mask");
-    if (!next) { patch({ mask: undefined }); return; }
+    s.labelNextEdit?.(`edit ${noun} mask`);
+    if (!next) { patch({ [field]: undefined }); return; }
     patch({
-      mask: {
+      [field]: {
         expr: next,
         action: mask?.action ?? "display",
         keepAlwaysShow: mask?.keepAlwaysShow ?? true,
+        onEmptySource: mask?.onEmptySource,
         when: mask?.when,
         label: mask?.label,
       },
-    });
+    } as Partial<Question>);
   };
 
   const issues = expr ? validateSetExpr(s.def, q.id, expr) : [];
   const summary = expr ? setExpressionSummary(s.def, expr) : "";
-  const convertible = !mask ? pipelineToSetExpr(q) : null;
+  // the older sequential pipeline only ever drove options, never rows/columns
+  const convertible = field === "mask" && !mask ? pipelineToSetExpr(q) : null;
 
-  /** Options the mask can never remove, for the reassurance line. */
-  const protectedOptions = q.options.filter(
+  /** Items the mask can never remove, for the reassurance line. */
+  const items = field === "mask" ? q.options : field === "rowMask" ? q.rows : q.columns;
+  const protectedItems = items.filter(
     (o) =>
       o.logic?.visibility === "always_show" ||
       o.flags?.some((f) => ["other_specify", "none_of_above", "dont_know", "refused"].includes(f)),
   );
+  const itemLabel = (o: (typeof items)[number]) => stripHtmlText(o.label);
 
   return (
-    <div className="masking-builder" data-testid="masking-builder">
+    <div className="masking-builder"
+      data-testid={field === "mask" ? "masking-builder" : `masking-builder-${field}`}>
       <p className="muted" style={{ fontSize: 12.5, marginTop: 0 }}>
-        Build this question&apos;s option list from other questions&apos; answers. Sets combine
+        Build this question&apos;s {noun} list from other questions&apos; answers. Sets combine
         with UNION (either), INTERSECTION (both) and DIFFERENCE (the first but not the
         second); brackets decide what is evaluated first.
+      </p>
+      <p className="muted" style={{ fontSize: 11.5, marginTop: -6 }} data-testid="mask-evaluation-order">
+        Evaluation order (fixed, so two rules can never disagree unpredictably):{" "}
+        {EVALUATION_ORDER[field]}.
       </p>
 
       {convertible && (
@@ -381,12 +448,12 @@ export function MaskingBuilder({ q, patch }: {
         <span className="grow" />
         {expr && (
           <button className="btn small danger" data-testid="mask-clear"
-            onClick={() => patch({ mask: undefined })}>clear mask</button>
+            onClick={() => patch({ [field]: undefined } as Partial<Question>)}>clear mask</button>
         )}
       </div>
 
       {mode === "visual"
-        ? <SetChainEditor expr={expr} sources={sources} onChange={setExpr} />
+        ? <SetChainEditor expr={expr} sources={sources} listFills={listFills} onChange={setExpr} />
         : (
           <>
             <SetExpressionPane expr={expr} onChange={setExpr} />
@@ -416,9 +483,9 @@ export function MaskingBuilder({ q, patch }: {
               <span>What to do with the result</span>
               <select className="select" data-testid="mask-action"
                 value={mask?.action ?? "display"}
-                onChange={(e) => patch({ mask: { ...mask!, action: e.target.value as MaskAction } })}>
-                <option value="display">Show only these options</option>
-                <option value="remove">Remove these options</option>
+                onChange={(e) => patch({ [field]: { ...mask!, action: e.target.value as MaskAction } } as Partial<Question>)}>
+                <option value="display">Show only these {noun}s</option>
+                <option value="remove">Remove these {noun}s</option>
                 <option value="preselect">Pre-select these (show all)</option>
                 <option value="display_and_preselect">Show only these, and pre-select them</option>
                 <option value="disable">Show all, allow only these</option>
@@ -427,22 +494,33 @@ export function MaskingBuilder({ q, patch }: {
             <label className="row" style={{ gap: 5, fontSize: 13, alignSelf: "flex-end" }}>
               <input type="checkbox" data-testid="mask-keep-always"
                 checked={mask?.keepAlwaysShow ?? true}
-                onChange={(e) => patch({ mask: { ...mask!, keepAlwaysShow: e.target.checked } })} />
+                onChange={(e) => patch({ [field]: { ...mask!, keepAlwaysShow: e.target.checked } } as Partial<Question>)} />
               Always keep Other / None / Don&apos;t know
             </label>
+            <label className="f" style={{ marginBottom: 0, width: 210 }}>
+              <span>If the source is unanswered</span>
+              <select className="select" data-testid="mask-empty-source"
+                value={mask?.onEmptySource ?? (mask?.keepAlwaysShow === false ? "show_none" : "always_show_only")}
+                onChange={(e) => patch({
+                  [field]: { ...mask!, onEmptySource: e.target.value as "show_all" | "show_none" | "always_show_only" },
+                } as Partial<Question>)}>
+                <option value="always_show_only">Show only Always-Show / special items</option>
+                <option value="show_all">Show every {noun}</option>
+                <option value="show_none">Show none</option>
+              </select>
+            </label>
           </div>
-          {protectedOptions.length > 0 && (mask?.keepAlwaysShow ?? true) && (
+          {protectedItems.length > 0 && (mask?.keepAlwaysShow ?? true) && (
             <div className="muted" style={{ fontSize: 12.5 }} data-testid="mask-protected">
-              Kept whatever the mask returns: {protectedOptions.map((o) =>
-                stripHtmlText(o.label)).join(", ")}
+              Kept whatever the mask returns: {protectedItems.map(itemLabel).join(", ")}
             </div>
           )}
           <OptionalCondition label="Apply the mask only when" value={mask?.when}
-            onChange={(when) => patch({ mask: { ...mask!, when } })} />
+            onChange={(when) => patch({ [field]: { ...mask!, when } } as Partial<Question>)} />
         </>
       )}
 
-      <PunchRules q={q} patch={patch} sources={sources} />
+      {field === "mask" && <PunchRules q={q} patch={patch} sources={sources} />}
     </div>
   );
 }
@@ -466,6 +544,7 @@ function PunchRules({ q, patch, sources }: {
 }) {
   const s = useStudio();
   const rules = q.punches ?? [];
+  const listFills = (s.def.listFills ?? []).map((lf) => ({ id: lf.id, name: lf.name ?? lf.id }));
 
   const setRule = (i: number, next: Partial<PunchRule>) =>
     patch({ punches: rules.map((r, j) => (j === i ? { ...r, ...next } as PunchRule : r)) });
@@ -527,7 +606,7 @@ function PunchRules({ q, patch, sources }: {
               onClick={() => patch({ punches: rules.filter((_, j) => j !== i) })}>×</button>
           </div>
 
-          <SetChainEditor expr={rule.source} sources={sources}
+          <SetChainEditor expr={rule.source} sources={sources} listFills={listFills}
             onChange={(next) => next && setRule(i, { source: next })} />
 
           <div className="mb-map">

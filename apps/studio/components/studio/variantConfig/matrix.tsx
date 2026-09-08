@@ -31,6 +31,7 @@ export function starterSumColumns(q: Question): QuestionColumn[] {
     validation: [],
     readOnly: false,
     min: 0,
+    flags: [],
   }));
 }
 

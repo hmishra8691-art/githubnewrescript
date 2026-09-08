@@ -2,11 +2,13 @@ import type {
   Question,
   Option,
   QuestionRow,
+  QuestionColumn,
   CarryForward,
   ListLogicRule,
   ListOperation,
   ListSource,
   OptionLogic,
+  OptionMask,
   OptionSourceRule,
   Randomization,
   SurveyDefinition,
@@ -888,8 +890,9 @@ function applyMask<T extends ItemWithLogic & { flags?: string[]; code: string | 
   items: T[],
   ctx: EvalContext,
   rec: Recorder | null,
+  maskOverride?: OptionMask,
 ): T[] {
-  const mask = q.mask;
+  const mask = maskOverride ?? q.mask;
   if (!mask) return items;
   if (mask.when && !evaluateCondition(mask.when, ctx)) return items;
 
@@ -898,9 +901,39 @@ function applyMask<T extends ItemWithLogic & { flags?: string[]; code: string | 
     evaluateSetExpr(mask.expr, ctx, { target: q }).map((c: string | number) => String(c)),
   );
 
-  /** Kept whatever the mask says: explicit Always Show, or a special option. */
+  /*
+   * §39 — missing/invalid source data. An unanswered or invalid source
+   * resolves the set expression to nothing, which is the ordinary case for
+   * a question masked on a predecessor the respondent hasn't reached yet,
+   * not an edge case. `onEmptySource` (derived from the legacy
+   * `keepAlwaysShow` boolean when absent, so every existing mask keeps its
+   * exact behavior) picks what happens then:
+   *
+   *   show_all          skip the mask entirely — the list is untouched
+   *   always_show_only  fall through to the ordinary filter below, which
+   *                     `protectedItem` already resolves to "just the
+   *                     flagged/special items" when nothing is selected
+   *   show_none         fall through to the ordinary filter with no
+   *                     protection — the mask's own arithmetic already
+   *                     produces "nothing" for an empty selected set
+   */
+  const fallback = mask.onEmptySource ?? (mask.keepAlwaysShow ? "always_show_only" : "show_none");
+  if (selected.size === 0 && fallback === "show_all") {
+    record(rec, "mask", "Mask (empty source → show all)", before, items, new Map());
+    return items;
+  }
+
+  /*
+   * Always Show / special-option protection is unconditional, not only an
+   * empty-source fallback — this is what makes "Other" and "None of the
+   * above" survive a mask that legitimately matched real answers, not just
+   * one that matched nothing. `fallback === "always_show_only"` is the
+   * single source of truth here (derived above from `onEmptySource`, or
+   * from `keepAlwaysShow` when that field is absent), so a config using
+   * either field gets identical protection.
+   */
   const protectedItem = (i: T) =>
-    mask.keepAlwaysShow &&
+    fallback === "always_show_only" &&
     (isAlwaysShow(i) ||
       !!i.flags?.some((f) =>
         ["other_specify", "none_of_above", "dont_know", "refused"].includes(f)));
@@ -1316,6 +1349,12 @@ function runRows(q: Question, ctx: EvalContext, rec: Recorder | null): QuestionR
   const pos = makePos(rows);
   rows = applyEligibility(rows, ctx, rec, pos);
   rows = applyNamedRules(q, "row", rows, ctx, rec);
+
+  // the set-expression mask (stage 4b, same engine as options — §17/§19/§43)
+  if (q.rowMask) {
+    rows = applyMask(q, rows, ctx, rec, q.rowMask);
+  }
+
   rows = applyPrioritization(rows, ctx, rec, pos);
   if (hasOptionGroups(q, "rows")) {
     const beforeGroups = rows;
@@ -1379,22 +1418,32 @@ export function resolveQuestionMedia(
   return { imageUrl: pipe(q.settings.imageUrl), mediaUrl: pipe(q.settings.mediaUrl) };
 }
 
-export function effectiveQuestion(q: Question, ctx: EvalContext): EffectiveQuestionView {
+/**
+ * Columns (composite / matrix). Addressed by `id`, not a `code` — the schema
+ * says so (`subRef: option code / row code / column id`) and a composite
+ * question's columns have no codes of their own — so the shared,
+ * code-keyed pipeline functions (`applyEligibility`, `applyMask`) run
+ * against a `{...column, code: column.id}` view and the result is mapped
+ * back. This is the same adapter the column grouping/randomization below it
+ * already uses; columns now share the identical eligibility (always-show/
+ * always-hide/show-when/hide-when, via `QuestionColumn.logic`) and mask
+ * (`columnMask`) stages options and rows get — one engine, three target
+ * dimensions (universal masking brief, §18–§20, §43).
+ */
+function runColumns(q: Question, ctx: EvalContext): QuestionColumn[] {
   const seedKey = loopKeySuffix(ctx.loop);
-  const options = runOptions(q, ctx, null);
-  const rows = runRows(q, ctx, null);
-
-  // --- columns (composite / matrix)
   let columns = q.columns.filter((c) => evaluateCondition(c.visibleIf, ctx));
-  /*
-   * A column is addressed by its `id`, not a code — the schema says so
-   * (`subRef: option code / row code / column id`) and a composite question's
-   * columns have no codes to address. There is no pinning for columns, so
-   * unlike options and rows the verdict is a plain boolean.
-   */
   if (hasDisplayRulesFor(ctx.def, "column")) {
     columns = columns.filter((c) => visibleByRules(ctx.def, "column", q.id, ctx, c.id));
   }
+
+  // eligibility (always show / always hide / show-when / hide-when)
+  columns = applyEligibility(
+    columns.map((c) => ({ ...c, code: c.id })),
+    ctx,
+    null,
+  ) as unknown as QuestionColumn[];
+
   columns = columns.map((c) => {
     let col = c;
     if (c.carryForward) {
@@ -1407,9 +1456,21 @@ export function effectiveQuestion(q: Question, ctx: EvalContext): EffectiveQuest
     if (col.label.includes("{{")) col = { ...col, label: resolvePiping(col.label, ctx) };
     return col;
   });
+
+  // the set-expression mask (stage 4b, same as options/rows)
+  if (q.columnMask) {
+    columns = applyMask(
+      q,
+      columns.map((c) => ({ ...c, code: c.id })),
+      ctx,
+      null,
+      q.columnMask,
+    ) as unknown as QuestionColumn[];
+  }
+
   if (hasOptionGroups(q, "columns")) {
     /* columns are addressed by id, so they are normalised to `code` the same
-       way the flat path does it below */
+       way the eligibility/mask stages above do it */
     columns = groupOrder(
       q, "columns",
       columns.map((c) => ({ ...c, code: c.id })) as never,
@@ -1427,6 +1488,13 @@ export function effectiveQuestion(q: Question, ctx: EvalContext): EffectiveQuest
     }
   }
 
+  return columns;
+}
+
+export function effectiveQuestion(q: Question, ctx: EvalContext): EffectiveQuestionView {
+  const options = runOptions(q, ctx, null);
+  const rows = runRows(q, ctx, null);
+  const columns = runColumns(q, ctx);
   return { options, rows, columns };
 }
 

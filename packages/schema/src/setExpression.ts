@@ -40,6 +40,14 @@ export type SetExpr =
   | { kind: "ref"; questionId: string; selection: SetSelection }
   /** Literal codes, for "these three, always". */
   | { kind: "codes"; codes: (string | number)[] }
+  /**
+   * A List Fill's already-decided result — the same list a loop can already
+   * iterate over via `source.kind: "listFill"`. Read-only: this never
+   * triggers List Fill's own allocation, it reads back whatever it already
+   * decided (see `listFillLoopItems` in `packages/engine/src/listFill.ts`),
+   * so evaluating a mask can never itself consume List Fill sample capacity.
+   */
+  | { kind: "listFill"; listFillId: string }
   /** Everything this question defines that is NOT in `of` — the complement. */
   | { kind: "complement"; of: SetExpr }
   | { kind: "op"; operator: SetOperator; left: SetExpr; right: SetExpr };
@@ -54,6 +62,10 @@ export const SetExpr: z.ZodType<SetExpr, z.ZodTypeDef, unknown> = z.lazy(() =>
     z.object({
       kind: z.literal("codes"),
       codes: z.array(z.union([z.string(), z.number()])).default([]),
+    }),
+    z.object({
+      kind: z.literal("listFill"),
+      listFillId: z.string(),
     }),
     z.object({ kind: z.literal("complement"), of: SetExpr }),
     z.object({
@@ -83,11 +95,31 @@ export type MaskAction = z.infer<typeof MaskAction>;
  * say" must survive a mask that returns nothing, or a respondent can be shown
  * a question with no answerable options at all.
  */
+/**
+ * What to show when the mask's own set expression resolves to nothing —
+ * an unanswered or invalid source is the ordinary case, not an edge case, so
+ * this is a real choice rather than one hardcoded behavior:
+ *
+ *   show_all          ignore the mask entirely; the item list is untouched
+ *   show_none         the mask result stands: nothing (unless `remove`, where
+ *                     "nothing selected" means nothing removed)
+ *   always_show_only  fall back to whatever `keepAlwaysShow` already protects
+ *
+ * Absent is derived from the legacy `keepAlwaysShow` boolean so every
+ * existing mask keeps behaving exactly as it does today: `true` →
+ * `"always_show_only"`, `false`/absent → `"show_none"`. `keepAlwaysShow`
+ * keeps working standalone; new UI writes both fields for clarity.
+ */
+export const MaskEmptySourceFallback = z.enum(["show_all", "show_none", "always_show_only"]);
+export type MaskEmptySourceFallback = z.infer<typeof MaskEmptySourceFallback>;
+
 export const OptionMask = z.object({
   expr: SetExpr,
   action: MaskAction.default("display"),
   /** Options flagged Always Show, or special (other/none/dk/refused), stay. */
   keepAlwaysShow: z.boolean().default(true),
+  /** See `MaskEmptySourceFallback`. Optional — derived from `keepAlwaysShow` when absent. */
+  onEmptySource: MaskEmptySourceFallback.optional(),
   /** Apply the mask only while this holds. */
   when: Condition.optional(),
   label: z.string().optional(),

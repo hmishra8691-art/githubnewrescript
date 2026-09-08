@@ -126,6 +126,7 @@ export function fallbackSumColumns(p: QRProps): QuestionColumn[] {
     validation: [],
     readOnly: false,
     min: 0,
+    flags: [],
   }));
 }
 

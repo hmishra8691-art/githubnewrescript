@@ -1,12 +1,14 @@
 import type {
-  SetExpr, SetOperator, SetSelection, SurveyDefinition, Question, PunchRule,
+  SetExpr, SetOperator, SetSelection, SurveyDefinition, Question, PunchRule, ListFill,
 } from "@rescript/schema";
 import { SET_OPERATOR_LABEL } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition } from "./evaluate.js";
 import { codesFrom, effectiveQuestion } from "./carryforward.js";
-import { getQuestion, getQuestionByCodeOrVar, type AnswerValue } from "./state.js";
+import { getQuestion, getQuestionByCodeOrVar, type AnswerValue, type ResponseState } from "./state.js";
 import { activePunchRules } from "./punchChain.js";
+import { listFillLoopItems } from "./listFill.js";
+import { loopNodes, questionIdsInLoop } from "./loopModel.js";
 
 /**
  * The set-expression engine: evaluate a nested set tree, and read or write it
@@ -85,6 +87,18 @@ export function evaluateSetExpr(
     case "ref": {
       const which = expr.selection === "unselected" ? "not_selected" : expr.selection;
       return dedupe(codesFrom(expr.questionId, which as any, ctx));
+    }
+
+    case "listFill": {
+      /*
+       * Read, never decided — the exact same reader a Loop already uses for
+       * `source.kind: "listFill"` (`listFillLoopItems`). A mask evaluates on
+       * every render; re-deciding the List Fill here would give the
+       * respondent a different list each time and consume sample capacity
+       * repeatedly, so this only ever looks at what was already allocated
+       * (empty until then, which composes correctly with `onEmptySource`).
+       */
+      return dedupe(listFillLoopItems(ctx.def, ctx.state, expr.listFillId).map((it) => it.code));
     }
 
     case "complement": {
@@ -259,6 +273,14 @@ const OPERATOR_WORDS: Record<string, SetOperator> = {
   except: "difference",
 };
 
+/** A List Fill by stable id, or by name (case-insensitively) for the text DSL. */
+function findListFillByRef(def: SurveyDefinition, ref: string): ListFill | undefined {
+  return (
+    def.listFills.find((lf) => lf.id === ref) ??
+    def.listFills.find((lf) => (lf.name ?? lf.id).toLowerCase() === ref.toLowerCase())
+  );
+}
+
 interface Tok { kind: "ident" | "number" | "punct"; text: string; pos: number }
 
 function tokenize(src: string): { tokens: Tok[]; error?: SetExprError } {
@@ -352,6 +374,29 @@ export function parseSetExpression(def: SurveyDefinition, src: string): SetParse
       return { kind: "complement", of: parsePrimary() };
     }
 
+    if (word(t) === "listfill") {
+      const start = t!;
+      at += 1;
+      const open = peek();
+      if (!open || open.kind !== "punct" || open.text !== "(") {
+        fail("LISTFILL needs a name in parentheses, e.g. LISTFILL(brands)", start.pos);
+      }
+      at += 1;
+      const nameTok = peek();
+      if (!nameTok || nameTok.kind !== "ident") {
+        fail("LISTFILL(...) needs a List Fill name or id", open!.pos);
+      }
+      at += 1;
+      const close = peek();
+      if (!close || close.kind !== "punct" || close.text !== ")") {
+        fail("Missing closing parenthesis", nameTok!.pos);
+      }
+      at += 1;
+      const lf = findListFillByRef(def, nameTok!.text);
+      if (!lf) fail(`“${nameTok!.text}” is not a List Fill on this survey`, nameTok!.pos);
+      return { kind: "listFill", listFillId: lf!.id };
+    }
+
     if (t!.kind !== "ident") fail(`Unexpected “${t!.text}”`, t!.pos);
 
     const segments = t!.text.split(".").filter(Boolean);
@@ -439,6 +484,10 @@ export function formatSetExpression(
         const q = getQuestion(def, node.questionId);
         return `${q?.code ?? node.questionId}.${SELECTION_TEXT[node.selection]}`;
       }
+      case "listFill": {
+        const lf = def.listFills.find((l) => l.id === node.listFillId);
+        return `LISTFILL(${lf?.name ?? node.listFillId})`;
+      }
       case "complement":
         return `NOT ${render(node.of, false)}`;
       case "op": {
@@ -470,6 +519,10 @@ export function setExpressionSummary(
             : node.selection === "displayed" ? `what ${name} displayed`
               : `every option in ${name}`;
       }
+      case "listFill": {
+        const lf = def.listFills.find((l) => l.id === node.listFillId);
+        return `what ${lf?.name ?? node.listFillId} allocated`;
+      }
       case "complement":
         return `everything except ${render(node.of)}`;
       case "op": {
@@ -486,14 +539,41 @@ export function setExpressionSummary(
 
 /* ============================================================== analysis */
 
-/** Every question a set expression reads — for cycle detection (req §31). */
-export function setExprSources(expr: SetExpr | undefined | null, into = new Set<string>()): Set<string> {
+/**
+ * Every question a set expression reads — for cycle detection (req §31).
+ *
+ * `def` is optional and only needed to bridge a `listFill` node to the
+ * question that feeds it (a mask on `LISTFILL(lf1)` depends on whatever `lf1`
+ * itself reads), so every existing call site that has no survey handy keeps
+ * compiling unchanged and simply does not see through the list fill.
+ */
+export function setExprSources(
+  expr: SetExpr | undefined | null,
+  into = new Set<string>(),
+  def?: SurveyDefinition,
+): Set<string> {
   if (!expr) return into;
   if (expr.kind === "ref") into.add(expr.questionId);
-  if (expr.kind === "complement") setExprSources(expr.of, into);
+  if (expr.kind === "listFill" && def) {
+    const lf = def.listFills.find((l) => l.id === expr.listFillId);
+    if (lf?.source.kind === "question") into.add(lf.source.questionId);
+  }
+  if (expr.kind === "complement") setExprSources(expr.of, into, def);
   if (expr.kind === "op") {
-    setExprSources(expr.left, into);
-    setExprSources(expr.right, into);
+    setExprSources(expr.left, into, def);
+    setExprSources(expr.right, into, def);
+  }
+  return into;
+}
+
+/** Every List Fill id a set expression reads directly (for validation/UI, not cycle detection). */
+export function setExprListFillIds(expr: SetExpr | undefined | null, into = new Set<string>()): Set<string> {
+  if (!expr) return into;
+  if (expr.kind === "listFill") into.add(expr.listFillId);
+  if (expr.kind === "complement") setExprListFillIds(expr.of, into);
+  if (expr.kind === "op") {
+    setExprListFillIds(expr.left, into);
+    setExprListFillIds(expr.right, into);
   }
   return into;
 }
@@ -527,6 +607,11 @@ export function validateSetExpr(
       issues.push({ level: "error", message: `A source question no longer exists (${id}).` });
     }
   }
+  for (const lfId of setExprListFillIds(expr)) {
+    if (!def.listFills.some((lf) => lf.id === lfId)) {
+      issues.push({ level: "error", message: `A source List Fill no longer exists (${lfId}).` });
+    }
+  }
   const empty = (node: SetExpr): boolean =>
     node.kind === "codes" ? node.codes.length === 0
       : node.kind === "op" ? empty(node.left) && empty(node.right)
@@ -536,6 +621,77 @@ export function validateSetExpr(
     issues.push({ level: "warning", message: "This mask has nothing in it, so it selects no options." });
   }
   return issues;
+}
+
+/* ================================================== masking variables §35 */
+
+/** Which field on `Question` a mask target reads/writes — one engine, three dimensions. */
+export type MaskTarget = "mask" | "rowMask" | "columnMask";
+
+const MASK_TARGET_SUFFIX: Record<MaskTarget, string> = {
+  mask: "",
+  rowMask: "_ROWS",
+  columnMask: "_COLS",
+};
+
+/**
+ * `MASK_<CODE>_COUNT` / `_LIST` / `_ITEM_<n>` / `_SOURCE` / `_OPERATION` (§35),
+ * named and shaped the same way `listFillVariables` already exposes
+ * `LISTFILL_<NAME>_*` — a survey programmer who has used one recognizes the
+ * other immediately, and both land in `state.calculated` through the same
+ * `Object.assign` in `runCalculations` (`flow.ts`).
+ *
+ * `items` is whatever `effectiveQuestion` already resolved for this
+ * dimension — the exact list the respondent sees — so these variables can
+ * never disagree with what actually rendered.
+ */
+export function maskVariables(
+  def: SurveyDefinition,
+  q: Question,
+  target: MaskTarget,
+  items: { code: string | number; label: string }[],
+): Record<string, string | number> {
+  const mask = q[target];
+  if (!mask) return {};
+  const key = `MASK_${String(q.code ?? q.id).toUpperCase()}${MASK_TARGET_SUFFIX[target]}`;
+  const out: Record<string, string | number> = {
+    [`${key}_COUNT`]: items.length,
+    [`${key}_LIST`]: items.map((i) => String(i.code)).join(","),
+    [`${key}_SOURCE`]: formatSetExpression(def, mask.expr),
+    [`${key}_OPERATION`]: mask.action,
+  };
+  items.forEach((it, i) => { out[`${key}_ITEM_${i + 1}`] = it.code; });
+  return out;
+}
+
+/**
+ * Every masked, non-loop-scoped question's variables, merged in one call
+ * (used by `runCalculations`). A question inside a loop is skipped here —
+ * its options/rows/columns are still masked correctly for rendering, but a
+ * per-iteration `MASK_*` naming scheme is a further decision the brief
+ * leaves open ("where possible"), so it is left unbuilt rather than shipped
+ * half-specified.
+ */
+export function maskingVariablesFor(def: SurveyDefinition, state: ResponseState): Record<string, string | number> {
+  const out: Record<string, string | number> = {};
+  const ctx: EvalContext = { def, state };
+  for (const q of def.questions) {
+    if (!q.mask && !q.rowMask && !q.columnMask) continue;
+    if (isInsideLoop(def, q.id)) continue;
+    const view = effectiveQuestion(q, ctx);
+    if (q.mask) Object.assign(out, maskVariables(def, q, "mask", view.options));
+    if (q.rowMask) Object.assign(out, maskVariables(def, q, "rowMask", view.rows));
+    if (q.columnMask) {
+      Object.assign(out, maskVariables(def, q, "columnMask", view.columns.map((c) => ({ code: c.id, label: c.label }))));
+    }
+  }
+  return out;
+}
+
+/** Whether a question is reached inside any loop node — reuses the same
+ *  loop/question map `LOOP_*` variable generation already builds. */
+function isInsideLoop(def: SurveyDefinition, questionId: string): boolean {
+  return loopNodes(def).some(({ node }) => questionIdsInLoop(node).includes(questionId));
 }
 
 /* ------------------------------------------------- from the flat pipeline */

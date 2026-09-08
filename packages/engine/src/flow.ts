@@ -9,7 +9,7 @@ import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
 import { checkQuotas, type QuotaCounts } from "./quotas.js";
 import { applyEmbeddedField, type EmbeddedField } from "./embedded.js";
-import { prefillQuestions } from "./setExpression.js";
+import { prefillQuestions, maskingVariablesFor } from "./setExpression.js";
 import { resolveUrlTemplate } from "./redirect.js";
 import { listFillHiddenDestinations } from "./listFill.js";
 import { containerVisibleByRules, visibleByRules } from "./displayRules.js";
@@ -288,6 +288,12 @@ export function runCalculations(
    * answers in their positional export columns.
    */
   Object.assign(state.calculated, loopVariables(def, state));
+  /*
+   * `MASK_<CODE>_COUNT/_LIST/_ITEM_<n>/_SOURCE/_OPERATION` (§35) — a pure
+   * function of the definition and the answers, same as loop variables just
+   * above, so it is recomputed on every trigger rather than cached.
+   */
+  Object.assign(state.calculated, maskingVariablesFor(def, state));
   /*
    * The resolver comes from `calcOptionsFor` rather than being built here, so
    * a calculation and an `expr` condition resolve names through literally the

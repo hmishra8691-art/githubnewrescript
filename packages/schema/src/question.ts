@@ -393,6 +393,15 @@ export const QuestionColumn = z.object({
   max: z.number().optional(),
   carryForward: CarryForward.optional(),
   meta: z.record(z.any()).optional(),
+  /**
+   * Columns share the option-level logic model — same engine, same editor
+   * as `Option.logic`/`QuestionRow.logic` (always-show/always-hide,
+   * show-when/hide-when). Absent = "Always Show", exactly how every
+   * pre-existing column already behaves.
+   */
+  logic: OptionLogic.optional(),
+  /** Mirrors `Option.flags`/`QuestionRow.flags` (e.g. a "Not applicable" column). */
+  flags: z.array(OptionFlag).default([]),
 });
 export type QuestionColumn = z.infer<typeof QuestionColumn>;
 
@@ -648,6 +657,22 @@ export const Question = z.object({
    * BEFORE the pipeline, and both are absent on every existing question.
    */
   mask: OptionMask.optional(),
+  /**
+   * The same mask, applied to this question's ROWS instead of its options
+   * (matrix/grid/composite questions). Same `OptionMask`/`SetExpr` type,
+   * same evaluator, same visual builder — a row is just a different target
+   * dimension for the identical engine, not a second one (universal masking
+   * brief, §17/§19/§22/§43). Absent on every existing question.
+   */
+  rowMask: OptionMask.optional(),
+  /**
+   * The same mask again, applied to this question's COLUMNS. Columns are
+   * addressed by `id` rather than `code` (see `QuestionColumn`), so the
+   * engine adapts them the same way it already does for column grouping/
+   * randomization — `{...column, code: column.id}` — before running the
+   * identical `applyMask` used for options and rows (§18–§20, §43).
+   */
+  columnMask: OptionMask.optional(),
   /**
    * Auto-selection: tick options in THIS question from other answers
    * (reqs §14–§19). The rule lives on the question being filled, so it only

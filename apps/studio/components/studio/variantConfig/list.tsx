@@ -64,6 +64,7 @@ export function starterSheetColumns(q: Question): QuestionColumn[] {
     options: [],
     validation: [],
     readOnly: false,
+    flags: [],
   }));
 }
 
