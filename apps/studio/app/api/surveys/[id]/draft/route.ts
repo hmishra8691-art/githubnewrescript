@@ -35,6 +35,8 @@ function guardMissing(message: string): boolean {
 
 const NEEDS_MIGRATION =
   "Autosave needs supabase/migrations/0003_draft_definitions.sql applied. Your work is safe — use Save version until then.";
+const NEEDS_GUARD_MIGRATION =
+  "Autosave's stale-write guard needs supabase/migrations/0004_revisions.sql applied. Your work is safe — nothing was overwritten — but this save was not applied, to avoid silently disabling the protection that stops one editor's save from clobbering another's. Use Save version until then.";
 
 export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
   const gate = await requireEditRight(req, params.id, "survey.edit");
@@ -181,34 +183,20 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   }
 
   /*
-   * Unguarded path — only reached when migration 0004 has not been applied, or
-   * the client did not send a revision. It behaves as before, and says
-   * plainly that stale-write protection is off rather than implying safety.
+   * Refused, not unguarded. This used to fall through to an unconditional
+   * UPDATE — last write wins, no concurrency protection — whenever the client
+   * had no revision to send or the guard RPC was missing, flagged to the
+   * client only via a quiet `unguarded: true` field nothing forced anyone to
+   * look at. That is exactly the mechanism that would make saves stop
+   * reliably persisting: two edits landing out of order with nothing to
+   * refuse the second one.
+   *
+   * Refusing loudly instead costs nothing this survey didn't already have —
+   * the draft on the server is untouched, "Save version" still works — and it
+   * means a database missing migration 0004 fails safe instead of silently
+   * losing its safety net.
    */
-  const { error } = await db
-    .from("surveys")
-    .update({
-      draft_definition: definition,
-      draft_updated_at: new Date().toISOString(),
-      draft_base_version_id: body.baseVersionId ?? null,
-      title: definition.meta.title,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", params.id);
-
-  if (error) {
-    return NextResponse.json(
-      { error: migrationMissing(error.message) ? NEEDS_MIGRATION : error.message },
-      { status: migrationMissing(error.message) ? 501 : 500 },
-    );
-  }
-  return NextResponse.json({
-    ok: true,
-    savedAt: new Date().toISOString(),
-    revision: null,
-    unguarded: true,
-    droppedFields,
-  });
+  return NextResponse.json({ error: NEEDS_GUARD_MIGRATION }, { status: 501 });
 }
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {

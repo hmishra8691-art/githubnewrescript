@@ -90,9 +90,15 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
    */
   const { data: doomed } = await db
     .from("surveys").select("code, title").eq("id", params.id).maybeSingle();
-  await db.from("surveys").update({ current_version_id: null }).eq("id", params.id);
-  const { error } = await db.from("surveys").delete().eq("id", params.id);
+  /*
+   * One RPC, one statement from here: clearing the self-referencing
+   * current_version_id and deleting the row now commit or fail together
+   * (supabase/migrations/0020_delete_project_transaction.sql), rather than
+   * being two independent calls with the first one's error discarded.
+   */
+  const { data: deleted, error } = await db.rpc("rescript_delete_project", { p_survey_id: params.id });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (!deleted) return NextResponse.json({ error: "not found" }, { status: 404 });
   await audit({
     action: "project.deleted", userId: gate.user.userId, sessionId: gate.user.sessionId,
     surveyId: null, customerId: gate.user.customerId,

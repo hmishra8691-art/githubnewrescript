@@ -1,6 +1,6 @@
 import { loadDeployment, BLOCKING_STATUSES } from "@/lib/deployment";
 import { loadQuotaCounts } from "@/lib/session";
-import { Runner } from "@/components/Runner";
+import { RunnerLive } from "@/components/RunnerLive";
 
 export const dynamic = "force-dynamic";
 
@@ -53,9 +53,8 @@ export default async function SurveyPage({
   const quotaCounts = await loadQuotaCounts(dep.surveyId, false);
 
   return (
-    <Runner
-      definition={dep.definition}
-      mode="live"
+    <RunnerLive
+      versionId={dep.versionId}
       sessionBoot={{
         client: params.client,
         study: params.study,

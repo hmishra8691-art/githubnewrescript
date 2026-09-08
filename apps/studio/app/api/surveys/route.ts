@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
     // Missing env vars: answer with a readable message instead of a 500 page.
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Supabase is not configured" },
-      { status: 503 },
+      { status: 503, headers: { "cache-control": "no-store" } },
     );
   }
 
@@ -40,7 +40,9 @@ export async function GET(req: NextRequest) {
     p_user: user.userId,
     p_lock_stale_seconds: user.policies.lock.staleAfterSeconds,
   });
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500, headers: { "cache-control": "no-store" } });
+  }
 
   const rows = (mine ?? []) as {
     survey_id: string; code: string; title: string; status: string; updated_at: string;
@@ -131,7 +133,7 @@ export async function GET(req: NextRequest) {
       stats: {},
       contributors: {},
       warnings: [`statistics unavailable: ${e instanceof Error ? e.message : String(e)}`],
-    });
+    }, { headers: { "cache-control": "no-store" } });
   }
 
   return NextResponse.json({
