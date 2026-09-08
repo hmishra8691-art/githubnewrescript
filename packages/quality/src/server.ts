@@ -17,7 +17,19 @@ import { ensureElementIds } from "@rescript/engine";
 export const RESPONSE_COLUMNS =
   "id, session_id, respondent_id, status, is_test, answers, calculated, embedded, flags, started_at, completed_at, telemetry, ip_hash, device_hash, quality, review_status, review_reason, reviewed_by, reviewed_at";
 
-const PEER_COLUMNS = "session_id, respondent_id, status, answers, started_at, completed_at, ip_hash, device_hash, quality, review_status";
+/*
+ * Only `system` out of `quality` ever gets read (by `sharedSignals` in
+ * similarity.ts, for matrix/open-end/timing fingerprints) — never
+ * `classification`, never the flags/categories/cluster/reasons/benchmarks
+ * that make up the rest of a stored assessment. Fetching the whole blob for
+ * up to `maxPeers` (3000 by default) rows on every completed interview was
+ * the single largest egress line item in the platform: every completion
+ * pulled several KB of flag text and score breakdowns per peer that nothing
+ * downstream ever looked at. `quality->system` projects just that sub-object
+ * at the database layer, and `review_status` is dropped outright — no rule
+ * or scoring path reads `PeerRecord.reviewStatus` either.
+ */
+const PEER_COLUMNS = "session_id, respondent_id, status, answers, started_at, completed_at, ip_hash, device_hash, system:quality->system";
 
 /** sha256(salt + value) — comparable, not reversible. */
 export function hashIdentifier(salt: string, value: string | null | undefined): string | null {
@@ -68,9 +80,11 @@ export function rowToPeer(row: any): PeerRecord {
     completedAt: row.completed_at ?? null,
     ipHash: row.ip_hash ?? null,
     deviceHash: row.device_hash ?? null,
-    system: row.quality?.system ?? null,
-    classification: row.quality?.classification ?? null,
-    reviewStatus: row.review_status ?? null,
+    // `row.system` is the projected `quality->system` column; `row.quality?.system`
+    // is a defensive fallback in case a caller ever hands this a full,
+    // unprojected row (e.g. a future direct `.select("*")`) — cheap insurance,
+    // never the expected path for `loadPeers`.
+    system: row.system ?? row.quality?.system ?? null,
   };
 }
 
@@ -166,6 +180,80 @@ export function parseDefinition(json: unknown): SurveyDefinition | null {
   return p.success ? ensureElementIds(p.data).def : null;
 }
 
+/* --------------------------------------------------- the immutable version cache */
+
+/**
+ * A published version's `definition` can never change again once cut — a
+ * database trigger (`survey_versions_immutable`, migration 0012) enforces it.
+ * That makes a version's parsed definition safe to hold in memory for the
+ * life of the process: there is no invalidation to get wrong, because there
+ * is nothing to invalidate.
+ *
+ * Before this cache, `resolveRunDefinition` re-fetched and re-validated the
+ * whole survey JSON from Postgres on EVERY save of a live session — every
+ * "Next" click, for the entire survey — just to read a handful of quality
+ * config flags. A 100-page survey saved a hundred times over meant a hundred
+ * multi-hundred-KB reads and a hundred full Zod parses, for content that
+ * cannot have changed since the first read. `loadDeployment` /
+ * `loadTestBuild` in the runtime (session start, on every page load) hit the
+ * same version for the same reason and are the other callers.
+ *
+ * Only the immutable VERSION path is cached here. A test session's autosaved
+ * DRAFT is deliberately never cached — it changes on every autosave, and
+ * "the latest saved state" is the whole point of a test link.
+ */
+const VERSION_CACHE_LIMIT = 300;
+const versionDefinitionCache = new Map<string, SurveyDefinition>();
+
+function cacheGet(versionId: string): SurveyDefinition | undefined {
+  const hit = versionDefinitionCache.get(versionId);
+  if (hit) {
+    // touch for a simple recency order — Map preserves insertion order, so
+    // delete+re-set moves this key to the "most recently used" end
+    versionDefinitionCache.delete(versionId);
+    versionDefinitionCache.set(versionId, hit);
+  }
+  return hit;
+}
+
+function cacheSet(versionId: string, def: SurveyDefinition): void {
+  versionDefinitionCache.set(versionId, def);
+  if (versionDefinitionCache.size > VERSION_CACHE_LIMIT) {
+    const oldest = versionDefinitionCache.keys().next().value;
+    if (oldest !== undefined) versionDefinitionCache.delete(oldest);
+  }
+}
+
+/**
+ * Load and parse one published version's definition, from memory when this
+ * process has already resolved that `versionId`. Returns null on a missing
+ * row or a definition that fails schema validation — exactly what callers
+ * already treated a failed fetch as: assessment/telemetry config unavailable,
+ * the response's answers still save regardless.
+ *
+ * The returned object is shared across every caller that asks for the same
+ * `versionId` in this process. Nothing on the read path (quota checks,
+ * quality assessment, sample-source resolution, rendering) mutates a
+ * definition in place — every one of those is a pure read — so sharing the
+ * reference is safe and is the whole point: it is what avoids re-parsing.
+ */
+export async function getCachedVersionDefinition(db: any, versionId: string): Promise<SurveyDefinition | null> {
+  const cached = cacheGet(versionId);
+  if (cached) return cached;
+  const { data: ver } = await db.from("survey_versions").select("definition").eq("id", versionId).single();
+  if (!ver) return null;
+  const parsed = SurveyDefinition.safeParse(ver.definition);
+  if (!parsed.success) return null;
+  const def = ensureElementIds(parsed.data).def;
+  cacheSet(versionId, def);
+  return def;
+}
+
+/** Test-only escape hatch — a suite that reuses a versionId across cases needs a clean slate. */
+export function __clearVersionDefinitionCacheForTests(): void {
+  versionDefinitionCache.clear();
+}
+
 /* ------------------------------------------------------------ which definition ran */
 
 /** The runner's description of the build a TEST session is running (see runtime `TestBuildInfo`). */
@@ -218,7 +306,6 @@ export async function resolveRunDefinition(
   } else if (existing.is_test && requested) {
     note = "a specific version was requested with ?v=";
   }
-  const { data: ver } = await db.from("survey_versions").select("definition").eq("id", existing.version_id).single();
-  const parsed = ver ? SurveyDefinition.safeParse(ver.definition) : null;
-  return { def: parsed?.success ? parsed.data : null, source: "version", versionId: existing.version_id, revision: null, note };
+  const def = await getCachedVersionDefinition(db, existing.version_id);
+  return { def, source: "version", versionId: existing.version_id, revision: null, note };
 }

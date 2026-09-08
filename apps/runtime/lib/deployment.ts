@@ -3,6 +3,7 @@ import { supabaseAdmin } from "./admin";
 import { SurveyDefinition } from "@rescript/schema";
 import { decideTestBuild, versionIdToFetch, type TestBuild } from "@rescript/engine";
 import { ensureElementIds } from "@rescript/engine";
+import { getCachedVersionDefinition } from "@rescript/quality/server";
 
 export interface LoadedDeployment {
   deploymentId: string;
@@ -50,35 +51,24 @@ export async function loadDeployment(
     .maybeSingle();
   if (!dep) return null;
 
-  const { data: ver } = await db
-    .from("survey_versions")
-    .select("id, definition")
-    .eq("id", dep.version_id)
-    .single();
-  if (!ver) return null;
+  /*
+   * A published version is FROZEN by a database trigger (0012) — deliberately,
+   * because a deployed link is pinned to that snapshot — so its definition
+   * (element ids backfilled per §31–49, see `getCachedVersionDefinition`) is
+   * safe to serve from memory once this process has read it once. This used
+   * to be a fresh Postgres read plus a full Zod parse on EVERY call, and
+   * `loadDeployment` runs at least twice per respondent — once rendering the
+   * page, once again inside `/api/session/start` — for a live session that
+   * never changes between those two calls.
+   */
+  const definition = await getCachedVersionDefinition(db, dep.version_id);
+  if (!definition) return null;
 
   const { data: survey } = await db
     .from("surveys")
     .select("status")
     .eq("id", dep.survey_id)
     .maybeSingle();
-
-  const parsed = SurveyDefinition.safeParse(ver.definition);
-  if (!parsed.success) return null;
-  /*
-   * STABLE ELEMENT IDS, presented on read (§31–49).
-   *
-   * A published version is FROZEN by a database trigger (0012) — deliberately,
-   * because a deployed link is pinned to that snapshot. So a version cut
-   * before ids existed can never be rewritten to have them, and the only way
-   * it can present them is to derive them here, every time.
-   *
-   * `ensureElementIds` is deterministic, so this gives the same answer on
-   * every request and on every server — which is the whole reason the
-   * backfill is derived rather than minted. A random id here would change
-   * under a respondent mid-session.
-   */
-  const definition = ensureElementIds(parsed.data).def;
 
   return {
     deploymentId: dep.id,
@@ -150,17 +140,31 @@ export async function loadTestBuild(
   const wanted = versionIdToFetch({ requestedVersionId, currentVersionId: survey.current_version_id, draft });
   let version: Parameters<typeof decideTestBuild>[0]["version"] = null;
   if (wanted) {
+    // small, cheap, no JSON blob — fetched every time regardless of the cache below
     const { data: ver, error } = await db
       .from("survey_versions")
-      .select("id, survey_id, version, definition")
+      .select("id, survey_id, version")
       .eq("id", wanted)
       .maybeSingle();
-    if (error || !ver) version = { ok: false, error: error?.message ?? "not found" };
-    else {
-      const parsed = SurveyDefinition.safeParse(ver.definition);
-      version = parsed.success
-        ? { ok: true, id: ver.id, surveyId: ver.survey_id, version: ver.version, definition: ensureElementIds(parsed.data).def }
-        : { ok: false, error: `stored definition does not match the schema: ${parsed.error.issues.slice(0, 3).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}` };
+    if (error || !ver) {
+      version = { ok: false, error: error?.message ?? "not found" };
+    } else {
+      const definition = await getCachedVersionDefinition(db, wanted);
+      if (definition) {
+        version = { ok: true, id: ver.id, surveyId: ver.survey_id, version: ver.version, definition };
+      } else {
+        // cache miss AND schema failure — vanishingly rare for an already-published
+        // version, but worth one more read to give the author the precise Zod error
+        // rather than a bare "not found"
+        const { data: raw } = await db.from("survey_versions").select("definition").eq("id", wanted).maybeSingle();
+        const parsed = raw ? SurveyDefinition.safeParse(raw.definition) : null;
+        version = {
+          ok: false,
+          error: parsed && !parsed.success
+            ? `stored definition does not match the schema: ${parsed.error.issues.slice(0, 3).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`
+            : "not found",
+        };
+      }
     }
   }
 

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { SurveyDefinition } from "@rescript/schema";
-import { assessAndStore, clientIp, deviceHashFrom, hashIdentifier, loadPeers, recomputeSurvey, resolveRunDefinition, rowToPeer, rowToResponse } from "./server.js";
+import { __clearVersionDefinitionCacheForTests, assessAndStore, clientIp, deviceHashFrom, getCachedVersionDefinition, hashIdentifier, loadPeers, recomputeSurvey, resolveRunDefinition, rowToPeer, rowToResponse } from "./server.js";
 
 /**
  * A minimal in-memory stand-in for the Supabase query builder: enough of the
@@ -18,7 +18,31 @@ function fakeDb(tables: Record<string, any[]>) {
     const filters: ((r: any) => boolean)[] = [];
     const apply = () => rows.filter((r) => filters.every((f) => f(r)));
     const b: any = {
-      select() { op = op === "update" ? "update" : "select"; return b; },
+      /*
+       * Real PostgREST projects `col->path` (or `alias:col->path`) onto a
+       * flat field, which is how `loadPeers` now asks for just
+       * `quality->system` instead of the whole assessment blob. This stub
+       * never dropped unselected fields anyway, so the only thing worth
+       * emulating here is that flattening — enough to prove `rowToPeer`
+       * reads the projected shape, not the nested one.
+       */
+      select(cols?: string) {
+        op = op === "update" ? "update" : "select";
+        if (typeof cols === "string" && cols.includes("->")) {
+          const projections = cols.split(",").map((s) => s.trim())
+            .map((spec) => spec.match(/^(?:(\w+):)?(\w+)->>?(\w+)$/))
+            .filter((m): m is RegExpMatchArray => !!m)
+            .map((m) => ({ alias: m[1] ?? m[3], col: m[2], path: m[3] }));
+          if (projections.length) {
+            rows = rows.map((r) => {
+              const out = { ...r };
+              for (const p of projections) out[p.alias] = r[p.col]?.[p.path] ?? null;
+              return out;
+            });
+          }
+        }
+        return b;
+      },
       update(p: any) { op = "update"; patch = p; return b; },
       insert(p: any) { calls.push({ table, op: "insert", args: p }); (tables[table] ??= []).push(p); return Promise.resolve({ data: p, error: null }); },
       eq(k: string, v: any) { filters.push((r) => r[k] === v); return b; },
@@ -27,8 +51,8 @@ function fakeDb(tables: Record<string, any[]>) {
       not(k: string, _op: string, _v: any) { filters.push((r) => r[k] !== null && r[k] !== undefined); return b; },
       order(k: string, o?: { ascending?: boolean }) { rows = [...rows].sort((a, c) => (String(a[k]) < String(c[k]) ? -1 : 1) * (o?.ascending === false ? -1 : 1)); return b; },
       limit(n: number) { rows = rows.slice(0, n); return b; },
-      maybeSingle() { return Promise.resolve({ data: apply()[0] ?? null, error: null }); },
-      single() { return Promise.resolve({ data: apply()[0] ?? null, error: null }); },
+      maybeSingle() { calls.push({ table, op: "select", args: null }); return Promise.resolve({ data: apply()[0] ?? null, error: null }); },
+      single() { calls.push({ table, op: "select", args: null }); return Promise.resolve({ data: apply()[0] ?? null, error: null }); },
       then(res: any, rej: any) {
         if (op === "update") {
           const hit = apply();
@@ -78,13 +102,13 @@ test("hashes: salted, comparable, not the raw value; device hash uses coarse fie
   assert.equal(clientIp({ get: () => null }), null);
 });
 
-test("row mapping: telemetry, hashes and the compact system record travel; in-progress rows are not peers", async () => {
-  const rows = [row(0), row(1, { status: "in_progress" }), row(2, { quality: { system: { SYSTEM_TOTAL_DURATION: 240 }, classification: "CLEAN" } })];
+test("row mapping: telemetry, hashes and the compact system record travel; in-progress rows are not peers; peers carry quality->system, never the full assessment", async () => {
+  const rows = [row(0), row(1, { status: "in_progress" }), row(2, { quality: { system: { SYSTEM_TOTAL_DURATION: 240 }, classification: "CLEAN", flags: [{ ruleId: "x" }] } })];
   const db = fakeDb({ responses: rows });
   const peers = await loadPeers(db, "S1", false, "sess000", 100);
   assert.deepEqual(peers.map((p) => p.sessionId), ["sess002"], "excludes self and in-progress");
-  assert.equal(peers[0].system?.SYSTEM_TOTAL_DURATION, 240);
-  assert.equal(peers[0].classification, "CLEAN");
+  assert.equal(peers[0].system?.SYSTEM_TOTAL_DURATION, 240, "quality->system is projected onto the row");
+  assert.ok(!("classification" in peers[0]), "the rest of the assessment (classification, flags, ...) is never fetched for a peer");
   const r = rowToResponse(rows[0]);
   assert.equal(r.ipHash, "ip0"); assert.equal(r.deviceHash, "dev0"); assert.equal(r.status, "complete");
   assert.equal(rowToPeer(rows[1]).status, "in_progress");
@@ -121,6 +145,7 @@ test("recomputeSurvey assesses every finished response, stamps shared cluster id
 });
 
 test("resolveRunDefinition: a test session is graded with the draft it ran, a live session with its version, ?v= with the requested version", async () => {
+  __clearVersionDefinitionCacheForTests(); // this test reuses versionId "V1" against a fresh survey_versions table
   const versionDef = { ...def, quality: { ...def.quality, enabled: false, strictness: "standard" } };
   const draftDef = { ...def, quality: { ...def.quality, enabled: true, strictness: "strict" } };
   const db = fakeDb({
@@ -148,4 +173,24 @@ test("resolveRunDefinition: a test session is graded with the draft it ran, a li
   // the hint cannot point at a definition the survey does not own: only the row's version is loaded
   const x = await resolveRunDefinition(db, { survey_id: "S1", version_id: "V1", is_test: true }, { source: "requested", versionId: "SOMEBODY_ELSES" });
   assert.equal(x.versionId, "V1");
+
+  // five of the calls above (r, l, n, b, x) resolved to the "version" source for the
+  // SAME versionId — that must be ONE database read, not five, because a published
+  // version's definition can never change (migration 0012's immutability trigger)
+  const versionReads = db.calls.filter((c) => c.table === "survey_versions" && c.op === "select").length;
+  assert.equal(versionReads, 1, `V1's definition should be read from the database once and served from memory after that, got ${versionReads} reads`);
+});
+
+test("getCachedVersionDefinition: caches per versionId, and a schema failure is not cached (never silently sticks)", async () => {
+  __clearVersionDefinitionCacheForTests();
+  const db = fakeDb({ survey_versions: [{ id: "V-good", definition: def }, { id: "V-bad", definition: { meta: "broken" } }] });
+  const a = await getCachedVersionDefinition(db, "V-good");
+  const b = await getCachedVersionDefinition(db, "V-good");
+  assert.ok(a && b);
+  assert.equal(a, b, "the exact same parsed object is returned from cache — no re-parse");
+  assert.equal(db.calls.filter((c) => c.table === "survey_versions").length, 1);
+
+  const bad1 = await getCachedVersionDefinition(db, "V-bad");
+  const bad2 = await getCachedVersionDefinition(db, "V-bad");
+  assert.equal(bad1, null); assert.equal(bad2, null);
 });

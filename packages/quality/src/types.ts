@@ -111,9 +111,6 @@ export interface PeerRecord {
   ipHash?: string | null;
   deviceHash?: string | null;
   system?: Partial<SystemVars> | null;
-  /** the peer's own classification, when already assessed */
-  classification?: QualityClass | null;
-  reviewStatus?: string | null;
 }
 
 /** A prior assessment of the same external respondent in another study. */
