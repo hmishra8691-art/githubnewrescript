@@ -9,9 +9,11 @@
 --
 --   psql -d <database> -f scripts/sample-source-sql-test.sql
 --
--- Run it against a scratch database with migrations 0001–0012 applied. It
--- creates its own fixtures under fixed ids and rolls nothing back, so use a
--- throwaway database — never a live project.
+-- Run it against a scratch database with migrations 0001–0012 applied (0021
+-- too, for the final test below) — 0002–0011/0013+ are not required for
+-- anything this file asserts. It creates its own fixtures under fixed ids
+-- and rolls nothing back, so use a throwaway database — never a live
+-- project.
 --
 -- Companion to scripts/access-sql-test.sql, which does the same for RLS.
 -- =====================================================================
@@ -155,3 +157,36 @@ select case when starts = 3 and not declared and target_completes is null
             else 'FAIL — starts ' || starts || ', declared ' || declared end
 from public.rescript_source_stats('22222222-2222-2222-2222-222222222222', false)
 where sample_source = 'cint';
+
+-- ===================================================== §42 / 0021 addendum
+
+\echo '--- 15. the version-immutability guard must not block deleting the SURVEY it protects'
+-- This is the P0 this addendum exists for: 0012's trigger correctly refused
+-- to let anyone delete JUST version 1.1 (test 5, above — it is still
+-- answered and still protected) or JUST version 1.0 (test 4 — it is still
+-- the survey's current version). But `rescript_delete_project` (0020)
+-- deletes the whole `surveys` row, which cascades into deleting every
+-- `survey_versions` row underneath it — and before 0021, that cascade fired
+-- the SAME trigger, which raised the SAME exception, so the entire delete
+-- transaction aborted and the survey could never be removed at all. Every
+-- fixture used above (survey 22222222…, its current version 33333333… and
+-- its answered version 44444444… with responses) is still exactly as the
+-- earlier tests left it, so this is the real end-to-end path: the actual RPC
+-- the DELETE route calls, on a survey no different from a real one.
+select case when public.rescript_delete_project('22222222-2222-2222-2222-222222222222')
+            then 'PASS survey with a current + answered version was deleted'
+            else 'FAIL — rescript_delete_project returned false' end;
+select case when count(*) = 0 then 'PASS no survey row left'
+            else 'FAIL — survey still exists' end
+  from public.surveys where id = '22222222-2222-2222-2222-222222222222';
+select case when count(*) = 0 then 'PASS both versions gone, including the ones the trigger was protecting'
+            else 'FAIL — a version survived' end
+  from public.survey_versions where survey_id = '22222222-2222-2222-2222-222222222222';
+select case when count(*) = 0 then 'PASS its responses are gone too'
+            else 'FAIL — a response survived' end
+  from public.responses where survey_id = '22222222-2222-2222-2222-222222222222';
+
+\echo '--- 16. calling it again on the now-gone survey is a safe no-op, not an error'
+select case when public.rescript_delete_project('22222222-2222-2222-2222-222222222222') = false
+            then 'PASS idempotent retry returns false, does not raise'
+            else 'FAIL' end;
