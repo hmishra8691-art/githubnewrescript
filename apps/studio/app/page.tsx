@@ -9,6 +9,7 @@ import {
 import { useSession } from "@/lib/useSession";
 import { AppHeader, greeting } from "@/components/ui/AppHeader";
 import { Icon } from "@/components/ui/Icon";
+import { can, type ProjectRole } from "@rescript/access";
 
 type SortKey =
   | "updated" | "created" | "name_az" | "name_za"
@@ -78,6 +79,15 @@ export default function Dashboard() {
   const [deleting, setDeleting] = React.useState<SurveyRow | null>(null);
   const [confirmText, setConfirmText] = React.useState("");
   const [deleteBusy, setDeleteBusy] = React.useState(false);
+  /*
+   * Scoped to the modal, not the page-level `error` banner: a genuine delete
+   * failure (wrong role, locked project, a 500) must stay visible right next
+   * to the button the user just pressed. The modal only closes on a real
+   * success or a confirmed already-deleted (404) — never on a failure, which
+   * is the bug this fixes (the modal used to close and the list reload
+   * unconditionally, so a refused delete looked identical to a real one).
+   */
+  const [deleteError, setDeleteError] = React.useState<string | null>(null);
 
   const load = React.useCallback(async () => {
     const ENV_HINT =
@@ -393,7 +403,17 @@ export default function Dashboard() {
           onOpen={() => (window.location.href = `/studio/${s.id}`)}
           onResponses={() => (window.location.href = `/studio/${s.id}?tab=data`)}
           onStatus={(status) => setStatus(s.id, status)}
-          onDelete={() => { setDeleting(s); setConfirmText(""); }} />
+          onDelete={() => { setDeleting(s); setConfirmText(""); setDeleteError(null); }}
+          /*
+           * project.delete is owner-only (packages/access/src/roles.ts) and
+           * that's already enforced server-side — this is only a courtesy so
+           * a role we KNOW can't delete doesn't walk through the whole
+           * confirm flow to hit a permission error. Unknown role (legacy
+           * rows without `myRole`) defaults to true, same fallback this file
+           * already uses for `roleSource` — never take away something that
+           * used to work over a missing field.
+           */
+          canDelete={s.myRole ? can(s.myRole as ProjectRole, "project.delete") : true} />
       ))}
       </div>
 
@@ -471,7 +491,7 @@ export default function Dashboard() {
       </div>
 
       {deleting && (
-        <div className="modal-back" onClick={() => setDeleting(null)}>
+        <div className="modal-back" onClick={() => { if (!deleteBusy) setDeleting(null); }} data-testid="delete-modal">
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h2>Delete “{deleting.title}”?</h2>
             <p className="muted" style={{ fontSize: 14 }}>
@@ -480,20 +500,49 @@ export default function Dashboard() {
               This cannot be undone — export the data first if you need it.
             </p>
             <label className="f"><span>Type the survey code <strong>{deleting.code}</strong> to confirm</span>
-              <input className="input mono" autoFocus value={confirmText}
+              <input className="input mono" autoFocus value={confirmText} data-testid="delete-confirm-input"
                 onChange={(e) => setConfirmText(e.target.value)} /></label>
+            {deleteError && (
+              <p className="card" data-testid="delete-error"
+                style={{ borderColor: "var(--red)", color: "var(--red)", fontSize: 13.5 }}>
+                {deleteError}
+              </p>
+            )}
             <div className="row" style={{ justifyContent: "flex-end" }}>
-              <button className="btn" onClick={() => setDeleting(null)}>Cancel</button>
-              <button className="btn danger" disabled={confirmText !== deleting.code || deleteBusy}
+              <button className="btn" disabled={deleteBusy} data-testid="delete-cancel-btn"
+                onClick={() => setDeleting(null)}>Cancel</button>
+              <button className="btn danger" data-testid="delete-confirm-btn"
+                disabled={confirmText !== deleting.code || deleteBusy}
                 style={confirmText === deleting.code ? { borderColor: "var(--red)" } : undefined}
                 onClick={async () => {
                   setDeleteBusy(true);
+                  setDeleteError(null);
                   try {
                     const r = await fetch(`/api/surveys/${deleting.id}`, { method: "DELETE" });
                     const d = await r.json().catch(() => ({}));
-                    if (!r.ok) setError(d.error ?? "delete failed");
-                    setDeleting(null);
-                    await load();
+                    /*
+                     * A 200 is a confirmed deletion; a 404 means it is
+                     * already gone (someone else deleted it, or a retry
+                     * after a prior success) — neither is a failure to
+                     * report (req §23). Anything else is a REAL failure and
+                     * must not be presented as success: the modal stays
+                     * open, the list is not touched, and the exact reason
+                     * the server gave is shown right here.
+                     */
+                    if (r.ok || r.status === 404) {
+                      setDeleting(null);
+                      setDeleteError(null);
+                      await load();
+                      return;
+                    }
+                    setDeleteError(
+                      d.error ??
+                        "We could not permanently delete this survey. No changes were applied. Please try again.",
+                    );
+                  } catch {
+                    setDeleteError(
+                      "We could not reach the server to delete this survey. No changes were applied. Please try again.",
+                    );
                   } finally {
                     setDeleteBusy(false);
                   }

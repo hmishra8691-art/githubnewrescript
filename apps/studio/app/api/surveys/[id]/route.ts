@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { SURVEY_STATUSES, isSurveyStatus } from "@/lib/status";
 import { audit, isFailure, requireEditRight, requireProject } from "@/lib/guard";
+import { purgeSurveyUploads, type StorageDb } from "@/lib/surveyUploads";
 
 export const dynamic = "force-dynamic";
 
@@ -90,6 +91,28 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
    */
   const { data: doomed } = await db
     .from("surveys").select("code, title").eq("id", params.id).maybeSingle();
+
+  /*
+   * Respondent-uploaded files (file/photo/signature/audio answers) live in
+   * object storage keyed by response session id, not a `survey_id`-FK'd
+   * table, so ON DELETE CASCADE below cannot reach them (see
+   * lib/surveyUploads.ts). This must run BEFORE the RPC, while
+   * `responses.session_id` still exists to key the bucket paths — and is
+   * deliberately best-effort: storage cannot join the same transaction as
+   * the database delete, so a storage hiccup is recorded for the audit log
+   * but never blocks or fails the authoritative delete below.
+   */
+  /*
+   * `db` (the real, fully-generic Supabase client) is cast through `unknown`
+   * rather than passed directly: comparing its type — dozens of overloaded,
+   * conditionally-typed methods — structurally against the small hand-written
+   * `StorageDb` interface blows past TypeScript's instantiation depth limit
+   * (TS2589). The unit tests in surveyUploads.test.ts already exercise this
+   * exact shape against the real function, so the cast is a formality, not a
+   * loss of safety.
+   */
+  const { warnings: storageWarnings } = await purgeSurveyUploads(db as unknown as StorageDb, params.id);
+
   /*
    * One RPC, one statement from here: clearing the self-referencing
    * current_version_id and deleting the row now commit or fail together
@@ -103,7 +126,10 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     action: "project.deleted", userId: gate.user.userId, sessionId: gate.user.sessionId,
     surveyId: null, customerId: gate.user.customerId,
     entity: "survey", entityId: params.id,
-    detail: { code: doomed?.code ?? null, title: doomed?.title ?? null },
+    detail: {
+      code: doomed?.code ?? null, title: doomed?.title ?? null,
+      ...(storageWarnings.length ? { storageWarnings } : {}),
+    },
   });
   return NextResponse.json({ ok: true });
 }

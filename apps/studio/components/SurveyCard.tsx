@@ -121,7 +121,9 @@ function Stat({ label, value, title, onClick }: {
   );
 }
 
-export function SurveyCard({ survey, stats, contributors, loading, onOpen, onResponses, onStatus, onDelete }: {
+export function SurveyCard({
+  survey, stats, contributors, loading, onOpen, onResponses, onStatus, onDelete, canDelete = true,
+}: {
   survey: SurveyRow;
   stats: SurveyStats | undefined;
   contributors: Record<string, Contributor>;
@@ -130,6 +132,15 @@ export function SurveyCard({ survey, stats, contributors, loading, onOpen, onRes
   onResponses(): void;
   onStatus(status: string): void;
   onDelete(): void;
+  /**
+   * Whether this viewer's role permits permanently deleting the survey.
+   * Defaults to `true` (unchanged behavior) when the caller doesn't know the
+   * role yet — the server is the actual authority on this (`project.delete`
+   * is owner-only, enforced in the DELETE route), so hiding the option here
+   * is only a courtesy to stop a user who can never succeed from opening the
+   * confirm dialog just to hit a permission error.
+   */
+  canDelete?: boolean;
 }) {
   const [menu, setMenu] = React.useState(false);
   const meta = STATUS_META[survey.status] ?? { label: survey.status, tone: "draft", hint: "" };
@@ -279,7 +290,9 @@ export function SurveyCard({ survey, stats, contributors, loading, onOpen, onRes
                     </button>
                   ))}
                   <div className="menu-sep" />
-                  <button className="menu-item danger" onClick={() => { setMenu(false); onDelete(); }}>
+                  <button className="menu-item danger" disabled={!canDelete} data-testid="delete-survey-menu-item"
+                    title={canDelete ? undefined : "Only the project owner can permanently delete this survey."}
+                    onClick={() => { setMenu(false); onDelete(); }}>
                     Delete survey…
                   </button>
                 </div>
