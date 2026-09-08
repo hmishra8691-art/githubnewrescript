@@ -17,6 +17,7 @@ import { evaluateCondition, withOption, withLegacyOptionLoop } from "./evaluate.
 import { getQuestion, lookupAnswer, loopKeySuffix } from "./state.js";
 import { resolvePiping, registerDisplayedOptionsResolver, registerEffectiveRowsResolver } from "./piping.js";
 import { evaluateSetExpr, LIST_ACTIONS } from "./setExpression.js";
+import { stripHtmlText } from "./html.js";
 import { seededShuffle, subSeed, mulberry32 } from "./random.js";
 import { hasDisplayRulesFor, ruleVerdict, visibleByRules } from "./displayRules.js";
 import { hasOptionGroups, groupsFor, orderWithGroups } from "./optionGroups.js";
@@ -801,7 +802,7 @@ function applyPrioritization<T extends ItemWithLogic>(
 
 /* ----------------------------------------------------------------- sorting */
 
-const stripHtml = (s: string) => s.replace(/<[^>]*>/g, "");
+const stripHtml = (s: string) => stripHtmlText(s);
 
 function sortItems<T extends { code: string | number; label: string }>(
   order: NonNullable<Question["settings"]["optionOrder"]> | undefined,

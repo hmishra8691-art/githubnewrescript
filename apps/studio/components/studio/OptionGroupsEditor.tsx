@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { OptionGroup, OptionOrder, Question } from "@rescript/schema";
-import { lintOptionGroups, groupOf } from "@rescript/engine";
+import { lintOptionGroups, groupOf, stripHtmlText } from "@rescript/engine";
 import { useStudio, uid } from "./store";
 import { OptionalCondition } from "./ConditionBuilder";
 
@@ -48,7 +48,7 @@ const ITEM_ORDERS: OptionOrder[] = [
   "alpha_asc", "alpha_desc", "numeric_asc", "numeric_desc", "custom", "priority",
 ];
 
-const stripHtml = (h: string) => h.replace(/<[^>]*>/g, "").trim();
+const stripHtml = (h: string) => stripHtmlText(h);
 type Scope = "options" | "rows" | "columns";
 
 export function OptionGroupsEditor({ q, patch }: {

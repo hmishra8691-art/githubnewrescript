@@ -11,6 +11,7 @@ import type {
 import { VALUELESS_OPERATORS, TWO_VALUE_OPERATORS, isOptionValueRef } from "@rescript/schema";
 import { getQuestionByCodeOrVar } from "./state.js";
 import { LIST_OP_LABELS } from "@rescript/schema";
+import { stripHtmlText } from "./html.js";
 
 /**
  * Readable logic summaries (req §14).
@@ -60,7 +61,7 @@ const OPERATOR_WORDS: Record<ComparisonOperator, string> = {
   dateBetween: "is between",
 };
 
-const stripHtml = (s: string) => String(s ?? "").replace(/<[^>]*>/g, "").trim();
+const stripHtml = (s: string) => stripHtmlText(String(s ?? ""));
 
 function labelForCode(q: Question | undefined, code: unknown): string {
   if (!q) return `“${String(code)}”`;

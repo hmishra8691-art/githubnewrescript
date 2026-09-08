@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import type { AttentionCheck, Question, Severity } from "@rescript/schema";
+import { stripHtmlText } from "@rescript/engine";
 import { useStudio } from "./store";
 
 /**
@@ -63,7 +64,7 @@ export function AttentionCheckEditor({ q, patch }: { q: Question; patch(p: Parti
             <label className="f"><span>{ac.kind === "repeat" ? "Must agree with" : "Paired expertise question (optional)"}</span>
               <select className="select" data-testid="attention-paired" value={ac.pairedQuestionId ?? ""} onChange={(e) => setAc({ pairedQuestionId: e.target.value || undefined })}>
                 <option value="">— choose a question —</option>
-                {others.map((o) => <option key={o.id} value={o.id}>{o.code} · {o.text.replace(/<[^>]*>/g, "").slice(0, 50)}</option>)}
+                {others.map((o) => <option key={o.id} value={o.id}>{o.code} · {stripHtmlText(o.text).slice(0, 50)}</option>)}
               </select></label>
           ) : null}
 
@@ -77,7 +78,7 @@ export function AttentionCheckEditor({ q, patch }: { q: Question; patch(p: Parti
                     return (
                       <label key={String(o.code)} className={`chip ${on ? "on" : ""}`} style={{ cursor: "pointer" }}>
                         <input type="checkbox" checked={on} onChange={(e) => setAc({ expected: e.target.checked ? [...ac.expected, o.code] : ac.expected.filter((c) => String(c) !== String(o.code)) })} />
-                        {" "}{o.code}: {o.label.replace(/<[^>]*>/g, "").slice(0, 30)}
+                        {" "}{o.code}: {stripHtmlText(o.label).slice(0, 30)}
                       </label>
                     );
                   })}

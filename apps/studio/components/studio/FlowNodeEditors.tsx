@@ -3,7 +3,7 @@ import React from "react";
 import type { FlowNode, EmbeddedDataType } from "@rescript/schema";
 import {
   EMBEDDED_TYPES, checkEmbeddedExpression, normalizeExpression, coerceEmbedded,
-  validateRedirectUrl, urlVariableCatalog, embeddedCatalog,
+  validateRedirectUrl, urlVariableCatalog, embeddedCatalog, stripHtmlText,
 } from "@rescript/engine";
 import { useStudio, uid } from "./store";
 import { OptionalCondition, ConditionEditor, conditionToText } from "./ConditionBuilder";
@@ -86,7 +86,7 @@ export function ExpressionField({ value, dataType, onChange, placeholder }: {
             <span className="flabel">Questions</span>
             <div className="ep-keys">
               {s.def.questions.slice(0, 40).map((q) => (
-                <button key={q.id} className="ep-key" title={q.text.replace(/<[^>]*>/g, "").slice(0, 60)}
+                <button key={q.id} className="ep-key" title={stripHtmlText(q.text).slice(0, 60)}
                   onClick={() => insert(q.variableName)}>{q.variableName}</button>
               ))}
               {s.def.questions.length === 0 && <span className="muted" style={{ fontSize: 12.5 }}>no questions yet</span>}
@@ -366,7 +366,7 @@ export function NodeEditor({ node, onChange }: { node: FlowNode; onChange(n: Flo
             return (
               <div key={qid} className="opt-row">
                 <span className="mono grow">
-                  {q ? `${q.code} — ${q.text.replace(/<[^>]*>/g, "").slice(0, 60)}` : `⚠ missing ${qid}`}
+                  {q ? `${q.code} — ${stripHtmlText(q.text).slice(0, 60)}` : `⚠ missing ${qid}`}
                 </span>
                 <button className="btn small" onClick={() => {
                   if (i === 0) return;

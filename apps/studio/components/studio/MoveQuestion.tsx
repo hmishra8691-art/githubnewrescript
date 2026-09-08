@@ -1,5 +1,6 @@
 "use client";
 import React from "react";
+import { stripHtmlText } from "@rescript/engine";
 import { useStudio } from "./store";
 import { listBlocks, listPages, blockSize } from "./blockModel";
 
@@ -52,7 +53,7 @@ export function MoveQuestionModal({ qid, onClose }: { qid: string; onClose(): vo
   const label = (id: string) => {
     const other = s.def.questions.find((x) => x.id === id);
     if (!other) return id;
-    const text = other.text.replace(/<[^>]*>/g, "").trim();
+    const text = stripHtmlText(other.text);
     return `${other.code}${text ? ` — ${text.slice(0, 46)}` : ""}`;
   };
 
@@ -127,7 +128,7 @@ export function MoveQuestionModal({ qid, onClose }: { qid: string; onClose(): vo
         onClick={(e) => e.stopPropagation()}>
         <h3 style={{ margin: "0 0 4px" }}>Move {q.code}</h3>
         <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
-          {q.text.replace(/<[^>]*>/g, "").slice(0, 90) || "(untitled question)"}
+          {stripHtmlText(q.text).slice(0, 90) || "(untitled question)"}
         </p>
 
         <div className="flabel">Move to block</div>

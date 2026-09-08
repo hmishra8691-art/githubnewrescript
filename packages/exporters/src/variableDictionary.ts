@@ -1,9 +1,9 @@
 import ExcelJS from "exceljs";
 import type { SurveyDefinition } from "@rescript/schema";
-import { buildVariableDictionary, loopNodes, loopVariablePrefix, maxLoopIterations, possibleLoopItems, directQuestionIdsInLoop } from "@rescript/engine";
+import { buildVariableDictionary, loopNodes, loopVariablePrefix, maxLoopIterations, possibleLoopItems, directQuestionIdsInLoop, stripHtmlText } from "@rescript/engine";
 
 const stripHtml = (html: string): string =>
-  html.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+  stripHtmlText(html).replace(/\s+/g, " ");
 
 const HEADER_FILL: ExcelJS.Fill = {
   type: "pattern",

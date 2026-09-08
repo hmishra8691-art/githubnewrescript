@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { Question } from "@rescript/schema";
-import { blockDependencies } from "@rescript/engine";
+import { blockDependencies, stripHtmlText } from "@rescript/engine";
 import { useStudio } from "./store";
 import { openPreview, setPreviewRevision } from "./previewWindow";
 import { runtimeBaseUrl } from "@/lib/runtime-url";
@@ -20,7 +20,7 @@ import { runtimeBaseUrl } from "@/lib/runtime-url";
  * blockers stay out of it.
  */
 
-const strip = (s: string) => s.replace(/<[^>]*>/g, "").trim();
+const strip = (s: string) => stripHtmlText(s);
 
 export function usePreviewBlock() {
   const s = useStudio();

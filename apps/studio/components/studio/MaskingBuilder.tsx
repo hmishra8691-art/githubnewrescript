@@ -9,6 +9,7 @@ import {
   setExprToChain, appendSet, replaceSetAt, removeSetAt, setChainOperator,
   bracketSetPair, validateSetExpr, pipelineToSetExpr,
   type SetExprError,
+  stripHtmlText,
 } from "@rescript/engine";
 import { useStudio, uid } from "./store";
 import { OptionalCondition } from "./ConditionBuilder";
@@ -322,7 +323,7 @@ export function MaskingBuilder({ q, patch }: {
     .map((x) => ({
       id: x.id,
       code: x.code,
-      label: x.text.replace(/<[^>]*>/g, "").slice(0, 40) || x.variableName,
+      label: stripHtmlText(x.text).slice(0, 40) || x.variableName,
     }));
 
   const mask = q.mask;
@@ -433,7 +434,7 @@ export function MaskingBuilder({ q, patch }: {
           {protectedOptions.length > 0 && (mask?.keepAlwaysShow ?? true) && (
             <div className="muted" style={{ fontSize: 12.5 }} data-testid="mask-protected">
               Kept whatever the mask returns: {protectedOptions.map((o) =>
-                o.label.replace(/<[^>]*>/g, "")).join(", ")}
+                stripHtmlText(o.label)).join(", ")}
             </div>
           )}
           <OptionalCondition label="Apply the mask only when" value={mask?.when}
@@ -554,7 +555,7 @@ function PunchRules({ q, patch, sources }: {
                   })}>
                   {q.options.map((o) => (
                     <option key={String(o.code)} value={String(o.code)}>
-                      {o.code}: {o.label.replace(/<[^>]*>/g, "").slice(0, 30)}
+                      {o.code}: {stripHtmlText(o.label).slice(0, 30)}
                     </option>
                   ))}
                 </select>

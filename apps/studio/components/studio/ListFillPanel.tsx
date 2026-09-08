@@ -7,6 +7,7 @@ import type { ListFill, ListFillMethod } from "@rescript/schema";
 import {
   decideListFill, simulateListFill, listFillStatus, listFillVariableNames, explainRejection,
   type ListFillCounts, type ListFillTrace, type ResponseState,
+  stripHtmlText,
 } from "@rescript/engine";
 
 type Env = "TEST" | "LIVE";
@@ -224,7 +225,7 @@ export function ListFillPanel() {
                     <tr key={row.code} data-code={row.code} data-status={row.status}>
                       <td className="mono">
                         {row.code}
-                        <span className="muted" style={{ marginLeft: 6 }}>{row.label !== row.code ? row.label : ""}</span>
+                        <span className="muted" style={{ marginLeft: 6 }}>{row.label !== row.code ? stripHtmlText(row.label) : ""}</span>
                       </td>
                       <td><CountInput width={62} value={opt?.priority} onChange={(v) => oi >= 0 && setLf(i, (x) => { x.options[oi].priority = v; })} /></td>
                       <td><CountInput width={70} value={opt?.target} onChange={(v) => oi >= 0 && setLf(i, (x) => { x.options[oi].target = v; })} /></td>

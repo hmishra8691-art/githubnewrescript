@@ -5,6 +5,7 @@ import {
   optionRule, simpleView, parsePunchExpression, formatPunchExpression, allPunchRules,
   formatCondition, PUNCH_ACTION_LABELS, LIST_ACTIONS,
   type SimplePunch, type PunchActionKind,
+  stripHtmlText,
 } from "@rescript/engine";
 import { useStudio, uid } from "./store";
 import { ConditionEditor } from "./ConditionBuilder";
@@ -29,7 +30,7 @@ import { lintPunchChain } from "@rescript/engine";
  *                               (inside the question's masking section).
  */
 
-const strip = (s: string) => s.replace(/<[^>]*>/g, "").trim();
+const strip = (s: string) => stripHtmlText(s);
 const short = (q: Question) => `${q.code} · ${strip(q.text).slice(0, 36) || q.variableName}`;
 
 /** Questions whose answer is a set of option codes — sources and targets. */

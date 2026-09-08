@@ -42,6 +42,7 @@ import type { Condition, OptionGroup, OptionOrder, Question } from "@rescript/sc
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition } from "./evaluate.js";
 import { seededShuffle, subSeed, mulberry32 } from "./random.js";
+import { stripHtmlText } from "./html.js";
 
 export interface GroupableItem {
   code: string | number;
@@ -52,7 +53,7 @@ export interface GroupableItem {
 }
 
 const key = (i: GroupableItem) => String(i.code);
-const stripHtml = (h: string) => h.replace(/<[^>]*>/g, "").trim();
+const stripHtml = (h: string) => stripHtmlText(h);
 
 /*
  * "Always show" and "always hide" live in the item's OPTION LOGIC, not in its

@@ -10,6 +10,7 @@ import {
   type PipeFormat,
   type PipeProperty,
   type PipeToken,
+  stripHtmlText,
 } from "@rescript/engine";
 import { useLoopScope } from "./loopScope";
 import { useStudio } from "./store";
@@ -122,7 +123,7 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
             <select className="select" data-testid="pipe-question" value={ref}
               onChange={(e) => setRef(e.target.value)}>
               {questions.map((x) => (
-                <option key={x.id} value={x.code}>{x.code} — {(x.text || x.variableName).replace(/<[^>]*>/g, "").slice(0, 46)}</option>
+                <option key={x.id} value={x.code}>{x.code} — {stripHtmlText(x.text || x.variableName).slice(0, 46)}</option>
               ))}
             </select>
           </label>
@@ -131,7 +132,7 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
               <select className="select" value={rowCode} onChange={(e) => setRowCode(e.target.value)}>
                 <option value="">whole answer</option>
                 {q!.rows.map((r) => (
-                  <option key={String(r.code)} value={String(r.code)}>{r.label.replace(/<[^>]*>/g, "")}</option>
+                  <option key={String(r.code)} value={String(r.code)}>{stripHtmlText(r.label)}</option>
                 ))}
               </select>
             </label>

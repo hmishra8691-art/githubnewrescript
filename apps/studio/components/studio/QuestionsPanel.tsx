@@ -56,6 +56,7 @@ import { InsertPipingButton } from "./PipingPicker";
 import {
   FIELD_TYPES, nextCode, resequenceQuestionCodes,
   parsePastedOptions, planPaste, optionsToPaste, type PasteMode,
+  stripHtmlText,
 } from "@rescript/engine"; // also registers builtin question types
 import { isEmptyOptionLogic } from "@rescript/schema";
 import { useStudio, uid } from "./store";
@@ -1440,8 +1441,9 @@ export function QuestionsPanel() {
         <div className="qlist-item">
           <strong className="mono">{q.code}</strong>
           <span className="qtype-badge">{q.variant?.split(".")[1] ?? q.type}</span>
-          <span className="grow qcard-text"
-            dangerouslySetInnerHTML={{ __html: q.text || '<span class="muted">untitled</span>' }} />
+          <span className={`grow qcard-text${stripHtmlText(q.text) ? "" : " muted"}`}>
+            {stripHtmlText(q.text) || "untitled"}
+          </span>
           {q.displayLogic && <span className="chip warn" title="has display logic">DL</span>}
           {q.skipLogic.length > 0 && <span className="chip warn" title="has skip logic">SL</span>}
           {q.carryForward && <span className="chip" title="carry-forward">CF</span>}

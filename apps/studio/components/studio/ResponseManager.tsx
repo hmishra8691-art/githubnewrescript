@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import type { Condition, Question, SurveyDefinition } from "@rescript/schema";
+import { stripHtmlText } from "@rescript/engine";
 import { useStudio } from "./store";
 import { ConditionEditor, conditionToText } from "./ConditionBuilder";
 
@@ -526,7 +527,7 @@ function Cell({ rec, column, def, disabled, surveyDbId, onSaved, onError }: {
   );
 }
 
-const stripTags = (s: string) => s.replace(/<[^>]*>/g, "").trim();
+const stripTags = (s: string) => stripHtmlText(s);
 
 /** Can this answer be represented by one value in one box? */
 function isSimple(q: Question, rowCode?: string): boolean {

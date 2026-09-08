@@ -7,7 +7,7 @@ import {
   locateNode, findNode, allContainers, summarizeFlowNode, containerSlots,
   containerLabel, canDropFlowNode, validateFlowStructure,
   listBlocks, blockSize, isBlockNode, isGroupNode,
-  FLOW_TYPE_LABELS,
+  FLOW_TYPE_LABELS, stripHtmlText,
 } from "@rescript/engine";
 import { useStudio, uid } from "./store";
 import { newBlockNode, newGroupNode, ELEMENT_LABELS, INSERTABLE } from "./blockModel";
@@ -347,7 +347,7 @@ function BlockCard({ node }: { node: FlowNode }) {
                   <div key={qid} className="fc-q">
                     <span className="mono fc-qcode">{q?.code ?? "?"}</span>
                     <span className="fc-qtext">
-                      {q ? q.text.replace(/<[^>]*>/g, "").slice(0, 90) || "(untitled)" : `⚠ missing ${qid}`}
+                      {q ? stripHtmlText(q.text).slice(0, 90) || "(untitled)" : `⚠ missing ${qid}`}
                     </span>
                   </div>
                 );

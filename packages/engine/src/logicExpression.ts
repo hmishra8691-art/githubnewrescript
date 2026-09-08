@@ -4,6 +4,7 @@ import type {
 } from "@rescript/schema";
 import { getQuestionByCodeOrVar } from "./state.js";
 import { findNamedExpression } from "./namedExpressions.js";
+import { stripHtmlText } from "./html.js";
 
 /**
  * The logic expression language: text in, canonical tree out, and back again.
@@ -249,7 +250,7 @@ const COUNT_FUNCTIONS = new Set(["count", "counted"]);
  * with a bracket after it" so a typo is a parse error naming the function
  * instead of a rule that silently evaluates to null at run time.
  */
-const CALC_FUNCTIONS = new Set([
+export const CALC_FUNCTIONS = new Set([
   /* numeric */
   "sum", "avg", "average", "mean", "min", "max", "round", "abs", "floor",
   "ceil", "ceiling", "sqrt", "pow", "pct", "percent", "weighted", "countif",
@@ -1066,7 +1067,7 @@ export interface ReferenceNode {
   children?: ReferenceNode[];
 }
 
-const stripHtml = (s: string) => s.replace(/<[^>]*>/g, "").trim();
+const stripHtml = (s: string) => stripHtmlText(s);
 
 /**
  * The pickable structure of a survey: questions, their rows, and what sits
@@ -1122,4 +1123,73 @@ export function referenceTree(def: SurveyDefinition): ReferenceNode[] {
     out.push({ token: `ed.${e.name}`, label: `data: ${e.name}`, kind: "variable" });
   }
   return out;
+}
+
+/* ======================================================== function calls */
+
+/**
+ * Split "a, b(c,d), \"e,f\"" into ["a", "b(c,d)", "\"e,f\""] at top-level
+ * commas only — depth inside `(`/`[` and quoted strings is not a split
+ * point. Returns null on unbalanced brackets/quotes rather than guessing.
+ */
+function splitTopLevelArgs(s: string): string[] | null {
+  const args: string[] = [];
+  let depth = 0;
+  let cur = "";
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (quote) {
+      cur += ch;
+      if (ch === quote && s[i - 1] !== "\\") quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { quote = ch; cur += ch; continue; }
+    if (ch === "(" || ch === "[") { depth += 1; cur += ch; continue; }
+    if (ch === ")" || ch === "]") { depth -= 1; if (depth < 0) return null; cur += ch; continue; }
+    if (ch === "," && depth === 0) { args.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  if (quote || depth !== 0) return null;
+  if (cur.trim() !== "" || args.length > 0) args.push(cur);
+  return args.map((a) => a.trim());
+}
+
+/**
+ * Decompose a stored `expr`-source `ref` (e.g. `"SUM(Q1_VAR, Q2_VAR, Q3_VAR)"`)
+ * into a function name and its top-level, comma-separated arguments — the
+ * shape the visual builder edits as a Function control plus one row per
+ * argument (`ExprEditor`). Returns `null` for anything that is not a single
+ * top-level call to a known calculation function — a bare arithmetic run
+ * (`Q5 + Q6`), a combination (`SUM(Q1,Q2) + 1`), or hand-typed text the
+ * tokenizer still accepts but this simple shape does not — so the caller can
+ * fall back to read-only text rather than mis-editing it.
+ */
+export function parseExprCall(ref: string | undefined | null): { fn: string; args: string[] } | null {
+  const src = (ref ?? "").trim();
+  const m = /^([A-Za-z_][A-Za-z0-9_]*)\s*\(([\s\S]*)\)$/.exec(src);
+  if (!m) return null;
+  const fn = m[1].toLowerCase();
+  if (!CALC_FUNCTIONS.has(fn) && !COUNT_FUNCTIONS.has(fn)) return null;
+  const args = splitTopLevelArgs(m[2]);
+  if (args === null) return null;
+  return { fn, args };
+}
+
+/**
+ * Inverse of `parseExprCall`. Any argument that names a question by code or
+ * variable name is normalised to that question's variable name first — the
+ * same rewriting `sliceText` applies to hand-typed expressions — so a call
+ * built through the visual editor evaluates identically to typing the
+ * equivalent text once. Anything else (a number, a quoted string, a nested
+ * call, `calc.X`/`ed.X`) is passed through unchanged.
+ */
+export function formatExprCall(def: SurveyDefinition, fn: string, args: string[]): string {
+  const normalized = args.map((a) => {
+    const trimmed = a.trim();
+    if (!trimmed || !/^[A-Za-z_][A-Za-z0-9_.]*$/.test(trimmed)) return trimmed;
+    const q = getQuestionByCodeOrVar(def, trimmed);
+    return q ? q.variableName : trimmed;
+  });
+  return `${fn}(${normalized.join(", ")})`;
 }

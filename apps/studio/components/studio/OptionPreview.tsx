@@ -7,6 +7,7 @@ import {
   questionDependencies,
   lintQuestionLogic,
   type OptionPipelineTrace,
+  stripHtmlText,
 } from "@rescript/engine";
 import { useStudio } from "./store";
 
@@ -18,7 +19,7 @@ import { useStudio } from "./store";
  * "why did Apple disappear?" without deploying a test link.
  */
 
-const stripHtml = (s: string) => s.replace(/<[^>]*>/g, "");
+const stripHtml = (s: string) => stripHtmlText(s);
 
 export function OptionPreview({ q }: { q: Question }) {
   const s = useStudio();

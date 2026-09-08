@@ -13,12 +13,14 @@ import {
   editableCondition, canonicalCondition, pathKey, appendTo, replaceAt, removeAt,
   duplicateAt, setOperatorAt, groupSelection, ungroupAt, validateLogicTree,
   OPERATOR_LABEL, OPERATOR_HINT, setGroupConnector, listFillVariableNames,
+  stripHtmlText,
 } from "@rescript/engine";
 import { SYSTEM_VARIABLE_HELP } from "@rescript/quality";
 import { useLoopScope } from "./loopScope";
 import { useStudio } from "./store";
 import { ExpressionEditor } from "./ExpressionEditor";
 import { CountEditor, COUNT_OPERATORS, scopesFor } from "./CountEditor";
+import { ExprEditor } from "./ExprEditor";
 
 /**
  * Recursive visual condition builder — arbitrary AND/OR/NOT nesting with
@@ -95,7 +97,7 @@ export function newConditionGroup(_defaultRef?: string): Condition {
   return { type: "group", op: "and", children: [] };
 }
 
-const stripHtml = (s: string) => s.replace(/<[^>]*>/g, "");
+const stripHtml = (s: string) => stripHtmlText(s);
 
 function RuleEditor({ rule, onChange, onRemove, perOption }: {
   rule: ConditionRule; onChange(r: ConditionRule): void; onRemove(): void; perOption?: boolean;
@@ -280,9 +282,24 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
             <option key={v.name} value={`calculation:${v.name}`} title={v.hint}>{v.name}</option>
           ))}
         </optgroup>
+        {/*
+          * A function call (SUM/AVG/MIN/MAX/…) gets its OWN full editor below
+          * (`ExprEditor`) — this option is only what the closed select shows,
+          * so it stays short instead of squeezing the entire call into one
+          * `.ref-select` sized for a short token like `q:Q3`, which is what
+          * used to look cut off / misaligned.
+          */}
+        {rule.source.kind === "expr" && (
+          <optgroup label="Function">
+            <option value={sourceValue}>
+              ƒ {rule.source.ref.length > 28 ? `${rule.source.ref.slice(0, 28)}…` : rule.source.ref || "(empty)"}
+            </option>
+          </optgroup>
+        )}
         {/* a source this build does not list still displays as itself, never as
             the placeholder — the rule stays readable and a re-save keeps it */}
-        {rule.source.kind !== "question" && rule.source.kind !== "option" && !knownSource(sourceValue, s.def, loopScope) && (
+        {rule.source.kind !== "question" && rule.source.kind !== "option" && rule.source.kind !== "expr"
+          && !knownSource(sourceValue, s.def, loopScope) && (
           <optgroup label="Other">
             <option value={sourceValue}>{rule.source.kind}: {rule.source.ref}</option>
           </optgroup>
@@ -427,6 +444,9 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
       {/* the count's own controls, on their own line: what to count, over
           what, narrowed to what, and a plain reading of the result */}
       {counting && <CountEditor rule={rule} onChange={onChange} />}
+      {/* a function call's own controls, on their own line: which function,
+          one row per argument, add/remove — see ExprEditor's own doc comment */}
+      {rule.source.kind === "expr" && <ExprEditor rule={rule} onChange={onChange} />}
       <div className="cond-rule-actions">
         <button className="btn small danger" title="Remove this condition" onClick={onRemove}>×</button>
       </div>

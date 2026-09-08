@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import type { Option, Question, QuestionRow } from "@rescript/schema";
+import { stripHtmlText } from "@rescript/engine";
 import { useStudio } from "../studio/store";
 import { Icon } from "../ui/Icon";
 import { OptionPreview } from "../studio/OptionPreview";
@@ -353,7 +354,7 @@ function Simulator({ q, deps, sample, setSample, loops, loopIndex, setLoopIndex,
               <select className="select small" data-testid="loop-iteration" value={loopIndex}
                 onChange={(e) => { setLoopIndex(Number(e.target.value)); setRefOverrides({}); }}>
                 {active.items.map((it, i) => (
-                  <option key={it.code} value={i}>{i + 1}. {it.label.replace(/<[^>]*>/g, "")}</option>
+                  <option key={it.code} value={i}>{i + 1}. {stripHtmlText(it.label)}</option>
                 ))}
               </select></label>
             {loop && <span className="badge neutral" data-testid="loop-chip">{loop.loopVar} = {loop.label}</span>}
@@ -385,14 +386,14 @@ function Simulator({ q, deps, sample, setSample, loops, loopIndex, setLoopIndex,
       {deps.map((d) => (
         <div className="lc-sim-row" key={d.id}>
           <label className="f grow">
-            <span>{d.code} · {d.text.replace(/<[^>]*>/g, "").slice(0, 60)}</span>
+            <span>{d.code} · {stripHtmlText(d.text).slice(0, 60)}</span>
             {d.options.length > 0 ? (
               <select className="select small" data-testid={`sample-${d.code}`}
                 value={String(sample[d.id] ?? "")}
                 onChange={(e) => setSample({ ...sample, [d.id]: e.target.value || undefined })}>
                 <option value="">— no answer —</option>
                 {d.options.map((o) => (
-                  <option key={String(o.code)} value={String(o.code)}>{o.label.replace(/<[^>]*>/g, "")}</option>
+                  <option key={String(o.code)} value={String(o.code)}>{stripHtmlText(o.label)}</option>
                 ))}
               </select>
             ) : (

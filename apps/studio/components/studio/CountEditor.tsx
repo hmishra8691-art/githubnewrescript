@@ -3,7 +3,7 @@ import React from "react";
 import type {
   ComparisonOperator, ConditionRule, CountOf, CountScope, CountSpec, Question,
 } from "@rescript/schema";
-import { lintCount, authoringQuestionView } from "@rescript/engine";
+import { lintCount, authoringQuestionView, stripHtmlText } from "@rescript/engine";
 import { useStudio } from "./store";
 
 /**
@@ -52,7 +52,7 @@ const OF_HINT: Record<CountOf, string> = {
 /** Only the operators that mean something against a number. */
 export const COUNT_OPERATORS: ComparisonOperator[] = ["eq", "ne", "gt", "lt", "gte", "lte", "between"];
 
-const stripHtml = (h: string) => h.replace(/<[^>]*>/g, "").trim();
+const stripHtml = (h: string) => stripHtmlText(h);
 
 /** Which scopes this question actually has. Never offer one it does not. */
 export function scopesFor(q: Question | undefined): CountScope[] {

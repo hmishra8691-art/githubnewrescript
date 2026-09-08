@@ -5,6 +5,7 @@ import type { Quota } from "@rescript/schema";
 import {
   QUOTA_STATE_LABEL, filterQuotas, quotaDashboard, quotaEditDiff, sortQuotas, validateQuotaEdit,
   type QuotaCellRow, type QuotaEdit, type QuotaEditIssue, type QuotaFilter, type QuotaRow, type QuotaSort, type QuotaState,
+  stripHtmlText,
 } from "@rescript/engine";
 import { useStudio, uid } from "./store";
 import { QuotasPanel } from "./QuotasPanel";
@@ -435,7 +436,7 @@ function QuotaCard(p: {
                 <span className="muted">Source{row.sources.length > 1 ? "s" : ""}: </span>
                 {row.sources.map((src) => (
                   <span key={src.questionId} className="qd-src">
-                    <strong>{src.code}</strong> – {src.text.slice(0, 80)}{src.text.length > 80 ? "…" : ""}
+                    <strong>{src.code}</strong> – {stripHtmlText(src.text).slice(0, 80)}{stripHtmlText(src.text).length > 80 ? "…" : ""}
                     <span className="muted"> · {src.variableName} · {typeLabel(src.type)}</span>
                   </span>
                 ))}
@@ -626,7 +627,7 @@ function QuotaDetail({ row, env, onClose, onLogic }: { row: QuotaRow | undefined
         <table className="grid" style={{ marginTop: 10 }}>
           <tbody>
             <tr><th>Quota id</th><td>{row.id}</td></tr>
-            <tr><th>Question(s)</th><td style={{ fontFamily: "var(--sans)" }}>{row.sources.map((q) => `${q.code} – ${q.text} (${q.variableName}, ${typeLabel(q.type)})`).join("; ") || "—"}</td></tr>
+            <tr><th>Question(s)</th><td style={{ fontFamily: "var(--sans)" }}>{row.sources.map((q) => `${q.code} – ${stripHtmlText(q.text)} (${q.variableName}, ${typeLabel(q.type)})`).join("; ") || "—"}</td></tr>
             <tr><th>Quota type</th><td>{row.mode} · {row.dimensions >= 2 ? `${row.dimensions}-dimensional` : "single dimension"} · on full: {row.onFull} · counts: {row.countStatus.join(", ")}</td></tr>
             <tr><th>Target total</th><td>{row.targetTotal ?? "—"}</td></tr>
             <tr><th>Current / Maximum</th><td>{row.current} / {row.maximum ?? "∞"} ({fmtPct(row.pct)}) · remaining {row.remaining ?? "—"} · {env.toLowerCase()} data</td></tr>

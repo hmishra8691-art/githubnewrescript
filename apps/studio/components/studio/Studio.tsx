@@ -223,7 +223,8 @@ function SaveIndicator() {
        */
       return (
         <span className="save-state err" data-testid="save-state" title={st.message}>
-          ⚠ Changed elsewhere — not saved. Nothing was overwritten.{" "}
+          ⚠ Changed elsewhere — {st.message}{" "}
+          <strong>Nothing was overwritten.</strong>{" "}
           <button className="btn small" style={{ marginLeft: 6 }} data-testid="save-download"
             onClick={() => downloadDraft(s.def, s.def.meta.code ?? "")}>Download my copy</button>
           <button className="btn small" style={{ marginLeft: 4 }} data-testid="save-discard"
@@ -384,10 +385,28 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
         cache: "no-store",
       });
       const d = await r.json().catch(() => ({}));
-      if (r.status === 409) {
+      /*
+       * A 409 here is two completely different events, exactly as
+       * `store.tsx`'s `persistDraft` already discriminates for autosave (see
+       * its comment on this same distinction). Only a genuine revision
+       * conflict carries `conflict: true` — that's this editor being behind
+       * newer work, and IS the case that must stop further saves. A lock
+       * refusal (this session's own edit lock merely lapsed; no `conflict`
+       * field, just `code`/`keepChanges`/`lock`) is not that: nobody's work
+       * is stale, nothing external changed, and treating it as a conflict
+       * used to call `noteConflict()` and permanently block autosave/Save
+       * version/Test Survey/Publish over a momentary lock hiccup the
+       * collaboration poll would have recovered from on its own.
+       */
+      if (r.status === 409 && d.conflict === true) {
         console.warn("[rescript:save] version REFUSED by the server (stale)", { surveyId: s.surveyDbId, baseRevision, serverRevision: d.revision, ms: Date.now() - startedAt });
         s.noteConflict(typeof d.revision === "number" ? d.revision : null, d.error);
         s.toast(d.error ?? "This survey changed elsewhere, so nothing was saved. Reload before saving again.", "err");
+        return null;
+      }
+      if (r.status === 409 || (r.status === 403 && d.code === "no_capability")) {
+        console.warn("[rescript:save] version REFUSED (lock)", { surveyId: s.surveyDbId, code: d.code, ms: Date.now() - startedAt });
+        s.toast(d.error ?? "This session does not currently hold the edit lock. Try again in a moment.", "err");
         return null;
       }
       if (!r.ok) {

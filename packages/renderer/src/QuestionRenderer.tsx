@@ -16,6 +16,7 @@ import {
   type EvalContext,
   type ResponseState,
   type LoopContext,
+  stripHtmlText,
 } from "@rescript/engine";
 import { variantRenderers } from "./variants/registry";
 import { MediaEmbed, SafeImage } from "./Media";
@@ -1960,8 +1961,8 @@ export function QuestionRenderer(props: QRProps) {
             */}
           <MediaEmbed
             url={p.q.settings.mediaUrl}
-            title={p.q.text.replace(/<[^>]*>/g, "")}
-            alt={a11y?.decorative ? "" : (a11y?.altText ?? p.q.text.replace(/<[^>]*>/g, ""))}
+            title={stripHtmlText(p.q.text)}
+            alt={a11y?.decorative ? "" : (a11y?.altText ?? stripHtmlText(p.q.text))}
           />
         </div>
       )}
