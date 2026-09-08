@@ -9,12 +9,13 @@ import type {
   OptionLogic,
   OptionSourceRule,
   Randomization,
+  SurveyDefinition,
 } from "@rescript/schema";
 import { LIST_OPS_WITH_SOURCES } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition, withOption, withLegacyOptionLoop } from "./evaluate.js";
 import { getQuestion, lookupAnswer, loopKeySuffix } from "./state.js";
-import { resolvePiping, registerDisplayedOptionsResolver } from "./piping.js";
+import { resolvePiping, registerDisplayedOptionsResolver, registerEffectiveRowsResolver } from "./piping.js";
 import { evaluateSetExpr, LIST_ACTIONS } from "./setExpression.js";
 import { seededShuffle, subSeed, mulberry32 } from "./random.js";
 import { hasDisplayRulesFor, ruleVerdict, visibleByRules } from "./displayRules.js";
@@ -60,6 +61,18 @@ export interface EffectiveQuestionView {
   columns: Question["columns"];
 }
 
+/**
+ * A carried-forward item's stable identity, independent of its display
+ * label: which question it came from and which code it had there. Shared
+ * shape for both options and rows, since carry-forward can land in either.
+ */
+export interface ResolvedListItem {
+  code: string | number;
+  label: string;
+  sourceQuestionId?: string;
+  sourceCode?: string | number;
+}
+
 /* ------------------------------------------------------------ source codes */
 
 type Which = "selected" | "not_selected" | "displayed" | "answered_rows" | "all";
@@ -70,6 +83,17 @@ type Which = "selected" | "not_selected" | "displayed" | "answered_rows" | "all"
  * backstop that guarantees evaluation always terminates (req §31).
  */
 const resolving = new Set<string>();
+
+/**
+ * Same backstop, kept separate, for `authoringQuestionView`'s and
+ * `optionFromSource`'s chained-carry-forward recursion: a still-being-edited
+ * definition can be cyclic for a moment before `detectLogicCycles` catches
+ * it, and this recursion is keyed differently from `resolving` above (by the
+ * chain being walked, not by "am I computing this question's displayed
+ * list"), so sharing one set would let an unrelated in-flight resolution
+ * falsely short-circuit this one.
+ */
+const resolvingView = new Set<string>();
 
 export function codesFrom(
   sourceQuestionId: string,
@@ -134,17 +158,131 @@ function carriedOptions(cf: CarryForward, ctx: EvalContext): Option[] {
   const src = getQuestion(ctx.def, cf.sourceQuestionId);
   if (!src) return [];
   const codes = codesFrom(cf.sourceQuestionId, cf.filter, ctx);
-  const pool: Option[] = codes.map((code) => optionFromSource(src, code));
+  const pool: Option[] = codes.map((code) => optionFromSource(src, code, ctx.def));
   if (!cf.where) return pool;
   return pool.filter((o) => evaluateCondition(cf.where, withLegacyOptionLoop(ctx, o)));
 }
 
-/** Build an Option for a code, borrowing the label from the source question. */
-function optionFromSource(src: Question, code: string | number): Option {
+/**
+ * Build an Option for a code, borrowing the label from the source question.
+ *
+ * Recurses through the source's OWN carry-forward chain when the code isn't
+ * found in its static lists — the source may itself be carry-forward driven
+ * (Q1 -> Q2 -> Q3) — so a multi-hop chain keeps its real label instead of
+ * silently degrading to the bare code. Every result is tagged with stable
+ * source identity (questionId + code): a carried-forward option or row is
+ * never identified by its display label alone, per the requirement that it
+ * remain addressable throughout the whole programming stack, not just the
+ * respondent-facing renderer.
+ */
+function optionFromSource(src: Question, code: string | number, def: SurveyDefinition): Option {
   const opt = src.options.find((o) => String(o.code) === String(code));
-  if (opt) return opt;
+  if (opt) {
+    return { ...opt, sourceQuestionId: opt.sourceQuestionId ?? src.id, sourceCode: opt.sourceCode ?? opt.code };
+  }
   const row = src.rows.find((r) => String(r.code) === String(code));
-  return { code, label: row?.label ?? String(code), flags: [] };
+  if (row) {
+    return {
+      code,
+      label: row.label,
+      flags: [],
+      sourceQuestionId: row.sourceQuestionId ?? src.id,
+      sourceCode: row.sourceCode ?? row.code,
+    };
+  }
+  if (src.carryForward) {
+    /*
+     * `authoringQuestionView` guards its OWN recursion (by `src.id`,
+     * internally) — this call must NOT also pre-mark `src.id` in the same
+     * `resolvingView` set first, or the very first, perfectly ordinary call
+     * here would see its own id "already resolving" and bail out with an
+     * empty view before ever resolving anything.
+     */
+    const view = authoringQuestionView(src, def);
+    const viaOpt = view.options.find((o) => String(o.code) === String(code));
+    if (viaOpt) {
+      return {
+        ...viaOpt,
+        sourceQuestionId: viaOpt.sourceQuestionId ?? src.id,
+        sourceCode: viaOpt.sourceCode ?? viaOpt.code,
+      };
+    }
+    const viaRow = view.rows.find((r) => String(r.code) === String(code));
+    if (viaRow) {
+      return {
+        code,
+        label: viaRow.label,
+        flags: [],
+        sourceQuestionId: viaRow.sourceQuestionId ?? src.id,
+        sourceCode: viaRow.sourceCode ?? viaRow.code,
+      };
+    }
+  }
+  return { code, label: String(code), flags: [] };
+}
+
+/**
+ * The authoring-time view of a question's rows / options: what a programmer
+ * building downstream logic should see for a carry-forward question, so a
+ * carried-forward item is a selectable, addressable citizen of the Condition
+ * Builder, Count Editor, and every other design-time list — not only the
+ * respondent-facing renderer (req: dynamic options must behave like
+ * first-class options throughout the complete programming stack).
+ *
+ * Preference order:
+ *   1. The REAL, live pipeline (`effectiveQuestion`) when `ctx` carries an
+ *      answer that actually produces items — the genuine carried set.
+ *   2. Otherwise (no ctx, or no answer yet — the normal state while
+ *      programming), the SOURCE question's own resolved list, recursively —
+ *      so a multi-hop chain (Q1 -> Q2 -> Q3) shows real labels and stable
+ *      source identity instead of an empty list or bare codes.
+ *
+ * A question with no carry-forward, or one carrying into columns (which are
+ * addressed by id/label and have their own independent per-column
+ * `carryForward`), is returned unchanged.
+ */
+export function authoringQuestionView(
+  q: Question,
+  def: SurveyDefinition,
+  ctx?: EvalContext,
+): Question {
+  const cf = q.carryForward;
+  if (!cf || cf.into === "columns") return q;
+
+  if (ctx) {
+    let live: EffectiveQuestionView;
+    try {
+      live = effectiveQuestion(q, ctx);
+    } catch {
+      live = { options: [], rows: [], columns: q.columns };
+    }
+    if (cf.into === "rows" && live.rows.length) return { ...q, rows: live.rows };
+    if (cf.into === "options" && live.options.length) return { ...q, options: live.options };
+  }
+
+  const src = getQuestion(def, cf.sourceQuestionId);
+  if (!src || resolvingView.has(q.id)) return q;
+  resolvingView.add(q.id);
+  let srcView: Question;
+  try {
+    srcView = authoringQuestionView(src, def, ctx);
+  } finally {
+    resolvingView.delete(q.id);
+  }
+  const pool: ResolvedListItem[] = srcView.options.length ? srcView.options : srcView.rows;
+  const tag = (i: ResolvedListItem): ResolvedListItem => ({
+    code: i.code,
+    label: i.label,
+    sourceQuestionId: i.sourceQuestionId ?? src.id,
+    sourceCode: i.sourceCode ?? i.code,
+  });
+
+  if (cf.into === "rows") {
+    const rows: QuestionRow[] = pool.map((i) => ({ ...tag(i), flags: [], validation: [], required: false }));
+    return { ...q, rows: cf.keepOwn ? [...rows, ...q.rows] : rows };
+  }
+  const options: Option[] = pool.map((i) => ({ ...tag(i), flags: [] }));
+  return { ...q, options: cf.keepOwn ? [...options, ...q.options] : options };
 }
 
 /* ------------------------------------------------------------ debug trace */
@@ -174,6 +312,9 @@ export interface OptionStatusTrace {
   /** excluded from randomization by a `randomizeWhen` that evaluated false */
   pinned?: boolean;
   position?: number;
+  /** stable carry-forward identity (never just the display label), when this item was carried */
+  sourceQuestionId?: string;
+  sourceCode?: string | number;
 }
 
 export interface OptionPipelineTrace {
@@ -181,6 +322,10 @@ export interface OptionPipelineTrace {
   stages: PipelineStageTrace[];
   byCode: Record<string, OptionStatusTrace>;
   final: Option[];
+  /** the same trace, run for the question's ROWS — present whenever it has any */
+  rowStages?: PipelineStageTrace[];
+  rowByCode?: Record<string, OptionStatusTrace>;
+  finalRows?: QuestionRow[];
 }
 
 interface Recorder {
@@ -291,7 +436,7 @@ function sourceRuleHolds(
         : String(item.code);
   return codes.some((c) => {
     if (rule.match === "code") return String(c) === needle;
-    const o = optionFromSource(src, c);
+    const o = optionFromSource(src, c, ctx.def);
     const cmp = rule.match === "label" ? o.label : String(o.value ?? o.code);
     return String(cmp) === needle;
   });
@@ -966,6 +1111,40 @@ interface RunOpts {
   trace?: boolean;
 }
 
+/**
+ * Stage 1 of the option pipeline, exposed on its own: the question's options
+ * exactly as carry-forward produces them (or its static list, unchanged, for
+ * an ordinary question) — BEFORE eligibility, masking, list operations,
+ * prioritisation, sorting or randomisation run.
+ *
+ * This is the carry-forward analogue of a plain question's static `options`
+ * array, and matters because some consumers (COUNT's "eligible" / "visible" /
+ * "hidden", and the pool it counts "selected" / "valid" / "matching" against)
+ * need the full configured universe to compare against the pipeline's final
+ * output — not the final output itself, which for a carry-forward question
+ * `effectiveQuestion` already applied every later stage to.
+ */
+export function carrySourceOptions(q: Question, ctx: EvalContext): Option[] {
+  if (!q.carryForward || q.carryForward.into !== "options") return q.options;
+  const carried = carriedOptions(q.carryForward, ctx);
+  return q.carryForward.keepOwn ? [...carried, ...q.options] : carried;
+}
+
+/** Stage 1 of the row pipeline — see `carrySourceOptions`. */
+export function carrySourceRows(q: Question, ctx: EvalContext): QuestionRow[] {
+  if (!q.carryForward || q.carryForward.into !== "rows") return q.rows;
+  const rows: QuestionRow[] = carriedOptions(q.carryForward, ctx).map((o) => ({
+    code: o.code,
+    label: o.label,
+    flags: [],
+    validation: [],
+    required: false,
+    sourceQuestionId: o.sourceQuestionId,
+    sourceCode: o.sourceCode,
+  }));
+  return q.carryForward.keepOwn ? [...rows, ...q.rows] : rows;
+}
+
 function runOptions(
   q: Question,
   ctx: EvalContext,
@@ -975,13 +1154,7 @@ function runOptions(
   const seed = subSeed(ctx.state.seed, `rand:${q.id}${seedKey}`);
 
   // 1 — source
-  let options: Option[] = [];
-  if (q.carryForward && q.carryForward.into === "options") {
-    options = carriedOptions(q.carryForward, ctx);
-    if (q.carryForward.keepOwn) options = [...options, ...q.options];
-  } else {
-    options = [...q.options];
-  }
+  let options: Option[] = carrySourceOptions(q, ctx);
   // programmed positions, fixed before anything is filtered
   const pos = makePos(options);
 
@@ -992,6 +1165,8 @@ function runOptions(
         label: stripHtml(o.label),
         status: "visible",
         alwaysShow: isAlwaysShow(o),
+        sourceQuestionId: o.sourceQuestionId,
+        sourceCode: o.sourceCode,
       };
     }
     rec.stages.push({
@@ -1032,7 +1207,7 @@ function runOptions(
       options,
       ctx,
       rec,
-      (code, src) => optionFromSource(src, code),
+      (code, src) => optionFromSource(src, code, ctx.def),
       seed,
       (order, list) => sortItems(order, list),
       pos,
@@ -1098,6 +1273,8 @@ function runOptions(
         label: stripHtml(o.label),
         status: "visible",
         alwaysShow: isAlwaysShow(o),
+        sourceQuestionId: o.sourceQuestionId,
+        sourceCode: o.sourceCode,
       });
       st.status = "visible";
       st.stage = undefined;
@@ -1109,42 +1286,80 @@ function runOptions(
   return options;
 }
 
-function runRows(q: Question, ctx: EvalContext): QuestionRow[] {
+function runRows(q: Question, ctx: EvalContext, rec: Recorder | null): QuestionRow[] {
   const seedKey = loopKeySuffix(ctx.loop);
-  let rows: QuestionRow[] = [];
-  if (q.carryForward && q.carryForward.into === "rows") {
-    rows = carriedOptions(q.carryForward, ctx).map((o) => ({
-      code: o.code,
-      label: o.label,
-      flags: [],
-      validation: [],
-      required: false,
-    }));
-    if (q.carryForward.keepOwn) rows = [...rows, ...q.rows];
-  } else {
-    rows = [...q.rows];
+  let rows: QuestionRow[] = carrySourceRows(q, ctx);
+
+  if (rec) {
+    for (const r of rows) {
+      rec.byCode[String(r.code)] = {
+        code: String(r.code),
+        label: stripHtml(r.label),
+        status: "visible",
+        alwaysShow: isAlwaysShow(r),
+        sourceQuestionId: r.sourceQuestionId,
+        sourceCode: r.sourceCode,
+      };
+    }
+    rec.stages.push({
+      key: "source",
+      label: q.carryForward?.into === "rows" ? "Source (carry-forward)" : "Source rows",
+      before: rows.map((r) => String(r.code)),
+      after: rows.map((r) => String(r.code)),
+      removed: [],
+      changed: false,
+    });
   }
+
   // rows share the option-logic model, minus the list-operation stages
   const pos = makePos(rows);
-  rows = applyEligibility(rows, ctx, null, pos);
-  rows = applyNamedRules(q, "row", rows, ctx, null);
-  rows = applyPrioritization(rows, ctx, null, pos);
+  rows = applyEligibility(rows, ctx, rec, pos);
+  rows = applyNamedRules(q, "row", rows, ctx, rec);
+  rows = applyPrioritization(rows, ctx, rec, pos);
   if (hasOptionGroups(q, "rows")) {
+    const beforeGroups = rows;
     rows = groupOrder(q, "rows", rows, ctx, subSeed(ctx.state.seed, `randrows:${q.id}${seedKey}`));
+    record(rec, "randomization", "Row groups", beforeGroups, rows, new Map());
   } else if (q.randomization?.enabled && q.randomization.scope === "rows") {
     const cfg = activeRandomization(q.randomization, ctx);
-    if (cfg)
+    if (cfg) {
+      const beforeRand = rows;
+      const pinned = pinnedCodes(rows, ctx, pos);
       rows = randomizeItems(
         rows,
         cfg,
         subSeed(ctx.state.seed, `randrows:${q.id}${seedKey}`),
-        pinnedCodes(rows, ctx, pos),
+        pinned,
         alwaysShowCodes(rows),
       );
+      const reasons = new Map<string, string>();
+      for (const r of beforeRand) reasons.set(String(r.code), "Not drawn by “show only N”");
+      record(rec, "randomization", `Randomization (${cfg.method})`, beforeRand, rows, reasons);
+      if (rec) for (const c of pinned) if (rec.byCode[c]) rec.byCode[c].pinned = true;
+    }
   }
-  return rows.map((r) =>
+  rows = rows.map((r) =>
     r.label.includes("{{") ? { ...r, label: resolvePiping(r.label, ctx) } : r,
   );
+
+  if (rec) {
+    rows.forEach((r, i) => {
+      const st = (rec.byCode[String(r.code)] ??= {
+        code: String(r.code),
+        label: stripHtml(r.label),
+        status: "visible",
+        alwaysShow: isAlwaysShow(r),
+        sourceQuestionId: r.sourceQuestionId,
+        sourceCode: r.sourceCode,
+      });
+      st.status = "visible";
+      st.stage = undefined;
+      st.reason = undefined;
+      st.position = i + 1;
+      st.label = stripHtml(r.label);
+    });
+  }
+  return rows;
 }
 
 /**
@@ -1166,7 +1381,7 @@ export function resolveQuestionMedia(
 export function effectiveQuestion(q: Question, ctx: EvalContext): EffectiveQuestionView {
   const seedKey = loopKeySuffix(ctx.loop);
   const options = runOptions(q, ctx, null);
-  const rows = runRows(q, ctx);
+  const rows = runRows(q, ctx, null);
 
   // --- columns (composite / matrix)
   let columns = q.columns.filter((c) => evaluateCondition(c.visibleIf, ctx));
@@ -1221,7 +1436,22 @@ export function effectiveQuestion(q: Question, ctx: EvalContext): EffectiveQuest
 export function explainOptions(q: Question, ctx: EvalContext): OptionPipelineTrace {
   const rec = newRecorder();
   const final = runOptions(q, ctx, rec);
-  return { questionId: q.id, stages: rec.stages, byCode: rec.byCode, final };
+  /*
+   * Rows get their own recorder, not the options one: a row and an option
+   * can share a code, and a single `stages`/`byCode` would either collide on
+   * that code or interleave two unrelated pipelines into one trace. Only
+   * built (and only shown by a caller) when the question actually has rows
+   * to trace — a plain choice question's trace is unchanged.
+   */
+  const rowRec = q.rows.length || q.carryForward?.into === "rows" ? newRecorder() : null;
+  const finalRows = rowRec ? runRows(q, ctx, rowRec) : undefined;
+  return {
+    questionId: q.id,
+    stages: rec.stages,
+    byCode: rec.byCode,
+    final,
+    ...(rowRec ? { rowStages: rowRec.stages, rowByCode: rowRec.byCode, finalRows } : {}),
+  };
 }
 
 /**
@@ -1237,4 +1467,15 @@ registerDisplayedOptionsResolver((q, ctx) => {
   } finally {
     resolving.delete(q.id);
   }
+});
+
+/**
+ * FIRST / LAST / Nth row & option addressing (`evaluate.ts`) needs the
+ * effective, carry-forward resolved list; registering here rather than
+ * importing keeps the two modules acyclic (same reasoning as the piping
+ * resolver just above).
+ */
+registerEffectiveRowsResolver((q, ctx) => {
+  const view = effectiveQuestion(q, ctx);
+  return { rows: view.rows, options: view.options };
 });

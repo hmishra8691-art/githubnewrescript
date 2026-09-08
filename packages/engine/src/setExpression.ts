@@ -4,7 +4,7 @@ import type {
 import { SET_OPERATOR_LABEL } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition } from "./evaluate.js";
-import { codesFrom } from "./carryforward.js";
+import { codesFrom, effectiveQuestion } from "./carryforward.js";
 import { getQuestion, getQuestionByCodeOrVar, type AnswerValue } from "./state.js";
 import { activePunchRules } from "./punchChain.js";
 
@@ -45,11 +45,18 @@ import { activePunchRules } from "./punchChain.js";
 const key = (c: string | number) => String(c);
 
 /** Options the target question defines — the universe for a complement. */
-function universe(target: Question | undefined): (string | number)[] {
+/**
+ * The full set a complement (`NOT(...)`) is taken against: the question's
+ * EFFECTIVE, carry-forward resolved rows/options — not the static schema
+ * arrays, which for a carry-forward question are empty and previously made
+ * every `NOT(...)` mask against one evaluate to nothing.
+ */
+function universe(target: Question | undefined, ctx: EvalContext): (string | number)[] {
   if (!target) return [];
-  return target.rows.length > 0 && target.options.length === 0
-    ? target.rows.map((r) => r.code)
-    : target.options.map((o) => o.code);
+  const view = effectiveQuestion(target, ctx);
+  return view.rows.length > 0 && view.options.length === 0
+    ? view.rows.map((r) => r.code)
+    : view.options.map((o) => o.code);
 }
 
 export interface SetEvalOptions {
@@ -82,7 +89,7 @@ export function evaluateSetExpr(
 
     case "complement": {
       const inside = new Set(evaluateSetExpr(expr.of, ctx, opts).map(key));
-      return universe(opts.target).filter((c) => !inside.has(key(c)));
+      return universe(opts.target, ctx).filter((c) => !inside.has(key(c)));
     }
 
     case "op": {

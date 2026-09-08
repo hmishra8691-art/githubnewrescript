@@ -5,6 +5,7 @@ import { findLoopScope, getQuestionByCodeOrVar, lookupAnswer, loopValue } from "
 import { evaluateCount } from "./countCondition.js";
 import { safeExpression } from "./calcContext.js";
 import { findNamedExpression } from "./namedExpressions.js";
+import { getEffectiveListsResolver } from "./piping.js";
 
 /**
  * The option currently under evaluation. Present whenever a condition is
@@ -15,7 +16,14 @@ import { findNamedExpression } from "./namedExpressions.js";
 export interface OptionEvalContext {
   code: string | number;
   label: string;
-  value: string | number;
+  /**
+   * Usually the option's own code/value. For a per-row `where` inside a
+   * COUNT (`countCondition.ts`'s `matches`), this is the row's whole stored
+   * answer instead — an object for a multi-column matrix cell — so a
+   * `kind: "option", ref: "value"` source can drill into one named column
+   * via `columnId` (see `resolveSourceValue`'s `case "option"`).
+   */
+  value: unknown;
   index: number;
 }
 
@@ -37,6 +45,17 @@ export interface EvalTrace {
   left: unknown;
   operator: string;
   right: unknown;
+}
+
+/** The code at a FIRST / LAST / 0-based-index position, or undefined past either end. */
+function codeAtPosition(
+  items: { code: string | number }[],
+  position: "first" | "last" | number,
+): string | number | undefined {
+  if (!items.length) return undefined;
+  if (position === "first") return items[0].code;
+  if (position === "last") return items[items.length - 1].code;
+  return items[position]?.code;
 }
 
 /** Resolve the raw value a condition source points at. */
@@ -79,6 +98,26 @@ export function resolveSourceValue(rule: ConditionRule, ctx: EvalContext): unkno
     case "option": {
       const o = ctx.option;
       if (!o) return null;
+      /*
+       * Column drill-down for a per-row condition. `matches()` in
+       * `countCondition.ts` puts the ROW'S OWN ANSWER in `o.value` when
+       * counting rows/columns (not the option's own value), so on a
+       * multi-column matrix that answer is an object keyed by column id —
+       * `columnId` picks out one named column of it, exactly the way
+       * `source.rowCode` + `source.columnId` already drill into a stored
+       * matrix answer for a `kind: "question"` source. Without this, a
+       * `where` could only read a single-response grid row's whole cell,
+       * never one column of a real multi-column matrix.
+       */
+      if (
+        source.ref === "value" &&
+        source.columnId != null &&
+        o.value != null &&
+        typeof o.value === "object" &&
+        !Array.isArray(o.value)
+      ) {
+        return (o.value as Record<string, unknown>)[source.columnId] ?? null;
+      }
       return source.ref === "label"
         ? o.label
         : source.ref === "value"
@@ -120,20 +159,47 @@ export function resolveSourceValue(rule: ConditionRule, ctx: EvalContext): unkno
         state.calculated[source.ref] ??
         state.embedded[source.ref] ??
         null;
+      /*
+       * FIRST / LAST / Nth addressing. An explicit `rowCode` always wins —
+       * it says exactly what it means — so position is only resolved when
+       * no code was given. Resolved against the EFFECTIVE (carry-forward
+       * resolved) list, lazily, so an ordinary condition that never uses
+       * positions pays nothing extra.
+       */
+      let rowCode = source.rowCode;
+      const listsResolver = getEffectiveListsResolver();
+      if (rowCode == null && source.rowPosition != null && q && listsResolver) {
+        const c = codeAtPosition(listsResolver(q, ctx).rows, source.rowPosition);
+        if (c != null) rowCode = String(c);
+      }
+      /*
+       * `optionPosition` fills the same slot `columnId` does when there is
+       * no row to drill through first — the flat-object key of a carry-
+       * forward-driven answer keyed by option code (an allocation question
+       * is the clear case: `{ code: amount }`). Only tried when `rowCode`
+       * (explicit or position-resolved) is absent, mirroring the existing
+       * mutual exclusivity between the two branches below.
+       */
+      let columnId = source.columnId;
+      if (columnId == null && rowCode == null && source.optionPosition != null && q && listsResolver) {
+        const c = codeAtPosition(listsResolver(q, ctx).options, source.optionPosition);
+        if (c != null) columnId = String(c);
+      }
+
       // drill into a matrix / composite cell
       if (val && typeof val === "object" && !Array.isArray(val)) {
-        if (source.rowCode != null) {
-          const row = (val as Record<string, unknown>)[String(source.rowCode)];
+        if (rowCode != null) {
+          const row = (val as Record<string, unknown>)[String(rowCode)];
           if (row !== undefined) {
             val =
-              source.columnId != null && row && typeof row === "object" && !Array.isArray(row)
-                ? ((row as Record<string, unknown>)[source.columnId] as any) ?? null
+              columnId != null && row && typeof row === "object" && !Array.isArray(row)
+                ? ((row as Record<string, unknown>)[columnId] as any) ?? null
                 : (row as any);
           } else {
             val = null;
           }
-        } else if (source.columnId != null) {
-          val = (val as Record<string, unknown>)[source.columnId] as any;
+        } else if (columnId != null) {
+          val = (val as Record<string, unknown>)[columnId] as any;
         }
       }
       return val ?? null;
@@ -449,7 +515,7 @@ export function evaluateRule(rule: ConditionRule, ctx: EvalContext): boolean {
  */
 export function withOption(
   ctx: EvalContext,
-  o: { code: string | number; label?: string; value?: string | number; index?: number },
+  o: { code: string | number; label?: string; value?: unknown; index?: number },
 ): EvalContext {
   return {
     ...ctx,

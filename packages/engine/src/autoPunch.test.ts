@@ -217,6 +217,37 @@ test("parsePunchExpression reports what is wrong, in words, without producing ru
   assert.ok(parsePunchExpression(d, "IF Q1.ZZZ THEN SELECT Q2.B").errors.length > 0);
 });
 
+test("parsePunchExpression can name an option that only exists via carry-forward", () => {
+  // Q_CF has no static options of its own — its options are whatever the
+  // respondent selected on Q1 (carryForward: into "options"). Before the
+  // fix, THEN SELECT Q_CF.A always failed with "has no option A", because
+  // the parser read the static (empty) options array.
+  const d = SurveyDefinition.parse({
+    meta: { id: "apcf", code: "APCF", title: "Auto punch carry-forward", version: "1.0" },
+    questions: [
+      products("q1", "Q1"),
+      { id: "q_cf", code: "QCF", variableName: "QCF", type: "multi_select", text: "Which matter?",
+        carryForward: { sourceQuestionId: "q1", filter: "selected", into: "options" } },
+      products("q3", "Q3"),
+    ],
+    flow: [
+      { type: "page", id: "p1", questionIds: ["q1"] },
+      { type: "page", id: "p2", questionIds: ["q_cf"] },
+      { type: "page", id: "p3", questionIds: ["q3"] },
+      { type: "end", id: "e1", status: "complete" },
+    ],
+  });
+  const r = parsePunchExpression(d, "IF Q1.A IS SELECTED THEN SELECT QCF.A");
+  assert.deepEqual(r.errors, [], `expected the carry-forward option to resolve, got: ${JSON.stringify(r.errors)}`);
+  assert.equal(r.rules.length, 1);
+  assert.equal(r.rules[0].targetQuestionId, "q_cf");
+  assert.deepEqual((r.rules[0].rule.source as any).codes, ["A"]);
+
+  // naming a code that genuinely isn't carried anywhere is still an error
+  const bad = parsePunchExpression(d, "IF Q1.A IS SELECTED THEN SELECT QCF.Z");
+  assert.match(bad.errors[0].message, /no option/);
+});
+
 test("formatPunchExpression round-trips through parsePunchExpression", () => {
   const d = def();
   const q2 = d.questions.find((q) => q.id === "q2")!;

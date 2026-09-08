@@ -133,6 +133,91 @@ test("carry-forward filters options to selection", () => {
   assert.equal(view4.columns.length, 3);
 });
 
+/*
+ * P0 CARRY-FORWARD / DYNAMIC OPTION FAMILY FIX — carried-forward options and
+ * rows must behave as first-class, addressable options throughout the whole
+ * programming stack (logic, COUNT, positional addressing), tagged with
+ * stable source identity rather than only a display label.
+ */
+
+test("chained carry-forward keeps real labels and source identity across two hops", () => {
+  const def = SurveyDefinition.parse({
+    meta: { id: "sc1", code: "SC1", title: "Chain", version: "1.0" },
+    questions: [
+      {
+        id: "q1", code: "Q1", variableName: "Q1V", type: "multi_select", text: "Pick brands",
+        options: [{ code: 1, label: "Apple" }, { code: 2, label: "Samsung" }, { code: 3, label: "Google" }],
+      },
+      {
+        id: "q2", code: "Q2", variableName: "Q2V", type: "single_select", text: "Favorite of those",
+        carryForward: { sourceQuestionId: "q1", filter: "selected", into: "options" },
+      },
+      {
+        id: "q3", code: "Q3", variableName: "Q3V", type: "composite", text: "Tell us more",
+        carryForward: { sourceQuestionId: "q2", filter: "selected", into: "rows" },
+        columns: [{ id: "c_note", label: "Note", responseType: "text", variableStem: "NOTE" }],
+      },
+    ],
+    flow: [
+      { type: "page", id: "p1", questionIds: ["q1"] },
+      { type: "page", id: "p2", questionIds: ["q2"] },
+      { type: "page", id: "p3", questionIds: ["q3"] },
+      { type: "end", id: "e", status: "complete" },
+    ],
+  });
+  const state = createResponseState(def, { seed: 1 });
+  state.answers["q1"] = [1, 3];
+  // respondent picked code 1 ("Apple") from Q2's own carried options
+  state.answers["q2"] = "1";
+
+  const q3 = def.questions.find((q) => q.id === "q3")!;
+  const view = effectiveQuestion(q3, { def, state });
+  assert.equal(view.rows.length, 1);
+  assert.equal(view.rows[0].label, "Apple",
+    "the chain resolves the REAL label from q1, not the bare code that used to leak through q2");
+  assert.equal(view.rows[0].code, 1);
+  assert.equal(view.rows[0].sourceQuestionId, "q1",
+    "identity traces back to the ORIGINAL source, not just the immediate one (q2)");
+  assert.equal(view.rows[0].sourceCode, 1);
+});
+
+test("COUNT against a carry-forward matrix's rows — used to silently evaluate to 0", () => {
+  const def = demoSurvey();
+  const state = createResponseState(def, { seed: 1 });
+  state.answers["q_brands"] = [1, 2]; // Apple, Samsung carried into q_grid's rows
+  state.answers["q_grid"] = { "1": { c_rating: 8, c_comment: "great", c_rec: 1 } }; // only Apple answered
+  const ctx = { def, state };
+
+  assert.equal(
+    evaluateCondition(cond.count("q_grid", "gte", 1, { of: "selected", scope: "rows" }), ctx),
+    true, "one carried row (Apple) holds an answer",
+  );
+  assert.equal(
+    evaluateCondition(cond.count("q_grid", "eq", 1, { of: "notSelected", scope: "rows" }), ctx),
+    true, "Samsung's carried row is the one left unanswered",
+  );
+});
+
+test("rowPosition addresses a carry-forward row by FIRST/LAST, not by knowing its code", () => {
+  const def = demoSurvey();
+  const state = createResponseState(def, { seed: 1 });
+  state.answers["q_brands"] = [1, 2]; // Apple, Samsung — rows carried in this order
+  state.answers["q_grid"] = {
+    "1": { c_rating: 8, c_comment: "great", c_rec: 1 },
+    "2": { c_rating: 3, c_comment: "meh", c_rec: 0 },
+  };
+  const ctx = { def, state };
+
+  assert.equal(
+    evaluateCondition(cond.rule("q_grid", "eq", 1, undefined, { rowPosition: "first", columnId: "c_rec" }), ctx),
+    true, "the first carried row (Apple) was recommended",
+  );
+  assert.equal(
+    evaluateCondition(cond.rule("q_grid", "eq", 0, undefined, { rowPosition: "last", columnId: "c_rec" }), ctx),
+    true, "the last carried row (Samsung) was not",
+  );
+});
+
 test("piping labels, values, counts, expressions", () => {
   const def = demoSurvey();
   const state = createResponseState(def, { seed: 1 });

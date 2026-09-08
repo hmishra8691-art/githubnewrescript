@@ -213,6 +213,92 @@ test("a grid row is 'selected' when it holds any answer", () => {
     "the three unanswered rows");
 });
 
+/* --------------------------------------------- carry-forward matrix counts */
+
+/*
+ * A matrix whose ROWS are carried forward from Q1's selection — the exact
+ * family of bug this file's COUNT fixes address. Before the fix, `pool()`
+ * read the static `q_cf_grid.rows` array, which is empty by construction for
+ * a carry-forward question (its rows only exist as a runtime computation),
+ * so every COUNT / ANY / ALL / NONE against it silently evaluated to 0.
+ */
+function cfGridSurvey() {
+  return SurveyDefinition.parse({
+    meta: { id: "s2", code: "S2", title: "Carry-forward counts", version: "1.0" },
+    questions: [
+      {
+        id: "q_brands", code: "Q1", variableName: "BRANDS", type: "multi_select",
+        text: "Which do you use?",
+        options: [
+          { code: "A", label: "Apple" }, { code: "B", label: "Bosch" }, { code: "C", label: "Candy" },
+        ],
+      },
+      {
+        id: "q_cf_grid", code: "Q2", variableName: "CFGRID", type: "composite",
+        text: "Tell us about each",
+        carryForward: { sourceQuestionId: "q_brands", filter: "selected", into: "rows" },
+        columns: [
+          { id: "c_rating", label: "Rating", responseType: "numeric", variableStem: "RATING" },
+          {
+            id: "c_rec", label: "Recommend?", responseType: "single", variableStem: "REC",
+            options: [{ code: 1, label: "Yes" }, { code: 0, label: "No" }],
+          },
+        ],
+      },
+    ],
+    flow: [
+      { type: "page", id: "p1", questionIds: ["q_brands"] },
+      { type: "page", id: "p2", questionIds: ["q_cf_grid"] },
+      { type: "end", id: "e1", status: "complete" },
+    ],
+  });
+}
+
+test("COUNT over a carry-forward matrix's rows — was silently 0, now counts the carried rows", () => {
+  const def = cfGridSurvey();
+  const answers = {
+    q_brands: ["A", "B"],
+    q_cf_grid: { A: { c_rating: 8, c_rec: 1 }, B: { c_rating: 3, c_rec: 0 } },
+  };
+  assert.equal(count({ ref: "q_cf_grid", count: { of: "selected", scope: "rows" } }, answers, def), 2,
+    "both carried rows (Apple, Bosch) hold an answer");
+  assert.equal(count({ ref: "q_cf_grid", count: { of: "notSelected", scope: "rows" } }, answers, def), 0,
+    "no carried row is left unanswered");
+});
+
+test("COUNT MATCHING with columnId reads one named column of a carry-forward matrix cell", () => {
+  const def = cfGridSurvey();
+  const answers = {
+    q_brands: ["A", "B", "C"],
+    q_cf_grid: { A: { c_rating: 8, c_rec: 1 }, B: { c_rating: 3, c_rec: 0 }, C: { c_rating: 9, c_rec: 1 } },
+  };
+  const spec = {
+    of: "matching", scope: "rows",
+    where: {
+      type: "rule",
+      source: { kind: "option", ref: "value", columnId: "c_rec" },
+      operator: "eq", value: 1,
+    },
+  };
+  assert.equal(count({ ref: "q_cf_grid", count: spec }, answers, def), 2,
+    "Apple and Candy were recommended (c_rec = 1); Bosch was not — a real multi-column matrix, not a single-response grid");
+});
+
+test("lintCount says nothing false about a carry-forward scope's unknowable design-time size", () => {
+  const def = cfGridSurvey();
+  // no answers yet: the static rows array is legitimately empty for a
+  // carry-forward question — that must not read as "has no rows to count"
+  const problems = lintCount(def,
+    { kind: "question", ref: "q_cf_grid", count: { of: "selected", scope: "rows" } } as never, "gte", 2);
+  assert.deepEqual(problems, [], `expected no false warnings, got: ${problems.join(" | ")}`);
+
+  // an unrelated, real problem on the SAME carry-forward question still surfaces
+  const groupProblems = lintCount(def,
+    { kind: "question", ref: "q_cf_grid", count: { of: "selected", scope: "rows", group: "nope" } } as never,
+    "gte", 1);
+  assert.ok(groupProblems.some((p) => /does not have/.test(p)), groupProblems.join(" | "));
+});
+
 test("COUNT COLUMNS counts columns that were used, across every row", () => {
   const def = SurveyDefinition.parse({
     meta: { id: "s2", code: "S2", title: "Composite", version: "1.0" },

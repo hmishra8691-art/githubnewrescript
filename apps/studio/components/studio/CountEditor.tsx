@@ -3,7 +3,7 @@ import React from "react";
 import type {
   ComparisonOperator, ConditionRule, CountOf, CountScope, CountSpec, Question,
 } from "@rescript/schema";
-import { lintCount } from "@rescript/engine";
+import { lintCount, authoringQuestionView } from "@rescript/engine";
 import { useStudio } from "./store";
 
 /**
@@ -95,7 +95,14 @@ export function CountEditor({
   if (!spec) return null;
 
   const q = s.def.questions.find((x) => x.id === rule.source.ref);
-  const scopes = scopesFor(q);
+  /*
+   * Same resolver as ConditionBuilder's row/column pickers: a carry-forward
+   * question has no rows/options/columns of its own in the static schema, so
+   * without this a COUNT rule against exactly the matrix this feature exists
+   * for offers nothing to count and nothing to narrow to.
+   */
+  const view = q ? authoringQuestionView(q, s.def) : undefined;
+  const scopes = scopesFor(view);
 
   const setSpec = (patch: Partial<CountSpec>) =>
     onChange({ ...rule, source: { ...rule.source, count: { ...spec, ...patch } as CountSpec } });
@@ -103,13 +110,13 @@ export function CountEditor({
   /** The items of the current scope, as pickable codes. */
   const items: { key: string; label: string }[] =
     spec.scope === "rows"
-      ? (q?.rows ?? []).map((r) => ({ key: String(r.code), label: stripHtml(r.label) }))
+      ? (view?.rows ?? []).map((r) => ({ key: String(r.code), label: stripHtml(r.label) }))
       : spec.scope === "columns"
-        ? (q?.columns ?? []).map((c) => ({ key: c.id, label: c.label }))
-        : (q?.options ?? []).map((o) => ({ key: String(o.code), label: stripHtml(o.label) }));
+        ? (view?.columns ?? []).map((c) => ({ key: c.id, label: c.label }))
+        : (view?.options ?? []).map((o) => ({ key: String(o.code), label: stripHtml(o.label) }));
 
   /* the responses a grid row can hold — the question's own option list */
-  const responses = (q?.options ?? []).map((o) => ({ key: String(o.code), label: stripHtml(o.label) }));
+  const responses = (view?.options ?? []).map((o) => ({ key: String(o.code), label: stripHtml(o.label) }));
 
   const toggle = (list: (string | number)[] | undefined, key: string): (string | number)[] | undefined => {
     const cur = (list ?? []).map(String);
@@ -233,7 +240,7 @@ export function CountEditor({
       )}
 
       <div className="count-reading muted" data-testid="count-reading">
-        {describeCount(spec, q)}
+        {describeCount(spec, view)}
       </div>
 
       {problems.map((p) => (

@@ -310,6 +310,40 @@ test("§8: static, count, and variable sources", () => {
   assert.deepEqual(resolveLoopItems(v, st, loopNode(v)).map((i) => i.code), ["p", "q", "r"]);
 });
 
+test("a loop sourced from a carry-forward question keeps real labels and source order", () => {
+  // Q2 brands → Q_CF (carry-forward: options = whatever was selected on Q2).
+  // Before the fix, a loop over Q_CF read Q_CF's static (empty) options
+  // array, so every iteration's label silently fell back to its bare code
+  // and "source order" meant nothing — there was no source list to order by.
+  const def = SurveyDefinition.parse({
+    meta: { id: "s3", code: "S3", title: "Loop over carry-forward", version: "1.0" },
+    questions: [
+      { id: "q2", code: "Q2", variableName: "Q2", type: "multi_select", text: "Brands?", options: BRANDS },
+      { id: "q_cf", code: "QCF", variableName: "QCF", type: "multi_select", text: "Which of these matter to you?",
+        carryForward: { sourceQuestionId: "q2", filter: "selected", into: "options" } },
+      { id: "q6", code: "Q6", variableName: "Q6", type: "text", text: "Say something about {{loop.label}}" },
+    ],
+    flow: [
+      { type: "page", id: "p1", questionIds: ["q2"] },
+      { type: "page", id: "p2", questionIds: ["q_cf"] },
+      {
+        type: "loop", id: "loopcf", loopVar: "item",
+        source: { kind: "question", questionId: "q_cf", filter: "selected" },
+        children: [{ type: "page", id: "p6", questionIds: ["q6"] }],
+      },
+      { type: "end", id: "e", status: "complete" },
+    ],
+  });
+  const state = createResponseState(def, { seed: 1 });
+  state.answers.q2 = [1, 3, 5]; // Apple, Google, Xiaomi carried forward as Q_CF's options
+  // respondent picks Xiaomi then Apple on Q_CF — answer order is reversed from source order
+  state.answers.q_cf = [5, 1];
+  const items = resolveLoopItems(def, state, loopNode(def, "loopcf"));
+  assert.deepEqual(items.map((i) => i.label), ["Apple", "Xiaomi"],
+    "real carried labels, not bare codes — and in SOURCE order (Apple before Xiaomi), the default for this loop");
+  assert.deepEqual(items.map((i) => i.code), ["1", "5"]);
+});
+
 /* ============================================================ nesting */
 
 function nested() {

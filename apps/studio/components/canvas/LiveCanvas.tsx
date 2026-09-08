@@ -2,11 +2,11 @@
 import React from "react";
 import type { Question } from "@rescript/schema";
 import {
-  createResponseState, validatePage, setAnswer, answerKey,
+  createResponseState, validatePage, setAnswer, answerKey, authoringQuestionView,
   type ResponseState, type LoopContext,
 } from "@rescript/engine";
 import { QuestionRenderer } from "@rescript/renderer";
-import { neutralised, annotate, withMarkedPiping, withCarriedFallback, type AuthoringAnnotations } from "./authoringView";
+import { neutralised, annotate, withMarkedPiping, type AuthoringAnnotations } from "./authoringView";
 import { resolveFromDom, findElement, sameSelection, type SelectedEntity } from "./selection";
 
 /**
@@ -98,7 +98,7 @@ export function LiveCanvas(p: LiveCanvasProps) {
 
   /** What actually goes to the renderer. */
   const rendered = React.useMemo(
-    () => (simulating ? p.q : withMarkedPiping(withCarriedFallback(neutralised(p.q), p.def, ctx), ctx)),
+    () => (simulating ? p.q : withMarkedPiping(authoringQuestionView(neutralised(p.q), p.def, ctx), ctx)),
     [simulating, p.q, p.def, ctx],
   );
 

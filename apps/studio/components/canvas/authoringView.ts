@@ -73,50 +73,17 @@ export function neutralised(q: Question): Question {
 /**
  * A carry-forward question has no items of its own: it takes them from an
  * earlier answer. With no answer yet — which is the normal state while
- * programming — the engine correctly produces nothing, and the programmer is
- * shown an empty grid they cannot click.
+ * programming — the engine correctly produces nothing, and the programmer
+ * would be shown an empty grid they cannot click.
  *
- * So when authoring, and only when the real pipeline came back empty, the
- * source question's own items stand in. They are the items that WILL arrive,
- * they carry the same codes, and seeing them is the difference between
- * programming a matrix and guessing at one. Giving the simulator a sample
- * answer replaces them with the genuine carried set.
+ * That stand-in used to live here as `withCarriedFallback`, one call site
+ * (LiveCanvas), reading only the immediate source's static options. It is
+ * now `authoringQuestionView` in `@rescript/engine` — the same resolver the
+ * Condition Builder, Count Editor and every other design-time list use, so a
+ * carry-forward question looks and behaves identically everywhere it is
+ * programmed, and a multi-hop chain (Q1 -> Q2 -> Q3) resolves correctly
+ * instead of only the first hop.
  */
-export function withCarriedFallback(q: Question, def: SurveyDefinition, ctx: EvalContext): Question {
-  const cf = q.carryForward;
-  if (!cf || cf.into === "columns") return q;
-  const src = def.questions.find((x) => x.id === cf.sourceQuestionId);
-  if (!src?.options.length) return q;
-
-  let live: { options: unknown[]; rows: unknown[] };
-  try {
-    const v = effectiveQuestion(q, ctx);
-    live = { options: v.options, rows: v.rows };
-  } catch {
-    live = { options: [], rows: [] };
-  }
-
-  /* The stand-in items have to REPLACE the carry-forward, not sit beside it:
-     the engine reads carry-forward first and ignores the question's own list,
-     so leaving it in place would hand back the empty set again. */
-  if (cf.into === "rows" && live.rows.length === 0) {
-    return {
-      ...q,
-      carryForward: undefined,
-      rows: src.options.map((o) => ({
-        code: o.code, label: o.label, flags: [], validation: [], required: false,
-      })) as Question["rows"],
-    };
-  }
-  if (cf.into === "options" && live.options.length === 0) {
-    return {
-      ...q,
-      carryForward: undefined,
-      options: src.options.map((o) => ({ code: o.code, label: o.label, flags: [] })) as Question["options"],
-    };
-  }
-  return q;
-}
 
 /**
  * Run the REAL pipeline to find out what a respondent would be shown, and what

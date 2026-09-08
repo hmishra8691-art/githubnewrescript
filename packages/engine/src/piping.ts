@@ -49,6 +49,37 @@ export function registerDisplayedOptionsResolver(fn: DisplayedResolver): void {
   displayedResolver = fn;
 }
 
+/**
+ * FIRST / LAST / Nth row & option addressing (`evaluate.ts`'s
+ * `resolveSourceValue`, for `ConditionSource.rowPosition` / `optionPosition`)
+ * needs the question's EFFECTIVE, carry-forward resolved list, which lives in
+ * `carryforward.ts`.
+ *
+ * Registered HERE rather than inside `evaluate.ts` itself, even though this
+ * is only consumed by `evaluate.ts`: `evaluate.ts` sits on a real runtime
+ * cycle (evaluate.ts -> countCondition.ts -> carryforward.ts -> evaluate.ts,
+ * via `evaluateCount`/`effectiveQuestion`), so a registration call made from
+ * carryforward.ts's own top level reaching back into a `let` inside
+ * evaluate.ts can hit that variable before evaluate.ts has finished its own
+ * module initialization, depending on which module in the cycle happens to
+ * load first (`ReferenceError: Cannot access '...' before initialization`).
+ * `piping.ts` has no runtime edge back to `evaluate.ts` — only a type import,
+ * erased at compile time — so it is a safe, cycle-free place for both
+ * `evaluate.ts` and `carryforward.ts` to share this without either importing
+ * the other.
+ */
+type EffectiveListsResolver = (
+  q: Question,
+  ctx: EvalContext,
+) => { rows: { code: string | number }[]; options: { code: string | number }[] };
+let effectiveListsResolver: EffectiveListsResolver | null = null;
+export function registerEffectiveRowsResolver(fn: EffectiveListsResolver): void {
+  effectiveListsResolver = fn;
+}
+export function getEffectiveListsResolver(): EffectiveListsResolver | null {
+  return effectiveListsResolver;
+}
+
 export function resolvePiping(text: string, ctx: EvalContext): string {
   if (!text || !text.includes("{{")) return text;
   return text.replace(PIPE_TOKEN_RE, (_m, raw: string) => {

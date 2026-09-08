@@ -43,7 +43,7 @@ import type {
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition, withOption } from "./evaluate.js";
 import { answerKey, getQuestionByCodeOrVar } from "./state.js";
-import { effectiveQuestion } from "./carryforward.js";
+import { effectiveQuestion, carrySourceOptions, carrySourceRows } from "./carryforward.js";
 import { checkScalarRules } from "./validate.js";
 
 const str = (v: unknown) => String(v);
@@ -109,8 +109,31 @@ interface Item {
   validation?: { kind: string }[];
 }
 
-/** The pool, narrowed by scope, group and `only` — before anything is counted. */
-function pool(q: Question, spec: CountSpec, answer: unknown): Item[] {
+/**
+ * The pool, narrowed by scope, group and `only` — before anything is counted.
+ *
+ * Reads the question's carry-forward-resolved rows / options — stage 1 of
+ * the option pipeline (`carrySourceRows` / `carrySourceOptions`), the full
+ * configured universe carry-forward produces — not the static schema arrays,
+ * and NOT the fully pipeline-resolved `effectiveQuestion` result either.
+ *
+ * That distinction matters: "eligible" / "visible" / "hidden" below compare
+ * this pool against `shownKeys`, which IS the final pipeline output — if pool
+ * were the same final output, "hidden" would always be empty by construction
+ * (everything in the pool would always be "shown"). Using the pre-eligibility
+ * universe here mirrors exactly what a plain question's static `options`
+ * array already meant for that comparison: every configured item, whether or
+ * not this respondent's answers currently keep it visible.
+ *
+ * Before this, a carry-forward matrix had no rows in the static schema at
+ * all — they only exist as a runtime computation from another question's
+ * answer — so every COUNT / ANY / ALL / NONE condition against a
+ * carry-forward collection silently evaluated to 0, with nothing on screen to
+ * say why. For a question with no carry-forward, `carrySourceRows` /
+ * `carrySourceOptions` return the same arrays the static read did, so this is
+ * not a behavior change for the overwhelming majority of questions.
+ */
+function pool(q: Question, spec: CountSpec, answer: unknown, ctx: EvalContext): Item[] {
   const only = spec.only ? new Set(spec.only.map(str)) : null;
   const members = groupMembers(q, spec);
   const keep = (key: string) =>
@@ -121,7 +144,7 @@ function pool(q: Question, spec: CountSpec, answer: unknown): Item[] {
       answer && typeof answer === "object" && !Array.isArray(answer)
         ? (answer as Record<string, unknown>)[code]
         : undefined;
-    return (q.rows ?? [])
+    return carrySourceRows(q, ctx)
       .map((r: QuestionRow) => ({
         key: str(r.code), label: r.label, value: rowValue(str(r.code)),
         validation: r.validation as { kind: string }[] | undefined,
@@ -149,7 +172,7 @@ function pool(q: Question, spec: CountSpec, answer: unknown): Item[] {
       .filter((i) => keep(i.key));
   }
 
-  return (q.options ?? [])
+  return carrySourceOptions(q, ctx)
     .map((o: Option) => ({ key: str(o.code), label: o.label, value: undefined }))
     .filter((i) => keep(i.key));
 }
@@ -188,7 +211,7 @@ export function evaluateCount(source: ConditionSource, ctx: EvalContext): number
   if (!q) return null;
 
   const answer = ctx.state.answers[answerKey(q.id, ctx.loop ?? null)];
-  const items = pool(q, spec, answer);
+  const items = pool(q, spec, answer, ctx);
 
   switch (spec.of) {
     case "selected":
@@ -273,7 +296,9 @@ function matches(
   const inner = withOption(ctx, {
     code: item.key,
     label: item.label,
-    value: spec.scope === "options" ? item.key : (item.value as string | number | undefined),
+    // for rows/columns this is the item's own stored answer — an object for
+    // a multi-column matrix cell, which `columnId` (evaluate.ts) drills into
+    value: spec.scope === "options" ? item.key : item.value,
     index: 0,
   });
   return evaluateCondition(where, inner);
@@ -299,12 +324,25 @@ export function lintCount(def: SurveyDefinition, source: ConditionSource, operat
 
   const collection = spec.scope === "rows" ? q.rows : spec.scope === "columns" ? q.columns : q.options;
   const size = (collection ?? []).length;
-  if (size === 0) {
+  /*
+   * A carry-forward question's real size is unknowable at design time — its
+   * rows/options/columns for the scope carry-forward feeds only exist once a
+   * respondent has answered the source question, so the static collection is
+   * legitimately empty (or, with `keepOwn`, incomplete) for a question that
+   * is working exactly as programmed. Every warning below that depends on
+   * "how many are there" or "which codes exist" would be false for that
+   * scope, so each is skipped for it rather than printed with a guess.
+   * Warnings unrelated to size (a missing option group, an unconfigured
+   * `matching` count) still run — they are about the SAME question but not
+   * about a fact only the runtime pipeline knows.
+   */
+  const isDynamicScope = q.carryForward?.into === spec.scope;
+  if (size === 0 && !isDynamicScope) {
     out.push(`${q.code} has no ${spec.scope} to count.`);
     return out;
   }
 
-  if (spec.only?.length) {
+  if (spec.only?.length && !isDynamicScope) {
     const keys = new Set(
       spec.scope === "columns"
         ? (q.columns ?? []).map((c) => c.id)
@@ -325,8 +363,10 @@ export function lintCount(def: SurveyDefinition, source: ConditionSource, operat
 
   const n = Number(value);
   if (Number.isFinite(n)) {
-    const max = spec.only?.length ?? size;
-    if ((operator === "gte" || operator === "gt" || operator === "eq") && n > max) {
+    // `only` narrows to a fixed, known-size subset even on a dynamic scope;
+    // otherwise the max is unknowable for a dynamic scope, same reasoning as above.
+    const max = spec.only?.length ?? (isDynamicScope ? null : size);
+    if (max != null && (operator === "gte" || operator === "gt" || operator === "eq") && n > max) {
       out.push(
         `Count of ${q.code} can never reach ${n} — there ${max === 1 ? "is" : "are"} only ${max} `
         + `${spec.scope === "options" ? "option" : spec.scope === "rows" ? "row" : "column"}${max === 1 ? "" : "s"} to count.`,

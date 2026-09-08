@@ -140,6 +140,15 @@ export const Option = z.object({
   logic: OptionLogic.optional(),
   /** Free metadata for custom renderers. */
   meta: z.record(z.any()).optional(),
+  /**
+   * Carry-forward provenance (P0 dynamic-option fix). When this option was
+   * materialized from another question's answer (see `Question.carryForward`),
+   * these identify the source unambiguously — by id and code, never by the
+   * display label alone, since labels can repeat or be edited independently
+   * of identity. Absent for ordinary, non-carried options.
+   */
+  sourceQuestionId: z.string().optional(),
+  sourceCode: z.union([z.string(), z.number()]).optional(),
 });
 export type Option = z.infer<typeof Option>;
 
@@ -403,6 +412,14 @@ export const QuestionRow = z.object({
   required: z.boolean().default(false),
   placeholder: z.string().optional(),
   meta: z.record(z.any()).optional(),
+  /**
+   * Carry-forward provenance (P0 dynamic-option fix). When this row was
+   * materialized from another question's answer (see `Question.carryForward`),
+   * these identify the source unambiguously — by id and code, never by the
+   * display label alone. Absent for ordinary, non-carried rows.
+   */
+  sourceQuestionId: z.string().optional(),
+  sourceCode: z.union([z.string(), z.number()]).optional(),
 });
 export type QuestionRow = z.infer<typeof QuestionRow>;
 

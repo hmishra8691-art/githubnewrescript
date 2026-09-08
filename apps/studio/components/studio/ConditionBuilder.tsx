@@ -8,7 +8,7 @@ import {
   isOptionValueRef,
 } from "@rescript/schema";
 import {
-  operatorsForQuestion, conditionSummary, embeddedCatalog,
+  operatorsForQuestion, conditionSummary, embeddedCatalog, authoringQuestionView,
   type LogicPath,
   editableCondition, canonicalCondition, pathKey, appendTo, replaceAt, removeAt,
   duplicateAt, setOperatorAt, groupSelection, ungroupAt, validateLogicTree,
@@ -102,6 +102,18 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
 }) {
   const s = useStudio();
   const q: Question | undefined = s.def.questions.find((x) => x.id === rule.source.ref);
+  /*
+   * A carry-forward question has no rows/options of its own in the static
+   * schema — they only exist as a runtime computation from another
+   * question's answer. Without this, the row/column pickers below and the
+   * option-value dropdown enumerate an empty list for exactly the questions
+   * this builder most needs to address (dynamic matrices, carried-forward
+   * multi-selects), which is the reported bug. `authoringQuestionView` is
+   * the one shared resolver every design-time list in Studio reads instead
+   * of the raw `q.rows` / `q.options` / `q.columns` — for an ordinary,
+   * non-carry-forward question it returns `q` unchanged.
+   */
+  const view: Question | undefined = q ? authoringQuestionView(q, s.def) : undefined;
   const listOps = LIST_VALUE_OPERATORS.includes(rule.operator);
   const needsValue = !VALUELESS_OPERATORS.includes(rule.operator);
   const needsValue2 = TWO_VALUE_OPERATORS.includes(rule.operator);
@@ -144,7 +156,7 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
       const { count: _drop, ...source } = rule.source;
       return onChange({ ...rule, source });
     }
-    const scope = scopesFor(q)[0];
+    const scope = scopesFor(view)[0];
     onChange({
       ...rule,
       source: { ...rule.source, count: { of: "selected", scope } as never },
@@ -331,20 +343,20 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
       {/* a count reads the whole collection, so a single row or column is not
           the thing being asked about — the subset picker inside the count
           editor is where narrowing happens */}
-      {!counting && q && (q.rows.length > 0 || q.columns.length > 0) && (
+      {!counting && view && (view.rows.length > 0 || view.columns.length > 0) && (
         <>
-          {q.rows.length > 0 && (
+          {view.rows.length > 0 && (
             <select className="select" value={rule.source.rowCode ?? ""}
               onChange={(e) => setSource({ rowCode: e.target.value || undefined })}>
               <option value="">any row</option>
-              {q.rows.map((r) => <option key={String(r.code)} value={String(r.code)}>row: {stripHtml(r.label)}</option>)}
+              {view.rows.map((r) => <option key={String(r.code)} value={String(r.code)}>row: {stripHtml(r.label)}</option>)}
             </select>
           )}
-          {q.columns.length > 0 && (
+          {view.columns.length > 0 && (
             <select className="select" value={rule.source.columnId ?? ""}
               onChange={(e) => setSource({ columnId: e.target.value || undefined })}>
               <option value="">any col</option>
-              {q.columns.map((c) => <option key={c.id} value={c.id}>col: {c.label}</option>)}
+              {view.columns.map((c) => <option key={c.id} value={c.id}>col: {c.label}</option>)}
             </select>
           )}
         </>
@@ -382,11 +394,11 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
           <span className="chip pipe-chip" title="Compares against the option this rule is attached to">
             this option’s {(rule.value as any).$option}
           </span>
-        ) : q && q.options.length > 0 && !listOps && rule.operator !== "matches" ? (
+        ) : view && view.options.length > 0 && !listOps && rule.operator !== "matches" ? (
           <select className="select" value={String(rule.value ?? "")}
             onChange={(e) => onChange({ ...rule, value: e.target.value })}>
             <option value="">— value —</option>
-            {q.options.map((o) => (
+            {view.options.map((o) => (
               <option key={String(o.code)} value={String(o.code)}>{o.code}: {stripHtml(o.label)}</option>
             ))}
           </select>

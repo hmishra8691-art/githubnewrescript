@@ -4,6 +4,7 @@ import { parseLogicExpression, formatCondition, type ExpressionError } from "./l
 import { evaluateCondition, type EvalContext } from "./evaluate.js";
 import { evaluateSetExpr, LIST_ACTIONS } from "./setExpression.js";
 import { activePunchRules } from "./punchChain.js";
+import { authoringQuestionView } from "./carryforward.js";
 
 /**
  * Option-level auto punching — "IF Q1.A is selected THEN SELECT Q2.B".
@@ -175,9 +176,18 @@ export function parsePunchExpression(def: SurveyDefinition, src: string): PunchE
       if (verb === "clear") {
         if (oTok !== undefined) errors.push({ message: `CLEAR takes a whole question — write CLEAR ${q.code}.`, position: thenAt + 4 });
       } else {
-        if (oTok === undefined) { errors.push({ message: `${gm[1].toUpperCase()} needs an option — e.g. ${q.code}.${String(q.options[0]?.code ?? "1")}`, position: thenAt + 4 }); continue; }
-        const opt = q.options.find((o) => String(o.code) === oTok)
-          ?? q.options.find((o) => o.label.replace(/<[^>]*>/g, "").trim().toLowerCase() === oTok.toLowerCase());
+        /*
+         * The EFFECTIVE (carry-forward resolved) option list, not the static
+         * `q.options` array — a carry-forward question has no options of its
+         * own in the schema, so naming one of its carried options here used
+         * to always fail with "has no option". Design-time only (no answers
+         * yet to run the real pipeline against), so this is the same
+         * source-chain resolution the Condition Builder and Count Editor use.
+         */
+        const view = authoringQuestionView(q, def);
+        if (oTok === undefined) { errors.push({ message: `${gm[1].toUpperCase()} needs an option — e.g. ${q.code}.${String(view.options[0]?.code ?? "1")}`, position: thenAt + 4 }); continue; }
+        const opt = view.options.find((o) => String(o.code) === oTok)
+          ?? view.options.find((o) => o.label.replace(/<[^>]*>/g, "").trim().toLowerCase() === oTok.toLowerCase());
         if (!opt) { errors.push({ message: `${q.code} has no option “${oTok}”.`, position: thenAt + 4 }); continue; }
         entry.codes.push(opt.code);
       }

@@ -2,7 +2,7 @@ import type {
   Condition, FlowNode, LoopCount, LoopCountValue, LoopOrder, LoopReferenceColumn, LoopReferences,
   LoopSource, SurveyDefinition,
 } from "@rescript/schema";
-import { codesFrom } from "./carryforward.js";
+import { codesFrom, effectiveQuestion } from "./carryforward.js";
 import { evaluateCondition, type EvalContext } from "./evaluate.js";
 import { listFillLoopItems, listFillVariableNames } from "./listFill.js";
 import type { QuotaCounts } from "./quotas.js";
@@ -212,8 +212,29 @@ function candidates(
     case "question": {
       const src = getQuestion(def, source.questionId);
       if (!src) return [];
-      const optionIndex = new Map(src.options.map((o, i) => [String(o.code), i]));
-      const labelOf = (c: string) => src.options.find((o) => String(o.code) === c)?.label ?? c;
+      /*
+       * The EFFECTIVE (carry-forward resolved) option list, not just the
+       * static `src.options` array — a carry-forward question has no options
+       * of its own in the schema, so a loop sourced from one used to see an
+       * empty list here and every iteration's label silently fell back to
+       * its bare code, in whatever order the answer happened to hold it.
+       *
+       * But the effective list is ALSO where masking, eligibility and
+       * display logic remove options from an ordinary question — and an
+       * option merely hidden by display logic is still a perfectly "known"
+       * option for the "invalid"/sourceIndex bookkeeping below; it must not
+       * start looking unknown just because this fix started consulting the
+       * effective view. So the index is the static list, plus only the
+       * items a carry-forward question adds that the static list has
+       * nothing for at all — for an ordinary question that's always empty,
+       * so behavior there is untouched byte-for-byte.
+       */
+      const effectiveOptions = effectiveQuestion(src, ctx).options;
+      const staticCodes = new Set(src.options.map((o) => String(o.code)));
+      const carriedOnly = effectiveOptions.filter((o) => !staticCodes.has(String(o.code)));
+      const listOptions = [...src.options, ...carriedOnly];
+      const optionIndex = new Map(listOptions.map((o, i) => [String(o.code), i]));
+      const labelOf = (c: string) => listOptions.find((o) => String(o.code) === c)?.label ?? c;
       const filter = source.filter ?? "selected";
 
       // the respondent's own selection, in the order they made it
@@ -264,7 +285,7 @@ function candidates(
       // source order is the option order; unknown codes go last, in answer order
       const items = codes.map((c) => ({
         code: c, label: labelOf(c),
-        sourceIndex: optionIndex.get(c) ?? src.options.length + (selectionIndex.get(c) ?? 0),
+        sourceIndex: optionIndex.get(c) ?? listOptions.length + (selectionIndex.get(c) ?? 0),
         selectionIndex: selectionIndex.get(c),
         references: referenceRow(node.references, c),
       }));

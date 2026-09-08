@@ -161,10 +161,11 @@ Two things are deliberately **not** neutralised:
   switching it off would empty the view of the very structure the programmer
   came to program. And when carry-forward legitimately produces nothing —
   normal while programming, because nothing upstream has been answered —
-  `withCarriedFallback` stands in the source question's own items, which carry
-  the same codes and will be the ones that arrive. (It clears `carryForward` on
-  the copy as it does so: `runRows` reads that field first and would ignore the
-  substituted rows otherwise.)
+  `authoringQuestionView` (`@rescript/engine`) stands in the source
+  question's resolved items, which carry the same codes, the same stable
+  source identity, and will be the ones that arrive. It resolves the
+  source's own carry-forward chain recursively, so a multi-hop chain
+  (Q1 -> Q2 -> Q3) shows real items at every hop, not just the first.
 * **Piping.** A token with a sample answer behind it is piped for real. A token
   with nothing behind it would resolve to empty and silently lose a word, so
   `markPiping` replaces it with a `.lc-pipe` chip carrying the token's name —
@@ -319,8 +320,8 @@ unchanged in order, with Data Analytics the only addition, following Data.
   it needs no editor-side code at all. A renderer that returns early (the `html`
   type does) still needs its own question anchor.
 * **The Live View never mutates the definition to render it.** `neutralised`,
-  `withCarriedFallback` and `withMarkedPiping` all return copies that live for
-  one render. What is saved is always what was programmed.
+  `authoringQuestionView` and `withMarkedPiping` all return copies that live
+  for one render. What is saved is always what was programmed.
 * **The overlays live inside the scrolling stage** and add back `scrollLeft` /
   `scrollTop`, so a wide matrix scrolls sideways with its outlines attached.
 * **The measurement effect has no dependency list on purpose** — no dependency

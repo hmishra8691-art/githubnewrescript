@@ -278,6 +278,18 @@ export const ConditionSource = z.object({
   rowCode: z.string().optional(),
   columnId: z.string().optional(),
   /**
+   * Address a row or option by POSITION instead of by code — FIRST / LAST /
+   * an explicit 0-based index — over the question's EFFECTIVE (carry-forward
+   * resolved) row/option list. This is what makes "the first carried-forward
+   * row" or "the third selected brand" expressible without knowing which
+   * code will land there at runtime, which for a carry-forward question is
+   * never known when the rule is written. Ignored when `rowCode` /
+   * `sourceRef`-style code addressing is also present — an explicit code
+   * always wins, since it says exactly what it means.
+   */
+  rowPosition: z.union([z.enum(["first", "last"]), z.number().int()]).optional(),
+  optionPosition: z.union([z.enum(["first", "last"]), z.number().int()]).optional(),
+  /**
    * For `kind: "loop"` inside NESTED loops: the `loopVar` of the loop meant.
    * Absent means the innermost loop, which is what a rule written inside a
    * single loop has always meant, so nothing existing changes.
