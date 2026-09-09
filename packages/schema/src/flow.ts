@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { Condition } from "./conditions.js";
+import { SetExpr } from "./setExpression.js";
 
 /**
  * Survey Flow — the ordered structure the runtime walks (requirement §7).
@@ -109,7 +110,7 @@ export type LoopQuestionFilter =
   | "eligible";
 
 export type LoopSource =
-  | { kind: "question"; questionId: string; filter?: LoopQuestionFilter }
+  | { kind: "question"; questionId: string; filter?: LoopQuestionFilter; dimension?: LoopDimension }
   | { kind: "static"; items: { code: string; label: string }[] }
   | { kind: "design"; designId: string }
   /** one iteration per item a List Fill allocated to this respondent */
@@ -122,7 +123,25 @@ export type LoopSource =
    * calculation feeds a loop. A JSON array (`["a","b"]`, or
    * `[{"code":"a","label":"Apple"}]`) or a delimited string.
    */
-  | { kind: "variable"; ref: string; separator?: string };
+  | { kind: "variable"; ref: string; separator?: string }
+  /**
+   * A set expression over other questions' answers — `INTERSECTION(Q1, Q2)`,
+   * `(Q1 UNION Q2) DIFF Q3`. The same `SetExpr` the masking engine evaluates,
+   * so "the brands common to both screeners" is one construct, not a
+   * calculation that reformats a list into a string for a `variable` source.
+   */
+  | { kind: "setExpression"; expr: SetExpr };
+
+/**
+ * Which of a question's three item collections a loop walks.
+ *
+ * Absent means `options`, which is what every loop written before this
+ * existed iterates. `rows` and `columns` make a grid's own structure
+ * loopable — "rate each row in turn", "process each scale point" — without
+ * the programmer first copying the row list into a static source, which is
+ * the workaround this replaces and which silently rots when a row is added.
+ */
+export type LoopDimension = "options" | "rows" | "columns";
 
 export type LoopOrderKind =
   | "source"          // the order of the options / items in the definition
@@ -170,11 +189,12 @@ export const LoopReferences: z.ZodType<LoopReferences> = z.object({
   values: z.record(z.string(), z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]))),
 });
 
-export const LoopSource: z.ZodType<LoopSource> = z.union([
+export const LoopSource: z.ZodType<LoopSource, z.ZodTypeDef, unknown> = z.union([
   z.object({
     kind: z.literal("question"),
     questionId: z.string(),
     filter: z.enum(["selected", "notSelected", "displayed", "all", "invalid", "eligible"]).optional(),
+    dimension: z.enum(["options", "rows", "columns"]).optional(),
   }),
   z.object({
     kind: z.literal("static"),
@@ -184,7 +204,37 @@ export const LoopSource: z.ZodType<LoopSource> = z.union([
   z.object({ kind: z.literal("listFill"), listFillId: z.string() }),
   z.object({ kind: z.literal("count"), count: LoopCountValue }),
   z.object({ kind: z.literal("variable"), ref: z.string(), separator: z.string().optional() }),
+  z.object({ kind: z.literal("setExpression"), expr: SetExpr }),
 ]);
+
+/**
+ * A value the loop computes across all its iterations, published as
+ * `LOOP_<VAR>_<NAME>` once the loop has run.
+ *
+ * This is the declarative form of "average the ratings, then branch on the
+ * average". It was already possible by hand — each iteration's answer lands
+ * in a positional variable (`Q7_1`, `Q7_2`, …) and the calculation engine has
+ * `avg`/`countif` — but only for loops whose size the definition fixes, and
+ * only if the programmer knew to write the positional spelling out. Naming
+ * the question and the operation instead works for a loop of any size,
+ * because the engine knows how many iterations there actually were.
+ */
+export interface LoopAggregate {
+  /** the variable's suffix: `LOOP_BRAND_<name>`. An identifier. */
+  name: string;
+  /** which question's per-iteration answer to aggregate, by code/variable/id */
+  questionRef: string;
+  op: "sum" | "avg" | "min" | "max" | "count" | "countIf";
+  /** for `countIf`: only iterations whose answer satisfies this are counted */
+  where?: Condition;
+}
+
+export const LoopAggregate: z.ZodType<LoopAggregate, z.ZodTypeDef, unknown> = z.object({
+  name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "an aggregate name must be an identifier"),
+  questionRef: z.string(),
+  op: z.enum(["sum", "avg", "min", "max", "count", "countIf"]),
+  where: Condition.optional(),
+});
 
 export const LoopOrder: z.ZodType<LoopOrder> = z.object({
   kind: z.enum(["source", "selection", "listFill", "priority", "random", "weightedRandom", "custom"]),
@@ -262,6 +312,50 @@ export type FlowNode =
       eligibleIf?: Condition;
       /** what "invalid" means for this loop's items (`filter: "invalid"`) */
       invalidIf?: Condition;
+      /**
+       * SKIP / CONTINUE — this item produces no iteration.
+       *
+       * The same filter stage as `eligibleIf`, in the opposite polarity, kept
+       * as its own field because that is how programmers say it: `eligibleIf`
+       * states who qualifies up front, `skipIf` excepts one case out of a
+       * list that otherwise qualifies ("every brand except Other"). Both are
+       * evaluated once per candidate with that item as the loop context.
+       */
+      skipIf?: Condition;
+      /**
+       * BREAK / UNTIL — stop after the iteration in which this first holds.
+       *
+       * Evaluated per item with that item's loop context, so it can read the
+       * answers that iteration produced. The breaking iteration is KEPT: a
+       * loop that reads "run the block, then break if the score is 5" must
+       * run the block that scored 5.
+       *
+       * `UNTIL cond` is this field. `WHILE cond` is this field holding
+       * `NOT cond` — one truncation rule rather than three spellings of it,
+       * so there is no question about which wins.
+       *
+       * Iterations the respondent has not reached yet have no answers, so the
+       * condition is false for them and nothing is truncated prematurely; and
+       * because the flow recompiles on every navigation, changing an earlier
+       * answer so the condition no longer holds brings the later iterations
+       * back, which is the same re-evaluation rule the rest of the engine
+       * follows.
+       */
+      breakIf?: Condition;
+      /**
+       * How the iteration list is decided (§32).
+       *
+       *   reevaluate  (default, and what loops have always done) — recomputed
+       *               on every navigation, so a change to the source question
+       *               is reflected immediately.
+       *   once        resolved when the loop is first entered and then held,
+       *               so a respondent who goes back and edits the source does
+       *               not lose or gain iterations mid-loop — which matters
+       *               when iterations have already been answered.
+       */
+      resolveSource?: "reevaluate" | "once";
+      /** Values computed across every iteration, published after the loop (§37). */
+      aggregates?: LoopAggregate[];
       count?: LoopCount;
       order?: LoopOrder;
       /**
@@ -380,6 +474,10 @@ export const FlowNode: z.ZodType<FlowNode> = z.lazy(() =>
       loopVar: z.string(),
       eligibleIf: Condition.optional(),
       invalidIf: Condition.optional(),
+      skipIf: Condition.optional(),
+      breakIf: Condition.optional(),
+      resolveSource: z.enum(["reevaluate", "once"]).optional(),
+      aggregates: z.array(LoopAggregate).optional(),
       count: LoopCount.optional(),
       order: LoopOrder.optional(),
       references: LoopReferences.optional(),

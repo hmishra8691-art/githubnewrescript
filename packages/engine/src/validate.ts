@@ -26,6 +26,17 @@ export interface ValidationError {
   message: string;
   /** absent means "error" — every caller that predates severity still blocks */
   severity?: ValidationSeverity;
+  /**
+   * WHICH ITERATION failed, when the question sits inside a loop (§28).
+   *
+   * Until this existed the iteration was identifiable only by which page the
+   * error happened to appear on — fine for a respondent looking at that page,
+   * useless everywhere else: a test-mode report, a data-quality review or a
+   * scripted check saw ten identical "Rating must be 1-5" errors with nothing
+   * to say which brand each belonged to. Absent for a question outside any
+   * loop, so nothing that predates it changes.
+   */
+  loop?: { loopId: string; loopVar: string; itemCode: string; itemLabel: string; index: number };
 }
 
 /** The checks that actually stop the page. */
@@ -252,8 +263,29 @@ export function validateQuestion(
    * just kind:"condition". A message with no `{{` is returned unchanged, so
    * this is a no-op for the vast majority of existing, un-piped messages.
    */
+  /*
+   * The iteration this check is running in, attached to every error the
+   * question raises. Taken from `ctx.loop` — the innermost enclosing
+   * iteration, which is the one the question is actually being asked in —
+   * rather than from anything the rule itself has to declare, so every rule
+   * kind gets it for free and none of them had to change.
+   */
+  const iteration: ValidationError["loop"] | undefined = ctx.loop
+    ? {
+        loopId: ctx.loop.loopId ?? "",
+        loopVar: ctx.loop.loopVar,
+        itemCode: ctx.loop.code,
+        itemLabel: ctx.loop.label,
+        index: ctx.loop.index,
+      }
+    : undefined;
   const push = (message: string, extra?: Partial<ValidationError>) =>
-    errors.push({ questionId: q.id, message: resolvePiping(message, ctx), ...extra });
+    errors.push({
+      questionId: q.id,
+      message: resolvePiping(message, ctx),
+      ...(iteration ? { loop: iteration } : {}),
+      ...extra,
+    });
 
   /*
    * Implicit required — but never on a question the respondent cannot answer.

@@ -234,6 +234,18 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
               onChange={(e) => set({ source: { ...src, filter: e.target.value as never } })}>
               {FILTERS.map((f) => <option key={f.value} value={f.value} title={f.hint}>{f.label}</option>)}
             </select>
+            {/* Which of the question's collections to walk. Only worth
+                offering when the question actually has rows — for a flat
+                list "options" is the only meaningful answer. */}
+            {(def.questions.find((q) => q.id === src.questionId)?.rows.length ?? 0) > 0 && (
+              <select className="select" data-testid="loop-dimension" value={src.dimension ?? "options"}
+                title="Which of this question's lists the loop walks"
+                onChange={(e) => set({ source: { ...src, dimension: e.target.value as never } })}>
+                <option value="options">its options</option>
+                <option value="rows">its rows</option>
+                <option value="columns">its columns</option>
+              </select>
+            )}
           </>
         )}
         {src.kind === "listFill" && (
@@ -303,7 +315,40 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
             hint="codes that match no option are always invalid; this rule adds more"
           />
         )}
+        {/*
+          * Control flow, in the order it runs: skip filters items out before
+          * the loop starts; break stops the loop part-way through. Both sit
+          * with eligibility because all three decide which iterations exist.
+          */}
+        <OptionalCondition
+          label="Skip an item (CONTINUE — the item produces no iteration)"
+          value={node.skipIf}
+          onChange={(c: Condition | undefined) => set({ skipIf: c })}
+          hint='e.g. loop.code = "other" — the opposite polarity of the eligibility rule'
+        />
+        <OptionalCondition
+          label="Stop the loop (BREAK / UNTIL — this iteration runs, later ones do not)"
+          value={node.breakIf}
+          onChange={(c: Condition | undefined) => set({ breakIf: c })}
+          hint="reads the answers this iteration gave, e.g. Q7 >= 5. For WHILE, write the condition that ends it."
+        />
       </LoopScopeProvider>
+
+      {/* ------------------------------------------------ source re-evaluation */}
+      <div className="row" style={{ flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+        <span className="flabel" style={{ margin: 0 }}>Resolve the item list</span>
+        <select className="select" data-testid="loop-resolve-source"
+          value={node.resolveSource ?? "reevaluate"}
+          onChange={(e) => set({ resolveSource: e.target.value as "reevaluate" | "once" })}>
+          <option value="reevaluate">every time (changes to the source apply immediately)</option>
+          <option value="once">once, when the loop is first reached</option>
+        </select>
+        <span className="muted" style={{ fontSize: 12.5 }}>
+          {node.resolveSource === "once"
+            ? "Editing the source later will not renumber iterations already answered."
+            : "Editing the source adds or removes iterations, even mid-loop."}
+        </span>
+      </div>
 
       {/* ------------------------------------------------ count & order */}
       <div className="row" style={{ flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
@@ -354,6 +399,68 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
             onChange={(e) => set({ order: { ...node.order!, custom: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) } })} />
         </div>
       )}
+
+      {/* ------------------------------------------------ aggregates */}
+      <div className="loop-refs" data-testid="loop-aggregates" style={{ marginBottom: 12 }}>
+        <div className="row" style={{ alignItems: "baseline" }}>
+          <strong style={{ fontSize: 14 }}>Loop results</strong>
+          <span className="muted" style={{ fontSize: 12.5, marginLeft: 8 }}>
+            values computed across every iteration, usable anywhere after the loop
+          </span>
+          <span className="grow" />
+          <button className="btn small" data-testid="loop-add-aggregate"
+            onClick={() => set({
+              aggregates: [...(node.aggregates ?? []),
+                { name: `RESULT_${(node.aggregates?.length ?? 0) + 1}`, questionRef: "", op: "avg" as const }],
+            })}>+ result</button>
+        </div>
+        {(node.aggregates ?? []).length === 0 && (
+          <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>
+            None. Add one to get e.g. <span className="mono">{loopVariablePrefix(node, null)}_AVG_SCORE</span> after
+            the loop, without writing out one term per iteration.
+          </div>
+        )}
+        {(node.aggregates ?? []).map((agg, i) => {
+          const patch = (p: Partial<typeof agg>) => set({
+            aggregates: (node.aggregates ?? []).map((a, j) => (j === i ? { ...a, ...p } : a)),
+          });
+          return (
+            <div className="row" key={i} style={{ flexWrap: "wrap", gap: 6, marginTop: 6, alignItems: "center" }}>
+              <span className="mono muted" style={{ fontSize: 12 }}>{loopVariablePrefix(node, null)}_</span>
+              <input className="input mono" style={{ width: 130 }} data-testid="loop-agg-name"
+                value={agg.name} onChange={(e) => patch({ name: e.target.value.toUpperCase() })} />
+              <select className="select" data-testid="loop-agg-op" value={agg.op}
+                onChange={(e) => patch({ op: e.target.value as typeof agg.op })}>
+                <option value="avg">average of</option>
+                <option value="sum">sum of</option>
+                <option value="min">smallest</option>
+                <option value="max">largest</option>
+                <option value="count">how many answered</option>
+                <option value="countIf">how many match a rule</option>
+              </select>
+              <select className="select" data-testid="loop-agg-question" value={agg.questionRef}
+                onChange={(e) => patch({ questionRef: e.target.value })}>
+                <option value="">— question —</option>
+                {def.questions.map((x) => <option key={x.id} value={x.code}>{x.code}</option>)}
+              </select>
+              <button className="btn small danger" title="Remove this result"
+                onClick={() => set({ aggregates: (node.aggregates ?? []).filter((_, j) => j !== i) })}>×</button>
+              {agg.op === "countIf" && (
+                <div style={{ flexBasis: "100%" }}>
+                  <LoopScopeProvider loops={scope}>
+                    <OptionalCondition
+                      label="count an iteration when"
+                      value={agg.where}
+                      onChange={(c: Condition | undefined) => patch({ where: c })}
+                      hint="evaluated once per iteration, in that iteration's context"
+                    />
+                  </LoopScopeProvider>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
 
       {/* ------------------------------------------------ references */}
       <div className="loop-refs" data-testid="loop-references">

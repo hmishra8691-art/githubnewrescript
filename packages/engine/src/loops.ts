@@ -1,6 +1,6 @@
 import type {
   Condition, FlowNode, LoopCount, LoopCountValue, LoopOrder, LoopReferenceColumn, LoopReferences,
-  LoopSource, SurveyDefinition,
+  LoopSource, SetExpr, SurveyDefinition,
 } from "@rescript/schema";
 import { codesFrom, effectiveQuestion } from "./carryforward.js";
 import { evaluateCondition, type EvalContext } from "./evaluate.js";
@@ -8,11 +8,42 @@ import { listFillLoopItems, listFillVariableNames } from "./listFill.js";
 import type { QuotaCounts } from "./quotas.js";
 import { mulberry32, seededShuffle, subSeed } from "./random.js";
 import {
-  getQuestion, getQuestionByCodeOrVar, lookupAnswer,
+  getQuestion, getQuestionByCodeOrVar, lookupAnswer, loopKeySuffix,
   type LoopContext, type LoopReferenceValue, type ResponseState,
 } from "./state.js";
 import { directChildLoops, loopNodes, loopVariablePrefix, type LoopFlowNode } from "./loopModel.js";
+import { evaluateSetExpr, setExprSources } from "./setExpression.js";
 export * from "./loopModel.js";
+
+/**
+ * The ceiling on iterations any one loop may produce, and on how deeply loops
+ * may nest (§42).
+ *
+ * A survey has no legitimate reason to exceed either. Both exist because the
+ * inputs are respondent- and panel-supplied: a `count` source reads a numeric
+ * answer or an embedded-data field, so the count is only as sensible as what
+ * arrived, and an unbounded one allocates contexts until the tab dies. The cap
+ * truncates rather than erroring, so a mistyped 1000 still fields — the
+ * respondent sees 200 iterations instead of a hung page — and `lintLoops`
+ * reports the situation at author time, which is where it can actually be
+ * fixed.
+ */
+export const MAX_LOOP_ITERATIONS = 200;
+export const MAX_LOOP_DEPTH = 5;
+
+/**
+ * A readable label for a code produced by a set expression, found in whichever
+ * source question defines it. Falls back to the code, which is also what a
+ * code no source question knows about correctly gets.
+ */
+function setExprLabel(def: SurveyDefinition, expr: SetExpr, code: string): string {
+  for (const qid of setExprSources(expr, new Set<string>(), def)) {
+    const q = getQuestion(def, qid);
+    const opt = q?.options.find((o) => String(o.code) === code);
+    if (opt) return opt.label;
+  }
+  return code;
+}
 
 /**
  * THE LOOP ENGINE — which items a loop runs over, in what order, how many, and
@@ -198,8 +229,28 @@ function candidates(
       return withRefs(listFillLoopItems(def, state, source.listFillId));
 
     case "count": {
-      const n = resolveLoopCount(def, state, source.count, parent) ?? 0;
+      /*
+       * Clamped (§42). The count can come from a respondent's numeric answer
+       * or an embedded-data field, so "how many products would you like to
+       * evaluate?" answered 1000000 — or a panel variable arriving as
+       * nonsense — used to allocate a million contexts and walk the children
+       * for each, which is a hang rather than a survey. MAX_LOOP_ITERATIONS
+       * is the ceiling every source shares.
+       */
+      const n = Math.min(resolveLoopCount(def, state, source.count, parent) ?? 0, MAX_LOOP_ITERATIONS);
       return withRefs(Array.from({ length: n }, (_, i) => ({ code: String(i + 1), label: String(i + 1) })));
+    }
+
+    case "setExpression": {
+      /*
+       * A set expression over other questions — `INTERSECTION(Q1, Q2)`. The
+       * masking engine's evaluator, unchanged: the platform has exactly one
+       * definition of what a set of option codes is, and a loop that walks
+       * "the brands in both screeners" must agree with a mask that shows
+       * them.
+       */
+      const codes = evaluateSetExpr(source.expr, { def, state, quotaCounts, loop: parent }).map(String);
+      return withRefs(codes.map((c) => ({ code: c, label: setExprLabel(def, source.expr, c) })));
     }
 
     case "variable": {
@@ -229,7 +280,54 @@ function candidates(
        * nothing for at all — for an ordinary question that's always empty,
        * so behavior there is untouched byte-for-byte.
        */
-      const effectiveOptions = effectiveQuestion(src, ctx).options;
+      /*
+       * WHICH COLLECTION THIS LOOP WALKS (§22-24).
+       *
+       * `options` (the default, and what every existing loop means) walks the
+       * answer list. `rows` walks a grid's rows — "rate each brand in turn",
+       * where a row's own answer decides whether it counts as selected.
+       * `columns` walks the scale: for a `matrix_*` question the column
+       * headers ARE `q.options`, while a composite table keeps them in
+       * `q.columns`, so both are consulted in that order — the same
+       * convention the masking pipeline uses, rather than a second idea of
+       * where a grid's columns live.
+       */
+      const dimension = source.dimension ?? "options";
+      const view = effectiveQuestion(src, ctx);
+      if (dimension === "rows" || dimension === "columns") {
+        const items = dimension === "rows"
+          ? view.rows.map((r) => ({ code: String(r.code), label: r.label }))
+          : (view.columns.length
+              ? view.columns.map((c) => ({ code: String(c.id), label: c.label }))
+              : view.options.map((o) => ({ code: String(o.code), label: o.label })));
+        const answer = lookupAnswer(state.answers, src.id, parent);
+        const answered = (code: string): boolean => {
+          if (answer == null || typeof answer !== "object" || Array.isArray(answer)) return false;
+          const rec = answer as Record<string, unknown>;
+          if (dimension === "rows") {
+            const v = rec[code];
+            return v != null && v !== "" && !(Array.isArray(v) && v.length === 0);
+          }
+          // a column counts as used when any row chose it or holds a value for it
+          return Object.values(rec).some((rowValue) =>
+            rowValue != null && typeof rowValue === "object" && !Array.isArray(rowValue)
+              ? (rowValue as Record<string, unknown>)[code] != null
+              : Array.isArray(rowValue)
+                ? rowValue.some((x) => String(x) === code)
+                : String(rowValue) === code);
+        };
+        const filter = source.filter ?? "all";
+        const kept = filter === "selected" ? items.filter((i) => answered(i.code))
+          : filter === "notSelected" ? items.filter((i) => !answered(i.code))
+          : items;
+        return kept.map((item, i) => ({
+          ...item,
+          sourceIndex: i,
+          references: referenceRow(node.references, item.code),
+        }));
+      }
+
+      const effectiveOptions = view.options;
       const staticCodes = new Set(src.options.map((o) => String(o.code)));
       const carriedOnly = effectiveOptions.filter((o) => !staticCodes.has(String(o.code)));
       const listOptions = [...src.options, ...carriedOnly];
@@ -423,6 +521,34 @@ export function resolveLoopItems(
   parent: LoopContext | null = null,
   quotaCounts?: QuotaCounts,
 ): LoopItem[] {
+  /*
+   * RESOLVE ONCE vs RE-EVALUATE (§32).
+   *
+   * `reevaluate` — the default and the historical behaviour — recomputes on
+   * every navigation, so editing the source question immediately changes the
+   * iterations. That is right while the respondent is still upstream of the
+   * loop, and wrong once they are inside it: adding a brand halfway through
+   * renumbers everything after it, and removing one discards answers already
+   * given.
+   *
+   * `once` takes a snapshot the first time the loop resolves to a non-empty
+   * list and reuses it. The snapshot lives in `state.calculated` under a
+   * reserved key rather than in a new field on ResponseState, so it persists,
+   * resumes and exports with everything else the respondent's session holds,
+   * and an old session that has no snapshot simply takes one on its next
+   * compile.
+   */
+  const snapshotKey = `__LOOP_SNAPSHOT_${node.id}${parent ? loopKeySuffix(parent) : ""}`;
+  if (node.resolveSource === "once") {
+    const saved = state.calculated[snapshotKey];
+    if (typeof saved === "string" && saved !== "") {
+      try {
+        const parsed = JSON.parse(saved) as LoopItem[];
+        if (Array.isArray(parsed) && parsed.length) return parsed;
+      } catch { /* a corrupt snapshot falls through and is retaken */ }
+    }
+  }
+
   let items = candidates(def, state, node, parent, quotaCounts);
 
   /*
@@ -436,6 +562,21 @@ export function resolveLoopItems(
     const rule: Condition = node.eligibleIf;
     items = items.filter((it) =>
       evaluateCondition(rule, { def, state, quotaCounts, loop: contextFor(node, it, 0, 0, parent) }));
+  }
+
+  /*
+   * SKIP / CONTINUE (§13, §15) — the same stage, opposite polarity.
+   *
+   * "Every brand except Other" is a sentence about an exception, and forcing
+   * it through `eligibleIf` makes the author write the whole qualifying rule
+   * inverted. Both run here, before ordering, so a skipped item never
+   * occupies a position or consumes a `max` slot — which is what "skip"
+   * means, as distinct from an iteration that runs and shows nothing.
+   */
+  if (node.skipIf) {
+    const rule: Condition = node.skipIf;
+    items = items.filter((it) =>
+      !evaluateCondition(rule, { def, state, quotaCounts, loop: contextFor(node, it, 0, 0, parent) }));
   }
 
   items = orderItems(items, node, state);
@@ -455,7 +596,55 @@ export function resolveLoopItems(
     default:
       break;
   }
-  return items;
+
+  /*
+   * BREAK / UNTIL (§14, §33) — last, because it truncates the sequence the
+   * respondent actually walks, which is the one that exists after ordering
+   * and counting have decided it.
+   *
+   * Evaluated per item with that item's own context and index, so the rule
+   * can read what the iteration produced ("break if this brand scored 5") or
+   * an accumulating total ("until TOTAL_SCORE >= 50"). The matching
+   * iteration is KEPT and everything after it dropped: a loop that says "run
+   * the block, then break" must have run the block that triggered the break.
+   *
+   * Why this needs no lazy expansion of the flow. `compileFlow` recompiles on
+   * every navigation, so the list is re-derived after each page submit.
+   * Iterations the respondent has not reached hold no answers, so their
+   * condition is false and nothing truncates early; the moment iteration 2's
+   * answers make it true, iterations 3+ leave the compiled flow. Editing an
+   * earlier answer so the rule no longer holds brings them back — the same
+   * re-evaluation semantics as display logic, rather than a second rule about
+   * when loops are allowed to change their minds.
+   */
+  if (node.breakIf) {
+    const rule: Condition = node.breakIf;
+    const stopAt = items.findIndex((it, i) =>
+      evaluateCondition(rule, {
+        def, state, quotaCounts,
+        loop: contextFor(node, it, i + 1, items.length, parent),
+      }));
+    if (stopAt >= 0) items = items.slice(0, stopAt + 1);
+  }
+
+  /*
+   * The ceiling applies to every source, not just `count` (§42): an ordinary
+   * question could carry hundreds of carried-forward options, and a nested
+   * loop multiplies. Truncating here rather than erroring keeps a survey in
+   * the field; `lintLoops` is where the author is told.
+   */
+  const final = items.length > MAX_LOOP_ITERATIONS ? items.slice(0, MAX_LOOP_ITERATIONS) : items;
+
+  /*
+   * Take the snapshot only once the loop has something to iterate. A loop
+   * whose source question is still unanswered resolves to nothing on the
+   * compiles that happen before the respondent reaches it, and freezing THAT
+   * would give the loop zero iterations forever.
+   */
+  if (node.resolveSource === "once" && final.length > 0 && !state.calculated[snapshotKey]) {
+    state.calculated[snapshotKey] = JSON.stringify(final);
+  }
+  return final;
 }
 
 /** The contexts, one per item — what `compileFlow` walks the children with. */
@@ -502,6 +691,14 @@ export function possibleLoopItems(def: SurveyDefinition, node: LoopFlowNode): { 
         ? Array.from({ length: Math.max(0, Math.trunc(s.count)) }, (_, i) => ({ code: String(i + 1), label: String(i + 1) }))
         : null;
     case "variable":
+      return null;
+    case "setExpression":
+      /*
+       * Unbounded from the definition alone: which codes a set expression
+       * yields depends on the respondent's answers, exactly as a `variable`
+       * source does. The export declares nothing positional for it and the
+       * lint says so; the answers are still stored and still addressable.
+       */
       return null;
   }
 }
@@ -592,6 +789,7 @@ export function loopVariables(
   const emit = (node: LoopFlowNode, parent: LoopContext | null) => {
     const items = resolveLoopItems(def, state, node, parent, quotaCounts);
     Object.assign(out, variablesFromItems(node, parent, items));
+    Object.assign(out, aggregateVariables(def, state, node, parent, items, quotaCounts));
     const children = directChildLoops(node);
     if (!children.length) return;
     items.forEach((it, i) => {
@@ -616,6 +814,66 @@ function variablesFromItems(node: LoopFlowNode, parent: LoopContext | null, item
       out[`${prefix}_ITEM_${n}_${col.name.toUpperCase()}`] = it.references[col.name] ?? null;
     }
   });
+  return out;
+}
+
+/**
+ * The loop's declared aggregates (§11, §12, §37) — `LOOP_BRAND_AVG_SCORE`,
+ * `LOOP_BRAND_HIGH_COUNT` — computed over what each iteration actually
+ * answered, and published like any other loop variable so later display
+ * logic, validation, masking and auto punch can read them with no new
+ * mechanism on their side.
+ *
+ * Reads the per-iteration answers through `lookupAnswer` with each item's own
+ * context, which is the same path the runtime stores them by. That is what
+ * makes this work for a loop of any size: the hand-written alternative
+ * (`avg(Q7_1, Q7_2, Q7_3)`) needs the programmer to know the iteration count
+ * when they write the expression, so it silently covers the wrong range the
+ * moment the loop's source changes.
+ *
+ * Unanswered iterations are skipped rather than counted as zero — an average
+ * over three answers and two blanks is the average of three answers, not a
+ * number dragged toward zero by iterations the respondent never reached.
+ */
+function aggregateVariables(
+  def: SurveyDefinition,
+  state: ResponseState,
+  node: LoopFlowNode,
+  parent: LoopContext | null,
+  items: LoopItem[],
+  quotaCounts?: QuotaCounts,
+): Record<string, LoopReferenceValue> {
+  const out: Record<string, LoopReferenceValue> = {};
+  const prefix = loopVariablePrefix(node, parent);
+  for (const agg of node.aggregates ?? []) {
+    const q = getQuestionByCodeOrVar(def, agg.questionRef);
+    if (!q) { out[`${prefix}_${agg.name.toUpperCase()}`] = null; continue; }
+
+    const values: number[] = [];
+    let matched = 0;
+    items.forEach((it, i) => {
+      const loop = contextFor(node, it, i + 1, items.length, parent);
+      const raw = lookupAnswer(state.answers, q.id, loop);
+      const answered = raw != null && raw !== "" && !(Array.isArray(raw) && raw.length === 0);
+      if (agg.op === "count") { if (answered) matched += 1; return; }
+      if (agg.op === "countIf") {
+        if (agg.where && evaluateCondition(agg.where, { def, state, quotaCounts, loop })) matched += 1;
+        return;
+      }
+      if (!answered) return;
+      const n = Number(Array.isArray(raw) ? raw.length : raw);
+      if (Number.isFinite(n)) values.push(n);
+    });
+
+    const name = `${prefix}_${agg.name.toUpperCase()}`;
+    switch (agg.op) {
+      case "count": case "countIf": out[name] = matched; break;
+      case "sum": out[name] = values.reduce((a, b) => a + b, 0); break;
+      case "avg": out[name] = values.length ? values.reduce((a, b) => a + b, 0) / values.length : null; break;
+      case "min": out[name] = values.length ? Math.min(...values) : null; break;
+      case "max": out[name] = values.length ? Math.max(...values) : null; break;
+    }
+  }
   return out;
 }
 

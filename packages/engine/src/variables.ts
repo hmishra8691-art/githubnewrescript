@@ -705,5 +705,7 @@ export function describeLoopSource(def: SurveyDefinition, node: LoopFlowNode): s
     case "listFill": return `List Fill ${def.listFills.find((l) => l.id === s.listFillId)?.name ?? s.listFillId}`;
     case "count": return typeof s.count === "number" ? `${s.count} iterations` : `a count from ${s.count.ref}`;
     case "variable": return `the list in ${s.ref}`;
+    case "setExpression":
+      return "a set expression";
   }
 }

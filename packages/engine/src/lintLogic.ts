@@ -16,7 +16,7 @@ import {
 import { getQuestionByCodeOrVar } from "./state.js";
 import { PIPE_TOKEN_RE, parsePipeBody } from "./pipingTokens.js";
 import { describeCycle, detectLogicCycles, orderIndex } from "./dependencies.js";
-import { loopNodes, loopVariableNames, maxLoopIterations, possibleLoopItems, questionIdsInLoop } from "./loops.js";
+import { MAX_LOOP_DEPTH, loopNodes, loopVariableNames, maxLoopIterations, possibleLoopItems, questionIdsInLoop } from "./loops.js";
 import { listFillVariableNames } from "./listFill.js";
 import { buildVariableDictionary } from "./variables.js";
 
@@ -727,6 +727,15 @@ export function lintLoops(def: SurveyDefinition): LogicIssue[] {
 
         if (!IDENT.test(n.loopVar)) push("error", "loopVar", `Loop "${n.id}": the name "${n.loopVar}" must be an identifier — it prefixes LOOP_… variables and can be piped as {{${n.loopVar}.label}}.`);
         if (ancestors.some((a) => a.loopVar === n.loopVar)) push("error", "loopVar", `Loop "${n.loopVar}" is nested inside another loop with the same name — {{${n.loopVar}.label}} could mean either.`);
+        /*
+         * Nesting depth (§42). Iterations multiply, so five levels of a
+         * ten-item loop is already 100 000 pages. The runtime caps each
+         * loop's own item count; this is where the author finds out, because
+         * a survey this shape is a mistake rather than a large survey.
+         */
+        if (ancestors.length + 1 > MAX_LOOP_DEPTH) {
+          push("error", "nesting", `Loop "${n.loopVar}" is nested ${ancestors.length + 1} deep — at most ${MAX_LOOP_DEPTH} levels are allowed, because iterations multiply.`);
+        }
 
         // column names
         const dup = columns.map((c) => c.name).filter((c, i, a) => a.indexOf(c) !== i);
