@@ -3,7 +3,7 @@ import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition } from "./evaluate.js";
 import type { LoopContext, ResponseState } from "./state.js";
 import { getQuestion, answerKey, loopKeySuffix } from "./state.js";
-import { loopContexts, loopVariables } from "./loops.js";
+import { loopContexts, loopVariables, registerIterationQuestionsResolver } from "./loops.js";
 import { seededShuffle, subSeed } from "./random.js";
 import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
@@ -626,3 +626,20 @@ export function setAnswer(
   state.answers[answerKey(questionId, loop ?? null)] = value as any;
   runCalculations(def, state, "on_change");
 }
+
+/*
+ * Tell the loop simulator how to decide which questions an iteration shows
+ * (§39). Registered rather than imported, because `loops.ts` is imported by
+ * this module and importing back would close the cycle — the same reason
+ * `carryforward.ts` registers its resolvers with `piping.ts`.
+ *
+ * `visibleQuestions` is the runtime's own function, so what the simulator
+ * lists and what the respondent is shown cannot drift apart.
+ */
+registerIterationQuestionsResolver((def, state, questionIds, loop) =>
+  visibleQuestions(
+    def,
+    { kind: "page", pageId: "__sim", showTitle: false, questionIds, loop, sectionPath: [], nodePath: [] },
+    state,
+  ).map((q) => ({ id: q.id, code: q.code })),
+);

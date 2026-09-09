@@ -419,9 +419,19 @@ export function MaskingBuilder({ q, patch, field = "mask" }: {
   const [mode, setMode] = React.useState<"visual" | "expression">("visual");
   const noun = FIELD_NOUN[field];
 
-  /** Any other question with options to draw from. */
+  /*
+   * Any other question a mask can read.
+   *
+   * Not only the ones with visible options: `codesFrom` handles a scalar
+   * answer (`[answer]`), an array, and a per-row object uniformly, so a
+   * hidden question populated programmatically, an embedded-data field, a
+   * calculated variable or a numeric answer are all perfectly good sources —
+   * and the masking spec asks for exactly that ("source Q1 is hidden but
+   * populated programmatically"). Only this filter stopped them being
+   * offered, which made an engine capability look like a missing feature.
+   */
   const sources = s.def.questions
-    .filter((x) => x.id !== q.id && (x.options.length > 0 || x.rows.length > 0))
+    .filter((x) => x.id !== q.id)
     .map((x) => ({
       id: x.id,
       code: x.code,
@@ -537,10 +547,20 @@ export function MaskingBuilder({ q, patch, field = "mask" }: {
                 <option value="disable">Show all, allow only these</option>
               </select>
             </label>
-            <label className="row" style={{ gap: 5, fontSize: 13, alignSelf: "flex-end" }}>
+            {/*
+              * Writes `protectAlwaysShow` — the explicit field — as well as the
+              * legacy `keepAlwaysShow`. The two settings used to be tangled:
+              * choosing "show none" for an unanswered source ALSO, silently,
+              * let the mask delete "Prefer not to say". They are separate
+              * decisions and this checkbox now decides only its own.
+              */}
+            <label className="row" style={{ gap: 5, fontSize: 13, alignSelf: "flex-end" }}
+              title="Independent of what happens when the source is unanswered">
               <input type="checkbox" data-testid="mask-keep-always"
-                checked={mask?.keepAlwaysShow ?? true}
-                onChange={(e) => patch({ [field]: { ...mask!, keepAlwaysShow: e.target.checked } } as Partial<Question>)} />
+                checked={mask?.protectAlwaysShow ?? mask?.keepAlwaysShow ?? true}
+                onChange={(e) => patch({
+                  [field]: { ...mask!, protectAlwaysShow: e.target.checked, keepAlwaysShow: e.target.checked },
+                } as Partial<Question>)} />
               Always keep Other / None / Don&apos;t know
             </label>
             <label className="f" style={{ marginBottom: 0, width: 210 }}>
@@ -556,7 +576,7 @@ export function MaskingBuilder({ q, patch, field = "mask" }: {
               </select>
             </label>
           </div>
-          {protectedItems.length > 0 && (mask?.keepAlwaysShow ?? true) && (
+          {protectedItems.length > 0 && (mask?.protectAlwaysShow ?? mask?.keepAlwaysShow ?? true) && (
             <div className="muted" style={{ fontSize: 12.5 }} data-testid="mask-protected">
               Kept whatever the mask returns: {protectedItems.map(itemLabel).join(", ")}
             </div>
@@ -595,9 +615,19 @@ export function PunchRules({ q, patch }: {
   const s = useStudio();
   const rules = q.punches ?? [];
   const listFills = (s.def.listFills ?? []).map((lf) => ({ id: lf.id, name: lf.name ?? lf.id }));
-  /** Any other question with options to draw from. */
+  /*
+   * Any other question a mask can read.
+   *
+   * Not only the ones with visible options: `codesFrom` handles a scalar
+   * answer (`[answer]`), an array, and a per-row object uniformly, so a
+   * hidden question populated programmatically, an embedded-data field, a
+   * calculated variable or a numeric answer are all perfectly good sources —
+   * and the masking spec asks for exactly that ("source Q1 is hidden but
+   * populated programmatically"). Only this filter stopped them being
+   * offered, which made an engine capability look like a missing feature.
+   */
   const sources = s.def.questions
-    .filter((x) => x.id !== q.id && (x.options.length > 0 || x.rows.length > 0))
+    .filter((x) => x.id !== q.id)
     .map((x) => ({
       id: x.id,
       code: x.code,

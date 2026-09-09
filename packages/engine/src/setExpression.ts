@@ -117,7 +117,7 @@ export function evaluateSetExpr(
        * depending on whether it gates a rule or fills one. Outside a loop, or
        * a reference the loop does not declare, this is empty — never a guess.
        */
-      const loop = findLoopScope(ctx.loop, null);
+      const loop = findLoopScope(ctx.loop, expr.scope ?? null);
       if (!loop) return [];
       const v = loopValue(loop, expr.ref || "code");
       return v == null ? [] : [v as string | number];
@@ -1191,6 +1191,53 @@ function isMultiValued(q: Question): boolean {
  * Punch every question on a page that asks for it. Called once per navigation
  * by the flow interpreter, never during render.
  */
+/**
+ * The TICKING half of a `preselect` / `display_and_preselect` mask.
+ *
+ * The mask's set expression says which options should already be chosen when
+ * the respondent arrives — "carry their earlier answer forward, pre-ticked,
+ * and let them adjust it". `applyMask` cannot do this: it is a pure view
+ * function over the option list, called on every render, and writing an
+ * answer from there would fight the respondent for control of the field.
+ * Prefill is where the engine legitimately writes answers, so it happens
+ * here, beside auto punch, using the same key function.
+ *
+ * Only ever writes into an UNANSWERED question. A preselect is a starting
+ * point, not a correction: re-applying it when the respondent has already
+ * unticked something would make that option impossible to remove.
+ */
+export function applyMaskPreselect(
+  q: Question,
+  ctx: EvalContext,
+  answerKeyFor: (q: Question) => string,
+): { key: string; value: unknown } | null {
+  const mask = q.mask;
+  if (!mask || (mask.action !== "preselect" && mask.action !== "display_and_preselect")) return null;
+  if (mask.when && !evaluateCondition(mask.when, ctx)) return null;
+
+  const key = answerKeyFor(q);
+  const existing = ctx.state.answers[key];
+  const answered = existing != null && existing !== "" && !(Array.isArray(existing) && existing.length === 0);
+  if (answered) return null;
+
+  const codes = evaluateSetExpr(mask.expr, ctx, { target: q }).map(String);
+  if (codes.length === 0) return null;
+
+  /*
+   * Restricted to options the question actually shows, so a preselect can
+   * never tick something the respondent cannot see or untick — the same rule
+   * the mask itself follows, where the set filters an existing list rather
+   * than inventing codes.
+   */
+  const visible = new Set(effectiveQuestion(q, ctx).options.map((o) => String(o.code)));
+  const usable = codes.filter((c) => visible.has(c));
+  if (usable.length === 0) return null;
+
+  const value = (isMultiValuedQuestion(q) ? usable : usable[0]) as AnswerValue;
+  ctx.state.answers[key] = value;
+  return { key, value };
+}
+
 export function prefillQuestions(
   questions: Question[],
   ctx: EvalContext,
@@ -1199,7 +1246,9 @@ export function prefillQuestions(
   const filled: string[] = [];
   for (const q of questions) {
     const done = applyPunches(q, ctx, answerKeyFor);
-    if (done) filled.push(q.id);
+    // a mask may pre-tick a question that carries no punch rules at all
+    const preset = applyMaskPreselect(q, ctx, answerKeyFor);
+    if (done || preset) filled.push(q.id);
   }
   return filled;
 }

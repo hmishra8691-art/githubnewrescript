@@ -95,7 +95,18 @@ export const LIST_VALUE_OPERATORS: ComparisonOperator[] = [
  */
 export const OPERATORS_BY_KIND: Record<string, ComparisonOperator[]> = {
   any: ["answered", "unanswered", "isEmpty", "isNotEmpty", "eq", "ne"],
-  choice: ["selected", "notSelected", "in", "notIn", "contains", "notContains"],
+  /*
+   * A single-response answer. The numeric comparisons are here because a
+   * matrix_single / matrix_dropdown cell holds a SCALE POINT, and "this row
+   * was rated 4 or better" is the most ordinary question anyone asks of a
+   * grid. The evaluator has always handled it correctly; only this table
+   * disallowed it, and the linter turned that into a blocking error — so a
+   * rule that worked was refused at author time.
+   */
+  choice: [
+    "selected", "notSelected", "in", "notIn", "contains", "notContains",
+    "gt", "gte", "lt", "lte", "between", "notBetween",
+  ],
   list: [
     "contains",
     "notContains",
@@ -129,6 +140,15 @@ export const OPERATORS_BY_KIND: Record<string, ComparisonOperator[]> = {
     "notRanked",
     "contains",
     "notContains",
+    /*
+     * A ranking answer is an ordered ARRAY of codes, and `evaluate.ts`
+     * implements all three list operators on arrays. "Did they rank any of
+     * these three brands at all?" is `containsAny` — it was implemented,
+     * offered nowhere, and rejected as an error if written.
+     */
+    "containsAny",
+    "containsAll",
+    "containsNone",
   ],
   date: ["dateBefore", "dateAfter", "dateEquals", "dateBetween", "answered", "unanswered"],
 };

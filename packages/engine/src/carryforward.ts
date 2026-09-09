@@ -933,8 +933,15 @@ function applyMask<T extends ItemWithLogic & { flags?: string[]; code: string | 
    * from `keepAlwaysShow` when that field is absent), so a config using
    * either field gets identical protection.
    */
+  /*
+   * `protectAlwaysShow` says so explicitly when it is set. When it is absent
+   * — every mask written before the field existed — protection is derived
+   * from the empty-source fallback exactly as it always was, so no stored
+   * mask changes behaviour. New masks can state the two independently.
+   */
+  const protectSpecials = mask.protectAlwaysShow ?? (fallback === "always_show_only");
   const protectedItem = (i: T) =>
-    fallback === "always_show_only" &&
+    protectSpecials &&
     (isAlwaysShow(i) ||
       !!i.flags?.some((f) =>
         ["other_specify", "none_of_above", "dont_know", "refused"].includes(f)));
@@ -948,9 +955,29 @@ function applyMask<T extends ItemWithLogic & { flags?: string[]; code: string | 
     case "remove":
       out = items.filter((i) => !selected.has(String(i.code)) || protectedItem(i));
       break;
-    case "preselect":
     case "disable":
-      // the list is untouched; the runtime reads the set for ticking/disabling
+      /*
+       * "Show all, but only these are answerable." Everything stays on
+       * screen; the items OUTSIDE the set become unanswerable, marked with
+       * the same `meta.disabled` flag an auto-punch `disable` rule sets a few
+       * hundred lines below, so the renderer needed no new concept and the
+       * two features cannot disagree about what "disabled" looks like.
+       *
+       * Until this existed the action was storable, offered in the picker,
+       * written into the exported spec — and applied by nothing at all, which
+       * is worse than not offering it: the programmer had every reason to
+       * believe the survey was configured.
+       */
+      out = items.map((i) =>
+        selected.has(String(i.code)) || protectedItem(i)
+          ? i
+          : ({ ...i, meta: { ...((i as { meta?: Record<string, unknown> }).meta ?? {}), disabled: true } } as T),
+      );
+      break;
+    case "preselect":
+      // the list is untouched; the TICKING happens in `applyMaskPreselect`,
+      // at prefill time, because writing an answer from inside a pure list
+      // resolver would re-run on every render.
       out = items;
       break;
   }

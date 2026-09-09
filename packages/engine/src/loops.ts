@@ -899,6 +899,14 @@ export interface LoopSimulation {
     code: string;
     label: string;
     references: Record<string, LoopReferenceValue>;
+    /**
+     * The questions this iteration would actually put on screen (§39) —
+     * resolved through `visibleQuestions`, in this iteration's own context,
+     * so per-iteration display logic is reflected: an iteration where the
+     * follow-up is hidden shows a shorter list than one where it is not.
+     * That is the whole value of the simulator over a count.
+     */
+    questions: { id: string; code: string }[];
   }[];
   /** columns the loop declares, so the simulator can show empty cells honestly */
   columns: string[];
@@ -909,6 +917,71 @@ export interface LoopSimulation {
  * special: it is `resolveLoopItems` against the state the Studio hands in,
  * which is the whole point — the simulator cannot disagree with the runtime.
  */
+/**
+ * How the simulator asks "which questions are visible on this page".
+ *
+ * Registered by `flow.ts` rather than imported from it: `flow.ts` already
+ * imports this module to resolve loop items, and importing back would close
+ * the cycle this package keeps open on purpose (`loopModel.ts` exists for the
+ * same reason). Same shape as `registerEffectiveRowsResolver` in `piping.ts`,
+ * which solves the identical problem for the option pipeline.
+ *
+ * Unregistered — a caller using the loop engine on its own — the simulator
+ * reports item counts and references exactly as it always did, and simply
+ * lists no questions.
+ */
+type IterationQuestionsResolver = (
+  def: SurveyDefinition,
+  state: ResponseState,
+  questionIds: string[],
+  loop: LoopContext,
+) => { id: string; code: string }[];
+let iterationQuestionsResolver: IterationQuestionsResolver | null = null;
+export function registerIterationQuestionsResolver(fn: IterationQuestionsResolver): void {
+  iterationQuestionsResolver = fn;
+}
+
+/**
+ * Which questions one iteration would show.
+ *
+ * Walks the loop's own children rather than the whole flow, and asks the same
+ * `visibleQuestions` the runtime asks — so a question hidden inside iteration
+ * 2 by a rule reading CURRENT_ITEM is absent from iteration 2's list here
+ * too, which is exactly what a programmer opens the simulator to check.
+ */
+function questionsForIteration(
+  def: SurveyDefinition,
+  state: ResponseState,
+  node: LoopFlowNode,
+  loop: LoopContext,
+): { id: string; code: string }[] {
+  if (!iterationQuestionsResolver) return [];
+  const out: { id: string; code: string }[] = [];
+  const seen = new Set<string>();
+  const walk = (nodes: FlowNode[]): void => {
+    for (const n of nodes) {
+      if (n.type === "page") {
+        for (const q of iterationQuestionsResolver!(def, state, n.questionIds, loop)) {
+          if (seen.has(q.id)) continue;
+          seen.add(q.id);
+          out.push({ id: q.id, code: q.code });
+        }
+        continue;
+      }
+      // nested loops are simulated on their own; here just their children's shape
+      if ("children" in n && Array.isArray((n as { children?: FlowNode[] }).children)) {
+        walk((n as { children: FlowNode[] }).children);
+      }
+      if (n.type === "branch") {
+        for (const b of n.branches) walk(b.children);
+        if (n.otherwise) walk(n.otherwise);
+      }
+    }
+  };
+  walk(node.children as FlowNode[]);
+  return out;
+}
+
 export function simulateLoop(
   def: SurveyDefinition,
   node: LoopFlowNode,
@@ -920,7 +993,13 @@ export function simulateLoop(
     loopId: node.id,
     loopVar: node.loopVar,
     count: contexts.length,
-    iterations: contexts.map((c) => ({ index: c.index, code: c.code, label: c.label, references: c.references ?? {} })),
+    iterations: contexts.map((c) => ({
+      index: c.index,
+      code: c.code,
+      label: c.label,
+      references: c.references ?? {},
+      questions: questionsForIteration(def, state, node, c),
+    })),
     columns: (node.references?.columns ?? []).map((c) => c.name),
   };
 }

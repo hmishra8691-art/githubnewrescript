@@ -57,7 +57,7 @@ export type SetExpr =
    * and a punch's trigger condition can never disagree about what the current
    * item is. Outside a loop this resolves to nothing.
    */
-  | { kind: "loopItem"; ref: string | null }
+  | { kind: "loopItem"; ref: string | null; scope?: string }
   /**
    * A calculated value, as a punch payload rather than a trigger — the same
    * `evaluateExpression` the calc engine and the condition `expr` source
@@ -88,6 +88,15 @@ export const SetExpr: z.ZodType<SetExpr, z.ZodTypeDef, unknown> = z.lazy(() =>
     z.object({
       kind: z.literal("loopItem"),
       ref: z.string().nullable().default(null),
+      /*
+       * Which loop, when loops nest — named by its `loopVar`, absent meaning
+       * the innermost, exactly as `ConditionSource.scope` already works.
+       * Without it an inner loop could only ever mask on its own item, so
+       * "show the products for the BRAND the outer loop is on" was
+       * inexpressible — a one-field omission rather than a design decision,
+       * since the condition engine had solved the same problem already.
+       */
+      scope: z.string().optional(),
     }),
     z.object({
       kind: z.literal("expr"),
@@ -146,6 +155,21 @@ export const OptionMask = z.object({
   keepAlwaysShow: z.boolean().default(true),
   /** See `MaskEmptySourceFallback`. Optional — derived from `keepAlwaysShow` when absent. */
   onEmptySource: MaskEmptySourceFallback.optional(),
+  /**
+   * Whether options flagged Always Show — and the four special codes — survive
+   * a mask that did not select them.
+   *
+   * Absent means "derive it from `onEmptySource`/`keepAlwaysShow`", which is
+   * exactly what every existing mask did and so changes nothing. Setting it
+   * explicitly separates two questions that were tangled together: "what
+   * should happen when the source is unanswered" and "may a mask remove my
+   * Other / None of the above". Those are different decisions, and deriving
+   * the second from the first meant the same option was kept or dropped for a
+   * reason the programmer never chose — picking `show_none` because an
+   * unanswered source should show nothing also, silently, made the mask able
+   * to delete "Prefer not to say".
+   */
+  protectAlwaysShow: z.boolean().optional(),
   /** Apply the mask only while this holds. */
   when: Condition.optional(),
   label: z.string().optional(),
