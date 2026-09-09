@@ -24,6 +24,7 @@ import { seededShuffle, subSeed, mulberry32 } from "./random.js";
 import { hasDisplayRulesFor, ruleVerdict, visibleByRules } from "./displayRules.js";
 import { hasOptionGroups, groupsFor, orderWithGroups } from "./optionGroups.js";
 import { activePunchRules } from "./punchChain.js";
+import { orderPunchRules } from "@rescript/schema";
 
 /**
  * THE OPTION PIPELINE.
@@ -994,7 +995,14 @@ function applyListPunches(
    * `hide` rule must not satisfy an `else` that a `select` rule was waiting
    * for, and the two are not even evaluated at the same point in the run.
    */
-  const listRules = (q.punches ?? []).filter((r) => LIST_ACTIONS.has(r.action));
+  // Priority (§29–§30) sorted before chaining, same as the answer-side chain
+  // in `setExpression.ts`: hide/show/enable/disable resolve as accumulated
+  // sets rather than last-write-wins, so ordering has no effect on the
+  // result here today, but sorting keeps the two punch chains consistent and
+  // means this stays correct if that ever changes. A stable sort on the
+  // default priority (0 everywhere) reorders nothing, so no existing survey
+  // is affected.
+  const listRules = orderPunchRules((q.punches ?? []).filter((r) => LIST_ACTIONS.has(r.action)));
   for (const rule of activePunchRules(listRules, (r) => evaluateCondition(r.when, ctx))) {
     const codes = evaluateSetExpr(rule.source, ctx, { target: q });
     const map = new Map(rule.mapping.map((m) => [String(m.from), m.to]));

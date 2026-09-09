@@ -186,6 +186,17 @@ export function LogicTracePanel() {
                 </span>
               </div>
               {r.trace && <TraceTree node={r.trace} />}
+              {r.applied && r.resolution && (
+                <div className="muted mono" style={{ fontSize: 12, marginLeft: 14 }} data-testid="punch-trace-resolution">
+                  {r.resolution.action === "clear"
+                    ? "→ clear"
+                    : `→ ${r.resolution.action}${
+                        r.resolution.targetRow !== undefined
+                          ? `[${r.resolution.targetRow}]${r.resolution.targetColumn ? `[${r.resolution.targetColumn}]` : ""}`
+                          : ""
+                      }: ${r.resolution.codes.join(", ") || "(no codes matched)"}`}
+                </div>
+              )}
               {!r.reached && (
                 <div className="muted" style={{ fontSize: 12, marginLeft: 14 }}>
                   An earlier branch of this chain already matched.
@@ -193,6 +204,20 @@ export function LogicTracePanel() {
               )}
             </div>
           ))}
+          {/*
+            * NAMED, NOT LEFT IMPLICIT (§29-§31, gap #3): when two independent
+            * applied rules disagree on the same code or cell, say so and say
+            * who won — the actual value read back from the same resolution
+            * `applyPunches` would use, not a guess.
+            */}
+          {punch.conflicts.length > 0 && (
+            <div className="card" style={{ marginTop: 6, padding: "6px 10px" }} data-testid="punch-conflicts">
+              <div className="flabel" style={{ margin: 0 }}>Conflicts resolved by priority</div>
+              {punch.conflicts.map((c, i) => (
+                <div key={i} className="muted" style={{ fontSize: 12.5 }} data-testid="punch-conflict-line">{c}</div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

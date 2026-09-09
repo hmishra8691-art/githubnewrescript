@@ -285,6 +285,16 @@ await studio.waitForFunction(() => document.activeElement?.classList.contains("r
 await studio.keyboard.type("Layout check");
 await studio.waitForTimeout(350);
 
+// The Properties panel's sections are independently collapsible and
+// default to collapsed unless already configured — expand Skip logic first.
+{
+  const head = '[data-testid="psec-head-skip-logic"]';
+  await studio.waitForSelector(head);
+  if ((await studio.getAttribute(head, "aria-expanded")) !== "true") {
+    await studio.click(head);
+    await studio.waitForTimeout(150);
+  }
+}
 await studio.click('.rightpanel >> text=+ skip rule');
 // conditions first: the builder opens empty, so build two and group them
 await studio.waitForSelector('.rightpanel [data-testid="logic-builder"]');

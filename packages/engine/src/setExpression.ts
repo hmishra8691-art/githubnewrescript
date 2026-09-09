@@ -5,10 +5,17 @@ import { SET_OPERATOR_LABEL } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition } from "./evaluate.js";
 import { codesFrom, effectiveQuestion } from "./carryforward.js";
-import { getQuestion, getQuestionByCodeOrVar, type AnswerValue, type ResponseState } from "./state.js";
+import {
+  getQuestion, getQuestionByCodeOrVar, findLoopScope, loopValue,
+  type AnswerValue, type ResponseState,
+} from "./state.js";
 import { activePunchRules } from "./punchChain.js";
 import { listFillLoopItems } from "./listFill.js";
 import { loopNodes, questionIdsInLoop } from "./loopModel.js";
+import { safeExpression } from "./calcContext.js";
+import { validateExpression } from "./calc.js";
+import { referencedNames } from "./embedded.js";
+import { orderPunchRules } from "@rescript/schema";
 
 /**
  * The set-expression engine: evaluate a nested set tree, and read or write it
@@ -101,6 +108,34 @@ export function evaluateSetExpr(
       return dedupe(listFillLoopItems(ctx.def, ctx.state, expr.listFillId).map((it) => it.code));
     }
 
+    case "loopItem": {
+      /*
+       * The current loop item as a PAYLOAD, not a trigger — resolved by the
+       * exact `findLoopScope`/`loopValue` pair the condition engine uses for
+       * `CURRENT_ITEM`/`CURRENT_ITEM.<ref>` (`evaluate.ts`'s `kind: "loop"`
+       * case), so "the current item" can never mean two different things
+       * depending on whether it gates a rule or fills one. Outside a loop, or
+       * a reference the loop does not declare, this is empty — never a guess.
+       */
+      const loop = findLoopScope(ctx.loop, null);
+      if (!loop) return [];
+      const v = loopValue(loop, expr.ref || "code");
+      return v == null ? [] : [v as string | number];
+    }
+
+    case "expr": {
+      /*
+       * A calculated value as a payload (§8, §17) — the same
+       * `evaluateExpression` a calculation and the condition `expr` source
+       * already run, through the same resolver (`safeExpression`), so a
+       * function calc already has works as a punch value from day one. Never
+       * throws: a broken expression punches nothing rather than crashing the
+       * page.
+       */
+      const v = safeExpression(expr.expression, ctx.def, ctx.state);
+      return v == null || v === "" ? [] : [v as string | number];
+    }
+
     case "complement": {
       const inside = new Set(evaluateSetExpr(expr.of, ctx, opts).map(key));
       return universe(opts.target, ctx).filter((c) => !inside.has(key(c)));
@@ -163,6 +198,25 @@ export interface PunchResult {
    * is written by logic too.
    */
   setValue: (string | number)[] | null;
+  /**
+   * Cell-targeted writes — one entry per distinct `targetRow`/`targetColumn`
+   * a rule addressed. `applyPunches` writes each of these into its own row
+   * (matrix) or row+column (composite grid) slot of the target's answer,
+   * completely independently of the whole-answer fields above, which is what
+   * makes a matrix cell punch safe: it can never overwrite a sibling row's
+   * value or replace the whole per-row answer object with a bare code.
+   */
+  cells: PunchCellWrite[];
+}
+
+export interface PunchCellWrite {
+  row: string | number;
+  /** Present only for a composite/custom-table cell; absent for a plain matrix row. */
+  column?: string;
+  select: (string | number)[];
+  deselect: (string | number)[];
+  clear: boolean;
+  setValue: (string | number)[] | null;
 }
 
 /**
@@ -175,6 +229,27 @@ export interface PunchResult {
  * written: an answer holding a code the option list has never contained is
  * unexportable and unanswerable.
  */
+/**
+ * Rules in the order `resolvePunches` should APPLY them so that, per target
+ * code, the last one applied wins — the mechanism every rule's select/
+ * deselect/set_value already relies on. Ascending priority (lowest first,
+ * highest last) makes the highest-priority rule the one that wins a
+ * conflict, exactly as `PunchRule.priority` documents; equal priority (the
+ * default, 0, for every rule that predates this field) is a stable no-op
+ * re-sort, so an existing survey with no priority set anywhere keeps its
+ * exact current behavior (original array order, last one wins ties).
+ *
+ * This is deliberately the reverse of `orderPunchRules` (schema), which
+ * sorts highest-first for DISPLAY — "the important rule at the top of the
+ * list" — a different, unrelated ordering need.
+ */
+function byApplicationOrder<T extends { priority?: number }>(rules: T[]): T[] {
+  return rules
+    .map((rule, index) => ({ rule, index }))
+    .sort((a, b) => (a.rule.priority ?? 0) - (b.rule.priority ?? 0) || a.index - b.index)
+    .map((x) => x.rule);
+}
+
 export function resolvePunches(
   q: Question,
   ctx: EvalContext,
@@ -189,6 +264,25 @@ export function resolvePunches(
   let clear = false;
   let setValue: (string | number)[] | null = null;
 
+  // Cell-targeted rules (`targetRow` set) write into their own row, or
+  // row+column for a composite/custom-table cell, instead of the question's
+  // whole answer — grouped by that address so two rules on the SAME cell
+  // still combine with the identical last-wins mechanic as the whole-answer
+  // path below, while rules on DIFFERENT cells can never collide. This is
+  // the fix for the matrix/composite scalar-overwrite bug: a cell write
+  // never touches `select`/`deselect`/`setValue` above, so `applyPunches`
+  // can never mistake a per-row answer object for a bare code to overwrite.
+  const cellMap = new Map<string, PunchCellWrite>();
+  const cellFor = (row: string | number, column?: string): PunchCellWrite => {
+    const k = column !== undefined ? `${key(row)}::${column}` : key(row);
+    let c = cellMap.get(k);
+    if (!c) {
+      c = { row, column, select: [], deselect: [], clear: false, setValue: null };
+      cellMap.set(k, c);
+    }
+    return c;
+  };
+
   /*
    * IF / ELSE IF / ELSE (§8, §23), resolved before anything is applied.
    *
@@ -199,30 +293,79 @@ export function resolvePunches(
    * even evaluated at the same point in the run.
    *
    * `walkPunchChain` calls the predicate only for rules it REACHES, so a
-   * branch the chain has already settled is not evaluated at all.
+   * branch the chain has already settled is not evaluated at all. Ordering
+   * by priority happens BEFORE chaining, not after: a chain's members share
+   * the default priority in every survey that doesn't use this field, so a
+   * stable sort leaves every chain exactly as authored (see
+   * `byApplicationOrder`) — priority is for INDEPENDENT rules, per the
+   * schema's own doc comment on `PunchRule.priority`.
    */
-  const answerRules = (q.punches ?? []).filter((r) => !LIST_ACTIONS.has(r.action));
+  const answerRules = byApplicationOrder(
+    (q.punches ?? []).filter((r) => !LIST_ACTIONS.has(r.action)),
+  );
   for (const rule of activePunchRules(answerRules, (r) => evaluateCondition(r.when, ctx))) {
     if (rule.recompute === "always") recomputeAlways = true;
 
-    if (rule.action === "clear") { clear = true; continue; }
+    const cellTarget = rule.targetRow !== undefined;
+    // The row (and, for a composite cell, the column) must actually exist on
+    // the target question — an address that doesn't resolve is a validation
+    // problem (see `validatePunchRule`), not a silent write to `existing[0]`
+    // or similar. Every source code is reported unmatched instead.
+    const rowExists = !cellTarget || q.rows.some((r) => key(r.code) === key(rule.targetRow!));
+    const column = rule.targetColumn ? q.columns.find((c) => c.id === rule.targetColumn) : undefined;
+    const columnExists = !rule.targetColumn || !!column;
+    if (cellTarget && (!rowExists || !columnExists)) {
+      if (!rule.ignoreUnmatched) {
+        unmatched.push(...evaluateSetExpr(rule.source, ctx, { target: q }));
+      }
+      continue;
+    }
+
+    // The codes this write may land on: the addressed column's own options
+    // for a composite cell, the shared row scale (`q.options`) for a plain
+    // matrix row, or — a numeric/text cell with no option list — anything
+    // (`null` below), matched unconditionally like `set_value` already is
+    // for a non-cell numeric/text target.
+    const cellOwn: Set<string> | null = !cellTarget
+      ? null
+      : column
+        ? (column.options.length > 0 ? new Set(column.options.map((o) => key(o.code))) : null)
+        : (q.options.length > 0 ? new Set(q.options.map((o) => key(o.code))) : null);
+
+    if (rule.action === "clear") {
+      if (cellTarget) cellFor(rule.targetRow!, rule.targetColumn).clear = true;
+      else clear = true;
+      continue;
+    }
 
     const sourceCodes = evaluateSetExpr(rule.source, ctx, { target: q });
     const map = new Map(rule.mapping.map((m) => [key(m.from), m.to]));
 
     if (rule.action === "set_value") {
-      setValue = sourceCodes.map((c) => (map.has(key(c)) ? map.get(key(c))! : c));
+      const values = sourceCodes.map((c) => (map.has(key(c)) ? map.get(key(c))! : c));
+      if (cellTarget) cellFor(rule.targetRow!, rule.targetColumn).setValue = values;
+      else setValue = values;
       continue;
     }
 
     for (const code of sourceCodes) {
       const mapped = map.has(key(code)) ? map.get(key(code))! : code;
-      if (!own.has(key(mapped))) {
+      const matches = cellTarget ? (cellOwn === null || cellOwn.has(key(mapped))) : own.has(key(mapped));
+      if (!matches) {
         if (!rule.ignoreUnmatched) unmatched.push(code);
         continue;
       }
-      // rules apply in order: a later rule on the same code wins
-      if (rule.action === "deselect") {
+      // rules apply in order: a later rule on the same code (or cell) wins
+      if (cellTarget) {
+        const cell = cellFor(rule.targetRow!, rule.targetColumn);
+        if (rule.action === "deselect") {
+          remove(cell.select, mapped);
+          cell.deselect.push(mapped);
+        } else {
+          remove(cell.deselect, mapped);
+          cell.select.push(mapped);
+        }
+      } else if (rule.action === "deselect") {
         remove(select, mapped);
         deselect.push(mapped);
       } else {
@@ -232,6 +375,11 @@ export function resolvePunches(
     }
   }
 
+  for (const cell of cellMap.values()) {
+    cell.select = dedupe(cell.select);
+    cell.deselect = dedupe(cell.deselect);
+  }
+
   return {
     select: dedupe(select),
     deselect: dedupe(deselect),
@@ -239,6 +387,7 @@ export function resolvePunches(
     recomputeAlways,
     clear,
     setValue,
+    cells: [...cellMap.values()],
   };
 }
 
@@ -281,7 +430,7 @@ function findListFillByRef(def: SurveyDefinition, ref: string): ListFill | undef
   );
 }
 
-interface Tok { kind: "ident" | "number" | "punct"; text: string; pos: number }
+interface Tok { kind: "ident" | "number" | "punct" | "exprBody"; text: string; pos: number }
 
 function tokenize(src: string): { tokens: Tok[]; error?: SetExprError } {
   const tokens: Tok[] = [];
@@ -304,6 +453,40 @@ function tokenize(src: string): { tokens: Tok[]; error?: SetExprError } {
     if (ident) {
       tokens.push({ kind: "ident", text: ident[0], pos: i });
       i += ident[0].length;
+
+      /*
+       * EXPR(...) carries a DIFFERENT language inside its parentheses — the
+       * calc engine's (`+`, `>`, quoted text, function calls) — none of which
+       * this tokenizer's own character set accepts. Once the identifier
+       * "expr" is immediately followed by "(" (whitespace allowed between),
+       * the whole balanced-paren span is captured as one opaque `exprBody`
+       * token instead of being re-tokenized character by character here, so
+       * `EXPR(SUM(Q1, Q2) + 5 > 10)` never hits "Unexpected character '+'"
+       * before parsing even starts.
+       */
+      if (ident[0].toLowerCase() === "expr") {
+        let k = i;
+        while (k < src.length && /\s/.test(src[k])) k += 1;
+        if (src[k] === "(") {
+          const openPos = k;
+          let depth = 0;
+          let j = k;
+          for (; j < src.length; j++) {
+            if (src[j] === "(") depth += 1;
+            else if (src[j] === ")") { depth -= 1; if (depth === 0) break; }
+          }
+          if (depth !== 0) {
+            return {
+              tokens,
+              error: { message: "EXPR(...) is missing its closing parenthesis", position: openPos },
+            };
+          }
+          tokens.push({ kind: "punct", text: "(", pos: openPos });
+          tokens.push({ kind: "exprBody", text: src.slice(openPos + 1, j), pos: openPos + 1 });
+          tokens.push({ kind: "punct", text: ")", pos: j });
+          i = j + 1;
+        }
+      }
       continue;
     }
     return { tokens, error: { message: `Unexpected character “${ch}”`, position: i } };
@@ -397,6 +580,44 @@ export function parseSetExpression(def: SurveyDefinition, src: string): SetParse
       return { kind: "listFill", listFillId: lf!.id };
     }
 
+    if (word(t) === "expr") {
+      const start = t!;
+      at += 1;
+      const open = peek();
+      if (!open || open.kind !== "punct" || open.text !== "(") {
+        fail("EXPR needs a calculation in parentheses, e.g. EXPR(SUM(Q1, Q2))", start.pos);
+      }
+      at += 1;
+      const body = peek();
+      if (!body || body.kind !== "exprBody") {
+        fail("EXPR(...) needs a calculation expression inside the parentheses", open!.pos);
+      }
+      at += 1;
+      const close = peek();
+      if (!close || close.kind !== "punct" || close.text !== ")") {
+        fail("Missing closing parenthesis", open!.pos);
+      }
+      at += 1;
+      const expression = body!.text.trim();
+      if (!expression) fail("EXPR(...) needs a calculation expression inside the parentheses", open!.pos);
+      const exprErr = validateExpression(expression);
+      if (exprErr) fail(`Invalid expression inside EXPR(...): ${exprErr}`, open!.pos);
+      return { kind: "expr", expression };
+    }
+
+    if (t!.kind === "ident") {
+      const segs = t!.text.split(".").filter(Boolean);
+      const head = segs[0]?.toLowerCase();
+      if (head === "current_item" || head === "current_item_code") {
+        at += 1;
+        if (segs.length > 2) fail(`“${t!.text}” has too many parts — use CURRENT_ITEM.<reference>`, t!.pos);
+        if (head === "current_item_code" && segs.length > 1) {
+          fail(`CURRENT_ITEM_CODE does not take a reference — use CURRENT_ITEM.${segs[1]} instead`, t!.pos);
+        }
+        return { kind: "loopItem", ref: head === "current_item_code" ? null : (segs[1] ?? null) };
+      }
+    }
+
     if (t!.kind !== "ident") fail(`Unexpected “${t!.text}”`, t!.pos);
 
     const segments = t!.text.split(".").filter(Boolean);
@@ -488,6 +709,14 @@ export function formatSetExpression(
         const lf = def.listFills.find((l) => l.id === node.listFillId);
         return `LISTFILL(${lf?.name ?? node.listFillId})`;
       }
+      case "loopItem":
+        return node.ref ? `CURRENT_ITEM.${node.ref}` : "CURRENT_ITEM_CODE";
+      case "expr":
+        // Prints for readability; a calc expression's own syntax (+, >, quoted
+        // text, …) is outside this tokenizer's grammar, so this form is
+        // display-only — edit it back via the Visual builder, not by retyping
+        // the printed text (the brief's own "where it can be parsed safely").
+        return `EXPR(${node.expression})`;
       case "complement":
         return `NOT ${render(node.of, false)}`;
       case "op": {
@@ -523,6 +752,10 @@ export function setExpressionSummary(
         const lf = def.listFills.find((l) => l.id === node.listFillId);
         return `what ${lf?.name ?? node.listFillId} allocated`;
       }
+      case "loopItem":
+        return node.ref ? `the current item's ${node.ref}` : "the current loop item";
+      case "expr":
+        return `the calculated value of "${node.expression}"`;
       case "complement":
         return `everything except ${render(node.of)}`;
       case "op": {
@@ -557,6 +790,17 @@ export function setExprSources(
   if (expr.kind === "listFill" && def) {
     const lf = def.listFills.find((l) => l.id === expr.listFillId);
     if (lf?.source.kind === "question") into.add(lf.source.questionId);
+  }
+  // `expr` reads whatever names its calc expression references — resolving
+  // them here (same as `calcReads` does for a calc variable's own
+  // dependencies) lets `validateSetExpr`'s self-mask check and the dependency
+  // graph both see through a calculated punch payload, not just a literal
+  // question reference.
+  if (expr.kind === "expr" && def) {
+    for (const name of referencedNames(expr.expression)) {
+      const q = getQuestionByCodeOrVar(def, name);
+      if (q) into.add(q.id);
+    }
   }
   if (expr.kind === "complement") setExprSources(expr.of, into, def);
   if (expr.kind === "op") {
@@ -594,7 +838,7 @@ export function validateSetExpr(
   const issues: SetExprIssue[] = [];
   if (!expr) return issues;
 
-  const sources = setExprSources(expr);
+  const sources = setExprSources(expr, new Set<string>(), def);
   if (sources.has(ownerId)) {
     const q = getQuestion(def, ownerId);
     issues.push({
@@ -620,6 +864,31 @@ export function validateSetExpr(
   if (empty(expr)) {
     issues.push({ level: "warning", message: "This mask has nothing in it, so it selects no options." });
   }
+
+  // `expr`/`loopItem` leaves (the calc-value and current-loop-item payloads):
+  // a bad expression or a loop reference with nowhere to run is a design-time
+  // mistake worth flagging now, not a silent `null`/`undefined` at runtime.
+  const ownerInLoop = loopNodes(def).some((info) => questionIdsInLoop(info.node).includes(ownerId));
+  const walk = (node: SetExpr): void => {
+    if (node.kind === "expr") {
+      const err = validateExpression(node.expression);
+      if (err) issues.push({ level: "error", message: `Invalid expression "${node.expression}": ${err}` });
+    } else if (node.kind === "loopItem" && !ownerInLoop) {
+      issues.push({
+        level: "warning",
+        message: node.ref
+          ? `CURRENT_ITEM.${node.ref} is only meaningful inside a loop — this question is not in one.`
+          : "CURRENT_ITEM_CODE is only meaningful inside a loop — this question is not in one.",
+      });
+    } else if (node.kind === "complement") {
+      walk(node.of);
+    } else if (node.kind === "op") {
+      walk(node.left);
+      walk(node.right);
+    }
+  };
+  walk(expr);
+
   return issues;
 }
 
@@ -774,13 +1043,95 @@ export function applyPunches(
   if (!q.punches?.length) return null;
 
   const result = resolvePunches(q, ctx);
-  const nothing = result.select.length === 0 && result.deselect.length === 0 && !result.clear && !result.setValue;
-  if (nothing) return null;
+  const nothingFlat =
+    result.select.length === 0 && result.deselect.length === 0 && !result.clear && !result.setValue;
+  if (nothingFlat && result.cells.length === 0) return null;
 
   const key = answerKeyFor(q);
-  let existing: unknown = ctx.state.answers[key];
+  const original: unknown = ctx.state.answers[key];
+  let wroteCell = false;
+
+  /*
+   * CELL-TARGETED WRITES (`targetRow`/`targetColumn`) — read and write one
+   * row, or one row+column of a composite grid, at a time. This is the fix
+   * for the confirmed bug: the old code path below writes `existing` itself,
+   * which for a matrix/composite answer (`Record<rowCode, value>`) meant a
+   * `select` action REPLACED THE WHOLE PER-ROW ANSWER OBJECT with one bare
+   * code. Every cell here is read from, and written back into, a shallow
+   * copy of the existing per-row object, so a rule on "Apple" can never
+   * touch "Banana", and a composite cell write never overwrites its row's
+   * other columns.
+   */
+  if (result.cells.length > 0) {
+    const base: Record<string, unknown> =
+      original && typeof original === "object" && !Array.isArray(original)
+        ? { ...(original as Record<string, unknown>) }
+        : {};
+    for (const cell of result.cells) {
+      const rowKey = String(cell.row);
+      const rowVal = base[rowKey];
+      const isRowObject = rowVal !== null && typeof rowVal === "object" && !Array.isArray(rowVal);
+      const cellAnswered = cell.column
+        ? isRowObject && (rowVal as Record<string, unknown>)[cell.column] !== undefined
+        : rowVal !== undefined;
+      if (cellAnswered && !result.recomputeAlways) continue;
+
+      if (cell.column) {
+        // one column of a composite/custom-table row — never disturbs the
+        // row's other columns.
+        const rowObj: Record<string, unknown> = isRowObject ? { ...(rowVal as Record<string, unknown>) } : {};
+        if (cell.setValue) {
+          rowObj[cell.column] = cell.setValue.length > 1 ? cell.setValue : cell.setValue[0];
+        } else if (cell.clear) {
+          delete rowObj[cell.column];
+        } else {
+          for (const c of cell.deselect) {
+            if (String(rowObj[cell.column]) === key0(c)) delete rowObj[cell.column];
+          }
+          if (cell.select.length) rowObj[cell.column] = cell.select[cell.select.length - 1];
+        }
+        base[rowKey] = rowObj;
+      } else {
+        // a plain matrix row — the row holds one scale value unless the
+        // question's own type is multi-valued per row.
+        if (cell.setValue) {
+          base[rowKey] = isMultiValued(q) ? cell.setValue : cell.setValue[0];
+        } else if (cell.clear) {
+          delete base[rowKey];
+        } else if (isMultiValued(q)) {
+          const current: (string | number)[] = Array.isArray(rowVal) ? [...(rowVal as (string | number)[])] : [];
+          const drop = new Set(cell.deselect.map(key0));
+          base[rowKey] = [
+            ...current.filter((c) => !drop.has(key0(c))),
+            ...cell.select.filter((c) => !current.some((x) => key0(x) === key0(c))),
+          ];
+        } else if (cell.select.length) {
+          base[rowKey] = cell.select[cell.select.length - 1];
+        } else if (cell.deselect.some((c) => key0(c) === String(rowVal))) {
+          delete base[rowKey];
+        }
+      }
+      wroteCell = true;
+    }
+    if (wroteCell) {
+      ctx.state.answers[key] = base as AnswerValue;
+    }
+  }
+
+  // WHOLE-ANSWER PATH — exactly the original behavior for every rule with no
+  // `targetRow`/`targetColumn`; a target that mixes cell and whole-answer
+  // rules is unusual, but the "answered" gate below is judged against the
+  // answer as it stood BEFORE this call (not after any cell write above),
+  // so the two paths can never see each other's writes as "already answered".
+  if (nothingFlat) {
+    return wroteCell ? { key, value: ctx.state.answers[key] } : null;
+  }
+
+  let existing: unknown = original;
   const answered = existing !== undefined;
-  if (answered && !result.recomputeAlways) return null;
+  if (answered && !result.recomputeAlways) {
+    return wroteCell ? { key, value: ctx.state.answers[key] } : null;
+  }
 
   const multi = Array.isArray(existing) || isMultiValued(q);
 

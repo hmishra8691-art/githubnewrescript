@@ -31,11 +31,12 @@
  * logic, so a trace can be incomplete but it can never disagree with what the
  * respondent got.
  */
-import type { Condition, ConditionRule, SurveyDefinition } from "@rescript/schema";
+import type { Condition, ConditionRule, PunchRule, Question, SurveyDefinition } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition, resolveSourceValue } from "./evaluate.js";
 import { conditionSummary } from "./logicSummary.js";
 import { findNamedExpression } from "./namedExpressions.js";
+import { evaluateSetExpr, resolvePunches, LIST_ACTIONS } from "./setExpression.js";
 
 export interface TraceNode {
   /** "and" | "or" | "not" for a group, or the operator for a rule. */
@@ -201,6 +202,15 @@ export function formatTrace(node: TraceNode, indent = 0): string {
 
 /* ------------------------------------------------------- the punch trace */
 
+/** What one rule itself resolved to — before conflict resolution against any other rule. */
+export interface PunchTraceResolution {
+  action: PunchRule["action"];
+  /** The codes this rule computed from its source (mapped, before matching against the target). */
+  codes: (string | number)[];
+  targetRow?: string | number;
+  targetColumn?: string;
+}
+
 export interface PunchTraceRule {
   ruleId: string;
   label: string;
@@ -209,6 +219,8 @@ export interface PunchTraceRule {
   held: boolean;
   applied: boolean;
   trace: TraceNode | null;
+  /** Present only when `applied` — what this rule itself resolved to. */
+  resolution?: PunchTraceResolution;
 }
 
 export interface PunchTrace {
@@ -217,6 +229,42 @@ export interface PunchTrace {
   rules: PunchTraceRule[];
   /** what the chain settled on, in words */
   outcome: string;
+  /**
+   * The actual combined write — the same computation `applyPunches` uses,
+   * priority and last-wins conflict resolution already settled (§29–§31).
+   */
+  finalValue: {
+    select: (string | number)[];
+    deselect: (string | number)[];
+    setValue: (string | number)[] | null;
+    clear: boolean;
+    cells: { row: string | number; column?: string; value: unknown }[];
+  };
+  /**
+   * Named explicitly, not left for the reader to spot: when two INDEPENDENT
+   * applied rules (not the same if/else-if/else chain, so both genuinely ran)
+   * proposed different values for the same code or cell, which one won and
+   * which was overridden. Chained rules can never conflict with each other —
+   * only one branch of a chain ever applies — so this only ever compares
+   * rules that are each other's peers.
+   */
+  conflicts: string[];
+}
+
+/**
+ * What one rule, on its own, resolves to — before it is weighed against any
+ * other applied rule. Mirrors the mapping step `resolvePunches` runs, but
+ * only for THIS rule, so the trace can show "Rule 2 proposed B" even when
+ * the final answer (below) ends up being something another rule wrote.
+ */
+function resolveOneRule(rule: PunchRule, ctx: EvalContext, q: Question): PunchTraceResolution {
+  if (rule.action === "clear") {
+    return { action: rule.action, codes: [], targetRow: rule.targetRow, targetColumn: rule.targetColumn };
+  }
+  const sourceCodes = evaluateSetExpr(rule.source, ctx, { target: q });
+  const map = new Map(rule.mapping.map((m) => [String(m.from), m.to]));
+  const codes = sourceCodes.map((c) => (map.has(String(c)) ? map.get(String(c))! : c));
+  return { action: rule.action, codes, targetRow: rule.targetRow, targetColumn: rule.targetColumn };
 }
 
 /**
@@ -226,6 +274,14 @@ export interface PunchTrace {
  * why — the specific thing the brief asks for, and the thing that makes a
  * three-branch chain debuggable at all. A rule that was skipped shows as
  * skipped rather than as false.
+ *
+ * Beyond that: what each APPLIED rule itself resolved to, the actual
+ * combined write once conflict resolution has run (`finalValue`, the same
+ * computation `applyPunches` uses), and — named explicitly rather than left
+ * for the reader to reconstruct — which target codes or cells had more than
+ * one independent rule proposing a different outcome, and what the target
+ * actually ended up with (§29–§31, gap #3: a trace that didn't used to say
+ * who won).
  */
 export function tracePunches(
   def: SurveyDefinition,
@@ -254,7 +310,10 @@ export function tracePunches(
     const held = mode === "else" && continues ? true : evaluateCondition(rule.when, ctx);
     const trace = mode === "else" && continues ? null : traceCondition(rule.when, ctx);
     if (held) { settled = true; if (!winner) winner = label; }
-    out.push({ ruleId: rule.id, label, mode, reached: true, held, applied: held, trace });
+    out.push({
+      ruleId: rule.id, label, mode, reached: true, held, applied: held, trace,
+      resolution: held ? resolveOneRule(rule, ctx, q) : undefined,
+    });
   }
 
   const appliedRules = out.filter((x) => x.applied);
@@ -264,5 +323,74 @@ export function tracePunches(
       ? `${appliedRules[0].label} applied.`
       : `${appliedRules.length} rules applied, in order: ${appliedRules.map((x) => x.label).join(", ")}.`;
 
-  return { questionId, questionCode: q.code, rules: out, outcome };
+  const result = resolvePunches(q, ctx);
+  const finalValue: PunchTrace["finalValue"] = {
+    select: result.select,
+    deselect: result.deselect,
+    setValue: result.setValue,
+    clear: result.clear,
+    cells: result.cells.map((c) => ({
+      row: c.row,
+      column: c.column,
+      value: c.setValue
+        ? (c.setValue.length > 1 ? c.setValue : c.setValue[0])
+        : c.select.length
+          ? c.select[c.select.length - 1]
+          : undefined,
+    })),
+  };
+
+  // Group every applied answer-side rule's proposal by the target it
+  // touched — a cell, the whole answer's value, or one code's on/off state —
+  // and flag any target where more than one rule proposed a DIFFERENT
+  // outcome. List-action rules (show/hide/enable/disable) act on the option
+  // list, not "a value" in this sense, so they are outside `finalValue` and
+  // this comparison, matching the scope of the underlying bug fix (gap #1).
+  const groups = new Map<string, { describe: string; rules: { label: string; value: string }[] }>();
+  const addToGroup = (groupKey: string, describe: string, label: string, value: string) => {
+    let g = groups.get(groupKey);
+    if (!g) { g = { describe, rules: [] }; groups.set(groupKey, g); }
+    g.rules.push({ label, value });
+  };
+  for (const r of appliedRules) {
+    const res = r.resolution;
+    if (!res || LIST_ACTIONS.has(res.action) || res.action === "clear") continue;
+    if (res.targetRow !== undefined) {
+      const k = `cell:${res.targetRow}:${res.targetColumn ?? ""}`;
+      const desc = `${q.code}[${res.targetRow}]${res.targetColumn ? `[${res.targetColumn}]` : ""}`;
+      addToGroup(k, desc, r.label, res.codes.join(", "));
+    } else if (res.action === "set_value") {
+      addToGroup("wholeValue", `${q.code}'s value`, r.label, res.codes.join(", "));
+    } else {
+      for (const code of res.codes) {
+        addToGroup(
+          `code:${code}`,
+          `code "${code}" on ${q.code}`,
+          r.label,
+          res.action === "deselect" ? "deselected" : "selected",
+        );
+      }
+    }
+  }
+
+  const conflicts: string[] = [];
+  for (const [groupKey, g] of groups) {
+    if (new Set(g.rules.map((x) => x.value)).size < 2) continue; // everyone touching this target agreed
+    let finalDesc: string;
+    if (groupKey.startsWith("cell:")) {
+      const [, row, col] = groupKey.split(":");
+      const cell = finalValue.cells.find((c) => String(c.row) === row && String(c.column ?? "") === col);
+      finalDesc = cell ? JSON.stringify(cell.value) : "(no value written)";
+    } else if (groupKey === "wholeValue") {
+      finalDesc = JSON.stringify(finalValue.setValue);
+    } else {
+      const code = groupKey.slice("code:".length);
+      finalDesc = finalValue.select.some((c) => String(c) === code) ? "selected" : "deselected";
+    }
+    conflicts.push(
+      `${g.describe}: ${g.rules.map((x) => `${x.label} → ${x.value}`).join("; ")} — final: ${finalDesc}.`,
+    );
+  }
+
+  return { questionId, questionCode: q.code, rules: out, outcome, finalValue, conflicts };
 }

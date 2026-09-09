@@ -3,7 +3,7 @@ import React from "react";
 import type { PunchRule, Question } from "@rescript/schema";
 import {
   optionRule, simpleView, parsePunchExpression, formatPunchExpression, allPunchRules,
-  formatCondition, PUNCH_ACTION_LABELS, LIST_ACTIONS,
+  formatCondition, PUNCH_ACTION_LABELS, LIST_ACTIONS, isOptionLevelPunch,
   type SimplePunch, type PunchActionKind,
   stripHtmlText,
 } from "@rescript/engine";
@@ -331,7 +331,11 @@ function AddRule({ defaultTarget }: { defaultTarget?: Question }) {
 export function AutoPunchPanel() {
   const s = useStudio();
   const ops = useRuleOps();
-  const all = allPunchRules(s.def);
+  // Only option-level rules round-trip through this DSL (see
+  // `isOptionLevelPunch`); a matrix/composite cell rule or one carrying an
+  // explicit priority is edited from its question's "Auto-select from a
+  // set" section instead, where the address and priority have real controls.
+  const all = allPunchRules(s.def).filter(({ rule }) => isOptionLevelPunch(rule) || simpleView(rule));
   return (
     <div data-testid="auto-punch-panel">
       <p className="muted" style={{ fontSize: 13 }}>
@@ -356,7 +360,7 @@ export function AutoPunchPanel() {
 export function AutoPunchRows({ q }: { q: Question }) {
   const s = useStudio();
   const ops = useRuleOps();
-  const rules = (q.punches ?? []).filter((r) => simpleView(r) || r.source.kind === "codes");
+  const rules = (q.punches ?? []).filter((r) => simpleView(r) || isOptionLevelPunch(r));
   /*
    * Chain problems the engine cannot refuse: an ELSE carrying a condition
    * that will be ignored, an ELSE IF with none, a rule stranded after the

@@ -2,16 +2,17 @@
 import { CountInput } from "./CountInput";
 import React from "react";
 import type { Question, ValidationRule, SkipRule, ListOperation, ListSource } from "@rescript/schema";
-import { validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary } from "@rescript/engine";
+import { validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups } from "@rescript/engine";
 import { resolveVariant, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript/schema";
 import { useStudio, selectedQuestion, uid } from "./store";
 import { useCanvas } from "../canvas/CanvasContext";
 import { ElementPanel } from "../canvas/ElementPanel";
 import { OptionalCondition, ConditionEditor } from "./ConditionBuilder";
 import { LoopScopeProvider, loopsAroundQuestion } from "./loopScope";
-import { MaskingBuilder } from "./MaskingBuilder";
+import { MaskingBuilder, PunchRules } from "./MaskingBuilder";
 import { QualitySettings } from "./QualitySettings";
 import { OptionGroupsEditor } from "./OptionGroupsEditor";
+import { CollapsibleSection } from "./CollapsibleSection";
 
 /** Context-aware validation (req §6/§19): only offer rules that make sense
  *  for the question type. */
@@ -521,11 +522,17 @@ export function PropertiesPanel() {
    * piping picker can offer the loops' reference columns — and only theirs.
    */
   const loopScope = loopsAroundQuestion(s.def, q.id);
+  const [search, setSearch] = React.useState("");
+  const showSec = (title: string) =>
+    !search.trim() || title.toLowerCase().includes(search.trim().toLowerCase());
 
   return (
     <LoopScopeProvider loops={loopScope}>
     <div>
       <h2>{q.code} properties</h2>
+      <input className="input psec-search" data-testid="properties-search"
+        placeholder="Search properties…" value={search}
+        onChange={(e) => setSearch(e.target.value)} />
       {loopScope.length > 0 && (
         <div className="chip" data-testid="in-loop-chip" style={{ marginBottom: 6 }} title={`Inside loop${loopScope.length > 1 ? "s" : ""}: ${loopScope.map((l) => l.loopVar).join(" › ")}. Answers are stored per iteration; {{loop.…}} pipes the current item.`}>
           in loop “{loopScope[0].loopVar}”{loopScope.length > 1 ? ` (nested in ${loopScope.slice(1).map((l) => l.loopVar).join(", ")})` : ""}
@@ -554,7 +561,8 @@ export function PropertiesPanel() {
       )}
 
       {/* Logic reads as IF → THEN: the conditions, then what happens. */}
-      <h3 className="sec">Display logic</h3>
+      {showSec("Display logic") && (
+      <CollapsibleSection id="display-logic" title="Display logic" active={!!q.displayLogic}>
       <div className="logic-rule">
         <div className="logic-if">IF</div>
         <OptionalCondition label="these conditions hold"
@@ -564,12 +572,17 @@ export function PropertiesPanel() {
           <span className="logic-then-word">THEN</span> show <strong>{q.code}</strong>
         </div>
       </div>
+      </CollapsibleSection>
+      )}
 
-      <h3 className="sec">Skip logic</h3>
+      {showSec("Skip logic") && (
+      <CollapsibleSection id="skip-logic" title="Skip logic" active={(q.skipLogic?.length ?? 0) > 0}>
       <SkipLogicEditor q={q} patch={patch} />
+      </CollapsibleSection>
+      )}
 
-      {hasCap("carry_forward") && (<>
-      <h3 className="sec">Carry-forward (dynamic options)</h3>
+      {hasCap("carry_forward") && showSec("Carry-forward") && (
+      <CollapsibleSection id="carry-forward" title="Carry-forward (dynamic options)" active={!!q.carryForward}>
       {q.carryForward ? (
         <div className="card" style={{ padding: 10 }}>
           <div className="row" style={{ flexWrap: "wrap" }}>
@@ -612,7 +625,8 @@ export function PropertiesPanel() {
           + carry forward from another question
         </button>
       )}
-      </>)}
+      </CollapsibleSection>
+      )}
 
       {/*
         * OPTION GROUPS (§13–30), directly above Randomization on purpose.
@@ -623,13 +637,14 @@ export function PropertiesPanel() {
         * The lint inside the groups panel says so; putting them adjacent means
         * the setting that is being overridden is visible at the same time.
         */}
-      {hasCap("randomization") && (<>
-      <h3 className="sec">Option groups</h3>
+      {hasCap("randomization") && showSec("Option groups") && (
+      <CollapsibleSection id="option-groups" title="Option groups" active={hasOptionGroups(q, "options")}>
       <OptionGroupsEditor q={q} patch={patch} />
-      </>)}
+      </CollapsibleSection>
+      )}
 
-      {hasCap("randomization") && (<>
-      <h3 className="sec">Randomization</h3>
+      {hasCap("randomization") && showSec("Randomization") && (
+      <CollapsibleSection id="randomization" title="Randomization" active={q.randomization?.enabled ?? false}>
       <div className="row" style={{ flexWrap: "wrap" }}>
         <label className="row" style={{ gap: 4 }}>
           <input type="checkbox" checked={q.randomization?.enabled ?? false}
@@ -727,13 +742,17 @@ export function PropertiesPanel() {
         </>
       )}
 
-      </>)}
+      </CollapsibleSection>
+      )}
 
-      {hasCap("list_logic") && (<>
-      <h3 className="sec">Masking (dynamic option sets)</h3>
+      {hasCap("list_logic") && showSec("Masking") && (
+      <CollapsibleSection id="masking" title="Masking (dynamic option sets)" active={!!q.mask}>
       <MaskingBuilder q={q} patch={patch} field="mask" />
+      </CollapsibleSection>
+      )}
 
-      <h3 className="sec">List logic (from previous questions)</h3>
+      {hasCap("list_logic") && showSec("List logic") && (
+      <CollapsibleSection id="list-logic" title="List logic (from previous questions)" active={(q.listLogic?.length ?? 0) > 0}>
       <p className="muted" style={{ fontSize: 12.5, marginTop: -2 }}>
         Include / exclude / prioritize this question&apos;s options based on what an earlier
         question selected or displayed. Rules apply in order, before sorting and randomization.
@@ -782,10 +801,14 @@ export function PropertiesPanel() {
         })}>
         + list rule
       </button>
+      </CollapsibleSection>
+      )}
 
-      <h3 className="sec">List operations (intersection / union / difference)</h3>
+      {hasCap("list_logic") && showSec("List operations") && (
+      <CollapsibleSection id="list-operations" title="List operations (intersection / union / difference)" active={(q.optionPipeline?.length ?? 0) > 0}>
       <ListOperationsEditor q={q} patch={patch} />
-      </>)}
+      </CollapsibleSection>
+      )}
 
       {/*
        * The identical mask engine, aimed at rows and columns instead of
@@ -793,20 +816,39 @@ export function PropertiesPanel() {
        * (matrix/grid/composite), matching the universal masking brief's
        * "the UI shows only the dimensions this question type supports."
        */}
-      {q.rows.length > 0 && (<>
-      <h3 className="sec">Row masking (dynamic row sets)</h3>
+      {q.rows.length > 0 && showSec("Row masking") && (
+      <CollapsibleSection id="row-masking" title="Row masking (dynamic row sets)" active={!!q.rowMask}>
       <MaskingBuilder q={q} patch={patch} field="rowMask" />
-      </>)}
+      </CollapsibleSection>
+      )}
 
-      {q.columns.length > 0 && (<>
-      <h3 className="sec">Column masking (dynamic column sets)</h3>
+      {q.columns.length > 0 && showSec("Column masking") && (
+      <CollapsibleSection id="column-masking" title="Column masking (dynamic column sets)" active={!!q.columnMask}>
       <MaskingBuilder q={q} patch={patch} field="columnMask" />
-      </>)}
+      </CollapsibleSection>
+      )}
 
-      <h3 className="sec">Validation rules</h3>
+      {/*
+       * ITS OWN TOP-LEVEL SECTION, not nested inside masking — Auto Punch
+       * targets any question type (numeric, hidden, matrix/composite cells,
+       * not just the choice-like types masking applies to), so it is not
+       * gated behind masking's capability check.
+       */}
+      {showSec("Auto punch") && (
+      <CollapsibleSection id="auto-punch" title="Auto punch" active={(q.punches?.length ?? 0) > 0}>
+      <PunchRules q={q} patch={patch} />
+      </CollapsibleSection>
+      )}
+
+      {showSec("Validation rules") && (
+      <CollapsibleSection id="validation-rules" title="Validation rules" active={(q.validation?.length ?? 0) > 0}>
       <ValidationEditor q={q} patch={patch} />
+      </CollapsibleSection>
+      )}
 
-      <h3 className="sec">State</h3>
+      {showSec("State") && (
+      <CollapsibleSection id="state" title="State"
+        active={q.settings.hidden || q.settings.readOnly || !!q.settings.defaultValue}>
       <div className="row" style={{ flexWrap: "wrap" }}>
         <label className="row" style={{ gap: 4, fontSize: 13 }}>
           <input type="checkbox" checked={q.settings.hidden}
@@ -821,8 +863,12 @@ export function PropertiesPanel() {
         <input className="input mono" value={String(q.settings.defaultValue ?? "")}
           placeholder='static, or {{Q1}} piped'
           onChange={(e) => patch({ settings: { ...q.settings, defaultValue: e.target.value || undefined } })} /></label>
+      </CollapsibleSection>
+      )}
 
-      <h3 className="sec">Custom code</h3>
+      {showSec("Custom code") && (
+      <CollapsibleSection id="custom-code" title="Custom code"
+        active={!!q.customJs || !!q.customCss || !!q.customHtml}>
       <label className="f"><span>Custom JavaScript (question scope)</span>
         <textarea className="ta code" style={{ minHeight: 90 }} value={q.customJs ?? ""}
           placeholder="// runs via the script host; use get()/set()/setCalc()…"
@@ -837,6 +883,8 @@ export function PropertiesPanel() {
       <label className="f"><span>Programmer notes</span>
         <textarea className="ta" value={q.notes ?? ""}
           onChange={(e) => patch({ notes: e.target.value || undefined })} /></label>
+      </CollapsibleSection>
+      )}
     </div>
     </LoopScopeProvider>
   );

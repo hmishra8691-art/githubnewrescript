@@ -71,6 +71,15 @@ const addQuestion = async (text, options) => {
 const select = async (idx) => {
   await page.click(`.qcard >> nth=${idx}`);
   await page.waitForSelector(".qcard.selected");
+  // Properties panel sections are independently collapsible and default to
+  // collapsed unless already configured (Part B of the universal auto-punch
+  // brief) — expand Option groups before looking inside it. Idempotent.
+  const head = '[data-testid="psec-head-option-groups"]';
+  await page.waitForSelector(head);
+  if ((await page.getAttribute(head, "aria-expanded")) !== "true") {
+    await page.click(head);
+    await page.waitForTimeout(150);
+  }
   await page.waitForSelector('[data-testid="option-groups"]');
 };
 

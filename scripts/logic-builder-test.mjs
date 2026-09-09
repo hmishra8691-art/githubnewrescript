@@ -51,6 +51,15 @@ const openQuestionLogic = async () => {
   const cards = await page.$$(".qcard");
   await cards[cards.length - 1].click();
   await page.waitForSelector(".rightpanel");
+  // The Properties panel's sections are independently collapsible and
+  // default to collapsed unless already configured — expand Display logic
+  // before looking for its "+ add" control.
+  const head = '[data-testid="psec-head-display-logic"]';
+  await page.waitForSelector(head);
+  if ((await page.getAttribute(head, "aria-expanded")) !== "true") {
+    await page.click(head);
+    await page.waitForTimeout(150);
+  }
   // the display-logic builder sits behind "+ add" on "Show this question when"
   const addBtn = await page.$('[data-testid="optional-add"]');
   if (addBtn) await addBtn.click();

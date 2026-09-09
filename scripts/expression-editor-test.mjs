@@ -46,6 +46,20 @@ const goTab = async (name) => {
 const displayLogicOf = (def, qid = "q_age") =>
   def.questions.find((q) => q.id === qid)?.displayLogic;
 
+/**
+ * The Properties panel's sections are independently collapsible and default
+ * to collapsed unless already configured — expand one before acting inside
+ * it. Idempotent.
+ */
+const ensureSectionOpen = async (id) => {
+  const head = `[data-testid="psec-head-${id}"]`;
+  await page.waitForSelector(head);
+  if ((await page.getAttribute(head, "aria-expanded")) !== "true") {
+    await page.click(head);
+    await page.waitForTimeout(150);
+  }
+};
+
 /** Open display logic on Q3 and switch to Expression mode. */
 const openExpression = async () => {
   await goTab("Questions");
@@ -53,6 +67,7 @@ const openExpression = async () => {
   const cards = await page.$$(".qcard");
   await cards[cards.length - 1].click();
   await page.waitForSelector(".rightpanel");
+  await ensureSectionOpen("display-logic");
   const add = await page.$('[data-testid="optional-add"]');
   if (add) await add.click();
   await page.waitForSelector('[data-testid="logic-mode-bar"]');
@@ -84,6 +99,7 @@ await page.waitForSelector(".qcard");
 let cards = await page.$$(".qcard");
 await cards[cards.length - 1].click();
 await page.waitForTimeout(300);
+await ensureSectionOpen("display-logic");
 await page.click('[data-testid="optional-add"]');
 await page.waitForSelector('[data-testid="logic-mode-bar"]');
 // the visual builder is what opens — the expression editor is opt-in

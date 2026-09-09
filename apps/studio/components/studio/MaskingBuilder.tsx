@@ -7,7 +7,7 @@ import { SET_OPERATOR_LABEL, SET_SELECTION_LABEL } from "@rescript/schema";
 import {
   parseSetExpression, formatSetExpression, setExpressionSummary,
   setExprToChain, appendSet, replaceSetAt, removeSetAt, setChainOperator,
-  bracketSetPair, validateSetExpr, pipelineToSetExpr,
+  bracketSetPair, validateSetExpr, pipelineToSetExpr, isOptionLevelPunch,
   type SetExprError,
   stripHtmlText,
 } from "@rescript/engine";
@@ -15,8 +15,12 @@ import { useStudio, uid } from "./store";
 import { OptionalCondition } from "./ConditionBuilder";
 import { AutoPunchRows } from "./AutoPunchEditor";
 
-/** Option-level rules (a literal code set) are edited by AutoPunchRows, not the set chain. */
-const isOptionLevel = (r: PunchRule) => r.source.kind === "codes";
+/**
+ * Option-level rules (a literal code set, no cell target, no priority) are
+ * edited by AutoPunchRows instead — see `isOptionLevelPunch` for why those
+ * two extra fields force a rule to stay here instead.
+ */
+const isOptionLevel = isOptionLevelPunch;
 
 /**
  * Visual masking: which options a question shows, computed from other
@@ -120,6 +124,48 @@ function SetRow({ node, sources, listFills, onChange, onRemove, onBracket, canBr
             <option key={lf.id} value={lf.id}>{lf.name}</option>
           ))}
         </select>
+        <button className="btn small danger" onClick={onRemove}>×</button>
+      </div>
+    );
+  }
+
+  if (node.kind === "loopItem") {
+    /*
+     * The current loop item as a PAYLOAD (§24) — "punch Q20 with the loop's
+     * current product", not a trigger. Leave the reference blank for the
+     * item's own code (`CURRENT_ITEM_CODE`); name one of the loop's own
+     * reference columns (e.g. `Product_ID`) to punch that column's value
+     * instead (`CURRENT_ITEM.Product_ID`). Meaningless outside a loop — the
+     * validator (`validateSetExpr`) flags that case rather than resolving to
+     * nothing silently.
+     */
+    return (
+      <div className="mb-row" data-testid="mask-row">
+        <span className="mb-kind">Loop Item</span>
+        <input className="input mono grow" data-testid="mask-loopitem-ref"
+          placeholder="leave blank for the item's own code, or name a reference column"
+          value={node.ref ?? ""}
+          onChange={(e) => onChange({ kind: "loopItem", ref: e.target.value.trim() || null })} />
+        <button className="btn small danger" onClick={onRemove}>×</button>
+      </div>
+    );
+  }
+
+  if (node.kind === "expr") {
+    /*
+     * A calculated value as a payload (§8, §17) — the same expression
+     * language a Calculation or a condition's Expression source already
+     * accepts (`SUM(...)`, `Q1 + Q2`, …), evaluated through the identical
+     * resolver so a function calc already has works as a punch value with no
+     * separate syntax to learn.
+     */
+    return (
+      <div className="mb-row" data-testid="mask-row">
+        <span className="mb-kind">Calculated Value</span>
+        <input className="input mono grow" data-testid="mask-expr"
+          placeholder="e.g. SUM(Q1, Q2)"
+          value={node.expression}
+          onChange={(e) => onChange({ kind: "expr", expression: e.target.value })} />
         <button className="btn small danger" onClick={onRemove}>×</button>
       </div>
     );
@@ -519,8 +565,6 @@ export function MaskingBuilder({ q, patch, field = "mask" }: {
             onChange={(when) => patch({ [field]: { ...mask!, when } } as Partial<Question>)} />
         </>
       )}
-
-      {field === "mask" && <PunchRules q={q} patch={patch} sources={sources} />}
     </div>
   );
 }
@@ -536,15 +580,29 @@ export function MaskingBuilder({ q, patch, field = "mask" }: {
  * across and writing into a question the respondent may not have seen.
  * "FOR EACH option IN Q5.Selected → punch the matching option" is this rule
  * with no mapping, which is why there is no separate loop to configure.
+ *
+ * Its own top-level Properties panel section (Part B) rather than nested
+ * inside masking — Auto Punch targets ANY question type (numeric, hidden,
+ * matrix/composite cells, not just choice-like ones masking applies to), so
+ * it is no longer gated behind masking's own capability check. It computes
+ * its own source list rather than taking one as a prop, so it has no
+ * dependency on `MaskingBuilder` beyond the shared `SetChainEditor` pieces.
  */
-function PunchRules({ q, patch, sources }: {
+export function PunchRules({ q, patch }: {
   q: Question;
   patch(p: Partial<Question>): void;
-  sources: { id: string; code: string; label: string }[];
 }) {
   const s = useStudio();
   const rules = q.punches ?? [];
   const listFills = (s.def.listFills ?? []).map((lf) => ({ id: lf.id, name: lf.name ?? lf.id }));
+  /** Any other question with options to draw from. */
+  const sources = s.def.questions
+    .filter((x) => x.id !== q.id && (x.options.length > 0 || x.rows.length > 0))
+    .map((x) => ({
+      id: x.id,
+      code: x.code,
+      label: stripHtmlText(x.text).slice(0, 40) || x.variableName,
+    }));
 
   const setRule = (i: number, next: Partial<PunchRule>) =>
     patch({ punches: rules.map((r, j) => (j === i ? { ...r, ...next } as PunchRule : r)) });
@@ -577,10 +635,18 @@ function PunchRules({ q, patch, sources }: {
       <h3 className="sec" style={{ marginTop: 16 }}>Auto-select from a set (punching)</h3>
       <p className="muted" style={{ fontSize: 12.5, marginTop: -4 }}>
         Tick options in this question from another question&apos;s answers. Codes that match
-        carry across; use a mapping when the two lists number things differently.
+        carry across; use a mapping when the two lists number things differently. A matrix or
+        composite target can also be addressed cell by cell, and independent rules that disagree
+        are settled by priority — see the Logic tab&apos;s trace for which rule actually won.
       </p>
 
-      {rules.filter((r) => !isOptionLevel(r)).map((rule) => { const i = rules.indexOf(rule); return (
+      {rules.filter((r) => !isOptionLevel(r)).map((rule) => { const i = rules.indexOf(rule);
+        // A row/column address that no longer resolves — the target's rows
+        // or columns changed since this rule was written — surfaced inline
+        // rather than left to fail silently when the rule runs.
+        const rowOk = rule.targetRow === undefined || q.rows.some((r) => String(r.code) === String(rule.targetRow));
+        const columnOk = rule.targetColumn === undefined || q.columns.some((c) => c.id === rule.targetColumn);
+        return (
         <div key={rule.id} className="card mb-punch-card" data-testid="punch-rule" style={{ padding: 10 }}>
           <div className="row" style={{ flexWrap: "wrap", marginBottom: 6 }}>
             <span className="flabel" style={{ margin: 0 }}>FOR EACH option in</span>
@@ -590,6 +656,8 @@ function PunchRules({ q, patch, sources }: {
               onChange={(e) => setRule(i, { action: e.target.value as PunchRule["action"] })}>
               <option value="select">select it here</option>
               <option value="deselect">unselect it here</option>
+              <option value="set_value">set value</option>
+              <option value="clear">clear</option>
               <option value="show">show it here</option>
               <option value="hide">hide it here</option>
               <option value="enable">enable it here</option>
@@ -606,9 +674,64 @@ function PunchRules({ q, patch, sources }: {
               onClick={() => patch({ punches: rules.filter((_, j) => j !== i) })}>×</button>
           </div>
 
+          {/*
+            * MATRIX / COMPOSITE CELL TARGETING (§16, §43). Absent (the
+            * default) writes the target's whole answer, exactly as every
+            * rule did before this existed. A row picker appears only for a
+            * target that actually has rows (matrix/composite); a column
+            * picker appears once a row is picked, only for a target that
+            * has columns (a composite/custom-table cell) — a plain matrix
+            * row has no column of its own, it writes the row's shared scale.
+            */}
+          {q.rows.length > 0 && (
+            <div className="row" style={{ flexWrap: "wrap", marginBottom: 6 }}>
+              <label className="row" style={{ gap: 4, fontSize: 13 }}>
+                row
+                <select className="select" data-testid="punch-target-row"
+                  value={rule.targetRow === undefined ? "" : String(rule.targetRow)}
+                  onChange={(e) => setRule(i, {
+                    targetRow: e.target.value === "" ? undefined : e.target.value,
+                    targetColumn: e.target.value === "" ? undefined : rule.targetColumn,
+                  })}>
+                  <option value="">(whole answer)</option>
+                  {q.rows.map((r) => (
+                    <option key={String(r.code)} value={String(r.code)}>{stripHtmlText(r.label)}</option>
+                  ))}
+                </select>
+              </label>
+              {rule.targetRow !== undefined && q.columns.length > 0 && (
+                <label className="row" style={{ gap: 4, fontSize: 13 }}>
+                  column
+                  <select className="select" data-testid="punch-target-column"
+                    value={rule.targetColumn ?? ""}
+                    onChange={(e) => setRule(i, { targetColumn: e.target.value || undefined })}>
+                    <option value="">(row&apos;s own scale)</option>
+                    {q.columns.map((c) => (
+                      <option key={c.id} value={c.id}>{c.label || c.id}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <label className="row" style={{ gap: 4, fontSize: 13 }}
+                title="Higher priority wins when this rule and another independent rule disagree on the same target — see the Logic tab's trace for which rule actually won">
+                priority
+                <input type="number" className="input mono" style={{ width: 56 }} data-testid="punch-priority"
+                  value={rule.priority ?? 0}
+                  onChange={(e) => setRule(i, { priority: Number(e.target.value) || undefined })} />
+              </label>
+            </div>
+          )}
+          {(!rowOk || !columnOk) && (
+            <div className="xe-error" data-testid="punch-target-issue">
+              {!rowOk && `✗ ${q.code} no longer has a row “${rule.targetRow}”. `}
+              {!columnOk && `✗ ${q.code} no longer has a column “${rule.targetColumn}”.`}
+            </div>
+          )}
+
           <SetChainEditor expr={rule.source} sources={sources} listFills={listFills}
             onChange={(next) => next && setRule(i, { source: next })} />
 
+          {rule.action !== "clear" && (
           <div className="mb-map">
             <div className="row" style={{ marginTop: 6 }}>
               <span className="flabel" style={{ margin: 0 }}>
@@ -628,21 +751,43 @@ function PunchRules({ q, patch, sources }: {
                     mapping: rule.mapping.map((x, j) => (j === mi ? { ...x, from: e.target.value } : x)),
                   })} />
                 <span className="muted">→</span>
-                <select className="select grow" value={String(m.to)}
-                  onChange={(e) => setRule(i, {
-                    mapping: rule.mapping.map((x, j) => (j === mi ? { ...x, to: e.target.value } : x)),
-                  })}>
-                  {q.options.map((o) => (
-                    <option key={String(o.code)} value={String(o.code)}>
-                      {o.code}: {stripHtmlText(o.label).slice(0, 30)}
-                    </option>
-                  ))}
-                </select>
+                {/*
+                  * The mapping target's own codes: a composite cell's column
+                  * options, a matrix row's shared scale, or — no options at
+                  * all (numeric/text) — a free-typed value.
+                  */}
+                {(rule.targetColumn
+                  ? q.columns.find((c) => c.id === rule.targetColumn)?.options ?? []
+                  : rule.targetRow !== undefined
+                    ? q.options
+                    : q.options
+                ).length > 0 ? (
+                  <select className="select grow" value={String(m.to)}
+                    onChange={(e) => setRule(i, {
+                      mapping: rule.mapping.map((x, j) => (j === mi ? { ...x, to: e.target.value } : x)),
+                    })}>
+                    {(rule.targetColumn
+                      ? q.columns.find((c) => c.id === rule.targetColumn)?.options ?? []
+                      : q.options
+                    ).map((o) => (
+                      <option key={String(o.code)} value={String(o.code)}>
+                        {o.code}: {stripHtmlText(o.label).slice(0, 30)}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input className="input grow mono" placeholder="value"
+                    value={String(m.to)}
+                    onChange={(e) => setRule(i, {
+                      mapping: rule.mapping.map((x, j) => (j === mi ? { ...x, to: e.target.value } : x)),
+                    })} />
+                )}
                 <button className="btn small danger"
                   onClick={() => setRule(i, { mapping: rule.mapping.filter((_, j) => j !== mi) })}>×</button>
               </div>
             ))}
           </div>
+          )}
 
           <OptionalCondition label="Only when" value={rule.when}
             onChange={(when) => setRule(i, { when })} />

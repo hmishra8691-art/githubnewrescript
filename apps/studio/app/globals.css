@@ -870,6 +870,28 @@ body.flow-dragging .flow-dropzone { height: 26px; }
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
 }
 .add-block-btn { display: block; width: 100%; margin: 4px 0 24px; }
+
+/* ---------- properties panel collapsible sections (Part B) ---------- */
+.psec {
+  border: 1px solid var(--border); border-radius: 8px; background: var(--panel);
+  margin-bottom: 10px; overflow: visible;
+}
+.psec-head {
+  display: flex; align-items: center; gap: 6px; padding: 7px 10px; cursor: pointer;
+}
+.psec:not(.collapsed) .psec-head { border-bottom: 1px solid var(--border); border-radius: 8px 8px 0 0; }
+.psec.collapsed .psec-head { border-radius: 8px; }
+.psec-toggle {
+  font: inherit; font-size: 12px; width: 18px; height: 18px; flex: none;
+  border: none; background: none; cursor: pointer; color: var(--subtle);
+}
+.psec-toggle:hover { color: var(--accent); }
+.psec-title { font-weight: 700; font-size: 13.5px; flex: 1; }
+.psec-dot { color: var(--accent); font-size: 13px; line-height: 1; }
+.psec-body { padding: 10px 12px 12px; }
+.psec-search {
+  width: 100%; margin-bottom: 10px;
+}
 .select.small.move-to { width: 104px; padding: 2px 6px; font-size: 13px; }
 
 /* ---------- page breaks inside a block ---------- */

@@ -59,12 +59,30 @@ const goTab = async (name) => {
 const maskOf = (def, id = "q8") => def.questions.find((q) => q.id === id)?.mask;
 const punchesOf = (def, id = "q8") => def.questions.find((q) => q.id === id)?.punches ?? [];
 
+/**
+ * The Properties panel's sections are independently collapsible (Part B of
+ * the universal auto-punch brief) and default to collapsed unless already
+ * configured — so a section this test needs to act inside has to be
+ * expanded first. Idempotent: does nothing if the section is already open,
+ * which matters since `openMasking()` runs more than once per question.
+ */
+const ensureSectionOpen = async (id) => {
+  const head = `[data-testid="psec-head-${id}"]`;
+  await page.waitForSelector(head);
+  const expanded = await page.getAttribute(head, "aria-expanded");
+  if (expanded !== "true") {
+    await page.click(head);
+    await page.waitForTimeout(150);
+  }
+};
+
 /** Select Q8 and scroll the masking builder into view. */
 const openMasking = async () => {
   await goTab("Questions");
   await page.waitForSelector(".qcard");
   const cards = await page.$$(".qcard");
   await cards[cards.length - 1].click();
+  await ensureSectionOpen("masking");
   await page.waitForSelector('[data-testid="masking-builder"]');
   await page.$eval('[data-testid="masking-builder"]', (e) => e.scrollIntoView({ block: "center" }));
 };
@@ -245,6 +263,10 @@ console.log("✔ §14: display / remove / pre-select / disable are separate acti
 
 /* ============================================ §14–§19: auto-selection */
 
+// Auto Punch is its own top-level Properties section now (extracted from
+// masking, so it can target any question type — see the universal auto
+// punch brief), collapsed by default like every other section.
+await ensureSectionOpen("auto-punch");
 await page.click('[data-testid="punch-add"]');
 await page.waitForSelector('[data-testid="punch-rule"]');
 await page.waitForTimeout(300);

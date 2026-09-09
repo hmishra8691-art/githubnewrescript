@@ -122,6 +122,16 @@ console.log("✔ option-to-option rule built visually:", JSON.stringify(firstRul
 /* ------------------------------------------------------- list operations */
 
 const opKind = '[data-testid="list-operations"] [data-testid="list-op-kind-0"]';
+// The Properties panel's sections are independently collapsible and default
+// to collapsed unless already configured — expand "List operations" first.
+{
+  const head = '[data-testid="psec-head-list-operations"]';
+  await page.waitForSelector(head);
+  if ((await page.getAttribute(head, "aria-expanded")) !== "true") {
+    await page.click(head);
+    await page.waitForTimeout(150);
+  }
+}
 await page.click('.rightpanel [data-testid="add-list-op"]');
 await page.waitForSelector(opKind);
 await page.selectOption(opKind, "intersect");

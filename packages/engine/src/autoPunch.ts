@@ -64,6 +64,28 @@ export { LIST_ACTIONS };
 let seq = 0;
 const newId = () => `punch_${Date.now().toString(36)}${(seq++).toString(36)}`;
 
+/**
+ * Whether a rule belongs on the OPTION-LEVEL punch editors at all
+ * (`AutoPunchPanel`, the survey-wide Logic-tab list, and `AutoPunchRows`,
+ * the per-question one) — a literal code source with no matrix/composite
+ * cell target and no explicit priority. Those two fields have no
+ * representation in this file's Simple form or its `IF ... THEN ...`
+ * expression DSL (`parsePunchExpression`/`formatPunchExpression`), so a rule
+ * that carries either must never round-trip through here: doing so would
+ * silently drop the cell address or the priority the moment the rule is
+ * merely re-printed, let alone edited. Such a rule belongs to — and is only
+ * ever rendered by — the set-expression punch editor (`PunchRules` in
+ * Studio), which has real controls for both.
+ */
+export function isOptionLevelPunch(rule: PunchRule): boolean {
+  return (
+    rule.source.kind === "codes"
+    && rule.targetRow === undefined
+    && rule.targetColumn === undefined
+    && rule.priority === undefined
+  );
+}
+
 /* ------------------------------------------------------------- the simple form */
 
 export interface SimplePunch {
@@ -101,6 +123,13 @@ export function optionRule(s: SimplePunch, id = newId()): PunchRule {
  */
 export function simpleView(rule: PunchRule): SimplePunch | null {
   if (rule.source.kind !== "codes" || rule.mapping.length) return null;
+  // A matrix/composite cell target, or an explicit priority, carries
+  // information `SimplePunch` has no field for — flattening it here would
+  // silently drop the cell address (or the priority) the moment the
+  // programmer touches anything in Simple mode. Force Expression mode
+  // instead, the same "never lose information" contract this function
+  // already applies to a non-empty mapping.
+  if (rule.targetRow !== undefined || rule.targetColumn !== undefined || rule.priority !== undefined) return null;
   const w = rule.when;
   if (!w || w.type !== "rule") return null;
   if (w.source.kind !== "question" || (w.operator !== "selected" && w.operator !== "notSelected")) return null;

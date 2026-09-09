@@ -53,6 +53,32 @@ export function orderIndex(def: SurveyDefinition): Record<string, number> {
 
 /* ------------------------------------------------------------ ref harvesting */
 
+/**
+ * Every question a calculated variable's expression ultimately reads,
+ * following calc → calc chains (`TOTAL` reads `SUBTOTAL` reads `Q1`/`Q2`) so
+ * a punch or display rule gated on the OUTER calc is still discovered as
+ * depending on the questions that actually feed it. `visited` guards against
+ * a declared cycle looping forever here too — `calculationCycles` is what
+ * reports the cycle itself; this just has to not hang while it exists.
+ */
+function calcQuestionRefs(
+  def: SurveyDefinition,
+  targetVariable: string,
+  into: Set<string>,
+  visited: Set<string> = new Set(),
+): void {
+  if (visited.has(targetVariable)) return;
+  visited.add(targetVariable);
+  const calc = (def.calculations ?? []).find((c) => c.targetVariable === targetVariable);
+  if (!calc) return;
+  const calcNames = new Set((def.calculations ?? []).map((c) => c.targetVariable));
+  for (const name of new Set(referencedNames(calc.expression ?? ""))) {
+    const q = getQuestionByCodeOrVar(def, name);
+    if (q) { into.add(q.id); continue; }
+    if (calcNames.has(name)) calcQuestionRefs(def, name, into, visited);
+  }
+}
+
 /** Every question id a condition tree reads from. */
 export function conditionRefs(
   def: SurveyDefinition,
@@ -64,6 +90,13 @@ export function conditionRefs(
     if (c.source.kind === "question" || c.source.kind === "variable") {
       const q = getQuestionByCodeOrVar(def, c.source.ref);
       if (q) into.add(q.id);
+    } else if (c.source.kind === "calculation") {
+      // See gap #4: without this, a punch or display rule gated on a
+      // calculated variable is invisible to the same-page dependency graph,
+      // so it can fail to re-fire when the question feeding the calculation
+      // changes (it still works on next-page arrival, since calculations
+      // always run before punches there).
+      calcQuestionRefs(def, c.source.ref, into);
     }
     return into;
   }

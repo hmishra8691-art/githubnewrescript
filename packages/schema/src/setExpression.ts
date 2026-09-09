@@ -48,6 +48,24 @@ export type SetExpr =
    * so evaluating a mask can never itself consume List Fill sample capacity.
    */
   | { kind: "listFill"; listFillId: string }
+  /**
+   * The current loop item, when this expression is evaluated inside a loop —
+   * `ref: null` is the item's own code (`CURRENT_ITEM_CODE`), `ref: "<name>"`
+   * a named reference column (`CURRENT_ITEM.<name>`). Evaluated by the exact
+   * `findLoopScope`/`loopValue` pair the condition engine already uses for
+   * `CURRENT_ITEM`/`CURRENT_ITEM.<ref>` — same resolver, so a punch payload
+   * and a punch's trigger condition can never disagree about what the current
+   * item is. Outside a loop this resolves to nothing.
+   */
+  | { kind: "loopItem"; ref: string | null }
+  /**
+   * A calculated value, as a punch payload rather than a trigger — the same
+   * `evaluateExpression` the calc engine and the condition `expr` source
+   * already run (`SUM`/`AVERAGE`/string concatenation/etc.), so a function
+   * calc already has works as a punch value from day one. Resolves to one
+   * code: the expression's result, stringified.
+   */
+  | { kind: "expr"; expression: string }
   /** Everything this question defines that is NOT in `of` — the complement. */
   | { kind: "complement"; of: SetExpr }
   | { kind: "op"; operator: SetOperator; left: SetExpr; right: SetExpr };
@@ -66,6 +84,14 @@ export const SetExpr: z.ZodType<SetExpr, z.ZodTypeDef, unknown> = z.lazy(() =>
     z.object({
       kind: z.literal("listFill"),
       listFillId: z.string(),
+    }),
+    z.object({
+      kind: z.literal("loopItem"),
+      ref: z.string().nullable().default(null),
+    }),
+    z.object({
+      kind: z.literal("expr"),
+      expression: z.string(),
     }),
     z.object({ kind: z.literal("complement"), of: SetExpr }),
     z.object({
@@ -204,8 +230,44 @@ export const PunchRule = z.object({
    * never runs.
    */
   mode: z.enum(["if", "else_if", "else"]).optional(),
+  /**
+   * MATRIX / GRID / COMPOSITE CELL TARGETING.
+   *
+   * Absent (the default, and every existing rule): the rule writes the
+   * target question's whole answer, exactly as today. Set `targetRow` alone
+   * to address one row of a matrix's row-keyed answer (e.g. `Q4["Apple"] =
+   * "Very Interested"`); set both `targetRow` and `targetColumn` to address
+   * one cell of a composite/custom-table grid (`Q4["Apple"]["Satisfaction"]
+   * = 5`). The row/column codes are resolved against the target's own
+   * `rows`/`columns` — a code that does not exist there is a validation
+   * error, not a silent write (see `validatePunchRule`).
+   */
+  targetRow: z.union([z.string(), z.number()]).optional(),
+  targetColumn: z.string().optional(),
+  /**
+   * EXPLICIT PRIORITY (§29–§30). Higher runs — and, for two INDEPENDENT
+   * rules (not in the same if/else-if/else chain) that both resolve a value
+   * for the same code, higher WINS — first; absent is treated as 0, so every
+   * existing rule keeps its current behavior (array order breaks ties, same
+   * as before this field existed). This is the one new field the "which rule
+   * wins" requirement needs — see `tracePunches` for where the winner is
+   * actually named.
+   */
+  priority: z.number().optional(),
 });
 export type PunchRule = z.infer<typeof PunchRule>;
+
+/**
+ * Rules in evaluation order: highest `priority` first (absent = 0), ties
+ * broken by original array position — a stable sort, so a survey with no
+ * `priority` set anywhere reorders nothing.
+ */
+export function orderPunchRules<T extends { priority?: number }>(rules: T[]): T[] {
+  return rules
+    .map((rule, index) => ({ rule, index }))
+    .sort((a, b) => (b.rule.priority ?? 0) - (a.rule.priority ?? 0) || a.index - b.index)
+    .map((x) => x.rule);
+}
 
 /* -------------------------------------------------------------- builders */
 

@@ -207,6 +207,18 @@ await (async () => {
   await p.waitForSelector(".qcard.selected");
   await p.waitForTimeout(300);
 
+  // The Properties panel's sections are independently collapsible and
+  // default to collapsed unless already configured — expand Display logic
+  // and Skip logic before reading their IF/THEN text.
+  for (const id of ["display-logic", "skip-logic"]) {
+    const head = `[data-testid="psec-head-${id}"]`;
+    await p.waitForSelector(head);
+    if ((await p.getAttribute(head, "aria-expanded")) !== "true") {
+      await p.click(head);
+      await p.waitForTimeout(150);
+    }
+  }
+
   const ifThen = await p.$eval(".rightpanel", (e) => e.innerText.replace(/\s+/g, " "));
   assert.match(ifThen, /IF/, `display logic is framed as IF: ${ifThen.slice(0, 120)}`);
   assert.match(ifThen, /THEN show/, `and states the action: ${ifThen.slice(0, 200)}`);

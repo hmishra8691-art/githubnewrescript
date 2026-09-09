@@ -188,6 +188,16 @@ const saveState = (page) => page.$eval('[data-testid="save-state"]', (e) => e.te
   // put display logic on the last question
   await page.click(".qcard >> nth=2");
   await page.waitForTimeout(300);
+  // The Properties panel's sections are independently collapsible and
+  // default to collapsed unless already configured — expand Display logic.
+  {
+    const head = '[data-testid="psec-head-display-logic"]';
+    await page.waitForSelector(head);
+    if ((await page.getAttribute(head, "aria-expanded")) !== "true") {
+      await page.click(head);
+      await page.waitForTimeout(150);
+    }
+  }
   const add = await page.$('.rightpanel >> text=+ add');
   assert.ok(add, "display logic can be added");
   await add.click();
