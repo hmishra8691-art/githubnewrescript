@@ -73,6 +73,13 @@ export function LogicTracePanel() {
         out.push({ id: `pu:${q.id}`, label: `${q.code} — auto punch (${q.punches.length} rules)`, punchFor: q.id });
       }
       if (q.mask?.when) out.push({ id: `mk:${q.id}`, label: `${q.code} — mask condition`, when: q.mask.when });
+      for (const [i, v] of (q.validation ?? []).entries()) {
+        // The Universal Logic Engine's Test Condition capability for
+        // Validation: a kind:"condition" rule's `check` tree is exactly the
+        // same shape every other traceable target already is, so it needs
+        // no new tracing logic — just listing it here.
+        if (v.check) out.push({ id: `vr:${v.id ?? `${q.id}:${i}`}`, label: `${q.code} — validation: ${v.message ?? v.kind}`, when: v.check });
+      }
     }
     for (const r of s.def.displayRules ?? []) {
       out.push({ id: `dr:${r.id}`, label: `display rule — ${r.label ?? r.id}`, when: r.when });

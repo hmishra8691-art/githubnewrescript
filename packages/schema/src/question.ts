@@ -187,6 +187,15 @@ export const ValidationRule = z.object({
     "integer",
     "custom_expression", // calc-engine expression that must evaluate truthy
     "custom_script", // id or name of a script in def.scripts; it calls ctx.error()
+    /**
+     * The Universal Logic Engine's Condition tree, evaluated as the check
+     * itself rather than a gate — see `check` below. This is what gives
+     * Validation the same visual/expression builder (nested AND/OR/NOT,
+     * COUNT, cross-question, matrix-cell, loop sources) already shared by
+     * Display Logic, Skip Logic, and Auto Punch, instead of a second,
+     * validation-only condition language.
+     */
+    "condition",
   ]),
   value: z.any().optional(),
   message: z.string().optional(),
@@ -203,6 +212,16 @@ export const ValidationRule = z.object({
   severity: z.enum(["error", "warning"]).optional(),
   /** Only enforce when the condition holds. */
   when: Condition.optional(),
+  /**
+   * The check itself, for `kind: "condition"` — the condition evaluating
+   * TRUE is what makes the rule FAIL (reads as "IF Q5 <= Q6 THEN invalid").
+   * Kept as its own field rather than overloading `when`: `when` stays a
+   * pure enable/gate on every kind including this one, so a rule can say
+   * "only run this cross-question check once Q3 is answered" (when)
+   * independently of "fail when Q5 > Q6" (check) — one field can't carry
+   * both meanings without changing what `when` means for every other kind.
+   */
+  check: Condition.optional(),
 });
 export type ValidationRule = z.infer<typeof ValidationRule>;
 

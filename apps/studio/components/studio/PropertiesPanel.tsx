@@ -7,7 +7,7 @@ import { resolveVariant, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript
 import { useStudio, selectedQuestion, uid } from "./store";
 import { useCanvas } from "../canvas/CanvasContext";
 import { ElementPanel } from "../canvas/ElementPanel";
-import { OptionalCondition, ConditionEditor } from "./ConditionBuilder";
+import { OptionalCondition, ConditionEditor, newConditionGroup } from "./ConditionBuilder";
 import { LoopScopeProvider, loopsAroundQuestion } from "./loopScope";
 import { MaskingBuilder, PunchRules } from "./MaskingBuilder";
 import { QualitySettings } from "./QualitySettings";
@@ -17,25 +17,28 @@ import { CollapsibleSection } from "./CollapsibleSection";
 /** Context-aware validation (req §6/§19): only offer rules that make sense
  *  for the question type. */
 export function validationKindsFor(qtype: string): ValidationRule["kind"][] {
+  // "condition" (the Universal Logic Engine's Visual/Expression builder) is
+  // meaningful for every question type — unlike e.g. sum_equals, which only
+  // makes sense for allocation — so every branch below gets it appended.
   if (["multi_select", "multi_dropdown", "image_select"].includes(qtype))
-    return ["required", "min_selections", "max_selections", "custom_expression"];
+    return ["required", "min_selections", "max_selections", "custom_expression", "condition"];
   if (["numeric", "slider", "nps", "matrix_numeric"].includes(qtype))
-    return ["required", "min_value", "max_value", "integer", "custom_expression"];
+    return ["required", "min_value", "max_value", "integer", "custom_expression", "condition"];
   if (["open_text", "long_text", "text_list"].includes(qtype))
-    return ["required", "min_length", "max_length", "pattern", "email", "phone", "custom_expression", "custom_script"];
+    return ["required", "min_length", "max_length", "pattern", "email", "phone", "custom_expression", "custom_script", "condition"];
   if (qtype === "numeric_list")
-    return ["required", "min_value", "max_value", "integer", "custom_expression"];
+    return ["required", "min_value", "max_value", "integer", "custom_expression", "condition"];
   if (qtype === "allocation")
-    return ["required", "sum_equals", "sum_max", "sum_min", "custom_expression"];
+    return ["required", "sum_equals", "sum_max", "sum_min", "custom_expression", "condition"];
   if (["date", "datetime"].includes(qtype))
-    return ["required", "date_min", "date_max", "custom_expression", "custom_script"];
+    return ["required", "date_min", "date_max", "custom_expression", "custom_script", "condition"];
   if (["single_select", "dropdown", "time", "ranking", "image_ranking"].includes(qtype))
-    return ["required", "custom_expression", "custom_script"];
+    return ["required", "custom_expression", "custom_script", "condition"];
   if (qtype === "composite" || qtype === "custom_table")
     return ["required", "min_selections", "max_selections",
-      "column_sum_equals", "column_sum_max", "column_sum_min", "custom_expression", "custom_script"];
+      "column_sum_equals", "column_sum_max", "column_sum_min", "custom_expression", "custom_script", "condition"];
   if (qtype.startsWith("matrix"))
-    return ["required", "min_selections", "max_selections", "custom_expression", "custom_script"];
+    return ["required", "min_selections", "max_selections", "custom_expression", "custom_script", "condition"];
   return VALIDATION_KINDS.map((k) => k.value);
 }
 
@@ -61,6 +64,7 @@ const VALIDATION_KINDS: { value: ValidationRule["kind"]; label: string; hasValue
   { value: "integer", label: "whole number", hasValue: false },
   { value: "custom_expression", label: "expression (calc DSL)", hasValue: true },
   { value: "custom_script", label: "script (by name)", hasValue: true },
+  { value: "condition", label: "condition (visual/expression)", hasValue: false },
 ];
 
 /** What the value box is asking for, per kind — a hint beats a guess. */
@@ -76,6 +80,7 @@ const VALUE_HINT: Partial<Record<ValidationRule["kind"], string>> = {
 };
 
 function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question>): void }) {
+  const s = useStudio();
   const qVariant = resolveVariant(q.variant);
   const allowed = (qVariant?.validations as ValidationRule["kind"][] | undefined) ?? validationKindsFor(q.type);
   const kinds = VALIDATION_KINDS.filter((k) => allowed.includes(k.value));
@@ -83,60 +88,92 @@ function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question
     <div>
       {q.validation.map((v, i) => {
         const kind = VALIDATION_KINDS.find((k) => k.value === v.kind);
+        const pipingIssues = v.message ? lintPipingTokens(s.def, v.message) : [];
         return (
-          <div key={i} className="opt-row">
-            <select className="select" style={{ width: 130 }} value={v.kind}
-              onChange={(e) => patch({
-                validation: q.validation.map((x, j) => (j === i ? { ...x, kind: e.target.value as any } : x)),
-              })}>
-              {/* keep an already-set kind visible even if not offered for this type */}
-              {(kinds.some((k) => k.value === v.kind) ? kinds : [kind!, ...kinds]).map((k) => (
-                <option key={k.value} value={k.value}>{k.label}</option>
-              ))}
-            </select>
-            {kind?.hasValue && (
-              <input className="input grow mono" value={String(v.value ?? "")}
-                placeholder={VALUE_HINT[v.kind] ?? ""}
-                data-testid="validation-value"
+          /*
+            * A plain-condition rule (kind:"condition") needs room below the
+            * top line for the shared visual/expression builder — the same
+            * card-per-rule shape SkipLogicEditor already uses for exactly
+            * this reason, so every logic-editing surface reads the same way.
+            */
+          <div key={i} className="card" data-testid="validation-rule" style={{ padding: 10, marginBottom: 6 }}>
+            <div className="opt-row">
+              <select className="select" style={{ width: 130 }} value={v.kind}
                 onChange={(e) => patch({
-                  validation: q.validation.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)),
-                })} />
-            )}
-            {/* which column a column-total rule adds up; blank = every column */}
-            {v.kind.startsWith("column_sum") && (
-              <select className="select" style={{ width: 120 }} value={v.ref ?? ""}
-                data-testid="validation-column"
-                title="Which column to total — every column when left blank"
-                onChange={(e) => patch({
-                  validation: q.validation.map((x, j) => (j === i ? { ...x, ref: e.target.value || undefined } : x)),
+                  validation: q.validation.map((x, j) => (j === i ? { ...x, kind: e.target.value as any } : x)),
                 })}>
-                <option value="">every column</option>
-                {q.columns.map((c) => <option key={c.id} value={c.id}>{c.label || c.id}</option>)}
+                {/* keep an already-set kind visible even if not offered for this type */}
+                {(kinds.some((k) => k.value === v.kind) ? kinds : [kind!, ...kinds]).map((k) => (
+                  <option key={k.value} value={k.value}>{k.label}</option>
+                ))}
               </select>
+              {kind?.hasValue && (
+                <input className="input grow mono" value={String(v.value ?? "")}
+                  placeholder={VALUE_HINT[v.kind] ?? ""}
+                  data-testid="validation-value"
+                  onChange={(e) => patch({
+                    validation: q.validation.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)),
+                  })} />
+              )}
+              {/* which column a column-total rule adds up; blank = every column */}
+              {v.kind.startsWith("column_sum") && (
+                <select className="select" style={{ width: 120 }} value={v.ref ?? ""}
+                  data-testid="validation-column"
+                  title="Which column to total — every column when left blank"
+                  onChange={(e) => patch({
+                    validation: q.validation.map((x, j) => (j === i ? { ...x, ref: e.target.value || undefined } : x)),
+                  })}>
+                  <option value="">every column</option>
+                  {q.columns.map((c) => <option key={c.id} value={c.id}>{c.label || c.id}</option>)}
+                </select>
+              )}
+              <input className="input grow" placeholder="message (optional)" value={v.message ?? ""}
+                onChange={(e) => patch({
+                  validation: q.validation.map((x, j) => (j === i ? { ...x, message: e.target.value || undefined } : x)),
+                })} />
+              {/*
+                * Blocks, or only warns. A soft check is how a researcher says
+                * "that is unusual, look again" without making a legitimate
+                * answer impossible to give — the respondent sees it once and
+                * the next click goes through.
+                */}
+              <select className="select" style={{ width: 92 }} value={v.severity ?? "error"}
+                data-testid="validation-severity"
+                title="Blocks the page, or shows a message and lets the respondent continue"
+                onChange={(e) => patch({
+                  validation: q.validation.map((x, j) => (j === i
+                    ? { ...x, severity: e.target.value === "warning" ? "warning" as const : undefined }
+                    : x)),
+                })}>
+                <option value="error">blocks</option>
+                <option value="warning">warns</option>
+              </select>
+              <button className="btn small danger"
+                onClick={() => patch({ validation: q.validation.filter((_, j) => j !== i) })}>×</button>
+            </div>
+            {pipingIssues.map((p, pi) => (
+              <div key={pi} className="chip warn" data-testid="validation-message-piping-warning" style={{ marginTop: 4 }}>
+                {p}
+              </div>
+            ))}
+            {v.kind === "condition" && (
+              /*
+                * The Universal Logic Engine's own builder — nested AND/OR/
+                * NOT, COUNT, cross-question, matrix-cell (row/column
+                * pickers), and loop sources — reused verbatim, not forked.
+                * Its own Visual⇄Expression tab bar IS the "mode" the brief
+                * asks for; "Simple" mode is just picking one of the flat
+                * kinds above instead of this one.
+                */
+              <div style={{ marginTop: 6 }} data-testid="validation-condition-editor">
+                <ConditionEditor
+                  value={v.check ?? newConditionGroup()}
+                  onChange={(check) => patch({
+                    validation: q.validation.map((x, j) => (j === i ? { ...x, check } : x)),
+                  })}
+                />
+              </div>
             )}
-            <input className="input grow" placeholder="message (optional)" value={v.message ?? ""}
-              onChange={(e) => patch({
-                validation: q.validation.map((x, j) => (j === i ? { ...x, message: e.target.value || undefined } : x)),
-              })} />
-            {/*
-              * Blocks, or only warns. A soft check is how a researcher says
-              * "that is unusual, look again" without making a legitimate
-              * answer impossible to give — the respondent sees it once and
-              * the next click goes through.
-              */}
-            <select className="select" style={{ width: 92 }} value={v.severity ?? "error"}
-              data-testid="validation-severity"
-              title="Blocks the page, or shows a message and lets the respondent continue"
-              onChange={(e) => patch({
-                validation: q.validation.map((x, j) => (j === i
-                  ? { ...x, severity: e.target.value === "warning" ? "warning" as const : undefined }
-                  : x)),
-              })}>
-              <option value="error">blocks</option>
-              <option value="warning">warns</option>
-            </select>
-            <button className="btn small danger"
-              onClick={() => patch({ validation: q.validation.filter((_, j) => j !== i) })}>×</button>
           </div>
         );
       })}

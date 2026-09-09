@@ -4,6 +4,7 @@ import type {
   OptionLogic,
   Question,
   SurveyDefinition,
+  ValidationRule,
 } from "@rescript/schema";
 import { setExprSources } from "./setExpression.js";
 import { getQuestionByCodeOrVar } from "./state.js";
@@ -104,6 +105,41 @@ export function conditionRefs(
   return into;
 }
 
+/**
+ * Every question a `custom_expression`/`custom_script` validation rule's raw
+ * string reads, by the same identifier-scanning `calcQuestionRefs` already
+ * uses for calc expressions (`referencedNames`, quote-aware) — no second
+ * parser. Without this, a cross-question `custom_expression` check (already
+ * possible today via the calc engine) was invisible to the dependency graph,
+ * so it could fail to re-validate live on the same page when the question it
+ * reads changes (it still worked on next-page arrival / submit).
+ */
+function exprStringRefs(def: SurveyDefinition, expr: string, into: Set<string>): void {
+  for (const name of new Set(referencedNames(expr))) {
+    const q = getQuestionByCodeOrVar(def, name);
+    if (q) into.add(q.id);
+    else calcQuestionRefs(def, name, into);
+  }
+}
+
+/** Every question a validation rule reads: its gate, its condition-tree
+ *  check (kind:"condition"), the question references inside a
+ *  `custom_expression`/`custom_script` string, and any piping tokens in its
+ *  message — reusing the already-existing `pipingRefs` (the same helper
+ *  question text piping uses), so a message like
+ *  "You selected {{COUNT(Q2)}} brands" participates in the dependency graph
+ *  for free. */
+function validationRefs(def: SurveyDefinition, rules: ValidationRule[] | undefined, into: Set<string>): void {
+  for (const v of rules ?? []) {
+    conditionRefs(def, v.when, into);
+    conditionRefs(def, v.check, into);
+    if ((v.kind === "custom_expression" || v.kind === "custom_script") && typeof v.value === "string") {
+      exprStringRefs(def, v.value, into);
+    }
+    pipingRefs(def, v.message, into);
+  }
+}
+
 function optionLogicRefs(
   def: SurveyDefinition,
   l: OptionLogic | undefined,
@@ -149,7 +185,7 @@ export function questionDependencies(def: SurveyDefinition, q: Question): Set<st
 
   conditionRefs(def, q.displayLogic, into);
   for (const r of q.skipLogic ?? []) conditionRefs(def, r.when, into);
-  for (const v of q.validation ?? []) conditionRefs(def, v.when, into);
+  validationRefs(def, q.validation, into);
   for (const r of q.randomization?.rules ?? []) conditionRefs(def, r.when, into);
 
   if (q.carryForward) {
@@ -198,7 +234,7 @@ export function questionDependencies(def: SurveyDefinition, q: Question): Set<st
     conditionRefs(def, r.visibleIf, into);
     optionLogicRefs(def, r.logic, into);
     pipingRefs(def, r.label, into);
-    for (const v of r.validation ?? []) conditionRefs(def, v.when, into);
+    validationRefs(def, r.validation, into);
   }
   for (const c of q.columns ?? []) {
     conditionRefs(def, c.visibleIf, into);
@@ -211,7 +247,7 @@ export function questionDependencies(def: SurveyDefinition, q: Question): Set<st
       conditionRefs(def, o.visibleIf, into);
       optionLogicRefs(def, o.logic, into);
     }
-    for (const v of c.validation ?? []) conditionRefs(def, v.when, into);
+    validationRefs(def, c.validation, into);
   }
 
   pipingRefs(def, q.text, into);

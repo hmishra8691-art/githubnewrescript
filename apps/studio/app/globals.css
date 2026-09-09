@@ -269,13 +269,28 @@ textarea.xe-input:focus { border-color: var(--accent); }
 }
 .lb-group.just-created { animation: lb-pulse 1.6s ease-out; }
 
+/*
+ * A condition row is a dynamic-height, up-to-2-row grid: the main
+ * source/operator/value controls share row 1 with the remove button, and
+ * any function-style sub-editor (COUNT, SUM/AVG/…) gets a full-width row of
+ * its own below. This used to be an *implicit* 2-column grid with no
+ * `grid-template-areas` — CSS auto-placement filled cells left-to-right, so
+ * a conditionally-rendered sub-editor landed in the `auto` column meant for
+ * the remove button, ballooned that column to its own content width, and
+ * starved `.cond-rule-main`'s `1fr` column down to its explicit `0` floor
+ * (confirmed live: `.cond-rule-main` computed to `width: 0px`). Naming the
+ * areas explicitly makes placement independent of DOM order or how many
+ * sub-editor rows a given function needs — the fix for one function's
+ * layout is the fix for all of them, not a per-function patch.
+ */
 .cond-rule {
   display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "main actions" "extra extra";
   gap: 4px 6px; align-items: start; margin: 4px 0;
   padding: 7px 8px; border-radius: 9px;
   background: var(--panel); border: 1px solid var(--border);
 }
-.cond-rule-main { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.cond-rule-main { grid-area: main; display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
 .cond-rule .select, .cond-rule .input {
   width: auto; min-width: 0; flex: 1 1 auto; max-width: 100%;
   padding: 4px 7px; font-size: 13.5px;
@@ -284,7 +299,18 @@ textarea.xe-input:focus { border-color: var(--accent); }
 .cond-rule .kind-select { flex: 0 0 auto; width: 74px; }
 .cond-rule .ref-select { flex: 2 1 130px; }
 .cond-rule .op-select { flex: 1 1 110px; }
-.cond-rule-actions { display: flex; gap: 4px; align-items: center; }
+.cond-rule-actions { grid-area: actions; display: flex; gap: 4px; align-items: center; align-self: start; }
+/*
+ * Any other direct child (CountEditor's `.count-editor`, ExprEditor's
+ * `.expr-editor` or unparsed `.row[data-testid=expr-editor-readonly]`, and
+ * any future function-style sub-editor) always gets its own full-width row
+ * below — matched by position, not by enumerating class names, so a new
+ * sub-editor kind needs no CSS change to avoid reintroducing this bug.
+ */
+.cond-rule > div:not(.cond-rule-main):not(.cond-rule-actions) {
+  grid-area: extra; min-width: 0;
+  background: var(--panel2); border-radius: 8px; padding: 8px; margin-top: 2px;
+}
 
 /* the connector between two rules */
 .cond-join { display: flex; align-items: center; gap: 8px; margin: 2px 0; }
@@ -962,6 +988,21 @@ body.flow-dragging .flow-dropzone { height: 26px; }
 
 /* ---- auto punch editor (AutoPunchEditor.tsx) */
 .ap-rule { margin-bottom: 8px; }
+/*
+ * The per-rule header: a mode select, an unbounded-length rule-text span,
+ * and a button group — see the doc comment at this row's JSX for the bug
+ * this replaces. `flex-wrap` lets the row break instead of shrinking button
+ * text past its own content (the "SimplExpression" overlap); no fixed
+ * heights, so it grows/wraps at any panel width.
+ */
+.ap-rule-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ap-rule-text {
+  flex: 1 1 160px; min-width: 60px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* the mode/remove buttons travel together and never shrink or lose their
+   text — they wrap to their own line as one unit rather than splitting */
+.ap-rule-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; margin-left: auto; }
 .ap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; align-items: end; }
 .ap-grid .f { margin-bottom: 0; }
 .ap-grid .f > span { font-size: 12.5px; color: var(--muted); display: block; margin-bottom: 2px; }

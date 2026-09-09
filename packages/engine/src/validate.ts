@@ -7,6 +7,7 @@ import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
 import { validateFieldValue } from "./fields.js";
 import { createScriptCtx, runScript, type ScriptRunResult } from "./scripts.js";
+import { resolvePiping } from "./piping.js";
 
 /**
  * Whether a failed check stops the respondent.
@@ -186,6 +187,19 @@ export function checkScalarRules(
         if (outcome.failed) fail(ruleError(rule, "This answer could not be checked."));
         break;
       }
+      case "condition": {
+        /*
+         * The Universal Logic Engine's Condition tree, evaluated as the
+         * check itself (condition TRUE => fails), not a gate — `rule.when`
+         * above already covers "only run this rule when X." Reuses the
+         * exact evaluator every other feature's condition tree goes
+         * through, so cross-question, matrix-cell (via a source's
+         * rowCode/columnId), COUNT-based, and loop-scoped checks all work
+         * here for free — nothing new to evaluate.
+         */
+        if (rule.check && evaluateCondition(rule.check, ctx)) fail(ruleError(rule, "Invalid answer."));
+        break;
+      }
       default:
         break;
     }
@@ -200,8 +214,15 @@ export function validateQuestion(
   ctx: EvalContext,
 ): ValidationError[] {
   const errors: ValidationError[] = [];
+  /*
+   * A rule's message is a plain string until it reaches a respondent — piped
+   * here, once, the same way question text already is (`resolvePiping`), so
+   * "You selected {{Q2.count}} brands" resolves for every rule kind, not
+   * just kind:"condition". A message with no `{{` is returned unchanged, so
+   * this is a no-op for the vast majority of existing, un-piped messages.
+   */
   const push = (message: string, extra?: Partial<ValidationError>) =>
-    errors.push({ questionId: q.id, message, ...extra });
+    errors.push({ questionId: q.id, message: resolvePiping(message, ctx), ...extra });
 
   // implicit required
   if (q.required && isEmpty(value)) {

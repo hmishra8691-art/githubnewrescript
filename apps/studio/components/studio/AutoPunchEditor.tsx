@@ -88,7 +88,19 @@ function SimpleRow({ target, rule, onChange, onMove, onRemove }: {
 
   return (
     <div className="card ap-rule" data-testid="ap-rule" style={{ padding: 10 }}>
-      <div className="row" style={{ alignItems: "center", marginBottom: 6 }}>
+      {/*
+        * A dedicated header class, not the generic `.row` — `.row` has no
+        * `flex-wrap`, and this row combines an unbounded-length rule-text
+        * span with three nowrap buttons. Once the row was narrower than its
+        * content, flex-shrink squeezed the buttons below their own text's
+        * natural width; the text itself can't reflow (`white-space: nowrap`
+        * on `.btn`), so it overflowed the shrunk box and visually
+        * overlapped the next button ("SimplExpression"). `.ap-rule-head`
+        * lets the row wrap instead, and `.ap-rule-actions` keeps the
+        * mode/remove buttons together as one non-shrinking group so they
+        * wrap as a unit rather than splitting mid-text.
+        */}
+      <div className="ap-rule-head" style={{ marginBottom: 6 }}>
         {/*
           * IF / ELSE IF / ELSE (§8, §23), on the rule itself.
           *
@@ -121,14 +133,18 @@ function SimpleRow({ target, rule, onChange, onMove, onRemove }: {
           <option value="else_if">ELSE IF</option>
           <option value="else">ELSE</option>
         </select>
-        <span className="muted mono" style={{ fontSize: 12.5 }} data-testid="ap-rule-text">{formatPunchExpression(s.def, target, rule)}</span>
-        <span className="grow" />
-        <button className={`btn small ${mode === "simple" ? "primary" : ""}`} data-testid="ap-mode-simple"
-          disabled={!simple} title={simple ? "" : "This rule's condition is more than one option — edit it as an expression"}
-          onClick={() => setMode("simple")}>Simple</button>
-        <button className={`btn small ${mode === "expression" ? "primary" : ""}`} data-testid="ap-mode-expression"
-          onClick={() => setMode("expression")}>Expression</button>
-        <button className="btn small danger" data-testid="ap-remove" onClick={onRemove} title="Remove this rule">×</button>
+        <span className="muted mono ap-rule-text" style={{ fontSize: 12.5 }}
+          data-testid="ap-rule-text" title={formatPunchExpression(s.def, target, rule)}>
+          {formatPunchExpression(s.def, target, rule)}
+        </span>
+        <span className="ap-rule-actions">
+          <button className={`btn small ${mode === "simple" ? "primary" : ""}`} data-testid="ap-mode-simple"
+            disabled={!simple} title={simple ? "" : "This rule's condition is more than one option — edit it as an expression"}
+            onClick={() => setMode("simple")}>Simple</button>
+          <button className={`btn small ${mode === "expression" ? "primary" : ""}`} data-testid="ap-mode-expression"
+            onClick={() => setMode("expression")}>Expression</button>
+          <button className="btn small danger" data-testid="ap-remove" onClick={onRemove} title="Remove this rule">×</button>
+        </span>
       </div>
 
       {rule.mode === "else" ? (
