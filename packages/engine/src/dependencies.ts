@@ -10,6 +10,7 @@ import { setExprSources } from "./setExpression.js";
 import { getQuestionByCodeOrVar } from "./state.js";
 import { pipeTokensIn } from "./pipingTokens.js";
 import { referencedNames } from "./embedded.js";
+import { isQuestionValueRef } from "@rescript/schema";
 
 /**
  * Dependency tracking (reqs §27, §31–32).
@@ -88,6 +89,26 @@ export function conditionRefs(
 ): Set<string> {
   if (!c) return into;
   if (c.type === "rule") {
+    /*
+     * The RIGHT-HAND SIDE counts too. A rule comparing one question against
+     * another (`{ $question: "q_start" }`) is read by two questions, and a
+     * graph that saw only the left one would let a same-page edit to the
+     * right-hand question leave the rule stale.
+     */
+    for (const v of Array.isArray(c.value) ? c.value : [c.value]) {
+      if (isQuestionValueRef(v)) {
+        const rq = getQuestionByCodeOrVar(def, v.$question);
+        if (rq) into.add(rq.id);
+      }
+    }
+    /*
+     * An `expr` source is arithmetic over other questions (`Q5 - Q6`), so the
+     * questions it names are dependencies exactly as a direct reference is.
+     * `exprStringRefs` is the same quote-aware scanner used for calculations
+     * and for custom_expression validation — one parser, three callers.
+     */
+    if (c.source.kind === "expr") exprStringRefs(def, c.source.ref, into);
+    if (c.source.count?.where) conditionRefs(def, c.source.count.where, into);
     if (c.source.kind === "question" || c.source.kind === "variable") {
       const q = getQuestionByCodeOrVar(def, c.source.ref);
       if (q) into.add(q.id);

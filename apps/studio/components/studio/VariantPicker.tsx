@@ -11,6 +11,7 @@ import {
   responseModelOf,
   isSafeConversion,
   isSelectableVariant,
+  allowedValidationKinds,
 } from "@rescript/schema";
 import { useStudio, uid } from "./store";
 
@@ -160,8 +161,15 @@ export function VariantSwitcher({ q }: { q: Question }) {
       cur.variant = to.id;
       applyVariantDefaults(cur, to);
       if (!safe) {
-        // reset only what the new variant cannot represent
-        cur.validation = cur.validation.filter((r) => to.validations.includes(r.kind));
+        /*
+         * Reset only what the new variant genuinely cannot represent.
+         * `allowedValidationKinds` keeps the four type-agnostic kinds
+         * (required / condition / custom_expression / custom_script), so
+         * switching variants no longer silently deletes a hand-built
+         * Condition-tree rule that the engine would still evaluate correctly.
+         */
+        const keep = allowedValidationKinds(to.validations, to.validations);
+        cur.validation = cur.validation.filter((r) => keep.includes(r.kind));
         if (!to.capabilities.includes("exclusive_options")) {
           cur.options = cur.options.map((o) => ({
             ...o,

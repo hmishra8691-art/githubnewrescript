@@ -361,6 +361,44 @@ export function isOptionValueRef(v: unknown): v is OptionValueRef {
   return !!v && typeof v === "object" && !Array.isArray(v) && "$option" in (v as object);
 }
 
+/**
+ * A comparison value that IS another question's answer, rather than a literal.
+ *
+ *   { type: "rule",
+ *     source: { kind: "question", ref: "q_end_date" },
+ *     operator: "gte",
+ *     value: { $question: "q_start_date" } }
+ *
+ *   → "the end date is on or after the start date"
+ *
+ * Without this the right-hand side of every rule was a literal, so the natural
+ * spelling of a cross-question comparison — picking Q5, `>`, then typing Q6 —
+ * compared Q5 against the four-character string "Q6" and was quietly false
+ * forever. The arithmetic escape hatch (`{kind:"expr", ref:"Q5 - Q6"} > 0`)
+ * expressed the numeric case only, and only for authors who knew to reach for
+ * it; it says nothing about confirming an email, requiring one answer to be a
+ * subset of another, or comparing two dates.
+ *
+ * `ref` is a question code, variable name or id — the same three spellings
+ * `ConditionSource.ref` already accepts, resolved by the same lookup, so the
+ * two sides of a rule name questions identically.
+ *
+ * `field` narrows what is read from that answer, mirroring `ConditionSource`:
+ * a row of a grid, a cell, or the count of a multi-select.
+ */
+export const QuestionValueRef = z.object({
+  $question: z.string(),
+  rowCode: z.string().optional(),
+  columnId: z.string().optional(),
+  /** "answer" (default) — the value; "count" — how many codes it holds. */
+  read: z.enum(["answer", "count"]).default("answer"),
+});
+export type QuestionValueRef = z.infer<typeof QuestionValueRef>;
+
+export function isQuestionValueRef(v: unknown): v is QuestionValueRef {
+  return !!v && typeof v === "object" && !Array.isArray(v) && "$question" in (v as object);
+}
+
 /** Convenience builders used by Studio and tests. */
 export const cond = {
   /** The option currently being evaluated — use as a rule's `value`. */

@@ -38,8 +38,17 @@ export function warnings(errors: ValidationError[]): ValidationError[] {
   return errors.filter((e) => e.severity === "warning");
 }
 
+/*
+ * Whitespace is not an answer. A respondent who types a space into a required
+ * open end has told us nothing, and every research platform treats that as
+ * blank — so `required` must reject it rather than accept a string that will
+ * arrive in the data file as " ". Trimming here rather than at each call site
+ * covers scalars, array members and grid cells at once, since every emptiness
+ * question in this file comes through this one function.
+ */
 function isEmpty(v: unknown): boolean {
-  if (v === null || v === undefined || v === "") return true;
+  if (v === null || v === undefined) return true;
+  if (typeof v === "string") return v.trim() === "";
   if (Array.isArray(v)) return v.length === 0;
   if (typeof v === "object") {
     return Object.values(v as object).every((x) => isEmpty(x));
@@ -49,6 +58,28 @@ function isEmpty(v: unknown): boolean {
 
 function ruleError(rule: ValidationRule, fallback: string): string {
   return rule.message ?? fallback;
+}
+
+/**
+ * True when this question is built from a set of items (options, rows or
+ * columns) and the pipeline has left it with none of them — so there is
+ * nothing on screen for the respondent to choose.
+ *
+ * Deliberately compares the EFFECTIVE view against the AUTHORED question: a
+ * question that never had items (open text, numeric, date, upload) returns
+ * false and keeps its ordinary requiredness. Only a question that had items
+ * and lost them all — an empty mask, a carry-forward from an unanswered
+ * source, a List Fill that allocated nothing — is treated as unanswerable.
+ */
+function hasNoAnswerableItems(q: Question, ctx: EvalContext): boolean {
+  const authoredItems = q.options.length + q.rows.length;
+  if (authoredItems === 0) return false;
+  const view = effectiveQuestion(q, ctx);
+  // A grid needs both axes; a flat list needs only its options.
+  if (q.rows.length > 0 && view.rows.length === 0) return true;
+  if (q.options.length > 0 && view.options.length === 0) return true;
+  if (q.columns.length > 0 && view.columns.length === 0) return true;
+  return false;
 }
 
 /** An ISO date, or the name of something in scope that holds one. */
@@ -224,8 +255,20 @@ export function validateQuestion(
   const push = (message: string, extra?: Partial<ValidationError>) =>
     errors.push({ questionId: q.id, message: resolvePiping(message, ctx), ...extra });
 
-  // implicit required
-  if (q.required && isEmpty(value)) {
+  /*
+   * Implicit required — but never on a question the respondent cannot answer.
+   *
+   * A mask, a carry-forward or a List Fill that resolves to nothing leaves an
+   * option-bearing question on the page with an empty list. Requiring an
+   * answer there is an unanswerable blocking page: the respondent is told to
+   * answer, and has nothing to answer with. The three masking cases (§M156-158
+   * — empty source, zero rows, zero columns) all land here, so the guard is on
+   * the *effective* item collection rather than on any one mask field.
+   *
+   * `hasNoAnswerableItems` is false for types that legitimately have no items
+   * (open text, numeric, date), so requiredness on those is untouched.
+   */
+  if (q.required && isEmpty(value) && !hasNoAnswerableItems(q, ctx)) {
     push("This question is required.");
   }
 
@@ -519,6 +562,50 @@ export function validateQuestion(
     for (const row of view.rows) {
       if (isEmpty(rowsAnswered[String(row.code)]))
         push(`Please answer for "${row.label}".`, { rowCode: String(row.code) });
+    }
+  }
+
+  /*
+   * MATRIX: per-row rules, and the question's own scalar rules applied per
+   * cell (§V092 "each rating must be 1-5", §V094 required cell, §V098).
+   *
+   * A matrix answer is an object keyed by row, so a rule like `min_value`
+   * written at question level was handed that whole object, `Number({...})`
+   * gave NaN, and the rule silently passed — while the properties panel went
+   * on offering min/max for `matrix_numeric` as though it worked. Per-row
+   * rules had the same fate from the other direction: the canvas wrote
+   * `row.validation` for any matrix, and only `text_list`/`numeric_list` ever
+   * read it back.
+   *
+   * Both are answered here by running the SAME `checkScalarRules` per cell
+   * that every other shape already uses — no matrix-specific rule engine, so
+   * a kind added anywhere works here too. Rows come from `effectiveQuestion`,
+   * so a masked-away row is exempt, which is what §V099 asks for.
+   */
+  if (q.type.startsWith("matrix") && q.rows.length > 0) {
+    const view = effectiveQuestion(q, ctx);
+    const cells = (value ?? {}) as Record<string, unknown>;
+    /*
+     * Cell-scoped kinds only. `required` is handled per row just above, and
+     * the selection-count and aggregate kinds are about the answer as a
+     * whole — running those per cell would report the same failure once per
+     * row.
+     */
+    const cellKinds = q.validation.filter((r) =>
+      !["required", "min_selections", "max_selections", "sum_equals", "sum_max", "sum_min",
+        "column_sum_equals", "column_sum_max", "column_sum_min"].includes(r.kind));
+    for (const row of view.rows) {
+      const rc = String(row.code);
+      const cell = cells?.[rc];
+      const label = row.label.replace(/<[^>]*>/g, "");
+      if (cellKinds.length && !isEmpty(cell)) {
+        checkScalarRules(cellKinds, cell, ctx, (m, sev) =>
+          push(`${label}: ${m}`, { rowCode: rc, severity: sev }),
+        );
+      }
+      checkScalarRules(row.validation ?? [], cell, ctx, (m, sev) =>
+        push(`${label}: ${m}`, { rowCode: rc, severity: sev }),
+      );
     }
   }
 

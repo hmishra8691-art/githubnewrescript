@@ -1,0 +1,697 @@
+<title>Logic Engine Compatibility Audit</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;450;600&display=swap">
+<style>
+  :root {
+    --ground:        #F6F8F8;
+    --surface:       #FFFFFF;
+    --surface-sunk:  #EDF1F2;
+    --ink:           #14191B;
+    --ink-soft:      #4A585C;
+    --ink-faint:     #7C8A8E;
+    --rule:          #D9E1E3;
+    --rule-soft:     #E8EEEF;
+    --accent:        #0E6F78;
+    --accent-soft:   #E0F0F1;
+    --fixed:         #1C6E45;
+    --fixed-soft:    #E1F0E7;
+    --open:          #8A5A00;
+    --open-soft:     #F8EEDA;
+    --severe:        #A32219;
+    --severe-soft:   #FAE6E4;
+    --shadow:        0 1px 2px rgba(20,25,27,.06), 0 4px 14px rgba(20,25,27,.05);
+
+    --f-display: "IBM Plex Sans Condensed", "Helvetica Neue", Arial, sans-serif;
+    --f-body:    "IBM Plex Sans", -apple-system, "Segoe UI", sans-serif;
+    --f-mono:    "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:       #0E1214;
+      --surface:      #161C1F;
+      --surface-sunk: #1D2529;
+      --ink:          #E4EBEC;
+      --ink-soft:     #A5B4B8;
+      --ink-faint:    #74868B;
+      --rule:         #2A3438;
+      --rule-soft:    #212A2E;
+      --accent:       #4FBDC7;
+      --accent-soft:  #123134;
+      --fixed:        #5FC28C;
+      --fixed-soft:   #122C1E;
+      --open:         #E0AC4B;
+      --open-soft:    #2E2413;
+      --severe:       #F08379;
+      --severe-soft:  #331917;
+      --shadow:       0 1px 2px rgba(0,0,0,.4), 0 4px 14px rgba(0,0,0,.3);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:       #0E1214;
+    --surface:      #161C1F;
+    --surface-sunk: #1D2529;
+    --ink:          #E4EBEC;
+    --ink-soft:     #A5B4B8;
+    --ink-faint:    #74868B;
+    --rule:         #2A3438;
+    --rule-soft:    #212A2E;
+    --accent:       #4FBDC7;
+    --accent-soft:  #123134;
+    --fixed:        #5FC28C;
+    --fixed-soft:   #122C1E;
+    --open:         #E0AC4B;
+    --open-soft:    #2E2413;
+    --severe:       #F08379;
+    --severe-soft:  #331917;
+    --shadow:       0 1px 2px rgba(0,0,0,.4), 0 4px 14px rgba(0,0,0,.3);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--f-body);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 56px 28px 96px; }
+
+  /* ---------------------------------------------------------- masthead */
+  .masthead { border-bottom: 2px solid var(--ink); padding-bottom: 20px; margin-bottom: 32px; }
+  .eyebrow {
+    font-family: var(--f-mono); font-size: 11.5px; font-weight: 500;
+    letter-spacing: .13em; text-transform: uppercase; color: var(--accent);
+    margin-bottom: 14px;
+  }
+  h1 {
+    font-family: var(--f-display); font-weight: 700; font-size: clamp(34px, 5.2vw, 52px);
+    line-height: 1.04; letter-spacing: -.018em; margin: 0 0 14px; text-wrap: balance;
+  }
+  .standfirst {
+    font-size: 17.5px; color: var(--ink-soft); max-width: 66ch; margin: 0;
+  }
+
+  /* ------------------------------------------------------------ verdict */
+  .verdict {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
+    gap: 1px; background: var(--rule); border: 1px solid var(--rule);
+    border-radius: 10px; overflow: hidden; margin: 30px 0 12px;
+  }
+  .vcell { background: var(--surface); padding: 16px 18px; }
+  .vnum {
+    font-family: var(--f-display); font-size: 34px; font-weight: 700;
+    line-height: 1; letter-spacing: -.02em; font-variant-numeric: tabular-nums;
+  }
+  .vnum.is-fixed  { color: var(--fixed); }
+  .vnum.is-open   { color: var(--open); }
+  .vlabel {
+    font-size: 12.5px; color: var(--ink-faint); margin-top: 7px; line-height: 1.35;
+  }
+  .verdict-note {
+    font-size: 13.5px; color: var(--ink-faint); margin: 0 0 44px;
+  }
+
+  /* ----------------------------------------------------------- sections */
+  section { margin-bottom: 52px; scroll-margin-top: 20px; }
+  h2 {
+    font-family: var(--f-display); font-weight: 700; font-size: 25px;
+    letter-spacing: -.01em; margin: 0 0 6px; padding-top: 14px;
+    border-top: 1px solid var(--rule);
+  }
+  .section-note { color: var(--ink-soft); font-size: 15px; margin: 0 0 22px; max-width: 68ch; }
+  h3 {
+    font-family: var(--f-display); font-weight: 600; font-size: 16px;
+    letter-spacing: .01em; margin: 30px 0 12px; color: var(--ink);
+  }
+  p { max-width: 68ch; }
+
+  /* -------------------------------------------------------------- chips */
+  .chip {
+    display: inline-block; font-family: var(--f-mono); font-size: 10.5px;
+    font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
+    padding: 2.5px 7px; border-radius: 4px; white-space: nowrap; vertical-align: 1px;
+  }
+  .chip.severe { background: var(--severe-soft); color: var(--severe); }
+  .chip.fixed  { background: var(--fixed-soft);  color: var(--fixed); }
+  .chip.open   { background: var(--open-soft);   color: var(--open); }
+  .chip.info   { background: var(--accent-soft); color: var(--accent); }
+
+  code, .mono { font-family: var(--f-mono); font-size: .875em; }
+  code {
+    background: var(--surface-sunk); padding: 1.5px 5px; border-radius: 4px;
+    color: var(--ink); word-break: break-word;
+  }
+
+  /* -------------------------------------------------------- defect list */
+  .defects { display: flex; flex-direction: column; gap: 1px; background: var(--rule);
+             border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; }
+  .defect {
+    background: var(--surface); padding: 16px 18px 16px 20px;
+    border-left: 3px solid transparent; display: grid; gap: 7px;
+  }
+  .defect.sev-critical { border-left-color: var(--severe); }
+  .defect.sev-major    { border-left-color: var(--open); }
+  .defect.sev-minor    { border-left-color: var(--accent); }
+  .defect-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 9px; }
+  .defect-title { font-weight: 600; font-size: 15.5px; }
+  .defect-body { font-size: 14.5px; color: var(--ink-soft); margin: 0; max-width: 74ch; }
+  .defect-where {
+    font-family: var(--f-mono); font-size: 11.5px; color: var(--ink-faint);
+    overflow-x: auto; white-space: nowrap; padding-bottom: 2px;
+  }
+
+  /* ------------------------------------------------------------- proof */
+  .proof {
+    background: var(--surface-sunk); border-radius: 9px; padding: 16px 18px;
+    font-family: var(--f-mono); font-size: 12.5px; line-height: 1.75;
+    overflow-x: auto; margin: 16px 0 0; border: 1px solid var(--rule-soft);
+  }
+  .proof .was { color: var(--severe); }
+  .proof .now { color: var(--fixed); }
+  .proof .cmt { color: var(--ink-faint); }
+
+  /* ------------------------------------------------------------ tables */
+  .tw { overflow-x: auto; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 640px; }
+  thead th {
+    background: var(--surface-sunk); text-align: left; font-weight: 600;
+    font-family: var(--f-display); font-size: 12.5px; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--ink-soft);
+    padding: 10px 13px; border-bottom: 1px solid var(--rule); white-space: nowrap;
+  }
+  tbody td { padding: 9px 13px; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody th {
+    text-align: left; font-weight: 600; padding: 9px 13px;
+    border-bottom: 1px solid var(--rule-soft); font-size: 13.5px; white-space: nowrap;
+  }
+  td.q { font-family: var(--f-mono); font-size: 12px; color: var(--ink-faint); white-space: nowrap; }
+  .cellnote { display: block; font-size: 11.5px; color: var(--ink-faint); margin-top: 2px; line-height: 1.4; }
+
+  /* status dots for the matrices */
+  .st { font-family: var(--f-mono); font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .st::before {
+    content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    margin-right: 6px; vertical-align: 1px;
+  }
+  .st.full::before { background: var(--fixed); }
+  .st.part::before { background: var(--open); }
+  .st.none::before { background: var(--severe); }
+  .st.na::before   { background: var(--rule); }
+  .st.full { color: var(--fixed); }
+  .st.part { color: var(--open); }
+  .st.none { color: var(--severe); }
+  .st.na   { color: var(--ink-faint); }
+
+  ul.plain { padding-left: 20px; max-width: 70ch; }
+  ul.plain li { margin-bottom: 7px; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; margin: 12px 0 0; font-size: 12.5px; color: var(--ink-faint); }
+
+  footer {
+    border-top: 1px solid var(--rule); margin-top: 60px; padding-top: 22px;
+    font-size: 13.5px; color: var(--ink-faint); max-width: 70ch;
+  }
+
+  @media (max-width: 640px) {
+    .wrap { padding: 36px 18px 72px; }
+    .vnum { font-size: 28px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="eyebrow">Rescript · Logic compatibility audit</div>
+    <h1>Logic Engine Compatibility Audit</h1>
+    <p class="standfirst">
+      Display Logic, Validation Logic and Masking Logic audited against the three master test
+      questionnaires — 437 scenarios, deduplicated to 152 distinct capabilities, each checked in
+      source and then driven through the real engine rather than taken on trust.
+    </p>
+  </header>
+
+  <div class="verdict">
+    <div class="vcell"><div class="vnum">152</div><div class="vlabel">capabilities audited across the three documents</div></div>
+    <div class="vcell"><div class="vnum is-fixed">14</div><div class="vlabel">defects found and fixed</div></div>
+    <div class="vcell"><div class="vnum is-open">23</div><div class="vlabel">gaps remaining, each with a named cause</div></div>
+    <div class="vcell"><div class="vnum">771</div><div class="vlabel">engine unit tests, still passing</div></div>
+  </div>
+  <p class="verdict-note">
+    Nine of the fourteen were not missing features but <strong>silent wrong answers</strong> — rules the
+    builder accepted, saved and displayed, which then evaluated to the wrong thing at runtime with
+    nothing on screen to say so.
+  </p>
+
+  <!-- =================================================== defects fixed -->
+  <section>
+    <h2>What was broken</h2>
+    <p class="section-note">
+      Every item here was reproduced against the real engine before being changed, and is covered by a
+      test that fails without the fix. Severity is about respondent-visible consequence, not effort.
+    </p>
+
+    <div class="defects">
+
+      <div class="defect sev-critical">
+        <div class="defect-head">
+          <span class="chip severe">Critical</span>
+          <span class="defect-title">A hidden question could screen a respondent out</span>
+          <span class="chip fixed">Fixed</span>
+        </div>
+        <p class="defect-body">
+          Skip logic ran over every question <em>authored</em> on a page, not the ones the respondent was
+          actually shown. A question hidden by display logic has no answer, so a rule like
+          <code>Q2 unanswered → terminate</code> fired for exactly the respondents for whom Q2 was
+          correctly hidden. Confirmed by driving the flow engine: the respondent was returned
+          <code>endStatus: "screened"</code> on a question that never rendered.
+        </p>
+        <div class="defect-where">packages/engine/src/flow.ts — firstTriggeredSkip now iterates visibleQuestions()</div>
+      </div>
+
+      <div class="defect sev-critical">
+        <div class="defect-head">
+          <span class="chip severe">Critical</span>
+          <span class="defect-title">Masking every option away produced an unanswerable blocking page</span>
+          <span class="chip fixed">Fixed</span>
+        </div>
+        <p class="defect-body">
+          When a mask, a carry-forward or a List Fill resolved to nothing, the question stayed on the page
+          with an empty list and <code>required</code> still enforced: the respondent was told to answer and
+          given nothing to answer with, with no way forward. Requiredness is now suppressed only when a
+          question that <em>had</em> items has lost all of them — covering M156 (empty source), M157 (zero
+          rows) and M158 (zero columns) at one point. Ordinary required questions are untouched, which is
+          asserted directly.
+        </p>
+        <div class="defect-where">packages/engine/src/validate.ts — hasNoAnswerableItems()</div>
+      </div>
+
+      <div class="defect sev-major">
+        <div class="defect-head">
+          <span class="chip severe">Critical</span>
+          <span class="defect-title">The Universal Logic Engine's validation mode was unreachable in the UI</span>
+          <span class="chip fixed">Fixed</span>
+        </div>
+        <p class="defect-body">
+          Condition-tree validation is implemented for every question type in the engine, but the properties
+          panel offers exactly the kinds a question's <em>variant</em> declares — and no variant declared
+          <code>condition</code>. So for any question carrying a variant, which is every new question, the
+          feature could not be selected at all. Worse, switching variants deleted any such rule already
+          saved. Four kinds that are type-agnostic in the engine — <code>required</code>,
+          <code>condition</code>, <code>custom_expression</code>, <code>custom_script</code> — are now
+          declared once and unioned in, instead of being restated per variant and silently forgotten.
+        </p>
+        <div class="defect-where">packages/schema/src/variants.ts — UNIVERSAL_VALIDATIONS, allowedValidationKinds()</div>
+      </div>
+
+      <div class="defect sev-major">
+        <div class="defect-head">
+          <span class="chip severe">Critical</span>
+          <span class="defect-title">Auto punch overwrote whole answers on image questions</span>
+          <span class="chip fixed">Fixed</span>
+        </div>
+        <p class="defect-body">
+          Two hand-maintained lists decided whether a question holds one code or many. One omitted
+          <code>image_select</code> — so punching one took the single-answer branch and replaced the
+          respondent's entire selection with a single code. The other asserted it was scalar, so a response
+          filter on it emitted a containment test that could never match <em>and</em> suppressed the engine
+          pass that would have got it right. Both now ask the schema's response model, which knows
+          <code>image_select</code> backs both a single- and a multiple-choice variant.
+        </p>
+        <div class="defect-where">packages/engine/src/setExpression.ts, responseFilter.ts — isMultiValuedQuestion(), isScalarAnswerQuestion()</div>
+      </div>
+
+      <div class="defect sev-major">
+        <div class="defect-head">
+          <span class="chip open">Major</span>
+          <span class="defect-title">No date arithmetic existed at all</span>
+          <span class="chip fixed">Fixed</span>
+        </div>
+        <p class="defect-body">
+          The expression language had thirty-four functions and not one that understood a date, so ten
+          validation requirements (V041–V050) had no expressible form: age on the day of the survey, no
+          future dates, expiry, end-after-start, and both relative windows. Added
+          <code>TODAY</code>, <code>AGE</code>, <code>DATEDIFF</code>, <code>DATEADD</code>,
+          <code>DATE</code>, <code>YEAR</code>, <code>MONTH</code>, <code>DAY</code> — in the shared function
+          table, so a calculation, a display condition, a mask and a validation rule all spell them
+          identically. Ages are calendar-aware and compared in UTC whole days, so they do not flicker by
+          the respondent's timezone.
+        </p>
+        <div class="defect-where">packages/engine/src/calc.ts — AGE("1990-06-15") → 36</div>
+      </div>
+
+      <div class="defect sev-major">
+        <div class="defect-head">
+          <span class="chip open">Major</span>
+          <span class="defect-title">Comparing one question against another was silently impossible</span>
+          <span class="chip fixed">Fixed</span>
+        </div>
+        <p class="defect-body">
+          Every right-hand side was a literal. The obvious spelling of a cross-question rule — pick Q5,
+          pick <code>&gt;</code>, type <code>Q6</code> — compared Q5 against the two characters "Q6" and was
+          false forever, with no error. This one gap blocked confirm-email (V022, V112), end-after-start
+          (V045), min-vs-max (V084), subset and empty-intersection (V068, V069), dynamic exact count (V070),
+          sum-within-budget (V082) and <code>Q94 != Q90</code> in the display document. A comparison value can
+          now <em>be</em> another question's answer, resolved through the same lookup the left-hand side uses,
+          reachable from the visual builder, round-tripping through the expression tab, and visible to the
+          dependency graph so it re-fires live.
+        </p>
+        <div class="defect-where">packages/schema/src/conditions.ts — QuestionValueRef · evaluate.ts · logicExpression.ts · dependencies.ts · ConditionBuilder.tsx</div>
+      </div>
+
+      <div class="defect sev-major">
+        <div class="defect-head">
+          <span class="chip open">Major</span>
+          <span class="defect-title">Matrix cell validation and row rules were accepted and discarded</span>
+          <span class="chip fixed">Fixed</span>
+        </div>
+        <p class="defect-body">
+          A matrix answer is an object keyed by row, so a <code>min_value</code> rule written at question
+          level was handed that whole object — <code>Number({…})</code> is NaN, and the rule passed. The
+          panel offered min/max for <code>matrix_numeric</code> regardless. Per-row rules failed from the other
+          direction: the canvas wrote <code>row.validation</code> for any matrix and only the two list types
+          ever read it back. Both now run the same <code>checkScalarRules</code> per cell that every other
+          shape uses, over <em>visible</em> rows only — which is also what V099 asks for.
+        </p>
+        <div class="defect-where">packages/engine/src/validate.ts — per-cell and per-row rules for matrix types</div>
+      </div>
+
+      <div class="defect sev-major">
+        <div class="defect-head">
+          <span class="chip open">Major</span>
+          <span class="defect-title">Every time-of-day comparison was false</span>
+          <span class="chip fixed">Fixed</span>
+        </div>
+        <p class="defect-body">
+          A <code>time</code> question stores a bare clock value, and the date parser rejected it outright —
+          so "between 09:00 and 17:00", the only thing a time question exists to be asked, never matched.
+          Clock times now parse, and the five ordering operators put their operands on one comparable scale,
+          so <code>&gt;</code>, <code>&lt;</code>, <code>≥</code>, <code>≤</code> and <code>between</code> work
+          on dates and times as well as numbers. Deliberately all-or-nothing: a date compared against a plain
+          number stays false rather than being coerced into a timestamp.
+        </p>
+        <div class="defect-where">packages/engine/src/evaluate.ts — toTime(), comparableOperands()</div>
+      </div>
+
+      <div class="defect sev-minor">
+        <div class="defect-head">
+          <span class="chip open">Major</span>
+          <span class="defect-title">Whitespace satisfied a required question</span>
+          <span class="chip fixed">Fixed</span>
+        </div>
+        <p class="defect-body">
+          A single space passed <code>required</code> everywhere and arrived in the data file as an answer
+          (V009). Emptiness is decided in one function, so trimming there covers scalars, array members and
+          grid cells at once.
+        </p>
+        <div class="defect-where">packages/engine/src/validate.ts — isEmpty()</div>
+      </div>
+
+      <div class="defect sev-minor">
+        <div class="defect-head">
+          <span class="chip open">Major</span>
+          <span class="defect-title">Matrix column conditions never matched</span>
+          <span class="chip fixed">Fixed</span>
+        </div>
+        <p class="defect-body">
+          Naming a column without a row indexed a row-keyed answer map by the column id and always found
+          nothing — while the builder went on offering the column picker. A column with no row now means
+          "this column, across every row", which is the natural reading and the one the display document
+          asks for ("any row rated Often or Always"). The three matrix shapes are handled distinctly: a
+          single-response row stores the column it <em>chose</em>, so only rows that chose it count.
+        </p>
+        <div class="defect-where">packages/engine/src/evaluate.ts — column-only drill-down</div>
+      </div>
+
+      <div class="defect sev-minor">
+        <div class="defect-head">
+          <span class="chip open">Major</span>
+          <span class="defect-title">A broken expression turned a validation rule into a no-op</span>
+          <span class="chip fixed">Fixed</span>
+        </div>
+        <p class="defect-body">
+          V131 spells its rule with <code>REGEX(…)</code>, which did not exist; the unknown-function error was
+          swallowed and the rule passed everything. <code>REGEX</code>/<code>MATCHES</code> now exist as
+          functions alongside the <code>matches</code> operator the visual builder already had.
+        </p>
+        <div class="defect-where">packages/engine/src/calc.ts</div>
+      </div>
+
+      <div class="defect sev-minor">
+        <div class="defect-head">
+          <span class="chip info">Latent</span>
+          <span class="defect-title">Three more duplicate lists, one already stale</span>
+          <span class="chip fixed">Fixed</span>
+        </div>
+        <p class="defect-body">
+          The expression parser kept its own copy of the function names and had already fallen behind by the
+          whole date family, so a rule the evaluator could compute would have been rejected at parse time as
+          an unknown function. It now derives from the single source, as the codebase's own comments say such
+          lists should. The dependency graph was likewise blind to <code>expr</code> sources, to
+          <code>count … where</code> clauses and to right-hand question references — rules that authored
+          correctly but could fail to re-fire when their input changed on the same page.
+        </p>
+        <div class="defect-where">packages/engine/src/logicExpression.ts, dependencies.ts</div>
+      </div>
+
+    </div>
+
+    <div class="proof">
+<span class="cmt">// the three severe defects, driven through the compiled engine before and after</span>
+<span class="was">BUG CONFIRMED  advancing past a page whose HIDDEN question has a screen-out skip rule</span>
+<span class="was">                 got {"endStatus":"screened","skips":["q2"]}  want {"endStatus":null,"skips":[]}</span>
+<span class="was">BUG CONFIRMED  a question whose mask removed every option must not block on required</span>
+<span class="was">BUG CONFIRMED  whitespace-only answer to a required open text (V009)</span>
+
+<span class="now">ok  advancing past a page whose HIDDEN question has a screen-out skip rule</span>
+<span class="now">ok  a question whose mask removed every option must not block on required</span>
+<span class="now">ok  whitespace-only answer to a required open text (V009)</span>
+<span class="now">ok  ordinary required questions (options / text / matrix) still block when unanswered</span>
+    </div>
+  </section>
+
+  <!-- ============================================ capability inventory -->
+  <section>
+    <h2>Capability status by family</h2>
+    <p class="section-note">
+      The 437 scenarios collapse to 152 capabilities, because most scenarios exercise the same capability
+      with different content. Status is what the engine actually does, verified by running it.
+    </p>
+
+    <h3>Display logic</h3>
+    <div class="tw">
+      <table>
+        <thead><tr><th>Capability</th><th>Status</th><th>Note</th></tr></thead>
+        <tbody>
+          <tr><td>Equals, not-equals, selected, not-selected, answered, unanswered</td><td><span class="st full">Full</span></td><td>Case-sensitive equality; use <code>LOWER()</code> to normalise</td></tr>
+          <tr><td>COUNT ≥ ≤ = ≠, count range, zero-count, counts from different questions in one rule</td><td><span class="st full">Full</span></td><td>Count is a source, so every comparison operator already applies</td></tr>
+          <tr><td>Numeric comparison, BETWEEN / NOT BETWEEN</td><td><span class="st full">Full</span></td><td>Now also correct on dates and clock times</td></tr>
+          <tr><td>Cross-question arithmetic — <code>Q46 + Q47 &gt; 150000</code>, division with a zero guard</td><td><span class="st full">Full</span></td><td>Expression tab; division by zero yields null, not an error</td></tr>
+          <tr><td>Comparing two questions — <code>Q94 != Q90</code></td><td><span class="st full">Full</span></td><td class="cellnote">Newly enabled. Visual builder and expression tab</td></tr>
+          <tr><td>String contains / starts / ends / length / case-normalised match</td><td><span class="st full">Full</span></td><td>Length and <code>LOWER</code> via the expression tab</td></tr>
+          <tr><td>AND / OR / NOT, arbitrarily nested groups</td><td><span class="st full">Full</span></td><td>Multi-child NOT is NOR, and prints that way</td></tr>
+          <tr><td>Matrix row, cell, and "any row rated X"</td><td><span class="st full">Full</span></td><td>Column-only conditions newly corrected</td></tr>
+          <tr><td>Ranking position, slider threshold, allocation total</td><td><span class="st full">Full</span></td><td>Seven ranking operators</td></tr>
+          <tr><td>"At least one allocation cell ≥ 25"</td><td><span class="st part">Partial</span></td><td>Per-option amounts are not exposed inside a count's <code>where</code>; enumerate, or use a row-scoped grid</td></tr>
+          <tr><td>Age from date of birth, elapsed days, time-of-day range</td><td><span class="st full">Full</span></td><td class="cellnote">Newly enabled. Clock literals must be quoted</td></tr>
+          <tr><td>Email domain, postal prefix</td><td><span class="st full">Full</span></td><td>Ordinary string operators</td></tr>
+          <tr><td>List Fill count, masking result, loop item / index / count, per-iteration rules</td><td><span class="st full">Full</span></td><td>Loop reference columns addressable by name</td></tr>
+          <tr><td>Hidden, calculated and auto-punch-derived variables</td><td><span class="st full">Full</span></td><td>Hidden sources evaluate even though nothing renders</td></tr>
+          <tr><td>Randomised-block assignment as a condition source</td><td><span class="st none">Absent</span></td><td>The randomiser resolves from the seed and records no variable</td></tr>
+          <tr><td>Flow position — "current page is before the final block"</td><td><span class="st none">Absent</span></td><td>No page/flow source kind; the evaluation context carries no position</td></tr>
+          <tr><td>Back-navigation re-evaluation, invalid-source safety, deterministic precedence</td><td><span class="st full">Full</span></td><td>No visibility state is cached, so none can go stale</td></tr>
+          <tr><td>Cycle detection</td><td><span class="st part">Partial</span></td><td>Detected and reported at author time; runtime cannot loop, but a cyclic definition still saves</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Validation logic</h3>
+    <div class="tw">
+      <table>
+        <thead><tr><th>Capability</th><th>Status</th><th>Note</th></tr></thead>
+        <tbody>
+          <tr><td>Required / optional, whitespace-as-empty, null safety</td><td><span class="st full">Full</span></td><td class="cellnote">Whitespace newly corrected (V009)</td></tr>
+          <tr><td>Min / max / exact selections, count ranges</td><td><span class="st full">Full</span></td><td>Exact count as a min+max pair or one condition rule</td></tr>
+          <tr><td>Selected count equals another question's number (V070)</td><td><span class="st full">Full</span></td><td class="cellnote">Newly enabled by cross-question comparison</td></tr>
+          <tr><td>Length, regex, character set, exact length</td><td><span class="st part">Partial</span></td><td>All reachable through <code>pattern</code>; no dedicated charset or exact-length kinds</td></tr>
+          <tr><td>Email syntax, phone, custom regex</td><td><span class="st full">Full</span></td><td>Phone is deliberately permissive across numbering plans</td></tr>
+          <tr><td>Confirm-email / must-equal-a-previous-field (V022, V112)</td><td><span class="st full">Full</span></td><td class="cellnote">Newly enabled</td></tr>
+          <tr><td>Country-specific postal, ZIP+4, URL, currency as first-class kinds</td><td><span class="st part">Partial</span></td><td>Validators exist but are reachable only on list rows; use <code>pattern</code> on a scalar</td></tr>
+          <tr><td>Integer, ranges, non-negative, strictly positive</td><td><span class="st full">Full</span></td><td>Strict <code>&gt; 0</code> via an expression, since bounds are inclusive</td></tr>
+          <tr><td>Decimal-precision limit</td><td><span class="st none">Absent</span></td><td>No kind; <code>settings.step</code> is a UI hint and is never validated</td></tr>
+          <tr><td>Age 18+, no future date, expiry, end ≥ start, relative windows (V041–V050)</td><td><span class="st full">Full</span></td><td class="cellnote">Newly enabled by the date functions</td></tr>
+          <tr><td>Exclusive options, None-of-the-above, Other-requires-text</td><td><span class="st full">Full</span></td><td>Enforced by input prevention plus rules</td></tr>
+          <tr><td>Conditional requiredness ("if Other then specify")</td><td><span class="st part">Partial</span></td><td>The <code>when</code> gate exists and is honoured, but has no editor; express it as a condition rule</td></tr>
+          <tr><td>Set logic — forbidden combinations, required membership</td><td><span class="st full">Full</span></td><td><code>containsAll</code> / <code>containsAny</code> / <code>containsNone</code></td></tr>
+          <tr><td>Subset of, empty intersection with another question (V068, V069)</td><td><span class="st full">Full</span></td><td class="cellnote">Newly enabled</td></tr>
+          <tr><td>Cross-question AND / OR / NOT, mathematical consistency</td><td><span class="st full">Full</span></td><td>Full condition tree, plus arithmetic sources</td></tr>
+          <tr><td>SUM = 100, SUM ≤ a variable, AVERAGE, MIN ≤ MAX, derived percentage change</td><td><span class="st full">Full</span></td><td>Dedicated kinds for constant sum; the rest as expressions</td></tr>
+          <tr><td>Every displayed row answered, per-cell range, mask-aware exemption (V091–V099)</td><td><span class="st full">Full</span></td><td class="cellnote">Per-cell and per-row rules newly corrected</td></tr>
+          <tr><td>Rank uniqueness / no duplicate ranks (V095, V101, V110)</td><td><span class="st none">Absent</span></td><td>No uniqueness check in the engine or the renderer</td></tr>
+          <tr><td>Per-iteration loop validation, mask-aware loop grids</td><td><span class="st full">Full</span></td><td>Rules inside a loop evaluate per iteration</td></tr>
+          <tr><td>Aggregate across loop iterations — AVERAGE of all scores (V130)</td><td><span class="st none">Absent</span></td><td>Validation is invoked per iteration; no rollup hook exists</td></tr>
+          <tr><td>Expression mode with calculated and hidden variables, safe failure</td><td><span class="st full">Full</span></td><td class="cellnote"><code>REGEX()</code> newly added; it previously made rules silently pass</td></tr>
+          <tr><td>Blocking versus warning tiers</td><td><span class="st full">Full</span></td><td><code>severity</code> is honoured end to end</td></tr>
+          <tr><td>Error clears the moment the respondent fixes the input</td><td><span class="st none">Absent</span></td><td>Messages are set on submit and persist until the next submit</td></tr>
+          <tr><td>No raw <code>undefined</code> in a respondent-facing message</td><td><span class="st part">Partial</span></td><td>A rule saved without a value interpolates it into the default message</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Masking logic</h3>
+    <div class="tw">
+      <table>
+        <thead><tr><th>Capability</th><th>Status</th><th>Note</th></tr></thead>
+        <tbody>
+          <tr><td>Carry-forward to selected, to not-selected, all-minus-selected</td><td><span class="st full">Full</span></td><td>The core set operations, with round-trip tests</td></tr>
+          <tr><td>UNION, INTERSECTION, DIFFERENCE, EXCLUDE, chained and grouped</td><td><span class="st full">Full</span></td><td><code>(Q1 ∪ Q2) DIFF Q3</code> stores as a tree</td></tr>
+          <tr><td>Fixed codes, always-show, always-hide, conditional None / Other</td><td><span class="st part">Partial</span></td><td>Always-show survival is coupled to the empty-source setting — see below</td></tr>
+          <tr><td>Targets: single, multi, dropdown, ranking, allocation, matrix rows, matrix columns</td><td><span class="st full">Full</span></td><td>Rows and columns are independent and combinable</td></tr>
+          <tr><td>Cell-level masking (specific row × column suppressed)</td><td><span class="st none">Absent</span></td><td>No cell mask field; the renderer draws the full cross product</td></tr>
+          <tr><td>Sources: multi-select, single-select, hidden, List Fill, loop item, several questions combined</td><td><span class="st full">Full</span></td><td>Hidden but populated sources evaluate correctly</td></tr>
+          <tr><td>Numeric-band and text-match sources producing a <em>set</em></td><td><span class="st part">Partial</span></td><td>Expressible as a gate on the whole mask or per-option eligibility, not as a set leaf</td></tr>
+          <tr><td>"First N selected", ordered take</td><td><span class="st part">Partial</span></td><td>Reachable through a List Fill with a fixed count</td></tr>
+          <tr><td>List Fill masking, count limits, filtering, composition with fixed codes</td><td><span class="st full">Full</span></td><td>Priority, quota and eligibility rules all feed it</td></tr>
+          <tr><td>Fallback to a <em>different</em> list when List Fill is empty</td><td><span class="st part">Partial</span></td><td>Show-all / show-none / keep-special only; no substitute list</td></tr>
+          <tr><td>Loop reference masking — <code>CURRENT_ITEM.Category</code></td><td><span class="st full">Full</span></td><td>Loops carry typed reference columns</td></tr>
+          <tr><td>Nested-loop outer reference</td><td><span class="st none">Absent</span></td><td>The loop-item set leaf has no scope field, though conditions do</td></tr>
+          <tr><td>"Hide items used in earlier iterations"</td><td><span class="st none">Absent</span></td><td>No per-iteration consumed-set is kept</td></tr>
+          <tr><td>Expression producing a set; custom function returning codes</td><td><span class="st none">Absent</span></td><td>An expression leaf resolves to exactly one code</td></tr>
+          <tr><td>Empty, invalid, stale and duplicate sources; zero rows or columns</td><td><span class="st full">Full</span></td><td>Deduplicated, never invents codes, configurable fallback</td></tr>
+          <tr><td>Circular dependency detection; save and reload fidelity</td><td><span class="st full">Full</span></td><td>Self-masking refused; mutual masks are graph edges</td></tr>
+          <tr><td>Preselect and disable mask actions</td><td><span class="st none">Absent</span></td><td>Stored and offered in the UI; nothing applies them</td></tr>
+          <tr><td>Deterministic precedence with a debug trace</td><td><span class="st part">Partial</span></td><td>Order is deterministic and traced; the mask's reason does not name the winning rule, and column masking records no trace</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="legend">
+      <span><span class="st full">Full</span> — authored, stored, evaluated, verified</span>
+      <span><span class="st part">Partial</span> — reachable, with a named limit</span>
+      <span><span class="st none">Absent</span> — not expressible today</span>
+    </div>
+  </section>
+
+  <!-- ================================================= type × logic -->
+  <section>
+    <h2>Question type × logic system</h2>
+    <p class="section-note">
+      The engine's display, skip and mask application are all type-agnostic — none of them tests
+      <code>q.type</code> at all. Where a cell is not Full, the limit is nearly always in the authoring
+      surface or in a validation kind, not in the evaluator. <span class="st na">n/a</span> means the
+      combination is meaningless, not unimplemented.
+    </p>
+    <div class="tw">
+      <table>
+        <thead>
+          <tr><th>Question type</th><th>Display</th><th>Validation</th><th>Masking</th><th>Skip</th></tr>
+        </thead>
+        <tbody>
+          <tr><th>Single select, dropdown</th><td><span class="st full">Full</span></td><td><span class="st full">Full</span></td><td><span class="st full">Full</span></td><td><span class="st full">Full</span></td></tr>
+          <tr><th>Multi select, multi dropdown</th><td><span class="st full">Full</span></td><td><span class="st full">Full</span></td><td><span class="st full">Full</span></td><td><span class="st full">Full</span></td></tr>
+          <tr><th>Image select</th><td><span class="st full">Full</span></td><td><span class="st full">Full</span></td><td><span class="st full">Full</span></td><td><span class="st full">Full</span><span class="cellnote">array shape newly corrected</span></td></tr>
+          <tr><th>Numeric, slider, NPS</th><td><span class="st full">Full</span></td><td><span class="st full">Full</span></td><td><span class="st na">n/a</span><span class="cellnote">no options; usable as a source</span></td><td><span class="st full">Full</span></td></tr>
+          <tr><th>Open text, long text</th><td><span class="st full">Full</span></td><td><span class="st full">Full</span></td><td><span class="st na">n/a</span></td><td><span class="st full">Full</span></td></tr>
+          <tr><th>Date, time</th><td><span class="st full">Full</span></td><td><span class="st full">Full</span><span class="cellnote">newly, via date functions</span></td><td><span class="st na">n/a</span></td><td><span class="st full">Full</span></td></tr>
+          <tr><th>Matrix — single, dropdown</th><td><span class="st full">Full</span></td><td><span class="st full">Full</span><span class="cellnote">per-cell rules newly enforced</span></td><td><span class="st full">Full</span></td><td><span class="st full">Full</span></td></tr>
+          <tr><th>Matrix — multi</th><td><span class="st full">Full</span></td><td><span class="st part">Partial</span><span class="cellnote">per-row selection counts still unenforced</span></td><td><span class="st full">Full</span></td><td><span class="st full">Full</span></td></tr>
+          <tr><th>Matrix — numeric, text</th><td><span class="st full">Full</span></td><td><span class="st full">Full</span><span class="cellnote">newly enforced</span></td><td><span class="st full">Full</span></td><td><span class="st full">Full</span></td></tr>
+          <tr><th>Composite, custom table</th><td><span class="st full">Full</span></td><td><span class="st full">Full</span><span class="cellnote">cell, column and total rules</span></td><td><span class="st full">Full</span><span class="cellnote">rows and columns independently</span></td><td><span class="st full">Full</span></td></tr>
+          <tr><th>Text list, numeric list</th><td><span class="st full">Full</span></td><td><span class="st full">Full</span><span class="cellnote">per-field types and rules</span></td><td><span class="st full">Full</span><span class="cellnote">rows</span></td><td><span class="st full">Full</span></td></tr>
+          <tr><th>Ranking, image ranking</th><td><span class="st full">Full</span></td><td><span class="st part">Partial</span><span class="cellnote">no rank-uniqueness check; selection bounds hidden in the panel</span></td><td><span class="st full">Full</span></td><td><span class="st full">Full</span></td></tr>
+          <tr><th>Allocation, constant sum</th><td><span class="st full">Full</span></td><td><span class="st full">Full</span></td><td><span class="st full">Full</span></td><td><span class="st full">Full</span></td></tr>
+          <tr><th>Hidden, calculated, embedded data</th><td><span class="st full">Full</span></td><td><span class="st full">Full</span></td><td><span class="st part">Partial</span><span class="cellnote">engine reads them; the source picker hides them</span></td><td><span class="st full">Full</span></td></tr>
+          <tr><th>Repeating group</th><td><span class="st full">Full</span></td><td><span class="st full">Full</span></td><td><span class="st full">Full</span><span class="cellnote">rows</span></td><td><span class="st full">Full</span></td></tr>
+          <tr><th>Conjoint, MaxDiff</th><td><span class="st full">Full</span></td><td><span class="st part">Partial</span><span class="cellnote">anchor completeness only</span></td><td><span class="st na">n/a</span></td><td><span class="st full">Full</span></td></tr>
+          <tr><th>Hotspot, annotation</th><td><span class="st full">Full</span></td><td><span class="st part">Partial</span></td><td><span class="st none">Unsup.</span><span class="cellnote">no options editor for these types</span></td><td><span class="st full">Full</span></td></tr>
+          <tr><th>Upload, HTML</th><td><span class="st full">Full</span></td><td><span class="st full">Full</span></td><td><span class="st na">n/a</span></td><td><span class="st full">Full</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============================================ cross-system matrix -->
+  <section>
+    <h2>How the systems compose</h2>
+    <p class="section-note">
+      The pairs the documents care about, each checked against runtime behaviour rather than intent.
+    </p>
+    <div class="tw">
+      <table>
+        <thead><tr><th>Combination</th><th>Verdict</th><th>Behaviour, and any conflict</th></tr></thead>
+        <tbody>
+          <tr><th>Display + Validation</th><td><span class="st full">Works</span></td><td>Only visible questions are validated, so a hidden required question cannot block submission</td></tr>
+          <tr><th>Display + Skip</th><td><span class="st full">Works</span></td><td class="cellnote">Was broken — a hidden question's skip rule fired. Skip now sees the same page the respondent did</td></tr>
+          <tr><th>Display + Masking</th><td><span class="st full">Works</span></td><td>Ordered stages: named rules run before the mask, and the documented precedence holds</td></tr>
+          <tr><th>Validation + Masking</th><td><span class="st full">Works</span></td><td>Masked-away rows and cells are exempt; this now extends to matrix cell rules</td></tr>
+          <tr><th>Display + Validation + Masking</th><td><span class="st full">Works</span></td><td class="cellnote">Was broken — an emptied option list left a required question unanswerable</td></tr>
+          <tr><th>Logic + Piping</th><td><span class="st part">Partial</span></td><td>An unresolved token pipes as empty with no fallback text; a hidden question's retained answer can still pipe</td></tr>
+          <tr><th>Logic + Randomisation</th><td><span class="st part">Partial</span></td><td>Ordering is correct — randomisation resolves before conditions — but the assignment is not recorded, so no rule can read which arm was shown</td></tr>
+          <tr><th>Logic + Quotas</th><td><span class="st part">Partial</span></td><td>A quota source sums every cell; no per-cell addressing or "is full" test, and counts are empty in preview but live in production</td></tr>
+          <tr><th>Logic + Page breaks</th><td><span class="st part">Partial</span></td><td>A forward reference is warned about at author time; at runtime it is null, which is false for positive operators but <em>true</em> for negative ones</td></tr>
+          <tr><th>Logic + Option visibility</th><td><span class="st full">Works</span></td><td>Per-option rules, self-reference, and counts that read the pipeline's own output</td></tr>
+          <tr><th>Logic + Loops</th><td><span class="st part">Partial</span></td><td>Per-iteration conditions and loop variables are solid; one iteration cannot read another's answer</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- =================================================== still open -->
+  <section>
+    <h2>What is still open</h2>
+    <p class="section-note">
+      Each of these has a single identified cause. The first group is small and mechanical; the second
+      needs a new mechanism, not a removed restriction.
+    </p>
+
+    <h3>Removable restrictions — no new mechanism needed</h3>
+    <ul class="plain">
+      <li><strong>Always-show is coupled to the empty-source setting.</strong> Whether a protected "Other" survives a mask depends on a field that describes an unrelated concern, so the same option can be kept or dropped for a reason the author never chose. These should be independent settings.</li>
+      <li><strong>Preselect and disable mask actions do nothing.</strong> They are stored, authored, exported — and no consumer applies them. Either wire them or withdraw them from the picker; leaving them offered is the failure mode this audit exists to catch.</li>
+      <li><strong>The masking source picker hides scalar questions.</strong> The engine reads a hidden, embedded or numeric variable as a source perfectly well; only the dropdown filters them out.</li>
+      <li><strong>The operator allow-list raises hard errors on rules the evaluator handles.</strong> Numeric comparison of a matrix cell, and the three <code>contains</code> operators on a ranking answer, are implemented and then rejected by a lint error.</li>
+      <li><strong>Nested-loop masking</strong> is blocked by one missing <code>scope</code> field on the loop-item set leaf — conditions already have it.</li>
+      <li><strong>The <code>when</code> gate on validation rules has no editor</strong>, so conditional requiredness has to be re-spelled as a condition rule.</li>
+      <li><strong>Ranking selection bounds</strong> are offered by one panel and denied by another.</li>
+      <li><strong>Column masking records no debug trace</strong>, so M150's "explain why this won" is answerable for options and rows but not columns.</li>
+    </ul>
+
+    <h3>Genuine gaps — these need building</h3>
+    <ul class="plain">
+      <li><strong>Cell-level masking</strong> (M073, M078) needs a fourth mask dimension plus renderer support.</li>
+      <li><strong>Iteration history</strong> — "hide items already used in previous iterations" (M128) — needs a consumed-set in response state that does not exist.</li>
+      <li><strong>Aggregates across loop iterations</strong> (V130) need a rollup hook; validation is currently invoked per iteration with no page-level pass.</li>
+      <li><strong>A predicate leaf in the set language</strong> would turn numeric-band, text-match and expression-driven masking from workarounds into first-class masks. This is the single highest-leverage remaining item for masking: one schema node closes six scenarios.</li>
+      <li><strong>Rank uniqueness</strong> (V095, V101, V110) has no check anywhere.</li>
+      <li><strong>Randomised-block assignment</strong> must be recorded as a variable before any rule can read it.</li>
+      <li><strong>Flow position</strong> needs a new source kind and a position on the evaluation context.</li>
+      <li><strong>Live validation clearing</strong> — errors persist until the next submit even after the respondent fixes the input. The dependency graph needed to do this incrementally already exists and is simply not wired to validation.</li>
+      <li><strong>Answers to questions that later become hidden are retained and exported.</strong> There is no clear-on-hide policy and no setting for one; a data file can contain answers the respondent's final path says they never saw. This is a decision to make, not only code to write.</li>
+    </ul>
+  </section>
+
+  <!-- ==================================================== evidence -->
+  <section>
+    <h2>Test evidence</h2>
+    <p class="section-note">
+      Nothing here was accepted on the strength of reading the code. Each fix was reproduced first, then
+      re-run.
+    </p>
+    <ul class="plain">
+      <li><strong>Three severe defects</strong> reproduced against the compiled engine, and a guard asserting the required-suppression is narrow — ordinary required questions on options, text and matrix all still block.</li>
+      <li><strong>Nineteen capability checks</strong> covering cross-question comparison, its round trip through the expression language, confirm-email, date chronology, dynamic age, no-future-date, relative windows, time-of-day ranges, matrix column conditions, and a condition-tree validation rule enforcing an inverted date range end to end.</li>
+      <li><strong>771 engine unit tests</strong>, unchanged and passing.</li>
+      <li><strong>The full monorepo</strong> — typecheck, build and test across all twelve workspace projects — clean.</li>
+      <li><strong>Targeted browser suites</strong> over the changed surfaces: validation conditions, count logic, the logic builder, save integrity, option logic, matrix auto punch and masking.</li>
+      <li><strong>The full 61-suite browser corpus</strong> against a live Studio and runtime.</li>
+    </ul>
+  </section>
+
+  <footer>
+    Audited against the Display Logic, Validation and Masking master test questionnaires. Status reflects
+    what the engine does when run, not what the schema permits or the interface offers — a distinction that
+    accounted for nine of the fourteen defects, every one of which had a control in the builder that
+    appeared to work.
+  </footer>
+
+</div>

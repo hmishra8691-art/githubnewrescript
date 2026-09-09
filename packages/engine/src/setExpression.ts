@@ -1,7 +1,7 @@
 import type {
   SetExpr, SetOperator, SetSelection, SurveyDefinition, Question, PunchRule, ListFill,
 } from "@rescript/schema";
-import { SET_OPERATOR_LABEL } from "@rescript/schema";
+import { SET_OPERATOR_LABEL, isMultiValuedQuestion } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition } from "./evaluate.js";
 import { codesFrom, effectiveQuestion } from "./carryforward.js";
@@ -1174,12 +1174,17 @@ function remove(list: (string | number)[], code: string | number): void {
   for (let i = list.length - 1; i >= 0; i--) if (String(list[i]) === String(code)) list.splice(i, 1);
 }
 
-/** Whether a question holds several codes at once. */
+/**
+ * Whether a question holds several codes at once.
+ *
+ * Delegates to the schema's response model rather than keeping a list here.
+ * The list this replaced named three types that do not exist (`checkbox`,
+ * `image_multi`, `max_diff`) and omitted `image_select`, whose multiple-choice
+ * variant does store an array — so punching one took the single-answer branch
+ * and replaced the respondent's whole selection with one code.
+ */
 function isMultiValued(q: Question): boolean {
-  return [
-    "multi_select", "multi_dropdown", "checkbox", "ranking", "image_ranking",
-    "image_multi", "max_diff",
-  ].includes(q.type);
+  return isMultiValuedQuestion(q);
 }
 
 /**

@@ -1,4 +1,5 @@
 import type { Condition, ConditionRule, SurveyDefinition } from "@rescript/schema";
+import { isScalarAnswerQuestion } from "@rescript/schema";
 import type { ResponseState } from "./state.js";
 import { evaluateCondition } from "./evaluate.js";
 import { flattenVariables } from "./flatten.js";
@@ -62,18 +63,19 @@ const COLUMN_FOR: Record<string, PrefilterClause["column"] | null> = {
  * A multi-select stores an array, a matrix an object per row, a list a per-row
  * map: for those the prefilter falls back to "was answered", and the engine
  * decides.
+ *
+ * Asks the schema's response model rather than matching `q.type` against a
+ * list. The list this replaced claimed `image_select` was scalar; its
+ * multiple-choice variant stores an array, so an `eq` filter on one emitted a
+ * containment test that could never match AND suppressed the engine pass that
+ * would have got it right — a filter that silently returned nothing.
  */
-const SCALAR_ANSWER_TYPES = new Set([
-  "single_select", "dropdown", "numeric", "open_text", "long_text", "date", "time",
-  "slider", "nps", "image_select", "hidden", "calculated", "embedded_data", "experiment",
-]);
-
 function scalarAnswer(def: SurveyDefinition, questionId: string): boolean {
   const q = def.questions.find((x) => x.id === questionId);
   if (!q) return false;
   // a question with rows or columns stores a map, never a scalar
   if (q.rows?.length || q.columns?.length) return false;
-  return SCALAR_ANSWER_TYPES.has(String(q.type));
+  return isScalarAnswerQuestion(q);
 }
 
 /** Is this rule's value a plain scalar we can put in a containment test? */

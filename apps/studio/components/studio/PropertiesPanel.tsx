@@ -3,7 +3,7 @@ import { CountInput } from "./CountInput";
 import React from "react";
 import type { Question, ValidationRule, SkipRule, ListOperation, ListSource } from "@rescript/schema";
 import { validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups } from "@rescript/engine";
-import { resolveVariant, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript/schema";
+import { resolveVariant, allowedValidationKinds, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript/schema";
 import { useStudio, selectedQuestion, uid } from "./store";
 import { useCanvas } from "../canvas/CanvasContext";
 import { ElementPanel } from "../canvas/ElementPanel";
@@ -82,7 +82,10 @@ const VALUE_HINT: Partial<Record<ValidationRule["kind"], string>> = {
 function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question>): void }) {
   const s = useStudio();
   const qVariant = resolveVariant(q.variant);
-  const allowed = (qVariant?.validations as ValidationRule["kind"][] | undefined) ?? validationKindsFor(q.type);
+  const allowed = allowedValidationKinds(
+    qVariant?.validations,
+    validationKindsFor(q.type),
+  ) as ValidationRule["kind"][];
   const kinds = VALIDATION_KINDS.filter((k) => allowed.includes(k.value));
   return (
     <div>

@@ -339,18 +339,28 @@ export interface NavigationResult {
   startAt?: { blockId: string; found: boolean };
 }
 
-/** Evaluate skip logic for questions on the submitted page. */
+/**
+ * Evaluate skip logic for questions on the submitted page.
+ *
+ * Only questions the respondent was actually SHOWN may route them. A question
+ * hidden by display logic (or by a named rule, or by an unfilled List Fill
+ * destination) never appeared, so it has no answer, and its rules would fire
+ * on that emptiness: `Q2 unanswered -> screen out` would terminate every
+ * respondent for whom Q2 was correctly hidden. Reusing `visibleQuestions`
+ * rather than re-deriving visibility here is deliberate — display logic and
+ * skip logic must agree about what "on the page" means, and two
+ * implementations of that would drift.
+ */
 function firstTriggeredSkip(
   def: SurveyDefinition,
   step: Extract<RuntimeStep, { kind: "page" }>,
   state: ResponseState,
+  quotaCounts?: QuotaCounts,
 ): { rule: SkipRule; questionId: string } | null {
-  const ctx: EvalContext = { def, state, loop: step.loop };
-  for (const qid of step.questionIds) {
-    const q = getQuestion(def, qid);
-    if (!q) continue;
+  const ctx: EvalContext = { def, state, loop: step.loop, quotaCounts };
+  for (const q of visibleQuestions(def, step, state, quotaCounts)) {
     for (const rule of q.skipLogic) {
-      if (evaluateCondition(rule.when, ctx)) return { rule, questionId: qid };
+      if (evaluateCondition(rule.when, ctx)) return { rule, questionId: q.id };
     }
   }
   return null;
@@ -417,7 +427,7 @@ export function advance(
 
   const current = steps[idx];
   if (current?.kind === "page") {
-    const skip = firstTriggeredSkip(def, current, state);
+    const skip = firstTriggeredSkip(def, current, state, quotaCounts);
     if (skip) {
       triggeredSkips.push({ questionId: skip.questionId, ruleId: skip.rule.id });
       if (skip.rule.target.kind === "url") {

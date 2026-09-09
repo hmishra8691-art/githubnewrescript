@@ -121,6 +121,39 @@ const VAL_SINGLE = ["required", "custom_expression"];
 const CAP_MULTI: VariantCapability[] = [...CAP_SINGLE, "exclusive_options", "min_max_selections"];
 const VAL_MULTI = ["required", "min_selections", "max_selections", "custom_expression"];
 
+/**
+ * Validation kinds that every question type supports, whatever its variant.
+ *
+ * The per-variant `validations` lists below describe what is *characteristic*
+ * of a variant — `min_selections` belongs to multi-select, `min_length` to
+ * text. They were never meant to be a capability ceiling, but they are read as
+ * one: the properties panel offers exactly the variant's list, and switching
+ * variants DELETES any rule whose kind is not in the new list.
+ *
+ * These four are type-agnostic in the engine — `required` and `condition` are
+ * evaluated for every question shape, and the two custom kinds run an
+ * expression that can say anything — so listing them per-variant would be a
+ * hundred copies of the same four strings, and forgetting one (as happened to
+ * `condition`, which made the Universal Logic Engine's validation mode
+ * unreachable for every question carrying a variant) silently removes a
+ * working feature. Kept in one place instead.
+ */
+export const UNIVERSAL_VALIDATIONS = [
+  "required", "condition", "custom_expression", "custom_script",
+] as const;
+
+/**
+ * The validation kinds a question may use: its variant's characteristic list
+ * (or a per-type fallback when it has no variant), plus the universal four.
+ */
+export function allowedValidationKinds(
+  variantValidations: readonly string[] | undefined,
+  fallback: readonly string[],
+): string[] {
+  const base = variantValidations ?? fallback;
+  return [...new Set([...base, ...UNIVERSAL_VALIDATIONS])];
+}
+
 const VAL_TEXT = ["required", "min_length", "max_length", "pattern", "email", "custom_expression"];
 const VAL_NUM = ["required", "min_value", "max_value", "integer", "custom_expression"];
 
@@ -1541,6 +1574,39 @@ export function responseModelOf(baseType: string): ResponseModel {
     case "html": return "none";
     default: return "none";
   }
+}
+
+/**
+ * The response model actually in force for a question: its variant's, when it
+ * has one, else the base type's default.
+ *
+ * `image_select` is why this exists — it backs both a single-choice and a
+ * multiple-choice variant, so the base type alone cannot say what shape the
+ * answer has. Anything deciding "is this answer an array or a scalar?" must
+ * ask this rather than testing `q.type` against a hand-written list, because
+ * such lists drift: one in the auto-punch engine omitted `image_select` (so a
+ * punch overwrote the whole array with a single code) while one in the
+ * response filter asserted it was scalar (so a filter on it matched nothing).
+ */
+export function effectiveResponseModel(q: { type: string; variant?: string | null }): ResponseModel {
+  const v = q.variant ? resolveVariant(q.variant) : null;
+  return v?.responseModel ?? responseModelOf(q.type);
+}
+
+/** Whether this question holds several codes at once. */
+export function isMultiValuedQuestion(q: { type: string; variant?: string | null }): boolean {
+  const m = effectiveResponseModel(q);
+  return m === "multiple_choice" || m === "rank_order";
+}
+
+/**
+ * Whether this question's answer is a single scalar stored directly under its
+ * question id — the only shape for which a JSON containment test is equivalent
+ * to equality.
+ */
+export function isScalarAnswerQuestion(q: { type: string; variant?: string | null }): boolean {
+  const m = effectiveResponseModel(q);
+  return m === "single_choice" || m === "numeric" || m === "text" || m === "derived";
 }
 
 /** Default variant id for a legacy question that has none stored.

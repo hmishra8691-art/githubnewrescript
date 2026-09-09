@@ -1,5 +1,5 @@
 import type { Condition, ConditionRule, SurveyDefinition } from "@rescript/schema";
-import { isOptionValueRef } from "@rescript/schema";
+import { isOptionValueRef, isQuestionValueRef } from "@rescript/schema";
 import type { LoopContext, ResponseState } from "./state.js";
 import { findLoopScope, getQuestionByCodeOrVar, lookupAnswer, loopValue } from "./state.js";
 import { evaluateCount } from "./countCondition.js";
@@ -199,7 +199,45 @@ export function resolveSourceValue(rule: ConditionRule, ctx: EvalContext): unkno
             val = null;
           }
         } else if (columnId != null) {
-          val = (val as Record<string, unknown>)[columnId] as any;
+          /*
+           * A column with no row named: the condition means "this column,
+           * across every row" — the natural reading of "any row rated
+           * Excellent", and the only reading available once no row is fixed.
+           *
+           * The answer map is keyed by ROW, so indexing it by a column id
+           * finds nothing; that is what this used to do, which made every
+           * column-only condition silently false while the builder happily
+           * offered a column picker. Collect the column's cell from each row
+           * instead and hand back an array, which the operators already treat
+           * existentially (`contains`/`selected`/`eq` against an array match
+           * if any member matches). A grid whose rows hold scalars rather
+           * than per-column objects has no column dimension to drill into, so
+           * its row values are returned as they are.
+           */
+          const cells: unknown[] = [];
+          for (const row of Object.values(val as Record<string, unknown>)) {
+            if (row && typeof row === "object" && !Array.isArray(row)) {
+              /*
+               * A composite/table row stores one value per column, so the
+               * column is a KEY: take that cell.
+               */
+              const cell = (row as Record<string, unknown>)[columnId];
+              if (cell !== undefined && cell !== null && cell !== "") cells.push(cell);
+            } else if (Array.isArray(row)) {
+              // matrix_multi: the row holds the column codes it selected
+              if (row.some((x) => looseEq(x, columnId))) cells.push(columnId);
+            } else if (row !== undefined && row !== null && row !== "") {
+              /*
+               * A single-response matrix row stores the column it CHOSE, so
+               * the column is a VALUE, not a key. Only rows that picked this
+               * column count — otherwise every answered row would match every
+               * column, and "any row rated Excellent" would be true the moment
+               * any row was rated at all.
+               */
+              if (looseEq(row, columnId)) cells.push(row);
+            }
+          }
+          val = (cells.length > 0 ? cells : null) as any;
         }
       }
       return val ?? null;
@@ -231,15 +269,59 @@ function num(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * Put the operands of an ordering comparison on one comparable scale.
+ *
+ * Numbers first, because that is what most comparisons are. When they are not
+ * all numeric but ALL of them are dates or clock times, they compare as
+ * instants instead — so `>`, `<`, `>=`, `<=` and `between` work on a date or
+ * `time` question the way anyone writing "between 09:00 and 17:00" expects,
+ * rather than silently yielding false because `Number("09:00")` is NaN.
+ *
+ * All-or-nothing on purpose: a mixed pair (a date against a plain number) is
+ * not a meaningful ordering, and coercing one side to a timestamp would make
+ * `date > 5` true for every date ever entered. Mixed stays null, and a null
+ * fails every comparison — the same fail-closed rule used everywhere else.
+ */
+function comparableOperands(values: unknown[]): number[] | null {
+  const nums = values.map(num);
+  if (nums.every((n) => n !== null)) return nums as number[];
+  /*
+   * The temporal path is only taken when NOT ONE operand is a number. A
+   * partly-numeric comparison is the mixed case, and must stay null: `Date`
+   * happily reads a bare "5" as a date, so allowing it would make
+   * `someDate > 5` true for every date ever entered.
+   */
+  if (nums.some((n) => n !== null)) return null;
+  const times = values.map(toTime);
+  if (times.every((t) => t !== null)) return times as number[];
+  return null;
+}
+
 function str(v: unknown): string {
   return v === null || v === undefined ? "" : String(v);
 }
 
-/** Parse a date-ish value to epoch ms; day-only strings compare by day. */
+/**
+ * Parse a date-ish value to epoch ms; day-only strings compare by day.
+ *
+ * A bare clock time ("09:00", "17:30:00") is what a `time` question stores,
+ * and `Date.parse` rejects it outright — so every time-of-day comparison and
+ * every "between 09:00 and 17:00" range silently evaluated to false, on a
+ * question type whose only purpose is to be compared this way. Such a value
+ * is resolved against a fixed epoch day, which makes clock times comparable
+ * with each other while leaving real dates untouched.
+ */
 function toTime(v: unknown): number | null {
   if (v === null || v === undefined || v === "") return null;
   if (v instanceof Date) return v.getTime();
   const s = String(v).trim();
+  const clock = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(s);
+  if (clock) {
+    const h = Number(clock[1]), m = Number(clock[2]), sec = Number(clock[3] ?? 0);
+    if (h > 23 || m > 59 || sec > 59) return null;
+    return Date.UTC(1970, 0, 1, h, m, sec);
+  }
   const t = /^\d{4}-\d{2}-\d{2}$/.test(s) ? Date.parse(`${s}T00:00:00Z`) : Date.parse(s);
   return Number.isFinite(t) ? t : null;
 }
@@ -258,9 +340,30 @@ function rankOf(left: unknown, code: unknown): number | null {
  * Resolve a comparison value. `{ $option: "code" }` resolves against the
  * option currently being evaluated, which is what makes option-to-option and
  * cross-question option matching expressible as ordinary rules (req §8–9).
+ * `{ $question: "Q6" }` resolves against another question's answer, which is
+ * what makes a cross-question comparison expressible at all.
  */
 export function resolveComparisonValue(v: unknown, ctx: EvalContext): unknown {
   if (Array.isArray(v)) return v.map((x) => resolveComparisonValue(x, ctx));
+  if (isQuestionValueRef(v)) {
+    /*
+     * Resolved through `resolveSourceValue` rather than by reading answers
+     * directly, so the right-hand side of a rule understands exactly what the
+     * left-hand side does: loop scoping, grid rows and cells, and the same
+     * code/variable/id spellings. A rule comparing two questions must not have
+     * two different ideas of what naming a question means.
+     */
+    const value = resolveSourceValue(
+      {
+        type: "rule",
+        source: { kind: "question", ref: v.$question, rowCode: v.rowCode, columnId: v.columnId },
+        operator: "eq",
+      } as ConditionRule,
+      ctx,
+    );
+    if (v.read === "count") return asArray(value).filter((x) => !isEmpty(x)).length;
+    return value;
+  }
   if (!isOptionValueRef(v)) return v;
   const o = ctx.option;
   if (!o) return null;
@@ -337,33 +440,33 @@ export function evaluateRule(rule: ConditionRule, ctx: EvalContext): boolean {
       result = !looseEq(left, right);
       break;
     case "gt": {
-      const l = num(left), r = num(right);
-      result = l !== null && r !== null && l > r;
+      const c = comparableOperands([left, right]);
+      result = c !== null && c[0] > c[1];
       break;
     }
     case "lt": {
-      const l = num(left), r = num(right);
-      result = l !== null && r !== null && l < r;
+      const c = comparableOperands([left, right]);
+      result = c !== null && c[0] < c[1];
       break;
     }
     case "gte": {
-      const l = num(left), r = num(right);
-      result = l !== null && r !== null && l >= r;
+      const c = comparableOperands([left, right]);
+      result = c !== null && c[0] >= c[1];
       break;
     }
     case "lte": {
-      const l = num(left), r = num(right);
-      result = l !== null && r !== null && l <= r;
+      const c = comparableOperands([left, right]);
+      result = c !== null && c[0] <= c[1];
       break;
     }
     case "between": {
-      const l = num(left), a = num(right), b = num(right2);
-      result = l !== null && a !== null && b !== null && l >= a && l <= b;
+      const c = comparableOperands([left, right, right2]);
+      result = c !== null && c[0] >= c[1] && c[0] <= c[2];
       break;
     }
     case "notBetween": {
-      const l = num(left), a = num(right), b = num(right2);
-      result = l === null || a === null || b === null ? false : l < a || l > b;
+      const c = comparableOperands([left, right, right2]);
+      result = c === null ? false : c[0] < c[1] || c[0] > c[2];
       break;
     }
     case "in":

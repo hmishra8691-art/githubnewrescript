@@ -6,6 +6,7 @@ import {
   TWO_VALUE_OPERATORS,
   LIST_VALUE_OPERATORS,
   isOptionValueRef,
+  isQuestionValueRef,
 } from "@rescript/schema";
 import {
   operatorsForQuestion, conditionSummary, embeddedCatalog, authoringQuestionView,
@@ -120,6 +121,7 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
   const needsValue = !VALUELESS_OPERATORS.includes(rule.operator);
   const needsValue2 = TWO_VALUE_OPERATORS.includes(rule.operator);
   const usesOption = isOptionValueRef(rule.value);
+  const usesQuestion = isQuestionValueRef(rule.value);
 
   /*
    * COUNTING CHANGES THE LEFT-HAND SIDE, SO IT CHANGES THE OPERATORS.
@@ -411,6 +413,23 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
           <span className="chip pipe-chip" title="Compares against the option this rule is attached to">
             this option’s {(rule.value as any).$option}
           </span>
+        ) : usesQuestion ? (
+          /*
+           * Comparing against ANOTHER QUESTION'S ANSWER rather than a fixed
+           * value — "end date on or after start date", "confirm email matches
+           * email", "priorities selected equals the number given in Q63".
+           * Rendered as a question picker so the reference is always a real
+           * question: typing a code into the plain value box next door would
+           * silently become the literal text of that code.
+           */
+          <select className="select" data-testid="value-question"
+            value={(rule.value as any).$question ?? ""}
+            onChange={(e) => onChange({ ...rule, value: { $question: e.target.value } })}>
+            <option value="">— question —</option>
+            {s.def.questions.filter((x) => x.id !== rule.source.ref).map((x) => (
+              <option key={x.id} value={x.code}>{x.code} — {stripHtml(x.text).slice(0, 40)}</option>
+            ))}
+          </select>
         ) : view && view.options.length > 0 && !listOps && rule.operator !== "matches" ? (
           <select className="select" value={String(rule.value ?? "")}
             onChange={(e) => onChange({ ...rule, value: e.target.value })}>
@@ -433,6 +452,22 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
           title="Compare against the option this rule is attached to"
           onClick={() => onChange({ ...rule, value: usesOption ? "" : { $option: "code" } })}>
           {usesOption ? "fixed value" : "↺ this option"}
+        </button>
+      )}
+      {/*
+        * Switch the right-hand side between a typed value and another
+        * question's answer. Without this the comparison is expressible only
+        * in the Expression tab, and the obvious visual spelling — pick Q5,
+        * pick ">", type "Q6" — quietly compares against the letters "Q6".
+        */}
+      {needsValue && !counting && !usesOption && !listOps && (
+        <button className="btn small" style={{ flex: "0 0 auto" }}
+          data-testid="value-mode-toggle"
+          title={usesQuestion
+            ? "Compare against a typed value instead"
+            : "Compare against another question's answer"}
+          onClick={() => onChange({ ...rule, value: usesQuestion ? "" : { $question: "" } })}>
+          {usesQuestion ? "fixed value" : "↔ a question"}
         </button>
       )}
       {needsValue2 && (

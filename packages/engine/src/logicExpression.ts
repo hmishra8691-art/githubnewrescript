@@ -5,6 +5,8 @@ import type {
 import { getQuestionByCodeOrVar } from "./state.js";
 import { findNamedExpression } from "./namedExpressions.js";
 import { stripHtmlText } from "./html.js";
+import { isQuestionValueRef } from "@rescript/schema";
+import { CALC_FUNCTION_NAMES } from "./calc.js";
 
 /**
  * The logic expression language: text in, canonical tree out, and back again.
@@ -246,20 +248,19 @@ function loopVarsIn(nodes: FlowNode[]): string[] {
 const COUNT_FUNCTIONS = new Set(["count", "counted"]);
 
 /**
- * Names handed to the calculation engine. Kept as a list rather than "anything
- * with a bracket after it" so a typo is a parse error naming the function
- * instead of a rule that silently evaluates to null at run time.
+ * Names handed to the calculation engine. Kept as an explicit set rather than
+ * "anything with a bracket after it" so a typo is a parse error naming the
+ * function instead of a rule that silently evaluates to null at run time.
+ *
+ * DERIVED from the calculation engine's own list rather than restated. This
+ * was the fourth hand-maintained copy of that list, and it had already fallen
+ * behind by the whole date family — so a rule the evaluator could compute was
+ * rejected at parse time as an unknown function. `count` is excluded because
+ * COUNT is handled by its own richer parser above, not as a plain call.
  */
-export const CALC_FUNCTIONS = new Set([
-  /* numeric */
-  "sum", "avg", "average", "mean", "min", "max", "round", "abs", "floor",
-  "ceil", "ceiling", "sqrt", "pow", "pct", "percent", "weighted", "countif",
-  /* string */
-  "len", "length", "concat", "contains", "upper", "lower", "trim",
-  "substring", "substr", "replace", "startswith", "endswith",
-  /* general */
-  "if", "coalesce", "number", "text",
-]);
+export const CALC_FUNCTIONS = new Set(
+  CALC_FUNCTION_NAMES.filter((n) => !COUNT_FUNCTIONS.has(n)),
+);
 
 /**
  * Functions whose value IS a yes/no answer, so a bare call is a complete
@@ -268,6 +269,16 @@ export const CALC_FUNCTIONS = new Set([
  * often as it is right, so that case is refused with a message instead.
  */
 const BOOLEAN_FUNCTIONS = new Set(["contains", "startswith", "endswith"]);
+
+/**
+ * Words that stay literals on the right-hand side even if a question happens
+ * to share the name. `TRUE`/`FALSE`/`NULL` are values in their own right, and
+ * a survey with a question coded `YES` must not turn `Q1 = YES` into a
+ * comparison of two answers.
+ */
+const RESERVED_OPERAND_WORDS = new Set([
+  "true", "false", "null", "yes", "no", "selected", "answered", "blank", "empty",
+]);
 
 /** Arithmetic that turns a run of tokens into a calc expression. */
 const ARITHMETIC = new Set(["+", "-", "*", "/", "%"]);
@@ -584,6 +595,29 @@ export function parseLogicExpression(
     }
     at += 1;
     if (t!.kind === "number") return Number(t!.text);
+    /*
+     * A BARE WORD THAT NAMES A QUESTION IS A REFERENCE, NOT A LITERAL.
+     *
+     * `Q5 > Q6` reads as comparing two answers to anyone who writes it, but
+     * every right-hand token used to become a literal string, so that rule
+     * compared Q5 against the two characters "Q6" and was false forever —
+     * silently, since nothing rejects a literal there.
+     *
+     * Only an UNQUOTED word that actually resolves to a question in this
+     * survey is promoted. A quoted "Q6" stays the literal text (that is what
+     * quotes are for), a word matching no question stays a literal, and a
+     * matrix/cell drill-down (`Q6.r1`) keeps its segments — so the only
+     * behaviour that changes is the one that was previously always wrong.
+     */
+    if (t!.kind === "ident") {
+      const segments = t!.text.split(".").filter(Boolean);
+      const q = getQuestionByCodeOrVar(def, segments[0]);
+      if (q && !RESERVED_OPERAND_WORDS.has(t!.text.toLowerCase())) {
+        return segments.length > 1
+          ? { $question: segments[0], rowCode: segments[1], columnId: segments[2] }
+          : { $question: segments[0] };
+      }
+    }
     return t!.text;
   };
 
@@ -896,6 +930,15 @@ function countText(def: SurveyDefinition, source: ConditionRule["source"]): stri
 function operandText(v: unknown): string {
   if (Array.isArray(v)) return `[${v.map(operandText).join(", ")}]`;
   if (typeof v === "number") return String(v);
+  /*
+   * A question reference on the right prints as the question's name, exactly
+   * as it was typed — `Q5 > Q6`, not `Q5 > [object Object]`. Printing it
+   * unquoted is also what makes the round trip an identity: `readOperand`
+   * promotes that same bare word straight back to a reference.
+   */
+  if (isQuestionValueRef(v)) {
+    return [v.$question, v.rowCode, v.columnId].filter(Boolean).join(".");
+  }
   const s = String(v ?? "");
   if (s === "") return '""';
   if (IDENT_SAFE.test(s) || /^-?\d+(\.\d+)?$/.test(s)) return s;

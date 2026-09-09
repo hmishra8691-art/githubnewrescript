@@ -393,6 +393,71 @@ function evalNode(n: Node, o: CalcOptions, depth = 0, budget?: { steps: number }
         }
         case "startswith": return String(rawArgs[0] ?? "").startsWith(String(rawArgs[1] ?? ""));
         case "endswith": return String(rawArgs[0] ?? "").endsWith(String(rawArgs[1] ?? ""));
+        case "regex": case "matches": {
+          /*
+           * `REGEX(Q1, "^[A-Z]{2}\\d{4}$")` — the spelling a programmer
+           * reaches for in a custom validation expression. The `matches`
+           * condition operator does the same job in the visual builder; this
+           * makes the function form work too, rather than throwing "Unknown
+           * function" into a catch that turned the whole rule into a no-op.
+           * A malformed pattern is false, not an exception.
+           */
+          try {
+            return new RegExp(String(rawArgs[1] ?? "")).test(String(rawArgs[0] ?? ""));
+          } catch { return false; }
+        }
+
+        /*
+         * Date functions. Research questionnaires are full of rules the rest
+         * of this language could not say at all — "must be 18 on the day they
+         * take the survey", "not in the future", "within the next year", "at
+         * least 365 days after the previous answer". Each was previously
+         * expressible only by pre-computing a cutoff into a calculated
+         * variable, which meant the common case needed setup that the author
+         * had no reason to expect.
+         *
+         * They live in this switch, like every other function, so a
+         * calculation, a display condition, a mask and a validation rule all
+         * spell them identically — the whole reason there is one language.
+         *
+         * Dates are compared as whole days in UTC: a survey is answered in
+         * every timezone, and an age that flickers by hour of day would be a
+         * worse bug than the one being fixed.
+         */
+        case "today": return utcMidnightToday();
+        case "date": {
+          const t = parseDateValue(rawArgs[0]);
+          return t == null ? null : t;
+        }
+        case "datediff": {
+          // datediff(later, earlier) -> whole days, negative if reversed
+          const a = parseDateValue(rawArgs[0]);
+          const b = parseDateValue(rawArgs[1]);
+          if (a == null || b == null) return null;
+          return Math.round((a - b) / 86_400_000);
+        }
+        case "age": {
+          // age(dob) as of today, or age(dob, asOf) — calendar years, not /365
+          const dob = parseDateValue(rawArgs[0]);
+          if (dob == null) return null;
+          const asOf = rawArgs.length > 1 ? parseDateValue(rawArgs[1]) : utcMidnightToday();
+          if (asOf == null) return null;
+          return calendarYearsBetween(dob, asOf);
+        }
+        case "dateadd": {
+          // dateadd(date, days) -> a date, so it can feed a comparison
+          const base = parseDateValue(rawArgs[0]);
+          if (base == null) return null;
+          return base + Math.round(toNum(rawArgs[1])) * 86_400_000;
+        }
+        case "year": case "month": case "day": {
+          const t = parseDateValue(rawArgs[0]);
+          if (t == null) return null;
+          const d = new Date(t);
+          return n.name.toLowerCase() === "year" ? d.getUTCFullYear()
+            : n.name.toLowerCase() === "month" ? d.getUTCMonth() + 1
+            : d.getUTCDate();
+        }
         default:
           throw new Error(`Unknown function ${n.name}()`);
       }
@@ -416,7 +481,51 @@ export const CALC_FUNCTION_NAMES: readonly string[] = [
   "sqrt", "pow", "if", "coalesce", "len", "length", "concat", "contains",
   "number", "text", "upper", "lower", "trim", "substring", "substr",
   "replace", "startswith", "endswith",
+  "today", "date", "datediff", "age", "dateadd", "year", "month", "day",
+  "regex", "matches",
 ];
+
+/** Midnight today, UTC — the reference point every relative date rule uses. */
+function utcMidnightToday(): number {
+  const n = new Date();
+  return Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate());
+}
+
+/**
+ * A date value as a UTC-midnight timestamp, from whatever a question stored.
+ *
+ * Accepts an ISO date, anything `Date.parse` understands, and a timestamp
+ * that is already a number. Returns null rather than NaN for everything else,
+ * so a date function on an unanswered or non-date question yields null and
+ * the surrounding comparison is false — the same fail-closed rule the rest of
+ * the evaluator follows, instead of `toNum`'s silent coercion of a date
+ * string to 0, which made `Q97 - Q98` evaluate to 0 and look like a
+ * legitimate answer.
+ */
+function parseDateValue(v: unknown): number | null {
+  if (v == null || v === "") return null;
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  const s = String(v).trim();
+  // a bare YYYY-MM-DD must not drift by timezone, so pin it to UTC explicitly
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (iso) return Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+  const t = Date.parse(s);
+  if (Number.isNaN(t)) return null;
+  const d = new Date(t);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
+/** Completed calendar years from `from` to `to` — birthday-aware, not /365. */
+function calendarYearsBetween(from: number, to: number): number {
+  const a = new Date(from);
+  const b = new Date(to);
+  let years = b.getUTCFullYear() - a.getUTCFullYear();
+  const beforeBirthday =
+    b.getUTCMonth() < a.getUTCMonth() ||
+    (b.getUTCMonth() === a.getUTCMonth() && b.getUTCDate() < a.getUTCDate());
+  if (beforeBirthday) years--;
+  return years;
+}
 
 const parseCache = new Map<string, Node>();
 
