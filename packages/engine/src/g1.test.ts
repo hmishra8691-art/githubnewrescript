@@ -160,23 +160,41 @@ test("what the rich-text surface stores is sanitized", () => {
 /* ------------------------------------------------------ registry contract */
 
 test("all seven G1 variants are stable and point at their renderer + base type", () => {
-  const expect: [string, string, string, string][] = [
-    ["numeric.numeric_range", "numeric_list", "numrange", "fields"],
-    ["slider.dual", "numeric_list", "rangeslider", "fields"],
-    ["slider.vertical", "slider", "vslider", "numeric"],
-    ["slider.multi_attribute", "matrix_numeric", "slidermatrix", "per_row"],
-    ["slider.allocation_slider", "allocation", "sliderallocation", "allocation"],
-    ["allocation.slider_allocation", "allocation", "sliderallocation", "allocation"],
-    ["text.rich_text", "long_text", "richtext", "text"],
+  /*
+   * REWRITTEN 2026-09-10 (question taxonomy audit). This test used to assert
+   * that ALL seven ids resolved to themselves — including
+   * `slider.allocation_slider` and `allocation.slider_allocation`, which it
+   * listed on adjacent lines with an identical base type, renderer and
+   * response model. The duplication was visible in the fixture from the day
+   * it was written, and the test defended it: "a test that encodes a bug will
+   * defend it" (platform-status.md). Two of the seven are now retired in
+   * favour of the variant they duplicated; the contract is that they STAY
+   * REGISTERED and RESOLVE to the survivor, so a survey in field is untouched.
+   */
+  const expect: [string, string, string, string, string | null][] = [
+    ["numeric.numeric_range", "numeric_list", "numrange", "fields", null],
+    ["slider.dual", "numeric_list", "rangeslider", "fields", null],
+    ["slider.vertical", "slider", "vslider", "numeric", null],
+    ["slider.multi_attribute", "matrix_numeric", "slidermatrix", "per_row", null],  // a preset of matrix.slider_matrix, still live
+    ["slider.allocation_slider", "allocation", "sliderallocation", "allocation", "allocation.slider_allocation"],
+    ["allocation.slider_allocation", "allocation", "sliderallocation", "allocation", null],
+    ["text.rich_text", "long_text", "richtext", "text", null],
   ];
-  for (const [id, baseType, renderer, model] of expect) {
+  for (const [id, baseType, renderer, model, retiredTo] of expect) {
     const v = variantRegistry.get(id);
     assert.ok(v, `${id} is registered`);
     assert.equal(v!.status, "stable", `${id} is stable`);
     assert.equal(v!.baseType, baseType);
     assert.equal(v!.renderer, renderer);
     assert.equal(v!.responseModel, model);
-    assert.equal(resolveVariant(id)!.id, id, `${id} is not retired`);
+    const resolved = resolveVariant(id)!;
+    if (retiredTo) {
+      assert.equal(resolved.id, retiredTo, `${id} is retired into ${retiredTo}`);
+      assert.equal(resolved.renderer, renderer, "retirement keeps the renderer");
+      assert.equal(resolved.responseModel, model, "retirement keeps the response model");
+    } else {
+      assert.equal(resolved.id, id, `${id} is live`);
+    }
   }
   // the from–to pair is the SAME data in two presentations
   assert.deepEqual(

@@ -8,9 +8,13 @@ import { anchor } from "../authoring";
 /**
  * allocation family renderers — see docs/VARIANT-BATCH.md.
  *
- * `sliderallocation` serves two registry entries — `allocation.slider_allocation`
- * and `slider.allocation_slider` — because both families legitimately offer
- * "sliders that must total 100". One renderer, one response model
+ * `sliderallocation` is `allocation.slider_allocation`. It ALSO still answers
+ * for `slider.allocation_slider`, which was the same question registered a
+ * second time under the Slider family and was retired in the 2026-09-10
+ * taxonomy audit — surveys that stored that id resolve here through
+ * `supersededBy`. An earlier version of this comment said both families
+ * "legitimately" offered it; they did not, and that reasoning is how a
+ * duplicate gets re-added. One renderer, one response model
  * (`{ code: number }`), so the sum rules, exports and the variable dictionary
  * see the same allocation the typed constant-sum variants produce.
  */

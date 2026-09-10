@@ -6,8 +6,11 @@ import { SafeImage, MediaEmbed } from "../Media";
 import { activate } from "./shared";
 
 /**
- * Image Annotation / Markup (image.annotation) and Draw-on-Image
- * (hotspot.draw) — one renderer, `annotate`, over the `annotation` base type.
+ * Draw-on-Image (`hotspot.draw`) — one renderer, `annotate`, over the
+ * `annotation` base type. `image.annotation` was the same question registered
+ * twice and was retired into it (2026-09-10 taxonomy audit); stored ids still
+ * resolve here. The pin-first tool set it used to default to is a setting
+ * (`settings.tools`), read from the question, not from the variant.
  *
  * The answer is `{ pins, strokes }` in PERCENT coordinates, so a mark made on
  * a phone lands in the same place as one made on a 27" monitor and the data

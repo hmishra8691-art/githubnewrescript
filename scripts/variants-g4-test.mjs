@@ -18,17 +18,30 @@ const qid = (k) => made[k].id;
 
 /* ------------------------------------------------ create every variant */
 for (const k of ["judge", "comparison"]) made[k] = await h.createFromPicker("carousel", `carousel.${k}`);
-for (const k of ["rich", "flip", "sortable"]) made[k] = await h.createFromPicker("card", `card.${k}`);
+for (const k of ["flip", "sortable"]) made[k] = await h.createFromPicker("card", `card.${k}`);
+// card.rich was the same question as single_select.product_choice and was retired into it (taxonomy audit)
+made.rich = await h.createFromPicker("single_select", "single_select.product_choice");
 made.attributes = await h.createFromPicker("comparison", "comparison.attributes");
 console.log("✔ all 6 carousel / card / comparison variants are stable in the picker and create with their variant id");
 
-/* the tournament entry built in another batch is merged alongside: both stable */
+/*
+ * `comparison.tournament` was the same question as `ranking.tournament` and was
+ * retired into it (2026-09-10 taxonomy audit). This block used to assert the
+ * duplicate was OFFERED. It now asserts the opposite — the retired id is gone
+ * from the picker and the survivor is where a programmer will find it — so a
+ * re-added duplicate fails here as well as in the registry test.
+ */
 await h.goTab("Questions");
 await h.page.click('[data-testid="add-question-top"]');
 await h.page.waitForSelector('[data-testid="picker-family-comparison"]');
 await h.page.click('[data-testid="picker-family-comparison"]');
-const tourn = await h.page.waitForSelector('[data-testid="picker-variant-comparison.tournament"]');
-assert.equal(await tourn.getAttribute("data-status"), "stable", "the tournament comparison is stable too");
+await h.page.waitForSelector('[data-testid="picker-variant-comparison.side_by_side"]');
+assert.equal(await h.page.$('[data-testid="picker-variant-comparison.tournament"]'), null,
+  "the retired duplicate must not be offered");
+await h.page.click('[data-testid="picker-family-ranking"]');
+const tourn = await h.page.waitForSelector('[data-testid="picker-variant-ranking.tournament"]');
+assert.equal(await tourn.getAttribute("data-status"), "stable", "tournament ranking lives in the ranking family");
+await h.page.click('[data-testid="picker-family-comparison"]');
 const attrCard = await h.page.$('[data-testid="picker-variant-comparison.attributes"]');
 assert.ok(!!attrCard);
 assert.equal(await attrCard.getAttribute("data-status"), "stable");

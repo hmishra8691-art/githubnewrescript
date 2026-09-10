@@ -50,10 +50,10 @@ async function swipeCard(pv, sel, dx, dy = 0) {
 
 made.tournament = await h.createFromPicker("ranking", "ranking.tournament");
 made.buckets = await h.createFromPicker("ranking", "ranking.buckets");
-made.cmp_tournament = await h.createFromPicker("comparison", "comparison.tournament");
+made.cmp_tournament = await h.createFromPicker("ranking", "ranking.tournament"); // comparison.tournament was retired into this (taxonomy audit)
 made.dd_buckets = await h.createFromPicker("dragdrop", "dragdrop.buckets");
 made.dd_scale = await h.createFromPicker("dragdrop", "dragdrop.scale");
-made.dd_alloc = await h.createFromPicker("dragdrop", "dragdrop.allocation");
+made.dd_alloc = await h.createFromPicker("allocation", "allocation.drag"); // dragdrop.allocation was retired into this (taxonomy audit)
 made.alloc_drag = await h.createFromPicker("allocation", "allocation.drag");
 made.sw_rate = await h.createFromPicker("swipe", "swipe.rate");
 made.sw_four = await h.createFromPicker("swipe", "swipe.four_direction");

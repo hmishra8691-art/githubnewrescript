@@ -59,10 +59,20 @@ async function setRange(pv, sel, v) {
 
 /* ------------------------------------------------ create every variant */
 made.numeric_range = await h.createFromPicker("numeric", "numeric.numeric_range");
-for (const k of ["dual", "vertical", "multi_attribute", "allocation_slider"]) {
+for (const k of ["dual", "vertical", "multi_attribute"]) {
   made[k] = await h.createFromPicker("slider", `slider.${k}`);
 }
 made.slider_allocation = await h.createFromPicker("allocation", "allocation.slider_allocation");
+/*
+ * `slider.allocation_slider` was the same question as `allocation.slider_allocation`
+ * registered a second time, and this suite used to create BOTH through the
+ * picker to prove they matched — which is to say it exercised the duplicate.
+ * The 2026-09-10 taxonomy audit retired it; the picker no longer offers it,
+ * and every assertion below that named it now runs against the survivor.
+ * Whether a stored `slider.allocation_slider` still resolves is asserted in
+ * packages/schema/src/variants.test.ts, where the registry's rules live.
+ */
+made.allocation_slider = made.slider_allocation;
 made.rich_text = await h.createFromPicker("text", "text.rich_text");
 console.log("✔ all 7 G1 variants are stable in the picker and create with their variant id");
 
@@ -82,11 +92,9 @@ assert.equal(made.multi_attribute.type, "matrix_numeric");
 assert.equal(made.multi_attribute.rows.length, 3, "three starter attributes");
 assert.equal(made.multi_attribute.settings.sliderLayout, "stack");
 
-for (const k of ["allocation_slider", "slider_allocation"]) {
-  assert.equal(made[k].type, "allocation");
-  assert.equal(made[k].settings.sumTarget, 100);
-  assert.equal(made[k].options.length, 3);
-}
+assert.equal(made.slider_allocation.type, "allocation");
+assert.equal(made.slider_allocation.settings.sumTarget, 100);
+assert.equal(made.slider_allocation.options.length, 3);
 
 assert.equal(made.rich_text.type, "long_text");
 console.log("✔ base types and seeded defaults are right");
@@ -321,7 +329,7 @@ await setRange(pv, `${q("slider_allocation")} [data-code="2"]`, 50);
 assert.deepEqual(await h.answerOf(pv, id("slider_allocation")), { 1: 100, 2: 0 },
   "with the budget spent, the next slider cannot take any of it");
 await pv.close();
-console.log("✔ allocation.slider_allocation shares the renderer and the model with slider.allocation_slider");
+console.log("✔ allocation.slider_allocation: a budget that cannot be overspent across sliders");
 
 await h.close();
 console.log("\nALL G1 (SLIDER / NUMERIC / TEXT / ALLOCATION) VARIANT CHECKS PASSED");
