@@ -30,6 +30,9 @@ export function applyVariantDefaults(q: Question, v: QuestionVariantDef): void {
   if (d.rows && q.rows.length === 0) q.rows = d.rows.map((r) => ({ flags: [], validation: [], required: false, ...r })) as any;
   if (d.validation && q.validation.length === 0) q.validation = d.validation as any;
   if (d.instruction && !q.instruction) q.instruction = d.instruction;
+  // recipe presets: a starter text and a follow-up probe already switched on
+  if (d.text && !q.text) q.text = d.text;
+  if (d.probe && !q.probe) q.probe = d.probe as any;
 }
 
 /** settings precedence: variant defaults fill gaps, explicit values win —
@@ -66,13 +69,54 @@ export function createFromVariant(v: QuestionVariantDef, n: number): Question {
   }
   if (v.defaults?.validation) q.validation = v.defaults.validation as any;
   if (v.defaults?.instruction) q.instruction = v.defaults.instruction;
+  // recipe presets: a starter text and a follow-up probe already switched on
+  if (v.defaults?.text) q.text = v.defaults.text;
+  if (v.defaults?.probe) q.probe = v.defaults.probe as any;
   return q;
 }
 
 /* -------------------------------------------------------------- the picker */
 
-export function VariantPickerModal({ onPick, onClose }: {
+/**
+ * SURVEY MODES offered in the picker. Each applies a `branding.layout` patch —
+ * the same settings Branding → Presentation edits — because "Voice Survey"
+ * and "Conversational Survey" are how the survey is shown, not what it asks.
+ */
+export interface SurveyMode {
+  id: string; family: string; name: string; description: string;
+  apply(layout: Record<string, any>): void;
+  toast: string;
+}
+export const SURVEY_MODES: SurveyMode[] = [
+  {
+    id: "mode.voice", family: "conversational", name: "Voice Survey",
+    description: "Every question is read aloud and every open end can be dictated. Switches the survey's voice settings on (Branding → Presentation).",
+    apply(layout) { layout.voice = { ...(layout.voice ?? {}), readAloud: true, dictation: true }; },
+    toast: "Voice survey on: questions are read aloud and text questions take dictation — Branding → Presentation to adjust",
+  },
+  {
+    id: "mode.conversational", family: "conversational", name: "Conversational Survey",
+    description: "One question at a time in chat framing, the earlier ones above as a transcript; pages, logic and exports unchanged.",
+    apply(layout) { layout.presentation = "conversational"; },
+    toast: "Conversational presentation on — Branding → Presentation to switch back",
+  },
+  {
+    id: "mode.adaptive", family: "conversational", name: "Adaptive Conversation",
+    description: "Conversational presentation plus AI follow-up probes: add an \"AI Follow-Up / Dynamic Probe\" open end (AI-Enabled family) for the questions that should dig deeper.",
+    apply(layout) { layout.presentation = "conversational"; },
+    toast: "Conversational presentation on — now add AI Follow-Up probes to the open ends that should dig deeper",
+  },
+  {
+    id: "mode.ai_conversational", family: "ai", name: "AI Conversational Survey",
+    description: "The same as Adaptive Conversation: conversational presentation with AI-written follow-ups on the open ends you choose.",
+    apply(layout) { layout.presentation = "conversational"; },
+    toast: "Conversational presentation on — add AI Follow-Up probes to the open ends that should dig deeper",
+  },
+];
+
+export function VariantPickerModal({ onPick, onMode, onClose }: {
   onPick(v: QuestionVariantDef): void;
+  onMode?(m: SurveyMode): void;
   onClose(): void;
 }) {
   const families = variantFamilies();
@@ -88,7 +132,8 @@ export function VariantPickerModal({ onPick, onClose }: {
    * each card carries its own "start from" row — including presets whose
    * registry entry lives in another family. One home per question.
    */
-  const { types, planned } = pickerTypesOf(family);
+  const { types, crossPresets, planned } = pickerTypesOf(family);
+  const modes = SURVEY_MODES.filter((m) => m.family === family);
 
   return (
     <div className="modal-back" onClick={onClose}>
@@ -147,6 +192,43 @@ export function VariantPickerModal({ onPick, onClose }: {
                   ))}
                 </div>
               )}
+            </div>
+          ))}
+          {/*
+            * PRESETS REGISTERED HERE WHOSE TYPE LIVES ELSEWHERE — "Speech-to-Text
+            * Response" is a Multi-Line Text with dictation on; the AI family's
+            * entries are a calculated variable or an open end with a probe.
+            * Found here, created as the thing they really are.
+            */}
+          {crossPresets.map(({ preset: v, parent }) => (
+            <div key={v.id} className="picker-type" data-testid={`picker-type-${v.id}`} style={{ marginBottom: 8 }}>
+              <div className="card selectable"
+                data-testid={`picker-variant-${v.id}`} data-status={v.status} data-preset-of={parent.id}
+                style={{ padding: "10px 14px" }}
+                onClick={() => onPick(v)}>
+                <div className="card-title" style={{ fontSize: 14 }}>
+                  {v.name}
+                  <span className="chip" title="what this creates">creates a {parent.name}</span>
+                </div>
+                <div style={{ color: "var(--subtle)", fontSize: 13, marginTop: 2 }}>{v.description}</div>
+              </div>
+            </div>
+          ))}
+          {/*
+            * SURVEY MODES — voice and conversational are not questions but the
+            * programmer looks for them here, so the family offers them as cards
+            * that switch the survey's presentation (Branding → Presentation).
+            */}
+          {modes.map((m) => (
+            <div key={m.id} className="picker-type" data-testid={`picker-type-${m.id}`} style={{ marginBottom: 8 }}>
+              <div className="card selectable" data-testid={`picker-mode-${m.id}`} style={{ padding: "10px 14px" }}
+                onClick={() => { onMode?.(m); }}>
+                <div className="card-title" style={{ fontSize: 14 }}>
+                  {m.name}
+                  <span className="chip" title="a survey-wide setting, not a question">survey mode</span>
+                </div>
+                <div style={{ color: "var(--subtle)", fontSize: 13, marginTop: 2 }}>{m.description}</div>
+              </div>
             </div>
           ))}
           {planned.map((v) => (

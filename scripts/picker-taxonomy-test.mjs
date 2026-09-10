@@ -44,14 +44,25 @@ assert.ok(!textTypeIds.includes("text.email") && !textTypeIds.includes("text.pho
 console.log(`  ok   Text shows ${textTypeIds.length} type cards; Email/Phone/URL/ZIP/Regex/Company are chips under Single-Line Text`);
 await closePicker();
 
-console.log("\nA CROSS-FAMILY PRESET LIVES WITH ITS PARENT — AND ONLY THERE");
+console.log("\nA CROSS-FAMILY PRESET IS FOUND IN BOTH PLACES AND CREATES ONE THING");
+/*
+ * The first version of this contract hid a cross-family preset from its own
+ * family ("appears once, under its parent"). That made "Speech-to-Text" and
+ * the AI entries look MISSING to a programmer browsing Video / Audio or
+ * AI-Enabled. So a preset registered in a family whose parent lives elsewhere
+ * is shown in ITS family as a card saying what it creates, and under the
+ * parent as a chip — two places to find it, one identity.
+ */
 await openPicker("numeric");
-assert.equal(await present("numeric.percentage_slider"), false, "Percentage Slider is not under Numeric any more");
+const pctCard = await page.$('[data-testid="picker-variant-numeric.percentage_slider"]');
+assert.ok(pctCard, "Percentage Slider is offered in Numeric…");
+assert.equal(await pctCard.getAttribute("data-preset-of"), "slider.single", "…as a card that says it creates a Single Slider (never as a type of its own)");
+assert.ok(!(await page.$('[data-testid="picker-type-numeric.percentage_slider"] [data-testid="picker-presets-numeric.percentage_slider"]')), "a preset card has no presets of its own");
 await closePicker();
 await openPicker("slider");
 const pctChip = await page.$('[data-testid="picker-type-slider.single"] [data-testid="picker-variant-numeric.percentage_slider"]');
-assert.ok(pctChip, "…it is a chip under Single Slider, in the Slider family");
-console.log("  ok   numeric.percentage_slider appears once, under slider.single");
+assert.ok(pctChip, "…and it is a chip under Single Slider, in the Slider family");
+console.log("  ok   numeric.percentage_slider: a card in Numeric (creates a Single Slider) and a chip under slider.single");
 await closePicker();
 
 console.log("\nTHE FAMILY COUNT IS THE NUMBER OF TYPES YOU CAN ACTUALLY PICK");
@@ -103,6 +114,73 @@ assert.equal(await page.$eval('[data-testid="variant-switcher"]', (e) => e.value
 const g2 = await page.$$eval('[data-testid="variant-switcher"] optgroup', (els) => els.map((g) => g.label));
 assert.ok(g2.some((l) => /Click.*Rank|Rank.*Click/i.test(l)), `Top-N sits under its parent Click-to-Rank: ${JSON.stringify(g2)}`);
 console.log("  ok   switcher: types as groups, presets nested, cross-family preset under its parent");
+
+console.log("\nTHE FORMER 'COMING SOON' ENTRIES ARE FINDABLE WHERE THEY WERE LOOKED FOR — AND CREATE THE REAL THING");
+await openPicker("media");
+const stt = await page.waitForSelector('[data-testid="picker-variant-media.speech_to_text"]');
+assert.equal(await stt.getAttribute("data-preset-of"), "text.multi_line", "Speech-to-Text is a preset of Multi-Line Text, offered in Video / Audio");
+assert.match(await stt.textContent(), /creates a Multi-Line Text/);
+await stt.click();
+await page.waitForTimeout(400);
+await page.click('[data-testid="close-question"]').catch(() => {});
+let d2 = await h.readDef();
+let made2 = d2.questions[d2.questions.length - 1];
+assert.equal(made2.type, "long_text");
+assert.equal(made2.variant, "media.speech_to_text");
+assert.equal(made2.settings.speechInput, true, "…with dictation already on");
+console.log("  ok   Speech-to-Text Response → long_text with speechInput on");
+
+await openPicker("ai");
+for (const id of ["ai.classification", "ai.sentiment", "ai.probe"]) assert.ok(await page.$(`[data-testid="picker-variant-${id}"]`), `${id} offered`);
+assert.ok(await page.$('[data-testid="picker-mode-mode.ai_conversational"]'), "AI Conversational Survey offered as a survey mode");
+await page.click('[data-testid="picker-variant-ai.classification"]');
+await page.waitForTimeout(400);
+await page.click('[data-testid="close-question"]').catch(() => {});
+d2 = await h.readDef();
+made2 = d2.questions[d2.questions.length - 1];
+assert.equal(made2.type, "calculated");
+assert.match(made2.settings.expression, /^ai_classify\(Q1, /, "a calculated variable with the ai_classify template");
+assert.match(made2.text, /AI-coded/);
+await openPicker("ai");
+await page.click('[data-testid="picker-variant-ai.probe"]');
+await page.waitForTimeout(400);
+await page.click('[data-testid="close-question"]').catch(() => {});
+d2 = await h.readDef();
+made2 = d2.questions[d2.questions.length - 1];
+assert.equal(made2.type, "long_text");
+assert.equal(made2.probe?.maxProbes, 2, "an open end with the follow-up probe switched on");
+console.log("  ok   AI classification → calculated + ai_classify(); AI probe → long_text with q.probe");
+
+await openPicker("dynamic");
+await page.click('[data-testid="picker-variant-dynamic.respondent_specific"]');
+await page.waitForTimeout(400);
+await page.click('[data-testid="close-question"]').catch(() => {});
+d2 = await h.readDef();
+made2 = d2.questions[d2.questions.length - 1];
+assert.equal(made2.type, "single_select");
+assert.ok(made2.options.some((o) => o.visibleIf?.source?.kind === "embedded"), "an option with a show-when condition over embedded data");
+console.log("  ok   Respondent-Specific Options → single_select with option visibleIf");
+
+assert.equal((await h.readDef()).branding.layout.voice?.readAloud ?? false, false);
+await openPicker("conversational");
+for (const id of ["mode.voice", "mode.conversational", "mode.adaptive"]) assert.ok(await page.$(`[data-testid="picker-mode-${id}"]`), `${id} offered as a survey mode`);
+await page.click('[data-testid="picker-mode-mode.voice"]');
+await page.waitForTimeout(400);
+d2 = await h.readDef();
+assert.deepEqual({ r: d2.branding.layout.voice.readAloud, d: d2.branding.layout.voice.dictation }, { r: true, d: true }, "Voice Survey switched the survey's voice settings on");
+assert.equal(d2.questions.length, made2 ? d2.questions.length : 0);
+const nAfter = d2.questions.length;
+await openPicker("conversational");
+await page.click('[data-testid="picker-mode-mode.conversational"]');
+await page.waitForTimeout(400);
+d2 = await h.readDef();
+assert.equal(d2.branding.layout.presentation, "conversational");
+assert.equal(d2.questions.length, nAfter, "a survey mode adds no question");
+await openPicker("ai");
+const navCounts = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('[data-testid^="picker-family-"]')].map((b) => [b.getAttribute("data-testid").replace("picker-family-", ""), b.querySelector(".nav-count")?.textContent])));
+assert.ok(navCounts.ai !== "soon" && navCounts.media !== "soon", `AI and Media families are no longer "soon": ${JSON.stringify({ ai: navCounts.ai, media: navCounts.media })}`);
+await closePicker();
+console.log("  ok   Voice Survey / Conversational Survey are survey-mode cards that set branding.layout; no phantom questions");
 
 await h.close();
 console.log("\nALL PICKER TAXONOMY CHECKS PASSED");

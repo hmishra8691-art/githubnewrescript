@@ -83,7 +83,11 @@ export interface QuestionVariantDef {
   /** applied on creation / conversion (merged into the question) */
   defaults?: {
     settings?: Record<string, unknown>;
-    options?: { code: string | number; label: string; flags?: string[]; imageUrl?: string; meta?: Record<string, unknown> }[];
+    options?: { code: string | number; label: string; flags?: string[]; imageUrl?: string; meta?: Record<string, unknown>; visibleIf?: unknown }[];
+    /** a starter question text (presets that are recipes — an AI classification, a probe) */
+    text?: string;
+    /** a follow-up probe switched on (schema ProbeConfig) */
+    probe?: Record<string, unknown>;
     rows?: Record<string, unknown>[];
     /** cell questions (composite / custom_table): starter columns */
     columns?: Record<string, unknown>[];
@@ -971,9 +975,18 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   }),
   /*
    * "Speech-to-Text Response" is not a type: it is the `speech_input`
-   * capability on Single-Line / Multi-Line Text (the transcript is the text
-   * answer), and survey-wide it is `branding.layout.voice.dictation`.
+   * capability on Multi-Line Text (the transcript IS the text answer), and
+   * survey-wide it is `branding.layout.voice.dictation`. It stays PICKABLE
+   * here as a preset — a Multi-Line Text with dictation already on — so a
+   * programmer looking in Video / Audio finds it, and what they get is the
+   * one text type with one setting switched, not a second kind of question.
    */
+  stable(F.media, "speech_to_text", "Speech-to-Text Response", "An open end the respondent can dictate: the microphone transcribes into the ordinary text answer.", {
+    baseType: "long_text", responseModel: "text",
+    capabilities: ["speech_input"], validations: ["required", "min_length", "max_length"],
+    defaults: { settings: { speechInput: true }, instruction: "Type, or tap the microphone and speak." },
+    presetOf: "text.multi_line",
+  }),
   stable(F.dragdrop, "ranking", "Drag-and-Drop Ranking", "Drag items into order.", {
     baseType: "ranking", renderer: "dragrank", responseModel: "rank_order",
     capabilities: ["options", "sorting", "randomization", "carry_forward", "list_logic"],
@@ -1484,6 +1497,26 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
    * the picker stops promising a capability that is already switched on.
    */
 
+  /*
+   * "Respondent-Specific Options" is option `visibleIf` logic on an ordinary
+   * choice question — every option can carry a Condition over embedded data,
+   * variables or earlier answers. Offered here as a preset with one such
+   * option already written, so the mechanism is found where it was looked for.
+   */
+  stable(F.dynamic, "respondent_specific", "Respondent-Specific Options", "A choice question whose options appear per respondent — each option carries a show-when condition over embedded data, variables or earlier answers.", {
+    baseType: "single_select", responseModel: "single_choice",
+    capabilities: CAP_SINGLE, validations: VAL_SINGLE,
+    defaults: {
+      options: [
+        { code: "a", label: "Shown to everyone" },
+        { code: "b", label: "Shown only when embedded SEGMENT = premium", visibleIf: { type: "rule", source: { kind: "embedded", ref: "SEGMENT" }, operator: "eq", value: "premium" } },
+        { code: "c", label: "Shown only when Q1 was answered", visibleIf: { type: "rule", source: { kind: "question", ref: "Q1" }, operator: "answered" } },
+      ],
+      instruction: "Edit each option's show-when condition in the Options panel.",
+    },
+    presetOf: "single_select.radio",
+  }),
+
   /* ----------------------------------------------------------- CALCULATED */
   stable(F.calculated, "value", "Calculated Value", "Expression-driven derived variable (calc DSL).", {
     baseType: "calculated", responseModel: "derived",
@@ -1608,17 +1641,36 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     presetOf: "experimental.ab",
   }),
   /*
-   * THE AI FAMILY HAS NO TYPES, by design. Each capability once planned here
-   * landed as a mechanism the rest of the platform already had:
-   *   · AI Open-End Classification → `calculated` with `ai_classify(Q5, "A|B|C")`
-   *   · AI Sentiment Analysis       → `calculated` with `ai_sentiment(Q5)`
-   *   · AI Follow-Up / Dynamic Probe → `q.probe` on any open end (Properties → Follow-up probe)
-   *   · AI Conversational Survey    → `branding.layout.presentation = "conversational"` + probes
+   * THE AI FAMILY HAS NO TYPES OF ITS OWN, by design. Each capability once
+   * planned here landed as a mechanism the rest of the platform already had,
+   * and each is offered below as a PRESET of that mechanism's type — pickable
+   * from this family, stored as the ordinary type with the mechanism on:
+   *   · AI Open-End Classification → `calculated` with `ai_classify(Q1, "A|B|C")`
+   *   · AI Sentiment Analysis       → `calculated` with `ai_sentiment(Q1)`
+   *   · AI Follow-Up / Dynamic Probe → Multi-Line Text with `q.probe` switched on
+   *   · AI Conversational Survey    → `branding.layout.presentation` — a survey mode, offered
+   *                                   as a mode card in the Conversational family
    *   · AI Quality Check            → the response-quality engine (`@rescript/quality`), which
    *                                   already grades every open end including probe answers
-   * A type would have been a second copy of each. The family stays as a label
-   * so the picker can say where these live.
    */
+  stable(F.ai, "classification", "AI Open-End Classification", "Codes an open end into the themes you name — a calculated variable: ai_classify(Q1, \"Price|Quality|Other\"). Edit the source question and the list.", {
+    baseType: "calculated", responseModel: "derived",
+    capabilities: ["expression"], validations: [],
+    defaults: { settings: { expression: 'ai_classify(Q1, "Theme A|Theme B|Other")' }, text: "Theme of Q1 (AI-coded)" },
+    presetOf: "calculated.value",
+  }),
+  stable(F.ai, "sentiment", "AI Sentiment Analysis", "positive / neutral / negative for an open end — a calculated variable: ai_sentiment(Q1).", {
+    baseType: "calculated", responseModel: "derived",
+    capabilities: ["expression"], validations: [],
+    defaults: { settings: { expression: "ai_sentiment(Q1)" }, text: "Sentiment of Q1 (AI-scored)" },
+    presetOf: "calculated.value",
+  }),
+  stable(F.ai, "probe", "AI Follow-Up / Dynamic Probe", "An open end that asks a follow-up written from the answer, up to twice. Properties → Follow-up probe holds the rules.", {
+    baseType: "long_text", responseModel: "text",
+    capabilities: ["speech_input"], validations: ["required", "min_length", "max_length"],
+    defaults: { probe: { maxProbes: 2, minWords: 0, required: false, instruction: "Find out what lies behind the answer." } },
+    presetOf: "text.multi_line",
+  }),
   stable(F.conversational, "chat_based_question", "Chat-Based Question", "One-at-a-time chat presentation.", {
     baseType: "matrix_text", renderer: "chat", responseModel: "per_row",
     capabilities: ["rows"], validations: ["required"],
@@ -1700,6 +1752,8 @@ export function variantFamilies(): { family: string; familyLabel: string; stable
      */
     if (v.status === "planned") e.planned++;
     else if (isSelectableVariant(v) && !v.presetOf) e.stable++;
+    // a preset whose parent lives elsewhere is something this family OFFERS (a card in its pane), so it counts here
+    else if (isSelectableVariant(v) && v.presetOf && variantRegistry.get(v.presetOf)?.family !== v.family) e.stable++;
     map.set(v.family, e);
   }
   return [...map.values()];
@@ -1723,14 +1777,30 @@ export function variantsOf(family: string): QuestionVariantDef[] {
  */
 export function pickerTypesOf(family: string): {
   types: { type: QuestionVariantDef; presets: QuestionVariantDef[] }[];
+  /**
+   * Presets registered IN this family whose parent type lives elsewhere —
+   * "Speech-to-Text Response" in Video / Audio (a Multi-Line Text with
+   * dictation on), the AI family's classification / sentiment / probe. They
+   * are shown here as cards saying what they create, AND under their parent.
+   * Two places to find them, one thing created.
+   */
+  crossPresets: { preset: QuestionVariantDef; parent: QuestionVariantDef }[];
   planned: QuestionVariantDef[];
 } {
   const inFamily = variantsOf(family);
   const types = inFamily
     .filter((v) => isSelectableVariant(v) && !v.presetOf)
     .map((type) => ({ type, presets: presetsOf(type.id) }));
+  const crossPresets = inFamily
+    .filter((v) => isSelectableVariant(v) && v.presetOf && variantRegistry.get(v.presetOf)?.family !== family)
+    .map((preset) => ({ preset, parent: variantRegistry.get(preset.presetOf!)! }));
   const planned = inFamily.filter((v) => v.status === "planned");
-  return { types, planned };
+  return { types, crossPresets, planned };
+}
+
+/** Presets registered in a family whose parent lives in another — what that family offers beyond its own types. */
+export function crossPresetsOf(family: string): QuestionVariantDef[] {
+  return variantsOf(family).filter((v) => isSelectableVariant(v) && v.presetOf && variantRegistry.get(v.presetOf)?.family !== family);
 }
 
 /**
