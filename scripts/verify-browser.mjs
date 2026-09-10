@@ -187,12 +187,14 @@ async function startServer(name, filter, readyUrl) {
      * unless the environment already chose them. `ai-variables-test`,
      * `probe-test` and `geo-test` prove their whole paths against them,
      * deterministically and keylessly; without them those suites fail on
-     * their first check with a message saying so. A runtime that was already up is left exactly as it was — this
-     * env goes only to a process we own.
+     * their first check with a message saying so. The Studio gets the fake AI
+     * provider too — `ai-conversation-test` proves the spoken-version
+     * rephrasing through it. A server that was already up is left exactly as
+     * it was — this env goes only to a process we own.
      */
     env: {
       ...process.env,
-      ...(name === "runtime" && !process.env.AI_API_URL ? { AI_API_URL: "fake:" } : {}),
+      ...(!process.env.AI_API_URL ? { AI_API_URL: "fake:" } : {}),
       ...(name === "runtime" && !process.env.GEOCODE_API_URL ? { GEOCODE_API_URL: "fake:" } : {}),
     },
   });

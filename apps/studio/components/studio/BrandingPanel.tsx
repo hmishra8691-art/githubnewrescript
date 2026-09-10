@@ -3,6 +3,7 @@ import React from "react";
 import { useStudio } from "./store";
 import { THEME_PRESETS } from "@/lib/defaults";
 import { Branding } from "@rescript/schema";
+import { AiConversationSection } from "./AiConversationPanel";
 
 function Color({ label, value, onChange }: { label: string; value: string; onChange(v: string): void }) {
   return (
@@ -187,32 +188,13 @@ export function BrandingPanel() {
           </select></label>
       </div>
 
-      <h3 className="sec">Presentation</h3>
-      <div className="muted" style={{ fontSize: 12.5, marginBottom: 6 }}>
-        How the same survey is shown — the questions, pages, logic and exports do not change.
-      </div>
-      <div className="row" style={{ flexWrap: "wrap" }}>
-        <label className="f" style={{ width: 220 }} title="Conversational shows one question at a time within each page, with the earlier ones above as a transcript.">
-          <span>Mode</span>
-          <select className="select" data-testid="presentation-mode" value={b.layout.presentation ?? "pages"}
-            onChange={(e) => set((x) => { x.layout.presentation = e.target.value as "pages" | "conversational"; })}>
-            <option value="pages">pages — questions together</option>
-            <option value="conversational">conversational — one at a time, chat framing</option>
-          </select></label>
-        <label className="row" style={{ gap: 4, fontSize: 13, alignSelf: "end" }} title="Speaks each question (and its options) with the browser's speech synthesis as it appears; a mute control stays on screen.">
-          <input type="checkbox" data-testid="voice-read-aloud" checked={!!b.layout.voice?.readAloud}
-            onChange={(e) => set((x) => { x.layout.voice = { ...(x.layout.voice ?? { readAloud: false, dictation: false }), readAloud: e.target.checked }; })} /> read questions aloud
-        </label>
-        <label className="row" style={{ gap: 4, fontSize: 13, alignSelf: "end" }} title="Every open-text question gets a microphone (dictation), as if 'allow dictation' were set on each.">
-          <input type="checkbox" data-testid="voice-dictation" checked={!!b.layout.voice?.dictation}
-            onChange={(e) => set((x) => { x.layout.voice = { ...(x.layout.voice ?? { readAloud: false, dictation: false }), dictation: e.target.checked }; })} /> dictation on every text question
-        </label>
-        {(b.layout.voice?.readAloud || b.layout.voice?.dictation) && (
-          <label className="f" style={{ width: 160 }}><span>Voice language (BCP-47)</span>
-            <input className="input mono" data-testid="voice-lang" value={b.layout.voice?.lang ?? ""} placeholder="survey language"
-              onChange={(e) => set((x) => { x.layout.voice = { ...(x.layout.voice ?? { readAloud: false, dictation: false }), lang: e.target.value || undefined }; })} /></label>
-        )}
-      </div>
+      {/*
+        * THE AI CONVERSATIONAL SURVEY — text / voice / both; standard,
+        * conversational or adaptive; the voice, the interviewer, the
+        * follow-ups. One object (branding.aiConversation); the older
+        * layout.presentation / layout.voice fields are mirrored from it.
+        */}
+      <AiConversationSection />
 
       <h3 className="sec">Buttons</h3>
       <div className="row" style={{ flexWrap: "wrap" }}>

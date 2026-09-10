@@ -1499,7 +1499,7 @@ export function QuestionsPanel() {
         {pickerAt && (
           <VariantPickerModal
             onPick={(v) => { insertQuestion(pickerAt.pageId, pickerAt.pos, v); setPickerAt(null); }}
-            onMode={(m) => { s.update((d) => { m.apply(d.branding.layout as Record<string, unknown>); }); s.toast(m.toast); setPickerAt(null); }}
+            onMode={(m) => { s.update((d) => { m.apply(d.branding as Record<string, unknown>); }); s.toast(m.toast); setPickerAt(null); }}
             onClose={() => setPickerAt(null)} />
         )}
       </div>

@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@rescript/ai": "workspace:*",
     "@rescript/engine": "workspace:*",
     "@rescript/quality": "workspace:*",
     "@rescript/renderer": "workspace:*",

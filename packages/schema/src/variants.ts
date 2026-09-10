@@ -88,6 +88,8 @@ export interface QuestionVariantDef {
     text?: string;
     /** a follow-up probe switched on (schema ProbeConfig) */
     probe?: Record<string, unknown>;
+    /** per-question AI conversation overrides (schema AiQuestionOverride) */
+    ai?: Record<string, unknown>;
     rows?: Record<string, unknown>[];
     /** cell questions (composite / custom_table): starter columns */
     columns?: Record<string, unknown>[];
@@ -1648,8 +1650,9 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
    *   · AI Open-End Classification → `calculated` with `ai_classify(Q1, "A|B|C")`
    *   · AI Sentiment Analysis       → `calculated` with `ai_sentiment(Q1)`
    *   · AI Follow-Up / Dynamic Probe → Multi-Line Text with `q.probe` switched on
-   *   · AI Conversational Survey    → `branding.layout.presentation` — a survey mode, offered
-   *                                   as a mode card in the Conversational family
+   *   · AI Conversational Question  → Multi-Line Text with `q.ai` (adaptive follow-ups on)
+   *   · AI Conversational Survey    → `branding.aiConversation` — a survey mode, offered
+   *                                   as a mode card in the AI and Conversational families
    *   · AI Quality Check            → the response-quality engine (`@rescript/quality`), which
    *                                   already grades every open end including probe answers
    */
@@ -1664,6 +1667,12 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: ["expression"], validations: [],
     defaults: { settings: { expression: "ai_sentiment(Q1)" }, text: "Sentiment of Q1 (AI-scored)" },
     presetOf: "calculated.value",
+  }),
+  stable(F.ai, "conversational_question", "AI Conversational Question", "An open end asked by the AI interviewer: spoken and answered by voice when the survey has voice on, with adaptive follow-ups (up to 2) within the survey's research objective and guardrails — Branding → AI Conversational Survey.", {
+    baseType: "long_text", responseModel: "text",
+    capabilities: ["speech_input"], validations: ["required", "min_length", "max_length"],
+    defaults: { ai: { conversation: "adaptive", adaptive: { enabled: true, maxFollowUps: 2 } }, text: "In your own words, what stood out most for you?" },
+    presetOf: "text.multi_line",
   }),
   stable(F.ai, "probe", "AI Follow-Up / Dynamic Probe", "An open end that asks a follow-up written from the answer, up to twice. Properties → Follow-up probe holds the rules.", {
     baseType: "long_text", responseModel: "text",
@@ -1684,11 +1693,12 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     },
   }),
   /*
-   * "Voice Survey" and "Adaptive Conversation" are PRESENTATION MODES of the
-   * same survey, not question types: `branding.layout.voice` (read-aloud +
-   * dictation) and `branding.layout.presentation = "conversational"` (one
-   * question at a time with a transcript), composed with `q.probe` for the
-   * adaptive follow-ups. Branding → Presentation in the Studio.
+   * "Voice Survey", "Conversational Survey" and "Adaptive Conversation" are
+   * ONE setting of the same survey, not question types: `branding.aiConversation`
+   * — Interaction Mode (text / voice / text + voice) and Conversation Behavior
+   * (standard / conversational / adaptive), with the voice, the interviewer
+   * and the follow-up rules. The picker offers it as the "AI Conversational
+   * Survey" mode card; Branding → AI Conversational Survey holds the controls.
    */
 
   /* --------------------------------------------------------------- CONTENT */

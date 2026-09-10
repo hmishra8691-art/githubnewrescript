@@ -13,7 +13,7 @@ import { useStudio, uid } from "./store";
 import { ConditionEditor, conditionToText, OptionalCondition } from "./ConditionBuilder";
 import { NamedExpressionsPanel } from "./NamedExpressionsPanel";
 import { LogicTracePanel } from "./LogicTracePanel";
-import { lintCalculations } from "@rescript/engine";
+import { lintCalculations, lintAiConversation } from "@rescript/engine";
 
 /**
  * Survey-wide logic check (reqs §30–31): every broken reference, dead option
@@ -32,6 +32,8 @@ function LogicCheck() {
       path: i.nodeId ? `flow.${i.nodeId}` : "flow",
       message: i.message,
     })),
+    // the AI conversational survey: an adaptive setting that adapts nothing, a voice that reads nothing, a spoken version not yet approved
+    ...lintAiConversation(s.def).map((message) => ({ level: "warning" as const, questionCode: "AI", path: "branding.aiConversation", message })),
   ], [s.def]);
   const cycles = React.useMemo(() => detectLogicCycles(s.def), [s.def]);
   const errors = issues.filter((i) => i.level === "error");

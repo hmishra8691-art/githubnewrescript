@@ -45,9 +45,13 @@ export function effectiveAiConversation(def: SurveyDefinition): AiConversation {
     interviewer: { acknowledge: false },
     voice: {
       locale: voice?.lang ? { language: voice.lang.split("-")[0], dialect: voice.lang } : {},
-      reading: { question: readAloud, options: readAloud },
-      // read-aloud without dictation was a listening survey with no microphone; it still is
-      interaction: { listen: dictation },
+      // the older switches only mean something when one of them was on; otherwise the defaults stand,
+      // so a survey that later turns voice on reads the question and listens
+      ...(anyVoice ? {
+        reading: { question: readAloud, options: readAloud },
+        // read-aloud without dictation was a listening survey with no microphone; it still is
+        interaction: { listen: dictation },
+      } : {}),
     },
   });
 }

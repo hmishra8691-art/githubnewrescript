@@ -111,7 +111,7 @@ export const GRID_READING_MODES = ["question_first", "row_by_row", "respondent_d
 
 export const VoiceReading = z.object({
   question: z.boolean().default(true),
-  options: z.boolean().default(false),
+  options: z.boolean().default(true),
   instructions: z.boolean().default(false),
   validationErrors: z.boolean().default(false),
   helpText: z.boolean().default(false),

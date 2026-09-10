@@ -33,6 +33,7 @@ export function applyVariantDefaults(q: Question, v: QuestionVariantDef): void {
   // recipe presets: a starter text and a follow-up probe already switched on
   if (d.text && !q.text) q.text = d.text;
   if (d.probe && !q.probe) q.probe = d.probe as any;
+  if (d.ai && !q.ai) q.ai = d.ai as any;
 }
 
 /** settings precedence: variant defaults fill gaps, explicit values win —
@@ -72,45 +73,44 @@ export function createFromVariant(v: QuestionVariantDef, n: number): Question {
   // recipe presets: a starter text and a follow-up probe already switched on
   if (v.defaults?.text) q.text = v.defaults.text;
   if (v.defaults?.probe) q.probe = v.defaults.probe as any;
+  if (v.defaults?.ai) q.ai = v.defaults.ai as any;
   return q;
 }
 
 /* -------------------------------------------------------------- the picker */
 
 /**
- * SURVEY MODES offered in the picker. Each applies a `branding.layout` patch —
- * the same settings Branding → Presentation edits — because "Voice Survey"
- * and "Conversational Survey" are how the survey is shown, not what it asks.
+ * THE SURVEY MODE offered in the picker. "Voice Survey", "Conversational
+ * Survey", "Adaptive Conversation" and "AI Conversational Survey" used to be
+ * four cards patching four scattered layout switches; they are ONE setting of
+ * the same survey — `branding.aiConversation` — so they are one card, offered
+ * in both families a programmer would look in. It switches the interviewer on
+ * with text + voice and adaptive follow-ups; Branding → AI Conversational
+ * Survey holds every control. The older `layout.presentation` / `layout.voice`
+ * fields are mirrored so nothing that reads them changes.
  */
 export interface SurveyMode {
-  id: string; family: string; name: string; description: string;
-  apply(layout: Record<string, any>): void;
+  id: string; families: string[]; name: string; description: string;
+  apply(branding: Record<string, any>): void;
   toast: string;
+}
+export function applyAiConversationalMode(branding: Record<string, any>): void {
+  const cur = (branding.aiConversation ?? {}) as Record<string, any>;
+  branding.aiConversation = {
+    ...cur,
+    enabled: true,
+    interaction: cur.interaction && cur.interaction !== "text" ? cur.interaction : "text_voice",
+    conversation: "adaptive",
+    adaptive: { ...(cur.adaptive ?? {}), enabled: true },
+  };
+  branding.layout = { ...(branding.layout ?? {}), presentation: "conversational", voice: { ...(branding.layout?.voice ?? {}), readAloud: true, dictation: true } };
 }
 export const SURVEY_MODES: SurveyMode[] = [
   {
-    id: "mode.voice", family: "conversational", name: "Voice Survey",
-    description: "Every question is read aloud and every open end can be dictated. Switches the survey's voice settings on (Branding → Presentation).",
-    apply(layout) { layout.voice = { ...(layout.voice ?? {}), readAloud: true, dictation: true }; },
-    toast: "Voice survey on: questions are read aloud and text questions take dictation — Branding → Presentation to adjust",
-  },
-  {
-    id: "mode.conversational", family: "conversational", name: "Conversational Survey",
-    description: "One question at a time in chat framing, the earlier ones above as a transcript; pages, logic and exports unchanged.",
-    apply(layout) { layout.presentation = "conversational"; },
-    toast: "Conversational presentation on — Branding → Presentation to switch back",
-  },
-  {
-    id: "mode.adaptive", family: "conversational", name: "Adaptive Conversation",
-    description: "Conversational presentation plus AI follow-up probes: add an \"AI Follow-Up / Dynamic Probe\" open end (AI-Enabled family) for the questions that should dig deeper.",
-    apply(layout) { layout.presentation = "conversational"; },
-    toast: "Conversational presentation on — now add AI Follow-Up probes to the open ends that should dig deeper",
-  },
-  {
-    id: "mode.ai_conversational", family: "ai", name: "AI Conversational Survey",
-    description: "The same as Adaptive Conversation: conversational presentation with AI-written follow-ups on the open ends you choose.",
-    apply(layout) { layout.presentation = "conversational"; },
-    toast: "Conversational presentation on — add AI Follow-Up probes to the open ends that should dig deeper",
+    id: "mode.ai_conversational", families: ["ai", "conversational"], name: "AI Conversational Survey",
+    description: "One AI interviewer for the whole survey: questions read aloud and answered by voice or text, one at a time in chat framing, with adaptive follow-ups. Interaction mode, conversation behaviour, the voice, dialect, guardrails and follow-up rules: Branding → AI Conversational Survey. Pages, logic and exports unchanged.",
+    apply: applyAiConversationalMode,
+    toast: "AI Conversational Survey on (text + voice, adaptive) — Branding → AI Conversational Survey to shape the interviewer",
   },
 ];
 
@@ -133,7 +133,7 @@ export function VariantPickerModal({ onPick, onMode, onClose }: {
    * registry entry lives in another family. One home per question.
    */
   const { types, crossPresets, planned } = pickerTypesOf(family);
-  const modes = SURVEY_MODES.filter((m) => m.family === family);
+  const modes = SURVEY_MODES.filter((m) => m.families.includes(family));
 
   return (
     <div className="modal-back" onClick={onClose}>
@@ -215,9 +215,9 @@ export function VariantPickerModal({ onPick, onMode, onClose }: {
             </div>
           ))}
           {/*
-            * SURVEY MODES — voice and conversational are not questions but the
-            * programmer looks for them here, so the family offers them as cards
-            * that switch the survey's presentation (Branding → Presentation).
+            * THE SURVEY MODE — an AI conversational survey is not a question but
+            * the programmer looks for it here, so the family offers it as a card
+            * that switches the interviewer on (Branding → AI Conversational Survey).
             */}
           {modes.map((m) => (
             <div key={m.id} className="picker-type" data-testid={`picker-type-${m.id}`} style={{ marginBottom: 8 }}>

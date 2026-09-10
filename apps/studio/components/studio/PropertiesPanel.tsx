@@ -13,6 +13,7 @@ import { MaskingBuilder, PunchRules } from "./MaskingBuilder";
 import { QualitySettings } from "./QualitySettings";
 import { OptionGroupsEditor } from "./OptionGroupsEditor";
 import { CollapsibleSection } from "./CollapsibleSection";
+import { AiQuestionSection } from "./AiQuestionSection";
 
 /** Context-aware validation (req §6/§19): only offer rules that make sense
  *  for the question type. */
@@ -744,6 +745,14 @@ export function PropertiesPanel() {
       )}
       </CollapsibleSection>
       )}
+
+      {/*
+        * AI CONVERSATION — what is different for THIS question in the AI
+        * conversational survey: overrides, the spoken script, a speech
+        * preview and an adaptive follow-up simulator. Survey-wide settings
+        * live in Branding.
+        */}
+      {q.type !== "html" && showSec("AI conversation") && <AiQuestionSection q={q} patch={patch} />}
 
       {hasCap("carry_forward") && showSec("Carry-forward") && (
       <CollapsibleSection id="carry-forward" title="Carry-forward (dynamic options)" active={!!q.carryForward}>

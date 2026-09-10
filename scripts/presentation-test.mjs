@@ -1,7 +1,7 @@
 /**
  * PRESENTATION MODES — conversational and voice — over an unchanged survey.
  *
- *   Studio: Branding → Presentation: mode, read aloud, dictation, language
+ *   Studio: Branding → AI Conversational Survey: behaviour, interaction, dialect
  *       ↓
  *   Runtime, conversational: one question at a time within each page, the
  *   earlier ones above as a transcript; validation per question; Back walks
@@ -46,22 +46,26 @@ const survey = (layout) => ({
   ],
 });
 
-console.log("\nSTUDIO — presentation and voice are branding-layout settings");
+console.log("\nSTUDIO — presentation and voice are ONE branding setting (AI Conversational Survey); the older layout fields follow it");
 await h.loadDef(survey({}));
 await h.goTab("Branding");
 await h.page.waitForSelector('[data-testid="presentation-mode"]');
 await h.page.selectOption('[data-testid="presentation-mode"]', "conversational");
-await h.page.click('[data-testid="voice-read-aloud"]');
-await h.page.click('[data-testid="voice-dictation"]');
+await h.page.selectOption('[data-testid="ai-interaction"]', "text_voice");
+await h.page.click('[data-testid="ai-advanced"]');
 await h.page.waitForSelector('[data-testid="voice-lang"]');
 await h.page.fill('[data-testid="voice-lang"]', "en-GB");
 await h.page.waitForTimeout(300);
 let def = await h.readDef();
-assert.equal(def.branding.layout.presentation, "conversational");
-assert.deepEqual(def.branding.layout.voice, { readAloud: true, dictation: true, lang: "en-GB" });
+assert.equal(def.branding.aiConversation.enabled, true);
+assert.equal(def.branding.aiConversation.conversation, "conversational");
+assert.equal(def.branding.aiConversation.interaction, "text_voice");
+assert.equal(def.branding.aiConversation.voice.locale.dialect, "en-GB");
+assert.equal(def.branding.layout.presentation, "conversational", "the older field mirrors the new object");
+assert.deepEqual(def.branding.layout.voice, { readAloud: true, dictation: true, lang: "en-GB" }, "…and so does layout.voice");
 assert.equal(def.questions.length, 4, "no question was added or changed");
 assert.equal(def.flow.length, 3, "the flow is the flow");
-console.log("  ok   layout.presentation = conversational; voice { readAloud, dictation, lang } stored; questions and flow untouched");
+console.log("  ok   branding.aiConversation { conversational, text + voice, en-GB }; layout.presentation / layout.voice mirrored; questions and flow untouched");
 
 /* a preview page with speech synthesis mocked: every utterance is recorded */
 const openVoicePreview = async (definition) => {
