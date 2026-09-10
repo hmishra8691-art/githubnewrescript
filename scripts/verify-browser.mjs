@@ -54,6 +54,7 @@
  */
 import { spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
+import net from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
 
 const ROOT = new URL("..", import.meta.url).pathname;
@@ -116,12 +117,55 @@ if (flag("list")) {
 
 /* ------------------------------------------------------------- the servers */
 
+/**
+ * IS ANYTHING LISTENING ON THIS PORT? A TCP connect, not an HTTP request.
+ *
+ * "Is a server already running" and "can it serve a page yet" are two
+ * different questions, and answering the first with the second is what broke
+ * a whole run: the check was a single 2.5-second GET of `/sandbox`, which on a
+ * COLD `next dev` has to compile the largest route in the app (823 kB of first
+ * load JS across 75 components). It cannot answer that fast. So a perfectly
+ * healthy server was declared absent, the runner started its own, and the run
+ * died on EADDRINUSE having tested nothing.
+ *
+ * A TCP connect answers the first question in milliseconds and cannot be
+ * confused by a slow compile.
+ */
+const portInUse = (url) => new Promise((resolve) => {
+  const { hostname, port } = new URL(url);
+  const socket = net.connect({
+    host: hostname === "localhost" ? "127.0.0.1" : hostname,
+    port: Number(port || 80),
+  });
+  const done = (v) => { socket.destroy(); resolve(v); };
+  socket.once("connect", () => done(true));
+  socket.once("error", () => done(false));
+  setTimeout(() => done(false), 2000).unref?.();
+});
+
+/** Can it actually serve this page? One attempt, generously timed. */
 const alive = async (url) => {
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(2500) });
+    /*
+     * Ten seconds, not 2.5: this is deliberately pointed at a page the app has
+     * to compile, because "the port answers" is not the property the suites
+     * need — the first suite would race the first compile and fail for a
+     * reason nobody could reproduce.
+     */
+    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
     return res.status < 500;
   } catch {
     return false;
+  }
+};
+
+/** Poll `alive` until it holds or the budget runs out. */
+const ready = async (url, budgetMs) => {
+  const deadline = Date.now() + budgetMs;
+  for (;;) {
+    if (await alive(url)) return true;
+    if (Date.now() >= deadline) return false;
+    await sleep(1500);
   }
 };
 
@@ -143,15 +187,23 @@ async function startServer(name, filter, readyUrl) {
   child.stdout.on("data", (d) => log.push(String(d)));
   child.stderr.on("data", (d) => log.push(String(d)));
 
-  const deadline = Date.now() + 120_000;
+  const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
-      throw new Error(`${name} exited before it was ready:\n${log.join("").slice(-1500)}`);
+      const text = log.join("");
+      /*
+       * EADDRINUSE is not a failure — it means somebody else owns the port,
+       * so the right move is to use THEIR server and make sure we never stop
+       * it. Treating it as fatal is how a healthy machine reported "the
+       * corpus could not be run".
+       */
+      if (/EADDRINUSE/.test(text)) return null;
+      throw new Error(`${name} exited before it was ready:\n${text.slice(-1500)}`);
     }
     if (await alive(readyUrl)) return child;
     await sleep(1500);
   }
-  throw new Error(`${name} did not become ready within 120s:\n${log.join("").slice(-1500)}`);
+  throw new Error(`${name} did not become ready within 180s:\n${log.join("").slice(-1500)}`);
 }
 
 /* ------------------------------------------------------------ one suite */
@@ -222,15 +274,37 @@ const started = [];
 let failed = false;
 
 try {
-  const studioWasUp = await alive(`${STUDIO}/sandbox`);
-  const runtimeWasUp = await alive(RUNTIME);
+  const studioWasUp = await portInUse(STUDIO);
+  const runtimeWasUp = await portInUse(RUNTIME);
 
   console.log(`\nRESCRIPT BROWSER CORPUS — ${suites.length} suite(s), ${jobs} at a time`);
   console.log(`  studio  ${STUDIO} ${studioWasUp ? "(already running — left alone)" : "(starting)"}`);
   console.log(`  runtime ${RUNTIME} ${runtimeWasUp ? "(already running — left alone)" : "(starting)"}\n`);
 
-  if (!studioWasUp) started.push(await startServer("studio", "studio", `${STUDIO}/sandbox`));
-  if (!runtimeWasUp) started.push(await startServer("runtime", "runtime", RUNTIME));
+  /*
+   * `startServer` returns null when the port turned out to be taken after all
+   * (a server that finished booting between the probe and the spawn). Null
+   * must not reach the cleanup list — this script stops only what it started,
+   * and a null there would throw while tidying up after a green run.
+   */
+  const adopt = (child) => { if (child) started.push(child); };
+  if (!studioWasUp) adopt(await startServer("studio", "studio", `${STUDIO}/sandbox`));
+  if (!runtimeWasUp) adopt(await startServer("runtime", "runtime", RUNTIME));
+
+  /*
+   * Whether we started them or found them, both must SERVE before suite 1.
+   * A server we found may still be cold, and a cold `/sandbox` compile is
+   * minutes on a loaded machine — waiting here costs one wait, while not
+   * waiting costs a false failure in whichever suite draws the short straw.
+   */
+  for (const [name, url] of [[`studio`, `${STUDIO}/sandbox`], [`runtime`, `${RUNTIME}/preview`]]) {
+    process.stdout.write(`  waiting for ${name} to serve a page… `);
+    if (!(await ready(url, 240_000))) {
+      throw new Error(`${name} is listening on its port but never served ${url} within 240s`);
+    }
+    console.log("ready");
+  }
+  console.log();
 
   const results = await runAll(suites, jobs);
 
