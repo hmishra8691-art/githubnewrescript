@@ -1,4 +1,5 @@
 import type { FlowNode, SurveyDefinition, Question, SkipRule } from "@rescript/schema";
+import { isServerResolvedExpression } from "./aiFunctions.js";
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition } from "./evaluate.js";
 import type { LoopContext, ResponseState } from "./state.js";
@@ -315,6 +316,13 @@ export function runCalculations(
   // calculated-type questions with expressions
   for (const q of def.questions) {
     if (q.type === "calculated" && q.settings.expression) {
+      /*
+       * An AI-derived variable is evaluated by the save route, not here: the
+       * browser has neither the provider nor the key. Its answer is whatever
+       * the server last wrote, and recomputing it to null on every trigger
+       * would erase that. Skip, and keep.
+       */
+      if (isServerResolvedExpression(q.settings.expression)) continue;
       try {
         const v = evaluateExpression(q.settings.expression, { resolver, names });
         state.answers[q.id] = Array.isArray(v) ? (v as any) : (v as any);

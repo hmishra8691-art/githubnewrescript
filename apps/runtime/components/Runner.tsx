@@ -20,6 +20,7 @@ import {
   answerKey,
   questionDependencies,
   pendingListFills,
+  serverResolvedQuestions,
   decideListFill,
   listFillVariables,
   applyListFillDestinations,
@@ -162,6 +163,75 @@ async function persistFinal(mode: string, session: RunnerProps["session"], state
  * changed and the flow must be recompiled (a `listFill` loop source expands
  * from the result).
  */
+/**
+ * AI-DERIVED VARIABLES for the page just answered — same slot as List Fill.
+ *
+ * Only the calculated questions whose SOURCE is on this page are sent, and
+ * only when the source text differs from the last text classified for that
+ * question (a respondent who goes back and changes nothing does not cost a
+ * second provider call). Results are merged into `state.answers` here, before
+ * the flow advances, so the next page's logic can read them; the ordinary
+ * save that follows persists them like any other answer.
+ *
+ * Preview has no session. It still asks — with `sessionId: "preview"` and the
+ * definition — and the route answers only if the runtime is on the FAKE
+ * provider (dev and the test corpus); against a real provider it is refused,
+ * because a real provider must never be reachable without a session. A
+ * provider that is unconfigured (501), refused (403), slow, or down changes
+ * nothing about the interview: the value stays unset and the respondent moves
+ * on. AI must never be the reason a page will not turn.
+ */
+const lastClassified = new Map<string, string>();
+async function runAiResolutions(
+  def: SurveyDefinition,
+  state: ResponseState,
+  pageQuestionIds: string[],
+  mode: string,
+  session: RunnerProps["session"],
+  build: RunnerProps["build"],
+  onTrace?: (line: string) => void,
+): Promise<string[]> {
+  if (mode !== "preview" && !session) return [];
+  const onPage = new Set(pageQuestionIds);
+  const due = serverResolvedQuestions(def).filter(({ question, source }) => {
+    if (!source || !onPage.has(source.id)) return false;
+    const raw = state.answers[source.id];
+    const text = typeof raw === "string" ? raw.trim() : raw == null ? "" : JSON.stringify(raw);
+    if (!text) return false;
+    return lastClassified.get(question.id) !== text;
+  });
+  if (!due.length) return [];
+  try {
+    const r = await fetch("/api/session/ai", {
+      method: "POST", headers: { "content-type": "application/json" }, cache: "no-store",
+      body: JSON.stringify({
+        sessionId: session?.sessionId ?? "preview",
+        definition: session ? undefined : def,
+        questionIds: due.map((d) => d.question.id),
+        answers: state.answers,
+        build: build ? { source: build.source, versionId: build.versionId, revision: build.revision } : undefined,
+      }),
+    });
+    if (r.status === 501 || r.status === 403) return []; // not configured, or a preview against a real provider — silently none
+    if (!r.ok) { onTrace?.(`[ai] resolution failed (${r.status}); variables left unset`); return []; }
+    const j = await r.json().catch(() => ({})) as { answers?: Record<string, string | null> };
+    const done: string[] = [];
+    for (const { question, source } of due) {
+      const v = j.answers?.[question.id];
+      if (v === undefined) continue;
+      state.answers[question.id] = v as never;
+      const raw = state.answers[source!.id];
+      lastClassified.set(question.id, typeof raw === "string" ? raw.trim() : JSON.stringify(raw));
+      done.push(question.id);
+      onTrace?.(`[ai] ${question.code} = ${v === null ? "(unresolved)" : JSON.stringify(v)} from ${source!.code}`);
+    }
+    return done;
+  } catch (e) {
+    onTrace?.(`[ai] ${(e as Error).message}; variables left unset`);
+    return [];
+  }
+}
+
 async function runListFills(
   def: SurveyDefinition,
   state: ResponseState,
@@ -631,6 +701,12 @@ export function Runner({ definition: def, mode, session: initialSession, session
         id, items: def.listFills.find((lf) => lf.id === id)?.name ?? id,
       })));
     }
+    /*
+     * AI-derived variables run in the same slot and for the same reason: a
+     * classification of this page's open end is what a display rule or quota
+     * on the NEXT page may read.
+     */
+    await runAiResolutions(def, state, pageStep.questionIds, mode, session, build, (line) => setLogs((l) => [...l, line]));
     telemetryRef.current?.leavePage();
     // name the page being left: a List Fill decided just above may have added steps before it
     const nav = advance(def, state, counts, { fromPageId: pageStep.pageId });

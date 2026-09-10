@@ -7,6 +7,7 @@ import type {
   ValidationRule,
 } from "@rescript/schema";
 import { setExprSources } from "./setExpression.js";
+import { lintAiCalls } from "./aiFunctions.js";
 import { getQuestionByCodeOrVar } from "./state.js";
 import { pipeTokensIn } from "./pipingTokens.js";
 import { referencedNames } from "./embedded.js";
@@ -549,5 +550,8 @@ export function lintCalculations(def: SurveyDefinition): string[] {
     );
   }
   out.push(...calculationOrderProblems(def));
+  // AI-derived calculations have their own shape rules (aiFunctions.ts); they
+  // are calculations, so their problems belong in this list, not a second one.
+  out.push(...lintAiCalls(def));
   return out;
 }

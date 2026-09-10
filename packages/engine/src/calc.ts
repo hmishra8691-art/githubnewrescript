@@ -459,6 +459,14 @@ function evalNode(n: Node, o: CalcOptions, depth = 0, budget?: { steps: number }
             : d.getUTCDate();
         }
         default:
+          if (n.name === "ai_classify" || n.name === "ai_sentiment") {
+            /*
+             * Reached only if an AI call is nested inside another expression,
+             * which lint refuses. The value is unknowable here — it lives on
+             * the server — so it is null, never a guess.
+             */
+            return null;
+          }
           throw new Error(`Unknown function ${n.name}()`);
       }
     }
@@ -483,6 +491,12 @@ export const CALC_FUNCTION_NAMES: readonly string[] = [
   "replace", "startswith", "endswith",
   "today", "date", "datediff", "age", "dateadd", "year", "month", "day",
   "regex", "matches",
+  /*
+   * Server-resolved: the browser never evaluates these (see aiFunctions.ts),
+   * but they are calc functions in every other sense — lint must not report
+   * them as unknown variables, and the expression editor must offer them.
+   */
+  "ai_classify", "ai_sentiment",
 ];
 
 /** Midnight today, UTC — the reference point every relative date rule uses. */

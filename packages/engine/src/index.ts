@@ -53,3 +53,4 @@ export * from "./calcContext.js";
 export * from "./namedExpressions.js";
 export * from "./punchChain.js";
 export * from "./logicTrace.js";
+export * from "./aiFunctions.js";
