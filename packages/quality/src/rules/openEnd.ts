@@ -5,14 +5,34 @@ import {
 } from "../metrics.js";
 import { isOpen, isSingle, isMulti, questionVocabulary } from "../survey.js";
 
-/** Text answers of a response: question → text (lists joined). */
-export function openEnds(questions: Question[], answers: Record<string, unknown>): { q: Question; text: string }[] {
-  const out: { q: Question; text: string }[] = [];
+/** One open-end text of a response. `key` is the answer key (the question id, or a probe side key); `label` is what a flag calls it. */
+export interface OpenEndEntry { q: Question; text: string; key: string; label: string; probe?: number }
+
+/**
+ * Text answers of a response: question → text (lists joined).
+ *
+ * FOLLOW-UP PROBE ANSWERS ARE OPEN ENDS. A respondent who answers "tell me
+ * more" with "asdfgh", or with the same sentence again, has done exactly what
+ * the gibberish and repeated-text rules exist to catch — so probe answers
+ * (`<id>__probe_n`, engine probe.ts) are yielded here beside the answer they
+ * follow, under the SAME question, and every open-end rule covers them with
+ * no second implementation. The entry's `key` keeps peer lookups honest
+ * (a probe answer is compared with peers' probe answers, not their main
+ * answer) and `label` names it `Q5_PROBE_1` in the flag.
+ */
+export function openEnds(questions: Question[], answers: Record<string, unknown>): OpenEndEntry[] {
+  const out: OpenEndEntry[] = [];
+  const textOf = (v: unknown) => typeof v === "string" ? v : Array.isArray(v) ? v.filter((x) => typeof x === "string").join(" ") : "";
   for (const q of questions) {
     if (!isOpen(q)) continue;
-    const v = answers[q.id];
-    const text = typeof v === "string" ? v : Array.isArray(v) ? v.filter((x) => typeof x === "string").join(" ") : "";
-    if (text.trim()) out.push({ q, text });
+    const text = textOf(answers[q.id]);
+    if (text.trim()) out.push({ q, text, key: q.id, label: q.code });
+    if (q.probe) {
+      for (let n = 1; n <= q.probe.maxProbes; n++) {
+        const t = textOf(answers[`${q.id}__probe_${n}`]);
+        if (t.trim()) out.push({ q, text: t, key: `${q.id}__probe_${n}`, label: `${q.code}_PROBE_${n}`, probe: n });
+      }
+    }
   }
   return out;
 }
@@ -30,7 +50,7 @@ export function openEndRules(ctx: RuleContext): FlagDraft[] {
   if (!allEnds.length) return out;
   const endsFor = (ruleId: string) => allEnds.filter((e) => ctx.applies(ruleId, e.q.id));
   let ends = allEnds;
-  const code = (q: Question) => q.code;
+  const code = (x: OpenEndEntry | Question) => ("label" in x ? x.label : x.code);
 
   /* too short / one word */
   if (ctx.enabled("openend.too_short")) {
@@ -59,7 +79,7 @@ export function openEndRules(ctx: RuleContext): FlagDraft[] {
     if (hits.length) {
       out.push({
         ruleId: "openend.gibberish",
-        observed: hits.map((h) => `${code(h.q)}: "${h.text.slice(0, 30)}${h.text.length > 30 ? "…" : ""}" (score ${Math.round(h.score * 100) / 100})`).join("; "),
+        observed: hits.map((h) => `${code(h)}: "${h.text.slice(0, 30)}${h.text.length > 30 ? "…" : ""}" (score ${Math.round(h.score * 100) / 100})`).join("; "),
         expected: `gibberish score < ${thr}`,
         explanation: "Text has the letter statistics of a keyboard mash rather than language.",
         questionIds: hits.map((h) => h.q.id),
@@ -73,18 +93,19 @@ export function openEndRules(ctx: RuleContext): FlagDraft[] {
     ends = endsFor("openend.repeated");
     const thr = ctx.param<number>("openend.repeated", "score");
     const rep = ends.filter((e) => words(e.text).length >= 3 && repeatedWordScore(e.text) >= thr);
-    const seen = new Map<string, Question[]>();
-    for (const e of ends) { const h = openEndHash(e.text); if (h) (seen.get(h) ?? seen.set(h, []).get(h)!).push(e.q); }
-    const dupes = [...seen.values()].filter((qs) => qs.length > 1);
+    const seen = new Map<string, OpenEndEntry[]>();
+    for (const e of ends) { const h = openEndHash(e.text); if (h) (seen.get(h) ?? seen.set(h, []).get(h)!).push(e); }
+    // the same text given to two DIFFERENT questions; a probe echoing its own question is openend.probe_echo
+    const dupes = [...seen.values()].filter((qs) => new Set(qs.map((e) => e.q.id)).size > 1);
     if (rep.length || dupes.length) {
       out.push({
         ruleId: "openend.repeated",
         observed: [
-          ...rep.map((e) => `${code(e.q)}: repeated words`),
+          ...rep.map((e) => `${code(e)}: repeated words`),
           ...dupes.map((qs) => `same text in ${qs.map(code).join(" & ")}`),
         ].join("; "),
         explanation: "The same word or phrase was repeated to fill the box, or one text was given to several questions.",
-        questionIds: [...new Set([...rep.map((e) => e.q.id), ...dupes.flat().map((q) => q.id)])],
+        questionIds: [...new Set([...rep.map((e) => e.q.id), ...dupes.flat().map((e) => e.q.id)])],
       });
     }
   }
@@ -107,7 +128,8 @@ export function openEndRules(ctx: RuleContext): FlagDraft[] {
 
   /* irrelevant: long answer, zero vocabulary overlap with the question */
   if (ctx.enabled("openend.irrelevant")) {
-    ends = endsFor("openend.irrelevant");
+    // a follow-up's answer is relevant to the conversation, not to the original wording — not judged here
+    ends = endsFor("openend.irrelevant").filter((e) => !e.probe);
     const hits = ends.filter((e) => {
       const ws = words(e.text).filter((w) => w.length > 3);
       if (ws.length < 8) return false;
@@ -128,7 +150,7 @@ export function openEndRules(ctx: RuleContext): FlagDraft[] {
   /* contradiction with closed answers: names an option explicitly NOT chosen on the preceding choice question */
   if (ctx.enabled("openend.contradiction")) {
     ends = endsFor("openend.contradiction");
-    const hits: { q: Question; other: Question; opt: string }[] = [];
+    const hits: { q: Question; label: string; other: Question; opt: string }[] = [];
     for (const e of ends) {
       const idx = ctx.def.questions.indexOf(e.q);
       const prev = ctx.def.questions.slice(Math.max(0, idx - 3), idx).reverse().find((p) => (isSingle(p) || isMulti(p)) && ctx.response.answers[p.id] !== undefined);
@@ -139,13 +161,13 @@ export function openEndRules(ctx: RuleContext): FlagDraft[] {
         const label = normalizeText(o.label);
         if (label.length < 4 || chosen.has(String(o.code))) continue;
         if (/\b(no|not|never|none)\b/.test(label)) continue;
-        if (text.includes(label) && /\b(i use|i own|i have|i bought|i drive|my)\b/.test(text)) { hits.push({ q: e.q, other: prev, opt: o.label }); break; }
+        if (text.includes(label) && /\b(i use|i own|i have|i bought|i drive|my)\b/.test(text)) { hits.push({ q: e.q, label: e.label, other: prev, opt: o.label }); break; }
       }
     }
     if (hits.length) {
       out.push({
         ruleId: "openend.contradiction",
-        observed: hits.map((h) => `${code(h.q)} mentions "${h.opt.replace(/<[^>]*>/g, "")}" not selected in ${code(h.other)}`).join("; "),
+        observed: hits.map((h) => `${h.label} mentions "${h.opt.replace(/<[^>]*>/g, "")}" not selected in ${code(h.other)}`).join("; "),
         explanation: "A text answer claims something the closed question before it denied.",
         questionIds: hits.flatMap((h) => [h.q.id, h.other.id]),
       });
@@ -157,29 +179,29 @@ export function openEndRules(ctx: RuleContext): FlagDraft[] {
     ends = endsFor("openend.duplicate");
     const thr = ctx.param<number>("openend.duplicate", "similarity");
     const minWords = ctx.param<number>("openend.duplicate", "minWords");
-    const hits: { q: Question; peers: string[]; sim: number }[] = [];
+    const hits: { q: Question; label: string; peers: string[]; sim: number }[] = [];
     for (const e of ends) {
       if (words(e.text).length < minWords || isGenericAnswer(e.text)) continue;
       const myHash = openEndHash(e.text);
-      const exact = ctx.peers.filter((p) => p.sessionId !== ctx.response.sessionId && myHash && p.system?.SYSTEM_OPENEND_HASHES?.[e.q.id] === myHash).map((p) => p.sessionId);
-      if (exact.length) { hits.push({ q: e.q, peers: exact, sim: 1 }); continue; }
+      const exact = ctx.peers.filter((p) => p.sessionId !== ctx.response.sessionId && myHash && p.system?.SYSTEM_OPENEND_HASHES?.[e.key] === myHash).map((p) => p.sessionId);
+      if (exact.length) { hits.push({ q: e.q, label: e.label, peers: exact, sim: 1 }); continue; }
       // near-duplicate: compare against peers' raw text when present in answers
       const near: string[] = [];
       let best = 0;
       for (const p of ctx.peers) {
         if (p.sessionId === ctx.response.sessionId) continue;
-        const pv = p.answers[e.q.id];
+        const pv = p.answers[e.key];
         const pt = typeof pv === "string" ? pv : Array.isArray(pv) ? pv.join(" ") : "";
         if (words(pt).length < minWords) continue;
         const s = textSimilarity(e.text, pt);
         if (s >= thr) { near.push(p.sessionId); best = Math.max(best, s); }
       }
-      if (near.length) hits.push({ q: e.q, peers: near, sim: best });
+      if (near.length) hits.push({ q: e.q, label: e.label, peers: near, sim: best });
     }
     if (hits.length) {
       out.push({
         ruleId: "openend.duplicate",
-        observed: hits.map((h) => `${code(h.q)} ${h.sim === 1 ? "identical" : `${pct(h.sim)} similar`} to ${h.peers.length} other${h.peers.length === 1 ? "" : "s"}`).join("; "),
+        observed: hits.map((h) => `${h.label} ${h.sim === 1 ? "identical" : `${pct(h.sim)} similar`} to ${h.peers.length} other${h.peers.length === 1 ? "" : "s"}`).join("; "),
         expected: `similarity < ${pct(thr)}`,
         explanation: "An open-ended answer is the same, or nearly the same, as another respondent's.",
         questionIds: hits.map((h) => h.q.id),
@@ -197,7 +219,7 @@ export function openEndRules(ctx: RuleContext): FlagDraft[] {
     if (hits.length) {
       out.push({
         ruleId: "openend.ai_like",
-        observed: hits.map((h) => `${code(h.q)}: polish score ${Math.round(h.score * 100) / 100}, ${words(h.text).length} words`).join("; "),
+        observed: hits.map((h) => `${code(h)}: polish score ${Math.round(h.score * 100) / 100}, ${words(h.text).length} words`).join("; "),
         expected: `< ${thr}`,
         explanation: "Unusually polished, connector-heavy, evenly structured prose. This is a risk signal, not proof that a tool wrote it.",
         questionIds: hits.map((h) => h.q.id),
@@ -217,10 +239,61 @@ export function openEndRules(ctx: RuleContext): FlagDraft[] {
     if (hits.length) {
       out.push({
         ruleId: "openend.pasted",
-        observed: hits.map((e) => `${code(e.q)}: ${ctx.telemetry!.questions[e.q.id].pasteChars} of ${e.text.length} characters pasted`).join("; "),
+        observed: hits.map((e) => `${code(e)}: ${ctx.telemetry!.questions[e.q.id].pasteChars} of ${e.text.length} characters pasted`).join("; "),
         expected: `pasted share < ${pct(thr)}`,
         explanation: "Most of the text arrived by paste and was barely edited.",
         questionIds: hits.map((e) => e.q.id),
+      });
+    }
+  }
+
+
+  /* follow-up probes shown and left blank */
+  if (ctx.enabled("openend.probe_ignored")) {
+    const need = ctx.param<number>("openend.probe_ignored", "count");
+    const ignored: { q: Question; n: number }[] = [];
+    for (const q of ctx.def.questions) {
+      if (!q.probe || !ctx.applies("openend.probe_ignored", q.id)) continue;
+      for (let n = 1; n <= q.probe.maxProbes; n++) {
+        const shown = ctx.response.answers[`${q.id}__probe_${n}_q`];
+        if (typeof shown !== "string") continue;
+        const a = ctx.response.answers[`${q.id}__probe_${n}`];
+        if (typeof a !== "string" || !a.trim()) ignored.push({ q, n });
+      }
+    }
+    if (ignored.length >= need) {
+      out.push({
+        ruleId: "openend.probe_ignored",
+        observed: `${ignored.length} follow-up${ignored.length === 1 ? "" : "s"} left blank (${ignored.map((i) => `${i.q.code}_PROBE_${i.n}`).join(", ")})`,
+        expected: `fewer than ${need}`,
+        explanation: "Follow-up questions asking for more detail were shown and skipped, repeatedly.",
+        questionIds: [...new Set(ignored.map((i) => i.q.id))],
+        intensity: Math.min(1, 0.5 + ignored.length * 0.15),
+      });
+    }
+  }
+
+  /* a follow-up answered with the same text as what it followed */
+  if (ctx.enabled("openend.probe_echo")) {
+    const thr = ctx.param<number>("openend.probe_echo", "similarity");
+    const hits: { e: OpenEndEntry; of: string; sim: number }[] = [];
+    for (const e of endsFor("openend.probe_echo")) {
+      if (!e.probe) continue;
+      if (words(e.text).length < 2) continue;
+      const earlier = allEnds.filter((o) => o.q.id === e.q.id && (o.probe ?? 0) < e.probe!);
+      for (const o of earlier) {
+        const sim = textSimilarity(e.text, o.text);
+        if (sim >= thr) { hits.push({ e, of: o.label, sim }); break; }
+      }
+    }
+    if (hits.length) {
+      out.push({
+        ruleId: "openend.probe_echo",
+        observed: hits.map((h) => `${h.e.label} ${h.sim === 1 ? "identical" : `${pct(h.sim)} similar`} to ${h.of}`).join("; "),
+        expected: `below ${pct(thr)} similarity`,
+        explanation: "Asked to say more, the respondent gave the same text again.",
+        questionIds: [...new Set(hits.map((h) => h.e.q.id))],
+        intensity: Math.min(1, 0.6 + hits.length * 0.2),
       });
     }
   }

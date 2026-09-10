@@ -599,3 +599,91 @@ test("explainability: every flag carries rule, observed, severity, points, expla
   assert.equal(a.system.SYSTEM_FLAG_COUNT, a.flags.length);
   assert.equal(a.system.SYSTEM_QUALITY_STATUS, a.classification);
 });
+
+/* ---------------------------------------------- probes and repeat pairs */
+
+test("FOLLOW-UP PROBE ANSWERS ARE OPEN ENDS: gibberish in a probe is caught by the ordinary gibberish rule, labelled Q6_PROBE_1", () => {
+  const d = def(undefined, []);
+  (d.questions.find((q) => q.id === "oe") as any).probe = { maxProbes: 2, minWords: 0, required: false, instruction: "why" };
+  const r = response({ answers: { ...GOOD_ANSWERS, oe__probe_1_q: "Could you say more?", oe__probe_1: "asdfgh jkl qwerty zxcv" } });
+  const a = assess({ def: d, response: r, peers: [] });
+  const f = a.flags.find((x) => x.ruleId === "openend.gibberish")!;
+  assert.ok(f, ruleIds(a).join());
+  assert.match(f.observed, /Q6_PROBE_1/, "the flag names the probe, not the main answer");
+  assert.deepEqual(f.questionIds, ["oe"], "…but points at the question it belongs to, which is what the UI and per-question scoping know");
+});
+
+test("probes ignored: shown and left blank, repeatedly → openend.probe_ignored; one skipped probe at standard is not", () => {
+  const d = def(undefined, []);
+  (d.questions.find((q) => q.id === "oe") as any).probe = { maxProbes: 3, minWords: 0, required: false, instruction: "why" };
+  (d.questions.find((q) => q.id === "oe2") as any).probe = { maxProbes: 3, minWords: 0, required: false, instruction: "why" };
+  const one = response({ answers: { ...GOOD_ANSWERS, oe__probe_1_q: "More?", oe__probe_1: "" } });
+  assert.ok(!has(assess({ def: d, response: one, peers: [] }), "openend.probe_ignored"), "one skipped follow-up is not a pattern");
+  const three = response({ answers: { ...GOOD_ANSWERS, oe__probe_1_q: "More?", oe__probe_1: "", oe__probe_2_q: "Else?", oe2__probe_1_q: "More?", oe2__probe_1: "  " } });
+  const a = assess({ def: d, response: three, peers: [] });
+  const f = a.flags.find((x) => x.ruleId === "openend.probe_ignored")!;
+  assert.ok(f, ruleIds(a).join());
+  assert.match(f.observed, /3 follow-ups left blank \(Q6_PROBE_1, Q6_PROBE_2, Q7_PROBE_1\)/);
+  assert.deepEqual(f.questionIds.sort(), ["oe", "oe2"]);
+  // a probe never shown is not "ignored"
+  const none = response({ answers: { ...GOOD_ANSWERS } });
+  assert.ok(!has(assess({ def: d, response: none, peers: [] }), "openend.probe_ignored"));
+});
+
+test("probe echo: the follow-up answered with the same text as the answer it followed; openend.repeated does not ALSO fire for that", () => {
+  const d = def(undefined, []);
+  (d.questions.find((q) => q.id === "oe") as any).probe = { maxProbes: 2, minWords: 0, required: false, instruction: "why" };
+  const text = "My brother recommended it after years of trouble-free driving.";
+  const echo = response({ answers: { ...GOOD_ANSWERS, oe: text, oe__probe_1_q: "Could you say more?", oe__probe_1: text } });
+  const a = assess({ def: d, response: echo, peers: [] });
+  const f = a.flags.find((x) => x.ruleId === "openend.probe_echo")!;
+  assert.ok(f, ruleIds(a).join());
+  assert.match(f.observed, /Q6_PROBE_1 identical to Q6/);
+  assert.ok(!has(a, "openend.repeated"), "one situation, one rule: the same-text-in-two-questions rule is for two DIFFERENT questions");
+
+  // near-identical counts too; a genuinely new answer does not
+  const near = response({ answers: { ...GOOD_ANSWERS, oe: text, oe__probe_1_q: "More?", oe__probe_1: "My brother recommended it after years of trouble free driving" } });
+  assert.ok(has(assess({ def: d, response: near, peers: [] }), "openend.probe_echo"));
+  const fresh = response({ answers: { ...GOOD_ANSWERS, oe: text, oe__probe_1_q: "More?", oe__probe_1: "He has had three of them and never once broke down on a long trip." } });
+  assert.ok(!has(assess({ def: d, response: fresh, peers: [] }), "openend.probe_echo"));
+
+  // a second probe echoing the first probe is caught against the first probe
+  const echo2 = response({ answers: { ...GOOD_ANSWERS, oe: text, oe__probe_1_q: "More?", oe__probe_1: "He has had three of them and never once broke down.", oe__probe_2_q: "Else?", oe__probe_2: "He has had three of them and never once broke down." } });
+  assert.match(assess({ def: d, response: echo2, peers: [] }).flags.find((x) => x.ruleId === "openend.probe_echo")!.observed, /Q6_PROBE_2 identical to Q6_PROBE_1/);
+});
+
+test("consistency.attention_pair FIRES: the same question asked twice, undeclared, answered differently — and not for a declared repeat pair", () => {
+  const twice = def(undefined, [
+    { id: "s1b", code: "Q14", variableName: "Q14", type: "single_select", text: "Satisfaction overall?", options: scale },
+    { id: "n1", code: "Q15", variableName: "Q15", type: "numeric", text: "How many cars has your household owned?", settings: { minValue: 0, maxValue: 20 } },
+    { id: "n2", code: "Q16", variableName: "Q16", type: "numeric", text: "How many cars has your household owned?", settings: { minValue: 0, maxValue: 20 } },
+  ]);
+  const agree = response({ answers: { ...GOOD_ANSWERS, s1: "4", s1b: "4", n1: 3, n2: 4 } });
+  const a0 = assess({ def: twice, response: agree, peers: [] });
+  assert.ok(!has(a0, "consistency.attention_pair"), `agreeing answers (numeric within tolerance 1) → no flag: ${ruleIds(a0).join()}`);
+
+  const disagree = response({ answers: { ...GOOD_ANSWERS, s1: "4", s1b: "1", n1: 3, n2: 9 } });
+  const a = assess({ def: twice, response: disagree, peers: [] });
+  const fl = a.flags.filter((x) => x.ruleId === "consistency.attention_pair");
+  assert.equal(fl.length, 2, ruleIds(a).join());
+  const single = fl.find((f) => f.questionIds.includes("s1b"))!;
+  assert.equal(single.observed, 'Q8 = "Agree", Q14 = "Strongly disagree"');
+  assert.equal(single.expected, "the same answer");
+  const numeric = fl.find((f) => f.questionIds.includes("n2"))!;
+  assert.equal(numeric.observed, 'Q15 = "3", Q16 = "9"');
+  assert.equal(numeric.expected, "within 1 point");
+  assert.ok(!has(a, "attention.failed"), "nothing was declared an attention check");
+
+  // declared repeat pair → attention.failed only, never both
+  const declared = def(undefined, [
+    { id: "s1b", code: "Q14", variableName: "Q14", type: "single_select", text: "Satisfaction overall?", options: scale, attentionCheck: { kind: "repeat", pairedQuestionId: "s1" } },
+  ]);
+  const b = assess({ def: declared, response: response({ answers: { ...GOOD_ANSWERS, s1: "4", s1b: "1" } }), peers: [] });
+  assert.ok(has(b, "attention.failed"));
+  assert.ok(!has(b, "consistency.attention_pair"));
+
+  // relaxed tolerance 2: a numeric difference of 2 is not a disagreement
+  const relaxed = def({ enabled: true, strictness: "relaxed" }, twice.questions.slice(-3).map((q) => JSON.parse(JSON.stringify(q))));
+  const c = assess({ def: relaxed, response: response({ answers: { ...GOOD_ANSWERS, n1: 3, n2: 5 } }), peers: [] });
+  assert.ok(!has(c, "consistency.attention_pair"));
+});

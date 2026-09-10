@@ -169,7 +169,7 @@ function systemVars(ctx: RuleContext, t: ResponseTelemetry | null, bench: Benchm
     if (sig) matrixSig[q.id] = sig;
   }
   const oeHashes: Record<string, string> = {};
-  for (const e of openEnds(ctx.def.questions, r.answers)) { const h = openEndHash(e.text); if (h) oeHashes[e.q.id] = h; }
+  for (const e of openEnds(ctx.def.questions, r.answers)) { const h = openEndHash(e.text); if (h) oeHashes[e.key] = h; }
   let passed = 0, failed = 0;
   for (const q of ctx.def.questions) {
     if (!q.attentionCheck) continue;

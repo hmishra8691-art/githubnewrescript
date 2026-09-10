@@ -152,6 +152,55 @@ export function consistencyRules(ctx: RuleContext): FlagDraft[] {
     }
   }
 
+  /*
+   * THE SAME QUESTION ASKED TWICE, UNDECLARED, ANSWERED DIFFERENTLY.
+   *
+   * Declared repeat pairs (attentionCheck.kind = "repeat") are attention.failed's;
+   * this is the test-retest a programmer built by duplicating a question
+   * without marking it. Two questions are "the same" when their wording and
+   * their options (code and label) or numeric scale match exactly. Numeric
+   * answers may differ by `tolerance` points before it counts.
+   */
+  if (ctx.enabled("consistency.attention_pair")) {
+    const tol = ctx.param<number>("consistency.attention_pair", "tolerance");
+    const declared = new Set<string>();
+    for (const q of def.questions) if (q.attentionCheck?.kind === "repeat" && q.attentionCheck.pairedQuestionId) { declared.add(q.id); declared.add(q.attentionCheck.pairedQuestionId); }
+    const signature = (q: Question): string | null => {
+      if (declared.has(q.id) || !has(q.id)) return null;
+      const text = normalizeText(q.text.replace(/<[^>]*>/g, ""));
+      if (!text) return null;
+      if (isSingle(q)) return `s|${text}|${q.options.map((o) => `${o.code}=${normalizeText(o.label)}`).join(",")}`;
+      if (q.type === "numeric" || q.type === "slider" || q.type === "nps") return `n|${text}|${q.settings.minValue ?? ""}-${q.settings.maxValue ?? ""}`;
+      return null;
+    };
+    const groups = new Map<string, Question[]>();
+    for (const q of def.questions) {
+      const sig = signature(q);
+      if (!sig || !ctx.applies("consistency.attention_pair", q.id)) continue;
+      (groups.get(sig) ?? groups.set(sig, []).get(sig)!).push(q);
+    }
+    for (const qs of groups.values()) {
+      if (qs.length < 2) continue;
+      const [first, ...rest] = qs;
+      for (const other of rest) {
+        const a1 = a[first.id], a2 = a[other.id];
+        const numeric = typeof a1 === "number" && typeof a2 === "number";
+        const differs = numeric ? Math.abs((a1 as number) - (a2 as number)) > tol : String(a1) !== String(a2);
+        if (!differs) continue;
+        const label = (q: Question, v: unknown) => q.options.find((o) => String(o.code) === String(v))?.label.replace(/<[^>]*>/g, "") ?? String(v);
+        out.push({
+          ruleId: "consistency.attention_pair",
+          title: `Repeated question answered differently (${first.code} / ${other.code})`,
+          observed: `${first.code} = "${label(first, a1)}", ${other.code} = "${label(other, a2)}"`,
+          expected: numeric ? `within ${tol} point${tol === 1 ? "" : "s"}` : "the same answer",
+          explanation: `${other.code} asks exactly what ${first.code} asked, with the same options; the two answers disagree.`,
+          questionIds: [first.id, other.id],
+          intensity: 1,
+        });
+      }
+    }
+  }
+
   /* frequency vs quantity: "never"/0 alongside a positive quantity in the same block */
   if (ctx.enabled("consistency.frequency_quantity")) {
     for (const q of def.questions) {

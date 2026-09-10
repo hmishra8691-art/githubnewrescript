@@ -181,8 +181,16 @@ export const RULES: RuleDef[] = [
   },
   {
     id: "consistency.attention_pair", category: "consistency", title: "Repeated-question disagreement",
-    description: "Two questions marked as a repeat pair have different answers.",
-    defaultSeverity: "high", riskPoints: 20, qualityPenalty: 20, enabledIn: ALL, params: [],
+    /*
+     * A DECLARED repeat pair (attentionCheck.kind = "repeat") is judged by
+     * attention.failed. This rule is the UNDECLARED case: the same question —
+     * same wording, same options or scale — asked twice in the survey, as
+     * test-retest programmers often do without marking it, and answered
+     * differently. Two rules, two situations, never both for one pair.
+     */
+    description: "The same question — identical wording and options or scale — appears twice without being marked as a repeat pair, and the two answers disagree.",
+    defaultSeverity: "high", riskPoints: 20, qualityPenalty: 20, enabledIn: ALL,
+    params: [p("tolerance", "Numeric answers may differ by up to this many scale points", lvl(2, 1, 1, 0), "points")],
   },
   {
     id: "consistency.frequency_quantity", category: "consistency", title: "Frequency vs quantity contradiction",
@@ -318,6 +326,24 @@ export const RULES: RuleDef[] = [
     description: "Most of an open-ended answer arrived by paste and was barely edited.",
     defaultSeverity: "medium", riskPoints: 12, qualityPenalty: 5, enabledIn: STD_UP, needs: ["clipboard"],
     params: [p("share", "Pasted share of the text above this", lvl(0.95, 0.85, 0.7, 0.6))],
+  },
+  /*
+   * FOLLOW-UP PROBES. A probe answer is an open end and every rule above
+   * already covers it (openEnds() yields them). These two are the situations
+   * only a follow-up can be in: it was shown and ignored, or it was answered
+   * by saying the same thing again.
+   */
+  {
+    id: "openend.probe_ignored", category: "open_end", title: "Follow-up probes ignored",
+    description: "Follow-up questions (\"could you say more?\") were shown and left blank, repeatedly.",
+    defaultSeverity: "low", riskPoints: 5, qualityPenalty: 10, enabledIn: STD_UP,
+    params: [p("count", "Flag when at least this many follow-ups were left blank", lvl(4, 3, 2, 1), "probes")],
+  },
+  {
+    id: "openend.probe_echo", category: "open_end", title: "Follow-up answered with the same text",
+    description: "A follow-up probe was answered with the answer it followed, or with an earlier follow-up's answer, near word for word.",
+    defaultSeverity: "medium", riskPoints: 8, qualityPenalty: 12, enabledIn: STD_UP,
+    params: [p("similarity", "Flag when the texts are at least this similar", lvl(0.95, 0.85, 0.75, 0.65))],
   },
 
   /* -------------------------------------------------------- interaction */
