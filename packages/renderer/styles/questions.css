@@ -480,3 +480,32 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
   }
   .rs-shell :is(.rs-opt, .rs-card, .rs-rank-item, input, select, textarea) { border-width: 2px; }
 }
+
+/* ---------------------------------------------------------------- geo */
+/* the slippy map: tiles are absolutely positioned 256-px images, the pin
+   and radius circle sit above them; the whole thing pans by pointer drag */
+.rs-map { position: relative; width: 100%; overflow: hidden; border-radius: 10px; border: 1.5px solid var(--rs-border); background: #e8eef2; cursor: crosshair; touch-action: none; user-select: none; }
+.rs-map.readonly { cursor: grab; }
+.rs-map-tiles { position: absolute; inset: 0; }
+.rs-map-tile { position: absolute; width: 256px; height: 256px; pointer-events: none; }
+.rs-map-pin { position: absolute; width: 22px; height: 22px; margin: -22px 0 0 -11px; background: var(--rs-primary, #2b6cb0); border: 2px solid #fff; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); box-shadow: 0 1px 4px rgba(0,0,0,.35); cursor: grab; }
+.rs-map-pin::after { content: ""; position: absolute; left: 6px; top: 6px; width: 6px; height: 6px; background: #fff; border-radius: 50%; }
+.rs-map-radius { position: absolute; border-radius: 50%; background: color-mix(in srgb, var(--rs-primary, #2b6cb0) 18%, transparent); border: 1.5px solid var(--rs-primary, #2b6cb0); pointer-events: none; }
+.rs-map-zoom { position: absolute; right: 8px; top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.rs-map-zoom button { width: 30px; height: 30px; border-radius: 6px; border: 1px solid var(--rs-border); background: #fff; font-size: 18px; line-height: 1; cursor: pointer; }
+.rs-map-attrib { position: absolute; right: 4px; bottom: 2px; font-size: 10px; color: #444; background: rgba(255,255,255,.7); padding: 0 4px; border-radius: 3px; }
+.rs-geo-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-top: 8px; font-size: 13px; }
+.rs-geo-readout { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--rs-subtle); }
+.rs-geo-addr { color: var(--rs-text); font-weight: 500; }
+.rs-geo-coords { font-family: ui-monospace, monospace; font-size: 12.5px; }
+.rs-geo-note { color: var(--rs-subtle); font-size: 12.5px; }
+.rs-geo-radius { display: flex; align-items: center; gap: 10px; }
+.rs-geo-radius input[type="range"] { width: 200px; }
+.rs-geo-search { display: flex; gap: 8px; }
+.rs-geo-search input { flex: 1; }
+.rs-geo-hits { list-style: none; margin: 6px 0 0; padding: 0; border: 1px solid var(--rs-border); border-radius: 8px; overflow: hidden; }
+.rs-geo-hits li + li { border-top: 1px solid var(--rs-border); }
+.rs-geo-hits button { display: block; width: 100%; text-align: left; padding: 8px 10px; background: #fff; border: 0; cursor: pointer; font-size: 14px; }
+.rs-geo-hits button:hover { background: var(--rs-hover, #f3f6f9); }
+.rs-btn-mini { padding: 6px 10px; border-radius: 6px; border: 1px solid var(--rs-border); background: #fff; font-size: 13px; cursor: pointer; }
+.rs-btn-mini:disabled { opacity: .6; cursor: default; }

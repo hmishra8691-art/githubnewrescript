@@ -629,6 +629,67 @@ export function PropertiesPanel() {
       )}
 
       {/*
+        * LOCATION — the `geo` response model's one configuration block. The
+        * mode picks the renderer (pin / address / radius) over one stored shape;
+        * the rest frames the map and bounds the radius (schema settings.geo*).
+        */}
+      {q.type === "geo" && showSec("Location / map") && (
+      <CollapsibleSection id="geo" title="Location / map" active defaultOpen>
+      <div className="card" style={{ padding: 10 }}>
+        <div className="row" style={{ flexWrap: "wrap", gap: 12 }}>
+          <label className="f" style={{ width: 200 }}><span>How the place is given</span>
+            <select className="select" value={q.settings.geoMode ?? "pin"} data-testid="geo-mode"
+              onChange={(e) => patch({ settings: { ...q.settings, geoMode: e.target.value as "pin" | "address" | "radius" } })}>
+              <option value="pin">Pin on a map</option>
+              <option value="address">Address search / typed</option>
+              <option value="radius">Pin with a radius</option>
+            </select></label>
+          <label className="row" style={{ gap: 4, fontSize: 13, alignSelf: "end" }}>
+            <input type="checkbox" checked={!!q.settings.allowGeolocation} data-testid="geo-allow-geolocation"
+              onChange={(e) => patch({ settings: { ...q.settings, allowGeolocation: e.target.checked || undefined } })} /> offer "use my location"
+          </label>
+        </div>
+        <div className="row" style={{ flexWrap: "wrap", gap: 12, marginTop: 8 }}>
+          <label className="f" style={{ width: 130 }}><span>Map centre latitude</span>
+            <input className="input mono" type="number" step="0.0001" min={-90} max={90} value={q.settings.mapCenter?.lat ?? ""} data-testid="geo-center-lat"
+              placeholder="e.g. 51.5"
+              onChange={(e) => { const lat = e.target.value === "" ? undefined : Number(e.target.value); patch({ settings: { ...q.settings, mapCenter: lat == null ? undefined : { lat, lng: q.settings.mapCenter?.lng ?? 0 } } }); }} /></label>
+          <label className="f" style={{ width: 130 }}><span>Map centre longitude</span>
+            <input className="input mono" type="number" step="0.0001" min={-180} max={180} value={q.settings.mapCenter?.lng ?? ""} data-testid="geo-center-lng"
+              placeholder="e.g. -0.12"
+              onChange={(e) => { const lng = e.target.value === "" ? undefined : Number(e.target.value); patch({ settings: { ...q.settings, mapCenter: lng == null ? undefined : { lat: q.settings.mapCenter?.lat ?? 0, lng } } }); }} /></label>
+          <label className="f" style={{ width: 110 }}><span>Initial zoom (1–19)</span>
+            <input className="input" type="number" min={1} max={19} value={q.settings.mapZoom ?? ""} data-testid="geo-zoom"
+              onChange={(e) => patch({ settings: { ...q.settings, mapZoom: e.target.value === "" ? undefined : Math.min(19, Math.max(1, Math.round(Number(e.target.value)))) } })} /></label>
+        </div>
+        {(q.settings.geoMode ?? "pin") === "radius" && (
+          <div className="row" style={{ flexWrap: "wrap", gap: 12, marginTop: 8 }}>
+            <label className="f" style={{ width: 130 }}><span>Radius min (m)</span>
+              <input className="input" type="number" min={0} value={q.settings.radiusMinM ?? ""} data-testid="geo-radius-min"
+                onChange={(e) => patch({ settings: { ...q.settings, radiusMinM: e.target.value === "" ? undefined : Math.max(0, Number(e.target.value)) } })} /></label>
+            <label className="f" style={{ width: 130 }}><span>Radius max (m)</span>
+              <input className="input" type="number" min={0} value={q.settings.radiusMaxM ?? ""} data-testid="geo-radius-max"
+                onChange={(e) => patch({ settings: { ...q.settings, radiusMaxM: e.target.value === "" ? undefined : Math.max(0, Number(e.target.value)) } })} /></label>
+            <label className="f" style={{ width: 130 }}><span>Radius default (m)</span>
+              <input className="input" type="number" min={0} value={q.settings.radiusDefaultM ?? ""} data-testid="geo-radius-default"
+                onChange={(e) => patch({ settings: { ...q.settings, radiusDefaultM: e.target.value === "" ? undefined : Math.max(0, Number(e.target.value)) } })} /></label>
+          </div>
+        )}
+        <label className="f" style={{ marginTop: 8 }}><span>Map tiles URL template (blank = OpenStreetMap; use a commercial provider at scale)</span>
+          <input className="input mono" value={q.settings.mapTiles ?? ""} placeholder="https://…/{z}/{x}/{y}.png" data-testid="geo-tiles"
+            onChange={(e) => patch({ settings: { ...q.settings, mapTiles: e.target.value || undefined } })} /></label>
+        <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+          Exports as <code>{q.variableName}</code> (address or lat,lng), <code>{q.variableName}_LAT</code>, <code>{q.variableName}_LNG</code>
+          {(q.settings.geoMode ?? "pin") === "radius" ? <>, <code>{q.variableName}_RADIUS_M</code></> : null}
+          {(q.settings.geoMode ?? "pin") === "address" ? <>, <code>{q.variableName}_CITY</code>, <code>{q.variableName}_COUNTRY</code>, <code>{q.variableName}_POSTAL</code></> : null}.
+          Distance between two places: <code>distance_km(Q1, Q2)</code> in a calculated question.
+          {(q.settings.geoMode ?? "pin") === "address" ? " Address search needs GEOCODE_API_URL on the runtime; without it the typed address is kept." : ""}
+        </div>
+      </div>
+      </CollapsibleSection>
+      )}
+
+      {/*
         * FOLLOW-UP PROBE — "tell me more" on an open end, asked after the page
         * is submitted, up to N times, without touching the flow. Configuration
         * on the question, not a question type (schema ProbeConfig).

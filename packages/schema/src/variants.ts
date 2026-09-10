@@ -28,6 +28,7 @@ export type ResponseModel =
   | "allocation" // code → number, summing rules
   | "tasks" // design-file driven (conjoint / maxdiff)
   | "coordinates" // clicked points on a stimulus image
+  | "geo" // a place: { lat, lng, accuracy?, radiusM?, address? } — see GeoAnswer
   | "derived" // hidden / calculated
   | "media" // uploads, recordings
   | "none"; // display-only
@@ -61,7 +62,9 @@ export type VariantCapability =
    * Response" is a capability of text questions and not a question type:
    * a type would have meant a second response model for the same data.
    */
-  | "speech_input";
+  | "speech_input"
+  /** `geo` questions: mode (pin / address / radius), map framing, geolocation, radius bounds. */
+  | "geo_settings";
 
 export interface QuestionVariantDef {
   id: string; // "<family>.<key>"
@@ -1298,11 +1301,29 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       instruction: "Draw on the image to mark what you mean.",
     },
   }),
-  ...planned(F.location, [
-    ["Location Picker / Map Pin", "Drop a pin on a map."],
-    ["Address Search", "Geocoded address entry."],
-    ["Radius / Distance Selection", "Select an area around a point."],
-  ]),
+  /*
+   * ONE RESPONSE MODEL, THREE RENDERERS. Pin, address and radius all store a
+   * GeoAnswer; they differ in how the respondent produces it, which is the
+   * renderer — so they are three types by the identity rule
+   * (baseType, renderer, responseModel), and not one type with two presets,
+   * because a preset may not change how the answer is captured. Distance is
+   * the calc function `distance_km(Q1, Q2)`, not a fourth type.
+   */
+  stable(F.location, "pin", "Location Picker / Map Pin", "Drop a pin on a map; latitude and longitude are recorded. Optionally \"use my location\".", {
+    baseType: "geo", renderer: "geopin", responseModel: "geo",
+    capabilities: ["geo_settings"], validations: ["required"],
+    defaults: { settings: { geoMode: "pin", mapZoom: 4, allowGeolocation: true }, instruction: "Click the map to place the pin. Drag to move it." },
+  }),
+  stable(F.location, "address", "Address Search", "Type an address; it is geocoded to a point when a geocoding provider is configured, and stored as text either way.", {
+    baseType: "geo", renderer: "geoaddress", responseModel: "geo",
+    capabilities: ["geo_settings"], validations: ["required"],
+    defaults: { settings: { geoMode: "address", mapZoom: 12 }, instruction: "Start typing an address and choose a match." },
+  }),
+  stable(F.location, "radius", "Radius / Distance Selection", "A pin with a radius around it — \"how far would you travel?\" — stored as centre and metres.", {
+    baseType: "geo", renderer: "georadius", responseModel: "geo",
+    capabilities: ["geo_settings"], validations: ["required"],
+    defaults: { settings: { geoMode: "radius", mapZoom: 10, allowGeolocation: true, radiusMinM: 500, radiusMaxM: 50000, radiusDefaultM: 5000 }, instruction: "Place the pin, then set the distance." },
+  }),
 
   /* --------------------------------------------------------------- DATE */
   stable(F.datetime, "date", "Date Picker", "Single date.", {
@@ -1719,6 +1740,7 @@ export function responseModelOf(baseType: string): ResponseModel {
     case "conjoint_task": case "maxdiff_task": return "tasks";
     case "hotspot": case "annotation": case "media_timeline": return "coordinates";
     case "upload": return "media";
+    case "geo": return "geo";
     case "repeating_group": return "fields";
     case "hidden": case "calculated": case "embedded_data": case "experiment": return "derived";
     case "html": return "none";

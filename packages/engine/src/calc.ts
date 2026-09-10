@@ -11,6 +11,7 @@
  *   avg(Q10_1, Q10_2, Q10_3) * 1.5
  *   weighted(Q1, 0.5, Q2, 0.3, Q3, 0.2)
  */
+import { coordinatesOf, distanceKm } from "./geo.js";
 
 export type CalcValue = number | string | boolean | null | CalcValue[];
 export type VarResolver = (name: string) => unknown;
@@ -342,6 +343,11 @@ function evalNode(n: Node, o: CalcOptions, depth = 0, budget?: { steps: number }
           return Math.round(toNum(rawArgs[0]) * f) / f;
         }
         case "abs": return Math.abs(toNum(rawArgs[0]));
+        case "distance_km": {
+          // distance_km(Q1, Q2) over two geo answers ("lat,lng" once flattened), or a literal "51.5,-0.12"
+          const a = coordinatesOf(rawArgs[0]), b = coordinatesOf(rawArgs[1]);
+          return a && b ? Math.round(distanceKm(a, b) * 1000) / 1000 : null;
+        }
         case "floor": return Math.floor(toNum(rawArgs[0]));
         case "ceil": case "ceiling": return Math.ceil(toNum(rawArgs[0]));
         case "sqrt": return Math.sqrt(toNum(rawArgs[0]));
@@ -491,6 +497,7 @@ export const CALC_FUNCTION_NAMES: readonly string[] = [
   "replace", "startswith", "endswith",
   "today", "date", "datediff", "age", "dateadd", "year", "month", "day",
   "regex", "matches",
+  "distance_km",
   /*
    * Server-resolved: the browser never evaluates these (see aiFunctions.ts),
    * but they are calc functions in every other sense — lint must not report

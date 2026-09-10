@@ -72,6 +72,7 @@ const CATEGORIES: Record<string, QuestionTypePlugin["category"]> = {
   upload: "media",
   repeating_group: "text",
   experiment: "special",
+  geo: "special",
 };
 
 const LABELS: Record<string, string> = {
@@ -112,6 +113,7 @@ const LABELS: Record<string, string> = {
   upload: "File upload",
   repeating_group: "Repeating form",
   experiment: "Experiment arm",
+  geo: "Location (map pin / address / radius)",
 };
 
 function featuresFor(type: string): QuestionTypePlugin["features"] {

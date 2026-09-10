@@ -31,7 +31,9 @@ export type PipeProperty =
   | "last"
   | "rank" // ordered labels of a ranking answer
   | "displayed" // options the question actually showed
-  | "remaining"; // options shown but not selected
+  | "remaining" // options shown but not selected
+  // a `geo` answer's parts (piping.ts); the default for a geo question is the address or "lat,lng"
+  | "lat" | "lng" | "address" | "city" | "country" | "radius";
 
 /** How multi-value results are rendered (req §25). */
 export type PipeFormat =

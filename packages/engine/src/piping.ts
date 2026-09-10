@@ -4,6 +4,7 @@ import { findLoopScope, getQuestionByCodeOrVar, lookupAnswer, loopValue } from "
 import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
 import { escapeHtml } from "./html.js";
+import { isGeoAnswer, geoText, round6, formatMetres } from "./geo.js";
 import {
   PIPE_TOKEN_RE,
   parsePipeBody,
@@ -190,6 +191,20 @@ function renderToken(t: PipeToken, ctx: EvalContext): string {
     return fmt(list.map((o) => o.label));
   }
   if (value == null) return "";
+
+  // a place: the address or "lat,lng"; {{Q1.lat}} / {{Q1.lng}} / {{Q1.address}} / {{Q1.city}} / {{Q1.radius}} for the parts
+  if (q.type === "geo" && isGeoAnswer(value)) {
+    const g = value;
+    switch (t.property) {
+      case "lat": return g.lat == null ? "" : String(round6(g.lat));
+      case "lng": return g.lng == null ? "" : String(round6(g.lng));
+      case "address": return escapeHtml(g.address?.formatted ?? "");
+      case "city": return escapeHtml(g.address?.city ?? "");
+      case "country": return escapeHtml(g.address?.country ?? "");
+      case "radius": return g.radiusM == null ? "" : formatMetres(g.radiusM);
+      default: return escapeHtml(geoText(g));
+    }
+  }
 
   const codes = Array.isArray(value) ? value : [value];
 

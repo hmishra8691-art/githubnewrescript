@@ -183,14 +183,18 @@ async function startServer(name, filter, readyUrl) {
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
     /*
-     * A runtime this script starts gets the FAKE AI provider unless the
-     * environment already chose one. `ai-variables-test` proves the whole
-     * AI-derived-variable path against it, deterministically and keylessly;
-     * without it that suite fails on its first check with a message saying
-     * so. A runtime that was already up is left exactly as it was — this
+     * A runtime this script starts gets the FAKE AI and geocoding providers
+     * unless the environment already chose them. `ai-variables-test`,
+     * `probe-test` and `geo-test` prove their whole paths against them,
+     * deterministically and keylessly; without them those suites fail on
+     * their first check with a message saying so. A runtime that was already up is left exactly as it was — this
      * env goes only to a process we own.
      */
-    env: { ...process.env, ...(name === "runtime" && !process.env.AI_API_URL ? { AI_API_URL: "fake:" } : {}) },
+    env: {
+      ...process.env,
+      ...(name === "runtime" && !process.env.AI_API_URL ? { AI_API_URL: "fake:" } : {}),
+      ...(name === "runtime" && !process.env.GEOCODE_API_URL ? { GEOCODE_API_URL: "fake:" } : {}),
+    },
   });
   const log = [];
   child.stdout.on("data", (d) => log.push(String(d)));

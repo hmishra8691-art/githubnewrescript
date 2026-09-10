@@ -8,6 +8,7 @@ import { evaluateExpression } from "./calc.js";
 import { validateFieldValue } from "./fields.js";
 import { createScriptCtx, runScript, type ScriptRunResult } from "./scripts.js";
 import { resolvePiping } from "./piping.js";
+import { geoAnswered, geoProblems } from "./geo.js";
 
 /**
  * Whether a failed check stops the respondent.
@@ -418,6 +419,15 @@ export function validateQuestion(
         if (r.required && isEmpty(e[String(r.code)])) push(`Entry ${i + 1}: ${r.label} is required.`, { rowCode: String(r.code) });
       }
     });
+  }
+
+  // geo: "answered" depends on the mode (geo.ts); then radius bounds and coordinate sanity
+  if (q.type === "geo") {
+    if (q.required && !geoAnswered(q, value) && !hasNoAnswerableItems(q, ctx)) {
+      if (isEmpty(value)) { /* the generic required message above already fired */ }
+      else push(q.settings.geoMode === "address" ? "Please enter or choose an address." : "Please place the pin on the map.");
+    }
+    for (const m of geoProblems(q, value)) push(m);
   }
 
   // uploads: count and size

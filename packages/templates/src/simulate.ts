@@ -117,6 +117,9 @@ export function defaultAnswer(def: SurveyDefinition, q: Question, ctx: { state: 
     }
     case "repeating_group": return [Object.fromEntries(rows.map((r) => [r, r === "cost" ? 12 : r === "since" ? "2025-01-01" : "Demo"]))];
     case "hotspot": return [{ x: 50, y: 50 }];
+    case "geo": return q.settings.geoMode === "address"
+      ? { lat: 51.5007, lng: -0.1246, address: { formatted: "Westminster, London SW1A 0AA, United Kingdom", city: "London", country: "United Kingdom", postal: "SW1A 0AA" }, source: "search" }
+      : { lat: 51.5007, lng: -0.1246, ...(q.settings.geoMode === "radius" ? { radiusM: q.settings.radiusDefaultM ?? 5000 } : {}), source: "pin" };
     case "annotation": return { pins: [{ x: 10, y: 10, comment: "demo" }], strokes: [] };
     case "media_timeline": return [];
     case "upload": return null;

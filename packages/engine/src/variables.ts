@@ -284,6 +284,27 @@ export function questionVariables(
       }
       break;
     }
+    case "geo": {
+      /*
+       * One text column with the place as the respondent gave it ("lat,lng"
+       * or the address), then typed components. Radius only in radius mode,
+       * address parts only in address mode — the columns say what was asked.
+       */
+      const mode = q.settings.geoMode === "address" || q.settings.geoMode === "radius" ? q.settings.geoMode : "pin";
+      push({ name: q.variableName, label: strip(q.text) || q.code, dataType: "text", notes: "The place as given: the address, or \"lat,lng\"" });
+      push({ name: `${q.variableName}_LAT`, label: `${q.code} — latitude`, dataType: "numeric" });
+      push({ name: `${q.variableName}_LNG`, label: `${q.code} — longitude`, dataType: "numeric" });
+      push({ name: `${q.variableName}_ACCURACY_M`, label: `${q.code} — device location accuracy (m)`, dataType: "numeric", notes: "Only when the respondent used their device location" });
+      if (mode === "radius") push({ name: `${q.variableName}_RADIUS_M`, label: `${q.code} — radius (m)`, dataType: "numeric" });
+      if (mode === "address") {
+        for (const [suffix, lab] of [["CITY", "city"], ["REGION", "region / state"], ["COUNTRY", "country"], ["POSTAL", "postal code"]] as const) {
+          push({ name: `${q.variableName}_${suffix}`, label: `${q.code} — ${lab}`, dataType: "text" });
+        }
+      }
+      push({ name: `${q.variableName}_SOURCE`, label: `${q.code} — how the place was given`, dataType: "text",
+        valueCodes: ["pin", "device", "search", "typed"], valueLabels: { pin: "Pin on the map", device: "Device location", search: "Address search", typed: "Typed address" } });
+      break;
+    }
     case "hidden":
       push({ name: q.variableName, label: strip(q.text) || q.code, dataType: "text", hidden: true });
       break;

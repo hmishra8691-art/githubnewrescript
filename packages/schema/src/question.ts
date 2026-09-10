@@ -51,6 +51,13 @@ export const BUILTIN_QUESTION_TYPES = [
   "upload", // a file the respondent supplied: {url, name, size, type}, or several
   "repeating_group", // respondent-driven repetition of a field set: array of records
   "experiment", // random arm assignment, stored as a derived value
+  /**
+   * A place: `{ lat, lng, accuracy?, radiusM?, address? }` (see GeoAnswer).
+   * The ONE response model the 2026-09 taxonomy work found genuinely missing.
+   * Pin, address search and radius are renderers over this one model
+   * (`settings.geoMode`), never three types with three data shapes.
+   */
+  "geo",
 ] as const;
 export type BuiltinQuestionType = (typeof BUILTIN_QUESTION_TYPES)[number];
 
@@ -526,6 +533,39 @@ export const ProbeConfig = z.object({
 });
 export type ProbeConfig = z.infer<typeof ProbeConfig>;
 
+/**
+ * THE GEO RESPONSE MODEL — what a `geo` question stores.
+ *
+ * WGS-84 coordinates, an optional accuracy (metres, from device geolocation),
+ * an optional radius (metres, `geoMode: "radius"`), and an optional address
+ * (from geocoding or typed). Exported as VAR_LAT / VAR_LNG / VAR_ACCURACY_M /
+ * VAR_RADIUS_M / VAR_ADDRESS / VAR_CITY / VAR_REGION / VAR_COUNTRY /
+ * VAR_POSTAL (engine variables.ts). Distance between two answers is the calc
+ * function `distance_km(Q1, Q2)`, not a question type.
+ */
+export const GeoAddress = z.object({
+  formatted: z.string().default(""),
+  line1: z.string().optional(),
+  city: z.string().optional(),
+  region: z.string().optional(),
+  country: z.string().optional(),
+  postal: z.string().optional(),
+});
+export type GeoAddress = z.infer<typeof GeoAddress>;
+
+export const GeoAnswer = z.object({
+  lat: z.number().min(-90).max(90).optional(),
+  lng: z.number().min(-180).max(180).optional(),
+  /** device geolocation accuracy, metres */
+  accuracy: z.number().min(0).optional(),
+  /** `geoMode: "radius"` — the selected radius, metres */
+  radiusM: z.number().min(0).optional(),
+  address: GeoAddress.optional(),
+  /** how the answer was produced — informational, exported as VAR_SOURCE */
+  source: z.enum(["pin", "device", "search", "typed"]).optional(),
+});
+export type GeoAnswer = z.infer<typeof GeoAnswer>;
+
 export const Question = z.object({
   id: z.string(), // stable internal id, e.g. "q_age"
   code: z.string(), // display code, e.g. "Q1"
@@ -590,6 +630,23 @@ export const Question = z.object({
        */
       speechInput: z.boolean().optional(),
       speechLang: z.string().optional(),
+      /**
+       * `geo` questions. `geoMode` picks the renderer over the one response model:
+       * "pin" (drop a pin), "address" (search / type an address, geocoded when a
+       * provider is configured), "radius" (a pin with a radius). `mapCenter` /
+       * `mapZoom` frame the initial map; `allowGeolocation` offers "use my
+       * location"; `radiusMinM` / `radiusMaxM` / `radiusDefaultM` bound the radius.
+       * `mapTiles` is a slippy-map URL template ({z}/{x}/{y}); blank = the runtime's
+       * default (OpenStreetMap — see its tile usage policy before fielding at scale).
+       */
+      geoMode: z.enum(["pin", "address", "radius"]).optional(),
+      mapCenter: z.object({ lat: z.number(), lng: z.number() }).optional(),
+      mapZoom: z.number().int().min(1).max(19).optional(),
+      allowGeolocation: z.boolean().optional(),
+      radiusMinM: z.number().min(0).optional(),
+      radiusMaxM: z.number().min(0).optional(),
+      radiusDefaultM: z.number().min(0).optional(),
+      mapTiles: z.string().optional(),
       readOnly: z.boolean().default(false),
       hidden: z.boolean().default(false),
       defaultValue: z.any().optional(),

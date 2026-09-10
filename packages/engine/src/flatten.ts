@@ -2,6 +2,7 @@ import type { SurveyDefinition, Question } from "@rescript/schema";
 import { loopKeySuffix, type LoopContext, type ResponseState } from "./state.js";
 import { directChildLoops, directQuestionIdsInLoop, loopNodes, loopVariablePrefix, type LoopFlowNode } from "./loopModel.js";
 import { designFor, designVersionFor } from "./designVersion.js";
+import { isGeoAnswer, hasCoordinates, geoText, round6 } from "./geo.js";
 
 export type FlatVars = Record<string, unknown>;
 
@@ -195,6 +196,23 @@ function flattenQuestion(q: Question, value: unknown, varName: string, out: Flat
         out[`${varName}_${i + 1}_X`] = Math.round((Number(pt?.x) || 0) * 10) / 10;
         out[`${varName}_${i + 1}_Y`] = Math.round((Number(pt?.y) || 0) * 10) / 10;
       });
+      break;
+    }
+    case "geo": {
+      if (!isGeoAnswer(value)) break;
+      const text = geoText(value);
+      if (text) out[varName] = text;
+      if (hasCoordinates(value)) { out[`${varName}_LAT`] = round6(value.lat); out[`${varName}_LNG`] = round6(value.lng); }
+      if (typeof value.accuracy === "number") out[`${varName}_ACCURACY_M`] = Math.round(value.accuracy);
+      if (typeof value.radiusM === "number") out[`${varName}_RADIUS_M`] = Math.round(value.radiusM);
+      const a = value.address;
+      if (a) {
+        if (a.city) out[`${varName}_CITY`] = a.city;
+        if (a.region) out[`${varName}_REGION`] = a.region;
+        if (a.country) out[`${varName}_COUNTRY`] = a.country;
+        if (a.postal) out[`${varName}_POSTAL`] = a.postal;
+      }
+      if (value.source) out[`${varName}_SOURCE`] = value.source;
       break;
     }
     case "annotation": {

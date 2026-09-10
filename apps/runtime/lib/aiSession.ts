@@ -23,14 +23,26 @@ import { aiConfigured, aiProviderName } from "@/lib/ai";
  * carve-out costs nothing and leaks nothing.
  */
 export async function definitionForAiCall(body: any): Promise<{ def: SurveyDefinition } | { response: NextResponse }> {
+  return definitionForProviderCall(body, { configured: aiConfigured(), fake: aiProviderName() === "fake", what: "the AI provider", unconfigured: "AI is not configured on this runtime" });
+}
+
+/**
+ * The same gate for ANY paid external provider a respondent's page may spend
+ * (AI, geocoding, …): `configured` says whether the provider exists at all,
+ * `fake` whether it is the free deterministic one a preview may use.
+ */
+export async function definitionForProviderCall(
+  body: any,
+  provider: { configured: boolean; fake: boolean; what: string; unconfigured: string },
+): Promise<{ def: SurveyDefinition } | { response: NextResponse }> {
   const sessionId = body?.sessionId;
   if (typeof sessionId !== "string" || (sessionId !== "preview" && sessionId.length < 16))
     return { response: NextResponse.json({ error: "invalid session" }, { status: 400 }) };
-  if (!aiConfigured()) return { response: NextResponse.json({ error: "AI is not configured on this runtime" }, { status: 501 }) };
+  if (!provider.configured) return { response: NextResponse.json({ error: provider.unconfigured }, { status: 501 }) };
 
   if (sessionId === "preview") {
-    if (aiProviderName() !== "fake") {
-      return { response: NextResponse.json({ error: "a preview cannot use the AI provider; open a test link to see real results" }, { status: 403 }) };
+    if (!provider.fake) {
+      return { response: NextResponse.json({ error: `a preview cannot use ${provider.what}; open a test link to see real results` }, { status: 403 }) };
     }
     const parsed = SurveyDefinition.safeParse(body?.definition);
     if (!parsed.success) return { response: NextResponse.json({ error: "preview needs the definition in the body" }, { status: 400 }) };
