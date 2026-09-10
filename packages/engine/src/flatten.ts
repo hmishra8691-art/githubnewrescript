@@ -61,7 +61,8 @@ export function flattenVariables(def: SurveyDefinition, state: ResponseState): F
       if (placed.has(key)) continue;
       // legacy fallback for loop answers whose loop variables are absent
       const loopSuffix = key.includes("@") ? `_${key.split("@").slice(1).join("_")}` : "";
-      flattenQuestion(q, value, `${q.variableName}${loopSuffix}`, out);
+      if (q.type === "conjoint_task" || q.type === "maxdiff_task") flattenTasks(def, q, value, `${q.variableName}${loopSuffix}`, out);
+      else flattenQuestion(q, value, `${q.variableName}${loopSuffix}`, out);
     }
     const other = state.answers[`${q.id}__other`];
     if (other !== undefined) out[`${q.variableName}_other`] = other;
@@ -97,6 +98,45 @@ export function flattenVariables(def: SurveyDefinition, state: ResponseState): F
   for (const [k, v] of Object.entries(state.calculated)) out[k] = v;
   for (const [k, v] of Object.entries(state.embedded)) out[k] = v;
   return out;
+}
+
+/**
+ * DESIGN-TASK ANSWERS → the per-task columns the dictionary declares
+ * (variables.ts): CBC `VAR_T<n>`, MaxDiff `VAR_T<n>_BEST/_WORST`, Menu
+ * `VAR_T<n>_<item>` 0/1 + `_NONE` + `_TOTAL`. Items and prices come from the
+ * design rows of the version this respondent answered, so a bundle total is
+ * computed from the prices they actually saw.
+ */
+function flattenTasks(def: SurveyDefinition, q: Question, value: unknown, varName: string, out: FlatVars): void {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const design = def.designs.find((d) => d.id === q.settings.designRef);
+  const vals = value as Record<string, unknown>;
+  const isMenu = design?.kind === "menu";
+  const rows = (design?.file?.rows ?? []) as Record<string, unknown>[];
+  // the version this respondent answered was written above from the seed (designVersion.ts)
+  const version = String(out[`${varName}_VERSION`] ?? out[`${q.variableName}_VERSION`] ?? "1");
+  for (const [task, v] of Object.entries(vals)) {
+    if (v == null || v === "") continue;
+    if (q.type === "maxdiff_task") {
+      const bw = v as { best?: unknown; worst?: unknown };
+      if (bw.best != null) out[`${varName}_T${task}_BEST`] = Number(bw.best);
+      if (bw.worst != null) out[`${varName}_T${task}_WORST`] = Number(bw.worst);
+    } else if (isMenu) {
+      const chosen = Array.isArray(v) ? v.map(String) : [];
+      const items = rows.filter((r) => String(r.version ?? "1") === version && String(r.task) === task);
+      let total = 0;
+      for (const it of items) {
+        const picked = Number(it.required) === 1 || chosen.includes(String(it.item));
+        out[`${varName}_T${task}_${it.item}`] = picked && !chosen.includes("none") ? 1 : 0;
+        if (picked && !chosen.includes("none") && Number.isFinite(Number(it.price_value))) total += Number(it.price_value);
+      }
+      out[`${varName}_T${task}_NONE`] = chosen.includes("none") ? 1 : 0;
+      out[`${varName}_T${task}_TOTAL`] = chosen.includes("none") ? 0 : Math.round(total * 100) / 100;
+    } else {
+      const n = Number(v);
+      out[`${varName}_T${task}`] = Number.isFinite(n) ? n : String(v);
+    }
+  }
 }
 
 function flattenQuestion(q: Question, value: unknown, varName: string, out: FlatVars): void {

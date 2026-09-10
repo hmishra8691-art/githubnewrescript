@@ -421,6 +421,40 @@ export function validateQuestion(
     });
   }
 
+  /*
+   * DESIGN TASKS — one answer per task of the design. `required` means every
+   * task answered: a chosen alternative (CBC), a best AND a worst (MaxDiff),
+   * or a menu decision (MBC — a non-empty set of items, or the explicit
+   * "nothing"). Menu tasks also honour the design's min/max selections.
+   */
+  if (q.type === "conjoint_task" && q.required && !hasNoAnswerableItems(q, ctx)) {
+    const design = def.designs.find((d) => d.id === q.settings.designRef);
+    const rows = (design?.file?.rows ?? []) as Record<string, unknown>[];
+    if (rows.length) {
+      const tasks = [...new Set(rows.map((r) => String(r.task)))];
+      const vals = (value ?? {}) as Record<string, unknown>;
+      // a menu with a required base: an empty tick-list is "just the base", a decision; without one it is no decision
+      const requiredOn = (t: string) => rows.filter((r) => String(r.task) === t && Number(r.required) === 1).length;
+      const missing = tasks.filter((t) => {
+        const v = vals[t];
+        if (design?.kind === "menu") return !Array.isArray(v) || (v.length === 0 && requiredOn(t) === 0);
+        return v == null || v === "";
+      });
+      if (missing.length && !isEmpty(value)) push(`Please answer ${missing.length === 1 ? `task ${missing[0]}` : `every task (${missing.length} left)`}.`);
+      if (design?.kind === "menu") {
+        const cfg = (design.config ?? {}) as { minSelections?: number; maxSelections?: number };
+        for (const t of tasks) {
+          const v = vals[t];
+          if (!Array.isArray(v) || v.includes("none")) continue;
+          // the limits count the whole bundle, required items included — the same count the renderer shows
+          const picked = v.filter((x) => x !== "none").length + requiredOn(t);
+          if (cfg.minSelections && picked < cfg.minSelections) push(`Task ${t}: please pick at least ${cfg.minSelections} item${cfg.minSelections === 1 ? "" : "s"}.`);
+          if (cfg.maxSelections && picked > cfg.maxSelections) push(`Task ${t}: please pick at most ${cfg.maxSelections} item${cfg.maxSelections === 1 ? "" : "s"}.`);
+        }
+      }
+    }
+  }
+
   // geo: "answered" depends on the mode (geo.ts); then radius bounds and coordinate sanity
   if (q.type === "geo") {
     if (q.required && !geoAnswered(q, value) && !hasNoAnswerableItems(q, ctx)) {

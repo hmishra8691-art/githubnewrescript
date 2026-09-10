@@ -71,7 +71,7 @@ export function questionVariables(
    * working; a caller that does not pass it simply describes a standard
    * MaxDiff question, which is what every design before this was.
    */
-  designs?: { id: string; config?: Record<string, unknown> }[],
+  designs?: { id: string; kind?: string; config?: Record<string, unknown>; file?: { columns?: string[]; rows?: Record<string, unknown>[] } }[],
 ): VariableDef[] {
   const rows = dictionaryRows(q, all);
   const base = {
@@ -339,6 +339,39 @@ export function questionVariables(
        * platform — which is how a question a respondent answered comes to be
        * missing from the file the client receives.
        */
+      /*
+       * ONE COLUMN PER TASK, DECLARED FROM THE DESIGN. "_TASKS … expanded at
+       * export" above was a note, not an implementation: no exporter ever
+       * expanded it, so task answers reached no CSV. The design file knows
+       * how many tasks a version has and, for a menu, which items are on it,
+       * so the columns are declared here and filled by flattenVariables:
+       *   CBC      VAR_T<n>            the alternative chosen (none = alternatives + 1)
+       *   MaxDiff  VAR_T<n>_BEST / _WORST   item index
+       *   Menu     VAR_T<n>_<item> 0/1, VAR_T<n>_NONE 0/1, VAR_T<n>_TOTAL
+       */
+      {
+        const design = designs?.find((d) => d.id === q.settings.designRef);
+        const rows = (design?.file?.rows ?? []) as Record<string, unknown>[];
+        const v1 = rows.filter((r) => String(r.version ?? "1") === "1");
+        const tasks = [...new Set(v1.map((r) => String(r.task)))];
+        for (const t of tasks) {
+          if (q.type === "maxdiff_task") {
+            push({ name: `${q.variableName}_T${t}_BEST`, label: `${q.code} — task ${t} best (item index)`, dataType: "numeric" });
+            push({ name: `${q.variableName}_T${t}_WORST`, label: `${q.code} — task ${t} worst (item index)`, dataType: "numeric" });
+          } else if (design?.kind === "menu") {
+            const items = v1.filter((r) => String(r.task) === t).sort((a, b) => Number(a.item) - Number(b.item));
+            for (const it of items) {
+              push({ name: `${q.variableName}_T${t}_${it.item}`, label: `${q.code} — task ${t}: ${strip(String(it.item_label ?? it.item))} chosen`, dataType: "numeric",
+                valueCodes: [0, 1], valueLabels: { "0": "Not chosen", "1": "Chosen" }, optionCode: String(it.item) });
+            }
+            push({ name: `${q.variableName}_T${t}_NONE`, label: `${q.code} — task ${t}: bought nothing`, dataType: "numeric", valueCodes: [0, 1], valueLabels: { "0": "No", "1": "Yes" } });
+            push({ name: `${q.variableName}_T${t}_TOTAL`, label: `${q.code} — task ${t}: bundle total`, dataType: "numeric", derived: true });
+          } else {
+            push({ name: `${q.variableName}_T${t}`, label: `${q.code} — task ${t} choice (alternative)`, dataType: "numeric",
+              notes: "The alternative number chosen; the None option, when offered, is alternatives + 1" });
+          }
+        }
+      }
       if (q.type === "maxdiff_task") {
         const design = designs?.find((d) => d.id === q.settings.designRef);
         if ((design?.config as { anchored?: boolean } | undefined)?.anchored) {

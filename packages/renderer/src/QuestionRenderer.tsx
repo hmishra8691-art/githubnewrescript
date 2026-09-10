@@ -984,6 +984,11 @@ function DesignTasks(p: QRProps) {
   if (!design?.file?.rows?.length) {
     return <div className="rs-error-msg">Design file “{p.q.settings.designRef}” not generated yet.</div>;
   }
+  // a menu design is a menu, whichever variant the question stored
+  if (design.kind === "menu" && variantRenderers.menutasks) {
+    const Menu = variantRenderers.menutasks;
+    return <Menu {...p} />;
+  }
   const allRows = design.file.rows as Record<string, unknown>[];
   /*
    * THE VERSION THIS RESPONDENT ANSWERS.

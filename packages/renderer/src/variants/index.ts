@@ -26,3 +26,4 @@ import "./gamified";
 import "./experimental";
 import "./conversational";
 import "./geo";
+import "./conjoint";

@@ -509,3 +509,16 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-geo-hits button:hover { background: var(--rs-hover, #f3f6f9); }
 .rs-btn-mini { padding: 6px 10px; border-radius: 6px; border: 1px solid var(--rs-border); background: #fff; font-size: 13px; cursor: pointer; }
 .rs-btn-mini:disabled { opacity: .6; cursor: default; }
+
+/* ------------------------------------------------------------ menu tasks */
+.rs-menu-items { display: flex; flex-direction: column; gap: 6px; }
+.rs-menu-item { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; border: 1.5px solid var(--rs-border); border-radius: 10px; cursor: pointer; background: var(--rs-surface); }
+.rs-menu-item.on { border-color: var(--rs-primary); background: color-mix(in srgb, var(--rs-primary) 7%, var(--rs-surface)); }
+.rs-menu-item.required { cursor: default; }
+.rs-menu-item.muted { opacity: .55; }
+.rs-menu-req { color: var(--rs-subtle); font-size: 12.5px; }
+.rs-menu-price { font-variant-numeric: tabular-nums; font-weight: 600; }
+.rs-menu-none { margin-top: 6px; border-style: dashed; }
+.rs-menu-total { display: flex; flex-wrap: wrap; align-items: baseline; gap: 14px; margin-top: 12px; font-size: 14px; color: var(--rs-subtle); }
+.rs-menu-total strong { color: var(--rs-text); font-size: 16px; }
+.rs-menu-hint { font-size: 12.5px; }

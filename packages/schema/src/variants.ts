@@ -1216,10 +1216,28 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: ["design_ref"], validations: [],
     supersededBy: "ranking.best_worst",
   }),
+  /*
+   * MENU-BASED CONJOINT is the `conjoint_task` base type with a MENU design
+   * (`packages/designs/menu.ts`): every task shows the whole menu at varying
+   * prices and the respondent ticks what they would buy. The answer per task
+   * is the set of chosen items rather than one alternative, which is why it
+   * is its own renderer and therefore its own type under the identity rule.
+   * The Pricing / Configurator exercise is the same type with a required base
+   * item — a preset, not a fourth generator.
+   */
+  stable(F.conjoint, "menu", "Menu-Based Conjoint (MBC)", "Every task is the whole menu at varying prices; respondents tick what they would buy. Needs a Menu design (Design Generators).", {
+    baseType: "conjoint_task", renderer: "menutasks", responseModel: "tasks",
+    capabilities: ["design_ref"], validations: ["required"],
+    defaults: { instruction: "Tick everything you would buy at these prices. Prices change from one menu to the next." },
+  }),
+  stable(F.conjoint, "pricing_configurator", "Pricing / Configurator Choice", "A base product that is always included, plus add-ons at varying prices — the running total updates as the respondent configures.", {
+    baseType: "conjoint_task", renderer: "menutasks", responseModel: "tasks",
+    capabilities: ["design_ref"], validations: ["required"],
+    defaults: { instruction: "Configure the product you would buy at these prices. The base is included; add what you would pay for." },
+    presetOf: "conjoint.menu",
+  }),
   ...planned(F.conjoint, [
-    ["Adaptive CBC (ACBC)", "Adaptive conjoint tasks."],
-    ["Menu-Based Conjoint", "Configure-your-own menu tasks."],
-    ["Pricing / Configurator Choice", "Price-focused choice tasks."],
+    ["Adaptive CBC (ACBC)", "Build-your-own → screening → choice tournament, adapted to each respondent."],
   ]),
 
   /* ------------------------------------------------------------ ALLOCATION */
