@@ -54,3 +54,4 @@ export * from "./namedExpressions.js";
 export * from "./punchChain.js";
 export * from "./logicTrace.js";
 export * from "./aiFunctions.js";
+export * from "./probe.js";

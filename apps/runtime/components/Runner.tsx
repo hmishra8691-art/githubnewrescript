@@ -1,6 +1,6 @@
 "use client";
 import React from "react";
-import type { SurveyDefinition, Branding } from "@rescript/schema";
+import type { SurveyDefinition, Branding, Question } from "@rescript/schema";
 import {
   createResponseState,
   compileFlow,
@@ -21,6 +21,13 @@ import {
   questionDependencies,
   pendingListFills,
   serverResolvedQuestions,
+  dueProbes,
+  probeHasFixedPrompt,
+  probeSourceText,
+  renderFixedProbe,
+  probeQuestion,
+  recordProbePrompt,
+  forgetProbe,
   decideListFill,
   listFillVariables,
   applyListFillDestinations,
@@ -232,6 +239,48 @@ async function runAiResolutions(
   }
 }
 
+/**
+ * THE WORDING OF ONE FOLLOW-UP PROBE. Fixed in the definition → rendered in
+ * the browser with `{answer}` and ordinary piping. Not fixed → asked of the
+ * provider through `/api/session/probe`. Null means "no probe this time": an
+ * unconfigured provider (501), a preview against a real provider (403), a
+ * slow or failed call — the interview continues, the follow-up is simply not
+ * asked. A probe must never be the reason a page will not turn.
+ */
+async function probeWording(
+  def: SurveyDefinition,
+  state: ResponseState,
+  q: Question,
+  n: number,
+  ctx: Parameters<typeof renderFixedProbe>[2],
+  mode: string,
+  session: RunnerProps["session"],
+  build: RunnerProps["build"],
+): Promise<string | null> {
+  const p = q.probe!;
+  const answer = probeSourceText(state.answers[q.id]);
+  if (probeHasFixedPrompt(p)) return renderFixedProbe(p, answer, ctx).trim() || null;
+  if (mode !== "preview" && !session) return null;
+  try {
+    const r = await fetch("/api/session/probe", {
+      method: "POST", headers: { "content-type": "application/json" }, cache: "no-store",
+      body: JSON.stringify({
+        sessionId: session?.sessionId ?? "preview",
+        definition: session ? undefined : def,
+        questionId: q.id,
+        n,
+        answers: state.answers,
+        build: build ? { source: build.source, versionId: build.versionId, revision: build.revision } : undefined,
+      }),
+    });
+    if (!r.ok) return null;
+    const j = await r.json().catch(() => ({})) as { prompt?: string | null };
+    return typeof j.prompt === "string" && j.prompt.trim() ? j.prompt.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 async function runListFills(
   def: SurveyDefinition,
   state: ResponseState,
@@ -396,6 +445,14 @@ export function Runner({ definition: def, mode, session: initialSession, session
    * full page until you ask for it.
    */
   const [startNote, setStartNote] = React.useState<string | null>(null);
+  /**
+   * THE FOLLOW-UP PROBE BEING SHOWN, if any — an overlay between this page and
+   * the next. The flow's step index does not move while it is up; Back
+   * returns to the page it belongs to. See engine probe.ts.
+   */
+  const [probe, setProbe] = React.useState<{ q: Question; n: number; pq: Question } | null>(null);
+  /** probes the provider had no wording for on this page visit — skipped, not retried on every Next */
+  const skippedProbesRef = React.useRef<Set<string>>(new Set());
   /** the quality engine's event collector — derived behavioural metadata only */
   const telemetryRef = React.useRef<TelemetryCollector | null>(null);
   const notePage = (allSteps: RuntimeStep[], index: number, via: "start" | "next" | "back" | "reload" | "jump") => {
@@ -443,6 +500,8 @@ export function Runner({ definition: def, mode, session: initialSession, session
     }
     setEnded(null);
     setErrors([]);
+    setProbe(null);
+    skippedProbesRef.current = new Set();
     setLogs([]);
     setEpoch((e) => e + 1);
   };
@@ -597,6 +656,8 @@ export function Runner({ definition: def, mode, session: initialSession, session
     if (stateRef.current.stepIndex >= next.length) {
       stateRef.current.stepIndex = Math.max(0, next.length - 1);
     }
+    // a follow-up on screen belongs to the definition that produced it
+    setProbe((p) => (p && def.questions.find((q) => q.id === p.q.id)?.probe ? p : null));
     force();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [def]);
@@ -707,6 +768,68 @@ export function Runner({ definition: def, mode, session: initialSession, session
      * on the NEXT page may read.
      */
     await runAiResolutions(def, state, pageStep.questionIds, mode, session, build, (line) => setLogs((l) => [...l, line]));
+    /*
+     * FOLLOW-UP PROBES come last in this slot: the page is valid, the derived
+     * variables exist, so a probe's `when` can read them. If one is due, it is
+     * shown INSTEAD of moving on; when the respondent answers it (or skips
+     * it), `handleProbeNext` asks again and finally calls `leavePage`. The
+     * flow has not moved in the meantime.
+     */
+    if (await showNextProbe()) return;
+    await leavePage();
+  };
+
+  /**
+   * Show the next due follow-up for this page, if there is one with a wording.
+   * Returns true when a probe is now on screen.
+   */
+  const showNextProbe = async (): Promise<boolean> => {
+    if (!pageStep) return false;
+    for (const { q, n } of dueProbes(questions, ctx)) {
+      const key = `${q.id}:${n}`;
+      if (skippedProbesRef.current.has(key)) continue;
+      const wording = await probeWording(def, state, q, n, ctx, mode, session, build);
+      if (!wording) {
+        skippedProbesRef.current.add(key);
+        if (mode !== "live") setLogs((l) => [...l, `[probe] ${q.code} follow-up ${n}: no wording available — skipped`]);
+        continue;
+      }
+      recordProbePrompt(state, q.id, n, wording);
+      if (mode !== "live") setLogs((l) => [...l, `[probe] ${q.code} follow-up ${n}: ${JSON.stringify(wording)}`]);
+      setProbe({ q, n, pq: probeQuestion(q, n, wording) });
+      setErrors([]);
+      force();
+      window.scrollTo({ top: 0 });
+      return true;
+    }
+    return false;
+  };
+
+  /** Next on a probe screen: validate it, then either the next probe or the page's exit. */
+  const handleProbeNext = async () => {
+    if (!probe) return;
+    const errs = validatePage(def, [probe.pq], ctx);
+    if (blockingErrors(errs).length > 0) { setErrors(errs); return; }
+    setErrors([]);
+    setProbe(null);
+    if (await showNextProbe()) return;
+    await leavePage();
+  };
+
+  /** Back on a probe screen returns to its page; the abandoned follow-up is forgotten. */
+  const handleProbeBack = () => {
+    if (!probe) return;
+    forgetProbe(state, probe.q.id, probe.n);
+    setProbe(null);
+    setErrors([]);
+    force();
+    window.scrollTo({ top: 0 });
+  };
+
+  /** Leave the current page: telemetry, advance, and everything that follows. */
+  const leavePage = async () => {
+    if (!pageStep) return;
+    skippedProbesRef.current = new Set();
     telemetryRef.current?.leavePage();
     // name the page being left: a List Fill decided just above may have added steps before it
     const nav = advance(def, state, counts, { fromPageId: pageStep.pageId });
@@ -832,6 +955,42 @@ export function Runner({ definition: def, mode, session: initialSession, session
     </div>
   ) : !pageStep ? (
     <div className="rs-card rs-end"><h2>Loading…</h2></div>
+  ) : probe ? (
+    /*
+     * A FOLLOW-UP PROBE — one question on its own, rendered by the ordinary
+     * QuestionRenderer, stored under the probed question's side key. The
+     * step index has not moved: Back returns to the page, Next asks the next
+     * probe or leaves the page exactly as the page's own Next would have.
+     */
+    <>
+      {errors.length > 0 && (
+        <div className="rs-error-banner" role="status" aria-live="polite">Please review the highlighted question below.</div>
+      )}
+      <div id="rs-questions" tabIndex={-1} data-testid="rs-probe" data-probe-of={probe.q.id} data-probe-n={probe.n}>
+        <QuestionRenderer
+          key={probe.pq.id}
+          def={def}
+          q={probe.pq}
+          state={state}
+          loop={null}
+          value={state.answers[probe.pq.id]}
+          otherValue=""
+          errors={errors.filter((e) => e.questionId === probe.pq.id).map((e) => e.message)}
+          onChange={(v) => { state.answers[probe.pq.id] = v as never; telemetryRef.current?.answerChanged(probe.q.id); force(); }}
+          onOtherChange={() => {}}
+        />
+      </div>
+      <div className="rs-nav">
+        {b.buttons.showBack ? (
+          <button type="button" data-testid="rs-back" className={`rs-btn secondary ${b.buttons.style}`} onClick={handleProbeBack}>
+            {b.buttons.backLabel}
+          </button>
+        ) : <span />}
+        <button type="button" data-testid="rs-next" className={`rs-btn ${b.buttons.style}`} onClick={handleProbeNext}>
+          {pageIndexAmongPages >= totalPages ? b.buttons.submitLabel : b.buttons.nextLabel}
+        </button>
+      </div>
+    </>
   ) : (
     <>
       {pageStep.title && pageStep.showTitle && (

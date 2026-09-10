@@ -1,5 +1,5 @@
 import "server-only";
-import { pickCategory, pickSentiment, fakeClassify, fakeSentiment } from "@rescript/engine";
+import { pickCategory, pickSentiment, fakeClassify, fakeSentiment, fakeProbe } from "@rescript/engine";
 
 /**
  * THE AI PROVIDER — one function per AI calc function, behind one client.
@@ -86,9 +86,49 @@ export async function sentiment(text: string): Promise<string | null> {
   return pickSentiment(out?.label);
 }
 
+/**
+ * Write the n-th follow-up question for an open end, or null.
+ *
+ * The model sees the original question, the answer, the follow-ups already
+ * asked and answered, and the programmer's instruction. It returns ONE short
+ * question. It never sees anything else about the respondent — no other
+ * answers, no embedded data — because a probe is about the answer in front
+ * of it, and because the less the provider is sent, the less there is to
+ * account for. Anything that is not a question (a statement, a list, an
+ * empty string, more than 300 characters) is discarded and the probe is
+ * skipped.
+ */
+export async function writeProbe(input: {
+  questionText: string;
+  answer: string;
+  transcript: { prompt: string; answer: string }[];
+  n: number;
+  instruction?: string;
+}): Promise<string | null> {
+  const answer = input.answer.slice(0, MAX_TEXT);
+  if (aiProviderName() === "fake") return fakeProbe(answer, input.n, input.instruction);
+  const history = input.transcript.map((t, i) => `Follow-up ${i + 1}: ${t.prompt}\nAnswer: ${t.answer || "(no answer)"}`).join("\n");
+  const out = await complete(
+    "You are a survey interviewer writing ONE short, neutral follow-up question (a probe) to learn more about a respondent's open-ended answer. "
+    + "Do not lead, do not suggest answers, do not repeat a follow-up already asked. Reply with JSON only: {\"question\": \"<the follow-up>\"}.",
+    `Original question: ${stripTags(input.questionText)}\nAnswer: """${answer}"""\n`
+    + (history ? `${history}\n` : "")
+    + (input.instruction ? `Interviewer's instruction: ${input.instruction}\n` : "")
+    + `Write follow-up ${input.n}.`,
+  );
+  const q = typeof out?.question === "string" ? out.question.trim() : "";
+  if (!q || q.length > 300 || !/\?\s*$/.test(q)) {
+    if (out) console.warn("[rescript:ai] probe writer returned something that is not a question", JSON.stringify({ n: input.n }));
+    return null;
+  }
+  return q;
+}
+
+const stripTags = (s: string) => s.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+
 /* ------------------------------------------------------- the http client */
 
-async function complete(system: string, user: string): Promise<{ label?: unknown } | null> {
+async function complete(system: string, user: string): Promise<{ label?: unknown; question?: unknown } | null> {
   const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
   const key = (process.env.AI_API_KEY ?? "").trim();
   if (!base) return null;
@@ -103,7 +143,7 @@ async function complete(system: string, user: string): Promise<{ label?: unknown
       body: JSON.stringify({
         model: (process.env.AI_MODEL ?? "").trim() || "gpt-4o-mini",
         temperature: 0,
-        max_tokens: 40,
+        max_tokens: 120,
         response_format: { type: "json_object" },
         messages: [{ role: "system", content: system }, { role: "user", content: user }],
       }),

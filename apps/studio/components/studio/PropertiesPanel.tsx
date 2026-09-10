@@ -2,7 +2,7 @@
 import { CountInput } from "./CountInput";
 import React from "react";
 import type { Question, ValidationRule, SkipRule, ListOperation, ListSource } from "@rescript/schema";
-import { validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups } from "@rescript/engine";
+import { validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion } from "@rescript/engine";
 import { resolveVariant, effectiveCapabilities, allowedValidationKinds, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript/schema";
 import { useStudio, selectedQuestion, uid } from "./store";
 import { useCanvas } from "../canvas/CanvasContext";
@@ -625,6 +625,62 @@ export function PropertiesPanel() {
       {showSec("Skip logic") && (
       <CollapsibleSection id="skip-logic" title="Skip logic" active={(q.skipLogic?.length ?? 0) > 0}>
       <SkipLogicEditor q={q} patch={patch} />
+      </CollapsibleSection>
+      )}
+
+      {/*
+        * FOLLOW-UP PROBE — "tell me more" on an open end, asked after the page
+        * is submitted, up to N times, without touching the flow. Configuration
+        * on the question, not a question type (schema ProbeConfig).
+        */}
+      {(PROBE_TYPES as readonly string[]).includes(q.type) && showSec("Follow-up probe") && (
+      <CollapsibleSection id="probe" title="Follow-up probe" active={!!q.probe}>
+      <label className="row" style={{ gap: 4, fontSize: 13, marginBottom: 8 }}>
+        <input type="checkbox" checked={!!q.probe} data-testid="probe-toggle"
+          onChange={(e) => patch({ probe: e.target.checked ? { maxProbes: 1, minWords: 0, required: false } : undefined })} />
+        ask a follow-up after this answer
+      </label>
+      {q.probe && (
+        <div className="card" style={{ padding: 10 }}>
+          <label className="f"><span>Wording (blank = the AI writes it from the answer)</span>
+            <textarea className="ta" style={{ minHeight: 56 }} value={q.probe.prompt ?? ""} data-testid="probe-prompt"
+              placeholder="You said “{answer}” — what made you feel that way?"
+              onChange={(e) => patch({ probe: { ...q.probe!, prompt: e.target.value || undefined } })} /></label>
+          {!q.probe.prompt && (
+            <label className="f"><span>Instruction for the AI</span>
+              <input className="input" value={q.probe.instruction ?? ""} data-testid="probe-instruction"
+                placeholder="find out which part of the experience they mean"
+                onChange={(e) => patch({ probe: { ...q.probe!, instruction: e.target.value || undefined } })} /></label>
+          )}
+          <div className="row" style={{ flexWrap: "wrap", gap: 12 }}>
+            <label className="f" style={{ width: 120 }}><span>Most follow-ups</span>
+              <input className="input" type="number" min={1} max={5} value={q.probe.maxProbes} data-testid="probe-max"
+                onChange={(e) => patch({ probe: { ...q.probe!, maxProbes: Math.min(5, Math.max(1, Number(e.target.value) || 1)) } })} /></label>
+            <label className="f" style={{ width: 160 }}><span>Only if the answer has ≥ words</span>
+              <input className="input" type="number" min={0} value={q.probe.minWords} data-testid="probe-min-words"
+                onChange={(e) => patch({ probe: { ...q.probe!, minWords: Math.max(0, Number(e.target.value) || 0) } })} /></label>
+            <label className="row" style={{ gap: 4, fontSize: 13, alignSelf: "end" }}>
+              <input type="checkbox" checked={q.probe.required}
+                onChange={(e) => patch({ probe: { ...q.probe!, required: e.target.checked } })} /> answer required
+            </label>
+          </div>
+          <div className="logic-rule" style={{ marginTop: 8 }}>
+            <div className="logic-if">IF</div>
+            <OptionalCondition label="ask only when these hold"
+              hint="Nothing here means the follow-up is asked whenever the question was answered."
+              value={q.probe.when} onChange={(c) => patch({ probe: { ...q.probe!, when: c } })} />
+            <OptionalCondition label="stop probing once these hold"
+              hint="Evaluated after every follow-up answer."
+              value={q.probe.stopWhen} onChange={(c) => patch({ probe: { ...q.probe!, stopWhen: c } })} />
+          </div>
+          {lintProbeQuestion(q).map((m, i) => (
+            <div key={i} className="muted" data-testid="probe-lint" style={{ fontSize: 12.5, color: "#7a4b00", marginTop: 6 }}>{m}</div>
+          ))}
+          <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+            Answers export as <code>{q.variableName}_PROBE_1</code>{q.probe.maxProbes > 1 ? ` … _PROBE_${q.probe.maxProbes}` : ""}, the wording asked as <code>{q.variableName}_PROBE_1_Q</code>. The programmed flow is not changed.
+          </div>
+        </div>
+      )}
       </CollapsibleSection>
       )}
 

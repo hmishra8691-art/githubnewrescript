@@ -426,6 +426,20 @@ export function questionVariables(
     && !q.options.some((o) => o.meta?.correct)) {
     push({ name: `${q.variableName}_CORRECT`, label: `${q.code} — pairs matched correctly`, dataType: "numeric", derived: true });
   }
+  /*
+   * FOLLOW-UP PROBES are declared up front from `maxProbes`, like loop
+   * iterations: `Q5_PROBE_n` holds the n-th follow-up answer and
+   * `Q5_PROBE_n_Q` the wording that was asked — which the analyst must see
+   * when the wording was generated per respondent (probe.ts).
+   */
+  if (q.probe) {
+    for (let n = 1; n <= q.probe.maxProbes; n++) {
+      push({ name: `${q.variableName}_PROBE_${n}`, label: `${q.code} — follow-up ${n}`, dataType: "text",
+        notes: `Answer to follow-up probe ${n} on ${q.code}` });
+      push({ name: `${q.variableName}_PROBE_${n}_Q`, label: `${q.code} — follow-up ${n} wording`, dataType: "text",
+        notes: `The exact follow-up question asked${q.probe.prompt ? "" : " (written per respondent)"}` });
+    }
+  }
   return out;
 }
 

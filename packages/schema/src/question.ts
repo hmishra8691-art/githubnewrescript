@@ -465,6 +465,67 @@ export const SkipRule = z.object({
 });
 export type SkipRule = z.infer<typeof SkipRule>;
 
+/**
+ * FOLLOW-UP PROBE — a dynamic "tell me more" on an open end.
+ *
+ * ## What it is
+ *
+ * Configuration on the question being probed, not a question type and not a
+ * flow node. When the page holding the question is submitted and its answers
+ * are valid, the runtime asks a follow-up — one open-ended question, shown on
+ * its own — up to `maxProbes` times, then continues to wherever the flow was
+ * already going. The programmed flow is never altered: no page is inserted,
+ * no branch is taken, the step index does not move. A probe is an overlay
+ * the runtime shows between a page and the next, the way an interstitial
+ * warning is.
+ *
+ * ## Where the wording comes from
+ *
+ * `prompt` set → a fixed wording, with `{answer}` and ordinary piping
+ * available ("You said {answer} — what made you feel that way?"). Works with
+ * no AI provider at all; this is the classic conditional follow-up every
+ * platform has, under the same mechanism.
+ *
+ * `prompt` unset → the AI provider writes the follow-up from the answer so
+ * far, guided by `instruction` ("find out which feature they mean"). If no
+ * provider is configured the probe is skipped and the interview continues
+ * — a missing follow-up, never a broken survey.
+ *
+ * ## What is gated, and by what
+ *
+ * `when` is an ordinary Condition over the whole response — the same tree
+ * display logic, skip logic and quotas use — evaluated after the page is
+ * valid; `stopWhen` is evaluated after each probe answer. Nothing here can
+ * express anything logic elsewhere cannot, and a probe never reads state
+ * that does not exist yet.
+ *
+ * ## Where the answers land
+ *
+ * Under the probed question's own variable: `Q5_PROBE_1`, `Q5_PROBE_2`, …
+ * hold the answers, `Q5_PROBE_1_Q`, … the exact wording that was asked —
+ * necessary when the wording was generated, since the analyst must see the
+ * question each respondent actually answered. Declared in the dictionary up
+ * front from `maxProbes`, so the export has the same columns before the
+ * first respondent and after the last, exactly as loop iterations do.
+ */
+export const ProbeConfig = z.object({
+  /** Ask only when this holds (evaluated after the page is valid). Absent = whenever the question was answered. */
+  when: Condition.optional(),
+  /** Stop probing once this holds (evaluated after every probe answer). */
+  stopWhen: Condition.optional(),
+  /** Most follow-ups to ask for this question. */
+  maxProbes: z.number().int().min(1).max(5).default(1),
+  /** Do not probe an answer shorter than this many words (0 = always). */
+  minWords: z.number().int().min(0).default(0),
+  /** Fixed wording; `{answer}` pipes the answer. Blank = the AI writes it. */
+  prompt: z.string().optional(),
+  /** Guidance for the AI when it writes the follow-up. */
+  instruction: z.string().optional(),
+  /** Must the respondent answer the follow-up? Default no — a probe invites, it does not demand. */
+  required: z.boolean().default(false),
+});
+export type ProbeConfig = z.infer<typeof ProbeConfig>;
+
 export const Question = z.object({
   id: z.string(), // stable internal id, e.g. "q_age"
   code: z.string(), // display code, e.g. "Q1"
@@ -714,6 +775,13 @@ export const Question = z.object({
    * miss becomes an explained flag (`@rescript/quality`, category "attention").
    */
   attentionCheck: AttentionCheck.optional(),
+
+  /**
+   * A FOLLOW-UP PROBE on an open end — "could you say more about that?" —
+   * asked after the page is submitted, up to `maxProbes` times, without
+   * touching the programmed flow (see `ProbeConfig`).
+   */
+  probe: ProbeConfig.optional(),
 
   displayLogic: Condition.optional(),
   skipLogic: z.array(SkipRule).default([]),

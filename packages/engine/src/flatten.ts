@@ -65,6 +65,14 @@ export function flattenVariables(def: SurveyDefinition, state: ResponseState): F
     const other = state.answers[`${q.id}__other`];
     if (other !== undefined) out[`${q.variableName}_other`] = other;
 
+    // follow-up probes: `<id>__probe_n` / `__probe_n_q` → VAR_PROBE_n / VAR_PROBE_n_Q (probe.ts)
+    for (let n = 1; n <= 5; n++) {
+      const prompt = state.answers[`${q.id}__probe_${n}_q`];
+      if (prompt === undefined) break;
+      out[`${q.variableName}_PROBE_${n}_Q`] = prompt;
+      out[`${q.variableName}_PROBE_${n}`] = state.answers[`${q.id}__probe_${n}`] ?? null;
+    }
+
     // ---- gamified / experimental families (variant batch) ----
     // Side answers live beside the answer exactly like `__other` above:
     // `<id>__correct`, `__rt`, `__timeout`, `__passed`. A reaction-time map

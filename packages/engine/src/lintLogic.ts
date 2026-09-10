@@ -6,6 +6,7 @@ import type {
   Question,
   SurveyDefinition,
 } from "@rescript/schema";
+import { lintProbeQuestion } from "./probe.js";
 import {
   LIST_VALUE_OPERATORS,
   OPERATORS_BY_KIND,
@@ -447,6 +448,19 @@ function lintQuestionLogicUnsafe(def: SurveyDefinition, q: Question): LogicIssue
   const optCtx = base(true);
 
   lintCondition(q.displayLogic, "displayLogic", ctx);
+  /*
+   * A follow-up probe is gated by ordinary Conditions, so they get the same
+   * reference checks; its own shape rules (probe.ts) surface here as
+   * warnings, with the other things about this question a programmer should
+   * see before fielding.
+   */
+  if (q.probe) {
+    lintCondition(q.probe.when, "probe.when", ctx);
+    lintCondition(q.probe.stopWhen, "probe.stopWhen", ctx);
+    for (const m of lintProbeQuestion(q)) {
+      issues.push({ level: "warning", questionId: q.id, questionCode: q.code, path: "probe", message: m });
+    }
+  }
   (q.skipLogic ?? []).forEach((r, i) => lintCondition(r.when, `skipLogic[${i}].when`, ctx));
   (q.validation ?? []).forEach((v, i) => lintCondition(v.when, `validation[${i}].when`, ctx));
   (q.randomization?.rules ?? []).forEach((r, i) =>
