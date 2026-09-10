@@ -520,6 +520,15 @@ export const Question = z.object({
         .enum(["original", "az", "za", "numeric_asc", "numeric_desc"])
         .optional(),
       placeholder: z.string().optional(),
+      /**
+       * Speech input on a text question (`speech_input` capability). The
+       * respondent may dictate; the transcript lands in the ordinary text
+       * value, so nothing downstream knows or cares that it was spoken.
+       * `speechLang` is a BCP-47 tag for the recogniser; unset, the survey's
+       * language is used, then the browser's.
+       */
+      speechInput: z.boolean().optional(),
+      speechLang: z.string().optional(),
       readOnly: z.boolean().default(false),
       hidden: z.boolean().default(false),
       defaultValue: z.any().optional(),

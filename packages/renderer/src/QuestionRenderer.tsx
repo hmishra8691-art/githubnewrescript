@@ -20,6 +20,7 @@ import {
 } from "@rescript/engine";
 import { variantRenderers } from "./variants/registry";
 import { MediaEmbed, SafeImage } from "./Media";
+import { SpeechInputButton } from "./SpeechInput";
 import { anchor, cellAnchor } from "./authoring";
 // side-effect: every family registers its renderers
 import "./variants";
@@ -417,15 +418,20 @@ export function NumericInput(p: QRProps) {
 }
 
 export function TextInput(p: QRProps) {
+  const text = p.value == null ? "" : String(p.value);
   return (
-    <input
-      className="rs-input"
-      type="text"
-      value={p.value == null ? "" : String(p.value)}
-      placeholder={p.q.settings.placeholder}
-      readOnly={p.q.settings.readOnly}
-      onChange={(e) => p.onChange(e.target.value)}
-    />
+    <div className="rs-textfield">
+      <input
+        className="rs-input"
+        type="text"
+        value={text}
+        placeholder={p.q.settings.placeholder}
+        readOnly={p.q.settings.readOnly}
+        onChange={(e) => p.onChange(e.target.value)}
+      />
+      {/* `speech_input`: dictation writes into the SAME value, through the same onChange */}
+      {p.q.settings.speechInput && <SpeechInputButton def={p.def} q={p.q} value={text} onChange={p.onChange} />}
+    </div>
   );
 }
 
@@ -447,6 +453,7 @@ export function LongText(p: QRProps) {
         maxLength={Number.isFinite(Number(maxLen)) ? Number(maxLen) : undefined}
         onChange={(e) => p.onChange(e.target.value)}
       />
+      {p.q.settings.speechInput && <SpeechInputButton def={p.def} q={p.q} value={text} onChange={p.onChange} />}
       {(Number.isFinite(min) || Number.isFinite(Number(maxLen))) && (
         <div className={`rs-counter ${short ? "short" : ""}`} data-testid="char-counter">
           {text.length}

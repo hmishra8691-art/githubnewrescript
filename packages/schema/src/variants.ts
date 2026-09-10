@@ -51,7 +51,17 @@ export type VariantCapability =
   | "other_specify"
   | "images"
   | "design_ref"
-  | "expression";
+  | "expression"
+  /**
+   * The respondent may dictate the answer. A microphone control on the text
+   * field runs the browser's speech recogniser and puts the transcript into
+   * the ordinary text value — so the answer IS an open-end answer, and every
+   * validator, piping token, export column and quality rule that reads text
+   * reads this without knowing it was spoken. This is why "Speech-to-Text
+   * Response" is a capability of text questions and not a question type:
+   * a type would have meant a second response model for the same data.
+   */
+  | "speech_input";
 
 export interface QuestionVariantDef {
   id: string; // "<family>.<key>"
@@ -427,9 +437,11 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   /* ----------------------------------------------------------------- TEXT */
   stable(F.text, "single_line", "Single-Line Text", "One-line open end.", {
     baseType: "open_text", responseModel: "text", validations: VAL_TEXT,
+    capabilities: ["speech_input"],
   }),
   stable(F.text, "multi_line", "Multi-Line Text", "Paragraph answer.", {
     baseType: "long_text", responseModel: "text", validations: VAL_TEXT,
+    capabilities: ["speech_input"],
   }),
   stable(F.text, "essay", "Essay / Long Text", "Long-form answer with a minimum length.", {
     baseType: "long_text", responseModel: "text", validations: VAL_TEXT,
@@ -1418,9 +1430,14 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       instruction: "Add alternatives in the right panel: the first whose condition holds replaces the wording and/or the options.",
     },
   }),
-  ...planned(F.dynamic, [
-    ["Respondent-Specific Options", "Options from embedded data or APIs."],
-  ]),
+  /*
+   * "Respondent-Specific Options" was planned here as a new question type. It
+   * is not one: option-level `show_when` already takes any Condition — embedded
+   * data, variables, quotas, previous answers — with the `$option` placeholder
+   * for per-option rules (optionLogic.test.ts:770 proves it against embedded
+   * data), and masking does the same with set algebra. Removed 2026-09-10 so
+   * the picker stops promising a capability that is already switched on.
+   */
 
   /* ----------------------------------------------------------- CALCULATED */
   stable(F.calculated, "value", "Calculated Value", "Expression-driven derived variable (calc DSL).", {
@@ -1661,6 +1678,23 @@ export function pickerTypesOf(family: string): {
     .map((type) => ({ type, presets: presetsOf(type.id) }));
   const planned = inFamily.filter((v) => v.status === "planned");
   return { types, planned };
+}
+
+/**
+ * WHAT A QUESTION MAY BE CONFIGURED WITH, given the variant it stores.
+ *
+ * A preset borrows its parent's identity, and it must borrow its parent's
+ * configurability too — "Email" is Single-Line Text, so if Single-Line Text
+ * can take dictation, so can Email. Reading the preset's own `capabilities`
+ * would make a preset LESS configurable than the type it is a preset of,
+ * which is the opposite of what a starting point is for. A retired id
+ * resolves to its survivor first, as everywhere else.
+ */
+export function effectiveCapabilities(variantId: string | undefined): readonly VariantCapability[] | null {
+  const v = resolveVariant(variantId);
+  if (!v) return null;
+  const parent = v.presetOf ? variantRegistry.get(v.presetOf) : undefined;
+  return (parent ?? v).capabilities;
 }
 
 /** Every live preset of a type, in registry order. */

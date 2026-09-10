@@ -3,7 +3,7 @@ import { CountInput } from "./CountInput";
 import React from "react";
 import type { Question, ValidationRule, SkipRule, ListOperation, ListSource } from "@rescript/schema";
 import { validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups } from "@rescript/engine";
-import { resolveVariant, allowedValidationKinds, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript/schema";
+import { resolveVariant, effectiveCapabilities, allowedValidationKinds, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript/schema";
 import { useStudio, selectedQuestion, uid } from "./store";
 import { useCanvas } from "../canvas/CanvasContext";
 import { ElementPanel } from "../canvas/ElementPanel";
@@ -551,8 +551,15 @@ export function PropertiesPanel() {
     });
 
   const variantDef = resolveVariant(q.variant);
+  /*
+   * Capabilities come from the TYPE, so a question created from a preset
+   * ("Email") is configurable exactly like the type it is a preset of
+   * ("Single-Line Text"). Reading the preset's own list would hide settings
+   * from it that its parent offers.
+   */
+  const effectiveCaps = effectiveCapabilities(q.variant);
   const hasCap = (c: string) =>
-    variantDef ? variantDef.capabilities.includes(c as any) : true;
+    effectiveCaps ? (effectiveCaps as readonly string[]).includes(c) : true;
   const pipingProblems = lintPipingTokens(s.def, `${q.text} ${q.instruction ?? ""}`);
   const exprError =
     q.type === "calculated" && q.settings.expression ? validateExpression(q.settings.expression) : null;
@@ -898,7 +905,19 @@ export function PropertiesPanel() {
           <input type="checkbox" checked={q.settings.readOnly}
             onChange={(e) => patch({ settings: { ...q.settings, readOnly: e.target.checked } })} /> read-only
         </label>
+        {hasCap("speech_input") && (
+          <label className="row" style={{ gap: 4, fontSize: 13 }} title="Adds a microphone; the transcript becomes the ordinary text answer">
+            <input type="checkbox" checked={!!q.settings.speechInput} data-testid="speech-input-toggle"
+              onChange={(e) => patch({ settings: { ...q.settings, speechInput: e.target.checked || undefined } })} /> allow dictation
+          </label>
+        )}
       </div>
+      {hasCap("speech_input") && q.settings.speechInput && (
+        <label className="f" style={{ marginTop: 8 }}><span>Dictation language (BCP-47, blank = survey language)</span>
+          <input className="input mono" value={q.settings.speechLang ?? ""} placeholder="en-GB, hi-IN, de-DE…"
+            data-testid="speech-lang"
+            onChange={(e) => patch({ settings: { ...q.settings, speechLang: e.target.value || undefined } })} /></label>
+      )}
       <label className="f" style={{ marginTop: 8 }}><span>Default / piped value</span>
         <input className="input mono" value={String(q.settings.defaultValue ?? "")}
           placeholder='static, or {{Q1}} piped'

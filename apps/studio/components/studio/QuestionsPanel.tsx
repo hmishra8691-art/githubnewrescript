@@ -1435,7 +1435,7 @@ export function QuestionsPanel() {
     return (
       <div key={q.id}
         className={`card selectable qcard ${isSelected ? "selected" : ""}`}
-        data-testid="qcard"
+        data-testid="qcard" data-qid={q.id}
         onClick={() => s.select(isSelected ? null : q.id)}>
         {isSelected && <EscapeCloses onClose={close} />}
         <div className="qlist-item">
