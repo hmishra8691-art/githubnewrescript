@@ -8,7 +8,14 @@
  *   the transcript; the page still turns where it always did
  *       ↓
  *   Runtime, voice: each question spoken as it appears (mocked speech
- *   synthesis), mute / replay; every text question gains dictation
+ *   synthesis) — the question, then each option as its own utterance — with
+ *   mute / replay; the voice console takes dictation and spoken answers
+ *
+ * The legacy settings (`layout.presentation`, `layout.voice`) are still what
+ * this suite writes; the runtime reads them through the unified AI
+ * Conversational Survey engine (`effectiveAiConversation`), so a survey saved
+ * with them behaves as it always did — see ai-conversation-test for the new
+ * `branding.aiConversation` object.
  *
  * The point under test is that the SURVEY is the same: same pages, same
  * display logic, same answers, same step index — only the presentation
@@ -64,8 +71,9 @@ const openVoicePreview = async (definition) => {
     const synth = {
       speaking: false,
       cancel() { window.__spoken.push({ cancel: true }); synth.speaking = false; },
-      speak(u) { window.__spoken.push({ text: u.text, lang: u.lang }); synth.speaking = true; setTimeout(() => { synth.speaking = false; }, 50); },
+      speak(u) { window.__spoken.push({ text: u.text, lang: u.lang }); synth.speaking = true; setTimeout(() => { synth.speaking = false; u.onend?.({}); }, 20); },
       getVoices() { return []; },
+      addEventListener() {},
     };
     Object.defineProperty(window, "speechSynthesis", { configurable: true, value: synth });
     window.SpeechSynthesisUtterance = function (text) { this.text = text; this.lang = ""; this.rate = 1; };
@@ -78,6 +86,10 @@ const openVoicePreview = async (definition) => {
   return pv;
 };
 const spoken = (pv) => pv.evaluate(() => window.__spoken.filter((s) => !s.cancel));
+const waitSpoken = (pv, re) => pv.waitForFunction((src) => window.__spoken.some((s) => !s.cancel && new RegExp(src).test(s.text)), re.source, { timeout: 10000 });
+const idle = (pv) => pv.waitForFunction(() => document.querySelector('[data-testid="rs-voice-bar"]')?.getAttribute("data-speaking") === "0", null, { timeout: 15000 });
+/** utterances joined into one line per question, so "text, then options" can be asserted whatever the pauses */
+const script = (said) => said.map((s) => s.text).join(" | ");
 const qids = (pv) => pv.$$eval("#rs-questions [data-qid]", (els) => els.map((e) => e.getAttribute("data-qid")));
 const stepIndex = (pv) => pv.evaluate(() => window.__rescriptState.stepIndex);
 
@@ -86,6 +98,7 @@ let pv = await openVoicePreview(def);
 assert.deepEqual(await qids(pv), ["q1"], "only the first question of page 1 is on screen");
 assert.equal(await stepIndex(pv), 0);
 assert.ok(!(await pv.$('[data-testid="rs-back"]')), "nothing to go back to yet");
+await waitSpoken(pv, /^Poor$/); // the question and its options have been read before we act
 // required Q1: Next refuses, on THIS question
 await h.next(pv);
 await pv.waitForTimeout(150);
@@ -101,8 +114,8 @@ const turns = await pv.$$eval('[data-testid="rs-convo-turn"]', (els) => els.map(
 assert.deepEqual(turns, [{ qid: "q1", q: "How was your visit?", a: "Great" }]);
 assert.match(await pv.textContent('[data-qid="q2"]'), /Why do you say Great\?/, "piping into the current question works as ever");
 // dictation was switched on survey-wide: Q2 has the microphone control although its own settings never asked for it
-assert.ok(await pv.$('[data-qid="q2"] [data-testid="speech-input"]'), "dictation control present via voice.dictation");
-assert.match(await pv.getAttribute('[data-qid="q2"] [data-testid="speech-toggle"]', "title"), /en-GB/, "…in the voice language");
+assert.ok(await pv.$('[data-testid="rs-voice-mic"]'), "dictation via voice.dictation: the voice console's microphone");
+assert.equal(await pv.getAttribute('[data-testid="rs-voice-bar"]', "data-lang"), "en-GB", "…in the voice language");
 await pv.fill('[data-qid="q2"] textarea', "Friendly staff.");
 await h.next(pv);
 await pv.waitForSelector('[data-qid="q3"]');
@@ -144,37 +157,42 @@ assert.deepEqual(turns3, ["q1", "q2"], "no Q3 in the transcript either");
 console.log("  ok   hidden questions are simply not walked");
 
 console.log("\nRUNTIME — voice: each question is spoken as it appears, in the configured language; mute and replay");
+await waitSpoken(pv, /^No$/);
+await idle(pv);
 let said = await spoken(pv);
 const first = said.find((s) => /How was your visit/.test(s.text));
 assert.ok(first, "Q1 was read aloud");
 assert.equal(first.lang, "en-GB");
-assert.match(first.text, /How was your visit\?\. Option 1: Great\. Option 2: Fine\. Option 3: Poor/, "text, then options, numbered");
+assert.match(script(said), /How was your visit\? \| Great \| Fine \| Poor/, "text, then each option as its own utterance");
 assert.ok(said.some((s) => /Why do you say Poor\?/.test(s.text)), "Q2 spoken with its piping RESOLVED — what is heard is what is shown");
-assert.ok(said.some((s) => /Would you come back\?\. Option 1: Yes/.test(s.text)), "Q4 on page 2 spoken on arrival");
+assert.match(script(said), /Would you come back\? \| Yes \| No/, "Q4 on page 2 spoken on arrival");
 const before = said.length;
 await pv.click('[data-testid="rs-voice-replay"]');
 await pv.waitForTimeout(100);
+await idle(pv);
 said = await spoken(pv);
-assert.equal(said.length, before + 1, "replay speaks the current question again");
-assert.match(said[said.length - 1].text, /Would you come back/);
+if (said.length !== before + 3) console.log("DEBUG", JSON.stringify(await pv.evaluate(() => window.__spoken.slice(-12))), await pv.getAttribute('[data-testid="rs-voice-bar"]', "data-speaking"));
+assert.equal(said.length, before + 3, "replay speaks the current question again (question + 2 options)");
+assert.match(said[before].text, /Would you come back/);
 await pv.click('[data-testid="rs-voice-mute"]');
 assert.equal(await pv.getAttribute('[data-testid="rs-voice-bar"]', "data-muted"), "1");
 await pv.click('[data-testid="rs-back"]');
 await pv.waitForSelector('[data-qid="q2"]');
 await pv.waitForTimeout(150);
-assert.equal((await spoken(pv)).length, before + 1, "muted: navigating speaks nothing");
-console.log("  ok   spoken text = shown text with options; lang en-GB; replay +1; mute silences navigation");
+assert.equal((await spoken(pv)).length, before + 3, "muted: navigating speaks nothing");
+console.log("  ok   spoken text = shown text with options; lang en-GB; replay; mute silences navigation");
 await pv.close();
 
 console.log("\nRUNTIME — pages mode with voice: the whole page is read in order; nothing else changes");
 const pagesVoice = survey({ presentation: "pages", voice: { readAloud: true, dictation: false, lang: "en-US" } });
 pv = await openVoicePreview(pagesVoice);
 assert.deepEqual(await qids(pv), ["q1", "q2", "q3"], "pages mode: the page's visible questions together (Q1 ≠ Poor holds while Q1 is unanswered)");
+await waitSpoken(pv, /How many times have you visited/);
+await idle(pv);
 said = await spoken(pv);
-assert.equal(said.length, 1, "one utterance for the page");
-assert.match(said[0].text, /^How was your visit\?\. Option 1: Great.*Why do you say \?.*How many times have you visited\?$/, "questions in page order, one reading");
+assert.match(script(said), /^How was your visit\? \| Great \| Fine \| Poor \| Why do you say \? \| How many times have you visited\?$/, "questions in page order, one reading");
 assert.equal(said[0].lang, "en-US");
-assert.ok(!(await pv.$('[data-qid="q2"] [data-testid="speech-input"]')), "dictation off → no microphone");
+assert.ok(!(await pv.$('[data-testid="rs-voice-mic"]')), "dictation off → no microphone");
 assert.ok(!(await pv.$('[data-testid="rs-convo-transcript"]')), "no transcript in pages mode");
 await pv.close();
 

@@ -144,3 +144,22 @@ body {
 /* ------------------------------------------------ presentation: voice */
 .rs-voice-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 13px; color: var(--rs-subtle, #64748b); }
 .rs-voice-bar[data-speaking="1"] .rs-voice-label::before { content: "● "; color: var(--rs-primary, #2563eb); }
+
+/* ------------------------------------------------ AI conversational survey: the voice console */
+.rs-voice-console { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; padding: 10px 12px; border: 1px solid var(--rs-border, #e2e8f0); border-radius: 10px; background: var(--rs-card, #fff); font-size: 13px; color: var(--rs-subtle, #64748b); }
+.rs-voice-console.speaking { border-color: var(--rs-primary, #2563eb); }
+.rs-voice-console.listening { border-color: var(--rs-danger, #d02b2b); }
+.rs-voice-console[data-speaking="1"] .rs-voice-label::before { content: "● "; color: var(--rs-primary, #2563eb); }
+.rs-voice-console[data-listening="1"] .rs-voice-label::before { content: "● "; color: var(--rs-danger, #d02b2b); }
+.rs-voice-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.rs-voice-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rs-voice-mic.on { border-color: var(--rs-danger, #d02b2b); color: var(--rs-danger, #d02b2b); }
+.rs-voice-caption { font-size: 15px; color: var(--rs-text, #0f172a); padding: 4px 0; min-height: 1.4em; }
+.rs-voice-active { font-size: 12px; }
+.rs-voice-heard { font-style: italic; }
+.rs-voice-status { color: var(--rs-text, #0f172a); }
+.rs-voice-confirm { display: flex; gap: 6px; }
+.rs-voice-reason { color: var(--rs-danger, #d02b2b); }
+.rs-voice-help { font-size: 12px; line-height: 1.5; }
+.rs-voice-script { margin-top: 6px; padding: 8px; background: var(--rs-bg, #f8fafc); border-radius: 6px; white-space: pre-wrap; }
+.rs-voice-lang { font-size: 12px; padding: 2px 4px; border-radius: 6px; border: 1px solid var(--rs-border, #e2e8f0); }

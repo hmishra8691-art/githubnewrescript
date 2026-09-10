@@ -68,6 +68,15 @@ export function flattenVariables(def: SurveyDefinition, state: ResponseState): F
     const other = state.answers[`${q.id}__other`];
     if (other !== undefined) out[`${q.variableName}_other`] = other;
 
+    // voice: `<id>__voice` → VAR_VOICE_TRANSCRIPT / _CONFIDENCE / _REPEATS / _CLARIFICATIONS (aiConversation.ts)
+    const voice = state.answers[`${q.id}__voice`] as { transcript?: string; confidence?: number; repeats?: number; clarifications?: number } | undefined;
+    if (voice && typeof voice === "object") {
+      if (voice.transcript) out[`${q.variableName}_VOICE_TRANSCRIPT`] = voice.transcript;
+      if (typeof voice.confidence === "number") out[`${q.variableName}_VOICE_CONFIDENCE`] = Math.round(voice.confidence * 100) / 100;
+      if (typeof voice.repeats === "number") out[`${q.variableName}_VOICE_REPEATS`] = voice.repeats;
+      if (typeof voice.clarifications === "number") out[`${q.variableName}_VOICE_CLARIFICATIONS`] = voice.clarifications;
+    }
+
     // follow-up probes: `<id>__probe_n` / `__probe_n_q` → VAR_PROBE_n / VAR_PROBE_n_Q (probe.ts)
     for (let n = 1; n <= 5; n++) {
       const prompt = state.answers[`${q.id}__probe_${n}_q`];

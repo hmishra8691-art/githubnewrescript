@@ -22,3 +22,8 @@ export { readAloudAvailable, spokenText, speechLangFor, speak, stopSpeaking, use
 export { variantRenderers, registerVariantRenderer } from "./variants/registry";
 export { anchor, cellAnchor, parseCellId, CELL_SEP } from "./authoring";
 export type { AuthoringAnchor, AuthoringElementKind } from "./authoring";
+export { VoiceConsole } from "./voice/VoiceConsole";
+export type { VoiceConsoleProps } from "./voice/VoiceConsole";
+export { speakSegments, useSpeaker } from "./voice/speaker";
+export { registerVoiceProvider, ttsProvider, sttProvider, browserTts, browserStt, chooseVoice } from "./voice/providers";
+export type { TtsProvider, SttProvider, VoiceInfo, SpeakOptions, SttResult, SttSession } from "./voice/providers";

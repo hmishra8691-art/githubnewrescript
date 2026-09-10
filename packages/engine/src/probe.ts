@@ -63,6 +63,19 @@ export function probeSourceText(value: unknown): string {
 const wordCount = (s: string) => (s.match(/\S+/g) ?? []).length;
 
 /**
+ * The text a probe is ABOUT, for any question: an open end's text, or the
+ * label(s) of a coded answer ("Dissatisfied" for code 2), so a follow-up on a
+ * satisfaction scale reads the words the respondent saw, not the code.
+ */
+export function probeSourceTextFor(q: Question, value: unknown): string {
+  const labelOf = (code: unknown) => q.options.find((o) => String(o.code) === String(code))?.label.replace(/<[^>]*>/g, "").trim();
+  if (q.options?.length && (typeof value === "string" || typeof value === "number")) return labelOf(value) ?? String(value);
+  if (q.options?.length && Array.isArray(value)) return value.map((v) => labelOf(v) ?? String(v)).filter(Boolean).join(", ");
+  if (q.type === "nps" || q.type === "numeric" || q.type === "slider") return value == null || value === "" ? "" : `${value}`;
+  return probeSourceText(value);
+}
+
+/**
  * IS ANOTHER FOLLOW-UP DUE for this question? Returns its number, or null.
  *
  * Due when: the question has a probe; the answer is non-empty and long
@@ -70,10 +83,10 @@ const wordCount = (s: string) => (s.match(/\S+/g) ?? []).length;
  * asked; and `stopWhen` does not hold. Evaluated against the whole response,
  * so a probe can depend on anything logic can.
  */
-export function nextProbe(q: Question, ctx: EvalContext): number | null {
-  const p = q.probe;
+export function nextProbe(q: Question, ctx: EvalContext, probe: ProbeConfig | null | undefined = q.probe): number | null {
+  const p = probe;
   if (!p) return null;
-  const text = probeSourceText(ctx.state.answers[q.id]);
+  const text = probeSourceTextFor(q, ctx.state.answers[q.id]);
   if (!text) return null;
   if (p.minWords > 0 && wordCount(text) < p.minWords) return null;
   const asked = probeTranscript(ctx.state, q.id);
@@ -84,11 +97,12 @@ export function nextProbe(q: Question, ctx: EvalContext): number | null {
 }
 
 /** Every question on a page with a follow-up due, in page order. */
-export function dueProbes(questions: Question[], ctx: EvalContext): { q: Question; n: number }[] {
-  const out: { q: Question; n: number }[] = [];
+export function dueProbes(questions: Question[], ctx: EvalContext, probeOf?: (q: Question) => ProbeConfig | null | undefined): { q: Question; n: number; probe: ProbeConfig }[] {
+  const out: { q: Question; n: number; probe: ProbeConfig }[] = [];
   for (const q of questions) {
-    const n = nextProbe(q, ctx);
-    if (n) out.push({ q, n });
+    const probe = probeOf ? probeOf(q) : q.probe;
+    const n = nextProbe(q, ctx, probe);
+    if (n && probe) out.push({ q, n, probe });
   }
   return out;
 }
@@ -110,7 +124,7 @@ export function renderFixedProbe(p: ProbeConfig, sourceText: string, ctx: EvalCo
  * ordinary `validatePage` work on it unchanged. It is never written into the
  * definition; it exists for the duration of one screen.
  */
-export function probeQuestion(q: Question, n: number, prompt: string): Question {
+export function probeQuestion(q: Question, n: number, prompt: string, probe: ProbeConfig | null | undefined = q.probe): Question {
   return {
     ...q,
     id: probeAnswerKey(q.id, n),
@@ -120,7 +134,7 @@ export function probeQuestion(q: Question, n: number, prompt: string): Question 
     variant: undefined,
     text: prompt,
     instruction: undefined,
-    required: q.probe?.required ?? false,
+    required: probe?.required ?? false,
     options: [],
     rows: [],
     columns: [],
@@ -128,6 +142,8 @@ export function probeQuestion(q: Question, n: number, prompt: string): Question 
     skipLogic: [],
     punches: [],
     probe: undefined,
+    ai: undefined,
+    spoken: undefined,
     attentionCheck: undefined,
     carryForward: undefined,
     customJs: undefined,

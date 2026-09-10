@@ -1,6 +1,6 @@
 "use client";
 import React from "react";
-import type { SurveyDefinition, Branding, Question } from "@rescript/schema";
+import type { SurveyDefinition, Branding, Question, ProbeConfig } from "@rescript/schema";
 import {
   createResponseState,
   compileFlow,
@@ -23,11 +23,18 @@ import {
   serverResolvedQuestions,
   dueProbes,
   probeHasFixedPrompt,
-  probeSourceText,
+  probeSourceTextFor,
   renderFixedProbe,
   probeQuestion,
   recordProbePrompt,
   forgetProbe,
+  effectiveAiConversation,
+  questionAi,
+  voiceOn,
+  effectiveProbe,
+  acknowledgement,
+  recordVoice,
+  type VoiceRecord,
   decideListFill,
   listFillVariables,
   applyListFillDestinations,
@@ -39,7 +46,7 @@ import {
 } from "@rescript/engine";
 import { QuestionRenderer } from "@rescript/renderer";
 import { Inspector } from "./Inspector";
-import { MediaEmbed, SafeImage, spokenText, speechLangFor, useReadAloud, readAloudAvailable } from "@rescript/renderer";
+import { MediaEmbed, SafeImage, VoiceConsole } from "@rescript/renderer";
 import {
   readResume, writeResume, clearResume, resumeLink,
   cachePending, readPending, clearPending, RESUME_MAX_AGE_DAYS,
@@ -257,9 +264,11 @@ async function probeWording(
   mode: string,
   session: RunnerProps["session"],
   build: RunnerProps["build"],
+  probe: ProbeConfig,
 ): Promise<string | null> {
-  const p = q.probe!;
-  const answer = probeSourceText(state.answers[q.id]);
+  const p = probe;
+  // the answer as words: an open end's text, or the labels of the options chosen (adaptive follow-ups on closed questions)
+  const answer = probeSourceTextFor(q, state.answers[q.id]);
   if (probeHasFixedPrompt(p)) return renderFixedProbe(p, answer, ctx).trim() || null;
   if (mode !== "preview" && !session) return null;
   try {
@@ -451,7 +460,9 @@ export function Runner({ definition: def, mode, session: initialSession, session
    * the next. The flow's step index does not move while it is up; Back
    * returns to the page it belongs to. See engine probe.ts.
    */
-  const [probe, setProbe] = React.useState<{ q: Question; n: number; pq: Question } | null>(null);
+  const [probe, setProbe] = React.useState<{ q: Question; n: number; pq: Question; cfg: ProbeConfig } | null>(null);
+  /** how many answers have been acknowledged — picks the next neutral acknowledgement */
+  const ackRef = React.useRef<{ n: number; text: string | null }>({ n: 0, text: null });
   /** conversational presentation: which of the page's visible questions is on screen */
   const [convo, setConvo] = React.useState<{ pageId: string; index: number }>({ pageId: "", index: 0 });
   /** probes the provider had no wording for on this page visit — skipped, not retried on every Next */
@@ -660,7 +671,7 @@ export function Runner({ definition: def, mode, session: initialSession, session
       stateRef.current.stepIndex = Math.max(0, next.length - 1);
     }
     // a follow-up on screen belongs to the definition that produced it
-    setProbe((p) => (p && def.questions.find((q) => q.id === p.q.id)?.probe ? p : null));
+    setProbe((p) => (p && def.questions.find((q) => q.id === p.q.id) ? p : null));
     force();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [def]);
@@ -684,21 +695,29 @@ export function Runner({ definition: def, mode, session: initialSession, session
   const ctx = { def, state, loop: pageStep?.loop ?? null, quotaCounts: counts };
 
   /*
-   * PRESENTATION MODE (branding.layout.presentation / .voice) — how the same
-   * survey is shown. "conversational" walks the page's visible questions one
-   * at a time with a cursor, the earlier ones staying above as a transcript;
-   * the flow, validation, logic and saves are untouched — a page is still a
-   * page, it is just revealed in order. "voice" switches two per-question
-   * capabilities on survey-wide: dictation on every text question, and
-   * read-aloud of whatever is on screen (VoiceLayer below).
+   * THE AI CONVERSATIONAL SURVEY — how the same survey is presented and
+   * spoken. `effectiveAiConversation` reads `branding.aiConversation`, or the
+   * older `layout.presentation` / `layout.voice` settings when a survey has
+   * only those, so nothing saved before this object existed changes.
+   *
+   * Conversational and adaptive behaviour walk the page's visible questions
+   * one at a time with a cursor, the earlier ones staying above as a
+   * transcript; the flow, validation, logic and saves are untouched — a page
+   * is still a page, it is just revealed in order. Voice (interaction "voice"
+   * or "text + voice") puts the VoiceConsole above what is on screen: it
+   * reads the question in the survey's voice and takes spoken answers and
+   * commands, always through the same onChange / Next / Back as the screen.
    */
-  const layout = def.branding.layout;
-  const conversational = layout.presentation === "conversational";
-  const voice = layout.voice ?? { readAloud: false, dictation: false };
-  const withVoice = (q: Question): Question =>
-    voice.dictation && (q.type === "open_text" || q.type === "long_text") && !q.settings.speechInput
-      ? { ...q, settings: { ...q.settings, speechInput: true } }
-      : q;
+  const ai = effectiveAiConversation(def);
+  const conversational = ai.enabled && ai.conversation !== "standard";
+  const voice = voiceOn(ai);
+  const probeOf = (q: Question) => effectiveProbe(def, q, ctx, questionAi(def, q));
+  const surveyLanguage = (def as unknown as { meta?: { language?: string } }).meta?.language || def.deployment?.languages?.[0] || null;
+  const noteVoice = (q: Question, rec: Partial<VoiceRecord>) => {
+    const cfg = questionAi(def, q);
+    recordVoice(state.answers as Record<string, unknown>, q.id, rec, cfg.voice.interaction.transcript === "store");
+    force();
+  };
   const convoIndex = conversational && pageStep
     ? (convo.pageId === pageStep.pageId ? Math.min(convo.index, Math.max(0, questions.length - 1)) : 0)
     : 0;
@@ -820,10 +839,10 @@ export function Runner({ definition: def, mode, session: initialSession, session
    */
   const showNextProbe = async (): Promise<boolean> => {
     if (!pageStep) return false;
-    for (const { q, n } of dueProbes(questions, ctx)) {
+    for (const { q, n, probe: cfg } of dueProbes(questions, ctx, probeOf)) {
       const key = `${q.id}:${n}`;
       if (skippedProbesRef.current.has(key)) continue;
-      const wording = await probeWording(def, state, q, n, ctx, mode, session, build);
+      const wording = await probeWording(def, state, q, n, ctx, mode, session, build, cfg);
       if (!wording) {
         skippedProbesRef.current.add(key);
         if (mode !== "live") setLogs((l) => [...l, `[probe] ${q.code} follow-up ${n}: no wording available — skipped`]);
@@ -831,7 +850,7 @@ export function Runner({ definition: def, mode, session: initialSession, session
       }
       recordProbePrompt(state, q.id, n, wording);
       if (mode !== "live") setLogs((l) => [...l, `[probe] ${q.code} follow-up ${n}: ${JSON.stringify(wording)}`]);
-      setProbe({ q, n, pq: probeQuestion(q, n, wording) });
+      setProbe({ q, n, pq: probeQuestion(q, n, wording, cfg), cfg });
       setErrors([]);
       force();
       window.scrollTo({ top: 0 });
@@ -854,6 +873,7 @@ export function Runner({ definition: def, mode, session: initialSession, session
   /** Back on a probe screen returns to its page; the abandoned follow-up is forgotten. */
   const handleProbeBack = () => {
     if (!probe) return;
+    ackRef.current.text = null;
     forgetProbe(state, probe.q.id, probe.n);
     setProbe(null);
     setErrors([]);
@@ -946,6 +966,7 @@ export function Runner({ definition: def, mode, session: initialSession, session
   };
 
   const handleBack = () => {
+    ackRef.current.text = null;
     telemetryRef.current?.leavePage();
     const nav = goBack(def, state, counts);
     notePage(nav.steps, nav.stepIndex, "back");
@@ -965,6 +986,7 @@ export function Runner({ definition: def, mode, session: initialSession, session
       const errs = validatePage(def, [q], ctx);
       if (blockingErrors(errs).length > 0) { setErrors(errs); return; }
     }
+    if (q && q.type !== "html") { ackRef.current = { n: ackRef.current.n + 1, text: acknowledgement(ai, ackRef.current.n) }; }
     if (convoIndex < questions.length - 1) {
       setErrors([]);
       setConvo({ pageId: pageStep.pageId, index: convoIndex + 1 });
@@ -975,6 +997,7 @@ export function Runner({ definition: def, mode, session: initialSession, session
   };
   const convoBack = () => {
     if (!pageStep) return;
+    ackRef.current.text = null; // going back is not an answer — nothing to acknowledge
     if (convoIndex > 0) { setErrors([]); setConvo({ pageId: pageStep.pageId, index: convoIndex - 1 }); force(); return; }
     handleBack();
   };
@@ -1027,11 +1050,27 @@ export function Runner({ definition: def, mode, session: initialSession, session
         <div className="rs-error-banner" role="status" aria-live="polite">Please review the highlighted question below.</div>
       )}
       <div id="rs-questions" tabIndex={-1} data-testid="rs-probe" data-probe-of={probe.q.id} data-probe-n={probe.n}>
-        {voice.readAloud && <VoiceLayer text={spokenText(probe.pq, resolvePiping(probe.pq.text, ctx))} lang={speechLangFor(def, probe.pq)} />}
+        {voice && (
+          <VoiceConsole
+            def={def}
+            questions={[probe.pq]}
+            ctx={ctx}
+            cfg={questionAi(def, probe.q)}
+            values={[state.answers[probe.pq.id]]}
+            errors={Object.fromEntries(errors.filter((e) => e.questionId === probe.pq.id).map((e) => [e.questionId, e.message]))}
+            onChange={(_, v) => { state.answers[probe.pq.id] = v as never; telemetryRef.current?.answerChanged(probe.q.id); force(); }}
+            onNext={handleProbeNext}
+            onBack={handleProbeBack}
+            canGoBack={b.buttons.showBack}
+            acknowledgement={ackRef.current.text}
+            onVoice={(_, rec) => noteVoice(probe.q, rec)}
+            surveyLanguage={surveyLanguage}
+          />
+        )}
         <QuestionRenderer
           key={probe.pq.id}
           def={def}
-          q={withVoice(probe.pq)}
+          q={probe.pq}
           state={state}
           loop={null}
           value={state.answers[probe.pq.id]}
@@ -1074,10 +1113,34 @@ export function Runner({ definition: def, mode, session: initialSession, session
       {startNote && (
         <div className="rs-error-banner" data-testid="rs-start-note" style={{ background: "#fff7e6", color: "#7a4b00", borderColor: "#f0c36d" }}>{startNote}</div>
       )}
-      {voice.readAloud && !ended && (
-        <VoiceLayer
-          text={shownQuestions.map((q) => spokenText(q, resolvePiping(q.text, ctx))).join(". ")}
-          lang={speechLangFor(def, shownQuestions[0] ?? null)} />
+      {voice && !ended && shownQuestions.length > 0 && (
+        <VoiceConsole
+          def={def}
+          questions={shownQuestions.filter((q) => q.type !== "html" && !q.settings.hidden)}
+          ctx={ctx}
+          cfg={questionAi(def, shownQuestions[0])}
+          values={shownQuestions.filter((q) => q.type !== "html" && !q.settings.hidden).map((q) => state.answers[answerKey(q.id, pageStep.loop ?? null)])}
+          errors={Object.fromEntries(errors.map((e) => [e.questionId, e.message]))}
+          onChange={(q, v) => {
+            setAnswer(def, state, q.id, v, pageStep.loop);
+            telemetryRef.current?.answerChanged(q.id);
+            for (const other of questions) {
+              if (other.id === q.id || !other.punches?.length) continue;
+              if (!questionDependencies(def, other).has(q.id)) continue;
+              applyPunches(other, ctx, (qq) => answerKey(qq.id, pageStep.loop ?? null));
+            }
+            const r = runScripts(def, state, "on_change", { scopeRef: q.id, loop: pageStep.loop });
+            if (r.logs.length) setLogs((l) => [...l, ...r.logs]);
+            force();
+          }}
+          onOtherChange={(q, t) => { state.answers[`${answerKey(q.id, pageStep.loop ?? null)}__other`] = t; force(); }}
+          onNext={conversational ? convoNext : handleNext}
+          onBack={conversational ? convoBack : handleBack}
+          canGoBack={b.buttons.showBack && (state.stepIndex > 0 || (conversational && convoIndex > 0))}
+          acknowledgement={conversational ? ackRef.current.text : null}
+          onVoice={noteVoice}
+          surveyLanguage={surveyLanguage}
+        />
       )}
       {conversational && transcript.length > 0 && (
         <div className="rs-convo-transcript" data-testid="rs-convo-transcript" aria-label="Earlier questions and your answers">
@@ -1090,8 +1153,7 @@ export function Runner({ definition: def, mode, session: initialSession, session
         </div>
       )}
       <div id="rs-questions" tabIndex={-1} className={conversational ? "rs-convo-current" : undefined} data-convo-index={conversational ? convoIndex : undefined}>
-      {shownQuestions.map((rawQ) => {
-        const q = withVoice(rawQ);
+      {shownQuestions.map((q) => {
         // the full iteration path, so nested loops key separately (see loopKeySuffix)
         const key = answerKey(q.id, pageStep.loop ?? null);
         return (
@@ -1246,27 +1308,5 @@ export function Runner({ definition: def, mode, session: initialSession, session
         body
       )}
     </>
-  );
-}
-
-/**
- * READ-ALOUD BAR — speaks `text` whenever it changes (renderer ReadAloud),
- * with mute and replay. A component rather than a hook in the Runner so the
- * Runner's early returns never change hook order.
- */
-function VoiceLayer({ text, lang }: { text: string; lang: string }) {
-  const [muted, setMuted] = React.useState(false);
-  const ra = useReadAloud(text, lang, !muted);
-  const available = readAloudAvailable();
-  return (
-    <div className="rs-voice-bar" data-testid="rs-voice-bar" data-speaking={ra.speaking ? "1" : "0"} data-muted={muted ? "1" : "0"}>
-      <span className="rs-voice-label">{available ? (muted ? "Read-aloud is off" : ra.speaking ? "Reading aloud…" : "Read aloud") : "Read-aloud is not available in this browser"}</span>
-      {available && (
-        <>
-          <button type="button" className="rs-btn-mini" data-testid="rs-voice-replay" onClick={ra.replay} disabled={muted} aria-label="Read the question again">🔊 Replay</button>
-          <button type="button" className="rs-btn-mini" data-testid="rs-voice-mute" onClick={() => setMuted((m) => !m)} aria-pressed={muted}>{muted ? "Unmute" : "Mute"}</button>
-        </>
-      )}
-    </div>
   );
 }

@@ -79,7 +79,7 @@ console.log("\nPAGE 2 — the open end (dictation on), its probe, then AI classi
 await pv.click('[data-qid="far"] input[value="1"]');
 await h.next(pv);
 await pv.waitForSelector('[data-qid="why"]');
-assert.ok(await pv.$('[data-qid="why"] [data-testid="speech-input"]'), "voice.dictation put a microphone on the open end");
+assert.ok(await pv.$('[data-testid="rs-voice-mic"]'), "voice.dictation → the voice console's microphone is offered on the open end");
 await pv.fill('[data-qid="why"] textarea', "Lower prices, everything is too expensive there.");
 await h.next(pv); // last question of the page → the page's Next → probe due
 await pv.waitForSelector('[data-testid="rs-probe"]');

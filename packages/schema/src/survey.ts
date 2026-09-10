@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AiConversation } from "./aiConversation.js";
 import { Condition } from "./conditions.js";
 import { Question } from "./question.js";
 import { FlowNode, LogicFlow, EmbeddedDataType } from "./flow.js";
@@ -168,6 +169,15 @@ export const Branding = z.object({
   footerHtml: z.string().optional(),
   customCss: z.string().optional(),
   customJs: z.string().optional(),
+  /**
+   * THE AI INTERVIEWER — interaction (text / voice / both), conversation
+   * (standard / conversational / adaptive), voice profile, locale, reading
+   * controls, audio, guardrails. Part of the brand experience so a client's
+   * voice travels with their logo. Optional: absent, the engine derives it
+   * from `layout.presentation` / `layout.voice` (the older settings), so
+   * every existing survey behaves exactly as before. See aiConversation.ts.
+   */
+  aiConversation: AiConversation.optional(),
 });
 export type Branding = z.infer<typeof Branding>;
 

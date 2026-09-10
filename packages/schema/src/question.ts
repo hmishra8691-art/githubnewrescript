@@ -3,6 +3,7 @@ import { Condition } from "./conditions.js";
 import { ListOperation, OptionLogic } from "./optionLogic.js";
 import { OptionMask, PunchRule } from "./setExpression.js";
 import { AttentionCheck } from "./quality.js";
+import { AiQuestionOverride, SpokenScript } from "./aiConversation.js";
 
 /**
  * Question model.
@@ -154,6 +155,8 @@ export const Option = z.object({
   logic: OptionLogic.optional(),
   /** Free metadata for custom renderers. */
   meta: z.record(z.any()).optional(),
+  /** What the voice says for this option when it differs from the label ("iPhone 15 Pro Max" for "Apple iPhone 15 Pro Max"). The label and code never change. */
+  spoken: z.string().optional(),
   /**
    * Carry-forward provenance (P0 dynamic-option fix). When this option was
    * materialized from another question's answer (see `Question.carryForward`),
@@ -846,6 +849,14 @@ export const Question = z.object({
    * touching the programmed flow (see `ProbeConfig`).
    */
   probe: ProbeConfig.optional(),
+
+  /**
+   * AI CONVERSATIONAL SURVEY — per-question overrides of the survey's
+   * interviewer (`branding.aiConversation`), and what the voice says for this
+   * question when it differs from what is shown. See schema aiConversation.ts.
+   */
+  ai: AiQuestionOverride.optional(),
+  spoken: SpokenScript.optional(),
 
   displayLogic: Condition.optional(),
   skipLogic: z.array(SkipRule).default([]),

@@ -5,6 +5,7 @@ import {
 } from "./loops.js";
 import { listFillVariableNames } from "./listFill.js";
 import { fieldDataType } from "./fields.js";
+import { questionAi, voiceOn } from "./aiConversation.js";
 
 /**
  * Variable / Data Dictionary generator (requirement §9).
@@ -562,6 +563,14 @@ export function unknownVariableOverrides(def: SurveyDefinition): string[] {
   return (def.variables ?? []).map((v) => v.name).filter((n) => n && !produced.has(n));
 }
 
+function voiceBase(q: Question, loc?: { pageId: string; sectionId?: string }): VariableDef {
+  return {
+    name: "", label: "", dataType: "text", valueCodes: [], valueLabels: {},
+    questionId: q.id, questionCode: q.code, questionText: strip(q.text), pageId: loc?.pageId, sectionId: loc?.sectionId,
+    hidden: false, derived: true, responseType: q.type,
+  } as VariableDef;
+}
+
 export function buildVariableDictionary(def: SurveyDefinition): VariableDef[] {
   return applyOverrides(def, buildDerivedVariables(def));
 }
@@ -612,6 +621,20 @@ export function buildDerivedVariables(def: SurveyDefinition): VariableDef[] {
         }
       }
       out.push(...base);
+      /*
+       * VOICE TRANSCRIPTS beside the normalised answer (AI conversational
+       * survey, interaction voice / text+voice, transcript stored): what was
+       * heard, how sure the recogniser was, how often the respondent asked for
+       * a repeat or a clarification. Research auditability: the export shows
+       * "I'd say Apple and maybe Samsung" next to APPLE=1, SAMSUNG=1.
+       */
+      const ai = questionAi(def, q);
+      if (voiceOn(ai) && ai.voice.interaction.transcript === "store" && !["html", "hidden", "calculated", "embedded_data"].includes(q.type)) {
+        out.push({ ...voiceBase(q, loc.get(q.id)), name: `${q.variableName}_VOICE_TRANSCRIPT`, label: `${q.code} — what was said (raw transcript)`, dataType: "text", notes: "Original voice transcript; the normalised answer is in the question's own columns" });
+        out.push({ ...voiceBase(q, loc.get(q.id)), name: `${q.variableName}_VOICE_CONFIDENCE`, label: `${q.code} — speech recognition confidence (0–1)`, dataType: "numeric" });
+        out.push({ ...voiceBase(q, loc.get(q.id)), name: `${q.variableName}_VOICE_REPEATS`, label: `${q.code} — times the question was repeated`, dataType: "numeric" });
+        out.push({ ...voiceBase(q, loc.get(q.id)), name: `${q.variableName}_VOICE_CLARIFICATIONS`, label: `${q.code} — clarification prompts`, dataType: "numeric" });
+      }
       continue;
     }
     const innermost = inLoop.chain[inLoop.chain.length - 1];
