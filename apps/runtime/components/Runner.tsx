@@ -32,13 +32,14 @@ import {
   listFillVariables,
   applyListFillDestinations,
   type ResponseState,
+  type LoopContext,
   type RuntimeStep,
   type QuotaCounts,
   type InspectorSnapshot,
 } from "@rescript/engine";
 import { QuestionRenderer } from "@rescript/renderer";
 import { Inspector } from "./Inspector";
-import { MediaEmbed, SafeImage } from "@rescript/renderer";
+import { MediaEmbed, SafeImage, spokenText, speechLangFor, useReadAloud, readAloudAvailable } from "@rescript/renderer";
 import {
   readResume, writeResume, clearResume, resumeLink,
   cachePending, readPending, clearPending, RESUME_MAX_AGE_DAYS,
@@ -451,6 +452,8 @@ export function Runner({ definition: def, mode, session: initialSession, session
    * returns to the page it belongs to. See engine probe.ts.
    */
   const [probe, setProbe] = React.useState<{ q: Question; n: number; pq: Question } | null>(null);
+  /** conversational presentation: which of the page's visible questions is on screen */
+  const [convo, setConvo] = React.useState<{ pageId: string; index: number }>({ pageId: "", index: 0 });
   /** probes the provider had no wording for on this page visit — skipped, not retried on every Next */
   const skippedProbesRef = React.useRef<Set<string>>(new Set());
   /** the quality engine's event collector — derived behavioural metadata only */
@@ -679,6 +682,38 @@ export function Runner({ definition: def, mode, session: initialSession, session
   const pageStep = step?.kind === "page" ? step : null;
   const questions = pageStep ? visibleQuestions(def, pageStep, state, counts) : [];
   const ctx = { def, state, loop: pageStep?.loop ?? null, quotaCounts: counts };
+
+  /*
+   * PRESENTATION MODE (branding.layout.presentation / .voice) — how the same
+   * survey is shown. "conversational" walks the page's visible questions one
+   * at a time with a cursor, the earlier ones staying above as a transcript;
+   * the flow, validation, logic and saves are untouched — a page is still a
+   * page, it is just revealed in order. "voice" switches two per-question
+   * capabilities on survey-wide: dictation on every text question, and
+   * read-aloud of whatever is on screen (VoiceLayer below).
+   */
+  const layout = def.branding.layout;
+  const conversational = layout.presentation === "conversational";
+  const voice = layout.voice ?? { readAloud: false, dictation: false };
+  const withVoice = (q: Question): Question =>
+    voice.dictation && (q.type === "open_text" || q.type === "long_text") && !q.settings.speechInput
+      ? { ...q, settings: { ...q.settings, speechInput: true } }
+      : q;
+  const convoIndex = conversational && pageStep
+    ? (convo.pageId === pageStep.pageId ? Math.min(convo.index, Math.max(0, questions.length - 1)) : 0)
+    : 0;
+  const shownQuestions = conversational ? questions.slice(convoIndex, convoIndex + 1) : questions;
+  /** what has been asked so far, for the conversational transcript: earlier pages, then this page's earlier questions */
+  const transcript: { q: Question; loop: LoopContext | null; answer: string }[] = conversational && pageStep
+    ? [
+      ...steps.slice(0, state.stepIndex).flatMap((s) => (s.kind === "page"
+        ? visibleQuestions(def, s, state, counts).map((q) => ({ q, loop: s.loop ?? null }))
+        : [])),
+      ...questions.slice(0, convoIndex).map((q) => ({ q, loop: pageStep.loop ?? null })),
+    ]
+      .filter(({ q }) => q.type !== "html" && !q.settings.hidden)
+      .map(({ q, loop }) => ({ q, loop, answer: resolvePiping(`{{${q.code}}}`, { ...ctx, loop }).trim() }))
+    : [];
 
   const snap: InspectorSnapshot | null = showInspector ? inspect(def, state, steps, counts) : null;
 
@@ -915,8 +950,33 @@ export function Runner({ definition: def, mode, session: initialSession, session
     const nav = goBack(def, state, counts);
     notePage(nav.steps, nav.stepIndex, "back");
     setErrors([]);
+    // conversational: arriving on the previous page from the right means its LAST question
+    const prev = nav.steps[nav.stepIndex];
+    if (conversational && prev?.kind === "page") setConvo({ pageId: prev.pageId, index: 9999 });
     force();
     window.scrollTo({ top: 0 });
+  };
+
+  /** Conversational Next: validate just the question on screen, then the next one, or the page's own Next. */
+  const convoNext = async () => {
+    if (!pageStep) return;
+    const q = questions[convoIndex];
+    if (q) {
+      const errs = validatePage(def, [q], ctx);
+      if (blockingErrors(errs).length > 0) { setErrors(errs); return; }
+    }
+    if (convoIndex < questions.length - 1) {
+      setErrors([]);
+      setConvo({ pageId: pageStep.pageId, index: convoIndex + 1 });
+      force();
+      return;
+    }
+    await handleNext();
+  };
+  const convoBack = () => {
+    if (!pageStep) return;
+    if (convoIndex > 0) { setErrors([]); setConvo({ pageId: pageStep.pageId, index: convoIndex - 1 }); force(); return; }
+    handleBack();
   };
 
   const content = ended && finalSave.kind === "failed" ? (
@@ -967,10 +1027,11 @@ export function Runner({ definition: def, mode, session: initialSession, session
         <div className="rs-error-banner" role="status" aria-live="polite">Please review the highlighted question below.</div>
       )}
       <div id="rs-questions" tabIndex={-1} data-testid="rs-probe" data-probe-of={probe.q.id} data-probe-n={probe.n}>
+        {voice.readAloud && <VoiceLayer text={spokenText(probe.pq, resolvePiping(probe.pq.text, ctx))} lang={speechLangFor(def, probe.pq)} />}
         <QuestionRenderer
           key={probe.pq.id}
           def={def}
-          q={probe.pq}
+          q={withVoice(probe.pq)}
           state={state}
           loop={null}
           value={state.answers[probe.pq.id]}
@@ -1013,8 +1074,24 @@ export function Runner({ definition: def, mode, session: initialSession, session
       {startNote && (
         <div className="rs-error-banner" data-testid="rs-start-note" style={{ background: "#fff7e6", color: "#7a4b00", borderColor: "#f0c36d" }}>{startNote}</div>
       )}
-      <div id="rs-questions" tabIndex={-1}>
-      {questions.map((q) => {
+      {voice.readAloud && !ended && (
+        <VoiceLayer
+          text={shownQuestions.map((q) => spokenText(q, resolvePiping(q.text, ctx))).join(". ")}
+          lang={speechLangFor(def, shownQuestions[0] ?? null)} />
+      )}
+      {conversational && transcript.length > 0 && (
+        <div className="rs-convo-transcript" data-testid="rs-convo-transcript" aria-label="Earlier questions and your answers">
+          {transcript.map(({ q, loop, answer }) => (
+            <div key={answerKey(q.id, loop)} className="rs-convo-turn" data-testid="rs-convo-turn" data-qid={q.id}>
+              <div className="rs-bubble rs-bubble-q" dangerouslySetInnerHTML={{ __html: resolvePiping(q.text, { ...ctx, loop }) }} />
+              <div className={`rs-bubble rs-bubble-a${answer ? "" : " empty"}`}>{answer || "(no answer)"}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      <div id="rs-questions" tabIndex={-1} className={conversational ? "rs-convo-current" : undefined} data-convo-index={conversational ? convoIndex : undefined}>
+      {shownQuestions.map((rawQ) => {
+        const q = withVoice(rawQ);
         // the full iteration path, so nested loops key separately (see loopKeySuffix)
         const key = answerKey(q.id, pageStep.loop ?? null);
         return (
@@ -1061,13 +1138,13 @@ export function Runner({ definition: def, mode, session: initialSession, session
       })}
       </div>
       <div className="rs-nav">
-        {b.buttons.showBack && state.stepIndex > 0 ? (
-          <button type="button" data-testid="rs-back" className={`rs-btn secondary ${b.buttons.style}`} onClick={handleBack}>
+        {b.buttons.showBack && (state.stepIndex > 0 || (conversational && convoIndex > 0)) ? (
+          <button type="button" data-testid="rs-back" className={`rs-btn secondary ${b.buttons.style}`} onClick={conversational ? convoBack : handleBack}>
             {b.buttons.backLabel}
           </button>
         ) : <span />}
-        <button type="button" data-testid="rs-next" className={`rs-btn ${b.buttons.style}`} onClick={handleNext}>
-          {pageIndexAmongPages >= totalPages ? b.buttons.submitLabel : b.buttons.nextLabel}
+        <button type="button" data-testid="rs-next" className={`rs-btn ${b.buttons.style}`} onClick={conversational ? convoNext : handleNext}>
+          {pageIndexAmongPages >= totalPages && (!conversational || convoIndex >= questions.length - 1) ? b.buttons.submitLabel : b.buttons.nextLabel}
         </button>
       </div>
     </>
@@ -1169,5 +1246,27 @@ export function Runner({ definition: def, mode, session: initialSession, session
         body
       )}
     </>
+  );
+}
+
+/**
+ * READ-ALOUD BAR — speaks `text` whenever it changes (renderer ReadAloud),
+ * with mute and replay. A component rather than a hook in the Runner so the
+ * Runner's early returns never change hook order.
+ */
+function VoiceLayer({ text, lang }: { text: string; lang: string }) {
+  const [muted, setMuted] = React.useState(false);
+  const ra = useReadAloud(text, lang, !muted);
+  const available = readAloudAvailable();
+  return (
+    <div className="rs-voice-bar" data-testid="rs-voice-bar" data-speaking={ra.speaking ? "1" : "0"} data-muted={muted ? "1" : "0"}>
+      <span className="rs-voice-label">{available ? (muted ? "Read-aloud is off" : ra.speaking ? "Reading aloud…" : "Read aloud") : "Read-aloud is not available in this browser"}</span>
+      {available && (
+        <>
+          <button type="button" className="rs-btn-mini" data-testid="rs-voice-replay" onClick={ra.replay} disabled={muted} aria-label="Read the question again">🔊 Replay</button>
+          <button type="button" className="rs-btn-mini" data-testid="rs-voice-mute" onClick={() => setMuted((m) => !m)} aria-pressed={muted}>{muted ? "Unmute" : "Mute"}</button>
+        </>
+      )}
+    </div>
   );
 }

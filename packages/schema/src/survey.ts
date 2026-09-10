@@ -125,6 +125,34 @@ export const Branding = z.object({
        * way with its own `showTitle`.
        */
       showBlockTitles: z.boolean().default(true),
+      /**
+       * PRESENTATION MODE — how the SAME survey is shown, never what it asks.
+       *
+       * "pages" is every survey so far: a page's questions together, Next
+       * between pages. "conversational" shows one question at a time inside
+       * each page, with the questions already answered above it as a
+       * transcript, in chat framing. The flow, the pages, validation, logic,
+       * quotas and exports are identical in both — the Runner walks the
+       * page's visible questions with a cursor instead of listing them. That
+       * is why this is a layout setting and not a question type: a
+       * "conversational survey" is the survey, presented differently.
+       */
+      presentation: z.enum(["pages", "conversational"]).default("pages"),
+      /**
+       * VOICE — read questions aloud (speech synthesis) and let every text
+       * question be dictated (`speech_input`, as if each had it set). Both
+       * are per-survey switches over capabilities that already exist per
+       * question; `lang` is a BCP-47 tag for both, falling back to the
+       * survey's language and then the browser's. A "voice survey" is the
+       * survey, spoken.
+       */
+      voice: z
+        .object({
+          readAloud: z.boolean().default(false),
+          dictation: z.boolean().default(false),
+          lang: z.string().optional(),
+        })
+        .default({}),
     })
     .default({}),
   buttons: z

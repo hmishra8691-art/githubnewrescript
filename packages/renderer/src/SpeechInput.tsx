@@ -102,7 +102,9 @@ export function SpeechInputButton({
   if (!Ctor || q.settings.readOnly) return null;
 
   const lang = q.settings.speechLang
+    || def.branding?.layout?.voice?.lang // the voice presentation mode's language, when set
     || (def as unknown as { meta?: { language?: string } }).meta?.language
+    || def.deployment?.languages?.[0]
     || (typeof navigator !== "undefined" ? navigator.language : "en");
 
   const start = () => {

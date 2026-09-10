@@ -200,8 +200,14 @@ test("every G5 variant is registered against the base type that owns its data", 
     assert.equal(v!.status, "stable", `${id} is stable`);
     assert.equal(v!.baseType, baseType, `${id} stores as ${baseType}`);
   }
-  // Speech-to-Text still needs a speech service: it stays "coming soon"
-  assert.equal(variantRegistry.get("media.speech_to_text_response")?.status, "planned");
+  /*
+   * Speech-to-Text is NOT a type any more (it used to be asserted "planned"
+   * here). It shipped as the `speech_input` capability on the text types and
+   * survey-wide as `branding.layout.voice.dictation`, so the placeholder is
+   * gone and nothing offers a "Speech-to-Text Response" question.
+   */
+  assert.equal(variantRegistry.get("media.speech_to_text_response"), undefined, "no placeholder type for a capability");
+  assert.ok(variantRegistry.get("text.single_line")!.capabilities.includes("speech_input"));
 
   // an `upload` question with no variant is a file upload, not a signature pad
   const uploads = Object.entries(expected).filter(([, b]) => b === "upload");

@@ -969,7 +969,11 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       instruction: "Record your answer in your own words.",
     },
   }),
-  ...planned(F.media, [["Speech-to-Text Response", "Transcribed voice answer."]]),
+  /*
+   * "Speech-to-Text Response" is not a type: it is the `speech_input`
+   * capability on Single-Line / Multi-Line Text (the transcript is the text
+   * answer), and survey-wide it is `branding.layout.voice.dictation`.
+   */
   stable(F.dragdrop, "ranking", "Drag-and-Drop Ranking", "Drag items into order.", {
     baseType: "ranking", renderer: "dragrank", responseModel: "rank_order",
     capabilities: ["options", "sorting", "randomization", "carry_forward", "list_logic"],
@@ -1583,13 +1587,18 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     },
     presetOf: "experimental.ab",
   }),
-  ...planned(F.ai, [
-    ["AI Open-End Classification", "Auto-code open ends into themes."],
-    ["AI Sentiment Analysis", "Score open-end sentiment."],
-    ["AI Follow-Up / Dynamic Probe", "Model-generated follow-up questions."],
-    ["AI Conversational Survey", "Interview-style adaptive flow."],
-    ["AI Quality Check", "Flag low-quality responses."],
-  ]),
+  /*
+   * THE AI FAMILY HAS NO TYPES, by design. Each capability once planned here
+   * landed as a mechanism the rest of the platform already had:
+   *   · AI Open-End Classification → `calculated` with `ai_classify(Q5, "A|B|C")`
+   *   · AI Sentiment Analysis       → `calculated` with `ai_sentiment(Q5)`
+   *   · AI Follow-Up / Dynamic Probe → `q.probe` on any open end (Properties → Follow-up probe)
+   *   · AI Conversational Survey    → `branding.layout.presentation = "conversational"` + probes
+   *   · AI Quality Check            → the response-quality engine (`@rescript/quality`), which
+   *                                   already grades every open end including probe answers
+   * A type would have been a second copy of each. The family stays as a label
+   * so the picker can say where these live.
+   */
   stable(F.conversational, "chat_based_question", "Chat-Based Question", "One-at-a-time chat presentation.", {
     baseType: "matrix_text", renderer: "chat", responseModel: "per_row",
     capabilities: ["rows"], validations: ["required"],
@@ -1602,10 +1611,13 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       ],
     },
   }),
-  ...planned(F.conversational, [
-    ["Voice Survey", "Spoken question and answer."],
-    ["Adaptive Conversation", "Dynamic follow-ups in a chat flow."],
-  ]),
+  /*
+   * "Voice Survey" and "Adaptive Conversation" are PRESENTATION MODES of the
+   * same survey, not question types: `branding.layout.voice` (read-aloud +
+   * dictation) and `branding.layout.presentation = "conversational"` (one
+   * question at a time with a transcript), composed with `q.probe` for the
+   * adaptive follow-ups. Branding → Presentation in the Studio.
+   */
 
   /* --------------------------------------------------------------- CONTENT */
   stable(F.content, "html", "Text / HTML Block", "Display-only content with piping.", {

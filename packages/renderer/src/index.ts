@@ -18,6 +18,7 @@ export { QuestionRenderer, ctxOf, optionsClass, gridColumnsStyle, useOptionFilte
 export type { QRProps } from "./QuestionRenderer";
 export { MediaEmbed, SafeImage } from "./Media";
 export { SpeechInputButton, speechInputAvailable } from "./SpeechInput";
+export { readAloudAvailable, spokenText, speechLangFor, speak, stopSpeaking, useReadAloud } from "./ReadAloud";
 export { variantRenderers, registerVariantRenderer } from "./variants/registry";
 export { anchor, cellAnchor, parseCellId, CELL_SEP } from "./authoring";
 export type { AuthoringAnchor, AuthoringElementKind } from "./authoring";

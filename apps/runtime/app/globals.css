@@ -128,3 +128,19 @@ body {
   border: 1px solid #4b5563; background: none; color: #e5e7eb;
 }
 .rs-debug-toggle.on { background: #2563eb; border-color: #2563eb; color: #fff; }
+
+/* ------------------------------------------------ presentation: conversational */
+/* earlier questions and answers as a transcript above the one on screen */
+.rs-convo-transcript { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
+.rs-convo-turn { display: flex; flex-direction: column; gap: 6px; }
+.rs-bubble { max-width: 85%; padding: 10px 14px; border-radius: 16px; font-size: 0.95em; line-height: 1.4; }
+.rs-bubble-q { align-self: flex-start; background: var(--rs-surface, #fff); border: 1px solid var(--rs-border, #e2e8f0); border-bottom-left-radius: 4px; color: var(--rs-text, #0f172a); }
+.rs-bubble-a { align-self: flex-end; background: var(--rs-primary, #2563eb); color: #fff; border-bottom-right-radius: 4px; white-space: pre-wrap; }
+.rs-bubble-a.empty { background: var(--rs-border, #e2e8f0); color: var(--rs-subtle, #64748b); font-style: italic; }
+.rs-convo-current { animation: rs-convo-in .25s ease-out; }
+@keyframes rs-convo-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .rs-convo-current { animation: none; } }
+
+/* ------------------------------------------------ presentation: voice */
+.rs-voice-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 13px; color: var(--rs-subtle, #64748b); }
+.rs-voice-bar[data-speaking="1"] .rs-voice-label::before { content: "● "; color: var(--rs-primary, #2563eb); }
