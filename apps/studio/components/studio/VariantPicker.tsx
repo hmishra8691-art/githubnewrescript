@@ -6,6 +6,7 @@ import {
   variantRegistry,
   variantFamilies,
   variantsOf,
+  pickerTypesOf,
   variantForLegacyType,
   resolveVariant,
   responseModelOf,
@@ -79,7 +80,18 @@ export function VariantPickerModal({ onPick, onClose }: {
 }) {
   const families = variantFamilies();
   const [family, setFamily] = React.useState(families[0]?.family ?? "single_select");
-  const variants = variantsOf(family).filter((v) => isSelectableVariant(v) || v.status === "planned");
+  /*
+   * TYPES, EACH WITH ITS PRESETS — not a flat list (taxonomy audit, 2026-09-10).
+   *
+   * A flat list showed "Single-Line Text", "Email", "Phone", "URL", "ZIP",
+   * "Company" as six peers, when five of them are the first one with a
+   * validator switched on. It also scattered a type's starting points across
+   * families: "Percentage Slider" sat under Numeric while the slider it is a
+   * preset of sat under Slider. Now a family shows its TYPES as cards, and
+   * each card carries its own "start from" row — including presets whose
+   * registry entry lives in another family. One home per question.
+   */
+  const { types, planned } = pickerTypesOf(family);
 
   return (
     <div className="modal-back" onClick={onClose}>
@@ -105,18 +117,48 @@ export function VariantPickerModal({ onPick, onClose }: {
             <span className="grow" />
             <button className="btn small" onClick={onClose}>close</button>
           </div>
-          {variants.map((v) => (
-            <div key={v.id}
-              className={`card ${v.status === "stable" ? "selectable" : ""}`}
-              data-testid={`picker-variant-${v.id}`} data-status={v.status}
-              style={{ padding: "10px 14px", opacity: v.status === "stable" ? 1 : 0.55 }}
-              onClick={() => v.status === "stable" && onPick(v)}>
-              <div className="card-title" style={{ fontSize: 14 }}>
-                {v.name}
-                {v.status === "planned" && <span className="chip">coming soon</span>}
-                {v.status === "stable" && (
+          {types.map(({ type: v, presets }) => (
+            /*
+             * The card is the type's click target; the presets are a row
+             * BESIDE it, not inside it. Putting buttons inside a clickable
+             * card made "click the card" ambiguous — the first version did,
+             * and a click in the middle of Single-Line Text picked URL.
+             */
+            <div key={v.id} className="picker-type" data-testid={`picker-type-${v.id}`} style={{ marginBottom: 8 }}>
+              <div
+                className="card selectable"
+                data-testid={`picker-variant-${v.id}`} data-status={v.status}
+                style={{ padding: "10px 14px", marginBottom: presets.length ? 4 : 0 }}
+                onClick={() => onPick(v)}>
+                <div className="card-title" style={{ fontSize: 14 }}>
+                  {v.name}
                   <span className="chip" title="response data model">{v.responseModel.replace("_", " ")}</span>
-                )}
+                </div>
+                <div style={{ color: "var(--subtle)", fontSize: 13, marginTop: 2 }}>{v.description}</div>
+              </div>
+              {presets.length > 0 && (
+                <div className="row" style={{ gap: 6, flexWrap: "wrap", padding: "0 14px", alignItems: "baseline" }}
+                  data-testid={`picker-presets-${v.id}`}>
+                  <span className="muted" style={{ fontSize: 12 }}>Start from:</span>
+                  {presets.map((p) => (
+                    <button key={p.id} className="chip"
+                      data-testid={`picker-variant-${p.id}`} data-status={p.status} data-preset-of={v.id}
+                      title={p.description}
+                      onClick={() => onPick(p)}>
+                      {p.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+          {planned.map((v) => (
+            <div key={v.id}
+              className="card"
+              data-testid={`picker-variant-${v.id}`} data-status={v.status}
+              style={{ padding: "10px 14px", opacity: 0.55 }}>
+              <div className="card-title" style={{ fontSize: 14 }}>
+                {v.name}<span className="chip">coming soon</span>
               </div>
               <div style={{ color: "var(--subtle)", fontSize: 13, marginTop: 2 }}>{v.description}</div>
             </div>

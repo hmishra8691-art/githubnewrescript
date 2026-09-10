@@ -1620,7 +1620,16 @@ export function variantFamilies(): { family: string; familyLabel: string; stable
   const map = new Map<string, { family: string; familyLabel: string; stable: number; planned: number }>();
   for (const v of QUESTION_VARIANTS) {
     const e = map.get(v.family) ?? { family: v.family, familyLabel: v.familyLabel, stable: 0, planned: 0 };
-    e[v.status === "stable" ? "stable" : "planned"]++;
+    /*
+     * `stable` counts what a programmer can actually PICK as a distinct type
+     * in this family: selectable, and not a preset (a preset is shown under
+     * its parent, wherever that parent lives). It used to count every
+     * `status: "stable"` record, which included the retired duplicates and
+     * every preset — so the Single Select family advertised 20 when it offers
+     * 12, and the number nobody trusted was the one meant to help them.
+     */
+    if (v.status === "planned") e.planned++;
+    else if (isSelectableVariant(v) && !v.presetOf) e.stable++;
     map.set(v.family, e);
   }
   return [...map.values()];
@@ -1628,6 +1637,35 @@ export function variantFamilies(): { family: string; familyLabel: string; stable
 
 export function variantsOf(family: string): QuestionVariantDef[] {
   return QUESTION_VARIANTS.filter((v) => v.family === family);
+}
+
+/**
+ * THE PICKER'S VIEW OF A FAMILY: its types, each carrying its presets.
+ *
+ * A type is a selectable variant that is not itself a preset. Its presets are
+ * every selectable variant that names it as `presetOf` — from ANY family, so
+ * `numeric.percentage_slider` appears under `slider.single` in the Slider
+ * family and nowhere else. That is the whole point: a starting point is found
+ * next to the thing it starts from, and the same question has one home.
+ *
+ * Planned entries are returned separately so the picker can still show what
+ * is coming, greyed out, without a placeholder ever being mistaken for a type.
+ */
+export function pickerTypesOf(family: string): {
+  types: { type: QuestionVariantDef; presets: QuestionVariantDef[] }[];
+  planned: QuestionVariantDef[];
+} {
+  const inFamily = variantsOf(family);
+  const types = inFamily
+    .filter((v) => isSelectableVariant(v) && !v.presetOf)
+    .map((type) => ({ type, presets: presetsOf(type.id) }));
+  const planned = inFamily.filter((v) => v.status === "planned");
+  return { types, planned };
+}
+
+/** Every live preset of a type, in registry order. */
+export function presetsOf(typeId: string): QuestionVariantDef[] {
+  return QUESTION_VARIANTS.filter((v) => v.presetOf === typeId && isSelectableVariant(v));
 }
 
 /** Response model of a base type — the ground truth for conversion safety. */

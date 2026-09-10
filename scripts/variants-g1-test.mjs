@@ -59,9 +59,12 @@ async function setRange(pv, sel, v) {
 
 /* ------------------------------------------------ create every variant */
 made.numeric_range = await h.createFromPicker("numeric", "numeric.numeric_range");
-for (const k of ["dual", "vertical", "multi_attribute"]) {
+for (const k of ["dual", "vertical"]) {
   made[k] = await h.createFromPicker("slider", `slider.${k}`);
 }
+// slider.multi_attribute is a PRESET of matrix.slider_matrix, so the picker
+// shows it beside its parent in the Matrix family — one home per question.
+made.multi_attribute = await h.createFromPicker("matrix", "slider.multi_attribute");
 made.slider_allocation = await h.createFromPicker("allocation", "allocation.slider_allocation");
 /*
  * `slider.allocation_slider` was the same question as `allocation.slider_allocation`
