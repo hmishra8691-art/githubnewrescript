@@ -522,3 +522,21 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-menu-total { display: flex; flex-wrap: wrap; align-items: baseline; gap: 14px; margin-top: 12px; font-size: 14px; color: var(--rs-subtle); }
 .rs-menu-total strong { color: var(--rs-text); font-size: 16px; }
 .rs-menu-hint { font-size: 12.5px; }
+
+/* ------------------------------------------------------------------ acbc */
+.rs-acbc-lead { font-weight: 600; margin-bottom: 12px; }
+.rs-acbc-attr { border: 1.5px solid var(--rs-border); border-radius: 10px; padding: 10px 12px; margin: 0 0 10px; }
+.rs-acbc-attr legend { font-weight: 600; padding: 0 6px; }
+.rs-acbc-levels { display: flex; flex-wrap: wrap; gap: 8px; }
+.rs-acbc-levels .rs-option { padding: 6px 12px; }
+.rs-acbc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.rs-acbc-concept { border: 1.5px solid var(--rs-border); border-radius: 10px; padding: 10px; background: var(--rs-surface); display: flex; flex-direction: column; gap: 10px; }
+.rs-acbc-concept.selected { border-color: var(--rs-primary); }
+.rs-acbc-profile { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.rs-acbc-profile th { text-align: left; color: var(--rs-subtle); font-weight: 500; padding: 3px 6px 3px 0; white-space: nowrap; }
+.rs-acbc-profile td { padding: 3px 0; }
+.rs-acbc-profile tr.differs td { font-weight: 600; }
+.rs-acbc-verdict { display: flex; gap: 6px; }
+.rs-acbc-verdict .rs-btn-mini.on { border-color: var(--rs-primary); background: color-mix(in srgb, var(--rs-primary) 12%, var(--rs-surface)); font-weight: 600; }
+.rs-acbc-actions { display: flex; gap: 10px; margin-top: 14px; }
+.rs-acbc-rule { border: 1.5px solid var(--rs-border); border-radius: 10px; padding: 14px 16px; font-size: 15px; }

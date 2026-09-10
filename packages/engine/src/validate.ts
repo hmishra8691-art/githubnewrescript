@@ -9,6 +9,7 @@ import { validateFieldValue } from "./fields.js";
 import { createScriptCtx, runScript, type ScriptRunResult } from "./scripts.js";
 import { resolvePiping } from "./piping.js";
 import { geoAnswered, geoProblems } from "./geo.js";
+import { acbcDone, isAcbcAnswer } from "./acbc.js";
 
 /**
  * Whether a failed check stops the respondent.
@@ -453,6 +454,15 @@ export function validateQuestion(
         }
       }
     }
+  }
+
+  // ACBC: required means the whole exercise — BYO, screens, tournament — is complete
+  if (q.type === "acbc_task" && q.required && !isEmpty(value) && !acbcDone(value) && !hasNoAnswerableItems(q, ctx)) {
+    const stage = isAcbcAnswer(value) ? value.stage : "byo";
+    push(stage === "byo" ? "Please build your preferred product first."
+      : stage === "screen" ? "Please say for each alternative whether it could work for you."
+      : stage === "rule" ? "Please answer the question about your preferences."
+      : "Please finish choosing between the alternatives.");
   }
 
   // geo: "answered" depends on the mode (geo.ts); then radius bounds and coordinate sanity

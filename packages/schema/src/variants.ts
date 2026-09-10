@@ -1236,9 +1236,11 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     defaults: { instruction: "Configure the product you would buy at these prices. The base is included; add what you would pay for." },
     presetOf: "conjoint.menu",
   }),
-  ...planned(F.conjoint, [
-    ["Adaptive CBC (ACBC)", "Build-your-own → screening → choice tournament, adapted to each respondent."],
-  ]),
+  stable(F.conjoint, "acbc", "Adaptive CBC (ACBC)", "Build-your-own → screening with unacceptable / must-have rules → choice tournament, built around each respondent's answers. Needs an ACBC design (Design Generators).", {
+    baseType: "acbc_task", renderer: "acbctasks", responseModel: "tasks",
+    capabilities: ["design_ref"], validations: ["required"],
+    defaults: { instruction: "First build the product you would most like. Then tell us which of the alternatives could work for you." },
+  }),
 
   /* ------------------------------------------------------------ ALLOCATION */
   stable(F.allocation, "constant_sum", "Constant Sum", "Values must total the target.", {
@@ -1767,7 +1769,7 @@ export function responseModelOf(baseType: string): ResponseModel {
     case "composite": case "custom_table": return "cells";
     case "ranking": case "image_ranking": return "rank_order";
     case "allocation": return "allocation";
-    case "conjoint_task": case "maxdiff_task": return "tasks";
+    case "conjoint_task": case "maxdiff_task": case "acbc_task": return "tasks";
     case "hotspot": case "annotation": case "media_timeline": return "coordinates";
     case "upload": return "media";
     case "geo": return "geo";

@@ -305,6 +305,25 @@ export function questionVariables(
         valueCodes: ["pin", "device", "search", "typed"], valueLabels: { pin: "Pin on the map", device: "Device location", search: "Address search", typed: "Typed address" } });
       break;
     }
+    case "acbc_task": {
+      /*
+       * ACBC exports the decisions, not the machinery: the BYO level per
+       * attribute, the winning concept's level per attribute, the confirmed
+       * rules, the screening counts, and the full transcript as JSON for
+       * re-analysis. Attributes come from the design's configuration.
+       */
+      const design = designs?.find((d) => d.id === q.settings.designRef);
+      const attrs = ((design?.config as { attributes?: { name: string }[] } | undefined)?.attributes ?? []).map((a) => a.name);
+      for (const a of attrs) push({ name: `${q.variableName}_BYO_${a.replace(/[^A-Za-z0-9]+/g, "_")}`, label: `${q.code} — build-your-own: ${a}`, dataType: "text" });
+      for (const a of attrs) push({ name: `${q.variableName}_WINNER_${a.replace(/[^A-Za-z0-9]+/g, "_")}`, label: `${q.code} — tournament winner: ${a}`, dataType: "text" });
+      push({ name: `${q.variableName}_UNACCEPTABLE`, label: `${q.code} — unacceptable levels confirmed`, dataType: "text", notes: "attribute=level, | separated" });
+      push({ name: `${q.variableName}_MUSTHAVE`, label: `${q.code} — must-have levels confirmed`, dataType: "text", notes: "attribute=level, | separated" });
+      push({ name: `${q.variableName}_SCREENED`, label: `${q.code} — concepts screened`, dataType: "numeric" });
+      push({ name: `${q.variableName}_ACCEPTED`, label: `${q.code} — concepts marked a possibility`, dataType: "numeric" });
+      push({ name: `${q.variableName}_ROUNDS`, label: `${q.code} — tournament rounds`, dataType: "numeric" });
+      push({ name: `${q.variableName}_JSON`, label: `${q.code} — full ACBC transcript (JSON)`, dataType: "text", notes: "BYO, every screen with concepts and verdicts, rules, every tournament round and choice" });
+      break;
+    }
     case "hidden":
       push({ name: q.variableName, label: strip(q.text) || q.code, dataType: "text", hidden: true });
       break;

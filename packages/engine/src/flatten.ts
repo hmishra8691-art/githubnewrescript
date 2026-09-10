@@ -3,6 +3,7 @@ import { loopKeySuffix, type LoopContext, type ResponseState } from "./state.js"
 import { directChildLoops, directQuestionIdsInLoop, loopNodes, loopVariablePrefix, type LoopFlowNode } from "./loopModel.js";
 import { designFor, designVersionFor } from "./designVersion.js";
 import { isGeoAnswer, hasCoordinates, geoText, round6 } from "./geo.js";
+import { isAcbcAnswer } from "./acbc.js";
 
 export type FlatVars = Record<string, unknown>;
 
@@ -253,6 +254,19 @@ function flattenQuestion(q: Question, value: unknown, varName: string, out: Flat
         if (a.postal) out[`${varName}_POSTAL`] = a.postal;
       }
       if (value.source) out[`${varName}_SOURCE`] = value.source;
+      break;
+    }
+    case "acbc_task": {
+      if (!isAcbcAnswer(value)) break;
+      const safe = (a: string) => a.replace(/[^A-Za-z0-9]+/g, "_");
+      for (const [a, l] of Object.entries(value.byo)) out[`${varName}_BYO_${safe(a)}`] = l;
+      if (value.winner) for (const [a, l] of Object.entries(value.winner.profile)) out[`${varName}_WINNER_${safe(a)}`] = l;
+      out[`${varName}_UNACCEPTABLE`] = value.unacceptable.filter((r) => r.confirmed).map((r) => `${r.attribute}=${r.level}`).join("|");
+      out[`${varName}_MUSTHAVE`] = value.mustHave.filter((r) => r.confirmed).map((r) => `${r.attribute}=${r.level}`).join("|");
+      out[`${varName}_SCREENED`] = value.screens.reduce((n, s) => n + s.concepts.length, 0);
+      out[`${varName}_ACCEPTED`] = value.screens.reduce((n, s) => n + Object.values(s.verdicts).filter((v) => v === "yes").length, 0);
+      out[`${varName}_ROUNDS`] = value.tournament.filter((r) => r.chosen).length;
+      out[`${varName}_JSON`] = JSON.stringify(value);
       break;
     }
     case "annotation": {

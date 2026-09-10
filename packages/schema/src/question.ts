@@ -58,6 +58,13 @@ export const BUILTIN_QUESTION_TYPES = [
    * (`settings.geoMode`), never three types with three data shapes.
    */
   "geo",
+  /**
+   * Adaptive CBC: build-your-own → screening (with unacceptable / must-have
+   * rules) → choice tournament, built per respondent at interview time from
+   * an `acbc` design's configuration (engine acbc.ts). One answer holds the
+   * whole transcript.
+   */
+  "acbc_task",
 ] as const;
 export type BuiltinQuestionType = (typeof BUILTIN_QUESTION_TYPES)[number];
 

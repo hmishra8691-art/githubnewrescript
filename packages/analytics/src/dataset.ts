@@ -85,7 +85,7 @@ export interface Dataset {
 const SCALE_TYPES = new Set(["slider", "nps", "matrix_numeric"]);
 const NUMERIC_TYPES = new Set(["numeric", "numeric_list", "allocation", "slider", "nps", "calculated", "matrix_numeric"]);
 const TEXT_TYPES = new Set(["open_text", "long_text", "text_list", "matrix_text"]);
-const COMPLEX_TYPES = new Set(["conjoint_task", "maxdiff_task", "hotspot", "annotation", "media_timeline", "upload", "repeating_group", "custom_component", "custom_table"]);
+const COMPLEX_TYPES = new Set(["conjoint_task", "maxdiff_task", "acbc_task", "hotspot", "annotation", "media_timeline", "upload", "repeating_group", "custom_component", "custom_table"]);
 
 function roleFor(v: VariableDef, q: Question | undefined): VariableRole {
   if (v.responseType === "system") return "system";

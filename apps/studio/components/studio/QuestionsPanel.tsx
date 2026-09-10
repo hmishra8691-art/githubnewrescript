@@ -893,7 +893,7 @@ export function QuestionEditor({ q }: { q: Question }) {
         </>
       )}
 
-      {(q.type === "conjoint_task" || q.type === "maxdiff_task") && (
+      {(q.type === "conjoint_task" || q.type === "maxdiff_task" || q.type === "acbc_task") && (
         <>
           <label className="f"><span>Design file</span>
             <select className="select" value={q.settings.designRef ?? ""}

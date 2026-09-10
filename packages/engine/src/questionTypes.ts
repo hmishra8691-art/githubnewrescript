@@ -73,6 +73,7 @@ const CATEGORIES: Record<string, QuestionTypePlugin["category"]> = {
   repeating_group: "text",
   experiment: "special",
   geo: "special",
+  acbc_task: "special",
 };
 
 const LABELS: Record<string, string> = {
@@ -114,6 +115,7 @@ const LABELS: Record<string, string> = {
   repeating_group: "Repeating form",
   experiment: "Experiment arm",
   geo: "Location (map pin / address / radius)",
+  acbc_task: "Adaptive CBC (ACBC)",
 };
 
 function featuresFor(type: string): QuestionTypePlugin["features"] {
