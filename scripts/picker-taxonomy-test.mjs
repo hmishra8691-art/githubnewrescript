@@ -83,5 +83,26 @@ assert.equal(made.variant, "text.single_line");
 assert.deepEqual(made.validation.filter((v) => v.kind === "email"), [], "no preset, no email validator");
 console.log("  ok   Single-Line Text → open_text with no preset defaults");
 
+console.log("\nTHE SWITCHER ON AN EXISTING QUESTION NESTS PRESETS UNDER THEIR PARENT TOO");
+await h.goTab("Questions");
+await page.click(`[data-qid="${q.id}"]`);
+await page.waitForSelector('[data-testid="variant-switcher"]');
+const groups = await page.$$eval('[data-testid="variant-switcher"] optgroup', (els) => els.map((g) => ({ label: g.label, options: [...g.querySelectorAll("option")].map((o) => o.value) })));
+const single = groups.find((g) => g.label === "Single-Line Text");
+assert.ok(single, `Single-Line Text is a group in the switcher: ${JSON.stringify(groups.map((g) => g.label))}`);
+assert.ok(single.options.includes("text.email") && single.options[0] === "text.single_line", "the type first, its presets under it");
+assert.equal(await page.$eval('[data-testid="variant-switcher"]', (e) => e.value), "text.email", "the current preset is selected");
+const flat = await page.$$eval('[data-testid="variant-switcher"] > option', (els) => els.map((o) => o.value));
+assert.ok(!flat.includes("text.email"), "…and not ALSO listed flat");
+// a preset whose parent is in another family shows the parent's family
+await h.loadDef({ ...(await h.readDef()), questions: [{ id: "tn", code: "TN", variableName: "TN", type: "ranking", variant: "ranking.top_n", text: "Top 3", options: [{ code: 1, label: "A" }, { code: 2, label: "B" }, { code: 3, label: "C" }, { code: 4, label: "D" }] }] });
+await h.goTab("Questions");
+await page.click('[data-qid="tn"]');
+await page.waitForSelector('[data-testid="variant-switcher"]');
+assert.equal(await page.$eval('[data-testid="variant-switcher"]', (e) => e.value), "ranking.top_n");
+const g2 = await page.$$eval('[data-testid="variant-switcher"] optgroup', (els) => els.map((g) => g.label));
+assert.ok(g2.some((l) => /Click.*Rank|Rank.*Click/i.test(l)), `Top-N sits under its parent Click-to-Rank: ${JSON.stringify(g2)}`);
+console.log("  ok   switcher: types as groups, presets nested, cross-family preset under its parent");
+
 await h.close();
 console.log("\nALL PICKER TAXONOMY CHECKS PASSED");

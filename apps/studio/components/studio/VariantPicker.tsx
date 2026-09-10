@@ -5,15 +5,12 @@ import {
   questionTypeRegistry,
   variantRegistry,
   variantFamilies,
-  variantsOf,
   pickerTypesOf,
   variantForLegacyType,
   resolveVariant,
   responseModelOf,
   isSafeConversion,
-  isSelectableVariant,
-  allowedValidationKinds,
-} from "@rescript/schema";
+  allowedValidationKinds } from "@rescript/schema";
 import { useStudio, uid } from "./store";
 
 /**
@@ -179,8 +176,16 @@ export function VariantSwitcher({ q }: { q: Question }) {
     resolveVariant(q.variant) ??
     (variantForLegacyType(q.type) ? variantRegistry.get(variantForLegacyType(q.type)!) : undefined);
   const families = variantFamilies().filter((f) => f.stable > 0);
-  const family = current?.family ?? "single_select";
-  const stableVariants = variantsOf(family).filter(isSelectableVariant);
+  /*
+   * A preset lives under its PARENT type, which may sit in another family
+   * (ranking.top_n's parent is ranking.click; slider.multi_attribute's is
+   * matrix.slider_matrix). The switcher shows the parent's family and lists
+   * types with their presets nested, exactly as the picker does — one home
+   * per question, in both places.
+   */
+  const parent = current?.presetOf ? variantRegistry.get(current.presetOf) : undefined;
+  const family = parent?.family ?? current?.family ?? "single_select";
+  const typesWithPresets = pickerTypesOf(family).types;
 
   const switchTo = (to: QuestionVariantDef) => {
     const safe = isSafeConversion(current, to, q.type);
@@ -232,19 +237,28 @@ export function VariantSwitcher({ q }: { q: Question }) {
       <label className="f" style={{ width: 150, marginBottom: 0 }}><span>Family</span>
         <select className="select" value={family}
           onChange={(e) => {
-            const first = variantsOf(e.target.value).find(isSelectableVariant);
+            const first = pickerTypesOf(e.target.value).types[0]?.type;
             if (first) switchTo(first);
           }}>
           {families.map((f) => <option key={f.family} value={f.family}>{f.familyLabel}</option>)}
         </select></label>
-      <label className="f" style={{ width: 200, marginBottom: 0 }}><span>Question type</span>
-        <select className="select" value={current?.id ?? ""}
+      <label className="f" style={{ width: 220, marginBottom: 0 }}><span>Question type</span>
+        <select className="select" value={current?.id ?? ""} data-testid="variant-switcher"
           onChange={(e) => {
             const to = variantRegistry.get(e.target.value);
             if (to) switchTo(to);
           }}>
           {!current && <option value="">({q.type})</option>}
-          {stableVariants.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+          {typesWithPresets.map(({ type, presets }) => (
+            presets.length === 0
+              ? <option key={type.id} value={type.id}>{type.name}</option>
+              : (
+                <optgroup key={type.id} label={type.name}>
+                  <option value={type.id}>{type.name}</option>
+                  {presets.map((pr) => <option key={pr.id} value={pr.id} data-preset-of={type.id}>↳ {pr.name}</option>)}
+                </optgroup>
+              )
+          ))}
         </select></label>
     </>
   );
