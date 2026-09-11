@@ -2,6 +2,7 @@ import type { SurveyDefinition, Question, Option, AiConversation, AiQuestionOver
 import { AiConversation as AiConversationSchema } from "@rescript/schema";
 import { evaluateCondition, type EvalContext } from "./evaluate.js";
 import { resolvePiping } from "./piping.js";
+import { audioFor, K } from "./localization.js";
 
 /**
  * THE AI CONVERSATIONAL SURVEY ENGINE — the pure half.
@@ -212,6 +213,8 @@ export interface SpokenScriptInput {
   rowCode?: string;
   /** "read options" was asked for, so read them even in on_request mode */
   optionsRequested?: boolean;
+  /** the respondent's language — recordings attached in the localization layer replace synthesis for the segments that have one */
+  language?: string;
 }
 
 /**
@@ -230,13 +233,15 @@ export function spokenSegments(def: SurveyDefinition, q: Question, ctx: EvalCont
   const say = (s: string) => pronounce(strip(resolvePiping(s, ctx)), v.pronunciations, sp?.pronunciations);
   const emph = v.audio.emphasis;
   const out: SpokenSegment[] = [];
+  // a recording attached for this language (human, approved AI, or a hosted file — by the survey's priority) plays instead of synthesis
+  const au = (key: string): string | undefined => (input.language ? audioFor(def, key, input.language)?.url : undefined);
 
   if (r.question) {
     let text = q.text;
     if (sp?.mode === "custom" && sp.question?.trim()) text = sp.question;
     else if (sp?.mode === "ai" && sp.aiApproved && sp.aiVersion?.trim() && !sp.locked) text = sp.aiVersion;
     const spoken = say(text);
-    if (spoken) out.push({ text: spoken, kind: "question", pauseMs: p.afterQuestionMs, audioUrl: sp?.audioUrl, emphasis: emph });
+    if (spoken) out.push({ text: spoken, kind: "question", pauseMs: p.afterQuestionMs, audioUrl: au(K.qText(q.id)) ?? sp?.audioUrl, emphasis: emph });
   }
   if (r.instructions && (sp?.instruction || q.instruction)) {
     const t = say(sp?.instruction ?? q.instruction ?? "");
@@ -263,7 +268,7 @@ export function spokenSegments(def: SurveyDefinition, q: Question, ctx: EvalCont
     list.forEach((o, i) => {
       const label = say(optionSpokenLabel(q, o));
       const last = i === list.length - 1;
-      out.push({ text: label, kind: "option", code: String(o.code), pauseMs: last ? p.afterAnswerMs : p.betweenOptionsMs, emphasis: emph === "moderate" ? "light" : "none" });
+      out.push({ text: label, kind: "option", code: String(o.code), pauseMs: last ? p.afterAnswerMs : p.betweenOptionsMs, emphasis: emph === "moderate" ? "light" : "none", audioUrl: au(K.opt(q.id, o.code)) });
       if (r.optionMode === "grouped" && (i + 1) % r.groupSize === 0 && !last) out[out.length - 1].pauseMs = Math.max(p.betweenOptionsMs * 2, p.beforeOptionsMs);
     });
     if (r.optionMode === "first_n" && speakable.length > list.length) {

@@ -35,6 +35,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     .from("themes")
     .select("id, name, branding, created_at")
     .eq("customer_id", gate.user.customerId)
+    .not("name", "like", "\\_\\_%") // reserved rows (the workspace glossary lives here too) are not themes
     .order("name", { ascending: true });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 

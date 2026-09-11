@@ -18,6 +18,8 @@ export interface PreviewEntry {
   answers?: Record<string, unknown>;
   /** the draft revision the pushed definition was flushed as (shown in the preview bar) */
   revision?: number | null;
+  /** the language to preview in — becomes `?lang=` on the preview URL, so the runtime's own routing serves it */
+  language?: string;
 }
 
 let win: Window | null = null;
@@ -46,7 +48,7 @@ export function pushPreview(def?: SurveyDefinition): void {
 export function openPreview(base: string, def: SurveyDefinition, next: PreviewEntry = {}): boolean {
   latestDef = def;
   entry = { ...next };
-  const w = window.open(`${base}/preview`, "rescript_preview");
+  const w = window.open(`${base}/preview${next.language ? `?lang=${encodeURIComponent(next.language)}` : ""}`, next.language ? `rescript_preview_${next.language}` : "rescript_preview");
   if (!w) return false;
   win = w;
   w.focus();

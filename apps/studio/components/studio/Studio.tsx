@@ -29,10 +29,11 @@ import { DistributionPanel } from "./DistributionPanel";
 import { ProjectPanel } from "./ProjectPanel";
 import { runtimeBaseUrl, surveyBaseUrl } from "@/lib/runtime-url";
 import { Icon, type IconName } from "@/components/ui/Icon";
+import { LocalizationPanel } from "./localization/LocalizationPanel";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
-  | "quotas" | "listfill" | "designs" | "branding" | "scripts" | "tests" | "data" | "fieldwork"
+  | "quotas" | "listfill" | "designs" | "branding" | "localization" | "scripts" | "tests" | "data" | "fieldwork"
   | "distribution" | "project" | "versions" | "json"
   | "collaborators" | "notes" | "activity"
   | "settings";
@@ -46,7 +47,7 @@ type Tab =
  */
 const EDITING_TABS = new Set<Tab>([
   "questions", "settings", "flow", "logic", "variables", "calculations",
-  "quotas", "listfill", "designs", "branding", "scripts", "json",
+  "quotas", "listfill", "designs", "branding", "localization", "scripts", "json",
 ]);
 
 /*
@@ -66,6 +67,13 @@ const NAV: { key: Tab; label: string; icon: IconName; group: string }[] = [
   { key: "listfill", label: "List Fill", icon: "listfill", group: "Programming" },
   { key: "designs", label: "Design Generators", icon: "designs", group: "Research tools" },
   { key: "branding", label: "Branding", icon: "branding", group: "Research tools" },
+  /*
+   * Translation & Localization — every language version of the survey (text
+   * and audio) over the one language-neutral definition. In Research tools
+   * beside Branding: it changes what a respondent reads and hears, never what
+   * the survey asks or stores. In EDITING_TABS: a translation is authorship.
+   */
+  { key: "localization", label: "Translation", icon: "layers", group: "Research tools" },
   { key: "scripts", label: "Scripts", icon: "scripts", group: "Research tools" },
   /*
    * §55/§56. In Research tools rather than Programming, and deliberately NOT
@@ -765,6 +773,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           {tab === "listfill" && <ListFillPanel />}
           {tab === "designs" && <DesignsPanel />}
           {tab === "branding" && <BrandingPanel />}
+          {tab === "localization" && <LocalizationPanel />}
           {tab === "scripts" && <ScriptsPanel />}
           {tab === "data" && <DataPanel />}
           {tab === "fieldwork" && <FieldworkPanel />}

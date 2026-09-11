@@ -48,7 +48,8 @@ export async function POST(req: NextRequest) {
     .map((t) => ({ prompt: t.prompt, answer: probeSourceText(t.answer) }));
 
   try {
-    const prompt = await writeProbe({ questionText: q.text, answer, transcript, n, instruction: probe.instruction });
+    const language = typeof body?.language === "string" ? body.language.slice(0, 20) : undefined;
+    const prompt = await writeProbe({ questionText: q.text, answer, transcript, n, instruction: probe.instruction, language });
     return NextResponse.json({ ok: true, prompt });
   } catch (e) {
     console.warn("[rescript:ai] probe failed", JSON.stringify({ q: q.code, error: (e as Error).message }));

@@ -107,6 +107,8 @@ export async function writeProbe(input: {
   transcript: { prompt: string; answer: string }[];
   n: number;
   instruction?: string;
+  /** the respondent's language — the follow-up is written in it */
+  language?: string;
 }): Promise<string | null> {
   const answer = input.answer.slice(0, MAX_TEXT);
   if (aiProviderName() === "fake") return fakeProbe(answer, input.n, input.instruction);
@@ -117,6 +119,7 @@ export async function writeProbe(input: {
     `Original question: ${stripTags(input.questionText)}\nAnswer: """${answer}"""\n`
     + (history ? `${history}\n` : "")
     + (input.instruction ? `Interviewer's instruction: ${input.instruction}\n` : "")
+    + (input.language && input.language !== "en" ? `Write the follow-up in the language with code "${input.language}" — the language the respondent is answering in.\n` : "")
     + `Write follow-up ${input.n}.`,
   );
   const q = typeof out?.question === "string" ? out.question.trim() : "";
@@ -166,11 +169,184 @@ export function fakeRephrase(text: string, variation: "low" | "medium" | "high" 
   return t;
 }
 
+/* ---------------------------------------------------------- translation */
+
+export interface TranslateItem { key: string; text: string; /** what the string is, for context: "question text", "answer option", "validation message"… */ kind?: string }
+export interface TranslateOptions {
+  sourceLanguage: string;
+  targetLanguage: string;
+  /** BCP-47 regional variant, when the study chose one ("es-MX", "zh-TW", "fr-CA") */
+  locale?: string;
+  /** preferred wordings: source term → target term (a target equal to the source means: do not translate it) */
+  glossary?: { source: string; target: string }[];
+  /** translator's notes for this language ("formal register", "use the Gurmukhi script") */
+  notes?: string;
+  /** the survey's title / topic, for terminology */
+  context?: string;
+}
+
+/**
+ * TRANSLATE A BATCH OF SURVEY STRINGS, with survey context.
+ *
+ * The model is told what each string IS (a question, an answer option, a
+ * scale point, a validation message), the survey's topic, the regional
+ * variant and the glossary — so a satisfaction scale stays a scale, a brand
+ * stays a brand and "18–24" stays "18–24". Two invariants are enforced after
+ * the model answers, not trusted to it: `{{piping}}` tokens and `{params}`
+ * must survive verbatim (a translation that lost or invented one is dropped
+ * and the caller sees no translation for that key rather than a broken
+ * one), and HTML tags must balance. Returns key → translation for the
+ * strings that came back usable.
+ */
+export async function translateBatch(items: TranslateItem[], opts: TranslateOptions): Promise<Record<string, string>> {
+  const clean = items.filter((i) => i.text?.trim()).slice(0, 80);
+  if (!clean.length) return {};
+  if (aiProviderName() === "fake") return Object.fromEntries(clean.map((i) => [i.key, fakeTranslate(i.text, opts)]));
+  const glossary = (opts.glossary ?? []).map((g) => (g.source === g.target ? `- "${g.source}": keep exactly as written (do not translate)` : `- "${g.source}" → "${g.target}"`)).join("\n");
+  const out = await complete(
+    "You are a professional survey localization translator. Translate each string from the source language into the target language and regional variant, "
+    + "as a market-research questionnaire would be written there: natural, neutral, the same meaning, the same register, the same scale direction. "
+    + "Rules: keep every {{piping}} token and every {parameter} EXACTLY as written; keep HTML tags and their nesting; keep numbers, ranges and codes; do not add explanations; "
+    + "translate answer options so they remain mutually distinct; follow the glossary exactly. Reply with JSON only: {\"translations\": {\"<key>\": \"<translation>\", ...}} with every key present.",
+    `Source language: ${opts.sourceLanguage}\nTarget language: ${opts.targetLanguage}${opts.locale ? ` (${opts.locale})` : ""}\n`
+    + (opts.context ? `Survey: ${stripTags(opts.context)}\n` : "")
+    + (opts.notes ? `Notes for this language: ${opts.notes}\n` : "")
+    + (glossary ? `Glossary:\n${glossary}\n` : "")
+    + `Strings (JSON):\n${JSON.stringify(clean.map((i) => ({ key: i.key, kind: i.kind ?? "text", text: i.text })))}`,
+    1200,
+  );
+  const raw = (out as { translations?: unknown } | null)?.translations;
+  if (!raw || typeof raw !== "object") return {};
+  const result: Record<string, string> = {};
+  for (const i of clean) {
+    const t = (raw as Record<string, unknown>)[i.key];
+    if (typeof t !== "string" || !t.trim()) continue;
+    if (!placeholdersMatch(i.text, t) || !tagsBalanced(t)) { console.warn("[rescript:ai] translation dropped — placeholders or HTML changed", JSON.stringify({ key: i.key })); continue; }
+    result[i.key] = t.trim();
+  }
+  return result;
+}
+
+const PLACEHOLDER_RE = /\{\{[^}]+\}\}|\{\w+\}/g;
+export function placeholdersMatch(a: string, b: string): boolean {
+  const norm = (s: string) => (s.match(PLACEHOLDER_RE) ?? []).map((x) => x.replace(/\s+/g, "")).sort().join("|");
+  return norm(a) === norm(b);
+}
+export function tagsBalanced(s: string): boolean {
+  return (s.match(/</g) ?? []).length === (s.match(/>/g) ?? []).length && !/<[^>]*$/.test(s);
+}
+
+/**
+ * A SMALL SURVEY DICTIONARY for the fake provider — common questionnaire
+ * words in a few languages, so a local demo reads plausibly; anything else is
+ * marked `[xx]` so it is unmistakably a stand-in. Placeholders, tags and
+ * numbers pass through untouched, and the glossary is applied — the same
+ * post-conditions the real provider is held to.
+ */
+const FAKE_DICT: Record<string, Record<string, string>> = {
+  hi: { "yes": "हाँ", "no": "नहीं", "next": "आगे", "back": "पीछे", "submit": "जमा करें", "male": "पुरुष", "female": "महिला", "other": "अन्य", "none of the above": "इनमें से कोई नहीं", "please specify": "कृपया बताएं", "strongly agree": "पूरी तरह सहमत", "agree": "सहमत", "neutral": "तटस्थ", "disagree": "असहमत", "strongly disagree": "पूरी तरह असहमत", "very satisfied": "बहुत संतुष्ट", "satisfied": "संतुष्ट", "dissatisfied": "असंतुष्ट", "very dissatisfied": "बहुत असंतुष्ट", "what is your age?": "आपकी उम्र क्या है?", "this question is required.": "यह प्रश्न अनिवार्य है।", "thank you for completing this survey.": "इस सर्वेक्षण को पूरा करने के लिए धन्यवाद।", "great": "बहुत अच्छा", "fine": "ठीक", "poor": "ख़राब", "good": "अच्छा", "bad": "बुरा", "language": "भाषा" },
+  es: { "yes": "Sí", "no": "No", "next": "Siguiente", "back": "Atrás", "submit": "Enviar", "male": "Hombre", "female": "Mujer", "other": "Otro", "none of the above": "Ninguna de las anteriores", "please specify": "Por favor, especifique", "strongly agree": "Totalmente de acuerdo", "agree": "De acuerdo", "neutral": "Neutral", "disagree": "En desacuerdo", "strongly disagree": "Totalmente en desacuerdo", "very satisfied": "Muy satisfecho", "satisfied": "Satisfecho", "dissatisfied": "Insatisfecho", "very dissatisfied": "Muy insatisfecho", "what is your age?": "¿Cuál es su edad?", "this question is required.": "Esta pregunta es obligatoria.", "thank you for completing this survey.": "Gracias por completar esta encuesta.", "great": "Excelente", "fine": "Bien", "poor": "Mal", "good": "Bueno", "bad": "Malo", "language": "Idioma" },
+  fr: { "yes": "Oui", "no": "Non", "next": "Suivant", "back": "Retour", "submit": "Envoyer", "male": "Homme", "female": "Femme", "other": "Autre", "none of the above": "Aucune de ces réponses", "please specify": "Veuillez préciser", "strongly agree": "Tout à fait d'accord", "agree": "D'accord", "neutral": "Neutre", "disagree": "Pas d'accord", "strongly disagree": "Pas du tout d'accord", "what is your age?": "Quel âge avez-vous ?", "this question is required.": "Cette question est obligatoire.", "thank you for completing this survey.": "Merci d'avoir répondu à cette enquête.", "great": "Excellent", "fine": "Bien", "poor": "Mauvais", "good": "Bon", "bad": "Mauvais", "language": "Langue" },
+  de: { "yes": "Ja", "no": "Nein", "next": "Weiter", "back": "Zurück", "submit": "Absenden", "male": "Männlich", "female": "Weiblich", "other": "Sonstiges", "none of the above": "Keine der genannten", "please specify": "Bitte angeben", "strongly agree": "Stimme voll zu", "agree": "Stimme zu", "neutral": "Neutral", "disagree": "Stimme nicht zu", "strongly disagree": "Stimme überhaupt nicht zu", "what is your age?": "Wie alt sind Sie?", "this question is required.": "Diese Frage ist erforderlich.", "thank you for completing this survey.": "Vielen Dank für die Teilnahme an dieser Umfrage.", "great": "Sehr gut", "fine": "Gut", "poor": "Schlecht", "good": "Gut", "bad": "Schlecht", "language": "Sprache" },
+  ar: { "yes": "نعم", "no": "لا", "next": "التالي", "back": "السابق", "submit": "إرسال", "male": "ذكر", "female": "أنثى", "other": "أخرى", "what is your age?": "كم عمرك؟", "this question is required.": "هذا السؤال إلزامي.", "language": "اللغة" },
+};
+
+export function fakeTranslate(text: string, opts: TranslateOptions): string {
+  const lang = opts.targetLanguage.toLowerCase().split("-")[0];
+  const dict = FAKE_DICT[lang] ?? {};
+  // protect placeholders and tags
+  const holes: string[] = [];
+  const protectedText = text.replace(/\{\{[^}]+\}\}|\{\w+\}|<[^>]+>/g, (m) => { holes.push(m); return `\u0000${holes.length - 1}\u0000`; });
+  const plain = protectedText.trim().toLowerCase();
+  let out: string;
+  if (dict[plain]) out = dict[plain];
+  else if (/^[\d\s.,%$€£+–-]+$/.test(protectedText.trim()) || !/\p{L}/u.test(protectedText)) out = protectedText;
+  else out = `[${lang}] ${protectedText.trim()}`;
+  for (const g of opts.glossary ?? []) {
+    if (!g.source.trim()) continue;
+    const re = new RegExp(`(^|[^\\p{L}\\p{N}_])${g.source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[^\\p{L}\\p{N}_])`, "giu");
+    out = out.replace(re, (_, pre) => `${pre}${g.target}`);
+  }
+  return out.replace(/\u0000(\d+)\u0000/g, (_, i) => holes[Number(i)]);
+}
+
+/* ---------------------------------------------------------------- speech */
+
+export interface SpeechOptions {
+  /** BCP-47 */
+  language: string;
+  /** a provider voice id, else the provider's default for the language */
+  voiceId?: string;
+  gender?: string;
+  /** 0.5–2 */
+  speed?: number;
+  style?: string;
+  format?: "mp3" | "wav";
+}
+
+/**
+ * GENERATE SPOKEN AUDIO for a translated string — the "AI voice" of the
+ * localization layer. OpenAI-compatible `/audio/speech`; the caller stores the
+ * bytes and marks the asset AI-generated (never presented as a human
+ * recording). The fake provider returns a short valid WAV tone whose length
+ * follows the text, so the whole pipeline — generate, preview, approve,
+ * attach, play — is testable without a vendor.
+ */
+export async function synthesizeSpeech(text: string, opts: SpeechOptions): Promise<{ bytes: Uint8Array; mimeType: string; durationMs: number } | null> {
+  const t = stripTags(text).slice(0, 2000);
+  if (!t) return null;
+  if (aiProviderName() === "fake") return fakeSpeech(t, opts.speed ?? 1);
+  const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
+  const key = (process.env.AI_API_KEY ?? "").trim();
+  if (!base) return null;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 30_000);
+  try {
+    const r = await fetch(`${base}/audio/speech`, {
+      method: "POST", signal: ctrl.signal, cache: "no-store",
+      headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
+      body: JSON.stringify({ model: (process.env.AI_TTS_MODEL ?? "").trim() || "tts-1", input: t, voice: opts.voiceId || defaultVoiceFor(opts.gender), speed: Math.max(0.5, Math.min(2, opts.speed ?? 1)), response_format: opts.format ?? "mp3", ...(opts.style ? { instructions: `Speak in ${opts.language}, ${opts.style}.` } : {}) }),
+    });
+    if (!r.ok) { console.warn("[rescript:ai] tts provider error", JSON.stringify({ status: r.status })); return null; }
+    const buf = new Uint8Array(await r.arrayBuffer());
+    if (!buf.length) return null;
+    const mime = opts.format === "wav" ? "audio/wav" : "audio/mpeg";
+    return { bytes: buf, mimeType: mime, durationMs: Math.round((t.length / 15) * 1000 / (opts.speed ?? 1)) };
+  } catch (e) {
+    console.warn("[rescript:ai] tts provider unreachable", JSON.stringify({ error: (e as Error).name }));
+    return null;
+  } finally { clearTimeout(timer); }
+}
+
+function defaultVoiceFor(gender?: string): string {
+  return gender === "female" ? "nova" : gender === "male" ? "onyx" : "alloy";
+}
+
+/** A 16-bit mono 8 kHz WAV: a soft tone whose duration follows the text — recognisably synthetic, valid everywhere. */
+export function fakeSpeech(text: string, speed = 1): { bytes: Uint8Array; mimeType: string; durationMs: number } {
+  const rate = 8000;
+  const durationMs = Math.min(8000, Math.max(300, Math.round((text.length / 15) * 1000 / speed)));
+  const samples = Math.round((rate * durationMs) / 1000);
+  const data = new Int16Array(samples);
+  for (let i = 0; i < samples; i++) {
+    const tsec = i / rate;
+    const env = Math.min(1, tsec / 0.05, (samples - i) / rate / 0.05);
+    data[i] = Math.round(Math.sin(2 * Math.PI * 440 * tsec) * 0.15 * 32767 * env);
+  }
+  const buf = new ArrayBuffer(44 + samples * 2);
+  const v = new DataView(buf);
+  const w = (o: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, "RIFF"); v.setUint32(4, 36 + samples * 2, true); w(8, "WAVE"); w(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, "data"); v.setUint32(40, samples * 2, true);
+  new Int16Array(buf, 44).set(data);
+  return { bytes: new Uint8Array(buf), mimeType: "audio/wav", durationMs };
+}
+
 const stripTags = (s: string) => s.replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
 
 /* ------------------------------------------------------- the http client */
 
-async function complete(system: string, user: string): Promise<{ label?: unknown; question?: unknown } | null> {
+async function complete(system: string, user: string, maxTokens = 160): Promise<{ label?: unknown; question?: unknown; translations?: unknown } | null> {
   const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
   const key = (process.env.AI_API_KEY ?? "").trim();
   if (!base) return null;
@@ -185,7 +361,7 @@ async function complete(system: string, user: string): Promise<{ label?: unknown
       body: JSON.stringify({
         model: (process.env.AI_MODEL ?? "").trim() || "gpt-4o-mini",
         temperature: 0,
-        max_tokens: 160,
+        max_tokens: maxTokens,
         response_format: { type: "json_object" },
         messages: [{ role: "system", content: system }, { role: "user", content: user }],
       }),

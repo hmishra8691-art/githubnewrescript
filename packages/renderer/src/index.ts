@@ -27,3 +27,4 @@ export type { VoiceConsoleProps } from "./voice/VoiceConsole";
 export { speakSegments, useSpeaker } from "./voice/speaker";
 export { registerVoiceProvider, ttsProvider, sttProvider, browserTts, browserStt, chooseVoice } from "./voice/providers";
 export type { TtsProvider, SttProvider, VoiceInfo, SpeakOptions, SttResult, SttSession } from "./voice/providers";
+export { QuestionAudio } from "./QuestionAudio";

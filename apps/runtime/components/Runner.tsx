@@ -34,6 +34,20 @@ import {
   effectiveProbe,
   acknowledgement,
   recordVoice,
+  localizeDefinition,
+  resolveLanguage,
+  offeredLanguages,
+  surveyLanguages,
+  languageDirection,
+  languageLocale,
+  languageName,
+  uiStringsFor,
+  uiText,
+  recordLanguage,
+  stateLanguage,
+  effectiveLocalization,
+  audioFor,
+  K,
   type VoiceRecord,
   decideListFill,
   listFillVariables,
@@ -46,7 +60,7 @@ import {
 } from "@rescript/engine";
 import { QuestionRenderer } from "@rescript/renderer";
 import { Inspector } from "./Inspector";
-import { MediaEmbed, SafeImage, VoiceConsole } from "@rescript/renderer";
+import { MediaEmbed, SafeImage, VoiceConsole, QuestionAudio } from "@rescript/renderer";
 import {
   readResume, writeResume, clearResume, resumeLink,
   cachePending, readPending, clearPending, RESUME_MAX_AGE_DAYS,
@@ -280,6 +294,7 @@ async function probeWording(
         questionId: q.id,
         n,
         answers: state.answers,
+        language: (state.embedded?.SURVEY_LANGUAGE as string | undefined) ?? undefined,
         build: build ? { source: build.source, versionId: build.versionId, revision: build.revision } : undefined,
       }),
     });
@@ -352,8 +367,23 @@ async function runListFills(
 }
 
 
-export function Runner({ definition: def, mode, session: initialSession, sessionBoot, quotaCounts: initialCounts, urlParams, build, startAt, seedAnswers }: RunnerProps) {
+export function Runner({ definition: sourceDef, mode, session: initialSession, sessionBoot, quotaCounts: initialCounts, urlParams, build, startAt, seedAnswers }: RunnerProps) {
   const [, force] = React.useReducer((x: number) => x + 1, 0);
+  /**
+   * THE RESPONDENT'S LANGUAGE — a layer over the definition, never a copy.
+   *
+   * `language` is an explicit choice (the selector, or the language a resumed
+   * session was answered in); otherwise the routing in
+   * `localization.routing` decides from the URL (`?lang=hi`), embedded data,
+   * country, the browser. `def` below is the SAME survey with its text fields
+   * swapped (`localizeDefinition`): ids, codes, conditions, quotas and
+   * variables are the very same objects, so everything the Runner does with
+   * it — compile the flow, validate, pipe, save — is identical in every
+   * language, and switching language mid-survey is a re-render, not a
+   * restart. Which language a respondent got is stored as SURVEY_LANGUAGE.
+   */
+  const [language, setLanguage] = React.useState<string | null>(null);
+  const browserLanguages = typeof navigator !== "undefined" ? navigator.languages : null;
   /**
    * The response row this run writes to. With `sessionBoot` it is obtained
    * (or resumed) from /api/session/start before the first page renders —
@@ -436,6 +466,30 @@ export function Runner({ definition: def, mode, session: initialSession, session
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionBoot, bootAttempt]);
   const stateRef = React.useRef<ResponseState | null>(null);
+  const chosenLanguage = language ?? (stateRef.current ? stateLanguage(stateRef.current) : null);
+  const lang = React.useMemo(
+    () => resolveLanguage(sourceDef, { urlParams, browserLanguages, embedded: stateRef.current?.embedded ?? null, chosen: chosenLanguage }, mode !== "live"),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sourceDef, urlParams, chosenLanguage, mode, stateRef.current?.embedded],
+  );
+  const def = React.useMemo(() => localizeDefinition(sourceDef, lang), [sourceDef, lang]);
+  const ui = React.useMemo(() => uiStringsFor(sourceDef, lang), [sourceDef, lang]);
+  const langCfg = surveyLanguages(sourceDef).find((l) => l.code === lang);
+  const locale = languageLocale(lang, langCfg);
+  const dir = languageDirection(lang, langCfg);
+  const languageChoices = offeredLanguages(sourceDef, mode !== "live");
+  const showLanguageSelector = languageChoices.length > 1 && effectiveLocalization(sourceDef).routing.allowSwitch;
+  React.useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.documentElement.lang = locale;
+    document.documentElement.dir = dir;
+  }, [locale, dir]);
+  /** the respondent changes language: same position, same answers, same seed — only the words */
+  const chooseLanguage = (code: string) => {
+    setLanguage(code);
+    if (stateRef.current) recordLanguage(stateRef.current, code);
+    force();
+  };
   const [steps, setSteps] = React.useState<RuntimeStep[]>([]);
   const [errors, setErrors] = React.useState<ReturnType<typeof validatePage>>([]);
   const [ended, setEnded] = React.useState<{ status: string; message?: string; redirectUrl?: string } | null>(null);
@@ -630,6 +684,14 @@ export function Runner({ definition: def, mode, session: initialSession, session
       nav.steps = steps2;
       savedRef.current = null;
     }
+    /*
+     * SURVEY_LANGUAGE: decided once the embedded data is in (a panel's
+     * `language` field, an invitation's country) — a resumed session keeps the
+     * language it was answered in, an explicit choice wins over detection.
+     */
+    if (sourceDef.localization?.languages?.length) {
+      recordLanguage(state, resolveLanguage(sourceDef, { urlParams, browserLanguages, embedded: state.embedded, chosen: language ?? stateLanguage(state) }, mode !== "live"));
+    }
     notePage(nav.steps, state.stepIndex, saved || telemetryRef.current.data.navigation.reloads > 0 ? "reload" : "start");
     setStartNote(
       nav.startAt && !nav.startAt.found
@@ -692,7 +754,7 @@ export function Runner({ definition: def, mode, session: initialSession, session
   const step = steps[state.stepIndex];
   const pageStep = step?.kind === "page" ? step : null;
   const questions = pageStep ? visibleQuestions(def, pageStep, state, counts) : [];
-  const ctx = { def, state, loop: pageStep?.loop ?? null, quotaCounts: counts };
+  const ctx = { def, state, loop: pageStep?.loop ?? null, quotaCounts: counts, ui, locale };
 
   /*
    * THE AI CONVERSATIONAL SURVEY — how the same survey is presented and
@@ -712,7 +774,6 @@ export function Runner({ definition: def, mode, session: initialSession, session
   const conversational = ai.enabled && ai.conversation !== "standard";
   const voice = voiceOn(ai);
   const probeOf = (q: Question) => effectiveProbe(def, q, ctx, questionAi(def, q));
-  const surveyLanguage = (def as unknown as { meta?: { language?: string } }).meta?.language || def.deployment?.languages?.[0] || null;
   const noteVoice = (q: Question, rec: Partial<VoiceRecord>) => {
     const cfg = questionAi(def, q);
     recordVoice(state.answers as Record<string, unknown>, q.id, rec, cfg.voice.interaction.transcript === "store");
@@ -1009,7 +1070,7 @@ export function Runner({ definition: def, mode, session: initialSession, session
       <button type="button" className="rs-btn" style={{ marginTop: 18 }} onClick={retryFinalSave}>Retry saving</button>
     </div>
   ) : ended && finalSave.kind === "saving" ? (
-    <div className="rs-card rs-end" data-testid="rs-saving"><h2>Saving your answers…</h2></div>
+    <div className="rs-card rs-end" data-testid="rs-saving"><h2>{uiText(ui, "saving")}</h2></div>
   ) : ended ? (
     <div className="rs-card rs-end" data-testid="rs-ended" data-saved={finalSave.kind === "saved" || mode === "preview" ? "1" : "0"}>
       {ended.message ? (
@@ -1017,12 +1078,12 @@ export function Runner({ definition: def, mode, session: initialSession, session
       ) : (
         <h2>
           {ended.status === "complete"
-            ? "Thank you for completing this survey!"
+            ? uiText(ui, "thank_you", undefined, "Thank you for completing this survey!")
             : ended.status === "quota_full"
-              ? "Unfortunately the group you belong to is already complete."
+              ? uiText(ui, "quota_full", undefined, "Unfortunately the group you belong to is already complete.")
               : ended.status === "screened"
-                ? "Thank you — you do not qualify for this study."
-                : "The survey has ended."}
+                ? uiText(ui, "screened", undefined, "Thank you — you do not qualify for this study.")
+                : uiText(ui, "terminated", undefined, "The survey has ended.")}
         </h2>
       )}
       {ended.redirectUrl && mode !== "live" && (
@@ -1047,7 +1108,7 @@ export function Runner({ definition: def, mode, session: initialSession, session
      */
     <>
       {errors.length > 0 && (
-        <div className="rs-error-banner" role="status" aria-live="polite">Please review the highlighted question below.</div>
+        <div className="rs-error-banner" role="status" aria-live="polite">{uiText(ui, "review_one")}</div>
       )}
       <div id="rs-questions" tabIndex={-1} data-testid="rs-probe" data-probe-of={probe.q.id} data-probe-n={probe.n}>
         {voice && (
@@ -1064,13 +1125,15 @@ export function Runner({ definition: def, mode, session: initialSession, session
             canGoBack={b.buttons.showBack}
             acknowledgement={ackRef.current.text}
             onVoice={(_, rec) => noteVoice(probe.q, rec)}
-            surveyLanguage={surveyLanguage}
+            surveyLanguage={locale}
+            language={lang}
           />
         )}
         <QuestionRenderer
           key={probe.pq.id}
           def={def}
           q={probe.pq}
+          ui={ui}
           state={state}
           loop={null}
           value={state.answers[probe.pq.id]}
@@ -1105,9 +1168,7 @@ export function Runner({ definition: def, mode, session: initialSession, session
       )}
       {errors.length > 0 && (
         <div className="rs-error-banner" role="status" aria-live="polite">
-          {blockingErrors(errors).length > 0
-            ? "Please review the highlighted questions below."
-            : "Please check the highlighted answers — you can continue if they are right."}
+          {blockingErrors(errors).length > 0 ? uiText(ui, "review_errors") : uiText(ui, "review_soft")}
         </div>
       )}
       {startNote && (
@@ -1139,7 +1200,8 @@ export function Runner({ definition: def, mode, session: initialSession, session
           canGoBack={b.buttons.showBack && (state.stepIndex > 0 || (conversational && convoIndex > 0))}
           acknowledgement={conversational ? ackRef.current.text : null}
           onVoice={noteVoice}
-          surveyLanguage={surveyLanguage}
+          surveyLanguage={locale}
+          language={lang}
         />
       )}
       {conversational && transcript.length > 0 && (
@@ -1157,10 +1219,13 @@ export function Runner({ definition: def, mode, session: initialSession, session
         // the full iteration path, so nested loops key separately (see loopKeySuffix)
         const key = answerKey(q.id, pageStep.loop ?? null);
         return (
+          <React.Fragment key={key}>
+          {/* language-specific audio for this question (a recording, approved AI audio or a hosted file, by the survey's priority) — the play button appears only when one exists */}
+          <QuestionAudio def={sourceDef} q={q} language={lang} />
           <QuestionRenderer
-            key={key}
             def={def}
             q={q}
+            ui={ui}
             state={state}
             loop={pageStep.loop ?? null}
             value={state.answers[key]}
@@ -1196,6 +1261,7 @@ export function Runner({ definition: def, mode, session: initialSession, session
               force();
             }}
           />
+          </React.Fragment>
         );
       })}
       </div>
@@ -1213,13 +1279,23 @@ export function Runner({ definition: def, mode, session: initialSession, session
   );
 
   const shell = (
-    <div className={`rs-shell rs-${b.layout.cardStyle}`} style={brandingVars(b)}>
+    <div className={`rs-shell rs-${b.layout.cardStyle}`} style={brandingVars(b)} dir={dir} lang={locale} data-language={lang}>
+      {showLanguageSelector && !ended && (
+        <div className="rs-language" data-testid="rs-language-bar">
+          <label>
+            <span className="rs-language-label">{uiText(ui, "language")}</span>
+            <select className="rs-language-select" data-testid="rs-language" value={lang} onChange={(e) => chooseLanguage(e.target.value)} aria-label={uiText(ui, "language")}>
+              {languageChoices.map((code) => <option key={code} value={code}>{languageName(code, surveyLanguages(sourceDef).find((l) => l.code === code))}</option>)}
+            </select>
+          </label>
+        </div>
+      )}
       {/*
         * The first tab stop on any page. Without it, a keyboard respondent
         * on page 7 of a grid tabs through the whole toolbar and progress
         * chrome before reaching a question — every time.
         */}
-      <a className="rs-skip" href="#rs-questions" data-testid="rs-skip">Skip to the questions</a>
+      <a className="rs-skip" href="#rs-questions" data-testid="rs-skip">{uiText(ui, "skip_to_questions")}</a>
       {b.customCss && <style dangerouslySetInnerHTML={{ __html: b.customCss }} />}
       {(b.logoUrl || b.headerHtml) && (
         <div className={`rs-header ${b.logoPosition}`}>

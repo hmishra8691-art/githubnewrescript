@@ -37,6 +37,13 @@ export interface EvalContext {
   quotaCounts?: Record<string, Record<string, number>>;
   /** trace collector for the inspector */
   trace?: EvalTrace[];
+  /**
+   * The respondent's language: interface / validation strings (`ui`, a
+   * language's translated catalogue — see localization.ts `uiText`) and the
+   * locale for number and date formatting. Absent = English defaults.
+   */
+  ui?: Record<string, string>;
+  locale?: string;
 }
 
 export interface EvalTrace {

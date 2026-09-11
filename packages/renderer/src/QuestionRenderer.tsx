@@ -17,6 +17,7 @@ import {
   type ResponseState,
   type LoopContext,
   stripHtmlText,
+  uiText,
 } from "@rescript/engine";
 import { variantRenderers } from "./variants/registry";
 import { MediaEmbed, SafeImage } from "./Media";
@@ -35,6 +36,8 @@ export interface QRProps {
   errors: string[];
   onChange(value: unknown): void;
   onOtherChange?(text: string): void;
+  /** the respondent's language's interface strings (engine `uiStringsFor`); absent = English */
+  ui?: Record<string, string>;
 }
 
 export const OTHER = (o: Option) => o.flags?.includes("other_specify");
@@ -43,7 +46,12 @@ export const EXCLUSIVE = (o: Option) =>
   o.flags?.includes("dont_know") || o.flags?.includes("refused");
 
 export function ctxOf(p: QRProps): EvalContext {
-  return { def: p.def, state: p.state, loop: p.loop };
+  return { def: p.def, state: p.state, loop: p.loop, ui: p.ui };
+}
+
+/** An interface string in the respondent's language ("Please specify", "Search 40 options…"). */
+export function uiOf(p: QRProps, id: string, params?: Record<string, unknown>, fallback?: string): string {
+  return uiText(p.ui, id, params, fallback);
 }
 
 /** N-column option layout (req §10) with a mobile fallback in CSS. */
@@ -67,7 +75,7 @@ export function gridColumnsStyle(p: QRProps, fallback: string): React.CSSPropert
 }
 
 /** Search box for long option lists (req §9). */
-export function useOptionFilter(options: Option[], threshold = 25) {
+export function useOptionFilter(options: Option[], threshold = 25, ui?: Record<string, string>) {
   const [filter, setFilter] = React.useState("");
   const filtered = React.useMemo(() => {
     if (!filter.trim()) return options;
@@ -80,7 +88,7 @@ export function useOptionFilter(options: Option[], threshold = 25) {
     options.length > threshold ? (
       <input
         className="rs-input rs-optfilter"
-        placeholder={`Search ${options.length} options…`}
+        placeholder={uiText(ui, "search_options", { n: options.length })}
         value={filter}
         onChange={(e) => setFilter(e.target.value)}
       />
@@ -91,7 +99,7 @@ export function useOptionFilter(options: Option[], threshold = 25) {
 /* ------------------------------------------------ single select / dropdown */
 export function SingleSelect(p: QRProps) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
-  const { filtered, searchBox } = useOptionFilter(options);
+  const { filtered, searchBox } = useOptionFilter(options, 25, p.ui);
   return (
     <div>
     {searchBox}
@@ -112,7 +120,7 @@ export function SingleSelect(p: QRProps) {
             {OTHER(o) && sel && (
               <input
                 className="rs-input rs-other-input"
-                placeholder="Please specify"
+                placeholder={uiOf(p, "other_specify")}
                 value={p.otherValue ?? ""}
                 onClick={(e) => e.stopPropagation()}
                 onChange={(e) => p.onOtherChange?.(e.target.value)}
@@ -128,7 +136,7 @@ export function SingleSelect(p: QRProps) {
 
 export function MultiSelect(p: QRProps) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
-  const { filtered, searchBox } = useOptionFilter(options);
+  const { filtered, searchBox } = useOptionFilter(options, 25, p.ui);
   const vals: (string | number)[] = Array.isArray(p.value) ? (p.value as any) : [];
   const toggle = (o: Option) =>
     p.onChange(toggleMultiValue(vals, o.code, options, p.q.settings.maxSelections));
@@ -156,7 +164,7 @@ export function MultiSelect(p: QRProps) {
             {OTHER(o) && sel && (
               <input
                 className="rs-input rs-other-input"
-                placeholder="Please specify"
+                placeholder={uiOf(p, "other_specify")}
                 value={p.otherValue ?? ""}
                 onClick={(e) => e.stopPropagation()}
                 onChange={(e) => p.onOtherChange?.(e.target.value)}
@@ -193,7 +201,7 @@ export function Dropdown(p: QRProps) {
       <input
         className="rs-input"
         style={{ marginTop: 8 }}
-        placeholder="Please specify"
+        placeholder={uiOf(p, "other_specify")}
         value={p.otherValue ?? ""}
         onChange={(e) => p.onOtherChange?.(e.target.value)}
       />
@@ -283,7 +291,7 @@ export function MultiDropdown(p: QRProps) {
               className="rs-input"
               style={{ maxWidth: "100%" }}
               autoFocus
-              placeholder={`Search ${options.length} options…`}
+              placeholder={uiOf(p, "search_options", { n: options.length })}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -1145,7 +1153,7 @@ export const ANCHOR_CHOICES: { value: string; label: string }[] = [
 /** Button Select / Button Multi-Select — large tap targets, exclusive-aware. */
 export function ChoiceButtons(p: QRProps & { multi: boolean }) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
-  const { filtered, searchBox } = useOptionFilter(options);
+  const { filtered, searchBox } = useOptionFilter(options, 25, p.ui);
   const vals: (string | number)[] = p.multi
     ? Array.isArray(p.value) ? (p.value as any) : []
     : p.value == null ? [] : [p.value as any];
@@ -1338,7 +1346,7 @@ export function SearchableSingle(p: QRProps) {
       {open && (
         <div className="rs-msd-pop">
           <input className="rs-input" style={{ maxWidth: "100%" }} autoFocus
-            placeholder={`Search ${options.length} options…`}
+            placeholder={uiOf(p, "search_options", { n: options.length })}
             value={search} onChange={(e) => setSearch(e.target.value)} />
           <div className="rs-msd-list" role="listbox">
             {filtered.length === 0 && <div style={{ padding: 8, color: "var(--rs-subtle)" }}>No matches</div>}

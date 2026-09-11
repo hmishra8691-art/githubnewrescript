@@ -668,6 +668,28 @@ export function buildDerivedVariables(def: SurveyDefinition): VariableDef[] {
       notes: `= ${calc.expression}`,
     });
   }
+  /*
+   * SURVEY_LANGUAGE — which language version the respondent answered in.
+   * Declared whenever the survey has more than its source language, stored in
+   * the response's embedded data by the runtime, categorical in analytics so
+   * completes and results can be compared across languages. Codes and option
+   * codes are identical in every language; this is the only column a language
+   * adds.
+   */
+  if (def.localization?.languages?.length) {
+    const langs = [def.localization.sourceLanguage, ...def.localization.languages.map((l) => l.code).filter((c) => c !== def.localization!.sourceLanguage)];
+    out.push({
+      name: "SURVEY_LANGUAGE",
+      label: "Survey language",
+      dataType: "text",
+      responseType: "embedded_data",
+      derived: false,
+      hidden: false,
+      valueCodes: langs,
+      valueLabels: Object.fromEntries(langs.map((c) => [c, def.localization!.languages.find((l) => l.code === c)?.name ?? c])),
+      notes: "the language version the respondent answered in",
+    });
+  }
   for (const ed of def.embeddedData) {
     out.push({
       name: ed.name,

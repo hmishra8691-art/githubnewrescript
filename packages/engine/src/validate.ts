@@ -1,3 +1,4 @@
+import { uiText } from "./localization.js";
 import type { Question, ValidationRule, SurveyDefinition } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition } from "./evaluate.js";
@@ -303,7 +304,7 @@ export function validateQuestion(
    * (open text, numeric, date), so requiredness on those is untouched.
    */
   if (q.required && isEmpty(value) && !hasNoAnswerableItems(q, ctx)) {
-    push("This question is required.");
+    push(uiText(ctx.ui, "required"));
   }
 
   /*
@@ -357,7 +358,7 @@ export function validateQuestion(
         const raw = lookupAnswer(answers as never, `${q.id}__other`, ctx.loop) ??
           answers[`${answerKey(q.id, ctx.loop)}__other`];
         const text = typeof raw === "string" ? raw.trim() : raw;
-        if (isEmpty(text)) push("Please say what “Other” is before continuing.");
+        if (isEmpty(text)) push(uiText(ctx.ui, "other_required"));
       }
     }
   }
@@ -365,9 +366,9 @@ export function validateQuestion(
   // bounds from settings
   if (!isEmpty(value) && (q.type === "numeric" || q.type === "slider" || q.type === "nps")) {
     if (q.settings.minValue != null && Number(value) < q.settings.minValue)
-      push(`Value must be at least ${q.settings.minValue}.`);
+      push(uiText(ctx.ui, "min_value", { min: q.settings.minValue }));
     if (q.settings.maxValue != null && Number(value) > q.settings.maxValue)
-      push(`Value must be at most ${q.settings.maxValue}.`);
+      push(uiText(ctx.ui, "max_value", { max: q.settings.maxValue }));
   }
   /*
    * DATE BOUNDS FROM SETTINGS.
@@ -382,19 +383,19 @@ export function validateQuestion(
     const lo = dateBound(q.settings.minDate, ctx);
     const hi = dateBound(q.settings.maxDate, ctx);
     if (got != null && lo != null && got < lo)
-      push(`Please choose a date on or after ${new Date(lo).toISOString().slice(0, 10)}.`);
+      push(uiText(ctx.ui, "date_min", { date: new Date(lo).toISOString().slice(0, 10) }));
     if (got != null && hi != null && got > hi)
-      push(`Please choose a date on or before ${new Date(hi).toISOString().slice(0, 10)}.`);
+      push(uiText(ctx.ui, "date_max", { date: new Date(hi).toISOString().slice(0, 10) }));
     const blocked = q.settings.disabledWeekdays;
     if (got != null && blocked?.length && blocked.includes(new Date(got).getUTCDay()))
-      push("That day of the week is not available — please choose another date.");
+      push(uiText(ctx.ui, "date_weekday"));
   }
 
   if (Array.isArray(value)) {
     if (q.settings.minSelections != null && value.length < q.settings.minSelections && !isEmpty(value))
-      push(`Select at least ${q.settings.minSelections}.`);
+      push(uiText(ctx.ui, "min_selections", { n: q.settings.minSelections }));
     if (q.settings.maxSelections != null && value.length > q.settings.maxSelections)
-      push(`Select at most ${q.settings.maxSelections}.`);
+      push(uiText(ctx.ui, "max_selections", { n: q.settings.maxSelections }));
   }
 
   // a from–to pair (numeric range, dual slider): the order has to hold
@@ -403,7 +404,7 @@ export function validateQuestion(
     const codes = (q.rows ?? []).map((r) => String(r.code));
     const lo = v[codes[0] ?? "from"], hi = v[codes[1] ?? "to"];
     if (!isEmpty(lo) && !isEmpty(hi) && Number(lo) > Number(hi)) {
-      push("The first value must not be greater than the second.");
+      push(uiText(ctx.ui, "range_order"));
     }
   }
 
@@ -502,7 +503,7 @@ export function validateQuestion(
       0,
     );
     if (total !== q.settings.sumTarget)
-      push(`Total must equal ${q.settings.sumTarget}${q.settings.sumUnit ?? ""} (currently ${total}).`);
+      push(uiText(ctx.ui, "sum_target", { target: `${q.settings.sumTarget}${q.settings.sumUnit ?? ""}`, total }));
   }
 
   // sum_* rules for allocation-like values
@@ -647,7 +648,7 @@ export function validateQuestion(
     const rowsAnswered = (value ?? {}) as Record<string, unknown>;
     for (const row of view.rows) {
       if (isEmpty(rowsAnswered[String(row.code)]))
-        push(`Please answer for "${row.label}".`, { rowCode: String(row.code) });
+        push(uiText(ctx.ui, "row_required", { row: row.label }), { rowCode: String(row.code) });
     }
   }
 

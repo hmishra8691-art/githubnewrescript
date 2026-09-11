@@ -8,3 +8,4 @@ export * from "./responseQuality.js";
 export * from "./spreadsheetImport.js";
 export * from "./invitations.js";
 export * from "./respondentList.js";
+export * from "./localization.js";

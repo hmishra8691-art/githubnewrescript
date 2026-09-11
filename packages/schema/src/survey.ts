@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AiConversation } from "./aiConversation.js";
+import { Localization } from "./localization.js";
 import { Condition } from "./conditions.js";
 import { Question } from "./question.js";
 import { FlowNode, LogicFlow, EmbeddedDataType } from "./flow.js";
@@ -334,6 +335,12 @@ export const SurveyDefinition = z.object({
   designs: z.array(DesignReference).default([]),
   /** Generated dictionary (kept in the JSON so exports reflect exact state). */
   variables: z.array(VariableDef).default([]),
+  /**
+   * TRANSLATIONS AND AUDIO, per language, addressed by stable element keys —
+   * a layer over this language-neutral definition, never a copy of it. Absent
+   * = a single-language survey exactly as before (see localization.ts).
+   */
+  localization: Localization.optional(),
   /**
    * Reusable named conditions (§34, §35). Empty by default, so every existing
    * survey is unchanged and nothing resolves differently until a programmer

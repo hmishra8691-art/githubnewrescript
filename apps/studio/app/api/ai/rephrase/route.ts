@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { aiConfigured, aiProviderName, rephraseForSpeech } from "@rescript/ai";
-import { isFailure, requireUser } from "@/lib/guard";
+import { rephraseForSpeech } from "@rescript/ai";
+import { requireAiCaller } from "@/lib/aiGate";
 
 export const dynamic = "force-dynamic";
 
@@ -19,11 +19,8 @@ export const dynamic = "force-dynamic";
  * suite and a local developer can see the mechanism work.
  */
 export async function POST(req: NextRequest) {
-  if (!aiConfigured()) return NextResponse.json({ error: "AI is not configured on this Studio" }, { status: 501 });
-  if (aiProviderName() !== "fake") {
-    const user = await requireUser(req);
-    if (isFailure(user)) return user.response;
-  }
+  const gate = await requireAiCaller(req);
+  if (!gate.ok) return gate.response;
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
   const text = typeof body?.text === "string" ? body.text : "";

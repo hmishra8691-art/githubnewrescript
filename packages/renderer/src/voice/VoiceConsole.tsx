@@ -68,6 +68,8 @@ export interface VoiceConsoleProps {
   onVoice?(q: Question, rec: Partial<VoiceRecord>): void;
   /** the survey's language, for locale matching */
   surveyLanguage?: string | null;
+  /** the respondent's language code — recordings attached in the localization layer replace synthesis */
+  language?: string | null;
   /** a title for the console, e.g. the interviewer's name */
   label?: string;
 }
@@ -142,6 +144,7 @@ export function VoiceConsole(p: VoiceConsoleProps) {
         error: p.errors?.[qq.id],
         optionsRequested: i === activeIndex && optionsRequested,
         rowCode: i === activeIndex ? rowCode : undefined,
+        language: p.language ?? undefined,
       }));
     });
     return out;
