@@ -46,12 +46,22 @@ function pickDefined(defaults: Record<string, unknown>, current: Record<string, 
   return out;
 }
 
-export function createFromVariant(v: QuestionVariantDef, n: number): Question {
+/**
+ * `naming` is what the new question is CALLED — its code and variable name.
+ * A number is still accepted (`Q${n}`) so older callers keep working, but the
+ * Studio passes `nextQuestionNaming(def)`, which looks at what the survey
+ * already holds. Counting questions minted a second Q3 on any survey that had
+ * ever had one deleted, and two questions named Q3 write the same export
+ * columns — including `Q3_other`, which is how one question's "Other,
+ * specify" text turns up under another in the data.
+ */
+export function createFromVariant(v: QuestionVariantDef, naming: number | { code: string; variableName: string }): Question {
+  const { code, variableName } = typeof naming === "number" ? { code: `Q${naming}`, variableName: `Q${naming}` } : naming;
   const plugin = questionTypeRegistry.get(v.baseType);
   const q: Question = plugin
-    ? plugin.create({ id: uid("q"), code: `Q${n}`, variableName: `Q${n}` })
+    ? plugin.create({ id: uid("q"), code, variableName })
     : ({
-        id: uid("q"), code: `Q${n}`, variableName: `Q${n}`, type: v.baseType, text: "",
+        id: uid("q"), code, variableName, type: v.baseType, text: "",
         options: [], rows: [], columns: [], validation: [], required: false,
         settings: { readOnly: false, hidden: false }, skipLogic: [], listLogic: [],
       } as unknown as Question);

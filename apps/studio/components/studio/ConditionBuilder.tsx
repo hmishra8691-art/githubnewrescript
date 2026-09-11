@@ -10,6 +10,7 @@ import {
 } from "@rescript/schema";
 import {
   operatorsForQuestion, conditionSummary, embeddedCatalog, authoringQuestionView,
+  gridAxes, authoringValueChoicesFor, describeReference,
   type LogicPath,
   editableCondition, canonicalCondition, pathKey, appendTo, replaceAt, removeAt,
   duplicateAt, setOperatorAt, groupSelection, ungroupAt, validateLogicTree,
@@ -117,6 +118,14 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
    * non-carry-forward question it returns `q` unchanged.
    */
   const view: Question | undefined = q ? authoringQuestionView(q, s.def) : undefined;
+  /*
+   * The question's AXES, and the values the current reference can hold. One
+   * resolver, shared with the lint and the evaluator, so the builder cannot
+   * offer a row where a column belongs or a scale the question does not use.
+   */
+  const srcQuestion = view ?? q;
+  const axes = gridAxes(srcQuestion);
+  const valueChoices = authoringValueChoicesFor(q, s.def, { rowCode: rule.source.rowCode, columnId: rule.source.columnId });
   const listOps = LIST_VALUE_OPERATORS.includes(rule.operator);
   const needsValue = !VALUELESS_OPERATORS.includes(rule.operator);
   const needsValue2 = TWO_VALUE_OPERATORS.includes(rule.operator);
@@ -362,23 +371,43 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
       {/* a count reads the whole collection, so a single row or column is not
           the thing being asked about — the subset picker inside the count
           editor is where narrowing happens */}
-      {!counting && view && (view.rows.length > 0 || view.columns.length > 0) && (
+      {/*
+        * THE TWO AXES, NAMED FOR WHAT THEY ACTUALLY ARE.
+        *
+        * The column picker used to appear only when `q.columns` was non-empty
+        * — which is never true of a Likert grid, because a Likert grid keeps
+        * its columns in `q.options` as the answer scale. So "any row rated
+        * Excellent", a reference the evaluator has always supported and the
+        * engine tests cover, could not be authored at all. `gridAxes` answers
+        * "what are this question's axes" once, for both spellings, and the
+        * pickers follow it.
+        */}
+      {!counting && axes.isGrid && (axes.rows.length > 0 || axes.columns.length > 0) && (
         <>
-          {view.rows.length > 0 && (
-            <select className="select" value={rule.source.rowCode ?? ""}
+          {axes.rows.length > 0 && (
+            <select className="select" data-testid="cond-row" value={rule.source.rowCode ?? ""}
               onChange={(e) => setSource({ rowCode: e.target.value || undefined })}>
               <option value="">any row</option>
-              {view.rows.map((r) => <option key={String(r.code)} value={String(r.code)}>row: {stripHtml(r.label)}</option>)}
+              {axes.rows.map((r) => <option key={r.ref} value={r.ref}>row: {r.label}</option>)}
             </select>
           )}
-          {view.columns.length > 0 && (
-            <select className="select" value={rule.source.columnId ?? ""}
-              onChange={(e) => setSource({ columnId: e.target.value || undefined })}>
-              <option value="">any col</option>
-              {view.columns.map((c) => <option key={c.id} value={c.id}>col: {c.label}</option>)}
+          {axes.columns.length > 0 && (
+            <select className="select" data-testid="cond-column" value={rule.source.columnId ?? ""}
+              onChange={(e) => setSource({ columnId: e.target.value || undefined })}
+              title={axes.columnMeaning === "option_code"
+                ? "The columns of this grid are its answer scale. Naming one asks about any row with that answer."
+                : "Naming a column asks about that column's cell."}>
+              <option value="">{axes.columnMeaning === "option_code" ? "any answer" : "any col"}</option>
+              {axes.columns.map((c) => <option key={c.ref} value={c.ref}>{axes.columnMeaning === "option_code" ? "rated" : "col"}: {c.label}</option>)}
             </select>
           )}
         </>
+      )}
+      {/* what the reference reads as, so there is never a doubt which cell it names */}
+      {!counting && axes.isGrid && (rule.source.rowCode || rule.source.columnId) && (
+        <span className="chip mono" data-testid="cond-reference" title="the element this condition reads">
+          {describeReference(srcQuestion, rule.source)}
+        </span>
       )}
       {/*
         * A NAMED EXPRESSION NEEDS NO OPERATOR. It already answers yes or no,
@@ -430,12 +459,15 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
               <option key={x.id} value={x.code}>{x.code} — {stripHtml(x.text).slice(0, 40)}</option>
             ))}
           </select>
-        ) : view && view.options.length > 0 && !listOps && rule.operator !== "matches" ? (
-          <select className="select" value={String(rule.value ?? "")}
+        ) : valueChoices.length > 0 && !listOps && rule.operator !== "matches" ? (
+          /* the values THIS reference can hold: a flat question's options, a
+             grid's scale, or the named column's own list — never a list from
+             a different axis, which is how an unmatchable rule got authored */
+          <select className="select" data-testid="cond-value" value={String(rule.value ?? "")}
             onChange={(e) => onChange({ ...rule, value: e.target.value })}>
             <option value="">— value —</option>
-            {view.options.map((o) => (
-              <option key={String(o.code)} value={String(o.code)}>{o.code}: {stripHtml(o.label)}</option>
+            {valueChoices.map((o) => (
+              <option key={o.ref} value={o.ref}>{o.ref}: {o.label}</option>
             ))}
           </select>
         ) : (

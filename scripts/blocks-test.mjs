@@ -267,10 +267,19 @@ await (async () => {
   await p.click('[data-testid="debug-toggle"]');
   await p.waitForSelector(".rs-inspector");
   const dbg = (await p.$eval(".rs-inspector", (e) => e.innerText)).toLowerCase();
-  for (const section of ["session", "display logic", "answers"]) {
+  /*
+   * The section this used to look for was headed "Display logic" and answered
+   * only "did the condition pass". It is now "Visibility", which answers the
+   * question a tester actually has — is this on the screen, what decided
+   * that, and what happened to each of its options — with the condition
+   * trace still printed underneath. The rename is the contract, so the test
+   * pins the new one rather than the old wording.
+   */
+  for (const section of ["session", "visibility", "answers"]) {
     assert.ok(dbg.includes(section), `debug shows ${section}: ${dbg.slice(0, 120)}`);
   }
-  console.log("✔ debug opens on demand with session, display-logic evaluation and answers");
+  assert.ok(/\bvisible\b|\bhidden\b/.test(dbg), "…and says which each question is");
+  console.log("✔ debug opens on demand with session, per-question visibility with reasons, and answers");
 
   await p.click('[data-testid="debug-toggle"]');
   inspectorOpen = await p.$$eval(".rs-inspector", (els) => els.length);

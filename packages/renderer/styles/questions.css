@@ -160,6 +160,9 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-footer { color: var(--rs-subtle); font-size: 12px; text-align: center; padding: 20px 0; }
 
 /* other-specify inline input */
+/* the box a button / card / tile layout cannot nest inside its choice */
+.rs-other-below { display: block; width: 100%; max-width: 420px; margin: 10px 0 0; }
+
 .rs-other-input {
   margin-left: 8px;
   flex: 2 1 220px;   /* outweigh the label so the box is actually typable */

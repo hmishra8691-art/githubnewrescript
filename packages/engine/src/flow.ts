@@ -4,6 +4,8 @@ import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition } from "./evaluate.js";
 import type { LoopContext, ResponseState } from "./state.js";
 import { getQuestion, answerKey, loopKeySuffix } from "./state.js";
+import { syncOtherText } from "./otherSpecify.js";
+import { pruneHiddenSelections } from "./visibility.js";
 import { loopContexts, loopVariables, registerIterationQuestionsResolver } from "./loops.js";
 import { seededShuffle, subSeed } from "./random.js";
 import { flattenVariables } from "./flatten.js";
@@ -483,6 +485,18 @@ function moveForward(
       if (visible.length === 0) { idx++; continue; }
       state.stepIndex = idx;
       /*
+       * An answer naming something no longer offered is not an answer. A
+       * respondent picks Blue, goes back, changes the answer that offered
+       * Blue, and returns: the option is gone from the screen and from the
+       * validator's list of what is available, so it must be gone from the
+       * response too — otherwise it still counts towards min/max selections,
+       * still drives other questions' logic, still fills a quota cell and
+       * still leaves on the export. Only VISIBLE questions are pruned; a
+       * question the respondent cannot see has not been asked to change
+       * anything. Before prefill, so auto-selection can refill what it wants.
+       */
+      pruneHiddenSelections(def, visible, { def, state, loop: s.loop, quotaCounts }, s.loop);
+      /*
        * Auto-selection runs here — once per navigation, on the questions the
        * respondent is about to see, from state that already exists. Doing it
        * during render would recompute on every keystroke and fight the
@@ -632,6 +646,14 @@ export function setAnswer(
   loop?: LoopContext | null,
 ): void {
   state.answers[answerKey(questionId, loop ?? null)] = value as any;
+  /*
+   * "Other, specify" text belongs to the selection that opened the box. A
+   * respondent who unticks Other and picks Blue instead used to leave their
+   * abandoned text in the response for ever — exported, analysed, and shown
+   * again on the way back. One door in, one place to tidy up.
+   */
+  const q = getQuestion(def, questionId);
+  if (q) syncOtherText(state, q, loop ?? null);
   runCalculations(def, state, "on_change");
 }
 

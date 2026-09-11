@@ -54,7 +54,7 @@ export const BLOCK_COMMANDS = {
 const MEDIA_OWNING = new Set(["videorating", "videotimeline", "watchtime", "audiorec", "base:media_timeline"]);
 import { InsertPipingButton } from "./PipingPicker";
 import {
-  FIELD_TYPES, nextCode, resequenceQuestionCodes,
+  FIELD_TYPES, nextCode, nextQuestionNaming, resequenceQuestionCodes,
   parsePastedOptions, planPaste, optionsToPaste, type PasteMode,
   stripHtmlText,
 } from "@rescript/engine"; // also registers builtin question types
@@ -1056,7 +1056,7 @@ export function QuestionsPanel() {
   /** Insert a question in a block at position pos (after pos-1). */
   const insertQuestion = (pageId: string, pos: number, variant?: QuestionVariantDef) => {
     const v = variant ?? variantRegistry.get("single_select.radio")!;
-    const q = createFromVariant(v, s.def.questions.length + 1);
+    const q = createFromVariant(v, nextQuestionNaming(s.def));
     s.update((d) => {
       d.questions.push(q);
       for (const pg of listPages(d.flow as any[])) {

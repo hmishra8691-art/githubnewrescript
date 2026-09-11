@@ -807,19 +807,37 @@ export function buildDerivedVariables(def: SurveyDefinition): VariableDef[] {
 
 /** Detect duplicate variable names — Studio surfaces these as errors. */
 export function lintVariables(def: SurveyDefinition): string[] {
-  const seen = new Map<string, string>();
+  const seen = new Map<string, { owner: string; label: string }>();
   const problems: string[] = [];
   for (const name of unknownVariableOverrides(def)) {
     problems.push(
       `Variable override "${name}" does not match anything this survey produces — it may have been renamed. The override is ignored.`,
     );
   }
+  /*
+   * Ownership is the question ID, not its code.
+   *
+   * This compared codes, so it could see "Q3 and Q3" and conclude there was
+   * nothing to report — which is precisely the case that hurts. A new
+   * question is minted `Q${questions.length + 1}`, so deleting one of three
+   * and adding another gives two DIFFERENT questions both coded and
+   * variabled Q3. Ids stay unique, so the Studio and the runtime are fine;
+   * the dataset is not. Both write `Q3`, and `Q3_other` — one respondent's
+   * "Other, specify" text appears under both questions, which reads exactly
+   * like the text leaking from one question into another.
+   */
   for (const v of buildVariableDictionary(def)) {
-    const owner = v.questionCode ?? v.responseType;
-    if (seen.has(v.name) && seen.get(v.name) !== owner) {
-      problems.push(`Duplicate variable "${v.name}" (${seen.get(v.name)} and ${owner})`);
+    const owner = v.questionId ?? v.questionCode ?? v.responseType;
+    const label = v.questionCode ?? v.responseType ?? owner;
+    const prev = seen.get(v.name);
+    if (prev && prev.owner !== owner) {
+      problems.push(
+        prev.label === label
+          ? `Duplicate variable "${v.name}" — two different questions are both coded ${label}. They write the same columns, so one overwrites the other in every export. Rename one.`
+          : `Duplicate variable "${v.name}" (${prev.label} and ${label})`,
+      );
     }
-    seen.set(v.name, owner);
+    seen.set(v.name, { owner, label });
   }
   return problems;
 }
@@ -840,4 +858,25 @@ export function describeLoopSource(def: SurveyDefinition, node: LoopFlowNode): s
     case "setExpression":
       return "a set expression";
   }
+}
+
+
+/**
+ * The next free `Q<n>` for a new question — free as both a CODE and a
+ * VARIABLE NAME, and checked against what the survey already holds rather
+ * than against how many questions it has.
+ *
+ * Counting was the bug: `Q${questions.length + 1}` on a survey whose Q3 was
+ * deleted mints a second Q3, and from then on two questions write the same
+ * export columns.
+ */
+export function nextQuestionNaming(def: SurveyDefinition, prefix = "Q"): { code: string; variableName: string } {
+  const taken = new Set<string>();
+  for (const q of def.questions ?? []) {
+    taken.add(String(q.code).toUpperCase());
+    taken.add(String(q.variableName).toUpperCase());
+  }
+  let n = (def.questions?.length ?? 0) + 1;
+  while (taken.has(`${prefix}${n}`.toUpperCase())) n++;
+  return { code: `${prefix}${n}`, variableName: `${prefix}${n}` };
 }

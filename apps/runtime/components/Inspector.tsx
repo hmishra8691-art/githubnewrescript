@@ -48,21 +48,46 @@ export function Inspector({ snap, logs }: { snap: InspectorSnapshot; logs: strin
         </>
       )}
 
-      <h3>Display logic</h3>
-      <table><tbody>
-        {snap.displayLogicResults.map((r) => (
-          <tr key={r.questionId}>
-            <td className="k">{r.questionId}</td>
-            <td>
-              <span className={r.visible ? "true" : "false"}>{r.visible ? "SHOW" : "HIDE"}</span>
-              {r.trace.map((t, i) => (
-                <div key={i} style={{ opacity: 0.8 }}>
-                  {t.rule} {t.operator} {JSON.stringify(t.right)} → <Val v={t.left} /> ⇒{" "}
-                  <span className={t.result ? "true" : "false"}>{String(t.result)}</span>
-                </div>
-              ))}
-            </td>
-          </tr>
+      {/*
+        * WHY IS THIS ON THE SCREEN.
+        *
+        * Two scopes, in the order the runtime resolves them: the question
+        * first, and its options only if the question survived. A hidden
+        * question's items are reported unavailable WITH the question named as
+        * the reason — the panel used to print a display-logic verdict of HIDE
+        * beside a pipeline of options that looked perfectly visible, which is
+        * the single most confusing thing a debugger can do.
+        */}
+      <h3>Visibility</h3>
+      <table data-testid="insp-visibility"><tbody>
+        {snap.visibility.map((v) => (
+          <React.Fragment key={v.questionId}>
+            <tr data-testid="insp-question" data-question={v.questionId} data-visible={String(v.visible)} data-cause={v.decidedBy}>
+              <td className="k">{v.code}</td>
+              <td>
+                <span className={v.visible ? "true" : "false"}>{v.visible ? "VISIBLE" : "HIDDEN"}</span>
+                {v.reason && <div style={{ opacity: 0.8 }}>{v.reason}</div>}
+                {v.trace.map((t, i) => (
+                  <div key={i} style={{ opacity: 0.8 }}>
+                    {t.rule} {t.operator} {JSON.stringify(t.right)} → <Val v={t.left} /> ⇒{" "}
+                    <span className={t.result ? "true" : "false"}>{String(t.result)}</span>
+                  </div>
+                ))}
+              </td>
+            </tr>
+            {v.items.map((it) => (
+              <tr key={`${v.questionId}_${it.scope}_${it.ref}`} data-testid="insp-item"
+                  data-question={v.questionId} data-scope={it.scope} data-ref={it.ref}
+                  data-visible={String(it.visible)} data-cause={it.decidedBy}>
+                <td className="k" style={{ paddingLeft: 18, opacity: 0.85 }}>{it.scope} {it.ref}</td>
+                <td>
+                  <span className={it.visible ? "true" : "false"}>{it.visible ? "Visible" : "Hidden"}</span>
+                  {it.label && <span style={{ opacity: 0.7 }}> — {it.label}</span>}
+                  {it.reason && <div style={{ opacity: 0.75 }}>{it.reason}</div>}
+                </td>
+              </tr>
+            ))}
+          </React.Fragment>
         ))}
       </tbody></table>
 

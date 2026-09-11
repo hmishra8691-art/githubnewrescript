@@ -20,6 +20,7 @@ import { describeCycle, detectLogicCycles, orderIndex } from "./dependencies.js"
 import { MAX_LOOP_DEPTH, loopNodes, loopVariableNames, maxLoopIterations, possibleLoopItems, questionIdsInLoop } from "./loops.js";
 import { listFillVariableNames } from "./listFill.js";
 import { buildVariableDictionary } from "./variables.js";
+import { gridAxes, gridScaleOptions } from "./gridAxes.js";
 
 /**
  * Logic configuration linting (reqs §30–31).
@@ -66,10 +67,20 @@ export function operatorsForQuestion(q: Question | undefined): ComparisonOperato
   return [...set];
 }
 
+/**
+ * Every code this question's ANSWER can hold — the vocabulary a value is
+ * compared against.
+ *
+ * Row codes used to be in here, so "Q4 = Apple" against a grid whose rows are
+ * brands passed silently while never matching anything: a row code is not an
+ * answer, it addresses one. They stay out; `rowCode` is validated on its own
+ * axis above. Column options stay in, because on a composite grid the cell's
+ * answer really is one of them.
+ */
 function optionCodes(q: Question): Set<string> {
   const s = new Set<string>();
+  for (const o of gridScaleOptions(q)) s.add(String(o.code));
   for (const o of q.options ?? []) s.add(String(o.code));
-  for (const r of q.rows ?? []) s.add(String(r.code));
   for (const c of q.columns ?? []) for (const o of c.options ?? []) s.add(String(o.code));
   return s;
 }
@@ -190,12 +201,43 @@ function lintCondition(
           message: `${src.code} has no row “${source.rowCode}”.`,
         });
       }
-      if (source.columnId && !(src.columns ?? []).some((x) => x.id === source.columnId)) {
-        ctx.push({
-          level: "warning",
-          path,
-          message: `${src.code} has no column “${source.columnId}”.`,
-        });
+      /*
+       * `columnId` addresses the other axis — and what lives on that axis
+       * depends on the question. On a composite grid it is a real column id;
+       * on a Likert-style matrix the columns ARE the scale, so it is an
+       * option code, which is what the evaluator has always resolved and
+       * what the tests cover. Validating it against `q.columns` alone
+       * reported every supported matrix reference as a mistake.
+       */
+      if (source.columnId) {
+        const axes = gridAxes(src);
+        const known = axes.columns.some((x) => x.ref === String(source.columnId));
+        if (!known) {
+          ctx.push({
+            level: "warning",
+            path,
+            message: axes.columnMeaning === "option_code"
+              ? `${src.code} has no scale point coded “${source.columnId}” — the columns of this grid are its answer scale.`
+              : `${src.code} has no column “${source.columnId}”.`,
+          });
+        }
+      }
+      /*
+       * A grid reference that names NEITHER axis compares against the whole
+       * `{ row: value }` object, so every code operator is false for every
+       * respondent — a rule that can never fire, and nothing said so.
+       */
+      if (!source.rowCode && !source.columnId && !source.count) {
+        const axes = gridAxes(src);
+        const codeBasedOp = ["selected", "notSelected", "eq", "ne", "in", "notIn", "contains", "notContains"].includes(operator)
+          || LIST_VALUE_OPERATORS.includes(operator);
+        if (axes.isGrid && codeBasedOp) {
+          ctx.push({
+            level: "warning",
+            path,
+            message: `${src.code} is a grid, so “${operator}” needs a ${axes.rowLabel} or a ${axes.columnLabel} to compare — without one it reads the whole grid and can never match. Pick a row (that row's answer), a column (any row with that answer), or both (one cell).`,
+          });
+        }
       }
     }
   }

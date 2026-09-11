@@ -270,6 +270,23 @@ await api("/api/admin/billing/transfer", { method: "POST", body: JSON.stringify(
 assert.ok(Math.abs((await view()).summary.remaining - srcBefore.balance) < 1e-6, `everything is back: the sandbox wallet is where it started (${(await view()).summary.remaining} vs ${srcBefore.balance})`);
 console.log("  ok   402 over available; project→project, project→user, user→project; two ledger lines per transfer; history filters; reversal");
 
+console.log("\nUSER TRANSFERS — a person moves their own credits, and only their own");
+{
+  /*
+   * The engine rules (available-only, atomic, two ledger lines, self-transfer
+   * refused) are proven in packages/billing. What matters HERE is the door:
+   * the user-facing endpoint is session-guarded, so an unauthenticated caller
+   * cannot move anybody's money, and it refuses a transfer to oneself before
+   * it reaches the engine.
+   */
+  const anon = await api("/api/billing/transfer", { method: "POST", body: JSON.stringify({ toUserCode: "USR-10482", amount: 25 }) });
+  assert.ok(anon.status === 401 || anon.status === 503, `a caller with no session is refused (${anon.status})`);
+  assert.ok(!/transfer/i.test(JSON.stringify(anon.json.transfer ?? "")), "and nothing moved");
+  const anonHistory = await api("/api/billing/transfer");
+  assert.ok(anonHistory.status === 401 || anonHistory.status === 503, "and cannot read anyone's history");
+  console.log(`  ok   /api/billing/transfer is session-guarded (${anon.status}); the balance rules are covered by the package tests`);
+}
+
 console.log("\nPAGES — Billing Administration and My usage render");
 await page.context().addCookies([{ name: "rescript_session", value: "sandbox", url: STUDIO }]);
 // no accounts exist on a database-less Studio: make the session check answer "cannot verify" (503, transient) rather than

@@ -105,15 +105,24 @@ assert.equal(made.file.settings.maxFiles, 1);
 assert.equal(made.photo.settings.accept, "image/*");
 console.log("✔ base types and seeded defaults are right");
 
-/* Speech-to-Text still needs a speech service — it must stay "coming soon" */
+/*
+ * Speech-to-Text is no longer deferred. It shipped (2026-09-10) as what it
+ * always was — the `speech_input` capability on Multi-Line Text, the
+ * transcript being the text answer — so the placeholder it used to be,
+ * `media.speech_to_text_response`, is gone and `media.speech_to_text` is
+ * stable. This section asserted the old promise and had been red since;
+ * it now pins what shipped: pickable in Video / Audio, and a preset of the
+ * one text type rather than a second kind of question.
+ */
 await h.goTab("Questions");
 await h.page.click('[data-testid="add-question-top"]');
 await h.page.click('[data-testid="picker-family-media"]');
-const stt = await h.page.waitForSelector('[data-testid="picker-variant-media.speech_to_text_response"]');
-assert.equal(await stt.getAttribute("data-status"), "planned", "Speech-to-Text Response is still coming soon");
+const stt = await h.page.waitForSelector('[data-testid="picker-variant-media.speech_to_text"]');
+assert.equal(await stt.getAttribute("data-status"), "stable", "Speech-to-Text Response ships");
+assert.equal(await h.page.$('[data-testid="picker-variant-media.speech_to_text_response"]'), null, "the deferred placeholder is gone");
 await h.page.click(".modal button:has-text('close')");
 await h.page.waitForTimeout(200);
-console.log("✔ Speech-to-Text Response is still offered as coming soon (deferred: needs a speech service)");
+console.log("✔ Speech-to-Text Response ships as a preset of Multi-Line Text with dictation on");
 
 /* ------------------------------------- Studio: the region editor draws regions */
 await h.setQuestion(id("regions"), (q) => {

@@ -288,3 +288,60 @@ test("a personal (user) wallet is a source and a destination; a reversal is a ne
   assert.equal(again.ok, false); if (!again.ok) assert.equal(again.reason, "already_reversed");
   assert.equal((await meter.reverseTransfer(rev2.transfer.id, "admin", "undo the undo")).ok, false, "a reversal cannot itself be reversed");
 });
+
+
+test("the brief's transfer cases: A user's own credits move to another user, and only what is genuinely available", async () => {
+  const store = new MemoryMeterStore();
+  const meter = new Meter(store, { cacheMs: 0 });
+  const A = (await store.walletForUser("cust-1", "user-A", { create: true }))!;
+  const B = (await store.walletForUser("cust-1", "user-B", { create: true }))!;
+  await meter.credit(A.id, 100, { reason: "assigned", by: "admin" });
+  await meter.credit(B.id, 20, { reason: "assigned", by: "admin" });
+
+  /* TEST A — A = $100, B = $20; A transfers $25 → A = $75, B = $45 */
+  const t = await meter.transfer({ sourceWalletId: A.id, destinationWalletId: B.id, amount: 25, by: "user-A" });
+  assert.ok(t.ok);
+  assert.equal(t.source.balance, 75);
+  assert.equal(t.destination.balance, 45);
+
+  /* TEST D — both ledger entries exist and share one transfer id */
+  const outLine = (await store.listLedger(A.id)).find((l) => l.transferId === t.transfer.id)!;
+  const inLine = (await store.listLedger(B.id)).find((l) => l.transferId === t.transfer.id)!;
+  assert.equal(outLine.kind, "transfer_out"); assert.equal(outLine.amount, -25);
+  assert.equal(inLine.kind, "transfer_in"); assert.equal(inLine.amount, 25);
+  assert.equal(outLine.transferId, inLine.transferId);
+  assert.match(t.transfer.code, /^TRX-/);
+
+  /* TEST B — A = $20, attempts $25 → rejected, no balance change */
+  const small = (await store.walletForUser("cust-1", "user-C", { create: true }))!;
+  await meter.credit(small.id, 20, { reason: "assigned", by: "admin" });
+  const before = (await store.getWallet(small.id))!.balance;
+  const refused = await meter.transfer({ sourceWalletId: small.id, destinationWalletId: B.id, amount: 25, by: "user-C" });
+  assert.equal(refused.ok, false);
+  if (!refused.ok) assert.equal(refused.reason, "insufficient_available");
+  assert.equal((await store.getWallet(small.id))!.balance, before, "nothing moved");
+  assert.equal((await store.listLedger(small.id)).filter((l) => l.kind === "transfer_out").length, 0, "and nothing was written");
+
+  /* TEST C — $100 with $40 reserved, attempts $70 → rejected */
+  const held = (await store.walletForUser("cust-1", "user-D", { create: true }))!;
+  await meter.credit(held.id, 100, { reason: "assigned", by: "admin" });
+  await store.reserve({ walletId: held.id, customerId: "cust-1", surveyId: null, userId: "user-D", eventType: "AI_REQUEST", environment: "LIVE", estimatedCost: 20, amount: 40, floor: 0, ttlMinutes: 30 });
+  assert.equal(transferableBalance((await store.getWallet(held.id))!), 60, "available is balance − reserved");
+  const overReserved = await meter.transfer({ sourceWalletId: held.id, destinationWalletId: B.id, amount: 70, by: "user-D" });
+  assert.equal(overReserved.ok, false);
+  if (!overReserved.ok) { assert.equal(overReserved.reason, "insufficient_available"); assert.equal(overReserved.available, 60); }
+  assert.equal((await store.getWallet(held.id))!.balance, 100, "the reserved money is untouchable, not merely uncounted");
+  /* …and exactly the available amount does go */
+  const exact = await meter.transfer({ sourceWalletId: held.id, destinationWalletId: B.id, amount: 60, by: "user-D" });
+  assert.ok(exact.ok);
+  assert.equal(exact.source.balance, 40, "the reservation is still held against what is left");
+
+  /* a transfer to oneself is the same wallet, and is refused */
+  const self = await meter.transfer({ sourceWalletId: A.id, destinationWalletId: A.id, amount: 1, by: "user-A" });
+  assert.equal(self.ok, false);
+  if (!self.ok) assert.equal(self.reason, "same_wallet");
+
+  /* history reads from either side */
+  assert.equal((await store.listTransfers({ walletId: A.id })).length, 1);
+  assert.equal((await store.listTransfers({ walletId: B.id })).length, 2, "B received the two that succeeded — a refused transfer leaves no trace to read");
+});

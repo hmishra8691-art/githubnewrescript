@@ -1,5 +1,6 @@
 import type { SurveyDefinition, Question } from "@rescript/schema";
 import { loopKeySuffix, type LoopContext, type ResponseState } from "./state.js";
+import { otherKey } from "./otherSpecify.js";
 import { directChildLoops, directQuestionIdsInLoop, loopNodes, loopVariablePrefix, type LoopFlowNode } from "./loopModel.js";
 import { designFor, designVersionFor } from "./designVersion.js";
 import { isGeoAnswer, hasCoordinates, geoText, round6 } from "./geo.js";
@@ -65,8 +66,16 @@ export function flattenVariables(def: SurveyDefinition, state: ResponseState): F
       if (q.type === "conjoint_task" || q.type === "maxdiff_task") flattenTasks(def, q, value, `${q.variableName}${loopSuffix}`, out);
       else flattenQuestion(q, value, `${q.variableName}${loopSuffix}`, out);
     }
-    const other = state.answers[`${q.id}__other`];
-    if (other !== undefined) out[`${q.variableName}_other`] = other;
+    /*
+     * "Other, specify" — the question's own key only. The loop pass below
+     * writes the per-iteration columns; reading a loop-suffixed key here
+     * would put one iteration's text in the flat column as well.
+     */
+    const other = state.answers[otherKey(q.id, null)];
+    if (other !== undefined && !placed.has(otherKey(q.id, null))) {
+      out[`${q.variableName}_other`] = other;
+      placed.add(otherKey(q.id, null));
+    }
 
     // voice: `<id>__voice` → VAR_VOICE_TRANSCRIPT / _CONFIDENCE / _REPEATS / _CLARIFICATIONS (aiConversation.ts)
     const voice = state.answers[`${q.id}__voice`] as { transcript?: string; confidence?: number; repeats?: number; clarifications?: number } | undefined;

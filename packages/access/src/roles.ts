@@ -106,6 +106,13 @@ export const CAPABILITIES = [
   /* metered usage & wallet (billing brief): reading the project's meter is part of running the project; asking for credits is an owner/editor act */
   "billing.read",             // open the project's Usage / Meter section: wallet, usage, forecast
   "billing.request_credits",  // submit a credit request for the project
+  /*
+   * Move this project's unused credits somewhere else. Owner-only, and
+   * deliberately not given to an editor: an editor changes the survey, an
+   * owner decides what the project's budget is for. A person's OWN wallet
+   * needs no capability at all — it is theirs.
+   */
+  "billing.transfer",
 ] as const;
 export type Capability = (typeof CAPABILITIES)[number];
 

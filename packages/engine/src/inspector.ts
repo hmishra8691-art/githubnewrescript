@@ -7,6 +7,7 @@ import { evaluateCondition, type EvalTrace } from "./evaluate.js";
 import { explainOptions, type OptionPipelineTrace } from "./carryforward.js";
 import { quotaStatus, type QuotaCounts, type QuotaCellStatus } from "./quotas.js";
 import { listFillLoopItems, pendingListFills, unusedListFillDestinations } from "./listFill.js";
+import { explainVisibility, type QuestionVisibility } from "./visibility.js";
 
 /**
  * Programmer inspector (requirements §24–25): a full snapshot of the
@@ -39,6 +40,19 @@ export interface InspectorSnapshot {
   embedded: Record<string, unknown>;
   flags: string[];
   displayLogicResults: { questionId: string; visible: boolean; trace: EvalTrace[] }[];
+  /**
+   * WHY each question on this page is shown or hidden, and — only for the
+   * ones that are shown — why each of their options, rows and columns is.
+   *
+   * `displayLogicResults` above answers "did the condition pass"; this
+   * answers "is it on the screen, and what decided that", which are not the
+   * same question: a question can pass its own condition and still be hidden
+   * by a named rule, by its type, or by a List Fill that gave it nothing.
+   * Item verdicts appear only under a VISIBLE question — a hidden question's
+   * items are reported unavailable, with the question named as the reason,
+   * rather than run through a pipeline whose answer could not matter.
+   */
+  visibility: QuestionVisibility[];
   /**
    * Stage-by-stage option pipeline for every question on this page whose
    * option list is dynamic — the runtime half of the option debugger
@@ -117,11 +131,20 @@ export function inspect(
     }
   }
 
+  /*
+   * The parent scope, stated. This also decides which questions get an
+   * option pipeline below: running one for a hidden question produced a
+   * trace of options nobody would ever see, printed next to a verdict that
+   * said the question was not on the page.
+   */
+  const visibility = pageStep ? explainVisibility(def, pageStep, state, quotaCounts) : [];
+  const shownIds = new Set(visibility.filter((v) => v.visible).map((v) => v.questionId));
+
   const optionPipelines: InspectorSnapshot["optionPipelines"] = [];
   if (pageStep) {
     for (const qid of pageStep.questionIds) {
       const q = def.questions.find((x) => x.id === qid);
-      if (!q) continue;
+      if (!q || !shownIds.has(qid)) continue;
       const dynamic =
         !!q.carryForward ||
         (q.listLogic?.length ?? 0) > 0 ||
@@ -142,6 +165,7 @@ export function inspect(
   }
 
   return {
+    visibility,
     page: pageStep
       ? {
           index: state.stepIndex,

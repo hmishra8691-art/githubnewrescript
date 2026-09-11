@@ -3,6 +3,7 @@ import React from "react";
 import type { Question } from "@rescript/schema";
 import {
   createResponseState, validatePage, setAnswer, answerKey, authoringQuestionView,
+  otherKey, setOtherText, otherIsSelected,
   type ResponseState, type LoopContext,
 } from "@rescript/engine";
 import { QuestionRenderer } from "@rescript/renderer";
@@ -60,8 +61,24 @@ export function LiveCanvas(p: LiveCanvasProps) {
   const [hover, setHover] = React.useState<SelectedEntity | null>(null);
   const [selBox, setSelBox] = React.useState<Box | null>(null);
   const [hoverBox, setHoverBox] = React.useState<Box | null>(null);
-  const [value, setValue] = React.useState<unknown>(undefined);
-  const [otherValue, setOtherValue] = React.useState<string>("");
+  /**
+   * THE SIMULATOR'S TYPED ANSWERS, KEYED THE WAY THE RUNTIME KEYS THEM.
+   *
+   * These were two bare `useState`s — one answer, one "Other, specify" text,
+   * belonging to no question in particular. The canvas got away with it only
+   * because the editor happens to remount when the selection changes; the
+   * moment anything renders it in a stable position across two questions, the
+   * text typed into Q1's Other box appears in Q2's, which is exactly the bug
+   * that was reported. State that belongs to a question must be keyed by that
+   * question — here, by `answerKey(q.id, loop)`, the same key the runner and
+   * the validator use, so the canvas cannot disagree with either.
+   */
+  const [draft, setDraft] = React.useState<Record<string, unknown>>({});
+  const slot = answerKey(p.q.id, p.loop ?? null);
+  const value = draft[slot];
+  const otherValue = typeof draft[otherKey(p.q.id, p.loop ?? null)] === "string"
+    ? (draft[otherKey(p.q.id, p.loop ?? null)] as string)
+    : "";
 
   const simulating = p.mode === "simulate";
 
@@ -87,8 +104,16 @@ export function LiveCanvas(p: LiveCanvasProps) {
         setAnswer(p.def, st, p.q.id, value, p.loop);
       } catch { /* a value the engine rejects is still worth rendering */ }
     }
+    /*
+     * The other-specify text goes INTO the response state, not beside it.
+     * It used to live only in a React state the validator could not see, so
+     * "Please specify" stayed on screen while the programmer typed into the
+     * box — the simulator disagreeing with the real validator about the same
+     * answer. `setOtherText` writes the one key everything reads.
+     */
+    if (simulating && otherValue) setOtherText(st, p.q.id, otherValue, p.loop);
     return st;
-  }, [p.def, p.sample, p.seed, p.q, p.loop, simulating, value]);
+  }, [p.def, p.sample, p.seed, p.q, p.loop, simulating, value, otherValue]);
 
   const ctx = React.useMemo(() => ({ def: p.def, state, loop: p.loop }), [p.def, state, p.loop]);
 
@@ -215,8 +240,16 @@ export function LiveCanvas(p: LiveCanvasProps) {
             value={simulating ? value : undefined}
             otherValue={otherValue}
             errors={errors}
-            onChange={(v) => simulating && setValue(v)}
-            onOtherChange={(t) => simulating && setOtherValue(t)}
+            onChange={(v) => {
+              if (!simulating) return;
+              /* the answer, and — when Other is no longer among the selections — the text that belonged to it */
+              setDraft((d) => {
+                const next = { ...d, [slot]: v };
+                if (!otherIsSelected(p.q, v)) delete next[otherKey(p.q.id, p.loop ?? null)];
+                return next;
+              });
+            }}
+            onOtherChange={(t) => simulating && setDraft((d) => ({ ...d, [otherKey(p.q.id, p.loop ?? null)]: t }))}
           />
           {!simulating && <Marks stage={stageRef} q={p.q} ann={annotations} show={p.showIndicators} hidden={p.showHidden} />}
 

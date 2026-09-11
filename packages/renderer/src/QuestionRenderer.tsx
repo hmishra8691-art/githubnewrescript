@@ -41,6 +41,33 @@ export interface QRProps {
 }
 
 export const OTHER = (o: Option) => o.flags?.includes("other_specify");
+
+/**
+ * THE "OTHER, SPECIFY" BOX FOR A LAYOUT THAT CANNOT NEST ONE.
+ *
+ * A radio list puts the input inside the selected option's label. A button,
+ * card, tile or icon grid cannot — an `<input>` inside a `<button>` is not
+ * typeable — so those layouts rendered no box at all: a respondent who chose
+ * "Other" on a tile question had nowhere to say what they meant, and the
+ * validator then refused to let them past a question it gave them no way to
+ * answer. This renders the box BELOW the choices instead, on exactly the same
+ * condition (a selected option carrying the flag) and against exactly the same
+ * stored value, so every layout of the same question behaves the same way.
+ */
+export function OtherSpecifyBox(p: QRProps & { options: Option[]; selected: (string | number)[] }) {
+  const chosen = p.options.find((o) => OTHER(o) && p.selected.some((v) => String(v) === String(o.code)));
+  if (!chosen) return null;
+  return (
+    <input
+      className="rs-input rs-other-input rs-other-below"
+      data-testid="rs-other-input"
+      placeholder={uiOf(p, "other_specify")}
+      value={p.otherValue ?? ""}
+      disabled={p.q.settings.readOnly}
+      onChange={(e) => p.onOtherChange?.(e.target.value)}
+    />
+  );
+}
 export const EXCLUSIVE = (o: Option) =>
   o.flags?.includes("exclusive") || o.flags?.includes("none_of_above") ||
   o.flags?.includes("dont_know") || o.flags?.includes("refused");
@@ -120,6 +147,7 @@ export function SingleSelect(p: QRProps) {
             {OTHER(o) && sel && (
               <input
                 className="rs-input rs-other-input"
+                data-testid="rs-other-input"
                 placeholder={uiOf(p, "other_specify")}
                 value={p.otherValue ?? ""}
                 onClick={(e) => e.stopPropagation()}
@@ -164,6 +192,7 @@ export function MultiSelect(p: QRProps) {
             {OTHER(o) && sel && (
               <input
                 className="rs-input rs-other-input"
+                data-testid="rs-other-input"
                 placeholder={uiOf(p, "other_specify")}
                 value={p.otherValue ?? ""}
                 onClick={(e) => e.stopPropagation()}
@@ -1178,6 +1207,7 @@ export function ChoiceButtons(p: QRProps & { multi: boolean }) {
           );
         })}
       </div>
+      <OtherSpecifyBox {...p} options={options} selected={vals} />
     </div>
   );
 }
@@ -1196,6 +1226,7 @@ export function ChoiceCards(p: QRProps & { multi: boolean }) {
   };
   const cols = p.q.settings.columnsLayout ?? 2;
   return (
+    <div>
     <div className={`rs-cardgrid cols-${Math.min(Math.max(cols, 1), 4)}`}>
       {options.map((o) => {
         const sel = vals.some((v) => String(v) === String(o.code));
@@ -1218,6 +1249,8 @@ export function ChoiceCards(p: QRProps & { multi: boolean }) {
           </div>
         );
       })}
+    </div>
+    <OtherSpecifyBox {...p} options={options} selected={vals} />
     </div>
   );
 }

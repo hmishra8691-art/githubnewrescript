@@ -51,6 +51,9 @@ import {
   type VoiceRecord,
   decideListFill,
   listFillVariables,
+  setOtherText,
+  otherTextOf,
+  pruneHiddenSelections,
   applyListFillDestinations,
   type ResponseState,
   type LoopContext,
@@ -1235,7 +1238,7 @@ export function Runner({ definition: sourceDef, mode, session: initialSession, s
              * read the loop-scoped key — so the text a respondent typed for Apple
              * showed up again under Google, and the validator could not see it.
              */
-            otherValue={(state.answers[`${key}__other`] as string) ?? ""}
+            otherValue={otherTextOf(state, q.id, pageStep.loop ?? null)}
             errors={errors.filter((e) => e.questionId === q.id).map((e) => e.message)}
             onChange={(v) => {
               setAnswer(def, state, q.id, v, pageStep.loop);
@@ -1252,12 +1255,20 @@ export function Runner({ definition: sourceDef, mode, session: initialSession, s
                 if (!questionDependencies(def, other).has(q.id)) continue;
                 applyPunches(other, ctx, (qq) => answerKey(qq.id, pageStep.loop ?? null));
               }
+              /*
+               * …and on the same page, an answer this one just took off the
+               * screen. "If Q1 = A hide Q2's option B" with Q1 and Q2 side by
+               * side must drop a Blue already ticked in Q2, not leave it
+               * counted but undrawn.
+               */
+              pruneHiddenSelections(def, questions, ctx, pageStep.loop ?? null);
               const r = runScripts(def, state, "on_change", { scopeRef: q.id, loop: pageStep.loop });
               if (r.logs.length) setLogs((l) => [...l, ...r.logs]);
               force();
             }}
             onOtherChange={(t) => {
-              state.answers[`${key}__other`] = t;
+              /* one writer, one key: an emptied box removes the text rather than storing "" */
+              setOtherText(state, q.id, t, pageStep.loop ?? null);
               force();
             }}
           />

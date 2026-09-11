@@ -30,21 +30,26 @@ for (const [family, variantId, key] of PICK) {
 }
 console.log(`✔ all ${PICK.length} variants are stable in the picker and create with their variant id`);
 
-/* the deferred siblings must stay greyed out */
+/*
+ * There are no deferred siblings left in these families, and this section
+ * had been red since they landed (2026-09-10). Each turned out not to be a
+ * question type at all: Respondent-Specific Options is option `visibleIf`
+ * logic on an ordinary choice question, and the two conversational entries
+ * are a survey MODE (`branding.aiConversation`), so their planned picker ids
+ * no longer exist. What is asserted now is that the capability is offered
+ * and the promise is not.
+ */
 await h.goTab("Questions");
 await h.page.click('[data-testid="add-question-top"]');
-for (const [family, id] of [
-  ["dynamic", "dynamic.respondent_specific_options"],
-  ["conversational", "conversational.voice_survey"],
-  ["conversational", "conversational.adaptive_conversation"],
-]) {
-  await h.page.click(`[data-testid="picker-family-${family}"]`);
-  const card = await h.page.waitForSelector(`[data-testid="picker-variant-${id}"]`);
-  assert.equal(await card.getAttribute("data-status"), "planned", `${id} stays "coming soon"`);
+await h.page.click('[data-testid="picker-family-dynamic"]');
+const rspec = await h.page.waitForSelector('[data-testid="picker-variant-dynamic.respondent_specific"]');
+assert.equal(await rspec.getAttribute("data-status"), "stable", "Respondent-Specific Options ships as a preset");
+for (const gone of ["dynamic.respondent_specific_options", "conversational.voice_survey", "conversational.adaptive_conversation"]) {
+  assert.equal(await h.page.$(`[data-testid="picker-variant-${gone}"]`), null, `${gone} is no longer promised in the picker`);
 }
 await h.page.click('.modal-back .btn:has-text("close")');
 await h.page.waitForSelector(".modal-back", { state: "detached" });
-console.log("✔ the three deferred variants (APIs / speech / LLM) are still coming soon");
+console.log("✔ nothing in these families is still 'coming soon' — each shipped as a preset of a mechanism that already existed");
 
 /* ------------------------------------------------ base types + seeded defaults */
 assert.equal(made.calendar.type, "date");

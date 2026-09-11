@@ -3,7 +3,7 @@ import React from "react";
 import type {
   ComparisonOperator, ConditionRule, CountOf, CountScope, CountSpec, Question,
 } from "@rescript/schema";
-import { lintCount, authoringQuestionView, stripHtmlText } from "@rescript/engine";
+import { lintCount, authoringQuestionView, stripHtmlText, gridAxes } from "@rescript/engine";
 import { useStudio } from "./store";
 
 /**
@@ -153,12 +153,14 @@ export function CountEditor({
             className="select" data-testid="count-scope" aria-label="What to count over"
             value={spec.scope} onChange={(e) => setSpec({ scope: e.target.value as CountScope, only: undefined })}
           >
+            {/* on a grid the "options" ARE the answer scale, and saying so
+                stops a programmer counting "options" expecting statements */}
             {scopes.map((sc) => (
-              <option key={sc} value={sc}>{sc === "options" ? "options" : sc}</option>
+              <option key={sc} value={sc}>{sc === "options" && gridAxes(view).model === "per_row" ? "scale points" : sc}</option>
             ))}
           </select>
         ) : (
-          <span className="chip" data-testid="count-scope-fixed">{scopes[0]}</span>
+          <span className="chip" data-testid="count-scope-fixed">{scopes[0] === "options" && gridAxes(view).model === "per_row" ? "scale points" : scopes[0]}</span>
         )}
 
         {groups.length > 0 && (
