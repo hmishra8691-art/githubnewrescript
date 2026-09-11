@@ -344,6 +344,31 @@ export function fakeSpeech(text: string, speed = 1): { bytes: Uint8Array; mimeTy
 
 const stripTags = (s: string) => s.replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
 
+/**
+ * THE MODEL'S JSON, however it was wrapped. `response_format: json_object`
+ * is honoured by OpenAI-style servers and IGNORED by others (Anthropic's
+ * OpenAI-compatible endpoint, some gateways), which then answer with the
+ * JSON inside a ```json fence or after a sentence. Take the first balanced
+ * object in the reply; anything without one is no answer.
+ */
+export function parseJsonReply(content: string): { label?: unknown; question?: unknown; translations?: unknown } | null {
+  const text = content.trim();
+  try { return JSON.parse(text); } catch { /* wrapped */ }
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
+  if (fenced) { try { return JSON.parse(fenced[1].trim()); } catch { /* fall through */ } }
+  const start = text.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) { if (esc) esc = false; else if (ch === "\\") esc = true; else if (ch === '"') inStr = false; continue; }
+    if (ch === '"') inStr = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}") { depth--; if (depth === 0) { try { return JSON.parse(text.slice(start, i + 1)); } catch { return null; } } }
+  }
+  return null;
+}
+
 /* ------------------------------------------------------- the http client */
 
 async function complete(system: string, user: string, maxTokens = 160): Promise<{ label?: unknown; question?: unknown; translations?: unknown } | null> {
@@ -373,7 +398,7 @@ async function complete(system: string, user: string, maxTokens = 160): Promise<
     const j = await r.json().catch(() => null) as { choices?: { message?: { content?: string } }[] } | null;
     const content = j?.choices?.[0]?.message?.content;
     if (!content) return null;
-    try { return JSON.parse(content); } catch { return null; }
+    return parseJsonReply(content);
   } catch (e) {
     console.warn("[rescript:ai] provider unreachable", JSON.stringify({ error: (e as Error).name }));
     return null;
