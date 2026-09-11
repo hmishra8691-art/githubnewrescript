@@ -57,7 +57,8 @@ assert.ok(await page.$('[data-testid="usage-progress"]'), "usage progress bar");
 assert.ok(await page.$('[data-testid="usage-chart"]'), "usage timeline chart");
 assert.ok(await page.$('[data-testid="usage-forecast"]'), "forecast tile");
 assert.equal(await page.getAttribute('[data-testid="usage-panel"]', "data-state"), "active");
-assert.match(await page.textContent('[data-testid="wallet-level"]'), /Normal|Low balance/);
+/* the level vocabulary is shared with the dashboard card: Healthy / Low balance / Critical / Exhausted */
+assert.match(await page.textContent('[data-testid="wallet-level"]'), /Healthy|Low balance/);
 console.log(`  ok   wallet ${remaining0} remaining, card + progress + chart + forecast`);
 
 console.log("\nMETER — an AI call and a translation batch are charged at the customer price, not the raw cost");

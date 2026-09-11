@@ -324,3 +324,63 @@ export function usageByProject(events: UsageEvent[]): { surveyId: string | null;
   }
   return [...m.values()].sort((a, b) => b.charge - a.charge);
 }
+
+/* ------------------------------------------------- the project card's meter */
+
+/**
+ * ONE PROJECT'S WALLET, AS A CARD SHOWS IT.
+ *
+ * The four numbers a researcher reads on the projects list — what was put in,
+ * what has gone, what is left, and how far through the meter is — plus the
+ * word for the state. It lives here, beside `summarizeWallet`, because the
+ * dashboard must not do its own arithmetic: a balance that reads $56.75 on
+ * the list and something else inside the project is one system telling a
+ * person two different things, and they have no way to know which is true.
+ *
+ * `used` is the sum of the CUSTOMER CHARGES on the project's events, exactly
+ * as `summarizeWallet` computes it, falling back to the wallet's own running
+ * total when the caller has not loaded events. There is no cost, margin or
+ * profit field on the result — a researcher's card has nowhere to put one.
+ */
+export interface ProjectMeter {
+  surveyId: string;
+  currency: string;
+  /** credits put into this wallet, ever */
+  allocated: number;
+  used: number;
+  /** what is left: the wallet balance */
+  remaining: number;
+  /** held by operations in flight — not spendable, not yet spent */
+  reserved: number;
+  available: number;
+  /** 0–100 of `allocated`. A wallet nothing was ever put into reads 0. */
+  usedPct: number;
+  level: BalanceLevel;
+  state: WalletState;
+  events: number;
+}
+
+export function projectMeter(
+  w: Wallet,
+  usage: { charge: number; events: number } | undefined,
+  cfg: BillingConfig,
+): ProjectMeter {
+  const used = money6(usage?.charge ?? w.totalUsed);
+  const allocated = money6(w.totalAdded);
+  return {
+    surveyId: w.surveyId ?? "",
+    currency: w.currency,
+    allocated,
+    used,
+    remaining: money6(w.balance),
+    reserved: money6(w.reserved),
+    available: availableBalance(w, cfg),
+    /* two decimals: a wallet is money, and "43.25% of $100" is the same
+       statement as "$43.25 used". Trailing zeros never render, so a round
+       half reads 50%, not 50.00%. */
+    usedPct: allocated > 0 ? Math.min(100, Math.max(0, Math.round((used / allocated) * 10000) / 100)) : 0,
+    level: balanceLevel(w.balance, cfg),
+    state: walletStateFor(w.balance, cfg, w.state),
+    events: usage?.events ?? 0,
+  };
+}

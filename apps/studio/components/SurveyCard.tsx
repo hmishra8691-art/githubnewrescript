@@ -1,5 +1,6 @@
 "use client";
 import React from "react";
+import { fmtMoney, LEVEL_CLASS, LEVEL_WORD, Progress } from "@/components/billing/shared";
 
 /**
  * One survey project on the dashboard.
@@ -80,6 +81,24 @@ export interface Contributor {
   initials: string;
 }
 
+/**
+ * A project's wallet as the card shows it — the researcher's four numbers and
+ * nothing else. There is deliberately no cost, margin or profit field on this
+ * type: what a project costs Rescript to run is an internal figure, and the
+ * way to keep it off a researcher's screen is for the screen's own data
+ * structure to have nowhere to put it.
+ */
+export interface CardMeter {
+  currency: string;
+  allocated: number;
+  used: number;
+  remaining: number;
+  reserved: number;
+  usedPct: number;
+  level: "normal" | "low" | "critical" | "locked";
+  state: "active" | "read_only" | "suspended";
+}
+
 export const STATUS_META: Record<string, { label: string; tone: string; hint: string }> = {
   draft: { label: "Draft", tone: "draft", hint: "Being programmed — no live link" },
   testing: { label: "Testing", tone: "testing", hint: "Test link active; not collecting live data" },
@@ -123,6 +142,7 @@ function Stat({ label, value, title, onClick }: {
 
 export function SurveyCard({
   survey, stats, contributors, loading, onOpen, onResponses, onStatus, onDelete, canDelete = true,
+  meter, meterLoading = false, canRefill = false, onRefill, onClone,
 }: {
   survey: SurveyRow;
   stats: SurveyStats | undefined;
@@ -132,6 +152,12 @@ export function SurveyCard({
   onResponses(): void;
   onStatus(status: string): void;
   onDelete(): void;
+  /** This project's wallet. `null` = no wallet yet; `undefined` = not loaded (or billing is off). */
+  meter?: CardMeter | null;
+  meterLoading?: boolean;
+  canRefill?: boolean;
+  onRefill?(): void;
+  onClone?(): void;
   /**
    * Whether this viewer's role permits permanently deleting the survey.
    * Defaults to `true` (unchanged behavior) when the caller doesn't know the
@@ -232,6 +258,65 @@ export function SurveyCard({
           title="Responses that reached the end of the survey" />
       </div>
 
+      {/*
+        * THE PROJECT'S WALLET, ON THE CARD.
+        *
+        * The point of putting it here is that a researcher should not have to
+        * open five projects to find the one that has run out. So all four
+        * numbers are shown at once — what was put in, what has gone, what is
+        * left, and how far through the meter is — with the bar to make the
+        * last one readable at a glance and a word for the ones that need
+        * action. Every figure is a CUSTOMER CHARGE; nothing on this card is
+        * an internal cost.
+        *
+        * Absent entirely when billing is off or a project has no wallet: a
+        * card that never had a meter should look like the card it was, not
+        * like a project whose wallet failed to load.
+        */}
+      {meter ? (
+        <div className={`card-wallet ${meter.state === "read_only" || meter.level === "locked" ? "exhausted" : ""}`}
+          data-testid="card-wallet" data-level={meter.level} data-state={meter.state} data-remaining={meter.remaining}>
+          <div className="cw-head">
+            <span className="cw-title">Project wallet</span>
+            <span className={`badge ${meter.state === "suspended" ? "error" : LEVEL_CLASS[meter.level]}`} data-testid="card-wallet-level">
+              {meter.state === "suspended" ? "Suspended"
+                : meter.state === "read_only" ? "Read-only"
+                : LEVEL_WORD[meter.level]}
+            </span>
+            <span className="grow" />
+            {canRefill && onRefill && (
+              <button className="btn small cw-refill" data-testid="card-refill"
+                onClick={(e) => { e.stopPropagation(); onRefill(); }}
+                title={meter.state === "read_only"
+                  ? "This project has stopped: add credits to start it again"
+                  : "Move credits into this project's wallet"}>
+                Refill wallet
+              </button>
+            )}
+          </div>
+          <div className="cw-figures">
+            <div className="cw-fig"><div className="cw-v" data-testid="cw-allocated">{fmtMoney(meter.allocated, meter.currency)}</div><div className="cw-l">Wallet</div></div>
+            <div className="cw-fig"><div className="cw-v" data-testid="cw-used">{fmtMoney(meter.used, meter.currency)}</div><div className="cw-l">Used</div></div>
+            <div className="cw-fig"><div className="cw-v strong" data-testid="cw-remaining">{fmtMoney(meter.remaining, meter.currency)}</div><div className="cw-l">Remaining</div></div>
+            <div className="cw-fig"><div className="cw-v" data-testid="cw-pct">{meter.usedPct}%</div><div className="cw-l">Meter used</div></div>
+          </div>
+          <Progress used={meter.used} total={meter.allocated} level={meter.level}
+            testid="card-wallet-bar" label={`${meter.usedPct}% of this project's wallet used`} />
+          {meter.reserved > 0 && (
+            <div className="cw-note muted" title="Held by operations in flight — not spent yet, and not available to spend">
+              {fmtMoney(meter.reserved, meter.currency)} reserved
+            </div>
+          )}
+          {(meter.state === "read_only" || meter.level === "locked") && (
+            <div className="cw-note warn" data-testid="card-wallet-readonly">
+              Read-only: this project has used its credits and has stopped collecting billable work.
+            </div>
+          )}
+        </div>
+      ) : meterLoading ? (
+        <div className="card-wallet" data-testid="card-wallet-loading"><span className="sk sk-lab" /></div>
+      ) : null}
+
       <div className="survey-card-foot">
         <div className="contributors" title={people.length ? people.map((p) => p.name).join(", ") : undefined}>
           {people.length > 0 ? (
@@ -278,6 +363,28 @@ export function SurveyCard({
               <>
                 <div className="menu-scrim" onClick={() => setMenu(false)} />
                 <div className="menu" role="menu">
+                  {/*
+                    * Clone lives in the menu rather than as a fourth button:
+                    * it is a deliberate, occasional act, and the card's own
+                    * job is to be readable. The wallet's Refill repeats here
+                    * so that on a narrow screen, where the card's buttons
+                    * wrap, every action is still reachable from one place.
+                    */}
+                  <div className="menu-label">Project</div>
+                  {onClone && (
+                    <button className="menu-item" data-testid="clone-project-menu-item"
+                      onClick={() => { setMenu(false); onClone(); }}
+                      title="Make an independent copy of this project's questions, logic and settings">
+                      Clone project…
+                    </button>
+                  )}
+                  {canRefill && onRefill && (
+                    <button className="menu-item" data-testid="refill-menu-item"
+                      onClick={() => { setMenu(false); onRefill(); }}>
+                      Refill wallet…
+                    </button>
+                  )}
+                  <div className="menu-sep" />
                   <div className="menu-label">Set status</div>
                   {Object.entries(STATUS_META).map(([key, m]) => (
                     <button key={key} className={`menu-item ${survey.status === key ? "on" : ""}`}

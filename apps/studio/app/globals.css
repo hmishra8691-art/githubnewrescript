@@ -1858,3 +1858,38 @@ p.qs-help { margin: -2px 0 10px; }
 .bl-config-group h4 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--c-text-3); }
 .bl-config-row { display: grid; grid-template-columns: minmax(220px, 1fr) 160px; gap: 12px; align-items: center; padding: 6px 0; border-bottom: 1px dashed var(--c-border); }
 .bl-config-row .bl-help { font-size: 12px; color: var(--c-text-3); }
+
+/* ---------------------------------------------------- project wallet on a card
+ * The meter a researcher reads without opening the project. Four figures on
+ * one reflowing row (the same auto-fit grid the statistics use, so a narrow
+ * card stacks them rather than overflowing), the shared .bl-progress bar
+ * underneath, and a tinted surface so the block reads as a section of the
+ * card rather than more statistics. Colours come from the level tokens the
+ * project's own Usage panel uses — one wallet, one palette.
+ */
+.card-wallet {
+  margin-top: 10px; padding: 10px 12px; border-radius: 10px;
+  background: var(--c-surface-2, var(--tint)); border: 1px solid var(--border);
+}
+.card-wallet.exhausted { border-color: var(--c-error-bd); background: var(--c-error-bg); }
+.cw-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.cw-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--subtle); white-space: nowrap; }
+/* the level word never wraps into the button beside it */
+.card-wallet .badge { white-space: nowrap; }
+.cw-refill { white-space: nowrap; }
+.cw-figures { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(78px, 1fr)); margin-bottom: 8px; }
+.cw-fig { min-width: 0; }
+.cw-v { font-size: 16px; font-weight: 650; font-variant-numeric: tabular-nums; line-height: 1.15; }
+.cw-v.strong { color: var(--c-text-1, inherit); }
+.cw-l { font-size: 11px; color: var(--subtle); text-transform: uppercase; letter-spacing: .05em; margin-top: 1px; }
+.cw-note { font-size: 12px; margin-top: 6px; }
+.cw-note.warn { color: var(--c-error-fg); }
+
+/* the refill and clone dialogs share the card's vocabulary */
+.rf-quick { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 10px; }
+.rf-avail { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--c-surface-2, var(--tint)); margin-bottom: 10px; }
+.rf-avail .rf-n { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.cl-list { columns: 2; column-gap: 18px; font-size: 12.5px; color: var(--subtle); margin: 6px 0 12px; }
+.cl-list li { break-inside: avoid; list-style: none; padding: 1px 0; }
+.cl-list li::before { content: "✓"; color: var(--c-success-fg, #16a34a); margin-right: 6px; }
+@media (max-width: 560px) { .cl-list { columns: 1; } }

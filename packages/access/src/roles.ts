@@ -113,6 +113,15 @@ export const CAPABILITIES = [
    * needs no capability at all — it is theirs.
    */
   "billing.transfer",
+  /*
+   * Copy this project's programming into a NEW project. Read-shaped in what
+   * it discloses — the copier could already open every question — but a
+   * creation act in what it does, so it sits with the roles that build
+   * surveys rather than with the ones that only look at them: a reviewer
+   * being able to read a study is not a reason for them to be able to put
+   * another project in the workspace's list.
+   */
+  "project.clone",
 ] as const;
 export type Capability = (typeof CAPABILITIES)[number];
 
@@ -138,6 +147,7 @@ const GRANTS: Record<ProjectRole, Capability[]> = {
     "project.share",
     "analytics.read", "analytics.edit", "analytics.publish", "analytics.export",
     "billing.read", "billing.request_credits",
+    "project.clone",
   ],
 
   programmer: [
@@ -148,6 +158,7 @@ const GRANTS: Record<ProjectRole, Capability[]> = {
     "lock.acquire", "lock.request",
     "analytics.read", "analytics.edit", "analytics.export",
     "billing.read",
+    "project.clone",
   ],
 
   reviewer: [

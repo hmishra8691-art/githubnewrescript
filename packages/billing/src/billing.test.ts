@@ -5,7 +5,7 @@ import { priceOperation, effectivePaymentFeeRate, depositProjection } from "./pr
 import { DEFAULT_RATES, DEFAULT_BILLABLE_EVENTS, findRate, providerCostFor, registerBillableEvent } from "./registry.js";
 import { Meter, estimateTokens } from "./meter.js";
 import { MemoryMeterStore } from "./store-memory.js";
-import { summarizeWallet, usageByCategory, usageTimeline, forecastUsage, balanceLevel, READ_ONLY_MESSAGE, transferableBalance, walletKind } from "./wallet.js";
+import { summarizeWallet, usageByCategory, usageTimeline, forecastUsage, balanceLevel, READ_ONLY_MESSAGE, transferableBalance, walletKind, projectMeter, type Wallet } from "./wallet.js";
 import { money6, formatMoney } from "./money.js";
 
 const cfg = billingConfig({});
@@ -344,4 +344,153 @@ test("the brief's transfer cases: A user's own credits move to another user, and
   /* history reads from either side */
   assert.equal((await store.listTransfers({ walletId: A.id })).length, 1);
   assert.equal((await store.listTransfers({ walletId: B.id })).length, 2, "B received the two that succeeded — a refused transfer leaves no trace to read");
+});
+
+/* ===================================================== the dashboard's meter
+ *
+ * The projects page draws a wallet on every card. These are the brief's own
+ * cases, tested on the arithmetic rather than through the browser, because
+ * the numbers are the part that must be right: a card that rounds its own way
+ * or calls an exhausted project healthy is worse than no card.
+ */
+
+/** A wallet row, for the arithmetic tests that do not need a store. */
+function wallet(p: { totalAdded: number; balance: number; totalUsed: number; reserved?: number }): Wallet {
+  const now = new Date().toISOString();
+  return {
+    id: "w1", customerId: "cust", surveyId: "srv_1", userId: null, sharedWalletId: null,
+    currency: "USD", balance: p.balance, reserved: p.reserved ?? 0,
+    totalAdded: p.totalAdded, totalUsed: p.totalUsed, state: "active",
+    overdraftEnabled: null, overdraftLimit: null, createdAt: now, updatedAt: now,
+  };
+}
+
+
+test("a project meter reads $65 remaining and 35% used from a $100 wallet with $35 spent", () => {
+  const w = wallet({ totalAdded: 100, balance: 65, totalUsed: 35 });
+  const m = projectMeter(w, { charge: 35, events: 12 }, cfg);
+  assert.equal(m.allocated, 100);
+  assert.equal(m.used, 35);
+  assert.equal(m.remaining, 65);
+  assert.equal(m.usedPct, 35);
+  assert.equal(m.level, "normal", "well above the low-balance threshold");
+  assert.equal(m.state, "active");
+  assert.equal(m.events, 12);
+});
+
+test("the bands follow the administrator's thresholds, not a number in the card", () => {
+  const c = billingConfig({ lowBalanceThreshold: 20, criticalBalanceThreshold: 5, readOnlyThreshold: 0 });
+  const at = (balance: number) => projectMeter(wallet({ totalAdded: 100, balance, totalUsed: 100 - balance }), { charge: 100 - balance, events: 1 }, c);
+  assert.equal(at(65).level, "normal");
+  assert.equal(at(20).level, "low", "AT the threshold is already low — a warning that waits for one cent past it is late");
+  assert.equal(at(12).level, "low");
+  assert.equal(at(5).level, "critical");
+  assert.equal(at(0.5).level, "critical");
+  assert.equal(at(0).level, "locked");
+
+  /* and moving the threshold moves the band, with no code change */
+  const generous = billingConfig({ lowBalanceThreshold: 80, criticalBalanceThreshold: 40, readOnlyThreshold: 0 });
+  assert.equal(projectMeter(wallet({ totalAdded: 100, balance: 65, totalUsed: 35 }), undefined, generous).level, "low");
+});
+
+test("an exhausted project reads 100% used, nothing remaining, and READ-ONLY", () => {
+  const m = projectMeter(wallet({ totalAdded: 100, balance: 0, totalUsed: 100 }), { charge: 100, events: 40 }, cfg);
+  assert.equal(m.remaining, 0);
+  assert.equal(m.usedPct, 100);
+  assert.equal(m.level, "locked");
+  assert.equal(m.state, "read_only", "the card says why the project has stopped");
+});
+
+test("a wallet nobody has funded reads 0%, not NaN and not 100%", () => {
+  const m = projectMeter(wallet({ totalAdded: 0, balance: 0, totalUsed: 0 }), undefined, cfg);
+  assert.equal(m.usedPct, 0);
+  assert.equal(m.allocated, 0);
+  assert.equal(m.remaining, 0);
+  assert.equal(m.state, "read_only", "a project with no credits cannot do billable work, and says so");
+});
+
+test("reserved money is shown apart: it is neither spent nor available", () => {
+  const m = projectMeter(wallet({ totalAdded: 100, balance: 60, totalUsed: 40, reserved: 10 }), { charge: 40, events: 3 }, cfg);
+  assert.equal(m.remaining, 60, "the balance still holds it");
+  assert.equal(m.reserved, 10);
+  assert.equal(m.available, 50, "but only 50 can be spent or moved");
+  assert.equal(m.used, 40, "and it has not been used");
+});
+
+test("the card's figures are the same ones the project's own Usage panel shows", async () => {
+  /*
+   * §24, tested rather than asserted in prose: the dashboard card and the
+   * project page must be the same numbers, so both are computed here from one
+   * wallet and one set of real usage events — recorded through the meter, not
+   * fabricated — and compared field by field.
+   */
+  const { meter, ctx, store, walletId } = await fixture(100);
+  await meter.record(ctx, { eventType: "AI_REQUEST", provider: "openai-compatible", service: "chat", model: "gpt-4o-mini", inputUnits: 9_000, outputUnits: 1_500 });
+  await meter.record(ctx, { eventType: "TRANSLATION_CHARACTER", provider: "google", service: "translate", model: "v2", quantity: 12_000 });
+  await meter.record(ctx, { eventType: "SURVEY_RESPONSE", quantity: 40 });
+
+  const w = (await store.getWallet(walletId))!;
+  const events = await store.listUsage({ walletId });
+  const panel = summarizeWallet(w, await store.listLedger(walletId), events, cfg);
+  const card = projectMeter(w, { charge: events.reduce((a, e) => a + e.customerCharge, 0), events: events.length }, cfg);
+
+  assert.equal(card.used, panel.used, "used");
+  assert.equal(card.remaining, panel.remaining, "remaining");
+  assert.equal(card.allocated, panel.totalAdded, "allocated");
+  assert.equal(card.available, panel.available, "available");
+  assert.equal(card.level, panel.level, "level");
+  assert.equal(card.state, panel.state, "state");
+  assert.equal(card.usedPct, Math.round((panel.used / panel.totalAdded) * 10000) / 100);
+  /* and the card carries nothing internal, whatever the panel knows */
+  assert.ok(!("costs" in card) && !("providerCost" in card), "no cost field exists on a researcher's meter");
+});
+
+test("a refill brings an exhausted project back to life without anyone touching its status", async () => {
+  const { meter, ctx, store, walletId } = await fixture(0);
+  await meter.credit(walletId, 20, { reason: "initial", by: "admin" });
+  /* spend it all: enough responses to take the wallet to nothing */
+  for (let i = 0; i < 40; i += 1) await meter.record(ctx, { eventType: "SURVEY_RESPONSE", quantity: 500 });
+
+  const spent = (await store.getWallet(walletId))!;
+  assert.ok(spent.balance <= 0, `the wallet is empty (${spent.balance})`);
+  assert.equal(spent.state, "read_only", "which stops billable work");
+  const before = projectMeter(spent, undefined, cfg);
+  assert.equal(before.state, "read_only");
+
+  const { wallet: after } = await meter.credit(walletId, 50, { reason: "Project wallet refill", by: "user_1" });
+  const m = projectMeter(after, undefined, cfg);
+  assert.ok(m.remaining > 0 && m.remaining <= 50);
+  assert.equal(m.state, "active", "the state follows the balance — nobody flips a switch by hand");
+  assert.equal(m.level, "normal");
+  assert.equal(m.allocated, 70, "the wallet has had $70 put into it over its life");
+
+  const ledger = await store.listLedger(walletId, 50);
+  assert.equal(ledger.filter((l) => l.kind === "credit").length, 2, "and every refill is a ledger line, never a balance written directly");
+  assert.equal(ledger.find((l) => l.reason === "Project wallet refill")?.amount, 50);
+});
+
+test("a refill can only ever MOVE credits: a transfer takes exactly what it gives", async () => {
+  /*
+   * The rule the Refill button exists under. A project's wallet goes up by
+   * the amount the person's wallet goes down by — no path adds to one
+   * without subtracting from the other, and a transfer of more than the
+   * available balance is refused rather than overdrawn.
+   */
+  const store = new MemoryMeterStore();
+  const meter = new Meter(store, { cacheMs: 0 });
+  const mine = (await store.walletForUser("cust", "user_1", { create: true }))!;
+  const project = (await meter.walletFor({ customerId: "cust", surveyId: "proj_empty" }))!;
+  await meter.credit(mine.id, 100, { reason: "assigned", by: "admin" });
+
+  const ok = await meter.transfer({ sourceWalletId: mine.id, destinationWalletId: project.id, amount: 60, by: "user_1" });
+  assert.ok(ok.ok);
+  assert.equal(ok.source.balance, 40);
+  assert.equal(ok.destination.balance, 60);
+  assert.equal(money6(ok.source.balance + ok.destination.balance), 100, "nothing was created");
+  assert.equal(projectMeter(ok.destination, undefined, cfg).allocated, 60, "and the project's wallet records what arrived");
+
+  const refused = await meter.transfer({ sourceWalletId: mine.id, destinationWalletId: project.id, amount: 500, by: "user_1" });
+  assert.equal(refused.ok, false);
+  assert.equal((await store.getWallet(mine.id))!.balance, 40, "a refused refill moves nothing");
+  assert.equal((await store.getWallet(project.id))!.balance, 60);
 });

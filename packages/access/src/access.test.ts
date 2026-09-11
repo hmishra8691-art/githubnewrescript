@@ -637,3 +637,27 @@ test("notifiable events are a declared list, not a rule hidden in a route", () =
   assert.equal(isNotifiable("lock.released"), true, "the whole point of §39 — tell the person who is waiting");
   assert.equal(isNotifiable("project.opened"), false, "nobody needs a notification for that");
 });
+
+test("cloning a project is a creation act, not a reading one", () => {
+  /*
+   * A clone discloses nothing new — whoever can clone could already open
+   * every question — but it puts a NEW PROJECT in the workspace's list, and
+   * that is a different kind of power from looking. So it goes to the roles
+   * that build surveys and not to the ones that only read them.
+   */
+  assert.equal(can("owner", "project.clone"), true);
+  assert.equal(can("editor", "project.clone"), true);
+  assert.equal(can("programmer", "project.clone"), true);
+  assert.equal(can("reviewer", "project.clone"), false, "a reviewer reads and comments");
+  assert.equal(can("viewer", "project.clone"), false);
+  assert.equal(can("test_user", "project.clone"), false);
+  assert.equal(can("deployment_manager", "project.clone"), false, "ships surveys; does not author them");
+  assert.equal(can(null, "project.clone"), false);
+});
+
+test("a clone is recorded against both projects", () => {
+  assert.equal(isAuditEvent("project.cloned"), true);
+  assert.match(describeEvent({ action: "project.cloned", detail: { newTitle: "Brand Tracker — Copy" } } as never), /cloned this project into Brand Tracker — Copy/);
+  assert.match(describeEvent({ action: "project.created", detail: { clonedFrom: "srv_1", clonedFromTitle: "Brand Tracker" } } as never), /created this project as a copy of Brand Tracker/);
+  assert.match(describeEvent({ action: "project.created", detail: {} } as never), /created this project$/, "an ordinary creation still reads as one");
+});

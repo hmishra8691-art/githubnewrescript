@@ -51,6 +51,14 @@ export const AUDIT_EVENTS = [
 
   /* projects */
   "project.created",
+  /*
+   * A clone writes TWO records, deliberately: `project.cloned` against the
+   * original ("this study was copied, by whom, when") and `project.created`
+   * against the copy, so the new project's own history starts the way every
+   * project's does. Reading only one of the two log lines still leaves you
+   * with a true statement.
+   */
+  "project.cloned",
   "project.opened",
   "project.deleted",
   "project.shared",
@@ -186,7 +194,8 @@ export function describeEvent(r: AuditRow): string {
     case "account.unlocked": return `${who} unlocked the account ${target}`;
     case "account.role_changed": return `${who} changed ${target}'s platform role to ${role}`;
 
-    case "project.created": return `${who} created this project`;
+    case "project.created": return `${who} created this project${d.clonedFrom ? ` as a copy of ${str(d.clonedFromTitle) || "another project"}` : ""}`;
+    case "project.cloned": return `${who} cloned this project${d.newTitle ? ` into ${str(d.newTitle)}` : ""}`;
     case "project.opened": return `${who} opened this project${d.readOnly ? " (read-only)" : ""}`;
     case "project.deleted": return `${who} deleted this project`;
     case "project.shared": return `${who} shared this project with ${target}${role ? ` as ${role}` : ""}`;

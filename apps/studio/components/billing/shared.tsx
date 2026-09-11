@@ -23,7 +23,13 @@ export const fmtQty = (n: number, unit: string): string => {
 export const fmtWhen = (iso: string): string => { const ms = Date.parse(iso); return Number.isNaN(ms) ? "—" : new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }); };
 
 export const LEVEL_CLASS: Record<string, string> = { normal: "success", low: "warning", critical: "error", locked: "error" };
-export const LEVEL_WORD: Record<string, string> = { normal: "Normal", low: "Low balance", critical: "Critical balance", locked: "Project locked" };
+/**
+ * ONE VOCABULARY FOR A BALANCE, everywhere it is shown: the dashboard card,
+ * the project's Usage tab and Billing Administration. A wallet called
+ * "Healthy" on one screen and "Normal" on the next reads as two different
+ * measurements of two different things.
+ */
+export const LEVEL_WORD: Record<string, string> = { normal: "Healthy", low: "Low balance", critical: "Critical", locked: "Exhausted" };
 export const STATE_WORD: Record<string, string> = { active: "Active", read_only: "Read-only", suspended: "Suspended" };
 
 /**
@@ -110,10 +116,16 @@ export function UsageBars({ points, currency, height = 120 }: { points: { day: s
   );
 }
 
-export function Progress({ used, total, level }: { used: number; total: number; level: string }) {
+export function Progress({ used, total, level, testid = "usage-progress", label }: {
+  used: number; total: number; level: string;
+  /** A page with one meter keeps the default; a list of them names each. */
+  testid?: string;
+  label?: string;
+}) {
   const pct = total > 0 ? Math.min(100, Math.max(0, (used / total) * 100)) : used > 0 ? 100 : 0;
   return (
-    <div className="bl-progress" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100} data-testid="usage-progress" data-pct={Math.round(pct)}>
+    <div className="bl-progress" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}
+      aria-label={label} data-testid={testid} data-pct={Math.round(pct)}>
       <div className={`bl-progress-fill ${level}`} style={{ width: `${pct}%` }} />
     </div>
   );

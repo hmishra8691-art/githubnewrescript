@@ -4,8 +4,10 @@ import { THEME_PRESETS } from "@/lib/defaults";
 import { SURVEY_TEMPLATES, findSurveyTemplate } from "@rescript/templates";
 import {
   SurveyCard, SurveyCardSkeleton, STATUS_META, relativeTime,
-  type SurveyRow, type SurveyStats, type Contributor,
+  type SurveyRow, type SurveyStats, type Contributor, type CardMeter,
 } from "@/components/SurveyCard";
+import { RefillWalletDialog } from "@/components/dashboard/RefillWalletDialog";
+import { CloneProjectDialog } from "@/components/dashboard/CloneProjectDialog";
 import { useSession } from "@/lib/useSession";
 import { AppHeader, greeting } from "@/components/ui/AppHeader";
 import { Icon } from "@/components/ui/Icon";
@@ -13,7 +15,8 @@ import { can, type ProjectRole } from "@rescript/access";
 
 type SortKey =
   | "updated" | "created" | "name_az" | "name_za"
-  | "responses_desc" | "responses_asc" | "questions_desc" | "due";
+  | "responses_desc" | "responses_asc" | "questions_desc" | "due"
+  | "used_desc" | "used_asc" | "balance_asc" | "balance_desc";
 
 const SORTS: { key: SortKey; label: string }[] = [
   { key: "updated", label: "Recently updated" },
@@ -24,7 +27,24 @@ const SORTS: { key: SortKey; label: string }[] = [
   { key: "responses_asc", label: "Fewest responses" },
   { key: "questions_desc", label: "Most questions" },
   { key: "due", label: "Due soonest" },
+  /* the wallet sorts: "which project is about to stop" is a question about
+     money, and it cannot be answered by any of the sorts above */
+  { key: "balance_asc", label: "Lowest balance" },
+  { key: "balance_desc", label: "Highest balance" },
+  { key: "used_desc", label: "Most credits used" },
+  { key: "used_asc", label: "Least credits used" },
 ];
+
+/** The wallet states a researcher filters by, in the words the card uses. */
+type BalanceFilter = "all" | "healthy" | "low" | "critical" | "exhausted";
+const BALANCE_FILTERS: { key: BalanceFilter; label: string }[] = [
+  { key: "all", label: "Any balance" },
+  { key: "healthy", label: "Healthy" },
+  { key: "low", label: "Low balance" },
+  { key: "critical", label: "Critical" },
+  { key: "exhausted", label: "Exhausted" },
+];
+const LEVEL_FILTER: Record<string, BalanceFilter> = { normal: "healthy", low: "low", critical: "critical", locked: "exhausted" };
 
 /**
  * MY PROJECTS (§36, §37).
@@ -69,7 +89,15 @@ export default function Dashboard() {
   const [search, setSearch] = React.useState("");
   const [statusFilter, setStatusFilter] = React.useState<string>("all");
   const [responseFilter, setResponseFilter] = React.useState<"any" | "has" | "none">("any");
+  const [balanceFilter, setBalanceFilter] = React.useState<BalanceFilter>("all");
   const [sort, setSort] = React.useState<SortKey>("updated");
+  /* wallets — loaded separately, so a workspace without billing still gets its projects */
+  const [meters, setMeters] = React.useState<Record<string, CardMeter | null>>({});
+  const [refillable, setRefillable] = React.useState<Record<string, boolean>>({});
+  const [metersLoading, setMetersLoading] = React.useState(true);
+  const [billingOn, setBillingOn] = React.useState(false);
+  const [refilling, setRefilling] = React.useState<SurveyRow | null>(null);
+  const [cloning, setCloning] = React.useState<SurveyRow | null>(null);
   const [creating, setCreating] = React.useState(false);
   const [title, setTitle] = React.useState("");
   const [code, setCode] = React.useState("");
@@ -131,9 +159,31 @@ export default function Dashboard() {
       setStatsLoading(false);
     }
   }, []);
+  /**
+   * THE WALLETS, IN ONE REQUEST FOR THE WHOLE PAGE.
+   *
+   * Separate from the survey list on purpose. Billing is optional on an
+   * installation and a wallet is additive information: if this call fails, or
+   * the installation has no billing, every card still renders exactly as it
+   * did before — the meter is simply not there. The alternative, folding it
+   * into `/api/surveys`, would let a billing problem empty the dashboard.
+   */
+  const loadMeters = React.useCallback(async () => {
+    try {
+      const r = await fetch("/api/billing/projects");
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d?.ok) { setBillingOn(false); return; }
+      const m: Record<string, CardMeter | null> = {};
+      const rf: Record<string, boolean> = {};
+      for (const p of d.projects ?? []) { m[p.id] = p.meter ?? null; rf[p.id] = !!p.canRefill; }
+      setMeters(m); setRefillable(rf); setBillingOn(true);
+    } catch { setBillingOn(false); } finally { setMetersLoading(false); }
+  }, []);
+
   React.useEffect(() => {
     void load();
-  }, [load]);
+    void loadMeters();
+  }, [load, loadMeters]);
 
   const create = async () => {
     setError(null);
@@ -194,6 +244,12 @@ export default function Dashboard() {
       const n = stats[s2.id]?.responseCount ?? 0;
       if (responseFilter === "has" && n === 0) return false;
       if (responseFilter === "none" && n > 0) return false;
+      /* a project with no wallet has no balance to be in any band, so it is
+         filtered out by a balance filter rather than silently counted healthy */
+      if (balanceFilter !== "all") {
+        const lvl = meters[s2.id]?.level;
+        if (!lvl || LEVEL_FILTER[lvl] !== balanceFilter) return false;
+      }
       if (!q) return true;
       return (
         s2.title.toLowerCase().includes(q) ||
@@ -210,6 +266,8 @@ export default function Dashboard() {
       );
     });
     const n = (id: string, k: keyof SurveyStats) => Number(stats[id]?.[k] ?? 0);
+    const cash = (id: string, missing: number) => meters[id]?.remaining ?? missing;
+    const spent = (id: string, missing: number) => meters[id]?.used ?? missing;
     rows = [...rows].sort((a, b) => {
       switch (sort) {
         case "created": return b.created_at.localeCompare(a.created_at);
@@ -218,6 +276,16 @@ export default function Dashboard() {
         case "responses_desc": return n(b.id, "responseCount") - n(a.id, "responseCount");
         case "responses_asc": return n(a.id, "responseCount") - n(b.id, "responseCount");
         case "questions_desc": return n(b.id, "questionCount") - n(a.id, "questionCount");
+        /*
+         * Wallet sorts. A project with no wallet sorts LAST in every one of
+         * them — it has no balance, and putting "unknown" at the top of
+         * "lowest balance" would bury the project that is actually about to
+         * stop, which is the only reason to sort this way.
+         */
+        case "balance_asc": return cash(a.id, Infinity) - cash(b.id, Infinity);
+        case "balance_desc": return cash(b.id, -Infinity) - cash(a.id, -Infinity);
+        case "used_desc": return spent(b.id, -Infinity) - spent(a.id, -Infinity);
+        case "used_asc": return spent(a.id, Infinity) - spent(b.id, Infinity);
         /*
          * §60 — soonest first, and a project with no due date goes last
          * rather than first: an absent date is "not scheduled", and sorting it
@@ -234,7 +302,7 @@ export default function Dashboard() {
       }
     });
     return rows;
-  }, [surveys, stats, search, statusFilter, responseFilter, sort]);
+  }, [surveys, stats, meters, ownership, search, statusFilter, responseFilter, balanceFilter, sort]);
 
   const totals = React.useMemo(() => {
     const list = Object.values(stats);
@@ -325,6 +393,13 @@ export default function Dashboard() {
           <option value="has">Has responses</option>
           <option value="none">No responses</option>
         </select>
+        {/* offered only where there are wallets to filter by */}
+        {billingOn && (
+          <select className="select" aria-label="Filter by wallet balance" data-testid="dash-balance-filter"
+            value={balanceFilter} onChange={(e) => setBalanceFilter(e.target.value as BalanceFilter)}>
+            {BALANCE_FILTERS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+          </select>
+        )}
       </div>
 
       <div className="dash-filters" data-testid="dash-ownership">
@@ -393,7 +468,7 @@ export default function Dashboard() {
         <p className="muted">
           No surveys match this filter.{" "}
           <button className="btn small" onClick={() => {
-            setSearch(""); setStatusFilter("all"); setResponseFilter("any");
+            setSearch(""); setStatusFilter("all"); setResponseFilter("any"); setBalanceFilter("all");
           }}>Clear filters</button>
         </p>
       )}
@@ -404,6 +479,11 @@ export default function Dashboard() {
           onResponses={() => (window.location.href = `/studio/${s.id}?tab=data`)}
           onStatus={(status) => setStatus(s.id, status)}
           onDelete={() => { setDeleting(s); setConfirmText(""); setDeleteError(null); }}
+          meter={billingOn ? meters[s.id] ?? null : undefined}
+          meterLoading={metersLoading}
+          canRefill={!!refillable[s.id]}
+          onRefill={() => setRefilling(s)}
+          onClone={() => setCloning(s)}
           /*
            * project.delete is owner-only (packages/access/src/roles.ts) and
            * that's already enforced server-side — this is only a courtesy so
@@ -578,6 +658,29 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
+      )}
+
+      {/*
+        * Refill and Clone, from the card. Both reload the page's data when
+        * they finish rather than patching a number into local state: a refill
+        * changes a balance the SERVER computes (and may bring a read-only
+        * project back to life), and a clone adds a project to the list.
+        */}
+      {refilling && (
+        <RefillWalletDialog
+          project={{ id: refilling.id, title: refilling.title, code: refilling.code }}
+          currency={meters[refilling.id]?.currency ?? "USD"}
+          isPlatformAdmin={session.state.kind === "signed_in" && session.state.user.isPlatformAdmin}
+          onClose={() => setRefilling(null)}
+          onDone={() => { void loadMeters(); }}
+        />
+      )}
+      {cloning && (
+        <CloneProjectDialog
+          project={{ id: cloning.id, title: cloning.title, code: cloning.code }}
+          onClose={() => setCloning(null)}
+          onCloned={() => { void load(); void loadMeters(); }}
+        />
       )}
     </div>
   );
