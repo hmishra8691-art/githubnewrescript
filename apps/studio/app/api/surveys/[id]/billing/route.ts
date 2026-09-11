@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isFailure, requireProject, audit } from "@/lib/guard";
 import { getMeter, getSandboxMeter, isSandboxProject, meterContextFor, projectContext } from "@/lib/metering";
-import { projectMeterView } from "@/lib/billingView";
+import { projectMeterView, stripInternalCosts } from "@/lib/billingView";
 
 export const dynamic = "force-dynamic";
 
@@ -14,20 +14,28 @@ export const dynamic = "force-dynamic";
  * `billing.read` to look, `billing.request_credits` to ask. The sandbox
  * project (`/sandbox`) reads the in-memory meter without a session so the
  * tab can be seen and tested without a database.
+ *
+ * AUDIENCE (change 2): a researcher receives the "user" view — charges,
+ * balance, usage, never a cost, fee or margin; a platform administrator
+ * opening the same tab receives the full view. The split happens in
+ * `projectMeterView` and the user payload is additionally passed through
+ * `stripInternalCosts`, so a future field cannot leak by omission.
  */
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   if (isSandboxProject(params.id)) {
-    const view = await projectMeterView(getSandboxMeter(), meterContextFor(null, "sandbox"));
-    return NextResponse.json({ ok: true, sandbox: true, ...view, requests: await getSandboxMeter().store.listCreditRequests({ surveyId: "sandbox" }) });
+    const view = await projectMeterView(getSandboxMeter(), meterContextFor(null, "sandbox"), { audience: "user" });
+    return NextResponse.json(stripInternalCosts({ ok: true, sandbox: true, ...view, requests: await getSandboxMeter().store.listCreditRequests({ surveyId: "sandbox" }) }));
   }
   const gate = await requireProject(req, params.id, "billing.read");
   if (isFailure(gate)) return gate.response;
   const meter = getMeter();
   const ctx = projectContext(gate);
   try {
-    const view = await projectMeterView(meter, ctx);
+    const audience = gate.user.isPlatformAdmin ? "admin" : "user";
+    const view = await projectMeterView(meter, ctx, { audience });
     const requests = await meter.store.listCreditRequests({ surveyId: params.id });
-    return NextResponse.json({ ok: true, sandbox: false, ...view, requests: requests.slice(0, 20), canRequest: gate.role != null && ["owner", "editor"].includes(gate.role) });
+    const payload = { ok: true, sandbox: false, ...view, requests: requests.slice(0, 20), canRequest: gate.role != null && ["owner", "editor"].includes(gate.role) };
+    return NextResponse.json(audience === "admin" ? payload : stripInternalCosts(payload));
   } catch (e) {
     const msg = (e as Error).message;
     // migration 0023 not applied yet: the section says so rather than failing the Studio

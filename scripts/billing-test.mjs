@@ -75,7 +75,8 @@ assert.ok(Math.abs(spent - (ai.json.usage.charge + tr.json.usage.charge)) < 1e-6
 const rows = after.recent;
 const trRow = rows.find((r) => r.eventType === "TRANSLATION_CHARACTER");
 assert.ok(trRow, "translation usage row"); assert.equal(trRow.environment, "LIVE");
-assert.ok(trRow.customerCharge > trRow.actualCost * 1.5, `charge ${trRow.customerCharge} is well above actual cost ${trRow.actualCost} — margin, fee and reserve are in it`);
+const adminRow = (await api("/api/admin/billing/wallets?survey=sandbox")).json.view.recent.find((r) => r.id === trRow.id);
+assert.ok(adminRow.customerCharge > adminRow.actualCost * 1.5, `charge ${adminRow.customerCharge} is well above actual cost ${adminRow.actualCost} — margin, fee and reserve are in it`);
 assert.ok(rows.some((r) => r.eventType === "AI_REQUEST" && r.inputUnits > 0), "AI row carries tokens");
 assert.ok(after.categories.some((c) => c.category === "translation") && after.categories.some((c) => c.category === "ai"), "usage by category: ai + translation");
 await reloadUsage();
@@ -195,6 +196,80 @@ assert.equal(evPut.status, 200); assert.equal(evPut.json.events.find((e) => e.ty
 await api("/api/admin/billing/events", { method: "PUT", body: JSON.stringify({ event: evs.find((e) => e.type === "EXPORT_GENERATION") }) });
 console.log("  ok   config validated + applied live (Low balance at 5000); rate change doubles the charge; events editable");
 
+console.log("\nVISIBILITY — a researcher sees charges only; the administrator sees every cost component");
+const userView = await view();
+const INTERNAL = ["actualCost", "providerCost", "infraCost", "paymentFee", "taxReserve", "grossProfit", "netProfit", "marginPct", "costs", "grossMarginPct"];
+const walk = (v, found = new Set()) => { if (Array.isArray(v)) v.forEach((x) => walk(x, found)); else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) { if (INTERNAL.includes(k)) found.add(k); walk(x, found); } return found; };
+assert.equal(userView.audience, "user");
+assert.deepEqual([...walk(userView)], [], "no internal cost key anywhere in the researcher's payload");
+assert.ok(userView.recent.length && typeof userView.recent[0].customerCharge === "number", "the charge is there");
+assert.ok(typeof userView.summary.usedPct === "number" && userView.summary.used > 0 && userView.summary.remaining > 0, "wallet / used / remaining / usage %");
+const adminView = (await api("/api/admin/billing/wallets?survey=sandbox")).json.view;
+assert.equal(adminView.audience, "admin");
+const adminKeys = walk(adminView);
+for (const k of ["actualCost", "providerCost", "infraCost", "paymentFee", "taxReserve", "grossProfit", "netProfit", "marginPct", "costs"]) assert.ok(adminKeys.has(k), `administrator payload carries ${k}`);
+assert.ok(adminView.summary.costs.providerCost > 0 && adminView.summary.costs.netProfit !== 0, "the backend still calculates and stores the cost split");
+await reloadUsage();
+assert.equal(await page.$('[data-testid="wallet-costs"]'), null, "no cost breakdown on the researcher's wallet card");
+assert.equal(await page.getAttribute('[data-testid="usage-rows"]', "data-cost-columns"), "0", "no cost column in the researcher's usage table");
+assert.match(await page.textContent('[data-testid="wallet-used-pct"]'), /%/); assert.match(await page.textContent('[data-testid="wallet-status"]'), /ACTIVE/);
+assert.ok(!(await page.textContent('[data-testid="usage-panel"]')).match(/Actual cost|Provider cost|Gross profit|Margin/i), "the words never appear on the researcher's screen");
+console.log("  ok   researcher payload/screen: charges only; administrator payload: full cost split");
+
+console.log("\nTRANSFERS — unused credits move between projects and people, atomically, with a confirmation and a traceable ledger");
+await api("/api/admin/billing/wallets", { method: "POST", body: JSON.stringify({ action: "ensure", surveyId: "sandbox-b" }) });   // the sandbox meter seeds a new wallet
+const lk = (await api("/api/admin/billing/lookup")).json;
+const dstBefore = lk.projects.find((p) => p.id === "sandbox-b").wallet;
+const userBefore = lk.users.find((u) => u.id === "sandbox-user-2").wallet?.balance ?? 0;
+assert.ok(lk.projects.some((p) => p.id === "sandbox") && lk.users.length >= 2, "lookup lists projects and users with balances");
+const srcBefore = lk.projects.find((p) => p.id === "sandbox").wallet;
+assert.ok(srcBefore.available <= srcBefore.balance, "available never exceeds balance");
+// rule 1: more than available is refused, nothing moves
+const tooMuch = await api("/api/admin/billing/transfer", { method: "POST", body: JSON.stringify({ source: { type: "project", id: "sandbox" }, destination: { type: "project", id: "sandbox-b" }, amount: srcBefore.available + 5 }) });
+assert.equal(tooMuch.status, 402); assert.equal(tooMuch.json.code, "transfer_insufficient_available");
+assert.equal((await view()).summary.remaining, srcBefore.balance, "a refused transfer changes nothing");
+// rule 2: reserved balance is excluded — hold some, then check available shrinks
+const holdRes = await api("/api/admin/billing/transfer", { method: "POST", body: JSON.stringify({ source: { type: "project", id: "sandbox" }, destination: { type: "project", id: "sandbox" }, amount: 1 }) });
+assert.equal(holdRes.status, 400, "same wallet refused");
+// project → project
+const x1 = await api("/api/admin/billing/transfer", { method: "POST", body: JSON.stringify({ source: { type: "project", id: "sandbox" }, destination: { type: "project", id: "sandbox-b" }, amount: 25, reason: "Unused project credits", note: "moving to B" }) });
+assert.equal(x1.status, 200, JSON.stringify(x1.json));
+assert.match(x1.json.transfer.code, /^TRX-/); assert.equal(x1.json.transfer.status, "completed");
+assert.ok(Math.abs(x1.json.source.balance - (srcBefore.balance - 25)) < 1e-6, "source −25"); assert.ok(Math.abs(x1.json.destination.balance - (dstBefore.balance + 25)) < 1e-6, "destination +25");
+const ledgerA = (await view()).ledger;
+const outLine = ledgerA.find((l) => l.transferId === x1.json.transfer.id);
+assert.ok(outLine && outLine.kind === "transfer_out" && outLine.amount === -25, "source ledger: Credit Transfer Out −25");
+const bView = (await api("/api/admin/billing/wallets?survey=sandbox-b")).json.view;
+const inLine = bView.ledger.find((l) => l.transferId === x1.json.transfer.id);
+assert.ok(inLine && inLine.kind === "transfer_in" && inLine.amount === 25, "destination ledger: Credit Transfer In +25, same transfer id");
+// project → user (personal wallet), then user → project
+const x2 = await api("/api/admin/billing/transfer", { method: "POST", body: JSON.stringify({ source: { type: "project", id: "sandbox-b" }, destination: { type: "user", id: "sandbox-user-2" }, amount: 20 }) });
+assert.equal(x2.status, 200); assert.equal(x2.json.transfer.destinationKind, "user"); assert.ok(Math.abs(x2.json.destination.balance - (userBefore + 20)) < 1e-6, "the person's own wallet +20"); assert.ok(Math.abs(x2.json.source.balance - (dstBefore.balance + 5)) < 1e-6);
+const x3 = await api("/api/admin/billing/transfer", { method: "POST", body: JSON.stringify({ source: { type: "user", id: "sandbox-user-2" }, destination: { type: "project", id: "sandbox" }, amount: 5 }) });
+assert.equal(x3.status, 200); assert.ok(Math.abs(x3.json.source.balance - (userBefore + 15)) < 1e-6);
+// history + filters
+const hist = (await api("/api/admin/billing/transfer?project=sandbox-b")).json.transfers;
+assert.ok(hist.length >= 2 && hist.every((t) => t.sourceRef === "sandbox-b" || t.destinationRef === "sandbox-b"), "history filtered by project");
+assert.ok(hist[0].sourceLabel && hist[0].destinationLabel && hist[0].adminLabel, "names resolved");
+assert.equal((await api("/api/admin/billing/transfer?min=100")).json.transfers.length, 0, "amount filter");
+// reversal: a new transfer referencing the original; the original is marked, not edited
+const cannot = await api("/api/admin/billing/transfer", { method: "POST", body: JSON.stringify({ action: "reverse", transferId: x2.json.transfer.id, note: "try" }) });
+if (userBefore < 5) assert.equal(cannot.status, 402, "the person has already moved 5 of the 20 on — a reversal needs the credits still to be there");
+else { assert.equal(cannot.status, 200, "with enough left the 20 goes back"); await api("/api/admin/billing/transfer", { method: "POST", body: JSON.stringify({ source: { type: "project", id: "sandbox-b" }, destination: { type: "user", id: "sandbox-user-2" }, amount: 20, reason: "redo" }) }); }
+const rv = await api("/api/admin/billing/transfer", { method: "POST", body: JSON.stringify({ action: "reverse", transferId: x3.json.transfer.id, note: "sent from the wrong wallet" }) });
+assert.equal(rv.status, 200, JSON.stringify(rv.json)); assert.equal(rv.json.transfer.reversalOf, x3.json.transfer.id); assert.equal(rv.json.transfer.amount, 5);
+const all = (await api("/api/admin/billing/transfer")).json.transfers;
+const orig = all.find((t) => t.id === x3.json.transfer.id);
+assert.equal(orig.status, "reversed"); assert.equal(orig.reversedBy, rv.json.transfer.id); assert.equal(orig.amount, 5, "the original row keeps its amount");
+assert.equal((await api("/api/admin/billing/transfer", { method: "POST", body: JSON.stringify({ action: "reverse", transferId: x3.json.transfer.id, note: "again" }) })).status, 409, "cannot reverse twice");
+assert.ok((await view()).ledger.some((l) => l.kind === "transfer_reversal" && l.transferId === rv.json.transfer.id), "reversal ledger line on the wallet that gave the credits back");
+assert.ok(Math.abs(rv.json.destination.balance - (userBefore + 20)) < 1e-6, "the person is back to +20");
+// put the sandbox wallet back where the suite expects it
+await api("/api/admin/billing/transfer", { method: "POST", body: JSON.stringify({ source: { type: "project", id: "sandbox-b" }, destination: { type: "project", id: "sandbox" }, amount: 5, reason: "test cleanup" }) });
+await api("/api/admin/billing/transfer", { method: "POST", body: JSON.stringify({ source: { type: "user", id: "sandbox-user-2" }, destination: { type: "project", id: "sandbox" }, amount: 20, reason: "test cleanup" }) });
+assert.ok(Math.abs((await view()).summary.remaining - srcBefore.balance) < 1e-6, `everything is back: the sandbox wallet is where it started (${(await view()).summary.remaining} vs ${srcBefore.balance})`);
+console.log("  ok   402 over available; project→project, project→user, user→project; two ledger lines per transfer; history filters; reversal");
+
 console.log("\nPAGES — Billing Administration and My usage render");
 await page.context().addCookies([{ name: "rescript_session", value: "sandbox", url: STUDIO }]);
 // no accounts exist on a database-less Studio: make the session check answer "cannot verify" (503, transient) rather than
@@ -215,6 +290,40 @@ assert.match(await page.textContent('[data-testid="admin-note"]'), /Added \$50\.
 await page.waitForFunction((b) => { const t = document.querySelector('[data-testid="admin-wallet-balance"]')?.textContent ?? ""; return Math.abs(Number(t.replace(/[^0-9.\-]/g, "")) - b - 50) < 0.02; }, bBefore);
 await page.waitForSelector('[data-testid="admin-ledger"]');
 assert.ok((await page.$$('[data-testid="admin-usage-rows"] [data-testid="usage-row"]')).length >= 1, "the project's usage is listed for the administrator");
+await page.click('[data-testid="admin-tab-transfers"]');
+await page.waitForSelector('[data-testid="transfer-form"]');
+await page.waitForSelector('[data-testid="transfer-row"]');
+await page.click('[data-testid="transfer-src-project"]');
+await page.selectOption('[data-testid="transfer-source"]', "sandbox");
+await page.waitForFunction(() => /\$/.test(document.querySelector('[data-testid="transfer-available"]')?.textContent ?? ""));
+const availText = money((await page.textContent('[data-testid="transfer-available"] .bl-stat-value')));
+assert.ok(availText > 10, `available balance shown (${availText})`);
+await page.fill('[data-testid="transfer-amount"]', String(availText + 100));
+await page.waitForSelector('[data-testid="transfer-too-much"]');
+assert.equal(await page.isDisabled('[data-testid="transfer-submit"]'), true, "the button is disabled when the amount exceeds the available balance");
+await page.fill('[data-testid="transfer-amount"]', "10");
+await page.click('[data-testid="transfer-dst-project"]');
+await page.selectOption('[data-testid="transfer-destination"]', "sandbox-b");
+await page.fill('[data-testid="transfer-reason"]', "Unused project credits");
+await page.click('[data-testid="transfer-submit"]');
+await page.waitForSelector('[data-testid="transfer-confirm"]');
+assert.match(await page.textContent('[data-testid="transfer-confirm"]'), /You are about to transfer \$10\.00 from Sandbox project \(project\) to Second sandbox project \(project\)\. This action will be recorded in the billing ledger\./);
+await page.click('[data-testid="transfer-confirm-no"]');
+assert.equal(await page.$('[data-testid="transfer-confirm"]'), null, "cancel closes the confirmation, nothing moved");
+await page.click('[data-testid="transfer-submit"]');
+await page.click('[data-testid="transfer-confirm-yes"]');
+await page.waitForSelector('[data-testid="admin-note"]');
+assert.match(await page.textContent('[data-testid="admin-note"]'), /TRX-\d+: \$10\.00 transferred from Sandbox project/);
+await page.waitForFunction(() => (document.querySelector('[data-testid="transfer-row"]')?.textContent ?? "").includes("$10.00"));
+await page.selectOption('[data-testid="transfer-filter-status"]', "reversed");
+await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="transfer-row"]')].every((r) => r.getAttribute("data-status") === "reversed"));
+await page.selectOption('[data-testid="transfer-filter-status"]', "");
+await api("/api/admin/billing/transfer", { method: "POST", body: JSON.stringify({ source: { type: "project", id: "sandbox-b" }, destination: { type: "project", id: "sandbox" }, amount: 10, reason: "test cleanup" }) });
+await page.click('[data-testid="admin-tab-wallets"]');
+await page.waitForSelector('[data-testid="admin-wallet-row"]');
+await page.click('[data-testid="admin-wallet-open"]');
+await page.waitForSelector('[data-testid="admin-usage-rows"]');
+assert.equal(await page.getAttribute('[data-testid="admin-usage-rows"]', "data-cost-columns"), "1", "the administrator's usage table shows actual cost and margin");
 await page.click('[data-testid="admin-tab-requests"]');
 await page.selectOption('[data-testid="admin-requests-filter"]', "all");
 await page.waitForSelector('[data-testid="admin-request"][data-status="approved"]');
@@ -227,7 +336,7 @@ await page.click('[data-testid="admin-tab-events"]');
 await page.waitForSelector('[data-testid="event-row"][data-type="AI_REQUEST"]');
 await page.goto(`${STUDIO}/billing`, { waitUntil: "networkidle" });
 await page.waitForSelector('[data-testid="my-usage-error"], [data-testid="my-usage-totals"]');
-console.log("  ok   admin: wallets (+$50 via preset), requests, configuration, rates, events; My usage page renders");
+console.log("  ok   admin: wallets (+$50 via preset), transfer with confirmation + history filter, cost columns for admins only, requests, configuration, rates, events; My usage page renders");
 
 await h.close();
 console.log("\nALL BILLING CHECKS PASSED");

@@ -3,7 +3,7 @@ import { CATEGORY_LABEL, usageByCategory, money6 } from "@rescript/billing";
 import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireUser } from "@/lib/guard";
 import { getMeter } from "@/lib/metering";
-import { publicEvent } from "@/lib/billingView";
+import { publicEvent, stripInternalCosts } from "@/lib/billingView";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +15,11 @@ export const dynamic = "force-dynamic";
  * Which projects: `rescript_my_projects`, the same function the dashboard
  * uses — so this page can never show a wallet for a project the person
  * could not open.
+ *
+ * Every amount here is a CUSTOMER CHARGE (change 2). Provider cost,
+ * infrastructure, fees, reserve and margin are internal metrics and are
+ * not in this payload — `publicEvent` never carries them and the whole
+ * response is passed through `stripInternalCosts`.
  */
 export async function GET(req: NextRequest) {
   const user = await requireUser(req);
@@ -30,6 +35,7 @@ export async function GET(req: NextRequest) {
     const events = await meter.store.listUsage({ customerId: user.customerId ?? undefined, limit: 5000 });
     const visible = new Set(rows.map((r) => r.survey_id));
     const mineEvents = events.filter((e) => e.surveyId && visible.has(e.surveyId));
+    const titles = new Map(rows.map((r) => [r.survey_id, r.title]));
     const projects = rows.map((r) => {
       const w = byId.get(r.survey_id);
       const ev = mineEvents.filter((e) => e.surveyId === r.survey_id);
@@ -39,17 +45,20 @@ export async function GET(req: NextRequest) {
         used: money6(ev.reduce((a, e) => a + e.customerCharge, 0)), events: ev.length,
       };
     }).sort((a, b) => b.used - a.used);
+    // the person's own wallet, when an administrator has created one (credits transferred to them)
+    const personal = wallets.find((w) => w.userId === user.userId) ?? null;
     const totals = {
-      credits: money6(projects.reduce((a, p) => a + (p.wallet?.totalAdded ?? 0), 0)),
-      used: money6(projects.reduce((a, p) => a + (p.wallet?.totalUsed ?? 0), 0)),
-      remaining: money6(projects.reduce((a, p) => a + (p.wallet?.balance ?? 0), 0)),
+      credits: money6(projects.reduce((a, p) => a + (p.wallet?.totalAdded ?? 0), 0) + (personal?.totalAdded ?? 0)),
+      used: money6(projects.reduce((a, p) => a + (p.wallet?.totalUsed ?? 0), 0) + (personal?.totalUsed ?? 0)),
+      remaining: money6(projects.reduce((a, p) => a + (p.wallet?.balance ?? 0), 0) + (personal?.balance ?? 0)),
     };
-    return NextResponse.json({
+    return NextResponse.json(stripInternalCosts({
       ok: true, projects, totals,
-      categories: usageByCategory(mineEvents).map((c) => ({ ...c, label: CATEGORY_LABEL[c.category] })),
-      recent: mineEvents.slice(0, 50).map(publicEvent),
+      personalWallet: personal ? { balance: personal.balance, totalAdded: personal.totalAdded, state: personal.state, currency: personal.currency } : null,
+      categories: usageByCategory(mineEvents).map((c) => ({ category: c.category, label: CATEGORY_LABEL[c.category], charge: c.charge, events: c.events, quantity: c.quantity })),
+      recent: mineEvents.slice(0, 50).map((e) => ({ ...publicEvent(e), projectTitle: e.surveyId ? titles.get(e.surveyId) ?? null : null })),
       requests: (await meter.store.listCreditRequests({ userId: user.userId })).slice(0, 20),
-    });
+    }));
   } catch (e) {
     const msg = (e as Error).message;
     const unavailable = /relation .* does not exist|function .* does not exist|schema cache/i.test(msg);

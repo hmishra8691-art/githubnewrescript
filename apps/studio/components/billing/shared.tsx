@@ -26,10 +26,19 @@ export const LEVEL_CLASS: Record<string, string> = { normal: "success", low: "wa
 export const LEVEL_WORD: Record<string, string> = { normal: "Normal", low: "Low balance", critical: "Critical balance", locked: "Project locked" };
 export const STATE_WORD: Record<string, string> = { active: "Active", read_only: "Read-only", suspended: "Suspended" };
 
+/**
+ * A usage row as the API sends it. A RESEARCHER'S row carries the charge
+ * only; the cost fields exist on an ADMINISTRATOR'S row alone (change 2) —
+ * they are optional here because the same table renders both, and it shows
+ * a cost column only when asked to and when the data has one.
+ */
 export interface UsageRow {
   id: string; at: string; eventType: string; category: string; label: string; environment: "TEST" | "LIVE";
   provider: string | null; model: string | null; quantity: number; unit: string; inputUnits: number | null; outputUnits: number | null;
-  actualCost: number; providerCost: number; infraCost: number; customerCharge: number; reversal: boolean; unbilled: boolean; operation: string | null; cached: boolean;
+  customerCharge: number; reversal: boolean; unbilled: boolean; operation: string | null; cached: boolean;
+  surveyId?: string | null; projectTitle?: string | null;
+  /* administrator only */
+  actualCost?: number; providerCost?: number; infraCost?: number; paymentFee?: number; taxReserve?: number; grossProfit?: number; netProfit?: number; marginPct?: number;
 }
 
 export const EVENT_WORDS: Record<string, string> = {
@@ -49,20 +58,23 @@ export function describeQuantity(r: UsageRow): string {
   return fmtQty(r.quantity, r.unit);
 }
 
-export function UsageTable({ rows, currency, showCost = true, onReverse, testid = "usage-rows" }: { rows: UsageRow[]; currency: string; showCost?: boolean; onReverse?: (row: UsageRow) => void; testid?: string }) {
+export function UsageTable({ rows, currency, showCost = false, showProject = false, onReverse, testid = "usage-rows" }: { rows: UsageRow[]; currency: string; showCost?: boolean; showProject?: boolean; onReverse?: (row: UsageRow) => void; testid?: string }) {
   if (!rows.length) return <p className="muted" style={{ fontSize: 13 }} data-testid={`${testid}-empty`}>No usage yet.</p>;
+  const cost = showCost && rows.some((r) => typeof r.actualCost === "number");
   return (
     <div style={{ overflowX: "auto" }}>
-      <table className="grid bl-table" data-testid={testid}>
-        <thead><tr><th>When</th><th>What</th><th>Quantity</th><th>Env</th>{showCost && <th>Actual cost</th>}<th>Charge</th>{onReverse && <th />}</tr></thead>
+      <table className="grid bl-table" data-testid={testid} data-cost-columns={cost ? "1" : "0"}>
+        <thead><tr><th>Date</th>{showProject && <th>Project</th>}<th>Activity</th><th>Quantity</th><th>Env</th>{cost && <th>Actual cost</th>}{cost && <th>Margin</th>}<th>Charge</th>{onReverse && <th />}</tr></thead>
         <tbody>
           {rows.map((r) => (
             <tr key={r.id} data-testid="usage-row" data-event={r.eventType} data-env={r.environment} className={r.reversal ? "bl-reversal" : ""}>
               <td className="muted">{fmtWhen(r.at)}</td>
+              {showProject && <td>{r.projectTitle ?? <span className="muted">—</span>}</td>}
               <td>{describeRow(r)}{r.model && r.model !== "fake" ? <span className="muted"> · {r.model}</span> : null}{r.reversal && <span className="badge neutral" style={{ marginLeft: 6 }}>reversal</span>}{r.unbilled && <span className="badge warning" style={{ marginLeft: 6 }} title="Recorded but not charged — the wallet could not cover it">unbilled</span>}</td>
               <td>{describeQuantity(r)}</td>
               <td><span className={`badge ${r.environment === "TEST" ? "neutral" : ""}`}>{r.environment}</span></td>
-              {showCost && <td className="muted">{fmtMoney(r.actualCost, currency)}</td>}
+              {cost && <td className="muted" data-testid="usage-cost">{fmtMoney(r.actualCost ?? 0, currency)}</td>}
+              {cost && <td className="muted">{r.marginPct != null ? `${r.marginPct}%` : "—"}</td>}
               <td data-testid="usage-charge"><strong>{fmtMoney(r.customerCharge, currency)}</strong></td>
               {onReverse && <td>{!r.reversal && r.customerCharge > 0 && <button className="btn small" onClick={() => onReverse(r)}>Reverse</button>}</td>}
             </tr>

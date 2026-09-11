@@ -16,8 +16,10 @@ export type BalanceLevel = "normal" | "low" | "critical" | "locked";
 export interface Wallet {
   id: string;
   customerId: string;
-  /** the project (survey) this wallet belongs to; null = the workspace wallet */
+  /** the project (survey) this wallet belongs to; null = a workspace wallet or a person's own wallet */
   surveyId: string | null;
+  /** the person this wallet belongs to (a personal pool credits can be moved into and out of); null for project / workspace wallets */
+  userId: string | null;
   /** when set, this project draws from that wallet instead of its own (explicit shared-wallet feature) */
   sharedWalletId: string | null;
   currency: string;
@@ -34,7 +36,7 @@ export interface Wallet {
   updatedAt: string;
 }
 
-export const LEDGER_KINDS = ["credit", "debit", "adjustment", "reversal", "expiry"] as const;
+export const LEDGER_KINDS = ["credit", "debit", "adjustment", "reversal", "expiry", "transfer_out", "transfer_in", "transfer_reversal"] as const;
 export type LedgerKind = (typeof LEDGER_KINDS)[number];
 
 export interface LedgerEntry {
@@ -51,9 +53,52 @@ export interface LedgerEntry {
   usageEventId: string | null;
   /** the entry this one reverses / adjusts */
   referenceId: string | null;
+  /** both sides of a credit transfer carry the same transfer id */
+  transferId: string | null;
   createdBy: string | null;
   createdAt: string;
   expiresAt: string | null;
+}
+
+/**
+ * A CREDIT TRANSFER — unused balance moved from one wallet to another by an
+ * administrator: one row, two ledger lines (transfer_out on the source,
+ * transfer_in on the destination) referencing it, all in one transaction.
+ * A reversal is a second transfer row pointing at the first, never an edit.
+ */
+export type WalletKind = "project" | "user" | "workspace";
+export interface CreditTransfer {
+  id: string;
+  /** the human-readable reference, TRX-XXXXXX */
+  code: string;
+  customerId: string;
+  sourceWalletId: string;
+  destinationWalletId: string;
+  sourceKind: WalletKind;
+  destinationKind: WalletKind;
+  /** the project or user id behind each wallet, for the history screen */
+  sourceRef: string | null;
+  destinationRef: string | null;
+  amount: number;
+  currency: string;
+  reason: string | null;
+  note: string | null;
+  transferredBy: string | null;
+  status: "completed" | "reversed";
+  /** set on a reversal: the transfer it undoes */
+  reversalOf: string | null;
+  /** set on the original once reversed */
+  reversedBy: string | null;
+  createdAt: string;
+}
+
+export function walletKind(w: Pick<Wallet, "surveyId" | "userId">): WalletKind {
+  return w.surveyId ? "project" : w.userId ? "user" : "workspace";
+}
+
+/** The balance that may leave a wallet: what is there minus what open reservations hold. Never overdraft room. */
+export function transferableBalance(w: Pick<Wallet, "balance" | "reserved">): number {
+  return money6(Math.max(0, w.balance - w.reserved));
 }
 
 export interface UsageEvent {

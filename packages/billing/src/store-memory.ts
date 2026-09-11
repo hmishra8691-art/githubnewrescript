@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { BillingConfig } from "./config.js";
 import { money6 } from "./money.js";
 import type { BillableEventDef, Rate } from "./registry.js";
-import type { MeterStore, UsageEventInput, UsageFilter } from "./meter.js";
-import { walletStateFor, type CreditRequest, type LedgerEntry, type LedgerKind, type Reservation, type UsageEvent, type Wallet } from "./wallet.js";
+import type { MeterStore, TransferFilter, UsageEventInput, UsageFilter } from "./meter.js";
+import { walletKind, walletStateFor, type CreditRequest, type CreditTransfer, type LedgerEntry, type LedgerKind, type Reservation, type UsageEvent, type Wallet } from "./wallet.js";
 import { billingConfig } from "./config.js";
 
 /**
@@ -24,6 +24,7 @@ export class MemoryMeterStore implements MeterStore {
   usage: UsageEvent[] = [];
   reservations = new Map<string, Reservation>();
   requests: CreditRequest[] = [];
+  transfers: CreditTransfer[] = [];
 
   async loadConfig() { return this.config; }
   async saveConfig(cfg: BillingConfig) { this.config = cfg; }
@@ -42,16 +43,23 @@ export class MemoryMeterStore implements MeterStore {
   }
 
   async walletFor(customerId: string, surveyId: string | null, opts: { create: boolean; seedBalance?: number }) {
-    for (const w of this.wallets.values()) if (w.customerId === customerId && w.surveyId === surveyId) return w;
+    for (const w of this.wallets.values()) if (w.customerId === customerId && w.surveyId === surveyId && !w.userId) return w;
     if (!opts.create) return null;
     const w: Wallet = {
-      id: randomUUID(), customerId, surveyId, sharedWalletId: null, currency: this.cfg().currency,
+      id: randomUUID(), customerId, surveyId, userId: null, sharedWalletId: null, currency: this.cfg().currency,
       balance: 0, reserved: 0, totalAdded: 0, totalUsed: 0, state: "active", overdraftEnabled: null, overdraftLimit: null,
       createdAt: this.now(), updatedAt: this.now(),
     };
     this.wallets.set(w.id, w);
     if (opts.seedBalance && opts.seedBalance > 0) await this.credit({ walletId: w.id, amount: opts.seedBalance, kind: "credit", reason: "starting_credits", note: "Starting balance", by: null, expiresAt: null }, this.cfg().readOnlyThreshold);
     return this.wallets.get(w.id)!;
+  }
+  async walletForUser(customerId: string, userId: string, opts: { create: boolean }) {
+    for (const w of this.wallets.values()) if (w.userId === userId) return w;
+    if (!opts.create) return null;
+    const w: Wallet = { id: randomUUID(), customerId, surveyId: null, userId, sharedWalletId: null, currency: this.cfg().currency, balance: 0, reserved: 0, totalAdded: 0, totalUsed: 0, state: "active", overdraftEnabled: null, overdraftLimit: null, createdAt: this.now(), updatedAt: this.now() };
+    this.wallets.set(w.id, w);
+    return w;
   }
   async getWallet(id: string) { return this.wallets.get(id) ?? null; }
   async listWallets(filter: { customerId?: string }) { return [...this.wallets.values()].filter((w) => !filter.customerId || w.customerId === filter.customerId); }
@@ -84,7 +92,7 @@ export class MemoryMeterStore implements MeterStore {
     const ev = this.push(event);
     if (event.customerCharge !== 0) {
       w.balance = money6(w.balance - event.customerCharge); w.totalUsed = money6(w.totalUsed + event.customerCharge);
-      this.ledger.push({ id: randomUUID(), walletId: w.id, customerId: w.customerId, surveyId: w.surveyId, kind: "debit", amount: money6(-event.customerCharge), balanceAfter: w.balance, reason: event.eventType, note: null, usageEventId: ev.id, referenceId: null, createdBy: event.userId, createdAt: this.now(), expiresAt: null });
+      this.ledger.push({ id: randomUUID(), walletId: w.id, customerId: w.customerId, surveyId: w.surveyId, kind: "debit", amount: money6(-event.customerCharge), balanceAfter: w.balance, reason: event.eventType, note: null, usageEventId: ev.id, referenceId: null, transferId: null, createdBy: event.userId, createdAt: this.now(), expiresAt: null });
     }
     this.touch(w, readOnlyThreshold);
     return { event: ev, wallet: w };
@@ -102,7 +110,7 @@ export class MemoryMeterStore implements MeterStore {
     const w = event.walletId ? this.wallets.get(event.walletId) ?? null : null;
     if (w && event.customerCharge !== 0 && !event.adjustsEventId) {
       w.balance = money6(w.balance - event.customerCharge); w.totalUsed = money6(w.totalUsed + event.customerCharge);
-      this.ledger.push({ id: randomUUID(), walletId: w.id, customerId: w.customerId, surveyId: w.surveyId, kind: "debit", amount: money6(-event.customerCharge), balanceAfter: w.balance, reason: event.eventType, note: null, usageEventId: ev.id, referenceId: null, createdBy: event.userId, createdAt: this.now(), expiresAt: null });
+      this.ledger.push({ id: randomUUID(), walletId: w.id, customerId: w.customerId, surveyId: w.surveyId, kind: "debit", amount: money6(-event.customerCharge), balanceAfter: w.balance, reason: event.eventType, note: null, usageEventId: ev.id, referenceId: null, transferId: null, createdBy: event.userId, createdAt: this.now(), expiresAt: null });
       this.touch(w, readOnlyThreshold);
     }
     return { event: ev, wallet: w };
@@ -119,7 +127,7 @@ export class MemoryMeterStore implements MeterStore {
     w.balance = money6(w.balance + input.amount);
     if (input.amount > 0 && input.kind !== "reversal") w.totalAdded = money6(w.totalAdded + input.amount);
     if (input.kind === "reversal") w.totalUsed = money6(w.totalUsed - input.amount);
-    const entry: LedgerEntry = { id: randomUUID(), walletId: w.id, customerId: w.customerId, surveyId: w.surveyId, kind: input.kind, amount: money6(input.amount), balanceAfter: w.balance, reason: input.reason, note: input.note, usageEventId: input.usageEventId ?? null, referenceId: input.referenceId ?? null, createdBy: input.by, createdAt: this.now(), expiresAt: input.expiresAt };
+    const entry: LedgerEntry = { id: randomUUID(), walletId: w.id, customerId: w.customerId, surveyId: w.surveyId, kind: input.kind, amount: money6(input.amount), balanceAfter: w.balance, reason: input.reason, note: input.note, usageEventId: input.usageEventId ?? null, referenceId: input.referenceId ?? null, transferId: null, createdBy: input.by, createdAt: this.now(), expiresAt: input.expiresAt };
     this.ledger.push(entry);
     this.touch(w, readOnlyThreshold);
     return { entry, wallet: w };
@@ -132,6 +140,45 @@ export class MemoryMeterStore implements MeterStore {
       && (!f.since || e.createdAt >= f.since) && (!f.until || e.createdAt < f.until)).slice(-(f.limit ?? 1000)).reverse();
   }
   async getUsage(id: string) { return this.usage.find((e) => e.id === id) ?? null; }
+
+  async transfer(input: { sourceWalletId: string; destinationWalletId: string; amount: number; reason: string | null; note: string | null; by: string | null; reversalOf?: string | null }, readOnlyThreshold: number) {
+    const src = this.wallets.get(input.sourceWalletId), dst = this.wallets.get(input.destinationWalletId);
+    if (!src || !dst) return { ok: false as const, reason: "unknown_wallet" as const };
+    if (src.id === dst.id) return { ok: false as const, reason: "same_wallet" as const };
+    let original: CreditTransfer | undefined;
+    if (input.reversalOf) {
+      original = this.transfers.find((t) => t.id === input.reversalOf);
+      if (!original || original.status === "reversed" || original.reversalOf) return { ok: false as const, reason: "already_reversed" as const };
+    }
+    const available = money6(Math.max(0, src.balance - src.reserved));
+    if (input.amount > available) return { ok: false as const, reason: "insufficient_available" as const, available };
+    const t: CreditTransfer = {
+      id: randomUUID(), code: `TRX-${(this.transfers.length + 1).toString().padStart(5, "0")}`, customerId: src.customerId,
+      sourceWalletId: src.id, destinationWalletId: dst.id, sourceKind: walletKind(src), destinationKind: walletKind(dst),
+      sourceRef: src.surveyId ?? src.userId ?? null, destinationRef: dst.surveyId ?? dst.userId ?? null,
+      amount: money6(input.amount), currency: src.currency, reason: input.reason, note: input.note, transferredBy: input.by,
+      status: "completed", reversalOf: input.reversalOf ?? null, reversedBy: null, createdAt: this.now(),
+    };
+    // both sides in the same (single-threaded) step
+    src.balance = money6(src.balance - t.amount); dst.balance = money6(dst.balance + t.amount);
+    dst.totalAdded = money6(dst.totalAdded + t.amount);   // credits arrived; the source's history of what was added stands
+    const kindOut: LedgerKind = input.reversalOf ? "transfer_reversal" : "transfer_out";
+    const kindIn: LedgerKind = input.reversalOf ? "transfer_reversal" : "transfer_in";
+    this.ledger.push({ id: randomUUID(), walletId: src.id, customerId: src.customerId, surveyId: src.surveyId, kind: kindOut, amount: money6(-t.amount), balanceAfter: src.balance, reason: input.reason ?? (input.reversalOf ? "transfer_reversal" : "credit_transfer"), note: input.note, usageEventId: null, referenceId: null, transferId: t.id, createdBy: input.by, createdAt: this.now(), expiresAt: null });
+    this.ledger.push({ id: randomUUID(), walletId: dst.id, customerId: dst.customerId, surveyId: dst.surveyId, kind: kindIn, amount: t.amount, balanceAfter: dst.balance, reason: input.reason ?? (input.reversalOf ? "transfer_reversal" : "credit_transfer"), note: input.note, usageEventId: null, referenceId: null, transferId: t.id, createdBy: input.by, createdAt: this.now(), expiresAt: null });
+    if (original) { original.status = "reversed"; original.reversedBy = t.id; }
+    this.transfers.push(t);
+    this.touch(src, readOnlyThreshold); this.touch(dst, readOnlyThreshold);
+    return { ok: true as const, transfer: t, source: src, destination: dst };
+  }
+  async listTransfers(f: TransferFilter) {
+    return this.transfers.filter((t) =>
+      (!f.customerId || t.customerId === f.customerId) && (!f.walletId || t.sourceWalletId === f.walletId || t.destinationWalletId === f.walletId)
+      && (!f.ref || t.sourceRef === f.ref || t.destinationRef === f.ref) && (!f.adminId || t.transferredBy === f.adminId) && (!f.status || t.status === f.status)
+      && (!f.since || t.createdAt >= f.since) && (!f.until || t.createdAt < f.until) && (f.minAmount == null || t.amount >= f.minAmount) && (f.maxAmount == null || t.amount <= f.maxAmount))
+      .slice(-(f.limit ?? 500)).reverse();
+  }
+  async getTransfer(id: string) { return this.transfers.find((t) => t.id === id) ?? null; }
 
   async createCreditRequest(input: Omit<CreditRequest, "id" | "status" | "decidedBy" | "decidedAt" | "decidedAmount" | "adminNote" | "createdAt">) {
     const r: CreditRequest = { ...input, id: randomUUID(), status: "pending", decidedBy: null, decidedAt: null, decidedAmount: null, adminNote: null, createdAt: this.now() };

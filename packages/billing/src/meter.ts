@@ -6,8 +6,8 @@ import {
   type BillableEventDef, type Rate, type UsageCategory,
 } from "./registry.js";
 import {
-  READ_ONLY_MESSAGE, availableBalance, walletStateFor,
-  type CreditRequest, type Environment, type LedgerEntry, type LedgerKind, type Reservation, type UsageEvent, type Wallet,
+  READ_ONLY_MESSAGE, availableBalance, walletStateFor, transferableBalance,
+  type CreditRequest, type CreditTransfer, type Environment, type LedgerEntry, type LedgerKind, type Reservation, type UsageEvent, type Wallet,
 } from "./wallet.js";
 
 /**
@@ -92,6 +92,8 @@ export interface MeterStore {
   saveEvent(def: BillableEventDef): Promise<void>;
 
   walletFor(customerId: string, surveyId: string | null, opts: { create: boolean; seedBalance?: number }): Promise<Wallet | null>;
+  /** a person's own wallet — a pool an administrator can credit and move credits from / into */
+  walletForUser(customerId: string, userId: string, opts: { create: boolean }): Promise<Wallet | null>;
   getWallet(id: string): Promise<Wallet | null>;
   listWallets(filter: { customerId?: string }): Promise<Wallet[]>;
   setWallet(id: string, patch: Partial<Pick<Wallet, "state" | "sharedWalletId" | "overdraftEnabled" | "overdraftLimit">>): Promise<Wallet>;
@@ -110,12 +112,19 @@ export interface MeterStore {
   listUsage(filter: UsageFilter): Promise<UsageEvent[]>;
   getUsage(id: string): Promise<UsageEvent | null>;
 
+  /** Atomically move `amount` from one wallet to another: refused unless `balance − reserved ≥ amount` on the source. */
+  transfer(input: { sourceWalletId: string; destinationWalletId: string; amount: number; reason: string | null; note: string | null; by: string | null; reversalOf?: string | null }, readOnlyThreshold: number): Promise<{ ok: true; transfer: CreditTransfer; source: Wallet; destination: Wallet } | { ok: false; reason: "insufficient_available" | "same_wallet" | "unknown_wallet" | "already_reversed"; available?: number }>;
+  listTransfers(filter: TransferFilter): Promise<CreditTransfer[]>;
+  getTransfer(id: string): Promise<CreditTransfer | null>;
+
   createCreditRequest(input: Omit<CreditRequest, "id" | "status" | "decidedBy" | "decidedAt" | "decidedAmount" | "adminNote" | "createdAt">): Promise<CreditRequest>;
   listCreditRequests(filter: { customerId?: string; surveyId?: string; userId?: string; status?: CreditRequest["status"] }): Promise<CreditRequest[]>;
   decideCreditRequest(id: string, decision: { status: "approved" | "rejected"; by: string; amount: number | null; note: string | null }): Promise<CreditRequest>;
 }
 
 export type UsageEventInput = Omit<UsageEvent, "id" | "createdAt">;
+export interface TransferFilter { customerId?: string; walletId?: string; ref?: string; adminId?: string; status?: CreditTransfer["status"]; since?: string; until?: string; minAmount?: number; maxAmount?: number; limit?: number }
+export type TransferRefusal = { ok: false; reason: "insufficient_available" | "same_wallet" | "unknown_wallet" | "already_reversed" | "invalid_amount"; message: string; available?: number };
 
 export class Meter {
   private cfgCache: { cfg: BillingConfig; at: number } | null = null;
@@ -283,6 +292,44 @@ export class Meter {
 
   /* ------------------------------------------------------------ credits */
 
+  /**
+   * CREDIT TRANSFER (admin only). Only the unconsumed, unreserved balance may
+   * move; source and destination change in one store transaction; each side
+   * gets its own ledger line carrying the same transfer id. Never a direct
+   * balance write.
+   */
+  async transfer(input: { sourceWalletId: string; destinationWalletId: string; amount: number; reason?: string | null; note?: string | null; by: string | null }): Promise<{ ok: true; transfer: CreditTransfer; source: Wallet; destination: Wallet } | TransferRefusal> {
+    const amount = money6(input.amount);
+    if (!Number.isFinite(amount) || amount <= 0) return { ok: false, reason: "invalid_amount", message: "The transfer amount must be a positive number." };
+    if (input.sourceWalletId === input.destinationWalletId) return { ok: false, reason: "same_wallet", message: "Source and destination are the same wallet." };
+    const cfg = await this.config();
+    const source = await this.store.getWallet(input.sourceWalletId);
+    if (!source) return { ok: false, reason: "unknown_wallet", message: "The source wallet does not exist." };
+    const avail = transferableBalance(source);
+    if (amount > avail) return { ok: false, reason: "insufficient_available", message: `Only ${avail.toFixed(2)} ${source.currency} is available to transfer (balance minus ${source.reserved.toFixed(2)} reserved for operations in progress); ${amount.toFixed(2)} was requested.`, available: avail };
+    const r = await this.store.transfer({ sourceWalletId: input.sourceWalletId, destinationWalletId: input.destinationWalletId, amount, reason: input.reason ?? null, note: input.note ?? null, by: input.by }, cfg.readOnlyThreshold);
+    if (!r.ok) {
+      const msg = r.reason === "insufficient_available" ? `Only ${(r.available ?? 0).toFixed(2)} is available to transfer.` : r.reason === "same_wallet" ? "Source and destination are the same wallet." : r.reason === "unknown_wallet" ? "One of the wallets does not exist." : "That transfer was already reversed.";
+      return { ok: false, reason: r.reason, message: msg, available: r.available };
+    }
+    return r;
+  }
+
+  /** Undo a transfer with a NEW transfer in the opposite direction that references the original; the original row is never edited. */
+  async reverseTransfer(transferId: string, by: string | null, note: string): Promise<{ ok: true; transfer: CreditTransfer; source: Wallet; destination: Wallet } | TransferRefusal> {
+    const original = await this.store.getTransfer(transferId);
+    if (!original) return { ok: false, reason: "unknown_wallet", message: "Unknown transfer." };
+    if (original.status === "reversed" || original.reversalOf) return { ok: false, reason: "already_reversed", message: "That transfer was already reversed, or is itself a reversal." };
+    const cfg = await this.config();
+    const dest = await this.store.getWallet(original.destinationWalletId);
+    if (!dest) return { ok: false, reason: "unknown_wallet", message: "The destination wallet no longer exists." };
+    const avail = transferableBalance(dest);
+    if (original.amount > avail) return { ok: false, reason: "insufficient_available", message: `The destination has spent part of the transferred credits: only ${avail.toFixed(2)} is available to return, ${original.amount.toFixed(2)} is needed.`, available: avail };
+    const r = await this.store.transfer({ sourceWalletId: original.destinationWalletId, destinationWalletId: original.sourceWalletId, amount: original.amount, reason: "transfer_reversal", note, by, reversalOf: original.id }, cfg.readOnlyThreshold);
+    if (!r.ok) return { ok: false, reason: r.reason, message: r.reason === "already_reversed" ? "That transfer was already reversed." : "The reversal could not be completed.", available: r.available };
+    return r;
+  }
+
   /** Administrator assigns / adds / removes credits. Always a ledger line; the balance is never set directly. */
   async credit(walletId: string, amount: number, opts: { reason: string; note?: string | null; by: string | null; expiresAt?: string | null }): Promise<{ entry: LedgerEntry; wallet: Wallet }> {
     const cfg = await this.config();
@@ -290,6 +337,8 @@ export class Meter {
     return this.store.credit({ walletId, amount: money6(amount), kind, reason: opts.reason, note: opts.note ?? null, by: opts.by, expiresAt: opts.expiresAt ?? null }, cfg.readOnlyThreshold);
   }
 }
+
+/* ------------------------------------------------------------- transfers (in Meter) */
 
 /* ---------------------------------------------------------------- pricing */
 

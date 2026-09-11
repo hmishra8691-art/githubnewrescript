@@ -10,11 +10,17 @@ import { fmtMoney, fmtWhen, STATE_WORD, UsageTable, type UsageRow } from "@/comp
  * their recent usage rows and their credit requests. Read-only: credits
  * are assigned on the administrator's screen; requests are made from a
  * project's Usage tab.
+ *
+ * Every amount is what was CHARGED to a wallet (change 2). The page never
+ * receives a provider cost, an infrastructure cost, a fee, a reserve or a
+ * margin — those are the administrator's numbers, on the administrator's
+ * screen.
  */
 interface Payload {
   projects: { id: string; code: string; title: string; status: string; role: string; wallet: { balance: number; totalAdded: number; totalUsed: number; state: string; currency: string } | null; used: number; events: number }[];
   totals: { credits: number; used: number; remaining: number };
   categories: { category: string; label: string; charge: number; events: number }[];
+  personalWallet: { balance: number; totalAdded: number; state: string; currency: string } | null;
   recent: UsageRow[];
   requests: { id: string; surveyId: string | null; requestedAmount: number; reason: string; status: string; createdAt: string; decidedAmount: number | null; adminNote: string | null }[];
 }
@@ -42,7 +48,7 @@ export default function BillingPage() {
           <div className="bl-grid2" data-testid="my-usage-totals">
             <div className="card bl-card"><div className="card-title">Total credits</div><div className="bl-remaining">{fmtMoney(data.totals.credits, cur)}</div><div className="muted" style={{ fontSize: 12.5 }}>assigned across {data.projects.filter((p) => p.wallet).length} project wallet{data.projects.filter((p) => p.wallet).length === 1 ? "" : "s"}</div></div>
             <div className="card bl-card"><div className="card-title">Total used</div><div className="bl-remaining">{fmtMoney(data.totals.used, cur)}</div><div className="muted" style={{ fontSize: 12.5 }}>{data.recent.length ? `latest ${fmtWhen(data.recent[0].at)}` : "no usage yet"}</div></div>
-            <div className="card bl-card"><div className="card-title">Remaining</div><div className="bl-remaining">{fmtMoney(data.totals.remaining, cur)}</div><div className="muted" style={{ fontSize: 12.5 }}>across every wallet you can see</div></div>
+            <div className="card bl-card"><div className="card-title">Remaining</div><div className="bl-remaining">{fmtMoney(data.totals.remaining, cur)}</div><div className="muted" style={{ fontSize: 12.5 }}>across every wallet you can see{data.personalWallet ? ` · ${fmtMoney(data.personalWallet.balance, data.personalWallet.currency)} in your own wallet` : ""}</div></div>
           </div>
           <div className="bl-grid2" style={{ marginTop: 12 }}>
             <div className="card bl-card">
@@ -80,7 +86,7 @@ export default function BillingPage() {
           </div>
           <div className="card bl-card" style={{ marginTop: 12 }}>
             <div className="card-title">Recent usage</div>
-            <UsageTable rows={data.recent} currency={cur} testid="my-usage-rows" />
+            <UsageTable rows={data.recent} currency={cur} showProject testid="my-usage-rows" />
           </div>
         </>
       )}

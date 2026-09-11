@@ -5,7 +5,7 @@ import { priceOperation, effectivePaymentFeeRate, depositProjection } from "./pr
 import { DEFAULT_RATES, DEFAULT_BILLABLE_EVENTS, findRate, providerCostFor, registerBillableEvent } from "./registry.js";
 import { Meter, estimateTokens } from "./meter.js";
 import { MemoryMeterStore } from "./store-memory.js";
-import { summarizeWallet, usageByCategory, usageTimeline, forecastUsage, balanceLevel, READ_ONLY_MESSAGE } from "./wallet.js";
+import { summarizeWallet, usageByCategory, usageTimeline, forecastUsage, balanceLevel, READ_ONLY_MESSAGE, transferableBalance, walletKind } from "./wallet.js";
 import { money6, formatMoney } from "./money.js";
 
 const cfg = billingConfig({});
@@ -234,4 +234,57 @@ test("credit requests: submitted by the researcher, decided by the administrator
   await meter.credit(walletId, 80, { reason: "credit_request_approved", by: "admin", note: req.id });
   assert.equal((await store.getWallet(walletId))!.balance, 81);
   await assert.rejects(() => store.decideCreditRequest(req.id, { status: "rejected", by: "admin", amount: null, note: null }), /already decided/);
+});
+
+test("credit transfer: only the available (unreserved) balance moves, atomically, as two ledger lines sharing one transfer id", async () => {
+  const { store, meter, ctx, walletId: a } = await fixture(100);
+  const b = (await meter.walletFor({ ...ctx, surveyId: "proj-B" }))!.id;
+  await meter.record(ctx, { eventType: "SURVEY_RESPONSE", quantity: 1, providerCost: 0, infraCost: 0 }); // tiny debit
+  const hold = await meter.reserve(ctx, { eventType: "TRANSLATION_CHARACTER", provider: "google", service: "translate", model: "v2", quantity: 400_000 }); // ≈ $18.5 held
+  assert.ok(hold.ok);
+  const wa = { ...(await store.getWallet(a))! };
+  const avail = transferableBalance(wa);
+  assert.ok(avail < wa.balance && avail > 0, "reserved money is not available");
+  const tooMuch = await meter.transfer({ sourceWalletId: a, destinationWalletId: b, amount: avail + 1, by: "admin" });
+  assert.equal(tooMuch.ok, false); if (!tooMuch.ok) { assert.equal(tooMuch.reason, "insufficient_available"); assert.match(tooMuch.message, /available to transfer/); }
+  assert.equal((await meter.transfer({ sourceWalletId: a, destinationWalletId: a, amount: 1, by: "admin" })).ok, false, "same wallet refused");
+  assert.equal((await meter.transfer({ sourceWalletId: a, destinationWalletId: b, amount: 0, by: "admin" })).ok, false, "zero refused");
+  const r = await meter.transfer({ sourceWalletId: a, destinationWalletId: b, amount: 25, reason: "Unused project credits", note: "moving to B", by: "admin" });
+  assert.ok(r.ok);
+  assert.equal(r.source.balance, money6(wa.balance - 25)); assert.equal(r.destination.balance, 25);
+  assert.equal(r.destination.totalAdded, 25, "credits arrived count as added on the destination");
+  assert.equal(r.source.totalAdded, wa.totalAdded, "the source's history of what was added is untouched");
+  assert.match(r.transfer.code, /^TRX-\d+$/); assert.equal(r.transfer.status, "completed"); assert.equal(r.transfer.sourceKind, "project"); assert.equal(r.transfer.sourceRef, "proj-A"); assert.equal(r.transfer.destinationRef, "proj-B");
+  const la = (await store.listLedger(a)).find((l) => l.transferId === r.transfer.id)!; const lb = (await store.listLedger(b)).find((l) => l.transferId === r.transfer.id)!;
+  assert.equal(la.kind, "transfer_out"); assert.equal(la.amount, -25); assert.equal(lb.kind, "transfer_in"); assert.equal(lb.amount, 25);
+  assert.equal(la.transferId, lb.transferId, "both lines trace to the same transfer");
+  await meter.release(hold);
+  // history filters
+  assert.equal((await store.listTransfers({ ref: "proj-B" })).length, 1);
+  assert.equal((await store.listTransfers({ adminId: "nobody" })).length, 0);
+  assert.equal((await store.listTransfers({ minAmount: 30 })).length, 0);
+});
+
+test("a personal (user) wallet is a source and a destination; a reversal is a new transfer that references the original and never edits it", async () => {
+  const { store, meter, ctx, walletId: a } = await fixture(50);
+  const u = (await store.walletForUser(ctx.customerId, "user-B", { create: true }))!;
+  assert.equal(walletKind(u), "user"); assert.equal((await store.walletForUser(ctx.customerId, "user-B", { create: true }))!.id, u.id);
+  assert.equal((await meter.walletFor({ customerId: ctx.customerId, surveyId: null }))!.id !== u.id, true, "the workspace wallet is not the personal wallet");
+  const t = await meter.transfer({ sourceWalletId: a, destinationWalletId: u.id, amount: 20, by: "admin" });
+  assert.ok(t.ok); assert.equal(t.destination.balance, 20); assert.equal(t.transfer.destinationKind, "user"); assert.equal((await store.getWallet(a))!.balance, 30);
+  const back = await meter.transfer({ sourceWalletId: u.id, destinationWalletId: a, amount: 5, by: "admin" });
+  assert.ok(back.ok); assert.equal(back.source.balance, 15);
+  // reversal of the 20
+  const rev = await meter.reverseTransfer(t.transfer.id, "admin", "sent to the wrong person");
+  assert.equal(rev.ok, false, "the user has spent (moved) 5 of the 20 — it cannot all come back");
+  await meter.credit(u.id, 5, { reason: "top up", by: "admin" });
+  const rev2 = await meter.reverseTransfer(t.transfer.id, "admin", "sent to the wrong person");
+  assert.ok(rev2.ok);
+  assert.equal(rev2.transfer.reversalOf, t.transfer.id); assert.equal(rev2.source.balance, 0); assert.equal(rev2.destination.balance, 55);
+  const original = (await store.getTransfer(t.transfer.id))!;
+  assert.equal(original.status, "reversed"); assert.equal(original.reversedBy, rev2.transfer.id); assert.equal(original.amount, 20, "the original row keeps its amount");
+  assert.ok((await store.listLedger(a)).some((l) => l.kind === "transfer_reversal" && l.transferId === rev2.transfer.id));
+  const again = await meter.reverseTransfer(t.transfer.id, "admin", "again");
+  assert.equal(again.ok, false); if (!again.ok) assert.equal(again.reason, "already_reversed");
+  assert.equal((await meter.reverseTransfer(rev2.transfer.id, "admin", "undo the undo")).ok, false, "a reversal cannot itself be reversed");
 });

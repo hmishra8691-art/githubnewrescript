@@ -1,8 +1,8 @@
 import type { BillingConfig } from "./config.js";
 import type { BillableEventDef, Rate } from "./registry.js";
 import { BillableEventDef as BillableEventSchema, Rate as RateSchema } from "./registry.js";
-import type { MeterStore, UsageEventInput, UsageFilter } from "./meter.js";
-import type { CreditRequest, LedgerEntry, LedgerKind, Reservation, UsageEvent, Wallet } from "./wallet.js";
+import type { MeterStore, TransferFilter, UsageEventInput, UsageFilter } from "./meter.js";
+import type { CreditRequest, CreditTransfer, LedgerEntry, LedgerKind, Reservation, UsageEvent, Wallet } from "./wallet.js";
 
 /**
  * THE DATABASE STORE — migration 0023.
@@ -29,7 +29,7 @@ const numOrNull = (v: unknown): number | null => (v == null ? null : num(v));
 
 export function walletFromRow(r: any): Wallet {
   return {
-    id: r.id, customerId: r.customer_id, surveyId: r.survey_id ?? null, sharedWalletId: r.shared_wallet_id ?? null, currency: r.currency ?? "USD",
+    id: r.id, customerId: r.customer_id, surveyId: r.survey_id ?? null, userId: r.user_id ?? null, sharedWalletId: r.shared_wallet_id ?? null, currency: r.currency ?? "USD",
     balance: num(r.balance), reserved: num(r.reserved), totalAdded: num(r.total_added), totalUsed: num(r.total_used), state: r.state,
     overdraftEnabled: r.overdraft_enabled ?? null, overdraftLimit: numOrNull(r.overdraft_limit), createdAt: r.created_at, updatedAt: r.updated_at,
   };
@@ -37,7 +37,7 @@ export function walletFromRow(r: any): Wallet {
 export function ledgerFromRow(r: any): LedgerEntry {
   return {
     id: String(r.id), walletId: r.wallet_id, customerId: r.customer_id, surveyId: r.survey_id ?? null, kind: r.kind, amount: num(r.amount), balanceAfter: num(r.balance_after),
-    reason: r.reason, note: r.note ?? null, usageEventId: r.usage_event_id ?? null, referenceId: r.reference_id == null ? null : String(r.reference_id), createdBy: r.created_by ?? null, createdAt: r.created_at, expiresAt: r.expires_at ?? null,
+    reason: r.reason, note: r.note ?? null, usageEventId: r.usage_event_id ?? null, referenceId: r.reference_id == null ? null : String(r.reference_id), transferId: r.transfer_id ?? null, createdBy: r.created_by ?? null, createdAt: r.created_at, expiresAt: r.expires_at ?? null,
   };
 }
 export function usageFromRow(r: any): UsageEvent {
@@ -61,6 +61,14 @@ export function requestFromRow(r: any): CreditRequest {
   return {
     id: r.id, customerId: r.customer_id, surveyId: r.survey_id ?? null, walletId: r.wallet_id ?? null, userId: r.user_id, requestedAmount: num(r.requested_amount), reason: r.reason, message: r.message ?? null,
     status: r.status, decidedBy: r.decided_by ?? null, decidedAt: r.decided_at ?? null, decidedAmount: numOrNull(r.decided_amount), adminNote: r.admin_note ?? null, createdAt: r.created_at,
+  };
+}
+export function transferFromRow(r: any): CreditTransfer {
+  return {
+    id: r.id, code: r.code, customerId: r.customer_id, sourceWalletId: r.source_wallet_id, destinationWalletId: r.destination_wallet_id,
+    sourceKind: r.source_kind, destinationKind: r.destination_kind, sourceRef: r.source_ref ?? null, destinationRef: r.destination_ref ?? null,
+    amount: num(r.amount), currency: r.currency ?? "USD", reason: r.reason ?? null, note: r.note ?? null, transferredBy: r.transferred_by ?? null,
+    status: r.status, reversalOf: r.reversal_of ?? null, reversedBy: r.reversed_by ?? null, createdAt: r.created_at,
   };
 }
 export function rateFromRow(r: any): Rate {
@@ -117,6 +125,11 @@ export class SupabaseMeterStore implements MeterStore {
   async walletFor(customerId: string, surveyId: string | null, opts: { create: boolean; seedBalance?: number }) {
     const { data, error } = await this.db.rpc("rescript_billing_wallet_for", { p_customer: customerId, p_survey: surveyId, p_create: opts.create, p_seed: opts.seedBalance ?? 0 });
     if (error) fail("wallet_for", error);
+    return data ? walletFromRow(data) : null;
+  }
+  async walletForUser(customerId: string, userId: string, opts: { create: boolean }) {
+    const { data, error } = await this.db.rpc("rescript_billing_user_wallet_for", { p_customer: customerId, p_user: userId, p_create: opts.create });
+    if (error) fail("user_wallet_for", error);
     return data ? walletFromRow(data) : null;
   }
   async getWallet(id: string) {
@@ -201,6 +214,36 @@ export class SupabaseMeterStore implements MeterStore {
     const { data, error } = await this.db.from("usage_events").select("*").eq("id", id).maybeSingle();
     if (error) fail("usage read", error);
     return data ? usageFromRow(data) : null;
+  }
+
+  async transfer(input: { sourceWalletId: string; destinationWalletId: string; amount: number; reason: string | null; note: string | null; by: string | null; reversalOf?: string | null }, readOnlyThreshold: number) {
+    const { data, error } = await this.db.rpc("rescript_billing_transfer", {
+      p_source: input.sourceWalletId, p_destination: input.destinationWalletId, p_amount: input.amount, p_reason: input.reason, p_note: input.note, p_by: input.by,
+      p_reversal_of: input.reversalOf ?? null, p_read_only_threshold: readOnlyThreshold,
+    });
+    if (error) fail("transfer", error);
+    if (!data?.ok) return { ok: false as const, reason: data?.reason ?? "unknown_wallet", available: data?.available == null ? undefined : num(data.available) };
+    return { ok: true as const, transfer: transferFromRow(data.transfer), source: walletFromRow(data.source), destination: walletFromRow(data.destination) };
+  }
+  async listTransfers(f: TransferFilter) {
+    let q = this.db.from("credit_transfers").select("*").order("created_at", { ascending: false }).limit(f.limit ?? 500);
+    if (f.customerId) q = q.eq("customer_id", f.customerId);
+    if (f.walletId) q = q.or(`source_wallet_id.eq.${f.walletId},destination_wallet_id.eq.${f.walletId}`);
+    if (f.ref) q = q.or(`source_ref.eq.${f.ref},destination_ref.eq.${f.ref}`);
+    if (f.adminId) q = q.eq("transferred_by", f.adminId);
+    if (f.status) q = q.eq("status", f.status);
+    if (f.since) q = q.gte("created_at", f.since);
+    if (f.until) q = q.lt("created_at", f.until);
+    if (f.minAmount != null) q = q.gte("amount", f.minAmount);
+    if (f.maxAmount != null) q = q.lte("amount", f.maxAmount);
+    const { data, error } = await q;
+    if (error) fail("transfers read", error);
+    return (data ?? []).map(transferFromRow);
+  }
+  async getTransfer(id: string) {
+    const { data, error } = await this.db.from("credit_transfers").select("*").eq("id", id).maybeSingle();
+    if (error) fail("transfer read", error);
+    return data ? transferFromRow(data) : null;
   }
 
   async createCreditRequest(input: Omit<CreditRequest, "id" | "status" | "decidedBy" | "decidedAt" | "decidedAmount" | "adminNote" | "createdAt">) {

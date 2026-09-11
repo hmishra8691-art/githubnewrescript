@@ -8,7 +8,8 @@ export const dynamic = "force-dynamic";
 /**
  * ASSIGN / ADD / REMOVE CREDITS (billing brief §1, §17).
  *
- *   POST { walletId | surveyId, amount, reason, note?, expiresAt? }
+ *   POST { walletId | surveyId | userId, amount, reason, note?, expiresAt? }
+ *   (`userId` credits the person's own wallet — the pool a transfer to a person lands in)
  *
  * A positive amount is a credit, a negative one an adjustment; both are
  * ledger lines — the balance is never written directly. Amounts are in the
@@ -36,7 +37,16 @@ export async function POST(req: NextRequest) {
       }
       walletId = (await gate.meter.walletFor({ customerId, surveyId: body.surveyId }, true))?.id ?? null;
     }
-    if (!walletId) return NextResponse.json({ error: "walletId or surveyId is required" }, { status: 400 });
+    if (!walletId && typeof body?.userId === "string") {
+      let customerId = "sandbox";
+      if (!gate.sandbox) {
+        const { data } = await supabaseAdmin().from("profiles").select("customer_id").eq("id", body.userId).maybeSingle();
+        if (!data) return NextResponse.json({ error: "Unknown user." }, { status: 404 });
+        customerId = data.customer_id ?? gate.user?.customerId ?? "";
+      }
+      walletId = (await gate.meter.store.walletForUser(customerId, body.userId, { create: true }))?.id ?? null;
+    }
+    if (!walletId) return NextResponse.json({ error: "walletId, surveyId or userId is required" }, { status: 400 });
     const { entry, wallet } = await gate.meter.credit(walletId, amount, { reason, note, by: gate.user?.userId ?? null, expiresAt });
     if (gate.user) await audit({ action: amount > 0 ? "billing.credits_assigned" : "billing.credits_adjusted", userId: gate.user.userId, sessionId: gate.user.sessionId, customerId: gate.user.customerId, surveyId: wallet.surveyId ?? undefined, entity: "wallet", entityId: wallet.id, detail: { amount, reason, note, expiresAt, balanceAfter: wallet.balance } });
     return NextResponse.json({ ok: true, entry, wallet });

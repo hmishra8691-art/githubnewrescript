@@ -119,6 +119,8 @@ export const AUDIT_EVENTS = [
   "billing.credit_requested",
   "billing.credit_request_decided",
   "billing.wallet_changed",
+  "billing.credits_transferred",
+  "billing.transfer_reversed",
   "analytics.export_generated",
   "analytics.report_downloaded",
 

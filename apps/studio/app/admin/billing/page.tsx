@@ -9,6 +9,9 @@ import { fmtMoney, fmtWhen, LEVEL_CLASS, LEVEL_WORD, PRESET_AMOUNTS, STATE_WORD,
  *
  * Five screens behind one door, for a platform administrator:
  *
+ *   Transfer credits    move unused (unreserved) balance between projects and people, with a
+ *                       confirmation step; every transfer is one row + two ledger lines; history
+ *                       with filters; reversal as a new transfer
  *   Wallets & credits   every project wallet — balance, state, level — assign / add /
  *                       remove credits (presets or any amount, with reason and note),
  *                       suspend / reactivate, the project's full usage with Reverse
@@ -21,7 +24,7 @@ import { fmtMoney, fmtWhen, LEVEL_CLASS, LEVEL_WORD, PRESET_AMOUNTS, STATE_WORD,
  * the screen never computes a balance.
  */
 
-type Tab = "wallets" | "requests" | "config" | "rates" | "events";
+type Tab = "wallets" | "transfers" | "requests" | "config" | "rates" | "events";
 
 interface WalletRow { id: string; surveyId: string | null; customerId: string; sharedWalletId: string | null; currency: string; project: { code: string; title: string; status: string; owner: string | null; customer: string | null } | null; balance: number; reserved: number; totalAdded: number; totalUsed: number; state: string; level: string; overdraftEnabled: boolean | null; overdraftLimit: number | null; usage: { today: number; thisWeek: number; thisMonth: number }; costs: { providerCost: number; infraCost: number; paymentFee: number; taxReserve: number; grossProfit: number; netProfit: number; marginPct: number }; events: number }
 interface RequestRow { id: string; surveyId: string | null; requestedAmount: number; reason: string; message: string | null; status: string; createdAt: string; requester: string; project: { code: string; title: string } | null; decidedAmount: number | null; adminNote: string | null }
@@ -46,14 +49,15 @@ export default function BillingAdminPage() {
       <AccountHeader active="admin-billing" user={user} onSignOut={signOut} />
       <div className="alert info" style={{ marginBottom: 8 }}>Simulation mode: credits are assigned by an administrator; no payment is processed. Every assignment, adjustment and approval is a ledger entry.</div>
       <div className="bl-tabs" role="tablist">
-        {(["wallets", "requests", "config", "rates", "events"] as Tab[]).map((t) => (
+        {(["wallets", "transfers", "requests", "config", "rates", "events"] as Tab[]).map((t) => (
           <button key={t} role="tab" className={tab === t ? "on" : ""} onClick={() => { setTab(t); setNote(null); }} data-testid={`admin-tab-${t}`}>
-            {{ wallets: "Wallets & credits", requests: `Credit requests${pending ? ` (${pending})` : ""}`, config: "Configuration", rates: "Cost registry", events: "Billable events" }[t]}
+            {{ wallets: "Wallets & credits", transfers: "Transfer credits", requests: `Credit requests${pending ? ` (${pending})` : ""}`, config: "Configuration", rates: "Cost registry", events: "Billable events" }[t]}
           </button>
         ))}
       </div>
       {note && <div className={`alert ${note.ok ? "success" : "error"}`} style={{ marginBottom: 10 }} data-testid="admin-note">{note.text}</div>}
       {tab === "wallets" && <WalletsTab say={say} onPending={setPending} />}
+      {tab === "transfers" && <TransfersTab say={say} />}
       {tab === "requests" && <RequestsTab say={say} onPending={setPending} />}
       {tab === "config" && <ConfigTab say={say} />}
       {tab === "rates" && <RatesTab say={say} />}
@@ -216,7 +220,7 @@ function WalletsTab({ say, onPending }: { say: (t: string, ok?: boolean) => void
           {detail && (
             <div style={{ marginTop: 12 }}>
               <div className="card-title">Usage on this project</div>
-              <UsageTable rows={detail.recent} currency={open.currency} onReverse={reverse} testid="admin-usage-rows" />
+              <UsageTable rows={detail.recent} currency={open.currency} showCost onReverse={reverse} testid="admin-usage-rows" />
             </div>
           )}
         </div>
@@ -487,5 +491,183 @@ function EventRow({ e, cats, units, onSave }: { e: EventDef; cats: string[]; uni
       <td><label className="row" style={{ gap: 6, fontSize: 13 }}><input type="checkbox" checked={d.active} onChange={(ev) => setD({ ...d, active: ev.target.checked })} /> {d.active ? "on" : "off"}</label></td>
       <td><button className="btn small primary" disabled={!dirty} onClick={() => onSave(d)} data-testid="event-save">Save</button></td>
     </tr>
+  );
+}
+
+
+/* ------------------------------------------------------------------ transfers */
+interface LookupUser { id: string; code: string; name: string; email: string; wallet: { walletId: string; balance: number; available: number; currency: string; state: string } | null }
+interface LookupProject { id: string; code: string; title: string; status: string; ownerId: string | null; wallet: LookupUser["wallet"] }
+interface TransferRow { id: string; code: string; sourceKind: string; destinationKind: string; sourceRef: string | null; destinationRef: string | null; sourceLabel: string; destinationLabel: string; adminLabel: string; amount: number; currency: string; reason: string | null; note: string | null; status: "completed" | "reversed"; reversalOf: string | null; reversedBy: string | null; createdAt: string }
+
+function TransfersTab({ say }: { say: (t: string, ok?: boolean) => void }) {
+  const [users, setUsers] = React.useState<LookupUser[]>([]);
+  const [projects, setProjects] = React.useState<LookupProject[]>([]);
+  const [srcType, setSrcType] = React.useState<"user" | "project">("project");
+  const [srcId, setSrcId] = React.useState("");
+  const [dstType, setDstType] = React.useState<"user" | "project">("project");
+  const [dstId, setDstId] = React.useState("");
+  const [dstUserProject, setDstUserProject] = React.useState("");   // when the destination is a person who owns projects: land it in one of them, or in their own wallet
+  const [amount, setAmount] = React.useState("");
+  const [reason, setReason] = React.useState("");
+  const [note, setNote] = React.useState("");
+  const [confirming, setConfirming] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const [history, setHistory] = React.useState<TransferRow[] | null>(null);
+  const [filters, setFilters] = React.useState({ project: "", user: "", admin: "", status: "", from: "", to: "", min: "", max: "" });
+
+  const loadLookup = React.useCallback(async () => {
+    const r = await call<{ users: LookupUser[]; projects: LookupProject[] }>("/api/admin/billing/lookup");
+    if (!r.ok) { say(r.json.error ?? "Could not read users and projects", false); return; }
+    setUsers(r.json.users); setProjects(r.json.projects);
+  }, [say]);
+  const loadHistory = React.useCallback(async () => {
+    const qs = new URLSearchParams(Object.fromEntries(Object.entries(filters).filter(([, v]) => v !== "")));
+    const r = await call<{ transfers: TransferRow[] }>(`/api/admin/billing/transfer?${qs}`);
+    if (!r.ok) { say(r.json.error ?? "Could not read the transfer history", false); return; }
+    setHistory(r.json.transfers);
+  }, [filters, say]);
+  React.useEffect(() => { void loadLookup(); }, [loadLookup]);
+  React.useEffect(() => { void loadHistory(); }, [loadHistory]);
+
+  const sourceLabel = (t: "user" | "project", id: string) => t === "project" ? (projects.find((p) => p.id === id) ? `${projects.find((p) => p.id === id)!.title} (project)` : id) : (users.find((u) => u.id === id) ? `${users.find((u) => u.id === id)!.name} (user)` : id);
+  const srcWallet = srcType === "project" ? projects.find((p) => p.id === srcId)?.wallet ?? null : users.find((u) => u.id === srcId)?.wallet ?? null;
+  const available = srcWallet?.available ?? 0;
+  const cur = srcWallet?.currency ?? "USD";
+  const amt = Number(amount);
+  const destProjectsOfUser = dstType === "user" && dstId ? projects.filter((p) => p.ownerId === dstId) : [];
+  const finalDestination: { type: "user" | "project"; id: string } | null = !dstId ? null : dstType === "user" && dstUserProject ? { type: "project", id: dstUserProject } : { type: dstType, id: dstId };
+  const sameWallet = finalDestination && srcType === finalDestination.type && srcId === finalDestination.id;
+  const valid = srcId && finalDestination && Number.isFinite(amt) && amt > 0 && amt <= available && !sameWallet;
+
+  const submit = async () => {
+    if (!valid || !finalDestination) return;
+    setBusy(true);
+    const r = await call<{ transfer: TransferRow; source: { balance: number }; destination: { balance: number } }>("/api/admin/billing/transfer", { method: "POST", body: JSON.stringify({ source: { type: srcType, id: srcId }, destination: finalDestination, amount: amt, reason: reason || undefined, note: note || undefined }) });
+    setBusy(false); setConfirming(false);
+    if (!r.ok) { say(r.json.error ?? `The transfer could not be completed (${r.status})`, false); return; }
+    say(`${r.json.transfer.code}: ${fmtMoney(amt, cur)} transferred from ${sourceLabel(srcType, srcId)} to ${sourceLabel(finalDestination.type, finalDestination.id)}. Source balance ${fmtMoney(r.json.source.balance, cur)}, destination ${fmtMoney(r.json.destination.balance, cur)}.`);
+    setAmount(""); setReason(""); setNote("");
+    await loadLookup(); await loadHistory();
+  };
+  const reverse = async (t: TransferRow) => {
+    const why = window.prompt(`Reverse ${t.code} (${fmtMoney(t.amount, t.currency)} back from ${t.destinationLabel} to ${t.sourceLabel})? Enter the reason — it is recorded on the ledger.`);
+    if (!why) return;
+    const r = await call<{ transfer: TransferRow }>("/api/admin/billing/transfer", { method: "POST", body: JSON.stringify({ action: "reverse", transferId: t.id, note: why }) });
+    if (!r.ok) { say(r.json.error ?? "Could not reverse", false); return; }
+    say(`${t.code} reversed by ${r.json.transfer.code}.`); await loadLookup(); await loadHistory();
+  };
+
+  const pick = (type: "user" | "project", value: string, onChange: (v: string) => void, testid: string) => (
+    <select className="select" value={value} onChange={(e) => onChange(e.target.value)} data-testid={testid}>
+      <option value="">— select a {type} —</option>
+      {type === "project"
+        ? projects.map((p) => <option key={p.id} value={p.id}>{p.title} · {p.code}{p.wallet ? ` — ${fmtMoney(p.wallet.available, p.wallet.currency)} available` : " — no wallet yet"}</option>)
+        : users.map((u) => <option key={u.id} value={u.id}>{u.name} · {u.code}{u.wallet ? ` — ${fmtMoney(u.wallet.available, u.wallet.currency)} available` : " — no wallet yet"}</option>)}
+    </select>
+  );
+
+  return (
+    <div>
+      <div className="bl-grid2">
+        <div className="card bl-card" data-testid="transfer-form">
+          <div className="card-title">Transfer credits</div>
+          <p className="muted" style={{ fontSize: 12.5 }}>Moves unused balance from one wallet to another. Only what is not reserved for operations in progress can move; both wallets change in one transaction and both ledgers record the same transfer id.</p>
+          <div className="bl-form" style={{ marginTop: 8 }}>
+            <label className="flabel">Source type</label>
+            <div className="row" style={{ gap: 14, fontSize: 13.5 }}>
+              <label className="row" style={{ gap: 5 }}><input type="radio" name="src-type" checked={srcType === "user"} onChange={() => { setSrcType("user"); setSrcId(""); }} data-testid="transfer-src-user" /> User</label>
+              <label className="row" style={{ gap: 5 }}><input type="radio" name="src-type" checked={srcType === "project"} onChange={() => { setSrcType("project"); setSrcId(""); }} data-testid="transfer-src-project" /> Project</label>
+            </div>
+            <label className="flabel">Source</label>
+            {pick(srcType, srcId, setSrcId, "transfer-source")}
+            <div className="bl-stat" data-testid="transfer-available">
+              <div className="bl-stat-label">Available balance</div>
+              <div className="bl-stat-value">{srcId ? fmtMoney(available, cur) : "—"}</div>
+              {srcWallet && srcWallet.balance !== srcWallet.available && <div className="bl-stat-sub muted">{fmtMoney(srcWallet.balance, cur)} balance, {fmtMoney(srcWallet.balance - srcWallet.available, cur)} reserved for operations in progress</div>}
+              {srcId && !srcWallet && <div className="bl-stat-sub muted">This {srcType} has no wallet yet — nothing to transfer.</div>}
+            </div>
+            <label className="flabel">Transfer amount ({cur})</label>
+            <input className="input" type="number" min={0.01} step={0.01} value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="25.00" data-testid="transfer-amount" />
+            {amount !== "" && amt > available && <div className="alert error" data-testid="transfer-too-much">The amount exceeds the available balance of {fmtMoney(available, cur)}.</div>}
+            <label className="flabel">Destination type</label>
+            <div className="row" style={{ gap: 14, fontSize: 13.5 }}>
+              <label className="row" style={{ gap: 5 }}><input type="radio" name="dst-type" checked={dstType === "user"} onChange={() => { setDstType("user"); setDstId(""); setDstUserProject(""); }} data-testid="transfer-dst-user" /> User</label>
+              <label className="row" style={{ gap: 5 }}><input type="radio" name="dst-type" checked={dstType === "project"} onChange={() => { setDstType("project"); setDstId(""); setDstUserProject(""); }} data-testid="transfer-dst-project" /> Project</label>
+            </div>
+            <label className="flabel">Destination</label>
+            {pick(dstType, dstId, (v) => { setDstId(v); setDstUserProject(""); }, "transfer-destination")}
+            {destProjectsOfUser.length > 0 && (
+              <>
+                <label className="flabel">Land the credits in</label>
+                <select className="select" value={dstUserProject} onChange={(e) => setDstUserProject(e.target.value)} data-testid="transfer-dst-user-project">
+                  <option value="">{users.find((u) => u.id === dstId)?.name ?? "The person"}&apos;s own wallet</option>
+                  {destProjectsOfUser.map((p) => <option key={p.id} value={p.id}>Project: {p.title} · {p.code}</option>)}
+                </select>
+              </>
+            )}
+            {sameWallet && <div className="alert error">Source and destination are the same wallet.</div>}
+            <label className="flabel">Reason (optional)</label>
+            <input className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Unused project credits" data-testid="transfer-reason" />
+            <label className="flabel">Notes (optional)</label>
+            <textarea className="ta" rows={2} value={note} onChange={(e) => setNote(e.target.value)} data-testid="transfer-note" />
+            {!confirming && <div className="row" style={{ marginTop: 8 }}><button className="btn primary" disabled={!valid} onClick={() => setConfirming(true)} data-testid="transfer-submit">Transfer credits</button></div>}
+            {confirming && finalDestination && (
+              <div className="alert warning" style={{ display: "block" }} data-testid="transfer-confirm">
+                <div>You are about to transfer <strong>{fmtMoney(amt, cur)}</strong> from <strong>{sourceLabel(srcType, srcId)}</strong> to <strong>{sourceLabel(finalDestination.type, finalDestination.id)}</strong>. This action will be recorded in the billing ledger.</div>
+                <div className="row" style={{ marginTop: 8, gap: 8 }}>
+                  <button className="btn primary" disabled={busy} onClick={submit} data-testid="transfer-confirm-yes">{busy ? "Transferring…" : "Confirm transfer"}</button>
+                  <button className="btn" onClick={() => setConfirming(false)} data-testid="transfer-confirm-no">Cancel</button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="card bl-card">
+          <div className="card-title">Rules</div>
+          <ul className="muted" style={{ fontSize: 13, paddingLeft: 18, lineHeight: 1.6 }}>
+            <li>Only available balance moves: wallet balance minus what open reservations hold. Overdraft room is never transferable.</li>
+            <li>Source and destination are updated in the same database transaction — never one without the other.</li>
+            <li>The source ledger shows <em>Credit Transfer Out</em>, the destination <em>Credit Transfer In</em>; both carry the same transfer id.</li>
+            <li>A transfer is never deleted or edited. To undo one, reverse it: a new <em>Credit Transfer Reversal</em> moves the credits back and references the original.</li>
+            <li>A person&apos;s own wallet is a pool: credits can be moved into it and out of it, and a project can be pointed at it from Wallets &amp; credits.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div className="card bl-card" style={{ marginTop: 12 }} data-testid="transfer-history">
+        <div className="row"><div className="card-title">Credit transfer history</div><span className="grow" /><button className="btn small" onClick={loadHistory}>↻ refresh</button></div>
+        <div className="row" style={{ gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+          <select className="select small" value={filters.project} onChange={(e) => setFilters({ ...filters, project: e.target.value })} data-testid="transfer-filter-project"><option value="">Any project</option>{projects.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}</select>
+          <select className="select small" value={filters.user} onChange={(e) => setFilters({ ...filters, user: e.target.value })} data-testid="transfer-filter-user"><option value="">Any user</option>{users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select>
+          <select className="select small" value={filters.admin} onChange={(e) => setFilters({ ...filters, admin: e.target.value })}><option value="">Any admin</option>{users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select>
+          <select className="select small" value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })} data-testid="transfer-filter-status"><option value="">Any status</option><option value="completed">Completed</option><option value="reversed">Reversed</option></select>
+          <input className="input small" type="date" value={filters.from} onChange={(e) => setFilters({ ...filters, from: e.target.value })} title="From date" />
+          <input className="input small" type="date" value={filters.to} onChange={(e) => setFilters({ ...filters, to: e.target.value })} title="To date" />
+          <input className="input small" type="number" placeholder="Min amount" value={filters.min} onChange={(e) => setFilters({ ...filters, min: e.target.value })} style={{ width: 110 }} data-testid="transfer-filter-min" />
+          <input className="input small" type="number" placeholder="Max amount" value={filters.max} onChange={(e) => setFilters({ ...filters, max: e.target.value })} style={{ width: 110 }} />
+        </div>
+        {!history ? <p className="muted">Reading history…</p> : !history.length ? <p className="muted" style={{ marginTop: 8 }} data-testid="transfer-history-empty">No transfers match.</p> : (
+          <table className="grid bl-table" style={{ marginTop: 8 }} data-testid="transfer-rows">
+            <thead><tr><th>Date</th><th>Transfer ID</th><th>Source</th><th>Destination</th><th>Amount</th><th>Admin</th><th>Reason</th><th>Status</th><th /></tr></thead>
+            <tbody>
+              {history.map((t) => (
+                <tr key={t.id} data-testid="transfer-row" data-code={t.code} data-status={t.status} data-reversal={String(!!t.reversalOf)}>
+                  <td className="muted">{fmtWhen(t.createdAt)}</td>
+                  <td style={{ fontFamily: "var(--mono)", fontSize: 12 }}>{t.code}{t.reversalOf && <div className="muted" style={{ fontSize: 11 }}>reverses {history.find((x) => x.id === t.reversalOf)?.code ?? "…"}</div>}</td>
+                  <td>{t.sourceLabel}<div className="muted" style={{ fontSize: 11 }}>{t.sourceKind}</div></td>
+                  <td>{t.destinationLabel}<div className="muted" style={{ fontSize: 11 }}>{t.destinationKind}</div></td>
+                  <td><strong>{fmtMoney(t.amount, t.currency)}</strong></td>
+                  <td className="muted">{t.adminLabel}</td>
+                  <td>{t.reason ?? <span className="muted">—</span>}{t.note && <div className="muted" style={{ fontSize: 11.5 }}>{t.note}</div>}</td>
+                  <td><span className={`badge ${t.status === "completed" ? "success" : "neutral"}`}>{t.reversalOf ? "Reversal" : t.status === "completed" ? "Completed" : "Reversed"}</span></td>
+                  <td>{t.status === "completed" && !t.reversalOf && <button className="btn small" onClick={() => reverse(t)} data-testid="transfer-reverse">Reverse</button>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
   );
 }

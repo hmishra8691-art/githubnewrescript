@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
       const w = wallets.find((x) => x.surveyId === surveyId) ?? null;
       const customerId = w?.customerId ?? (gate.sandbox ? "sandbox" : null);
       if (!customerId) return NextResponse.json({ ok: true, view: null });
-      const view = await projectMeterView(gate.meter, { customerId, surveyId }, { recent: 200 });
+      const view = await projectMeterView(gate.meter, { customerId, surveyId }, { recent: 200, audience: "admin" });
       return NextResponse.json({ ok: true, view, requests: await gate.meter.store.listCreditRequests({ surveyId }) });
     }
     const wallets = await gate.meter.store.listWallets({});
@@ -34,6 +34,11 @@ export async function GET(req: NextRequest) {
       const ids = wallets.map((w) => w.surveyId).filter(Boolean) as string[];
       const { data } = await db.from("surveys").select("id, code, title, status, owner_id, customer_id, profiles:owner_id(full_name, email), customers:customer_id(name)").in("id", ids);
       for (const r of (data ?? []) as any[]) projects[r.id] = { code: r.code, title: r.title, status: r.status, owner: r.profiles?.full_name ?? r.profiles?.email ?? null, customer: r.customers?.name ?? null };
+      const userIds = wallets.map((w) => w.userId).filter(Boolean) as string[];
+      if (userIds.length) {
+        const { data: ps } = await db.from("profiles").select("id, user_code, full_name, email").in("id", userIds);
+        for (const p of (ps ?? []) as any[]) projects[`user:${p.id}`] = { code: p.user_code, title: `Personal wallet — ${p.full_name || p.email}`, status: "", owner: p.full_name || p.email, customer: null };
+      }
     }
     const rows = await Promise.all(wallets.map(async (w) => {
       const events = await gate.meter.store.listUsage({ walletId: w.id, limit: 5000 });
@@ -41,7 +46,12 @@ export async function GET(req: NextRequest) {
       const s = summarizeWallet(w, ledger, events, cfg);
       return {
         id: w.id, surveyId: w.surveyId, customerId: w.customerId, sharedWalletId: w.sharedWalletId, currency: w.currency,
-        project: w.surveyId ? projects[w.surveyId] ?? (gate.sandbox ? { code: "SANDBOX", title: "Sandbox project", status: "draft", owner: null, customer: null } : null) : { code: "—", title: "Workspace wallet", status: "", owner: null, customer: null },
+        project: w.surveyId
+          ? projects[w.surveyId] ?? (gate.sandbox ? { code: w.surveyId === "sandbox" ? "SANDBOX" : w.surveyId.toUpperCase(), title: w.surveyId === "sandbox" ? "Sandbox project" : `Sandbox project ${w.surveyId}`, status: "draft", owner: null, customer: null } : null)
+          : w.userId
+            ? projects[`user:${w.userId}`] ?? { code: "—", title: `Personal wallet — ${gate.sandbox ? w.userId : "user"}`, status: "", owner: null, customer: null }
+            : { code: "—", title: "Workspace wallet", status: "", owner: null, customer: null },
+        userId: w.userId,
         balance: w.balance, reserved: w.reserved, totalAdded: w.totalAdded, totalUsed: w.totalUsed, state: s.state, level: balanceLevel(w.balance, cfg),
         overdraftEnabled: w.overdraftEnabled, overdraftLimit: w.overdraftLimit, usage: s.usage, costs: s.costs, events: events.length, updatedAt: w.updatedAt,
       };

@@ -18,21 +18,24 @@ import { fmtMoney, fmtWhen, LevelBanner, LEVEL_CLASS, LEVEL_WORD, Progress, PRES
 
 export interface MeterView {
   ok: boolean; sandbox: boolean;
+  /** "user": charges, balance and usage only; "admin": every cost component as well (change 2) */
+  audience: "user" | "admin";
   wallet: { id: string; currency: string; state: "active" | "read_only" | "suspended"; sharedWalletId: string | null; overdraftEnabled: boolean };
   summary: {
-    currency: string; initialBalance: number; totalAdded: number; used: number; remaining: number; reserved: number; available: number; level: string; state: string;
-    costs: { providerCost: number; infraCost: number; paymentFee: number; taxReserve: number; grossProfit: number; netProfit: number; marginPct: number };
+    currency: string; initialBalance: number; totalAdded: number; used: number; remaining: number; reserved: number; available: number; level: string; state: string; usedPct: number;
+    /** administrator only */
+    costs?: { providerCost: number; infraCost: number; paymentFee: number; taxReserve: number; grossProfit: number; netProfit: number; marginPct: number };
     usage: { today: number; thisWeek: number; thisMonth: number; allTime: number }; events: number;
   };
   level: string; message: string;
   thresholds: { low: number; critical: number; readOnly: number; minimumRemaining: number };
   policy: { testUsage: string; testDiscountPct: number; allowExportsWhenReadOnly: boolean; lockRespondentsWhenReadOnly: boolean };
-  categories: { category: string; label: string; charge: number; actualCost: number; events: number; quantity: number }[];
-  byEnvironment: { TEST: { charge: number; events: number; actualCost: number }; LIVE: { charge: number; events: number; actualCost: number } };
-  timeline: { day: string; charge: number; actualCost: number; events: number }[];
+  categories: { category: string; label: string; charge: number; actualCost?: number; events: number; quantity: number }[];
+  byEnvironment: { TEST: { charge: number; events: number; actualCost?: number }; LIVE: { charge: number; events: number; actualCost?: number } };
+  timeline: { day: string; charge: number; actualCost?: number; events: number }[];
   recent: UsageRow[];
   forecast: { windowDays: number; averageDailyUsage: number; estimatedRemainingDays: number | null; trendPct: number | null; currentWindowUsage: number; previousWindowUsage: number };
-  ledger: { id: string; kind: string; amount: number; balanceAfter: number; reason: string; note: string | null; createdAt: string }[];
+  ledger: { id: string; kind: string; amount: number; balanceAfter: number; reason: string; note: string | null; createdAt: string; transferId?: string | null }[];
   requests: { id: string; requestedAmount: number; reason: string; status: string; createdAt: string; decidedAmount: number | null; adminNote: string | null }[];
   canRequest?: boolean;
 }
@@ -71,6 +74,8 @@ export function useMeterView(surveyId: string) {
   }, [surveyId, tick]);
   return { view, error, reload: () => { void fetchView(surveyId, true); listeners.forEach((l) => l()); } };
 }
+
+const LEDGER_WORDS: Record<string, string> = { debit: "Usage", credit: "Credits added", adjustment: "Adjustment", reversal: "Usage reversed", expiry: "Credits expired", transfer_out: "Credit Transfer Out", transfer_in: "Credit Transfer In", transfer_reversal: "Credit Transfer Reversal" };
 
 export function UsagePanel() {
   const s = useStudio();
@@ -138,18 +143,25 @@ export function UsagePanel() {
               <tr><td><strong>Remaining</strong></td><td><strong>{fmtMoney(sm.remaining, cur)}</strong></td></tr>
             </tbody>
           </table>
-          <details style={{ marginTop: 10 }}>
-            <summary className="muted" style={{ cursor: "pointer", fontSize: 12.5 }}>Where the usage went</summary>
-            <table className="bl-kv" style={{ marginTop: 6 }} data-testid="wallet-costs">
-              <tbody>
-                <tr><td>Actual provider cost</td><td>{fmtMoney(sm.costs.providerCost, cur)}</td></tr>
-                <tr><td>Infrastructure cost</td><td>{fmtMoney(sm.costs.infraCost, cur)}</td></tr>
-                <tr><td>Payment / fees</td><td>{fmtMoney(sm.costs.paymentFee, cur)}</td></tr>
-                <tr><td>Tax / reserve</td><td>{fmtMoney(sm.costs.taxReserve, cur)}</td></tr>
-                <tr><td>Platform gross profit</td><td>{fmtMoney(sm.costs.grossProfit, cur)}</td></tr>
-              </tbody>
-            </table>
-          </details>
+          <div className="bl-stats" style={{ marginTop: 10 }}>
+            <Stat label="Usage" value={`${sm.usedPct}%`} testid="wallet-used-pct" />
+            <Stat label="Status" value={view.wallet.state === "read_only" ? "READ-ONLY" : view.wallet.state.toUpperCase()} testid="wallet-status" />
+          </div>
+          {view.audience === "admin" && sm.costs && (
+            <details style={{ marginTop: 10 }} data-testid="wallet-costs-admin">
+              <summary className="muted" style={{ cursor: "pointer", fontSize: 12.5 }}>Cost breakdown (administrators only)</summary>
+              <table className="bl-kv" style={{ marginTop: 6 }} data-testid="wallet-costs">
+                <tbody>
+                  <tr><td>Actual provider cost</td><td>{fmtMoney(sm.costs.providerCost, cur)}</td></tr>
+                  <tr><td>Infrastructure cost</td><td>{fmtMoney(sm.costs.infraCost, cur)}</td></tr>
+                  <tr><td>Payment / fees</td><td>{fmtMoney(sm.costs.paymentFee, cur)}</td></tr>
+                  <tr><td>Tax / reserve</td><td>{fmtMoney(sm.costs.taxReserve, cur)}</td></tr>
+                  <tr><td>Platform gross profit</td><td>{fmtMoney(sm.costs.grossProfit, cur)}</td></tr>
+                  <tr><td>Net profit</td><td>{fmtMoney(sm.costs.netProfit, cur)} ({sm.costs.marginPct}%)</td></tr>
+                </tbody>
+              </table>
+            </details>
+          )}
         </div>
 
         <div className="card bl-card">
@@ -245,7 +257,7 @@ export function UsagePanel() {
                 {view.ledger.map((l) => (
                   <tr key={l.id} data-kind={l.kind}>
                     <td className="muted">{fmtWhen(l.createdAt)}</td>
-                    <td>{l.kind === "debit" ? "Usage" : l.kind === "credit" ? "Credits added" : l.kind === "reversal" ? "Usage reversed" : l.kind}{l.note ? <span className="muted"> · {l.note}</span> : l.kind !== "debit" && l.reason ? <span className="muted"> · {l.reason.replace(/_/g, " ")}</span> : null}</td>
+                    <td>{LEDGER_WORDS[l.kind] ?? l.kind}{l.note ? <span className="muted"> · {l.note}</span> : l.kind !== "debit" && l.reason ? <span className="muted"> · {l.reason.replace(/_/g, " ")}</span> : null}</td>
                     <td className={l.amount < 0 ? "" : "bl-pos"}>{l.amount < 0 ? "−" : "+"}{fmtMoney(Math.abs(l.amount), cur)}</td>
                     <td>{fmtMoney(l.balanceAfter, cur)}</td>
                   </tr>
@@ -259,7 +271,7 @@ export function UsagePanel() {
       {/* ---------------------------------------------------------------- recent usage */}
       <div className="card bl-card" style={{ marginTop: 12 }}>
         <div className="card-title">Recent usage <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>{sm.events} events · state {STATE_WORD[view.wallet.state]}</span></div>
-        <UsageTable rows={view.recent} currency={cur} />
+        <UsageTable rows={view.recent} currency={cur} showCost={view.audience === "admin"} />
       </div>
     </div>
   );
