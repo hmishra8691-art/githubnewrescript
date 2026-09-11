@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { probeSourceText, probeSourceTextFor, probeTranscript, effectiveProbe, questionAi, createResponseState, type ResponseState } from "@rescript/engine";
 import { writeProbe } from "@/lib/ai";
 import { definitionForAiCall } from "@/lib/aiSession";
+import { meteredSessionAi } from "@/lib/metering";
 
 export const dynamic = "force-dynamic";
 
@@ -49,8 +50,10 @@ export async function POST(req: NextRequest) {
 
   try {
     const language = typeof body?.language === "string" ? body.language.slice(0, 20) : undefined;
-    const prompt = await writeProbe({ questionText: q.text, answer, transcript, n, instruction: probe.instruction, language });
-    return NextResponse.json({ ok: true, prompt });
+    // METERED on the session's project; a refused wallet means no follow-up, and the interview continues
+    const m = await meteredSessionAi(gate.billing, { estimateText: `${q.text} ${answer} ${transcript.map((t) => t.prompt + t.answer).join(" ")}`, maxTokens: 120, operation: "probe" }, () =>
+      writeProbe({ questionText: q.text, answer, transcript, n, instruction: probe.instruction, language }));
+    return NextResponse.json({ ok: true, prompt: "refused" in m ? null : m.value });
   } catch (e) {
     console.warn("[rescript:ai] probe failed", JSON.stringify({ q: q.code, error: (e as Error).message }));
     return NextResponse.json({ ok: true, prompt: null });

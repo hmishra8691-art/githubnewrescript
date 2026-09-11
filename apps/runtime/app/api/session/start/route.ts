@@ -4,6 +4,7 @@ import { loadDeployment, loadTestBuild, type LoadedDeployment } from "@/lib/depl
 import { createSession } from "@/lib/session";
 import { clientIp } from "@rescript/quality/server";
 import { resolveSampleSource } from "@rescript/engine";
+import { sessionAllowed } from "@/lib/metering";
 
 export const dynamic = "force-dynamic";
 
@@ -100,6 +101,19 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  /*
+   * METERING (billing brief §14). A project at its usage limit takes no new
+   * interview in a billable environment — the same sentence the Studio shows.
+   * Resumes above are untouched: a respondent already in the interview
+   * finishes it. Configurable: `lockRespondentsWhenReadOnly`.
+   */
+  {
+    const { data: sv } = await db.from("surveys").select("customer_id").eq("id", d.surveyId).maybeSingle();
+    if (sv?.customer_id) {
+      const gate = await sessionAllowed(sv.customer_id, d.surveyId, isTest ? "TEST" : "LIVE");
+      if (!gate.allowed) return NextResponse.json({ error: gate.message, code: "wallet_read_only" }, { status: 423 });
+    }
+  }
   const session = await createSession(d, {
     isTest,
     ip: clientIp(req.headers),

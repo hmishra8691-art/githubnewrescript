@@ -17,7 +17,7 @@ import { AppHeader } from "@/components/ui/AppHeader";
  */
 
 export interface AccountHeaderProps {
-  active: "profile" | "security" | "admin";
+  active: "profile" | "security" | "admin" | "billing" | "admin-billing";
   user: SessionUser | null;
   onSignOut: () => void;
 }
@@ -26,6 +26,8 @@ const TITLES: Record<AccountHeaderProps["active"], string> = {
   profile: "Your profile",
   security: "Sign-in & sessions",
   admin: "Administration",
+  billing: "My usage",
+  "admin-billing": "Billing administration",
 };
 
 /** Initials from whatever name we actually have — one word still gives two letters. */
@@ -85,8 +87,12 @@ export function AccountHeader({ active, user, onSignOut }: AccountHeaderProps) {
       <nav className="acct-nav">
         <a href="/profile" className={active === "profile" ? "active" : undefined}>Profile</a>
         <a href="/security" className={active === "security" ? "active" : undefined}>Security</a>
+        <a href="/billing" className={active === "billing" ? "active" : undefined} data-testid="nav-billing">My usage</a>
         {user?.isPlatformAdmin && (
           <a href="/admin" className={active === "admin" ? "active" : undefined}>Administration</a>
+        )}
+        {user?.isPlatformAdmin && (
+          <a href="/admin/billing" className={active === "admin-billing" ? "active" : undefined} data-testid="nav-admin-billing">Billing</a>
         )}
         <span className="grow" />
         <a href="/">Back to projects</a>

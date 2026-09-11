@@ -146,10 +146,10 @@ export function TranslationEditor({ focusKey, onFocused }: { focusKey?: string |
           try {
             const r = await fetch("/api/ai/translate", {
               method: "POST", headers: { "content-type": "application/json" },
-              body: JSON.stringify({ items: chunk.map((e) => ({ key: e.key, text: e.source, kind: e.kind.replace(/_/g, " ") })), sourceLanguage: loc.sourceLanguage, targetLanguage: lang, locale: languageLocale(lang, cfg), glossary, notes: cfg?.notes, context: title, useCache: loc.cache !== false }),
+              body: JSON.stringify({ surveyId: s.surveyDbId, items: chunk.map((e) => ({ key: e.key, text: e.source, kind: e.kind.replace(/_/g, " ") })), sourceLanguage: loc.sourceLanguage, targetLanguage: lang, locale: languageLocale(lang, cfg), glossary, notes: cfg?.notes, context: title, useCache: loc.cache !== false }),
             });
             const j = await r.json().catch(() => ({})) as { translations?: Record<string, string>; cached?: string[]; error?: { code: string; message: string; retryable: boolean } | string; provider?: string };
-            const err = typeof j.error === "string" ? { code: "invalid", message: j.error, retryable: false } : j.error;
+            const err = typeof j.error === "string" ? { code: r.status === 402 || r.status === 423 ? "wallet" : "invalid", message: j.error, retryable: false } : j.error;
             const got = j.translations ?? {};
             if (Object.keys(got).length) {
               s.update((d) => {

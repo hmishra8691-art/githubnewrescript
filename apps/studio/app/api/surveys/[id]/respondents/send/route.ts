@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertNotReadOnly, getMeter, projectContext, recordUsage } from "@/lib/metering";
 import { supabaseAdmin } from "@/lib/admin";
 import { parseEnvironment } from "@/lib/responseData";
 import { audit, isFailure, requireProject } from "@/lib/guard";
@@ -166,8 +167,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     };
   });
 
+  // METERING: a read-only project sends nothing; every message actually mailed is one EMAIL_MESSAGE
+  const mctx = projectContext(gate);
+  const blocked = await assertNotReadOnly(getMeter(), mctx, "other");
+  if (blocked) return blocked;
   const results = await sendMany(messages, { perSecond: 2 });
   const summary = summariseSend(results);
+  const sentCount = results.filter((r) => r.result.sent).length;
+  if (sentCount) void recordUsage(getMeter(), mctx, { eventType: "EMAIL_MESSAGE", quantity: sentCount, metadata: { attempted: results.length } });
 
   /*
    * Stamp `sent_at` only for those actually mailed. A failure must stay

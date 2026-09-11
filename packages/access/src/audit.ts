@@ -108,6 +108,17 @@ export const AUDIT_EVENTS = [
   "analytics.report_shared",
   "analytics.share_revoked",
   "analytics.share_accessed",
+
+  /* metered usage & wallets (billing brief §17): every credit movement is an audited administrative act */
+  "billing.credits_assigned",
+  "billing.credits_adjusted",
+  "billing.usage_reversed",
+  "billing.config_changed",
+  "billing.rate_changed",
+  "billing.event_changed",
+  "billing.credit_requested",
+  "billing.credit_request_decided",
+  "billing.wallet_changed",
   "analytics.export_generated",
   "analytics.report_downloaded",
 

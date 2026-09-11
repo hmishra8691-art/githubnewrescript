@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertNotReadOnly, getMeter, projectContext, recordUsage } from "@/lib/metering";
 import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
 import { responsesToCSV, exportResponsesXlsx, inDataset, QUALITY_CSV_COLUMNS, qualityCsvCells, SAMPLE_COLUMNS, sampleCells, type DatasetFilter, type QualityExportRow } from "@rescript/exporters";
@@ -42,6 +43,12 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
    * anywhere.
    */
   if (format !== "summary") {
+    // METERING: a read-only project may still export only when the configuration allows it; the download is a usage event either way
+    const meter = getMeter();
+    const mctx = projectContext(gate);
+    const blocked = await assertNotReadOnly(meter, mctx, "export");
+    if (blocked) return blocked;
+    void recordUsage(meter, mctx, { eventType: "EXPORT_GENERATION", quantity: 1, metadata: { format, dataset, include } });
     await audit({
       action: "responses.exported", userId: gate.user.userId, sessionId: gate.user.sessionId,
       surveyId: params.id, customerId: gate.user.customerId,

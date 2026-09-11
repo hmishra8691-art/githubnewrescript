@@ -20,6 +20,22 @@ const ROOT = "apps/studio/app/api";
 const GUARDS = ["requireUser", "requireProject", "requireProjectFor", "requireEditRight", "requireEditRightFor", "requireAdmin"];
 
 /**
+ * SHARED GATES — helpers in `lib/` that several routes call instead of a
+ * guard directly, because they add a decision the guard does not know about
+ * (is the AI provider configured? is there a translation adapter? is this a
+ * database-less installation?). Each is honoured only if its OWN source calls
+ * a real guard — checked below, so a gate that stops calling `requireUser`
+ * stops counting on the next run. The FAKE-provider carve-out inside the AI
+ * and translation gates (a sandbox may call a free, deterministic provider
+ * without a session) is documented in each file.
+ */
+const LIB_GATES = {
+  requireAiCaller: "lib/aiGate.ts",
+  requireTranslationCaller: "lib/translationGate.ts",
+  requireBillingAdmin: "lib/billingAdmin.ts",
+};
+
+/**
  * Routes that are deliberately public, with the reason.
  *
  * Every entry here is a decision, not an omission — an unauthenticated caller
@@ -32,6 +48,10 @@ const PUBLIC = {
   "auth/password/route.ts": "a password reset is for people who cannot sign in; answers identically for unknown addresses",
   "auth/logout/route.ts": "signing out must never fail, including from an already-dead session",
   "auth/heartbeat/route.ts": "validates the session cookie itself and answers 401 without the guard's shape",
+  "localization/export/route.ts":
+    "a pure transform of the document in the request body into a spreadsheet: reads no data, spends no provider, keeps nothing",
+  "localization/import/route.ts":
+    "a pure parse of the uploaded spreadsheet into rows the client applies to its own draft: reads no data, keeps nothing",
   "share/[token]/route.ts":
     "a report share link is given to people with no account: the TOKEN is the credential, resolved by the "
     + "security-definer function `rescript_resolve_share`, which applies expiry, revocation, password and "
@@ -71,6 +91,12 @@ const ROUTERS = {
 const BODY_FIRST = {
   "surveys/[id]/config/route.ts PATCH":
     "the capability depends on which fields the payload changes, so the body decides which guard to call",
+  "surveys/[id]/billing/route.ts GET":
+    "the /sandbox fixture (id \"sandbox\") has no database row and is served from the in-memory meter without a session; every real id goes through requireProject(billing.read)",
+  "surveys/[id]/billing/route.ts POST":
+    "the body is validated first (action, amount, reason) and the sandbox id answered from memory; every real id goes through requireProject(billing.request_credits)",
+  "translation/status/route.ts GET":
+    "reports only whether a provider is configured — never a key; the FAKE provider answers without a session so the sandbox tab can render",
 };
 
 /**
@@ -228,7 +254,10 @@ for (const file of files) {
       })
       .filter((n) => n && !VERBS.includes(n));
 
-    const guard = [...GUARDS, ...delegates].find((g) => body.includes(`${g}(`));
+    const libGates = Object.entries(LIB_GATES).filter(([, file]) => {
+      try { return GUARDS.some((g) => readFileSync(join("apps/studio", file), "utf8").includes(`${g}(`)); } catch { return false; }
+    }).map(([name]) => name);
+    const guard = [...GUARDS, ...delegates, ...libGates].find((g) => body.includes(`${g}(`));
     if (!guard) {
       failures.push(`${rel} ${verb} — NO GUARD CALL`);
       continue;
@@ -274,7 +303,9 @@ for (const file of files) {
     }
 
     // and its refusal must be returned, not discarded
-    if (!/isFailure\s*\(/.test(body)) {
+    // a shared gate answers { ok: false, response } and the route must return that response
+    const gateRefusalReturned = libGates.includes(guard) && /if\s*\(!\w+\.ok\)\s*return\s+\w+\.response/.test(body);
+    if (!/isFailure\s*\(/.test(body) && !gateRefusalReturned) {
       failures.push(`${rel} ${verb} — calls ${guard} but never checks isFailure(), so a refusal is ignored`);
       continue;
     }

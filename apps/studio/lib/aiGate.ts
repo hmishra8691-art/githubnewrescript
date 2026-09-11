@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { aiConfigured, aiProviderName } from "@rescript/ai";
-import { isFailure, requireUser } from "@/lib/guard";
+import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
 
 /**
  * WHO MAY SPEND THE AI PROVIDER FROM THE STUDIO — shared by the rephrase,
@@ -12,11 +12,12 @@ import { isFailure, requireUser } from "@/lib/guard";
  * browser suites and a local developer can see the whole path work. Nothing
  * here ever returns the key or the provider URL.
  */
-export async function requireAiCaller(req: NextRequest): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
+export async function requireAiCaller(req: NextRequest): Promise<{ ok: true; user: AuthedUser | null } | { ok: false; response: NextResponse }> {
   if (!aiConfigured()) return { ok: false, response: NextResponse.json({ error: "AI is not configured on this Studio" }, { status: 501 }) };
-  if (aiProviderName() !== "fake") {
-    const user = await requireUser(req);
-    if (isFailure(user)) return { ok: false, response: user.response };
+  const user = await requireUser(req);
+  if (isFailure(user)) {
+    if (aiProviderName() !== "fake") return { ok: false, response: user.response };
+    return { ok: true, user: null };
   }
-  return { ok: true };
+  return { ok: true, user };
 }

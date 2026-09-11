@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { GlossaryEntry } from "@rescript/schema";
-import { isFailure, requireProject } from "@/lib/guard";
+import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -28,7 +28,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 }
 
 export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
-  const gate = await requireProject(req, params.id, "survey.edit");
+  const gate = await requireEditRight(req, params.id, "survey.edit");
   if (isFailure(gate)) return gate.response;
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }

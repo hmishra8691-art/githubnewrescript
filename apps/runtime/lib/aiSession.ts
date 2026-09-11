@@ -4,6 +4,7 @@ import { SurveyDefinition } from "@rescript/schema";
 import { resolveRunDefinition } from "@rescript/quality/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { aiConfigured, aiProviderName } from "@/lib/ai";
+import type { SessionBilling } from "@/lib/metering";
 
 /**
  * WHO MAY ASK THE AI PROVIDER, AND FOR WHICH SURVEY — shared by every route
@@ -22,7 +23,7 @@ import { aiConfigured, aiProviderName } from "@/lib/ai";
  * with 403 otherwise. The fake provider is deterministic and free, so the
  * carve-out costs nothing and leaks nothing.
  */
-export async function definitionForAiCall(body: any): Promise<{ def: SurveyDefinition } | { response: NextResponse }> {
+export async function definitionForAiCall(body: any): Promise<{ def: SurveyDefinition; billing: SessionBilling | null } | { response: NextResponse }> {
   return definitionForProviderCall(body, { configured: aiConfigured(), fake: aiProviderName() === "fake", what: "the AI provider", unconfigured: "AI is not configured on this runtime" });
 }
 
@@ -34,7 +35,7 @@ export async function definitionForAiCall(body: any): Promise<{ def: SurveyDefin
 export async function definitionForProviderCall(
   body: any,
   provider: { configured: boolean; fake: boolean; what: string; unconfigured: string },
-): Promise<{ def: SurveyDefinition } | { response: NextResponse }> {
+): Promise<{ def: SurveyDefinition; billing: SessionBilling | null } | { response: NextResponse }> {
   const sessionId = body?.sessionId;
   if (typeof sessionId !== "string" || (sessionId !== "preview" && sessionId.length < 16))
     return { response: NextResponse.json({ error: "invalid session" }, { status: 400 }) };
@@ -46,13 +47,13 @@ export async function definitionForProviderCall(
     }
     const parsed = SurveyDefinition.safeParse(body?.definition);
     if (!parsed.success) return { response: NextResponse.json({ error: "preview needs the definition in the body" }, { status: 400 }) };
-    return { def: parsed.data };
+    return { def: parsed.data, billing: null };   // a preview bills nobody — it can only use the free provider
   }
 
   const db = supabaseAdmin();
   const { data: existing } = await db
     .from("responses")
-    .select("id, survey_id, version_id, status, is_test, deleted_at")
+    .select("id, survey_id, version_id, status, is_test, deleted_at, surveys(customer_id)")
     .eq("session_id", sessionId)
     .maybeSingle();
   if (!existing) return { response: NextResponse.json({ error: "unknown session" }, { status: 404 }) };
@@ -61,5 +62,13 @@ export async function definitionForProviderCall(
 
   const run = await resolveRunDefinition(db, existing as never, body?.build);
   if (!run.def) return { response: NextResponse.json({ error: "the survey definition for this session could not be read" }, { status: 500 }) };
-  return { def: run.def };
+  /*
+   * METERING (billing brief §4, §21). The session's project pays, in the
+   * session's environment — a TEST interview's AI is TEST usage, priced by
+   * the administrator's policy, and never mixed with LIVE.
+   */
+  const customerId = (existing as unknown as { surveys?: { customer_id?: string } | { customer_id?: string }[] }).surveys;
+  const cid = Array.isArray(customerId) ? customerId[0]?.customer_id : customerId?.customer_id;
+  const billing: SessionBilling | null = cid ? { customerId: cid, surveyId: existing.survey_id, environment: existing.is_test ? "TEST" : "LIVE", sessionId } : null;
+  return { def: run.def, billing };
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { translateWithCache } from "@rescript/ai";
 import { requireTranslationCaller } from "@/lib/translationGate";
 import { cachesFor } from "@/lib/translationCache";
+import { billingProjectFor, meteredTranslation, refusalResponse } from "@/lib/metering";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +33,15 @@ export async function POST(req: NextRequest) {
   const sourceLanguage = typeof body?.sourceLanguage === "string" ? body.sourceLanguage.slice(0, 12) : "en";
   const targetLanguage = typeof body?.targetLanguage === "string" ? body.targetLanguage.trim().slice(0, 12) : "";
   if (!items.length || !targetLanguage) return NextResponse.json({ error: "items and targetLanguage are required" }, { status: 400 });
-  const result = await translateWithCache(items, {
+  /*
+   * METERED (§5 of the billing brief). The project named in the body pays;
+   * cached results cost nothing and are answered before any reservation is
+   * needed, so the estimate is the characters that will actually leave.
+   */
+  const billing = await billingProjectFor(gate.user, body?.surveyId);
+  if ("response" in billing) return billing.response;
+  const characters = items.reduce((n: number, i: { text: string }) => n + i.text.length, 0);
+  const metered = await meteredTranslation(billing.meter, billing.ctx, { characters, providerId: gate.adapter.id, operation: `translate:${sourceLanguage}->${targetLanguage}` }, () => translateWithCache(items, {
     sourceLanguage, targetLanguage,
     locale: typeof body?.locale === "string" ? body.locale.slice(0, 20) : undefined,
     glossary: Array.isArray(body?.glossary) ? body.glossary.filter((g: any) => g && typeof g.source === "string" && typeof g.target === "string").slice(0, 500) : undefined,
@@ -41,7 +50,9 @@ export async function POST(req: NextRequest) {
     useCache: body?.useCache !== false,
     caches: cachesFor(gate.user?.customerId ?? null),
     adapter: gate.adapter,
-  });
+  }));
+  if (!metered.ok) return refusalResponse(metered);
+  const result = metered.value;
   const status = result.error ? (result.error.code === "auth" ? 502 : result.error.code === "rate_limit" || result.error.code === "quota" ? 429 : result.error.code === "unsupported_language" || result.error.code === "invalid" ? 422 : 503) : 200;
-  return NextResponse.json({ ok: !result.error, provider: result.provider, translations: result.translations, cached: result.cached, error: result.error }, { status: result.error && !Object.keys(result.translations).length ? status : 200 });
+  return NextResponse.json({ ok: !result.error, provider: result.provider, translations: result.translations, cached: result.cached, error: result.error, usage: metered.event ? { charge: metered.event.customerCharge, quantity: metered.event.quantity, unit: metered.event.unit } : null }, { status: result.error && !Object.keys(result.translations).length ? status : 200 });
 }

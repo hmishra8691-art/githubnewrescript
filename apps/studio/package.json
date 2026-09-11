@@ -13,6 +13,7 @@
     "@rescript/analytics": "workspace:*",
     "@rescript/designs": "workspace:*",
     "@rescript/ai": "workspace:*",
+    "@rescript/billing": "workspace:*",
     "@rescript/engine": "workspace:*",
     "@rescript/exporters": "workspace:*",
     "@rescript/mail": "workspace:*",

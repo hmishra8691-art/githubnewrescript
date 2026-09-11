@@ -1,4 +1,5 @@
 import { LANGUAGE_LIBRARY } from "@rescript/schema";
+import { reportUsage } from "./usage.js";
 import { translateBatch as llmTranslateBatch, fakeTranslate, aiConfigured, aiProviderName, placeholdersMatch, tagsBalanced, type TranslateItem, type TranslateOptions } from "./index.js";
 
 /**
@@ -172,10 +173,13 @@ export const googleTranslationAdapter: TranslationAdapter = {
     for (let i = 0; i < clean.length; i += GOOGLE_BATCH) {
       const chunk = clean.slice(i, i + GOOGLE_BATCH);
       const protectedItems = chunk.map((it) => ({ it, ...protectPlaceholders(applyDoNotTranslate(it.text, opts)) }));
+      const q = protectedItems.map((p) => p.text);
       const body = await googleFetch("", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ q: protectedItems.map((p) => p.text), source, target, format: "html" }),
+        body: JSON.stringify({ q, source, target, format: "html" }),
       }) as { data?: { translations?: { translatedText: string }[] } };
+      // Google bills every character of `q` — the protected text, wrappers included — per request
+      reportUsage({ kind: "translate", provider: "google", model: "v2", characters: q.reduce((n, t) => n + t.length, 0), requests: 1, estimated: false });
       const results = body?.data?.translations ?? [];
       protectedItems.forEach((p, k) => {
         const raw = results[k]?.translatedText;
@@ -243,7 +247,9 @@ export const fakeTranslationAdapter: TranslationAdapter = {
   async supportedLanguages() { return LANGUAGE_LIBRARY.map((l) => ({ code: l.code, name: l.name })); },
   async translate(items, opts) {
     const out: Record<string, string> = {};
-    for (const it of items) if (it.text?.trim()) out[it.key] = fakeTranslate(it.text, opts);
+    let chars = 0;
+    for (const it of items) if (it.text?.trim()) { out[it.key] = fakeTranslate(it.text, opts); chars += it.text.length; }
+    if (chars) reportUsage({ kind: "translate", provider: "fake", model: "fake-translate", characters: chars, requests: 1, estimated: true });
     return out;
   },
 };

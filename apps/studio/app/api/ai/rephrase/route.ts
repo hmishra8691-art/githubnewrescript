@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { rephraseForSpeech } from "@rescript/ai";
 import { requireAiCaller } from "@/lib/aiGate";
+import { billingProjectFor, meteredAi, refusalResponse } from "@/lib/metering";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,11 @@ export const dynamic = "force-dynamic";
  * carve-out mirrors the runtime's: against the FAKE provider (free,
  * deterministic) the sandbox may call this without a session, so the browser
  * suite and a local developer can see the mechanism work.
+ *
+ * METERED. `surveyId` in the body names the project whose wallet pays; the
+ * caller must be able to edit it. The meter reserves from the prompt size,
+ * settles with the tokens the provider reports; a read-only or empty wallet
+ * refuses with 423 / 402 before the provider is called.
  */
 export async function POST(req: NextRequest) {
   const gate = await requireAiCaller(req);
@@ -26,9 +32,13 @@ export async function POST(req: NextRequest) {
   const text = typeof body?.text === "string" ? body.text : "";
   if (!text.trim()) return NextResponse.json({ error: "text is required" }, { status: 400 });
   const variation = ["low", "medium", "high"].includes(body?.variation) ? body.variation as "low" | "medium" | "high" : "low";
+  const billing = await billingProjectFor(gate.user, body?.surveyId);
+  if ("response" in billing) return billing.response;
   try {
-    const question = await rephraseForSpeech({ questionText: text, instruction: typeof body?.instruction === "string" ? body.instruction : undefined, variation, style: typeof body?.style === "string" ? body.style : undefined });
-    return NextResponse.json({ ok: true, question });
+    const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: `${text} ${body?.instruction ?? ""}`, maxTokens: 160, operation: "rephrase_for_speech" },
+      () => rephraseForSpeech({ questionText: text, instruction: typeof body?.instruction === "string" ? body.instruction : undefined, variation, style: typeof body?.style === "string" ? body.style : undefined }));
+    if (!m.ok) return refusalResponse(m);
+    return NextResponse.json({ ok: true, question: m.value, usage: m.event ? { charge: m.event.customerCharge, tokens: m.event.quantity } : null });
   } catch (e) {
     console.warn("[rescript:ai] rephrase failed", JSON.stringify({ error: (e as Error).message }));
     return NextResponse.json({ ok: true, question: null });

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { serverResolvedQuestions } from "@rescript/engine";
 import { classify, sentiment } from "@/lib/ai";
 import { definitionForAiCall } from "@/lib/aiSession";
+import { meteredSessionAi } from "@/lib/metering";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +28,7 @@ export async function POST(req: NextRequest) {
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
   const gate = await definitionForAiCall(body);
   if ("response" in gate) return gate.response;
-  const { def } = gate;
+  const { def, billing } = gate;
   const { answers, questionIds } = body ?? {};
 
   const wanted = new Set<string>(Array.isArray(questionIds) ? questionIds : []);
@@ -40,9 +41,10 @@ export async function POST(req: NextRequest) {
     const text = textOf(a[source.id]);
     if (!text) continue;
     try {
-      out[question.id] = call.fn === "ai_classify"
-        ? await classify(text, call.categories ?? [])
-        : await sentiment(text);
+      // METERED: one AI request per variable, on the session's project wallet; a refusal leaves the value unset
+      const m = await meteredSessionAi(billing, { estimateText: `${text} ${(call.categories ?? []).join(" ")}`, maxTokens: 40, operation: call.fn }, () =>
+        call.fn === "ai_classify" ? classify(text, call.categories ?? []) : sentiment(text));
+      out[question.id] = "refused" in m ? null : m.value;
     } catch (e) {
       console.warn("[rescript:ai] resolution failed", JSON.stringify({ q: question.code, error: (e as Error).message }));
       out[question.id] = null;

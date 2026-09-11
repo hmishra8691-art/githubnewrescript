@@ -30,11 +30,13 @@ import { ProjectPanel } from "./ProjectPanel";
 import { runtimeBaseUrl, surveyBaseUrl } from "@/lib/runtime-url";
 import { Icon, type IconName } from "@/components/ui/Icon";
 import { LocalizationPanel } from "./localization/LocalizationPanel";
+import { UsagePanel, useMeterView } from "./UsagePanel";
+import { fmtMoney } from "@/components/billing/shared";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
   | "quotas" | "listfill" | "designs" | "branding" | "localization" | "scripts" | "tests" | "data" | "fieldwork"
-  | "distribution" | "project" | "versions" | "json"
+  | "distribution" | "project" | "usage" | "versions" | "json"
   | "collaborators" | "notes" | "activity"
   | "settings";
 
@@ -102,6 +104,13 @@ const NAV: { key: Tab; label: string; icon: IconName; group: string }[] = [
    * `project.lock_settings` for the freeze).
    */
   { key: "project", label: "Project", icon: "home", group: "Management" },
+  /*
+   * Metered usage & wallet (billing brief §11). Beside Project, because the
+   * wallet belongs to the project, not the questionnaire. Not in
+   * EDITING_TABS: reading what the project has spent, and asking for
+   * credits, never needs the edit lock.
+   */
+  { key: "usage", label: "Usage & Wallet", icon: "chart", group: "Management" },
   { key: "distribution", label: "Distribution", icon: "share", group: "Management" },
   { key: "versions", label: "Versions & Deploy", icon: "versions", group: "Management" },
   { key: "json", label: "JSON", icon: "json", group: "Management" },
@@ -653,6 +662,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
         <a className="btn" href={`/api/surveys/${s.surveyDbId}/export/xlsx`} target="_blank"><Icon name="download" size={15} /> Variables .xlsx</a>
         <button className="btn" data-testid="export-survey" onClick={() => setExportOpen(true)}
           title="Export the survey you are editing as Word or JSON"><Icon name="export" size={15} /> Export</button>
+        <WalletBadge surveyId={s.surveyDbId} onOpen={() => setTab("usage")} />
         <button className="btn" onClick={() => setTab("data")} title="Browse test and live responses"><Icon name="data" size={15} /> Data</button>
         {session.state.kind === "signed_in" && (
           <span className="row" style={{ gap: 6 }} data-testid="studio-user">
@@ -674,6 +684,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
         </button>
       </div>
       {exportOpen && <ExportDialog onClose={() => setExportOpen(false)} />}
+      <ReadOnlyBar surveyId={s.surveyDbId} onOpen={() => setTab("usage")} />
       {liveIsBehind && (
         <div className="publish-bar" data-testid="publish-bar">
           <span className="publish-dot" />
@@ -778,6 +789,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           {tab === "data" && <DataPanel />}
           {tab === "fieldwork" && <FieldworkPanel />}
           {tab === "project" && <ProjectPanel />}
+          {tab === "usage" && <UsagePanel />}
           {tab === "distribution" && <DistributionPanel />}
           {tab === "versions" && <VersionsPanel />}
           {tab === "json" && <JsonPanel />}
@@ -829,5 +841,37 @@ export function Studio({ definition, surveyDbId, versionId, draftSavedAt, revisi
       readOnly={collaboration}>
       <StudioShell collaboration={collaboration} />
     </StudioProvider>
+  );
+}
+
+
+/**
+ * THE WALLET IN THE HEADER (billing brief §10, §13): the remaining balance,
+ * coloured by level, one click from the Usage tab. Reads once per Studio
+ * load and again when the Usage tab changes something; a Studio without the
+ * billing tables (migration 0023 not applied) simply shows nothing here.
+ */
+function WalletBadge({ surveyId, onOpen }: { surveyId: string; onOpen: () => void }) {
+  const { view } = useMeterView(surveyId);
+  if (!view) return null;
+  const level = view.wallet.state === "suspended" ? "locked" : view.level;
+  return (
+    <button className={`bl-wallet-badge ${level}`} onClick={onOpen} data-testid="wallet-badge" data-level={level} title="Project wallet — open Usage & Wallet">
+      <Icon name="chart" size={13} /> {fmtMoney(view.summary.remaining, view.wallet.currency)}
+    </button>
+  );
+}
+
+/** The sentence the brief specifies, across the top of a project at its usage limit (§14). */
+function ReadOnlyBar({ surveyId, onOpen }: { surveyId: string; onOpen: () => void }) {
+  const { view } = useMeterView(surveyId);
+  if (!view || (view.wallet.state !== "read_only" && view.wallet.state !== "suspended")) return null;
+  return (
+    <div className="bl-readonly-bar" data-testid="wallet-readonly-bar">
+      <span aria-hidden="true">⚠</span>
+      <span>{view.wallet.state === "suspended" ? "This project's wallet is suspended. Please contact your administrator." : view.message || "Your project has reached its usage limit. Please request additional credits from your administrator."}</span>
+      <span className="grow" />
+      <button className="btn small" onClick={onOpen}>Usage &amp; Wallet</button>
+    </div>
   );
 }

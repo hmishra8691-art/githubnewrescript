@@ -60,9 +60,10 @@ export function AiQuestionSection({ q, patch }: { q: Question; patch(p: Partial<
   const generate = async () => {
     setBusy(true); setNote(null);
     try {
-      const r = await fetch("/api/ai/rephrase", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: q.text, instruction: q.instruction, variation: survey.rephrase.maxVariation, style: survey.interviewer.style }) });
+      const r = await fetch("/api/ai/rephrase", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: s.surveyDbId, text: q.text, instruction: q.instruction, variation: survey.rephrase.maxVariation, style: survey.interviewer.style }) });
       const j = await r.json().catch(() => ({})) as { question?: string | null; error?: string };
       if (r.status === 501) { setNote("AI is not configured on this Studio — write the spoken version by hand."); return; }
+      if (r.status === 402 || r.status === 423) { setNote(j.error ?? "This project has reached its usage limit."); return; }
       if (!r.ok) { setNote(j.error ?? `Could not generate (${r.status})`); return; }
       if (!j.question) { setNote("The AI had no usable rewording; the displayed text will be read."); return; }
       setSpoken({ mode: "ai", aiVersion: j.question, aiApproved: !survey.rephrase.requireApproval, locked: false });

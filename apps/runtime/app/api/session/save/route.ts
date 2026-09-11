@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { qualitySalt } from "@/lib/session";
+import { recordSessionUsage } from "@/lib/metering";
 import { SurveyDefinition } from "@rescript/schema";
 import { quotaIncrements, type ResponseState } from "@rescript/engine";
 import { assessAndStore, deviceHashFrom, resolveRunDefinition, RESPONSE_COLUMNS } from "@rescript/quality/server";
@@ -35,7 +36,7 @@ export async function POST(req: NextRequest) {
   const db = supabaseAdmin();
   const { data: existing } = await db
     .from("responses")
-    .select("id, survey_id, version_id, status, respondent_id, is_test, respondent_code, deleted_at")
+    .select("id, survey_id, version_id, status, respondent_id, is_test, respondent_code, deleted_at, surveys(customer_id)")
     .eq("session_id", sessionId)
     .maybeSingle();
   if (!existing) return NextResponse.json({ error: "unknown session" }, { status: 404 });
@@ -115,6 +116,18 @@ export async function POST(req: NextRequest) {
     }
     if (existing.respondent_id) {
       await db.from("respondents").update({ status: newStatus }).eq("id", existing.respondent_id);
+    }
+    /*
+     * METERING (billing brief §6). One SURVEY_RESPONSE per completed
+     * interview, on the project's wallet, in this environment — TEST
+     * completes are TEST usage and priced by policy. Screen-outs and
+     * quota-fulls are not completes and are not billed; the interview's data
+     * is saved above regardless of what the meter says.
+     */
+    if (newStatus === "complete") {
+      const cust = (existing as unknown as { surveys?: { customer_id?: string } | { customer_id?: string }[] }).surveys;
+      const customerId = Array.isArray(cust) ? cust[0]?.customer_id : cust?.customer_id;
+      if (customerId) void recordSessionUsage({ customerId, surveyId: existing.survey_id, environment: existing.is_test ? "TEST" : "LIVE", sessionId }, { eventType: "SURVEY_RESPONSE", quantity: 1, metadata: { sessionId: sessionId.slice(0, 8), versionId: existing.version_id } });
     }
     // the quality engine, on the final state of the row
     const summary = def ? summarizeConfig(def) : null;

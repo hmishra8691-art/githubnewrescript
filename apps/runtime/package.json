@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@rescript/ai": "workspace:*",
+    "@rescript/billing": "workspace:*",
     "@rescript/engine": "workspace:*",
     "@rescript/quality": "workspace:*",
     "@rescript/renderer": "workspace:*",

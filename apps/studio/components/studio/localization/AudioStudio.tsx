@@ -215,7 +215,7 @@ function ElementAudio({ el, lang, onRecord, onAi, onUrl, onApprove, onDelete, on
   const generate = async () => {
     setBusy(true); setErr(null); setGen(null);
     try {
-      const r = await fetch("/api/ai/tts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text, language: languageLocale(lang, loc.languages.find((l) => l.code === lang)), gender, speed, style: style || undefined, voiceId: voiceId || undefined }) });
+      const r = await fetch("/api/ai/tts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: s.surveyDbId, text, language: languageLocale(lang, loc.languages.find((l) => l.code === lang)), gender, speed, style: style || undefined, voiceId: voiceId || undefined }) });
       if (r.status === 501) { setErr("AI is not configured on this Studio — record a voice or link a file instead."); return; }
       const j = await r.json().catch(() => ({})) as { dataUrl?: string | null; mimeType?: string; durationMs?: number; error?: string };
       if (!r.ok) { setErr(j.error ?? `Could not generate (${r.status})`); return; }

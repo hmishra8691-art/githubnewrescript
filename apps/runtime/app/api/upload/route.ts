@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
+import { recordSessionUsage } from "@/lib/metering";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -56,6 +57,20 @@ export async function POST(req: NextRequest) {
 
   const signed = await db.storage.from(BUCKET).createSignedUrl(path, 60 * 60 * 24 * 365);
   if (signed.error) return NextResponse.json({ error: signed.error.message }, { status: 500 });
+
+  /*
+   * METERED: FILE_UPLOAD in MB on the session's project, in the session's
+   * environment. Recorded after the upload succeeded — a respondent's file is
+   * never refused by the meter; an uncovered upload is recorded as unbilled.
+   */
+  const { data: row } = await db.from("responses").select("survey_id, is_test, surveys(customer_id)").eq("session_id", sessionId).maybeSingle();
+  const cust = (row as unknown as { surveys?: { customer_id?: string } | { customer_id?: string }[] } | null)?.surveys;
+  const customerId = Array.isArray(cust) ? cust[0]?.customer_id : cust?.customer_id;
+  if (row && customerId) {
+    void recordSessionUsage({ customerId, surveyId: row.survey_id, environment: row.is_test ? "TEST" : "LIVE", sessionId }, {
+      eventType: "FILE_UPLOAD", quantity: Math.max(0.001, bytes.length / (1024 * 1024)), metadata: { questionId, contentType: file.type || null, bytes: bytes.length },
+    });
+  }
 
   return NextResponse.json({
     url: signed.data.signedUrl,

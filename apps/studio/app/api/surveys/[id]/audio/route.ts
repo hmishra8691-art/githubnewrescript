@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
-import { isFailure, requireProject } from "@/lib/guard";
+import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
+import { getMeter, projectContext, recordUsage } from "@/lib/metering";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -24,7 +25,7 @@ const MAX_BYTES = 20 * 1024 * 1024;
 const SIGNED_SECONDS = 60 * 60 * 24 * 365 * 5;
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const gate = await requireProject(req, params.id, "survey.edit");
+  const gate = await requireEditRight(req, params.id, "survey.edit");
   if (isFailure(gate)) return gate.response;
 
   let form: FormData;
@@ -53,5 +54,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (up.error) return NextResponse.json({ error: up.error.message }, { status: 500 });
   const signed = await db.storage.from(BUCKET).createSignedUrl(path, SIGNED_SECONDS);
   if (signed.error) return NextResponse.json({ error: signed.error.message }, { status: 500 });
+  // METERING: a stored recording is FILE_UPLOAD in MB on the project's wallet
+  void recordUsage(getMeter(), projectContext(gate), { eventType: "FILE_UPLOAD", quantity: Math.max(0.001, file.size / (1024 * 1024)), metadata: { kind: "audio", contentType: file.type, bytes: file.size } });
   return NextResponse.json({ ok: true, url: signed.data.signedUrl, path, bytes: file.size, mimeType: file.type, fileName: safeName });
 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { geocode, geocodeConfigured, geocodeProviderName } from "@/lib/geocode";
 import { definitionForProviderCall } from "@/lib/aiSession";
+import { getMeter, contextOf } from "@/lib/metering";
 
 export const dynamic = "force-dynamic";
 
@@ -28,6 +29,16 @@ export async function POST(req: NextRequest) {
   if (!q || q.type !== "geo") return NextResponse.json({ error: "that question is not a location question" }, { status: 400 });
   const text = typeof body?.q === "string" ? body.q.trim() : "";
   if (!text) return NextResponse.json({ ok: true, hits: [] });
+  /*
+   * METERED: one GEOCODE_REQUEST per lookup on the session's project. A
+   * refused wallet returns no hits and the respondent keeps the typed
+   * address — the same fallback as an unconfigured provider.
+   */
+  if (gate.billing) {
+    const fake = geocodeProviderName() === "fake" && process.env.BILLING_SIMULATE_FAKE_COSTS !== "1";
+    const r = await getMeter().record(contextOf(gate.billing), { eventType: "GEOCODE_REQUEST", provider: fake ? "fake" : "geocode", service: "lookup", model: null, quantity: 1, metadata: { operation: "geocode", sessionId: gate.billing.sessionId.slice(0, 8) } }).catch((e) => { console.warn("[rescript:billing] geocode not metered", (e as Error).message); return { ok: true as const, event: null }; });
+    if (!r.ok) return NextResponse.json({ ok: true, hits: [], refused: r.message });
+  }
   const hits = await geocode(text);
   return NextResponse.json({ ok: true, hits });
 }

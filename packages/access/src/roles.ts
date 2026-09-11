@@ -102,6 +102,10 @@ export const CAPABILITIES = [
   "analytics.edit",           // save, modify and delete analyses, charts, segments, filters, reports, dashboards, themes
   "analytics.publish",        // publish a report version, create / revoke share links
   "analytics.export",         // generate PowerPoint / Excel downloads
+
+  /* metered usage & wallet (billing brief): reading the project's meter is part of running the project; asking for credits is an owner/editor act */
+  "billing.read",             // open the project's Usage / Meter section: wallet, usage, forecast
+  "billing.request_credits",  // submit a credit request for the project
 ] as const;
 export type Capability = (typeof CAPABILITIES)[number];
 
@@ -126,6 +130,7 @@ const GRANTS: Record<ProjectRole, Capability[]> = {
     "lock.acquire", "lock.request",
     "project.share",
     "analytics.read", "analytics.edit", "analytics.publish", "analytics.export",
+    "billing.read", "billing.request_credits",
   ],
 
   programmer: [
@@ -135,6 +140,7 @@ const GRANTS: Record<ProjectRole, Capability[]> = {
     "comment.create", "comment.resolve",
     "lock.acquire", "lock.request",
     "analytics.read", "analytics.edit", "analytics.export",
+    "billing.read",
   ],
 
   reviewer: [
@@ -143,6 +149,7 @@ const GRANTS: Record<ProjectRole, Capability[]> = {
     "comment.create", "comment.resolve",
     "lock.request",
     "analytics.read", "analytics.export",
+    "billing.read",
   ],
 
   viewer: [
@@ -164,6 +171,7 @@ const GRANTS: Record<ProjectRole, Capability[]> = {
     "comment.create",
     "lock.request",
     "analytics.read", "analytics.export",
+    "billing.read",
   ],
 };
 

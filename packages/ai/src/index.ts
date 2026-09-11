@@ -1,4 +1,5 @@
 import { pickCategory, pickSentiment, fakeClassify, fakeSentiment, fakeProbe } from "@rescript/engine";
+import { approxTokens, reportUsage } from "./usage.js";
 
 /**
  * THE AI PROVIDER — one client, shared by the runtime (classification,
@@ -65,7 +66,7 @@ export function aiProviderName(): "fake" | "openai-compatible" | null {
 export async function classify(text: string, categories: string[]): Promise<string | null> {
   if (!categories.length) return null;
   const t = text.slice(0, MAX_TEXT);
-  if (aiProviderName() === "fake") return fakeClassify(t, categories);
+  if (aiProviderName() === "fake") { reportFake("chat", t, 8); return fakeClassify(t, categories); }
   const out = await complete(
     "You code survey open-ends into exactly one category from a fixed list. "
     + "Reply with JSON only: {\"label\": \"<one category, copied verbatim from the list>\"}. "
@@ -80,7 +81,7 @@ export async function classify(text: string, categories: string[]): Promise<stri
 /** positive | neutral | negative, or null. */
 export async function sentiment(text: string): Promise<string | null> {
   const t = text.slice(0, MAX_TEXT);
-  if (aiProviderName() === "fake") return fakeSentiment(t);
+  if (aiProviderName() === "fake") { reportFake("chat", t, 4); return fakeSentiment(t); }
   const out = await complete(
     "You rate the sentiment of a survey open-end. Reply with JSON only: {\"label\": \"positive\" | \"neutral\" | \"negative\"}.",
     `Response:\n"""${t}"""`,
@@ -111,7 +112,7 @@ export async function writeProbe(input: {
   language?: string;
 }): Promise<string | null> {
   const answer = input.answer.slice(0, MAX_TEXT);
-  if (aiProviderName() === "fake") return fakeProbe(answer, input.n, input.instruction);
+  if (aiProviderName() === "fake") { reportFake("chat", answer, 40); return fakeProbe(answer, input.n, input.instruction); }
   const history = input.transcript.map((t, i) => `Follow-up ${i + 1}: ${t.prompt}\nAnswer: ${t.answer || "(no answer)"}`).join("\n");
   const out = await complete(
     "You are a survey interviewer writing ONE short, neutral follow-up question (a probe) to learn more about a respondent's open-ended answer. "
@@ -142,7 +143,7 @@ export async function writeProbe(input: {
 export async function rephraseForSpeech(input: { questionText: string; instruction?: string; variation?: "low" | "medium" | "high"; style?: string }): Promise<string | null> {
   const text = stripTags(input.questionText).slice(0, MAX_TEXT);
   if (!text) return null;
-  if (aiProviderName() === "fake") return fakeRephrase(text, input.variation ?? "low");
+  if (aiProviderName() === "fake") { reportFake("chat", text, approxTokens(text)); return fakeRephrase(text, input.variation ?? "low"); }
   const bound = input.variation === "high" ? "You may restructure the sentence and split it in two." : input.variation === "medium" ? "Keep the sentence structure close to the original; you may simplify words." : "Change as little as possible: only what is needed for the ear.";
   const out = await complete(
     "You rewrite a survey question so it sounds natural when READ ALOUD by a voice interviewer. Keep exactly the same meaning, the same scale and the same terms; do not add, remove or reorder answer options; do not lead. "
@@ -201,7 +202,7 @@ export interface TranslateOptions {
 export async function translateBatch(items: TranslateItem[], opts: TranslateOptions): Promise<Record<string, string>> {
   const clean = items.filter((i) => i.text?.trim()).slice(0, 80);
   if (!clean.length) return {};
-  if (aiProviderName() === "fake") return Object.fromEntries(clean.map((i) => [i.key, fakeTranslate(i.text, opts)]));
+  if (aiProviderName() === "fake") { reportFake("chat", clean.map((i) => i.text).join(" "), approxTokens(clean.map((i) => i.text).join(" "))); return Object.fromEntries(clean.map((i) => [i.key, fakeTranslate(i.text, opts)])); }
   const glossary = (opts.glossary ?? []).map((g) => (g.source === g.target ? `- "${g.source}": keep exactly as written (do not translate)` : `- "${g.source}" → "${g.target}"`)).join("\n");
   const out = await complete(
     "You are a professional survey localization translator. Translate each string from the source language into the target language and regional variant, "
@@ -295,7 +296,7 @@ export interface SpeechOptions {
 export async function synthesizeSpeech(text: string, opts: SpeechOptions): Promise<{ bytes: Uint8Array; mimeType: string; durationMs: number } | null> {
   const t = stripTags(text).slice(0, 2000);
   if (!t) return null;
-  if (aiProviderName() === "fake") return fakeSpeech(t, opts.speed ?? 1);
+  if (aiProviderName() === "fake") { reportUsage({ kind: "tts", provider: "fake", model: "fake-tts", characters: t.length, requests: 1, estimated: true }); return fakeSpeech(t, opts.speed ?? 1); }
   const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
   const key = (process.env.AI_API_KEY ?? "").trim();
   if (!base) return null;
@@ -310,6 +311,7 @@ export async function synthesizeSpeech(text: string, opts: SpeechOptions): Promi
     if (!r.ok) { console.warn("[rescript:ai] tts provider error", JSON.stringify({ status: r.status })); return null; }
     const buf = new Uint8Array(await r.arrayBuffer());
     if (!buf.length) return null;
+    reportUsage({ kind: "tts", provider: "openai-compatible", model: (process.env.AI_TTS_MODEL ?? "").trim() || "tts-1", characters: t.length, requests: 1, estimated: false });
     const mime = opts.format === "wav" ? "audio/wav" : "audio/mpeg";
     return { bytes: buf, mimeType: mime, durationMs: Math.round((t.length / 15) * 1000 / (opts.speed ?? 1)) };
   } catch (e) {
@@ -371,8 +373,19 @@ export function parseJsonReply(content: string): { label?: unknown; question?: u
 
 /* ------------------------------------------------------- the http client */
 
+/** The model the Studio / runtime is configured to call. */
+export function aiModelName(): string {
+  return (process.env.AI_MODEL ?? "").trim() || "gpt-4o-mini";
+}
+
+/** A fake-provider call reports the shape of a real one so the meter can show what it WOULD cost. */
+function reportFake(kind: "chat", promptText: string, outputTokens: number): void {
+  reportUsage({ kind, provider: "fake", model: "fake", inputTokens: approxTokens(promptText) + 60, outputTokens, requests: 1, estimated: true });
+}
+
 async function complete(system: string, user: string, maxTokens = 160): Promise<{ label?: unknown; question?: unknown; translations?: unknown } | null> {
   const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
+  const model = aiModelName();
   const key = (process.env.AI_API_KEY ?? "").trim();
   if (!base) return null;
   const ctrl = new AbortController();
@@ -384,7 +397,7 @@ async function complete(system: string, user: string, maxTokens = 160): Promise<
       cache: "no-store",
       headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
       body: JSON.stringify({
-        model: (process.env.AI_MODEL ?? "").trim() || "gpt-4o-mini",
+        model,
         temperature: 0,
         max_tokens: maxTokens,
         response_format: { type: "json_object" },
@@ -395,8 +408,20 @@ async function complete(system: string, user: string, maxTokens = 160): Promise<
       console.warn("[rescript:ai] provider error", JSON.stringify({ status: r.status }));
       return null;
     }
-    const j = await r.json().catch(() => null) as { choices?: { message?: { content?: string } }[] } | null;
+    const j = await r.json().catch(() => null) as { choices?: { message?: { content?: string } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number }; model?: string } | null;
     const content = j?.choices?.[0]?.message?.content;
+    /*
+     * METERING. The provider's own count when it gives one (OpenAI-compatible
+     * `usage`), an estimate from the text when it does not — reported to
+     * whoever wrapped this call in `collectUsage`; nobody else notices.
+     */
+    const inTok = j?.usage?.prompt_tokens, outTok = j?.usage?.completion_tokens;
+    reportUsage({
+      kind: "chat", provider: "openai-compatible", model: j?.model || model,
+      inputTokens: typeof inTok === "number" ? inTok : approxTokens(system + user),
+      outputTokens: typeof outTok === "number" ? outTok : approxTokens(content ?? ""),
+      requests: 1, estimated: typeof inTok !== "number",
+    });
     if (!content) return null;
     return parseJsonReply(content);
   } catch (e) {
@@ -408,3 +433,4 @@ async function complete(system: string, user: string, maxTokens = 160): Promise<
 }
 
 export * from "./translation.js";
+export * from "./usage.js";

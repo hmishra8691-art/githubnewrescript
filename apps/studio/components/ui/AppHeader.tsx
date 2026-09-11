@@ -37,6 +37,7 @@ export function AppHeader({ active, user, onSignOut, crumbs }: {
               {!!user.unread && <a className="btn small" href="/profile" title="You have unread notifications"><Icon name="bell" size={14} /> {user.unread} new</a>}
               <a className="btn small" href="/profile">Profile</a>
               <a className="btn small" href="/security">Security</a>
+              <a className="btn small" href="/billing">My usage</a>
               {user.isPlatformAdmin && <a className="btn small" href="/admin">Administration</a>}
               <button className="btn small" data-testid="dash-signout" onClick={() => onSignOut?.()}>Sign out</button>
             </>
@@ -62,6 +63,7 @@ export function AppHeader({ active, user, onSignOut, crumbs }: {
                   <div className="menu-sep" />
                   <a className="menu-item" href="/profile" role="menuitem"><Icon name="user" size={15} /> Profile</a>
                   <a className="menu-item" href="/security" role="menuitem"><Icon name="shield" size={15} /> Security &amp; sessions</a>
+                  <a className="menu-item" href="/billing" role="menuitem"><Icon name="chart" size={15} /> My usage</a>
                   <a className="menu-item" href="/" role="menuitem"><Icon name="grid" size={15} /> Projects</a>
                   {user.isPlatformAdmin && <a className="menu-item" href="/admin" role="menuitem"><Icon name="settings" size={15} /> Administration</a>}
                   <div className="menu-sep" />
