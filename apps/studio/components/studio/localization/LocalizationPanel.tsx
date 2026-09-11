@@ -3,7 +3,7 @@ import React from "react";
 import type { Condition, LanguageConfig } from "@rescript/schema";
 import { LANGUAGE_LIBRARY, LANGUAGE_STATUSES, LANGUAGE_ROUTING_MODES, languageInfo } from "@rescript/schema";
 import { lintLocalization, lintLanguage, languageName, languageLocale, languageDirection, searchLanguages, translationRows, applyTranslationRows, languageReady, type LanguageReport, type LocalizationIssue } from "@rescript/engine";
-import { useLocalization, useEditorName, downloadBlob } from "./shared";
+import { useLocalization, useEditorName, useProviderStatus, downloadBlob, PROVIDER_NAMES } from "./shared";
 import { TranslationEditor } from "./TranslationEditor";
 import { GlossaryEditor } from "./GlossaryEditor";
 import { AudioStudio } from "./AudioStudio";
@@ -28,7 +28,7 @@ import { uid } from "../store";
  * keys; the survey's questions, ids, codes and logic are never touched here.
  */
 
-type View = "languages" | "translate" | "glossary" | "audio" | "qa" | "routing" | "files";
+type View = "languages" | "translate" | "glossary" | "audio" | "qa" | "routing" | "files" | "settings";
 
 export function LocalizationPanel() {
   const { s, loc, setLoc } = useLocalization();
@@ -68,7 +68,7 @@ export function LocalizationPanel() {
       </div>
 
       <div className="row" style={{ gap: 4, marginBottom: 12, flexWrap: "wrap" }} data-testid="loc-views">
-        {([["languages", "Languages"], ["translate", "Translate"], ["glossary", "Glossary"], ["audio", "Voice / Audio"], ["qa", "QA"], ["routing", "Routing"], ["files", "Import / Export"]] as [View, string][]).map(([k, label]) => (
+        {([["languages", "Languages"], ["translate", "Translate"], ["glossary", "Glossary"], ["audio", "Voice / Audio"], ["qa", "QA"], ["routing", "Routing"], ["files", "Import / Export"], ["settings", "Settings"]] as [View, string][]).map(([k, label]) => (
           <button key={k} type="button" className={`btn small ${view === k ? "primary" : ""}`} data-testid={`loc-view-${k}`} onClick={() => setView(k)}>
             {label}{k === "qa" && reports.some((r) => r.language !== loc.sourceLanguage && !r.ready) ? " ⚠" : ""}
           </button>
@@ -82,6 +82,7 @@ export function LocalizationPanel() {
       {view === "qa" && <QaReport reports={reports} onFix={goFix} />}
       {view === "routing" && <RoutingEditor />}
       {view === "files" && <ImportExport />}
+      {view === "settings" && <ProviderSettings />}
       <span hidden>{editor}</span>
     </div>
   );
@@ -96,7 +97,16 @@ function Languages({ reports, onTranslate, onQa }: { reports: LanguageReport[]; 
   const [picked, setPicked] = React.useState<Record<string, string>>({}); // code → locale tag
   const [customCode, setCustomCode] = React.useState("");
   const existing = new Set([loc.sourceLanguage, ...loc.languages.map((l) => l.code)]);
+  /* the provider's own language list — Google's, when Google is connected — so the picker is not a hard-coded subset */
+  const [providerLangs, setProviderLangs] = React.useState<{ code: string; name: string; nativeName: string; supported: boolean; source: string }[] | null>(null);
+  React.useEffect(() => {
+    if (!adding || providerLangs) return;
+    fetch("/api/translation/languages", { cache: "no-store" }).then(async (r) => { if (!r.ok) return; const j = await r.json() as { languages?: typeof providerLangs }; setProviderLangs(j.languages ?? []); }).catch(() => {});
+  }, [adding, providerLangs]);
+  const supportedByProvider = (code: string) => providerLangs?.find((l) => l.code === code)?.supported;
   const results = searchLanguages(query).filter((l) => !existing.has(l.code));
+  const q = query.trim().toLowerCase();
+  const providerOnly = (providerLangs ?? []).filter((l) => l.source === "provider" && !existing.has(l.code) && (!q || l.name.toLowerCase().includes(q) || l.code === q));
 
   const addPicked = () => {
     const entries = Object.entries(picked);
@@ -136,19 +146,25 @@ function Languages({ reports, onTranslate, onQa }: { reports: LanguageReport[]; 
         <div className="card" style={{ padding: 12, marginBottom: 12 }} data-testid="loc-add-panel">
           <div className="row" style={{ gap: 8, marginBottom: 8 }}>
             <input className="input" style={{ width: 300 }} autoFocus placeholder="Search a language or country — Hindi, India, Spanish, Mexico…" value={query} data-testid="loc-lang-search" onChange={(e) => setQuery(e.target.value)} />
-            <span className="muted" style={{ fontSize: 12 }}>{results.length} of {LANGUAGE_LIBRARY.length} languages · pick the country / locale beside each</span>
+            <span className="muted" style={{ fontSize: 12 }}>{results.length + providerOnly.length} languages{providerLangs ? ` · ${providerLangs.filter((l) => l.supported).length} supported by the provider` : ""} · pick the country / locale beside each</span>
           </div>
           <div className="loc-lang-grid">
             {results.slice(0, 60).map((l) => (
               <label key={l.code} className={`loc-lang-pick${picked[l.code] ? " on" : ""}`} data-testid={`loc-pick-${l.code}`}>
                 <input type="checkbox" checked={!!picked[l.code]} onChange={(e) => setPicked((p) => { const n = { ...p }; if (e.target.checked) n[l.code] = l.locales[0].tag; else delete n[l.code]; return n; })} />
-                <span className="loc-lang-name">{l.name} <span className="muted">{l.nativeName}{l.direction === "rtl" ? " · RTL" : ""}</span></span>
+                <span className="loc-lang-name">{l.name} <span className="muted">{l.nativeName}{l.direction === "rtl" ? " · RTL" : ""}</span>{supportedByProvider(l.code) === false && <span className="chip warn" style={{ marginLeft: 6 }} title="The connected provider cannot translate into this language — it can still be added and translated by hand or by import">manual only</span>}</span>
                 {picked[l.code] && l.locales.length > 1 && (
                   <select className="select" style={{ width: 210 }} value={picked[l.code]} data-testid={`loc-pick-locale-${l.code}`} onChange={(e) => setPicked((p) => ({ ...p, [l.code]: e.target.value }))} onClick={(e) => e.stopPropagation()}>
                     {l.locales.map((x) => <option key={x.tag} value={x.tag}>{x.countryName} → {x.name} ({x.tag})</option>)}
                   </select>
                 )}
                 {picked[l.code] && l.locales.length === 1 && <span className="muted" style={{ fontSize: 11.5 }}>{l.locales[0].countryName} → {l.locales[0].name}</span>}
+              </label>
+            ))}
+            {providerOnly.slice(0, 40).map((l) => (
+              <label key={l.code} className={`loc-lang-pick${picked[l.code] ? " on" : ""}`} data-testid={`loc-pick-${l.code}`} title="Offered by the connected translation provider">
+                <input type="checkbox" checked={!!picked[l.code]} onChange={(e) => setPicked((p) => { const n = { ...p }; if (e.target.checked) n[l.code] = l.code; else delete n[l.code]; return n; })} />
+                <span className="loc-lang-name">{l.name} <span className="muted">{l.code} · provider</span></span>
               </label>
             ))}
           </div>
@@ -386,6 +402,83 @@ function ImportExport() {
         <label className="btn small primary" style={{ cursor: "pointer" }}>Import file…<input type="file" accept=".xlsx,.csv,.json" style={{ display: "none" }} data-testid="loc-import-file" onChange={(e) => { const f = e.target.files?.[0]; if (f) void importFile(f); e.target.value = ""; }} /></label>
       </div>
       {note && <div className="muted" style={{ fontSize: 12.5 }} data-testid="loc-import-note">{note}</div>}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ settings */
+
+/**
+ * TRANSLATION PROVIDER SETTINGS. The provider and its credentials live in
+ * the Studio's SERVER environment — `GOOGLE_TRANSLATE_API_KEY` for Google
+ * Cloud Translation (the primary), `AI_API_URL` / `AI_API_KEY` for the AI
+ * model, `TRANSLATION_PROVIDER` to pin one — so this card can only report
+ * what is connected; it never shows, stores or transmits a key, and the
+ * survey JSON never carries one. What IS the survey's to decide sits here
+ * too: source language, translation mode and whether the customer's
+ * translation memory is consulted before the provider.
+ */
+function ProviderSettings() {
+  const { loc, setLoc } = useLocalization();
+  const { status, loading, reload } = useProviderStatus();
+  const [probe, setProbe] = React.useState<string | null>(null);
+  const [probing, setProbing] = React.useState(false);
+  const test = async () => {
+    setProbing(true); setProbe(null);
+    try {
+      const r = await fetch("/api/translation/languages", { cache: "no-store" });
+      const j = await r.json().catch(() => ({})) as { languages?: { supported: boolean; source: string }[]; error?: string };
+      if (!r.ok) { setProbe(j.error ?? `The provider could not be reached (${r.status}).`); return; }
+      const supported = (j.languages ?? []).filter((l) => l.supported).length;
+      setProbe(`Connected — ${supported} languages available from the provider.`);
+    } catch { setProbe("Could not reach the Studio."); } finally { setProbing(false); }
+  };
+  const p = status?.provider;
+  return (
+    <div data-testid="loc-settings">
+      <div className="card" style={{ padding: 12, marginBottom: 10 }} data-testid="loc-provider-card" data-connected={p?.connected ? "1" : "0"} data-provider={p?.id ?? ""}>
+        <div className="flabel">Translation provider</div>
+        <div className="row" style={{ gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <strong style={{ fontSize: 15 }} data-testid="loc-provider-name">{loading ? "…" : p?.connected ? p.name : "Not configured"}</strong>
+          <span className={`chip ${p?.connected ? "on" : "warn"}`} data-testid="loc-provider-connected">{loading ? "checking…" : p?.connected ? "Connected" : "Not connected"}</span>
+          {status?.pinned && <span className="chip" title="TRANSLATION_PROVIDER pins the provider">pinned: {status.pinned}</span>}
+          <span className="grow" />
+          <button type="button" className="btn small" data-testid="loc-provider-test" disabled={probing || !p?.connected} onClick={test}>{probing ? "…" : "Test connection"}</button>
+          <button type="button" className="btn small" onClick={reload}>Refresh</button>
+        </div>
+        {probe && <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }} data-testid="loc-provider-probe">{probe}</div>}
+        <div className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>
+          Credentials are read from the Studio server\'s environment and are never shown here, stored in a survey, or sent to a browser.
+          {" "}<code>GOOGLE_TRANSLATE_API_KEY</code> connects Google Cloud Translation (primary); <code>AI_API_URL</code> + <code>AI_API_KEY</code> connect the AI language model as an alternative; <code>TRANSLATION_PROVIDER=google|ai</code> pins one when both are set.
+        </div>
+        {status && (
+          <div className="row" style={{ gap: 6, flexWrap: "wrap", marginTop: 6, fontSize: 12 }}>
+            <span className={`chip ${status.candidates.google ? "on" : ""}`}>Google Cloud Translation {status.candidates.google ? "· key present" : "· no key"}</span>
+            <span className={`chip ${status.candidates.ai ? "on" : ""}`}>AI language model {status.candidates.ai ? "· configured" : "· not configured"}</span>
+            {status.candidates.fake && <span className="chip">fake provider (testing)</span>}
+            <span className="chip" data-testid="loc-cache-backend">Cache: {status.cache.backend === "database" ? "database (per workspace) + memory" : "memory only"}</span>
+          </div>
+        )}
+      </div>
+      <div className="card" style={{ padding: 12 }}>
+        <div className="flabel">This survey</div>
+        <div className="row" style={{ gap: 12, flexWrap: "wrap" }}>
+          <label className="f" style={{ width: 220 }}><span>Default source language</span>
+            <select className="select" value={loc.sourceLanguage} onChange={(e) => setLoc((cur) => ({ ...cur, sourceLanguage: e.target.value, languages: cur.languages.filter((l) => l.code !== e.target.value) }))}>
+              {LANGUAGE_LIBRARY.map((l) => <option key={l.code} value={l.code}>{l.name} — {l.nativeName}</option>)}
+            </select></label>
+          <label className="f" style={{ width: 260 }}><span>Default translation mode</span>
+            <select className="select" data-testid="loc-settings-mode" value={loc.mode} onChange={(e) => setLoc((cur) => ({ ...cur, mode: e.target.value as typeof cur.mode }))}>
+              <option value="ai">Automatic — the provider translates, people review</option>
+              <option value="hybrid">Hybrid — provider first, then review (recommended)</option>
+              <option value="manual">Manual — people enter every string</option>
+            </select></label>
+          <label className="row" style={{ gap: 4, fontSize: 13, alignSelf: "end" }} title="Reuse the workspace\'s translation memory (approved wordings and earlier machine results) before asking the provider — fewer calls, consistent terms.">
+            <input type="checkbox" data-testid="loc-cache-enabled" checked={loc.cache !== false} onChange={(e) => setLoc((cur) => ({ ...cur, cache: e.target.checked }))} /> translation cache enabled
+          </label>
+          {loc.provider && <span className="muted" style={{ fontSize: 12, alignSelf: "end" }}>Last machine translations by {PROVIDER_NAMES[loc.provider] ?? loc.provider}</span>}
+        </div>
+      </div>
     </div>
   );
 }

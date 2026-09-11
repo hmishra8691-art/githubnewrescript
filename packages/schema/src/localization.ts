@@ -180,7 +180,7 @@ export const LanguageConfig = z.object({
 });
 export type LanguageConfig = z.infer<typeof LanguageConfig>;
 
-export const TRANSLATION_STATUSES = ["not_translated", "ai", "edited", "reviewed", "approved"] as const;
+export const TRANSLATION_STATUSES = ["not_translated", "ai", "edited", "reviewed", "approved", "outdated"] as const;
 export const TRANSLATION_ORIGINS = ["ai", "manual", "import", "glossary", "memory"] as const;
 
 /** One translated string, with where it came from and how it changed. */
@@ -279,5 +279,9 @@ export const Localization = z.object({
   routing: LocalizationRouting.default({}),
   /** the translation mode the team works in — informational, drives the editor's defaults */
   mode: z.enum(["ai", "manual", "hybrid"]).default("hybrid"),
+  /** reuse cached translations (the customer's translation memory) before asking the provider */
+  cache: z.boolean().default(true),
+  /** the provider that produced the machine translations — informational (google | llm | fake) */
+  provider: z.string().optional(),
 });
 export type Localization = z.infer<typeof Localization>;

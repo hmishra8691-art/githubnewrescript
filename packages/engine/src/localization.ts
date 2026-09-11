@@ -521,6 +521,39 @@ export function recordTranslation(loc: Localization, lang: string, key: string, 
   return { ...loc, translations: { ...loc.translations, [lang]: table } };
 }
 
+/**
+ * MARK OUTDATED: every translation whose source text changed since it was
+ * made gets status "outdated" — the text is kept and still shown (better
+ * than the source language) until it is re-translated or confirmed, and it
+ * is never overwritten silently. Returns the same object when nothing
+ * changed, so callers can store only real changes.
+ */
+export function markOutdated(def: SurveyDefinition): Localization {
+  const loc = effectiveLocalization(def);
+  const elements = translatableElements(def);
+  let changed = false;
+  const translations: Localization["translations"] = {};
+  for (const [lang, table] of Object.entries(loc.translations)) {
+    const next: Record<string, TranslationEntry> = { ...table };
+    for (const el of elements) {
+      const t = next[el.key];
+      if (!t || t.status === "not_translated" || t.status === "outdated" || !t.sourceHash) continue;
+      if (t.sourceHash !== textHash(el.source)) { next[el.key] = { ...t, status: "outdated" }; changed = true; }
+    }
+    translations[lang] = next;
+  }
+  return changed ? { ...loc, translations } : loc;
+}
+
+/** Confirm an outdated translation still fits the new source — status back to edited, hash refreshed. */
+export function confirmTranslation(loc: Localization, lang: string, key: string, source: string, by?: string): Localization {
+  const table = { ...(loc.translations[lang] ?? {}) };
+  const prev = table[key];
+  if (!prev) return loc;
+  table[key] = { ...prev, status: "edited", sourceHash: textHash(source), updatedAt: new Date().toISOString(), updatedBy: by };
+  return { ...loc, translations: { ...loc.translations, [lang]: table } };
+}
+
 /** Change only the status (review / approve) — a version is not a new text. */
 export function setTranslationStatus(loc: Localization, lang: string, key: string, status: TranslationEntry["status"], by?: string): Localization {
   const table = { ...(loc.translations[lang] ?? {}) };
@@ -639,14 +672,14 @@ export function lintLanguage(def: SurveyDefinition, lang: string): LanguageRepor
     if (!hasLetters(tx) && hasLetters(el.source)) issues.push({ language: lang, kind: "empty", key: el.key, label: el.label, message: "The translation has no words in it.", blocking: el.mandatory, questionId: el.questionId });
     else if (strip(tx) === strip(el.source) && hasLetters(el.source) && strip(el.source).length > 2 && !/^\{\{[^}]+\}\}$/.test(strip(el.source)) && !/^[\d\s.,%$€£+-]+$/.test(strip(el.source)))
       issues.push({ language: lang, kind: "untranslated", key: el.key, label: el.label, message: "Identical to the source text — still in the original language?", blocking: false, questionId: el.questionId });
-    if (t.sourceHash && t.sourceHash !== textHash(el.source)) issues.push({ language: lang, kind: "stale_source", key: el.key, label: el.label, message: "The source text was edited after this was translated.", blocking: el.mandatory, questionId: el.questionId });
+    if (t.status === "outdated" || (t.sourceHash && t.sourceHash !== textHash(el.source))) issues.push({ language: lang, kind: "stale_source", key: el.key, label: el.label, message: "Outdated — the source text was edited after this was translated. Re-translate or confirm it.", blocking: el.mandatory, questionId: el.questionId });
     const a = tokens(el.source), b = tokens(tx);
     if (a.join("|") !== b.join("|")) issues.push({ language: lang, kind: "placeholder_mismatch", key: el.key, label: el.label, message: `Piping / placeholders differ: source has ${a.length ? a.join(" ") : "none"}, translation has ${b.length ? b.join(" ") : "none"}.`, blocking: true, questionId: el.questionId });
     const ta = tags(el.source), tb = tags(tx);
     if (ta.join("|") !== tb.join("|")) issues.push({ language: lang, kind: "html_mismatch", key: el.key, label: el.label, message: "HTML tags differ from the source — formatting may break.", blocking: false, questionId: el.questionId });
     if (/<[^>]*$/.test(tx) || (tx.match(/</g) ?? []).length !== (tx.match(/>/g) ?? []).length) issues.push({ language: lang, kind: "html_mismatch", key: el.key, label: el.label, message: "Unbalanced HTML in the translation.", blocking: true, questionId: el.questionId });
     if (strip(tx).length > 40 && strip(tx).length > strip(el.source).length * 2.2 && (el.kind === "option" || el.kind === "button" || el.kind === "column" || el.kind === "scale_label")) issues.push({ language: lang, kind: "overflow", key: el.key, label: el.label, message: `Much longer than the source (${strip(tx).length} vs ${strip(el.source).length} characters) — may overflow its control.`, blocking: false, questionId: el.questionId });
-    if (t.status === "ai" || t.status === "edited") issues.push({ language: lang, kind: "not_approved", key: el.key, label: el.label, message: `${t.status === "ai" ? "AI translation" : "Edited"} — not reviewed yet.`, blocking: false, questionId: el.questionId });
+    if (t.status === "ai" || t.status === "edited") issues.push({ language: lang, kind: "not_approved", key: el.key, label: el.label, message: `${t.status === "ai" ? "Machine translation" : "Edited"} — not reviewed yet.`, blocking: false, questionId: el.questionId });
     const src = strip(el.source).toLowerCase(), tr = strip(tx).toLowerCase();
     if (!bySource.has(src)) bySource.set(src, new Set());
     bySource.get(src)!.add(tr);

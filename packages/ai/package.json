@@ -16,7 +16,8 @@
     "test": "node --test dist/*.test.js"
   },
   "dependencies": {
-    "@rescript/engine": "workspace:*"
+    "@rescript/engine": "workspace:*",
+    "@rescript/schema": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",

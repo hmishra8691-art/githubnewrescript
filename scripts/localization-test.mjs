@@ -97,10 +97,13 @@ await page.waitForSelector('[data-testid="loc-table"]');
 for (const l of ["hi", "es", "ar"]) if (!(await page.isChecked(`[data-testid="loc-col-${l}"]`))) await page.click(`[data-testid="loc-col-${l}"]`);
 const rowCount = (await page.$$('[data-testid="loc-row"]')).length;
 assert.ok(rowCount > 30, `every element has a row (${rowCount})`);
-// edit hi Poor by hand, approve, edit again → history
+// edit hi Poor by hand, approve, edit again → history. The wording carries a per-run suffix: an approved wording is
+// remembered by the server's translation memory, so the next run's "Translate all" would already return it and a
+// same-text edit is (correctly) a no-op.
+const RUN = Date.now().toString(36).slice(-4);
 await page.selectOption('[data-testid="loc-filter-question"]', "q1");
 const poorRow = page.locator('[data-testid="loc-row"][data-key="q:q1:opt:3"]');
-await poorRow.locator('[data-testid="loc-input-hi"]').fill("बुरा");
+await poorRow.locator('[data-testid="loc-input-hi"]').fill(`बुरा ${RUN}`);
 await page.waitForTimeout(200);
 assert.equal(await poorRow.locator('[data-testid="loc-status-hi"]').textContent(), "Manually edited");
 await poorRow.locator('[data-testid="loc-approve-hi"]').click();
@@ -109,11 +112,71 @@ await poorRow.locator('[data-testid="loc-input-hi"]').fill("ख़राब");
 await page.waitForTimeout(200);
 assert.equal(await poorRow.locator('[data-testid="loc-status-hi"]').textContent(), "Manually edited", "an edit to an approved text drops the approval");
 await poorRow.locator('[data-testid="loc-history-hi"]').click();
-assert.match(await page.textContent('[data-testid="loc-history"]'), /बुरा/, "the previous version is kept");
+assert.match(await page.textContent('[data-testid="loc-history"]'), new RegExp(`बुरा ${RUN}`), "the previous version is kept");
 def = await h.readDef();
 assert.equal(def.localization.translations.hi["q:q1:opt:3"].version, 3);
-assert.equal(def.localization.translations.hi["q:q1:opt:3"].history[0].text, "बुरा");
+assert.equal(def.localization.translations.hi["q:q1:opt:3"].history[0].text, `बुरा ${RUN}`);
 console.log("  ok   3 languages translated; statuses AI → edited → approved → edited; history v3 with previous text");
+
+console.log("\nSTUDIO — Provider settings: which provider is connected, never the key; cache backend");
+await toView("settings");
+await page.waitForSelector('[data-testid="loc-provider-card"][data-connected="1"]');
+assert.equal(await page.getAttribute('[data-testid="loc-provider-card"]', "data-provider"), "fake", "the fake provider is what this Studio has (AI_API_URL=fake:)");
+assert.equal(await page.textContent('[data-testid="loc-provider-connected"]'), "Connected");
+await page.click('[data-testid="loc-provider-test"]');
+await page.waitForSelector('[data-testid="loc-provider-probe"]');
+assert.match(await page.textContent('[data-testid="loc-provider-probe"]'), /Connected — \d+ languages available/);
+assert.ok(!/sk-|key=|AIza/.test(await page.textContent('[data-testid="loc-settings"]')), "no credential anywhere on the page");
+{
+  const st = await (await fetch(`${STUDIO}/api/translation/status`)).json();
+  assert.equal(st.provider.id, "fake");
+  assert.ok(!JSON.stringify(st).match(/AIza|sk-ant|api_key|apiKey/i), "the status route carries no secret");
+}
+console.log("  ok   provider card: fake · Connected · test connection; nothing secret");
+
+console.log("\nSTUDIO — Translation memory: the same source text already reviewed is reused without the provider; an edited source becomes OUTDATED, re-translate clears it");
+// Q2's Spanish "Other"-like reuse: add a question whose option repeats an approved source
+await toView("translate");
+if (!(await page.isChecked('[data-testid="loc-col-es"]'))) await page.click('[data-testid="loc-col-es"]');
+await page.selectOption('[data-testid="loc-filter-question"]', "q1");
+await page.locator('[data-testid="loc-row"][data-key="q:q1:opt:1"] [data-testid="loc-approve-es"]').click();
+await page.waitForTimeout(150);
+// a new question that says "Great" again
+await h.setQuestion("q3", (q, d) => { d.questions.push({ id: "q4", code: "Q4", variableName: "Q4", type: "single_select", text: "Overall?", options: [{ code: 1, label: "Great" }, { code: 2, label: "Awful" }] }); d.flow[1].questionIds.push("q4"); });
+await toView("translate");
+if (!(await page.isChecked('[data-testid="loc-col-es"]'))) await page.click('[data-testid="loc-col-es"]');
+await page.selectOption('[data-testid="loc-filter-question"]', "q4");
+await page.waitForSelector('[data-testid="loc-row"][data-key="q:q4:opt:1"]');
+await page.click('[data-testid="loc-translate-all"]');
+await page.waitForFunction(() => [...document.querySelectorAll('[data-testid^="loc-progress-"]')].every((c) => /100%|up to date/.test(c.textContent)), null, { timeout: 60000 });
+await page.waitForTimeout(200);
+def = await h.readDef();
+assert.equal(def.localization.translations.es["q:q4:opt:1"].text, "Excelente");
+assert.equal(def.localization.translations.es["q:q4:opt:1"].origin, "memory", "the approved wording of Q1's 'Great' was reused for Q4 without asking the provider");
+assert.equal(def.localization.translations.es["q:q4:opt:2"].origin, "ai", "the new string went to the provider");
+// the source of Q1 changes → its translations are OUTDATED, kept and shown
+await h.setQuestion("q1", (q) => { q.text = "How was your latest visit to Miures?"; });
+await toView("translate");
+await page.waitForTimeout(300);
+def = await h.readDef();
+assert.equal(def.localization.translations.es["q:q1:text"].status, "outdated");
+assert.equal(def.localization.translations.hi["q:q1:text"].status, "outdated");
+assert.equal(def.localization.translations.es["q:q1:text"].text, "[es] How was your visit to Miures?", "the old translation is kept, not deleted");
+assert.equal(def.localization.translations.es["q:q1:opt:1"].status, "approved", "an approved option is untouched — only the edited element is outdated");
+await toView("qa");
+await page.waitForSelector('[data-testid="qa-es"]');
+assert.ok(await page.$('[data-testid="qa-es"] [data-testid="qa-issue"][data-kind="stale_source"][data-blocking="1"]'), "QA lists the outdated element as blocking");
+await toView("translate");
+for (const l of ["hi", "es", "ar"]) if (!(await page.isChecked(`[data-testid="loc-col-${l}"]`))) await page.click(`[data-testid="loc-col-${l}"]`);
+assert.match(await page.textContent('[data-testid="loc-retranslate-outdated"]'), /Re-translate outdated \(1\)/);
+await page.click('[data-testid="loc-retranslate-outdated"]');
+await page.waitForFunction(() => [...document.querySelectorAll('[data-testid^="loc-progress-"]')].every((c) => /100%|up to date/.test(c.textContent)), null, { timeout: 60000 });
+await page.waitForTimeout(200);
+def = await h.readDef();
+assert.equal(def.localization.translations.es["q:q1:text"].status, "ai");
+assert.equal(def.localization.translations.es["q:q1:text"].text, "[es] How was your latest visit to Miures?");
+assert.equal(def.localization.translations.es["q:q1:text"].history[0].text, "[es] How was your visit to Miures?", "the outdated version is in the history");
+console.log("  ok   memory reuse (origin: memory); source edit → OUTDATED (kept); QA blocks; Re-translate outdated → fresh machine translation with history");
 
 console.log("\nSTUDIO — Glossary: a do-not-translate brand and a preferred term, enforced on existing translations");
 await toView("glossary");
@@ -126,7 +189,7 @@ await page.locator('[data-testid="gl-row"][data-source="visit"] [data-testid="gl
 await page.click('[data-testid="gl-apply"]');
 await page.waitForSelector('[data-testid="gl-note"]');
 def = await h.readDef();
-assert.equal(def.localization.translations.hi["q:q1:text"].text, "[hi] How was your यात्रा to Miures?", "the preferred term replaced the word; the brand stayed");
+assert.equal(def.localization.translations.hi["q:q1:text"].text, "[hi] How was your latest यात्रा to Miures?", "the preferred term replaced the word; the brand stayed");
 assert.equal(def.localization.translations.hi["q:q1:text"].origin, "glossary");
 assert.equal(def.localization.glossary.length, 2);
 console.log("  ok   glossary applied across the survey and recorded as versioned edits");
@@ -224,7 +287,7 @@ const [download] = await Promise.all([page.waitForEvent("download"), page.click(
 const csvPath = await download.path();
 const csv = fs.readFileSync(csvPath, "utf8");
 assert.match(csv.split("\n")[0], /^﻿?Element ID,Question ID,Question,Element,Source Language,Target Language,Source Text,Translation,Status,Audio URL/);
-assert.ok(csv.includes("q:q1:opt:1,q1,Q1,Q1 · option 1,en,es,Great,Excelente,ai,"), "a row per element and language, with status");
+assert.ok(csv.includes("q:q1:opt:1,q1,Q1,Q1 · option 1,en,es,Great,Excelente,approved,"), "a row per element and language, with status (approved in the memory section above)");
 const tmp = path.join(os.tmpdir(), `loc-import-${Date.now()}.json`);
 fs.writeFileSync(tmp, JSON.stringify({ rows: [
   { elementKey: "q:q1:opt:2", targetLanguage: "es", translation: "Regular", status: "reviewed" },
@@ -257,7 +320,7 @@ const text = (pv, sel) => pv.textContent(sel);
 console.log("\nRUNTIME — ?lang=es serves Spanish: texts, options, buttons; SURVEY_LANGUAGE stored; ids and codes unchanged");
 let pv = await openLang("es");
 assert.equal(await pv.getAttribute('[data-testid="rs-language"]', "value") ?? await pv.inputValue('[data-testid="rs-language"]'), "es");
-assert.match(await text(pv, '[data-qid="q1"]'), /\[es\] How was your visit to Miures\?/);
+assert.match(await text(pv, '[data-qid="q1"]'), /\[es\] How was your latest visit to Miures\?/);
 assert.match(await text(pv, '[data-qid="q1"]'), /Excelente/);
 assert.match(await text(pv, '[data-qid="q1"]'), /Regular/, "the imported, reviewed translation");
 assert.equal(await text(pv, '[data-testid="rs-next"]'), "Siguiente");

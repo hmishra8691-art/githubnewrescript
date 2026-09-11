@@ -406,3 +406,5 @@ async function complete(system: string, user: string, maxTokens = 160): Promise<
     clearTimeout(timer);
   }
 }
+
+export * from "./translation.js";
