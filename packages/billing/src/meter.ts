@@ -6,8 +6,8 @@ import {
   type BillableEventDef, type Rate, type UsageCategory,
 } from "./registry.js";
 import {
-  READ_ONLY_MESSAGE, availableBalance, walletStateFor, transferableBalance,
-  type CreditRequest, type CreditTransfer, type Environment, type LedgerEntry, type LedgerKind, type Reservation, type UsageEvent, type Wallet,
+  READ_ONLY_MESSAGE, PROJECT_FROZEN_MESSAGE, availableBalance, walletStateFor, transferableBalance, projectHeadroom,
+  type CreditRequest, type CreditTransfer, type Environment, type LedgerEntry, type LedgerKind, type ProjectSpending, type Reservation, type SpendingMode, type UsageEvent, type Wallet,
 } from "./wallet.js";
 
 /**
@@ -55,8 +55,12 @@ export interface UsageSpec {
   metadata?: Record<string, unknown>;
 }
 
-export type MeterRefusalReason = "read_only" | "insufficient_balance" | "no_wallet" | "suspended" | "store_error";
-export interface MeterRefusal { ok: false; reason: MeterRefusalReason; message: string; wallet?: Wallet | null; estimate?: ChargeBreakdown }
+export type MeterRefusalReason = "read_only" | "insufficient_balance" | "no_wallet" | "suspended" | "store_error" | "project_limit";
+export interface MeterRefusal {
+  ok: false; reason: MeterRefusalReason; message: string; wallet?: Wallet | null; estimate?: ChargeBreakdown;
+  /** present when the PROJECT's own policy refused, so a caller can say which limit and offer to raise it */
+  spending?: ProjectSpending | null;
+}
 
 export interface Priced {
   breakdown: ChargeBreakdown;
@@ -98,8 +102,15 @@ export interface MeterStore {
   listWallets(filter: { customerId?: string }): Promise<Wallet[]>;
   setWallet(id: string, patch: Partial<Pick<Wallet, "state" | "sharedWalletId" | "overdraftEnabled" | "overdraftLimit">>): Promise<Wallet>;
 
-  /** Atomically hold `amount` if `balance − reserved − amount ≥ floor`. */
-  reserve(input: { walletId: string; customerId: string; surveyId: string | null; userId: string | null; eventType: string; environment: Environment; estimatedCost: number; amount: number; floor: number; ttlMinutes: number }): Promise<{ ok: true; reservation: Reservation; wallet: Wallet } | { ok: false; wallet: Wallet }>;
+  /**
+   * Atomically hold `amount` if the WALLET has room (`balance − reserved −
+   * amount ≥ floor`) AND the PROJECT has room under its own policy. Both
+   * tests are made under the same locks, in the same transaction, because a
+   * limit checked anywhere else is a limit two concurrent charges walk past.
+   * The refusal says which test failed: "this project has reached its limit"
+   * and "your wallet is empty" ask the person to do different things.
+   */
+  reserve(input: { walletId: string; customerId: string; surveyId: string | null; userId: string | null; eventType: string; environment: Environment; estimatedCost: number; amount: number; floor: number; ttlMinutes: number }): Promise<{ ok: true; reservation: Reservation; wallet: Wallet; spending?: ProjectSpending | null } | { ok: false; wallet: Wallet; reason?: "insufficient_balance" | "project_limit"; spending?: ProjectSpending | null; headroom?: number | null }>;
   /** Atomically debit the actual charge, release the hold, write the usage event and its ledger line, recompute the state. */
   settle(reservationId: string, event: UsageEventInput, readOnlyThreshold: number): Promise<{ event: UsageEvent; wallet: Wallet }>;
   release(reservationId: string, status?: "released" | "expired"): Promise<void>;
@@ -116,6 +127,12 @@ export interface MeterStore {
   transfer(input: { sourceWalletId: string; destinationWalletId: string; amount: number; reason: string | null; note: string | null; by: string | null; reversalOf?: string | null }, readOnlyThreshold: number): Promise<{ ok: true; transfer: CreditTransfer; source: Wallet; destination: Wallet } | { ok: false; reason: "insufficient_available" | "same_wallet" | "unknown_wallet" | "already_reversed"; available?: number }>;
   listTransfers(filter: TransferFilter): Promise<CreditTransfer[]>;
   getTransfer(id: string): Promise<CreditTransfer | null>;
+
+  /** This project's spending policy and what it has spent. `create` writes the default row. */
+  getSpending(surveyId: string, customerId: string, opts?: { create?: boolean }): Promise<ProjectSpending | null>;
+  listSpending(filter: { customerId?: string; surveyIds?: string[] }): Promise<ProjectSpending[]>;
+  /** Change the policy. Moves no money, and unfreezes a project that now has room. */
+  setSpending(surveyId: string, customerId: string, patch: { mode: SpendingMode; budgetLimit: number | null }): Promise<ProjectSpending>;
 
   createCreditRequest(input: Omit<CreditRequest, "id" | "status" | "decidedBy" | "decidedAt" | "decidedAmount" | "adminNote" | "createdAt">): Promise<CreditRequest>;
   listCreditRequests(filter: { customerId?: string; surveyId?: string; userId?: string; status?: CreditRequest["status"] }): Promise<CreditRequest[]>;
@@ -181,15 +198,50 @@ export class Meter {
     return own;
   }
 
-  /** May this project run a billable operation right now? (the read-only gate for things that are not metered per call, e.g. exports) */
-  async check(ctx: Pick<MeterContext, "customerId" | "surveyId">): Promise<{ allowed: boolean; state: Wallet["state"] | "none"; wallet: Wallet | null; message: string }> {
+  /**
+   * May this project run a billable operation right now? (the read-only gate
+   * for things that are not metered per call, e.g. exports)
+   *
+   * Two ways to be stopped, and they are reported apart: the WALLET is empty
+   * or suspended, or the PROJECT has spent its own limit while the wallet is
+   * perfectly healthy. The second is the whole point of per-project budgets,
+   * and calling it "your wallet has run out" would send the person to top up
+   * a wallet that has $499 in it.
+   */
+  async check(ctx: Pick<MeterContext, "customerId" | "surveyId">): Promise<{
+    allowed: boolean; state: Wallet["state"] | "none"; wallet: Wallet | null; message: string;
+    reason?: "read_only" | "suspended" | "project_limit"; spending?: ProjectSpending | null;
+  }> {
     const cfg = await this.config();
     const wallet = await this.walletFor(ctx, true).catch(() => null);
     if (!wallet) return { allowed: true, state: "none", wallet: null, message: "" };
     const state = walletStateFor(wallet.balance, cfg, wallet.state);
-    if (state === "suspended") return { allowed: false, state, wallet, message: "This project's wallet is suspended. Please contact your administrator." };
-    if (state === "read_only") return { allowed: false, state, wallet, message: READ_ONLY_MESSAGE };
-    return { allowed: true, state, wallet, message: "" };
+    if (state === "suspended") return { allowed: false, state, wallet, reason: "suspended", message: "This project's wallet is suspended. Please contact your administrator." };
+    if (state === "read_only") return { allowed: false, state, wallet, reason: "read_only", message: READ_ONLY_MESSAGE };
+    const spending = ctx.surveyId ? await this.spendingFor(ctx.surveyId, ctx.customerId).catch(() => null) : null;
+    if (spending?.state === "frozen") {
+      return { allowed: false, state, wallet, reason: "project_limit", spending, message: PROJECT_FROZEN_MESSAGE };
+    }
+    return { allowed: true, state, wallet, spending, message: "" };
+  }
+
+  /* -------------------------------------------------- spending policies */
+
+  /** This project's policy and what it has spent. Created on demand, as `shared`. */
+  async spendingFor(surveyId: string, customerId: string): Promise<ProjectSpending | null> {
+    return this.store.getSpending(surveyId, customerId, { create: true });
+  }
+
+  /**
+   * Change what a project may spend. MOVES NO MONEY — that is the model: a
+   * budget is permission against the owner's wallet, not a pot inside the
+   * project — and raising a limit starts a frozen project again in the same
+   * operation, because a person who has just granted more room should not
+   * have to go and find a separate switch.
+   */
+  async setSpending(surveyId: string, customerId: string, patch: { mode: SpendingMode; budgetLimit: number | null }): Promise<ProjectSpending> {
+    const limit = patch.mode === "budget" ? (typeof patch.budgetLimit === "number" && Number.isFinite(patch.budgetLimit) ? money6(Math.max(0, patch.budgetLimit)) : 0) : null;
+    return this.store.setSpending(surveyId, customerId, { mode: patch.mode, budgetLimit: limit });
   }
 
   /* ------------------------------------------------------------ the flow */
@@ -218,6 +270,21 @@ export class Meter {
       estimatedCost: priced.breakdown.actualCost, amount: charge, floor, ttlMinutes: cfg.reservationTtlMinutes,
     });
     if (!r.ok) {
+      /*
+       * WHICH LIMIT STOPPED THIS. The wallet being empty and the project
+       * having reached its own budget are different problems with different
+       * remedies — one needs money, the other needs permission — and a
+       * researcher told the wrong one goes looking in the wrong place.
+       */
+      if (r.reason === "project_limit") {
+        const room = projectHeadroom(r.spending);
+        return {
+          ok: false, reason: "project_limit", wallet: r.wallet, spending: r.spending ?? null, estimate: priced.breakdown,
+          message: r.spending?.budgetLimit != null
+            ? `This project's spending limit of ${r.spending.budgetLimit.toFixed(2)} ${wallet.currency} is reached — ${Math.max(0, room ?? 0).toFixed(2)} left of it, and this operation needs ${charge.toFixed(4)}. Raise the limit to continue; the rest of your wallet is unaffected.`
+            : PROJECT_FROZEN_MESSAGE,
+        };
+      }
       const avail = availableBalance(r.wallet, cfg);
       return { ok: false, reason: "insufficient_balance", message: `Insufficient balance: this operation needs ${charge.toFixed(4)} ${wallet.currency} and ${Math.max(0, avail).toFixed(2)} ${wallet.currency} is available.`, wallet: r.wallet, estimate: priced.breakdown };
     }

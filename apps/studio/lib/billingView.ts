@@ -1,4 +1,4 @@
-import { forecastUsage, summarizeWallet, usageByCategory, usageTimeline, balanceLevel, LEVEL_MESSAGE, CATEGORY_LABEL, type Meter, type MeterContext, type UsageEvent, type WalletSummary } from "@rescript/billing";
+import { forecastUsage, summarizeWallet, usageByCategory, usageTimeline, balanceLevel, projectMeter, LEVEL_MESSAGE, CATEGORY_LABEL, type Meter, type MeterContext, type UsageEvent, type WalletSummary } from "@rescript/billing";
 
 /**
  * THE PROJECT METER VIEW — what the Usage tab, the user page and the admin
@@ -21,15 +21,30 @@ export async function projectMeterView(meter: Meter, ctx: Pick<MeterContext, "cu
   const cfg = await meter.config();
   const wallet = await meter.walletFor(ctx, true);
   if (!wallet) return null;
-  const [ledger, events] = await Promise.all([meter.store.listLedger(wallet.id, 200), meter.store.listUsage({ surveyId: ctx.surveyId, limit: 5000 })]);
+  const [ledger, events, spending] = await Promise.all([
+    meter.store.listLedger(wallet.id, 200),
+    meter.store.listUsage({ surveyId: ctx.surveyId, limit: 5000 }),
+    /* this project's own policy: what it may take from that wallet */
+    ctx.surveyId ? meter.spendingFor(ctx.surveyId, ctx.customerId).catch(() => null) : Promise.resolve(null),
+  ]);
   const full = summarizeWallet(wallet, ledger, events, cfg);
   const forecast = forecastUsage(wallet.balance, events, cfg);
   const level = balanceLevel(wallet.balance, cfg);
   const { costs, ...summary } = full;
   const usedPct = full.totalAdded > 0 ? Math.round((full.used / full.totalAdded) * 10000) / 100 : full.used > 0 ? 100 : 0;
+  /*
+   * THE WALLET IS THE OWNER'S, AND THE PROJECT'S RULE IS ITS OWN. Both are
+   * reported, and they are never merged into one number: a project stopped at
+   * its own $1 limit while the wallet holds $499 is a completely different
+   * situation from a wallet that has run out, and a screen that shows one
+   * figure cannot tell the two apart.
+   */
+  const meterRow = projectMeter(wallet, { charge: full.used, events: events.length }, cfg, spending ?? null);
   return {
     audience,
     wallet: { id: wallet.id, currency: wallet.currency, state: full.state, sharedWalletId: wallet.sharedWalletId, overdraftEnabled: wallet.overdraftEnabled ?? cfg.overdraftEnabled },
+    /* what THIS project has spent and may spend */
+    project: { ...meterRow, spending: spending ?? null },
     summary: audience === "admin" ? { ...summary, costs, usedPct } : { ...summary, usedPct },
     level, message: LEVEL_MESSAGE[level],
     thresholds: { low: cfg.lowBalanceThreshold, critical: cfg.criticalBalanceThreshold, readOnly: cfg.readOnlyThreshold, minimumRemaining: cfg.minimumRemainingBalance },

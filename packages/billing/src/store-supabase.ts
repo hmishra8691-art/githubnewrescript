@@ -2,7 +2,7 @@ import type { BillingConfig } from "./config.js";
 import type { BillableEventDef, Rate } from "./registry.js";
 import { BillableEventDef as BillableEventSchema, Rate as RateSchema } from "./registry.js";
 import type { MeterStore, TransferFilter, UsageEventInput, UsageFilter } from "./meter.js";
-import type { CreditRequest, CreditTransfer, LedgerEntry, LedgerKind, Reservation, UsageEvent, Wallet } from "./wallet.js";
+import type { CreditRequest, CreditTransfer, LedgerEntry, LedgerKind, ProjectSpending, Reservation, SpendingMode, UsageEvent, Wallet } from "./wallet.js";
 
 /**
  * THE DATABASE STORE — migration 0023.
@@ -32,6 +32,12 @@ export function walletFromRow(r: any): Wallet {
     id: r.id, customerId: r.customer_id, surveyId: r.survey_id ?? null, userId: r.user_id ?? null, sharedWalletId: r.shared_wallet_id ?? null, currency: r.currency ?? "USD",
     balance: num(r.balance), reserved: num(r.reserved), totalAdded: num(r.total_added), totalUsed: num(r.total_used), state: r.state,
     overdraftEnabled: r.overdraft_enabled ?? null, overdraftLimit: numOrNull(r.overdraft_limit), createdAt: r.created_at, updatedAt: r.updated_at,
+  };
+}
+export function spendingFromRow(r: any): ProjectSpending {
+  return {
+    surveyId: r.survey_id, customerId: r.customer_id, mode: r.mode, budgetLimit: numOrNull(r.budget_limit),
+    spent: num(r.spent), reserved: num(r.reserved), state: r.state, frozenAt: r.frozen_at ?? null,
   };
 }
 export function ledgerFromRow(r: any): LedgerEntry {
@@ -161,8 +167,18 @@ export class SupabaseMeterStore implements MeterStore {
       p_estimated: input.estimatedCost, p_amount: input.amount, p_floor: input.floor, p_ttl_minutes: input.ttlMinutes,
     });
     if (error) fail("reserve", error);
-    if (!data?.ok) return { ok: false as const, wallet: walletFromRow(data.wallet) };
-    return { ok: true as const, reservation: reservationFromRow(data.reservation), wallet: walletFromRow(data.wallet) };
+    if (!data?.ok) {
+      return {
+        ok: false as const, wallet: walletFromRow(data.wallet),
+        reason: data?.reason === "project_limit" ? ("project_limit" as const) : ("insufficient_balance" as const),
+        spending: data?.spending ? spendingFromRow(data.spending) : null,
+        headroom: data?.headroom == null ? null : num(data.headroom),
+      };
+    }
+    return {
+      ok: true as const, reservation: reservationFromRow(data.reservation), wallet: walletFromRow(data.wallet),
+      spending: data.spending ? spendingFromRow(data.spending) : null,
+    };
   }
   async settle(reservationId: string, event: UsageEventInput, readOnlyThreshold: number) {
     const { data, error } = await this.db.rpc("rescript_billing_settle", { p_reservation: reservationId, p_event: event, p_read_only_threshold: readOnlyThreshold });
@@ -178,6 +194,34 @@ export class SupabaseMeterStore implements MeterStore {
     if (error) fail("record", error);
     return { event: usageFromRow(data.event), wallet: data.wallet ? walletFromRow(data.wallet) : null };
   }
+  /* ------------------------------------------------- project spending policies */
+
+  async getSpending(surveyId: string, customerId: string, opts: { create?: boolean } = {}) {
+    if (opts.create) {
+      const { data, error } = await this.db.rpc("rescript_billing_spending_for", { p_survey: surveyId, p_customer: customerId, p_create: true });
+      if (error) fail("spending read", error);
+      return data ? spendingFromRow(data) : null;
+    }
+    const { data, error } = await this.db.from("project_spending").select("*").eq("survey_id", surveyId).maybeSingle();
+    if (error) fail("spending read", error);
+    return data ? spendingFromRow(data) : null;
+  }
+  async listSpending(filter: { customerId?: string; surveyIds?: string[] }) {
+    let q = this.db.from("project_spending").select("*");
+    if (filter.customerId) q = q.eq("customer_id", filter.customerId);
+    if (filter.surveyIds?.length) q = q.in("survey_id", filter.surveyIds);
+    const { data, error } = await q;
+    if (error) fail("spending list", error);
+    return (data ?? []).map(spendingFromRow);
+  }
+  async setSpending(surveyId: string, customerId: string, patch: { mode: SpendingMode; budgetLimit: number | null }) {
+    const { data, error } = await this.db.rpc("rescript_billing_set_spending", {
+      p_survey: surveyId, p_customer: customerId, p_mode: patch.mode, p_limit: patch.budgetLimit,
+    });
+    if (error) fail("spending write", error);
+    return spendingFromRow(data);
+  }
+
   async expireReservations(now: Date) {
     const { data, error } = await this.db.rpc("rescript_billing_expire_reservations", { p_now: now.toISOString() });
     if (error) fail("expire", error);

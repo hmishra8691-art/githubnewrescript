@@ -31,7 +31,8 @@ export async function GET(req: NextRequest) {
     let projects: Record<string, { code: string; title: string; status: string; owner: string | null; customer: string | null }> = {};
     if (!gate.sandbox && wallets.length) {
       const db = supabaseAdmin();
-      const ids = wallets.map((w) => w.surveyId).filter(Boolean) as string[];
+      const policyIds = (await gate.meter.store.listSpending({})).map((p) => p.surveyId);
+      const ids = [...new Set([...wallets.map((w) => w.surveyId).filter(Boolean) as string[], ...policyIds])];
       const { data } = await db.from("surveys").select("id, code, title, status, owner_id, customer_id, profiles:owner_id(full_name, email), customers:customer_id(name)").in("id", ids);
       for (const r of (data ?? []) as any[]) projects[r.id] = { code: r.code, title: r.title, status: r.status, owner: r.profiles?.full_name ?? r.profiles?.email ?? null, customer: r.customers?.name ?? null };
       const userIds = wallets.map((w) => w.userId).filter(Boolean) as string[];
@@ -56,7 +57,27 @@ export async function GET(req: NextRequest) {
         overdraftEnabled: w.overdraftEnabled, overdraftLimit: w.overdraftLimit, usage: s.usage, costs: s.costs, events: events.length, updatedAt: w.updatedAt,
       };
     }));
-    return NextResponse.json({ ok: true, wallets: rows, pendingRequests: (await gate.meter.store.listCreditRequests({ status: "pending" })).length });
+    /*
+     * PROJECT SPENDING, beside the wallets.
+     *
+     * Under the central-wallet model a project has no balance to list, so a
+     * table of wallets no longer answers "what is this study costing and what
+     * is it allowed to cost". These rows do: one per project with a policy,
+     * carrying what it has spent, its limit and whether its own rule has
+     * stopped it.
+     */
+    const policies = await gate.meter.store.listSpending({});
+    const spending = policies.map((p) => ({
+      surveyId: p.surveyId,
+      project: projects[p.surveyId] ?? null,
+      mode: p.mode, limit: p.budgetLimit, spent: p.spent, reserved: p.reserved,
+      state: p.state, frozenAt: p.frozenAt,
+    })).sort((a, b) => b.spent - a.spent);
+
+    return NextResponse.json({
+      ok: true, wallets: rows, spending,
+      pendingRequests: (await gate.meter.store.listCreditRequests({ status: "pending" })).length,
+    });
   } catch (e) { return billingError(e); }
 }
 
@@ -65,7 +86,34 @@ export async function POST(req: NextRequest) {
   if (!gate.ok) return gate.response;
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
-  if (body?.action !== "ensure" || typeof body?.surveyId !== "string") return NextResponse.json({ error: "action ensure and surveyId are required" }, { status: 400 });
+  /*
+   * An administrator setting a project's limit. Same function as the owner's
+   * control, so there is one rule and one place it is enforced — the
+   * difference is only who is allowed to reach it.
+   */
+  if (body?.action === "set_spending" && typeof body?.surveyId === "string") {
+    try {
+      let customerId = "sandbox";
+      if (!gate.sandbox) {
+        const { data } = await supabaseAdmin().from("surveys").select("customer_id").eq("id", body.surveyId).maybeSingle();
+        if (!data) return NextResponse.json({ error: "Unknown project." }, { status: 404 });
+        customerId = data.customer_id;
+      }
+      const mode = String(body?.mode ?? "shared");
+      const limit = body?.limit == null ? null : Number(body.limit);
+      const spending = await gate.meter.setSpending(body.surveyId, customerId, { mode: mode as never, budgetLimit: limit });
+      if (gate.user) {
+        await audit({
+          action: "billing.project_budget_changed", userId: gate.user.userId, sessionId: gate.user.sessionId, customerId: gate.user.customerId,
+          surveyId: body.surveyId, entity: "project_spending", entityId: body.surveyId,
+          detail: { mode, limit: spending.budgetLimit, spent: spending.spent, state: spending.state, byAdmin: true },
+        });
+      }
+      return NextResponse.json({ ok: true, spending });
+    } catch (e) { return billingError(e); }
+  }
+
+  if (body?.action !== "ensure" || typeof body?.surveyId !== "string") return NextResponse.json({ error: "action ensure or set_spending, and surveyId, are required" }, { status: 400 });
   try {
     let customerId = "sandbox";
     if (!gate.sandbox) {

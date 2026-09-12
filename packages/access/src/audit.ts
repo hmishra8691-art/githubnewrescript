@@ -128,6 +128,8 @@ export const AUDIT_EVENTS = [
   "billing.credit_request_decided",
   "billing.wallet_changed",
   "billing.credits_transferred",
+  /* an owner changing what one project may take from their wallet — moves no money */
+  "billing.project_budget_changed",
   "billing.transfer_reversed",
   "analytics.export_generated",
   "analytics.report_downloaded",
@@ -196,6 +198,9 @@ export function describeEvent(r: AuditRow): string {
 
     case "project.created": return `${who} created this project${d.clonedFrom ? ` as a copy of ${str(d.clonedFromTitle) || "another project"}` : ""}`;
     case "project.cloned": return `${who} cloned this project${d.newTitle ? ` into ${str(d.newTitle)}` : ""}`;
+    case "billing.project_budget_changed": return d.mode === "budget"
+      ? `${who} set this project's spending limit to ${str(d.limit)}`
+      : `${who} set this project to spend ${d.mode === "priority" ? "as the priority project" : "freely"} from the owner's wallet`;
     case "project.opened": return `${who} opened this project${d.readOnly ? " (read-only)" : ""}`;
     case "project.deleted": return `${who} deleted this project`;
     case "project.shared": return `${who} shared this project with ${target}${role ? ` as ${role}` : ""}`;

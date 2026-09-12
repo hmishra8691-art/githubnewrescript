@@ -167,6 +167,68 @@ export interface CreditRequest {
   createdAt: string;
 }
 
+/* ------------------------------------------------- project spending policy */
+
+/**
+ * WHAT A PROJECT MAY TAKE FROM THE WALLET IT DRAWS ON.
+ *
+ * A project no longer holds money. It holds a POLICY against the wallet of
+ * the person who owns it, and a record of what it has actually spent. The
+ * distinction matters everywhere: raising a limit from $1 to $100 moves
+ * nothing, it changes permission, and the wallet's balance is identical
+ * before and after.
+ *
+ *   shared   — no limit of its own; bounded only by the wallet
+ *   budget   — may consume at most `budgetLimit` from that wallet, ever
+ *   priority — shared, and marked as the study the wallet is mainly for
+ *
+ * `priority` grants no privilege of its own, deliberately. With every other
+ * project capped, the priority project already has whatever the others cannot
+ * take; giving it a second mechanism — a reservation only it may spend —
+ * would be two ways to express one intention, and the second one would
+ * disagree with the first the first time somebody edited a budget.
+ */
+export const SPENDING_MODES = ["shared", "budget", "priority"] as const;
+export type SpendingMode = (typeof SPENDING_MODES)[number];
+
+export interface ProjectSpending {
+  surveyId: string;
+  customerId: string;
+  mode: SpendingMode;
+  /** only meaningful in `budget` mode */
+  budgetLimit: number | null;
+  /** customer charges attributed to this project, cumulative */
+  spent: number;
+  /** held by this project's operations in flight */
+  reserved: number;
+  state: "active" | "frozen";
+  frozenAt: string | null;
+}
+
+/** A project with no policy row yet behaves as `shared`, which is the default. */
+export function defaultSpending(surveyId: string, customerId: string): ProjectSpending {
+  return { surveyId, customerId, mode: "shared", budgetLimit: null, spent: 0, reserved: 0, state: "active", frozenAt: null };
+}
+
+/**
+ * What this project may still spend under its own policy — `null` for "no
+ * limit of its own". Counts its own holds, so two concurrent operations
+ * cannot both be told there is room for the last dollar.
+ */
+export function projectHeadroom(p: ProjectSpending | null | undefined): number | null {
+  if (!p) return null;
+  if (p.state === "frozen") return 0;
+  if (p.mode !== "budget" || p.budgetLimit == null) return null;
+  return Math.max(0, money6(p.budgetLimit - p.spent - p.reserved));
+}
+
+/** The state a policy should be in for what has been spent under it. */
+export function spendingStateFor(p: ProjectSpending): "active" | "frozen" {
+  return p.mode === "budget" && p.budgetLimit != null && money6(p.spent + p.reserved) >= p.budgetLimit ? "frozen" : "active";
+}
+
+export const PROJECT_FROZEN_MESSAGE = "This project has reached its own spending limit. Raise the limit to continue — the rest of your wallet is unaffected.";
+
 /* -------------------------------------------------------------- balance */
 
 /** Spendable now: balance minus open reservations (plus the overdraft room when allowed). */
@@ -328,59 +390,136 @@ export function usageByProject(events: UsageEvent[]): { surveyId: string | null;
 /* ------------------------------------------------- the project card's meter */
 
 /**
- * ONE PROJECT'S WALLET, AS A CARD SHOWS IT.
+ * ONE PROJECT, AS A CARD SHOWS IT.
  *
- * The four numbers a researcher reads on the projects list — what was put in,
- * what has gone, what is left, and how far through the meter is — plus the
- * word for the state. It lives here, beside `summarizeWallet`, because the
- * dashboard must not do its own arithmetic: a balance that reads $56.75 on
- * the list and something else inside the project is one system telling a
- * person two different things, and they have no way to know which is true.
+ * The model changed under this type and the type changed with it. A project
+ * no longer holds money, so there is no "balance of this project" to show;
+ * what a researcher needs to know from a list of projects is:
  *
- * `used` is the sum of the CUSTOMER CHARGES on the project's events, exactly
- * as `summarizeWallet` computes it, falling back to the wallet's own running
- * total when the caller has not loaded events. There is no cost, margin or
- * profit field on the result — a researcher's card has nowhere to put one.
+ *   · what this project has SPENT,
+ *   · what it may still spend, and WHY that is the number — its own limit,
+ *     or simply what is left in the wallet it draws on,
+ *   · whether it is running, and if not, which of the two rules stopped it.
+ *
+ * `limit` and `allowance` are the honest pair. `limit` is the project's own
+ * budget when it has one and `null` when it does not — a shared project is
+ * not "limited to the wallet balance", it is unlimited and merely funded by
+ * a wallet that can run out. `allowance` is what can actually be spent right
+ * now, which is the smaller of the two, and is what the meter bar fills
+ * against.
+ *
+ * It lives here, beside `summarizeWallet`, because no screen may do this
+ * arithmetic itself: a figure that reads one way on the dashboard and another
+ * inside the project is one system telling a person two different things.
+ * There is no cost, margin or profit field — a researcher's card has nowhere
+ * to put one.
  */
 export interface ProjectMeter {
   surveyId: string;
   currency: string;
-  /** credits put into this wallet, ever */
-  allocated: number;
+  /** customer charges attributed to this project */
   used: number;
-  /** what is left: the wallet balance */
-  remaining: number;
-  /** held by operations in flight — not spendable, not yet spent */
+  /** its own budget, or `null` when it spends freely from the wallet */
+  limit: number | null;
+  mode: SpendingMode;
+  /** what it may still spend now: its own headroom, or the wallet's available balance */
+  allowance: number;
+  /** what the wallet funding it holds — the same number on every project that shares it */
+  walletRemaining: number;
+  /** held by this project's operations in flight */
   reserved: number;
-  available: number;
-  /** 0–100 of `allocated`. A wallet nothing was ever put into reads 0. */
+  /** 0–100 against the limit when there is one, else against the wallet */
   usedPct: number;
   level: BalanceLevel;
-  state: WalletState;
+  /** why it is or is not running */
+  state: "active" | "frozen" | "read_only" | "suspended";
   events: number;
+
+  /*
+   * The wallet figures, for a screen that wants to say "of your $500". They
+   * are the WALLET's, not the project's, and are named so that nothing can
+   * mistake one for the other.
+   */
+  walletAllocated: number;
+  walletUsed: number;
 }
 
 export function projectMeter(
   w: Wallet,
   usage: { charge: number; events: number } | undefined,
   cfg: BillingConfig,
+  spending?: ProjectSpending | null,
 ): ProjectMeter {
-  const used = money6(usage?.charge ?? w.totalUsed);
-  const allocated = money6(w.totalAdded);
+  const used = money6(usage?.charge ?? spending?.spent ?? 0);
+  const walletAvailable = Math.max(0, availableBalance(w, cfg));
+  const headroom = projectHeadroom(spending);
+  const allowance = headroom == null ? walletAvailable : Math.min(headroom, walletAvailable);
+  const walletState = walletStateFor(w.balance, cfg, w.state);
+  /*
+   * Two decimals: money, and "43.25% of $100" is the same statement as
+   * "$43.25 used". A project with no limit is measured against the wallet it
+   * draws on, which is the only denominator that means anything for it.
+   */
+  const denominator = spending?.mode === "budget" && spending.budgetLimit != null ? spending.budgetLimit : money6(used + walletAvailable);
   return {
-    surveyId: w.surveyId ?? "",
+    surveyId: spending?.surveyId ?? w.surveyId ?? "",
     currency: w.currency,
-    allocated,
     used,
-    remaining: money6(w.balance),
+    limit: spending?.mode === "budget" ? spending.budgetLimit : null,
+    mode: spending?.mode ?? "shared",
+    allowance: money6(allowance),
+    walletRemaining: money6(w.balance),
+    reserved: money6(spending?.reserved ?? 0),
+    usedPct: denominator > 0 ? Math.min(100, Math.max(0, Math.round((used / denominator) * 10000) / 100)) : 0,
+    /*
+     * The level a researcher should act on. A project with its own budget is
+     * judged against WHAT IT MAY STILL SPEND, not against the wallet: a study
+     * with $0.40 left of its dollar is critical even though the wallet behind
+     * it is full, and saying "healthy" there would be a lie the next AI call
+     * exposes.
+     */
+    level: headroom == null ? balanceLevel(w.balance, cfg) : balanceLevel(allowance, cfg),
+    state: walletState === "suspended" ? "suspended"
+      : spending?.state === "frozen" ? "frozen"
+      : walletState === "read_only" ? "read_only"
+      : "active",
+    events: usage?.events ?? 0,
+    walletAllocated: money6(w.totalAdded),
+    walletUsed: money6(w.totalUsed),
+  };
+}
+
+/** The whole wallet, for the person who owns it. */
+export interface WalletOverview {
+  walletId: string | null;
+  currency: string;
+  balance: number;
+  reserved: number;
+  available: number;
+  totalAdded: number;
+  totalUsed: number;
+  transferredOut: number;
+  transferredIn: number;
+  level: BalanceLevel;
+  state: WalletState;
+}
+
+export function walletOverview(w: Wallet | null, ledger: LedgerEntry[], cfg: BillingConfig): WalletOverview {
+  const sum = (kinds: LedgerKind[]) => money6(ledger.filter((l) => kinds.includes(l.kind)).reduce((a, l) => a + Math.abs(l.amount), 0));
+  if (!w) {
+    return { walletId: null, currency: cfg.currency, balance: 0, reserved: 0, available: 0, totalAdded: 0, totalUsed: 0, transferredOut: 0, transferredIn: 0, level: "locked", state: "read_only" };
+  }
+  return {
+    walletId: w.id,
+    currency: w.currency,
+    balance: money6(w.balance),
     reserved: money6(w.reserved),
-    available: availableBalance(w, cfg),
-    /* two decimals: a wallet is money, and "43.25% of $100" is the same
-       statement as "$43.25 used". Trailing zeros never render, so a round
-       half reads 50%, not 50.00%. */
-    usedPct: allocated > 0 ? Math.min(100, Math.max(0, Math.round((used / allocated) * 10000) / 100)) : 0,
+    available: Math.max(0, availableBalance(w, cfg)),
+    totalAdded: money6(w.totalAdded),
+    totalUsed: money6(w.totalUsed),
+    transferredOut: sum(["transfer_out"]),
+    transferredIn: sum(["transfer_in"]),
     level: balanceLevel(w.balance, cfg),
     state: walletStateFor(w.balance, cfg, w.state),
-    events: usage?.events ?? 0,
   };
 }

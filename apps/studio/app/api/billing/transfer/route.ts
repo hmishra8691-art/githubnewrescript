@@ -7,7 +7,12 @@ import { getMeter } from "@/lib/metering";
 export const dynamic = "force-dynamic";
 
 /**
- * TRANSFER MY OWN CREDITS.
+ * TRANSFER MY OWN CREDITS — from my wallet to another person's.
+ *
+ * With one wallet per person, this is the only transfer there is: project
+ * budgets are permissions against a wallet, not pots of money, so there is
+ * nothing inside a project to move and raising a limit from $1 to $100
+ * transfers nothing.
  *
  * Credits belong to the person or the project that holds them, so the person
  * who holds them is who moves them. An administrator could already do this
@@ -41,31 +46,29 @@ async function personalWallet(user: AuthedUser, create: boolean) {
   return getMeter().store.walletForUser(user.customerId ?? "", user.userId, { create });
 }
 
-/** The wallet this person is allowed to spend from, and the words for it. */
+/**
+ * The wallet this person spends from: their own, and only their own.
+ *
+ * A project no longer holds money — it spends from its owner's wallet under a
+ * policy — so there is nothing in a project to transfer. A request that names
+ * one is answered with what to do instead rather than with a generic refusal,
+ * because the change is recent and the instinct is reasonable.
+ */
 async function resolveSource(
-  req: NextRequest,
+  _req: NextRequest,
   user: AuthedUser,
   source: unknown,
 ): Promise<{ walletId: string; label: string } | { response: NextResponse }> {
   const kind = (source as { type?: string } | null)?.type;
-  if (!source || kind === "user" || kind === undefined) {
-    const w = await personalWallet(user, true);
-    if (!w) return { response: NextResponse.json({ error: "You have no credit wallet yet." }, { status: 404 }) };
-    return { walletId: w.id, label: "your own credits" };
-  }
-  if (kind !== "project") return NextResponse.json({ error: "source.type must be user or project" }, { status: 400 }) as never;
-  const id = String((source as { id?: string }).id ?? "");
-  if (!id) return { response: NextResponse.json({ error: "source.id is required" }, { status: 400 }) };
-  const gate = await requireProjectFor(user, id, "billing.transfer");
-  if (isFailure(gate)) {
+  if (kind === "project") {
     return { response: NextResponse.json({
-      error: "Only a project's owner can move its credits. Ask the owner, or transfer from your own credits instead.",
-      code: "not_your_project",
-    }, { status: 403 }) };
+      error: "Projects no longer hold credits — they spend from your wallet under a limit you set. Transfer from your own credits, and use the project's spending limit to control how much it may take.",
+      code: "projects_have_no_wallet",
+    }, { status: 400 }) };
   }
-  const w = await getMeter().walletFor({ customerId: gate.survey.customer_id ?? user.customerId ?? "", surveyId: id }, true);
-  if (!w) return { response: NextResponse.json({ error: "That project has no wallet yet." }, { status: 404 }) };
-  return { walletId: w.id, label: gate.survey.title };
+  const w = await personalWallet(user, true);
+  if (!w) return { response: NextResponse.json({ error: "You have no credit wallet yet." }, { status: 404 }) };
+  return { walletId: w.id, label: "your own credits" };
 }
 
 /** The recipient, by User ID — within the sender's workspace. */
@@ -116,13 +119,18 @@ export async function POST(req: NextRequest) {
     if (!w) return NextResponse.json({ error: "That person has no credit wallet." }, { status: 404 });
     destWalletId = w.id; destLabel = `${who.name} (${who.userCode})`; recipientId = who.id;
   } else if (typeof body?.toProjectId === "string" && body.toProjectId.trim()) {
-    const gate = await requireProjectFor(user, body.toProjectId.trim(), "billing.read");
-    if (isFailure(gate)) return NextResponse.json({ error: "You cannot add credits to a project you cannot open." }, { status: 403 });
-    const w = await getMeter().walletFor({ customerId: gate.survey.customer_id ?? user.customerId ?? "", surveyId: gate.survey.id }, true);
-    if (!w) return NextResponse.json({ error: "That project has no wallet." }, { status: 404 });
-    destWalletId = w.id; destLabel = gate.survey.title;
+    /*
+     * "Put credits into this project" was the old model's move. It has no
+     * meaning now — the project already draws on this person's wallet — and
+     * silently succeeding by crediting the owner would be a different act
+     * from the one that was asked for.
+     */
+    return NextResponse.json({
+      error: "A project does not hold credits: it spends from its owner's wallet. Set the project's spending limit to control how much of your wallet it may use.",
+      code: "projects_have_no_wallet",
+    }, { status: 400 });
   } else {
-    return NextResponse.json({ error: "Name a recipient: a User ID, or one of your projects." }, { status: 400 });
+    return NextResponse.json({ error: "Name a recipient by their User ID." }, { status: 400 });
   }
 
   if (destWalletId === src.walletId) {

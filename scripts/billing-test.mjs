@@ -352,9 +352,43 @@ await page.click('[data-testid="admin-tab-rates"]');
 await page.waitForSelector('[data-testid="rate-row"][data-id="google.translate.v2"]');
 await page.click('[data-testid="admin-tab-events"]');
 await page.waitForSelector('[data-testid="event-row"][data-type="AI_REQUEST"]');
+/*
+ * PROJECT SPENDING — one wallet, and a limit on the project.
+ *
+ * The admin table now answers "what is this study costing and what is it
+ * allowed to cost", which a list of wallets cannot under a central wallet.
+ */
+await page.click('[data-testid="admin-tab-wallets"]');
+await page.waitForSelector('[data-testid="admin-spending"]');
+assert.ok(await page.$('[data-testid="admin-spending-row"]'), "every project with a policy is listed with what it has spent");
+await page.click('[data-testid="admin-spending-edit"]');
+await page.waitForSelector('[data-testid="admin-limit-editor"]');
+await page.fill('[data-testid="admin-limit-amount"]', "250");
+await page.click('[data-testid="admin-limit-save"]');
+await page.waitForTimeout(600);
+assert.match(await page.textContent('[data-testid="admin-note"]'), /may now spend up to \$250\.00 of its owner's wallet/);
+assert.match(await page.textContent('[data-testid="admin-spending-limit"]'), /\$250\.00/);
+await page.click('[data-testid="admin-spending-edit"]');
+await page.waitForSelector('[data-testid="admin-limit-editor"]');
+await page.click('[data-testid="admin-limit-none"]');
+await page.waitForTimeout(600);
+assert.match(await page.textContent('[data-testid="admin-spending-limit"]'), /no limit/);
+console.log("  ok   admin project spending: spend, limit, and a limit set and cleared without moving money");
+
+/* the wallet page: one balance and the whole position */
 await page.goto(`${STUDIO}/billing`, { waitUntil: "networkidle" });
-await page.waitForSelector('[data-testid="my-usage-error"], [data-testid="my-usage-totals"]');
-console.log("  ok   admin: wallets (+$50 via preset), transfer with confirmation + history filter, cost columns for admins only, requests, configuration, rates, events; My usage page renders");
+await page.waitForSelector('[data-testid="my-usage-error"], [data-testid="my-wallet"]');
+if (await page.$('[data-testid="my-wallet"]')) {
+  const wallet = (await page.textContent('[data-testid="my-wallet"]')).replace(/\s+/g, " ");
+  for (const bit of ["Total deposited", "Total used", "Transferred out", "Received", "Reserved", "Available to spend"]) {
+    assert.ok(wallet.includes(bit), `the wallet page states ${bit}: ${wallet}`);
+  }
+  assert.ok(await page.$('[data-testid="my-add-funds"]'), "and offers to add funds");
+  const projects = await page.textContent('[data-testid="my-usage-projects"]');
+  assert.match(projects, /Spent/, "with the projects that spend it, and what each has spent");
+  console.log("  ok   my wallet: deposited / used / transferred / reserved / available, and the projects spending it");
+}
+console.log("  ok   admin: wallets (+$50 via preset), transfer with confirmation + history filter, cost columns for admins only, requests, configuration, rates, events");
 
 await h.close();
 console.log("\nALL BILLING CHECKS PASSED");

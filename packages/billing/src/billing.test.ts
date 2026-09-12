@@ -5,7 +5,10 @@ import { priceOperation, effectivePaymentFeeRate, depositProjection } from "./pr
 import { DEFAULT_RATES, DEFAULT_BILLABLE_EVENTS, findRate, providerCostFor, registerBillableEvent } from "./registry.js";
 import { Meter, estimateTokens } from "./meter.js";
 import { MemoryMeterStore } from "./store-memory.js";
-import { summarizeWallet, usageByCategory, usageTimeline, forecastUsage, balanceLevel, READ_ONLY_MESSAGE, transferableBalance, walletKind, projectMeter, type Wallet } from "./wallet.js";
+import {
+  summarizeWallet, usageByCategory, usageTimeline, forecastUsage, balanceLevel, READ_ONLY_MESSAGE, transferableBalance, walletKind,
+  projectMeter, walletOverview, defaultSpending, projectHeadroom, type ProjectSpending, type Wallet,
+} from "./wallet.js";
 import { money6, formatMoney } from "./money.js";
 
 const cfg = billingConfig({});
@@ -346,151 +349,231 @@ test("the brief's transfer cases: A user's own credits move to another user, and
   assert.equal((await store.listTransfers({ walletId: B.id })).length, 2, "B received the two that succeeded — a refused transfer leaves no trace to read");
 });
 
-/* ===================================================== the dashboard's meter
+/* ================================================= one wallet, many projects
  *
- * The projects page draws a wallet on every card. These are the brief's own
- * cases, tested on the arithmetic rather than through the browser, because
- * the numbers are the part that must be right: a card that rounds its own way
- * or calls an exhausted project healthy is worse than no card.
+ * The central-wallet model, tested on the arithmetic and on the engine rather
+ * than through a browser: a person has one balance, every project they own
+ * spends from it, and what a project may take is a POLICY on the project. The
+ * SQL enforces the same rules and is proven separately
+ * (scripts/billing-central-wallet-sql-test.sql); these are the same
+ * statements made where the unit tests can reach them.
  */
 
 /** A wallet row, for the arithmetic tests that do not need a store. */
 function wallet(p: { totalAdded: number; balance: number; totalUsed: number; reserved?: number }): Wallet {
   const now = new Date().toISOString();
   return {
-    id: "w1", customerId: "cust", surveyId: "srv_1", userId: null, sharedWalletId: null,
+    id: "w1", customerId: "cust", surveyId: null, userId: "user_1", sharedWalletId: null,
     currency: "USD", balance: p.balance, reserved: p.reserved ?? 0,
     totalAdded: p.totalAdded, totalUsed: p.totalUsed, state: "active",
     overdraftEnabled: null, overdraftLimit: null, createdAt: now, updatedAt: now,
   };
 }
+const policy = (p: Partial<ProjectSpending> & { surveyId: string }): ProjectSpending =>
+  ({ ...defaultSpending(p.surveyId, "cust"), ...p });
 
-
-test("a project meter reads $65 remaining and 35% used from a $100 wallet with $35 spent", () => {
-  const w = wallet({ totalAdded: 100, balance: 65, totalUsed: 35 });
-  const m = projectMeter(w, { charge: 35, events: 12 }, cfg);
-  assert.equal(m.allocated, 100);
-  assert.equal(m.used, 35);
-  assert.equal(m.remaining, 65);
-  assert.equal(m.usedPct, 35);
-  assert.equal(m.level, "normal", "well above the low-balance threshold");
+test("a project that shares the wallet is measured against the wallet, not against a pot of its own", () => {
+  const w = wallet({ totalAdded: 500, balance: 265, totalUsed: 235 });
+  const m = projectMeter(w, { charge: 120, events: 12 }, cfg, policy({ surveyId: "p_a", spent: 120 }));
+  assert.equal(m.used, 120, "what THIS project spent");
+  assert.equal(m.limit, null, "it has no limit of its own");
+  assert.equal(m.mode, "shared");
+  assert.equal(m.allowance, 265, "it may spend what the wallet has left");
+  assert.equal(m.walletRemaining, 265);
   assert.equal(m.state, "active");
+  assert.equal(m.usedPct, Math.round((120 / 385) * 10000) / 100, "measured against what it has spent plus what it could still spend");
   assert.equal(m.events, 12);
 });
 
-test("the bands follow the administrator's thresholds, not a number in the card", () => {
-  const c = billingConfig({ lowBalanceThreshold: 20, criticalBalanceThreshold: 5, readOnlyThreshold: 0 });
-  const at = (balance: number) => projectMeter(wallet({ totalAdded: 100, balance, totalUsed: 100 - balance }), { charge: 100 - balance, events: 1 }, c);
-  assert.equal(at(65).level, "normal");
-  assert.equal(at(20).level, "low", "AT the threshold is already low — a warning that waits for one cent past it is late");
-  assert.equal(at(12).level, "low");
-  assert.equal(at(5).level, "critical");
-  assert.equal(at(0.5).level, "critical");
-  assert.equal(at(0).level, "locked");
-
-  /* and moving the threshold moves the band, with no code change */
-  const generous = billingConfig({ lowBalanceThreshold: 80, criticalBalanceThreshold: 40, readOnlyThreshold: 0 });
-  assert.equal(projectMeter(wallet({ totalAdded: 100, balance: 65, totalUsed: 35 }), undefined, generous).level, "low");
+test("a budgeted project is measured against ITS OWN limit, whatever the wallet holds", () => {
+  const w = wallet({ totalAdded: 500, balance: 499, totalUsed: 1 });
+  const m = projectMeter(w, { charge: 0.6, events: 3 }, cfg, policy({ surveyId: "p_b", mode: "budget", budgetLimit: 1, spent: 0.6 }));
+  assert.equal(m.limit, 1);
+  assert.equal(m.used, 0.6);
+  assert.equal(m.allowance, 0.4, "40c of its dollar remains — not the wallet's $499");
+  assert.equal(m.usedPct, 60);
+  assert.equal(m.walletRemaining, 499, "and the wallet's own figure is reported apart, never mistaken for the project's");
+  assert.equal(m.level, "critical", "judged on what it may still spend: 40c is nearly out, however full the wallet is");
 });
 
-test("an exhausted project reads 100% used, nothing remaining, and READ-ONLY", () => {
-  const m = projectMeter(wallet({ totalAdded: 100, balance: 0, totalUsed: 100 }), { charge: 100, events: 40 }, cfg);
-  assert.equal(m.remaining, 0);
+test("a project at its limit reads frozen; the wallet behind it is still healthy", () => {
+  const w = wallet({ totalAdded: 500, balance: 499, totalUsed: 1 });
+  const m = projectMeter(w, { charge: 1, events: 5 }, cfg, policy({ surveyId: "p_b", mode: "budget", budgetLimit: 1, spent: 1, state: "frozen", frozenAt: new Date().toISOString() }));
+  assert.equal(m.state, "frozen", "the PROJECT stopped");
+  assert.equal(m.allowance, 0);
   assert.equal(m.usedPct, 100);
-  assert.equal(m.level, "locked");
-  assert.equal(m.state, "read_only", "the card says why the project has stopped");
+  assert.equal(m.walletRemaining, 499, "the other projects are unaffected");
 });
 
-test("a wallet nobody has funded reads 0%, not NaN and not 100%", () => {
-  const m = projectMeter(wallet({ totalAdded: 0, balance: 0, totalUsed: 0 }), undefined, cfg);
+test("an empty wallet stops every project, whatever its policy says", () => {
+  const w = wallet({ totalAdded: 500, balance: 0, totalUsed: 500 });
+  const shared = projectMeter(w, { charge: 300, events: 9 }, cfg, policy({ surveyId: "p_a", spent: 300 }));
+  const budgeted = projectMeter(w, { charge: 1, events: 1 }, cfg, policy({ surveyId: "p_b", mode: "budget", budgetLimit: 50, spent: 1 }));
+  assert.equal(shared.state, "read_only");
+  assert.equal(budgeted.state, "read_only", "a project with 49 of its 50 dollars unspent still cannot spend an empty wallet");
+  assert.equal(budgeted.allowance, 0, "and its allowance says so");
+});
+
+test("a project nobody has metered yet reads zero, not NaN", () => {
+  const m = projectMeter(wallet({ totalAdded: 0, balance: 0, totalUsed: 0 }), undefined, cfg, null);
+  assert.equal(m.used, 0);
   assert.equal(m.usedPct, 0);
-  assert.equal(m.allocated, 0);
-  assert.equal(m.remaining, 0);
-  assert.equal(m.state, "read_only", "a project with no credits cannot do billable work, and says so");
+  assert.equal(m.mode, "shared");
+  assert.equal(m.state, "read_only", "an empty wallet cannot fund billable work, and says so");
 });
 
-test("reserved money is shown apart: it is neither spent nor available", () => {
-  const m = projectMeter(wallet({ totalAdded: 100, balance: 60, totalUsed: 40, reserved: 10 }), { charge: 40, events: 3 }, cfg);
-  assert.equal(m.remaining, 60, "the balance still holds it");
-  assert.equal(m.reserved, 10);
-  assert.equal(m.available, 50, "but only 50 can be spent or moved");
-  assert.equal(m.used, 40, "and it has not been used");
+test("the card carries nothing internal, whatever the wallet knows", () => {
+  const m = projectMeter(wallet({ totalAdded: 100, balance: 60, totalUsed: 40 }), { charge: 40, events: 2 }, cfg, null);
+  for (const k of ["costs", "providerCost", "actualCost", "grossProfit", "marginPct"]) {
+    assert.ok(!(k in m), `a researcher's meter has no ${k}`);
+  }
 });
 
-test("the card's figures are the same ones the project's own Usage panel shows", async () => {
-  /*
-   * §24, tested rather than asserted in prose: the dashboard card and the
-   * project page must be the same numbers, so both are computed here from one
-   * wallet and one set of real usage events — recorded through the meter, not
-   * fabricated — and compared field by field.
-   */
-  const { meter, ctx, store, walletId } = await fixture(100);
-  await meter.record(ctx, { eventType: "AI_REQUEST", provider: "openai-compatible", service: "chat", model: "gpt-4o-mini", inputUnits: 9_000, outputUnits: 1_500 });
-  await meter.record(ctx, { eventType: "TRANSLATION_CHARACTER", provider: "google", service: "translate", model: "v2", quantity: 12_000 });
-  await meter.record(ctx, { eventType: "SURVEY_RESPONSE", quantity: 40 });
-
-  const w = (await store.getWallet(walletId))!;
-  const events = await store.listUsage({ walletId });
-  const panel = summarizeWallet(w, await store.listLedger(walletId), events, cfg);
-  const card = projectMeter(w, { charge: events.reduce((a, e) => a + e.customerCharge, 0), events: events.length }, cfg);
-
-  assert.equal(card.used, panel.used, "used");
-  assert.equal(card.remaining, panel.remaining, "remaining");
-  assert.equal(card.allocated, panel.totalAdded, "allocated");
-  assert.equal(card.available, panel.available, "available");
-  assert.equal(card.level, panel.level, "level");
-  assert.equal(card.state, panel.state, "state");
-  assert.equal(card.usedPct, Math.round((panel.used / panel.totalAdded) * 10000) / 100);
-  /* and the card carries nothing internal, whatever the panel knows */
-  assert.ok(!("costs" in card) && !("providerCost" in card), "no cost field exists on a researcher's meter");
-});
-
-test("a refill brings an exhausted project back to life without anyone touching its status", async () => {
-  const { meter, ctx, store, walletId } = await fixture(0);
-  await meter.credit(walletId, 20, { reason: "initial", by: "admin" });
-  /* spend it all: enough responses to take the wallet to nothing */
-  for (let i = 0; i < 40; i += 1) await meter.record(ctx, { eventType: "SURVEY_RESPONSE", quantity: 500 });
-
-  const spent = (await store.getWallet(walletId))!;
-  assert.ok(spent.balance <= 0, `the wallet is empty (${spent.balance})`);
-  assert.equal(spent.state, "read_only", "which stops billable work");
-  const before = projectMeter(spent, undefined, cfg);
-  assert.equal(before.state, "read_only");
-
-  const { wallet: after } = await meter.credit(walletId, 50, { reason: "Project wallet refill", by: "user_1" });
-  const m = projectMeter(after, undefined, cfg);
-  assert.ok(m.remaining > 0 && m.remaining <= 50);
-  assert.equal(m.state, "active", "the state follows the balance — nobody flips a switch by hand");
-  assert.equal(m.level, "normal");
-  assert.equal(m.allocated, 70, "the wallet has had $70 put into it over its life");
-
-  const ledger = await store.listLedger(walletId, 50);
-  assert.equal(ledger.filter((l) => l.kind === "credit").length, 2, "and every refill is a ledger line, never a balance written directly");
-  assert.equal(ledger.find((l) => l.reason === "Project wallet refill")?.amount, 50);
-});
-
-test("a refill can only ever MOVE credits: a transfer takes exactly what it gives", async () => {
-  /*
-   * The rule the Refill button exists under. A project's wallet goes up by
-   * the amount the person's wallet goes down by — no path adds to one
-   * without subtracting from the other, and a transfer of more than the
-   * available balance is refused rather than overdrawn.
-   */
+test("the wallet overview is the person's whole position, from the ledger", async () => {
   const store = new MemoryMeterStore();
   const meter = new Meter(store, { cacheMs: 0 });
   const mine = (await store.walletForUser("cust", "user_1", { create: true }))!;
-  const project = (await meter.walletFor({ customerId: "cust", surveyId: "proj_empty" }))!;
-  await meter.credit(mine.id, 100, { reason: "assigned", by: "admin" });
+  const theirs = (await store.walletForUser("cust", "user_2", { create: true }))!;
+  await meter.credit(mine.id, 500, { reason: "deposit", by: "admin" });
+  await meter.transfer({ sourceWalletId: mine.id, destinationWalletId: theirs.id, amount: 50, by: "user_1" });
+  await meter.transfer({ sourceWalletId: theirs.id, destinationWalletId: mine.id, amount: 20, by: "user_2" });
 
-  const ok = await meter.transfer({ sourceWalletId: mine.id, destinationWalletId: project.id, amount: 60, by: "user_1" });
-  assert.ok(ok.ok);
-  assert.equal(ok.source.balance, 40);
-  assert.equal(ok.destination.balance, 60);
-  assert.equal(money6(ok.source.balance + ok.destination.balance), 100, "nothing was created");
-  assert.equal(projectMeter(ok.destination, undefined, cfg).allocated, 60, "and the project's wallet records what arrived");
+  const w = (await store.getWallet(mine.id))!;
+  const o = walletOverview(w, await store.listLedger(mine.id), cfg);
+  assert.equal(o.totalAdded, 520, "deposits and credits received");
+  assert.equal(o.transferredOut, 50);
+  assert.equal(o.transferredIn, 20);
+  assert.equal(o.balance, 470);
+  assert.equal(o.available, 470);
+  assert.equal(o.state, "active");
+  assert.equal(walletOverview(null, [], cfg).walletId, null, "a person with no wallet yet has a readable position too");
+});
 
-  const refused = await meter.transfer({ sourceWalletId: mine.id, destinationWalletId: project.id, amount: 500, by: "user_1" });
+/* ------------------------------------------------ the rules, through the engine */
+
+/**
+ * Ana owns three projects and has one wallet.
+ *
+ * `spend(project, $)` charges an exact amount by asking the meter what one
+ * unit costs and buying that many — the alternative, writing a ledger row by
+ * hand, would prove the arithmetic of the test rather than the engine's.
+ */
+async function ana(balance = 500) {
+  const store = new MemoryMeterStore();
+  store.config = { minimumChargePerOperation: 0 };
+  const meter = new Meter(store, { cacheMs: 0 });
+  for (const p of ["p_a", "p_b", "p_c"]) store.setOwner(p, "ana");
+  const w = (await meter.walletFor({ customerId: "cust", surveyId: "p_a" }))!;
+  if (balance) await meter.credit(w.id, balance, { reason: "deposit", by: "admin" });
+  const ctx = (surveyId: string) => ({ customerId: "cust", surveyId, userId: "ana", environment: "LIVE" as const });
+  const unit = (await meter.price({ eventType: "SURVEY_RESPONSE", quantity: 1 }, "LIVE")).breakdown.customerCharge;
+  const spend = (surveyId: string, amount: number) =>
+    meter.record(ctx(surveyId), { eventType: "SURVEY_RESPONSE", quantity: amount / unit });
+  return { store, meter, w, ctx, spend, unit };
+}
+
+test("three projects, one wallet: every charge comes out of the same balance", async () => {
+  const { meter, w, spend, store } = await ana(500);
+  assert.equal((await meter.walletFor({ customerId: "cust", surveyId: "p_b" }))!.id, w.id, "the second project resolves to the same wallet");
+  assert.equal((await meter.walletFor({ customerId: "cust", surveyId: "p_c" }))!.id, w.id, "and the third");
+
+  await spend("p_a", 120);
+  await spend("p_b", 75);
+  await spend("p_c", 40);
+  const after = (await store.getWallet(w.id))!;
+  assert.equal(Math.round(after.balance), 265, `500 − 235 = 265, not three separate balances (${after.balance})`);
+  assert.equal(Math.round((await store.getSpending("p_a", "cust"))!.spent), 120, "and each project knows its own share");
+  assert.equal(Math.round((await store.getSpending("p_b", "cust"))!.spent), 75);
+  assert.equal(Math.round((await store.getSpending("p_c", "cust"))!.spent), 40);
+});
+
+test("the brief's arrangement: one priority project spends on while the others are capped at a dollar", async () => {
+  const { meter, w, spend, ctx, store } = await ana(500);
+  await meter.setSpending("p_a", "cust", { mode: "priority", budgetLimit: null });
+  await meter.setSpending("p_b", "cust", { mode: "budget", budgetLimit: 1 });
+  await meter.setSpending("p_c", "cust", { mode: "budget", budgetLimit: 1 });
+
+  await spend("p_b", 1);
+  const refused = await meter.record(ctx("p_b"), { eventType: "SURVEY_RESPONSE", quantity: 100 });
   assert.equal(refused.ok, false);
-  assert.equal((await store.getWallet(mine.id))!.balance, 40, "a refused refill moves nothing");
-  assert.equal((await store.getWallet(project.id))!.balance, 60);
+  assert.equal((refused as { reason: string }).reason, "project_limit", "the PROJECT refused, not the wallet");
+  assert.match((refused as { message: string }).message, /spending limit/i);
+  assert.match((refused as { message: string }).message, /rest of your wallet is unaffected/i, "and it says the rest of the money is still there");
+
+  const ok = await meter.record(ctx("p_a"), { eventType: "SURVEY_RESPONSE", quantity: 1000 });
+  assert.equal(ok.ok, true, "the priority project is untouched by B's limit");
+
+  const wallet_ = (await store.getWallet(w.id))!;
+  assert.ok(wallet_.balance > 400, `and the wallet still holds the rest (${wallet_.balance})`);
+  assert.equal((await store.getSpending("p_b", "cust"))!.state, "frozen");
+  assert.equal((await store.getSpending("p_c", "cust"))!.state, "active", "a project that has spent nothing is not frozen by its sibling");
+});
+
+test("raising a limit moves no money and starts the project again", async () => {
+  const { meter, w, spend, ctx, store } = await ana(500);
+  await meter.setSpending("p_b", "cust", { mode: "budget", budgetLimit: 1 });
+  await spend("p_b", 1);
+  assert.equal((await store.getSpending("p_b", "cust"))!.state, "frozen");
+  const before = (await store.getWallet(w.id))!.balance;
+
+  const raised = await meter.setSpending("p_b", "cust", { mode: "budget", budgetLimit: 100 });
+  assert.equal(raised.state, "active", "the project runs again");
+  assert.equal(Math.round(raised.spent), 1, "what it spent is unchanged");
+  assert.equal((await store.getWallet(w.id))!.balance, before, "and NOTHING moved: a budget is permission, not a transfer");
+  assert.equal((await meter.record(ctx("p_b"), { eventType: "SURVEY_RESPONSE", quantity: 10 })).ok, true);
+});
+
+test("an exhausted wallet freezes everything, and a deposit brings it all back", async () => {
+  const { meter, w, spend, ctx, store } = await ana(20);
+  await spend("p_a", 20);
+  assert.equal((await store.getWallet(w.id))!.state, "read_only");
+
+  const refused = await meter.record(ctx("p_c"), { eventType: "SURVEY_RESPONSE", quantity: 10 });
+  assert.equal(refused.ok, false);
+  assert.equal((refused as { reason: string }).reason, "read_only", "every project stops — this one has spent nothing at all");
+
+  await meter.credit(w.id, 100, { reason: "deposit", by: "admin" });
+  assert.equal((await store.getWallet(w.id))!.state, "active", "the deposit reactivates the wallet with nobody flipping a switch");
+  assert.equal((await meter.record(ctx("p_c"), { eventType: "SURVEY_RESPONSE", quantity: 10 })).ok, true);
+});
+
+test("a hold counts against the project's budget while it is held, and is given back if it is released", async () => {
+  const { meter, ctx, store, unit } = await ana(500);
+  await meter.setSpending("p_b", "cust", { mode: "budget", budgetLimit: 1 });
+  const hold = await meter.reserve(ctx("p_b"), { eventType: "SURVEY_RESPONSE", quantity: 1 / unit });
+  assert.ok(hold.ok);
+  assert.equal(Math.round((await store.getSpending("p_b", "cust"))!.reserved * 100) / 100, 1);
+
+  const second = await meter.reserve(ctx("p_b"), { eventType: "SURVEY_RESPONSE", quantity: 1 / unit });
+  assert.equal(second.ok, false, "two operations cannot both be told there is room for the last dollar");
+  assert.equal((second as { reason: string }).reason, "project_limit");
+
+  await meter.release(hold as never);
+  assert.equal((await store.getSpending("p_b", "cust"))!.reserved, 0, "a released hold gives the headroom back");
+  assert.equal((await meter.reserve(ctx("p_b"), { eventType: "SURVEY_RESPONSE", quantity: 0.5 / unit })).ok, true);
+});
+
+test("check() tells a frozen project apart from an empty wallet", async () => {
+  const { meter, spend } = await ana(500);
+  await meter.setSpending("p_b", "cust", { mode: "budget", budgetLimit: 1 });
+  await spend("p_b", 1);
+
+  const frozen = await meter.check({ customerId: "cust", surveyId: "p_b" });
+  assert.equal(frozen.allowed, false);
+  assert.equal(frozen.reason, "project_limit");
+  assert.match(frozen.message, /own spending limit/i);
+  assert.ok(frozen.wallet && frozen.wallet.balance > 100, "while the wallet it draws on is fine");
+
+  const fine = await meter.check({ customerId: "cust", surveyId: "p_a" });
+  assert.equal(fine.allowed, true, "and its sibling is unaffected");
+});
+
+test("the ledger says which project spent, even though one wallet paid", async () => {
+  const { meter, w, spend, store } = await ana(500);
+  await spend("p_a", 20);
+  await spend("p_b", 10);
+  const ledger = await store.listLedger(w.id, 50);
+  const debits = ledger.filter((l) => l.kind === "debit");
+  assert.equal(new Set(debits.map((l) => l.surveyId)).size, 2, "two projects, two attributions on one wallet");
+  assert.ok(debits.some((l) => l.surveyId === "p_a") && debits.some((l) => l.surveyId === "p_b"));
 });

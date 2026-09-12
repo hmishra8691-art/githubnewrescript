@@ -67,8 +67,23 @@ export default function BillingAdminPage() {
 }
 
 /* ------------------------------------------------------------------ wallets */
+/** One project's spending policy, as Billing Administration lists it. */
+interface SpendingRow {
+  surveyId: string;
+  project: { code: string; title: string; status: string; owner: string | null; customer: string | null } | null;
+  mode: "shared" | "budget" | "priority";
+  limit: number | null;
+  spent: number;
+  reserved: number;
+  state: "active" | "frozen";
+  frozenAt: string | null;
+}
+
 function WalletsTab({ say, onPending }: { say: (t: string, ok?: boolean) => void; onPending: (n: number) => void }) {
   const [wallets, setWallets] = React.useState<WalletRow[] | null>(null);
+  const [spending, setSpending] = React.useState<SpendingRow[]>([]);
+  const [limitFor, setLimitFor] = React.useState<SpendingRow | null>(null);
+  const [limitValue, setLimitValue] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [open, setOpen] = React.useState<WalletRow | null>(null);
   const [amount, setAmount] = React.useState(100);
@@ -80,10 +95,24 @@ function WalletsTab({ say, onPending }: { say: (t: string, ok?: boolean) => void
   const [ensureId, setEnsureId] = React.useState("");
 
   const load = React.useCallback(async () => {
-    const r = await call<{ wallets: WalletRow[]; pendingRequests: number }>("/api/admin/billing/wallets");
+    const r = await call<{ wallets: WalletRow[]; spending?: SpendingRow[]; pendingRequests: number }>("/api/admin/billing/wallets");
     if (!r.ok) { setError(r.json.error ?? `Could not read wallets (${r.status})`); return; }
-    setError(null); setWallets(r.json.wallets); onPending(r.json.pendingRequests);
+    setError(null); setWallets(r.json.wallets); setSpending(r.json.spending ?? []); onPending(r.json.pendingRequests);
   }, [onPending]);
+
+  const saveLimit = async (row: SpendingRow, mode: SpendingRow["mode"], limit: number | null) => {
+    setBusy(true);
+    const r = await call<{ spending: SpendingRow }>("/api/admin/billing/wallets", {
+      method: "POST", body: JSON.stringify({ action: "set_spending", surveyId: row.surveyId, mode, limit }),
+    });
+    setBusy(false);
+    if (!r.ok) { say(r.json.error ?? `The limit could not be saved (${r.status})`, false); return; }
+    say(mode === "budget"
+      ? `${row.project?.title ?? "That project"} may now spend up to ${fmtMoney(limit ?? 0, "USD")} of its owner's wallet.`
+      : `${row.project?.title ?? "That project"} now spends ${mode === "priority" ? "as the priority project" : "freely"} from its owner's wallet.`);
+    setLimitFor(null);
+    await load();
+  };
   React.useEffect(() => { void load(); }, [load]);
   React.useEffect(() => {
     if (!open?.surveyId) { setDetail(null); return; }
@@ -154,6 +183,65 @@ function WalletsTab({ say, onPending }: { say: (t: string, ok?: boolean) => void
             ))}
           </tbody>
         </table>
+      )}
+
+      {/*
+        * PROJECT SPENDING — what each study is costing, and what it is
+        * allowed to cost. A project holds no balance now, so a table of
+        * wallets alone cannot answer either question; the limit below moves
+        * no money, it decides how much of the owner's wallet that project may
+        * consume.
+        */}
+      {spending.length > 0 && (
+        <div className="card bl-card" style={{ marginTop: 14 }} data-testid="admin-spending-card">
+          <div className="card-title">Project spending</div>
+          <p className="muted" style={{ fontSize: 12.5, marginTop: -4 }}>
+            Each project spends from its owner&apos;s wallet. A limit caps how much of that wallet the project may use — it
+            transfers nothing, and raising it releases a project that stopped at its own limit.
+          </p>
+          <table className="grid bl-table" data-testid="admin-spending">
+            <thead><tr><th>Project</th><th>Owner</th><th>Spent</th><th>Limit</th><th>State</th><th /></tr></thead>
+            <tbody>
+              {spending.map((p) => (
+                <tr key={p.surveyId} data-testid="admin-spending-row" data-survey={p.surveyId} data-state={p.state} data-mode={p.mode}>
+                  <td>{p.project?.title ?? p.surveyId}{p.project?.code && <span className="muted"> · {p.project.code}</span>}</td>
+                  <td className="muted">{p.project?.owner ?? "—"}</td>
+                  <td data-testid="admin-spending-spent">{fmtMoney(p.spent, "USD")}</td>
+                  <td data-testid="admin-spending-limit">
+                    {p.limit == null ? <span className="muted">{p.mode === "priority" ? "priority · no limit" : "no limit"}</span> : fmtMoney(p.limit, "USD")}
+                  </td>
+                  <td>
+                    <span className={`badge ${p.state === "frozen" ? "warning" : "success"}`}>{p.state === "frozen" ? "At its limit" : "Active"}</span>
+                  </td>
+                  <td>
+                    <button className="btn small" data-testid="admin-spending-edit"
+                      onClick={() => { setLimitFor(p); setLimitValue(p.limit == null ? "" : String(p.limit)); }}>
+                      Limit…
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {limitFor && (
+            <div className="bl-form" style={{ marginTop: 12 }} data-testid="admin-limit-editor">
+              <div className="card-title" style={{ fontSize: 14 }}>{limitFor.project?.title ?? limitFor.surveyId}</div>
+              <label className="flabel">Spending limit ({fmtMoney(limitFor.spent, "USD")} already spent)</label>
+              <input className="input" data-testid="admin-limit-amount" value={limitValue}
+                onChange={(e) => setLimitValue(e.target.value)} placeholder="e.g. 100" />
+              <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                <button className="btn primary" disabled={busy || !Number.isFinite(Number(limitValue))} data-testid="admin-limit-save"
+                  onClick={() => saveLimit(limitFor, "budget", Number(limitValue))}>Set limit</button>
+                <button className="btn" disabled={busy} data-testid="admin-limit-none"
+                  onClick={() => saveLimit(limitFor, "shared", null)}>No limit</button>
+                <button className="btn" disabled={busy} data-testid="admin-limit-priority"
+                  onClick={() => saveLimit(limitFor, "priority", null)}>Priority project</button>
+                <button className="btn" onClick={() => setLimitFor(null)}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       {open && (

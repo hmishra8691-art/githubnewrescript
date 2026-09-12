@@ -9,12 +9,13 @@ import { can, type ProjectRole } from "@rescript/access";
 export const dynamic = "force-dynamic";
 
 /**
- * EVERY PROJECT'S WALLET, FOR THE DASHBOARD.
+ * THE WALLET, AND WHAT EVERY PROJECT IS SPENDING FROM IT.
  *
- * One request for the whole page. The dashboard draws a meter on every card,
- * and asking each card to fetch its own would be a query per project for a
- * number that is a sum — `projectMeters` answers the whole set in two store
- * reads (see that file for why this is not `projectMeterView` in a loop).
+ * One request for the whole page: one balance, plus each project's own spend
+ * and policy. Asking each card to fetch its own would be a query per project
+ * for numbers that are sums — `projectMeters` answers the whole set in three
+ * store reads (see that file for why this is not `projectMeterView` in a
+ * loop).
  *
  * Which projects: `rescript_my_projects`, the same function the survey list
  * itself uses, so a wallet can never appear for a project the person could
@@ -41,16 +42,17 @@ export async function GET(req: NextRequest) {
 
   const meter = getMeter();
   try {
-    const { meters, config } = await projectMeters(meter, user.customerId, rows.map((r) => r.survey_id));
-    /* Who may put credits into which project — decided here, with the role,
-       so the card does not have to guess and the button is not offered to
-       someone the transfer endpoint would refuse. */
-    const canRefill = new Set(
-      rows.filter((r) => can(r.my_role as ProjectRole, "billing.transfer")).map((r) => r.survey_id),
+    const { meters, wallet, config } = await projectMeters(meter, user.customerId, user.userId, rows.map((r) => r.survey_id));
+    /* Who may change which project's spending limit — decided here, with the
+       role, so a card does not offer a control the server would refuse. */
+    const canBudget = new Set(
+      rows.filter((r) => can(r.my_role as ProjectRole, "billing.set_budget")).map((r) => r.survey_id),
     );
     return NextResponse.json(stripInternalCosts({
       ok: true,
       currency: config.currency,
+      /* the one balance every card on this page draws on */
+      wallet,
       thresholds: meterThresholds(config),
       isPlatformAdmin: !!user.isPlatformAdmin,
       projects: rows.map((r) => {
@@ -58,7 +60,7 @@ export async function GET(req: NextRequest) {
         return {
           id: r.survey_id,
           meter: m ?? null,
-          canRefill: canRefill.has(r.survey_id) || !!user.isPlatformAdmin,
+          canBudget: canBudget.has(r.survey_id) || !!user.isPlatformAdmin,
         };
       }),
     }));

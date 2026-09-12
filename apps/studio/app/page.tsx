@@ -6,12 +6,14 @@ import {
   SurveyCard, SurveyCardSkeleton, STATUS_META, relativeTime,
   type SurveyRow, type SurveyStats, type Contributor, type CardMeter,
 } from "@/components/SurveyCard";
-import { RefillWalletDialog } from "@/components/dashboard/RefillWalletDialog";
+import { ProjectBudgetDialog } from "@/components/dashboard/ProjectBudgetDialog";
+import { AddFundsDialog } from "@/components/dashboard/AddFundsDialog";
 import { CloneProjectDialog } from "@/components/dashboard/CloneProjectDialog";
 import { useSession } from "@/lib/useSession";
 import { AppHeader, greeting } from "@/components/ui/AppHeader";
 import { Icon } from "@/components/ui/Icon";
 import { can, type ProjectRole } from "@rescript/access";
+import { fmtMoney, LEVEL_CLASS, LEVEL_WORD } from "@/components/billing/shared";
 
 type SortKey =
   | "updated" | "created" | "name_az" | "name_za"
@@ -27,24 +29,37 @@ const SORTS: { key: SortKey; label: string }[] = [
   { key: "responses_asc", label: "Fewest responses" },
   { key: "questions_desc", label: "Most questions" },
   { key: "due", label: "Due soonest" },
-  /* the wallet sorts: "which project is about to stop" is a question about
-     money, and it cannot be answered by any of the sorts above */
-  { key: "balance_asc", label: "Lowest balance" },
-  { key: "balance_desc", label: "Highest balance" },
-  { key: "used_desc", label: "Most credits used" },
-  { key: "used_asc", label: "Least credits used" },
+  /* the spending sorts: "which study is about to stop" is a question about
+     money, and none of the sorts above can answer it */
+  { key: "balance_asc", label: "Least left to spend" },
+  { key: "balance_desc", label: "Most left to spend" },
+  { key: "used_desc", label: "Most spent" },
+  { key: "used_asc", label: "Least spent" },
 ];
 
-/** The wallet states a researcher filters by, in the words the card uses. */
-type BalanceFilter = "all" | "healthy" | "low" | "critical" | "exhausted";
+/** The spending states a researcher filters by, in the words the cards use. */
+type BalanceFilter = "all" | "healthy" | "low" | "critical" | "exhausted" | "frozen";
 const BALANCE_FILTERS: { key: BalanceFilter; label: string }[] = [
-  { key: "all", label: "Any balance" },
+  { key: "all", label: "Any spending" },
   { key: "healthy", label: "Healthy" },
   { key: "low", label: "Low balance" },
   { key: "critical", label: "Critical" },
+  { key: "frozen", label: "At its limit" },
   { key: "exhausted", label: "Exhausted" },
 ];
 const LEVEL_FILTER: Record<string, BalanceFilter> = { normal: "healthy", low: "low", critical: "critical", locked: "exhausted" };
+
+/** The person's one wallet, as the page header shows it. */
+interface WalletSummary {
+  currency: string;
+  balance: number;
+  reserved: number;
+  available: number;
+  totalAdded: number;
+  totalUsed: number;
+  level: "normal" | "low" | "critical" | "locked";
+  state: "active" | "read_only" | "suspended";
+}
 
 /**
  * MY PROJECTS (§36, §37).
@@ -91,12 +106,15 @@ export default function Dashboard() {
   const [responseFilter, setResponseFilter] = React.useState<"any" | "has" | "none">("any");
   const [balanceFilter, setBalanceFilter] = React.useState<BalanceFilter>("all");
   const [sort, setSort] = React.useState<SortKey>("updated");
-  /* wallets — loaded separately, so a workspace without billing still gets its projects */
+  /* the wallet and the projects spending from it — loaded separately, so a
+     workspace without billing still gets its projects */
   const [meters, setMeters] = React.useState<Record<string, CardMeter | null>>({});
-  const [refillable, setRefillable] = React.useState<Record<string, boolean>>({});
+  const [budgetable, setBudgetable] = React.useState<Record<string, boolean>>({});
+  const [wallet, setWallet] = React.useState<WalletSummary | null>(null);
   const [metersLoading, setMetersLoading] = React.useState(true);
   const [billingOn, setBillingOn] = React.useState(false);
-  const [refilling, setRefilling] = React.useState<SurveyRow | null>(null);
+  const [budgeting, setBudgeting] = React.useState<SurveyRow | null>(null);
+  const [addingFunds, setAddingFunds] = React.useState(false);
   const [cloning, setCloning] = React.useState<SurveyRow | null>(null);
   const [creating, setCreating] = React.useState(false);
   const [title, setTitle] = React.useState("");
@@ -174,9 +192,9 @@ export default function Dashboard() {
       const d = await r.json().catch(() => ({}));
       if (!r.ok || !d?.ok) { setBillingOn(false); return; }
       const m: Record<string, CardMeter | null> = {};
-      const rf: Record<string, boolean> = {};
-      for (const p of d.projects ?? []) { m[p.id] = p.meter ?? null; rf[p.id] = !!p.canRefill; }
-      setMeters(m); setRefillable(rf); setBillingOn(true);
+      const bd: Record<string, boolean> = {};
+      for (const p of d.projects ?? []) { m[p.id] = p.meter ?? null; bd[p.id] = !!p.canBudget; }
+      setMeters(m); setBudgetable(bd); setWallet(d.wallet ?? null); setBillingOn(true);
     } catch { setBillingOn(false); } finally { setMetersLoading(false); }
   }, []);
 
@@ -244,11 +262,15 @@ export default function Dashboard() {
       const n = stats[s2.id]?.responseCount ?? 0;
       if (responseFilter === "has" && n === 0) return false;
       if (responseFilter === "none" && n > 0) return false;
-      /* a project with no wallet has no balance to be in any band, so it is
-         filtered out by a balance filter rather than silently counted healthy */
+      /* a project with no meter has no band to be in, so a spending filter
+         excludes it rather than silently counting it healthy */
       if (balanceFilter !== "all") {
-        const lvl = meters[s2.id]?.level;
-        if (!lvl || LEVEL_FILTER[lvl] !== balanceFilter) return false;
+        const m = meters[s2.id];
+        if (!m) return false;
+        /* "at its limit" is about the PROJECT's own rule, which is a
+           different question from how much money is left */
+        if (balanceFilter === "frozen") { if (m.state !== "frozen") return false; }
+        else if (m.state === "frozen" || LEVEL_FILTER[m.level] !== balanceFilter) return false;
       }
       if (!q) return true;
       return (
@@ -266,7 +288,7 @@ export default function Dashboard() {
       );
     });
     const n = (id: string, k: keyof SurveyStats) => Number(stats[id]?.[k] ?? 0);
-    const cash = (id: string, missing: number) => meters[id]?.remaining ?? missing;
+    const cash = (id: string, missing: number) => meters[id]?.allowance ?? missing;
     const spent = (id: string, missing: number) => meters[id]?.used ?? missing;
     rows = [...rows].sort((a, b) => {
       switch (sort) {
@@ -375,6 +397,41 @@ export default function Dashboard() {
         <div className="metric"><span className="metric-v">{surveys ? totals.questions.toLocaleString() : <span className="sk sk-num" />}</span><span className="metric-l">Questions</span></div>
       </div>
 
+      {/*
+        * ONE WALLET, ABOVE THE PROJECTS THAT SPEND IT.
+        *
+        * The balance belongs here and not on the cards, because there is one
+        * of it: repeating it on every card would suggest each project had its
+        * own, which is exactly the model this replaced. The cards below say
+        * what each study has spent and what it may still take; this says what
+        * there is.
+        */}
+      {billingOn && wallet && (
+        <div className={`dash-wallet ${wallet.state === "read_only" ? "empty" : ""}`} data-testid="dash-wallet"
+          data-level={wallet.level} data-state={wallet.state}>
+          <div className="dw-main">
+            <div className="dw-label">My wallet</div>
+            <div className="dw-balance" data-testid="dash-wallet-balance">{fmtMoney(wallet.balance, wallet.currency)}</div>
+            <div className="dw-sub muted">
+              {fmtMoney(wallet.totalUsed, wallet.currency)} used of {fmtMoney(wallet.totalAdded, wallet.currency)} added
+              {wallet.reserved > 0 ? ` · ${fmtMoney(wallet.reserved, wallet.currency)} held by work in progress` : ""}
+            </div>
+          </div>
+          <div className="dw-side">
+            <span className={`badge ${wallet.state === "suspended" ? "error" : LEVEL_CLASS[wallet.level]}`} data-testid="dash-wallet-level">
+              {wallet.state === "suspended" ? "Suspended" : wallet.state === "read_only" ? "Empty" : LEVEL_WORD[wallet.level]}
+            </span>
+            <button className="btn small primary" data-testid="dash-add-funds" onClick={() => setAddingFunds(true)}>Add funds</button>
+            <a className="btn small" href="/billing">My usage</a>
+          </div>
+          {wallet.state === "read_only" && (
+            <div className="dw-note" data-testid="dash-wallet-empty">
+              Your wallet is empty, so every project has stopped running billable work. Adding funds starts them again.
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="dash-body">
       <div className="dash-main">
 
@@ -481,8 +538,8 @@ export default function Dashboard() {
           onDelete={() => { setDeleting(s); setConfirmText(""); setDeleteError(null); }}
           meter={billingOn ? meters[s.id] ?? null : undefined}
           meterLoading={metersLoading}
-          canRefill={!!refillable[s.id]}
-          onRefill={() => setRefilling(s)}
+          canBudget={!!budgetable[s.id]}
+          onBudget={() => setBudgeting(s)}
           onClone={() => setCloning(s)}
           /*
            * project.delete is owner-only (packages/access/src/roles.ts) and
@@ -661,18 +718,32 @@ export default function Dashboard() {
       )}
 
       {/*
-        * Refill and Clone, from the card. Both reload the page's data when
-        * they finish rather than patching a number into local state: a refill
-        * changes a balance the SERVER computes (and may bring a read-only
-        * project back to life), and a clone adds a project to the list.
+        * The spending limit, Add funds and Clone. All three reload the page's
+        * data when they finish rather than patching a number into local
+        * state: the server decides what a project may now spend, whether it
+        * is frozen, and what the wallet holds.
         */}
-      {refilling && (
-        <RefillWalletDialog
-          project={{ id: refilling.id, title: refilling.title, code: refilling.code }}
-          currency={meters[refilling.id]?.currency ?? "USD"}
-          isPlatformAdmin={session.state.kind === "signed_in" && session.state.user.isPlatformAdmin}
-          onClose={() => setRefilling(null)}
-          onDone={() => { void loadMeters(); }}
+      {budgeting && meters[budgeting.id] && (
+        <ProjectBudgetDialog
+          project={{ id: budgeting.id, title: budgeting.title, code: budgeting.code }}
+          meter={{
+            mode: meters[budgeting.id]!.mode,
+            limit: meters[budgeting.id]!.limit,
+            used: meters[budgeting.id]!.used,
+            currency: meters[budgeting.id]!.currency,
+            walletRemaining: meters[budgeting.id]!.walletRemaining,
+            state: meters[budgeting.id]!.state,
+          }}
+          onClose={() => setBudgeting(null)}
+          onSaved={() => { void loadMeters(); }}
+        />
+      )}
+      {addingFunds && (
+        <AddFundsDialog
+          currency={wallet?.currency ?? "USD"}
+          balance={wallet?.balance ?? 0}
+          onClose={() => setAddingFunds(false)}
+          onRequested={() => { void loadMeters(); }}
         />
       )}
       {cloning && (

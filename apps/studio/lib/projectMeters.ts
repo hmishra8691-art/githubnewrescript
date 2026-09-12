@@ -1,21 +1,24 @@
-import type { Meter, Wallet, BillingConfig, UsageEvent, ProjectMeter } from "@rescript/billing";
-import { money6, projectMeter } from "@rescript/billing";
+import type { Meter, Wallet, BillingConfig, UsageEvent, ProjectMeter, ProjectSpending, WalletOverview } from "@rescript/billing";
+import { money6, projectMeter, walletOverview } from "@rescript/billing";
 
 /**
- * EVERY PROJECT'S METER, IN TWO QUERIES.
+ * ONE PERSON'S WALLET, AND WHAT EACH OF THEIR PROJECTS IS SPENDING FROM IT.
  *
- * The dashboard shows a wallet on every card and "My usage" lists the same
- * wallets. Neither works out its own answer: the arithmetic is `projectMeter`
- * in the billing package, beside the rest of the wallet maths, and this file
- * only fetches. A researcher who reads $56.75 on a card, opens the project
- * and sees something else has been told two different things by one system.
+ * The model this serves: a person has ONE balance, every project they own
+ * draws on it, and what a project may take is a policy on the project rather
+ * than money inside it. So a projects page needs two different things at
+ * once — the wallet, which is the same number on every card, and each
+ * project's own spend and policy, which are not.
  *
- * Two store reads, whatever the number of projects: every wallet in the
- * workspace and every usage event in it, grouped in memory. The obvious
- * implementation — ask each project for its own meter — is one round trip per
- * card, which on a dashboard of forty projects is eighty queries for a number
- * that is a sum. `projectMeterView` remains the answer for ONE project opened
- * on its own, where the ledger, forecast and timeline it also loads are shown.
+ * Both come from `@rescript/billing`: `walletOverview` and `projectMeter`.
+ * No screen does this arithmetic itself, because a figure that reads one way
+ * on the dashboard and another inside the project is one system telling a
+ * person two different things and no way for them to know which is true.
+ *
+ * Three store reads for the whole page, whatever the number of projects: the
+ * wallets, the spending policies, and the usage events. The obvious
+ * implementation — ask each project for its own meter — is a round trip per
+ * card for numbers that are sums.
  *
  * Nothing internal is computed here, so nothing internal can leak: provider
  * cost, infrastructure, fees, reserve and margin are not read, not summed and
@@ -25,27 +28,40 @@ import { money6, projectMeter } from "@rescript/billing";
 export type { ProjectMeter };
 
 export interface ProjectMeterSet {
-  /** Keyed by survey id. A project with no wallet yet is absent. */
+  /** Keyed by survey id. Every visible project has one, wallet or no wallet. */
   meters: Map<string, ProjectMeter>;
+  /** The wallet those projects draw on — the signed-in person's. */
+  wallet: WalletOverview;
+  spending: Map<string, ProjectSpending>;
   config: BillingConfig;
   wallets: Wallet[];
   events: UsageEvent[];
 }
 
 /**
- * The meters for a set of projects.
+ * The meters for a set of projects, all drawing on one person's wallet.
  *
- * `surveyIds` is the projects the caller may see, and it is applied to the
- * usage events as well as to the wallets — a workspace's events can never be
+ * `surveyIds` is what the caller may see, and it is applied to the usage
+ * events as well as to the policies — a workspace's events can never be
  * summed into a project the person cannot open.
  */
-export async function projectMeters(meter: Meter, customerId: string | null | undefined, surveyIds: string[]): Promise<ProjectMeterSet> {
+export async function projectMeters(
+  meter: Meter,
+  customerId: string | null | undefined,
+  userId: string,
+  surveyIds: string[],
+): Promise<ProjectMeterSet> {
   const cfg = await meter.config();
   const visible = new Set(surveyIds);
-  const [wallets, events] = await Promise.all([
+  const [wallets, events, policies] = await Promise.all([
     meter.store.listWallets({ customerId: customerId ?? undefined }),
     meter.store.listUsage({ customerId: customerId ?? undefined, limit: 5000 }),
+    meter.store.listSpending({ customerId: customerId ?? undefined, surveyIds }),
   ]);
+
+  const mine = wallets.find((w) => w.userId === userId) ?? null;
+  const ledger = mine ? await meter.store.listLedger(mine.id, 500) : [];
+  const wallet = walletOverview(mine, ledger, cfg);
 
   const mineEvents = events.filter((e) => e.surveyId && visible.has(e.surveyId));
   const usedById = new Map<string, { charge: number; events: number }>();
@@ -56,12 +72,20 @@ export async function projectMeters(meter: Meter, customerId: string | null | un
     usedById.set(e.surveyId!, row);
   }
 
+  const spending = new Map(policies.map((p) => [p.surveyId, p]));
+  /*
+   * A project whose wallet is not this person's — one shared with them by a
+   * colleague — is metered against the wallet that actually funds it, so the
+   * card never shows a stranger's balance as though it were theirs.
+   */
+  const byProject = new Map(wallets.filter((w) => w.surveyId).map((w) => [w.surveyId!, w]));
   const meters = new Map<string, ProjectMeter>();
-  for (const w of wallets) {
-    if (!w.surveyId || !visible.has(w.surveyId)) continue;
-    meters.set(w.surveyId, projectMeter(w, usedById.get(w.surveyId), cfg));
+  for (const id of surveyIds) {
+    const w = mine ?? byProject.get(id) ?? null;
+    if (!w) continue;
+    meters.set(id, projectMeter(w, usedById.get(id), cfg, spending.get(id) ?? null));
   }
-  return { meters, config: cfg, wallets, events: mineEvents };
+  return { meters, wallet, spending, config: cfg, wallets, events: mineEvents };
 }
 
 /**

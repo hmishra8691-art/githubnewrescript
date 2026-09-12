@@ -90,13 +90,19 @@ export interface Contributor {
  */
 export interface CardMeter {
   currency: string;
-  allocated: number;
+  /** what THIS project has spent */
   used: number;
-  remaining: number;
+  /** its own budget, or null when it spends freely from the wallet */
+  limit: number | null;
+  mode: "shared" | "budget" | "priority";
+  /** what it may still spend: its own headroom, or what the wallet has left */
+  allowance: number;
+  /** the wallet behind it — the same figure on every project that shares it */
+  walletRemaining: number;
   reserved: number;
   usedPct: number;
   level: "normal" | "low" | "critical" | "locked";
-  state: "active" | "read_only" | "suspended";
+  state: "active" | "frozen" | "read_only" | "suspended";
 }
 
 export const STATUS_META: Record<string, { label: string; tone: string; hint: string }> = {
@@ -142,7 +148,7 @@ function Stat({ label, value, title, onClick }: {
 
 export function SurveyCard({
   survey, stats, contributors, loading, onOpen, onResponses, onStatus, onDelete, canDelete = true,
-  meter, meterLoading = false, canRefill = false, onRefill, onClone,
+  meter, meterLoading = false, canBudget = false, onBudget, onClone,
 }: {
   survey: SurveyRow;
   stats: SurveyStats | undefined;
@@ -152,11 +158,12 @@ export function SurveyCard({
   onResponses(): void;
   onStatus(status: string): void;
   onDelete(): void;
-  /** This project's wallet. `null` = no wallet yet; `undefined` = not loaded (or billing is off). */
+  /** This project's spend and policy. `null` = nothing to show; `undefined` = not loaded (or billing is off). */
   meter?: CardMeter | null;
   meterLoading?: boolean;
-  canRefill?: boolean;
-  onRefill?(): void;
+  /** whether this viewer may change the project's limit (the owner) */
+  canBudget?: boolean;
+  onBudget?(): void;
   onClone?(): void;
   /**
    * Whether this viewer's role permits permanently deleting the survey.
@@ -259,57 +266,76 @@ export function SurveyCard({
       </div>
 
       {/*
-        * THE PROJECT'S WALLET, ON THE CARD.
+        * WHAT THIS PROJECT IS SPENDING, AND OUT OF WHAT.
         *
-        * The point of putting it here is that a researcher should not have to
-        * open five projects to find the one that has run out. So all four
-        * numbers are shown at once — what was put in, what has gone, what is
-        * left, and how far through the meter is — with the bar to make the
-        * last one readable at a glance and a word for the ones that need
-        * action. Every figure is a CUSTOMER CHARGE; nothing on this card is
-        * an internal cost.
+        * A project holds no money — it spends from the wallet of the person
+        * who owns it, under a policy of its own. So the card answers the two
+        * questions a researcher actually has when scanning a list: what has
+        * this study cost me, and can it keep running. "Spent" is its own
+        * figure; "Remaining" is whichever limit will stop it first, which is
+        * its budget when it has one and the wallet when it does not — and the
+        * label says which, because $12 left of a budget and $12 left in a
+        * wallet call for different actions.
         *
-        * Absent entirely when billing is off or a project has no wallet: a
-        * card that never had a meter should look like the card it was, not
-        * like a project whose wallet failed to load.
+        * Every figure is a CUSTOMER CHARGE; nothing here is an internal cost.
         */}
       {meter ? (
-        <div className={`card-wallet ${meter.state === "read_only" || meter.level === "locked" ? "exhausted" : ""}`}
-          data-testid="card-wallet" data-level={meter.level} data-state={meter.state} data-remaining={meter.remaining}>
+        <div className={`card-wallet ${meter.state === "frozen" || meter.state === "read_only" ? "exhausted" : ""}`}
+          data-testid="card-wallet" data-level={meter.level} data-state={meter.state}
+          data-mode={meter.mode} data-remaining={meter.allowance}>
           <div className="cw-head">
-            <span className="cw-title">Project wallet</span>
+            <span className="cw-title">{meter.mode === "budget" ? "Project budget" : "Project spend"}</span>
             <span className={`badge ${meter.state === "suspended" ? "error" : LEVEL_CLASS[meter.level]}`} data-testid="card-wallet-level">
               {meter.state === "suspended" ? "Suspended"
-                : meter.state === "read_only" ? "Read-only"
+                : meter.state === "frozen" ? "Limit reached"
+                : meter.state === "read_only" ? "Wallet empty"
                 : LEVEL_WORD[meter.level]}
             </span>
+            {meter.mode === "priority" && (
+              <span className="chip" data-testid="card-wallet-priority" title="The study this wallet is mainly for">Priority</span>
+            )}
             <span className="grow" />
-            {canRefill && onRefill && (
-              <button className="btn small cw-refill" data-testid="card-refill"
-                onClick={(e) => { e.stopPropagation(); onRefill(); }}
-                title={meter.state === "read_only"
-                  ? "This project has stopped: add credits to start it again"
-                  : "Move credits into this project's wallet"}>
-                Refill wallet
+            {canBudget && onBudget && (
+              <button className="btn small cw-refill" data-testid="card-budget"
+                onClick={(e) => { e.stopPropagation(); onBudget(); }}
+                title={meter.state === "frozen"
+                  ? "This project has reached its own limit: raise it to start it again"
+                  : "Set how much of your wallet this project may spend"}>
+                {meter.state === "frozen" ? "Raise limit" : "Set limit"}
               </button>
             )}
           </div>
           <div className="cw-figures">
-            <div className="cw-fig"><div className="cw-v" data-testid="cw-allocated">{fmtMoney(meter.allocated, meter.currency)}</div><div className="cw-l">Wallet</div></div>
-            <div className="cw-fig"><div className="cw-v" data-testid="cw-used">{fmtMoney(meter.used, meter.currency)}</div><div className="cw-l">Used</div></div>
-            <div className="cw-fig"><div className="cw-v strong" data-testid="cw-remaining">{fmtMoney(meter.remaining, meter.currency)}</div><div className="cw-l">Remaining</div></div>
+            <div className="cw-fig"><div className="cw-v" data-testid="cw-used">{fmtMoney(meter.used, meter.currency)}</div><div className="cw-l">Spent</div></div>
+            <div className="cw-fig">
+              <div className="cw-v" data-testid="cw-limit">{meter.limit == null ? "No limit" : fmtMoney(meter.limit, meter.currency)}</div>
+              <div className="cw-l">{meter.limit == null ? "Own budget" : "Budget"}</div>
+            </div>
+            <div className="cw-fig">
+              <div className="cw-v strong" data-testid="cw-remaining">{fmtMoney(meter.allowance, meter.currency)}</div>
+              <div className="cw-l">{meter.limit == null ? "Wallet left" : "Left of it"}</div>
+            </div>
             <div className="cw-fig"><div className="cw-v" data-testid="cw-pct">{meter.usedPct}%</div><div className="cw-l">Meter used</div></div>
           </div>
-          <Progress used={meter.used} total={meter.allocated} level={meter.level}
-            testid="card-wallet-bar" label={`${meter.usedPct}% of this project's wallet used`} />
+          <Progress used={meter.used} total={meter.used + meter.allowance} level={meter.level}
+            testid="card-wallet-bar"
+            label={meter.limit == null
+              ? `${meter.usedPct}% of what this project can spend from your wallet`
+              : `${meter.usedPct}% of this project's budget used`} />
           {meter.reserved > 0 && (
-            <div className="cw-note muted" title="Held by operations in flight — not spent yet, and not available to spend">
-              {fmtMoney(meter.reserved, meter.currency)} reserved
+            <div className="cw-note muted" title="Held by this project's operations in flight — not spent yet, and not available to spend">
+              {fmtMoney(meter.reserved, meter.currency)} held by work in progress
             </div>
           )}
-          {(meter.state === "read_only" || meter.level === "locked") && (
+          {meter.state === "frozen" && (
+            <div className="cw-note warn" data-testid="card-wallet-frozen">
+              Stopped at its own limit of {fmtMoney(meter.limit ?? 0, meter.currency)}. Your wallet still has
+              {" "}{fmtMoney(meter.walletRemaining, meter.currency)} for other projects.
+            </div>
+          )}
+          {meter.state === "read_only" && (
             <div className="cw-note warn" data-testid="card-wallet-readonly">
-              Read-only: this project has used its credits and has stopped collecting billable work.
+              Read-only: your wallet is empty, so no project can run billable work until you add funds.
             </div>
           )}
         </div>
@@ -366,7 +392,7 @@ export function SurveyCard({
                   {/*
                     * Clone lives in the menu rather than as a fourth button:
                     * it is a deliberate, occasional act, and the card's own
-                    * job is to be readable. The wallet's Refill repeats here
+                    * job is to be readable. The spending limit repeats here
                     * so that on a narrow screen, where the card's buttons
                     * wrap, every action is still reachable from one place.
                     */}
@@ -378,10 +404,10 @@ export function SurveyCard({
                       Clone project…
                     </button>
                   )}
-                  {canRefill && onRefill && (
-                    <button className="menu-item" data-testid="refill-menu-item"
-                      onClick={() => { setMenu(false); onRefill(); }}>
-                      Refill wallet…
+                  {canBudget && onBudget && (
+                    <button className="menu-item" data-testid="budget-menu-item"
+                      onClick={() => { setMenu(false); onBudget(); }}>
+                      Spending limit…
                     </button>
                   )}
                   <div className="menu-sep" />

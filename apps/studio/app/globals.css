@@ -1893,3 +1893,28 @@ p.qs-help { margin: -2px 0 10px; }
 .cl-list li { break-inside: avoid; list-style: none; padding: 1px 0; }
 .cl-list li::before { content: "✓"; color: var(--c-success-fg, #16a34a); margin-right: 6px; }
 @media (max-width: 560px) { .cl-list { columns: 1; } }
+
+/* --------------------------------------------------- the person's one wallet
+ * Above the project list, because there is ONE of it: repeating a balance on
+ * every card is what suggested each project had its own, which is the model
+ * this replaced. The cards say what each study spends; this says what there
+ * is to spend.
+ */
+.dash-wallet {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 14px 18px; margin-bottom: 14px; border-radius: 12px;
+  background: var(--c-surface-2, var(--tint)); border: 1px solid var(--border);
+}
+.dash-wallet.empty { border-color: var(--c-error-bd); background: var(--c-error-bg); }
+.dw-main { min-width: 0; }
+.dw-label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--subtle); }
+.dw-balance { font-size: 28px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.dw-sub { font-size: 12.5px; margin-top: 2px; }
+.dw-side { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.dw-note { flex-basis: 100%; font-size: 12.5px; color: var(--c-error-fg); }
+
+/* the spending-mode chooser */
+.bd-modes { display: grid; gap: 6px; margin: 8px 0 12px; }
+.bd-mode { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); cursor: pointer; font-size: 13px; }
+.bd-mode.on { border-color: var(--c-primary); background: var(--c-surface-2, var(--tint)); }
+.bd-mode input { margin-top: 2px; }

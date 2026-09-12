@@ -114,6 +114,14 @@ export const CAPABILITIES = [
    */
   "billing.transfer",
   /*
+   * Set how much of the owner's wallet THIS project may consume, and freeze
+   * or release it on that basis. Owner-only for the same reason as the
+   * transfer above: an editor programs the survey, the owner decides what
+   * the money is for. It moves nothing — a budget is permission against a
+   * wallet, not a pot inside the project.
+   */
+  "billing.set_budget",
+  /*
    * Copy this project's programming into a NEW project. Read-shaped in what
    * it discloses — the copier could already open every question — but a
    * creation act in what it does, so it sits with the roles that build

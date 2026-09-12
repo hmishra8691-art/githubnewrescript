@@ -3,7 +3,10 @@ import type { BillingConfig } from "./config.js";
 import { money6 } from "./money.js";
 import type { BillableEventDef, Rate } from "./registry.js";
 import type { MeterStore, TransferFilter, UsageEventInput, UsageFilter } from "./meter.js";
-import { walletKind, walletStateFor, type CreditRequest, type CreditTransfer, type LedgerEntry, type LedgerKind, type Reservation, type UsageEvent, type Wallet } from "./wallet.js";
+import {
+  walletKind, walletStateFor, defaultSpending, projectHeadroom, spendingStateFor,
+  type CreditRequest, type CreditTransfer, type LedgerEntry, type LedgerKind, type ProjectSpending, type Reservation, type SpendingMode, type UsageEvent, type Wallet,
+} from "./wallet.js";
 import { billingConfig } from "./config.js";
 
 /**
@@ -25,6 +28,19 @@ export class MemoryMeterStore implements MeterStore {
   reservations = new Map<string, Reservation>();
   requests: CreditRequest[] = [];
   transfers: CreditTransfer[] = [];
+  spending = new Map<string, ProjectSpending>();
+
+  /**
+   * WHICH WALLET A PROJECT SPENDS FROM, in memory.
+   *
+   * The SQL resolves a project to its owner's wallet by reading
+   * `surveys.owner_id`; there is no surveys table here, so a test (and the
+   * sandbox) declares the ownership it wants. A project with no owner
+   * registered keeps its own wallet, exactly as the SQL leaves a project
+   * whose owner column is null.
+   */
+  owners = new Map<string, string>();
+  setOwner(surveyId: string, userId: string) { this.owners.set(surveyId, userId); }
 
   async loadConfig() { return this.config; }
   async saveConfig(cfg: BillingConfig) { this.config = cfg; }
@@ -43,6 +59,8 @@ export class MemoryMeterStore implements MeterStore {
   }
 
   async walletFor(customerId: string, surveyId: string | null, opts: { create: boolean; seedBalance?: number }) {
+    const owner = surveyId ? this.owners.get(surveyId) : null;
+    if (owner) return this.walletForUser(customerId, owner, { create: opts.create });
     for (const w of this.wallets.values()) if (w.customerId === customerId && w.surveyId === surveyId && !w.userId) return w;
     if (!opts.create) return null;
     const w: Wallet = {
@@ -72,7 +90,13 @@ export class MemoryMeterStore implements MeterStore {
 
   async reserve(input: { walletId: string; customerId: string; surveyId: string | null; userId: string | null; eventType: string; environment: "TEST" | "LIVE"; estimatedCost: number; amount: number; floor: number; ttlMinutes: number }) {
     const w = this.wallets.get(input.walletId); if (!w) throw new Error("unknown wallet");
-    if (money6(w.balance - w.reserved - input.amount) < input.floor) return { ok: false as const, wallet: w };
+    /* the project's own policy first, so the refusal names the limit that actually stopped it */
+    const sp = input.surveyId ? await this.getSpending(input.surveyId, input.customerId, { create: true }) : null;
+    const room = projectHeadroom(sp);
+    if (room != null && money6(input.amount) > room) {
+      return { ok: false as const, wallet: w, reason: "project_limit" as const, spending: sp, headroom: room };
+    }
+    if (money6(w.balance - w.reserved - input.amount) < input.floor) return { ok: false as const, wallet: w, reason: "insufficient_balance" as const, spending: sp };
     const r: Reservation = {
       id: randomUUID(), walletId: w.id, customerId: input.customerId, surveyId: input.surveyId, userId: input.userId, eventType: input.eventType, environment: input.environment,
       estimatedCost: input.estimatedCost, reservedAmount: money6(input.amount), status: "held", actualCharge: null,
@@ -80,7 +104,8 @@ export class MemoryMeterStore implements MeterStore {
     };
     w.reserved = money6(w.reserved + r.reservedAmount); w.updatedAt = this.now();
     this.reservations.set(r.id, r);
-    return { ok: true as const, reservation: r, wallet: w };
+    if (sp) { sp.reserved = money6(sp.reserved + r.reservedAmount); this.spending.set(sp.surveyId, sp); }
+    return { ok: true as const, reservation: r, wallet: w, spending: sp };
   }
 
   async settle(reservationId: string, event: UsageEventInput, readOnlyThreshold: number) {
@@ -92,9 +117,13 @@ export class MemoryMeterStore implements MeterStore {
     const ev = this.push(event);
     if (event.customerCharge !== 0) {
       w.balance = money6(w.balance - event.customerCharge); w.totalUsed = money6(w.totalUsed + event.customerCharge);
-      this.ledger.push({ id: randomUUID(), walletId: w.id, customerId: w.customerId, surveyId: w.surveyId, kind: "debit", amount: money6(-event.customerCharge), balanceAfter: w.balance, reason: event.eventType, note: null, usageEventId: ev.id, referenceId: null, transferId: null, createdBy: event.userId, createdAt: this.now(), expiresAt: null });
+      /* the ledger line names the PROJECT that spent, not the wallet that paid:
+         a central wallet has no project, and taking it from there would leave
+         every line attributed to nothing */
+      this.ledger.push({ id: randomUUID(), walletId: w.id, customerId: w.customerId, surveyId: event.surveyId ?? w.surveyId, kind: "debit", amount: money6(-event.customerCharge), balanceAfter: w.balance, reason: event.eventType, note: null, usageEventId: ev.id, referenceId: null, transferId: null, createdBy: event.userId, createdAt: this.now(), expiresAt: null });
     }
     this.touch(w, readOnlyThreshold);
+    if (r.surveyId) this.spend(r.surveyId, w.customerId, event.customerCharge, r.reservedAmount);
     return { event: ev, wallet: w };
   }
 
@@ -102,7 +131,44 @@ export class MemoryMeterStore implements MeterStore {
     const r = this.reservations.get(reservationId); if (!r || r.status !== "held") return;
     const w = this.wallets.get(r.walletId);
     if (w) { w.reserved = money6(Math.max(0, w.reserved - r.reservedAmount)); w.updatedAt = this.now(); }
+    if (r.surveyId) this.spend(r.surveyId, r.customerId, 0, r.reservedAmount);
     r.status = status;
+  }
+
+  /** A project's meter after a charge: the hold comes off, the spend goes on, the state follows. */
+  private spend(surveyId: string, customerId: string, charge: number, held: number) {
+    const sp = this.spending.get(surveyId) ?? defaultSpending(surveyId, customerId);
+    sp.reserved = money6(Math.max(0, sp.reserved - held));
+    sp.spent = money6(sp.spent + charge);
+    const next = spendingStateFor(sp);
+    if (next === "frozen" && sp.state !== "frozen") sp.frozenAt = this.now();
+    if (next === "active") sp.frozenAt = null;
+    sp.state = next;
+    this.spending.set(surveyId, sp);
+  }
+
+  async getSpending(surveyId: string, customerId: string, opts: { create?: boolean } = {}) {
+    const cur = this.spending.get(surveyId);
+    if (cur) return cur;
+    if (!opts.create) return null;
+    const sp = defaultSpending(surveyId, customerId);
+    this.spending.set(surveyId, sp);
+    return sp;
+  }
+  async listSpending(filter: { customerId?: string; surveyIds?: string[] }) {
+    return [...this.spending.values()].filter((p) =>
+      (!filter.customerId || p.customerId === filter.customerId) && (!filter.surveyIds || filter.surveyIds.includes(p.surveyId)));
+  }
+  async setSpending(surveyId: string, customerId: string, patch: { mode: SpendingMode; budgetLimit: number | null }) {
+    const sp = (await this.getSpending(surveyId, customerId, { create: true }))!;
+    sp.mode = patch.mode;
+    sp.budgetLimit = patch.mode === "budget" ? patch.budgetLimit : null;
+    const next = spendingStateFor(sp);
+    if (next === "frozen" && sp.state !== "frozen") sp.frozenAt = this.now();
+    if (next === "active") sp.frozenAt = null;
+    sp.state = next;
+    this.spending.set(surveyId, sp);
+    return sp;
   }
 
   async record(event: UsageEventInput, readOnlyThreshold: number) {
@@ -110,8 +176,9 @@ export class MemoryMeterStore implements MeterStore {
     const w = event.walletId ? this.wallets.get(event.walletId) ?? null : null;
     if (w && event.customerCharge !== 0 && !event.adjustsEventId) {
       w.balance = money6(w.balance - event.customerCharge); w.totalUsed = money6(w.totalUsed + event.customerCharge);
-      this.ledger.push({ id: randomUUID(), walletId: w.id, customerId: w.customerId, surveyId: w.surveyId, kind: "debit", amount: money6(-event.customerCharge), balanceAfter: w.balance, reason: event.eventType, note: null, usageEventId: ev.id, referenceId: null, transferId: null, createdBy: event.userId, createdAt: this.now(), expiresAt: null });
+      this.ledger.push({ id: randomUUID(), walletId: w.id, customerId: w.customerId, surveyId: event.surveyId ?? w.surveyId, kind: "debit", amount: money6(-event.customerCharge), balanceAfter: w.balance, reason: event.eventType, note: null, usageEventId: ev.id, referenceId: null, transferId: null, createdBy: event.userId, createdAt: this.now(), expiresAt: null });
       this.touch(w, readOnlyThreshold);
+      if (event.surveyId) this.spend(event.surveyId, w.customerId, event.customerCharge, 0);
     }
     return { event: ev, wallet: w };
   }

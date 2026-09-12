@@ -2,6 +2,7 @@
 import React from "react";
 import { useStudio } from "./store";
 import { fmtMoney, fmtWhen, LevelBanner, LEVEL_CLASS, LEVEL_WORD, Progress, PRESET_AMOUNTS, Stat, STATE_WORD, UsageBars, UsageTable, type UsageRow } from "@/components/billing/shared";
+import { ProjectBudgetDialog } from "@/components/dashboard/ProjectBudgetDialog";
 
 /**
  * USAGE / METER — the project's wallet and everything it has paid for
@@ -38,6 +39,18 @@ export interface MeterView {
   ledger: { id: string; kind: string; amount: number; balanceAfter: number; reason: string; note: string | null; createdAt: string; transferId?: string | null }[];
   requests: { id: string; requestedAmount: number; reason: string; status: string; createdAt: string; decidedAmount: number | null; adminNote: string | null }[];
   canRequest?: boolean;
+  /** whether this viewer may change the project's spending limit (the owner) */
+  canBudget?: boolean;
+  /**
+   * What THIS project has spent and may spend. Separate from `wallet` on
+   * purpose: the wallet belongs to the owner and funds every project they
+   * own, while these are this study's own figures.
+   */
+  project?: {
+    currency: string; used: number; limit: number | null; mode: "shared" | "budget" | "priority";
+    allowance: number; walletRemaining: number; reserved: number; usedPct: number;
+    level: string; state: "active" | "frozen" | "read_only" | "suspended";
+  } | null;
 }
 
 /*
@@ -86,6 +99,8 @@ export function UsagePanel() {
   const [message, setMessage] = React.useState("");
   const [note, setNote] = React.useState<{ text: string; ok: boolean } | null>(null);
   const [busy, setBusy] = React.useState(false);
+  const [budget, setBudget] = React.useState(false);
+  const canBudget = !!view?.canBudget;
 
   const submitRequest = async () => {
     setBusy(true); setNote(null);
@@ -127,11 +142,31 @@ export function UsagePanel() {
     <div className="bl-panel" data-testid="usage-panel" data-level={view.level} data-state={view.wallet.state}>
       {head}
       <LevelBanner level={view.level} message={view.message} state={view.wallet.state} />
+      {view.project?.state === "frozen" && (
+        <div className="alert warning" data-testid="project-frozen-banner">
+          This project has reached its own spending limit of {fmtMoney(view.project.limit ?? 0, cur)}. The wallet still holds
+          {" "}{fmtMoney(view.project.walletRemaining, cur)} for other projects — raise the limit to continue.
+        </div>
+      )}
+      {budget && view.project && (
+        <ProjectBudgetDialog
+          project={{ id: s.surveyDbId, title: s.def.meta.title, code: s.def.meta.code }}
+          meter={{ mode: view.project.mode, limit: view.project.limit, used: view.project.used, currency: cur, walletRemaining: view.project.walletRemaining, state: view.project.state }}
+          onClose={() => setBudget(false)}
+          onSaved={() => reload()}
+        />
+      )}
 
       {/* ---------------------------------------------------------------- wallet */}
       <div className="bl-grid2" style={{ marginTop: 10 }}>
         <div className="card bl-card" data-testid="wallet-card">
-          <div className="card-title">Project wallet <span className={`badge ${LEVEL_CLASS[view.level]}`} data-testid="wallet-level">{view.wallet.state === "suspended" ? "Suspended" : LEVEL_WORD[view.level]}</span></div>
+          {/*
+            * THE WALLET THIS PROJECT DRAWS ON — the owner's, shared with
+            * every project they own. It is titled as what it is, because
+            * "Project wallet" on a balance that five studies are spending
+            * would be the old model's words on the new model's number.
+            */}
+          <div className="card-title">Wallet <span className={`badge ${LEVEL_CLASS[view.level]}`} data-testid="wallet-level">{view.wallet.state === "suspended" ? "Suspended" : LEVEL_WORD[view.level]}</span></div>
           <div className="bl-remaining" data-testid="wallet-remaining">{fmtMoney(sm.remaining, cur)} <span className="muted">remaining</span></div>
           <Progress used={sm.used} total={total} level={view.level} />
           <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }} data-testid="wallet-progress-text">{fmtMoney(sm.used, cur)} / {fmtMoney(total, cur)} used{sm.reserved > 0 && <> · {fmtMoney(sm.reserved, cur)} reserved for operations in progress</>}</div>
@@ -162,6 +197,39 @@ export function UsagePanel() {
               </table>
             </details>
           )}
+        </div>
+
+        {/* ------------------------------------------------ this project's own rule */}
+        <div className="card bl-card" data-testid="project-spending" data-mode={view.project?.mode ?? "shared"} data-state={view.project?.state ?? "active"}>
+          <div className="row" style={{ alignItems: "center", gap: 8 }}>
+            <div className="card-title" style={{ margin: 0 }}>This project</div>
+            {view.project?.state === "frozen" && <span className="badge warning" data-testid="project-frozen">At its limit</span>}
+            {view.project?.mode === "priority" && <span className="chip">Priority</span>}
+            <span className="grow" />
+            {canBudget && (
+              <button className="btn small" data-testid="project-set-limit" onClick={() => setBudget(true)}>
+                {view.project?.state === "frozen" ? "Raise limit" : "Set limit"}
+              </button>
+            )}
+          </div>
+          <div className="bl-remaining" data-testid="project-spent">{fmtMoney(view.project?.used ?? 0, cur)} <span className="muted">spent by this project</span></div>
+          <table className="bl-kv">
+            <tbody>
+              <tr>
+                <td>Spending limit</td>
+                <td data-testid="project-limit">{view.project?.limit == null ? "No limit of its own" : fmtMoney(view.project.limit, cur)}</td>
+              </tr>
+              <tr>
+                <td>{view.project?.limit == null ? "Wallet available" : "Left of the limit"}</td>
+                <td data-testid="project-allowance">{fmtMoney(view.project?.allowance ?? 0, cur)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+            {view.project?.limit == null
+              ? "This project spends from the wallet above with no limit of its own. Setting a limit moves no money — it caps how much of the wallet this project may use."
+              : "A limit caps how much of the wallet this project may use. It moves no money, and raising it above what has been spent starts a stopped project again."}
+          </p>
         </div>
 
         <div className="card bl-card">
