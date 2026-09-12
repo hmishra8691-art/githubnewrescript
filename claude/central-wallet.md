@@ -75,6 +75,26 @@ Wallet empty    — nothing can run; adding funds starts everything again
 
 Verified against a real PostgreSQL 16: all 25 migrations replayed from empty, then the three SQL suites (0023, 0024 and this one) run against the result.
 
-## Still to do
+## Applied to Supabase (2026-09-12)
 
-**Migration 0025 has not been applied to Supabase.** It is verified locally but it moves money — the sweep empties every project wallet into its owner's — so it should be applied deliberately: Supabase dashboard → SQL editor → paste `supabase/migrations/0025_central_wallet.sql` → Run. It is idempotent and safe to re-run.
+Live on `gouxrdjpiejuliucqwoy`, in two steps so the money-moving part was a deliberate, visible act: schema and functions first (which move nothing), then the sweep.
+
+| | |
+|---|---|
+| project wallets swept | 6 of 6 (all had owners) |
+| moved | **$469.709444**, in 6 transfers with 6 matching ledger pairs |
+| landed in | 4 owners' wallets — $169.83, $124.88, $100.00, $75.00 |
+| installation total | $469.709444 before, $469.709444 after |
+| project wallets | all retired; none resolvable as a funding wallet again |
+| spending policies | 12 projects, all `shared`, no limits |
+| spend history | carried across for the 3 projects that had used credits |
+
+A live check (rolled back) confirmed it on the real data: two of one owner's projects resolving to a single wallet, a $1 limit refusing a $5 charge with `project_limit`, the sibling project unaffected, and raising the limit letting the same charge through.
+
+### What the security linter caught, and the fix
+
+After the first apply, Supabase's own linter flagged two of the new functions as callable over PostgREST by `anon` and `authenticated` as `SECURITY DEFINER`. The cause: `revoke ... from authenticated, anon` leaves the **default EXECUTE grant that PUBLIC holds on every function**. That meant anyone could have called `rescript_billing_set_spending` — changing a project's limit — or re-run the sweep.
+
+Fixed by revoking from `public` as well, and the two pure helpers were given a fixed `search_path` like every other function in the schema. Verified: `anon` and `authenticated` now have no EXECUTE on any of the five; `service_role`, which the application uses, is unaffected. The migration file matches the database, and the whole 25-migration replay plus all three SQL suites were re-run against the corrected file.
+
+**Worth knowing, not introduced here:** the installation carries 66 pre-existing `SECURITY DEFINER` functions with the same default PUBLIC grant, 13 with a mutable `search_path`, 8 RLS-enabled tables with no policy, and leaked-password protection switched off. None of those are new, and none involve `project_spending` — but the same class of hole exists across the older billing and auth functions and is worth a pass of its own.

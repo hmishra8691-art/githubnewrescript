@@ -172,7 +172,7 @@ end $$;
  * there is room for the last dollar.
  */
 create or replace function public.rescript_billing_project_headroom(r public.project_spending)
-returns numeric language sql immutable as $$
+returns numeric language sql immutable set search_path = public as $$
   select case
     when r.survey_id is null then null
     when r.state = 'frozen' then 0
@@ -183,7 +183,7 @@ $$;
 
 /** The state a project's spending should be in for what it has spent. */
 create or replace function public.rescript_billing_project_state(r public.project_spending)
-returns text language sql immutable as $$
+returns text language sql immutable set search_path = public as $$
   select case
     when r.mode = 'budget' and r.budget_limit is not null and (r.spent + r.reserved) >= r.budget_limit then 'frozen'
     else 'active' end
@@ -413,6 +413,18 @@ select s.id, s.customer_id from public.surveys s
   where not exists (select 1 from public.project_spending p where p.survey_id = s.id)
 on conflict (survey_id) do nothing;
 
-revoke all on function public.rescript_billing_spending_for(uuid, uuid, boolean) from authenticated, anon;
-revoke all on function public.rescript_billing_set_spending(uuid, uuid, text, numeric) from authenticated, anon;
-revoke all on function public.rescript_billing_sweep_to_owners() from authenticated, anon;
+/*
+ * FROM PUBLIC, not just from `anon` and `authenticated`.
+ *
+ * Every function carries a default EXECUTE grant to PUBLIC, so revoking the
+ * two roles alone leaves it reachable over PostgREST as SECURITY DEFINER —
+ * which for `set_spending` would mean anyone changing a project's limit, and
+ * for the sweep would mean anyone re-running it. The application calls these
+ * with the service role, which these revokes do not touch. (Supabase's own
+ * security linter is what caught this after the first apply.)
+ */
+revoke all on function public.rescript_billing_spending_for(uuid, uuid, boolean) from public, anon, authenticated;
+revoke all on function public.rescript_billing_set_spending(uuid, uuid, text, numeric) from public, anon, authenticated;
+revoke all on function public.rescript_billing_sweep_to_owners() from public, anon, authenticated;
+revoke all on function public.rescript_billing_project_headroom(public.project_spending) from public, anon, authenticated;
+revoke all on function public.rescript_billing_project_state(public.project_spending) from public, anon, authenticated;
