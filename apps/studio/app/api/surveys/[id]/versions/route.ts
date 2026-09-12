@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
-import { buildVariableDictionary, nextVersion } from "@rescript/engine";
+import { buildVariableDictionary, nextVersion, normaliseQuestionOrder } from "@rescript/engine";
 import { audit, isFailure, requireEditRight, requireProject } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -36,6 +36,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     );
   }
   const def = parsed.data;
+  /*
+   * A version is what the runtime and every export read, so it is the last
+   * place the two question orders can be allowed to disagree: `def.questions`
+   * goes in flow order before the dictionary is built from it, and the
+   * columns of the export then match the order the questions were asked in.
+   */
+  normaliseQuestionOrder(def);
   // regenerate the dictionary so every saved version carries its exact variables
   def.variables = buildVariableDictionary(def);
   def.meta.updatedAt = new Date().toISOString();

@@ -168,3 +168,28 @@ test("a row code is not an answer: comparing a grid's value against one is repor
   const issues = lintQuestionLogic(d, d.questions[0]);
   assert.ok(issues.some((i) => /has no option coded “B”/.test(i.message)), issues.map((i) => i.message).join(" | "));
 });
+
+/* ------------------------------------------------------------------------- */
+
+test("a question that USED to be a matrix is not one because its rows survived", () => {
+  /*
+   * The state a type change left behind before `questionShape.ts` existed:
+   * an open end still carrying the matrix's rows and scale. `gridAxes` used
+   * to call it a grid on `rows.length > 0` alone, so the lint, the value
+   * picker, auto punch and the exporter all went on addressing rows nothing
+   * renders.
+   */
+  const wasAMatrix = { ...matrix, type: "open_text", variant: undefined } as Question;
+  const axes = gridAxes(wasAMatrix);
+  assert.equal(axes.model, "flat", "the TYPE says what it is");
+  assert.equal(axes.isGrid, false);
+  assert.deepEqual(axes.rows, []);
+  assert.equal(axes.columnMeaning, "none");
+});
+
+test("a text list keeps its rows — its shape owns them", () => {
+  const list = { ...matrix, type: "text_list", options: [] } as Question;
+  const axes = gridAxes(list);
+  assert.equal(axes.isGrid, true, "fields are addressable rows, and always were");
+  assert.deepEqual(axes.rows.map((r) => r.ref), ["A", "B"]);
+});

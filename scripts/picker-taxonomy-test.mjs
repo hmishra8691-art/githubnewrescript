@@ -73,15 +73,27 @@ assert.equal(navCount, cards, `nav says ${navCount}, the pane shows ${cards} typ
 console.log(`  ok   Single Select advertises ${navCount} and shows ${cards} — the same number`);
 await closePicker();
 
+/*
+ * WHICH question was just created, by id rather than by position.
+ * `questions[length - 1]` worked only while that array kept creation order;
+ * it is now kept in FLOW order — one question order for the whole platform,
+ * so the logic pickers, the variable dictionary and the export cannot
+ * disagree with the Questions panel. See claude/schema-integrity.md.
+ */
+const idsOf = async () => new Set((await h.readDef()).questions.map((q) => q.id));
+const newSince = (ids, def) => def.questions.find((q) => !ids.has(q.id));
+let prevIds = new Set();
+
 console.log("\nPICKING A PRESET CREATES THE PARENT'S TYPE WITH THE PRESET'S DEFAULTS");
-const before = (await h.readDef()).questions.length;
+const beforeIds = await idsOf();
+const before = beforeIds.size;
 await openPicker("text");
 await page.click('[data-testid="picker-variant-text.email"]');
 await page.waitForTimeout(400);
 await page.click('[data-testid="close-question"]').catch(() => {});
 const def = await h.readDef();
 assert.equal(def.questions.length, before + 1, "one question created");
-const q = def.questions[def.questions.length - 1];
+const q = newSince(beforeIds, def);
 assert.equal(q.type, "open_text", "it is Single-Line Text's base type");
 assert.equal(q.variant, "text.email", "…recorded as the preset, so the properties panel knows where it came from");
 assert.ok(q.validation.some((v) => v.kind === "email"), "…with the email validator already on");
@@ -116,6 +128,7 @@ assert.ok(g2.some((l) => /Click.*Rank|Rank.*Click/i.test(l)), `Top-N sits under 
 console.log("  ok   switcher: types as groups, presets nested, cross-family preset under its parent");
 
 console.log("\nTHE FORMER 'COMING SOON' ENTRIES ARE FINDABLE WHERE THEY WERE LOOKED FOR — AND CREATE THE REAL THING");
+prevIds = await idsOf();
 await openPicker("media");
 const stt = await page.waitForSelector('[data-testid="picker-variant-media.speech_to_text"]');
 assert.equal(await stt.getAttribute("data-preset-of"), "text.multi_line", "Speech-to-Text is a preset of Multi-Line Text, offered in Video / Audio");
@@ -124,12 +137,13 @@ await stt.click();
 await page.waitForTimeout(400);
 await page.click('[data-testid="close-question"]').catch(() => {});
 let d2 = await h.readDef();
-let made2 = d2.questions[d2.questions.length - 1];
+let made2 = newSince(prevIds, d2);
 assert.equal(made2.type, "long_text");
 assert.equal(made2.variant, "media.speech_to_text");
 assert.equal(made2.settings.speechInput, true, "…with dictation already on");
 console.log("  ok   Speech-to-Text Response → long_text with speechInput on");
 
+prevIds = await idsOf();
 await openPicker("ai");
 for (const id of ["ai.classification", "ai.sentiment", "ai.probe"]) assert.ok(await page.$(`[data-testid="picker-variant-${id}"]`), `${id} offered`);
 assert.ok(await page.$('[data-testid="picker-mode-mode.ai_conversational"]'), "AI Conversational Survey offered as a survey mode");
@@ -137,26 +151,28 @@ await page.click('[data-testid="picker-variant-ai.classification"]');
 await page.waitForTimeout(400);
 await page.click('[data-testid="close-question"]').catch(() => {});
 d2 = await h.readDef();
-made2 = d2.questions[d2.questions.length - 1];
+made2 = newSince(prevIds, d2);
 assert.equal(made2.type, "calculated");
 assert.match(made2.settings.expression, /^ai_classify\(Q1, /, "a calculated variable with the ai_classify template");
 assert.match(made2.text, /AI-coded/);
+prevIds = await idsOf();
 await openPicker("ai");
 await page.click('[data-testid="picker-variant-ai.probe"]');
 await page.waitForTimeout(400);
 await page.click('[data-testid="close-question"]').catch(() => {});
 d2 = await h.readDef();
-made2 = d2.questions[d2.questions.length - 1];
+made2 = newSince(prevIds, d2);
 assert.equal(made2.type, "long_text");
 assert.equal(made2.probe?.maxProbes, 2, "an open end with the follow-up probe switched on");
 console.log("  ok   AI classification → calculated + ai_classify(); AI probe → long_text with q.probe");
 
+prevIds = await idsOf();
 await openPicker("dynamic");
 await page.click('[data-testid="picker-variant-dynamic.respondent_specific"]');
 await page.waitForTimeout(400);
 await page.click('[data-testid="close-question"]').catch(() => {});
 d2 = await h.readDef();
-made2 = d2.questions[d2.questions.length - 1];
+made2 = newSince(prevIds, d2);
 assert.equal(made2.type, "single_select");
 assert.ok(made2.options.some((o) => o.visibleIf?.source?.kind === "embedded"), "an option with a show-when condition over embedded data");
 console.log("  ok   Respondent-Specific Options → single_select with option visibleIf");
@@ -164,6 +180,7 @@ console.log("  ok   Respondent-Specific Options → single_select with option vi
 const dBefore = await h.readDef();
 assert.equal(dBefore.branding.layout.voice?.readAloud ?? false, false);
 const nBefore = dBefore.questions.length;
+prevIds = await idsOf();
 await openPicker("conversational");
 assert.ok(await page.$('[data-testid="picker-mode-mode.ai_conversational"]'), "the ONE survey-mode card is offered in the Conversational family too");
 for (const id of ["mode.voice", "mode.conversational", "mode.adaptive"]) assert.ok(!(await page.$(`[data-testid="picker-mode-${id}"]`)), `${id} is no longer a separate card — consolidated into AI Conversational Survey`);
@@ -177,15 +194,17 @@ assert.equal(d2.branding.aiConversation.adaptive.enabled, true);
 assert.deepEqual({ r: d2.branding.layout.voice.readAloud, d: d2.branding.layout.voice.dictation, p: d2.branding.layout.presentation }, { r: true, d: true, p: "conversational" }, "the older layout fields are mirrored");
 assert.equal(d2.questions.length, nBefore, "a survey mode adds no question");
 const nAfter = d2.questions.length;
+prevIds = await idsOf();
 await openPicker("ai");
 await page.click('[data-testid="picker-variant-ai.conversational_question"]');
 await page.waitForTimeout(400);
 await page.click('[data-testid="close-question"]').catch(() => {});
 d2 = await h.readDef();
-made2 = d2.questions[d2.questions.length - 1];
+made2 = newSince(prevIds, d2);
 assert.equal(made2.type, "long_text", "AI Conversational Question is an ordinary open end…");
 assert.deepEqual(made2.ai, { conversation: "adaptive", adaptive: { enabled: true, maxFollowUps: 2 } }, "…with the interviewer's adaptive follow-ups on for it");
 assert.equal(d2.questions.length, nAfter + 1);
+prevIds = await idsOf();
 await openPicker("ai");
 const navCounts = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('[data-testid^="picker-family-"]')].map((b) => [b.getAttribute("data-testid").replace("picker-family-", ""), b.querySelector(".nav-count")?.textContent])));
 assert.ok(navCounts.ai !== "soon" && navCounts.media !== "soon", `AI and Media families are no longer "soon": ${JSON.stringify({ ai: navCounts.ai, media: navCounts.media })}`);

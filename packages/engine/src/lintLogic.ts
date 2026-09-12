@@ -13,6 +13,7 @@ import {
   TWO_VALUE_OPERATORS,
   VALUELESS_OPERATORS,
   isOptionValueRef,
+  effectiveResponseModel,
 } from "@rescript/schema";
 import { getQuestionByCodeOrVar } from "./state.js";
 import { PIPE_TOKEN_RE, parsePipeBody } from "./pipingTokens.js";
@@ -21,6 +22,7 @@ import { MAX_LOOP_DEPTH, loopNodes, loopVariableNames, maxLoopIterations, possib
 import { listFillVariableNames } from "./listFill.js";
 import { buildVariableDictionary } from "./variables.js";
 import { gridAxes, gridScaleOptions } from "./gridAxes.js";
+import { staleFields } from "./questionShape.js";
 
 /**
  * Logic configuration linting (reqs §30–31).
@@ -41,18 +43,45 @@ export interface LogicIssue {
   message: string;
 }
 
-/** Which operator family a question's answers belong to. */
+/**
+ * Which operator family a question's answers belong to.
+ *
+ * THE RESPONSE MODEL DECIDES, not a hand-written list of base types.
+ *
+ * The list this replaced named `image_select` as multi-valued — which is true
+ * of one of its two variants and false of the other — and had no entry at all
+ * for anything added since, so every newer type fell through to "any" and was
+ * offered the union of every operator family: "ranked first" on an upload,
+ * "contains" on a location. `effectiveResponseModel` is the platform's one
+ * answer to "what shape is this answer", it honours the variant, and it was
+ * added precisely because such lists drift.
+ *
+ * Two models span more than one vocabulary and need the base type to tell
+ * them apart — `fields` (a text list is text, a numeric list is numbers) and
+ * `per_row` (a Likert grid holds codes, a numeric grid holds numbers). Those
+ * are the only places the type is consulted, and each is a genuine
+ * distinction rather than a missing row in a table.
+ */
 export function sourceKindForQuestion(q: Question | undefined): keyof typeof OPERATORS_BY_KIND {
   if (!q) return "any";
-  const t = q.type;
-  if (["multi_select", "multi_dropdown", "image_select", "matrix_multi"].includes(t)) return "list";
-  if (["single_select", "dropdown", "matrix_single", "matrix_dropdown"].includes(t)) return "choice";
-  if (["open_text", "long_text", "text_list", "matrix_text"].includes(t)) return "text";
-  if (["numeric", "slider", "nps", "numeric_list", "allocation", "matrix_numeric"].includes(t))
-    return "numeric";
-  if (["ranking", "image_ranking"].includes(t)) return "ranking";
-  if (["date", "time"].includes(t)) return "date";
-  return "any";
+  const model = effectiveResponseModel(q);
+  switch (model) {
+    case "single_choice": return "choice";
+    case "multiple_choice": return "list";
+    case "rank_order": return "ranking";
+    case "numeric": case "allocation": return "numeric";
+    case "text": return q.type === "date" || q.type === "time" ? "date" : "text";
+    case "fields":
+      return q.type === "numeric_list" ? "numeric" : "text";
+    case "per_row":
+      return q.type === "matrix_multi" ? "list"
+        : q.type === "matrix_numeric" ? "numeric"
+        : q.type === "matrix_text" ? "text"
+        : "choice";
+    /* a cell grid, a set of tasks, a place, a file, a derived value: their
+       answers are not one vocabulary, so nothing is narrowed */
+    default: return "any";
+  }
 }
 
 /** Operators that make sense for a source question (req §7). */
@@ -488,6 +517,31 @@ function lintQuestionLogicUnsafe(def: SurveyDefinition, q: Question): LogicIssue
   });
   const ctx = base(false);
   const optCtx = base(true);
+
+  /*
+   * CONFIGURATION LEFT OVER FROM AN EARLIER QUESTION TYPE.
+   *
+   * Before type changes migrated the schema, changing a type wrote `q.type`
+   * and left everything else in place — so surveys written until now carry
+   * options, rows, masks and settings their current type cannot read. None of
+   * it renders, so nothing on screen says it is there; all of it is in the
+   * JSON, in the export and in front of anything that inspects the schema
+   * rather than the screen.
+   *
+   * It is reported rather than removed. Deleting a programmer's list because
+   * a lint pass thought it obsolete is exactly the silent behaviour this work
+   * is undoing — so the survey says what it is carrying, and the Studio
+   * offers to clear it in one click, with the list shown first.
+   */
+  for (const stale of staleFields(q)) {
+    issues.push({
+      level: "warning",
+      questionId: q.id,
+      questionCode: q.code,
+      path: stale.field,
+      message: `${stale.detail}. Left over from an earlier question type: nothing reads it, but it is still in the survey JSON.`,
+    });
+  }
 
   lintCondition(q.displayLogic, "displayLogic", ctx);
   /*

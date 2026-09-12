@@ -165,6 +165,19 @@ console.log("✔ “ungroup” removes the group and keeps its blocks in place")
 
 /* --------------------------------------- 3. move a question between blocks */
 
+/*
+ * WHICH question is being moved, captured BEFORE the move.
+ *
+ * This used to read `def.questions[0]` afterwards, which worked only while
+ * that array kept creation order. It is now kept in FLOW order — one
+ * question order for the whole platform, so the logic pickers, the variable
+ * dictionary and the export cannot disagree with the Questions panel — and
+ * after moving the first question elsewhere, `questions[0]` is whatever
+ * became first, not the one that moved. See claude/schema-integrity.md.
+ */
+const movingId = (await readDef()).flow.flatMap(function pages(n) {
+  return n.type === "page" ? [n] : (n.children ?? []).flatMap(pages);
+})[0].questionIds[0];
 await toQuestions();
 await page.click('[data-testid="move-question-btn"] >> nth=0');
 await page.waitForSelector('[data-testid="move-question"]');
@@ -191,7 +204,7 @@ const pagesOf = (d) => {
   return out;
 };
 const allPages = pagesOf(def);
-const q1 = def.questions[0];
+const q1 = def.questions.find((x) => x.id === movingId);
 const holder = allPages.find((p) => p.questionIds.includes(q1.id));
 assert.equal(holder.questionIds[0], q1.id, "it landed at the beginning, as asked");
 assert.ok(!allPages[0].questionIds.includes(q1.id), "and left the block it came from");

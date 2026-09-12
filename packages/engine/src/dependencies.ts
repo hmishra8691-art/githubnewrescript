@@ -54,6 +54,68 @@ export function orderIndex(def: SurveyDefinition): Record<string, number> {
   return idx;
 }
 
+/**
+ * THE QUESTION LIST, IN THE ORDER THE SURVEY ASKS THEM.
+ *
+ * There used to be two orders and no way to choose between them. Dragging a
+ * question in the Questions panel rewrote `page.questionIds` and left
+ * `def.questions` exactly as it was, so the panel and the flow showed the new
+ * order while every logic picker, the variable dictionary, the dependency
+ * list and the JSON showed the old one. Both were "the question order", they
+ * disagreed the moment anything was moved, and they never converged again.
+ *
+ * The answer is not for each screen to sort for itself — that is the same
+ * mistake in more places, and a screen that forgets is a screen that is
+ * subtly wrong. `def.questions` is simply KEPT in flow order: the Studio
+ * normalises it on every edit and the save routes normalise what they are
+ * given, so the array IS the order and every consumer — pickers, dictionary,
+ * export, JSON, runtime — is right without asking.
+ *
+ * Questions on no page keep existing and come last, in the order they were
+ * created. `placedCount` says where that group begins, for the one or two
+ * screens that want to draw a line before it.
+ */
+export function questionsInFlowOrder(def: SurveyDefinition): Question[] {
+  const byId = new Map(def.questions.map((q) => [q.id, q]));
+  const out: Question[] = [];
+  for (const id of questionOrder(def)) {
+    const q = byId.get(id);
+    if (q && !out.includes(q)) out.push(q);
+  }
+  /* anything questionOrder could not account for (a duplicate id, a question
+     referenced by no page and no flow node) still belongs to the survey */
+  for (const q of def.questions) if (!out.includes(q)) out.push(q);
+  return out;
+}
+
+/** How many of `questionsInFlowOrder` are actually placed on a page. */
+export function placedCount(def: SurveyDefinition): number {
+  const placed = new Set<string>();
+  const walk = (nodes: any[]): void => {
+    for (const n of nodes ?? []) {
+      if (n?.type === "page" && Array.isArray(n.questionIds)) for (const id of n.questionIds) placed.add(id);
+      if (n?.children) walk(n.children);
+      if (n?.branches) for (const b of n.branches) walk(b.children);
+      if (n?.otherwise) walk(n.otherwise);
+    }
+  };
+  walk(def.flow as any[]);
+  return def.questions.filter((q) => placed.has(q.id)).length;
+}
+
+/**
+ * Put `def.questions` into flow order, in place. Returns true when it moved
+ * something — so a caller can tell a normalisation from a no-op without
+ * comparing arrays itself.
+ */
+export function normaliseQuestionOrder(def: SurveyDefinition): boolean {
+  const ordered = questionsInFlowOrder(def);
+  if (ordered.length === def.questions.length
+    && ordered.every((q, i) => q === def.questions[i])) return false;
+  def.questions = ordered;
+  return true;
+}
+
 /* ------------------------------------------------------------ ref harvesting */
 
 /**

@@ -67,9 +67,23 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
 
   const q = questions.find((x) => x.code === ref || x.id === ref);
   const props = propertiesForQuestion(q);
+  /*
+   * `ref` is seeded once, from the question list as it was when the picker
+   * first mounted. If that question is renamed, retyped or deleted while the
+   * picker is open — and it is open over the editor, so all three happen —
+   * `q` becomes undefined, the property list empties and the picker inserts a
+   * token naming a code that no longer exists. Falling back to the first
+   * question that still exists keeps the picker pointed at something real.
+   */
   React.useEffect(() => {
-    if (kind === "question" && !props.some((p) => p.value === property)) setProperty("label");
-  }, [ref, kind]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (kind !== "question") return;
+    if (!q) {
+      const fallback = questions.find((x) => x.id !== currentQuestionId) ?? questions[0];
+      if (fallback && fallback.code !== ref) setRef(fallback.code);
+      return;
+    }
+    if (!props.some((p) => p.value === property)) setProperty("label");
+  }, [ref, kind, q, questions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /*
    * The loops around the question being edited, innermost first. Their

@@ -63,3 +63,5 @@ export * from "./otherSpecify.js";
 export * from "./visibility.js";
 export * from "./cloneProject.js";
 export * from "./gridAxes.js";
+export * from "./references.js";
+export * from "./questionShape.js";

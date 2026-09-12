@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import type { SurveyDefinition, Question } from "@rescript/schema";
+import { normaliseQuestionOrder } from "@rescript/engine";
 
 /**
  * Central Studio state — the single source of truth for the survey being
@@ -502,6 +503,17 @@ export function StudioProvider({
       const prev = latest.current;
       const draft = structuredClone(prev);
       mutator(draft);
+      /*
+       * ONE QUESTION ORDER, ENFORCED HERE.
+       *
+       * Dragging a question rewrote the page's `questionIds` and left
+       * `def.questions` alone, so the Questions panel and the flow showed one
+       * order while every logic picker, the variable dictionary and the JSON
+       * showed another — permanently, since nothing ever reconciled them.
+       * Normalising at the single point every edit passes through means no
+       * screen has to remember to sort, and none can disagree.
+       */
+      normaliseQuestionOrder(draft);
       latest.current = draft;
       setPast((p) => [...p, { def: prev, label }].slice(-UNDO_LIMIT));
       setFuture([]);
@@ -516,6 +528,9 @@ export function StudioProvider({
       const label = nextLabel.current ?? "replace survey";
       nextLabel.current = null;
       const prev = latest.current;
+      /* an imported or restored definition arrives in whatever order it was
+         written in; it joins the survey in flow order like everything else */
+      normaliseQuestionOrder(next);
       latest.current = next;
       setPast((p) => [...p, { def: prev, label }].slice(-UNDO_LIMIT));
       setFuture([]);

@@ -901,7 +901,19 @@ export function buildMasterDemoSurvey(surveyId = "master-demo"): SurveyDefinitio
     variant: "swipe.statement", settings: { swipeDirections: { right: "agree", left: "disagree" } },
     notes: "[DEMO: Presentation variant] Same single_select response model, swipe presentation.",
   });
-  single("q_stars", "SURVEY_STARS", "How would you rate the design of the products you saw in this survey?", opts(["1", "2", "3", "4", "5"]), { variant: "single_select.stars", notes: "[DEMO: Star-rating variant]" });
+  /*
+   * A star rating STORES A NUMBER. `single_select.stars` declares baseType
+   * `numeric` and responseModel `numeric`, and the renderer draws its stars
+   * from `minValue`/`maxValue` — it never looks at an option list.
+   *
+   * This was built as a `single_select` carrying five options, so the two
+   * disagreed: the variant said the answer is a number while the type said it
+   * is a code, and the five options were configuration nothing read. The
+   * schema lint now reports exactly that (see claude/schema-integrity.md), and
+   * the honest question is the one below — same five stars on screen, one
+   * source of truth underneath.
+   */
+  numeric("q_stars", "SURVEY_STARS", "How would you rate the design of the products you saw in this survey?", 1, 5, { variant: "single_select.stars", notes: "[DEMO: Star-rating variant]" });
 
   /* ====================================================== 19 Open ends */
 

@@ -55,10 +55,22 @@ function SimpleRow({ target, rule, onChange, onMove, onRemove }: {
   const [text, setText] = React.useState(() => formatPunchExpression(s.def, target, rule));
   const [err, setErr] = React.useState<string | null>(null);
 
+  /*
+   * The expression is a RENDERING of the definition, not a second copy of it.
+   *
+   * This used to resync only when `rule` or `target.id` changed, and only
+   * while the expression tab was open — so an expression naming Q5 went on
+   * reading "Q5" after Q5 was renamed, retyped or deleted elsewhere in the
+   * Studio, and a programmer who then pressed Apply wrote the stale text
+   * back over the rule. `s.def` is in the dependencies now (it is a new
+   * object on every edit, which is exactly the signal wanted), and the text
+   * is refreshed whichever tab is open, so switching to the expression can
+   * never show something the definition no longer says.
+   */
   React.useEffect(() => {
-    if (mode === "expression") setText(formatPunchExpression(s.def, target, rule));
+    setText(formatPunchExpression(s.def, target, rule));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rule, target.id]);
+  }, [s.def, rule, target.id]);
 
   const set = (patch: Partial<SimplePunch>) => {
     if (!simple) return;

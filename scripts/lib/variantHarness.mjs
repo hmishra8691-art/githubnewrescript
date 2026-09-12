@@ -54,6 +54,14 @@ export async function openHarness({
 
   /** Open the picker, choose a family and a variant; returns the created question. */
   const createFromPicker = async (family, variantId) => {
+    /*
+     * WHICH question was just created, identified by id rather than by
+     * position. `questions[length - 1]` worked only while that array kept
+     * creation order; it is now kept in FLOW order — one question order for
+     * the whole platform — so a question created above another is not last.
+     * See claude/schema-integrity.md.
+     */
+    const idsBefore = new Set((await readDef()).questions.map((q) => q.id));
     await goTab("Questions");
     await page.waitForSelector('[data-testid="add-question-top"]');
     await page.click('[data-testid="add-question-top"]');
@@ -67,7 +75,8 @@ export async function openHarness({
     // close whatever opened so the next pick starts clean
     await page.click('[data-testid="close-question"]').catch(() => {});
     const def = await readDef();
-    const q = def.questions[def.questions.length - 1];
+    const q = def.questions.find((x) => !idsBefore.has(x.id));
+    assert.ok(q, "a question was created");
     assert.equal(q.variant, variantId, "the created question stores the variant id");
     return q;
   };

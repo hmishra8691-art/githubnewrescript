@@ -80,3 +80,36 @@ test("a self-referential calculation chain does not hang dependency resolution",
   const deps = questionDependencies(d, q3);
   assert.ok(deps instanceof Set);
 });
+
+/* ------------------------------------------------------------------------- */
+
+test("the question list is kept in the order the flow asks them", async () => {
+  const { normaliseQuestionOrder, questionsInFlowOrder, placedCount } = await import("./dependencies.js");
+  /*
+   * The state dragging used to leave: the page says Q3 comes first, the
+   * array still says Q1 does. Every logic picker and the variable dictionary
+   * read the array, so they showed an order the survey does not use.
+   */
+  const def: any = {
+    id: "s", code: "S", title: "t", meta: {}, variables: [], flow: [
+      { id: "p1", type: "page", questionIds: ["q3", "q1"] },
+      { id: "p2", type: "page", questionIds: ["q2"] },
+    ],
+    questions: [
+      { id: "q1", code: "Q1", variableName: "Q1", type: "open_text", text: "", options: [], rows: [], columns: [], validation: [], required: false, settings: {}, skipLogic: [] },
+      { id: "q2", code: "Q2", variableName: "Q2", type: "open_text", text: "", options: [], rows: [], columns: [], validation: [], required: false, settings: {}, skipLogic: [] },
+      { id: "q3", code: "Q3", variableName: "Q3", type: "open_text", text: "", options: [], rows: [], columns: [], validation: [], required: false, settings: {}, skipLogic: [] },
+    ],
+  };
+
+  assert.equal(normaliseQuestionOrder(def), true, "it moved something, and says so");
+  assert.deepEqual(def.questions.map((q: any) => q.code), ["Q3", "Q1", "Q2"], "the flow decides");
+  assert.equal(normaliseQuestionOrder(def), false, "and running it again is a no-op");
+
+  /* a question on no page still exists, and comes last */
+  def.questions.push({ id: "q9", code: "Q9", variableName: "Q9", type: "open_text", text: "", options: [], rows: [], columns: [], validation: [], required: false, settings: {}, skipLogic: [] } as any);
+  normaliseQuestionOrder(def);
+  assert.deepEqual(def.questions.map((q: any) => q.code), ["Q3", "Q1", "Q2", "Q9"]);
+  assert.equal(placedCount(def), 3, "and a screen can draw a line before it");
+  assert.equal(questionsInFlowOrder(def).length, 4, "nothing is ever dropped");
+});

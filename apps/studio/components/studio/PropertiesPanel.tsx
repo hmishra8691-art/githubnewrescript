@@ -2,7 +2,7 @@
 import { CountInput } from "./CountInput";
 import React from "react";
 import type { Question, ValidationRule, SkipRule, ListOperation, ListSource } from "@rescript/schema";
-import { validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion } from "@rescript/engine";
+import { validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion, shapeHasAxis, staleFields, migrateQuestionType } from "@rescript/engine";
 import { resolveVariant, effectiveCapabilities, allowedValidationKinds, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript/schema";
 import { useStudio, selectedQuestion, uid } from "./store";
 import { useCanvas } from "../canvas/CanvasContext";
@@ -565,6 +565,8 @@ export function PropertiesPanel() {
   const exprError =
     q.type === "calculated" && q.settings.expression ? validateExpression(q.settings.expression) : null;
   const logicIssues = lintQuestionLogic(s.def, q);
+  /** What this question carries that its current type cannot read. */
+  const stale = React.useMemo(() => staleFields(q), [q]);
   /*
    * The loops this question sits inside, so its display logic, skip logic and
    * piping picker can offer the loops' reference columns — and only theirs.
@@ -605,6 +607,44 @@ export function PropertiesPanel() {
       {logicIssues.length > 0 && !logicIssues.some((i) => i.level === "error") && (
         <div className="muted" style={{ fontSize: 12.5, marginBottom: 6 }}>
           {logicIssues.length} logic note{logicIssues.length === 1 ? "" : "s"} — see Logic → Logic check
+        </div>
+      )}
+
+      {/*
+       * CONFIGURATION FROM AN EARLIER TYPE, and a way to be rid of it.
+       *
+       * A type change now migrates the schema, but a survey written before
+       * that still carries whatever its questions had before they were
+       * retyped — options on an open end, rows on a numeric, a `minSelections`
+       * on a single choice. Nothing renders it, so nothing on screen says it
+       * is there; the JSON, the export and everything that reads the schema
+       * rather than the screen still see it.
+       *
+       * It is shown rather than removed on sight, and the button says exactly
+       * what it will drop before it drops it — the same rule the type-change
+       * dialog follows, for the same reason.
+       */}
+      {stale.length > 0 && (
+        <div className="alert" style={{ marginBottom: 8, fontSize: 12.5 }} data-testid="stale-fields">
+          <b>Left over from an earlier question type</b>
+          <ul className="tc-list" style={{ marginTop: 4 }}>
+            {stale.map((c, k) => <li key={k} data-field={c.field}>{c.detail}</li>)}
+          </ul>
+          <button className="btn small" data-testid="stale-fields-clear" style={{ marginTop: 6 }}
+            onClick={() => {
+              s.labelNextEdit?.(`clean up ${q.code}`);
+              s.update((d) => {
+                const i = d.questions.findIndex((x) => x.id === q.id);
+                if (i < 0) return;
+                d.questions[i] = migrateQuestionType(d.questions[i], {
+                  baseType: d.questions[i].type,
+                  id: d.questions[i].variant ?? undefined,
+                }).q;
+              });
+              s.toast(`${q.code} cleaned up — ${stale.length} leftover field${stale.length === 1 ? "" : "s"} removed`);
+            }}>
+            Remove {stale.length} leftover field{stale.length === 1 ? "" : "s"}
+          </button>
         </div>
       )}
 
@@ -988,14 +1028,19 @@ export function PropertiesPanel() {
        * options — shown only for question types that actually have them
        * (matrix/grid/composite), matching the universal masking brief's
        * "the UI shows only the dimensions this question type supports."
+       *
+       * "Actually have them" is a question about the question's SHAPE, not
+       * about `rows.length`: a question whose type was changed away from a
+       * matrix could still be carrying its old rows, and offering to mask
+       * them built a mask over a list nothing renders.
        */}
-      {q.rows.length > 0 && showSec("Row masking") && (
+      {shapeHasAxis(q, "rows") && q.rows.length > 0 && showSec("Row masking") && (
       <CollapsibleSection id="row-masking" title="Row masking (dynamic row sets)" active={!!q.rowMask}>
       <MaskingBuilder q={q} patch={patch} field="rowMask" />
       </CollapsibleSection>
       )}
 
-      {q.columns.length > 0 && showSec("Column masking") && (
+      {shapeHasAxis(q, "columns") && q.columns.length > 0 && showSec("Column masking") && (
       <CollapsibleSection id="column-masking" title="Column masking (dynamic column sets)" active={!!q.columnMask}>
       <MaskingBuilder q={q} patch={patch} field="columnMask" />
       </CollapsibleSection>

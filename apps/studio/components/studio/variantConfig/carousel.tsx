@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import type { Question } from "@rescript/schema";
+import { migrateQuestionType } from "@rescript/engine";
 import { registerVariantSettings, registerOptionMetaFields, DESC, PRICE } from "./registry";
 
 /**
@@ -31,7 +32,18 @@ registerVariantSettings("carouseljudge", ({ q, patch, patchSettings }) => {
   const setMode = (key: string) => {
     const m = MODES.find((x) => x.key === key);
     if (!m || m.type === q.type) return;
-    patch({ type: m.type });
+    /*
+     * Even here — three base types that share one response model and one
+     * variant — the type goes through the migration rather than being written
+     * directly. A bare `patch({ type })` was the second way a question's type
+     * could change, and a second way is how the two drift: the first one to
+     * gain a rule the other did not have is the bug. This one reports
+     * nothing to a person because there is nothing to report, and that is the
+     * migration's judgement rather than this file's assumption.
+     */
+    const { q: migrated } = migrateQuestionType(q, { baseType: m.type, id: q.variant ?? undefined });
+    const { id, code, ...rest } = migrated as any;
+    patch(rest);
     // a slider needs bounds; fill them only when the programmer has none
     if (m.type === "matrix_numeric") {
       patchSettings({

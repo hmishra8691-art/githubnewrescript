@@ -12,6 +12,7 @@ import { OptionPreview } from "./OptionPreview";
 import { usePreviewBlock } from "./PreviewBlock";
 import { MediaUrlInput } from "./MediaUrlInput";
 import { AttentionCheckEditor } from "./AttentionCheckEditor";
+import { DeleteQuestionDialog } from "./DeleteQuestionDialog";
 import { Icon } from "../ui/Icon";
 import { useCanvas } from "../canvas/CanvasContext";
 import { LiveView } from "../canvas/LiveView";
@@ -56,7 +57,8 @@ import { InsertPipingButton } from "./PipingPicker";
 import {
   FIELD_TYPES, nextCode, nextQuestionNaming, resequenceQuestionCodes,
   parsePastedOptions, planPaste, optionsToPaste, type PasteMode,
-  stripHtmlText,
+  stripHtmlText, referencesTo, pruneReferencesTo, referencesToMany, pruneReferencesToMany,
+  type QuestionReference,
 } from "@rescript/engine"; // also registers builtin question types
 import { isEmptyOptionLogic } from "@rescript/schema";
 import { useStudio, uid } from "./store";
@@ -1159,19 +1161,32 @@ export function QuestionsPanel() {
       if (p) (p.node as any).title = title || undefined;
     });
 
+  /*
+   * A block goes the same way a question does: the dialog lists what OUTSIDE
+   * the block referred to anything inside it, and confirming prunes those
+   * references in the same undo step. Wiring between the block's own
+   * questions is not listed — it is going with them, and burying the
+   * external breakage under it is what makes such a list unread.
+   */
   const deleteBlock = (blockId: string) => {
     const b = blocks.find((x) => x.id === blockId);
     if (!b) return;
     const qids = b.pages.flatMap((p) => p.node.questionIds);
-    const n = qids.length;
-    if (n > 0 && !confirm(
-      `Delete this block and its ${n} question${n === 1 ? "" : "s"}? Logic referring to them will need updating.`,
-    )) return;
+    setPendingDelete({
+      ids: qids, blockId,
+      code: `${(b as any).title || "this block"}${qids.length ? ` and its ${qids.length} question${qids.length === 1 ? "" : "s"}` : ""}`,
+      refs: referencesToMany(s.def, qids),
+    });
+  };
+
+  const confirmDeleteBlock = (blockId: string, qids: string[], label: string) => {
+    setPendingDelete(null);
+    s.labelNextEdit(`delete ${label}`);
     s.update((d) => {
       const hit = blockIn(d, blockId);
       if (!hit) return;
-      const ids = new Set(hit.pages.flatMap((p) => p.node.questionIds));
-      d.questions = d.questions.filter((q) => !ids.has(q.id));
+      const ids = hit.pages.flatMap((p) => p.node.questionIds);
+      pruneReferencesToMany(d, ids);
       hit.parent.splice(hit.parent.indexOf(hit.node), 1);
     });
     if (s.selectedQuestionId && qids.includes(s.selectedQuestionId)) s.select(null);
@@ -1404,9 +1419,40 @@ export function QuestionsPanel() {
       }
     });
 
+  /**
+   * DELETING IS A CHANGE TO THE WHOLE SURVEY, so it is shown as one.
+   *
+   * `referencesTo` finds everything that names this question and says what
+   * pruning does to each; the dialog shows that list; confirming runs
+   * `pruneReferencesTo` — the same function — inside the same `update`, so
+   * the question and every rule that depended on it go in one undo step.
+   *
+   * Before this, delete removed the question and left the references behind
+   * pointing at an id nothing could resolve: the rule rendered as an unset
+   * row, so it read as unfinished rather than broken, and the survey silently
+   * behaved differently in the field.
+   */
+  const [pendingDelete, setPendingDelete] = React.useState<
+    { id?: string; ids?: string[]; blockId?: string; code: string; refs: QuestionReference[] } | null
+  >(null);
+
   const remove = (id: string) => {
-    if (!confirm("Delete this question? Logic referring to it will need updating.")) return;
+    const q = s.def.questions.find((x) => x.id === id);
+    setPendingDelete({ id, code: q?.code ?? "this question", refs: referencesTo(s.def, id) });
+  };
+
+  const confirmDelete = () => {
+    if (!pendingDelete) return;
+    if (pendingDelete.blockId) {
+      confirmDeleteBlock(pendingDelete.blockId, pendingDelete.ids ?? [], pendingDelete.code);
+      return;
+    }
+    const id = pendingDelete.id;
+    if (!id) return;
+    setPendingDelete(null);
+    s.labelNextEdit(`delete ${pendingDelete.code}`);
     s.update((d) => {
+      pruneReferencesTo(d, id);
       d.questions = d.questions.filter((q) => q.id !== id);
       for (const p of flattenPages(d.flow)) p.questionIds = p.questionIds.filter((x) => x !== id);
     });
@@ -1465,7 +1511,7 @@ export function QuestionsPanel() {
               title="Done editing — close this question (Esc)"
               onClick={(e) => { e.stopPropagation(); close(); }}>Done</button>
           )}
-          <button className="btn small danger" title="Delete this question" onClick={(e) => { e.stopPropagation(); remove(q.id); }}>×</button>
+          <button className="btn small danger" data-testid="delete-question" title="Delete this question" onClick={(e) => { e.stopPropagation(); remove(q.id); }}>×</button>
         </div>
         {isSelected && selected && (
           <div style={{ marginTop: 14 }} onClick={(e) => e.stopPropagation()}>
@@ -1485,6 +1531,14 @@ export function QuestionsPanel() {
 
   return (
     <div>
+      {pendingDelete && (
+        <DeleteQuestionDialog
+          code={pendingDelete.code}
+          refs={pendingDelete.refs}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={confirmDelete}
+        />
+      )}
       <div className="row" style={{ marginBottom: 14 }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>Questions</h2>
         <span className="chip">{s.def.questions.length} question{s.def.questions.length === 1 ? "" : "s"}</span>

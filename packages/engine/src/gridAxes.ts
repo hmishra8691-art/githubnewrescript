@@ -1,6 +1,7 @@
 import type { Option, Question, QuestionColumn, QuestionRow, SurveyDefinition } from "@rescript/schema";
 import { effectiveResponseModel } from "@rescript/schema";
 import { authoringQuestionView } from "./carryforward.js";
+import { shapeHasAxis } from "./questionShape.js";
 
 /**
  * ROWS, COLUMNS, CELLS — WHAT A LOGIC REFERENCE IS ACTUALLY NAMING.
@@ -86,10 +87,20 @@ export function gridScaleOptions(q: Question): Option[] {
 /** This question's axes, and what a reference to each one addresses. */
 export function gridAxes(q: Question | undefined | null): GridAxes {
   if (!q) return { model: "flat", isGrid: false, rows: [], columns: [], columnMeaning: "none", rowLabel: "row", columnLabel: "column" };
+  /*
+   * The third branch used to read `q.rows.length > 0` — "anything carrying
+   * rows is a grid". That is the one place the module's own rule was broken:
+   * it asked the DATA what shape the question is, and a question that had
+   * been a matrix and was changed to an open end still carried its rows, so
+   * it went on being offered a per-row answer shape to lint, to punch into
+   * and to export. The rows a `fields` question (text list, numeric list,
+   * repeating form) genuinely has still count — because its SHAPE owns rows,
+   * not because the array happens to be non-empty.
+   */
   const model: GridModel =
     effectiveResponseModel(q) === "cells" ? "cells"
     : effectiveResponseModel(q) === "per_row" ? "per_row"
-    : (q.rows?.length ?? 0) > 0 ? "per_row"
+    : shapeHasAxis(q, "rows") && (q.rows?.length ?? 0) > 0 ? "per_row"
     : "flat";
 
   if (model === "cells") {

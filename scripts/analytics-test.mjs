@@ -526,10 +526,26 @@ const nav = await page.$$eval(".leftnav .nav-item", (es) => es.map((e) => [...e.
 // Data Analytics and Fieldwork (§23)
 // sit next to Data, in the Results group — additions that displace nothing
 // already there, which is what this assertion is for
-assert.deepEqual(nav.filter((t) => !["Data Analytics", "Fieldwork", "Distribution", "Project", "Tests"].includes(t)), ["Questions", "Survey Settings", "Survey Flow", "Logic", "Variables", "Calculations", "Quotas", "List Fill", "Design Generators", "Branding", "Scripts", "Data", "Versions & Deploy", "JSON", "Collaborators", "Internal notes", "Activity"]);
+/*
+ * The exclusion list is every tab added SINCE this assertion was written.
+ * The assertion's subject is the seventeen that were here then: they are all
+ * still here, in the same order, and nothing new was inserted among them.
+ * "Translation" (localization) and "Usage & Wallet" (the wallet work) are the
+ * two most recent additions and belong on the list for the same reason the
+ * others do.
+ */
+assert.deepEqual(nav.filter((t) => !["Data Analytics", "Fieldwork", "Distribution", "Project", "Tests", "Translation", "Usage & Wallet"].includes(t)), ["Questions", "Survey Settings", "Survey Flow", "Logic", "Variables", "Calculations", "Quotas", "List Fill", "Design Generators", "Branding", "Scripts", "Data", "Versions & Deploy", "JSON", "Collaborators", "Internal notes", "Activity"]);
 assert.equal(nav.indexOf("Fieldwork"), nav.indexOf("Data Analytics") + 1, "Fieldwork belongs beside Data in Results");
 assert.equal(nav.indexOf("Distribution"), nav.indexOf("Versions & Deploy") - 1, "Distribution belongs beside Versions & Deploy in Management");
-assert.equal(nav.indexOf("Project"), nav.indexOf("Distribution") - 1, "Project belongs at the top of Management");
+/*
+ * Project is the FIRST entry in Management — which is what "at the top"
+ * means, and what this checks. It used to be spelled as "immediately before
+ * Distribution", an adjacency that held only until something was added
+ * between them; "Usage & Wallet" (the wallet work) is now there, and the
+ * order it is really asserting is unchanged.
+ */
+assert.ok(nav.indexOf("Project") < nav.indexOf("Distribution"), "Project belongs at the top of Management");
+assert.ok(nav.indexOf("Project") > nav.indexOf("Fieldwork"), "…which begins after Results ends");
 assert.equal(nav.filter((t) => t === "Data Analytics").length, 1);
 assert.equal(nav[nav.indexOf("Data") + 1], "Data Analytics", "Data Analytics follows Data");
 assert.match(await page.$eval('[data-testid="nav-analytics"]', (e) => e.getAttribute("href")), /^\/analytics/);

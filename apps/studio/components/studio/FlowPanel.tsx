@@ -7,7 +7,7 @@ import {
   locateNode, findNode, allContainers, summarizeFlowNode, containerSlots,
   containerLabel, canDropFlowNode, validateFlowStructure,
   listBlocks, blockSize, isBlockNode, isGroupNode,
-  FLOW_TYPE_LABELS, stripHtmlText,
+  FLOW_TYPE_LABELS, stripHtmlText, referencesToMany, pruneReferencesToMany,
 } from "@rescript/engine";
 import { useStudio, uid } from "./store";
 import { newBlockNode, newGroupNode, ELEMENT_LABELS, INSERTABLE } from "./blockModel";
@@ -591,19 +591,29 @@ export function FlowPanel() {
       const summary = summarizeFlowNode(node);
       const questionIds = collectQuestionIds(node);
       const message = questionIds.length > 0
-        ? `Delete ${summary.label} and its ${questionIds.length} question${questionIds.length === 1 ? "" : "s"}? Logic referring to them will need updating.`
+        ? `Delete ${summary.label} and its ${questionIds.length} question${questionIds.length === 1 ? "" : "s"}?`
         : summary.children > 0
           ? `Delete ${summary.label}? Anything nested inside it goes too.`
           : `Delete ${summary.label}?`;
-      if (!confirm(message)) return;
+      /*
+       * Deleting a flow element takes its questions with it, so it takes
+       * everything that referred to them too. `referencesToMany` says what
+       * that is before the confirm rather than leaving rules pointing at ids
+       * that no longer resolve — which rendered as unset rows, so the logic
+       * read as unfinished instead of broken.
+       */
+      const refs = questionIds.length ? referencesToMany(s.def, questionIds) : [];
+      const tail = refs.length
+        ? `\n\n${refs.length} other thing${refs.length === 1 ? "" : "s"} in this survey refer${refs.length === 1 ? "s" : ""} to them, and will be cleaned up:\n` +
+          refs.slice(0, 8).map((r) => `  · ${r.where} — ${r.effect}`).join("\n") +
+          (refs.length > 8 ? `\n  · …and ${refs.length - 8} more` : "")
+        : "";
+      if (!confirm(message + tail)) return;
       s.labelNextEdit(`delete ${summary.label}`);
       s.update((d) => {
         const r = removeFlowNode((d as any).flow as FlowNode[], id);
         (d as any).flow = r.flow;
-        if (questionIds.length) {
-          const gone = new Set(questionIds);
-          d.questions = d.questions.filter((q) => !gone.has(q.id));
-        }
+        if (questionIds.length) pruneReferencesToMany(d, questionIds);
       });
     },
     duplicate(id) {

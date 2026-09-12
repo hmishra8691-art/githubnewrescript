@@ -135,6 +135,15 @@ const beforeDelete = await blockCount();
 const menus3 = await page.$$('[data-testid="block-menu"]');
 await menus3[menus3.length - 1].click();
 await page.click('.menu-item:has-text("Delete block")');
+/*
+ * Deleting a block now names what ELSE in the survey referred to its
+ * questions and cleans those references up on confirm — the same dialog a
+ * single question's delete uses, for the same reason: the references used to
+ * be left pointing at ids nothing could resolve. See
+ * scripts/schema-integrity-test.mjs, which is where that behaviour is proved.
+ */
+await page.waitForSelector('[data-testid="delete-question-dialog"]');
+await page.click('[data-testid="delete-question-confirm"]');
 await page.waitForTimeout(350);
 assert.equal(await blockCount(), beforeDelete - 1, "deleting removes the block");
 console.log("✔ a block can be deleted, with its questions");

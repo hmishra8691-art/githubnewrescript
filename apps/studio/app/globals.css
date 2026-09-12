@@ -1918,3 +1918,15 @@ p.qs-help { margin: -2px 0 10px; }
 .bd-mode { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); cursor: pointer; font-size: 13px; }
 .bd-mode.on { border-color: var(--c-primary); background: var(--c-surface-2, var(--tint)); }
 .bd-mode input { margin-top: 2px; }
+
+/* What a type change is about to do, and what deleting a question will break.
+   Both are lists a person reads once, decides on, and never sees again — so
+   they are compact and quiet rather than styled like content. */
+.tc-list { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.55; }
+.tc-list li { margin: 0 0 2px; }
+.tc-list li::marker { color: var(--subtle); }
+.tc-scroll { max-height: 230px; overflow-y: auto; }
+
+/* An operator the source question can no longer take — kept selectable, but
+   never dressed up as ordinary. */
+.op-select.stale { border-color: var(--amber, #b45309); }

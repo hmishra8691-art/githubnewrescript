@@ -79,7 +79,10 @@ export function MoveQuestionModal({ qid, onClose }: { qid: string; onClose(): vo
   }, [q, s.def.questions]);
 
   /** Order across the whole survey, so "after" means what a respondent sees. */
-  const orderedIds = listPages(s.def.flow as any[]).flatMap((p) => p.node.questionIds);
+  const orderedIds = React.useMemo(
+    () => listPages(s.def.flow as any[]).flatMap((p) => p.node.questionIds),
+    [s.def.flow],
+  );
   const landingIndex = () => {
     const before: string[] = [];
     for (const p of listPages(s.def.flow as any[])) {
@@ -101,7 +104,15 @@ export function MoveQuestionModal({ qid, onClose }: { qid: string; onClose(): vo
       const ri = orderedIds.filter((x) => x !== qid).indexOf(r.id);
       return ri >= at;
     });
-  }, [blockId, pageIdx, pos, referenced.length]);
+    /*
+     * `referenced.length` was the dependency, not `referenced` — so editing a
+     * dependency without changing HOW MANY there are (repointing a rule from
+     * Q3 to Q9, say) left this memo holding the old list, and the panel went
+     * on warning about a question the rule no longer names while saying
+     * nothing about the one it does. The list itself is the input; so is the
+     * order it is being measured against.
+     */
+  }, [blockId, pageIdx, pos, referenced, orderedIds]);
 
   const doMove = () => {
     s.update((d) => {

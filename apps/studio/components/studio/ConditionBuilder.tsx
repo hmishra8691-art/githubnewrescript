@@ -1,6 +1,6 @@
 "use client";
 import React from "react";
-import type { Condition, ConditionGroup, ConditionRule, ComparisonOperator, Question } from "@rescript/schema";
+import type { Condition, ConditionGroup, ConditionRule, ComparisonOperator, Question, SurveyDefinition } from "@rescript/schema";
 import {
   VALUELESS_OPERATORS,
   TWO_VALUE_OPERATORS,
@@ -101,6 +101,19 @@ export function newConditionGroup(_defaultRef?: string): Condition {
 
 const stripHtml = (s: string) => stripHtmlText(s);
 
+/**
+ * The question a `{ $question: … }` comparison names, however it was stored.
+ *
+ * New rules store the id. Rules written before that store the code, and a few
+ * store the variable name — the evaluator has always accepted all three, so
+ * the picker has to as well or an existing rule would show as unset and be
+ * lost the first time somebody touched it.
+ */
+const rhsQuestion = (def: SurveyDefinition, ref: unknown) =>
+  typeof ref === "string"
+    ? def.questions.find((x) => x.id === ref || x.code === ref || x.variableName === ref)
+    : undefined;
+
 function RuleEditor({ rule, onChange, onRemove, perOption }: {
   rule: ConditionRule; onChange(r: ConditionRule): void; onRemove(): void; perOption?: boolean;
 }) {
@@ -150,7 +163,22 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
       : rule.source.kind === "question" && q
         ? operatorsForQuestion(q)
         : (Object.keys(OPERATOR_LABELS) as ComparisonOperator[]);
-  const operatorChoices = allowed.includes(rule.operator) ? allowed : [rule.operator, ...allowed];
+  /*
+   * AN OPERATOR THE SOURCE CAN NO LONGER TAKE.
+   *
+   * Retyping a question changes what comparisons mean for it: "contains" on
+   * a multi-select is nothing at all once that question is a number, and
+   * "ranked first" survives nothing. The saved operator used to be quietly
+   * added to the list and rendered like any other, so a rule that could
+   * never be true looked exactly like a rule that could.
+   *
+   * It is still SELECTABLE — dropping it would leave the select showing the
+   * first valid operator while the stored rule still held the invalid one,
+   * which is the same lie the other way round — but it is labelled for what
+   * it is, and the row says so with a one-click fix beside it.
+   */
+  const operatorStale = !counting && !allowed.includes(rule.operator);
+  const operatorChoices = operatorStale ? [rule.operator, ...allowed] : allowed;
 
   /**
    * Turn counting on or off for this rule.
@@ -422,10 +450,24 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
           onClick={() => onChange({ ...rule, operator: "eq", value: rule.value === false })}
         >{rule.value === false ? "is NOT true" : "is true"}</button>
       ) : (
-        <select className="select op-select" value={rule.operator}
-          onChange={(e) => onChange({ ...rule, operator: e.target.value as ComparisonOperator })}>
-          {operatorChoices.map((o) => <option key={o} value={o}>{OPERATOR_LABELS[o] ?? o}</option>)}
-        </select>
+        <>
+          <select className={`select op-select${operatorStale ? " stale" : ""}`} value={rule.operator}
+            data-stale={operatorStale ? "1" : undefined}
+            onChange={(e) => onChange({ ...rule, operator: e.target.value as ComparisonOperator })}>
+            {operatorChoices.map((o) => (
+              <option key={o} value={o}>
+                {(OPERATOR_LABELS[o] ?? o) + (operatorStale && o === rule.operator ? " — not available for this question" : "")}
+              </option>
+            ))}
+          </select>
+          {operatorStale && allowed.length > 0 && (
+            <button type="button" className="btn small" data-testid="fix-operator"
+              title={`“${OPERATOR_LABELS[rule.operator] ?? rule.operator}” cannot be evaluated against this question any more — its type changed. Use “${OPERATOR_LABELS[allowed[0]] ?? allowed[0]}” instead.`}
+              onClick={() => onChange({ ...rule, operator: allowed[0], value: undefined })}>
+              fix
+            </button>
+          )}
+        </>
       )}
 
       {/* a count is compared against a NUMBER — never against an option code,
@@ -451,12 +493,20 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
            * question: typing a code into the plain value box next door would
            * silently become the literal text of that code.
            */
+          /*
+           * Stored as the question's ID, shown as its code. It used to be
+           * stored as the code, so renaming Q5 to Q5b broke every rule that
+           * compared against it — silently, since an unresolvable reference
+           * is simply false. The evaluator has always resolved an id, a code
+           * or a variable name, so old rules keep working and new ones stop
+           * depending on a name a person is free to change.
+           */
           <select className="select" data-testid="value-question"
-            value={(rule.value as any).$question ?? ""}
+            value={rhsQuestion(s.def, (rule.value as any).$question)?.id ?? ""}
             onChange={(e) => onChange({ ...rule, value: { $question: e.target.value } })}>
             <option value="">— question —</option>
             {s.def.questions.filter((x) => x.id !== rule.source.ref).map((x) => (
-              <option key={x.id} value={x.code}>{x.code} — {stripHtml(x.text).slice(0, 40)}</option>
+              <option key={x.id} value={x.id}>{x.code} — {stripHtml(x.text).slice(0, 40)}</option>
             ))}
           </select>
         ) : valueChoices.length > 0 && !listOps && rule.operator !== "matches" ? (
@@ -764,6 +814,14 @@ export function ConditionEditor(props: {
   );
 }
 
+/** The tree's shape, with nothing of its contents: what a path key depends on. */
+function shapeSignature(c: Condition | undefined): string {
+  if (!c) return "";
+  return c.type === "group"
+    ? `(${(c.children ?? []).map(shapeSignature).join(",")})`
+    : "r";
+}
+
 function VisualConditionEditor({ value, onChange, perOption }: {
   value: Condition; onChange(c: Condition): void; perOption?: boolean;
 }) {
@@ -772,6 +830,29 @@ function VisualConditionEditor({ value, onChange, perOption }: {
   const [selected, setSelected] = React.useState<string[]>([]);
   const [justGrouped, setJustGrouped] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
+
+  /**
+   * A SELECTION IS A LIST OF POSITIONS, so it survives only while the
+   * positions mean the same thing.
+   *
+   * `selected` holds path keys — "0.2" is the third child of the first group.
+   * Nothing cleared them when the tree changed underneath: an undo, a rule
+   * deleted from its own row, a collaborator's edit, or the logic being
+   * replaced wholesale all shifted every path along, and "group these two"
+   * then grouped two different conditions than the ones with ticks next to
+   * them. Structure is what moves paths, so structure is what clears the
+   * selection; editing an operator or a value leaves it alone, because those
+   * do not move anything.
+   */
+  const shape = React.useMemo(() => shapeSignature(root), [root]);
+  const lastShape = React.useRef(shape);
+  React.useEffect(() => {
+    if (lastShape.current === shape) return;
+    lastShape.current = shape;
+    setSelected([]);
+    setJustGrouped(null);
+    setNotice(null);
+  }, [shape]);
 
   /** Every write goes through here: canonicalise, label for undo, save. */
   const commit = (next: ConditionGroup, label: string) => {

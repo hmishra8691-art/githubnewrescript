@@ -7,11 +7,10 @@ import {
   variantFamilies,
   pickerTypesOf,
   variantForLegacyType,
-  resolveVariant,
-  responseModelOf,
-  isSafeConversion,
-  allowedValidationKinds } from "@rescript/schema";
+  resolveVariant } from "@rescript/schema";
+import { migrateQuestionType, type TypeMigration } from "@rescript/engine";
 import { useStudio, uid } from "./store";
+import { TypeChangeDialog } from "./TypeChangeDialog";
 
 /**
  * Question Family → Variant selection (hierarchical picker) and the
@@ -279,55 +278,50 @@ export function VariantSwitcher({ q }: { q: Question }) {
   const family = parent?.family ?? current?.family ?? "single_select";
   const typesWithPresets = pickerTypesOf(family).types;
 
-  const switchTo = (to: QuestionVariantDef) => {
-    const safe = isSafeConversion(current, to, q.type);
-    if (!safe) {
-      const fromModel = current?.responseModel ?? responseModelOf(q.type);
-      const ok = window.confirm(
-        `Changing this question to "${to.name}" changes its response structure ` +
-        `(${fromModel.replace("_", " ")} → ${to.responseModel.replace("_", " ")}).\n\n` +
-        `Question text, options and the variable name are preserved, but collected ` +
-        `data, logic and exports that depend on the old structure may be affected, ` +
-        `and incompatible validation/settings will be reset.\n\nContinue?`,
-      );
-      if (!ok) return;
-    }
+  /**
+   * A TYPE CHANGE IS A SCHEMA CHANGE, and it happens in one place.
+   *
+   * `migrateQuestionType` (packages/engine/src/questionShape.ts) decides for
+   * every field whether it is preserved, transformed, removed or reset —
+   * against one declaration of what each response model reads, not against a
+   * list of special cases maintained here. This component's job is only to
+   * show that decision before applying it and to write the result.
+   *
+   * Nothing is computed twice: the question the dialog described is the
+   * question that is stored, so what a person approved is what happens.
+   */
+  const [pending, setPending] = React.useState<{ migration: TypeMigration; to: QuestionVariantDef } | null>(null);
+
+  const apply = (migration: TypeMigration, to: QuestionVariantDef) => {
     s.update((d) => {
       const i = d.questions.findIndex((x) => x.id === q.id);
       if (i < 0) return;
-      const cur = d.questions[i];
-      cur.type = to.baseType;
-      cur.variant = to.id;
-      applyVariantDefaults(cur, to);
-      if (!safe) {
-        /*
-         * Reset only what the new variant genuinely cannot represent.
-         * `allowedValidationKinds` keeps the four type-agnostic kinds
-         * (required / condition / custom_expression / custom_script), so
-         * switching variants no longer silently deletes a hand-built
-         * Condition-tree rule that the engine would still evaluate correctly.
-         */
-        const keep = allowedValidationKinds(to.validations, to.validations);
-        cur.validation = cur.validation.filter((r) => keep.includes(r.kind));
-        if (!to.capabilities.includes("exclusive_options")) {
-          cur.options = cur.options.map((o) => ({
-            ...o,
-            flags: (o.flags ?? []).filter((f) => !["exclusive", "none_of_above", "dont_know", "refused"].includes(f)),
-          }));
-        }
-        if (!to.capabilities.includes("min_max_selections")) {
-          delete (cur.settings as any).minSelections;
-          delete (cur.settings as any).maxSelections;
-        }
-      }
+      d.questions[i] = migration.q;
+      applyVariantDefaults(d.questions[i], to);
     });
-    s.toast(`Question type changed to ${to.name}${safe ? "" : " (incompatible settings reset)"}`);
+    const lost = migration.changes.filter((c) => c.kind !== "transformed").length;
+    s.toast(`Question type changed to ${to.name}${lost ? ` — ${lost} setting${lost === 1 ? "" : "s"} removed` : ""}`);
+  };
+
+  const switchTo = (to: QuestionVariantDef) => {
+    const migration = migrateQuestionType(q, to);
+    /* nothing to report is nothing to ask about */
+    if (migration.changes.length === 0) { apply(migration, to); return; }
+    setPending({ migration, to });
   };
 
   return (
     <>
+      {pending && (
+        <TypeChangeDialog
+          migration={pending.migration}
+          toName={pending.to.name}
+          onCancel={() => setPending(null)}
+          onConfirm={() => { apply(pending.migration, pending.to); setPending(null); }}
+        />
+      )}
       <label className="f" style={{ width: 150, marginBottom: 0 }}><span>Family</span>
-        <select className="select" value={family}
+        <select className="select" data-testid="family-switcher" value={family}
           onChange={(e) => {
             const first = pickerTypesOf(e.target.value).types[0]?.type;
             if (first) switchTo(first);

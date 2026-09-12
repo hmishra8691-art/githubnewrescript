@@ -11,6 +11,7 @@ import { createScriptCtx, runScript, type ScriptRunResult } from "./scripts.js";
 import { resolvePiping } from "./piping.js";
 import { geoAnswered, geoProblems } from "./geo.js";
 import { acbcDone, isAcbcAnswer } from "./acbc.js";
+import { shapeHasAxis } from "./questionShape.js";
 
 /**
  * Whether a failed check stops the respondent.
@@ -86,13 +87,23 @@ function ruleError(rule: ValidationRule, fallback: string): string {
  * source, a List Fill that allocated nothing — is treated as unanswerable.
  */
 function hasNoAnswerableItems(q: Question, ctx: EvalContext): boolean {
-  const authoredItems = q.options.length + q.rows.length;
+  /*
+   * Only a list this question's SHAPE reads can make it unanswerable. An open
+   * end still carrying the options it had before its type was changed is not
+   * a question whose choices ran out — it is a question with no choices, and
+   * measuring it against them excused it from `required`, so a mandatory
+   * open end could be left blank. The shape decides; the array length does
+   * not (see `questionShape.ts`).
+   */
+  const reads = (axis: "options" | "rows" | "columns") =>
+    shapeHasAxis(q, axis) ? q[axis].length : 0;
+  const authoredItems = reads("options") + reads("rows");
   if (authoredItems === 0) return false;
   const view = effectiveQuestion(q, ctx);
   // A grid needs both axes; a flat list needs only its options.
-  if (q.rows.length > 0 && view.rows.length === 0) return true;
-  if (q.options.length > 0 && view.options.length === 0) return true;
-  if (q.columns.length > 0 && view.columns.length === 0) return true;
+  if (reads("rows") > 0 && view.rows.length === 0) return true;
+  if (reads("options") > 0 && view.options.length === 0) return true;
+  if (reads("columns") > 0 && view.columns.length === 0) return true;
   return false;
 }
 
