@@ -9,6 +9,7 @@ import {
   type InterviewState,
 } from "@rescript/engine";
 import type { InterviewAnswer } from "@rescript/schema";
+import { RECORDING_CONSTRAINTS } from "@rescript/media";
 
 /**
  * THE VIDEO INTERVIEW — a researcher asks on camera, a respondent answers
@@ -47,11 +48,23 @@ import type { InterviewAnswer } from "@rescript/schema";
  * its gate in `useState` and loses it on remount; that is a bug this type
  * cannot afford.
  *
- * ## Nothing here blocks on the network
+ * ## Storing and transcribing are two things, not one
  *
- * The recording is uploaded and transcribed by one call. If it fails, or
- * there is no provider, or the wallet refuses, the clip is kept where it can
- * be and the transcript is absent — never an interview that will not finish.
+ * The clip goes straight from the browser to object storage on a signed URL
+ * — a serverless host refuses a request body over 4.5 MB, and this platform
+ * offers answer lengths up to thirty minutes. The answer is COMPLETE the
+ * moment storage confirms it: that is what "the respondent may not proceed
+ * until the audio response has been captured" asks for, and Next unlocks
+ * there.
+ *
+ * The transcript follows, as a durable job the respondent is never held for.
+ * It used to be the same request: store, then call the provider inline. A
+ * five-minute answer took the provider longer than the function was allowed
+ * to live, so the request died AFTER the clip was safely uploaded and this
+ * component told the respondent "your recording could not be saved" — which
+ * was false, and asked them to say it all again. Now a provider that is down,
+ * a wallet that is empty and a timeout all leave the same thing behind: a
+ * stored clip and a transcript that can be retried.
  */
 
 const EMPTY: InterviewAnswer = {};
@@ -101,6 +114,14 @@ export function VideoInterview(p: QRProps) {
   const tick = React.useRef<ReturnType<typeof setInterval> | null>(null);
   const startedAt = React.useRef(0);
   const elapsed = React.useRef(0);
+  /**
+   * The take that has not yet reached storage.
+   *
+   * Kept so that a failed upload offers "Try again" on the SAME recording.
+   * Asking somebody to say it all a second time because a network blipped is
+   * the most expensive failure in a qualitative interview.
+   */
+  const pending = React.useRef<{ blob: Blob; seconds: number; retakes: number } | null>(null);
 
   const stopTick = () => { if (tick.current) { clearInterval(tick.current); tick.current = null; } };
   React.useEffect(() => () => {
@@ -118,6 +139,14 @@ export function VideoInterview(p: QRProps) {
   });
 
   const patch = (next: Partial<InterviewAnswer>) => p.onChange({ ...a, ...next });
+  /*
+   * The answer as it stands right now, for the transcript poller. It writes
+   * several times over a minute or more, and a callback closed over the
+   * render that started it would keep resurrecting the answer as it was then
+   * — including undoing the audio it had just saved.
+   */
+  const pRef = React.useRef(a);
+  pRef.current = a;
 
   /* ------------------------------------------------------------ the player */
 
@@ -202,19 +231,47 @@ export function VideoInterview(p: QRProps) {
 
     setBusy("uploading");
     setError(null);
+    /* the take is kept so a failed upload is a retry, not a re-recording */
+    pending.current = { blob, seconds, retakes };
     try {
-      const form = new FormData();
-      form.append("file", blob, "answer.webm");
-      form.append("sessionId", sessionId);
-      form.append("questionId", p.q.id);
-      form.append("durationSeconds", String(seconds));
-      form.append("retakes", String(retakes));
-      if (transcribes(p.q)) setBusy("transcribing");
+      /*
+       * TICKET, PUT, CONFIRM.
+       *
+       * The clip goes straight from here to object storage on a signed URL.
+       * It used to be POSTed to us as multipart and forwarded, which a
+       * serverless host refuses over 4.5 MB — and the Studio offers answer
+       * lengths up to thirty minutes.
+       *
+       * Storing and transcribing are now two steps rather than one request.
+       * They were one before, and a five-minute answer took the provider
+       * longer than the function was allowed to live, so the request died
+       * AFTER the clip was safely uploaded and this component told the
+       * respondent their recording could not be saved — which was false, and
+       * asked them to record it all again.
+       */
+      const ticketRes = await fetch("/api/session/media/ticket", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionId, kind: "answer_audio", questionId: p.q.id,
+          fileName: "answer.webm", mimeType: blob.type || "audio/webm",
+          bytes: blob.size, durationSeconds: seconds,
+        }),
+      });
+      const ticket = await ticketRes.json().catch(() => ({}));
+      if (!ticketRes.ok || !ticket?.uploadUrl) {
+        setError(ticket?.error ?? "Your recording could not be saved. Please check your connection and try again.");
+        return;
+      }
 
-      const r = await fetch("/api/session/transcribe", { method: "POST", body: form });
-      if (!r.ok) {
+      const put = await fetch(ticket.uploadUrl, {
+        method: "PUT",
+        headers: { "content-type": blob.type || "audio/webm", "x-upsert": "false" },
+        body: blob,
+      });
+      if (!put.ok) {
         /*
-         * The clip did not reach the server. This is the ONE failure the
+         * The clip did not reach storage. This is the ONE failure the
          * respondent must be told about, because unlike a missing transcript
          * it cannot be repaired later — so it is said plainly, the local
          * recording is kept playable, and Try again is offered.
@@ -222,11 +279,36 @@ export function VideoInterview(p: QRProps) {
         setError("Your recording could not be saved. Please check your connection and try again.");
         return;
       }
-      const j = (await r.json()) as { audio?: Record<string, unknown> | null; transcript?: Record<string, unknown> };
-      patch({
-        audio: (j.audio as InterviewAnswer["audio"]) ?? { url: local, mimeType: blob.type, bytes: blob.size, durationSeconds: seconds, retakes },
-        transcript: (j.transcript as InterviewAnswer["transcript"]) ?? { source: "none" },
+
+      const confirmRes = await fetch("/api/session/media/confirm", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId, mediaId: ticket.mediaId, questionId: p.q.id, bytes: blob.size, durationSeconds: seconds, retakes }),
       });
+      const confirmed = await confirmRes.json().catch(() => ({}));
+      if (!confirmRes.ok || !confirmed?.audio) {
+        setError(confirmed?.error ?? "Your recording could not be saved. Please check your connection and try again.");
+        return;
+      }
+
+      /*
+       * THE ANSWER IS COMPLETE HERE. The clip is stored; `interviewAnswered`
+       * is satisfied; Next unlocks. Everything below is the transcript, and
+       * the respondent is never held for it.
+       */
+      const status = (confirmed.transcriptStatus ?? null) as string | null;
+      patch({
+        audio: confirmed.audio as InterviewAnswer["audio"],
+        transcript: status
+          ? { source: "provider", status: status as never }
+          : { source: "none" },
+      });
+      pending.current = null;
+
+      if (status) {
+        setBusy("transcribing");
+        void driveTranscript(sessionId, String(ticket.mediaId));
+      }
     } catch {
       setError("Your recording could not be saved. Please check your connection and try again.");
     } finally {
@@ -234,6 +316,53 @@ export function VideoInterview(p: QRProps) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.q.id, p.value]);
+
+  /**
+   * Ask the runtime to transcribe, then follow it until it settles.
+   *
+   * Deliberately after the answer is already complete, and deliberately
+   * tolerant: every outcome here — provider down, wallet empty, timeout —
+   * leaves a stored clip and a transcript that can be retried, so none of
+   * them is allowed to look like a lost answer.
+   */
+  const driveTranscript = React.useCallback(async (sessionId: string, mediaId: string) => {
+    const write = (t: Record<string, unknown>) => p.onChange({
+      ...pRef.current,
+      transcript: {
+        ...(pRef.current.transcript ?? {}),
+        text: (t.text as string) ?? undefined,
+        language: (t.language as string) ?? undefined,
+        model: (t.model as string) ?? undefined,
+        status: (t.status as never) ?? undefined,
+        error: (t.error as string) ?? undefined,
+        source: t.text ? "provider" : "none",
+        failed: t.status === "failed" ? true : undefined,
+        transcribedAt: t.completedAt ? String(t.completedAt) : undefined,
+      },
+    });
+    try {
+      const r = await fetch("/api/session/media/transcript", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId, mediaId, questionId: p.q.id }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (j?.transcript) write(j.transcript);
+      /* a job somebody else is running settles on its own; follow it */
+      for (let i = 0; i < 40 && j?.transcript?.pending; i++) {
+        await new Promise((res) => setTimeout(res, 3000));
+        const poll = await fetch(`/api/session/media/transcript?sessionId=${encodeURIComponent(sessionId)}&mediaId=${encodeURIComponent(mediaId)}`);
+        const pj = await poll.json().catch(() => ({}));
+        if (!pj?.transcript) break;
+        write(pj.transcript);
+        if (!pj.transcript.pending) break;
+      }
+    } catch {
+      /* the clip is stored; a transcript that never arrives is retryable */
+    } finally {
+      setBusy(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.q.id]);
 
   const startRecording = async () => {
     setError(null);
@@ -243,7 +372,17 @@ export function VideoInterview(p: QRProps) {
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const rec = new MediaRecorder(stream);
+      /*
+       * An explicit bitrate, and a timeslice. The browser's default for Opus
+       * is around 128 kbps, which at the thirty minutes the Studio lets a
+       * researcher authorise is ~14 MB held in the tab as an array of Blobs
+       * until the respondent stops speaking. 64 kbps is ample for one voice
+       * close to a microphone and makes five minutes 2.4 MB.
+       */
+      const rec = new MediaRecorder(stream, {
+        ...pickAudioMime(),
+        audioBitsPerSecond: RECORDING_CONSTRAINTS.answerAudioBitsPerSecond,
+      });
       chunks.current = [];
       elapsed.current = 0;
       rec.ondataavailable = (e) => { if (e.data.size) chunks.current.push(e.data); };
@@ -253,12 +392,13 @@ export function VideoInterview(p: QRProps) {
         setRecording(false);
         setPaused(false);
         const blob = new Blob(chunks.current, { type: rec.mimeType || "audio/webm" });
+        chunks.current = [];
         const seconds = Math.round(elapsed.current * 10) / 10;
         if (!blob.size) { setError("Nothing was recorded. Please try again."); return; }
         void upload(blob, seconds, a.audio ? used + 1 : 0);
       };
       recRef.current = rec;
-      rec.start();
+      rec.start(RECORDING_CONSTRAINTS.timesliceMs);
       startedAt.current = Date.now();
       setSecs(0);
       setRecording(true);
@@ -434,7 +574,21 @@ export function VideoInterview(p: QRProps) {
               </div>
             )}
 
-            {error && (
+            {/*
+              Two different "again"s, and they are not interchangeable. If the
+              take is still here, the thing to try again is the UPLOAD —
+              asking somebody to repeat a five-minute answer because a network
+              blipped is the most expensive failure in a qualitative
+              interview. Only when there is nothing left to send is
+              re-recording the offer.
+            */}
+            {error && pending.current && (
+              <button type="button" className="btn" data-testid="interview-retry-upload"
+                onClick={() => { const t = pending.current!; void upload(t.blob, t.seconds, t.retakes); }}>
+                Try sending it again
+              </button>
+            )}
+            {error && !pending.current && (
               <button type="button" className="btn" data-testid="interview-retry" onClick={startRecording}>
                 Try again
               </button>
@@ -446,7 +600,21 @@ export function VideoInterview(p: QRProps) {
               </div>
             )}
 
-            {a.transcript?.failed && a.audio && (
+            {/*
+              The transcript's own state, which the answer now carries rather
+              than inferring. `failed` could only ever say that something went
+              wrong, never that something is still going right, so a clip
+              mid-transcription and a clip nothing would ever transcribe read
+              identically — and a refresh lost even that.
+            */}
+            {a.audio && a.transcript?.status && a.transcript.status !== "completed" && (
+              <div className="rs-iv-note muted" data-testid="interview-transcript-state" data-status={a.transcript.status}>
+                {a.transcript.status === "failed"
+                  ? "Your recording is saved. We could not write it up automatically, which does not affect your answer."
+                  : "Your recording is saved. We are writing it up — you can carry on."}
+              </div>
+            )}
+            {a.transcript?.failed && !a.transcript?.status && a.audio && (
               <div className="rs-iv-note muted" data-testid="interview-no-transcript">
                 Your recording is saved. We could not write it up automatically, which does not
                 affect your answer.
@@ -476,3 +644,12 @@ export function VideoInterview(p: QRProps) {
 
 registerVariantRenderer("videointerview", VideoInterview);
 registerVariantRenderer("base:video_interview", VideoInterview);
+
+/** The first audio container this browser will actually record. */
+function pickAudioMime(): MediaRecorderOptions {
+  const want = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
+  for (const t of want) {
+    if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported?.(t)) return { mimeType: t };
+  }
+  return {};
+}

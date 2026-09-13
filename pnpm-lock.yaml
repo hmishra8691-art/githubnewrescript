@@ -19,6 +19,9 @@ importers:
       '@rescript/engine':
         specifier: workspace:*
         version: link:../../packages/engine
+      '@rescript/media':
+        specifier: workspace:*
+        version: link:../../packages/media
       '@rescript/quality':
         specifier: workspace:*
         version: link:../../packages/quality
@@ -83,6 +86,9 @@ importers:
       '@rescript/mail':
         specifier: workspace:*
         version: link:../../packages/mail
+      '@rescript/media':
+        specifier: workspace:*
+        version: link:../../packages/media
       '@rescript/quality':
         specifier: workspace:*
         version: link:../../packages/quality
@@ -253,6 +259,15 @@ importers:
         specifier: ^5.6.3
         version: 5.9.3
 
+  packages/media:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.20.1
+        version: 22.20.1
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+
   packages/quality:
     dependencies:
       '@rescript/engine':
@@ -274,6 +289,9 @@ importers:
       '@rescript/engine':
         specifier: workspace:*
         version: link:../engine
+      '@rescript/media':
+        specifier: workspace:*
+        version: link:../media
       '@rescript/schema':
         specifier: workspace:*
         version: link:../schema

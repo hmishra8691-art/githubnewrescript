@@ -12,6 +12,7 @@
     "@rescript/ai": "workspace:*",
     "@rescript/billing": "workspace:*",
     "@rescript/engine": "workspace:*",
+    "@rescript/media": "workspace:*",
     "@rescript/quality": "workspace:*",
     "@rescript/renderer": "workspace:*",
     "@rescript/schema": "workspace:*",

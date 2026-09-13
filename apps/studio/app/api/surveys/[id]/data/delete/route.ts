@@ -5,6 +5,7 @@ import { Condition } from "@rescript/schema";
 import { matchingResponseIds, parseEnvironment, missingResponseMigration, RESPONSE_MIGRATION_MESSAGE } from "@/lib/responseData";
 import { recountQuotas } from "@/lib/quotaRecount";
 import { audit, isFailure, requireProject } from "@/lib/guard";
+import { purgeSessionMedia, type MediaDb } from "@rescript/media";
 
 export const dynamic = "force-dynamic";
 
@@ -109,6 +110,35 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   if (!ids.length) return NextResponse.json({ ok: true, affected: 0, action, note: "nothing matched" });
 
+  /*
+   * A PURGE MUST TAKE THE RECORDINGS WITH IT.
+   *
+   * `rescript_purge_responses` deletes the rows, and the cascade takes the
+   * `media_objects` rows that name the objects — so if this ran afterwards
+   * there would be nothing left to say which objects to delete, and a
+   * respondent erased for a GDPR request would keep their voice recording in
+   * the bucket behind a year-long signed URL. It runs BEFORE, and it reads
+   * the sessions rather than the response ids for that same reason.
+   *
+   * Only on `purge`. A soft delete is reversible and the recording must
+   * survive it, exactly as the row does.
+   */
+  let mediaRemoved = 0;
+  const mediaWarnings: string[] = [];
+  if (action === "purge") {
+    try {
+      const { data: sessions } = await db.from("responses").select("session_id").in("id", ids);
+      const sessionIds = Array.from(new Set(
+        (sessions ?? []).map((r: { session_id: string | null }) => r.session_id).filter((x: string | null): x is string => !!x),
+      ));
+      const purged = await purgeSessionMedia(db as unknown as MediaDb, sessionIds);
+      mediaRemoved = purged.objects;
+      mediaWarnings.push(...purged.warnings);
+    } catch (e) {
+      mediaWarnings.push(`media cleanup failed: ${(e as Error).message}`);
+    }
+  }
+
   const fn = action === "purge" ? "rescript_purge_responses" : action === "restore" ? "rescript_restore_responses" : "rescript_soft_delete_responses";
   const args: Record<string, unknown> = { p_survey: params.id, p_ids: ids, p_by: by };
   if (action === "delete") args.p_reason = reason;
@@ -139,8 +169,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       operation: action, environment, reason: reason ?? null,
       count: typeof affected === "number" ? affected : ids.length,
       sample: codes.slice(0, 5),
+      ...(action === "purge" ? { mediaObjectsRemoved: mediaRemoved } : {}),
+      ...(mediaWarnings.length ? { mediaWarnings } : {}),
     },
   });
   console.info("[rescript:data] bulk", JSON.stringify({ surveyId: params.id, environment, action, affected, by, reason, sample: codes.slice(0, 5) }));
-  return NextResponse.json({ ok: true, action, affected: typeof affected === "number" ? affected : ids.length, respondentCodes: codes.slice(0, 200), quotas });
+  return NextResponse.json({ ok: true, action, affected: typeof affected === "number" ? affected : ids.length, respondentCodes: codes.slice(0, 200), quotas, mediaRemoved });
 }

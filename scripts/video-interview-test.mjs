@@ -29,12 +29,18 @@ import { openPreview } from "./lib/preview.mjs";
 const RUNTIME = process.env.RUNTIME_URL ?? "http://localhost:3001";
 const CLIP = `${RUNTIME}/test-media/tiny.webm`;
 
-/* the fake provider must be the one answering, or the transcript assertions
-   below would be asserting against somebody's real bill */
+/*
+ * The media routes must be reachable. Storing a recording no longer depends
+ * on a transcription provider at all — a respondent's answer has to be kept
+ * whether or not anyone has configured speech-to-text — so this asks only
+ * that the route exists and is refusing for the right reason.
+ */
 {
-  const probe = await fetch(`${RUNTIME}/api/session/transcribe`, { method: "POST" });
-  assert.notEqual(probe.status, 501,
-    "the runtime must be started with AI_API_URL=fake: — transcription is not configured");
+  const probe = await fetch(`${RUNTIME}/api/session/media/ticket`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+  });
+  assert.notEqual(probe.status, 404, "the media ticket route is not deployed");
+  assert.equal(probe.status, 400, `an empty body is an invalid session, not a crash: ${probe.status}`);
 }
 
 const h = await openHarness();
@@ -212,62 +218,54 @@ console.log("\nWATCHING IT THROUGH OPENS THE ANSWER; RECORDING IT CLOSES THE QUE
   console.log("  ok   record → stored → reviewable");
 }
 
-/* ============================== 5. the transcript, against a real session */
+/* ============================== 5. storage is gated on a real session */
 
-console.log("\nA LIVE SESSION STORES THE CLIP AND TRANSCRIBES IT");
+console.log("\nA PREVIEW STORES NOTHING, AND SAYS SO RATHER THAN FAILING QUIETLY");
 {
   /*
-   * The transcription route, called directly with the definition in the body
-   * — the preview carve-out every provider route has. This is the only way
-   * to exercise the provider path without a database, and it proves the two
-   * halves the renderer depends on: the clip is stored, and the transcript
-   * that comes back belongs to the bytes that were sent.
+   * Transcription used to run inline inside the upload request, and a preview
+   * was allowed through it against the fake provider. Both of those are gone:
+   * storing and transcribing are separate steps now, and a preview has no
+   * respondent whose recording it would be. So the ticket route refuses a
+   * preview outright — and the renderer, which knows this, keeps the clip as
+   * an object URL and never calls it (proved in section 4 above).
+   *
+   * The pipeline itself — claim, read, transcribe, retry, give up after three
+   * attempts — is proven in packages/media/src/store.test.ts against a stub
+   * database, which is stronger than this suite could manage: it can assert
+   * that a second runner does NOT bill the provider a second time.
    */
-  const wav = await (await fetch(`${RUNTIME}/test-media/tone.wav`)).arrayBuffer();
-  const form = new FormData();
-  form.append("file", new Blob([wav], { type: "audio/wav" }), "answer.wav");
-  form.append("sessionId", "preview");
-  form.append("questionId", "qiv");
-  form.append("durationSeconds", "1");
-  form.append("definition", JSON.stringify(def));
-
-  const r = await fetch(`${RUNTIME}/api/session/transcribe`, { method: "POST", body: form });
-  assert.equal(r.status, 200, `the route accepted the clip: ${r.status}`);
+  const r = await fetch(`${RUNTIME}/api/session/media/ticket`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sessionId: "preview", kind: "answer_audio", questionId: "qiv", definition: def }),
+  });
+  assert.equal(r.status, 403, `a preview may not reserve storage: ${r.status}`);
   const j = await r.json();
-
-  assert.equal(j.transcript?.source, "provider", "it was transcribed");
-  assert.ok(j.transcript.text?.length > 10, `and there is text: ${j.transcript.text}`);
-  assert.match(j.transcript.text, /transcript [a-z0-9]+/, "the fake provider stamps the clip's own id");
-  assert.ok(j.transcript.transcribedAt, "with a timestamp");
-
-  /* a different clip must produce a different transcript — a constant would
-     pass every assertion above while proving nothing */
-  const other = new FormData();
-  other.append("file", new Blob([wav.slice(0, wav.byteLength / 2)], { type: "audio/wav" }), "other.wav");
-  other.append("sessionId", "preview");
-  other.append("questionId", "qiv");
-  other.append("definition", JSON.stringify(def));
-  const r2 = await fetch(`${RUNTIME}/api/session/transcribe`, { method: "POST", body: other });
-  const j2 = await r2.json();
-  assert.notEqual(j2.transcript.text, j.transcript.text,
-    "the transcript belongs to the clip that produced it");
-
-  console.log("  ok   stored and transcribed, and the transcript is the clip's own");
+  assert.match(j.error, /preview/i, `and is told why: ${j.error}`);
 }
 
-console.log("\nTRANSCRIPTION OFF MEANS NOTHING IS SENT ANYWHERE");
+console.log("\nAN UNKNOWN SESSION CANNOT RESERVE STORAGE EITHER");
 {
-  const quiet = survey(question({ transcribeAnswer: false }));
-  const wav = await (await fetch(`${RUNTIME}/test-media/tone.wav`)).arrayBuffer();
-  const form = new FormData();
-  form.append("file", new Blob([wav], { type: "audio/wav" }), "answer.wav");
-  form.append("sessionId", "preview");
-  form.append("questionId", "qiv");
-  form.append("definition", JSON.stringify(quiet));
-  const j = await (await fetch(`${RUNTIME}/api/session/transcribe`, { method: "POST", body: form })).json();
-  assert.equal(j.transcript?.source, "none", "the provider was never called");
-  assert.equal(j.transcript?.text, undefined);
-  console.log("  ok   a question that does not want a transcript does not pay for one");
+  const r = await fetch(`${RUNTIME}/api/session/media/ticket`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sessionId: "0123456789abcdef0123456789abcdef", kind: "answer_audio", questionId: "qiv" }),
+  });
+  /* 404 where a database is configured; 501 on a runtime that has none —
+     both are a refusal, and neither is a bucket write */
+  assert.ok(r.status === 404 || r.status === 501, `an invented session id is refused: ${r.status}`);
+  console.log("  ok   nobody writes into the bucket without a live session");
+}
+
+console.log("\nTHE RESPONDENT BUCKET ONLY TAKES RESPONDENT KINDS");
+{
+  const r = await fetch(`${RUNTIME}/api/session/media/ticket`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sessionId: "0123456789abcdef0123456789abcdef", kind: "question_video", questionId: "qiv" }),
+  });
+  /* refused before the session is even resolved, or by the session gate —
+     either way a respondent route will not store a researcher's stimulus */
+  assert.ok(r.status === 400 || r.status === 404 || r.status === 501, `a respondent cannot store a question video: ${r.status}`);
+  console.log("  ok   a respondent route stores respondent media and nothing else");
 }
 
 /* ======================================= 6. the gate survives a refresh */

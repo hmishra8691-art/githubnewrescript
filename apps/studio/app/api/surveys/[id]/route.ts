@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { SURVEY_STATUSES, isSurveyStatus } from "@/lib/status";
 import { audit, isFailure, requireEditRight, requireProject } from "@/lib/guard";
 import { purgeSurveyUploads, type StorageDb } from "@/lib/surveyUploads";
+import { purgeSurveyMedia, type MediaDb } from "@rescript/media";
 
 export const dynamic = "force-dynamic";
 
@@ -114,6 +115,20 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   const { warnings: storageWarnings } = await purgeSurveyUploads(db as unknown as StorageDb, params.id);
 
   /*
+   * And every OTHER object this survey owns — the question videos and their
+   * audio companions, the localization readings — which `purgeSurveyUploads`
+   * could never reach because it walks `responses.session_id` and those are
+   * keyed by survey. They are reachable now because each one is a row in
+   * `media_objects`; before that table they were simply invisible, and a
+   * deleted survey left its recordings in the bucket permanently.
+   *
+   * Before `rescript_delete_project`, because the cascade takes the rows that
+   * name the objects.
+   */
+  const mediaPurge = await purgeSurveyMedia(db as unknown as MediaDb, params.id).catch((e: Error) => ({ objects: 0, rows: 0, warnings: [`media cleanup failed: ${e.message}`] }));
+  storageWarnings.push(...mediaPurge.warnings);
+
+  /*
    * One RPC, one statement from here: clearing the self-referencing
    * current_version_id and deleting the row now commit or fail together
    * (supabase/migrations/0020_delete_project_transaction.sql), rather than
@@ -128,6 +143,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     entity: "survey", entityId: params.id,
     detail: {
       code: doomed?.code ?? null, title: doomed?.title ?? null,
+      mediaObjectsRemoved: mediaPurge.objects,
       ...(storageWarnings.length ? { storageWarnings } : {}),
     },
   });

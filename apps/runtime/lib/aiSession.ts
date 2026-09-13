@@ -32,10 +32,18 @@ export async function definitionForAiCall(body: any): Promise<{ def: SurveyDefin
  * (AI, geocoding, …): `configured` says whether the provider exists at all,
  * `fake` whether it is the free deterministic one a preview may use.
  */
+export interface SessionRow {
+  /** the `responses` row id, so media can cascade with an erasure */
+  responseId: string;
+  surveyId: string;
+  customerId: string | null;
+  sessionId: string;
+}
+
 export async function definitionForProviderCall(
   body: any,
   provider: { configured: boolean; fake: boolean; what: string; unconfigured: string },
-): Promise<{ def: SurveyDefinition; billing: SessionBilling | null } | { response: NextResponse }> {
+): Promise<{ def: SurveyDefinition; billing: SessionBilling | null; row: SessionRow | null } | { response: NextResponse }> {
   const sessionId = body?.sessionId;
   if (typeof sessionId !== "string" || (sessionId !== "preview" && sessionId.length < 16))
     return { response: NextResponse.json({ error: "invalid session" }, { status: 400 }) };
@@ -47,10 +55,19 @@ export async function definitionForProviderCall(
     }
     const parsed = SurveyDefinition.safeParse(body?.definition);
     if (!parsed.success) return { response: NextResponse.json({ error: "preview needs the definition in the body" }, { status: 400 }) };
-    return { def: parsed.data, billing: null };   // a preview bills nobody — it can only use the free provider
+    return { def: parsed.data, billing: null, row: null };   // a preview bills nobody — it can only use the free provider
   }
 
-  const db = supabaseAdmin();
+  /*
+   * A runtime with no database configured answers 501, not 500. It is the
+   * same distinction every provider route here already draws — "this
+   * installation does not have that" is a deployment fact the caller can act
+   * on, while a 500 reads as a bug and sends somebody looking for one.
+   */
+  let db;
+  try { db = supabaseAdmin(); }
+  catch { return { response: NextResponse.json({ error: "this runtime has no database configured" }, { status: 501 }) }; }
+
   const { data: existing } = await db
     .from("responses")
     .select("id, survey_id, version_id, status, is_test, deleted_at, surveys(customer_id)")
@@ -70,5 +87,28 @@ export async function definitionForProviderCall(
   const customerId = (existing as unknown as { surveys?: { customer_id?: string } | { customer_id?: string }[] }).surveys;
   const cid = Array.isArray(customerId) ? customerId[0]?.customer_id : customerId?.customer_id;
   const billing: SessionBilling | null = cid ? { customerId: cid, surveyId: existing.survey_id, environment: existing.is_test ? "TEST" : "LIVE", sessionId } : null;
-  return { def: run.def, billing };
+  return {
+    def: run.def,
+    billing,
+    row: { responseId: existing.id as string, surveyId: existing.survey_id as string, customerId: cid ?? null, sessionId },
+  };
+}
+
+/**
+ * The same session gate, for STORING a recording rather than spending a
+ * provider call.
+ *
+ * Separate because the provider is beside the point here: a respondent's
+ * answer must be stored whether or not anybody has configured speech-to-text,
+ * and refusing the upload with 501 because transcription is unavailable would
+ * lose the recording to save a transcript. So this gate checks the session
+ * and nothing else, and the transcript is queued afterwards if it can be.
+ */
+export async function sessionForMedia(body: any): Promise<{ def: SurveyDefinition; billing: SessionBilling | null; row: SessionRow | null } | { response: NextResponse }> {
+  return definitionForProviderCall(body, {
+    configured: true,
+    fake: true,
+    what: "media storage",
+    unconfigured: "storage is not configured on this runtime",
+  });
 }

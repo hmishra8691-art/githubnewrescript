@@ -654,6 +654,15 @@ export const InterviewAudio = z.object({
   recordedAt: z.string().optional(),
   /** how many times they re-recorded before settling on this one */
   retakes: z.number().int().min(0).optional(),
+  /**
+   * The `media_objects` row for this clip.
+   *
+   * The url and path above are what the runtime plays; this is what makes the
+   * object findable from SQL — so an erasure request can delete it, and a
+   * transcript that failed can be re-driven from the stored audio rather than
+   * from a recording the respondent no longer has.
+   */
+  mediaId: z.string().optional(),
 });
 export type InterviewAudio = z.infer<typeof InterviewAudio>;
 
@@ -672,6 +681,18 @@ export const InterviewTranscript = z.object({
   transcribedAt: z.string().optional(),
   /** the provider could not be reached or refused; the clip is still stored */
   failed: z.boolean().optional(),
+  /**
+   * Where the transcription has got to, mirroring `media_transcripts.status`.
+   *
+   * `failed` above could only ever say that something went wrong, never that
+   * something is still going right — so a clip mid-transcription and a clip
+   * nothing would ever transcribe looked identical in the stored answer, and
+   * a refresh lost the difference. These five words are the ones the
+   * interface shows.
+   */
+  status: z.enum(["waiting", "processing", "transcribing", "completed", "failed"]).optional(),
+  /** why it failed, in a sentence the person reading it can act on */
+  error: z.string().optional(),
 });
 export type InterviewTranscript = z.infer<typeof InterviewTranscript>;
 
@@ -709,6 +730,23 @@ export const InterviewVideo = z.object({
    */
   status: z.enum(["ready", "processing", "failed"]).default("ready"),
   fileName: z.string().optional(),
+  /** the `media_objects` row for the video itself */
+  mediaId: z.string().optional(),
+  /**
+   * The audio-only companion recorded alongside the video.
+   *
+   * A five-minute 720p take is ~49 MB and speech-to-text services accept 25.
+   * Rather than extract audio server-side — which would mean ffmpeg in a
+   * serverless function, for a track the browser already has — the recorder
+   * captures the microphone twice: once into the video, once on its own at
+   * 64 kbps. Five minutes of that is 2.4 MB, and it is what gets transcribed.
+   */
+  audioMediaId: z.string().optional(),
+  /** mirrors `media_transcripts.status` for the question's own recording */
+  transcriptStatus: z.enum(["waiting", "processing", "transcribing", "completed", "failed"]).optional(),
+  /** the completed transcript, cached here so reading it needs no round trip */
+  transcript: z.string().optional(),
+  transcriptError: z.string().optional(),
 });
 export type InterviewVideo = z.infer<typeof InterviewVideo>;
 

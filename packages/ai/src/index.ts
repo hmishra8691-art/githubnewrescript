@@ -381,8 +381,23 @@ export async function transcribe(
   if (!base) return null;
   const model = (process.env.AI_STT_MODEL ?? "").trim() || "whisper-1";
 
+  /*
+   * The timeout scales with the clip, because a fixed one is wrong at both
+   * ends. Thirty seconds was generous for a fifteen-second answer and far too
+   * short for five minutes of speech, which a Whisper-class service takes
+   * twenty to sixty seconds to read and longer under load — so the flat
+   * 30_000 aborted legitimate work and recorded it as "the provider could not
+   * be reached", indistinguishable from having no provider configured at all.
+   *
+   * Roughly 0.4s of patience per second of audio, never less than 30s and
+   * never more than 240s. The ceiling sits under the 300s the calling routes
+   * are allowed, so the abort is ours — and produces a message a researcher
+   * can act on — rather than the platform killing the function and producing
+   * none.
+   */
+  const budgetMs = Math.min(240_000, Math.max(30_000, Math.round(seconds * 400)));
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 30_000);
+  const timer = setTimeout(() => ctrl.abort(), budgetMs);
   try {
     const form = new FormData();
     /* `Blob` over the raw array: the provider reads the part's filename and
