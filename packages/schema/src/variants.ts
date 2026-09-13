@@ -31,6 +31,15 @@ export type ResponseModel =
   | "geo" // a place: { lat, lng, accuracy?, radiusM?, address? } — see GeoAnswer
   | "derived" // hidden / calculated
   | "media" // uploads, recordings
+  /**
+   * A researcher-led qualitative interview: the proof their video was
+   * watched, the respondent's recorded answer, and its transcript, as one
+   * record — see `InterviewAnswer`. Not `media`, because a file's shape
+   * cannot carry a watch record or a transcript, and not `text`, because
+   * the transcript without the clip is a summary of evidence rather than
+   * the evidence.
+   */
+  | "interview"
   | "none"; // display-only
 
 export type VariantCapability =
@@ -64,7 +73,9 @@ export type VariantCapability =
    */
   | "speech_input"
   /** `geo` questions: mode (pin / address / radius), map framing, geolocation, radius bounds. */
-  | "geo_settings";
+  | "geo_settings"
+  /** `video_interview`: the researcher's clip, the watch gate, the spoken answer and its transcript. */
+  | "video_interview";
 
 export interface QuestionVariantDef {
   id: string; // "<family>.<key>"
@@ -277,6 +288,7 @@ const F = {
   ai: { family: "ai", familyLabel: "AI-Enabled" },
   conversational: { family: "conversational", familyLabel: "Conversational" },
   content: { family: "content", familyLabel: "Content / Hidden" },
+  qualitative: { family: "qualitative", familyLabel: "Qualitative / Interview" },
 } as const;
 
 export const QUESTION_VARIANTS: QuestionVariantDef[] = [
@@ -965,6 +977,69 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
         { code: "completed", label: "Watched to the end", fieldType: "number" },
       ],
       instruction: "Please watch the clip.",
+    },
+  }),
+  /*
+   * VIDEO INTERVIEW — the researcher asks, on camera; the respondent answers
+   * out loud. Offered in Qualitative (where somebody planning depth work
+   * looks) and, as a cross-family preset below, in Video / Audio (where
+   * somebody who thinks "I want video" looks). One type, two doors.
+   */
+  stable(F.qualitative, "video_interview", "Video Interview", "You record yourself asking the question; the respondent watches it through, answers out loud, and the recording is transcribed.", {
+    baseType: "video_interview", renderer: "videointerview", responseModel: "interview",
+    capabilities: ["video_interview"], validations: ["required"],
+    defaults: {
+      settings: {
+        /* the qualitative defaults the brief asks for, all on */
+        requireWatch: true,
+        requireAudioAnswer: true,
+        transcribeAnswer: true,
+        saveAnswerAudio: true,
+        saveTranscript: true,
+        allowSeek: false,
+        allowReplay: true,
+        showProgress: true,
+        autoPlayVideo: false,
+        allowAnswerPause: true,
+        reviewBeforeSubmit: true,
+        transcriptVisibility: "respondent",
+        maxRetakes: 3,
+        minAnswerSeconds: 3,
+        maxAnswerSeconds: 300,
+      },
+      instruction: "Watch the whole clip, then record your answer in your own words.",
+    },
+  }),
+  /*
+   * The same type with the interview discipline relaxed, listed in Video /
+   * Audio so somebody who thinks "show a clip, get a spoken reaction" finds
+   * it. It is a preset and not a second type because it is the same
+   * question, drawn the same way, storing the same record — what differs is
+   * the starting point: the gate is off, seeking is allowed, and nothing is
+   * transcribed, which is what ad-reaction work wants and depth work does
+   * not. A programmer can turn any of it back on.
+   */
+  stable(F.media, "video_prompt_voice", "Video Prompt → Voice Reply", "Play a clip and collect a spoken reaction. No forced completion, no transcript — the qualitative discipline of Video Interview, switched off.", {
+    baseType: "video_interview", renderer: "videointerview", responseModel: "interview",
+    capabilities: ["video_interview"], validations: ["required"],
+    presetOf: "qualitative.video_interview",
+    defaults: {
+      settings: {
+        requireWatch: false,
+        allowSeek: true,
+        allowReplay: true,
+        showProgress: true,
+        requireAudioAnswer: true,
+        transcribeAnswer: false,
+        saveAnswerAudio: true,
+        saveTranscript: false,
+        transcriptVisibility: "hidden",
+        reviewBeforeSubmit: true,
+        allowAnswerPause: true,
+        maxRetakes: 3,
+        maxAnswerSeconds: 120,
+      },
+      instruction: "Watch the clip, then tell us what you think.",
     },
   }),
   stable(F.media, "audio_recording", "Audio Recording / Voice Response", "Record a spoken answer.", {
@@ -1853,6 +1928,7 @@ export function responseModelOf(baseType: string): ResponseModel {
     case "hotspot": case "annotation": case "media_timeline": return "coordinates";
     case "upload": return "media";
     case "geo": return "geo";
+    case "video_interview": return "interview";
     case "repeating_group": return "fields";
     case "hidden": case "calculated": case "embedded_data": case "experiment": return "derived";
     case "html": return "none";

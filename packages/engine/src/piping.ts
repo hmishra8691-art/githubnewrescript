@@ -5,6 +5,7 @@ import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
 import { escapeHtml } from "./html.js";
 import { isGeoAnswer, geoText, round6, formatMetres } from "./geo.js";
+import { interviewText, isInterviewAnswer } from "./interview.js";
 import {
   PIPE_TOKEN_RE,
   parsePipeBody,
@@ -204,6 +205,16 @@ function renderToken(t: PipeToken, ctx: EvalContext): string {
       case "radius": return g.radiusM == null ? "" : formatMetres(g.radiusM);
       default: return escapeHtml(geoText(g));
     }
+  }
+
+  /*
+   * An interview pipes as what was SAID. `{{Q5}}` inside a follow-up probe
+   * reads the transcript, which is the only part of the record a sentence
+   * can be built from — a signed URL piped into a question would be both
+   * meaningless and a leak.
+   */
+  if (q.type === "video_interview" && isInterviewAnswer(value)) {
+    return escapeHtml(interviewText(value));
   }
 
   const codes = Array.isArray(value) ? value : [value];

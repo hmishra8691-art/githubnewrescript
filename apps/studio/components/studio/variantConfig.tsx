@@ -72,6 +72,7 @@ import "./variantConfig/ranking";
 import "./variantConfig/slider";
 import "./variantConfig/image";
 import "./variantConfig/media";
+import "./variantConfig/interview";
 import "./variantConfig/dragdrop";
 import "./variantConfig/swipe";
 import "./variantConfig/carousel";

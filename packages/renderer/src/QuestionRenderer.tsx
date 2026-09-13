@@ -1832,7 +1832,7 @@ function CustomComponent(p: QRProps) {
  * (the media family tracks playback on it); every other question shows the
  * media under its text through one MediaEmbed.
  */
-const MEDIA_OWNING_RENDERERS = new Set(["videorating", "videotimeline", "watchtime", "audiorec", "base:media_timeline"]);
+const MEDIA_OWNING_RENDERERS = new Set(["videorating", "videotimeline", "watchtime", "audiorec", "base:media_timeline", "videointerview", "base:video_interview"]);
 
 /**
  * The question with its media URLs piped.

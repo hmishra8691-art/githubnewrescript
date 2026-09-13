@@ -74,6 +74,7 @@ const CATEGORIES: Record<string, QuestionTypePlugin["category"]> = {
   experiment: "special",
   geo: "special",
   acbc_task: "special",
+  video_interview: "media",
 };
 
 const LABELS: Record<string, string> = {
@@ -116,6 +117,7 @@ const LABELS: Record<string, string> = {
   experiment: "Experiment arm",
   geo: "Location (map pin / address / radius)",
   acbc_task: "Adaptive CBC (ACBC)",
+  video_interview: "Video interview (watch, then answer out loud)",
 };
 
 function featuresFor(type: string): QuestionTypePlugin["features"] {

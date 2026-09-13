@@ -78,6 +78,13 @@ export function sourceKindForQuestion(q: Question | undefined): keyof typeof OPE
         : q.type === "matrix_numeric" ? "numeric"
         : q.type === "matrix_text" ? "text"
         : "choice";
+    /*
+     * An interview's comparable value is its TRANSCRIPT, so it takes the
+     * text operators: "contains", "matches", "is empty". Comparing against
+     * the whole record would be comparing against an object, which no
+     * operator does anything useful with.
+     */
+    case "interview": return "text";
     /* a cell grid, a set of tasks, a place, a file, a derived value: their
        answers are not one vocabulary, so nothing is narrowed */
     default: return "any";

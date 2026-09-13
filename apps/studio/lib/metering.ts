@@ -97,14 +97,24 @@ export function meterProvider(provider: string, kind: "chat" | "tts" | "stt" | "
 }
 export function meterModel(provider: string, model: string | null, kind: "chat" | "tts" | "stt" | "translate"): string | null {
   if (provider !== "fake" || process.env.BILLING_SIMULATE_FAKE_COSTS !== "1") return model;
-  return kind === "translate" ? "v2" : kind === "chat" ? aiModelName() : (process.env.AI_TTS_MODEL ?? "").trim() || "tts-1";
+  if (kind === "translate") return "v2";
+  if (kind === "chat") return aiModelName();
+  if (kind === "stt") return (process.env.AI_STT_MODEL ?? "").trim() || "whisper-1";
+  return (process.env.AI_TTS_MODEL ?? "").trim() || "tts-1";
 }
 
 /** Turn collected provider reports into the usage the meter settles. */
-export function usageToSpec(usage: AiUsage[], fallback: { kind: "chat" | "tts" | "translate" }): Partial<UsageSpec> {
+export function usageToSpec(usage: AiUsage[], fallback: { kind: "chat" | "tts" | "stt" | "translate" }): Partial<UsageSpec> {
   const t = sumUsage(usage);
   const provider = t.provider ?? "fake";
   const kind = usage[0]?.kind ?? fallback.kind;
+  /*
+   * Speech-to-text is priced PER AUDIO MINUTE, not per token. Without this
+   * branch an stt report fell through to the chat one and was billed as
+   * tokens it does not have — quantity zero, so a transcription cost
+   * nothing and the rate row `ai.stt.*` was never reached.
+   */
+  if (kind === "stt") return { provider: meterProvider(provider, "stt"), service: "stt", model: meterModel(provider, t.model, "stt"), quantity: (t.seconds ?? 0) / 60, metadata: { requests: t.requests, estimated: t.estimated, actualProvider: provider, seconds: t.seconds ?? 0 } };
   if (kind === "translate") return { provider: meterProvider(provider, "translate"), service: "translate", model: meterModel(provider, t.model, "translate"), quantity: t.characters, metadata: { requests: t.requests, estimated: t.estimated, actualProvider: provider } };
   if (kind === "tts") return { provider: meterProvider(provider, "tts"), service: "tts", model: meterModel(provider, t.model, "tts"), quantity: t.characters, metadata: { requests: t.requests, estimated: t.estimated, actualProvider: provider } };
   return { provider: meterProvider(provider, "chat"), service: "chat", model: meterModel(provider, t.model, "chat"), inputUnits: t.inputTokens, outputUnits: t.outputTokens, quantity: t.inputTokens + t.outputTokens, metadata: { requests: t.requests, estimated: t.estimated, actualProvider: provider } };

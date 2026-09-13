@@ -12,6 +12,7 @@ import { resolvePiping } from "./piping.js";
 import { geoAnswered, geoProblems } from "./geo.js";
 import { acbcDone, isAcbcAnswer } from "./acbc.js";
 import { shapeHasAxis } from "./questionShape.js";
+import { videoCompleted, interviewAnswered, interviewProblems, requiresAudioAnswer } from "./interview.js";
 
 /**
  * Whether a failed check stops the respondent.
@@ -484,6 +485,23 @@ export function validateQuestion(
       else push(q.settings.geoMode === "address" ? "Please enter or choose an address." : "Please place the pin on the map.");
     }
     for (const m of geoProblems(q, value)) push(m);
+  }
+
+  /*
+   * VIDEO INTERVIEW. Three gates, each with its own sentence, because
+   * "please answer this question" tells a respondent staring at a locked
+   * microphone nothing at all. The `required` flag is not consulted for the
+   * watch gate: a question configured to require complete playback requires
+   * it whether or not an answer was compulsory, since the point of the type
+   * is that the question was heard before it was answered.
+   */
+  if (q.type === "video_interview") {
+    if (!videoCompleted(q, value)) {
+      push("Please watch the whole clip before answering.");
+    } else if (q.required && requiresAudioAnswer(q) && !interviewAnswered(q, value)) {
+      push("Please record your answer.");
+    }
+    for (const m of interviewProblems(q, value)) push(m);
   }
 
   // uploads: count and size

@@ -7,4 +7,4 @@ import "server-only";
  * Configuration is server env only (AI_API_URL, AI_API_KEY, AI_MODEL; see the
  * package); `server-only` here keeps every import of it out of the browser.
  */
-export { aiConfigured, aiProviderName, classify, sentiment, writeProbe, rephraseForSpeech } from "@rescript/ai";
+export { aiConfigured, aiProviderName, classify, sentiment, writeProbe, rephraseForSpeech, transcribe } from "@rescript/ai";

@@ -432,6 +432,31 @@ export function questionVariables(
       }
       break;
     }
+    /*
+     * VIDEO INTERVIEW. The base variable is the TRANSCRIPT, because that is
+     * what an analyst reads, codes and searches — a URL in the first column
+     * would make the data file useless to the person it is for. Everything
+     * else hangs off it: the recording, how long they spoke, and the proof
+     * the question was actually heard before it was answered.
+     */
+    case "video_interview": {
+      push({ name: q.variableName, label: `${q.code} — transcript`, dataType: "text" });
+      push({ name: `${q.variableName}_AUDIO_URL`, label: `${q.code} — recording URL`, dataType: "text" });
+      push({ name: `${q.variableName}_DURATION_S`, label: `${q.code} — answer length (seconds)`, dataType: "numeric" });
+      push({ name: `${q.variableName}_RETAKES`, label: `${q.code} — re-records`, dataType: "numeric" });
+      push({
+        name: `${q.variableName}_TRANSCRIPT_SOURCE`, label: `${q.code} — transcript source`, dataType: "text",
+        valueCodes: ["provider", "browser", "manual", "none"],
+        valueLabels: { provider: "Transcribed automatically", browser: "Respondent's own device", manual: "Typed or corrected", none: "Not transcribed" },
+      });
+      if (q.settings.interviewVideo?.url) {
+        push({ name: `${q.variableName}_VIDEO_COMPLETED`, label: `${q.code} — watched the question through`, dataType: "numeric", valueCodes: [0, 1], valueLabels: { 0: "No", 1: "Yes" } });
+        push({ name: `${q.variableName}_WATCHED_S`, label: `${q.code} — seconds of the question actually played`, dataType: "numeric" });
+        push({ name: `${q.variableName}_WATCHED_PCT`, label: `${q.code} — percent of the question watched`, dataType: "numeric" });
+        push({ name: `${q.variableName}_REPLAYS`, label: `${q.code} — times the question was replayed`, dataType: "numeric" });
+      }
+      break;
+    }
     case "repeating_group": {
       // array of records → VAR_<i>_<row> up to the cap
       const n = Math.max(1, q.settings.maxRepeats ?? 10);

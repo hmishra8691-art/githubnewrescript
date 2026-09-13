@@ -174,3 +174,55 @@ body {
 .rs-qaudio-btn { font: inherit; font-size: 12.5px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--rs-border, #e2e8f0); background: var(--rs-card, #fff); color: var(--rs-text, #0f172a); cursor: pointer; }
 .rs-qaudio-btn.playing { border-color: var(--rs-primary, #2563eb); color: var(--rs-primary, #2563eb); }
 .rs-qaudio-kind { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+
+/* ============================================================ VIDEO INTERVIEW
+   A researcher's recorded question, watched through, then answered out loud.
+   The transport is drawn rather than native because a scrub bar is the one
+   control this question type cannot offer — see variants/interview.tsx. */
+.rs-interview { display: flex; flex-direction: column; gap: 18px; }
+
+.rs-iv-video { display: flex; flex-direction: column; gap: 10px; }
+.rs-iv-video video {
+  width: 100%; max-width: 100%; display: block; background: #000;
+  border-radius: var(--rs-radius, 10px); aspect-ratio: 16 / 9; object-fit: contain;
+}
+.rs-iv-transport { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.rs-iv-bar {
+  flex: 1 1 140px; min-width: 100px; height: 6px; border-radius: 999px;
+  background: var(--rs-border, #e2e8f0); overflow: hidden;
+}
+.rs-iv-bar > span { display: block; height: 100%; background: var(--rs-primary, #2563eb); transition: width .2s linear; }
+@media (prefers-reduced-motion: reduce) { .rs-iv-bar > span { transition: none; } }
+.rs-iv-time { font-size: 12.5px; color: var(--rs-subtle, #64748b); font-variant-numeric: tabular-nums; }
+.rs-iv-done { font-size: 12.5px; font-weight: 600; color: var(--rs-success, #15803d); }
+
+.rs-iv-answer {
+  border: 1px solid var(--rs-border, #e2e8f0); border-radius: var(--rs-radius, 10px);
+  padding: 14px 16px; background: var(--rs-card, #fff);
+}
+.rs-iv-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.rs-iv-label {
+  font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--rs-subtle, #64748b);
+}
+.rs-iv-say { font-size: 13.5px; color: var(--rs-subtle, #64748b); }
+.rs-iv-locked {
+  display: flex; align-items: center; gap: 8px; padding: 18px 0;
+  font-size: 14px; color: var(--rs-subtle, #64748b);
+}
+.rs-iv-controls { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.rs-iv-controls[disabled] { opacity: .6; }
+.rs-iv-live, .rs-iv-saved { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.rs-iv-saved audio { max-width: 100%; }
+.rs-iv-dot {
+  width: 10px; height: 10px; border-radius: 50%; background: var(--rs-danger, #dc2626);
+  animation: rs-iv-pulse 1.4s ease-in-out infinite;
+}
+@keyframes rs-iv-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .rs-iv-dot { animation: none; } }
+.rs-iv-busy, .rs-iv-note { font-size: 13.5px; color: var(--rs-subtle, #64748b); }
+.rs-iv-transcript { display: flex; flex-direction: column; gap: 6px; }
+.rs-iv-transcript p {
+  margin: 0; padding: 10px 12px; font-size: 14px; line-height: 1.55;
+  background: var(--rs-tint, #f8fafc); border-radius: calc(var(--rs-radius, 10px) * .7);
+}

@@ -320,6 +320,122 @@ export async function synthesizeSpeech(text: string, opts: SpeechOptions): Promi
   } finally { clearTimeout(timer); }
 }
 
+/* ------------------------------------------------------- speech to text */
+
+export interface TranscribeOptions {
+  /** BCP-47 hint. Blank lets the provider detect it, which is usually right. */
+  language?: string;
+  /** filename the provider sees — some infer the container from its extension */
+  fileName?: string;
+  /** what the recording is, e.g. "audio/webm" */
+  mimeType?: string;
+  /** seconds, for metering; estimated from the byte count when unknown */
+  durationSeconds?: number;
+}
+
+export interface Transcription {
+  text: string;
+  language?: string;
+  model: string;
+  durationSeconds?: number;
+}
+
+/** A rough audio-minute figure when the caller could not measure one.
+ *  Opus/WebM voice is ~16 kB per second; wrong by a factor under two, which
+ *  is close enough to bill honestly and far better than billing nothing. */
+const BYTES_PER_SECOND = 16_000;
+
+/**
+ * TRANSCRIBE A RECORDING — the respondent's spoken answer, as text.
+ *
+ * OpenAI-compatible `/audio/transcriptions`, and the first **multipart**
+ * provider call in this package: every other request here is JSON, and the
+ * transcription endpoint takes a file part. That asymmetry is the whole
+ * reason this is its own function rather than a flag on `complete`.
+ *
+ * The failure posture is the one every provider call in this platform has:
+ * a `null` return is not an error the caller must handle loudly. It means
+ * the clip stays recorded, stays uploaded, stays the answer — and the
+ * transcript is simply absent, to be generated later. An interview that
+ * cannot be finished because a transcription service was slow is a worse
+ * outcome than an interview with a transcript still to come.
+ *
+ * The timeout is the TTS one, not the chat one: audio takes longer than a
+ * sentence of JSON, and 8 seconds would abort legitimate work on a minute of
+ * speech.
+ */
+export async function transcribe(
+  bytes: Uint8Array,
+  opts: TranscribeOptions = {},
+): Promise<Transcription | null> {
+  if (!bytes?.length) return null;
+  const seconds = opts.durationSeconds ?? Math.max(1, Math.round(bytes.length / BYTES_PER_SECOND));
+
+  if (aiProviderName() === "fake") {
+    reportUsage({ kind: "stt", provider: "fake", model: "fake-stt", seconds, requests: 1, estimated: true });
+    return fakeTranscribe(bytes, opts);
+  }
+
+  const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
+  const key = (process.env.AI_API_KEY ?? "").trim();
+  if (!base) return null;
+  const model = (process.env.AI_STT_MODEL ?? "").trim() || "whisper-1";
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 30_000);
+  try {
+    const form = new FormData();
+    /* `Blob` over the raw array: the provider reads the part's filename and
+       content type to pick a decoder, and a bare buffer gives it neither */
+    form.append("file", new Blob([bytes as unknown as BlobPart], { type: opts.mimeType || "audio/webm" }), opts.fileName || "answer.webm");
+    form.append("model", model);
+    form.append("response_format", "json");
+    if (opts.language) form.append("language", shortLang(opts.language));
+
+    const r = await fetch(`${base}/audio/transcriptions`, {
+      method: "POST", signal: ctrl.signal, cache: "no-store",
+      /* deliberately NO content-type header — fetch sets it with the
+         multipart boundary, and setting it by hand produces a body the
+         provider cannot parse */
+      headers: { ...(key ? { authorization: `Bearer ${key}` } : {}) },
+      body: form,
+    });
+    if (!r.ok) { console.warn("[rescript:ai] stt provider error", JSON.stringify({ status: r.status })); return null; }
+    const j = (await r.json().catch(() => null)) as { text?: string; language?: string; duration?: number } | null;
+    const text = (j?.text ?? "").trim();
+    if (!text) return null;
+    const measured = Number.isFinite(j?.duration) ? Math.max(1, Math.round(j!.duration!)) : seconds;
+    reportUsage({ kind: "stt", provider: "openai-compatible", model, seconds: measured, requests: 1, estimated: !Number.isFinite(j?.duration) });
+    return { text, language: j?.language || opts.language, model, durationSeconds: measured };
+  } catch (e) {
+    console.warn("[rescript:ai] stt provider unreachable", JSON.stringify({ error: (e as Error).name }));
+    return null;
+  } finally { clearTimeout(timer); }
+}
+
+/**
+ * The fake transcriber. Deterministic, and deliberately NOT a fixed string:
+ * it reports the clip's length and a stable id derived from the bytes, so a
+ * test can tell two different recordings apart and assert that the
+ * transcript belongs to the clip that produced it — which a constant could
+ * never prove.
+ */
+export function fakeTranscribe(bytes: Uint8Array, opts: TranscribeOptions = {}): Transcription {
+  const seconds = opts.durationSeconds ?? Math.max(1, Math.round(bytes.length / BYTES_PER_SECOND));
+  let h = 2166136261;
+  for (let i = 0; i < bytes.length; i += 97) { h ^= bytes[i]; h = Math.imul(h, 16777619); }
+  const id = (h >>> 0).toString(36).slice(0, 6);
+  return {
+    text: `[transcript ${id}] This is a simulated transcript of a ${seconds}-second answer.`,
+    language: opts.language ? shortLang(opts.language) : "en",
+    model: "fake-stt",
+    durationSeconds: seconds,
+  };
+}
+
+/** "en-GB" → "en". Providers take the base tag; a region often 400s. */
+const shortLang = (l: string) => (l || "").trim().split(/[-_]/)[0].toLowerCase();
+
 function defaultVoiceFor(gender?: string): string {
   return gender === "female" ? "nova" : gender === "male" ? "onyx" : "alloy";
 }

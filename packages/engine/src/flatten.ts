@@ -317,6 +317,29 @@ function flattenQuestion(q: Question, value: unknown, varName: string, out: Flat
       }
       break;
     }
+    /* the columns declared by `questionVariables`'s `video_interview` case,
+       in the same order and with the same names — the two are asserted equal */
+    case "video_interview": {
+      const a = (value ?? {}) as {
+        watch?: { completed?: boolean; watchedSeconds?: number; percent?: number; replays?: number };
+        audio?: { url?: string; durationSeconds?: number; retakes?: number };
+        transcript?: { text?: string; source?: string };
+      };
+      out[varName] = (a.transcript?.text ?? "").trim();
+      out[`${varName}_AUDIO_URL`] = a.audio?.url ?? "";
+      out[`${varName}_DURATION_S`] = a.audio?.durationSeconds ?? "";
+      out[`${varName}_RETAKES`] = a.audio?.retakes ?? "";
+      out[`${varName}_TRANSCRIPT_SOURCE`] = a.transcript?.source ?? "";
+      if (q.settings.interviewVideo?.url) {
+        /* absent is not the same as "did not watch", so an untouched question
+           exports blank rather than a 0 an analyst would count */
+        out[`${varName}_VIDEO_COMPLETED`] = a.watch ? (a.watch.completed ? 1 : 0) : "";
+        out[`${varName}_WATCHED_S`] = a.watch?.watchedSeconds ?? "";
+        out[`${varName}_WATCHED_PCT`] = a.watch?.percent ?? "";
+        out[`${varName}_REPLAYS`] = a.watch?.replays ?? "";
+      }
+      break;
+    }
     case "repeating_group": {
       const entries = Array.isArray(value) ? (value as Record<string, unknown>[]) : [];
       const n = Math.max(1, q.settings.maxRepeats ?? 10);

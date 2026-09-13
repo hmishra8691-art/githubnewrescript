@@ -42,18 +42,30 @@ export function contextOf(b: SessionBilling): MeterContext {
 }
 
 function simulateFake(): boolean { return process.env.BILLING_SIMULATE_FAKE_COSTS === "1"; }
-export function meterProvider(provider: string, kind: "chat" | "translate" | "tts"): string {
+export function meterProvider(provider: string, kind: "chat" | "translate" | "tts" | "stt"): string {
   if (provider !== "fake") return provider;
   return simulateFake() ? (kind === "translate" ? "google" : "openai-compatible") : "fake";
 }
-function meterModel(provider: string, model: string | null): string | null {
+function meterModel(provider: string, model: string | null, kind: "chat" | "stt" = "chat"): string | null {
   if (provider !== "fake" || !simulateFake()) return model;
-  return aiModelName();
+  return kind === "stt" ? (process.env.AI_STT_MODEL ?? "").trim() || "whisper-1" : aiModelName();
 }
 
+/**
+ * Turn what the provider reported into what the meter settles.
+ *
+ * The runtime used to assume every provider call it made was a chat call,
+ * which was true until a respondent's recording needed transcribing.
+ * Speech-to-text is billed per audio MINUTE against the `ai.stt.*` rate, and
+ * an stt report priced as tokens settles at zero — a cost that silently
+ * never appears on anybody's wallet.
+ */
 function usageToSpec(usage: AiUsage[]): Partial<UsageSpec> {
   const t = sumUsage(usage);
   const provider = t.provider ?? "fake";
+  if ((usage[0]?.kind ?? "chat") === "stt") {
+    return { provider: meterProvider(provider, "stt"), service: "stt", model: meterModel(provider, t.model, "stt"), quantity: (t.seconds ?? 0) / 60, metadata: { requests: t.requests, estimated: t.estimated, actualProvider: provider, seconds: t.seconds ?? 0 } };
+  }
   return { provider: meterProvider(provider, "chat"), service: "chat", model: meterModel(provider, t.model), inputUnits: t.inputTokens, outputUnits: t.outputTokens, quantity: t.inputTokens + t.outputTokens, metadata: { requests: t.requests, estimated: t.estimated, actualProvider: provider } };
 }
 
@@ -86,6 +98,58 @@ export async function meteredSessionAi<T>(billing: SessionBilling | null, est: {
     if (!usage.length) { await meter.release(hold); return { value, event: null }; }
     const spec = usageToSpec(usage);
     const event = await meter.settle(hold, { ...spec, metadata: { operation: est.operation, sessionId: billing.sessionId.slice(0, 8), ...spec.metadata } });
+    return { value, event };
+  } catch (e) {
+    await meter.release(hold).catch(() => {});
+    throw e;
+  }
+}
+
+/**
+ * TRANSCRIBE UNDER THE METER — the same reserve → run → settle dance as
+ * `meteredSessionAi`, against the one event type that is priced by audio
+ * minutes rather than by tokens.
+ *
+ * It is a separate function rather than a flag because the RESERVATION
+ * differs: there is nothing to estimate from a prompt, and the hold has to be
+ * taken on the clip's length before it is sent. Settling then corrects it
+ * with whatever the provider says it actually heard.
+ *
+ * A refusal reads exactly like an absent provider: the caller keeps the
+ * recording and returns it with no transcript. Nobody's interview stops
+ * because a wallet was empty.
+ */
+export async function meteredSessionStt<T>(
+  billing: SessionBilling | null,
+  est: { seconds: number; operation: string },
+  fn: () => Promise<T>,
+): Promise<{ value: T; event: UsageEvent | null } | { refused: string }> {
+  if (!billing) { const value = await fn(); return { value, event: null }; }
+  const meter = getMeter();
+  const providerName = process.env.AI_API_URL === "fake:" ? "fake" : "openai-compatible";
+  const minutes = Math.max(0.05, est.seconds / 60);
+  let hold;
+  try {
+    hold = await meter.reserve(contextOf(billing), {
+      eventType: "SPEECH_TO_TEXT_MINUTE",
+      provider: meterProvider(providerName, "stt"), service: "stt",
+      model: meterModel(providerName, (process.env.AI_STT_MODEL ?? "").trim() || "whisper-1", "stt"),
+      quantity: minutes,
+      metadata: { operation: est.operation, sessionId: billing.sessionId.slice(0, 8), seconds: est.seconds },
+    });
+  } catch (e) {
+    console.warn("[rescript:billing] meter unavailable — running unmetered", JSON.stringify({ error: (e as Error).message }));
+    const value = await fn(); return { value, event: null };
+  }
+  if (!hold.ok) {
+    console.info("[rescript:billing] refused", JSON.stringify({ surveyId: billing.surveyId, reason: hold.reason, operation: est.operation }));
+    return { refused: hold.message };
+  }
+  try {
+    const { value, usage } = await collectUsage(fn);
+    if (!usage.length) { await meter.release(hold); return { value, event: null }; }
+    const spec = usageToSpec(usage);
+    const event = await meter.settle(hold, { ...spec, eventType: "SPEECH_TO_TEXT_MINUTE", metadata: { operation: est.operation, sessionId: billing.sessionId.slice(0, 8), ...spec.metadata } });
     return { value, event };
   } catch (e) {
     await meter.release(hold).catch(() => {});

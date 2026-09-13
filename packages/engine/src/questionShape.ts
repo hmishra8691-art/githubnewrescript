@@ -93,6 +93,12 @@ const SETTING_GROUPS = {
   range_pair: ["rangePair"],
   design_ref: ["designRef"],
   placeholder: ["placeholder"],
+  interview_video: ["interviewVideo", "requireWatch", "allowSeek", "allowReplay",
+                    "showProgress", "autoPlayVideo"],
+  interview_answer: ["requireAudioAnswer", "minAnswerSeconds", "maxAnswerSeconds",
+                     "allowAnswerPause", "maxRetakes", "reviewBeforeSubmit"],
+  interview_transcript: ["transcribeAnswer", "transcriptLanguage", "transcriptVisibility",
+                         "saveAnswerAudio", "saveTranscript"],
 } as const;
 
 type SettingGroup = keyof typeof SETTING_GROUPS;
@@ -119,6 +125,15 @@ const SETTING_LABEL: Record<string, string> = {
   sumTarget: "Sum target", sumUnit: "Sum unit", chipValue: "Chip value", rowSum: "Per-row sum",
   listCount: "Number of fields", minRepeats: "Minimum repeats", maxRepeats: "Maximum repeats",
   rankMode: "Ranking mode", tournamentTopN: "Tournament top N",
+  interviewVideo: "The researcher's video", requireWatch: "Require complete playback",
+  allowSeek: "Allow seeking", allowReplay: "Allow replay", showProgress: "Show progress",
+  autoPlayVideo: "Auto-play",
+  requireAudioAnswer: "Audio response required", minAnswerSeconds: "Minimum recording length",
+  maxAnswerSeconds: "Maximum recording length", allowAnswerPause: "Allow pause",
+  maxRetakes: "Maximum re-records", reviewBeforeSubmit: "Play back before submitting",
+  transcribeAnswer: "Automatic transcription", transcriptLanguage: "Transcript language",
+  transcriptVisibility: "Transcript visibility", saveAnswerAudio: "Save original audio",
+  saveTranscript: "Save transcript",
   geoMode: "Map mode", mapCenter: "Map centre", mapZoom: "Map zoom",
   allowGeolocation: "Use my location", radiusMinM: "Minimum radius",
   radiusMaxM: "Maximum radius", radiusDefaultM: "Default radius", mapTiles: "Map tiles",
@@ -222,6 +237,17 @@ export const SHAPES: Record<ResponseModel, ShapeSpec> = {
   geo: { label: "a place", axes: [], groups: ["geo"] },
   derived: { label: "a derived value", axes: ["options"], groups: ["derived", "placeholder"] },
   media: { label: "an uploaded file", axes: [], groups: ["upload"] },
+  /*
+   * A recorded interview: the watch record, the clip and the transcript, as
+   * one value. No axes — there is nothing to choose from — and three setting
+   * groups, because the researcher's video, the spoken answer and the
+   * transcript are configured independently of one another.
+   */
+  interview: {
+    label: "a recorded interview answer",
+    axes: [],
+    groups: ["interview_video", "interview_answer", "interview_transcript", "speech"],
+  },
   none: { label: "nothing (display only)", axes: [], groups: [] },
 };
 

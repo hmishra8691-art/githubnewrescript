@@ -66,6 +66,26 @@ export const BUILTIN_QUESTION_TYPES = [
    * whole transcript.
    */
   "acbc_task",
+  /**
+   * VIDEO INTERVIEW — a researcher-led qualitative question.
+   *
+   * The researcher records themselves asking the question; the respondent
+   * watches it to the end, answers out loud, and the clip is transcribed.
+   * One answer holds all three things (see `InterviewAnswer`): the proof the
+   * video was watched, the recording, and the transcript.
+   *
+   * It is a TYPE rather than a preset of `upload`, and that is a deliberate
+   * departure from the taxonomy's usual answer. A "Speech-to-Text Response"
+   * was refused as a type precisely because a transcript is a text answer
+   * and a second type means a second place for the same data to live. This
+   * is a different case: the answer is not a file and is not a string, it is
+   * a small record whose parts only mean anything together — a transcript
+   * with no clip cannot be re-listened to, a clip with no watch record
+   * cannot be trusted as an answer to the question that was asked, and a
+   * watch record on its own is telemetry. An `upload` carrying three
+   * transcript fields would have been that second place.
+   */
+  "video_interview",
 ] as const;
 export type BuiltinQuestionType = (typeof BUILTIN_QUESTION_TYPES)[number];
 
@@ -576,6 +596,122 @@ export const GeoAnswer = z.object({
 });
 export type GeoAnswer = z.infer<typeof GeoAnswer>;
 
+/**
+ * THE INTERVIEW RESPONSE MODEL — what a `video_interview` question stores.
+ *
+ * Three things that only mean anything together:
+ *
+ *   1. `watch` — proof the researcher's video was actually watched. Not a
+ *      flag set when Play was pressed: `watchedSeconds` is summed from
+ *      playback, so a jump to the end does not count (the same accounting
+ *      the watch-time variant uses, for the same reason).
+ *   2. `audio` — the respondent's recorded answer, stored like any upload.
+ *   3. `transcript` — what they said, and where the text came from.
+ *
+ * Kept as ONE value rather than three questions because the parts do not
+ * survive separation: a transcript with no clip cannot be re-listened to, a
+ * clip with no watch record cannot be trusted as an answer to the question
+ * that was asked, and a watch record alone is telemetry. Exported as
+ * VAR_TRANSCRIPT / VAR_AUDIO_URL / VAR_DURATION_S / VAR_WATCHED_S /
+ * VAR_WATCHED_PCT / VAR_VIDEO_COMPLETED / VAR_RETAKES / VAR_TRANSCRIPT_SOURCE
+ * (engine variables.ts).
+ *
+ * Every field is optional because the answer is built up across a page turn
+ * and must survive a refresh at any point in that sequence. `interview.ts`
+ * in the engine is the one place that decides what a partially-filled record
+ * means.
+ */
+export const InterviewWatch = z.object({
+  /** the video was played at least once */
+  started: z.boolean().optional(),
+  /** seconds SUMMED FROM PLAYBACK — scrubbing forward adds nothing */
+  watchedSeconds: z.number().min(0).optional(),
+  /** the clip's length, as the browser reported it */
+  durationSeconds: z.number().min(0).optional(),
+  /** watched ÷ duration, 0–100, capped */
+  percent: z.number().min(0).max(100).optional(),
+  /** reached the end honestly; the gate that opens the answer area */
+  completed: z.boolean().optional(),
+  /** how many times they chose to watch it again */
+  replays: z.number().int().min(0).optional(),
+  /**
+   * Forward jumps the player refused or discounted. Zero on an ordinary
+   * interview; non-zero is worth a researcher's attention, which is why it
+   * is kept rather than silently swallowed.
+   */
+  seeks: z.number().int().min(0).optional(),
+});
+export type InterviewWatch = z.infer<typeof InterviewWatch>;
+
+export const InterviewAudio = z.object({
+  /** signed URL, as the upload route returns */
+  url: z.string().optional(),
+  /** storage path, so the object can be found again without the URL */
+  path: z.string().optional(),
+  mimeType: z.string().optional(),
+  bytes: z.number().min(0).optional(),
+  durationSeconds: z.number().min(0).optional(),
+  recordedAt: z.string().optional(),
+  /** how many times they re-recorded before settling on this one */
+  retakes: z.number().int().min(0).optional(),
+});
+export type InterviewAudio = z.infer<typeof InterviewAudio>;
+
+export const InterviewTranscript = z.object({
+  text: z.string().optional(),
+  /** BCP-47, as configured or as the provider reported it */
+  language: z.string().optional(),
+  /**
+   * `provider` — transcribed server-side. `browser` — the respondent's own
+   * recogniser. `manual` — typed or corrected by a person. `none` — the clip
+   * was kept but nothing transcribed it, which is a normal outcome when no
+   * provider is configured and must never block the interview.
+   */
+  source: z.enum(["provider", "browser", "manual", "none"]).optional(),
+  model: z.string().optional(),
+  transcribedAt: z.string().optional(),
+  /** the provider could not be reached or refused; the clip is still stored */
+  failed: z.boolean().optional(),
+});
+export type InterviewTranscript = z.infer<typeof InterviewTranscript>;
+
+export const InterviewAnswer = z.object({
+  watch: InterviewWatch.optional(),
+  audio: InterviewAudio.optional(),
+  transcript: InterviewTranscript.optional(),
+});
+export type InterviewAnswer = z.infer<typeof InterviewAnswer>;
+
+/**
+ * The researcher's recorded question — the stimulus, not the answer.
+ *
+ * Lives on `settings.interviewVideo` rather than in `settings.mediaUrl`
+ * because a qualitative interview needs the metadata the brief asks for
+ * (duration, size, format, when it was recorded, whether it is ready) and a
+ * bare URL string carries none of it. `mediaUrl` stays what it is: a
+ * stimulus shown above any question.
+ */
+export const InterviewVideo = z.object({
+  url: z.string(),
+  /** storage path when we hold the object; absent for an external URL */
+  path: z.string().optional(),
+  mimeType: z.string().optional(),
+  bytes: z.number().min(0).optional(),
+  durationSeconds: z.number().min(0).optional(),
+  width: z.number().min(0).optional(),
+  height: z.number().min(0).optional(),
+  recordedAt: z.string().optional(),
+  source: z.enum(["recorded", "uploaded", "url"]).default("uploaded"),
+  /**
+   * `ready` — playable. `processing` — uploaded, not yet confirmed.
+   * `failed` — the upload did not complete; the question is not fieldable
+   * and the Studio says so rather than letting it reach a respondent.
+   */
+  status: z.enum(["ready", "processing", "failed"]).default("ready"),
+  fileName: z.string().optional(),
+});
+export type InterviewVideo = z.infer<typeof InterviewVideo>;
+
 export const Question = z.object({
   id: z.string(), // stable internal id, e.g. "q_age"
   code: z.string(), // display code, e.g. "Q1"
@@ -657,6 +793,58 @@ export const Question = z.object({
       radiusMaxM: z.number().min(0).optional(),
       radiusDefaultM: z.number().min(0).optional(),
       mapTiles: z.string().optional(),
+
+      /* ---- video_interview. See InterviewAnswer for what is stored. */
+      /** The researcher's recorded question. Without it the question cannot field. */
+      interviewVideo: InterviewVideo.optional(),
+      /**
+       * Must the video be watched to the end before the answer area opens?
+       * On by default for qualitative work — it is the whole point of the
+       * type. Off turns the question into an ordinary prompted voice answer.
+       */
+      requireWatch: z.boolean().optional(),
+      /**
+       * May the respondent drag the progress bar? Off by default, and "off"
+       * means the handle is not drawn at all rather than drawn and fought
+       * with — a control that visibly refuses reads as broken.
+       */
+      allowSeek: z.boolean().optional(),
+      /** May they watch it again once it has finished? */
+      allowReplay: z.boolean().optional(),
+      /** Show elapsed / remaining while it plays. */
+      showProgress: z.boolean().optional(),
+      /**
+       * Try to start playing on arrival. Browsers refuse unmuted autoplay
+       * without a gesture, so this is a preference, never a guarantee: the
+       * player falls back to a Play button and the gate is unaffected.
+       */
+      autoPlayVideo: z.boolean().optional(),
+
+      /** Must they record an answer, or may they move on having only watched? */
+      requireAudioAnswer: z.boolean().optional(),
+      minAnswerSeconds: z.number().min(0).optional(),
+      maxAnswerSeconds: z.number().min(0).optional(),
+      /** May recording be paused and resumed, or is it one take? */
+      allowAnswerPause: z.boolean().optional(),
+      /** How many times they may discard and start again. 0 = one take only. */
+      maxRetakes: z.number().int().min(0).optional(),
+      /** Offer playback of their own answer before they move on. */
+      reviewBeforeSubmit: z.boolean().optional(),
+
+      /** Send the clip for transcription. Off keeps the audio and nothing else. */
+      transcribeAnswer: z.boolean().optional(),
+      /** BCP-47 hint for the recogniser. Blank = the survey's language. */
+      transcriptLanguage: z.string().optional(),
+      /**
+       * Who sees the transcript. `hidden` — nobody but the researcher;
+       * `respondent` — shown back so they can check they were understood;
+       * `editable` — shown and correctable, which sets `source: "manual"`.
+       */
+      transcriptVisibility: z.enum(["hidden", "respondent", "editable"]).optional(),
+      /** Keep the recording itself. Off stores only the transcript. */
+      saveAnswerAudio: z.boolean().optional(),
+      /** Keep the transcript. Off transcribes for nothing, so it also turns transcription off. */
+      saveTranscript: z.boolean().optional(),
       readOnly: z.boolean().default(false),
       hidden: z.boolean().default(false),
       defaultValue: z.any().optional(),

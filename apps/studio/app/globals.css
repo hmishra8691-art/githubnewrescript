@@ -1930,3 +1930,15 @@ p.qs-help { margin: -2px 0 10px; }
 /* An operator the source question can no longer take — kept selectable, but
    never dressed up as ordinary. */
 .op-select.stale { border-color: var(--amber, #b45309); }
+
+/* The Video Interview's recorder in the properties panel: a camera monitor, a
+   take under review, and the clip currently attached to the question. */
+.iv-recorder { display: flex; flex-direction: column; gap: 10px; margin-bottom: 8px; }
+.iv-stage, .iv-current, .iv-empty { display: flex; flex-direction: column; gap: 8px; }
+.iv-recorder video {
+  width: 100%; max-width: 420px; aspect-ratio: 16 / 9; object-fit: contain;
+  background: #000; border-radius: 8px; display: block;
+}
+.iv-meta { font-size: 11.5px; color: var(--subtle); }
+.iv-check { margin-bottom: 6px; }
+.iv-check > .row { align-items: center; }
