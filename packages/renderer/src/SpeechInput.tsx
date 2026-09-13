@@ -63,6 +63,21 @@ export function speechInputAvailable(): boolean {
   return recognizerCtor() !== null;
 }
 
+/**
+ * A spoken phrase joins what is already in the field with exactly one space.
+ *
+ * What the respondent typed is left exactly as they typed it — leading and
+ * trailing spaces included. Only the transcript is trimmed, because a
+ * recogniser's idea of where a phrase begins is not something the respondent
+ * chose.
+ */
+export function appendSpoken(current: string, spoken: string): string {
+  const add = spoken.trim();
+  if (!add) return current;
+  if (!current) return add;
+  return /\s$/.test(current) ? current + add : `${current} ${add}`;
+}
+
 const REASONS: Record<string, string> = {
   "not-allowed": "Microphone access was refused. Allow it in your browser and try again.",
   "service-not-allowed": "Speech recognition is not available in this browser.",
@@ -86,16 +101,27 @@ export function SpeechInputButton({
   const [reason, setReason] = React.useState<string | null>(null);
   const rec = React.useRef<Recognizer | null>(null);
   /*
-   * The text as it was when dictation started — final transcripts append to
-   * THIS. It is read through a ref that every render refreshes, not from the
-   * `value` prop closed over by the click handler: a click can land before
-   * React has re-rendered after the respondent's last keystroke, and a handler
-   * holding the previous render's prop would append to text that no longer
-   * exists, silently dropping what they just typed.
+   * The answer as it stands RIGHT NOW — every final transcript is appended to
+   * this, once, at the moment it arrives.
+   *
+   * It is read through a ref rather than from the `value` prop closed over by
+   * the handler for two reasons. A recogniser callback is not a React event,
+   * so React is free to batch the re-render it causes; two phrases arriving
+   * before that render would otherwise both append to the same stale prop and
+   * the first would be lost. And a click can land before React has re-rendered
+   * after the respondent's last keystroke.
+   *
+   * There is deliberately no snapshot of the text as it was when dictation
+   * started. Rewriting the whole answer as `snapshot + everything heard so
+   * far` looks equivalent and is not: the field stays editable while the
+   * recogniser listens — that is the whole point, recognisers mishear — and a
+   * correction typed mid-sentence was silently destroyed by the next final
+   * result.
    */
   const latest = React.useRef(value);
   latest.current = value;
-  const base = React.useRef(value);
+  /** Write through the ref as well, so results in the same task compose. */
+  const write = (next: string) => { latest.current = next; onChange(next); };
 
   React.useEffect(() => () => rec.current?.abort(), []);
 
@@ -112,19 +138,23 @@ export function SpeechInputButton({
     r.lang = lang;
     r.continuous = true;
     r.interimResults = true;
-    base.current = latest.current;
-    let finalText = "";
     r.onresult = (e) => {
+      /*
+       * `resultIndex` is where this event's news starts, so what is gathered
+       * here is the phrase just finalised — not the whole session. Appending
+       * it is what keeps dictation additive without the answer ever being
+       * rewritten from end to end.
+       */
       let interimText = "";
+      let heard = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const res = e.results[i];
         const t = res[0]?.transcript ?? "";
-        if (res.isFinal) finalText += (finalText && !finalText.endsWith(" ") ? " " : "") + t.trim();
+        if (res.isFinal) heard += (heard && !heard.endsWith(" ") ? " " : "") + t.trim();
         else interimText += t;
       }
       setInterim(interimText);
-      const joined = [base.current.trim(), finalText.trim()].filter(Boolean).join(" ");
-      onChange(joined);
+      if (heard.trim()) write(appendSpoken(latest.current, heard));
     };
     r.onerror = (e) => {
       const msg = REASONS[e.error] ?? `Speech recognition failed (${e.error}).`;

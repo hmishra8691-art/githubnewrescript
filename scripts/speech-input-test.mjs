@@ -82,6 +82,19 @@ assert.ok(!(await pv.$(`[data-qid="${num.id}"] [data-testid="speech-toggle"]`)),
 const toggle = `[data-qid="${text.id}"] [data-testid="speech-toggle"]`;
 const startDictation = async () => { await pv.click(toggle); await pv.waitForSelector(`${toggle}[aria-pressed="true"]`); };
 const stopDictation = async () => { await pv.click(toggle); await pv.waitForSelector(`${toggle}[aria-pressed="false"]`); };
+/*
+ * A recogniser callback is not a React event, so the re-render it causes is
+ * batched rather than flushed before the next tick — the transcript lands in
+ * the field a frame or two later. Sampling `inputValue` the instant `say()`
+ * returns read the field mid-flight and made this suite fail at random; wait
+ * for the value, then assert on it so a real mismatch still reports properly.
+ */
+const valueIs = async (expected, why) => {
+  await pv
+    .waitForFunction(([sel, want]) => document.querySelector(sel)?.value === want, [field, expected], { timeout: 5000 })
+    .catch(() => {});
+  assert.equal(await pv.inputValue(field), expected, why);
+};
 await pv.fill(field, "I liked the");
 await startDictation();
 await pv.waitForSelector('[data-testid="speech-interim"]');
@@ -93,7 +106,7 @@ assert.match(await pv.textContent('[data-testid="speech-interim"]'), /packaging 
 assert.equal(await pv.inputValue(field), "I liked the", "…without touching the stored value yet");
 
 await pv.evaluate(() => window.__speech.say("packaging but not the price", true));
-assert.equal(await pv.inputValue(field), "I liked the packaging but not the price", "final transcript APPENDED to what was typed");
+await valueIs("I liked the packaging but not the price", "final transcript APPENDED to what was typed");
 await stopDictation();
 assert.ok(!(await pv.$('[data-testid="speech-interim"]')), "stopped: no live indicator");
 const stored = await h.answerOf(pv, text.id);
@@ -104,9 +117,37 @@ console.log("\nRUNTIME — the field stays editable, and a second dictation appe
 await pv.fill(field, "I liked the packaging.");
 await startDictation();
 await pv.evaluate(() => window.__speech.say("Delivery was slow.", true));
-assert.equal(await pv.inputValue(field), "I liked the packaging. Delivery was slow.");
+await valueIs("I liked the packaging. Delivery was slow.");
 await stopDictation();
 console.log("  ok   edit, dictate again, appended");
+
+console.log("\nRUNTIME — a correction typed WHILE the recogniser is listening survives the next phrase");
+/*
+ * Recognisers mishear, which is the reason the field is left editable during
+ * dictation. Appending to a snapshot of the text as it was when dictation
+ * started made that promise a lie: the correction was there until the next
+ * final result rewrote the whole answer without it.
+ */
+await pv.fill(field, "The delivery");
+await startDictation();
+await pv.evaluate(() => window.__speech.say("was late", true));
+await valueIs("The delivery was late", "first phrase appended");
+await pv.click(field);
+await pv.press(field, "End");
+await pv.type(field, " (by two days)");
+await valueIs("The delivery was late (by two days)", "…and the field is still editable mid-dictation");
+await pv.evaluate(() => window.__speech.say("but the box was fine.", true));
+await valueIs(
+  "The delivery was late (by two days) but the box was fine.",
+  "the typed correction survives the next phrase — appends go onto the LIVE answer, not a snapshot",
+);
+await stopDictation();
+assert.equal(
+  await h.answerOf(pv, text.id),
+  "The delivery was late (by two days) but the box was fine.",
+  "and that is what is stored",
+);
+console.log("  ok   typing during dictation is not clobbered");
 
 console.log("\nRUNTIME — a refused microphone gives a reason instead of a dead button");
 await startDictation();
