@@ -14,6 +14,8 @@ interface Project {
   dueDate: string | null;
   costCentre: string | null;
   notes: string | null;
+  mediaDeliveryEmail: string | null;
+  mediaDeliveryEnabled: boolean;
   locked: boolean;
   collaboration: { requireLockToEdit?: boolean; allowConcurrentViewers?: boolean; lockMinutes?: number };
   updatedAt?: string;
@@ -90,7 +92,10 @@ export function ProjectPanel() {
             clientName: d.project.clientName ?? null, projectManager: d.project.projectManager ?? null,
             fieldworkFrom: d.project.fieldworkFrom ?? null, fieldworkTo: d.project.fieldworkTo ?? null,
             dueDate: d.project.dueDate ?? null, costCentre: d.project.costCentre ?? null,
-            notes: d.project.notes ?? null, locked: !!d.project.locked,
+            notes: d.project.notes ?? null,
+            mediaDeliveryEmail: d.project.mediaDeliveryEmail ?? null,
+            mediaDeliveryEnabled: !!d.project.mediaDeliveryEnabled,
+            locked: !!d.project.locked,
             collaboration: d.project.collaboration ?? {}, updatedAt: d.project.updatedAt,
           });
         }
@@ -233,6 +238,83 @@ export function ProjectPanel() {
         </label>
       </div>
 
+
+      {/*
+        * QUALITATIVE MEDIA DELIVERY.
+        *
+        * The one setting on this panel that is an instruction rather than a
+        * record: everything above is filed so a person can find it later,
+        * this one makes a cron send somebody's recordings to a mailbox. So
+        * it says out loud what it will do, including the part nobody would
+        * guess — that the recordings are deleted afterwards.
+        */}
+      <h3 className="sec">Qualitative media delivery</h3>
+      <div className="card" data-testid="pj-media-delivery">
+        <p className="muted" style={{ fontSize: 12.5, marginTop: 0 }}>
+          Audio and video responses collected through qualitative questions are delivered to this address. Respondents
+          never see it.
+        </p>
+
+        <div className="row" style={{ flexWrap: "wrap", gap: 10, alignItems: "flex-start" }}>
+          <label className="f" style={{ width: 280 }}>
+            <span>Researcher email</span>
+            <input
+              className="input" type="email"
+              defaultValue={p.mediaDeliveryEmail ?? ""}
+              placeholder="researcher@company.com"
+              disabled={!can.edit || busy}
+              data-testid="pj-media-email"
+              onBlur={(e) => {
+                const value = e.target.value.trim();
+                if (value === (p.mediaDeliveryEmail ?? "")) return;
+                void save({ mediaDeliveryEmail: value || null },
+                  value ? "Delivery address saved." : "Delivery address cleared, and delivery switched off.");
+              }}
+            />
+            <span className="muted" style={{ fontSize: 11.5 }}>
+              {p.mediaDeliveryEmail
+                ? `Currently delivering to ${p.mediaDeliveryEmail}.`
+                : "No address set, so nothing is delivered."}
+            </span>
+          </label>
+
+          <div className="f" style={{ width: 150 }}>
+            <span>Retention period</span>
+            <div className="chip" style={{ marginTop: 6 }} data-testid="pj-media-retention">48 hours (2 days)</div>
+            <span className="muted" style={{ fontSize: 11.5 }}>Fixed.</span>
+          </div>
+
+          <div className="f" style={{ width: 150 }}>
+            <span>Delivery method</span>
+            <div className="chip" style={{ marginTop: 6 }}>Email via Resend</div>
+          </div>
+        </div>
+
+        <label className="ax-toggle" style={{ marginTop: 10 }}>
+          <input
+            type="checkbox"
+            checked={p.mediaDeliveryEnabled}
+            disabled={!can.edit || busy || !p.mediaDeliveryEmail}
+            data-testid="pj-media-enabled"
+            onChange={(e) => void save({ mediaDeliveryEnabled: e.target.checked },
+              e.target.checked ? "Media delivery is on for this project." : "Media delivery is off.")}
+          />
+          <span>
+            <strong>Deliver qualitative media for this project.</strong>{" "}
+            {p.mediaDeliveryEmail
+              ? "Each completed response with a recording is packaged and emailed."
+              : "Add an address above first."}
+          </span>
+        </label>
+
+        <p className="muted" style={{ fontSize: 12, marginTop: 10, marginBottom: 0 }}>
+          Original audio and video files are stored temporarily for processing and researcher delivery, and are
+          deleted automatically after 48 hours. Transcripts and survey response data stay in Rescript Studio.
+        </p>
+      </div>
+
+      <MediaDeliveries surveyId={s.surveyDbId} canRetry={can.edit} enabled={p.mediaDeliveryEnabled} />
+
       {/*
         * Owner-only, because `project.lock_settings` is granted to the owner
         * alone. Shown to everybody so that a person who cannot change the
@@ -304,4 +386,145 @@ export function ProjectPanel() {
       </p>
     </div>
   );
+}
+
+/* ------------------------------------------------- delivery status */
+
+interface Delivery {
+  id: string;
+  respondent: string;
+  recipient: string;
+  status: string;
+  say: string;
+  canRetry: boolean;
+  mediaCount: number;
+  totalBytes: number;
+  attempts: number;
+  error: string | null;
+  emailSentAt: string | null;
+  downloadedAt: string | null;
+  downloadCount: number;
+  expiresAt: string | null;
+  deletedAt: string | null;
+  createdAt: string;
+}
+
+/** grey for in-flight, green for arrived, amber for gone or broken */
+const TONE: Record<string, string> = {
+  pending: "", processing: "", sent: "on", downloaded: "on",
+  expired: "", deleted: "", failed: "warn",
+};
+
+/**
+ * WHAT THE CRON DID.
+ *
+ * Delivery happens where nobody is watching, and the one thing that makes
+ * that acceptable is being able to look afterwards. Each row is one
+ * respondent's recordings: where they went, whether anybody opened them, and
+ * when the originals expire — the last of which is the only warning a
+ * researcher gets that a clock is running on data they may still need.
+ */
+function MediaDeliveries({ surveyId, canRetry, enabled }: { surveyId: string | null; canRetry: boolean; enabled: boolean }) {
+  const [rows, setRows] = React.useState<Delivery[] | null>(null);
+  const [note, setNote] = React.useState<string | null>(null);
+  const [busy, setBusy] = React.useState(false);
+
+  const load = React.useCallback(() => {
+    if (!surveyId) return;
+    fetch(`/api/surveys/${surveyId}/media/deliveries`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d) => setRows(Array.isArray(d.deliveries) ? d.deliveries : []))
+      .catch(() => setRows([]));
+  }, [surveyId]);
+  React.useEffect(load, [load]);
+
+  const retry = async (id: string) => {
+    setBusy(true);
+    try {
+      const r = await fetch(`/api/surveys/${surveyId}/media/deliveries`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "retry", deliveryId: id }),
+      });
+      const j = await r.json();
+      setNote(r.ok ? (j.note ?? "Queued.") : (j.error ?? "That could not be retried."));
+      load();
+    } finally { setBusy(false); }
+  };
+
+  if (!rows || (!rows.length && !enabled)) return null;
+
+  return (
+    <>
+      <h3 className="sec">Media deliveries</h3>
+      <div className="card" data-testid="pj-deliveries">
+        {note && <div className="chip qd-note">{note}</div>}
+        {!rows.length ? (
+          <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>
+            Nothing delivered yet. A response is packaged once it is complete and has a recording — test responses are
+            never delivered.
+          </p>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table className="tbl" style={{ width: "100%", fontSize: 12.5 }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "left" }}>Respondent</th>
+                  <th style={{ textAlign: "left" }}>Status</th>
+                  <th style={{ textAlign: "right" }}>Files</th>
+                  <th style={{ textAlign: "left" }}>Emailed</th>
+                  <th style={{ textAlign: "left" }}>Downloaded</th>
+                  <th style={{ textAlign: "left" }}>Originals</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((d) => (
+                  <tr key={d.id} data-testid={`pj-delivery-${d.id}`}>
+                    <td className="mono">{d.respondent}</td>
+                    <td>
+                      <span className={`chip ${TONE[d.status] ?? ""}`}>{d.say}</span>
+                      {d.error && <div className="muted" style={{ fontSize: 11.5 }}>{d.error}</div>}
+                    </td>
+                    <td style={{ textAlign: "right" }}>{d.mediaCount || "—"}</td>
+                    <td>{when(d.emailSentAt)}</td>
+                    <td>{d.downloadedAt ? `${when(d.downloadedAt)}${d.downloadCount > 1 ? ` (${d.downloadCount}×)` : ""}` : "—"}</td>
+                    <td>{originals(d)}</td>
+                    <td style={{ textAlign: "right" }}>
+                      {d.canRetry && canRetry && (
+                        <button className="btn small" disabled={busy} onClick={() => void retry(d.id)} data-testid="pj-delivery-retry">
+                          ↻ retry
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p className="muted" style={{ fontSize: 11.5, marginBottom: 0, marginTop: 10 }}>
+          Only the original recordings expire. Transcripts, answers and every other part of these responses stay here.
+        </p>
+      </div>
+    </>
+  );
+}
+
+function when(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * The column a researcher actually reads: how long they have left. A date is
+ * arithmetic somebody has to do while worrying; "7 hours left" is the answer.
+ */
+function originals(d: Delivery): string {
+  if (d.deletedAt) return `deleted ${when(d.deletedAt)}`;
+  if (!d.expiresAt) return "—";
+  const left = Date.parse(d.expiresAt) - Date.now();
+  if (left <= 0) return "expired";
+  const hours = Math.floor(left / 3_600_000);
+  return hours >= 1 ? `${hours}h left` : `${Math.max(1, Math.round(left / 60_000))}m left`;
 }

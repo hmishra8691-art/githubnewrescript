@@ -6,6 +6,7 @@ import {
 } from "./rules.js";
 import {
   passwordResetEmail, projectInvitationEmail, respondentInvitationEmail, testEmail,
+  mediaDeliveryEmail,
 } from "./templates.js";
 
 /* ============================================ the guarantee that matters */
@@ -229,4 +230,81 @@ test("a url with an ampersand survives into a working href", () => {
 
 test("escapeHtml covers the five characters that matter", () => {
   assert.equal(escapeHtml(`<>&"'`), "&lt;&gt;&amp;&quot;&#39;");
+});
+
+/* ------------------------------------------- qualitative media delivery */
+
+test("the delivery email states the deadline in the body, not only the footer", () => {
+  const m = mediaDeliveryEmail({
+    projectName: "Beverage Habits 2026",
+    surveyName: "Beverage Habits 2026",
+    respondentLabel: "A4F2",
+    fileCount: 2,
+    respondedAt: "2026-01-01T09:15:00Z",
+    expiresAt: "2026-01-03T09:15:00Z",
+    hoursRemaining: 48,
+    url: "https://studio.example.com/d/abc?k=tok",
+    totalBytes: 12 * 1024 * 1024,
+    questions: ["Q12", "Q13"],
+  });
+
+  assert.match(m.subject, /^Qualitative research media available — Beverage Habits 2026$/);
+  for (const part of [m.text, m.html]) {
+    assert.match(part, /48 hours/, "the number of hours");
+    assert.match(part, /3 January 2026/, "and the date it actually happens");
+    assert.match(part, /automatically deleted|deleted automatically/);
+  }
+  assert.match(m.text, /A4F2/);
+  assert.match(m.text, /2 media files \(12 MB\)/);
+  assert.match(m.text, /Q12, Q13/);
+});
+
+test("the delivery email carries a link, and the link is readable as text", () => {
+  const url = "https://studio.example.com/d/abc?k=to%26ken";
+  const m = mediaDeliveryEmail({
+    projectName: "P", respondentLabel: "R", fileCount: 1,
+    respondedAt: "2026-01-01T00:00:00Z", expiresAt: "2026-01-03T00:00:00Z",
+    hoursRemaining: 48, url,
+  });
+  assert.ok(m.text.includes(url), "the plain part carries the raw URL");
+  assert.ok(m.html.includes(`href="${url.replace(/&/g, "&amp;")}"`), "and the HTML links it with & escaped");
+  assert.doesNotMatch(m.text, /<[a-z/][^>]*>/i, "no HTML leaked into the text part");
+});
+
+test("the delivery email never carries the research itself", () => {
+  const m = mediaDeliveryEmail({
+    projectName: "P", respondentLabel: "R", fileCount: 1,
+    respondedAt: "2026-01-01T00:00:00Z", expiresAt: "2026-01-03T00:00:00Z",
+    hoursRemaining: 48, url: "https://x/d/1?k=2",
+  });
+  // a mailbox is not a place to duplicate a respondent's words
+  assert.doesNotMatch(m.text + m.html, /transcript:/i);
+  assert.match(m.text, /stay in Rescript Studio/, "it says where the transcript is instead");
+});
+
+test("a project name from a client cannot inject markup into the delivery email", () => {
+  const m = mediaDeliveryEmail({
+    projectName: '<img src=x onerror="alert(1)">',
+    respondentLabel: '"><script>alert(2)</script>',
+    fileCount: 1,
+    respondedAt: "2026-01-01T00:00:00Z", expiresAt: "2026-01-03T00:00:00Z",
+    hoursRemaining: 48, url: "https://x/d/1?k=2",
+  });
+  // the escaped text still CONTAINS the string "onerror=", which is the point:
+  // it is inert characters, not an attribute. So assert on the markup, not on
+  // the substring — a test that fails on correct output teaches nothing.
+  assert.ok(!m.html.includes("<script"), m.html);
+  assert.ok(!m.html.includes("<img"), m.html);
+  assert.match(m.html, /&lt;img src=x onerror=&quot;/, "the payload is rendered as text");
+  assert.match(m.html, /&lt;script&gt;/, "and so is the second one");
+});
+
+test("one file reads as one file", () => {
+  const m = mediaDeliveryEmail({
+    projectName: "P", respondentLabel: "R", fileCount: 1,
+    respondedAt: "2026-01-01T00:00:00Z", expiresAt: "2026-01-03T00:00:00Z",
+    hoursRemaining: 48, url: "https://x/d/1?k=2",
+  });
+  assert.match(m.text, /1 media file\b/);
+  assert.doesNotMatch(m.text, /1 media files/);
 });

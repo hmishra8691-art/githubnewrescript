@@ -43,7 +43,19 @@ import { platformTier } from "./platform";
  * `deliver()`.
  */
 
-export type MailKind = "password_reset" | "project_invitation" | "respondent_invitation" | "test";
+export type MailKind =
+  | "password_reset"
+  | "project_invitation"
+  | "respondent_invitation"
+  | "test"
+  /*
+   * One respondent's recordings, with a link that stops working after 48
+   * hours. Transactional rather than bulk: it is triggered by one person
+   * finishing one survey, it goes to a colleague rather than to a list, and
+   * it carries a deadline — the last thing it should share is a reputation
+   * with a 400-address invitation wave.
+   */
+  | "media_delivery";
 
 export interface MailMessage {
   to: string;

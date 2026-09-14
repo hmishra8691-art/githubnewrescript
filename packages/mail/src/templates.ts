@@ -233,3 +233,106 @@ export function testEmail(args: {
     ),
   };
 }
+
+/* ------------------------------------------------ qualitative media delivery */
+
+/**
+ * The recordings from one respondent's sitting.
+ *
+ * This email is the only notice the researcher gets that a 48-hour clock is
+ * running, so the deadline is stated three times and in three registers: the
+ * hour it expires, the wording "automatically deleted", and the reason. A
+ * retention policy nobody was told about is indistinguishable from data loss.
+ *
+ * What is deliberately NOT in it: the transcript, the respondent's answers,
+ * any free text they gave. Those live in the Studio behind an account, and a
+ * mailbox is not the place to duplicate them — this is a notification with a
+ * link, not a copy of the research.
+ *
+ * The subject leads with the project, because a researcher running three
+ * studies sorts their inbox by which one this is.
+ */
+export function mediaDeliveryEmail(args: {
+  projectName: string;
+  surveyName?: string | null;
+  respondentLabel: string;
+  fileCount: number;
+  respondedAt: string;
+  expiresAt: string;
+  hoursRemaining: number;
+  url: string;
+  totalBytes?: number | null;
+  questions?: string[];
+}): Rendered {
+  const files = args.fileCount === 1 ? "1 media file" : `${args.fileCount} media files`;
+  const size = args.totalBytes ? ` (${mb(args.totalBytes)})` : "";
+  const expiry = when(args.expiresAt);
+  const responded = when(args.respondedAt);
+  const survey = args.surveyName && args.surveyName !== args.projectName ? args.surveyName : null;
+  const asked = (args.questions ?? []).filter(Boolean).slice(0, 8);
+
+  const facts: [string, string][] = [
+    ["Project", args.projectName],
+    ...(survey ? ([["Survey", survey]] as [string, string][]) : []),
+    ["Respondent", args.respondentLabel],
+    ["Media files", `${files}${size}`],
+    ["Responded", responded],
+  ];
+
+  const text = [
+    "A new qualitative research response containing audio/video media is available for your project.",
+    "",
+    ...facts.map(([k, v]) => `${k}: ${v}`),
+    ...(asked.length ? ["", `Questions: ${asked.join(", ")}`] : []),
+    "",
+    "The original media files are available through the secure download link below.",
+    "",
+    args.url,
+    "",
+    `Important: these files are automatically deleted ${args.hoursRemaining} hours from now, on ${expiry}. Please download them before then.`,
+    "",
+    "The transcript and the rest of the response stay in Rescript Studio — only the original recordings expire.",
+    "",
+    SIG,
+  ].join("\n");
+
+  const rows = facts
+    .map(([k, v]) =>
+      `<p style="margin:0 0 4px"><span style="color:#6b7690">${escapeHtml(k)}:</span> ${escapeHtml(v)}</p>`)
+    .join("");
+
+  const html = shell(
+    `<p style="margin:0 0 16px">A new qualitative research response containing audio/video media is available for your project.</p>` +
+      rows +
+      (asked.length
+        ? `<p style="margin:12px 0 0"><span style="color:#6b7690">Questions:</span> ${escapeHtml(asked.join(", "))}</p>`
+        : "") +
+      linkBlock(args.url, `Download ${files}`) +
+      /*
+       * Amber, and above the fold. Every other warning in these templates is
+       * grey small print, and this one is not small print: it is the entire
+       * difference between a delivery and a loss.
+       */
+      `<p style="margin:22px 0 0;padding:12px 14px;background:#fff7ed;border-left:3px solid #ea580c;border-radius:4px">` +
+      `<strong>These files are deleted automatically ${args.hoursRemaining} hours from now</strong>, on ${escapeHtml(expiry)}. ` +
+      `Please download them before then.</p>` +
+      `<p style="margin:16px 0 0">The transcript and the rest of the response stay in Rescript Studio — only the original recordings expire.</p>`,
+    "You are receiving this because your project is configured to deliver qualitative media to this address.",
+  );
+
+  return { subject: `Qualitative research media available — ${args.projectName}`, text, html };
+}
+
+function mb(bytes: number): string {
+  const m = bytes / (1024 * 1024);
+  return m >= 10 ? `${Math.round(m)} MB` : `${m.toFixed(1)} MB`;
+}
+
+function when(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString("en-GB", {
+    day: "numeric", month: "long", year: "numeric",
+    hour: "2-digit", minute: "2-digit", timeZone: "UTC",
+  }) + " UTC";
+}

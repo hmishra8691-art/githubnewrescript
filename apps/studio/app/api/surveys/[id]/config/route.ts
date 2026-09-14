@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { audit, isFailure, requireProject } from "@/lib/guard";
+import { isEmail } from "@rescript/mail";
 
 export const dynamic = "force-dynamic";
 
@@ -48,6 +49,7 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 const CAMEL: Record<string, string> = {
   clientName: "client_name",
+  mediaDeliveryEmail: "media_delivery_email",
   projectManager: "project_manager",
   costCentre: "cost_centre",
   fieldworkFrom: "fieldwork_from",
@@ -64,7 +66,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const db = supabaseAdmin();
   const { data, error } = await db
     .from("surveys")
-    .select("id, code, title, status, owner_id, client_name, project_manager, fieldwork_from, fieldwork_to, due_date, cost_centre, notes, locked, collaboration, settings, created_at, updated_at")
+    .select("id, code, title, status, owner_id, client_name, project_manager, fieldwork_from, fieldwork_to, due_date, cost_centre, notes, locked, collaboration, settings, media_delivery_email, media_delivery_enabled, created_at, updated_at")
     .eq("id", params.id)
     .maybeSingle();
 
@@ -94,6 +96,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       clientName: data.client_name, projectManager: data.project_manager,
       fieldworkFrom: data.fieldwork_from, fieldworkTo: data.fieldwork_to,
       dueDate: data.due_date, costCentre: data.cost_centre, notes: data.notes,
+      mediaDeliveryEmail: data.media_delivery_email ?? null,
+      mediaDeliveryEnabled: !!data.media_delivery_enabled,
       locked: data.locked, collaboration: data.collaboration ?? {},
       settings: data.settings ?? {},
       createdAt: data.created_at, updatedAt: data.updated_at,
@@ -158,11 +162,19 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
   }
 
-  const hasFacts = Object.keys(CAMEL).some((k) => k in body) || DATE_FIELDS.some((k) => k in body) || Object.keys(TEXT_FIELDS).some((k) => k in body);
+  const hasFacts = Object.keys(CAMEL).some((k) => k in body) || DATE_FIELDS.some((k) => k in body)
+    || Object.keys(TEXT_FIELDS).some((k) => k in body) || "mediaDeliveryEnabled" in body;
   if (hasFacts) {
     const gate = await requireProject(req, params.id, "survey.edit");
     if (isFailure(gate)) return gate.response;
     ctx = gate;
+
+    if ("mediaDeliveryEnabled" in body) {
+      if (typeof body.mediaDeliveryEnabled !== "boolean") {
+        return NextResponse.json({ error: "mediaDeliveryEnabled must be true or false" }, { status: 400 });
+      }
+      patch.media_delivery_enabled = body.mediaDeliveryEnabled;
+    }
 
     for (const [camel, column] of Object.entries(CAMEL)) {
       const key = camel in body ? camel : column in body ? column : null;
@@ -174,6 +186,25 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
           return NextResponse.json({ error: "settings must be an object" }, { status: 400 });
         }
         patch.settings = raw ?? {};
+        continue;
+      }
+
+      /*
+       * The delivery address is validated here rather than only in the form.
+       * Everything else on this panel is free text a human reads; this one is
+       * an instruction to a machine — a typo does not look wrong on screen,
+       * it just means the recordings go nowhere and the delivery retries
+       * until it gives up. `isEmail` is the same predicate the mail layer
+       * routes on, so the form and the sender cannot disagree about what an
+       * address is.
+       */
+      if (column === "media_delivery_email") {
+        if (raw === null || raw === "") { patch.media_delivery_email = null; patch.media_delivery_enabled = false; continue; }
+        const address = String(raw).trim().toLowerCase().slice(0, 200);
+        if (!isEmail(address)) {
+          return NextResponse.json({ error: "That does not look like an email address." }, { status: 400 });
+        }
+        patch.media_delivery_email = address;
         continue;
       }
 
@@ -209,12 +240,18 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     .from("surveys")
     .update({ ...patch, updated_at: new Date().toISOString() })
     .eq("id", params.id)
-    .select("id, client_name, project_manager, fieldwork_from, fieldwork_to, due_date, cost_centre, notes, locked, collaboration, settings")
+    .select("id, client_name, project_manager, fieldwork_from, fieldwork_to, due_date, cost_centre, notes, locked, collaboration, settings, media_delivery_email, media_delivery_enabled")
     .single();
 
   if (error) {
     if (/client_name|project_manager|does not exist|schema cache/i.test(error.message)) {
       return NextResponse.json({ error: "Project configuration needs migration 0015.", migration: "0015" }, { status: 503 });
+    }
+    if (/surveys_media_delivery_needs_email/i.test(error.message)) {
+      return NextResponse.json({ error: "Add a delivery email address before switching media delivery on." }, { status: 400 });
+    }
+    if (/media_delivery_email|media_delivery_enabled/i.test(error.message)) {
+      return NextResponse.json({ error: "Qualitative media delivery needs migration 0029.", migration: "0029" }, { status: 503 });
     }
     if (/surveys_fieldwork_order/i.test(error.message)) {
       return NextResponse.json({ error: "Fieldwork cannot end before it starts." }, { status: 400 });
@@ -253,6 +290,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       id: data.id, clientName: data.client_name, projectManager: data.project_manager,
       fieldworkFrom: data.fieldwork_from, fieldworkTo: data.fieldwork_to, dueDate: data.due_date,
       costCentre: data.cost_centre, notes: data.notes, locked: data.locked,
+      mediaDeliveryEmail: data.media_delivery_email ?? null,
+      mediaDeliveryEnabled: !!data.media_delivery_enabled,
       collaboration: data.collaboration ?? {}, settings: data.settings ?? {},
     },
     ...(froze && patch.locked

@@ -30,7 +30,15 @@ import { NextResponse, type NextRequest } from "next/server";
  * it unusable in the one case it exists for — checking an instance while it is
  * being set up, before there is an account to sign in with.
  */
-const PUBLIC_PATHS = ["/login", "/signup", "/forgot", "/reset", "/sandbox", "/share", "/platform"];
+/*
+ * `/d` is the qualitative media download link, and it is public for the same
+ * reason `/reset` is: the person holding it is not a Rescript user and has no
+ * account to sign in with — they are a researcher who was emailed a link.
+ * Bouncing it to a login would make the feature deliver nothing. The route
+ * carries its own credential (a 32-byte token, stored only as a hash, dead
+ * after 48 hours) and refuses everything else with a 410.
+ */
+const PUBLIC_PATHS = ["/login", "/signup", "/forgot", "/reset", "/sandbox", "/share", "/platform", "/d"];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
