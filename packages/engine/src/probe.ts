@@ -1,4 +1,5 @@
 import type { SurveyDefinition, Question, ProbeConfig } from "@rescript/schema";
+import { interviewText } from "./interview.js";
 import type { ResponseState } from "./state.js";
 import { evaluateCondition, type EvalContext } from "./evaluate.js";
 import { resolvePiping } from "./piping.js";
@@ -72,6 +73,13 @@ export function probeSourceTextFor(q: Question, value: unknown): string {
   if (q.options?.length && (typeof value === "string" || typeof value === "number")) return labelOf(value) ?? String(value);
   if (q.options?.length && Array.isArray(value)) return value.map((v) => labelOf(v) ?? String(v)).filter(Boolean).join(", ");
   if (q.type === "nps" || q.type === "numeric" || q.type === "slider") return value == null || value === "" ? "" : `${value}`;
+  /*
+   * An interview's text is what they SAID, not a join of the object holding
+   * it. The generic fallback below produced "[object Object]" three times
+   * over, which passed the `minWords` gate for entirely the wrong reason and
+   * handed that to the provider writing the follow-up.
+   */
+  if (q.type === "video_interview") return interviewText(value);
   return probeSourceText(value);
 }
 

@@ -46,6 +46,13 @@ export async function POST(req: NextRequest) {
       questionId,
       sessionId: gate.row.sessionId,
       responseId: gate.row.responseId,
+      /*
+       * Inside a loop the answer lives under `<questionId>__<iteration>`, so
+       * the question id alone cannot say which answer this recording's
+       * transcript belongs to. The browser knows; it says so here, once, and
+       * the server needs nothing from it afterwards.
+       */
+      answerKey: typeof body.answerKey === "string" && body.answerKey.trim() ? body.answerKey.trim() : null,
       fileName: typeof body.fileName === "string" ? body.fileName : null,
       mimeType: typeof body.mimeType === "string" ? body.mimeType : null,
       bytes: Number(body.bytes) || null,

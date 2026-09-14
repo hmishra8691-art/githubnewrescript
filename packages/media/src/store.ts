@@ -188,6 +188,15 @@ export interface BeginUpload {
   questionId?: string | null;
   sessionId?: string | null;
   responseId?: string | null;
+  /**
+   * The key this recording's answer lives under in `responses.answers`.
+   *
+   * The question id outside a loop, `<questionId>__<iteration>` inside one.
+   * Recorded because the server has to be able to put the finished transcript
+   * back into the right answer without the browser's help — the browser may
+   * have submitted and closed by then.
+   */
+  answerKey?: string | null;
   fileName?: string | null;
   mimeType?: string | null;
   /** What the client says it is about to send; refused here if over the limit. */
@@ -254,6 +263,7 @@ export async function beginUpload(db: MediaDb, req: BeginUpload): Promise<Upload
       question_id: req.questionId ?? null,
       response_id: req.responseId ?? null,
       session_id: req.sessionId ?? null,
+      answer_key: req.answerKey ?? req.questionId ?? null,
       kind: req.kind,
       bucket: spec.bucket,
       path,
@@ -470,6 +480,37 @@ export async function transcriptFor(db: MediaDb, mediaId: string): Promise<Trans
   const { data, error } = await db.from("media_transcripts").select("*").eq("media_id", mediaId).maybeSingle();
   if (error) throw new MediaError(error.message);
   return (data as TranscriptRow) ?? null;
+}
+
+/**
+ * Put a finished transcript into the answer it belongs to.
+ *
+ * This is the step that was missing, and the reason a transcript could be
+ * generated, stored and retryable while the export column stayed blank. The
+ * browser cannot do it: the job finishes twenty to sixty seconds after the
+ * respondent stopped speaking, and by then they may have pressed Next — or
+ * submitted, after which `api/session/save` deliberately refuses further
+ * writes so a stale tab cannot rewrite a finished interview.
+ *
+ * So the runner that produced the transcript writes it, through a database
+ * function that patches one path under one row lock rather than rewriting the
+ * whole answer document. A transcript landing mid-interview cannot cost an
+ * answer to a question it knows nothing about.
+ *
+ * Returns false when the session no longer exists — a purged respondent,
+ * which is not an error.
+ */
+export async function mergeTranscriptIntoAnswer(
+  db: MediaDb,
+  args: { sessionId: string; answerKey: string; transcript: Record<string, unknown> },
+): Promise<boolean> {
+  const { data, error } = await db.rpc("rescript_set_answer_transcript", {
+    p_session: args.sessionId,
+    p_answer_key: args.answerKey,
+    p_transcript: args.transcript,
+  });
+  if (error) throw new MediaError(`could not save the transcript onto the answer: ${error.message}`);
+  return data === true;
 }
 
 /** Download the stored bytes so a transcript can be re-driven without the recording. */

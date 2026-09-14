@@ -142,7 +142,9 @@ export function lintAiCalls(def: SurveyDefinition): string[] {
     const src = findByRef(def, call.sourceRef);
     if (!src) {
       problems.push(`${q.code}: ${call.fn}() reads ${call.sourceRef}, which is not a question in this survey.`);
-    } else if (!["open_text", "long_text", "text_list"].includes(src.type)) {
+    } else if (!["open_text", "long_text", "text_list", "video_interview"].includes(src.type)) {
+      /* an interview's value IS text — its transcript — so it classifies like
+         any other open end; the evaluator resolves it to that text */
       problems.push(`${q.code}: ${call.fn}() reads ${src.code}, which is ${src.type}, not an open end. AI functions classify text.`);
     }
     if (call.fn === "ai_classify") {

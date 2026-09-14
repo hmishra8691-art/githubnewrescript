@@ -10,6 +10,8 @@ import {
 } from "@rescript/engine";
 import type { InterviewAnswer } from "@rescript/schema";
 import { RECORDING_CONSTRAINTS } from "@rescript/media";
+import { startLiveCaptions, liveCaptionsAvailable, type LiveCaptions, type CaptionState } from "../liveCaptions";
+import { answerKey } from "@rescript/engine";
 
 /**
  * THE VIDEO INTERVIEW — a researcher asks on camera, a respondent answers
@@ -122,11 +124,24 @@ export function VideoInterview(p: QRProps) {
    * the most expensive failure in a qualitative interview.
    */
   const pending = React.useRef<{ blob: Blob; seconds: number; retakes: number } | null>(null);
+  /**
+   * The browser's own live transcription, running beside the recorder.
+   *
+   * Two transcripts exist for two purposes: this one so the respondent can
+   * SEE that they are being heard and catch a mishearing while they still
+   * remember what they meant, and the server's afterwards because it is
+   * better and it is what analysis reads. Neither may interrupt the other,
+   * and neither may interrupt the recording.
+   */
+  const captions = React.useRef<LiveCaptions | null>(null);
+  const [caption, setCaption] = React.useState<CaptionState>({ final: "", interim: "" });
 
   const stopTick = () => { if (tick.current) { clearInterval(tick.current); tick.current = null; } };
   React.useEffect(() => () => {
     stopTick();
     recRef.current?.stream?.getTracks().forEach((t) => t.stop());
+    captions.current?.stop();
+    captions.current = null;
     if (localUrl) URL.revokeObjectURL(localUrl);
   }, [localUrl]);
 
@@ -210,7 +225,7 @@ export function VideoInterview(p: QRProps) {
   const maxSecs = p.q.settings.maxAnswerSeconds;
   const minSecs = p.q.settings.minAnswerSeconds;
 
-  const upload = React.useCallback(async (blob: Blob, seconds: number, retakes: number) => {
+  const upload = React.useCallback(async (blob: Blob, seconds: number, retakes: number, heard = "") => {
     const sessionId = liveSessionId(p);
     const local = URL.createObjectURL(blob);
     setLocalUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return local; });
@@ -222,9 +237,17 @@ export function VideoInterview(p: QRProps) {
      * work. The same rule the upload variants follow.
      */
     if (!sessionId) {
+      /*
+       * A preview has no session to store against, but it DOES have the
+       * browser's own transcript — so the programmer testing the question
+       * sees the whole shape of the answer, captions and all, rather than a
+       * clip with the word "none" beside it.
+       */
       patch({
         audio: { url: local, mimeType: blob.type || "audio/webm", bytes: blob.size, durationSeconds: seconds, recordedAt: new Date().toISOString(), retakes },
-        transcript: { source: "none" },
+        transcript: heard
+          ? { text: heard, source: "browser", status: "completed", transcribedAt: new Date().toISOString() }
+          : { source: "none" },
       });
       return;
     }
@@ -254,6 +277,10 @@ export function VideoInterview(p: QRProps) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           sessionId, kind: "answer_audio", questionId: p.q.id,
+          /* inside a loop the answer is keyed per iteration, and the server
+             needs that key to put the finished transcript back on the right
+             answer without the browser's help */
+          answerKey: answerKey(p.q.id, p.loop),
           fileName: "answer.webm", mimeType: blob.type || "audio/webm",
           bytes: blob.size, durationSeconds: seconds,
         }),
@@ -296,12 +323,23 @@ export function VideoInterview(p: QRProps) {
        * is satisfied; Next unlocks. Everything below is the transcript, and
        * the respondent is never held for it.
        */
+      /*
+       * THE ANSWER IS COMPLETE HERE, AND IT ALREADY HAS WORDS IN IT.
+       *
+       * The browser's transcript goes in immediately rather than waiting for
+       * the provider's. It is rougher, and it is present — which matters on
+       * the last question of a survey, where the respondent submits before
+       * any provider could have finished, and on an installation with no
+       * speech-to-text configured at all. The server's replaces it when it
+       * lands, and `source` says which one is in there.
+       */
       const status = (confirmed.transcriptStatus ?? null) as string | null;
       patch({
         audio: confirmed.audio as InterviewAnswer["audio"],
-        transcript: status
-          ? { source: "provider", status: status as never }
-          : { source: "none" },
+        transcript: {
+          ...(heard ? { text: heard, source: "browser" as const, transcribedAt: new Date().toISOString() } : { source: "none" as const }),
+          ...(status ? { status: status as never } : {}),
+        },
       });
       pending.current = null;
 
@@ -330,12 +368,14 @@ export function VideoInterview(p: QRProps) {
       ...pRef.current,
       transcript: {
         ...(pRef.current.transcript ?? {}),
-        text: (t.text as string) ?? undefined,
+        /* a provider that returns nothing must not erase what the browser
+           heard — a rough transcript beats no transcript */
+        text: (t.text as string) || pRef.current.transcript?.text || undefined,
         language: (t.language as string) ?? undefined,
         model: (t.model as string) ?? undefined,
         status: (t.status as never) ?? undefined,
         error: (t.error as string) ?? undefined,
-        source: t.text ? "provider" : "none",
+        source: t.text ? "provider" : (pRef.current.transcript?.text ? "browser" : "none"),
         failed: t.status === "failed" ? true : undefined,
         transcribedAt: t.completedAt ? String(t.completedAt) : undefined,
       },
@@ -391,14 +431,30 @@ export function VideoInterview(p: QRProps) {
         stopTick();
         setRecording(false);
         setPaused(false);
+        const heard = captions.current?.text() ?? "";
+        captions.current?.stop();
+        captions.current = null;
+        setCaption({ final: heard, interim: "" });
         const blob = new Blob(chunks.current, { type: rec.mimeType || "audio/webm" });
         chunks.current = [];
         const seconds = Math.round(elapsed.current * 10) / 10;
         if (!blob.size) { setError("Nothing was recorded. Please try again."); return; }
-        void upload(blob, seconds, a.audio ? used + 1 : 0);
+        void upload(blob, seconds, a.audio ? used + 1 : 0, heard);
       };
       recRef.current = rec;
       rec.start(RECORDING_CONSTRAINTS.timesliceMs);
+
+      /*
+       * Captions start AFTER the recorder, and their failure is not checked.
+       * The recording is the answer; the captions are a courtesy, and a
+       * browser without a recogniser simply shows none.
+       */
+      setCaption({ final: "", interim: "" });
+      captions.current = startLiveCaptions({
+        lang: (p.q.settings.transcriptLanguage as string | undefined) || p.def.localization?.sourceLanguage || undefined,
+        onChange: setCaption,
+      });
+
       startedAt.current = Date.now();
       setSecs(0);
       setRecording(true);
@@ -418,6 +474,11 @@ export function VideoInterview(p: QRProps) {
     if (!rec || rec.state !== "recording") return;
     rec.pause();
     stopTick();
+    /* the recogniser keeps listening through a pause on purpose: a
+       respondent who pauses the RECORDING has stopped talking to us, and a
+       caption that kept appearing would be untrue */
+    captions.current?.stop();
+    captions.current = null;
     setPaused(true);
   };
   const resumeRecording = () => {
@@ -545,6 +606,33 @@ export function VideoInterview(p: QRProps) {
                     : <button type="button" className="btn" data-testid="interview-pause" onClick={pauseRecording}>Pause</button>
                 )}
                 <button type="button" className="btn primary" data-testid="interview-stop" onClick={stopRecording}>Stop</button>
+              </div>
+            )}
+
+            {/*
+              LIVE CAPTIONS.
+              Two spans, not one, and they are visibly different things:
+              what the recogniser has committed to, and the phrase it is
+              still working out. The second one WILL change and may vanish
+              mid-sentence — showing them alike would make the text look like
+              it was rewriting itself. `aria-live="polite"` rather than
+              "assertive" so a screen reader is not interrupted on every word.
+            */}
+            {recording && (caption.final || caption.interim) && (
+              <div className="rs-iv-captions" data-testid="interview-captions" aria-live="polite" aria-atomic="false">
+                {caption.final && (
+                  <span className="rs-iv-caption-final" data-testid="interview-caption-final">{caption.final}</span>
+                )}
+                {caption.interim && (
+                  <span className="rs-iv-caption-interim" data-testid="interview-caption-interim">
+                    {caption.final ? " " : ""}{caption.interim}
+                  </span>
+                )}
+              </div>
+            )}
+            {recording && !caption.final && !caption.interim && liveCaptionsAvailable() && (
+              <div className="rs-iv-captions muted" data-testid="interview-captions-waiting" aria-live="polite">
+                Listening…
               </div>
             )}
 

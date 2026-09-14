@@ -209,13 +209,102 @@ console.log("\nWATCHING IT THROUGH OPENS THE ANSWER; RECORDING IT CLOSES THE QUE
    * a provider call per keystroke.
    */
   assert.match(String(answer.audio.url), /^blob:/, "a preview keeps the clip in the browser");
-  assert.equal(answer.transcript?.source, "none", "and transcribes nothing");
+  /* headless Chromium has no real recogniser, so there are no captions to
+     keep — see the next section, which installs one */
+  assert.ok(["none", "browser"].includes(String(answer.transcript?.source)),
+    `a preview sends nothing to a provider: ${answer.transcript?.source}`);
 
   assert.ok(await pv.$('[data-testid="interview-playback"]'), "they can hear their answer back");
   assert.ok(await pv.$('[data-testid="interview-retake"]'), "and record it again");
 
   await pv.close();
   console.log("  ok   record → stored → reviewable");
+}
+
+/* ================================ 4b. live captions while they speak */
+
+console.log("\nTHE RESPONDENT SEES THEIR WORDS AS THEY SAY THEM");
+{
+  /*
+   * Headless Chromium ships no working recogniser, so one is installed —
+   * the same approach `speech-input-test.mjs` takes, and for the same reason:
+   * what is under test is the component's contract with the API, not the
+   * API. `window.__speech` is the instance the component built.
+   */
+  const FAKE = `
+    class FakeRecognition {
+      constructor(){ this.lang=""; this.continuous=false; this.interimResults=false;
+        this.onresult=null; this.onerror=null; this.onend=null;
+        window.__speech = this; window.__speechStarts=(window.__speechStarts||0)+1; }
+      start(){ this.started = true; }
+      stop(){ this.started = false; this.onend && this.onend(); }
+      abort(){ this.started = false; }
+      say(text, isFinal){ const r=[Object.assign([{transcript:text}],{isFinal})];
+        this.onresult && this.onresult({ resultIndex:0, results:r }); }
+      fail(code){ this.onerror && this.onerror({ error: code }); }
+    }
+    window.SpeechRecognition = FakeRecognition;
+  `;
+  const ctx = await recorder.newContext({ permissions: ["microphone"] });
+  const pv = await ctx.newPage();
+  pv.on("pageerror", (e) => console.error("PREVIEW ERROR:", e.message));
+  await pv.addInitScript(FAKE);
+  await pv.goto(`${RUNTIME}/preview`, { waitUntil: "networkidle" });
+  await pv.evaluate((d) => window.postMessage({ type: "rescript:preview", definition: d }, "*"), def);
+  await pv.waitForSelector('[data-testid="interview"]', { timeout: 15000 });
+  await watchThrough(pv);
+
+  await pv.click('[data-testid="interview-record"]');
+  await pv.waitForSelector('[data-testid="interview-recording"]');
+  /* the recogniser is told the survey's language and asked for interim results */
+  assert.equal(await pv.evaluate(() => window.__speech.continuous && window.__speech.interimResults), true,
+    "continuous with interim results, or there are no live captions");
+
+  /* a phrase still being worked out appears, and is marked as provisional */
+  await pv.evaluate(() => window.__speech.say("I think the product", false));
+  await pv.waitForSelector('[data-testid="interview-caption-interim"]');
+  assert.match(await pv.textContent('[data-testid="interview-caption-interim"]'), /I think the product/);
+  assert.equal(await pv.$('[data-testid="interview-caption-final"]'), null,
+    "nothing is confirmed yet, so nothing is shown as confirmed");
+
+  /* it grows, still provisional */
+  await pv.evaluate(() => window.__speech.say("I think the product is very useful", false));
+  await pv.waitForFunction(() => /very useful/.test(document.querySelector('[data-testid="interview-caption-interim"]')?.textContent ?? ""));
+
+  /* confirmed text moves across, and stops changing */
+  await pv.evaluate(() => window.__speech.say("I think the product is very useful", true));
+  await pv.waitForSelector('[data-testid="interview-caption-final"]');
+  assert.match(await pv.textContent('[data-testid="interview-caption-final"]'), /I think the product is very useful/);
+
+  /* a second phrase appends rather than replacing the first */
+  await pv.evaluate(() => window.__speech.say("because it saves me time.", true));
+  await pv.waitForFunction(() => /saves me time/.test(document.querySelector('[data-testid="interview-caption-final"]')?.textContent ?? ""));
+  const shown = await pv.textContent('[data-testid="interview-caption-final"]');
+  assert.match(shown, /I think the product is very useful because it saves me time\./,
+    `both phrases, in order: ${shown}`);
+
+  /* a recogniser that dies does NOT stop the recording */
+  await pv.evaluate(() => window.__speech.fail("network"));
+  await pv.waitForTimeout(200);
+  assert.ok(await pv.$('[data-testid="interview-recording"]'), "the microphone is still running");
+  assert.equal(await pv.getAttribute('[data-testid="interview"]', "data-state"), "RECORDING");
+
+  await pv.click('[data-testid="interview-stop"]');
+  await pv.waitForSelector('[data-testid="interview-saved"]', { timeout: 20000 });
+
+  /* and what they said is the ANSWER, not merely something that was on screen */
+  const answer = await pv.evaluate(() => {
+    const st = window.__rescriptState ?? window.__RESCRIPT_STATE__;
+    return st?.answers?.qiv ?? null;
+  });
+  assert.equal(answer?.transcript?.source, "browser", "the browser's transcript is kept");
+  assert.match(String(answer.transcript.text), /I think the product is very useful because it saves me time\./,
+    `the answer holds the words: ${answer.transcript.text}`);
+  assert.ok(answer.audio?.url, "and the recording is still there beside it");
+
+  await pv.close();
+  await ctx.close();
+  console.log("  ok   interim → final → appended, captions survive a failure, transcript IS the answer");
 }
 
 /* ============================== 5. storage is gated on a real session */

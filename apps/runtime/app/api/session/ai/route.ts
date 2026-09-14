@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { serverResolvedQuestions } from "@rescript/engine";
+import { interviewText, isInterviewAnswer } from "@rescript/engine";
 import { classify, sentiment } from "@/lib/ai";
 import { definitionForAiCall } from "@/lib/aiSession";
 import { meteredSessionAi } from "@/lib/metering";
@@ -57,6 +58,12 @@ export async function POST(req: NextRequest) {
 function textOf(v: unknown): string {
   if (v == null) return "";
   if (typeof v === "string") return v.trim();
+  /*
+   * An interview answer is an object holding a transcript, not a bag of
+   * fields. The generic join below turned it into "[object Object]" three
+   * times over and handed that to the classifier.
+   */
+  if (isInterviewAnswer(v)) return interviewText(v);
   if (typeof v === "object") {
     // text_list / fields: join the field values
     return Object.values(v as Record<string, unknown>).map((x) => (x == null ? "" : String(x))).filter(Boolean).join("\n").trim();

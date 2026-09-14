@@ -1,3 +1,4 @@
+import { interviewText, isInterviewAnswer } from "@rescript/engine";
 import type { Question } from "@rescript/schema";
 import type { FlagDraft, RuleContext } from "../types.js";
 import {
@@ -22,7 +23,13 @@ export interface OpenEndEntry { q: Question; text: string; key: string; label: s
  */
 export function openEnds(questions: Question[], answers: Record<string, unknown>): OpenEndEntry[] {
   const out: OpenEndEntry[] = [];
-  const textOf = (v: unknown) => typeof v === "string" ? v : Array.isArray(v) ? v.filter((x) => typeof x === "string").join(" ") : "";
+  /* an interview stores its text inside the answer object, so it is read from
+     there rather than coming out blank and silently escaping every check */
+  const textOf = (v: unknown) =>
+    typeof v === "string" ? v
+    : Array.isArray(v) ? v.filter((x) => typeof x === "string").join(" ")
+    : isInterviewAnswer(v) ? interviewText(v)
+    : "";
   for (const q of questions) {
     if (!isOpen(q)) continue;
     const text = textOf(answers[q.id]);

@@ -6,6 +6,7 @@ import { transcribe } from "@rescript/ai";
 import { savesAudio } from "@rescript/engine";
 import {
   runTranscription, transcriptFor, queueTranscript, removeMedia, stageLogger,
+  mergeTranscriptIntoAnswer,
   TRANSCRIPT_SAY, transcriptPending, MediaError, type TranscriptStatus,
 } from "@rescript/media";
 
@@ -84,7 +85,7 @@ export async function POST(req: NextRequest) {
   const db = handle.db;
 
   try {
-    const { data: owned } = await db.from("media_objects").select("id, session_id, status, bucket, path").eq("id", mediaId).maybeSingle();
+    const { data: owned } = await db.from("media_objects").select("id, session_id, status, bucket, path, answer_key, question_id").eq("id", mediaId).maybeSingle();
     if (!owned || owned.session_id !== gate.row!.sessionId) return NextResponse.json({ error: "no such recording" }, { status: 404 });
     if (owned.status !== "stored") return NextResponse.json({ error: "that recording has not finished uploading yet" }, { status: 409 });
 
@@ -106,6 +107,48 @@ export async function POST(req: NextRequest) {
     });
 
     const row = await transcriptFor(db, mediaId);
+
+    /*
+     * THE TRANSCRIPT IS THE ANSWER, SO IT IS WRITTEN ONTO THE ANSWER — HERE,
+     * BY THE SERVER.
+     *
+     * The browser used to be the only thing that did this, by patching its
+     * own copy and hoping a later page turn would save it. That works for a
+     * respondent who lingers and fails for one who presses Next promptly,
+     * and fails always on the last question: `api/session/save` refuses to
+     * write to a finalised session, deliberately and correctly, so the
+     * transcript of the last thing they said was the one guaranteed to be
+     * lost. Nothing about that was visible — the job said `completed` and the
+     * export column was blank.
+     *
+     * Done after the job row is settled, so the two can only disagree in the
+     * direction a sweep can repair (`rescript_unmerged_transcripts` lists
+     * exactly that disagreement).
+     */
+    if (row?.status === "completed" && row.text) {
+      const answerKey = String(owned.answer_key ?? owned.question_id ?? questionId ?? "");
+      if (answerKey) {
+        try {
+          const merged = await mergeTranscriptIntoAnswer(db, {
+            sessionId: gate.row!.sessionId,
+            answerKey,
+            transcript: {
+              text: row.text,
+              language: row.language ?? undefined,
+              model: row.model ?? undefined,
+              source: "provider",
+              status: "completed",
+              transcribedAt: row.completed_at ?? new Date().toISOString(),
+              mediaId,
+            },
+          });
+          stageLogger(`session:${gate.row!.sessionId.slice(0, 8)}`)("transcription_completed", { mediaId, answerKey, merged });
+        } catch (e) {
+          /* the transcript is safe in its own row; the sweep can repair this */
+          console.warn("[rescript:media] transcript not merged onto the answer", JSON.stringify({ mediaId, error: (e as Error).message }));
+        }
+      }
+    }
 
     /*
      * `saveAnswerAudio: false` — the researcher asked for the words and not

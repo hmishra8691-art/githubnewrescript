@@ -17,6 +17,8 @@ import {
   retakeLimit, INTERVIEW_END_TOLERANCE,
 } from "./interview.js";
 import { buildVariableDictionary } from "./variables.js";
+import { evaluateCondition } from "./evaluate.js";
+import { probeSourceTextFor } from "./probe.js";
 import { flattenVariables } from "./flatten.js";
 import { createResponseState } from "./state.js";
 
@@ -226,4 +228,58 @@ test("a half-finished interview exports blanks, never a zero an analyst would co
   assert.equal(flat.Q1_AUDIO_URL, "");
   assert.equal(flat.Q1_DURATION_S, "", "blank, not 0 — they did not speak for zero seconds");
   assert.equal(flat.Q1_VIDEO_COMPLETED, 1, "but we do know they watched it");
+});
+
+/* ------------------------------------------------------------------------
+ * THE TRANSCRIPT IS THE ANSWER VALUE
+ *
+ * The logic builder has always offered this type the text operators. For a
+ * long time the evaluator handed those operators the whole answer object, so
+ * `contains` was always false, `matches` tested against "[object Object]",
+ * and `isNotEmpty` was true the moment a respondent pressed play. These lock
+ * the promise and the behaviour together.
+ * --------------------------------------------------------------------- */
+
+test("a condition on an interview compares against what they said", () => {
+  const d = survey();
+  const state = createResponseState(d);
+  state.answers.q1 = {
+    watch: { completed: true, watchedSeconds: 10, durationSeconds: 10 },
+    audio: { url: "a.webm", durationSeconds: 12 },
+    transcript: { text: "I liked the packaging but not the price.", source: "provider" },
+  };
+  const ctx = { def: d, state, loop: null } as never;
+
+  const cond = (operator: string, value: unknown) => ({
+    type: "rule", source: { kind: "question", ref: "Q1" }, operator, value,
+  }) as never;
+
+  assert.equal(evaluateCondition(cond("contains", "packaging"), ctx), true, "contains reads the transcript");
+  assert.equal(evaluateCondition(cond("contains", "delivery"), ctx), false);
+  assert.equal(evaluateCondition(cond("matches", "^I liked"), ctx), true, "matches is not run against [object Object]");
+  assert.equal(evaluateCondition(cond("isNotEmpty", null), ctx), true);
+});
+
+test("watching the clip is not answering it — isNotEmpty stays false", () => {
+  const d = survey();
+  const state = createResponseState(d);
+  /* the exact state a respondent is in while the clip plays */
+  state.answers.q1 = { watch: { started: true, watchedSeconds: 3, durationSeconds: 10 } };
+  const ctx = { def: d, state, loop: null } as never;
+  const cond = { type: "rule", source: { kind: "question", ref: "Q1" }, operator: "isNotEmpty", value: null } as never;
+  assert.equal(evaluateCondition(cond, ctx), false,
+    "a watch record is not an answer; routing on it would skip people who had not spoken yet");
+});
+
+test("a probe on an interview is about the words, not the object", () => {
+  const iq = q() as never;
+  const answer = {
+    watch: { completed: true },
+    audio: { url: "a.webm" },
+    transcript: { text: "It saves me a lot of time.", source: "provider" },
+  };
+  assert.equal(probeSourceTextFor(iq, answer), "It saves me a lot of time.");
+  /* the object join used to produce this, and it passed a minWords gate */
+  assert.ok(!probeSourceTextFor(iq, answer).includes("[object"));
+  assert.equal(probeSourceTextFor(iq, { watch: { started: true } }), "", "nothing said, nothing to probe");
 });

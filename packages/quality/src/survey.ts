@@ -11,7 +11,13 @@ import { agreementPolarity, normalizeText, words } from "./metrics.js";
 
 export const SINGLE = new Set(["single_select", "dropdown", "image_select", "nps"]);
 export const MULTI = new Set(["multi_select", "multi_dropdown"]);
-export const OPEN = new Set(["open_text", "long_text"]);
+/*
+ * A spoken answer is an open end. Its transcript needs the same gibberish,
+ * too-short and duplicate checks as a typed one — the mode of entry does not
+ * change what the text is, and a video interview whose transcript is three
+ * identical words is exactly the response a reviewer wants flagged.
+ */
+export const OPEN = new Set(["open_text", "long_text", "video_interview"]);
 export const MATRIX_SINGLE = new Set(["matrix_single", "matrix_dropdown"]);
 export const NON_RESPONDENT = new Set(["html", "hidden", "calculated", "embedded_data", "custom_component"]);
 

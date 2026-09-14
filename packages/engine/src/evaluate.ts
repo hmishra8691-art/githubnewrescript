@@ -1,6 +1,7 @@
 import type { Condition, ConditionRule, SurveyDefinition } from "@rescript/schema";
 import { isOptionValueRef, isQuestionValueRef } from "@rescript/schema";
 import type { LoopContext, ResponseState } from "./state.js";
+import { interviewText, isInterviewAnswer } from "./interview.js";
 import { findLoopScope, getQuestionByCodeOrVar, lookupAnswer, loopValue } from "./state.js";
 import { evaluateCount } from "./countCondition.js";
 import { safeExpression } from "./calcContext.js";
@@ -247,6 +248,23 @@ export function resolveSourceValue(rule: ConditionRule, ctx: EvalContext): unkno
           val = (cells.length > 0 ? cells : null) as any;
         }
       }
+      /*
+       * AN INTERVIEW'S COMPARABLE VALUE IS ITS TRANSCRIPT.
+       *
+       * The logic builder has always offered this type the TEXT operators —
+       * `lintLogic` says so explicitly — and the evaluator was handing those
+       * operators the whole `{watch, audio, transcript}` object. `contains`
+       * fell through to an equality check and was always false; `matches`
+       * tested a regex against the string "[object Object]"; and `isNotEmpty`
+       * was true the moment a respondent pressed play, before they had said
+       * a word. The builder promised one thing and the evaluator did another,
+       * which is the worst of the three possible states.
+       *
+       * Resolved here, once, where the value is read — so every operator,
+       * every rule and every quota sees the same text the export column and
+       * the piping token already show.
+       */
+      if (q?.type === "video_interview" && isInterviewAnswer(val)) return interviewText(val);
       return val ?? null;
     }
   }

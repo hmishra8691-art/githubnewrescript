@@ -221,6 +221,20 @@ body {
 @keyframes rs-iv-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
 @media (prefers-reduced-motion: reduce) { .rs-iv-dot { animation: none; } }
 .rs-iv-busy, .rs-iv-note { font-size: 13.5px; color: var(--rs-subtle, #64748b); }
+/*
+ * LIVE CAPTIONS. Confirmed text reads as text; the phrase still being
+ * recognised is dimmed and italic, because it will change and may vanish —
+ * showing the two alike makes the answer look like it is rewriting itself.
+ * A minimum height so the block does not jump the page as words arrive.
+ */
+.rs-iv-captions {
+  min-height: 3.2em; padding: 10px 12px; font-size: 15px; line-height: 1.6;
+  background: var(--rs-tint, #f8fafc); border-radius: calc(var(--rs-radius, 10px) * .7);
+  border-left: 3px solid var(--rs-accent, #4f46e5);
+}
+.rs-iv-caption-final { color: var(--rs-text, #0f172a); }
+.rs-iv-caption-interim { color: var(--rs-subtle, #64748b); font-style: italic; }
+
 .rs-iv-transcript { display: flex; flex-direction: column; gap: 6px; }
 .rs-iv-transcript p {
   margin: 0; padding: 10px 12px; font-size: 14px; line-height: 1.55;

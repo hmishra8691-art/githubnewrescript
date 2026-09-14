@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   beginUpload, confirmUpload, queueTranscript, removeMedia, purgeSessionMedia,
-  resetBucketCache, MediaError, type MediaDb,
+  resetBucketCache, mergeTranscriptIntoAnswer, MediaError, type MediaDb,
 } from "./store.js";
 import { runTranscription } from "./runner.js";
 
@@ -364,4 +364,42 @@ test("a storage failure is reported, never thrown — a delete must not be block
   assert.equal(report.objects, 0);
   assert.equal(report.rows, 1, "the row still goes, so the next sweep is not confused by it");
   assert.match(report.warnings[0], /storage is down/);
+});
+
+/* ------------------------------------------------- the transcript as answer */
+
+test("a finished transcript is written onto the answer, by key", async () => {
+  resetBucketCache();
+  const s = stub();
+  const calls: Array<{ fn: string; args: Record<string, unknown> }> = s.rpcCalls;
+  await mergeTranscriptIntoAnswer(s.db, {
+    sessionId: "sess-abc",
+    answerKey: "q1__2",
+    transcript: { text: "It saves me time.", source: "provider", status: "completed" },
+  });
+  const call = calls.find((c) => c.fn === "rescript_set_answer_transcript")!;
+  assert.ok(call, "the merge goes through the database function, not a read-modify-write");
+  assert.equal(call.args.p_session, "sess-abc");
+  assert.equal(call.args.p_answer_key, "q1__2", "the LOOP ITERATION's key, not the question id");
+  assert.equal((call.args.p_transcript as { text: string }).text, "It saves me time.");
+});
+
+test("an upload records the answer key it belongs to", async () => {
+  resetBucketCache();
+  const s = stub();
+  const ticket = await beginUpload(s.db, {
+    ...BEGIN, kind: "answer_audio", mimeType: "audio/webm", bytes: 1000,
+    sessionId: "sess-a", questionId: "q1", answerKey: "q1__2",
+  });
+  assert.equal(s.rows.get(ticket.mediaId)!.answer_key, "q1__2");
+});
+
+test("without a loop the answer key is just the question", async () => {
+  resetBucketCache();
+  const s = stub();
+  const ticket = await beginUpload(s.db, {
+    ...BEGIN, kind: "answer_audio", mimeType: "audio/webm", bytes: 1000,
+    sessionId: "sess-a", questionId: "q1",
+  });
+  assert.equal(s.rows.get(ticket.mediaId)!.answer_key, "q1", "defaulted, never null");
 });

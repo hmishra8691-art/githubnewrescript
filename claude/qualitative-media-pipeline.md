@@ -182,6 +182,79 @@ otherwise. `sttConfigured()` gates the routes instead of `aiProviderName()`, so
 a job is never queued that nothing could run, and `sttUnavailableReason()`
 names the vendor and the setting that fixes it before any round trip is spent.
 
+### The respondent sees their words as they say them
+
+Two transcripts exist, for two purposes.
+
+**The browser's**, live, from the Web Speech API running beside the
+`MediaRecorder` — the same recogniser the dictation control has always used.
+Free, instant, roughly accurate. Interim text is dimmed and italic because it
+*will* change; confirmed text reads as text. It exists so a respondent can see
+that they are being heard, and catch a mishearing while they still remember
+what they meant.
+
+**The provider's**, afterwards, from the durable job. Slower, better, and what
+analysis reads.
+
+The browser's text becomes the answer the moment recording stops, and the
+provider's replaces it when it lands; `transcript.source` says which is in
+there, and a provider that returns nothing never erases what the browser
+heard. That ordering matters on the last question of a survey — where the
+respondent submits long before any provider could finish — and on an
+installation with no speech-to-text configured at all.
+
+Nothing about the captions may touch the recording. Every callback is
+wrapped, errors are swallowed, and the restart watchdog is on a leash: Chrome
+ends a continuous session after a pause, so `onend` restarts it — but a
+browser where the recogniser *cannot* run ends it immediately every time, and
+a bare restart is then an unbounded loop that pins a core and exhausts memory
+while somebody is trying to answer a question. Restarts are deferred, and
+three barren ones in a row give up silently.
+
+### A transcript that arrives late is still the answer
+
+The job finishes twenty to sixty seconds after the respondent stopped
+speaking. The answer is written to `responses` on a page turn or at submit —
+and `api/session/save` refuses to write to a finalised session, deliberately,
+so a stale tab cannot rewrite a finished interview.
+
+Those two facts together meant the transcript of the **last** question was the
+one guaranteed to be lost: generated, stored, retryable, and absent from the
+data, with nothing anywhere saying so. The browser could not fix it; it may be
+closed.
+
+So the server writes it, from the runner that produced it, through
+`rescript_set_answer_transcript` — one `jsonb_set` under one row lock, so a
+transcript landing mid-interview cannot cost an answer to a question it knows
+nothing about. It works on a finalised response on purpose: the rule is that a
+*browser* may not rewrite a submitted interview, and this is not a browser, it
+is the transcript of a recording that interview already contains.
+
+`media_objects.answer_key` records where to put it, because inside a loop the
+answer is keyed `<questionId>__<iteration>` and the question id alone cannot
+say which of three recordings this transcript belongs to.
+`rescript_unmerged_transcripts()` lists any disagreement between the two — the
+sweep, and the way to know the two ever diverge.
+
+### The transcript IS the open end
+
+It was the base export column, the data-grid cell and the piping token from
+the start. It was not the value that the rest of the platform saw, because
+everything else read `answers[qid]` and got the object:
+
+| | was | now |
+|---|---|---|
+| `evaluate.ts` | `contains` always false, `matches` tested `"[object Object]"`, `isNotEmpty` true the moment they pressed play | compares the transcript |
+| `probe.ts` | `"[object Object]"` ×3, which passed the `minWords` gate and went to the provider | the words |
+| `/api/session/ai` | the same join | the words |
+| `aiFunctions` lint | refused `ai_classify` on this type | accepts it |
+| quality open-ends | not an open end at all, so no gibberish/duplicate/too-short checks ever ran | an open end |
+
+`lintLogic` was the one that made this indefensible rather than merely
+incomplete: it has always handed researchers the *text* operators for this
+type. The builder promised one thing and the evaluator did another, which is
+the worst of the three possible states.
+
 ### The attempt cap, and who it is for
 
 Three attempts, then the job stops claiming itself. That cap exists to stop
