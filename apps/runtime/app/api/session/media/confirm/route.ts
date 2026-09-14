@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { sessionForMedia } from "@/lib/aiSession";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
 import { recordSessionUsage } from "@/lib/metering";
-import { aiProviderName } from "@/lib/ai";
+import { sttConfigured } from "@/lib/ai";
 import { transcribes, savesAudio } from "@rescript/engine";
 import { confirmUpload, queueTranscript, MediaError, stageLogger } from "@rescript/media";
 
@@ -72,7 +72,7 @@ export async function POST(req: NextRequest) {
     const wantTranscript = q ? transcribes(q) : false;
 
     let transcriptStatus: string | null = null;
-    if (wantTranscript && aiProviderName()) {
+    if (wantTranscript && sttConfigured()) {
       const job = await queueTranscript(db, mediaId, gate.row.surveyId);
       transcriptStatus = job.status;
       log("transcription_queued", { mediaId, jobId: job.id });

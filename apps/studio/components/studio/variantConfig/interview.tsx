@@ -296,7 +296,7 @@ function VideoRecorder({ q, patchSettings }: VariantSettingsProps) {
     blob: Blob,
     fileName: string,
     extra: { durationSeconds?: number; width?: number; height?: number; source?: string },
-  ): Promise<{ mediaId: string; video?: InterviewVideo; transcriptStatus?: TranscriptStatus | null }> => {
+  ): Promise<{ mediaId: string; video?: InterviewVideo; transcriptStatus?: TranscriptStatus | null; transcriptUnavailable?: string | null }> => {
     const limit = withinLimit(kind, blob.size, kind === "question_video" ? limits.maxBytes : undefined);
     if (!limit.ok) throw new Error(limit.message);
 
@@ -326,7 +326,12 @@ function VideoRecorder({ q, patchSettings }: VariantSettingsProps) {
     const confirmed = await confirmRes.json().catch(() => ({}));
     if (!confirmRes.ok) throw new Error(confirmed?.error ?? `The recording did not reach storage (${confirmRes.status}).`);
     stage("storage_confirmed", { questionId: q.id, kind, mediaId: ticket.mediaId });
-    return { mediaId: ticket.mediaId, video: confirmed.video, transcriptStatus: confirmed.transcriptStatus ?? null };
+    return {
+      mediaId: ticket.mediaId,
+      video: confirmed.video,
+      transcriptStatus: confirmed.transcriptStatus ?? null,
+      transcriptUnavailable: confirmed.transcriptUnavailable ?? null,
+    };
   };
 
   /** Store the take (or an uploaded file) and write it onto the question. */
@@ -375,7 +380,10 @@ function VideoRecorder({ q, patchSettings }: VariantSettingsProps) {
         try {
           const companion = await putOne("question_audio", audio, fileName.replace(/\.[^.]+$/, "") + ".webm", { durationSeconds: seconds });
           audioMediaId = companion.mediaId;
-          transcriptStatus = (companion.transcriptStatus ?? "waiting") as TranscriptStatus;
+          transcriptStatus = (companion.transcriptStatus ?? undefined) as TranscriptStatus | undefined;
+          /* a provider that cannot transcribe says so once, here, rather than
+             leaving a status chip spinning on a job nothing will ever run */
+          if (companion.transcriptUnavailable) setNote(companion.transcriptUnavailable);
         } catch (e) {
           setNote(`The video is saved. The audio for the transcript could not be stored (${(e as Error).message}) — you can retry the transcript below.`);
         }

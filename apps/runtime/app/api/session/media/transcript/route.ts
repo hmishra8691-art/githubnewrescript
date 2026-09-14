@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sessionForMedia } from "@/lib/aiSession";
 import { mediaDbOrResponse, sessionStt } from "@/lib/mediaRoute";
-import { aiProviderName } from "@/lib/ai";
+import { sttConfigured, sttProviderName } from "@/lib/ai";
 import { transcribe } from "@rescript/ai";
 import { savesAudio } from "@rescript/engine";
 import {
@@ -88,7 +88,7 @@ export async function POST(req: NextRequest) {
     if (!owned || owned.session_id !== gate.row!.sessionId) return NextResponse.json({ error: "no such recording" }, { status: 404 });
     if (owned.status !== "stored") return NextResponse.json({ error: "that recording has not finished uploading yet" }, { status: 409 });
 
-    if (!aiProviderName()) return NextResponse.json({ ok: true, transcript: { status: null, pending: false } });
+    if (!sttConfigured()) return NextResponse.json({ ok: true, transcript: { status: null, pending: false } });
 
     await queueTranscript(db, mediaId, gate.row!.surveyId);
 
@@ -101,7 +101,7 @@ export async function POST(req: NextRequest) {
       transcribe: (bytes, opts) => transcribe(bytes, opts),
       metered: sessionStt(gate.billing, "transcribe_answer"),
       language,
-      provider: aiProviderName() ?? undefined,
+      provider: sttProviderName() ?? undefined,
       log: stageLogger(`session:${gate.row!.sessionId.slice(0, 8)}`),
     });
 

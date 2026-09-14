@@ -3,6 +3,7 @@ import { isFailure, requireEditRight } from "@/lib/guard";
 import { getMeter, projectContext, recordUsage } from "@/lib/metering";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
 import { confirmUpload, queueTranscript, MediaError, MEDIA_KINDS, stageLogger, type MediaKind } from "@rescript/media";
+import { sttConfigured, sttUnavailableReason } from "@rescript/ai";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -56,17 +57,30 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       metadata: { kind: owned.kind, bytes: stored.bytes, questionId: String(body.questionId ?? "") },
     });
 
+    /*
+     * A job is queued only if something could ever run it. Queuing one an
+     * installation cannot service leaves a row at `waiting` forever and a
+     * panel that polls it forever, which looks like slowness rather than the
+     * configuration problem it is.
+     */
     let transcriptStatus: string | null = null;
+    let transcriptUnavailable: string | null = null;
     if (MEDIA_KINDS[owned.kind as MediaKind]?.transcribed) {
-      const job = await queueTranscript(db, mediaId, params.id);
-      transcriptStatus = job.status;
-      log("transcription_queued", { mediaId, jobId: job.id });
+      if (sttConfigured()) {
+        const job = await queueTranscript(db, mediaId, params.id);
+        transcriptStatus = job.status;
+        log("transcription_queued", { mediaId, jobId: job.id });
+      } else {
+        transcriptUnavailable = sttUnavailableReason() ?? "No transcription provider is configured on this installation.";
+        log("transcription_failed", { mediaId, at: "not_configured", error: transcriptUnavailable });
+      }
     }
 
     return NextResponse.json({
       ok: true,
       mediaId,
       transcriptStatus,
+      transcriptUnavailable,
       /* exactly the shape `settings.interviewVideo` expects, so the caller
          stores what it is given rather than assembling a second version */
       video: {

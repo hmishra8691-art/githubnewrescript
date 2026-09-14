@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 import { mediaDbOrResponse, projectStt } from "@/lib/mediaRoute";
-import { transcribe, aiProviderName } from "@rescript/ai";
+import { transcribe, sttConfigured, sttProviderName, sttUnavailableReason } from "@rescript/ai";
 import { runTranscription, transcriptFor, queueTranscript, resetTranscript, stageLogger, TRANSCRIPT_SAY, transcriptPending, MediaError, type TranscriptStatus } from "@rescript/media";
 
 export const dynamic = "force-dynamic";
@@ -95,8 +95,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
      */
     await resetTranscript(db, mediaId);
 
-    if (!aiProviderName()) {
-      return NextResponse.json({ error: "transcription is not configured on this installation" }, { status: 501 });
+    if (!sttConfigured()) {
+      /*
+       * The reason, not the fact. "Transcription is not configured" is true
+       * of an installation whose AI provider is Anthropic — which has chat
+       * and no speech-to-text — and is not a sentence anybody could act on,
+       * because everything about the AI configuration looks correct.
+       */
+      return NextResponse.json({
+        error: sttUnavailableReason() ?? "transcription is not configured on this installation",
+      }, { status: 501 });
     }
 
     const language = typeof body.language === "string" && body.language.trim() ? body.language.trim() : undefined;
@@ -104,7 +112,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       transcribe: (bytes, opts) => transcribe(bytes, opts),
       metered: projectStt(gate, "transcribe_question"),
       language,
-      provider: aiProviderName() ?? undefined,
+      provider: sttProviderName() ?? undefined,
       log: stageLogger(`survey:${params.id}`),
     });
 

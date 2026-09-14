@@ -159,6 +159,29 @@ was refused, and a timeout says how long it waited. The runner stores that
 verbatim, because a provider that says "model whisper-1 does not exist" has
 diagnosed the problem better than any message we could compose.
 
+### Speech-to-text is a separate provider
+
+`AI_API_URL` was assumed to serve both chat and transcription. That is wrong
+for the commonest configuration there is. **Anthropic's API is
+OpenAI-compatible for `/chat/completions` and has no speech-to-text endpoint
+at all** — so an installation pointed at `api.anthropic.com` gets working
+classification, sentiment and probes, and a 404 on every single transcription,
+with nothing in the configuration to suggest why. That is exactly what
+happened here.
+
+```
+AI_STT_API_URL   a provider serving POST <base>/audio/transcriptions
+                 (OpenAI, Groq, a self-hosted Whisper). Falls back to AI_API_URL.
+AI_STT_API_KEY   its token. Falls back to AI_API_KEY.
+AI_STT_MODEL     default whisper-1
+```
+
+The fallback stays, because an installation using OpenAI for everything should
+not have to say so twice; the point is that it is now possible to say
+otherwise. `sttConfigured()` gates the routes instead of `aiProviderName()`, so
+a job is never queued that nothing could run, and `sttUnavailableReason()`
+names the vendor and the setting that fixes it before any round trip is spent.
+
 ### The attempt cap, and who it is for
 
 Three attempts, then the job stops claiming itself. That cap exists to stop

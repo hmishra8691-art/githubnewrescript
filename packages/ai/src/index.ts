@@ -14,6 +14,18 @@ import { approxTokens, reportUsage } from "./usage.js";
  *   AI_API_KEY   bearer token for that API
  *   AI_MODEL     model name (default gpt-4o-mini)
  *
+ *   AI_STT_API_URL   base URL of a provider serving POST
+ *                    <base>/audio/transcriptions. Falls back to AI_API_URL.
+ *   AI_STT_API_KEY   bearer token for it. Falls back to AI_API_KEY.
+ *   AI_STT_MODEL     model name (default whisper-1)
+ *
+ * Speech-to-text is configured separately because it is usually a different
+ * vendor. Anthropic's API is OpenAI-compatible for chat and has no
+ * transcription endpoint at all; an installation that names it for AI_API_URL
+ * is correctly configured for classification, sentiment and probes, and
+ * cannot transcribe a thing. `sttUnavailableReason()` says so in a sentence
+ * rather than letting every clip collect a 404.
+ *
  * Unset means AI is OFF: `aiConfigured()` is false, the routes answer 501,
  * the derived variables stay unset, and the survey runs exactly as it would
  * without them. Like mail, nothing here degrades a respondent's experience
@@ -60,6 +72,73 @@ export function aiProviderName(): "fake" | "openai-compatible" | null {
   const url = (process.env.AI_API_URL ?? "").trim();
   if (!url) return null;
   return url === "fake:" ? "fake" : "openai-compatible";
+}
+
+/* ------------------------------------------------- speech-to-text provider */
+
+/**
+ * SPEECH-TO-TEXT IS A SEPARATE PROVIDER, AND USUALLY A DIFFERENT VENDOR.
+ *
+ * `AI_API_URL` was assumed to serve both chat and transcription. That is
+ * wrong for the commonest configuration there is: Anthropic's API is
+ * OpenAI-compatible for `/chat/completions` and has NO speech-to-text
+ * endpoint at all, so an installation pointed at `api.anthropic.com` gets
+ * working classification, sentiment and probes — and a 404 on every
+ * transcription, with nothing in the configuration to suggest why.
+ *
+ *   AI_STT_API_URL   base URL of a provider that serves
+ *                    POST <base>/audio/transcriptions (OpenAI, Groq,
+ *                    a self-hosted Whisper, …). Falls back to AI_API_URL.
+ *   AI_STT_API_KEY   bearer token for it. Falls back to AI_API_KEY.
+ *   AI_STT_MODEL     the model name (default whisper-1).
+ *
+ * The fallback is kept because an installation using OpenAI for everything
+ * should not have to say so twice. The point is that it is now possible to
+ * say otherwise.
+ */
+export function sttBase(): string {
+  const own = (process.env.AI_STT_API_URL ?? "").trim();
+  return (own || (process.env.AI_API_URL ?? "").trim()).replace(/\/+$/, "");
+}
+
+function sttKey(): string {
+  return ((process.env.AI_STT_API_KEY ?? "").trim() || (process.env.AI_API_KEY ?? "").trim());
+}
+
+/**
+ * Vendors known to serve chat on an OpenAI-compatible path and no
+ * transcription whatsoever.
+ *
+ * Hard-coding a hostname is not a thing to do lightly, and this is worth it:
+ * without it the installation gets a 404 whose honest reading is "check your
+ * endpoint and model", and no amount of checking the model will help, because
+ * the vendor does not offer the capability. One sentence here saves a long
+ * afternoon.
+ */
+const NO_STT_HOSTS = [
+  { match: /(^|\.)anthropic\.com$/i, vendor: "Anthropic" },
+];
+
+export function sttUnavailableReason(): string | null {
+  const base = sttBase();
+  if (!base) return "No transcription provider is configured (AI_STT_API_URL and AI_API_URL are both unset).";
+  if (base === "fake:") return null;
+  let host = "";
+  try { host = new URL(base).hostname; } catch { return null; }
+  const known = NO_STT_HOSTS.find((h) => h.match.test(host));
+  if (!known) return null;
+  return `${known.vendor}'s API has no speech-to-text endpoint — it is OpenAI-compatible for chat only. Set AI_STT_API_URL (and AI_STT_API_KEY) to a provider that serves /audio/transcriptions, such as OpenAI or Groq, and leave AI_API_URL as it is for everything else.`;
+}
+
+/** Whether this installation can transcribe at all. */
+export function sttConfigured(): boolean {
+  return !!sttBase() && !sttUnavailableReason();
+}
+
+export function sttProviderName(): "fake" | "openai-compatible" | null {
+  const base = sttBase();
+  if (!base) return null;
+  return base === "fake:" ? "fake" : "openai-compatible";
 }
 
 /** Pick one of `categories` for `text`, or null. */
@@ -406,14 +485,17 @@ export async function transcribe(
   if (!bytes?.length) return { ok: false, reason: "The recording was empty." };
   const seconds = opts.durationSeconds ?? Math.max(1, Math.round(bytes.length / BYTES_PER_SECOND));
 
-  if (aiProviderName() === "fake") {
+  if (sttProviderName() === "fake") {
     reportUsage({ kind: "stt", provider: "fake", model: "fake-stt", seconds, requests: 1, estimated: true });
     return { ok: true, value: fakeTranscribe(bytes, opts) };
   }
 
-  const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
-  const key = (process.env.AI_API_KEY ?? "").trim();
-  if (!base) return { ok: false, reason: "No transcription provider is configured on this installation (AI_API_URL is unset)." };
+  const base = sttBase();
+  const key = sttKey();
+  if (!base) return { ok: false, reason: "No transcription provider is configured on this installation (AI_STT_API_URL and AI_API_URL are both unset)." };
+  /* a vendor that cannot do this at all, said before the round trip */
+  const impossible = sttUnavailableReason();
+  if (impossible) return { ok: false, reason: impossible };
   const model = (process.env.AI_STT_MODEL ?? "").trim() || "whisper-1";
 
   /*
