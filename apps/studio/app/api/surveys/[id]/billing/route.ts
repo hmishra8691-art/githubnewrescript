@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { SPENDING_MODES, type SpendingMode } from "@rescript/billing";
 import { can } from "@rescript/access";
 import { isFailure, requireProject, audit } from "@/lib/guard";
-import { getMeter, getSandboxMeter, isSandboxProject, meterContextFor, projectContext } from "@/lib/metering";
+import { getMeter, getSandboxMeter, isSandboxProject, meterContextFor, projectContext, projectLookup } from "@/lib/metering";
 import { projectMeterView, stripInternalCosts } from "@/lib/billingView";
 
 export const dynamic = "force-dynamic";
@@ -25,13 +25,13 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   if (isSandboxProject(params.id)) {
-    const view = await projectMeterView(getSandboxMeter(), meterContextFor(null, "sandbox"), { audience: "user" });
+    const view = await projectMeterView(getSandboxMeter(), meterContextFor(null, "sandbox", "LIVE"), { audience: "user" });
     return NextResponse.json(stripInternalCosts({ ok: true, sandbox: true, ...view, canBudget: true, requests: await getSandboxMeter().store.listCreditRequests({ surveyId: "sandbox" }) }));
   }
   const gate = await requireProject(req, params.id, "billing.read");
   if (isFailure(gate)) return gate.response;
   const meter = getMeter();
-  const ctx = projectContext(gate);
+  const ctx = projectLookup(gate);
   try {
     const audience = gate.user.isPlatformAdmin ? "admin" : "user";
     const view = await projectMeterView(meter, ctx, { audience });
@@ -80,7 +80,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
     const gate = await requireProject(req, params.id, "billing.set_budget");
     if (isFailure(gate)) return gate.response;
-    const ctx = projectContext(gate);
+    const ctx = projectLookup(gate);
     const spending = await getMeter().setSpending(params.id, ctx.customerId, { mode: mode as SpendingMode, budgetLimit: limit ?? null });
     await audit({
       action: "billing.project_budget_changed", userId: gate.user.userId, sessionId: gate.user.sessionId,
@@ -99,14 +99,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   if (isSandboxProject(params.id)) {
     const meter = getSandboxMeter();
-    const wallet = await meter.walletFor(meterContextFor(null, "sandbox"), true);
+    const wallet = await meter.walletFor(meterContextFor(null, "sandbox", "LIVE"), true);
     const r = await meter.store.createCreditRequest({ customerId: "sandbox", surveyId: "sandbox", walletId: wallet?.id ?? null, userId: "sandbox-user", requestedAmount: amount, reason, message: message || null });
     return NextResponse.json({ ok: true, request: r });
   }
   const gate = await requireProject(req, params.id, "billing.request_credits");
   if (isFailure(gate)) return gate.response;
   const meter = getMeter();
-  const ctx = projectContext(gate);
+  const ctx = projectLookup(gate);
   const wallet = await meter.walletFor(ctx, true);
   const r = await meter.store.createCreditRequest({ customerId: ctx.customerId, surveyId: params.id, walletId: wallet?.id ?? null, userId: gate.user.userId, requestedAmount: amount, reason, message: message || null });
   await audit({ action: "billing.credit_requested", userId: gate.user.userId, sessionId: gate.user.sessionId, surveyId: params.id, customerId: gate.user.customerId, entity: "credit_request", entityId: r.id, detail: { amount, reason } });

@@ -112,8 +112,8 @@ function OptionProps({ q, code, ann, patch, onSelect }: {
 
       <label className="f"><span>Code</span>
         <input className="input mono" data-testid="opt-code"
-          value={String(o.code)} disabled={s.hasResponses}
-          title={s.hasResponses ? "Codes are frozen once responses exist" : undefined}
+          value={String(o.code)} disabled={s.codesFrozen}
+          title={s.codesFrozen ? "Codes are frozen once this survey has live responses — moving a code would rewrite what a respondent said" : undefined}
           onChange={(e) => {
             const next = e.target.value;
             s.update((d) => {
@@ -172,7 +172,7 @@ function RowProps({ q, code, ann, patch, onSelect }: {
           onChange={(e) => patch(code, { label: e.target.value })} /></label>
 
       <label className="f"><span>Code</span>
-        <input className="input mono" data-testid="row-code" value={String(r.code)} disabled={s.hasResponses}
+        <input className="input mono" data-testid="row-code" value={String(r.code)} disabled={s.codesFrozen}
           onChange={(e) => {
             const next = e.target.value;
             s.update((d) => {

@@ -115,6 +115,12 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
   /** called after a removal so the owner can re-sequence codes */
   onAfterDelete?(): void;
 }) {
+  /*
+   * Codes go read-only once the survey has live responses. The canvas
+   * surface froze them from the start; this panel — the one programmers
+   * actually use — never did, so the guard existed and was unreachable.
+   */
+  const frozen = useStudio().codesFrozen;
   const [filter, setFilter] = React.useState("");
   const [showAll, setShowAll] = React.useState(false);
   const [pasteOpen, setPasteOpen] = React.useState(false);
@@ -263,8 +269,12 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
         return (
         <React.Fragment key={i}>
         <div className={`opt-row ${logicOpen === String(o.code) ? "logic-open" : ""}`}>
-          <input className="input code-input" value={String(o.code)}
-            onChange={(e) => set(i, { code: e.target.value })} title="code" />
+          <input className="input code-input" value={String(o.code)} data-testid="option-code"
+            disabled={frozen}
+            onChange={(e) => set(i, { code: e.target.value })}
+            title={frozen
+              ? "Codes are frozen once this survey has live responses — moving a code would rewrite what a respondent said"
+              : "code"} />
           <input className="input grow" value={o.label} data-oidx={i}
             onChange={(e) => set(i, { label: e.target.value })}
             onKeyDown={(e) => onLabelKeyDown(e, i)}
@@ -514,6 +524,8 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
   patchSettings(p: Partial<Question["settings"]>): void;
 }) {
   const rows = q.rows;
+  /* a field row's code is its variable suffix — same freeze, same reason */
+  const frozen = useStudio().codesFrozen;
   const [condOpen, setCondOpen] = React.useState<number | null>(null);
   const setRow = (i: number, p: Partial<Question["rows"][number]>) =>
     patch({ rows: rows.map((r, j) => (j === i ? { ...r, ...p } : r)) });
@@ -552,7 +564,11 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
         return (
           <div key={i} className="card" style={{ padding: 10 }}>
             <div className="row" style={{ flexWrap: "wrap" }}>
-              <input className="input code-input" title="row code / variable suffix" value={String(r.code)}
+              <input className="input code-input" value={String(r.code)} data-testid="field-row-code"
+                disabled={frozen}
+                title={frozen
+                  ? "Codes are frozen once this survey has live responses — moving a code would rewrite what a respondent said"
+                  : "row code / variable suffix"}
                 onChange={(e) => setRow(i, { code: e.target.value })} />
               <input className="input grow" placeholder="Field label, e.g. Email Address"
                 value={r.label} onChange={(e) => setRow(i, { label: e.target.value })} />
@@ -665,7 +681,7 @@ export function QuestionEditor({ q }: { q: Question }) {
    * use meaningful (non-numeric) codes.
    */
   const resequence = (scope: "options" | "rows") => {
-    if (s.hasResponses) return;
+    if (s.codesFrozen) return;
     s.update((d) => {
       const r = resequenceQuestionCodes(d, q.id, scope);
       if (Object.keys(r.mapping).length === 0) return;

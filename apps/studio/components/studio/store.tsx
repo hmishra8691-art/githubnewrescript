@@ -2,6 +2,7 @@
 import React from "react";
 import type { SurveyDefinition, Question } from "@rescript/schema";
 import { normaliseQuestionOrder } from "@rescript/engine";
+import { codesFrozenBy } from "@/lib/responseSummary";
 
 /**
  * Central Studio state — the single source of truth for the survey being
@@ -73,11 +74,19 @@ export interface StudioState {
   saveState: SaveState;
   selectedQuestionId: string | null;
   /**
-   * True once this survey has collected responses. Code re-sequencing rewrites
-   * references across the definition, but it cannot rewrite data already
-   * stored against the old codes — so once this is true, codes freeze.
+   * True once this survey has collected LIVE responses.
+   *
+   * Code re-sequencing rewrites references across the definition, but it
+   * cannot rewrite answers already stored against the old codes — a
+   * respondent who chose code 4 is recorded as having chosen 4, and moving
+   * that option to 3 rewrites what they said. So once this is true, codes
+   * freeze: the inputs go read-only and `resequence` refuses.
+   *
+   * LIVE only, deliberately. Test data is disposable and a programmer editing
+   * a survey through its test link would otherwise find the codes frozen by
+   * their own pilot interviews.
    */
-  hasResponses: boolean;
+  codesFrozen: boolean;
   /**
    * READ-ONLY MODE (§19).
    *
@@ -201,7 +210,7 @@ export function StudioProvider({
   const [selectedQuestionId, setSelected] = React.useState<string | null>(null);
   const [currentVersionId, setVersionId] = React.useState<string | null>(versionId);
   const [toastMsg, setToastMsg] = React.useState<{ msg: string; kind: "ok" | "err" } | null>(null);
-  const [hasResponses, setHasResponses] = React.useState(false);
+  const [codesFrozen, setCodesFrozen] = React.useState(false);
   const [revision, setRevision] = React.useState<number | null>(initialRevision ?? null);
   const [unguarded, setUnguarded] = React.useState(false);
   const [readOnly, setReadOnlyState] = React.useState(initialReadOnly ?? true);
@@ -428,16 +437,33 @@ export function StudioProvider({
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [saveState, dirty]);
 
-  // one cheap probe on mount; a survey with data must not have its codes moved
+  /*
+   * One cheap probe on mount: a survey with live data must not have its codes
+   * moved.
+   *
+   * THIS READ WAS WRONG FROM THE DAY IT WAS WRITTEN, and silently. It asked
+   * for `d.total ?? d.rows?.length`, but the endpoint answers
+   * `{ live: {…, total}, test: {…, total} }` — there is no top-level `total`
+   * and no `rows`, so `n` was 0 on every survey that has ever existed and
+   * `codesFrozen` was never once true. Every guard downstream was therefore
+   * dead code: the "Codes are frozen once responses exist" tooltip never
+   * appeared, the inputs were never disabled, and `resequence` renumbered
+   * options on live surveys mid-field — the exact thing `renumber.ts` says in
+   * its own header that its caller must refuse.
+   *
+   * A shape mismatch between two of our own files, with no type between them
+   * and no test, cost the strongest data-integrity guard in the editor. The
+   * shape now has ONE reader, `codesFrozenBy`, and a suite that runs it over
+   * the real endpoint's real answer.
+   */
   React.useEffect(() => {
     let cancelled = false;
     if (sandbox) return;
-    fetch(`/api/surveys/${surveyDbId}/responses?limit=1`, { cache: "no-store" })
+    fetch(`/api/surveys/${surveyDbId}/responses?format=summary`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (cancelled || !d) return;
-        const n = Array.isArray(d) ? d.length : (d.total ?? d.rows?.length ?? 0);
-        setHasResponses(n > 0);
+        setCodesFrozen(codesFrozenBy(d));
       })
       .catch(() => { /* offline / not deployed yet — treat as no data */ });
     return () => { cancelled = true; };
@@ -468,7 +494,7 @@ export function StudioProvider({
     dirty,
     saveState,
     selectedQuestionId,
-    hasResponses,
+    codesFrozen,
     goToTab: (tab) => goToTabRef.current?.(tab),
     setGoToTab(fn) { goToTabRef.current = fn; },
     setLeaveGuard(fn) { leaveGuardRef.current = fn; },

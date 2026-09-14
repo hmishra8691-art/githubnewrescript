@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { assertNotReadOnly, getMeter, projectContext, recordUsage } from "@/lib/metering";
+import { assertNotReadOnly, getMeter, projectContext, projectLookup, recordUsage } from "@/lib/metering";
+import type { Environment } from "@rescript/billing";
 import type { AuditEvent, Capability } from "@rescript/access";
 import { buildPptx, buildXlsx } from "@rescript/analytics/export";
 import {
@@ -9,6 +10,18 @@ import {
 import { supabaseService } from "@/lib/authServer";
 import { audit, isFailure, requireProject, type ProjectContext } from "@/lib/guard";
 import { compute, hashPassword, loadDefinition, loadTheme, newToken, variablesPayload } from "@/lib/analytics";
+
+/**
+ * The environment a report is built from.
+ *
+ * A deck is LIVE only when everything in it is: an analysis over test data,
+ * or a mixed report, is test work. Nothing is the same as unknown, and
+ * unknown is TEST — the side of this question that cannot overcharge anyone.
+ */
+function environmentOf(envs: (string | null | undefined)[]): Environment {
+  const seen = new Set(envs.filter(Boolean));
+  return seen.size === 1 && seen.has("LIVE") ? "LIVE" : "TEST";
+}
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -228,10 +241,17 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
   if (head === "export") {
     const ctx = await gate(req, surveyId, "analytics.export"); if (isFailure(ctx)) return ctx.response;
     const format = body.format === "xlsx" ? "xlsx" : "pptx";
-    // METERING: report generation respects READ_ONLY (unless exports are allowed) and is recorded as REPORT_GENERATION
-    const mctx = projectContext(ctx);
-    const blocked = await assertNotReadOnly(getMeter(), mctx, "export");
+    /*
+     * METERING: report generation respects READ_ONLY (unless exports are
+     * allowed) and is recorded as REPORT_GENERATION — against the environment
+     * of the data it reports on, not against "LIVE" because the researcher
+     * happened to be signed in. A deck built from pilot data is test work.
+     */
+    const blocked = await assertNotReadOnly(getMeter(), projectLookup(ctx), "export");
     if (blocked) return blocked;
+    /* which environment this deck is built from — filled in by whichever
+       branch below resolves the analysis, and TEST until one does */
+    let exportEnv: Environment = "TEST";
     const settings = (body.settings as Record<string, unknown>) ?? {};
     const themeId = (body.themeId as string | null) ?? null;
     let report: ReportDefinition & { author?: string; date?: string }; let results: Record<string, AnalysisResult>; let reportId: string | null = null; let analysisId: string | null = null; let reportVersion: number | null = null; let themeSrc: unknown = null; let name = "";
@@ -249,11 +269,17 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
         report = r.definition as ReportDefinition; results = await computeReport(db, surveyId, loaded, report);
       }
       if (!themeId && !themeSrc) themeSrc = await loadTheme(db, r.theme_id);
+      const ids = Object.keys(results);
+      if (ids.length) {
+        const { data: defs } = await db.from("analytics_analyses").select("definition").in("id", ids);
+        exportEnv = environmentOf((defs ?? []).map((d) => (d.definition as AnalysisDefinition)?.dataset?.environment));
+      }
     } else if (typeof body.analysisId === "string" && isUuid(body.analysisId)) {
       const { data: a } = await db.from("analytics_analyses").select("*").eq("id", body.analysisId).eq("survey_id", surveyId).is("deleted_at", null).maybeSingle();
       if (!a) return bad("Unknown analysis.", 404);
       const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
       analysisId = a.id; name = a.name;
+      exportEnv = environmentOf([(a.definition as AnalysisDefinition)?.dataset?.environment]);
       const result = await compute(db, surveyId, loaded, { ...(a.definition as AnalysisDefinition), id: a.id, name: a.name });
       results = { [a.id]: result };
       const chart = (body.chart as ChartSpec | undefined) ?? { type: result.recommendedCharts[0] ?? "bar_vertical", options: {} };
@@ -262,6 +288,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
       // ad-hoc: export an unsaved analysis
       const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
       const def = body.definition as AnalysisDefinition; name = def.name || def.kind;
+      exportEnv = environmentOf([def.dataset?.environment]);
       const result = await compute(db, surveyId, loaded, def);
       results = { adhoc: result };
       const chart = (body.chart as ChartSpec | undefined) ?? { type: result.recommendedCharts[0] ?? "bar_vertical", options: {} };
@@ -271,7 +298,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     const meta = { survey: ctx.survey.title, generatedBy: ctx.user.fullName || ctx.user.email };
     const buf = format === "pptx" ? await buildPptx({ report: { ...report, author: report.author ?? ctx.user.fullName }, results, theme, settings: settings as never, meta }) : await buildXlsx({ report, results, theme, settings: settings as never, meta: { Survey: ctx.survey.title, "Generated by": ctx.user.fullName || ctx.user.email } });
     await db.from("analytics_exports").insert({ survey_id: surveyId, report_id: reportId, analysis_id: analysisId, format, settings, report_version: reportVersion, bytes: buf.length, created_by: ctx.user.userId });
-    void recordUsage(getMeter(), mctx, { eventType: "REPORT_GENERATION", quantity: 1, metadata: { format, bytes: buf.length, reportId, analysisId } });
+    void recordUsage(getMeter(), projectContext(ctx, exportEnv), { eventType: "REPORT_GENERATION", quantity: 1, metadata: { format, bytes: buf.length, reportId, analysisId, environment: exportEnv } });
     log(ctx, "analytics.export_generated", reportId ?? analysisId, { name, format, version: reportVersion });
     const filename = `${(name || "analytics").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "_") || "analytics"}.${format}`;
     return new NextResponse(new Uint8Array(buf), { status: 200, headers: { "content-type": format === "pptx" ? "application/vnd.openxmlformats-officedocument.presentationml.presentation" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "content-disposition": `attachment; filename="${filename}"`, "cache-control": "no-store" } });

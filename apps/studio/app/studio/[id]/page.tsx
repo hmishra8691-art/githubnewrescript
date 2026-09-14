@@ -1,12 +1,24 @@
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
 import { newSurveyDefinition } from "@/lib/defaults";
 import { Studio } from "@/components/studio/Studio";
 import { ensureElementIds } from "@rescript/engine";
+import { projectPageGate } from "@/lib/guard";
+import { SESSION_COOKIE_NAME } from "@/lib/authServer";
 
 export const dynamic = "force-dynamic";
 
 /**
+ * AUTHORIZE FIRST. This page is the only server component in the Studio that
+ * reads data, and it used to read it with the service-role client and no gate
+ * at all — so any signed-in user, from any workspace, could open
+ * `/studio/<uuid>` and be served the whole questionnaire, logic, quotas and
+ * unsaved draft of a project they hold no role on. The middleware cannot
+ * cover this: at the edge there is no database, so it can only see that a
+ * cookie exists.
+ *
  * Load the survey the programmer should see, in this order:
  *
  *   1. the autosaved DRAFT, if one exists — that is their unsaved work
@@ -21,6 +33,32 @@ export const dynamic = "force-dynamic";
  * survey.
  */
 export default async function StudioPage({ params }: { params: { id: string } }) {
+  const gate = await projectPageGate(
+    cookies().get(SESSION_COOKIE_NAME)?.value ?? null,
+    params.id,
+    "project.read",
+  );
+  if (!gate.ok) {
+    if (gate.kind === "signed_out") {
+      redirect(`/login?next=${encodeURIComponent(`/studio/${params.id}`)}`);
+    }
+    /*
+     * "Not found" and "not yours" read identically on purpose — the same
+     * answer `requireProject` gives an outsider over the API. On an
+     * installation shared by several agencies, the existence of a study is
+     * itself confidential.
+     */
+    return (
+      <div className="dash">
+        <h1>{gate.kind === "unknown" ? "Survey not found" : "You cannot open this project"}</h1>
+        {gate.kind === "forbidden" && (
+          <div className="card" style={{ borderColor: "var(--red)", color: "var(--red)" }}>{gate.message}</div>
+        )}
+        <a className="btn" href="/">← back to surveys</a>
+      </div>
+    );
+  }
+
   const db = supabaseAdmin();
 
   // draft columns only exist after migration 0003 — ask for them, but survive

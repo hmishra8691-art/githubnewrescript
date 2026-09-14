@@ -45,7 +45,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   if (format !== "summary") {
     // METERING: a read-only project may still export only when the configuration allows it; the download is a usage event either way
     const meter = getMeter();
-    const mctx = projectContext(gate);
+    /* the file's own dataset decides this: `include=test` is test work */
+    const mctx = projectContext(gate, include === "test" ? "TEST" : "LIVE");
     const blocked = await assertNotReadOnly(meter, mctx, "export");
     if (blocked) return blocked;
     void recordUsage(meter, mctx, { eventType: "EXPORT_GENERATION", quantity: 1, metadata: { format, dataset, include } });
@@ -58,10 +59,17 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   }
 
   if (format === "summary") {
-    const { data } = await db
+    /* binned rows are not data — see the note on the export query below. The
+       fallback is for a database from before migration 0006, which has no
+       soft delete and therefore nothing to exclude. */
+    let { data, error: sErr } = await db
       .from("responses")
       .select("status, is_test")
-      .eq("survey_id", params.id);
+      .eq("survey_id", params.id)
+      .is("deleted_at", null);
+    if (sErr && /deleted_at|does not exist|schema cache/i.test(sErr.message)) {
+      data = (await db.from("responses").select("status, is_test").eq("survey_id", params.id)).data;
+    }
     const rows = data ?? [];
     const count = (s: string, t: boolean) => rows.filter((r) => r.status === s && r.is_test === t).length;
     const block = (t: boolean) => ({
@@ -79,18 +87,38 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const parsed = ver ? SurveyDefinition.safeParse(ver.definition) : null;
   if (!parsed?.success) return NextResponse.json({ error: "definition invalid" }, { status: 500 });
 
+  /*
+   * A RESPONSE THE RESEARCHER BINNED MUST NOT REACH THE DELIVERED FILE.
+   *
+   * This query had no `deleted_at` filter, while every other reader in the
+   * platform has one — `responseData.ts` ("soft-deleted rows are not data"),
+   * the analytics loader, the counts on the Data tab. So the screen said
+   * seven responses and the CSV handed to the client contained twelve,
+   * including the five completes the researcher had just removed as
+   * fraudulent. Nothing warned anybody: the file looked entirely normal.
+   *
+   * The Data tab's contract is that a deleted row leaves EVERY dataset. The
+   * export is a dataset. Rows are recoverable from the recycle bin until they
+   * are purged, so nothing is lost by excluding them here.
+   */
   let query = db.from("responses")
     .select("session_id, respondent_id, status, seed, answers, calculated, embedded, flags, started_at, completed_at, is_test, quality, review_status, review_reason, reviewed_by, reviewed_at, sample_source, sample_source_respondent")
-    .eq("survey_id", params.id);
+    .eq("survey_id", params.id)
+    .is("deleted_at", null);
   if (include === "live") query = query.eq("is_test", false);
   else if (include === "test") query = query.eq("is_test", true);
   let { data: resp, error: qerr } = (await query.order("started_at")) as { data: any[] | null; error: { message: string } | null };
-  if (qerr && /quality|review_status|sample_source|does not exist|schema cache/i.test(qerr.message)) {
+  if (qerr && /quality|review_status|sample_source|deleted_at|does not exist|schema cache/i.test(qerr.message)) {
     /*
-     * A column the database has not got yet — migration 0005 (quality) or
-     * 0012 (sample source). Serve the data without them rather than refusing
-     * the export: a researcher who cannot download their responses because a
-     * migration is pending has lost the study, not a column.
+     * A column the database has not got yet — migration 0005 (quality), 0006
+     * (soft delete) or 0012 (sample source). Serve the data without them
+     * rather than refusing the export: a researcher who cannot download their
+     * responses because a migration is pending has lost the study, not a
+     * column.
+     *
+     * Dropping the `deleted_at` filter here is safe rather than a hole: a
+     * database without the column has no soft delete, so it has no binned
+     * rows to leak.
      */
     let q2 = db.from("responses")
       .select("session_id, respondent_id, status, seed, answers, calculated, embedded, flags, started_at, completed_at, is_test")

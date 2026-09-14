@@ -94,7 +94,18 @@ export function isFailure<T>(v: T | GuardFailure): v is GuardFailure {
  * endpoint, which is the client saying "someone is here".
  */
 export async function requireUser(req: NextRequest): Promise<AuthedUser | GuardFailure> {
-  const sessionId = sessionIdFrom(req);
+  return userForSession(sessionIdFrom(req));
+}
+
+/**
+ * The same check, for a caller that has the session id rather than a request.
+ *
+ * A server-rendered PAGE has `cookies()`, not a `NextRequest` — and until this
+ * existed, the one server component in the app simply did not authorize at
+ * all. Splitting the lookup out is what lets a page run the identical gate
+ * instead of an approximation of it.
+ */
+export async function userForSession(sessionId: string | null): Promise<AuthedUser | GuardFailure> {
   if (!sessionId) return fail({ error: "Not signed in.", code: "no_session" }, 401);
 
   const db = supabaseService();
@@ -495,4 +506,66 @@ export function publicUser(user: AuthedUser) {
       lockStaleAfterSeconds: user.policies.lock.staleAfterSeconds,
     },
   };
+}
+
+/* ------------------------------------------------- 4. the same gate, for a page */
+
+/**
+ * PROJECT AUTHORIZATION FOR A SERVER-RENDERED PAGE.
+ *
+ * Every other screen in the Studio is a client component that fetches from a
+ * guarded API route, so `requireProject` covered the whole application — right
+ * up until it did not. `/studio/[id]` is the one server component that reads
+ * data, and it queried with the SERVICE ROLE and rendered the complete
+ * questionnaire — questions, logic, quotas, scripts and the unsaved draft —
+ * to anyone holding any session cookie. The middleware does not help and says
+ * so itself: at the edge there is no database, so it can only check that a
+ * cookie is present, and any non-empty string passes.
+ *
+ * `auth-guard-audit.mjs` reported 137 of 137 handlers guarded and was right;
+ * it only walks the route handlers under `app/api`. It now walks pages too.
+ *
+ * A page cannot answer 401 or 403 — it has to render something or redirect —
+ * so the outcomes are named rather than returned as responses, and each maps
+ * to the same decision the API makes:
+ *
+ *   signed_out  →  send them to /login with a `next` back to here
+ *   unknown     →  "not found", the SAME answer an outsider gets for a
+ *                  project that does not exist. Telling a stranger that a
+ *                  study exists but is not theirs is itself a disclosure.
+ *   forbidden   →  a member without the capability, told their role
+ */
+export type PageGate =
+  | { ok: true; ctx: ProjectContext }
+  | { ok: false; kind: "signed_out" | "unknown" | "forbidden"; message: string };
+
+export async function projectPageGate(
+  sessionId: string | null,
+  surveyId: string,
+  capability: Capability,
+): Promise<PageGate> {
+  const user = await userForSession(sessionId);
+  if (isFailure(user)) {
+    /*
+     * 503 means "could not check", not "not signed in" — the session store was
+     * unreachable. Treating it as a sign-out would throw everybody at /login
+     * during a database blip, which is the failure the 503/401 split exists to
+     * prevent. Say it plainly and let them retry.
+     */
+    if (user.response.status === 503) {
+      return { ok: false, kind: "forbidden", message: "We could not check your session just now. Reload in a moment — nothing is wrong with this project." };
+    }
+    return { ok: false, kind: "signed_out", message: "Please sign in." };
+  }
+
+  const ctx = await requireProjectFor(user, surveyId, capability);
+  if (!isFailure(ctx)) return { ok: true, ctx };
+
+  if (ctx.response.status === 404) return { ok: false, kind: "unknown", message: "Project not found." };
+  let message = "You do not have access to this project.";
+  try {
+    const body = (await ctx.response.json()) as { error?: string };
+    if (body?.error) message = body.error;
+  } catch { /* keep the default */ }
+  return { ok: false, kind: "forbidden", message };
 }

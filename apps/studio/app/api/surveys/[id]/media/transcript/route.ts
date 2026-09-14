@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
+import { mediaEnvironment } from "@/lib/metering";
 import { mediaDbOrResponse, projectStt } from "@/lib/mediaRoute";
 import { transcribe, sttConfigured, sttProviderName, sttUnavailableReason } from "@rescript/ai";
 import { runTranscription, transcriptFor, queueTranscript, resetTranscript, stageLogger, TRANSCRIPT_SAY, transcriptPending, MediaError, type TranscriptStatus } from "@rescript/media";
@@ -110,7 +111,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const language = typeof body.language === "string" && body.language.trim() ? body.language.trim() : undefined;
     const outcome = await runTranscription(db, mediaId, {
       transcribe: (bytes, opts) => transcribe(bytes, opts),
-      metered: projectStt(gate, "transcribe_question"),
+      /* the clip decides: a take with no response behind it is test work,
+         and a pilot interview's clip is charged as the pilot it is */
+      metered: projectStt(gate, "transcribe_question", await mediaEnvironment(mediaId)),
       language,
       provider: sttProviderName() ?? undefined,
       log: stageLogger(`survey:${params.id}`),

@@ -2,6 +2,7 @@ import "server-only";
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { getMeter, projectContext, meterProvider, meterModel, usageToSpec } from "@/lib/metering";
+import type { Environment } from "@rescript/billing";
 import { collectUsage } from "@rescript/ai";
 import type { ProjectContext } from "@/lib/guard";
 import type { MediaDb, MeteredRun } from "@rescript/media";
@@ -37,11 +38,17 @@ export function mediaDbOrResponse(): { db: MediaDb } | { response: NextResponse 
  * is returned rather than thrown: an empty wallet leaves the recording stored
  * and the transcript retryable, and is never allowed to look like a broken
  * pipeline.
+ *
+ * `environment` is the clip's, resolved by the caller from the response it
+ * belongs to. This is the path that actually charged for test work: two rows
+ * in the production ledger say LIVE for clips with no session at all — a
+ * researcher trying the recorder — because the context builder defaulted to
+ * LIVE and nobody could pass anything else.
  */
-export function projectStt(gate: ProjectContext, operation: string): MeteredRun {
+export function projectStt(gate: ProjectContext, operation: string, environment: Environment): MeteredRun {
   return async <T>(seconds: number, fn: () => Promise<T>): Promise<{ value: T } | { refused: string }> => {
     const meter = getMeter();
-    const ctx = projectContext(gate);
+    const ctx = projectContext(gate, environment);
     const providerName = process.env.AI_API_URL === "fake:" ? "fake" : "openai-compatible";
     const minutes = Math.max(0.05, seconds / 60);
     let hold;

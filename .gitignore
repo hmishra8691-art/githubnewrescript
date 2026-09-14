@@ -3,6 +3,7 @@ node_modules/
 # the production build `scripts/p0-cookie-test.mjs` makes for itself, kept out
 # of `.next` so it cannot overwrite a running dev server's chunks
 .next-p0/
+.next-blockers/
 dist/
 *.tsbuildinfo
 .env

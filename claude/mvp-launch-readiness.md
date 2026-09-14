@@ -37,6 +37,15 @@ has never met a real respondent. That governs the launch plan more than any indi
 
 Ordered by expected damage. "One-line" means exactly that.
 
+> **Fixed since this audit (15 Sep):** R1, R3, R4 and R12 are done, with
+> `scripts/blocker-fixes-test.mjs` — 24 checks against a stub PostgREST and a
+> real production build. The suite was run against the OLD code first and
+> failed 6 of them, including "the binned one is not in the file" and "a
+> stranger does not get the questionnaire", so it is a test rather than a
+> decoration. `scripts/auth-guard-audit.mjs` now walks server-rendered pages
+> as well as API routes and refuses a page that reads before it gates.
+> **R2, R5–R11 and R13 are still open.**
+
 ### R1 · Exports include responses the researcher deleted
 `apps/studio/app/api/surveys/[id]/responses/route.ts:82-87` — no `deleted_at` filter, in any
 of the CSV, JSON, XLSX or summary branches. Every other reader excludes them

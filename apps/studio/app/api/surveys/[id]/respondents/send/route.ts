@@ -168,7 +168,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   });
 
   // METERING: a read-only project sends nothing; every message actually mailed is one EMAIL_MESSAGE
-  const mctx = projectContext(gate);
+  /* the wave being mailed already said which environment it is — use it,
+     rather than recording a test send as production email */
+  const mctx = projectContext(gate, environment);
   const blocked = await assertNotReadOnly(getMeter(), mctx, "other");
   if (blocked) return blocked;
   const results = await sendMany(messages, { perSecond: 2 });

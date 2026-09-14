@@ -51,7 +51,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     });
     log("storage_confirmed", { mediaId, kind: owned.kind, bytes: stored.bytes, seconds: stored.durationSeconds });
 
-    void recordUsage(getMeter(), projectContext(gate), {
+    /* question media is authoring content — a stimulus or a recorded prompt
+       that ships with the questionnaire — so it is real spend, LIVE. The
+       TRANSCRIPTION of a clip is a different question, answered per clip by
+       `mediaEnvironment`. */
+    void recordUsage(getMeter(), projectContext(gate, "LIVE"), {
       eventType: "FILE_UPLOAD",
       quantity: Math.max(0.001, (stored.bytes ?? 0) / (1024 * 1024)),
       metadata: { kind: owned.kind, bytes: stored.bytes, questionId: String(body.questionId ?? "") },

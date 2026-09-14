@@ -55,6 +55,6 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const signed = await db.storage.from(BUCKET).createSignedUrl(path, SIGNED_SECONDS);
   if (signed.error) return NextResponse.json({ error: signed.error.message }, { status: 500 });
   // METERING: a stored recording is FILE_UPLOAD in MB on the project's wallet
-  void recordUsage(getMeter(), projectContext(gate), { eventType: "FILE_UPLOAD", quantity: Math.max(0.001, file.size / (1024 * 1024)), metadata: { kind: "audio", contentType: file.type, bytes: file.size } });
+  void recordUsage(getMeter(), projectContext(gate, "LIVE"), { eventType: "FILE_UPLOAD", quantity: Math.max(0.001, file.size / (1024 * 1024)), metadata: { kind: "audio", contentType: file.type, bytes: file.size } });
   return NextResponse.json({ ok: true, url: signed.data.signedUrl, path, bytes: file.size, mimeType: file.type, fileName: safeName });
 }

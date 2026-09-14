@@ -369,7 +369,74 @@ if (lockExempt.length) {
   for (const e of lockExempt) console.log(`  · ${e}`);
 }
 
-console.log(`\n${checked} handlers checked, ${failures.length} problem(s)`);
+
+/* ============================================================ server pages */
+
+/*
+ * THE CLASS THIS AUDIT USED TO MISS ENTIRELY.
+ *
+ * It walked route handlers and reported "137 of 137 guarded", which was true
+ * and was not the whole surface. `/studio/[id]` is a server component: it
+ * queried with the service-role client and rendered a complete questionnaire
+ * — questions, logic, quotas, the unsaved draft — to anyone holding any
+ * session cookie, because the middleware at the edge has no database and can
+ * only see that a cookie exists.
+ *
+ * So every SERVER-rendered page (no "use client") that reads data must call a
+ * gate. A page that renders no data of its own is exempt by stated reason,
+ * the same way a public route is.
+ */
+const PAGE_ROOT = "apps/studio/app";
+const PUBLIC_PAGES = {
+  "layout.tsx": "the application shell: renders no project or account data",
+  "login/page.tsx": "signing in cannot require being signed in",
+};
+const PAGE_GUARDS = ["projectPageGate", "requireUser", "requireProject", "userForSession"];
+
+const pageFiles = [];
+(function walkPages(dir) {
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) { if (entry !== "api") walkPages(full); }
+    else if (entry === "page.tsx" || entry === "layout.tsx") pageFiles.push(full);
+  }
+})(PAGE_ROOT);
+pageFiles.sort();
+
+console.log("\nSERVER-RENDERED PAGES");
+let pagesChecked = 0;
+for (const file of pageFiles) {
+  const rel = relative(PAGE_ROOT, file);
+  const src = readFileSync(file, "utf8");
+  /* a client component fetches from the guarded API; it holds no service key */
+  if (/^\s*["']use client["']/m.test(src.split("\n").slice(0, 3).join("\n"))) continue;
+
+  if (PUBLIC_PAGES[rel]) { exempt.push(`${rel} — ${PUBLIC_PAGES[rel]}`); continue; }
+  pagesChecked++;
+  checked++;
+
+  const guard = PAGE_GUARDS.find((g) => new RegExp(`\\b${g}\\s*\\(`).test(src));
+  if (!guard) {
+    failures.push(`${rel} — SERVER PAGE WITH NO GUARD CALL (it can read with the service role)`);
+    console.log(`  FAIL ${rel} — no guard call`);
+    continue;
+  }
+  /*
+   * And it must gate BEFORE it reads. A guard that runs after the query has
+   * already fetched the questionnaire has not protected anything.
+   */
+  const guardAt = src.search(new RegExp(`\\b${guard}\\s*\\(`));
+  const readAt = src.search(/\bsupabaseAdmin\s*\(|\bsupabaseService\s*\(/);
+  if (readAt !== -1 && readAt < guardAt) {
+    failures.push(`${rel} — reads the database BEFORE ${guard}`);
+    console.log(`  FAIL ${rel} — reads before it gates`);
+    continue;
+  }
+  console.log(`  ok   ${rel} — ${guard}, before any read`);
+}
+console.log(`  (${pagesChecked} server page${pagesChecked === 1 ? "" : "s"} checked)`);
+
+console.log(`\n${checked} handlers and server pages checked, ${failures.length} problem(s)`);
 if (failures.length) {
   for (const f of failures) console.log(`  FAIL ${f}`);
   process.exit(1);

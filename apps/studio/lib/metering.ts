@@ -63,15 +63,73 @@ export function meterFor(surveyId: string | null | undefined): Meter {
   return isSandboxProject(surveyId) ? getSandboxMeter() : getMeter();
 }
 
-/** The billing context of a Studio operation: the project's customer, the project, the person, LIVE (studio work is real spend). */
-export function meterContextFor(user: AuthedUser | null, surveyId: string | null | undefined, environment: Environment = "LIVE"): MeterContext {
+/**
+ * THE BILLING CONTEXT OF A STUDIO OPERATION.
+ *
+ * `environment` IS REQUIRED, AND THAT IS A BUG FIX, NOT A STYLE CHOICE.
+ *
+ * It used to default to `"LIVE"`, and not one caller in the whole Studio ever
+ * passed it — which is not an oversight anybody could have noticed, because
+ * the Studio has no response row to read `is_test` from and so had nothing to
+ * pass. The result is in the production ledger: speech-to-text charged as
+ * LIVE for clips with `session_id = null`, i.e. a researcher trying the
+ * recorder in the editor; LIVE `FILE_UPLOAD` rows for the same takes; and
+ * `EXPORT_GENERATION` rows whose own metadata says `include: "test"` sitting
+ * beside `environment: "LIVE"` in the same row.
+ *
+ * A default is the wrong shape for this question. Every call site knows
+ * something — the dataset it is exporting, the respondent list it is mailing,
+ * the response a recording belongs to — and the one place that genuinely knows
+ * nothing (a researcher's own take, with no respondent behind it) should say
+ * TEST, because that is the side that cannot overcharge anybody. Making it an
+ * argument is what forces each of them to answer.
+ *
+ * Authoring work — rephrasing a question, translating a questionnaire, a
+ * stimulus video — is LIVE and passes LIVE explicitly. It is real spend by a
+ * paying customer on building their study, and there is no respondent
+ * environment to inherit.
+ */
+export function meterContextFor(user: AuthedUser | null, surveyId: string | null | undefined, environment: Environment): MeterContext {
   if (isSandboxProject(surveyId) || !user) return { customerId: SANDBOX_CUSTOMER, surveyId: "sandbox", userId: user?.userId ?? null, environment };
   return { customerId: user.customerId ?? SANDBOX_CUSTOMER, surveyId: surveyId!, userId: user.userId, environment };
 }
 
-/** The billing context of a guarded project route. */
-export function projectContext(gate: ProjectContext, environment: Environment = "LIVE"): MeterContext {
+/** The billing context of a guarded project route. See `meterContextFor`. */
+export function projectContext(gate: ProjectContext, environment: Environment): MeterContext {
   return { customerId: gate.survey.customer_id ?? gate.user.customerId ?? SANDBOX_CUSTOMER, surveyId: gate.survey.id, userId: gate.user.userId, environment };
+}
+
+/**
+ * For a LOOKUP rather than a charge — reading a wallet, rendering the usage
+ * view. Nothing is billed, so there is no environment to state, and inventing
+ * one to satisfy a type is how the default above came to exist in the first
+ * place.
+ */
+export function projectLookup(gate: ProjectContext): Pick<MeterContext, "customerId" | "surveyId" | "userId"> {
+  return { customerId: gate.survey.customer_id ?? gate.user.customerId ?? SANDBOX_CUSTOMER, surveyId: gate.survey.id, userId: gate.user.userId };
+}
+
+/**
+ * The environment a stored recording belongs to.
+ *
+ * A recording carries its own answer: the response it was captured in. One
+ * that belongs to no response at all was made by a researcher in the editor
+ * — a take, a trial of the recorder — and is TEST. Transcribing a clip from a
+ * pilot interview must not bill as production, which is exactly what the
+ * default did.
+ */
+export async function mediaEnvironment(mediaId: string): Promise<Environment> {
+  try {
+    const db = supabaseAdmin();
+    const { data: media } = await db.from("media_objects").select("response_id").eq("id", mediaId).maybeSingle();
+    const responseId = (media as { response_id?: string | null } | null)?.response_id;
+    if (!responseId) return "TEST";
+    const { data: resp } = await db.from("responses").select("is_test").eq("id", responseId).maybeSingle();
+    /* an unreadable row is TEST: the safe side of a question about money */
+    return (resp as { is_test?: boolean } | null)?.is_test === false ? "LIVE" : "TEST";
+  } catch {
+    return "TEST";
+  }
 }
 
 /**
@@ -79,14 +137,18 @@ export function projectContext(gate: ProjectContext, environment: Environment = 
  * the caller must hold `capability` on it — a signed-in user may not spend
  * a project they cannot edit. The sandbox project is accepted without a
  * session; nothing about it reaches a database.
+ *
+ * LIVE, and stated rather than defaulted: this is the door for AI authoring —
+ * rephrasing, translating, speech — which is real spend on building the
+ * study and has no respondent environment to inherit.
  */
 export async function billingProjectFor(user: AuthedUser | null, surveyId: unknown, capability: Capability = "survey.edit"): Promise<{ ctx: MeterContext; meter: Meter } | { response: NextResponse }> {
   const id = typeof surveyId === "string" && surveyId.trim() ? surveyId.trim() : null;
-  if (isSandboxProject(id)) return { ctx: meterContextFor(user, "sandbox"), meter: getSandboxMeter() };
+  if (isSandboxProject(id)) return { ctx: meterContextFor(user, "sandbox", "LIVE"), meter: getSandboxMeter() };
   if (!user) return { response: NextResponse.json({ error: "sign in to use this project" }, { status: 401 }) };
   const gate = await requireProjectFor(user, id!, capability);
   if (isFailure(gate)) return { response: gate.response };
-  return { ctx: projectContext(gate), meter: getMeter() };
+  return { ctx: projectContext(gate, "LIVE"), meter: getMeter() };
 }
 
 /** Provider ids as the cost registry knows them; the fake provider is priced as the real one only when simulation is on. */
