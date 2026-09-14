@@ -816,7 +816,18 @@ export function Runner({ definition: sourceDef, mode, session: initialSession, s
   // hidden name must not leak through it to respondents. In test and preview
   // the programmer still sees it, marked as hidden, so they can tell the
   // setting took without opening the inspector.
-  const rawBlockName = pageStep?.sectionPath?.[pageStep.sectionPath.length - 1] ?? pageStep?.title;
+  /*
+   * Piped, like the heading below it. A block or page inside a loop is
+   * routinely titled "About {{loop.label}}", and the h1 has always resolved
+   * that; the toolbar printed the token instead, so the one place a
+   * programmer looks to confirm which iteration they are on read
+   * `About {{loop.label}} · Page 15 of 23`. Same text, same context, same
+   * resolver — there was never a reason for the two to disagree.
+   */
+  const rawBlockName = resolvePiping(
+    pageStep?.sectionPath?.[pageStep.sectionPath.length - 1] ?? pageStep?.title ?? "",
+    ctx,
+  ) || undefined;
   const blockName = !rawBlockName
     ? undefined
     : pageStep?.showTitle

@@ -821,3 +821,34 @@ test("§35: a masked question inside a loop produces no MASK_* variables (docume
   const vars = maskingVariablesFor(d, state);
   assert.equal(vars.MASK_Q8_COUNT, undefined, "loop-scoped masked questions are skipped, not wrong");
 });
+
+/* ----------------------------------------------- NOT(...) as a question's own mask */
+
+/**
+ * `NOT (Q5.Selected)` is the first spelling this file's own header documents,
+ * and until the `universe()` fix it took the whole runtime down: resolving the
+ * mask asked for the universe, the universe was built by running the option
+ * pipeline, and the pipeline applied the mask again. A respondent never saw
+ * the question — the tab died with a stack overflow.
+ */
+test("a complement mask on a question resolves instead of recursing into itself", () => {
+  const d = def();
+  d.questions[3].mask = { expr: parsed("NOT (Q5.Selected)"), action: "display", keepAlwaysShow: false } as any;
+  const state = createResponseState(d);
+  state.answers.q5 = ["a", "b"];
+  const view = effectiveQuestion(d.questions[3], { def: d, state, loop: null });
+  const shown = view.options.map((o) => String(o.code));
+  assert.ok(!shown.includes("a"), "the selected codes are excluded");
+  assert.ok(!shown.includes("b"), "the selected codes are excluded");
+  assert.ok(shown.includes("c"), "everything else the question defines remains");
+});
+
+test("a complement mask takes its universe from the configured list, not the masked one", () => {
+  const d = def();
+  // nothing selected: the complement is the whole configured list, which is
+  // only true if the universe is stage 1 rather than the pipeline's output.
+  d.questions[3].mask = { expr: parsed("NOT (Q5.Selected)"), action: "display", keepAlwaysShow: false } as any;
+  const state = createResponseState(d);
+  const view = effectiveQuestion(d.questions[3], { def: d, state, loop: null });
+  assert.ok(view.options.length >= 3, "an empty selection leaves every configured option showing");
+});

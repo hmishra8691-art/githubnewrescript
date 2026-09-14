@@ -4,6 +4,7 @@ import type {
   ListOperation,
   OptionLogic,
   Question,
+  SetExpr,
   SurveyDefinition,
 } from "@rescript/schema";
 import { lintProbeQuestion } from "./probe.js";
@@ -14,9 +15,11 @@ import {
   VALUELESS_OPERATORS,
   isOptionValueRef,
   effectiveResponseModel,
+  isMultiValuedQuestion,
 } from "@rescript/schema";
 import { getQuestionByCodeOrVar } from "./state.js";
 import { PIPE_TOKEN_RE, parsePipeBody } from "./pipingTokens.js";
+import { registerBareNameResolver } from "./piping.js";
 import { describeCycle, detectLogicCycles, orderIndex } from "./dependencies.js";
 import { MAX_LOOP_DEPTH, loopNodes, loopVariableNames, maxLoopIterations, possibleLoopItems, questionIdsInLoop } from "./loops.js";
 import { listFillVariableNames } from "./listFill.js";
@@ -393,15 +396,52 @@ function lintListOps(ops: ListOperation[] | undefined, ctx: Ctx): void {
   });
 }
 
-/** Names a bare `{{NAME}}` pipe can reach besides questions — see lintPiping. */
-function bareNameResolves(def: SurveyDefinition, q: Question, name: string): boolean {
+/**
+ * Can this set only ever produce ONE code?
+ *
+ * A literal list of one, a calculated expression (one value), and the current
+ * loop item are singular by construction. An answer reference, a List Fill
+ * allocation, a complement and any set operation can all produce several, so
+ * they are treated as plural even when a particular respondent's answers
+ * happen to narrow them to one — a lint reasons about the definition, not
+ * about one session.
+ */
+function maskSetIsSingular(expr: SetExpr | undefined | null): boolean {
+  if (!expr) return true;
+  switch (expr.kind) {
+    case "codes": return expr.codes.length <= 1;
+    case "expr": return true;
+    case "loopItem": return true;
+    default: return false;
+  }
+}
+
+/**
+ * Names a bare `{{NAME}}` pipe can reach besides questions — see lintPiping.
+ *
+ * Exported because `lintPipingTokens` (piping.ts, which is what the Studio's
+ * Properties panel calls while someone is typing) has to answer exactly the
+ * same question. It used to answer it on its own, knowing only about
+ * questions, and so reported every calculation, embedded field and
+ * `LISTFILL_*` variable as an unknown reference — a red mark under a token
+ * that pipes perfectly well at runtime. Two linters disagreeing about what
+ * resolves is worse than either being strict.
+ *
+ * `q` is the question the text belongs to, when there is one. It only narrows
+ * the loop check: a `{{brand}}` is the loop's variable for a question INSIDE
+ * that loop. Without a question — a validation message, a lint of loose text
+ * — any loop's variable is accepted, because there is nothing to place the
+ * text against and a false "unknown" is the costlier mistake.
+ */
+export function bareNameResolves(def: SurveyDefinition, q: Question | undefined, name: string): boolean {
   if ((def.calculations ?? []).some((c) => c.targetVariable === name)) return true;
   if ((def.embeddedData ?? []).some((e) => e.name === name)) return true;
+  if ((def.variables ?? []).some((v) => v.name === name)) return true;
   for (const lf of def.listFills ?? []) {
     if (listFillVariableNames(lf).some((v) => v.name === name)) return true;
   }
   for (const { node } of loopNodes(def)) {
-    if (node.loopVar === name && questionIdsInLoop(node).includes(q.id)) return true;
+    if (node.loopVar === name && (!q || questionIdsInLoop(node).includes(q.id))) return true;
     if (loopVariableNames(def, node).some((v) => v.name === name)) return true;
   }
   return false;
@@ -569,6 +609,37 @@ function lintQuestionLogicUnsafe(def: SurveyDefinition, q: Question): LogicIssue
   (q.randomization?.rules ?? []).forEach((r, i) =>
     lintCondition(r.when, `randomization.rules[${i}].when`, ctx),
   );
+
+  /*
+   * A PRESELECT THAT PICKS FOR THE RESPONDENT.
+   *
+   * `applyMaskPreselect` writes `usable[0]` on a single-valued question — the
+   * FIRST code the set produced. That is right when the set can only ever
+   * hold one (a calculated band, the current loop item, a single literal
+   * code) and is what the action is for. It is a quiet wrong answer when the
+   * set can hold several: "display and preselect from Q2.Selected" on a
+   * favourite-brand question pre-ticks whichever brand happens to come first,
+   * and a respondent who agrees with the tick has been led there.
+   *
+   * A warning, not an error, and nothing is changed: the action is legitimate
+   * and a programmer may know their set is singular in practice. But the
+   * survey now says so, which is the only way anyone would find out short of
+   * looking at a screenshot.
+   */
+  for (const [axis, mask] of [["mask", q.mask], ["rowMask", q.rowMask], ["columnMask", q.columnMask]] as const) {
+    if (!mask) continue;
+    if (mask.action !== "preselect" && mask.action !== "display_and_preselect") continue;
+    if (isMultiValuedQuestion(q) || maskSetIsSingular(mask.expr)) continue;
+    issues.push({
+      level: "warning",
+      questionId: q.id,
+      questionCode: q.code,
+      path: `${axis}.action`,
+      message:
+        `“${mask.action}” pre-ticks the FIRST code the set produces, and this set can hold more than one. ` +
+        `On a single-answer question that answers it for the respondent. Use “display” unless the set is always one code.`,
+    });
+  }
 
   if (q.carryForward) {
     if (!def.questions.some((x) => x.id === q.carryForward!.sourceQuestionId)) {
@@ -957,3 +1028,11 @@ export function lintLoops(def: SurveyDefinition): LogicIssue[] {
   }
   return issues;
 }
+
+/*
+ * Teach `lintPipingTokens` (piping.ts) what a bare `{{NAME}}` can reach, so
+ * the Studio's live, as-you-type lint and this one cannot disagree. A hook
+ * rather than an import, because piping.ts sits below this file in the
+ * package's load order — see `registerBareNameResolver`.
+ */
+registerBareNameResolver((def, name, q) => bareNameResolves(def, q, name));

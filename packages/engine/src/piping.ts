@@ -82,6 +82,29 @@ export function getEffectiveListsResolver(): EffectiveListsResolver | null {
   return effectiveListsResolver;
 }
 
+/**
+ * "Does this bare `{{NAME}}` reach anything?" — the SAME predicate
+ * `lintSurveyLogic` uses, reached through a registration hook rather than an
+ * import.
+ *
+ * The import was the obvious spelling and it deadlocks the package:
+ * `lintLogic` reaches `carryforward`, `carryforward` registers itself here on
+ * load, and `piping` importing `lintLogic` closes that into a cycle whose
+ * initialisation order depends on which module is entered first — the exact
+ * `Cannot access '...' before initialization` the long comment above this
+ * describes. `lintLogic` registers itself instead, the same way
+ * `carryforward` already does, and nothing new imports anything.
+ *
+ * Unregistered (a deep import of this module alone, outside the package
+ * barrel), the answer is "no" and the lint falls back to checking questions
+ * only — what it did before this existed.
+ */
+type BareNameResolver = (def: SurveyDefinition, name: string, q?: Question) => boolean;
+let bareNameResolver: BareNameResolver | null = null;
+export function registerBareNameResolver(fn: BareNameResolver): void {
+  bareNameResolver = fn;
+}
+
 export function resolvePiping(text: string, ctx: EvalContext): string {
   if (!text || !text.includes("{{")) return text;
   return text.replace(PIPE_TOKEN_RE, (_m, raw: string) => {
@@ -270,8 +293,24 @@ function rowLabelFor(q: Question, rowCode: string): string {
   return row ? row.label : rowCode;
 }
 
-/** Find unresolved / malformed tokens — used by Studio validation. */
-export function lintPipingTokens(def: SurveyDefinition, text: string): string[] {
+/**
+ * Find unresolved / malformed tokens — used by Studio validation, live, as
+ * someone types question text.
+ *
+ * A bare `{{NAME}}` parses as `kind: "question"` because that is the common
+ * case, but the flat variable map a pipe actually resolves against carries
+ * more than questions: calculations, embedded fields, `LISTFILL_*`,
+ * `LOOP_*`, and a loop's own variable. This used to check only the question
+ * list and so underlined every one of those as unknown — a warning on a
+ * token that pipes correctly, which teaches a programmer to ignore the
+ * warnings. `bareNameResolves` is the same predicate `lintSurveyLogic` uses,
+ * so the two linters cannot disagree about what resolves.
+ *
+ * Pass `q` when the text belongs to a question: it is what lets `{{brand}}`
+ * be recognised as the enclosing loop's variable for that question and not
+ * for one outside it.
+ */
+export function lintPipingTokens(def: SurveyDefinition, text: string, q?: Question): string[] {
   const problems: string[] = [];
   for (const m of text.matchAll(PIPE_TOKEN_RE)) {
     const t = parsePipeBody(m[1], m[0]);
@@ -279,8 +318,20 @@ export function lintPipingTokens(def: SurveyDefinition, text: string): string[] 
       problems.push(`Malformed piping token "${m[0]}"`);
       continue;
     }
+    if (t.kind === "calc") {
+      if (!(def.calculations ?? []).some((c) => c.targetVariable === t.ref)) {
+        problems.push(`No calculation named "${t.ref}"`);
+      }
+      continue;
+    }
+    if (t.kind === "embedded") {
+      if (!(def.embeddedData ?? []).some((e) => e.name === t.ref)) {
+        problems.push(`No embedded data field named "${t.ref}"`);
+      }
+      continue;
+    }
     if (t.kind !== "question") continue;
-    if (!getQuestionByCodeOrVar(def, t.ref)) {
+    if (!getQuestionByCodeOrVar(def, t.ref) && !(bareNameResolver?.(def, t.ref, q) ?? false)) {
       problems.push(`Unknown piping reference "${t.ref}"`);
     }
   }

@@ -4,7 +4,7 @@ import type {
 import { SET_OPERATOR_LABEL, isMultiValuedQuestion } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition } from "./evaluate.js";
-import { codesFrom, effectiveQuestion } from "./carryforward.js";
+import { codesFrom, effectiveQuestion, carrySourceOptions, carrySourceRows } from "./carryforward.js";
 import {
   getQuestion, getQuestionByCodeOrVar, findLoopScope, loopValue,
   type AnswerValue, type ResponseState,
@@ -53,19 +53,33 @@ import { orderPunchRules } from "@rescript/schema";
 
 const key = (c: string | number) => String(c);
 
-/** Options the target question defines — the universe for a complement. */
 /**
  * The full set a complement (`NOT(...)`) is taken against: the question's
- * EFFECTIVE, carry-forward resolved rows/options — not the static schema
- * arrays, which for a carry-forward question are empty and previously made
- * every `NOT(...)` mask against one evaluate to nothing.
+ * carry-forward resolved rows/options — not the static schema arrays, which
+ * for a carry-forward question are empty and previously made every `NOT(...)`
+ * mask against one evaluate to nothing.
+ *
+ * STAGE 1, not the finished list. This used to call `effectiveQuestion`, and
+ * that is a cycle whenever the complement is the question's OWN mask — which
+ * is the ordinary case, `NOT (Q5.Selected)` being the documented spelling at
+ * the top of this file. Resolving the mask needs the universe; building the
+ * universe through `effectiveQuestion` runs the option pipeline; the pipeline
+ * applies the mask; and the runtime dies of a stack overflow before the
+ * respondent sees the question. `carrySourceOptions` / `carrySourceRows` are
+ * the same pipeline's stage 1, exported for exactly this reason ("the full
+ * configured universe to compare against the pipeline's final output"), so
+ * carry-forward still resolves and the cycle is gone.
+ *
+ * Taking the complement against the CONFIGURED list rather than the displayed
+ * one is also the right answer on its own terms: "this question's other
+ * options" means the ones it defines, not the ones some earlier stage of its
+ * own pipeline has already removed.
  */
 function universe(target: Question | undefined, ctx: EvalContext): (string | number)[] {
   if (!target) return [];
-  const view = effectiveQuestion(target, ctx);
-  return view.rows.length > 0 && view.options.length === 0
-    ? view.rows.map((r) => r.code)
-    : view.options.map((o) => o.code);
+  const options = carrySourceOptions(target, ctx);
+  if (options.length > 0) return options.map((o) => o.code);
+  return carrySourceRows(target, ctx).map((r) => r.code);
 }
 
 export interface SetEvalOptions {
