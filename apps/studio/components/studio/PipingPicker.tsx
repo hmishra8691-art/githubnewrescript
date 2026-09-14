@@ -38,9 +38,12 @@ export function propertiesForQuestion(q: Question | undefined) {
   if (!q) return PIPE_PROPERTIES;
   const isMulti = MULTI_TYPES.includes(q.type);
   const hasOptions = (q.options?.length ?? 0) > 0 || !!q.carryForward;
+  /* a question with no flagged option has no Other text to pipe */
+  const hasOther = (q.options ?? []).some((o) => o.flags?.includes("other_specify"));
   return PIPE_PROPERTIES.filter((p) => {
     if (p.value === "rank") return q.type === "ranking" || q.type === "image_ranking";
     if (p.value === "displayed" || p.value === "remaining") return hasOptions;
+    if (p.value === "other") return hasOther;
     if (p.multiOnly) return isMulti;
     return true;
   });
@@ -141,7 +144,26 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
               ))}
             </select>
           </label>
-          {(q?.rows?.length ?? 0) > 0 && (
+          {/*
+            * WHICH BOX. For `other`, the bracket slot holds an option code
+            * rather than a row code — a question can carry several "Other,
+            * specify" boxes and each has its own answer, so a picker that
+            * could only say "the Other text" would be able to name only one
+            * of three. Shown in place of the row selector because the two
+            * never apply to the same token.
+            */}
+          {property === "other" && (q?.options ?? []).filter((o) => o.flags?.includes("other_specify")).length > 1 && (
+            <label className="f"><span>Which “Other” box</span>
+              <select className="select" data-testid="pipe-other-option" value={rowCode}
+                onChange={(e) => setRowCode(e.target.value)}>
+                <option value="">the first one</option>
+                {(q!.options ?? []).filter((o) => o.flags?.includes("other_specify")).map((o) => (
+                  <option key={String(o.code)} value={String(o.code)}>{stripHtmlText(String(o.label))}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          {property !== "other" && (q?.rows?.length ?? 0) > 0 && (
             <label className="f"><span>Row (optional)</span>
               <select className="select" value={rowCode} onChange={(e) => setRowCode(e.target.value)}>
                 <option value="">whole answer</option>

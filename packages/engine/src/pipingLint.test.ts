@@ -84,3 +84,65 @@ test("a question code still resolves, and a question's own text lints the same w
 test("a malformed token is still malformed", () => {
   assert.match(lintPipingTokens(def(), "{{ }}")[0] ?? "", /Malformed|Unknown/);
 });
+
+/* ------------------------------------------------- "other, specify" tokens */
+
+const withOthers = () =>
+  SurveyDefinition.parse({
+    meta: { id: "s2", title: "T" },
+    questions: [
+      {
+        id: "q1", code: "Q1", variableName: "BRAND", type: "multi_select", text: "Which?",
+        options: [
+          { code: 1, label: "Acme" },
+          { code: 97, label: "Other phone", flags: ["other_specify"] },
+          { code: 98, label: "Other tablet", flags: ["other_specify"] },
+        ],
+      },
+      { id: "q2", code: "Q2", variableName: "PLAIN", type: "open_text", text: "Why?" },
+    ],
+    flow: [
+      { type: "page", id: "p1", questionIds: ["q1"] },
+      { type: "page", id: "p2", questionIds: ["q2"] },
+      { type: "end", id: "e1", status: "complete" },
+    ],
+  });
+
+test("an Other token naming a real box is accepted by both linters", () => {
+  const d = withOthers();
+  for (const token of ["{{Q1.other}}", "{{Q1[97].other}}", "{{Q1[98].other}}"]) {
+    assert.deepEqual(lintPipingTokens(d, `You said ${token}.`), [], token);
+  }
+  d.questions[1].text = "You said {{Q1[98].other}}. Why?";
+  assert.deepEqual(
+    lintSurveyLogic(d).filter((i) => i.questionId === "q2" && i.path === "text"),
+    [],
+    "and the survey linter agrees",
+  );
+});
+
+test("an Other token naming a box that does not exist is reported", () => {
+  const d = withOthers();
+  d.questions[1].text = "You said {{Q1[55].other}}.";
+  const issues = lintSurveyLogic(d).filter((i) => i.questionId === "q2");
+  assert.equal(issues.length, 1, JSON.stringify(issues));
+  assert.match(issues[0]!.message, /no “Other, specify” option “55”/);
+  assert.match(issues[0]!.message, /97, 98/, "and it says which ones there are");
+});
+
+test("an Other token on a question with no Other option is reported", () => {
+  const d = withOthers();
+  d.questions[0].text = "You said {{Q2.other}}.";
+  const issues = lintSurveyLogic(d).filter((i) => i.questionId === "q1" && /Other/.test(i.message));
+  assert.equal(issues.length, 1, JSON.stringify(issues));
+  assert.match(issues[0]!.message, /has no “Other, specify” option to pipe/);
+});
+
+test("the option code in the bracket is not checked against the row list", () => {
+  // the same slot means "which part of the answer"; for `.other` the parts are
+  // boxes, and checking them against rows would fail every correct token
+  const d = withOthers();
+  d.questions[1].text = "{{Q1[97].other}}";
+  const rowWarnings = lintSurveyLogic(d).filter((i) => /has no row/.test(i.message));
+  assert.deepEqual(rowWarnings, []);
+});

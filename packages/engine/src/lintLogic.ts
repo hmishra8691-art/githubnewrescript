@@ -488,6 +488,25 @@ function lintPiping(text: string | undefined, path: string, ctx: Ctx): void {
         message: `Pipes from ${src.code}, which is asked after ${ctx.q.code} — it will be blank.`,
       });
     }
+    /*
+     * For `.other` the bracket names an OPTION, not a row — the same slot
+     * meaning the same thing it always did ("which part of this answer") for
+     * a question whose parts are boxes rather than rows. Checking it against
+     * the row list would report every correct token as wrong.
+     */
+    if (t.property === "other") {
+      const flagged = (src.options ?? []).filter((o) => o.flags?.includes("other_specify"));
+      if (!flagged.length) {
+        ctx.push({ level: "warning", path, message: `${src.code} has no “Other, specify” option to pipe.` });
+      } else if (t.rowCode && !flagged.some((o) => String(o.code) === String(t.rowCode))) {
+        ctx.push({
+          level: "warning",
+          path,
+          message: `${src.code} has no “Other, specify” option “${t.rowCode}” — it has ${flagged.map((o) => o.code).join(", ")}.`,
+        });
+      }
+      continue;
+    }
     if (t.rowCode && !(src.rows ?? []).some((r) => String(r.code) === String(t.rowCode))) {
       ctx.push({ level: "warning", path, message: `${src.code} has no row “${t.rowCode}”.` });
     }

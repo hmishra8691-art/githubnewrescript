@@ -32,6 +32,20 @@ export type PipeProperty =
   | "rank" // ordered labels of a ranking answer
   | "displayed" // options the question actually showed
   | "remaining" // options shown but not selected
+  /*
+   * ONE "other, specify" BOX'S OWN TEXT.
+   *
+   *   {{Q1.other}}       the first flagged option's box
+   *   {{Q1[97].other}}   option 97's box, specifically
+   *
+   * The option code goes in the `[...]` slot the grammar already has for a
+   * matrix row, because it is the same idea — "which part of this question's
+   * answer" — and reusing it meant the parser needed no new syntax. A
+   * question with three Other boxes has three different answers in it, and
+   * before this there was no way to pipe any of them: the flat-map fallback
+   * reached one shared column, so all three sentences read "Apple".
+   */
+  | "other"
   // a `geo` answer's parts (piping.ts); the default for a geo question is the address or "lat,lng"
   | "lat" | "lng" | "address" | "city" | "country" | "radius";
 
@@ -83,6 +97,12 @@ export const PIPE_PROPERTIES: { value: PipeProperty; label: string; multiOnly?: 
   { value: "rank", label: "Ranking order", multiOnly: true },
   { value: "displayed", label: "Options displayed", multiOnly: true },
   { value: "remaining", label: "Options not selected", multiOnly: true },
+  /*
+   * Offered in the builder, not just documented. A pipe nobody can find in
+   * the picker is a pipe nobody uses — and "what did they type into Other"
+   * is the single most asked-for follow-up in qualitative work.
+   */
+  { value: "other", label: "“Other, specify” text" },
 ];
 
 export const PIPE_FORMATS: { value: PipeFormat; label: string; example: string }[] = [

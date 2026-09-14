@@ -4,6 +4,7 @@ import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition } from "./evaluate.js";
 import { effectiveQuestion } from "./carryforward.js";
 import { answerKey, lookupAnswer } from "./state.js";
+import { selectedOtherCodes, otherTextFor } from "./otherSpecify.js";
 import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
 import { validateFieldValue } from "./fields.js";
@@ -352,27 +353,19 @@ export function validateQuestion(
 
   /*
    * Other (specify): selecting it is not an answer until the respondent says
-   * what "other" is. A blank specify was reaching the data — enforced here in
-   * the engine, so the runtime, the preview and the inspector agree, and so
-   * every renderer that shows the box gets it without its own check. The
-   * text lives beside the answer under `<id>__other` (see state.ts).
+   * what "other" is. Enforced here in the engine, so the runtime, the preview
+   * and the inspector agree, and so every renderer that shows a box gets it
+   * without its own check.
+   *
+   * PER BOX. This used to be `chosen.some(...)` against one shared text: tick
+   * three "Other" options, fill in one, and the other two passed validation
+   * with nothing in them — which is the same shared-value bug that let one
+   * box's text appear in another, seen from the validator's side.
    */
   if (!q.settings.otherSpecifyOptional && !isEmpty(value) && Array.isArray(q.options)) {
-    const otherCodes = q.options
-      .filter((o) => o.flags?.includes("other_specify"))
-      .map((o) => String(o.code));
-    if (otherCodes.length > 0) {
-      const chosen = (Array.isArray(value) ? value : [value]).map(String);
-      if (chosen.some((c) => otherCodes.includes(c))) {
-        const answers = ctx.state.answers as Record<string, unknown>;
-        // the iteration's own "other" text, then the enclosing iterations',
-        // then the plain one — same rule as every other loop-scoped read
-        const raw = lookupAnswer(answers as never, `${q.id}__other`, ctx.loop) ??
-          answers[`${answerKey(q.id, ctx.loop)}__other`];
-        const text = typeof raw === "string" ? raw.trim() : raw;
-        if (isEmpty(text)) push(uiText(ctx.ui, "other_required"));
-      }
-    }
+    const unfilled = selectedOtherCodes(q, value)
+      .filter((code) => !otherTextFor(ctx.state, q, code, ctx.loop).trim());
+    if (unfilled.length) push(uiText(ctx.ui, "other_required"));
   }
 
   // bounds from settings

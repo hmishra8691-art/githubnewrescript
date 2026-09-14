@@ -32,15 +32,65 @@ export interface QRProps {
   state: ResponseState;
   loop: LoopContext | null;
   value: unknown;
+  /**
+   * "OTHER, SPECIFY" TEXT, PER OPTION.
+   *
+   * A question can carry several flagged options and therefore several boxes,
+   * each with its own answer. `otherValue` — one string for the whole
+   * question — is what made typing "Apple" into the first box put "Apple"
+   * into the other two: every box rendered the same binding. It is kept only
+   * so that callers with a single box keep working, and it is read for the
+   * FIRST flagged option alone.
+   */
+  otherValues?: Record<string, string>;
+  /** @deprecated the first flagged option's text; use `otherValues` */
   otherValue?: string;
   errors: string[];
   onChange(value: unknown): void;
-  onOtherChange?(text: string): void;
+  /** `code` names the box. Absent means the first flagged option. */
+  onOtherChange?(text: string, code?: string | number): void;
   /** the respondent's language's interface strings (engine `uiStringsFor`); absent = English */
   ui?: Record<string, string>;
 }
 
 export const OTHER = (o: Option) => o.flags?.includes("other_specify");
+
+/**
+ * The text belonging to ONE box.
+ *
+ * `otherValues` wins; `otherValue` answers only for the first flagged option,
+ * which is the only box a caller that knows about one box could have meant.
+ * Every input below reads through this, so no two boxes can share a binding
+ * by accident again.
+ */
+export function otherTextOfOption(p: QRProps, code: string | number): string {
+  const own = p.otherValues?.[String(code)];
+  if (own != null) return own;
+  const first = (p.q.options ?? []).find(OTHER);
+  return first && String(first.code) === String(code) ? (p.otherValue ?? "") : "";
+}
+
+/** One box. Named by its option, so React never reuses another box's state. */
+function OtherInput(p: QRProps & { option: Option; below?: boolean }) {
+  const code = String(p.option.code);
+  return (
+    <input
+      className={`rs-input rs-other-input${p.below ? " rs-other-below" : ""}`}
+      data-testid="rs-other-input"
+      data-other-code={code}
+      id={`${p.q.id}__other__${code}`}
+      name={`${p.q.id}__other__${code}`}
+      aria-label={`${stripTags(String(p.option.label ?? ""))} — ${uiOf(p, "other_specify")}`}
+      placeholder={uiOf(p, "other_specify")}
+      value={otherTextOfOption(p, code)}
+      disabled={p.q.settings.readOnly}
+      onClick={(e) => e.stopPropagation()}
+      onChange={(e) => p.onOtherChange?.(e.target.value, code)}
+    />
+  );
+}
+
+const stripTags = (s: string) => s.replace(/<[^>]*>/g, "").trim();
 
 /**
  * THE "OTHER, SPECIFY" BOX FOR A LAYOUT THAT CANNOT NEST ONE.
@@ -55,17 +105,18 @@ export const OTHER = (o: Option) => o.flags?.includes("other_specify");
  * stored value, so every layout of the same question behaves the same way.
  */
 export function OtherSpecifyBox(p: QRProps & { options: Option[]; selected: (string | number)[] }) {
-  const chosen = p.options.find((o) => OTHER(o) && p.selected.some((v) => String(v) === String(o.code)));
-  if (!chosen) return null;
+  /*
+   * EVERY selected flagged option, not the first one. `.find(...)` meant that
+   * a respondent who ticked two "Other" options on a tile question got one
+   * box and no way to answer the second — while the validator, which checks
+   * each selection, refused to let them past.
+   */
+  const chosen = p.options.filter((o) => OTHER(o) && p.selected.some((v) => String(v) === String(o.code)));
+  if (!chosen.length) return null;
   return (
-    <input
-      className="rs-input rs-other-input rs-other-below"
-      data-testid="rs-other-input"
-      placeholder={uiOf(p, "other_specify")}
-      value={p.otherValue ?? ""}
-      disabled={p.q.settings.readOnly}
-      onChange={(e) => p.onOtherChange?.(e.target.value)}
-    />
+    <>
+      {chosen.map((o) => <OtherInput key={String(o.code)} {...p} option={o} below />)}
+    </>
   );
 }
 export const EXCLUSIVE = (o: Option) =>
@@ -144,16 +195,7 @@ export function SingleSelect(p: QRProps) {
               disabled={p.q.settings.readOnly || !!o.meta?.disabled}
             />
             <span className="lbl" dangerouslySetInnerHTML={{ __html: o.label }} />
-            {OTHER(o) && sel && (
-              <input
-                className="rs-input rs-other-input"
-                data-testid="rs-other-input"
-                placeholder={uiOf(p, "other_specify")}
-                value={p.otherValue ?? ""}
-                onClick={(e) => e.stopPropagation()}
-                onChange={(e) => p.onOtherChange?.(e.target.value)}
-              />
-            )}
+            {OTHER(o) && sel && <OtherInput {...p} option={o} />}
           </label>
         );
       })}
@@ -189,16 +231,7 @@ export function MultiSelect(p: QRProps) {
             <input type="checkbox" value={String(o.code)} checked={sel} onChange={() => toggle(o)}
               disabled={p.q.settings.readOnly || atMax || !!o.meta?.disabled} />
             <span className="lbl" dangerouslySetInnerHTML={{ __html: o.label }} />
-            {OTHER(o) && sel && (
-              <input
-                className="rs-input rs-other-input"
-                data-testid="rs-other-input"
-                placeholder={uiOf(p, "other_specify")}
-                value={p.otherValue ?? ""}
-                onClick={(e) => e.stopPropagation()}
-                onChange={(e) => p.onOtherChange?.(e.target.value)}
-              />
-            )}
+            {OTHER(o) && sel && <OtherInput {...p} option={o} />}
           </label>
         );
       })}
@@ -210,7 +243,7 @@ export function MultiSelect(p: QRProps) {
 export function Dropdown(p: QRProps) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
   // an other-specify option is meaningless without somewhere to type
-  const otherSelected = options.some(
+  const otherOpt = options.find(
     (o) => OTHER(o) && String(o.code) === String(p.value),
   );
   return (
@@ -226,14 +259,10 @@ export function Dropdown(p: QRProps) {
         <option key={String(o.code)} value={String(o.code)} {...anchor("option", o.code)}>{o.label.replace(/<[^>]*>/g, "")}</option>
       ))}
     </select>
-    {otherSelected && (
-      <input
-        className="rs-input"
-        style={{ marginTop: 8 }}
-        placeholder={uiOf(p, "other_specify")}
-        value={p.otherValue ?? ""}
-        onChange={(e) => p.onOtherChange?.(e.target.value)}
-      />
+    {/* a dropdown selects one option, so at most one box — but it is still
+        THAT option's box, addressed by its own code */}
+    {otherOpt && (
+      <div style={{ marginTop: 8 }}><OtherInput {...p} option={otherOpt} /></div>
     )}
     </>
   );

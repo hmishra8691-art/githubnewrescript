@@ -3,7 +3,7 @@ import React from "react";
 import type { Question } from "@rescript/schema";
 import {
   createResponseState, validatePage, setAnswer, answerKey, authoringQuestionView,
-  otherKey, setOtherText, otherIsSelected,
+  otherKeyFor, otherOptions, setOtherTextFor, otherIsSelected, clearOtherText,
   type ResponseState, type LoopContext,
 } from "@rescript/engine";
 import { QuestionRenderer } from "@rescript/renderer";
@@ -76,8 +76,15 @@ export function LiveCanvas(p: LiveCanvasProps) {
   const [draft, setDraft] = React.useState<Record<string, unknown>>({});
   const slot = answerKey(p.q.id, p.loop ?? null);
   const value = draft[slot];
-  const otherValue = typeof draft[otherKey(p.q.id, p.loop ?? null)] === "string"
-    ? (draft[otherKey(p.q.id, p.loop ?? null)] as string)
+  /* one entry per flagged option, so the canvas shows what the runtime shows */
+  const otherValues = Object.fromEntries(
+    otherOptions(p.q).map((o) => {
+      const v = draft[otherKeyFor(p.q.id, o.code, p.loop ?? null)];
+      return [String(o.code), typeof v === "string" ? v : ""];
+    }),
+  );
+  const otherValue = typeof draft[otherKeyFor(p.q.id, otherOptions(p.q)[0]?.code ?? "", p.loop ?? null)] === "string"
+    ? (draft[otherKeyFor(p.q.id, otherOptions(p.q)[0]?.code ?? "", p.loop ?? null)] as string)
     : "";
 
   const simulating = p.mode === "simulate";
@@ -111,9 +118,13 @@ export function LiveCanvas(p: LiveCanvasProps) {
      * box — the simulator disagreeing with the real validator about the same
      * answer. `setOtherText` writes the one key everything reads.
      */
-    if (simulating && otherValue) setOtherText(st, p.q.id, otherValue, p.loop);
+    if (simulating) {
+      for (const [code, text] of Object.entries(otherValues)) {
+        if (text) setOtherTextFor(st, p.q, code, text, p.loop);
+      }
+    }
     return st;
-  }, [p.def, p.sample, p.seed, p.q, p.loop, simulating, value, otherValue]);
+  }, [p.def, p.sample, p.seed, p.q, p.loop, simulating, value, JSON.stringify(otherValues)]);
 
   const ctx = React.useMemo(() => ({ def: p.def, state, loop: p.loop }), [p.def, state, p.loop]);
 
@@ -238,18 +249,27 @@ export function LiveCanvas(p: LiveCanvasProps) {
             state={state}
             loop={p.loop}
             value={simulating ? value : undefined}
-            otherValue={otherValue}
+            otherValues={otherValues}
             errors={errors}
             onChange={(v) => {
               if (!simulating) return;
               /* the answer, and — when Other is no longer among the selections — the text that belonged to it */
               setDraft((d) => {
                 const next = { ...d, [slot]: v };
-                if (!otherIsSelected(p.q, v)) delete next[otherKey(p.q.id, p.loop ?? null)];
+                /* an unticked Other takes its own box's text, per option */
+                if (!otherIsSelected(p.q, v)) {
+                  const tmp = { answers: next } as never;
+                  clearOtherText(tmp, p.q, p.loop ?? null);
+                }
                 return next;
               });
             }}
-            onOtherChange={(t) => simulating && setDraft((d) => ({ ...d, [otherKey(p.q.id, p.loop ?? null)]: t }))}
+            onOtherChange={(t, code) => {
+              if (!simulating) return;
+              const which = code ?? otherOptions(p.q)[0]?.code;
+              if (which == null) return;
+              setDraft((d) => ({ ...d, [otherKeyFor(p.q.id, which, p.loop ?? null)]: t }));
+            }}
           />
           {!simulating && <Marks stage={stageRef} q={p.q} ann={annotations} show={p.showIndicators} hidden={p.showHidden} />}
 

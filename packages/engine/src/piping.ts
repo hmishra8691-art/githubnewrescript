@@ -6,6 +6,7 @@ import { evaluateExpression } from "./calc.js";
 import { escapeHtml } from "./html.js";
 import { isGeoAnswer, geoText, round6, formatMetres } from "./geo.js";
 import { interviewText, isInterviewAnswer } from "./interview.js";
+import { otherOptions, otherTextFor } from "./otherSpecify.js";
 import {
   PIPE_TOKEN_RE,
   parsePipeBody,
@@ -31,6 +32,8 @@ import {
  *   {{Q1.displayed}}       options Q1 actually showed this respondent
  *   {{Q1.remaining}}       options shown but not selected
  *   {{Q1[2].label}}        label of the row "2" answer (matrix/composite)
+ *   {{Q1.other}}           what they typed in the first "Other, specify" box
+ *   {{Q1[97].other}}       what they typed in option 97's box, specifically
  *   {{calc.TOTAL_SCORE}}   calculated variable
  *   {{ed.PANEL_ID}}        embedded data
  *   {{loop.label}} {{loop.code}} {{loop.index}}
@@ -201,6 +204,18 @@ function renderToken(t: PipeToken, ctx: EvalContext): string {
   // this iteration's answer first, then each enclosing iteration's, then the
   // survey-level one — the one rule for every loop-scoped read
   let value: unknown = lookupAnswer(ctx.state.answers, q.id, ctx.loop);
+
+  /*
+   * `{{Q1.other}}` / `{{Q1[97].other}}` — the text in one Other box, read
+   * BEFORE the row-code narrowing below, because for this property the
+   * bracket holds an option code rather than a row.
+   */
+  if (t.property === "other") {
+    const flagged = otherOptions(q);
+    if (!flagged.length) return "";
+    const code = t.rowCode ?? String(flagged[0]!.code);
+    return escapeHtml(otherTextFor(ctx.state, q, code, ctx.loop ?? null));
+  }
 
   if (t.rowCode != null && value && typeof value === "object" && !Array.isArray(value)) {
     value = (value as Record<string, unknown>)[t.rowCode];

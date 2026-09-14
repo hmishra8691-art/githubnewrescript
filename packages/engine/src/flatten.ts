@@ -1,6 +1,6 @@
 import type { SurveyDefinition, Question } from "@rescript/schema";
 import { loopKeySuffix, type LoopContext, type ResponseState } from "./state.js";
-import { otherKey } from "./otherSpecify.js";
+import { otherOptions, otherTextFor, otherColumnFor, otherKeyFor, legacyOtherKey } from "./otherSpecify.js";
 import { directChildLoops, directQuestionIdsInLoop, loopNodes, loopVariablePrefix, type LoopFlowNode } from "./loopModel.js";
 import { designFor, designVersionFor } from "./designVersion.js";
 import { isGeoAnswer, hasCoordinates, geoText, round6 } from "./geo.js";
@@ -67,15 +67,23 @@ export function flattenVariables(def: SurveyDefinition, state: ResponseState): F
       else flattenQuestion(q, value, `${q.variableName}${loopSuffix}`, out);
     }
     /*
-     * "Other, specify" — the question's own key only. The loop pass below
-     * writes the per-iteration columns; reading a loop-suffixed key here
-     * would put one iteration's text in the flat column as well.
+     * "Other, specify" — ONE COLUMN PER BOX, the question's own iteration
+     * only. The loop pass below writes the per-iteration columns; reading a
+     * loop-suffixed key here would put one iteration's text in the flat
+     * column as well.
+     *
+     * A question with three flagged options collects three different brands
+     * and now exports three; before per-option keys it exported one, because
+     * all three boxes wrote to the same place. The FIRST flagged option keeps
+     * `VAR_other` so last month's export still lines up beside this one.
      */
-    const other = state.answers[otherKey(q.id, null)];
-    if (other !== undefined && !placed.has(otherKey(q.id, null))) {
-      out[`${q.variableName}_other`] = other;
-      placed.add(otherKey(q.id, null));
+    for (const o of otherOptions(q)) {
+      const text = otherTextFor(state, q, o.code, null);
+      if (!text) continue;
+      out[otherColumnFor(q, o.code)] = text;
+      placed.add(otherKeyFor(q.id, o.code, null));
     }
+    placed.add(legacyOtherKey(q.id, null));
 
     // voice: `<id>__voice` → VAR_VOICE_TRANSCRIPT / _CONFIDENCE / _REPEATS / _CLARIFICATIONS (aiConversation.ts)
     const voice = state.answers[`${q.id}__voice`] as { transcript?: string; confidence?: number; repeats?: number; clarifications?: number } | undefined;
@@ -419,8 +427,15 @@ function placeLoopAnswers(def: SurveyDefinition, state: ResponseState, out: Flat
         if (state.answers[key] === undefined) continue;
         flattenQuestion(q, state.answers[key], `${q.variableName}${position}`, out);
         placed.add(key);
-        const other = state.answers[`${key}__other`];
-        if (other !== undefined) { out[`${q.variableName}${position}_other`] = other; placed.add(`${key}__other`); }
+        /* the same per-box columns, inside the iteration's own prefix */
+        for (const o of otherOptions(q)) {
+          const text = otherTextFor(state, q, o.code, ctx);
+          if (!text) continue;
+          const stem = otherColumnFor(q, o.code).slice(q.variableName.length);  // "_other" | "_other_97"
+          out[`${q.variableName}${position}${stem}`] = text;
+          placed.add(otherKeyFor(q.id, o.code, ctx));
+        }
+        placed.add(`${key}__other`);
       }
       for (const child of children) place(child, ctx, position);
     }

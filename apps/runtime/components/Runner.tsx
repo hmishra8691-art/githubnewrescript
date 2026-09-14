@@ -52,7 +52,8 @@ import {
   decideListFill,
   listFillVariables,
   setOtherText,
-  otherTextOf,
+  setOtherTextFor,
+  otherTextsOf,
   pruneHiddenSelections,
   applyListFillDestinations,
   type ResponseState,
@@ -1208,7 +1209,13 @@ export function Runner({ definition: sourceDef, mode, session: initialSession, s
             if (r.logs.length) setLogs((l) => [...l, ...r.logs]);
             force();
           }}
-          onOtherChange={(q, t) => { state.answers[`${answerKey(q.id, pageStep.loop ?? null)}__other`] = t; force(); }}
+          onOtherChange={(q, t) => {
+            /* through the engine, like every other writer — this line used to
+               spell the key by hand and is exactly how a second spelling of it
+               would drift again */
+            setOtherText(state, q, t, pageStep.loop ?? null);
+            force();
+          }}
           onNext={conversational ? convoNext : handleNext}
           onBack={conversational ? convoBack : handleBack}
           canGoBack={b.buttons.showBack && (state.stepIndex > 0 || (conversational && convoIndex > 0))}
@@ -1249,7 +1256,7 @@ export function Runner({ definition: sourceDef, mode, session: initialSession, s
              * read the loop-scoped key — so the text a respondent typed for Apple
              * showed up again under Google, and the validator could not see it.
              */
-            otherValue={otherTextOf(state, q.id, pageStep.loop ?? null)}
+            otherValues={otherTextsOf(state, q, pageStep.loop ?? null)}
             errors={errors.filter((e) => e.questionId === q.id).map((e) => e.message)}
             onChange={(v) => {
               setAnswer(def, state, q.id, v, pageStep.loop);
@@ -1277,9 +1284,16 @@ export function Runner({ definition: sourceDef, mode, session: initialSession, s
               if (r.logs.length) setLogs((l) => [...l, ...r.logs]);
               force();
             }}
-            onOtherChange={(t) => {
-              /* one writer, one key: an emptied box removes the text rather than storing "" */
-              setOtherText(state, q.id, t, pageStep.loop ?? null);
+            onOtherChange={(t, code) => {
+              /*
+               * One writer, one key PER BOX. `code` names which "Other"
+               * option the text belongs to; without it, three boxes on one
+               * question wrote to the same place and overwrote each other as
+               * the respondent typed. An emptied box removes its own key
+               * rather than storing "" — an absent answer, not a blank one.
+               */
+              if (code == null) setOtherText(state, q, t, pageStep.loop ?? null);
+              else setOtherTextFor(state, q, code, t, pageStep.loop ?? null);
               force();
             }}
           />

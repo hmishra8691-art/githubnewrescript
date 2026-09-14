@@ -8,7 +8,7 @@ import { listFillHiddenDestinations } from "./listFill.js";
 import { answerKey, getQuestion, type LoopContext, type ResponseState } from "./state.js";
 import type { RuntimeStep } from "./flow.js";
 import type { QuotaCounts } from "./quotas.js";
-import { otherKey } from "./otherSpecify.js";
+import { clearOtherText } from "./otherSpecify.js";
 import { sourceKindForQuestion } from "./lintLogic.js";
 import { adaptedQuestion } from "./adaptive.js";
 
@@ -266,8 +266,8 @@ export function pruneHiddenSelections(
       if (!valuesAreCodes || (typeof answer !== "string" && typeof answer !== "number") || !offered.size) continue;
       if (offered.has(String(answer))) continue;
       delete state.answers[key];
-      /* the Other text belonged to the selection that has just gone */
-      delete state.answers[otherKey(q.id, loop ?? ctx.loop ?? null)];
+      /* every box's text belonged to the selection that has just gone */
+      clearOtherText(state, q, loop ?? ctx.loop ?? null);
       out.push({ questionId: q.id, scope: "option", removed: [String(answer)] });
       continue;
     }

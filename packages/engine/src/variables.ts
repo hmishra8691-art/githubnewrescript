@@ -4,6 +4,7 @@ import {
   possibleLoopItems, type LoopFlowNode,
 } from "./loops.js";
 import { listFillVariableNames } from "./listFill.js";
+import { otherOptions, otherColumnFor } from "./otherSpecify.js";
 import { fieldDataType } from "./fields.js";
 import { questionAi, voiceOn } from "./aiConversation.js";
 
@@ -100,8 +101,21 @@ export function questionVariables(
     case "image_select": {
       const { codes, labels } = valueMap(q);
       push({ name: q.variableName, label: strip(q.text) || q.code, dataType: "numeric", valueCodes: codes, valueLabels: labels });
-      if (q.options.some((o) => o.flags?.includes("other_specify")))
-        push({ name: `${q.variableName}_other`, label: `${q.code} — Other (specify)`, dataType: "text" });
+      /*
+       * ONE COLUMN PER BOX. `.some(...)` declared a single `VAR_other` no
+       * matter how many flagged options a question carried, so three
+       * respondent answers arrived in the export as one — the same shared
+       * value bug, seen from the dictionary's side. The first flagged option
+       * keeps `VAR_other` so existing exports and syntax files still match.
+       */
+      for (const o of otherOptions(q)) {
+        push({
+          name: otherColumnFor(q, o.code),
+          label: `${q.code} — ${strip(String(o.label ?? "Other"))} (specify)`,
+          dataType: "text",
+          optionCode: String(o.code),
+        });
+      }
       break;
     }
     case "multi_select":
@@ -117,8 +131,21 @@ export function questionVariables(
           optionCode: String(opt.code),
         });
       }
-      if (q.options.some((o) => o.flags?.includes("other_specify")))
-        push({ name: `${q.variableName}_other`, label: `${q.code} — Other (specify)`, dataType: "text" });
+      /*
+       * ONE COLUMN PER BOX. `.some(...)` declared a single `VAR_other` no
+       * matter how many flagged options a question carried, so three
+       * respondent answers arrived in the export as one — the same shared
+       * value bug, seen from the dictionary's side. The first flagged option
+       * keeps `VAR_other` so existing exports and syntax files still match.
+       */
+      for (const o of otherOptions(q)) {
+        push({
+          name: otherColumnFor(q, o.code),
+          label: `${q.code} — ${strip(String(o.label ?? "Other"))} (specify)`,
+          dataType: "text",
+          optionCode: String(o.code),
+        });
+      }
       void labels;
       break;
     }

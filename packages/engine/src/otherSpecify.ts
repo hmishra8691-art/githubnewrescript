@@ -2,35 +2,47 @@ import type { Option, Question, SurveyDefinition } from "@rescript/schema";
 import { answerKey, type LoopContext, type ResponseState } from "./state.js";
 
 /**
- * "OTHER, SPECIFY" — ONE IDENTITY PER FIELD.
+ * "OTHER, SPECIFY" — ONE IDENTITY PER BOX.
  *
- * Every other-specify box belongs to exactly one question, in exactly one loop
- * iteration, and its text is stored under exactly one key:
+ * Every other-specify box belongs to exactly one OPTION, of one question, in
+ * one loop iteration, and its text is stored under exactly one key:
  *
- *     `${answerKey(questionId, loop)}__other`      q_abc__other · q_abc@apple__other
+ *     `${answerKey(questionId, loop)}__other__${code}`
+ *      q_abc__other__97 · q_abc@apple__other__99
  *
- * That key was already the storage contract, but it was spelled by hand at
- * nine call sites across three packages — the runtime runner, the renderer's
- * callers, the validator, the flattener, the exporter — and one of them
- * spelling it differently is exactly how a respondent's text for Apple once
- * appeared under Google. This module is the only place the key is built, so
- * they cannot drift again, and it carries the three operations that go with
- * it: read, write, and the housekeeping nobody was doing.
+ * ## Why this changed
  *
- * THE HOUSEKEEPING. Text typed into an other box and then abandoned — the
- * respondent unticks "Other" and picks "Blue" instead — used to stay in the
- * response for ever: exported, analysed, and shown again on the way back.
- * `syncOtherText` removes it the moment no selected option carries the flag,
- * and `setAnswer` calls it, so every surface that answers a question through
- * the engine gets it for free.
+ * It used to be one key per QUESTION — `q_abc__other` — and the file said so
+ * on purpose: "a question shows one box, whichever flagged option is chosen".
+ * That is true of a single-select, and false of everything else. A ten-option
+ * multi-select with three "Other" options shows three boxes, and all three
+ * were bound to the same string: typing Apple into the first put Apple into
+ * the other two, on screen and in the data. The respondent saw their answer
+ * changed under them, and the export recorded one brand where three were
+ * named.
  *
- * WHAT THIS DELIBERATELY IS NOT. It is not a per-option store. An option's
- * `other_specify` flag makes the question's box appear; a question shows one
- * box, whichever flagged option is chosen, and stores one string — which is
- * what the dictionary declares (`VAR_other`) and what every export, analysis
- * and downstream tool already expects. Two flagged options in one question
- * (say "Other brand" and "Other flavour") share that box by design; giving
- * each its own would change the response model and every file built from it.
+ * The fix is not a rendering fix. Three boxes need three identities, so the
+ * key grew the one dimension it was missing — the option code — and every
+ * layer above it (renderer props, validation, flattening, the dictionary,
+ * piping) carries that code through instead of assuming there can only be one.
+ *
+ * ## Old responses still read correctly
+ *
+ * A response collected before this change has `q_abc__other` and no
+ * per-option key. `otherTextFor` falls back to it for the question's FIRST
+ * flagged option, which is the only option that box could have belonged to.
+ * Nothing rewrites stored data; the fallback is read-only and permanent.
+ * `VAR_other` also stays the column name of that first option, so an export
+ * opened next to last month's export still lines up.
+ *
+ * ## The housekeeping
+ *
+ * Text typed into a box and then abandoned — the respondent unticks "Other"
+ * and picks "Blue" — used to stay in the response for ever. `syncOtherText`
+ * removes the text of every flagged option that is no longer selected, and
+ * `setAnswer` calls it, so every surface that answers through the engine gets
+ * it for free. Per option, now: unticking one "Other" must not take another
+ * one's text with it.
  */
 
 /** The flag that makes an option carry an other-specify box. */
@@ -40,81 +52,273 @@ export function isOtherOption(o: Option): boolean {
   return !!o.flags?.includes(OTHER_SPECIFY_FLAG);
 }
 
-/** THE key an other-specify text is stored under. Nothing else may spell it. */
-export function otherKey(questionId: string, loop?: LoopContext | null): string {
+/** The flagged options of a question, in their programmed order. */
+export function otherOptions(q: Question): Option[] {
+  return (q.options ?? []).filter(isOtherOption);
+}
+
+/**
+ * THE key one box's text is stored under. Nothing else may spell it.
+ *
+ * The code is part of the key because it is part of the identity. Position
+ * would not do: reordering the options in the Studio must not move a
+ * respondent's text from one box to another, and a code is the one thing
+ * about an option that is promised to be stable.
+ */
+export function otherKeyFor(
+  questionId: string,
+  code: string | number,
+  loop?: LoopContext | null,
+): string {
+  return `${answerKey(questionId, loop ?? null)}__other__${String(code)}`;
+}
+
+/**
+ * The pre-per-option key, still read and never written.
+ *
+ * Exported because the flattener and the validator both have to recognise it
+ * in old data, and a magic string in three files is how the last bug got in.
+ */
+export function legacyOtherKey(questionId: string, loop?: LoopContext | null): string {
   return `${answerKey(questionId, loop ?? null)}__other`;
 }
 
-/** The text a respondent typed into this question's other box, in this iteration. */
-export function otherTextOf(state: ResponseState, questionId: string, loop?: LoopContext | null): string {
-  const v = state.answers[otherKey(questionId, loop)];
-  return typeof v === "string" ? v : v == null ? "" : String(v);
-}
-
-/** Store it. An empty string removes the key rather than storing "" — an absent answer, not a blank one. */
-export function setOtherText(state: ResponseState, questionId: string, text: string, loop?: LoopContext | null): void {
-  const key = otherKey(questionId, loop);
-  if (text === "") delete state.answers[key];
-  else state.answers[key] = text as never;
-}
-
-/** Does this answer select an option flagged `other_specify`? */
-export function otherIsSelected(q: Question, answer: unknown): boolean {
-  const flagged = q.options.filter(isOtherOption);
-  if (!flagged.length) return false;
-  if (answer == null || answer === "") return false;
-  const codes = new Set(flagged.map((o) => String(o.code)));
-  if (Array.isArray(answer)) return answer.some((v) => codes.has(String(v)));
-  if (typeof answer === "object") {
-    // per-row grids: any row whose value (or array of values) names a flagged option
-    for (const v of Object.values(answer as Record<string, unknown>)) {
-      if (Array.isArray(v) ? v.some((x) => codes.has(String(x))) : codes.has(String(v))) return true;
-    }
-    return false;
-  }
-  return codes.has(String(answer));
+/** True for any key that holds an other-specify text, new shape or old. */
+export function isOtherAnswerKey(key: string): boolean {
+  return key.includes("__other");
 }
 
 /**
- * Drop abandoned other text. Called by `setAnswer` for the question just
- * answered, so an unticked "Other" takes its text with it — in the runtime,
- * in the Studio's simulator, and in anything else that answers through the
- * engine. Returns true when something was removed.
+ * The text in one option's box.
+ *
+ * Falls back to the legacy question-level key for the FIRST flagged option,
+ * which is where a response collected before per-option keys put it — and the
+ * only option it could have meant.
+ */
+export function otherTextFor(
+  state: ResponseState,
+  q: Question,
+  code: string | number,
+  loop?: LoopContext | null,
+): string {
+  const own = state.answers[otherKeyFor(q.id, code, loop)];
+  if (own != null && own !== "") return String(own);
+
+  const flagged = otherOptions(q);
+  if (flagged.length && String(flagged[0]!.code) === String(code)) {
+    const legacy = state.answers[legacyOtherKey(q.id, loop)];
+    if (legacy != null && legacy !== "") return String(legacy);
+  }
+  return "";
+}
+
+/** Every box of this question that has text, keyed by option code. */
+export function otherTextsOf(
+  state: ResponseState,
+  q: Question,
+  loop?: LoopContext | null,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const o of otherOptions(q)) {
+    const text = otherTextFor(state, q, o.code, loop);
+    if (text) out[String(o.code)] = text;
+  }
+  return out;
+}
+
+/**
+ * Store one box's text. An empty string removes the key rather than storing
+ * "" — an absent answer, not a blank one.
+ *
+ * Clearing also removes the legacy key when this is the first flagged option,
+ * so a respondent who empties a box carried over from an old response sees it
+ * stay empty instead of the fallback putting the old text straight back.
+ */
+export function setOtherTextFor(
+  state: ResponseState,
+  q: Question,
+  code: string | number,
+  text: string,
+  loop?: LoopContext | null,
+): void {
+  const key = otherKeyFor(q.id, code, loop);
+  if (text === "") {
+    delete state.answers[key];
+    const flagged = otherOptions(q);
+    if (flagged.length && String(flagged[0]!.code) === String(code)) {
+      delete state.answers[legacyOtherKey(q.id, loop)];
+    }
+    return;
+  }
+  state.answers[key] = text as never;
+}
+
+/* ------------------------------------------------------------ single-box */
+
+/**
+ * The question's other text when there is only one box to mean.
+ *
+ * Kept because a great deal of calling code — the voice console, the Studio
+ * simulator, older tests — has one flagged option and no way to name it.
+ * With several flagged options it reads the first, which is the same thing it
+ * did before and is now clearly a narrowing rather than the whole story.
+ */
+export function otherTextOf(state: ResponseState, q: Question, loop?: LoopContext | null): string {
+  const first = otherOptions(q)[0];
+  return first ? otherTextFor(state, q, first.code, loop) : "";
+}
+
+export function setOtherText(state: ResponseState, q: Question, text: string, loop?: LoopContext | null): void {
+  const first = otherOptions(q)[0];
+  if (first) setOtherTextFor(state, q, first.code, text, loop);
+}
+
+/* ------------------------------------------------------------- selection */
+
+/** The flagged option codes this answer selects. */
+export function selectedOtherCodes(q: Question, answer: unknown): string[] {
+  const flagged = otherOptions(q);
+  if (!flagged.length || answer == null || answer === "") return [];
+  const codes = new Set(flagged.map((o) => String(o.code)));
+
+  const hit = new Set<string>();
+  const take = (v: unknown) => { const s = String(v); if (codes.has(s)) hit.add(s); };
+
+  if (Array.isArray(answer)) answer.forEach(take);
+  else if (typeof answer === "object") {
+    // per-row grids: a row's value, or each of its values
+    for (const v of Object.values(answer as Record<string, unknown>)) {
+      if (Array.isArray(v)) v.forEach(take); else take(v);
+    }
+  } else take(answer);
+
+  // programmed order, so "the first one" means the same thing everywhere
+  return flagged.map((o) => String(o.code)).filter((c) => hit.has(c));
+}
+
+/** Does this answer select any option flagged `other_specify`? */
+export function otherIsSelected(q: Question, answer: unknown): boolean {
+  return selectedOtherCodes(q, answer).length > 0;
+}
+
+/**
+ * Drop abandoned other text, per box.
+ *
+ * Called by `setAnswer` for the question just answered. Unticking one "Other"
+ * must take its own text and nothing else: with three boxes on one question,
+ * clearing them all would delete two answers the respondent still means.
+ * Returns true when something was removed.
  */
 export function syncOtherText(state: ResponseState, q: Question, loop?: LoopContext | null): boolean {
-  const key = otherKey(q.id, loop);
-  if (state.answers[key] === undefined) return false;
-  if (otherIsSelected(q, state.answers[answerKey(q.id, loop ?? null)])) return false;
-  delete state.answers[key];
-  return true;
+  const flagged = otherOptions(q);
+  if (!flagged.length) return false;
+
+  const still = new Set(selectedOtherCodes(q, state.answers[answerKey(q.id, loop ?? null)]));
+  let removed = false;
+
+  for (const o of flagged) {
+    if (still.has(String(o.code))) continue;
+    const key = otherKeyFor(q.id, o.code, loop);
+    if (state.answers[key] !== undefined) { delete state.answers[key]; removed = true; }
+  }
+
+  // and the legacy key, which belonged to the first flagged option
+  const legacy = legacyOtherKey(q.id, loop);
+  if (state.answers[legacy] !== undefined && !still.has(String(flagged[0]!.code))) {
+    delete state.answers[legacy];
+    removed = true;
+  }
+  return removed;
 }
 
+/** Remove every box's text for this question — used when the question itself goes away. */
+export function clearOtherText(state: ResponseState, q: Question, loop?: LoopContext | null): void {
+  for (const o of otherOptions(q)) delete state.answers[otherKeyFor(q.id, o.code, loop)];
+  delete state.answers[legacyOtherKey(q.id, loop)];
+}
+
+/* ------------------------------------------------------- export / analysis */
+
 /**
- * Every other-specify text in a response, keyed by the question it belongs to
- * — for storage, export and analysis, where "which question was this typed
- * into" is the whole question. Loop iterations are reported separately, with
- * the iteration path, because they are separate answers.
+ * Every other-specify text in a response, one entry per BOX — for storage,
+ * export and analysis, where "which box was this typed into" is the whole
+ * question. Loop iterations are reported separately, with the iteration path,
+ * because they are separate answers.
  */
 export interface OtherSpecifyEntry {
   questionId: string;
   /** the variable this question writes, for the column name */
   variableName: string;
+  /** the option whose box this is */
+  optionCode: string;
+  optionLabel: string;
+  /** the column this text is exported under */
+  column: string;
   /** the loop suffix, "" outside a loop (e.g. "@apple") */
   iteration: string;
   text: string;
 }
 
+/**
+ * The export column for one box.
+ *
+ * The FIRST flagged option keeps `VAR_other`, unchanged, because that is the
+ * column every existing export, syntax file and analysis script already
+ * knows. Additional boxes are new, so they get a new, unambiguous name rather
+ * than renaming the one that was already right.
+ */
+export function otherColumnFor(q: Question, code: string | number): string {
+  const flagged = otherOptions(q);
+  const first = flagged[0];
+  return first && String(first.code) === String(code)
+    ? `${q.variableName}_other`
+    : `${q.variableName}_other_${String(code)}`;
+}
+
 export function otherSpecifyEntries(def: SurveyDefinition, state: ResponseState): OtherSpecifyEntry[] {
   const byId = new Map(def.questions.map((q) => [q.id, q]));
   const out: OtherSpecifyEntry[] = [];
+  const seen = new Set<string>();
+
+  const push = (q: Question, code: string, iteration: string, text: string) => {
+    const dedupe = `${q.id}${iteration}__${code}`;
+    if (seen.has(dedupe)) return;
+    seen.add(dedupe);
+    const option = otherOptions(q).find((o) => String(o.code) === code);
+    out.push({
+      questionId: q.id,
+      variableName: q.variableName,
+      optionCode: code,
+      optionLabel: option ? String(option.label ?? "") : "",
+      column: otherColumnFor(q, code),
+      iteration,
+      text,
+    });
+  };
+
   for (const [key, value] of Object.entries(state.answers)) {
-    if (!key.endsWith("__other") || typeof value !== "string" || !value) continue;
+    if (typeof value !== "string" || !value) continue;
+
+    const at = key.indexOf("__other__");
+    if (at >= 0) {
+      const base = key.slice(0, at);
+      const code = key.slice(at + "__other__".length);
+      const loopAt = base.indexOf("@");
+      const q = byId.get(loopAt < 0 ? base : base.slice(0, loopAt));
+      if (!q) continue;
+      push(q, code, loopAt < 0 ? "" : base.slice(loopAt), value);
+      continue;
+    }
+
+    /* the legacy shape, which belonged to the first flagged option */
+    if (!key.endsWith("__other")) continue;
     const base = key.slice(0, -"__other".length);
-    const at = base.indexOf("@");
-    const questionId = at < 0 ? base : base.slice(0, at);
-    const q = byId.get(questionId);
+    const loopAt = base.indexOf("@");
+    const q = byId.get(loopAt < 0 ? base : base.slice(0, loopAt));
     if (!q) continue;
-    out.push({ questionId, variableName: q.variableName, iteration: at < 0 ? "" : base.slice(at), text: value });
+    const first = otherOptions(q)[0];
+    if (!first) continue;
+    push(q, String(first.code), loopAt < 0 ? "" : base.slice(loopAt), value);
   }
   return out;
 }

@@ -61,11 +61,25 @@ console.log("\nOTHER SPECIFY — four questions, four independent texts (single 
   for (const [qid, word] of Object.entries(boxes)) {
     assert.equal(await pv.inputValue(`[data-qid="${qid}"] [data-testid="rs-other-input"]`), word, `${qid} shows its own text`);
   }
-  // in the response: four keys, four different words
-  const stored = await pv.evaluate(() => {
+  /*
+   * Read each question's other text WITHOUT spelling the storage key. The key
+   * grew an option code when three "Other" boxes on one question stopped
+   * sharing a value, and this assertion — which hand-spelled `q1__other` —
+   * broke while the behaviour it checks was still correct. A test that pins a
+   * key rather than a behaviour reports the wrong thing.
+   */
+  const otherTexts = () => pv.evaluate(() => {
     const st = window.__rescriptState ?? window.__RESCRIPT_STATE__;
-    return { q1: st.answers.q1__other, q2: st.answers.q2__other, q3: st.answers.q3__other, q4: st.answers.q4__other };
+    const out = {};
+    for (const qid of ["q1", "q2", "q3", "q4"]) {
+      const key = Object.keys(st.answers).find((k) => k.startsWith(`${qid}__other`));
+      out[qid] = key ? st.answers[key] : undefined;
+    }
+    return out;
   });
+
+  // in the response: four keys, four different words
+  const stored = await otherTexts();
   assert.deepEqual(stored, boxes, "each question stores its own text under its own key");
 
   // changing ONE changes only that one — the reported symptom, reversed
@@ -76,20 +90,14 @@ console.log("\nOTHER SPECIFY — four questions, four independent texts (single 
   assert.equal(await pv.inputValue('[data-qid="q4"] [data-testid="rs-other-input"]'), "Banana", "Q4 is untouched");
   await pv.fill('[data-qid="q3"] [data-testid="rs-other-input"]', "Melon");
   await pv.waitForTimeout(120);
-  const after = await pv.evaluate(() => {
-    const st = window.__rescriptState ?? window.__RESCRIPT_STATE__;
-    return { q1: st.answers.q1__other, q2: st.answers.q2__other, q3: st.answers.q3__other, q4: st.answers.q4__other };
-  });
+  const after = await otherTexts();
   assert.deepEqual(after, { q1: "Pear", q2: "Orange", q3: "Melon", q4: "Banana" });
 
   // unticking Other takes its text with it — and only its own
   await pv.click('[data-qid="q1"] [data-rs-el="option"][data-rs-id="1"] input');
   await pv.waitForTimeout(150);
-  const cleared = await pv.evaluate(() => {
-    const st = window.__rescriptState ?? window.__RESCRIPT_STATE__;
-    return { q1: st.answers.q1__other ?? null, q2: st.answers.q2__other ?? null };
-  });
-  assert.equal(cleared.q1, null, "the abandoned text is gone");
+  const cleared = await otherTexts();
+  assert.equal(cleared.q1 ?? null, null, "the abandoned text is gone");
   assert.equal(cleared.q2, "Orange", "and nobody else's is");
   await pv.context().close();
   console.log("  ok   4 boxes, 4 keys, 4 words; editing one moves none of the others; unticking clears only its own");
