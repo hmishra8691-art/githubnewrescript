@@ -73,23 +73,40 @@ export function useSession(options: { redirectOnSignOut?: boolean } = {}) {
   stateRef.current = state;
 
   const load = React.useCallback(async () => {
-    try {
-      const r = await fetch("/api/auth/me", { cache: "no-store" });
-      if (r.status === 401 || r.status === 403) {
-        const j = await r.json().catch(() => ({}));
-        setState({ kind: "signed_out", reason: REASONS[j?.code] ?? j?.error, code: j?.code });
-        return;
+    /*
+     * Up to three attempts, because the FIRST call decides whether the app
+     * ever leaves its loading state.
+     *
+     * A transient failure is not a sign-out, and 503 is explicitly that: the
+     * gate answers 503 when it could not REACH the database, as opposed to
+     * 401 when it checked and the session is gone. Treating "cannot check" as
+     * "signed out" would empty every open tab on a blip — but simply keeping
+     * the old state has its own failure, which the 14 September Supabase
+     * wobble made visible: on a fresh page load there IS no old state, so a
+     * single dropped request left the chrome stuck on "loading" with nothing
+     * to click and no way back except a manual reload.
+     *
+     * Asking again costs a second at most and only ever happens on the path
+     * that is already broken. A sign-out and a real answer both return at
+     * once; only "could not tell" waits.
+     */
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const r = await fetch("/api/auth/me", { cache: "no-store" });
+        if (r.status === 401 || r.status === 403) {
+          const j = await r.json().catch(() => ({}));
+          setState({ kind: "signed_out", reason: REASONS[j?.code] ?? j?.error, code: j?.code });
+          return;
+        }
+        if (r.ok) {
+          setState({ kind: "signed_in", user: (await r.json()) as SessionUser });
+          return;
+        }
+      } catch {
+        /* offline: keep whatever we had rather than throwing the user out */
       }
-      /*
-       * A transient failure is not a sign-out — and 503 is now explicitly
-       * that: the gate answers 503 when it could not REACH the database, as
-       * opposed to 401 when it checked and the session is gone. Treating
-       * "cannot check" as "signed out" would empty every open tab on a blip.
-       */
-      if (!r.ok) return;
-      setState({ kind: "signed_in", user: (await r.json()) as SessionUser });
-    } catch {
-      /* offline: keep whatever we had rather than throwing the user out */
+      if (attempt >= 3) return;
+      await new Promise((res) => setTimeout(res, attempt * 500));
     }
   }, []);
 

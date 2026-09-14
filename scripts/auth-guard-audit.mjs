@@ -56,6 +56,10 @@ const PUBLIC = {
     "a report share link is given to people with no account: the TOKEN is the credential, resolved by the "
     + "security-definer function `rescript_resolve_share`, which applies expiry, revocation, password and "
     + "permission in the database. A session guard here would make the feature impossible",
+  "cron/media-delivery/route.ts":
+    "the scheduler has no session and never will: Vercel Cron calls this with a bearer token, checked against "
+    + "CRON_SECRET by `timingSafeEqual` in the handler's first statement, and the route REFUSES EVERYTHING when "
+    + "that variable is unset. Not exempt from authentication — authenticated by a different credential",
 };
 
 /**

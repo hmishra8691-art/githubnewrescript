@@ -1,5 +1,6 @@
 import "server-only";
 import { createClient } from "@supabase/supabase-js";
+import { supabaseFetch } from "./supabaseFetch";
 import { createHash, randomBytes } from "node:crypto";
 import type { NextRequest, NextResponse } from "next/server";
 import {
@@ -64,17 +65,20 @@ const SESSION_COOKIE = "rescript_session";
  * row on every request is that a revoke takes effect immediately rather than
  * at the next login, and a cached read quietly gave back exactly the property
  * that re-reading was there to provide.
+ *
+ * `supabaseFetch` does that, and one thing more that this file cares about
+ * particularly: it repeats a READ that the Supabase gateway dropped. The gate
+ * below is deliberately careful to answer 503 "cannot check" rather than 401
+ * "checked, and it is dead" when the lookup fails — and the cheapest way to
+ * honour that distinction is to make "cannot check" rare in the first place.
  */
-const uncachedFetch: typeof fetch = (input, init) =>
-  fetch(input as never, { ...(init ?? {}), cache: "no-store" });
-
 export function supabaseService() {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new Error("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not configured");
   return createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
-    global: { fetch: uncachedFetch },
+    global: { fetch: supabaseFetch() },
   });
 }
 
@@ -90,10 +94,12 @@ function supabaseAuthClient() {
   const key = process.env.SUPABASE_ANON_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new Error("SUPABASE_URL / SUPABASE_ANON_KEY not configured");
   // uncached for the same reason as `supabaseService`, and more sharply: a
-  // cached password check is a cached authentication decision
+  // cached password check is a cached authentication decision. The retry does
+  // NOT apply here — `signInWithPassword` is a POST, and a password attempt
+  // repeated by the transport would be a login attempt the throttle never saw
   return createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
-    global: { fetch: uncachedFetch },
+    global: { fetch: supabaseFetch() },
   });
 }
 

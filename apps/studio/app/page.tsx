@@ -135,17 +135,50 @@ export default function Dashboard() {
    */
   const [deleteError, setDeleteError] = React.useState<string | null>(null);
 
-  const load = React.useCallback(async () => {
-    const ENV_HINT =
-      "Check SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in THIS Vercel project's environment variables, then redeploy.";
-    setError(null);
+  /**
+   * WHAT A FAILED LOAD ACTUALLY MEANS.
+   *
+   * This banner used to end EVERY failure with "Check SUPABASE_URL and
+   * SUPABASE_SERVICE_ROLE_KEY … then redeploy". On 14 September it said that
+   * through a ten-minute Supabase gateway wobble, and the advice was wrong in
+   * the most expensive way available: the deployment was correct, the keys
+   * were correct, the database logged no error at all and was answering its
+   * other queries in under a millisecond — and the person reading it went and
+   * edited production environment variables to fix a fault that was not
+   * theirs and was already over.
+   *
+   * The server had the distinction all along and the page threw it away.
+   * `requireUser` answers 503 `session_unavailable` for "could not ask", and
+   * keeps the session cookie, precisely because a failed lookup is not
+   * evidence of anything. So this now reads what it was told:
+   *
+   *   · TRANSIENT (502/503/504, `session_unavailable`, a timeout, a refused
+   *     connection) → say it is temporary, try again unprompted, and only
+   *     mention the environment once several attempts have failed;
+   *   · NOT JSON, or a message about configuration → that is a real
+   *     misconfiguration, and the only case where the hint belongs first;
+   *   · anything else → show what the server said, unadorned. A 403 about a
+   *     role is not a Vercel problem.
+   *
+   * And the banner carries a Retry button, so the answer to a blip is one
+   * click rather than a redeploy.
+   */
+  const ENV_HINT =
+    "Check SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in THIS Vercel project's environment variables, then redeploy.";
+  const TRANSIENT_SAY =
+    "Supabase did not answer. This is usually brief — nothing is lost and nothing here needs changing.";
+  const TRANSIENT_TRIES = 3;
+
+  type LoadOutcome = { ok: true } | { ok: false; message: string; transient: boolean };
+
+  const loadOnce = React.useCallback(async (mine: () => boolean): Promise<LoadOutcome> => {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 15000);
     try {
-      const r = await fetch("/api/surveys", { signal: ctrl.signal });
+      const r = await fetch("/api/surveys", { signal: ctrl.signal, cache: "no-store" });
       const raw = await r.text();
       let d: {
-        surveys?: SurveyRow[]; error?: string;
+        surveys?: SurveyRow[]; error?: string; code?: string;
         stats?: Record<string, SurveyStats>;
         contributors?: Record<string, Contributor>;
         warnings?: string[];
@@ -153,30 +186,82 @@ export default function Dashboard() {
       try {
         d = raw ? JSON.parse(raw) : {};
       } catch {
-        setError(`Server returned ${r.status} (not JSON). ${ENV_HINT}`);
-        return;
+        /* an HTML error page instead of our JSON: the server threw before any
+           route code ran, and an unset key is far the commonest reason */
+        return { ok: false, transient: false, message: `Server returned ${r.status} (not JSON). ${ENV_HINT}` };
       }
       if (!r.ok) {
-        setError(`${d.error ?? `Server returned ${r.status}`}. ${ENV_HINT}`);
-        return;
+        const said = d.error ?? `Server returned ${r.status}`;
+        /*
+         * THE MESSAGE IS READ BEFORE THE STATUS, and the order is the whole
+         * point. `/api/surveys` answers 503 for BOTH "the gateway dropped it"
+         * and "SUPABASE_URL is not set" — the status alone cannot tell them
+         * apart, and reading it first would retry an unset key three times
+         * and then call a permanent misconfiguration temporary. A message
+         * that names the variables is never a blip.
+         */
+        if (/not configured|SUPABASE_[A-Z_]+/.test(said)) {
+          return { ok: false, transient: false, message: `${said}. ${ENV_HINT}` };
+        }
+        if (d.code === "session_unavailable" || r.status === 502 || r.status === 503 || r.status === 504) {
+          return { ok: false, transient: true, message: `${said} ${TRANSIENT_SAY}` };
+        }
+        return { ok: false, transient: false, message: said };
       }
+      if (!mine()) return { ok: true };
       setSurveys(d.surveys ?? []);
       // statistics are additive — the listing renders even if they failed
       setStats(d.stats ?? {});
       setContributors(d.contributors ?? {});
       setWarnings(d.warnings ?? []);
-      setStatsLoading(false);
+      return { ok: true };
     } catch (e) {
-      setError(
-        (e as Error)?.name === "AbortError"
-          ? `Timed out after 15s — the server could not reach Supabase. ${ENV_HINT}`
-          : `Could not reach the API. ${ENV_HINT}`,
-      );
+      /* aborted, or the network refused. Neither says anything about how this
+         deployment is configured, and both are worth simply asking again */
+      return {
+        ok: false,
+        transient: true,
+        message:
+          (e as Error)?.name === "AbortError"
+            ? `The request took longer than 15 seconds. ${TRANSIENT_SAY}`
+            : `Could not reach the API. ${TRANSIENT_SAY}`,
+      };
     } finally {
       clearTimeout(timer);
-      setStatsLoading(false);
     }
-  }, []);
+  }, [ENV_HINT, TRANSIENT_SAY]);
+
+  /*
+   * ONLY THE NEWEST LOAD MAY WRITE TO THE PAGE.
+   *
+   * Two can be in flight at once — a mount and a Try again, a Try again
+   * pressed twice, React's development double-invoke — and each of them sits
+   * in a retry loop for a second or more. Without a ticket, an older attempt
+   * finishing late overwrites a newer one's success with its own stale error,
+   * which is the banner flickering back after the data has already arrived.
+   */
+  const loadRun = React.useRef(0);
+
+  const load = React.useCallback(async () => {
+    const run = ++loadRun.current;
+    const mine = () => loadRun.current === run;
+    setError(null);
+    for (let attempt = 1; ; attempt++) {
+      const outcome = await loadOnce(mine);
+      if (!mine()) return;
+      if (outcome.ok) { setError(null); setStatsLoading(false); return; }
+      if (outcome.transient && attempt < TRANSIENT_TRIES) {
+        setError(`${outcome.message} Trying again…`);
+        await new Promise((r) => setTimeout(r, attempt * 700));
+        if (!mine()) return;
+        continue;
+      }
+      /* only now, after it has kept failing, is the environment worth a look */
+      setError(outcome.transient ? `${outcome.message} If it keeps happening: ${ENV_HINT}` : outcome.message);
+      setStatsLoading(false);
+      return;
+    }
+  }, [loadOnce, ENV_HINT]);
   /**
    * THE WALLETS, IN ONE REQUEST FOR THE WHOLE PAGE.
    *
@@ -505,7 +590,19 @@ export default function Dashboard() {
         )}
       </div>
 
-      {error && <div className="card" style={{ borderColor: "var(--red)", color: "var(--red)" }}>{error}</div>}
+      {error && (
+        <div
+          className="card"
+          data-testid="dash-error"
+          style={{
+            borderColor: "var(--red)", color: "var(--red)",
+            display: "flex", gap: 12, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap",
+          }}
+        >
+          <span>{error}</span>
+          <button className="btn" data-testid="dash-retry" onClick={() => void load()}>Try again</button>
+        </div>
+      )}
       {warnings.map((w, i) => (
         <div key={i} className="chip warn" style={{ marginBottom: 8 }}>{w}</div>
       ))}
