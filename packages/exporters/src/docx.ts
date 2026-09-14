@@ -4,7 +4,10 @@ import {
   LevelFormat, convertInchesToTwip,
 } from "docx";
 import type { SurveyDefinition, Question, Option, ValidationRule } from "@rescript/schema";
-import { conditionSummary, optionLogicSummary } from "@rescript/engine";
+import {
+  conditionSummary, optionLogicSummary, listOperationSummary,
+  formatSetExpression, setExpressionSummary,
+} from "@rescript/engine";
 import {
   type ExportFields, type OutlineEntry, type OutlineBlock,
   surveyOutline, plainText, elementSummary,
@@ -47,6 +50,89 @@ const divider = () =>
     spacing: { after: 120 },
     border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: RULE, space: 6 } },
   });
+
+/* ------------------------------------------------------- masking words */
+
+const MASK_ACTION_TEXT: Record<string, string> = {
+  display: "Show only",
+  display_and_preselect: "Show only, and pre-tick",
+  preselect: "Pre-tick",
+  disable: "Show everything, but only these are answerable",
+  remove: "Remove",
+};
+
+const EMPTY_SOURCE_TEXT: Record<string, string> = {
+  show_all: "show the full list",
+  show_none: "show nothing",
+  always_show_only: "show only the always-show items",
+};
+
+const PUNCH_VERB: Record<string, string> = {
+  select: "SELECT", deselect: "DESELECT", clear: "CLEAR", set_value: "SET",
+  show: "SHOW", hide: "HIDE", enable: "ENABLE", disable: "DISABLE",
+};
+
+/**
+ * One auto-punch rule, in the IF/THEN form the punch editor parses.
+ *
+ * `formatPunchExpression` in the engine prints only `codes` sources and drops
+ * the mapping, which on a rule that translates one question's codes into
+ * another's would print the rule as if it wrote nothing. A specification has
+ * to carry the mapping, the cell address and the if/else-if/else position, or
+ * a reader cannot tell two rules on the same question apart.
+ */
+function punchText(def: SurveyDefinition, target: Question, rule: any): string {
+  const mode = rule.mode === "else_if" ? "ELSE IF" : rule.mode === "else" ? "ELSE" : "IF";
+  const cond = rule.mode === "else" ? "" :
+    ` ${rule.when ? conditionSummary(def, rule.when) : "always"} THEN`;
+  const verb = PUNCH_VERB[rule.action] ?? rule.action.toUpperCase();
+  const cell = rule.targetRow
+    ? ` in row “${rule.targetRow}”${rule.targetColumn ? `, column “${rule.targetColumn}”` : ""}`
+    : "";
+  const from = rule.action === "clear" ? target.code : formatSetExpression(def, rule.source) || target.code;
+  const map = rule.mapping?.length
+    ? `  ·  mapping ${rule.mapping.map((m: any) => `${m.from}→${m.to}`).join(", ")}`
+    : "";
+  /*
+   * Only what departs from the defaults. `ignoreUnmatched` defaults to true
+   * and `recompute` to "once", so printing both on every rule buries the one
+   * that matters — a rule that REPORTS unmatched codes, or recomputes, is the
+   * exception a reviewer needs to see.
+   */
+  const extra = [
+    rule.recompute === "always" ? "recomputed on every change" : null,
+    rule.ignoreUnmatched === false ? "unmatched codes are reported, not ignored" : null,
+    rule.priority != null ? `priority ${rule.priority}` : null,
+  ].filter(Boolean).join(", ");
+  return `${mode}${rule.mode === "else" ? "" : cond} ${verb} ${from}${cell} into ${target.code}${map}${extra ? `  (${extra})` : ""}`;
+}
+
+/**
+ * A plain header-and-rows table. `optionRows` builds the option table with
+ * its own widths; everything else that is genuinely tabular — a loop's
+ * reference data, the List Fill allocation, quota cells — shares this one so
+ * the document has a single table style rather than four.
+ */
+function gridTable(head: string[], rows: string[][]): Table {
+  const total = 9000;
+  const w = Math.floor(total / head.length);
+  const cell = (text: string, isHead: boolean) =>
+    new TableCell({
+      width: { size: w, type: WidthType.DXA },
+      shading: isHead ? { type: ShadingType.CLEAR, fill: "EEF1F6", color: "auto" } : undefined,
+      margins: { top: 60, bottom: 60, left: 90, right: 90 },
+      children: [new Paragraph({
+        children: [new TextRun({ text, bold: isHead, size: 18, color: isHead ? SUBTLE : INK })],
+      })],
+    });
+  return new Table({
+    width: { size: total, type: WidthType.DXA },
+    rows: [
+      new TableRow({ tableHeader: true, children: head.map((h) => cell(h, true)) }),
+      ...rows.map((r) => new TableRow({ children: r.map((v) => cell(v, false)) })),
+    ],
+  });
+}
 
 function optionRows(q: Question, fields: ExportFields, def: SurveyDefinition): Table {
   // A column of "—" is noise. The column appears only when some option in
@@ -129,7 +215,16 @@ function questionBlock(q: Question, def: SurveyDefinition, fields: ExportFields)
   const meta: string[] = [];
   if (fields.questionId) meta.push(`ID ${q.id}  ·  variable ${q.variableName}`);
   if (fields.questionType) meta.push(`Type: ${q.variant ?? q.type}`);
-  if (fields.required) meta.push(q.validation?.some((v) => v.kind === "required") ? "Required" : "Optional");
+  /*
+   * `q.required` is the Studio's own tick-box; a `required` VALIDATION rule is
+   * the same statement with a custom message. Reading only the second printed
+   * "Optional" over every question marked required without one — and a tester
+   * signing off that line would be signing off the opposite of what fields.
+   */
+  if (fields.required) {
+    const req = !!q.required || !!q.validation?.some((v) => v.kind === "required");
+    meta.push(req ? "Required" : "Optional");
+  }
   if (meta.length) out.push(muted(meta.join("   ·   ")));
 
   if (fields.questionText && q.instruction) out.push(body(plainText(q.instruction)));
@@ -192,9 +287,68 @@ function questionBlock(q: Question, def: SurveyDefinition, fields: ExportFields)
     ));
   }
 
+  /*
+   * MASKING. The reason a respondent sees three brands out of ten, and the
+   * single most consequential thing a reviewer has to check. Printed in both
+   * forms on purpose: the expression is what another programmer retypes, the
+   * sentence is what a client reads, and they are generated from the same
+   * tree so they cannot drift apart.
+   */
+  if (fields.masking) {
+    for (const [axis, mask] of [
+      ["Masking", q.mask], ["Row masking", q.rowMask], ["Column masking", q.columnMask],
+    ] as const) {
+      if (!mask) continue;
+      out.push(label(axis));
+      if (mask.label) out.push(muted(mask.label));
+      out.push(body(`${MASK_ACTION_TEXT[mask.action] ?? mask.action}: ${formatSetExpression(def, mask.expr)}`));
+      out.push(muted(`— ${setExpressionSummary(def, mask.expr)}`));
+      const notes: string[] = [];
+      if (mask.when) notes.push(`applies only when ${conditionSummary(def, mask.when)}`);
+      /*
+       * The EFFECTIVE fallback, not the stored field. `onEmptySource` is
+       * optional and derived from `keepAlwaysShow` when absent (carryforward's
+       * own `mask.onEmptySource ?? (mask.keepAlwaysShow ? … : …)`), so printing
+       * only what is stored says nothing at all about the commonest case —
+       * a mask whose source has not been answered yet.
+       */
+      const fallback = mask.onEmptySource ?? (mask.keepAlwaysShow ? "always_show_only" : "show_none");
+      notes.push(`when the set is empty: ${EMPTY_SOURCE_TEXT[fallback] ?? fallback}`);
+      const protects = mask.protectAlwaysShow ?? (fallback === "always_show_only");
+      notes.push(protects
+        ? "“Other”, “None of these” and always-show items survive the mask"
+        : "no option is protected from the mask");
+      out.push(muted(notes.join("  ·  ")));
+    }
+  }
+
+  /* AUTO-PUNCH. What gets written into the data without the respondent
+     touching it — invisible on screen, and therefore only ever checkable
+     from a document like this one. */
+  if (fields.autoPunch && q.punches?.length) {
+    out.push(label("Auto-punch"));
+    for (const rule of q.punches) out.push(body(punchText(def, q, rule)));
+  }
+
+  if (fields.optionLogic && q.carryForward) {
+    out.push(label("Carry-forward"));
+    const cf: any = q.carryForward;
+    const src = def.questions.find((x) => x.id === cf.sourceQuestionId);
+    out.push(body(
+      `Build the ${cf.into ?? "options"} from ${src?.code ?? cf.sourceQuestionId}` +
+      `${cf.filter ? ` (${cf.filter})` : ""}${cf.keepOwn ? ", keeping this question's own list too" : ""}`,
+    ));
+    if (cf.where) out.push(muted(`Keep an item only when ${conditionSummary(def, cf.where)}`));
+  }
+
   if (fields.optionLogic && q.optionPipeline?.length) {
     out.push(label("Option list operations"));
-    for (const op of q.optionPipeline) out.push(body(`${op.kind} across ${op.sources?.length ?? 0} source(s)`));
+    // `${op.kind} across ${op.sources?.length} source(s)` printed "filter
+    // across 0 source(s)" for every filter and randomize op, which is every
+    // op that has no sources — a line that says nothing at all.
+    for (const op of q.optionPipeline) {
+      out.push(body(`${op.label ? `${op.label} — ` : ""}${listOperationSummary(def, op)}`));
+    }
   }
 
   return out as (Paragraph | Table)[];
@@ -269,6 +423,38 @@ function elementSection(e: any, def: SurveyDefinition, fields: ExportFields): (P
   if (e.type === "embedded_data") {
     for (const f of e.node.fields ?? []) {
       out.push(body(`  ${f.name} ← ${f.source}${f.value ? ` (${f.value})` : ""}`));
+    }
+  }
+  /*
+   * THE REDIRECT URL. "End of survey — screened" says a respondent leaves;
+   * it does not say where they are sent, which is the one thing about a
+   * screen-out that a tester actually has to click through and verify, and
+   * the one thing a panel partner has to be given. It was in the JSON export
+   * and in the Studio, and missing from the only document anyone reviews.
+   */
+  if ((e.type === "end" || e.type === "redirect")) {
+    const url = e.node.redirectUrl ?? e.node.url;
+    if (url) out.push(body(`  Redirect to ${url}`));
+  }
+  if (e.type === "quota_check" && e.node.onFull?.url) {
+    out.push(body(`  When full, redirect to ${e.node.onFull.url}`));
+  }
+  /*
+   * A loop's reference columns are named in the summary line; their VALUES
+   * are what the piped text and any loop-scoped mask actually resolve to, so
+   * a reviewer checking "does Aquaviva show the right attributes" needs the
+   * table, not the column names.
+   */
+  if (e.type === "loop" && e.node.references?.columns?.length) {
+    const cols = e.node.references.columns.map((c: any) => c.name);
+    const values = e.node.references.values ?? {};
+    const keys = Object.keys(values);
+    if (keys.length) {
+      out.push(label("Loop reference data"));
+      out.push(gridTable(
+        ["Item", ...cols],
+        keys.map((k) => [k, ...cols.map((c: string) => String(values[k]?.[c] ?? ""))]),
+      ));
     }
   }
   return out;
@@ -379,6 +565,104 @@ export async function exportSurveyDocx(
     }
   };
   emit(entries);
+
+  /* ------------------------------------------------------------ appendix
+   *
+   * Survey-level configuration. None of it is attached to a question, so
+   * none of it appeared anywhere in this document before — a reviewer had no
+   * way to check a quota target, a calculated variable's formula or the List
+   * Fill's priority order except by reading the JSON.
+   */
+  const appendix: (Paragraph | Table)[] = [];
+
+  if (fields.calculations && def.calculations?.length) {
+    appendix.push(new Paragraph({
+      children: [new TextRun({ text: "CALCULATED VARIABLES", bold: true, size: 26, color: INK })],
+      heading: HeadingLevel.HEADING_1, spacing: { before: 120, after: 40 },
+    }));
+    appendix.push(muted("Derived values. They hold no respondent answer of their own; every one is computed from the answers above and can be piped, tested in logic, and exported."));
+    appendix.push(divider());
+    appendix.push(gridTable(
+      ["Variable", "Expression", "Recomputed"],
+      def.calculations.map((c: any) => [
+        c.targetVariable + (c.label ? `\n${c.label}` : ""),
+        c.expression,
+        c.trigger ?? "on_change",
+      ]),
+    ));
+  }
+
+  if (fields.quotas && def.quotas?.length) {
+    appendix.push(new Paragraph({ children: [new PageBreak()] }));
+    appendix.push(new Paragraph({
+      children: [new TextRun({ text: "QUOTAS", bold: true, size: 26, color: INK })],
+      heading: HeadingLevel.HEADING_1, spacing: { before: 120, after: 40 },
+    }));
+    appendix.push(divider());
+    for (const quota of def.quotas as any[]) {
+      appendix.push(label(quota.name ?? quota.id));
+      const bits = [
+        `${quota.mode ?? "hard"} quota`,
+        quota.targetTotal != null ? `total sample ${quota.targetTotal}` : null,
+        `counts ${(quota.countStatus ?? ["complete"]).join(" + ")}`,
+        quota.onFull?.kind ? `when full: ${quota.onFull.kind}` : null,
+      ].filter(Boolean);
+      appendix.push(muted(bits.join("  ·  ")));
+      appendix.push(gridTable(
+        ["Cell", "Limit", "Who falls in it"],
+        (quota.cells ?? []).map((c: any) => [
+          c.label ?? c.id,
+          `${c.limit}${c.limitType === "percent" ? "%" : ""}${c.target != null ? ` (target ${c.target})` : ""}`,
+          c.when ? conditionSummary(def, c.when) : "everyone",
+        ]),
+      ));
+    }
+  }
+
+  if (fields.listFill && def.listFills?.length) {
+    appendix.push(new Paragraph({ children: [new PageBreak()] }));
+    appendix.push(new Paragraph({
+      children: [new TextRun({ text: "LIST FILL ALLOCATION", bold: true, size: 26, color: INK })],
+      heading: HeadingLevel.HEADING_1, spacing: { before: 120, after: 40 },
+    }));
+    appendix.push(divider());
+    for (const lf of def.listFills as any[]) {
+      appendix.push(label(lf.name ?? lf.id));
+      if (lf.label) appendix.push(muted(lf.label));
+      const src = lf.source?.questionId
+        ? def.questions.find((x) => x.id === lf.source.questionId)?.code ?? lf.source.questionId
+        : lf.source?.kind;
+      appendix.push(body(
+        `Source: ${src}${lf.source?.take ? ` (${lf.source.take})` : ""}  ·  ` +
+        `method ${lf.selection?.method ?? "random"}  ·  ` +
+        `count ${lf.selection?.count?.kind === "fixed" ? lf.selection.count.value : `from ${lf.selection?.count?.ref ?? "?"}`}`,
+      ));
+      if (lf.tracking?.respectQuotas) {
+        appendix.push(muted(`Respects quotas: ${(lf.tracking.quotaIds ?? []).join(", ") || "all"}  ·  sample size ${lf.tracking.sampleSize ?? "—"}`));
+      }
+      appendix.push(gridTable(
+        ["Code", "Label", "Priority", "Target", "Maximum", "Eligible when"],
+        (lf.options ?? []).map((o: any) => [
+          String(o.code), plainText(o.label ?? ""),
+          o.priority != null ? String(o.priority) : "—",
+          o.target != null ? String(o.target) : "—",
+          o.maximum != null ? String(o.maximum) : "—",
+          o.eligibleWhen ? conditionSummary(def, o.eligibleWhen) : (o.eligible === false ? "never" : "always"),
+        ]),
+      ));
+      if (lf.destinations?.length) {
+        appendix.push(muted(`Written into: ${lf.destinations.map((d: any) => {
+          const q = def.questions.find((x) => x.id === d.questionId);
+          return `${q?.code ?? d.questionId}${d.position != null ? ` (slot ${d.position})` : ""}`;
+        }).join(", ")}`));
+      }
+    }
+  }
+
+  if (appendix.length) {
+    children.push(new Paragraph({ children: [new PageBreak()] }));
+    children.push(...appendix);
+  }
 
   const doc = new Document({
     creator: "Rescript",

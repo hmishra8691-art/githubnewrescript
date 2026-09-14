@@ -25,6 +25,18 @@ export interface ExportFields {
   optionLogic: boolean;
   piping: boolean;
   randomization: boolean;
+  /**
+   * The set engine's own work. Masking and auto-punch decide what a
+   * respondent is shown and what lands in the data, and a specification that
+   * omits them describes a different survey from the one that was
+   * programmed — every masked question reads as an unmasked one.
+   */
+  masking: boolean;
+  autoPunch: boolean;
+  /* survey-level configuration a tester has to check against */
+  calculations: boolean;
+  quotas: boolean;
+  listFill: boolean;
   /* survey structure */
   blockName: boolean;
   pageBreaks: boolean;
@@ -36,7 +48,9 @@ export interface ExportFields {
 export const ALL_FIELDS: (keyof ExportFields)[] = [
   "questionId", "questionText", "questionType", "options", "validation", "required",
   "displayLogic", "skipLogic", "branchLogic", "optionLogic", "piping", "randomization",
+  "masking", "autoPunch",
   "blockName", "pageBreaks", "blockOrder", "flowElements", "embeddedData",
+  "calculations", "quotas", "listFill",
 ];
 
 export const FIELD_LABELS: Record<keyof ExportFields, string> = {
@@ -52,17 +66,23 @@ export const FIELD_LABELS: Record<keyof ExportFields, string> = {
   optionLogic: "Option-level logic",
   piping: "Piping",
   randomization: "Randomization",
+  masking: "Masking / set expressions",
+  autoPunch: "Auto-punch rules",
   blockName: "Block name",
   pageBreaks: "Page breaks",
   blockOrder: "Block order",
   flowElements: "Survey flow elements",
   embeddedData: "Embedded data",
+  calculations: "Calculated variables",
+  quotas: "Quotas",
+  listFill: "List Fill allocation",
 };
 
 export const FIELD_GROUPS: { title: string; fields: (keyof ExportFields)[] }[] = [
   { title: "Question information", fields: ["questionId", "questionText", "questionType", "options", "validation", "required"] },
-  { title: "Logic information", fields: ["displayLogic", "skipLogic", "branchLogic", "optionLogic", "piping", "randomization"] },
+  { title: "Logic information", fields: ["displayLogic", "skipLogic", "branchLogic", "optionLogic", "piping", "randomization", "masking", "autoPunch"] },
   { title: "Survey structure", fields: ["blockName", "pageBreaks", "blockOrder", "flowElements", "embeddedData"] },
+  { title: "Survey-level configuration", fields: ["calculations", "quotas", "listFill"] },
 ];
 
 const only = (on: (keyof ExportFields)[]): ExportFields =>
@@ -82,8 +102,9 @@ export const EXPORT_PRESETS = {
   spec: only([
     "questionId", "questionText", "questionType", "options",
     "validation", "displayLogic", "skipLogic", "branchLogic", "optionLogic",
-    "piping", "randomization",
+    "piping", "randomization", "masking", "autoPunch",
     "blockName", "pageBreaks", "blockOrder", "flowElements", "embeddedData",
+    "calculations", "quotas", "listFill",
   ]),
   full: only(ALL_FIELDS),
 } satisfies Record<string, ExportFields>;
