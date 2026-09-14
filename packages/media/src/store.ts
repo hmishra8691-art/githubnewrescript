@@ -22,7 +22,7 @@
  * same reason.
  */
 import {
-  MEDIA_KINDS, mediaPath, safeSegment, withinLimit, acceptsType,
+  MEDIA_KINDS, mediaPath, safeSegment, withinLimit, acceptsType, secondsThatFit,
   type MediaKind, type TranscriptStatus,
 } from "./plan.js";
 
@@ -42,8 +42,8 @@ export interface MediaDb {
   from(table: string): any;
   rpc(fn: string, args: Record<string, unknown>): PromiseLike<DbResult<unknown>>;
   storage: {
-    listBuckets(): PromiseLike<DbResult<{ name: string }[]>>;
-    createBucket(name: string, opts: { public: boolean; fileSizeLimit: number }): PromiseLike<{ error: DbError | null }>;
+    listBuckets(): PromiseLike<DbResult<Array<{ name: string; file_size_limit?: number | null }>>>;
+    createBucket(name: string, opts: { public: boolean; fileSizeLimit?: number }): PromiseLike<{ error: DbError | null }>;
     from(bucket: string): {
       createSignedUploadUrl(path: string): PromiseLike<DbResult<{ signedUrl: string; token: string; path: string }>>;
       createSignedUrl(path: string, seconds: number): PromiseLike<DbResult<{ signedUrl: string }>>;
@@ -101,30 +101,83 @@ export class MediaError extends Error {
 
 /* ------------------------------------------------------------ buckets */
 
-const ensured = new Set<string>();
+const ensured = new Map<string, number>();
+
+/** True for the storage service's refusal of a limit above the project's own. */
+function isLimitRefusal(message: string): boolean {
+  return /exceeded the maximum allowed size|maximum allowed size|exceeds the maximum/i.test(message);
+}
 
 /**
- * Create the bucket if it is missing, at most once per process.
+ * Make sure the bucket exists, and find out what it will actually accept.
  *
- * The four routes that used to do this each called `listBuckets()` on EVERY
- * upload — a network round trip, every time, to learn something that changes
- * once in the lifetime of an installation.
+ * ## Why this is not just `createBucket`
+ *
+ * A Supabase project has a GLOBAL upload limit — 50 MB by default — and a
+ * bucket may not declare a limit above it. `createBucket` with a 150 MB
+ * `fileSizeLimit` is therefore refused outright with "The object exceeded the
+ * maximum allowed size", which is a sentence about a bucket that reads like a
+ * sentence about a file. A researcher recording a one-second clip was told
+ * their 0.2 MB take was too big.
+ *
+ * So the limit we ask for is a preference, not an assertion. If the project
+ * will not have it, the bucket is created without one and inherits the
+ * project's — and the number that comes back is what everything downstream
+ * measures against, rather than the number this package would have liked.
+ *
+ * Returns the effective ceiling in bytes.
  */
-export async function ensureBucket(db: MediaDb, bucket: string, maxBytes: number): Promise<void> {
-  if (ensured.has(bucket)) return;
+export async function ensureBucket(db: MediaDb, bucket: string, maxBytes: number): Promise<number> {
+  const known = ensured.get(bucket);
+  if (known !== undefined) return known;
+
   const { data: buckets, error } = await db.storage.listBuckets();
   if (error) throw new MediaError(`could not check storage buckets: ${error.message}`);
-  if (!buckets?.some((b) => b.name === bucket)) {
-    const made = await db.storage.createBucket(bucket, { public: false, fileSizeLimit: maxBytes });
-    if (made.error && !/already exists/i.test(made.error.message)) {
-      throw new MediaError(`could not create bucket: ${made.error.message}`);
-    }
+
+  const existing = buckets?.find((b) => b.name === bucket);
+  if (existing) {
+    const limit = typeof existing.file_size_limit === "number" && existing.file_size_limit > 0
+      ? Math.min(existing.file_size_limit, maxBytes)
+      : maxBytes;
+    ensured.set(bucket, limit);
+    return limit;
   }
-  ensured.add(bucket);
+
+  let made = await db.storage.createBucket(bucket, { public: false, fileSizeLimit: maxBytes });
+  if (made.error && isLimitRefusal(made.error.message)) {
+    /* the project will not allow a bucket this permissive — take its own */
+    made = await db.storage.createBucket(bucket, { public: false });
+  }
+  if (made.error && !/already exists/i.test(made.error.message)) {
+    throw new MediaError(`could not create the storage bucket: ${made.error.message}`);
+  }
+
+  /* read back rather than assume: the bucket may have been created without
+     our limit, either by the retry above or by another process */
+  const after = await db.storage.listBuckets();
+  const row = after.data?.find((b) => b.name === bucket);
+  const limit = row && typeof row.file_size_limit === "number" && row.file_size_limit > 0
+    ? Math.min(row.file_size_limit, maxBytes)
+    : maxBytes;
+  ensured.set(bucket, limit);
+  return limit;
 }
 
 /** Testing seam: forget what this process believes about buckets. */
 export function resetBucketCache(): void { ensured.clear(); }
+
+/**
+ * What storage will really accept for this kind, and how long a take fits.
+ *
+ * The recorder asks this BEFORE the camera is opened, so the duration it
+ * offers is one that can actually be stored. A ceiling discovered at upload
+ * time is a ceiling discovered after the interview.
+ */
+export async function mediaLimits(db: MediaDb, kind: MediaKind): Promise<{ maxBytes: number; maxSeconds: number }> {
+  const spec = MEDIA_KINDS[kind];
+  const maxBytes = await ensureBucket(db, spec.bucket, spec.maxBytes);
+  return { maxBytes, maxSeconds: secondsThatFit(kind, maxBytes) };
+}
 
 /* ------------------------------------------------------------ upload */
 
@@ -167,16 +220,22 @@ export async function beginUpload(db: MediaDb, req: BeginUpload): Promise<Upload
   const spec = MEDIA_KINDS[req.kind];
   if (!spec) throw new MediaError(`unknown media kind ${req.kind}`, 400);
 
-  if (typeof req.bytes === "number" && req.bytes > 0) {
-    const verdict = withinLimit(req.kind, req.bytes);
-    if (!verdict.ok) throw new MediaError(verdict.message!, 413);
-  }
   if (req.mimeType) {
     const verdict = acceptsType(req.kind, req.mimeType);
     if (!verdict.ok) throw new MediaError(verdict.message!, 415);
   }
 
-  await ensureBucket(db, spec.bucket, spec.maxBytes);
+  /*
+   * The bucket is settled BEFORE the size is judged, because what the size is
+   * judged against comes from the bucket. Asking the other way round is how a
+   * 0.2 MB take came to be refused for being too large: the limit this package
+   * would like was never the limit storage would accept.
+   */
+  const ceiling = await ensureBucket(db, spec.bucket, spec.maxBytes);
+  if (typeof req.bytes === "number" && req.bytes > 0) {
+    const verdict = withinLimit(req.kind, req.bytes, ceiling);
+    if (!verdict.ok) throw new MediaError(verdict.message!, 413);
+  }
 
   const path = mediaPath(req.kind, {
     surveyId: req.surveyId,
@@ -222,7 +281,7 @@ export async function beginUpload(db: MediaDb, req: BeginUpload): Promise<Upload
     path,
     uploadUrl: signed.data.signedUrl,
     token: signed.data.token,
-    maxBytes: spec.maxBytes,
+    maxBytes: ceiling,
   };
 }
 
@@ -272,7 +331,7 @@ export async function confirmUpload(
 
   const bytes = observed.bytes ?? row.bytes ?? null;
   if (typeof bytes === "number" && bytes > 0) {
-    const verdict = withinLimit(row.kind as MediaKind, bytes);
+    const verdict = withinLimit(row.kind as MediaKind, bytes, ensured.get(row.bucket));
     if (!verdict.ok) {
       await db.storage.from(row.bucket).remove([row.path]);
       await db.from("media_objects").update({ status: "failed", error: verdict.message }).eq("id", mediaId);

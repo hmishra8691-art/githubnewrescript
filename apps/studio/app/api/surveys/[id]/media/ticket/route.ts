@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isFailure, requireEditRight } from "@/lib/guard";
+import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
-import { beginUpload, MediaError, stageLogger, type MediaKind } from "@rescript/media";
+import { beginUpload, mediaLimits, MediaError, stageLogger, RECORDING_CONSTRAINTS, type MediaKind } from "@rescript/media";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -62,6 +62,41 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     });
     log("upload_url_issued", { mediaId: ticket.mediaId, kind, questionId, bytes: Number(body.bytes) || null });
     return NextResponse.json({ ok: true, ...ticket });
+  } catch (e) {
+    if (e instanceof MediaError) return NextResponse.json({ error: e.message }, { status: e.status });
+    return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+  }
+}
+
+/**
+ * WHAT STORAGE WILL ACTUALLY ACCEPT.
+ *
+ * Asked before the camera is opened, so the recorder offers a length that can
+ * be stored rather than discovering the ceiling after the interview. A
+ * Supabase project has a global upload limit — 50 MB by default — and no
+ * bucket may exceed it, so the number this package would like is not
+ * necessarily the number that applies.
+ *
+ * A failure here is not fatal: the recorder falls back to its own constants
+ * and the upload is still judged on the server.
+ */
+export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+  const gate = await requireProject(req, params.id, "project.read");
+  if (isFailure(gate)) return gate.response;
+
+  const handle = mediaDbOrResponse();
+  if ("response" in handle) return handle.response;
+
+  try {
+    const video = await mediaLimits(handle.db, "question_video");
+    const audio = await mediaLimits(handle.db, "question_audio");
+    return NextResponse.json({
+      ok: true,
+      video,
+      audio,
+      /* the smaller of what storage allows and what this recorder will do */
+      maxSeconds: Math.min(video.maxSeconds, RECORDING_CONSTRAINTS.maxSeconds),
+    });
   } catch (e) {
     if (e instanceof MediaError) return NextResponse.json({ error: e.message }, { status: e.status });
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });

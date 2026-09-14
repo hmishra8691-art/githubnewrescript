@@ -45,12 +45,25 @@ import { useStudio } from "../store";
  * bitrate, chunks are flushed every few seconds and released once the take is
  * assembled, and the bytes go straight from the browser to object storage on
  * a signed URL that never passes through this application. Five minutes is
- * ~49 MB and the upload is the browser's problem, which is the one part of
+ * ~36 MB and the upload is the browser's problem, which is the one part of
  * this that was never broken.
+ *
+ * ### And why a 0.2-second take then failed
+ *
+ * The fourth limit, which none of the above touches: a Supabase PROJECT has a
+ * global upload ceiling — 50 MB by default — and no bucket may declare one
+ * above it. Creating the video bucket with a 150 MB `fileSizeLimit` was
+ * refused with "The object exceeded the maximum allowed size", a sentence
+ * about a bucket that reads like a sentence about a file. Nothing had been
+ * uploaded at all; the bucket did not exist.
+ *
+ * So the ceiling is now asked for rather than assumed. This component fetches
+ * it before the camera opens, shows it, and stops the recording there — a
+ * limit discovered at upload time is a limit discovered after the interview.
  *
  * The microphone is recorded TWICE — once into the video, once on its own at
  * 64 kbps. That second track is the audio extraction: transcription services
- * take 25 MB and a 49 MB video is not something to hand them, and doing it
+ * take 25 MB and a 36 MB video is not something to hand them, and doing it
  * here costs nothing because the browser already has the track. Five minutes
  * of it is 2.4 MB.
  *
@@ -83,6 +96,18 @@ function VideoRecorder({ q, patchSettings }: VariantSettingsProps) {
    */
   const [phase, setPhase] = React.useState<"idle" | "processing" | "uploading" | "uploaded" | "failed">("idle");
   const [pct, setPct] = React.useState(0);
+  /*
+   * What storage will actually accept, asked for before the camera opens.
+   *
+   * A Supabase project has a global upload limit — 50 MB by default — and no
+   * bucket may exceed it, so the ceiling this recorder would like is not
+   * necessarily the one that applies. Discovering it at upload time meant
+   * discovering it after the interview.
+   */
+  const [limits, setLimits] = React.useState<{ maxBytes: number; maxSeconds: number }>({
+    maxBytes: MEDIA_KINDS.question_video.maxBytes,
+    maxSeconds: RECORDING_CONSTRAINTS.maxSeconds,
+  });
 
   const monitorRef = React.useRef<HTMLVideoElement>(null);
   const reviewRef = React.useRef<HTMLVideoElement>(null);
@@ -100,6 +125,21 @@ function VideoRecorder({ q, patchSettings }: VariantSettingsProps) {
   const busy = phase === "processing" || phase === "uploading";
   const supported = typeof MediaRecorder !== "undefined" && typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
   const canPause = supported && typeof MediaRecorder.prototype.pause === "function";
+
+  React.useEffect(() => {
+    if (s.surveyDbId === "sandbox") return;
+    let live = true;
+    void (async () => {
+      try {
+        const r = await fetch(`/api/surveys/${s.surveyDbId}/media/ticket`);
+        const j = await r.json().catch(() => ({}));
+        if (live && r.ok && j?.video?.maxBytes) {
+          setLimits({ maxBytes: j.video.maxBytes, maxSeconds: j.maxSeconds ?? j.video.maxSeconds });
+        }
+      } catch { /* the constants are a sane fallback, and the server still judges */ }
+    })();
+    return () => { live = false; };
+  }, [s.surveyDbId]);
 
   const stopTick = () => { if (tick.current) { clearInterval(tick.current); tick.current = null; } };
   const dropStream = () => { streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; };
@@ -212,7 +252,7 @@ function VideoRecorder({ q, patchSettings }: VariantSettingsProps) {
       setSecs((n) => {
         const next = n + 1;
         /* stop on its own rather than let a forgotten recorder run for an hour */
-        if (next >= RECORDING_CONSTRAINTS.maxSeconds) { stopBoth(); setNote(`Recording stopped at the ${Math.round(RECORDING_CONSTRAINTS.maxSeconds / 60)}-minute limit.`); }
+        if (next >= limits.maxSeconds) { stopBoth(); setNote(`Recording stopped at ${clock(limits.maxSeconds)}, which is the longest take this project's storage accepts.`); }
         return next;
       });
     }, 1000);
@@ -257,7 +297,7 @@ function VideoRecorder({ q, patchSettings }: VariantSettingsProps) {
     fileName: string,
     extra: { durationSeconds?: number; width?: number; height?: number; source?: string },
   ): Promise<{ mediaId: string; video?: InterviewVideo; transcriptStatus?: TranscriptStatus | null }> => {
-    const limit = withinLimit(kind, blob.size);
+    const limit = withinLimit(kind, blob.size, kind === "question_video" ? limits.maxBytes : undefined);
     if (!limit.ok) throw new Error(limit.message);
 
     const ticketRes = await fetch(`/api/surveys/${s.surveyDbId}/media/ticket`, {
@@ -417,7 +457,7 @@ function VideoRecorder({ q, patchSettings }: VariantSettingsProps) {
   const onPick = async (f: File | undefined) => {
     if (!f) return;
     if (!/^video\//.test(f.type)) { setNote(`“${f.name}” is ${f.type || "an unknown type"} — please choose a video file.`); return; }
-    const limit = withinLimit("question_video", f.size);
+    const limit = withinLimit("question_video", f.size, limits.maxBytes);
     if (!limit.ok) { setNote(limit.message!); return; }
     await save(f, null, f.name, "uploaded");
   };
@@ -490,7 +530,7 @@ function VideoRecorder({ q, patchSettings }: VariantSettingsProps) {
             {(mode === "recording" || mode === "paused") && (
               <>
                 <span className="chip warn mono" data-testid="iv-elapsed">
-                  {mode === "paused" ? "paused" : "●"} {clock(secs)} / {clock(RECORDING_CONSTRAINTS.maxSeconds)}
+                  {mode === "paused" ? "paused" : "●"} {clock(secs)} / {clock(limits.maxSeconds)}
                 </span>
                 {canPause && (mode === "recording"
                   ? <button className="btn" data-testid="iv-pause" onClick={pause}>Pause</button>
@@ -523,7 +563,7 @@ function VideoRecorder({ q, patchSettings }: VariantSettingsProps) {
         <div className="iv-empty" data-testid="iv-empty">
           <p className="muted" style={{ margin: "0 0 8px", fontSize: 13 }}>
             Record the question yourself, or upload one you already have. Without a video this
-            question cannot be fielded.
+            question cannot be fielded. Takes up to {clock(limits.maxSeconds)} are stored.
           </p>
           <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
             <button className="btn primary" data-testid="iv-open-camera" disabled={!supported || busy}

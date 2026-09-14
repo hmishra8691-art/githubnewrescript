@@ -73,12 +73,19 @@ export const STT_MAX_BYTES = 25 * 1024 * 1024;
  * FormData. It did not fail because a limit was too low. It failed because
  * nothing had ever said how big a recording should be.
  *
- * 720p at 1.2 Mbps is a person talking to a camera, which is what this
- * feature records. Five minutes is ~49 MB; ten is ~97 MB.
+ * 720p at 900 kbps is a person talking to a camera, which is what this
+ * feature records. Five minutes is ~36 MB, which matters: a Supabase project
+ * has a GLOBAL upload limit of 50 MB by default, and no bucket may exceed it.
+ * A five-minute take has to fit inside that with room to spare, because a
+ * variable-bitrate encoder overshoots on a take with movement in it.
+ *
+ * `maxSeconds` is the ceiling this package would like. The real one is
+ * whatever storage will accept — `secondsThatFit` works it out from the limit
+ * the server discovers, and the recorder uses the smaller of the two.
  */
 export const RECORDING_CONSTRAINTS = {
   video: { width: 1280, height: 720, frameRate: 30 },
-  videoBitsPerSecond: 1_200_000,
+  videoBitsPerSecond: 900_000,
   audioBitsPerSecond: 96_000,
   /** The audio-only companion track, recorded for transcription. */
   answerAudioBitsPerSecond: 64_000,
@@ -97,6 +104,22 @@ export function expectedVideoBytes(seconds: number): number {
 /** Bytes the audio companion of a take this long should be, give or take. */
 export function expectedAudioBytes(seconds: number): number {
   return Math.round((RECORDING_CONSTRAINTS.answerAudioBitsPerSecond / 8) * Math.max(0, seconds));
+}
+
+/**
+ * How long a take of this kind fits inside a given ceiling.
+ *
+ * The fifteen percent held back is for the encoder, not for us: MediaRecorder
+ * targets a bitrate rather than obeying one, and a take with movement in it
+ * runs over. A recorder that stops at exactly the limit produces a file that
+ * is over it.
+ */
+export function secondsThatFit(kind: MediaKind, limitBytes: number): number {
+  const perSecond = kind === "question_video"
+    ? (RECORDING_CONSTRAINTS.videoBitsPerSecond + RECORDING_CONSTRAINTS.audioBitsPerSecond) / 8
+    : RECORDING_CONSTRAINTS.answerAudioBitsPerSecond / 8;
+  const usable = Math.max(0, limitBytes) * 0.85;
+  return Math.max(30, Math.min(RECORDING_CONSTRAINTS.maxSeconds, Math.floor(usable / perSecond)));
 }
 
 const EXTENSIONS: Array<[RegExp, string]> = [
@@ -179,13 +202,13 @@ export interface SizeVerdict {
  * the platform's body limit long before the route's own careful message could
  * run.
  */
-export function withinLimit(kind: MediaKind, bytes: number): SizeVerdict {
-  const spec = MEDIA_KINDS[kind];
-  if (bytes <= spec.maxBytes) return { ok: true };
+export function withinLimit(kind: MediaKind, bytes: number, ceilingBytes?: number): SizeVerdict {
+  const limit = Math.min(MEDIA_KINDS[kind].maxBytes, ceilingBytes && ceilingBytes > 0 ? ceilingBytes : Infinity);
+  if (bytes <= limit) return { ok: true };
   const mb = (n: number) => `${Math.round(n / 1024 / 1024)} MB`;
   return {
     ok: false,
-    message: `That recording is ${mb(bytes)} and the limit is ${mb(spec.maxBytes)}. Record a shorter take, or upload a file saved at a lower quality.`,
+    message: `That recording is ${mb(bytes)} and this project's storage accepts ${mb(limit)}. Record a shorter take, or upload a file saved at a lower quality.`,
   };
 }
 

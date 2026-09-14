@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   MEDIA_KINDS, MEDIA_BUCKETS, RECORDING_CONSTRAINTS, STT_MAX_BYTES,
-  expectedVideoBytes, expectedAudioBytes, extensionFor, safeSegment, mediaPath,
+  expectedVideoBytes, expectedAudioBytes, extensionFor, safeSegment, mediaPath, secondsThatFit,
   withinLimit, acceptsType, transcriptPending, TRANSCRIPT_SAY,
 } from "./plan.js";
 
@@ -12,12 +12,41 @@ import {
  * it was absent, was the bug.
  */
 
-test("five minutes of video fits, comfortably, under the limit", () => {
+/** Supabase's default project-wide upload ceiling, which no bucket may exceed. */
+const DEFAULT_PROJECT_LIMIT = 50 * 1024 * 1024;
+
+test("five minutes of video fits inside a DEFAULT Supabase project, with room to spare", () => {
   const fiveMinutes = expectedVideoBytes(300);
-  assert.ok(fiveMinutes < MEDIA_KINDS.question_video.maxBytes,
-    `five minutes is ${Math.round(fiveMinutes / 1024 / 1024)} MB against a ${MEDIA_KINDS.question_video.maxBytes / 1024 / 1024} MB limit`);
-  /* the brief asks for five; ten is the recorder's own ceiling and must fit too */
-  assert.ok(expectedVideoBytes(RECORDING_CONSTRAINTS.maxSeconds) < MEDIA_KINDS.question_video.maxBytes);
+  assert.ok(fiveMinutes < DEFAULT_PROJECT_LIMIT * 0.85,
+    `five minutes is ${Math.round(fiveMinutes / 1024 / 1024)} MB and a default project accepts ${DEFAULT_PROJECT_LIMIT / 1024 / 1024} MB`);
+  /* the brief asks for five; the encoder overshoots, hence the margin */
+  assert.ok(fiveMinutes < MEDIA_KINDS.question_video.maxBytes);
+});
+
+test("the recorder stops where storage stops, not where this package would like", () => {
+  /* a default 50 MB project: five minutes must still be offered */
+  const fits = secondsThatFit("question_video", DEFAULT_PROJECT_LIMIT);
+  assert.ok(fits >= 300, `a default project should allow at least five minutes, got ${fits}s`);
+  assert.ok(expectedVideoBytes(fits) < DEFAULT_PROJECT_LIMIT, "and what it allows must actually fit");
+
+  /* a generous project is capped by the recorder's own ceiling instead */
+  assert.equal(secondsThatFit("question_video", 5 * 1024 * 1024 * 1024), RECORDING_CONSTRAINTS.maxSeconds);
+
+  /* a mean one still offers something rather than zero */
+  assert.ok(secondsThatFit("question_video", 1024 * 1024) >= 30);
+
+  /* audio is judged at the audio bitrate, so it fits far more */
+  assert.ok(secondsThatFit("answer_audio", DEFAULT_PROJECT_LIMIT) > secondsThatFit("question_video", DEFAULT_PROJECT_LIMIT));
+});
+
+test("the size verdict measures against the ceiling it is given", () => {
+  /* what the package would allow */
+  assert.equal(withinLimit("question_video", 60 * 1024 * 1024).ok, true);
+  /* what a default project actually allows */
+  const no = withinLimit("question_video", 60 * 1024 * 1024, DEFAULT_PROJECT_LIMIT);
+  assert.equal(no.ok, false);
+  assert.match(no.message!, /50 MB/, "the message names the real ceiling, not the wished-for one");
+  assert.match(no.message!, /this project/);
 });
 
 test("the old defaults would NOT have fitted — which is why it failed", () => {
