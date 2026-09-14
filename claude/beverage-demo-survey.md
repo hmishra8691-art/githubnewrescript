@@ -126,3 +126,19 @@ Harnesses are in the same folder.
 - `render-demo.mjs` / `render-screenout.mjs` — real browser, real runtime:
   computed styles, greyed options, masked grid rows, the allocation total
   turning red then green, three loop passes, and all four redirect paths
+
+## The testing document
+
+`Export → Word → Full export` produces the questionnaire-and-logic
+specification a tester works from. Programming this survey is what showed
+that export was incomplete: it described the survey without once using the
+word "mask". It now carries, per question, the mask on all three axes (as
+both the expression and the sentence, plus the effective empty-source
+behaviour), the auto-punch chain in if / else-if / else order with its
+mapping and target cell, carry-forward, and the option-list operations; per
+flow element, the redirect URL and a loop's reference values; and an
+appendix of calculations, quotas and the List Fill allocation. `Basic` is
+unchanged — it is still the client-review questionnaire.
+
+A `required` question with no custom message used to export as "Optional",
+so that line was worth exactly nothing to whoever signed it.
