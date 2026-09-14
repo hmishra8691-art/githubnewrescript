@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 import { mediaDbOrResponse, projectStt } from "@/lib/mediaRoute";
 import { transcribe, aiProviderName } from "@rescript/ai";
-import { runTranscription, transcriptFor, queueTranscript, stageLogger, TRANSCRIPT_SAY, transcriptPending, MediaError, type TranscriptStatus } from "@rescript/media";
+import { runTranscription, transcriptFor, queueTranscript, resetTranscript, stageLogger, TRANSCRIPT_SAY, transcriptPending, MediaError, type TranscriptStatus } from "@rescript/media";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -84,6 +84,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     /* a retry on a recording that was never queued should queue it */
     await queueTranscript(db, mediaId, params.id);
+    /*
+     * This route is only ever reached by a person: the recorder calls it once
+     * when a take is stored, and the Retry button calls it thereafter. So a
+     * failed job is put back to `waiting` with its attempts cleared — the cap
+     * is there to stop automatic re-driving running up a bill, not to tell a
+     * researcher who has just fixed their provider settings that they are out
+     * of tries. The runtime's equivalent, which the renderer drives on its
+     * own, deliberately does not do this.
+     */
+    await resetTranscript(db, mediaId);
 
     if (!aiProviderName()) {
       return NextResponse.json({ error: "transcription is not configured on this installation" }, { status: 501 });

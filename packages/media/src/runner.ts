@@ -27,13 +27,25 @@ export interface TranscriptionResult {
   durationSeconds?: number;
 }
 
+/**
+ * What the provider did, not merely whether it worked.
+ *
+ * A `null` here would be six different problems wearing the same face — no
+ * credentials, no such model, rate-limited, unreadable audio, no speech, a
+ * timeout — each with a different fix, and the researcher reading the result
+ * is the person who has to apply it.
+ */
+export type TranscribeResult =
+  | { ok: true; value: TranscriptionResult }
+  | { ok: false; reason: string; status?: number };
+
 export interface TranscribeFn {
   (bytes: Uint8Array, opts: {
     mimeType?: string;
     fileName?: string;
     language?: string;
     durationSeconds?: number;
-  }): Promise<TranscriptionResult | null>;
+  }): Promise<TranscribeResult>;
 }
 
 /**
@@ -117,7 +129,7 @@ export async function runTranscription(db: MediaDb, mediaId: string, deps: Runne
     ? Number(job.duration_seconds)
     : Math.max(1, Math.round(bytes.length / 16_000));
 
-  let ran: { value: TranscriptionResult | null } | { refused: string };
+  let ran: { value: TranscribeResult } | { refused: string };
   try {
     ran = await deps.metered(seconds, () => deps.transcribe(bytes, {
       mimeType: job.mime_type ?? undefined,
@@ -138,9 +150,17 @@ export async function runTranscription(db: MediaDb, mediaId: string, deps: Runne
     return outcomeOf(await transcriptFor(db, mediaId), true);
   }
 
-  const result = ran.value;
-  if (!result || !result.text.trim()) {
-    const error = "The transcription service returned nothing for this recording. The audio is saved — try again, or check that it contains speech.";
+  const outcome = ran.value;
+  if (!outcome.ok) {
+    /* the provider's own diagnosis, kept verbatim — it knows better than we do */
+    await markTranscript(db, job.id, "failed", { error: outcome.reason });
+    log("transcription_failed", { mediaId, jobId: job.id, at: "provider", status: outcome.status, error: outcome.reason });
+    return outcomeOf(await transcriptFor(db, mediaId), true);
+  }
+
+  const result = outcome.value;
+  if (!result.text.trim()) {
+    const error = "The transcription service heard no speech in this recording. The audio is saved — check that it is audible, then try again.";
     await markTranscript(db, job.id, "failed", { error });
     log("transcription_failed", { mediaId, jobId: job.id, at: "empty_result" });
     return outcomeOf(await transcriptFor(db, mediaId), true);

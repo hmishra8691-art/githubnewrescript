@@ -206,7 +206,7 @@ test("queueing a transcript twice queues one job", async () => {
 
 /* ------------------------------------------------------------ the runner */
 
-const okTranscribe = async () => ({ text: "  I liked the packaging.  ", model: "whisper-1", language: "en" });
+const okTranscribe = async () => ({ ok: true as const, value: { text: "  I liked the packaging.  ", model: "whisper-1", language: "en" } });
 const pass = async <T>(_s: number, fn: () => Promise<T>) => ({ value: await fn() });
 
 async function stored(s: ReturnType<typeof stub>, over = false) {
@@ -236,7 +236,7 @@ test("a second runner does not take a job the first one holds", async () => {
   const s = stub();
   const mediaId = await stored(s);
   let calls = 0;
-  const slow = async () => { calls++; return { text: "hello", model: "whisper-1" }; };
+  const slow = async () => { calls++; return { ok: true as const, value: { text: "hello", model: "whisper-1" } }; };
   await runTranscription(s.db, mediaId, { transcribe: slow, metered: pass });
   const second = await runTranscription(s.db, mediaId, { transcribe: slow, metered: pass });
   assert.equal(second.ran, false, "a completed job is not re-run");
@@ -261,7 +261,7 @@ test("a failed job is retryable, and gives up after three attempts", async () =>
   resetBucketCache();
   const s = stub();
   const mediaId = await stored(s);
-  const down = async () => null;
+  const down = async () => ({ ok: false as const, reason: "The transcription service returned 503." });
   const a = await runTranscription(s.db, mediaId, { transcribe: down, metered: pass });
   assert.equal(a.status, "failed");
   assert.equal(a.attempts, 1);
@@ -279,7 +279,7 @@ test("a retry after a failure succeeds from the STORED audio", async () => {
   resetBucketCache();
   const s = stub();
   const mediaId = await stored(s);
-  await runTranscription(s.db, mediaId, { transcribe: async () => null, metered: pass });
+  await runTranscription(s.db, mediaId, { transcribe: async () => ({ ok: false as const, reason: "The transcription service returned 503." }), metered: pass });
   const out = await runTranscription(s.db, mediaId, { transcribe: okTranscribe, metered: pass });
   assert.equal(out.status, "completed");
   assert.equal(out.text, "I liked the packaging.");
@@ -297,7 +297,7 @@ test("audio too large for the provider is refused with a sentence, not sent", as
   void big;
   let called = false;
   const out = await runTranscription(s.db, ticket.mediaId, {
-    transcribe: async () => { called = true; return null; },
+    transcribe: async () => { called = true; return { ok: false as const, reason: "nope" }; },
     metered: pass,
   });
   /* the stub returns 4 bytes, so this one completes — the size guard is

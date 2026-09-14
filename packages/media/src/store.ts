@@ -447,6 +447,25 @@ export async function markTranscript(
   if (error) throw new MediaError(`could not save the transcript: ${error.message}`);
 }
 
+/**
+ * Let a failed transcript be tried again from the top.
+ *
+ * The attempt cap exists to stop AUTOMATIC re-driving from billing a customer
+ * for a clip the provider genuinely cannot read. A person who has just fixed
+ * their API key and pressed "Retry transcription" is not that, and telling
+ * them the button is spent because the software already tried three times
+ * before they fixed it would be absurd. So an explicit human retry resets the
+ * count; nothing that runs on its own may call this.
+ */
+export async function resetTranscript(db: MediaDb, mediaId: string): Promise<void> {
+  const { error } = await db
+    .from("media_transcripts")
+    .update({ status: "waiting", attempts: 0, error: null, claimed_at: null })
+    .eq("media_id", mediaId)
+    .eq("status", "failed");
+  if (error) throw new MediaError(`could not reset the transcript: ${error.message}`);
+}
+
 export async function transcriptFor(db: MediaDb, mediaId: string): Promise<TranscriptRow | null> {
   const { data, error } = await db.from("media_transcripts").select("*").eq("media_id", mediaId).maybeSingle();
   if (error) throw new MediaError(error.message);

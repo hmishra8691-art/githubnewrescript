@@ -364,21 +364,56 @@ const BYTES_PER_SECOND = 16_000;
  * sentence of JSON, and 8 seconds would abort legitimate work on a minute of
  * speech.
  */
+/**
+ * An HTTP status from a speech-to-text provider, said usefully.
+ *
+ * These four are the ones that actually happen when a provider is newly
+ * configured, and each has a different fix — which is the whole reason for
+ * not collapsing them into "returned nothing".
+ */
+function providerReason(status: number, model: string, detail: string): string {
+  const tail = detail ? ` The service said: ${detail}` : "";
+  if (status === 401 || status === 403) return `The transcription service rejected this installation's credentials (${status}). Check AI_API_KEY.${tail}`;
+  if (status === 404) return `The transcription service has no /audio/transcriptions endpoint, or no model called "${model}" (404). Check AI_API_URL points at an OpenAI-compatible base URL, and AI_STT_MODEL names a speech-to-text model it offers.${tail}`;
+  if (status === 429) return `The transcription service is rate-limiting this installation (429). The audio is saved — try again shortly.${tail}`;
+  if (status === 400 || status === 415 || status === 422) return `The transcription service would not accept this audio (${status}).${tail}`;
+  return `The transcription service returned ${status}.${tail}`;
+}
+
+/**
+ * What happened, not merely whether it worked.
+ *
+ * `transcribe` used to answer `null` to six different questions — no bytes,
+ * no provider configured, an HTTP error, an unreadable body, an empty
+ * transcript, and a timeout — and the caller stored one sentence for all of
+ * them. A researcher was told "the service returned nothing" when the service
+ * had in fact returned 404, which is a different problem with a different
+ * fix. So the reason travels with the failure.
+ *
+ * The reason is written for the person who will read it in the Studio, and
+ * carries the provider's own words where it has any: a provider that says
+ * "model whisper-1 does not exist" has diagnosed the problem better than any
+ * message we could compose.
+ */
+export type TranscribeOutcome =
+  | { ok: true; value: Transcription }
+  | { ok: false; reason: string; status?: number };
+
 export async function transcribe(
   bytes: Uint8Array,
   opts: TranscribeOptions = {},
-): Promise<Transcription | null> {
-  if (!bytes?.length) return null;
+): Promise<TranscribeOutcome> {
+  if (!bytes?.length) return { ok: false, reason: "The recording was empty." };
   const seconds = opts.durationSeconds ?? Math.max(1, Math.round(bytes.length / BYTES_PER_SECOND));
 
   if (aiProviderName() === "fake") {
     reportUsage({ kind: "stt", provider: "fake", model: "fake-stt", seconds, requests: 1, estimated: true });
-    return fakeTranscribe(bytes, opts);
+    return { ok: true, value: fakeTranscribe(bytes, opts) };
   }
 
   const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
   const key = (process.env.AI_API_KEY ?? "").trim();
-  if (!base) return null;
+  if (!base) return { ok: false, reason: "No transcription provider is configured on this installation (AI_API_URL is unset)." };
   const model = (process.env.AI_STT_MODEL ?? "").trim() || "whisper-1";
 
   /*
@@ -415,16 +450,34 @@ export async function transcribe(
       headers: { ...(key ? { authorization: `Bearer ${key}` } : {}) },
       body: form,
     });
-    if (!r.ok) { console.warn("[rescript:ai] stt provider error", JSON.stringify({ status: r.status })); return null; }
+    if (!r.ok) {
+      /*
+       * The provider's own words, up to a couple of sentences. Never the
+       * request — the body we sent carries the audio and the headers carry
+       * the key, and neither belongs in an error a researcher reads.
+       */
+      const detail = (await r.text().catch(() => "")).trim().slice(0, 300);
+      console.warn("[rescript:ai] stt provider error", JSON.stringify({ status: r.status, model, detail }));
+      return { ok: false, status: r.status, reason: providerReason(r.status, model, detail) };
+    }
     const j = (await r.json().catch(() => null)) as { text?: string; language?: string; duration?: number } | null;
-    const text = (j?.text ?? "").trim();
-    if (!text) return null;
+    if (!j) return { ok: false, reason: "The transcription service replied in a format this installation could not read." };
+    const text = (j.text ?? "").trim();
+    if (!text) {
+      return { ok: false, reason: "The transcription service heard no speech in this recording. The audio is saved — check that it is audible, then try again." };
+    }
     const measured = Number.isFinite(j?.duration) ? Math.max(1, Math.round(j!.duration!)) : seconds;
     reportUsage({ kind: "stt", provider: "openai-compatible", model, seconds: measured, requests: 1, estimated: !Number.isFinite(j?.duration) });
-    return { text, language: j?.language || opts.language, model, durationSeconds: measured };
+    return { ok: true, value: { text, language: j?.language || opts.language, model, durationSeconds: measured } };
   } catch (e) {
-    console.warn("[rescript:ai] stt provider unreachable", JSON.stringify({ error: (e as Error).name }));
-    return null;
+    const name = (e as Error).name;
+    console.warn("[rescript:ai] stt provider unreachable", JSON.stringify({ error: name }));
+    return {
+      ok: false,
+      reason: name === "AbortError"
+        ? `The transcription service did not answer within ${Math.round(budgetMs / 1000)} seconds. The audio is saved — try again.`
+        : "The transcription service could not be reached. The audio is saved — try again.",
+    };
   } finally { clearTimeout(timer); }
 }
 

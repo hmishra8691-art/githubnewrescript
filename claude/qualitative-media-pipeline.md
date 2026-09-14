@@ -141,6 +141,35 @@ floor 30s, ceiling 240s. The ceiling sits under the routes' `maxDuration =
 300`, so the abort is ours and produces a message rather than the platform
 killing the function and producing none.
 
+### Why a failure names itself
+
+`transcribe()` used to answer `null` to six different questions — no bytes, no
+provider configured, an HTTP error, an unreadable body, an empty transcript,
+and a timeout — and the caller stored one sentence for all of them. That is
+the same defect this whole pass removed everywhere else, and it survived here
+until a researcher was shown *"the service returned nothing"* for a perfectly
+good 30 KB Opus file. The service had not returned nothing; it had returned
+something, and nobody had written it down.
+
+It now returns `{ok: true, value} | {ok: false, reason, status}`, and the
+reason carries the provider's own words. 401/403 names the credential, 404
+names the endpoint and the model (the two things actually worth checking when
+a provider is newly configured), 429 says to wait, 400/415/422 says the audio
+was refused, and a timeout says how long it waited. The runner stores that
+verbatim, because a provider that says "model whisper-1 does not exist" has
+diagnosed the problem better than any message we could compose.
+
+### The attempt cap, and who it is for
+
+Three attempts, then the job stops claiming itself. That cap exists to stop
+AUTOMATIC re-driving from billing a customer for a clip the provider genuinely
+cannot read — it is not there to tell a researcher who has just fixed their
+API key that they are out of tries. So the Studio's transcript route, which is
+only ever reached by a person (the recorder once per take, the Retry button
+thereafter), resets a failed job to `waiting` with the count cleared. The
+runtime's equivalent, which the renderer drives on its own, deliberately does
+not.
+
 A failure leaves the audio in the bucket and the attempt count unexhausted.
 That is what makes **Retry** a button rather than an apology — and the retry
 reads the stored clip, not a recording the respondent no longer has.
