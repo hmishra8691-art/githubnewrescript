@@ -236,9 +236,19 @@ export class Meter {
 
   /* -------------------------------------------------- spending policies */
 
-  /** This project's policy and what it has spent. Created on demand, as `shared`. */
-  async spendingFor(surveyId: string, customerId: string): Promise<ProjectSpending | null> {
-    return this.store.getSpending(surveyId, customerId, { create: true });
+  /**
+   * This project's policy and what it has spent. Created on demand, as `shared`.
+   *
+   * `subjectKind` is part of the key since 0031, not a label on the row: the
+   * primary key is `(subject_kind, subject_id)`, so asking for an interview
+   * project without saying so reads — or worse, CREATES — the survey-shaped row
+   * with the same id. It defaults to `survey`, which is what every caller
+   * written before interviews existed meant.
+   */
+  async spendingFor(
+    subjectId: string, customerId: string, subjectKind: BillingSubjectKind = "survey",
+  ): Promise<ProjectSpending | null> {
+    return this.store.getSpending(subjectId, customerId, { create: true, subjectKind });
   }
 
   /**
@@ -248,9 +258,12 @@ export class Meter {
    * operation, because a person who has just granted more room should not
    * have to go and find a separate switch.
    */
-  async setSpending(surveyId: string, customerId: string, patch: { mode: SpendingMode; budgetLimit: number | null }): Promise<ProjectSpending> {
+  async setSpending(subjectId: string, customerId: string, patch: { mode: SpendingMode; budgetLimit: number | null; subjectKind?: BillingSubjectKind }): Promise<ProjectSpending> {
     const limit = patch.mode === "budget" ? (typeof patch.budgetLimit === "number" && Number.isFinite(patch.budgetLimit) ? money6(Math.max(0, patch.budgetLimit)) : 0) : null;
-    return this.store.setSpending(surveyId, customerId, { mode: patch.mode, budgetLimit: limit });
+    /* see `spendingFor` — the kind is half the key, so it has to travel */
+    return this.store.setSpending(subjectId, customerId, {
+      mode: patch.mode, budgetLimit: limit, subjectKind: patch.subjectKind ?? "survey",
+    });
   }
 
   /* ------------------------------------------------------------ the flow */

@@ -215,7 +215,7 @@ A separate Vercel project, on `apps/interviews`, port 3002 in development.
 | `R2_SECRET_ACCESS_KEY` | storage | |
 | `R2_REGION` | storage | `auto` for R2; a real region for S3 |
 | `INTERVIEWS_PUBLIC_URL` | candidate links **and sign-in** | the public origin. A session code is bound to this exact string at both ends |
-| `NEXT_PUBLIC_STUDIO_URL` | the sign-in link | where the handoff starts |
+| `NEXT_PUBLIC_STUDIO_URL` | the sign-in link **and the way back** | where the handoff starts; also the "Rescript Studio" link in this app's header |
 | `AI_STT_API_URL` / `AI_STT_API_KEY` / `AI_STT_MODEL` | transcription | Phase 3 |
 
 On the **Studio** project, one variable is needed too:
@@ -223,6 +223,12 @@ On the **Studio** project, one variable is needed too:
 | Variable | For | Notes |
 |---|---|---|
 | `AUTH_HANDOFF_ORIGINS` | sign-in | this app's origin, exactly. Unset means nobody may be handed a session |
+| `NEXT_PUBLIC_INTERVIEWS_URL` | discoverability | this app's origin. Unset means the Studio shows no Interviews link at all — there is no localhost fallback, deliberately |
+
+Those two go together. A URL with no allowlist gives a link that refuses every
+handoff; an allowlist that does not contain the URL's own origin does the same
+while looking configured. `/platform` in the Studio reports both and warns about
+either state.
 
 `rescript_session` is host-only, so the Studio's cookie cannot reach this
 origin and a shared cookie domain is not available — `vercel.app` is on the
@@ -397,7 +403,54 @@ per reviewer rather than one per interview, using the same three verdicts as
 the analysis so agreement and disagreement are directly comparable. The
 analysis verdict is shown beside the choice and never pre-selected as it.
 
-**Phase 8 — Studio integration.** Not started.
+**Phase 8 — Studio integration.** Built. Two halves, and the one that mattered
+was not the navigation link.
+
+*The billing surfaces were about to become wrong.* Since 0031 a usage event
+carries `subjectKind`, and `store-supabase.ts` sets `surveyId` to null for
+anything that is not a survey. The Studio's project meters filtered on
+`e.surveyId && visible.has(e.surveyId)`, so interview spend was dropped from
+the per-project figures — while the page total comes from the wallet, which
+includes it. The moment Interviews billed anything, My usage would have shown a
+total larger than the sum of its parts with nothing on the page explaining the
+difference. Non-survey events now count towards the total, attributed by
+WALLET rather than by customer, so a colleague's interview spend is not shown to
+somebody who cannot see it, and each is labelled "Interviews" in the recent
+list. They contribute to no project card, because a project card is about a
+survey and an interview has none.
+
+The administrator's spending table was broken outright rather than merely
+misleading: it keyed rows on `surveyId`, which is null for every interview
+policy, so those rows shared a React key, and its limit editor posted
+`surveyId`, which the route refused with a 400. Both now use
+`(subjectKind, subjectId)` — the actual primary key of `project_spending` since
+0031 — and the route resolves an interview project's name and owner from
+`interview_projects` with the same joins the survey rows use. `surveyId` keeps
+working for callers that still send it.
+
+Underneath, `Meter.setSpending` and `Meter.spendingFor` were dropping
+`subjectKind` on the way to the store, which defaults it to `survey`. That was
+silent and in the worst direction: capping an interview project would have
+written a survey-shaped policy for a subject that is not a survey, and nothing
+downstream could tell that row from a real one. Both wrappers now carry the
+kind, defaulting to `survey` for every caller written before interviews existed.
+
+*Then the way in.* `NEXT_PUBLIC_INTERVIEWS_URL` on the Studio adds an Interviews
+entry to the header, the account menu and the dashboard quick actions. Unlike
+`NEXT_PUBLIC_RUNTIME_URL` it has NO localhost fallback: a survey installation
+always has a runtime, and may simply not have Interviews, so an unset variable
+means the links are absent rather than pointing at a port on the reader's own
+machine.
+
+Every one of those links goes to `/api/auth/handoff?origin=…`, on the Studio's
+own origin — never a bare href to the other host. `rescript_session` is
+host-only and could not be otherwise on `vercel.app`, which is on the Public
+Suffix List, so a plain link arrives signed out. `/platform` now reports the
+Interviews URL and the handoff allowlist, and warns about the half-configured
+states: a URL with no allowlist gives a link that refuses every handoff, and an
+allowlist that does not contain the URL's own origin does the same while looking
+configured. The way back is a plain link, because the Studio is where the
+session already lives.
 
 **Also outstanding:** the browser suite. The uploader is tested against a real
 object store in Node, which covers the protocol; driving the candidate page in

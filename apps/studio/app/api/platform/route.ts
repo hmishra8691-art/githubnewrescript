@@ -108,6 +108,10 @@ export async function GET(_req: NextRequest) {
     tierDeclared: info.declared,
     database: info.database,
     runtimeUrl: info.runtimeUrl,
+    /* public host names of this operator's own applications — the same class of
+       fact as the runtime URL, and never a key */
+    interviewsUrl: info.interviewsUrl,
+    handoffOrigins: info.handoffOrigins,
     studioUrl: info.studioUrl,
     release: info.release,
     node: info.node,

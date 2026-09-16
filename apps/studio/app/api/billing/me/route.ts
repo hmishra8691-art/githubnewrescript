@@ -55,7 +55,19 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(stripInternalCosts({
       ok: true, projects, totals, wallet,
       categories: usageByCategory(mineEvents).map((c) => ({ category: c.category, label: CATEGORY_LABEL[c.category], charge: c.charge, events: c.events, quantity: c.quantity })),
-      recent: mineEvents.slice(0, 50).map((e) => ({ ...publicEvent(e), projectTitle: e.surveyId ? titles.get(e.surveyId) ?? null : null })),
+      /*
+       * An event with no survey is not a mystery to hide — it is interview
+       * work, billed against an interview project rather than a survey. Naming
+       * it is what makes the page add up: the reader sees a total, a set of
+       * categories that sum to it, and a line saying where the remainder came
+       * from.
+       */
+      recent: mineEvents.slice(0, 50).map((e) => ({
+        ...publicEvent(e),
+        projectTitle: e.surveyId
+          ? titles.get(e.surveyId) ?? null
+          : e.subjectKind === "interview" ? "Interviews" : null,
+      })),
       requests: (await meter.store.listCreditRequests({ userId: user.userId })).slice(0, 20),
     }));
   } catch (e) {

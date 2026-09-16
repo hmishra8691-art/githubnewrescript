@@ -90,8 +90,25 @@ export function setSessionCookie(res: NextResponse, sessionId: string): void {
  * return here still signed out.
  */
 export function signInUrl(next = "/"): string | null {
-  const studio = process.env.NEXT_PUBLIC_STUDIO_URL ?? "https://rescriptstudio.vercel.app";
-  return handoffStartUrl(studio, publicOrigin(), next);
+  return handoffStartUrl(studioUrl(), publicOrigin(), next);
+}
+
+/**
+ * Where Rescript Studio is.
+ *
+ * The same default `signInUrl` has always used, lifted out so the two callers
+ * cannot drift: this is both where sign-in happens and where a signed-in person
+ * goes to get back to their surveys. A person who arrives here through the
+ * Studio's Interviews link and finds no way back has been handed a one-way
+ * door, and the browser Back button is not a navigation design.
+ *
+ * No handoff is needed in this direction. The Studio is where the session was
+ * minted, so its own cookie is already on that origin — this is a plain link.
+ */
+export function studioUrl(): string {
+  const raw = (process.env.NEXT_PUBLIC_STUDIO_URL ?? "").trim() || "https://rescriptstudio.vercel.app";
+  const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  return withScheme.replace(/\/+$/, "");
 }
 
 /**

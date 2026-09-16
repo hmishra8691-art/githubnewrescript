@@ -63,13 +63,35 @@ export async function projectMeters(
   const ledger = mine ? await meter.store.listLedger(mine.id, 500) : [];
   const wallet = walletOverview(mine, ledger, cfg);
 
-  const mineEvents = events.filter((e) => e.surveyId && visible.has(e.surveyId));
+  /*
+   * WHAT COUNTS AS THIS PERSON'S USAGE — and why it is two conditions.
+   *
+   * A survey they can open, as before. PLUS anything charged to their own
+   * wallet that is not attributable to a survey at all: Rescript Interviews
+   * bills the interview PROJECT as its subject, and `store-supabase` sets
+   * `surveyId` to null for a non-survey subject, so interview spend has no
+   * survey to be visible through.
+   *
+   * Without the second condition the My-usage page stopped adding up the day
+   * interviews started billing: `totals` comes from the wallet and includes
+   * interview spend, while the categories and the recent list came from this
+   * filter and did not. A page whose total is larger than its parts, with
+   * nothing saying why, is worse than one that shows neither.
+   *
+   * The wallet is the attribution, not the customer: a colleague's interview
+   * spend is on a colleague's wallet, and "my usage" must not show it.
+   */
+  const mineEvents = events.filter((e) =>
+    (e.surveyId && visible.has(e.surveyId)) || (!e.surveyId && mine && e.walletId === mine.id),
+  );
   const usedById = new Map<string, { charge: number; events: number }>();
   for (const e of mineEvents) {
-    const row = usedById.get(e.surveyId!) ?? { charge: 0, events: 0 };
+    /* the project cards are about surveys; an event with no survey has no card */
+    if (!e.surveyId) continue;
+    const row = usedById.get(e.surveyId) ?? { charge: 0, events: 0 };
     row.charge = money6(row.charge + e.customerCharge);
     row.events += 1;
-    usedById.set(e.surveyId!, row);
+    usedById.set(e.surveyId, row);
   }
 
   /*

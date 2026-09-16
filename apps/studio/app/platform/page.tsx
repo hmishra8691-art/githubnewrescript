@@ -22,6 +22,8 @@ interface Info {
   tierDeclared: boolean;
   database: string | null;
   runtimeUrl: string;
+  interviewsUrl?: string | null;
+  handoffOrigins?: string[];
   studioUrl: string | null;
   release: string | null;
   node: string;
@@ -45,6 +47,8 @@ const LABELS: Record<string, string> = {
   anonKey: "Anon key",
   runtimeUrl: "Respondent runtime URL",
   studioUrl: "Public Studio URL (for emailed links)",
+  interviewsUrl: "Interviews URL",
+  handoffOrigins: "Sign-in handoff origins",
   authSalt: "Auth hash salt",
   qualitySalt: "Quality hash salt",
   mail: "Mail (Resend)",
@@ -128,6 +132,14 @@ export default function PlatformPage() {
             <tr><td>Tier</td><td><strong>{info.tier}</strong>{info.tierDeclared ? "" : " (inferred from NODE_ENV — set RESCRIPT_ENV)"}</td></tr>
             <tr><td>Database</td><td className="mono">{info.database ?? <span className="muted">not configured</span>}</td></tr>
             <tr><td>Respondent runtime</td><td className="mono">{info.runtimeUrl}</td></tr>
+            <tr><td>Interviews</td><td className="mono" data-testid="platform-interviews-url">
+              {info.interviewsUrl ?? <span className="muted">not set — the Interviews link is hidden</span>}
+            </td></tr>
+            <tr><td>Handoff origins</td><td className="mono" data-testid="platform-handoff-origins">
+              {info.handoffOrigins?.length
+                ? info.handoffOrigins.join(", ")
+                : <span className="muted">none — cross-app sign-in is refused</span>}
+            </td></tr>
             <tr><td>Public Studio URL</td><td className="mono">{info.studioUrl ?? <span className="muted">not set — emailed links will be relative</span>}</td></tr>
             <tr><td>Release</td><td className="mono">{info.release ?? <span className="muted">unknown</span>}</td></tr>
             <tr><td>Node</td><td className="mono">{info.node}</td></tr>

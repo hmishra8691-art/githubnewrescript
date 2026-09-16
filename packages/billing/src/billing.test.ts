@@ -577,3 +577,49 @@ test("the ledger says which project spent, even though one wallet paid", async (
   assert.equal(new Set(debits.map((l) => l.surveyId)).size, 2, "two projects, two attributions on one wallet");
   assert.ok(debits.some((l) => l.surveyId === "p_a") && debits.some((l) => l.surveyId === "p_b"));
 });
+
+test("A SUBJECT'S KIND IS HALF ITS KEY — an interview policy is not the survey policy with the same id", async () => {
+  /*
+   * The primary key of `project_spending` has been `(subject_kind, subject_id)`
+   * since 0031, and both `Meter` wrappers used to drop the kind on the way to
+   * the store. The store defaults it to `survey`, so the failure was silent and
+   * in the worst direction: an administrator capping an INTERVIEW project at $1
+   * would have capped the survey that happens to share its id — or, far more
+   * often, created a survey-shaped policy for an id no survey has, which then
+   * stops the interview from ever being capped at all.
+   *
+   * Two ids that are the same string is not a contrivance: an installation
+   * migrating a study from surveys to interviews carries the id across on
+   * purpose, and nothing in the schema forbids it.
+   */
+  const { meter } = await ana(500);
+
+  await meter.setSpending("same_id", "cust", { mode: "budget", budgetLimit: 1 });
+  await meter.setSpending("same_id", "cust", { mode: "budget", budgetLimit: 250, subjectKind: "interview" });
+
+  const survey = await meter.spendingFor("same_id", "cust");
+  const interview = await meter.spendingFor("same_id", "cust", "interview");
+
+  assert.equal(survey!.budgetLimit, 1, "the survey policy is untouched by the interview one");
+  assert.equal(interview!.budgetLimit, 250);
+  assert.equal(survey!.subjectKind, "survey");
+  assert.equal(interview!.subjectKind, "interview");
+});
+
+test("reading a subject without saying its kind does not CREATE the wrong row", async () => {
+  /*
+   * `spendingFor` creates on demand. Asking about an interview project without
+   * its kind therefore does not merely read the wrong row — it writes one, and
+   * from then on the table holds a survey policy for a subject that is not a
+   * survey. Nothing downstream can tell that row from a real one.
+   */
+  const { meter, store } = await ana(500);
+
+  await meter.spendingFor("iv_1", "cust", "interview");
+  const all = await store.listSpending({});
+  const forIv = all.filter((p) => p.subjectId === "iv_1");
+
+  assert.equal(forIv.length, 1, "one row, not one per kind somebody forgot to pass");
+  assert.equal(forIv[0].subjectKind, "interview");
+  assert.equal(forIv[0].surveyId, null, "and it does not claim to be a survey");
+});

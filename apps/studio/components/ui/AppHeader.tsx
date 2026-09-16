@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import type { SessionUser } from "@/lib/useSession";
+import { interviewsHandoffHref } from "@/lib/interviews-url";
 import { Icon } from "./Icon";
 
 /**
@@ -16,6 +17,8 @@ export function AppHeader({ active, user, onSignOut, crumbs }: {
   crumbs?: React.ReactNode;
 }) {
   const [open, setOpen] = React.useState(false);
+  /* read once — NEXT_PUBLIC_INTERVIEWS_URL is inlined at build time and cannot change */
+  const interviewsHref = React.useMemo(() => interviewsHandoffHref("/"), []);
   const initials = (user?.name ?? "").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase() || "?";
   const hue = user ? [...user.userId].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0) : 230;
   return (
@@ -27,6 +30,10 @@ export function AppHeader({ active, user, onSignOut, crumbs }: {
       <nav className="apph-nav" aria-label="Primary">
         <a href="/" className={active === "dashboard" ? "on" : ""} aria-current={active === "dashboard" ? "page" : undefined}><Icon name="grid" size={16} /> Projects</a>
         <a href="/analytics" className={active === "analytics" ? "on" : ""} aria-current={active === "analytics" ? "page" : undefined} data-testid="dash-analytics"><Icon name="analytics" size={16} /> Data Analytics</a>
+        {/* absent, rather than broken, when this installation has no Interviews app */}
+        {interviewsHref && (
+          <a href={interviewsHref} data-testid="dash-interviews"><Icon name="play" size={16} /> Interviews</a>
+        )}
       </nav>
       {crumbs && <div className="apph-crumbs">{crumbs}</div>}
       <span className="grow" />
@@ -65,6 +72,9 @@ export function AppHeader({ active, user, onSignOut, crumbs }: {
                   <a className="menu-item" href="/security" role="menuitem"><Icon name="shield" size={15} /> Security &amp; sessions</a>
                   <a className="menu-item" href="/billing" role="menuitem"><Icon name="chart" size={15} /> My usage</a>
                   <a className="menu-item" href="/" role="menuitem"><Icon name="grid" size={15} /> Projects</a>
+                  {interviewsHref && (
+                    <a className="menu-item" href={interviewsHref} role="menuitem"><Icon name="play" size={15} /> Interviews</a>
+                  )}
                   {user.isPlatformAdmin && <a className="menu-item" href="/admin" role="menuitem"><Icon name="settings" size={15} /> Administration</a>}
                   <div className="menu-sep" />
                   <button className="menu-item" role="menuitem" onClick={() => { setOpen(false); onSignOut?.(); }}><Icon name="logout" size={15} /> Sign out</button>

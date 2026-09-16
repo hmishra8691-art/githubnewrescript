@@ -37,6 +37,10 @@ export interface PlatformInfo {
   database: string | null;
   /** where respondents are sent */
   runtimeUrl: string;
+  /** where the Interviews app is, when this installation has one */
+  interviewsUrl: string | null;
+  /** which origins may be handed a signed-in session — names, never codes */
+  handoffOrigins: string[];
   /** absolute base for the links this platform emails (invites, resets) */
   studioUrl: string | null;
   /** the release this instance is running, when the platform was told */
@@ -49,6 +53,8 @@ export interface PlatformInfo {
     anonKey: boolean;
     runtimeUrl: boolean;
     studioUrl: boolean;
+    interviewsUrl: boolean;
+    handoffOrigins: boolean;
     authSalt: boolean;
     qualitySalt: boolean;
     mail: boolean;
@@ -92,6 +98,17 @@ export function platformInfo(): PlatformInfo {
   const database = projectRef(process.env.SUPABASE_URL);
   const runtimeUrl = (process.env.NEXT_PUBLIC_RUNTIME_URL ?? "").trim() || "http://localhost:3001";
   const studioUrl = (process.env.STUDIO_PUBLIC_URL ?? "").trim() || null;
+  const interviewsUrl = (process.env.NEXT_PUBLIC_INTERVIEWS_URL ?? "").trim() || null;
+  /*
+   * The allowlist, shown as origins rather than as a count. An operator
+   * debugging "the Interviews link sends me to a sign-in page" needs to SEE
+   * that the list says `https://interviews-lemon.vercel.app` and the link says
+   * `https://interviews.example.com`. These are origins of the operator's own
+   * applications — public host names, safe to screenshot, exactly like the
+   * runtime URL two rows above.
+   */
+  const handoffOrigins = (process.env.AUTH_HANDOFF_ORIGINS ?? "")
+    .split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
 
   const configured = {
     database: !!process.env.SUPABASE_URL,
@@ -99,6 +116,8 @@ export function platformInfo(): PlatformInfo {
     anonKey: !!process.env.SUPABASE_ANON_KEY,
     runtimeUrl: !!(process.env.NEXT_PUBLIC_RUNTIME_URL ?? "").trim(),
     studioUrl: !!studioUrl,
+    interviewsUrl: !!interviewsUrl,
+    handoffOrigins: handoffOrigins.length > 0,
     authSalt: !!(process.env.AUTH_HASH_SALT ?? process.env.QUALITY_HASH_SALT),
     qualitySalt: !!process.env.QUALITY_HASH_SALT,
     /*
@@ -127,6 +146,22 @@ export function platformInfo(): PlatformInfo {
   if (!configured.studioUrl && tier !== "development") {
     warnings.push("STUDIO_PUBLIC_URL is not set, so password-reset and invitation links come out relative and unusable in an email.");
   }
+  /*
+   * The half-configured state, which is the one that produces a bug report.
+   * Either alone is silent: a URL with no allowlist gives a link that always
+   * refuses, and an allowlist with no URL gives a working endpoint nothing
+   * links to.
+   */
+  if (configured.interviewsUrl && !configured.handoffOrigins) {
+    warnings.push("NEXT_PUBLIC_INTERVIEWS_URL is set but AUTH_HANDOFF_ORIGINS is not, so the Interviews link will refuse every sign-in handoff. Add the Interviews origin to AUTH_HANDOFF_ORIGINS.");
+  }
+  if (configured.interviewsUrl && configured.handoffOrigins && !handoffOrigins.some((o) => {
+    /* the link is built from the URL, so the URL's ORIGIN is what must be listed */
+    try { return new URL(o).origin === new URL(/^https?:\/\//i.test(interviewsUrl!) ? interviewsUrl! : `https://${interviewsUrl}`).origin; }
+    catch { return false; }
+  })) {
+    warnings.push(`AUTH_HANDOFF_ORIGINS does not include ${interviewsUrl}, so the Interviews link will be refused even though both variables are set.`);
+  }
   if (!configured.authSalt) {
     warnings.push("AUTH_HASH_SALT is not set, so throttling hashes use a default salt shared with every other unconfigured instance.");
   }
@@ -153,6 +188,8 @@ export function platformInfo(): PlatformInfo {
     declared,
     database,
     runtimeUrl,
+    interviewsUrl,
+    handoffOrigins,
     studioUrl,
     release:
       (process.env.RESCRIPT_RELEASE ?? process.env.VERCEL_GIT_COMMIT_SHA ?? "").trim().slice(0, 12) || null,

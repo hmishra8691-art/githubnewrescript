@@ -67,9 +67,19 @@ export default function BillingAdminPage() {
 }
 
 /* ------------------------------------------------------------------ wallets */
-/** One project's spending policy, as Billing Administration lists it. */
+/**
+ * One project's spending policy, as Billing Administration lists it.
+ *
+ * `subjectId` is the identifier, not `surveyId`. Since 0031 a policy's subject
+ * may be an interview project, and the route sends `surveyId: null` for those —
+ * so keying rows or POSTs on it gave every interview row the same React key and
+ * a request the route refused. `surveyId` is kept because the wallet drawer
+ * still asks about surveys, and only surveys.
+ */
 interface SpendingRow {
-  surveyId: string;
+  subjectKind: "survey" | "interview";
+  subjectId: string;
+  surveyId: string | null;
   project: { code: string; title: string; status: string; owner: string | null; customer: string | null } | null;
   mode: "shared" | "budget" | "priority";
   limit: number | null;
@@ -103,7 +113,10 @@ function WalletsTab({ say, onPending }: { say: (t: string, ok?: boolean) => void
   const saveLimit = async (row: SpendingRow, mode: SpendingRow["mode"], limit: number | null) => {
     setBusy(true);
     const r = await call<{ spending: SpendingRow }>("/api/admin/billing/wallets", {
-      method: "POST", body: JSON.stringify({ action: "set_spending", surveyId: row.surveyId, mode, limit }),
+      method: "POST",
+      body: JSON.stringify({
+        action: "set_spending", subjectId: row.subjectId, subjectKind: row.subjectKind, mode, limit,
+      }),
     });
     setBusy(false);
     if (!r.ok) { say(r.json.error ?? `The limit could not be saved (${r.status})`, false); return; }
@@ -203,8 +216,15 @@ function WalletsTab({ say, onPending }: { say: (t: string, ok?: boolean) => void
             <thead><tr><th>Project</th><th>Owner</th><th>Spent</th><th>Limit</th><th>State</th><th /></tr></thead>
             <tbody>
               {spending.map((p) => (
-                <tr key={p.surveyId} data-testid="admin-spending-row" data-survey={p.surveyId} data-state={p.state} data-mode={p.mode}>
-                  <td>{p.project?.title ?? p.surveyId}{p.project?.code && <span className="muted"> · {p.project.code}</span>}</td>
+                <tr key={`${p.subjectKind}:${p.subjectId}`} data-testid="admin-spending-row"
+                  data-survey={p.surveyId ?? ""} data-subject={p.subjectId} data-kind={p.subjectKind}
+                  data-state={p.state} data-mode={p.mode}>
+                  <td>
+                    {p.project?.title ?? p.subjectId}
+                    {p.project?.code && <span className="muted"> · {p.project.code}</span>}
+                    {/* which product this policy belongs to — two projects can share a title */}
+                    {p.subjectKind === "interview" && <span className="muted"> · interview</span>}
+                  </td>
                   <td className="muted">{p.project?.owner ?? "—"}</td>
                   <td data-testid="admin-spending-spent">{fmtMoney(p.spent, "USD")}</td>
                   <td data-testid="admin-spending-limit">

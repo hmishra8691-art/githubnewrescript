@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import Link from "next/link";
-import { SESSION_COOKIE_NAME, userForSession, isFailure, signInUrl } from "@/lib/auth";
+import { SESSION_COOKIE_NAME, userForSession, isFailure, signInUrl, studioUrl } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/admin";
 import { NewProject } from "@/components/NewProject";
 
@@ -80,7 +80,13 @@ export default async function Home({
     <main className="wrap wide">
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 16 }}>
         <h1 style={{ margin: 0 }}>Interviews</h1>
-        <span className="muted small">{user.email}</span>
+        <div className="row" style={{ gap: 12, alignItems: "center" }}>
+          {/* the way back. A plain link: the session cookie is already on that origin. */}
+          <a className="btn secondary small" href={studioUrl()} data-testid="back-to-studio">
+            Rescript Studio
+          </a>
+          <span className="muted small">{user.email}</span>
+        </div>
       </div>
 
       <NewProject />

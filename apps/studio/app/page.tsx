@@ -12,6 +12,7 @@ import { CloneProjectDialog } from "@/components/dashboard/CloneProjectDialog";
 import { useSession } from "@/lib/useSession";
 import { AppHeader, greeting } from "@/components/ui/AppHeader";
 import { Icon } from "@/components/ui/Icon";
+import { interviewsHandoffHref } from "@/lib/interviews-url";
 import { can, type ProjectRole } from "@rescript/access";
 import { fmtMoney, LEVEL_CLASS, LEVEL_WORD } from "@/components/billing/shared";
 
@@ -437,6 +438,8 @@ export default function Dashboard() {
     () => (surveys?.length ? [...surveys].sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0] : null),
     [surveys],
   );
+  /* null when this installation has no Interviews app — the action is then absent */
+  const interviewsHref = React.useMemo(() => interviewsHandoffHref("/"), []);
 
   /** what actually happened last, across every project — edits and responses interleaved */
   const activity = React.useMemo(() => {
@@ -663,6 +666,13 @@ export default function Dashboard() {
               <span className="qa-ico"><Icon name="analytics" size={17} /></span>
               <span><span className="qa-t">Data Analytics</span><span className="qa-s">Analyse, chart and report</span></span>
             </a>
+            {/* through the handoff route, not a bare link — see AppHeader */}
+            {interviewsHref && (
+              <a className="qa-item" href={interviewsHref} data-testid="qa-interviews">
+                <span className="qa-ico"><Icon name="play" size={17} /></span>
+                <span><span className="qa-t">Interviews</span><span className="qa-s">Moderated and recorded sessions</span></span>
+              </a>
+            )}
             {latest && (
               <>
                 <a className="qa-item" href={`/studio/${latest.id}?tab=data`} data-testid="qa-data">

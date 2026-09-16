@@ -31,7 +31,11 @@ export async function GET(req: NextRequest) {
     let projects: Record<string, { code: string; title: string; status: string; owner: string | null; customer: string | null }> = {};
     if (!gate.sandbox && wallets.length) {
       const db = supabaseAdmin();
-      const policyIds = (await gate.meter.store.listSpending({})).map((p) => p.surveyId);
+      /* survey policies only — an interview policy's `surveyId` is null, and a
+         null in an `in ('…')` list asks `surveys` about nothing */
+      const policyIds = (await gate.meter.store.listSpending({}))
+        .map((p) => p.surveyId)
+        .filter((id): id is string => typeof id === "string" && id.length > 0);
       const ids = [...new Set([...wallets.map((w) => w.surveyId).filter(Boolean) as string[], ...policyIds])];
       const { data } = await db.from("surveys").select("id, code, title, status, owner_id, customer_id, profiles:owner_id(full_name, email), customers:customer_id(name)").in("id", ids);
       for (const r of (data ?? []) as any[]) projects[r.id] = { code: r.code, title: r.title, status: r.status, owner: r.profiles?.full_name ?? r.profiles?.email ?? null, customer: r.customers?.name ?? null };
@@ -67,13 +71,42 @@ export async function GET(req: NextRequest) {
      * stopped it.
      */
     const policies = await gate.meter.store.listSpending({});
+
+    /*
+     * The interview projects among them, by id. One query rather than one per
+     * row, and skipped entirely when there are no interview policies — which
+     * is every installation that has not enabled the second product.
+     */
+    const interviewIds = policies.filter((p) => p.subjectKind === "interview").map((p) => p.subjectId);
+    const interviewProjects: Record<string, { code: string; title: string; status: string; owner: string | null; customer: string | null }> = {};
+    if (interviewIds.length && !gate.sandbox) {
+      const { data: ivp } = await supabaseAdmin()
+        .from("interview_projects")
+        .select("id, code, name, status, customer_id, profiles:owner_id(full_name, email), customers:customer_id(name)")
+        .in("id", interviewIds);
+      /* the same joins the survey rows use, so the Owner column is not blank for
+         half the table */
+      for (const row of (ivp ?? []) as any[]) {
+        interviewProjects[row.id] = {
+          code: row.code, title: row.name, status: row.status,
+          owner: row.profiles?.full_name ?? row.profiles?.email ?? null,
+          customer: row.customers?.name ?? null,
+        };
+      }
+    }
     const spending = policies.map((p) => ({
       subjectKind: p.subjectKind,
       surveyId: p.surveyId,
       subjectId: p.subjectId,
-      /* only a survey has a row in `projects`; an interview project's name
-         comes from its own table and is not this admin view's business */
-      project: p.surveyId ? projects[p.surveyId] ?? null : null,
+      /*
+       * A survey's name comes from `projects`; an interview project's from its
+       * own table. Looking up both is the difference between an administrator
+       * seeing "Beverage study · spent $4.10" and a blank row with a uuid — and
+       * a blank row is exactly what this view existed to replace.
+       */
+      project: p.subjectKind === "interview"
+        ? interviewProjects[p.subjectId] ?? null
+        : p.surveyId ? projects[p.surveyId] ?? null : null,
       mode: p.mode, limit: p.budgetLimit, spent: p.spent, reserved: p.reserved,
       state: p.state, frozenAt: p.frozenAt,
     })).sort((a, b) => b.spent - a.spent);
@@ -95,17 +128,28 @@ export async function POST(req: NextRequest) {
    * control, so there is one rule and one place it is enforced — the
    * difference is only who is allowed to reach it.
    */
-  if (body?.action === "set_spending" && typeof body?.surveyId === "string") {
+  /*
+   * `subjectId` is the name now, because the subject may be an interview
+   * project — `surveyId` is kept working for anything that still sends it, and
+   * means the same thing it always did.
+   */
+  const subjectId = typeof body?.subjectId === "string" ? body.subjectId
+    : typeof body?.surveyId === "string" ? body.surveyId : null;
+  const subjectKind = body?.subjectKind === "interview" ? "interview" : "survey";
+
+  if (body?.action === "set_spending" && subjectId) {
     try {
       let customerId = "sandbox";
       if (!gate.sandbox) {
-        const { data } = await supabaseAdmin().from("surveys").select("customer_id").eq("id", body.surveyId).maybeSingle();
+        /* the subject's own table — an interview project is not in `surveys` */
+        const table = subjectKind === "interview" ? "interview_projects" : "surveys";
+        const { data } = await supabaseAdmin().from(table).select("customer_id").eq("id", subjectId).maybeSingle();
         if (!data) return NextResponse.json({ error: "Unknown project." }, { status: 404 });
         customerId = data.customer_id;
       }
       const mode = String(body?.mode ?? "shared");
       const limit = body?.limit == null ? null : Number(body.limit);
-      const spending = await gate.meter.setSpending(body.surveyId, customerId, { mode: mode as never, budgetLimit: limit });
+      const spending = await gate.meter.setSpending(subjectId, customerId, { mode: mode as never, budgetLimit: limit, subjectKind });
       if (gate.user) {
         await audit({
           action: "billing.project_budget_changed", userId: gate.user.userId, sessionId: gate.user.sessionId, customerId: gate.user.customerId,
