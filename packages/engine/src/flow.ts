@@ -598,6 +598,67 @@ export function start(
   return advanceFrom(def, state, quotaCounts, -1);
 }
 
+/**
+ * PUT A RESUMING RESPONDENT BACK, ON A STEP THAT CAN ACTUALLY BE DRAWN.
+ *
+ * A saved `step_index` is a number, and a number is not a position: the flow
+ * is recompiled against the restored answers, and the step that number now
+ * names may be an `embedded_data` node, a `quota_check`, a page whose last
+ * visible question has just been hidden, or nothing at all because the survey
+ * got shorter. The Runner can only render a page, so an index that lands
+ * anywhere else is a dead end — and it looked like a loading screen, because
+ * "no page to show" and "no page YET" were the same state.
+ *
+ * That was the P0: the demo survey's flow begins with `ed_capture`, an
+ * `embedded_data` node, so step 0 is not a page. A test session that was
+ * opened and closed without answering anything saved `step_index = 0`, and
+ * every later visit resumed onto it. `start()` never had the problem because
+ * it walks from -1 through `moveForward`; resume restored the raw index and
+ * skipped the walk entirely.
+ *
+ * So resume goes through the same walker as everything else. If the saved step
+ * is a renderable page, that is where the respondent was and that is where
+ * they stay. Otherwise `moveForward` settles from there, EXECUTING the
+ * non-page steps it passes rather than jumping over them — which is why the
+ * embedded data is captured on the way through instead of arriving unset and
+ * making every piping reference render empty.
+ *
+ * There is deliberately no "resume backwards". A respondent resumes where they
+ * were or later, never earlier: walking back could re-ask a page they have
+ * already submitted, and a quota check they already passed.
+ */
+export function resumeAt(
+  def: SurveyDefinition,
+  state: ResponseState,
+  quotaCounts: QuotaCounts,
+  savedIndex: number | null | undefined,
+): NavigationResult {
+  const steps = compileFlow(def, state, quotaCounts);
+
+  /*
+   * A missing, negative or corrupt index is a fresh start, not index 0.
+   * `Math.max(0, …)` used to turn -1 and NaN into "the first step", which on
+   * this flow is the embedded-data node — the deadlock, arrived at from a
+   * second direction.
+   */
+  const wanted = Number.isFinite(savedIndex as number) ? Math.trunc(savedIndex as number) : -1;
+  if (wanted < 0) return advanceFrom(def, state, quotaCounts, -1);
+
+  const target = Math.min(wanted, steps.length - 1);
+  const at = target >= 0 ? steps[target] : undefined;
+  if (at?.kind === "page" && visibleQuestions(def, at, state, quotaCounts).length > 0) {
+    state.stepIndex = target;
+    return { steps, stepIndex: target, done: false, triggeredSkips: [], quotaFull: [] };
+  }
+
+  /*
+   * Not renderable. Settle forward from here — not from the beginning, which
+   * would re-run quota checks the respondent has already passed and re-ask
+   * pages they have already answered.
+   */
+  return moveForward(def, state, quotaCounts, Math.max(0, target), []);
+}
+
 export interface StartOptions {
   /**
    * Begin at the first page of this block / section (a flow node id) instead

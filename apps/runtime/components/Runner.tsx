@@ -5,6 +5,7 @@ import {
   createResponseState,
   compileFlow,
   start,
+  resumeAt,
   advance,
   goBack,
   setAnswer,
@@ -743,7 +744,7 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
         if (mode !== "live") setLogs((l) => [...l, `[survey JS] ERROR: ${e instanceof Error ? e.message : String(e)}`]);
       }
     }
-    const nav = start(def, state, counts, startAt ? { startAt } : {});
+    let nav = start(def, state, counts, startAt ? { startAt } : {});
     /*
      * Resume: the row's answers come back, the flow is recompiled with them
      * (branches depend on answers) and the position is restored, clamped in
@@ -756,9 +757,29 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
       Object.assign(state.calculated, saved.calculated ?? {});
       Object.assign(state.embedded, saved.embedded ?? {});
       state.flags = [...(saved.flags as never[] ?? [])];
-      const steps2 = compileFlow(def, state, counts);
-      state.stepIndex = Math.max(0, Math.min(saved.stepIndex ?? 0, steps2.length - 1));
-      nav.steps = steps2;
+      /*
+       * `resumeAt` rather than a clamp on the saved number.
+       *
+       * This line used to be:
+       *
+       *     state.stepIndex = Math.max(0, Math.min(saved.stepIndex ?? 0, len - 1));
+       *
+       * which restores an INDEX without asking whether it names anything the
+       * Runner can draw. A flow that begins with an `embedded_data` node — the
+       * ordinary way to capture URL parameters, and the first node of the demo
+       * survey — has a step 0 that is not a page, and a row saved before the
+       * first page was submitted has `step_index = 0`. So every visit resumed
+       * onto a step with nothing to render, `pageStep` was null, and the
+       * survey sat on "Loading…" for ever: the Next and Back handlers both
+       * begin `if (!pageStep) return;`, so nothing could move it.
+       *
+       * `resumeAt` recompiles against the restored answers and settles through
+       * the same `moveForward` walker `start()` uses — staying put when the
+       * saved step is a renderable page, and otherwise walking forward,
+       * EXECUTING the embedded-data and quota steps on the way rather than
+       * jumping over them.
+       */
+      nav = resumeAt(def, state, counts, saved.stepIndex);
       savedRef.current = null;
     }
     /*
@@ -1230,7 +1251,54 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
       )}
     </div>
   ) : !pageStep ? (
-    <div className="rs-card rs-end"><h2>Loading…</h2></div>
+    /*
+     * NO PAGE TO SHOW — AND THAT IS AN ANSWER, NOT A WAIT.
+     *
+     * This branch used to render "Loading…", and that one word was the P0.
+     * By the time we are here the survey has finished loading: `booting` is
+     * false, the definition compiled, the steps are built. "No page" means the
+     * step at `state.stepIndex` is something the Runner cannot draw — an
+     * `embedded_data` or `quota_check` node, or nothing at all because the
+     * flow is shorter than the index.
+     *
+     * It is also PERMANENT. The only callers of `advance()` are the Next and
+     * Back handlers, and both open with `if (!pageStep) return;` — so a
+     * runtime that lands here can never leave. Calling that "Loading…" turned
+     * a deterministic dead end into an infinite spinner with no diagnostics,
+     * which is how a resume bug (see `resumeAt`) reached a respondent as a
+     * survey that simply never started.
+     *
+     * `resumeAt` and `start` both settle onto a renderable page now, so this
+     * should be unreachable. It is kept, loudly, because the next thing that
+     * can produce an unrenderable step must announce itself rather than
+     * spinning — and because "unreachable" is a claim, not a guarantee.
+     */
+    <div className="rs-card rs-end" data-testid="rs-no-page" data-step-kind={step?.kind ?? "none"}>
+      <h2>{mode === "live" ? "This survey could not be started" : "There is no page to show"}</h2>
+      {mode === "live" ? (
+        <p style={{ color: "var(--rs-subtle)" }}>
+          Something in this survey&rsquo;s setup stopped it before the first question. Nothing you
+          did caused it, and nothing you entered has been lost. Please try again, or contact
+          whoever sent you this link.
+        </p>
+      ) : (
+        <>
+          <p style={{ marginTop: 10 }}>
+            The flow compiled to {steps.length} step{steps.length === 1 ? "" : "s"} and position{" "}
+            {state.stepIndex} is {step ? <>a <code>{step.kind}</code> step</> : <>past the end</>} —
+            not a page, so there is nothing to render.
+          </p>
+          <p className="rs-muted" style={{ color: "var(--rs-subtle)", marginTop: 10 }}>
+            Every page in the flow is hidden by its display logic, or the flow has no pages at all.
+            Check the display rules on the first block, and that the flow contains at least one page
+            reachable with these test values.
+          </p>
+        </>
+      )}
+      <button type="button" className="rs-btn" style={{ marginTop: 18 }} onClick={restart}>
+        {mode === "live" ? "Start again" : "↻ Restart test session"}
+      </button>
+    </div>
   ) : probe ? (
     /*
      * A FOLLOW-UP PROBE — one question on its own, rendered by the ordinary
