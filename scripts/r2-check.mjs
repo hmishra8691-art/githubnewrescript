@@ -33,7 +33,58 @@
  */
 
 import { readFileSync, existsSync } from "node:fs";
-import { R2StorageProvider, planUpload } from "../packages/storage/dist/index.js";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+/* --------------------------------------------------- the package it needs */
+
+/**
+ * BUILD `@rescript/storage` IF IT IS NOT BUILT.
+ *
+ * `dist/` is gitignored, so a fresh clone has none — and the first thing
+ * somebody setting up R2 does is clone and run this. `ERR_MODULE_NOT_FOUND`
+ * on a path they have never heard of is a bad first impression of a script
+ * whose whole job is to make a confusing thing clear.
+ *
+ * It deliberately imports the REAL provider rather than reimplementing a few
+ * S3 calls inline. A verifier that does not use the code under test proves
+ * nothing about the code under test — it would pass happily while the
+ * application failed.
+ */
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
+const DIST = new URL("../packages/storage/dist/index.js", import.meta.url);
+
+function build() {
+  const hasModules = existsSync(new URL("../node_modules", import.meta.url));
+  const steps = hasModules ? [] : [["pnpm", ["install"]]];
+  steps.push(["pnpm", ["--filter", "@rescript/storage", "build"]]);
+  for (const [cmd, args] of steps) {
+    process.stdout.write(`  ${cmd} ${args.join(" ")} … `);
+    const r = spawnSync(cmd, args, { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+    if (r.error || r.status !== 0) {
+      console.log("failed");
+      const detail = String(r.stderr ?? r.error?.message ?? "").trim().split("\n").slice(-4).join("\n");
+      if (detail) console.log(`\n${detail}\n`);
+      return false;
+    }
+    console.log("done");
+  }
+  return existsSync(DIST);
+}
+
+if (!existsSync(DIST)) {
+  console.log("\nThe storage package is not built yet — doing that first (once).\n");
+  if (!build()) {
+    console.error("\nCould not build it. Run these from the repository root, then try again:\n");
+    console.error("  pnpm install");
+    console.error("  pnpm --filter @rescript/storage build\n");
+    console.error("If `pnpm` is not installed:  npm install -g pnpm\n");
+    process.exit(2);
+  }
+  console.log("");
+}
+
+const { R2StorageProvider, planUpload } = await import(DIST.href);
 
 /* ------------------------------------------------------------------ setup */
 

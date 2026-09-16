@@ -245,6 +245,10 @@ node scripts/r2-check.mjs http://localhost:3002
 `.env.r2` is in `.gitignore`, so it cannot be committed by accident. Delete it
 when you are done, or keep it for the next time you rotate the token.
 
+On a fresh clone the script builds `@rescript/storage` for you the first time
+— `dist/` is not committed. It needs `pnpm` on your PATH
+(`npm install -g pnpm` if not).
+
 Exported environment variables still win over the file, so a one-off
 `R2_BUCKET=rescript-interviews-prod node scripts/r2-check.mjs …` works without
 editing anything.
