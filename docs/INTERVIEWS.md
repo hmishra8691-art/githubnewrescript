@@ -369,9 +369,33 @@ interview-specific event, because the unit is still audio minutes; a separate
 event type is only needed if the dashboard should break it out. Storage is
 still unmetered, and will be by the retention sweep Phase 7 adds.
 
-**Phase 7 — production.** Retention sweep, orphan reconciliation, the
-abandoned-upload sweep and observability all have their SQL and their
-arithmetic; none has a scheduler.
+**Phase 7 — production.** Built. The cron runs the retention sweep and the
+abandoned-upload sweep after the queue, and only with time left over: deleting
+things is not urgent, while a transcript nobody is waiting on is a researcher
+staring at "transcribing".
+
+All three sweeps read the keys, delete the objects, and only then update the
+rows — never the reverse. A row dropped before its object leaves an object
+nothing can name, which is why `rescript_interview_media_for` exists. Both
+possible failures of that order are recoverable; the other order is not.
+
+Deletion defaults fall towards keeping. An unset `retention_scope` removes the
+recordings and nothing else, because nobody writing `retention_days: 90` is
+asking for the analysis a colleague wrote a report from to be destroyed. An
+object with no modification time is kept, not deleted. A deleted row still
+counts as claiming its key, so the orphan sweep cannot race the retention sweep
+to the same object.
+
+The orphan sweep is deliberately NOT on the schedule — it runs per organization
+from an explicit call, and it refuses outright if more than half of what it saw
+looks unclaimed, because the way that goes wrong is a database lookup silently
+returning nothing while the listing works. `MAX_DELETIONS_PER_SWEEP` is a blast
+radius, not a performance limit.
+
+Human review is written now too: `PUT /api/interviews/[id]/review`, one review
+per reviewer rather than one per interview, using the same three verdicts as
+the analysis so agreement and disagreement are directly comparable. The
+analysis verdict is shown beside the choice and never pre-selected as it.
 
 **Phase 8 — Studio integration.** Not started.
 

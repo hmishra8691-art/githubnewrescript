@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { drain } from "@/lib/runner";
+import { emptySweepReport, sweepAbandonedUploads, sweepRetention } from "@/lib/sweeps";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -61,6 +62,26 @@ async function run(req: Request): Promise<NextResponse> {
    * itself again.
    */
   const report = await drain(["transcription", "analysis"]);
+
+  /*
+   * The sweeps run AFTER the queue, and only with time left over. Deleting
+   * things is not urgent — an interview a few minutes past its retention window
+   * is not an incident — while a transcript nobody is waiting on is a
+   * researcher staring at "transcribing".
+   *
+   * The orphan sweep is deliberately absent from the schedule. It is the one
+   * that deletes objects the database does not know about, and it runs per
+   * organization from an explicit call rather than on a timer, so nobody
+   * discovers it by finding a bucket emptier than they left it.
+   */
+  const sweeps = emptySweepReport();
+  if (Date.now() - startedAt < 120_000) {
+    await sweepAbandonedUploads(sweeps);
+    await sweepRetention(sweeps);
+  } else {
+    sweeps.warnings.push("the queue took the whole window, so the sweeps were skipped this pass");
+  }
+
   const ms = Date.now() - startedAt;
 
   /*
@@ -69,9 +90,9 @@ async function run(req: Request): Promise<NextResponse> {
    * that claimed nothing is still worth a line — a queue that is quiet and a
    * cron that is not firing look identical from the outside otherwise.
    */
-  console.info("[rescript:interviews] cron drain", JSON.stringify({ ...report, ms }));
+  console.info("[rescript:interviews] cron drain", JSON.stringify({ ...report, ...sweeps, warnings: [...report.warnings, ...sweeps.warnings], ms }));
 
-  return NextResponse.json({ ok: true, ...report, ms }, {
+  return NextResponse.json({ ok: true, ...report, sweeps, ms }, {
     headers: { "cache-control": "no-store" },
   });
 }

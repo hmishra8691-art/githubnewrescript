@@ -9,6 +9,7 @@ import { SESSION_COOKIE_NAME, can, projectPageGate, signInUrl } from "@/lib/auth
 import {
   InterviewReview, type EvidenceView, type RecordingView,
 } from "@/components/InterviewReview";
+import { ReviewPanel, type ReviewRequirement } from "@/components/ReviewPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -65,6 +66,7 @@ export default async function InterviewPage({ params }: { params: { id: string }
 
   const mayWatch = can(gate.ctx.role, "media.read");
   const mayMap = can(gate.ctx.role, "transcript.read");
+  const mayReview = can(gate.ctx.role, "review.write");
 
   const [{ data: media }, { data: questions }, { data: transcripts }, { data: evidenceRows }, { data: analysis }, { data: telemetry }] =
     await Promise.all([
@@ -168,6 +170,28 @@ export default async function InterviewPage({ params }: { params: { id: string }
       count: (v as { count: number }).count,
     }));
 
+  /*
+   * The reviewer's own draft, and the analysis verdict per requirement for
+   * comparison. The analysis verdict is shown BESIDE the choice and never
+   * pre-selected as it: a form that starts on the machine's answer is a form
+   * most people agree with.
+   */
+  const { data: myReview } = mayReview
+    ? await db.from("interview_reviews")
+        .select("status, assessments, notes, recommendation")
+        .eq("interview_id", params.id)
+        .eq("reviewer_id", gate.ctx.user.userId)
+        .maybeSingle()
+    : { data: null };
+
+  const analysisVerdicts = (analysis?.summary ?? {}) as Record<string, { verdict?: string }>;
+  const reviewRequirements: ReviewRequirement[] = (requirements ?? []).map((r) => ({
+    id: r.id as string,
+    code: r.code as string,
+    title: r.title as string,
+    analysisVerdict: (analysisVerdicts[r.code as string]?.verdict as ReviewRequirement["analysisVerdict"]) ?? null,
+  }));
+
   return (
     <main className="wrap wide">
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 16 }}>
@@ -199,6 +223,21 @@ export default async function InterviewPage({ params }: { params: { id: string }
         signals={signals}
         canMap={mayMap}
       />
+
+      {mayReview && reviewRequirements.length > 0 && (
+        <ReviewPanel
+          interviewId={params.id}
+          requirements={reviewRequirements}
+          initial={myReview
+            ? {
+                status: myReview.status as string,
+                assessments: (myReview.assessments as Record<string, string>) ?? {},
+                notes: (myReview.notes as string) ?? "",
+                recommendation: (myReview.recommendation as string) ?? null,
+              }
+            : null}
+        />
+      )}
     </main>
   );
 }
