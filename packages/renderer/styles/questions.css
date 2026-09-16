@@ -280,16 +280,23 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 }
 .rs-cardopt.selected .rs-cardopt-check { background: var(--rs-primary); }
 
-.rs-stars { display: flex; align-items: center; gap: 4px; }
+/* `flex-wrap` — ten symbols at 34px do not fit a narrow card, and without it
+   they ran straight out of the question frame. `.rs-nps` has wrapped since it
+   was written; these two never did, which is what the review saw. */
+.rs-stars { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .rs-stars button {
   font-size: 34px; line-height: 1; border: none; background: none; cursor: pointer;
   color: var(--rs-border); padding: 2px; transition: color .1s, transform .1s;
+}
+@media (max-width: 480px) {
+  .rs-stars button { font-size: 26px; }
+  .rs-emoji button { font-size: 24px; padding: 6px 7px; }
 }
 .rs-stars button.on { color: #f59e0b; }
 .rs-stars button:hover { transform: scale(1.15); }
 .rs-stars-val { margin-left: 10px; color: var(--rs-subtle); font-size: .9em; }
 
-.rs-emoji { display: flex; gap: 10px; }
+.rs-emoji { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .rs-emoji button {
   font-size: 32px; line-height: 1; cursor: pointer; padding: 8px 10px;
   border: 1.5px solid var(--rs-border); border-radius: 12px; background: var(--rs-surface);

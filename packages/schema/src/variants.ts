@@ -91,6 +91,22 @@ export interface QuestionVariantDef {
   capabilities: VariantCapability[];
   /** ValidationRule kinds the editor offers for this variant */
   validations: string[];
+  /**
+   * THE RANGE THIS VARIANT'S SCALE CAN ACTUALLY TAKE.
+   *
+   * A rating renderer can only draw so many symbols, and some scales are
+   * standards rather than settings. Until this existed, neither fact was
+   * written down anywhere: `maxValue` was an unbounded number in the schema,
+   * the editor's Min/Max inputs carried no `min`/`max` attribute, and the
+   * renderer quietly clamped — so a Heart Rating configured 1–50 showed ten
+   * hearts, printed "3 / 10" next to them, and validated the answer against
+   * 50. The September review reported that three times.
+   *
+   * `fixed` means the scale is the variant's definition rather than the
+   * author's choice: an NPS that is not 0–10 is not an NPS, so the editor
+   * shows the range and offers no way to change it.
+   */
+  scale?: { min: number; max: number; fixed?: boolean };
   /** applied on creation / conversion (merged into the question) */
   defaults?: {
     settings?: Record<string, unknown>;
@@ -188,6 +204,14 @@ const VAL_MULTI = ["required", "min_selections", "max_selections", "custom_expre
  */
 const without = (caps: VariantCapability[], ...drop: VariantCapability[]): VariantCapability[] =>
   caps.filter((c) => !drop.includes(c));
+
+/**
+ * Stars, hearts and emoji are drawn one symbol per scale point, and past ten
+ * they stop fitting on a phone. The renderers already knew that and clamped
+ * silently; the bound is declared here so the editor can refuse the value
+ * instead, and so the stored scale and the drawn scale can never disagree.
+ */
+const SCALE_SYMBOLS = { min: 1, max: 10 } as const;
 
 /**
  * Validation kinds that every question type supports, whatever its variant.
@@ -342,23 +366,51 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     baseType: "numeric", renderer: "stars", responseModel: "numeric",
     capabilities: ["numeric_bounds"], validations: VAL_NUM,
     defaults: { settings: { minValue: 1, maxValue: 5 } },
+    scale: SCALE_SYMBOLS,
     supersededBy: "slider.stars",
   }),
   stable(F.single, "emoji", "Emoji / Smiley Rating", "Five-point emoji scale stored as 1–5.", {
     baseType: "numeric", renderer: "emoji", responseModel: "numeric",
     capabilities: ["numeric_bounds"], validations: VAL_NUM,
     defaults: { settings: { minValue: 1, maxValue: 5 } },
+    scale: SCALE_SYMBOLS,
     supersededBy: "slider.emoji",
   }),
-  stable(F.single, "likelihood", "Likelihood Scale (1–7)", "Numbered scale with end labels.", {
+  /*
+   * "Likelihood Scale (1–7)" carried its range in its name while the Min and
+   * Max fields let the author set any range at all — so the label and the
+   * configuration could disagree, which the review reported. The name no
+   * longer claims a range; `scale` says what the range may be, and the
+   * editor enforces it.
+   */
+  stable(F.single, "likelihood", "Likelihood Scale", "Numbered scale with end labels — set the range and the labels.", {
     baseType: "nps", responseModel: "numeric",
     capabilities: ["numeric_bounds", "scale_labels"], validations: ["required"],
     defaults: { settings: { minValue: 1, maxValue: 7, npsLeftLabel: "Not at all likely", npsRightLabel: "Extremely likely" } },
+    scale: { min: 0, max: 15 },
     presetOf: "single_select.nps",
   }),
-  stable(F.single, "nps", "NPS (0–10)", "Standard Net Promoter Score scale.", {
+  /*
+   * An NPS that is not 0–10 is not an NPS. It declared `numeric_bounds` and
+   * seeded no defaults at all, so the scale started empty and the author
+   * could set it to anything — the review asked for the fields to go. They
+   * are gone: `fixed` tells the editor to show the range and offer no way to
+   * change it, and the defaults make the standard scale the actual stored
+   * configuration rather than a fallback two layers down in the renderer.
+   */
+  stable(F.single, "nps", "NPS (0–10)", "Standard Net Promoter Score scale — fixed 0–10, with editable end labels.", {
     baseType: "nps", responseModel: "numeric",
+    /*
+     * `numeric_bounds` stays: the capability says this question SHAPE has a
+     * min and a max, which is what the shape table and the migration read it
+     * for. Whether the author may set them is a different question, and
+     * `scale.fixed` is where that answer lives. Conflating the two would also
+     * break the registry's rule that a preset may not unlock what its parent
+     * lacks — Likelihood Scale is a preset of this one and does set its range.
+     */
     capabilities: ["numeric_bounds", "scale_labels"], validations: ["required"],
+    defaults: { settings: { minValue: 0, maxValue: 10, npsLeftLabel: "Not at all likely", npsRightLabel: "Extremely likely" } },
+    scale: { min: 0, max: 10, fixed: true },
   }),
   stable(F.single, "slider", "Slider Selection", "Continuous slider between two anchors.", {
     baseType: "slider", responseModel: "numeric",
@@ -392,10 +444,11 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     baseType: "single_select", renderer: "listrows", responseModel: "single_choice",
     capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
   }),
-  stable(F.single, "heart_rating", "Heart Rating", "1–N hearts stored as a score.", {
+  stable(F.single, "heart_rating", "Heart Rating", "1–N hearts stored as a score (up to 10).", {
     baseType: "numeric", renderer: "hearts", responseModel: "numeric",
     capabilities: ["numeric_bounds"], validations: VAL_NUM,
     defaults: { settings: { minValue: 1, maxValue: 5 } },
+    scale: SCALE_SYMBOLS,
   }),
   stable(F.single, "product_choice", "Product Choice", "Rich product cards — image, description, price, badge — pick one.", {
     baseType: "single_select", renderer: "richcards", responseModel: "single_choice",
@@ -846,15 +899,17 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     defaults: { settings: { step: 1 } },
     presetOf: "slider.single",
   }),
-  stable(F.slider, "stars", "Star Rating", "1–N stars stored as a numeric score.", {
+  stable(F.slider, "stars", "Star Rating", "1–N stars stored as a numeric score (up to 10).", {
     baseType: "numeric", renderer: "stars", responseModel: "numeric",
     capabilities: ["numeric_bounds"], validations: VAL_NUM,
     defaults: { settings: { minValue: 1, maxValue: 5 } },
+    scale: SCALE_SYMBOLS,
   }),
-  stable(F.slider, "emoji", "Emoji / Smiley Rating", "Emoji scale; the face count follows min–max.", {
+  stable(F.slider, "emoji", "Emoji / Smiley Rating", "Emoji scale; the face count follows min–max (up to 10).", {
     baseType: "numeric", renderer: "emoji", responseModel: "numeric",
     capabilities: ["numeric_bounds"], validations: VAL_NUM,
     defaults: { settings: { minValue: 1, maxValue: 5 } },
+    scale: SCALE_SYMBOLS,
   }),
   stable(F.slider, "dual", "Dual / Range Slider", "Two handles selecting a range.", {
     // The same from–to pair as numeric.numeric_range, dragged instead of

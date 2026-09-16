@@ -15,6 +15,7 @@ import { acbcDone, isAcbcAnswer } from "./acbc.js";
 import { shapeHasAxis } from "./questionShape.js";
 import { videoCompleted, interviewAnswered, interviewProblems, requiresAudioAnswer } from "./interview.js";
 import { isEmptyAnswer } from "./answers.js";
+import { validationBounds } from "./scale.js";
 
 /**
  * Whether a failed check stops the respondent.
@@ -363,10 +364,19 @@ export function validateQuestion(
 
   // bounds from settings
   if (!isEmpty(value) && (q.type === "numeric" || q.type === "slider" || q.type === "nps")) {
-    if (q.settings.minValue != null && Number(value) < q.settings.minValue)
-      push(uiText(ctx.ui, "min_value", { min: q.settings.minValue }));
-    if (q.settings.maxValue != null && Number(value) > q.settings.maxValue)
-      push(uiText(ctx.ui, "max_value", { max: q.settings.maxValue }));
+    /*
+     * Through `validationBounds` rather than straight off the settings, so
+     * the numbers checked here are the numbers the respondent was shown. A
+     * rating variant declares the range its scale may take; a question whose
+     * stored settings fall outside it (authored before the bound existed, or
+     * edited through the API) is validated against the range that was
+     * actually drawn, not against the impossible one it holds.
+     */
+    const bounds = validationBounds(q);
+    if (bounds.min != null && Number(value) < bounds.min)
+      push(uiText(ctx.ui, "min_value", { min: bounds.min }));
+    if (bounds.max != null && Number(value) > bounds.max)
+      push(uiText(ctx.ui, "max_value", { max: bounds.max }));
   }
   /*
    * DATE BOUNDS FROM SETTINGS.

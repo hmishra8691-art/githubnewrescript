@@ -19,6 +19,7 @@ import {
   stripHtmlText,
   selectedOtherCodes,
   uiText,
+  effectiveScale,
 } from "@rescript/engine";
 import { variantRenderers } from "./variants/registry";
 import { MediaEmbed, SafeImage } from "./Media";
@@ -517,6 +518,14 @@ export function NumberField({
       onChange={(e) => {
         const t = e.target.value;
         if (t !== "" && !/^-?\d*\.?\d*(e-?\d*)?$/i.test(t)) return; // reject letters, keep the caret
+        /*
+         * A minus sign where the scale starts at zero or above. Currency and
+         * Quantity seed `minValue: 0` precisely because a negative price or a
+         * negative number of items is not a thing, and the validator refuses
+         * it — but only after the respondent has typed it and pressed Next.
+         * Refusing the keystroke is the same rule said earlier.
+         */
+        if (t.startsWith("-") && min != null && min >= 0) return;
         commit(t);
       }}
       data-min={min}
@@ -708,8 +717,13 @@ export function ListInput(p: QRProps & { numeric: boolean }) {
 
 /* ------------------------------------------------------------- NPS / slider */
 export function Nps(p: QRProps) {
-  const min = p.q.settings.minValue ?? 0;
-  const max = p.q.settings.maxValue ?? 10;
+  /*
+   * The scale comes from the variant's declared range, not straight from the
+   * settings: an NPS is fixed 0–10 and a Likelihood Scale may be 0–15. Before
+   * this, `maxValue` was whatever the editor had been allowed to store, so a
+   * value of 50 drew fifty-one buttons.
+   */
+  const { min, max } = effectiveScale(p.q, { min: 0, max: 10 });
   // The label row has to be the same width as the button row, or the right
   // label drifts to the card edge — badly on short scales, where the buttons
   // occupy half the width. Wrapping both in one inline-block sizes the labels
@@ -1343,8 +1357,14 @@ export function ChoiceCards(p: QRProps & { multi: boolean }) {
 
 /** Star Rating — numeric 1..max. */
 export function StarRating(p: QRProps) {
-  const max = Math.min(p.q.settings.maxValue ?? 5, 10);
-  const min = p.q.settings.minValue ?? 1;
+  /*
+   * This used to be `Math.min(maxValue ?? 5, 10)` — a silent clamp. The
+   * editor accepted 50, the renderer drew 10, the counter said "/ 10" and
+   * the validator accepted up to 50. The clamp is the same; what changed is
+   * that the editor now refuses the value in the first place, and the
+   * validator asks for the same pair of numbers this does.
+   */
+  const { min, max } = effectiveScale(p.q, { min: 1, max: 10 });
   const val = p.value == null ? 0 : Number(p.value);
   const [hover, setHover] = React.useState(0);
   const shown = hover || val;
@@ -1399,8 +1419,7 @@ export function emojiScale(count: number): string[] {
  * the editor said, which made the bounds fields quietly meaningless.
  */
 export function EmojiRating(p: QRProps) {
-  const min = p.q.settings.minValue ?? 1;
-  const max = p.q.settings.maxValue ?? 5;
+  const { min, max } = effectiveScale(p.q, { min: 1, max: 10 });
   const count = Math.max(1, Math.min(11, max - min + 1));
   const faces = emojiScale(count);
   const val = p.value == null ? null : Number(p.value);

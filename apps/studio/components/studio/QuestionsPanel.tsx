@@ -60,6 +60,7 @@ import {
   parsePastedOptions, planPaste, optionsToPaste, type PasteMode,
   stripHtmlText, referencesTo, pruneReferencesTo, referencesToMany, pruneReferencesToMany,
   PIPE_TOKEN_RE,
+  effectiveScale,
   type QuestionReference,
 } from "@rescript/engine"; // also registers builtin question types
 import { isEmptyOptionLogic } from "@rescript/schema";
@@ -676,6 +677,22 @@ export function QuestionEditor({ q }: { q: Question }) {
    * package owns the list, because the renderer is what decides.
    */
   const showLayout = has("layout_columns") && honoursColumns(variantDef?.renderer, q.type);
+  /* what this variant's scale may be, and what it will actually be drawn as */
+  const scaleLimit = variantDef?.scale;
+  const scaleShown = effectiveScale(q, { min: scaleLimit?.min ?? 0, max: scaleLimit?.max ?? 10 });
+  const scaleOut = !!scaleLimit && scaleShown.clamped;
+  /*
+   * Which pair of end-label settings this question's renderer reads. The NPS
+   * button row and the emoji row read `npsLeftLabel`/`npsRightLabel`; the
+   * slider reads `sliderLeftLabel`/`sliderRightLabel`. Stars and hearts draw
+   * no labels at all, so there is nothing to offer for them.
+   */
+  const scaleLabelKeys: readonly [string, string] | null =
+    q.type === "nps" || variantDef?.renderer === "emoji"
+      ? ["npsLeftLabel", "npsRightLabel"] as const
+      : q.type === "slider"
+        ? ["sliderLeftLabel", "sliderRightLabel"] as const
+        : null;
   const patch = (p: Partial<Question>) =>
     s.update((d) => {
       const i = d.questions.findIndex((x) => x.id === q.id);
@@ -858,14 +875,44 @@ export function QuestionEditor({ q }: { q: Question }) {
         <FieldRowsEditor q={q} patch={patch} patchSettings={patchSettings} />
       )}
 
-      {feats.numericBounds && (
+      {/*
+        * A SCALE THAT IS THE VARIANT'S DEFINITION HAS NO FIELDS TO EDIT.
+        * An NPS that is not 0–10 is not an NPS, so the range is shown and
+        * there is nothing to change. This is the review's "remove the Min and
+        * Max input fields from the NPS settings" — removed for the variants
+        * whose scale is a standard, kept and bounded for the ones where the
+        * range is a real choice.
+        */}
+      {feats.numericBounds && scaleLimit?.fixed && (
+        <p className="muted" style={{ fontSize: 13 }} data-testid="scale-fixed">
+          Scale fixed at {scaleLimit.min}–{scaleLimit.max} — the standard for this question type.
+        </p>
+      )}
+      {feats.numericBounds && !scaleLimit?.fixed && (
         <div className="row">
           <label className="f"><span>Min</span>
-            <input className="input" type="number" style={{ width: 90 }} value={q.settings.minValue ?? ""}
+            <input className="input" type="number" style={{ width: 90 }} data-testid="min-value"
+              min={scaleLimit?.min} max={scaleLimit?.max}
+              value={q.settings.minValue ?? ""}
               onChange={(e) => patchSettings({ minValue: e.target.value === "" ? undefined : Number(e.target.value) })} /></label>
           <label className="f"><span>Max</span>
-            <input className="input" type="number" style={{ width: 90 }} value={q.settings.maxValue ?? ""}
+            <input className="input" type="number" style={{ width: 90 }} data-testid="max-value"
+              min={scaleLimit?.min} max={scaleLimit?.max}
+              value={q.settings.maxValue ?? ""}
               onChange={(e) => patchSettings({ maxValue: e.target.value === "" ? undefined : Number(e.target.value) })} /></label>
+          {/*
+            * The message the review asked for. `min`/`max` on a number input
+            * are a hint to the spinner, not a refusal — a typed 50 still
+            * lands in the setting, so the editor has to say so. Nothing here
+            * rewrites the author's value: it tells them what will be drawn,
+            * which is what was missing when a 1–50 heart rating showed ten
+            * hearts and said nothing.
+            */}
+          {scaleLimit && scaleOut && (
+            <span className="chip warn" data-testid="scale-out-of-range" style={{ alignSelf: "flex-end", marginBottom: 7 }}>
+              This scale can only be {scaleLimit.min}–{scaleLimit.max}. It will be drawn and scored as {scaleShown.min}–{scaleShown.max}.
+            </span>
+          )}
           {feats.sum && (
             <>
               <label className="f"><span>Sum target</span>
@@ -876,6 +923,32 @@ export function QuestionEditor({ q }: { q: Question }) {
                   onChange={(e) => patchSettings({ sumUnit: e.target.value || undefined })} /></label>
             </>
           )}
+        </div>
+      )}
+
+      {/*
+        * SCALE END LABELS.
+        *
+        * `scale_labels` has been a declared capability on fifteen variants
+        * since the taxonomy work, the settings keys exist, and the renderers
+        * read them — but nothing in the Studio ever wrote them. The slider
+        * variant's own config file says these "are edited in the ordinary
+        * panels"; they were not. So every NPS in the product showed the
+        * renderer's hard-coded "Not at all likely" / "Extremely likely",
+        * which is exactly what the review asked to be able to change.
+        */}
+      {has("scale_labels") && scaleLabelKeys && (
+        <div className="row">
+          <label className="f" style={{ minWidth: 220 }}><span>Left end label</span>
+            <input className="input" data-testid="scale-left-label"
+              placeholder={scaleLabelKeys[0] === "npsLeftLabel" ? "Not at all likely" : String(q.settings.minValue ?? "")}
+              value={(q.settings as Record<string, unknown>)[scaleLabelKeys[0]] as string ?? ""}
+              onChange={(e) => patchSettings({ [scaleLabelKeys[0]]: e.target.value || undefined } as Partial<Question["settings"]>)} /></label>
+          <label className="f" style={{ minWidth: 220 }}><span>Right end label</span>
+            <input className="input" data-testid="scale-right-label"
+              placeholder={scaleLabelKeys[1] === "npsRightLabel" ? "Extremely likely" : String(q.settings.maxValue ?? "")}
+              value={(q.settings as Record<string, unknown>)[scaleLabelKeys[1]] as string ?? ""}
+              onChange={(e) => patchSettings({ [scaleLabelKeys[1]]: e.target.value || undefined } as Partial<Question["settings"]>)} /></label>
         </div>
       )}
 

@@ -27,6 +27,7 @@ export * from "./flowTree.js";
 export * from "./embedded.js";
 export * from "./redirect.js";
 export * from "./quotas.js";
+export * from "./scale.js";
 export * from "./validate.js";
 export * from "./variables.js";
 export * from "./scripts.js";
