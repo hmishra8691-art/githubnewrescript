@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { assembleAndVerify, readClaimedParts } from "@/lib/recordings";
 import { supabaseAdmin } from "@/lib/admin";
+import { enqueue } from "@/lib/runner";
 import { candidateGate, isCandidateFailure, touchInterview } from "@/lib/candidate";
 import { storageOrResponse } from "@/lib/storage";
 
@@ -106,6 +107,20 @@ export async function POST(req: NextRequest) {
       response_id: media.response_id,
       status: "waiting",
     }, { onConflict: "media_id", ignoreDuplicates: true });
+
+    /*
+     * And QUEUED. Creating the row was always the easy half; until the runner
+     * existed it waited for ever, which is what "Phase 3" meant. The insert is
+     * idempotent on `idempotency_key`, so a re-sent completion queues nothing
+     * twice.
+     */
+    await enqueue({
+      kind: "transcription",
+      subjectId: media.id,
+      customerId: gate.interview.customer_id,
+      projectId: gate.project.id,
+      interviewId: gate.interview.id,
+    });
   }
 
   await touchInterview(gate);

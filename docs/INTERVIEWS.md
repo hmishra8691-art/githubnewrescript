@@ -305,10 +305,32 @@ routes and share their verification through `checkBeforeAssembly` /
 `GET /api/media/[id]/url` mints a 15-minute signed playback URL behind
 `media.read`. Before it existed nothing in this product could be watched.
 
-**Phase 3 — processing.** The `interview_jobs` queue, its claim functions and
-its idempotency exist and are tested; there is no runner and no cron yet, so
-nothing transcribes. `interview_transcripts` rows are created when an audio
-companion is stored, waiting for one.
+**Phase 3 — processing.** Built. `lib/runner.ts` claims from `interview_jobs`,
+dispatches by kind and finishes with a `run_after` the policy in
+`@rescript/interviews` computes. `/api/cron/jobs` drains it every five minutes
+behind `CRON_SECRET`, using the Studio cron's `timingSafeEqual` check; unset
+means the route refuses everything, because an open endpoint that drains a
+queue is one anybody can use to spend the wallet.
+
+Failures are classified rather than counted: a 4xx from a provider that has
+looked at the file, a missing object, an unsupported format are permanent and
+stop at once, while 429, 5xx and every unrecognised error retry with growing
+backoff. Three attempts at a recording the provider has already refused is
+three charges for the same "no".
+
+Transcription asks for segment timings always and for diarization only on a
+moderated recording — a candidate alone in front of a camera is one voice, and
+asking a provider to separate speakers in it invites it to invent a second.
+`Transcription.diarized` reports whether separation ACTUALLY happened, not
+whether it was requested: the OpenAI endpoint cannot do it and several
+OpenAI-compatible gateways can, so the request is sent, the reply parsed, and
+the truth recorded.
+
+Transcription is metered against the interview project's wallet through
+`subject_kind = 'interview'` — the first thing in this product to spend money,
+and the reason 0031 exists. The settle carries an idempotency key derived from
+the recording, so a job retried after a failed database write cannot charge
+twice.
 
 **Phase 4 — intelligence.** `verifyEvidence` and the requirement vocabulary
 are built and tested; the prompt, the provider call and the review interface
@@ -317,10 +339,11 @@ are not.
 **Phase 5 — telemetry surfaces.** Events are collected and stored; the
 reviewer's dashboard that renders them under `SIGNALS_CAVEAT` is not built.
 
-**Phase 6 — billing.** The subject generalisation is done and interview meters
-can be added as data. No interview meter is wired to a code path yet — nothing
-in Phases 1–2 spends money except storage, which is metered by the retention
-sweep that Phase 7 adds.
+**Phase 6 — billing.** Transcription is metered (see Phase 3). It reuses
+`SPEECH_TO_TEXT_MINUTE` and the `ai.stt.*` rate rather than inventing an
+interview-specific event, because the unit is still audio minutes; a separate
+event type is only needed if the dashboard should break it out. Storage is
+still unmetered, and will be by the retention sweep Phase 7 adds.
 
 **Phase 7 — production.** Retention sweep, orphan reconciliation, the
 abandoned-upload sweep and observability all have their SQL and their

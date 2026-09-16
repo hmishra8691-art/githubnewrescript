@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
+import { enqueue } from "@/lib/runner";
 import { isFailure } from "@/lib/auth";
 import { assembleAndVerify, readClaimedParts, requireMedia } from "@/lib/recordings";
 
@@ -92,6 +93,19 @@ export async function POST(req: NextRequest) {
     response_id: null,
     status: "waiting",
   }, { onConflict: "media_id", ignoreDuplicates: true });
+
+  /*
+   * A moderated recording is transcribed with diarization asked for, because
+   * it has more than one voice in it. The runner decides that from the media
+   * kind; queuing it is the same call either way.
+   */
+  await enqueue({
+    kind: "transcription",
+    subjectId: mediaId,
+    customerId: media.customer_id,
+    projectId: media.project_id,
+    interviewId: media.interview_id,
+  });
 
   return NextResponse.json({ ok: true, mediaId, bytes: verified.size, verified: true });
 }

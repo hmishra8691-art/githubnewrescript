@@ -410,6 +410,37 @@ export interface TranscribeOptions {
   mimeType?: string;
   /** seconds, for metering; estimated from the byte count when unknown */
   durationSeconds?: number;
+  /**
+   * Ask for per-segment timings as well as the text.
+   *
+   * Costs nothing extra on an OpenAI-compatible endpoint — it is
+   * `verbose_json` instead of `json` — and it is what makes a transcript
+   * navigable: a reviewer clicking a quote and landing at the second it was
+   * said. `locateQuote` in `@rescript/interviews` needs them.
+   */
+  segments?: boolean;
+  /**
+   * Ask the provider to separate the speakers.
+   *
+   * Requested, never assumed. The OpenAI Whisper endpoint does not do this;
+   * several OpenAI-COMPATIBLE gateways do, through an extra field they accept
+   * and the rest ignore. So the parameter is sent, the reply is parsed for
+   * speaker labels, and `Transcription.diarized` says truthfully whether any
+   * came back. A recording of three people transcribed by a provider that
+   * cannot diarize is a transcript with one voice, and the product must know
+   * that rather than assume the labels are simply missing.
+   *
+   * Implies `segments`: a speaker label with no timing has nothing to attach to.
+   */
+  diarize?: boolean;
+}
+
+export interface TranscriptSegment {
+  start: number;
+  end: number;
+  text: string;
+  /** the provider's own anonymous label — "Speaker 1", "A". Never a name. */
+  speaker?: string;
 }
 
 export interface Transcription {
@@ -417,6 +448,16 @@ export interface Transcription {
   language?: string;
   model: string;
   durationSeconds?: number;
+  /** present when `segments` or `diarize` was asked for and the provider obliged */
+  segments?: TranscriptSegment[];
+  /**
+   * Whether speaker separation ACTUALLY happened — not whether it was asked
+   * for. False after a diarize request the provider ignored, which is the case
+   * that must not be mistaken for "everybody sounded the same".
+   */
+  diarized?: boolean;
+  /** how many distinct voices the provider reported, when it diarized */
+  speakerCount?: number;
 }
 
 /** A rough audio-minute figure when the caller could not measure one.
@@ -521,7 +562,21 @@ export async function transcribe(
        content type to pick a decoder, and a bare buffer gives it neither */
     form.append("file", new Blob([bytes as unknown as BlobPart], { type: opts.mimeType || "audio/webm" }), opts.fileName || "answer.webm");
     form.append("model", model);
-    form.append("response_format", "json");
+    /*
+     * `verbose_json` is what carries segment timings. It is the same request
+     * and the same price as `json`, so it is used whenever anything downstream
+     * wants timings — and diarization implies them, since a speaker label with
+     * no timing has nothing to attach to.
+     */
+    const wantSegments = !!(opts.segments || opts.diarize);
+    form.append("response_format", wantSegments ? "verbose_json" : "json");
+    if (wantSegments) form.append("timestamp_granularities[]", "segment");
+    /*
+     * Sent as an extra field rather than negotiated. Providers that diarize
+     * read it; the rest ignore an unknown multipart part, which is why asking
+     * is safe against an endpoint that has never heard of it.
+     */
+    if (opts.diarize) form.append("diarize", "true");
     if (opts.language) form.append("language", shortLang(opts.language));
 
     const r = await fetch(`${base}/audio/transcriptions`, {
@@ -542,7 +597,10 @@ export async function transcribe(
       console.warn("[rescript:ai] stt provider error", JSON.stringify({ status: r.status, model, detail }));
       return { ok: false, status: r.status, reason: providerReason(r.status, model, detail) };
     }
-    const j = (await r.json().catch(() => null)) as { text?: string; language?: string; duration?: number } | null;
+    const j = (await r.json().catch(() => null)) as {
+      text?: string; language?: string; duration?: number;
+      segments?: { start?: number; end?: number; text?: string; speaker?: string; speaker_label?: string }[];
+    } | null;
     if (!j) return { ok: false, reason: "The transcription service replied in a format this installation could not read." };
     const text = (j.text ?? "").trim();
     if (!text) {
@@ -550,7 +608,32 @@ export async function transcribe(
     }
     const measured = Number.isFinite(j?.duration) ? Math.max(1, Math.round(j!.duration!)) : seconds;
     reportUsage({ kind: "stt", provider: "openai-compatible", model, seconds: measured, requests: 1, estimated: !Number.isFinite(j?.duration) });
-    return { ok: true, value: { text, language: j?.language || opts.language, model, durationSeconds: measured } };
+
+    /*
+     * Segments are taken only when they are usable. A provider that returns
+     * the key with no timings gives a transcript that looks navigable and
+     * jumps to zero, which is worse than one that plainly has no timings.
+     */
+    const rawSegments = Array.isArray(j?.segments) ? j!.segments! : [];
+    const segments: TranscriptSegment[] = rawSegments
+      .map((sg) => ({
+        start: Number(sg.start),
+        end: Number(sg.end),
+        text: String(sg.text ?? "").trim(),
+        speaker: (sg.speaker ?? sg.speaker_label ?? "").trim() || undefined,
+      }))
+      .filter((sg) => Number.isFinite(sg.start) && Number.isFinite(sg.end) && sg.text);
+
+    const speakers = new Set(segments.map((sg) => sg.speaker).filter(Boolean) as string[]);
+    return {
+      ok: true,
+      value: {
+        text, language: j?.language || opts.language, model, durationSeconds: measured,
+        ...(segments.length ? { segments } : {}),
+        /* truthful: asked-for is not the same as happened */
+        ...(opts.diarize ? { diarized: speakers.size > 0, speakerCount: speakers.size } : {}),
+      },
+    };
   } catch (e) {
     const name = (e as Error).name;
     console.warn("[rescript:ai] stt provider unreachable", JSON.stringify({ error: name }));
@@ -575,11 +658,47 @@ export function fakeTranscribe(bytes: Uint8Array, opts: TranscribeOptions = {}):
   let h = 2166136261;
   for (let i = 0; i < bytes.length; i += 97) { h ^= bytes[i]; h = Math.imul(h, 16777619); }
   const id = (h >>> 0).toString(36).slice(0, 6);
+  const text = `[transcript ${id}] This is a simulated transcript of a ${seconds}-second answer.`;
+
+  /*
+   * The fake diarizes when asked, because a fake that cannot exercise the
+   * interesting path is a fake that lets the interesting path ship untested.
+   * Two voices alternating, which is what a moderated interview sounds like.
+   */
+  const want = !!(opts.segments || opts.diarize);
+  const segments: TranscriptSegment[] = [];
+  if (want) {
+    /*
+     * Four turns, not "however many sentences the filler text happens to
+     * have". A fake whose segment count depends on its own punctuation is a
+     * fake that silently stops exercising the multi-speaker path the day
+     * somebody rewords it — which is exactly what a test caught here.
+     */
+    const words = text.split(/\s+/).filter(Boolean);
+    const turns = 4;
+    const per = Math.max(1, Math.ceil(words.length / turns));
+    const parts = Array.from({ length: turns }, (_, i) =>
+      words.slice(i * per, (i + 1) * per).join(" ")).filter(Boolean);
+    const each = Math.max(1, seconds / Math.max(1, parts.length));
+    parts.forEach((part, i) => {
+      segments.push({
+        start: Math.round(i * each * 100) / 100,
+        end: Math.round((i + 1) * each * 100) / 100,
+        text: part.endsWith(".") ? part : `${part}.`,
+        ...(opts.diarize ? { speaker: `Speaker ${(i % 2) + 1}` } : {}),
+      });
+    });
+  }
+
   return {
-    text: `[transcript ${id}] This is a simulated transcript of a ${seconds}-second answer.`,
+    text,
     language: opts.language ? shortLang(opts.language) : "en",
     model: "fake-stt",
     durationSeconds: seconds,
+    ...(segments.length ? { segments } : {}),
+    ...(opts.diarize
+      ? { diarized: true, speakerCount: new Set(segments.map((s2) => s2.speaker)).size }
+      : {}),
   };
 }
 
