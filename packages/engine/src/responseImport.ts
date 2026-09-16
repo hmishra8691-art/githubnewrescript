@@ -2,6 +2,7 @@ import type { Question, SurveyDefinition } from "@rescript/schema";
 import { buildVariableDictionary } from "./variables.js";
 import { htmlToText, validateQuestion } from "./validate.js";
 import { createResponseState } from "./state.js";
+import { embeddedCatalog } from "./embedded.js";
 
 /**
  * Importing response data — the VALIDATE → PREVIEW half.
@@ -111,7 +112,7 @@ export function suggestMapping(def: SurveyDefinition, headers: string[]): Column
       if (rl) byVar.set(norm(`${q.code} ${rl}`), { kind: "question", questionId: q.id, rowCode: String(r.code) });
     }
   }
-  for (const e of def.embeddedData) byVar.set(norm(e.name), { kind: "embedded", name: e.name });
+  for (const e of embeddedCatalog(def)) byVar.set(norm(e.name), { kind: "embedded", name: e.name });
   for (const v of dict) if (!byVar.has(norm(v.name))) byVar.set(norm(v.name), { kind: "ignore" });
 
   const mapping: ColumnMapping = {};

@@ -383,27 +383,57 @@ function Simulator({ q, deps, sample, setSample, loops, loopIndex, setLoopIndex,
         </>
       )}
 
-      {deps.map((d) => (
-        <div className="lc-sim-row" key={d.id}>
-          <label className="f grow">
-            <span>{d.code} · {stripHtmlText(d.text).slice(0, 60)}</span>
-            {d.options.length > 0 ? (
-              <select className="select small" data-testid={`sample-${d.code}`}
-                value={String(sample[d.id] ?? "")}
-                onChange={(e) => setSample({ ...sample, [d.id]: e.target.value || undefined })}>
-                <option value="">— no answer —</option>
-                {d.options.map((o) => (
-                  <option key={String(o.code)} value={String(o.code)}>{stripHtmlText(o.label)}</option>
-                ))}
-              </select>
-            ) : (
-              <input className="input small" data-testid={`sample-${d.code}`}
-                value={String(sample[d.id] ?? "")}
-                onChange={(e) => setSample({ ...sample, [d.id]: e.target.value || undefined })} />
+      {deps.map((d) => {
+        /*
+         * THE OTHER-SPECIFY TEXT OF A QUESTION THIS ONE DEPENDS ON.
+         *
+         * The simulator could set which option a previous question chose, and
+         * nothing else — so choosing "Other, please specify" produced a
+         * selection with no text behind it, and `{{Q1.other}}` in the question
+         * being programmed rendered as an unresolved placeholder chip. The
+         * researcher concluded that Others Specify piping did not work; what
+         * did not work was the only surface they had to try it on.
+         *
+         * The text is stored under the engine's own per-box key, so the canvas
+         * writes it with `setOtherTextFor` and every reader — piping, logic,
+         * validation — sees exactly what a respondent's would look like.
+         */
+        const chosen = String(sample[d.id] ?? "");
+        const otherOpt = d.options.find(
+          (o) => String(o.code) === chosen && o.flags?.includes("other_specify"),
+        );
+        const otherKey = otherOpt ? `${d.id}__other__${String(otherOpt.code)}` : null;
+        return (
+          <div className="lc-sim-row" key={d.id}>
+            <label className="f grow">
+              <span>{d.code} · {stripHtmlText(d.text).slice(0, 60)}</span>
+              {d.options.length > 0 ? (
+                <select className="select small" data-testid={`sample-${d.code}`}
+                  value={chosen}
+                  onChange={(e) => setSample({ ...sample, [d.id]: e.target.value || undefined })}>
+                  <option value="">— no answer —</option>
+                  {d.options.map((o) => (
+                    <option key={String(o.code)} value={String(o.code)}>{stripHtmlText(o.label)}</option>
+                  ))}
+                </select>
+              ) : (
+                <input className="input small" data-testid={`sample-${d.code}`}
+                  value={chosen}
+                  onChange={(e) => setSample({ ...sample, [d.id]: e.target.value || undefined })} />
+              )}
+            </label>
+            {otherKey && (
+              <label className="f grow">
+                <span className="mono">{`{{${d.code}.other}}`}</span>
+                <input className="input small" data-testid={`sample-${d.code}-other`}
+                  placeholder="what the respondent typed, e.g. Tesla Model Y"
+                  value={String(sample[otherKey] ?? "")}
+                  onChange={(e) => setSample({ ...sample, [otherKey]: e.target.value || undefined })} />
+              </label>
             )}
-          </label>
-        </div>
-      ))}
+          </div>
+        );
+      })}
 
       <div className="row" style={{ gap: 8, marginTop: 8 }}>
         <button className="btn small" data-testid="clear-sample"

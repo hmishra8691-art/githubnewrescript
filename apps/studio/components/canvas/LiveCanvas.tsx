@@ -123,6 +123,20 @@ export function LiveCanvas(p: LiveCanvasProps) {
         if (text) setOtherTextFor(st, p.q, code, text, p.loop);
       }
     }
+    /*
+     * The other-specify text of the questions THIS one depends on, which the
+     * simulator now collects (see LiveView). Keyed exactly as the engine keys
+     * it — `<questionId>__other__<optionCode>` — so this loop only has to
+     * recognise the shape and hand it to `setOtherTextFor`, which owns the
+     * spelling. Sample answers for questions outside this survey are ignored,
+     * as they are for ordinary answers above.
+     */
+    for (const [key, text] of Object.entries(p.sample)) {
+      const m = /^(.+)__other__(.+)$/.exec(key);
+      if (!m || text === undefined || text === "") continue;
+      const dep = p.def.questions.find((x) => x.id === m[1]);
+      if (dep) setOtherTextFor(st, dep, m[2], String(text), null);
+    }
     return st;
   }, [p.def, p.sample, p.seed, p.q, p.loop, simulating, value, JSON.stringify(otherValues)]);
 

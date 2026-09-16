@@ -7,6 +7,7 @@ import { findNamedExpression } from "./namedExpressions.js";
 import { stripHtmlText } from "./html.js";
 import { isQuestionValueRef } from "@rescript/schema";
 import { CALC_FUNCTION_NAMES } from "./calc.js";
+import { embeddedCatalog } from "./embedded.js";
 
 /**
  * The logic expression language: text in, canonical tree out, and back again.
@@ -1162,7 +1163,7 @@ export function referenceTree(def: SurveyDefinition): ReferenceNode[] {
   for (const c of def.calculations) {
     out.push({ token: `calc.${c.targetVariable}`, label: `calc: ${c.targetVariable}`, kind: "variable" });
   }
-  for (const e of def.embeddedData) {
+  for (const e of embeddedCatalog(def)) {
     out.push({ token: `ed.${e.name}`, label: `data: ${e.name}`, kind: "variable" });
   }
   return out;

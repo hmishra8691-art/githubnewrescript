@@ -278,10 +278,15 @@ export function buildBrandTrackerSurvey(surveyId = "brand-tracker"): SurveyDefin
       options: SAT_5,
       displayLogic: rule("q_main", "answered"),
     },
-    {
-      id: "q_wave", code: "H1", variableName: "WAVE", type: "hidden",
-      text: "Fieldwork wave", notes: "Set from the invitation URL: ?WAVE=2026Q3",
-    },
+    /*
+     * There is no hidden `H1 / WAVE` question here any more.
+     *
+     * It declared the variable WAVE, and so does the Embedded Data node
+     * below — two declarations of one fact, which is a duplicate column in
+     * every export and two places to change the wave. The embedded field is
+     * the one that actually reads `?WAVE=` from the invitation link, so it is
+     * the one that stays; it appears in the data dictionary in its own right.
+     */
   ];
   return survey(surveyId, { code: "TRACKER", title: "Brand tracker — quarterly wave" }, questions, [
     {
@@ -291,7 +296,6 @@ export function buildBrandTrackerSurvey(surveyId = "brand-tracker"): SurveyDefin
     page("p_funnel", "Brand funnel", ["q_aware", "q_consider", "q_used", "q_main"]),
     page("p_image", "Brand image", ["q_image"]),
     page("p_sat", "Your main brand", ["q_sat"]),
-    page("p_wave", "", ["q_wave"]),
   ]);
 }
 

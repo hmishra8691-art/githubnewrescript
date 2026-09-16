@@ -7,6 +7,7 @@ import { listFillVariableNames } from "./listFill.js";
 import { otherOptions, otherColumnFor } from "./otherSpecify.js";
 import { fieldDataType } from "./fields.js";
 import { questionAi, voiceOn } from "./aiConversation.js";
+import { embeddedCatalog } from "./embedded.js";
 
 /**
  * Variable / Data Dictionary generator (requirement §9).
@@ -742,7 +743,14 @@ export function buildDerivedVariables(def: SurveyDefinition): VariableDef[] {
       notes: "the language version the respondent answered in",
     });
   }
-  for (const ed of def.embeddedData) {
+  /*
+   * Embedded variables, from the CATALOG — the union of the survey-level
+   * registry and every Embedded Data node in the flow. It used to be the
+   * registry alone, which the Studio never writes, so a survey capturing
+   * `?source=` produced a dictionary, an SPSS file and an analysis dataset
+   * with no column for it: the value was collected and then invisible.
+   */
+  for (const ed of embeddedCatalog(def)) {
     out.push({
       name: ed.name,
       label: ed.label ?? ed.name,

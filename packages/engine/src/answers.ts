@@ -51,3 +51,38 @@ export function normalizeMultiValue(
     maxSelections != null ? nonExclusive.slice(0, maxSelections) : nonExclusive;
   return capped;
 }
+
+/**
+ * ONE DEFINITION OF "NOT ANSWERED".
+ *
+ * There were three, and they disagreed on the two cases that matter most:
+ *
+ *   ·  `"   "`      validate said empty (it trimmed); evaluate said answered
+ *   ·  `{ r1: null }`  countCondition said empty; evaluate said answered
+ *
+ * Both disagreements were reachable inside a single AND. A grid with no cell
+ * filled in was simultaneously answered (the `isNotEmpty` rule passed) and
+ * not answered (the count rule beside it returned 0), and a required open end
+ * containing one space was blank to the validator and answered to the logic —
+ * so the respondent was stopped by a message about a question their own
+ * survey's logic had already routed past.
+ *
+ * This is the definition all three now use, and it is `validate`'s, which was
+ * the strict one:
+ *
+ *   ·  null / undefined                       — never answered
+ *   ·  a string of nothing but whitespace     — nothing was said
+ *   ·  an empty array                         — nothing selected
+ *   ·  an object whose every value is empty   — a grid with no cell filled
+ *
+ * `0` and `false` are ANSWERS. They are the values a scale of zero and a
+ * "No" produce, and treating them as blank is the single most damaging
+ * coercion a survey engine can make.
+ */
+export function isEmptyAnswer(v: unknown): boolean {
+  if (v === null || v === undefined) return true;
+  if (typeof v === "string") return v.trim() === "";
+  if (Array.isArray(v)) return v.length === 0;
+  if (typeof v === "object") return Object.values(v as object).every((x) => isEmptyAnswer(x));
+  return false;
+}

@@ -42,19 +42,16 @@ import type {
 } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition, withOption } from "./evaluate.js";
-import { answerKey, getQuestionByCodeOrVar } from "./state.js";
+import { getQuestionByCodeOrVar, lookupAnswer } from "./state.js";
 import { effectiveQuestion, carrySourceOptions, carrySourceRows } from "./carryforward.js";
 import { checkScalarRules } from "./validate.js";
+import { isEmptyAnswer } from "./answers.js";
 
 const str = (v: unknown) => String(v);
 const has = (set: Set<string>, v: unknown) => set.has(str(v));
 
-function isEmptyValue(v: unknown): boolean {
-  if (v === null || v === undefined || v === "") return true;
-  if (Array.isArray(v)) return v.length === 0;
-  if (typeof v === "object") return Object.values(v as object).every((x) => isEmptyValue(x));
-  return false;
-}
+/* The one definition — see `isEmptyAnswer`. */
+const isEmptyValue = isEmptyAnswer;
 
 /**
  * The codes a stored answer counts as "selected".
@@ -210,7 +207,18 @@ export function evaluateCount(source: ConditionSource, ctx: EvalContext): number
   const q = getQuestionByCodeOrVar(def, source.ref);
   if (!q) return null;
 
-  const answer = ctx.state.answers[answerKey(q.id, ctx.loop ?? null)];
+  /*
+   * `lookupAnswer`, NOT `answerKey`.
+   *
+   * `answerKey` builds ONE exact key for this iteration; `lookupAnswer` walks
+   * outward — this iteration, then each enclosing one, then the survey level —
+   * and it is what `evaluate.ts` uses for an ordinary rule. Using the exact
+   * key here meant a count rule could not see a question answered OUTSIDE the
+   * loop it was evaluated in, while an ordinary rule on the same question in
+   * the same AND could. One condition, two readings of the same answer: the
+   * AND was not misevaluating, it was being told two different things.
+   */
+  const answer = lookupAnswer(ctx.state.answers, q.id, ctx.loop ?? null);
   const items = pool(q, spec, answer, ctx);
 
   switch (spec.of) {

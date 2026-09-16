@@ -1,5 +1,5 @@
 import type { Option, Question, SurveyDefinition } from "@rescript/schema";
-import { answerKey, type LoopContext, type ResponseState } from "./state.js";
+import { answerKey, answerLookupKeys, type LoopContext, type ResponseState } from "./state.js";
 
 /**
  * "OTHER, SPECIFY" — ONE IDENTITY PER BOX.
@@ -91,9 +91,28 @@ export function isOtherAnswerKey(key: string): boolean {
 /**
  * The text in one option's box.
  *
- * Falls back to the legacy question-level key for the FIRST flagged option,
- * which is where a response collected before per-option keys put it — and the
- * only option it could have meant.
+ * Two rules, and the difference between them is the whole of §3 of the
+ * brief — the value contract.
+ *
+ * ## An empty box is an answer, not a missing one
+ *
+ * This used to read `if (own != null && own !== "") return String(own)`,
+ * which folded three different states together: no box, an empty box, and a
+ * box that was never reached. An empty string then fell through to the
+ * legacy key and RESURRECTED text from a response collected months earlier —
+ * a respondent who cleared their answer saw the old one come back, in the
+ * data if not on the screen. So presence decides: if the key exists, its
+ * value is the answer, `""` included. Only an ABSENT key consults the legacy
+ * one, which is exactly what the fallback was for.
+ *
+ * ## It is read from an iteration, like every other answer
+ *
+ * The key is built exactly, while `lookupAnswer` walks outward through the
+ * enclosing iterations. So a question answered outside a loop had an Other
+ * text that ordinary piping could see and `{{Q1.other}}` could not: inside
+ * the loop it returned "" and the sentence lost the respondent's own words.
+ * `answerLookupKeys` is the one statement of that walk, and this now uses it —
+ * deepest iteration first, then each enclosing one, then the survey level.
  */
 export function otherTextFor(
   state: ResponseState,
@@ -101,13 +120,24 @@ export function otherTextFor(
   code: string | number,
   loop?: LoopContext | null,
 ): string {
-  const own = state.answers[otherKeyFor(q.id, code, loop)];
-  if (own != null && own !== "") return String(own);
+  const suffix = `__other__${String(code)}`;
+  for (const base of answerLookupKeys(q.id, loop ?? null)) {
+    const k = `${base}${suffix}`;
+    if (k in state.answers) {
+      const own = state.answers[k];
+      return own == null ? "" : String(own);
+    }
+  }
 
   const flagged = otherOptions(q);
   if (flagged.length && String(flagged[0]!.code) === String(code)) {
-    const legacy = state.answers[legacyOtherKey(q.id, loop)];
-    if (legacy != null && legacy !== "") return String(legacy);
+    for (const base of answerLookupKeys(q.id, loop ?? null)) {
+      const k = `${base}__other`;
+      if (k in state.answers) {
+        const legacy = state.answers[k];
+        return legacy == null ? "" : String(legacy);
+      }
+    }
   }
   return "";
 }

@@ -24,6 +24,7 @@ import { describeCycle, detectLogicCycles, orderIndex } from "./dependencies.js"
 import { MAX_LOOP_DEPTH, loopNodes, loopVariableNames, maxLoopIterations, possibleLoopItems, questionIdsInLoop } from "./loops.js";
 import { listFillVariableNames } from "./listFill.js";
 import { buildVariableDictionary } from "./variables.js";
+import { embeddedCatalog, isNamedEmbeddedField } from "./embedded.js";
 import { gridAxes, gridScaleOptions } from "./gridAxes.js";
 import { staleFields } from "./questionShape.js";
 
@@ -185,7 +186,7 @@ function lintCondition(
     src = getQuestionByCodeOrVar(ctx.def, source.ref);
     const isNamedVariable =
       (ctx.def.calculations ?? []).some((x) => x.targetVariable === source.ref) ||
-      (ctx.def.embeddedData ?? []).some((x) => x.name === source.ref);
+      embeddedNames(ctx.def).has(source.ref);
     if (!src && !isNamedVariable) {
       ctx.push({
         level: "error",
@@ -433,9 +434,26 @@ function maskSetIsSingular(expr: SetExpr | undefined | null): boolean {
  * — any loop's variable is accepted, because there is nothing to place the
  * text against and a false "unknown" is the costlier mistake.
  */
+/**
+ * EVERY EMBEDDED NAME THE SURVEY ACTUALLY HAS.
+ *
+ * `def.embeddedData` is the survey-level registry — and the Studio has never
+ * written to it. Every embedded variable a programmer creates is a field on an
+ * Embedded Data node in the flow, which lives in `def.flow`. The linters read
+ * only the registry, so a survey that captured `?source=` and piped
+ * `{{e://source}}` was told, in red, that no such field existed: an error on a
+ * token that resolves perfectly well at runtime.
+ *
+ * `embeddedCatalog` is the union the piping picker and the variable dictionary
+ * already use. Using it here is what makes the three agree.
+ */
+function embeddedNames(def: SurveyDefinition): Set<string> {
+  return new Set(embeddedCatalog(def).map((e) => e.name));
+}
+
 export function bareNameResolves(def: SurveyDefinition, q: Question | undefined, name: string): boolean {
   if ((def.calculations ?? []).some((c) => c.targetVariable === name)) return true;
-  if ((def.embeddedData ?? []).some((e) => e.name === name)) return true;
+  if (embeddedNames(def).has(name)) return true;
   if ((def.variables ?? []).some((v) => v.name === name)) return true;
   for (const lf of def.listFills ?? []) {
     if (listFillVariableNames(lf).some((v) => v.name === name)) return true;
@@ -461,7 +479,7 @@ function lintPiping(text: string | undefined, path: string, ctx: Ctx): void {
       continue;
     }
     if (t.kind === "embedded") {
-      if (!(ctx.def.embeddedData ?? []).some((e) => e.name === t.ref))
+      if (!embeddedNames(ctx.def).has(t.ref))
         ctx.push({ level: "warning", path, message: `No embedded data field named “${t.ref}”.` });
       continue;
     }
@@ -750,6 +768,37 @@ export function lintSurveyLogic(def: SurveyDefinition): LogicIssue[] {
  */
 export function lintStructure(def: SurveyDefinition): LogicIssue[] {
   const issues: LogicIssue[] = [];
+
+  /* --- an embedded-data row nobody has named ------------------------ */
+  /*
+   * The Studio creates an Embedded Data node already holding one empty row,
+   * so the programmer has somewhere to type. An unnamed row is therefore an
+   * edit in progress, not an error — the runtime simply does not create a
+   * variable for it (see `embeddedFieldName`). But a row left unnamed at
+   * release time is a variable somebody meant to capture and did not, and
+   * `?utm_source=` arriving at a survey that never declared it looks exactly
+   * like the survey working. So it is a warning, which is what a warning is
+   * for: harmless now, almost certainly not what was intended.
+   */
+  const walkEmbedded = (nodes: any[]) => {
+    for (const n of nodes ?? []) {
+      if (n?.type === "embedded_data") {
+        const blank = (n.fields ?? []).filter((f: any) => !isNamedEmbeddedField(f)).length;
+        if (blank) {
+          issues.push({
+            level: "warning", path: "flow",
+            message: blank === 1
+              ? "An Embedded Data field has no name, so it captures nothing. Name it or remove the row."
+              : `${blank} Embedded Data fields have no name, so they capture nothing. Name them or remove the rows.`,
+          });
+        }
+      }
+      if (n?.children) walkEmbedded(n.children);
+      if (n?.branches) for (const b of n.branches) walkEmbedded(b.children);
+      if (n?.otherwise) walkEmbedded(n.otherwise);
+    }
+  };
+  walkEmbedded(def.flow as any[]);
 
   /* --- a question that is in the survey but on no page -------------- */
   const placed = new Set<string>();

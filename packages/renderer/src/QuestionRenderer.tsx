@@ -17,6 +17,7 @@ import {
   type ResponseState,
   type LoopContext,
   stripHtmlText,
+  selectedOtherCodes,
   uiText,
 } from "@rescript/engine";
 import { variantRenderers } from "./variants/registry";
@@ -119,6 +120,55 @@ export function OtherSpecifyBox(p: QRProps & { options: Option[]; selected: (str
     </>
   );
 }
+/**
+ * THE BOX APPEARS WHEREVER THE FLAG DOES — the dead-end fix.
+ *
+ * `other_specify` is a flag on an OPTION, so the Studio offers it on any
+ * question that has options. Rendering it, though, was each variant's own
+ * business: `SingleSelect`, `MultiSelect` and `Dropdown` nest the input in
+ * the chosen option's label, `ChoiceButtons` and `ChoiceCards` call
+ * `OtherSpecifyBox` — and the other twenty-odd option variants rendered
+ * nothing at all.
+ *
+ * That is not a cosmetic gap. `validate.ts` requires text for every selected
+ * flagged option, on every variant, because emptiness is a property of the
+ * ANSWER and not of the layout. So on a searchable dropdown, an adaptive
+ * question, a carousel, an image grid — a respondent who selected "Other"
+ * was shown "Please specify", given nowhere to specify it, and could not go
+ * forward or back out of it. A dead-end interview: the worst failure a
+ * runtime has, because the respondent is lost and the data never arrives.
+ *
+ * Rather than adding a box to twenty-odd variant files — twenty-odd chances
+ * to write it differently — the dispatcher renders one CENTRALLY for every
+ * variant that does not already render its own. `selectedOtherCodes` is the
+ * engine's own reading of which flagged options an answer selects, so it
+ * handles a scalar, a multi-select array and a grid object identically, and
+ * it is the same function the validator asks. The box binds to the same
+ * per-option key everything else uses; nothing about the data changes.
+ */
+const OWN_OTHER_BOX_RENDERERS = new Set(["buttons", "cards"]);
+const OWN_OTHER_BOX_TYPES = new Set(["single_select", "multi_select", "dropdown"]);
+
+export function rendersOwnOtherBox(q: Question, renderer: string | undefined): boolean {
+  return renderer ? OWN_OTHER_BOX_RENDERERS.has(renderer) : OWN_OTHER_BOX_TYPES.has(q.type);
+}
+
+/** Every box this answer needs that the variant did not draw. */
+export function OtherSpecifyFallback(p: QRProps) {
+  const { options } = effectiveQuestion(p.q, ctxOf(p));
+  const q = options === p.q.options ? p.q : { ...p.q, options };
+  const codes = selectedOtherCodes(q, p.value);
+  if (!codes.length) return null;
+  return (
+    <>
+      {codes.map((c) => {
+        const o = options.find((x) => String(x.code) === c);
+        return o ? <OtherInput key={c} {...p} option={o} below /> : null;
+      })}
+    </>
+  );
+}
+
 export const EXCLUSIVE = (o: Option) =>
   o.flags?.includes("exclusive") || o.flags?.includes("none_of_above") ||
   o.flags?.includes("dont_know") || o.flags?.includes("refused");
@@ -1967,6 +2017,15 @@ export function QuestionRenderer(props: QRProps) {
     }
   })();
 
+  /*
+   * The central "Other, specify" box — see `rendersOwnOtherBox`. It is a
+   * no-op (null) unless the answer actually selects a flagged option, so it
+   * costs nothing on the questions that have none.
+   */
+  const otherFallback = rendersOwnOtherBox(p.q, variantDef?.renderer)
+    ? null
+    : <OtherSpecifyFallback {...p} />;
+
   let body: React.ReactNode;
   if (variantBody) {
     body = variantBody;
@@ -2015,6 +2074,9 @@ export function QuestionRenderer(props: QRProps) {
       );
     default: body = <TextInput {...p} />;
   }
+
+  // one place, after every dispatch path — see `rendersOwnOtherBox`
+  if (otherFallback) body = <>{body}{otherFallback}</>;
 
   return (
     <div

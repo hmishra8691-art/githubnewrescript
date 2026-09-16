@@ -6,13 +6,14 @@ import { evaluateExpression } from "./calc.js";
 import { escapeHtml } from "./html.js";
 import { isGeoAnswer, geoText, round6, formatMetres } from "./geo.js";
 import { interviewText, isInterviewAnswer } from "./interview.js";
-import { otherOptions, otherTextFor } from "./otherSpecify.js";
+import { isOtherOption, otherOptions, otherTextFor } from "./otherSpecify.js";
 import {
   PIPE_TOKEN_RE,
   parsePipeBody,
   formatPipeValues,
   type PipeToken,
 } from "./pipingTokens.js";
+import { embeddedCatalog } from "./embedded.js";
 
 /**
  * Piping (requirement §5, extended by §16–25).
@@ -229,6 +230,23 @@ function renderToken(t: PipeToken, ctx: EvalContext): string {
       t.property === "displayed" ? shown : shown.filter((o) => !selected.has(String(o.code)));
     return fmt(list.map((o) => o.label));
   }
+  /**
+   * A COUNT IS A NUMBER, WHATEVER THE ANSWER IS.
+   *
+   * It sat below the `value == null` guard and above `codes = [value]`, so it
+   * managed to be wrong in both directions at once: an unanswered question
+   * piped "" — not a number at all — while a question holding an empty string
+   * piped "1", counting a selection nobody made. Both are §3's "values must
+   * not be converted into one another", seen from the counting side.
+   *
+   * Nothing selected is 0. One scalar answer is 1. An array is its length.
+   */
+  if (t.property === "count") {
+    if (value == null || value === "") return "0";
+    if (Array.isArray(value)) return String(value.length);
+    if (typeof value === "object") return String(Object.values(value as Record<string, unknown>).filter((v) => v != null && v !== "").length);
+    return "1";
+  }
   if (value == null) return "";
 
   // a place: the address or "lat,lng"; {{Q1.lat}} / {{Q1.lng}} / {{Q1.address}} / {{Q1.city}} / {{Q1.radius}} for the parts
@@ -257,18 +275,47 @@ function renderToken(t: PipeToken, ctx: EvalContext): string {
 
   const codes = Array.isArray(value) ? value : [value];
 
+  /**
+   * WHAT A SELECTED "OTHER" PIPES.
+   *
+   * This is the bug the brief calls Others Specify piping. `{{Q1.other}}` has
+   * always worked; what nobody could make work was `{{Q1}}` — the token every
+   * researcher reaches for first, and the one the picker offers first. A
+   * respondent who ticked Other and typed "Tesla Model Y" saw the next
+   * question ask about "Other, please specify", because a selected code was
+   * resolved to its option LABEL and an other-specify option's label is the
+   * invitation to type, never the thing typed.
+   *
+   * So a flagged option resolves to the respondent's own words when there are
+   * any. With an empty box it stays the label: the option IS selected, and
+   * piping nothing would lose that fact — an empty box is handled by
+   * `{{Q1.other}}`, whose whole contract (§3) is to give back exactly what is
+   * in the box, `""` included.
+   *
+   * `.value` and `.code` are deliberately untouched: they are the stored
+   * code, which is how a programmer distinguishes the four things an option
+   * has — id, code, label, other text — and a piped code that silently became
+   * free text would break every exported cross-break.
+   */
+  const labelOrOther = (c: unknown): string => {
+    const opt = (q.options ?? []).find((o) => String(o.code) === String(c));
+    if (opt && isOtherOption(opt)) {
+      const text = otherTextFor(ctx.state, q, opt.code, ctx.loop ?? null).trim();
+      if (text) return escapeHtml(text);
+    }
+    return labelFor(ctx.def, q, c);
+  };
+
   switch (t.property) {
     case "value":
     case "code":
       return fmt(codes.map((c) => escapeHtml(String(c))));
-    case "count":
-      return String(codes.length);
     case "first":
-      return labelFor(ctx.def, q, codes[0]);
+      return labelOrOther(codes[0]);
     case "last":
-      return labelFor(ctx.def, q, codes[codes.length - 1]);
+      return labelOrOther(codes[codes.length - 1]);
     case "rank":
-      return fmt(codes.map((c) => labelFor(ctx.def, q, c)));
+      return fmt(codes.map((c) => labelOrOther(c)));
     case "label":
     case "labels":
     default:
@@ -280,7 +327,7 @@ function renderToken(t: PipeToken, ctx: EvalContext): string {
           ),
         );
       }
-      return fmt(codes.map((c) => labelFor(ctx.def, q, c)));
+      return fmt(codes.map((c) => labelOrOther(c)));
   }
 }
 
@@ -340,7 +387,13 @@ export function lintPipingTokens(def: SurveyDefinition, text: string, q?: Questi
       continue;
     }
     if (t.kind === "embedded") {
-      if (!(def.embeddedData ?? []).some((e) => e.name === t.ref)) {
+      /*
+       * The catalog, not `def.embeddedData` — see `embeddedNames` in
+       * lintLogic. The registry is empty in every survey the Studio has ever
+       * produced, so checking it told programmers their own embedded fields
+       * did not exist while they were typing.
+       */
+      if (!embeddedCatalog(def).some((e) => e.name === t.ref)) {
         problems.push(`No embedded data field named "${t.ref}"`);
       }
       continue;

@@ -96,12 +96,46 @@ export function embeddedTypeOf(def: SurveyDefinition, name: string): EmbeddedDat
   return undefined;
 }
 
-/** Every embedded-data field declared anywhere in the flow, in flow order. */
+/**
+ * ONE RULE FOR WHAT COUNTS AS A NAMED EMBEDDED FIELD.
+ *
+ * The Studio creates an embedded-data node already holding one empty row
+ * (`FlowPanel`: `fields: [{ name: "", source: "url", dataType: "string" }]`)
+ * so the programmer has something to type into, and the schema accepts it
+ * because `z.string()` has no minimum — deliberately, since tightening it
+ * would make every draft that has an untyped row unsaveable mid-edit.
+ *
+ * The cost was that a row nobody had named yet was still a variable. It
+ * created `state.embedded[""]`, it appeared in the piping picker as a blank
+ * line, it exported as a column with no heading, and every consumer had to
+ * remember the case. Whitespace-only names did the same thing while looking
+ * different from each other: "a " and "a" were two variables.
+ *
+ * So the rule lives here, once: a field is a variable when its name has
+ * non-whitespace in it, and the name is that text trimmed. An unnamed row is
+ * an edit in progress — it is not an error, it simply does not exist yet.
+ */
+export function embeddedFieldName(f: { name?: unknown }): string {
+  return typeof f?.name === "string" ? f.name.trim() : "";
+}
+
+export function isNamedEmbeddedField(f: { name?: unknown }): boolean {
+  return embeddedFieldName(f) !== "";
+}
+
+/**
+ * Every embedded-data field declared anywhere in the flow, in flow order.
+ *
+ * Unnamed rows are left out — see `embeddedFieldName`. Callers that want the
+ * raw rows (only the editor does) read `node.fields` themselves.
+ */
 export function allEmbeddedFields(def: SurveyDefinition): EmbeddedField[] {
   const out: EmbeddedField[] = [];
   const walk = (nodes: any[]) => {
     for (const n of nodes ?? []) {
-      if (n?.type === "embedded_data") out.push(...(n.fields ?? []));
+      if (n?.type === "embedded_data") {
+        for (const f of n.fields ?? []) if (isNamedEmbeddedField(f)) out.push(f);
+      }
       if (n?.children) walk(n.children);
       if (n?.branches) for (const b of n.branches) walk(b.children);
       if (n?.otherwise) walk(n.otherwise);
@@ -120,15 +154,18 @@ export function embeddedCatalog(
 ): { name: string; dataType: EmbeddedDataType; label?: string; source?: string }[] {
   const byName = new Map<string, { name: string; dataType: EmbeddedDataType; label?: string; source?: string }>();
   for (const e of def.embeddedData) {
-    byName.set(e.name, { name: e.name, dataType: e.dataType ?? "string", label: e.label, source: e.source });
+    const name = embeddedFieldName(e);
+    if (!name) continue;
+    byName.set(name, { name, dataType: e.dataType ?? "string", label: e.label, source: e.source });
   }
   for (const f of allEmbeddedFields(def)) {
-    const existing = byName.get(f.name);
+    const name = embeddedFieldName(f);
+    const existing = byName.get(name);
     if (existing) {
       if (f.dataType && !existing.dataType) existing.dataType = f.dataType;
       continue;
     }
-    byName.set(f.name, { name: f.name, dataType: f.dataType ?? "string", source: f.source });
+    byName.set(name, { name, dataType: f.dataType ?? "string", source: f.source });
   }
   return [...byName.values()];
 }
@@ -287,6 +324,14 @@ export function applyEmbeddedField(
   state: ResponseState,
   field: EmbeddedField,
 ): { value: unknown; error?: string } {
+  /*
+   * A row the programmer has not named yet. It writes nothing — not even a
+   * null under the empty key, which is what used to happen and what put a
+   * nameless variable into every response, every export and every picker.
+   */
+  const name = embeddedFieldName(field);
+  if (!name) return { value: null };
+
   let raw: unknown = null;
 
   switch (field.source) {
@@ -295,15 +340,24 @@ export function applyEmbeddedField(
       break;
     case "expression": {
       if (field.value) {
-        const flat = flattenVariables(def, state);
+        /*
+         * `flattenVariables` used to sit OUTSIDE this try. It walks the whole
+         * definition and the whole response state, so a survey it could not
+         * flatten threw out of `applyEmbeddedField`, out of `compileFlow`, and
+         * out of the Runner's init effect — where nothing caught it and the
+         * respondent waited on "Loading survey…" for the rest of the session.
+         * An embedded field that cannot be computed is a field with no value,
+         * and it reports the reason; it is not the end of the interview.
+         */
         try {
+          const flat = flattenVariables(def, state);
           const v = evaluateExpression(normalizeExpression(field.value), {
             resolver: (n) => flat[n],
             names: () => Object.keys(flat),
           });
           raw = Array.isArray(v) ? v.join(",") : v;
         } catch (e) {
-          state.embedded[field.name] = null;
+          state.embedded[name] = null;
           return { value: null, error: (e as Error).message };
         }
       }
@@ -311,7 +365,7 @@ export function applyEmbeddedField(
     }
     default:
       // url / panel: captured at session start, already in state
-      raw = state.embedded[field.name] ?? null;
+      raw = state.embedded[name] ?? null;
       break;
   }
 
@@ -324,12 +378,12 @@ export function applyEmbeddedField(
      * nulls in every export — for surveys that captured URL fields long before
      * types and defaults existed. Silence is what they have always produced.
      */
-    if (raw === null && field.dataType === undefined && !(field.name in state.embedded)) {
+    if (raw === null && field.dataType === undefined && !(name in state.embedded)) {
       return { value: null };
     }
   }
 
   const { value, error } = coerceEmbedded(field.dataType, raw);
-  state.embedded[field.name] = value;
+  state.embedded[name] = value;
   return { value, error };
 }

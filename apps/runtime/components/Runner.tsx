@@ -13,6 +13,7 @@ import {
   resolvePiping,
   runScripts,
   allEmbeddedFields,
+  embeddedFieldName,
   blockingErrors,
   warnings,
   inspect,
@@ -64,6 +65,7 @@ import {
 } from "@rescript/engine";
 import { QuestionRenderer } from "@rescript/renderer";
 import { Inspector } from "./Inspector";
+import { RunnerBoundary, FatalCard, fatalOf, type FatalDetail } from "./RunnerBoundary";
 import { MediaEmbed, SafeImage, VoiceConsole, QuestionAudio } from "@rescript/renderer";
 import {
   readResume, writeResume, clearResume, resumeLink,
@@ -371,7 +373,27 @@ async function runListFills(
 }
 
 
-export function Runner({ definition: sourceDef, mode, session: initialSession, sessionBoot, quotaCounts: initialCounts, urlParams, build, startAt, seedAnswers }: RunnerProps) {
+/**
+ * THE ONE ENTRY POINT — and the one place a runtime failure is caught.
+ *
+ * Every mode reaches the respondent through here: `/t` and `/preview` import
+ * `Runner` directly, `RunnerLive` wraps it. So the boundary belongs here
+ * rather than in three route files that would each have to remember it.
+ *
+ * `RunnerBoundary` catches throws during RENDER. `RunnerInner`'s own
+ * try/catch (see the init effect) catches throws during BOOT, which a React
+ * boundary cannot see because they happen inside an effect. Between them
+ * there is no path that leaves the respondent on "Loading survey…" for ever.
+ */
+export function Runner(props: RunnerProps) {
+  return (
+    <RunnerBoundary diagnostic={props.mode !== "live"}>
+      <RunnerInner {...props} />
+    </RunnerBoundary>
+  );
+}
+
+function RunnerInner({ definition: sourceDef, mode, session: initialSession, sessionBoot, quotaCounts: initialCounts, urlParams, build, startAt, seedAnswers }: RunnerProps) {
   const [, force] = React.useReducer((x: number) => x + 1, 0);
   /**
    * THE RESPONDENT'S LANGUAGE — a layer over the definition, never a copy.
@@ -397,6 +419,13 @@ export function Runner({ definition: sourceDef, mode, session: initialSession, s
   const [session, setSession] = React.useState<RunnerProps["session"] | undefined>(initialSession);
   const [bootError, setBootError] = React.useState<string | null>(null);
   const [bootAttempt, setBootAttempt] = React.useState(0);
+  /**
+   * A survey that could not start. Distinct from `bootError`, which means the
+   * SESSION could not be obtained (a network or server problem, worth
+   * retrying); this one means the DEFINITION could not be run, which retrying
+   * the same definition will never fix.
+   */
+  const [fatal, setFatal] = React.useState<FatalDetail | null>(null);
   const savedRef = React.useRef<{ answers: Record<string, unknown>; calculated: Record<string, unknown>; embedded: Record<string, unknown>; flags: unknown[]; stepIndex: number } | null>(null);
   /** §24: embedded data from this respondent's row on the invitation list. */
   const respondentEmbeddedRef = React.useRef<Record<string, unknown> | null>(null);
@@ -416,10 +445,23 @@ export function Runner({ definition: sourceDef, mode, session: initialSession, s
      * not silently stitched back onto.
      */
     const resume = readResume(sessionBoot.mode, sessionBoot.surveyDbId);
+    /*
+     * A WATCHDOG, because "no answer" is the one failure a fetch never
+     * reports. A request that neither resolves nor rejects — a proxy holding
+     * the connection open, a device that went to sleep mid-flight — left
+     * `booting` true and the respondent on "Loading survey…" indefinitely,
+     * with no error and nothing to retry. Aborting turns that silence into
+     * the ordinary boot error below, which already has a Try again button.
+     */
+    const abort = new AbortController();
+    const watchdog = setTimeout(() => abort.abort(new Error(
+      "The survey did not start within 25 seconds. This is usually a network problem — please try again.",
+    )), 25_000);
     (async () => {
       try {
         const r = await fetch("/api/session/start", {
           method: "POST", headers: { "content-type": "application/json" }, cache: "no-store",
+          signal: abort.signal,
           /*
            * The query string goes with the request so the response row can
            * record which supplier sent this respondent (§23). It is sent once,
@@ -463,10 +505,13 @@ export function Runner({ definition: sourceDef, mode, session: initialSession, s
         }
         setSession({ ...j.session, seed: sessionBoot.seed ?? j.session.seed });
       } catch (e) {
-        if (!cancelled) setBootError((e as Error).message || "The survey could not be started.");
+        const err = (abort.signal.aborted ? (abort.signal.reason as Error) : (e as Error)) ?? (e as Error);
+        if (!cancelled) setBootError(err?.message || "The survey could not be started.");
+      } finally {
+        clearTimeout(watchdog);
       }
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; clearTimeout(watchdog); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionBoot, bootAttempt]);
   const stateRef = React.useRef<ResponseState | null>(null);
@@ -581,13 +626,40 @@ export function Runner({ definition: sourceDef, mode, session: initialSession, s
   // init once per session epoch — and not before the row is known
   React.useEffect(() => {
     if (sessionBoot && !session) return;
+    /**
+     * EVERY THROW IN HERE USED TO BECOME AN INDEFINITE "Loading survey…".
+     *
+     * This effect is the whole of survey start: state creation, embedded
+     * data, on_load scripts, the survey's own JavaScript, `start()` (which
+     * compiles the flow and walks it, and whose `moveForward` guard THROWS on
+     * a flow that does not terminate), resume, language and the first page
+     * note. It ran unguarded, and `stateRef.current` is only assigned part
+     * way through it — so a throw anywhere left `state` null, and the render
+     * below short-circuited to the boot card for the rest of the session.
+     *
+     * A React error boundary cannot help here: a throw inside an effect is
+     * not a render error. So the effect catches its own, and the failure
+     * becomes the same FatalCard the boundary shows — a real error state with
+     * the diagnostic in test and preview, a neutral sentence live.
+     */
+    try {
+      initSurvey();
+    } catch (e) {
+      console.error("[rescript:runtime] survey failed to start", e);
+      stateRef.current = null;
+      setFatal(fatalOf(e, "boot"));
+    }
+    return;
+
+    function initSurvey() {
     const state = createResponseState(def, {
       sessionId: session?.sessionId,
       seed: session?.seed,
       embedded: Object.fromEntries(
         def.embeddedData
-          .filter((e) => urlParams && e.name in urlParams)
-          .map((e) => [e.name, urlParams![e.name]]),
+          .map((e) => embeddedFieldName(e))
+          .filter((name) => name && urlParams && name in urlParams)
+          .map((name) => [name, urlParams![name]]),
       ),
     });
     /*
@@ -615,14 +687,15 @@ export function Runner({ definition: sourceDef, mode, session: initialSession, s
      * constructed on purpose.
      */
     if (respondentEmbeddedRef.current) {
-      const declared = new Set(allEmbeddedFields(def).map((f) => f.name));
-      for (const e of def.embeddedData) declared.add(e.name);
+      const declared = new Set(allEmbeddedFields(def).map((f) => embeddedFieldName(f)));
+      for (const e of def.embeddedData) { const n = embeddedFieldName(e); if (n) declared.add(n); }
       for (const [k, v] of Object.entries(respondentEmbeddedRef.current)) {
         if (declared.has(k) && v != null && v !== "") state.embedded[k] = v as never;
       }
     }
     for (const f of allEmbeddedFields(def)) {
-      if (f.source === "url" && urlParams?.[f.name] != null) state.embedded[f.name] = urlParams[f.name];
+      const name = embeddedFieldName(f);
+      if (f.source === "url" && urlParams?.[name] != null) state.embedded[name] = urlParams[name];
     }
     stateRef.current = state;
     // test and preview only: the live state, for the inspector's consumers and
@@ -720,6 +793,7 @@ export function Runner({ definition: sourceDef, mode, session: initialSession, s
       }
     }
     force();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [epoch, session]);
 
@@ -731,13 +805,26 @@ export function Runner({ definition: sourceDef, mode, session: initialSession, s
    */
   React.useEffect(() => {
     if (mode !== "preview" || !stateRef.current) return;
-    const next = compileFlow(def, stateRef.current, counts);
-    setSteps(next);
-    if (stateRef.current.stepIndex >= next.length) {
-      stateRef.current.stepIndex = Math.max(0, next.length - 1);
+    /*
+     * The Studio pushes a definition on EVERY keystroke, so this effect sees
+     * half-finished configurations constantly — a branch whose target has not
+     * been chosen yet, a loop with no source. One of those throwing used to
+     * blank the preview with no way back short of a reload. Now it says what
+     * is wrong and keeps saying it until the edit that fixes it arrives.
+     */
+    try {
+      const next = compileFlow(def, stateRef.current, counts);
+      setSteps(next);
+      if (stateRef.current.stepIndex >= next.length) {
+        stateRef.current.stepIndex = Math.max(0, next.length - 1);
+      }
+      // a follow-up on screen belongs to the definition that produced it
+      setProbe((p) => (p && def.questions.find((q) => q.id === p.q.id) ? p : null));
+      setFatal(null);
+    } catch (e) {
+      console.error("[rescript:runtime] preview could not compile the flow", e);
+      setFatal(fatalOf(e, "definition"));
     }
-    // a follow-up on screen belongs to the definition that produced it
-    setProbe((p) => (p && def.questions.find((q) => q.id === p.q.id) ? p : null));
     force();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [def]);
@@ -749,6 +836,15 @@ export function Runner({ definition: sourceDef, mode, session: initialSession, s
         <h2>{bootError}</h2>
         <button type="button" className="rs-btn" style={{ marginTop: 18 }} onClick={() => { setBootError(null); setBootAttempt((n) => n + 1); }}>Try again</button>
       </div></div>
+    );
+  }
+  if (fatal) {
+    return (
+      <FatalCard
+        fatal={fatal}
+        diagnostic={mode !== "live"}
+        onRetry={() => { setFatal(null); setEpoch((e) => e + 1); }}
+      />
     );
   }
   if (booting || !state) {
@@ -963,7 +1059,21 @@ export function Runner({ definition: sourceDef, mode, session: initialSession, s
     skippedProbesRef.current = new Set();
     telemetryRef.current?.leavePage();
     // name the page being left: a List Fill decided just above may have added steps before it
-    const nav = advance(def, state, counts, { fromPageId: pageStep.pageId });
+    let nav: ReturnType<typeof advance>;
+    try {
+      nav = advance(def, state, counts, { fromPageId: pageStep.pageId });
+    } catch (e) {
+      /*
+       * `moveForward` throws when the flow does not terminate — a branch that
+       * routes back to itself, a loop whose break condition can never be
+       * true. Unhandled, that left the respondent on a page whose Next button
+       * simply did nothing, for ever. Naming it is the whole fix: the survey
+       * is broken and the person testing it needs to know which guard tripped.
+       */
+      console.error("[rescript:runtime] could not leave the page", e);
+      setFatal(fatalOf(e, "navigation"));
+      return;
+    }
     setSteps(nav.steps);
     if (nav.done) {
       /*
@@ -1044,7 +1154,14 @@ export function Runner({ definition: sourceDef, mode, session: initialSession, s
   const handleBack = () => {
     ackRef.current.text = null;
     telemetryRef.current?.leavePage();
-    const nav = goBack(def, state, counts);
+    let nav: ReturnType<typeof goBack>;
+    try {
+      nav = goBack(def, state, counts);
+    } catch (e) {
+      console.error("[rescript:runtime] could not go back", e);
+      setFatal(fatalOf(e, "navigation"));
+      return;
+    }
     notePage(nav.steps, nav.stepIndex, "back");
     setErrors([]);
     // conversational: arriving on the previous page from the right means its LAST question

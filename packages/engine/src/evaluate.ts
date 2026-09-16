@@ -7,6 +7,7 @@ import { evaluateCount } from "./countCondition.js";
 import { safeExpression } from "./calcContext.js";
 import { findNamedExpression } from "./namedExpressions.js";
 import { getEffectiveListsResolver } from "./piping.js";
+import { isEmptyAnswer } from "./answers.js";
 
 /**
  * The option currently under evaluation. Present whenever a condition is
@@ -100,6 +101,17 @@ export function resolveSourceValue(rule: ConditionRule, ctx: EvalContext): unkno
      *
      * Never throws: a broken expression is `null`, and null fails every
      * comparison below, so the rule is false rather than the page being blank.
+     *
+     * ONE DELIBERATE DIVERGENCE, worth knowing about. Inside the expression,
+     * an unanswered numeric reads as 0, because that is what a CALCULATION
+     * means by it — `avg(Q5, Q6, Q7)` has to total what is there. An ordinary
+     * rule is fail-closed instead: `Q5 < 10` is false when Q5 is unanswered,
+     * because a comparison against nothing has no answer. So `expr("Q5 < 10")`
+     * and the plain rule `Q5 < 10` disagree on an unanswered Q5, by design:
+     * the first is arithmetic, the second is a question about an answer.
+     * Write `Q5 isNotEmpty AND Q5 < 10` when the distinction matters. This is
+     * not unified here because `toNum` is shared with every calculation and
+     * every live quota built on one.
      */
     case "expr":
       return safeExpression(source.ref, ctx.def, ctx.state);
@@ -270,12 +282,9 @@ export function resolveSourceValue(rule: ConditionRule, ctx: EvalContext): unkno
   }
 }
 
-function isEmpty(v: unknown): boolean {
-  if (v === null || v === undefined || v === "") return true;
-  if (Array.isArray(v)) return v.length === 0;
-  if (typeof v === "object") return Object.keys(v as object).length === 0;
-  return false;
-}
+/* The one definition — see `isEmptyAnswer`. This file used to carry its own,
+ * which counted whitespace as an answer and a grid of nulls as answered. */
+const isEmpty = isEmptyAnswer;
 
 function asArray(v: unknown): unknown[] {
   if (v === null || v === undefined) return [];
@@ -286,6 +295,20 @@ function looseEq(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (a === null || b === null || a === undefined || b === undefined) return false;
   return String(a) === String(b);
+}
+
+/** `looseEq`, ignoring case — the membership test `contains` uses. */
+function looseEqCI(a: unknown, b: unknown): boolean {
+  if (looseEq(a, b)) return true;
+  if (a === null || b === null || a === undefined || b === undefined) return false;
+  return String(a).toLowerCase() === String(b).toLowerCase();
+}
+
+/** `contains`, in one place, so `notContains` cannot drift from it. */
+function containsValue(left: unknown, right: unknown): boolean {
+  if (Array.isArray(left)) return left.some((l) => looseEqCI(l, right));
+  if (typeof left === "string") return left.toLowerCase().includes(String(right ?? "").toLowerCase());
+  return looseEqCI(left, right);
 }
 
 function num(v: unknown): number | null {
@@ -500,19 +523,29 @@ export function evaluateRule(rule: ConditionRule, ctx: EvalContext): boolean {
     case "notIn":
       result = !asArray(right).some((r) => looseEq(left, r));
       break;
+    /*
+     * ONE CASE POLICY FOR `contains`.
+     *
+     * It had two, chosen by the ANSWER'S RUNTIME SHAPE rather than by the
+     * programmer: a multi-select (array) matched its members case-SENSITIVELY
+     * through `looseEq`, while an open end (string) matched its substring
+     * case-INSENSITIVELY. The same rule against the same question therefore
+     * changed meaning when the respondent selected one option instead of two,
+     * because a single selection can arrive as a scalar — which is how a
+     * condition passes on one page and fails on the next with nothing about
+     * the survey having changed.
+     *
+     * Case-insensitive throughout, which is what the string branch already
+     * promised and what a researcher writing `contains "blue"` means. What is
+     * matched still depends on the shape — membership in a list, substring in
+     * text — because those are genuinely different questions; only the casing
+     * is now the same question everywhere.
+     */
     case "contains":
-      result = Array.isArray(left)
-        ? left.some((l) => looseEq(l, right))
-        : typeof left === "string"
-          ? left.toLowerCase().includes(String(right ?? "").toLowerCase())
-          : looseEq(left, right);
+      result = containsValue(left, right);
       break;
     case "notContains":
-      result = !(Array.isArray(left)
-        ? left.some((l) => looseEq(l, right))
-        : typeof left === "string"
-          ? left.toLowerCase().includes(String(right ?? "").toLowerCase())
-          : looseEq(left, right));
+      result = !containsValue(left, right);
       break;
     case "selected":
       result = asArray(left).some((l) => looseEq(l, right ?? true));
@@ -688,6 +721,38 @@ export function withLegacyOptionLoop(
  */
 const resolving: string[] = [];
 
+/**
+ * A GROUP WITH NOTHING IN IT SAYS NOTHING.
+ *
+ * This is the root of the "AND evaluates incorrectly" report, and it is not
+ * in the AND. `[].every(...)` is true and `[].some(...)` is false, so an
+ * empty group took its truth value from its OPERATOR rather than from its
+ * (absent) contents — and the two operators disagreed:
+ *
+ *     A AND B AND or([])   →  A ∧ B ∧ false  →  always false
+ *     A OR  B OR  and([])  →  A ∨ B ∨ true   →  always true
+ *
+ * A programmer who clicks "+ Group" and has not yet put a rule in it has
+ * expressed no condition. One click, in a builder that offers the button,
+ * silently inverted a whole logic tree — and the printed summary left the
+ * empty group out, so what was on screen said the opposite of what ran.
+ *
+ * The contract is now the same one an absent condition already has
+ * (`if (!condition) return true` above): an empty group is not a constraint.
+ * It is skipped, and a group whose children are ALL empty is empty in turn,
+ * so nesting cannot smuggle the old behaviour back in.
+ *
+ * This deliberately does not "fix" it by treating an empty OR as false-open
+ * or an empty AND as true-closed. Those are guesses about intent. Saying
+ * nothing is the only reading that cannot silently change an answer.
+ */
+export function isVacuousCondition(c: Condition | undefined | null): boolean {
+  if (!c) return true;
+  if (c.type === "rule") return false;
+  const kids = c.children ?? [];
+  return kids.length === 0 || kids.every((k) => isVacuousCondition(k));
+}
+
 /** Evaluate any condition tree — arbitrary AND/OR/NOT nesting (req. §6). */
 export function evaluateCondition(
   condition: Condition | undefined | null,
@@ -695,7 +760,9 @@ export function evaluateCondition(
 ): boolean {
   if (!condition) return true;
   if (condition.type === "rule") return evaluateRule(condition, ctx);
-  const { op, children } = condition;
+  const { op } = condition;
+  const children = (condition.children ?? []).filter((c) => !isVacuousCondition(c));
+  if (!children.length) return true;
   if (op === "and") return children.every((c) => evaluateCondition(c, ctx));
   if (op === "or") return children.some((c) => evaluateCondition(c, ctx));
   /*

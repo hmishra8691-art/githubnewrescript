@@ -14,6 +14,7 @@ import { geoAnswered, geoProblems } from "./geo.js";
 import { acbcDone, isAcbcAnswer } from "./acbc.js";
 import { shapeHasAxis } from "./questionShape.js";
 import { videoCompleted, interviewAnswered, interviewProblems, requiresAudioAnswer } from "./interview.js";
+import { isEmptyAnswer } from "./answers.js";
 
 /**
  * Whether a failed check stops the respondent.
@@ -63,15 +64,7 @@ export function warnings(errors: ValidationError[]): ValidationError[] {
  * covers scalars, array members and grid cells at once, since every emptiness
  * question in this file comes through this one function.
  */
-function isEmpty(v: unknown): boolean {
-  if (v === null || v === undefined) return true;
-  if (typeof v === "string") return v.trim() === "";
-  if (Array.isArray(v)) return v.length === 0;
-  if (typeof v === "object") {
-    return Object.values(v as object).every((x) => isEmpty(x));
-  }
-  return false;
-}
+const isEmpty = isEmptyAnswer;
 
 function ruleError(rule: ValidationRule, fallback: string): string {
   return rule.message ?? fallback;
