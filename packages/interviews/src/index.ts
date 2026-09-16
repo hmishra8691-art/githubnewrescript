@@ -6,3 +6,4 @@ export * from "./limits.js";
 export * from "./participants.js";
 export * from "./completion.js";
 export * from "./jobs.js";
+export * from "./prompt.js";

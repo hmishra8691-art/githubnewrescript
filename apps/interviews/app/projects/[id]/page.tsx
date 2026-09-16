@@ -67,7 +67,10 @@ export default async function ProjectPage({ params }: { params: { id: string } }
               {(interviews ?? []).map((i) => (
                 <tr key={i.id}>
                   <td>
-                    {i.candidate_name ?? <span className="muted">unnamed</span>}
+                    {/* the row is the way in: recordings, transcript, analysis */}
+                    <Link href={`/interviews/${i.id}`}>
+                      {i.candidate_name ?? <span className="muted">unnamed</span>}
+                    </Link>
                     {i.is_test && <span className="pill" style={{ marginLeft: 8 }}>test</span>}
                   </td>
                   <td><span className="pill">{INTERVIEW_SAY[i.status as InterviewStatus] ?? i.status}</span></td>

@@ -1,12 +1,13 @@
 import "server-only";
 import {
   classifyFailure, decideAfterFailure, emptyReport, isJobKind, jobKey,
-  noteDecision, shouldClaimAnother,
+  noteDecision, planAnalysisPrompt, readClaims, shouldClaimAnother,
+  summariseRequirements, verifyEvidence,
   type DrainBudget, type DrainReport, type Job, type JobDecision, type JobKind,
 } from "@rescript/interviews";
-import { transcribe } from "@rescript/ai";
+import { completeJson, transcribe } from "@rescript/ai";
 import { supabaseAdmin } from "./admin";
-import { meteredTranscription } from "./metering";
+import { meteredAnalysis, meteredTranscription } from "./metering";
 import { storageOrResponse } from "./storage";
 
 /**
@@ -346,7 +347,273 @@ const transcription: Handler = async (job, row) => {
       .eq("id", media.response_id);
   }
 
+  /*
+   * ANALYSIS FOLLOWS THE LAST TRANSCRIPT, not the completion of the interview.
+   *
+   * Queueing it when the candidate finishes would analyse whatever happened to
+   * be transcribed by then — usually nothing, since transcription is
+   * asynchronous and the candidate leaves first. So the check is here, after
+   * each transcript, and is simply "is there anything left to transcribe": the
+   * last one to finish queues the analysis, and the idempotency key means the
+   * other five that finish at almost the same moment queue nothing.
+   */
+  if (media.interview_id) await maybeQueueAnalysis(media.interview_id);
+
   void project;
 };
 
-const HANDLERS: Partial<Record<JobKind, Handler>> = { transcription };
+/**
+ * Queue the analysis if this interview has nothing left to transcribe.
+ *
+ * Never throws: an analysis that was not queued is recoverable by hand, and a
+ * transcription marked failed because the FOLLOW-UP could not be queued is a
+ * recording transcribed twice for no reason.
+ */
+async function maybeQueueAnalysis(interviewId: string): Promise<void> {
+  try {
+    const db = supabaseAdmin();
+
+    const { data: interview } = await db
+      .from("interviews")
+      .select("id, project_id, customer_id, status")
+      .eq("id", interviewId)
+      .maybeSingle();
+    /* an interview still being answered is not ready to be read */
+    if (!interview) return;
+    if (interview.status !== "completed" && interview.status !== "processing") return;
+
+    const { data: outstanding } = await db
+      .from("interview_transcripts")
+      .select("media_id")
+      .eq("interview_id", interviewId)
+      .in("status", ["waiting", "processing", "transcribing"])
+      .limit(1);
+    if ((outstanding ?? []).length) return;
+
+    await db.from("interviews")
+      .update({ status: "processing" })
+      .eq("id", interviewId)
+      .eq("status", "completed");
+
+    await enqueue({
+      kind: "analysis",
+      subjectId: interviewId,
+      customerId: interview.customer_id as string,
+      projectId: interview.project_id as string,
+      interviewId,
+      priority: 200,
+    });
+  } catch (e) {
+    console.warn("[rescript:interviews] could not queue analysis",
+      JSON.stringify({ interview: interviewId, error: (e as Error).message }));
+  }
+}
+
+
+/* ------------------------------------------------------------ analysis */
+
+/**
+ * READ ONE INTERVIEW'S TRANSCRIPTS AGAINST ITS REQUIREMENTS.
+ *
+ * `verifyEvidence` has been built and tested since Phase 1 with no production
+ * caller at all — 309 lines enforcing the rule that every finding points at
+ * words the candidate actually said. This is the caller.
+ *
+ * The order matters and is the whole design:
+ *
+ *   ask for quotes  →  the model answers  →  EVERY quote is checked against
+ *   the transcript verbatim  →  anything that cannot be found is downgraded to
+ *   `insufficient` with the reason recorded
+ *
+ * The prompt asking is not enough: a model can decline a rule silently. The
+ * verifier alone is not enough either: it has nothing to check if nothing was
+ * quoted. Together they mean a fabricated finding cannot reach a reviewer as a
+ * finding — it reaches them as "not enough evidence", which is true.
+ */
+const analysis: Handler = async (job, row) => {
+  const db = supabaseAdmin();
+  const interviewId = job.subjectId;
+  if (!interviewId) throw new Error("the job names no interview");
+
+  const { data: interview, error } = await db
+    .from("interviews")
+    .select("id, project_id, customer_id, status, is_test, deleted_at")
+    .eq("id", interviewId)
+    .maybeSingle();
+  if (error) throw new Error(`could not read the interview: ${error.message}`);
+  if (!interview || interview.deleted_at) throw new Error("that interview does not exist");
+
+  const [{ data: requirements }, { data: responses }, { data: questions }] = await Promise.all([
+    db.from("interview_requirements")
+      .select("id, code, title, criteria, weight")
+      .eq("project_id", interview.project_id)
+      .order("position", { ascending: true }),
+    db.from("interview_responses")
+      .select("id, question_id, answer_text, status")
+      .eq("interview_id", interviewId)
+      .order("position", { ascending: true }),
+    db.from("interview_questions")
+      .select("id, code")
+      .eq("project_id", interview.project_id),
+  ]);
+
+  const reqs = (requirements ?? []).map((r) => ({
+    id: r.id as string, code: r.code as string, title: r.title as string,
+    criteria: (r.criteria as string) || undefined,
+    weight: Number(r.weight ?? 1),
+  }));
+
+  /*
+   * No requirements is not a failure. A project can collect interviews without
+   * assessing them against anything, and running a model over transcripts with
+   * nothing to look for would spend money to produce an empty answer.
+   */
+  if (!reqs.length) {
+    await writeAnalysis(interviewId, interview.project_id, {
+      status: "complete", summary: {}, narrative: null, requirements: [],
+    });
+    await markProcessed(interviewId);
+    return;
+  }
+
+  const codeOf = new Map((questions ?? []).map((q) => [q.id as string, q.code as string]));
+
+  const { data: transcripts } = await db
+    .from("interview_transcripts")
+    .select("response_id, media_id, text, segments, status")
+    .eq("interview_id", interviewId)
+    .eq("status", "completed");
+
+  const byResponse = new Map<string, { text: string; segments: unknown }>();
+  for (const t of transcripts ?? []) {
+    if (t.response_id) byResponse.set(t.response_id as string, { text: (t.text as string) ?? "", segments: t.segments });
+  }
+
+  const sources = (responses ?? [])
+    .map((r) => {
+      const t = byResponse.get(r.id as string);
+      const text = (t?.text ?? (r.answer_text as string) ?? "").trim();
+      if (!text) return null;
+      return {
+        responseId: r.id as string,
+        questionId: (r.question_id as string) ?? "",
+        questionCode: codeOf.get((r.question_id as string) ?? "") ?? "",
+        text,
+        segments: (t?.segments as { start: number; end: number; text: string }[] | null) ?? null,
+      };
+    })
+    .filter(Boolean) as Parameters<typeof verifyEvidence>[1][number][];
+
+  if (!sources.length) {
+    throw new Error("no transcript is ready for this interview yet");
+  }
+
+  const plan = planAnalysisPrompt(reqs, sources);
+
+  const outcome = await meteredAnalysis(
+    {
+      customerId: interview.customer_id,
+      projectId: interview.project_id,
+      environment: interview.is_test ? "TEST" : "LIVE",
+    },
+    {
+      estimatedTokens: plan.approxTokens,
+      operation: "analyse_interview",
+      idempotencyKey: `interview-analysis:${interviewId}`,
+    },
+    () => completeJson(plan.system, plan.user, 2_000),
+  );
+
+  if (outcome.refused) {
+    const err = new Error(outcome.refused);
+    (err as Error & { status?: number }).status = 402;
+    throw err;
+  }
+
+  const { claims, narrative } = readClaims(outcome.value ?? null);
+
+  /*
+   * THE CHECK. Every claim's quote must appear in the transcript it names,
+   * character for character. What cannot be found is not discarded silently —
+   * it is downgraded to `insufficient` and carries the reason, so a reviewer
+   * seeing a thin analysis can tell "the candidate did not say this" from "the
+   * model made something up".
+   */
+  const verified = verifyEvidence(
+    claims.map((c) => ({
+      requirementId: c.requirementId,
+      responseId: c.responseId,
+      verdict: c.verdict as never,
+      quote: c.quote ?? null,
+      explanation: c.explanation ?? "",
+    })),
+    sources,
+    reqs,
+  );
+
+  const summary = summariseRequirements(reqs, verified.evidence);
+
+  /* a re-run replaces: stale findings from an earlier model are not evidence */
+  await db.from("interview_evidence").delete().eq("interview_id", interviewId);
+
+  if (verified.evidence.length) {
+    await db.from("interview_evidence").insert(verified.evidence.map((e) => ({
+      interview_id: interviewId,
+      project_id: interview.project_id,
+      requirement_id: e.requirementId,
+      response_id: e.responseId,
+      question_id: e.questionId ?? sources.find((s) => s.responseId === e.responseId)?.questionId ?? null,
+      verdict: e.verdict,
+      explanation: e.explanation ?? "",
+      quote: e.quote ?? null,
+      quote_start_seconds: e.quoteStartSeconds,
+      quote_end_seconds: e.quoteEndSeconds,
+      provider: process.env.AI_API_URL === "fake:" ? "fake" : "openai-compatible",
+      model: process.env.AI_MODEL ?? null,
+    })));
+  }
+
+  await writeAnalysis(interviewId, interview.project_id, {
+    status: "complete",
+    summary: Object.fromEntries(summary.map((s) => [s.code, { verdict: s.verdict, evidenceCount: s.evidenceCount }])),
+    narrative,
+    requirements: reqs,
+    dropped: verified.dropped.length,
+    omitted: plan.omitted,
+  });
+
+  await markProcessed(interviewId);
+
+  async function writeAnalysis(
+    iv: string, project: string,
+    body: { status: string; summary: Record<string, unknown>; narrative: string | null;
+      requirements: unknown[]; dropped?: number; omitted?: string[] },
+  ) {
+    await db.from("interview_analysis").upsert({
+      interview_id: iv,
+      project_id: project,
+      status: body.status,
+      summary: {
+        ...body.summary,
+        ...(body.dropped ? { _unverifiedClaimsDropped: body.dropped } : {}),
+        ...(body.omitted?.length ? { _answersNotSentToTheModel: body.omitted } : {}),
+      },
+      narrative: body.narrative,
+      provider: process.env.AI_API_URL === "fake:" ? "fake" : "openai-compatible",
+      model: process.env.AI_MODEL ?? null,
+      requirements_snapshot: body.requirements,
+      completed_at: new Date().toISOString(),
+      error: null,
+    }, { onConflict: "interview_id" });
+  }
+
+  async function markProcessed(iv: string) {
+    await db.from("interviews").update({
+      status: "processed", processed_at: new Date().toISOString(),
+    }).eq("id", iv);
+  }
+
+  void row;
+};
+
+const HANDLERS: Partial<Record<JobKind, Handler>> = { transcription, analysis };

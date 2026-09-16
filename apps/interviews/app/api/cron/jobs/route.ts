@@ -55,7 +55,12 @@ async function run(req: Request): Promise<NextResponse> {
   }
 
   const startedAt = Date.now();
-  const report = await drain(["transcription"]);
+  /*
+   * Transcription first: analysis depends on it, and a pass that analyses
+   * before transcribing would read an interview that is not ready and queue
+   * itself again.
+   */
+  const report = await drain(["transcription", "analysis"]);
   const ms = Date.now() - startedAt;
 
   /*

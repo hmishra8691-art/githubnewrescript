@@ -332,12 +332,36 @@ and the reason 0031 exists. The settle carries an idempotency key derived from
 the recording, so a job retried after a failed database write cannot charge
 twice.
 
-**Phase 4 — intelligence.** `verifyEvidence` and the requirement vocabulary
-are built and tested; the prompt, the provider call and the review interface
-are not.
+**Phase 4 — intelligence.** Built. The analysis job reads an interview's
+transcripts against its requirements, and the prompt and the verifier are one
+mechanism: the prompt demands a verbatim quote with every claim and tells the
+model what happens without one, and `verifyEvidence` then checks every quote
+against the transcript it names. A claim whose quote cannot be found is
+downgraded to `insufficient` carrying the reason — so a reviewer can tell "the
+candidate did not say this" from "the model made something up". Neither half
+works alone: a prompt is a request a model can silently decline, and a verifier
+with nothing quoted has nothing to check.
 
-**Phase 5 — telemetry surfaces.** Events are collected and stored; the
-reviewer's dashboard that renders them under `SIGNALS_CAVEAT` is not built.
+`FORBIDDEN_INFERENCES` is read into the system message and into the caveat a
+reviewer is shown, from one array, so the promise and the instruction cannot
+drift. An answer too long for the context is dropped WHOLE and named, never
+truncated: a quote from the tail of a cut answer would be discarded as a
+fabrication.
+
+Analysis is queued by the last transcript to finish rather than by the
+candidate completing, because transcription is asynchronous and the candidate
+leaves first.
+
+**Phase 5 — review surfaces.** Built. `/interviews/[id]` is the page the
+product did not have: recordings with playback, transcripts with speaker
+attribution, the analysis, and the telemetry signals under `SIGNALS_CAVEAT`.
+
+A signed URL is minted when somebody presses play, not on render — a page that
+mints one per recording as it loads leaves a dozen live credentials on whatever
+screen it is open on. An unattributed voice renders as its label, never as a
+name. `media.read` is what lets somebody press play and a `viewer` does not
+have it, enforced on the page and again in the route, because a page that hides
+a button is a page somebody can call the API behind.
 
 **Phase 6 — billing.** Transcription is metered (see Phase 3). It reuses
 `SPEECH_TO_TEXT_MINUTE` and the `ai.stt.*` rate rather than inventing an

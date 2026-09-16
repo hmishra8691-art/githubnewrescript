@@ -3,7 +3,7 @@ import {
   Meter, MemoryMeterStore, SupabaseMeterStore,
   type Environment, type MeterContext, type UsageSpec,
 } from "@rescript/billing";
-import { collectUsage, sumUsage, type AiUsage } from "@rescript/ai";
+import { aiModelName, collectUsage, sumUsage, type AiUsage } from "@rescript/ai";
 import { supabaseAdmin } from "./admin";
 
 /**
@@ -173,6 +173,84 @@ export async function meteredTranscription<T>(
     return { value, billedSeconds };
   } catch (e) {
     /* the hold is released so an error does not leave money reserved for ever */
+    await meter.release(hold).catch(() => {});
+    throw e;
+  }
+}
+
+/**
+ * The same, for one analysis run.
+ *
+ * `AI_REQUEST` rather than a new event type: the registry already prices a
+ * model call from its input and output tokens, and an interview analysis is
+ * one. A separate type would only be needed if the dashboard should break
+ * interview analysis out from every other AI call, which nobody has asked for.
+ *
+ * Priced per token rather than per minute, so it settles through the chat
+ * branch — and `usageToSpec` above deliberately ignores chat usage, because
+ * mixing the two in one function is how an stt report gets priced as tokens.
+ * This one has its own.
+ */
+function chatToSpec(usage: AiUsage[]): Partial<UsageSpec> {
+  const chat = usage.filter((u) => u.kind === "chat");
+  if (!chat.length) return {};
+  const total = sumUsage(chat);
+  return {
+    provider: process.env.AI_API_URL === "fake:" ? "fake" : "openai-compatible",
+    service: "chat",
+    model: String(chat[0].model ?? aiModelName()),
+    inputUnits: Number(total.inputTokens ?? 0),
+    outputUnits: Number(total.outputTokens ?? 0),
+    quantity: Number(total.inputTokens ?? 0) + Number(total.outputTokens ?? 0),
+    unit: "token",
+    metadata: { requests: total.requests ?? chat.length },
+  };
+}
+
+export async function meteredAnalysis<T>(
+  billing: InterviewBilling,
+  args: { estimatedTokens: number; operation: string; idempotencyKey: string },
+  fn: () => Promise<T>,
+): Promise<MeteredOutcome<T>> {
+  const meter = getMeter();
+  const ctx = contextOf(billing);
+
+  let hold;
+  try {
+    hold = await meter.reserve(ctx, {
+      eventType: "AI_REQUEST",
+      provider: process.env.AI_API_URL === "fake:" ? "fake" : "openai-compatible",
+      service: "chat",
+      model: aiModelName(),
+      /*
+       * The reservation is an ESTIMATE from the prompt size; the settle
+       * replaces it with what the provider actually counted. Reserving nothing
+       * and settling the truth would let an analysis run on an empty wallet.
+       */
+      quantity: Math.max(1, args.estimatedTokens),
+      unit: "token",
+      metadata: { operation: args.operation },
+    });
+  } catch (e) {
+    console.warn("[rescript:billing] meter unavailable — analysing unmetered",
+      JSON.stringify({ error: (e as Error).message }));
+    return { value: await fn() };
+  }
+
+  if (!hold.ok) return { refused: hold.message };
+
+  try {
+    const { value, usage } = await collectUsage(fn);
+    if (!usage.length) { await meter.release(hold); return { value }; }
+    const spec = chatToSpec(usage);
+    await meter.settle(hold, {
+      ...spec,
+      eventType: "AI_REQUEST",
+      idempotencyKey: args.idempotencyKey,
+      metadata: { operation: args.operation, ...(spec.metadata ?? {}) },
+    });
+    return { value };
+  } catch (e) {
     await meter.release(hold).catch(() => {});
     throw e;
   }

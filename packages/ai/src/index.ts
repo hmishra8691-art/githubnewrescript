@@ -768,6 +768,82 @@ function reportFake(kind: "chat", promptText: string, outputTokens: number): voi
   reportUsage({ kind, provider: "fake", model: "fake", inputTokens: approxTokens(promptText) + 60, outputTokens, requests: 1, estimated: true });
 }
 
+/**
+ * ONE JSON REPLY FROM THE MODEL, UNINTERPRETED.
+ *
+ * `complete` below is the narrow version every existing caller uses — it
+ * returns the three keys the survey product asks for. The interview analysis
+ * asks for a different shape entirely (a list of claims, each with a quote),
+ * and widening `complete`'s return type would make every existing call site
+ * carry a union it does not care about.
+ *
+ * So this is the general one and `complete` is a thin reading of it. Same
+ * request, same metering, same timeout: there is one place that talks to a
+ * chat provider, not two that will drift.
+ */
+export async function completeJson(
+  system: string,
+  user: string,
+  maxTokens = 160,
+): Promise<unknown | null> {
+  const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
+  const model = aiModelName();
+  const key = (process.env.AI_API_KEY ?? "").trim();
+  if (!base) return null;
+
+  if (aiProviderName() === "fake") {
+    /*
+     * The fake answers with an empty object rather than inventing claims. An
+     * analysis fake that produced findings would be a fake that puts words in
+     * a candidate's mouth, and `verifyEvidence` would then have to drop them
+     * — which is the right behaviour, exercised on made-up input.
+     */
+    reportFake("chat", system + user, 20);
+    return {};
+  }
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  try {
+    const r = await fetch(`${base}/chat/completions`, {
+      method: "POST", signal: ctrl.signal, cache: "no-store",
+      headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
+      body: JSON.stringify({
+        model, temperature: 0, max_tokens: maxTokens,
+        response_format: { type: "json_object" },
+        messages: [{ role: "system", content: system }, { role: "user", content: user }],
+      }),
+    });
+    if (!r.ok) {
+      const detail = (await r.text().catch(() => "")).trim().slice(0, 200);
+      const err = new Error(`the analysis provider refused the request (${r.status}) ${detail}`.trim());
+      (err as Error & { status?: number }).status = r.status;
+      throw err;
+    }
+    const j = await r.json().catch(() => null) as {
+      choices?: { message?: { content?: string } }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+      model?: string;
+    } | null;
+    const content = j?.choices?.[0]?.message?.content;
+    const inTok = j?.usage?.prompt_tokens, outTok = j?.usage?.completion_tokens;
+    reportUsage({
+      kind: "chat", provider: "openai-compatible", model: j?.model || model,
+      inputTokens: typeof inTok === "number" ? inTok : approxTokens(system + user),
+      outputTokens: typeof outTok === "number" ? outTok : approxTokens(content ?? ""),
+      requests: 1, estimated: typeof inTok !== "number",
+    });
+    if (!content) return null;
+    try {
+      return JSON.parse(content.trim().replace(/^```(?:json)?\s*|\s*```$/g, ""));
+    } catch {
+      return null;
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function complete(system: string, user: string, maxTokens = 160): Promise<{ label?: unknown; question?: unknown; translations?: unknown } | null> {
   const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
   const model = aiModelName();
