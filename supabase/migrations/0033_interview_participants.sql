@@ -161,6 +161,26 @@ create trigger interviews_mirror_respondent
   after insert or update of candidate_name, candidate_email on public.interviews
   for each row execute function public.rescript_interview_mirror_respondent();
 
+/* ------------------------------------------- the interviews that already exist */
+
+/*
+ * The trigger fires on insert and update, which leaves every interview created
+ * before this migration without a mirror — and therefore missing from every
+ * participant selector, which is exactly the bug the mirror exists to prevent.
+ *
+ * One statement, idempotent through the same partial unique index the trigger
+ * uses, so re-running the migration is free.
+ */
+insert into public.interview_people
+  (customer_id, project_id, interview_id, display_name, email, kind, derived)
+select i.customer_id, i.project_id, i.id,
+       coalesce(nullif(btrim(i.candidate_name), ''), 'Respondent ' || left(i.token_prefix, 8)),
+       nullif(btrim(i.candidate_email), ''),
+       'respondent', true
+  from public.interviews i
+ where i.deleted_at is null
+on conflict (interview_id) where derived do nothing;
+
 /* ========================================= who is in one recording */
 
 /**

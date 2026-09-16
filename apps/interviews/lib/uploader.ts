@@ -1,7 +1,9 @@
 "use client";
 export {
   RecordingUploader,
-  type UploadPhase, type UploadState, type UploaderOptions,
+  CANDIDATE_ENDPOINTS,
+  SESSION_ENDPOINTS,
+  type UploadPhase, type UploadState, type UploaderOptions, type UploaderEndpoints,
 } from "@rescript/interviews/uploader";
 
 /**

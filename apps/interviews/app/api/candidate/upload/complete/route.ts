@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assembleAndVerify, readClaimedParts } from "@/lib/recordings";
 import { supabaseAdmin } from "@/lib/admin";
 import { candidateGate, isCandidateFailure, touchInterview } from "@/lib/candidate";
 import { storageOrResponse } from "@/lib/storage";
-import { planUpload, type CompletedPart } from "@rescript/storage";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -52,82 +52,24 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, mediaId: media.id, alreadyStored: true });
   }
 
-  /* ---- assemble the parts, when there are parts */
-  if (media.multipart_upload_id) {
-    const parts: CompletedPart[] = Array.isArray(body?.parts)
-      ? body.parts
-          .map((p: { partNumber?: unknown; etag?: unknown }) => ({
-            partNumber: Number(p?.partNumber),
-            etag: String(p?.etag ?? "").replace(/^"|"$/g, ""),
-          }))
-          .filter((p: CompletedPart) => Number.isInteger(p.partNumber) && p.partNumber > 0 && p.etag)
-      : [];
-    /*
-     * The browser's list is checked against the store's rather than trusted.
-     * A part the browser thinks it sent and the store has no record of would
-     * otherwise produce a completion that fails with an unhelpful S3 error;
-     * asking first means the failure is ours and says which part is missing.
-     */
-    let known: CompletedPart[] = [];
-    try {
-      known = await store.storage.listUploadedParts(media.storage_key, media.multipart_upload_id);
-    } catch { /* an older upload the store has forgotten: fall through to the completion */ }
-
-    /*
-     * DEFENCE IN DEPTH: refuse to assemble a recording that is short.
-     *
-     * The client now verifies against the store before completing, but this
-     * route must not depend on the client being correct — assembling
-     * whatever happens to be there is how a truncated answer gets marked
-     * saved, and a truncated video plays perfectly well, so nobody finds out.
-     * The expected part count comes from the size the browser declared at
-     * `begin`, which is written on the row.
-     */
-    if (known.length && media.file_size) {
-      const expected = planUpload(Number(media.file_size)).partCount;
-      if (known.length < expected) {
-        await markFailed(media.id, media.response_id,
-          `only ${known.length} of ${expected} parts reached storage`);
-        return NextResponse.json(
-          { error: "Part of your recording did not reach us. Please try again.", resumable: true },
-          { status: 409 },
-        );
-      }
-    }
-
-    const use = known.length ? known : parts;
-    if (!use.length) {
-      await markFailed(media.id, media.response_id, "no parts reached storage");
-      return NextResponse.json(
-        { error: "None of your recording reached us. Please try again." }, { status: 409 },
-      );
-    }
-    try {
-      await store.storage.completeMultipartUpload(media.storage_key, media.multipart_upload_id, use);
-    } catch (e) {
-      await markFailed(media.id, media.response_id, (e as Error).message);
-      return NextResponse.json(
-        { error: "Your recording could not be assembled. Please try again." },
-        { status: (e as { status?: number }).status ?? 502 },
-      );
-    }
-  }
-
-  /* ---- the verification the whole route exists for */
-  let meta: { size: number; contentType: string | null } | null = null;
-  try {
-    meta = await store.storage.getMetadata(media.storage_key);
-  } catch (e) {
-    return NextResponse.json(
-      { error: `We could not confirm your recording: ${(e as Error).message}` }, { status: 503 },
-    );
-  }
-  if (!meta || meta.size <= 0) {
-    await markFailed(media.id, media.response_id, "the object is not in the store after upload");
-    return NextResponse.json(
-      { error: "Your recording did not reach us. Please try again." }, { status: 409 },
-    );
-  }
+  /*
+   * Assembly and verification live in `lib/recordings.ts` so the moderated
+   * recorder runs the identical check. The short-upload refusal below it is
+   * where a real bug lived — a completion that assembled whatever parts were
+   * present marked a truncated recording "saved", and a truncated video plays
+   * perfectly — and two copies of that logic would be two chances to lose the
+   * fix.
+   */
+  const verified = await assembleAndVerify({
+    storage: store.storage,
+    storageKey: media.storage_key,
+    multipartUploadId: media.multipart_upload_id,
+    declaredBytes: media.file_size,
+    claimedParts: readClaimedParts(body?.parts),
+    onFailure: (reason) => markFailed(media.id, media.response_id, reason),
+  });
+  if (!verified.ok) return verified.response;
+  const meta = { size: verified.size, contentType: verified.contentType };
 
   const durationSeconds = Number(body?.durationSeconds);
   await db.from("interview_media").update({

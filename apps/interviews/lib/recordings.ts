@@ -1,9 +1,10 @@
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
 import {
+  COMPLETION_SAY, checkAfterAssembly, checkBeforeAssembly, completionReason,
   isParticipantRole, type Participant, type ParticipantRole,
 } from "@rescript/interviews";
-import { PLAYBACK_SECONDS } from "@rescript/storage";
+import { PLAYBACK_SECONDS, type CompletedPart } from "@rescript/storage";
 import { supabaseAdmin } from "./admin";
 import {
   isFailure, requireProject, type GuardFailure, type InterviewCapability, type ProjectContext,
@@ -41,6 +42,9 @@ export interface MediaContext extends ProjectContext {
     duration_seconds: number | null;
     upload_status: string;
     processing_status: string;
+    /** set while a multipart upload is in flight, so an interrupted one can resume */
+    multipart_upload_id: string | null;
+    client_token: string | null;
     deleted_at: string | null;
     recorded_by: string | null;
     created_at: string;
@@ -53,7 +57,7 @@ export async function requireMedia(
   const db = supabaseAdmin();
   const { data: media, error } = await db
     .from("interview_media")
-    .select("id, customer_id, project_id, interview_id, response_id, question_id, kind, storage_provider, storage_key, mime_type, file_size, duration_seconds, upload_status, processing_status, deleted_at, recorded_by, created_at")
+    .select("id, customer_id, project_id, interview_id, response_id, question_id, kind, storage_provider, storage_key, mime_type, file_size, duration_seconds, upload_status, processing_status, multipart_upload_id, client_token, deleted_at, recorded_by, created_at")
     .eq("id", mediaId)
     .maybeSingle();
 
@@ -114,6 +118,125 @@ export async function playbackUrl(ctx: MediaContext): Promise<
       { error: `Storage would not release that recording: ${(e as Error).message}` },
       { status: (e as { status?: number }).status ?? 502 }) };
   }
+}
+
+/* ---------------------------------------------------- finishing an upload */
+
+export interface AssembleInput {
+  storage: {
+    listUploadedParts(key: string, uploadId: string): Promise<CompletedPart[]>;
+    completeMultipartUpload(key: string, uploadId: string, parts: CompletedPart[]): Promise<unknown>;
+    getMetadata(key: string): Promise<{ size: number; contentType: string | null } | null>;
+  };
+  storageKey: string;
+  multipartUploadId: string | null;
+  /** the size the browser declared at `begin`, which is how many parts are owed */
+  declaredBytes: number | null;
+  /** what the browser says it uploaded; checked against the store, never trusted */
+  claimedParts: readonly CompletedPart[];
+  /** called before every refusal, so the row records why rather than only the caller */
+  onFailure: (reason: string) => Promise<void>;
+}
+
+/**
+ * ASSEMBLE A MULTIPART UPLOAD AND PROVE THE OBJECT IS THERE.
+ *
+ * Extracted from the candidate route rather than copied for the moderated one.
+ * This is the piece where a real bug lived — a completion that assembled
+ * whatever parts happened to be present marked a truncated recording "saved",
+ * and a truncated video plays perfectly, so nobody found out — and two copies
+ * of it would be two chances to lose that fix.
+ *
+ * Three refusals, in order of how badly they would end:
+ *
+ *   1. the store holds FEWER parts than the declared size implies. That is a
+ *      short recording, and it is refused before anything is assembled;
+ *   2. no parts at all reached the store;
+ *   3. the object is absent, or empty, after the store said the upload
+ *      completed. `getMetadata` is a HEAD against the real bucket and is the
+ *      only thing in this system permitted to move a recording to `stored` —
+ *      the client's word is never enough.
+ *
+ * It takes a storage-shaped object rather than the provider type so the whole
+ * thing can be exercised against `MemoryStorageProvider` with no database.
+ */
+export async function assembleAndVerify(
+  input: AssembleInput,
+): Promise<{ ok: true; size: number; contentType: string | null } | { ok: false; response: NextResponse }> {
+  const { storage, storageKey, multipartUploadId } = input;
+
+  /*
+   * The DECISIONS are in `@rescript/interviews` — pure, and tested against a
+   * real object store in Node. This function does the I/O around them and
+   * turns a verdict into an HTTP answer; it deliberately makes no judgement of
+   * its own, so the candidate path and the moderated path cannot come to
+   * different conclusions about the same upload.
+   */
+  let knownParts: CompletedPart[] | null = null;
+  if (multipartUploadId) {
+    try {
+      knownParts = await storage.listUploadedParts(storageKey, multipartUploadId);
+    } catch {
+      /* an upload the store has forgotten: `null` means "could not ask" */
+      knownParts = null;
+    }
+  }
+
+  const before = checkBeforeAssembly({
+    multipartUploadId,
+    knownParts,
+    claimedParts: input.claimedParts,
+    declaredBytes: input.declaredBytes,
+  });
+  if (!before.ok) {
+    await input.onFailure(completionReason(before));
+    return { ok: false, response: NextResponse.json(
+      { error: COMPLETION_SAY[before.code], resumable: true }, { status: 409 }) };
+  }
+
+  if (multipartUploadId && before.parts) {
+    try {
+      await storage.completeMultipartUpload(storageKey, multipartUploadId, before.parts);
+    } catch (e) {
+      await input.onFailure((e as Error).message);
+      return { ok: false, response: NextResponse.json(
+        { error: "Your recording could not be assembled. Please try again." },
+        { status: (e as { status?: number }).status ?? 502 }) };
+    }
+  }
+
+  let meta: { size: number; contentType: string | null } | null = null;
+  try {
+    meta = await storage.getMetadata(storageKey);
+  } catch (e) {
+    /*
+     * 503, not 409. We could not CHECK — which is not evidence the recording is
+     * missing, and telling somebody their interview was lost because a HEAD
+     * timed out is the worst available answer.
+     */
+    return { ok: false, response: NextResponse.json(
+      { error: `We could not confirm your recording: ${(e as Error).message}` }, { status: 503 }) };
+  }
+
+  const after = checkAfterAssembly(meta);
+  if (!after.ok) {
+    await input.onFailure(completionReason(after));
+    return { ok: false, response: NextResponse.json(
+      { error: COMPLETION_SAY[after.code], resumable: true }, { status: 409 }) };
+  }
+
+  return { ok: true, size: after.size, contentType: after.contentType };
+}
+
+/** The browser's part list, cleaned. Anything malformed is dropped rather than trusted. */
+export function readClaimedParts(raw: unknown): CompletedPart[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((p: { partNumber?: unknown; etag?: unknown }) => ({
+      partNumber: Number(p?.partNumber),
+      etag: String(p?.etag ?? "").replace(/^"|"$/g, ""),
+    }))
+    .filter((p) => Number.isInteger(p.partNumber) && p.partNumber > 0 && !!p.etag);
 }
 
 /* -------------------------------------------------------- participants */

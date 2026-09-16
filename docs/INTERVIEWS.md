@@ -286,6 +286,25 @@ regression; worth fixing separately.
 Honestly, because the brief asks for a production launch and this is two of
 eight phases.
 
+**Participants and moderated recording (0033).** Built. `interview_people`
+holds a project's roster — interviewers, observers, and each interview's
+respondent, mirrored from `candidate_name` by a trigger.
+`interview_media_participants` holds who is in ONE recording, which is the
+point: the same study's three recordings can have three different interviewer
+lists, and a list held at the interview level gets all three wrong. Identity is
+an account first and an email second, never a name. `speaker_label` is the
+diarization seat, left empty until somebody maps a voice to a person; an
+unmapped label renders as the label, never as a guess.
+
+`session_video` / `session_audio` are the moderated kinds, bound to a question
+rather than to a candidate response row, with `recorded_by` naming who pressed
+record. `/api/sessions/upload/{begin,parts,complete}` mirror the candidate
+routes and share their verification through `checkBeforeAssembly` /
+`checkAfterAssembly` in `@rescript/interviews` — one decision, two callers.
+
+`GET /api/media/[id]/url` mints a 15-minute signed playback URL behind
+`media.read`. Before it existed nothing in this product could be watched.
+
 **Phase 3 — processing.** The `interview_jobs` queue, its claim functions and
 its idempotency exist and are tested; there is no runner and no cron yet, so
 nothing transcribes. `interview_transcripts` rows are created when an audio

@@ -4,3 +4,4 @@ export * from "./telemetry.js";
 export * from "./evidence.js";
 export * from "./limits.js";
 export * from "./participants.js";
+export * from "./completion.js";

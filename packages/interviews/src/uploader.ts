@@ -55,9 +55,43 @@ export interface UploadState {
   mediaId: string | null;
 }
 
+/**
+ * Where the uploader talks, and what it says when it starts.
+ *
+ * The candidate path and the moderated path differ in exactly two ways: the
+ * URLs, and the identifiers in the `begin` body — a link token and a response
+ * for a candidate, an interview and a question for a researcher. Everything
+ * after that is the same protocol against the same store, including the
+ * verify-before-believe completion, so they share one implementation rather
+ * than two that will drift.
+ *
+ * Both default to the candidate's, so nothing that exists today changes.
+ */
+export interface UploaderEndpoints {
+  begin: string;
+  parts: string;
+  complete: string;
+}
+
+export const CANDIDATE_ENDPOINTS: UploaderEndpoints = {
+  begin: "/api/candidate/upload/begin",
+  parts: "/api/candidate/upload/parts",
+  complete: "/api/candidate/upload/complete",
+};
+
+export const SESSION_ENDPOINTS: UploaderEndpoints = {
+  begin: "/api/sessions/upload/begin",
+  parts: "/api/sessions/upload/parts",
+  complete: "/api/sessions/upload/complete",
+};
+
 export interface UploaderOptions {
-  token: string;
-  responseId: string;
+  token?: string;
+  responseId?: string;
+  /** used instead of the candidate defaults for a moderated session recording */
+  endpoints?: UploaderEndpoints;
+  /** merged into the `begin` body — how a session names its interview and question */
+  beginExtra?: Record<string, unknown>;
   mimeType: string;
   /** Told to the server so the plan and the caps can be computed up front. */
   estimatedBytes: number;
@@ -93,6 +127,7 @@ export class RecordingUploader {
    * same recording that both get paid for.
    */
   private readonly clientToken: string;
+  private readonly endpoints: UploaderEndpoints;
 
   private begun: BeginReply | null = null;
   private readonly accepted = new Map<number, string>();   // partNumber -> etag
@@ -103,6 +138,7 @@ export class RecordingUploader {
   private abandoned = false;
 
   constructor(opts: UploaderOptions) {
+    this.endpoints = opts.endpoints ?? CANDIDATE_ENDPOINTS;
     this.opts = opts;
     this.doFetch = opts.fetchImpl ?? fetch.bind(globalThis);
     this.accumulator = new PartAccumulator();
@@ -127,7 +163,7 @@ export class RecordingUploader {
   /** Ask the server for a plan and the first set of signed URLs. */
   async begin(): Promise<void> {
     this.set({ phase: "preparing", message: null });
-    const res = await this.doFetch("/api/candidate/upload/begin", {
+    const res = await this.doFetch(this.endpoints.begin, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -136,6 +172,7 @@ export class RecordingUploader {
         clientToken: this.clientToken,
         bytes: this.opts.estimatedBytes,
         mimeType: this.opts.mimeType,
+        ...(this.opts.beginExtra ?? {}),
       }),
     });
     const reply = (await res.json().catch(() => ({}))) as BeginReply;
@@ -200,7 +237,7 @@ export class RecordingUploader {
     }
 
     this.set({ phase: "finishing" });
-    const res = await this.doFetch("/api/candidate/upload/complete", {
+    const res = await this.doFetch(this.endpoints.complete, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -235,7 +272,7 @@ export class RecordingUploader {
     this.set({ phase: "waiting", message: "Reconnecting…" });
     this.tell("upload_retried", { mediaId: this.begun.mediaId });
 
-    const res = await this.doFetch("/api/candidate/upload/parts", {
+    const res = await this.doFetch(this.endpoints.parts, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
