@@ -105,7 +105,7 @@ On **each** bucket: **Settings → CORS policy → Edit → paste**:
 [
   {
     "AllowedOrigins": [
-      "https://rescript-interviews.vercel.app",
+      "https://interviews-lemon.vercel.app",
       "http://localhost:3002"
     ],
     "AllowedMethods": ["PUT", "GET", "HEAD"],
@@ -180,7 +180,7 @@ the repo, and set **Root Directory** to `apps/interviews`. Vercel will detect
 Next.js. It will fail its first build until the variables below exist — that
 is expected.
 
-**Project → Settings → Environment Variables.** Eight of them:
+**Project → Settings → Environment Variables.** Ten of them:
 
 | Name | Value | Environments |
 |---|---|---|
@@ -192,7 +192,7 @@ is expected.
 | `R2_ACCESS_KEY_ID` | from Part 4 | all |
 | `R2_SECRET_ACCESS_KEY` | from Part 4 | all — tick **Sensitive** |
 | `R2_REGION` | `auto` | all |
-| `INTERVIEWS_PUBLIC_URL` | `https://rescript-interviews.vercel.app` | Production |
+| `INTERVIEWS_PUBLIC_URL` | `https://interviews-lemon.vercel.app` | Production |
 | `NEXT_PUBLIC_STUDIO_URL` | `https://rescriptstudio.vercel.app` | all |
 
 `R2_BUCKET` is deliberately listed twice with different scopes — that one
@@ -202,8 +202,23 @@ variable have a different value per environment; set it as two entries.
 Tick **Sensitive** on `R2_SECRET_ACCESS_KEY` and `SUPABASE_SERVICE_ROLE_KEY`
 so they cannot be read back out of the dashboard afterwards.
 
-`INTERVIEWS_PUBLIC_URL` is what the invite route builds candidate links from.
-Get it wrong and the links point somewhere that does not exist.
+`INTERVIEWS_PUBLIC_URL` is what the invite route builds candidate links from,
+and what a sign-in code is bound to. Get it wrong and the links point somewhere
+that does not exist and nobody can sign in.
+
+### One more, on the STUDIO project
+
+Interviews cannot read the Studio's session cookie — it is host-only, and
+`vercel.app` is on the Public Suffix List, so no shared cookie domain is
+possible. Sign-in goes through a single-use code instead, and the Studio must
+be told which application may receive one:
+
+| Name | Value | Environments |
+|---|---|---|
+| `AUTH_HANDOFF_ORIGINS` | `https://interviews-lemon.vercel.app` | all |
+
+Exactly that string, no trailing slash. Redeploy the Studio afterwards.
+[AUTH-HANDOFF.md](./AUTH-HANDOFF.md) explains the mechanism.
 
 Then **Deployments → Redeploy**. Environment variables are baked in at build
 time; changing one does nothing until you redeploy.

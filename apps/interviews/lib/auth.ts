@@ -1,5 +1,6 @@
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
+import { handoffStartUrl, normaliseOrigin } from "@rescript/access";
 import { supabaseAdmin } from "./admin";
 
 /**
@@ -54,6 +55,57 @@ export function sessionIdFrom(req: NextRequest): string | null {
   const v = req.cookies.get(SESSION_COOKIE_NAME)?.value ?? null;
   /* the Studio's own rule: anything shorter than a uuid is not one */
   return v && v.length >= 32 ? v : null;
+}
+
+/**
+ * Write the session cookie on THIS origin.
+ *
+ * Every attribute matches `apps/studio/lib/authServer.ts` deliberately — same
+ * name, `httpOnly`, `sameSite: lax`, `secure` in production, path `/` — so
+ * that a person signed in through the handoff is in exactly the state the
+ * Studio would have put them in, not a slightly different one that behaves
+ * differently under a cross-site POST.
+ *
+ * Notably there is still NO `domain`. This cookie is host-only too; the
+ * handoff is what crosses the origin, once, and nothing about it makes the
+ * cookie itself travel.
+ */
+export function setSessionCookie(res: NextResponse, sessionId: string): void {
+  res.cookies.set(SESSION_COOKIE_NAME, sessionId, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: ABSOLUTE_SECONDS,
+  });
+}
+
+/**
+ * Where to send somebody who is not signed in.
+ *
+ * The Studio's `/api/auth/handoff` checks their session there — where the
+ * cookie is valid — and redirects back to `/api/auth/callback` with a
+ * single-use code. Pointing at `/login` instead is what the sign-in card used
+ * to do, and it could not work: they would sign in on the Studio's origin and
+ * return here still signed out.
+ */
+export function signInUrl(next = "/"): string | null {
+  const studio = process.env.NEXT_PUBLIC_STUDIO_URL ?? "https://rescriptstudio.vercel.app";
+  return handoffStartUrl(studio, publicOrigin(), next);
+}
+
+/**
+ * This app's own origin, as the Studio must be told it.
+ *
+ * It has to be the deployed public origin rather than whatever host the
+ * request arrived on, because the code is bound to this exact string at both
+ * ends: minted for it, redeemed against it. A Vercel preview URL reaching the
+ * Studio under its own hostname would mint a code it could never spend, which
+ * is the correct outcome and a confusing one, so `INTERVIEWS_PUBLIC_URL` is
+ * the single place that decides.
+ */
+export function publicOrigin(): string {
+  return normaliseOrigin(process.env.INTERVIEWS_PUBLIC_URL) ?? "";
 }
 
 /**

@@ -16,3 +16,4 @@ export * from "./sessions.js";
 export * from "./locks.js";
 export * from "./audit.js";
 export * from "./settings.js";
+export * from "./handoff.js";

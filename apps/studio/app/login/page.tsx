@@ -29,8 +29,30 @@ export const dynamic = "force-dynamic";
  * showing a sign-in form to somebody already signed in is a redundant screen.
  * The worst case of the opposite is the loop this replaced.
  */
-export default async function LoginPage() {
+/**
+ * Where an ALREADY signed-in visitor goes.
+ *
+ * This used to be an unconditional "/" and that was fine while every route
+ * that sent somebody here wanted the dashboard afterwards. `/api/auth/handoff`
+ * does not: a person with a live session who lands on the form — a stale tab,
+ * a bookmarked link, a race against their own sign-in — would be bounced to
+ * the dashboard and lose the app they were actually trying to open.
+ *
+ * Same rule as `LoginForm`'s own `next`, and it has to be: a path, never a
+ * URL, so "//evil.example" is rejected rather than followed.
+ */
+function safeNext(raw: string | undefined): string {
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return "/";
+  return raw;
+}
+
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams?: { next?: string };
+}) {
   const sessionId = cookies().get(SESSION_COOKIE_NAME)?.value;
+  const next = safeNext(searchParams?.next);
 
   if (sessionId && sessionId.length >= 32) {
     try {
@@ -58,7 +80,7 @@ export default async function LoginPage() {
           // the SAME predicate the API gate uses. Two different notions of
           // "still signed in" between the page and the gate is how you get a
           // page that redirects to a dashboard that redirects back.
-          if (sessionAuthorizes(record, policies.session)) redirect("/");
+          if (sessionAuthorizes(record, policies.session)) redirect(next);
         }
       }
     } catch (e) {

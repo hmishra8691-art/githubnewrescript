@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import Link from "next/link";
-import { SESSION_COOKIE_NAME, userForSession, isFailure } from "@/lib/auth";
+import { SESSION_COOKIE_NAME, userForSession, isFailure, signInUrl } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/admin";
 import { NewProject } from "@/components/NewProject";
 
@@ -12,16 +12,54 @@ export const dynamic = "force-dynamic";
  * Signed out, it says so and points at the Studio's login rather than growing
  * a second sign-in form — one authentication system, and this app is not it.
  */
-export default async function Home() {
+/**
+ * What to say when a sign-in attempt came back without a session.
+ *
+ * Each of these is a different thing to do next, which is why they are
+ * different messages: an expired code is "press it again", an unavailable
+ * database is "wait a moment", and a misconfiguration is not the visitor's
+ * problem at all and must not pretend to be.
+ */
+const SIGNIN_NOTICE: Record<string, string> = {
+  expired: "That sign-in link had already been used or had expired. Please try again.",
+  failed: "That sign-in link was incomplete. Please try again.",
+  unavailable: "We could not reach the sign-in service just then. Please try again in a moment.",
+  misconfigured:
+    "This deployment is missing its public address, so sign-in cannot complete. " +
+    "Set INTERVIEWS_PUBLIC_URL and redeploy.",
+};
+
+export default async function Home({
+  searchParams,
+}: {
+  searchParams?: { signin?: string };
+}) {
   const user = await userForSession(cookies().get(SESSION_COOKIE_NAME)?.value ?? null);
   if (isFailure(user)) {
-    const studio = process.env.NEXT_PUBLIC_STUDIO_URL ?? "https://rescriptstudio.vercel.app";
+    const notice = SIGNIN_NOTICE[searchParams?.signin ?? ""] ?? null;
+    /*
+     * The link goes to the Studio's HANDOFF, not its login form. Sending
+     * somebody to `/login` signed them in on the Studio's origin and returned
+     * them here still signed out, because `rescript_session` is host-only and
+     * `vercel.app` is on the Public Suffix List — no cookie can span the two.
+     * The handoff signs them in there if they are not already, then hands this
+     * origin a single-use code for the session they already have.
+     */
+    const href = signInUrl("/");
     return (
       <main className="wrap">
         <div className="card">
           <h1>Rescript Interviews</h1>
+          {notice ? <p className="note warn">{notice}</p> : null}
           <p>Please sign in to your Rescript account to continue.</p>
-          <p><a className="btn" href={`${studio}/login`}>Sign in</a></p>
+          {href ? (
+            <p><a className="btn" href={href}>Sign in</a></p>
+          ) : (
+            <p className="muted small">
+              Sign-in is unavailable until <code>INTERVIEWS_PUBLIC_URL</code> is set on this
+              deployment.
+            </p>
+          )}
           <p className="muted small">
             Interviews uses the same account as Rescript Studio. Signing in there signs you in here.
           </p>

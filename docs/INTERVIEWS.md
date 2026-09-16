@@ -214,9 +214,20 @@ A separate Vercel project, on `apps/interviews`, port 3002 in development.
 | `R2_ACCESS_KEY_ID` | storage | |
 | `R2_SECRET_ACCESS_KEY` | storage | |
 | `R2_REGION` | storage | `auto` for R2; a real region for S3 |
-| `INTERVIEWS_PUBLIC_URL` | candidate links | the public origin, for the link in the invite reply |
-| `NEXT_PUBLIC_STUDIO_URL` | the sign-in link | |
+| `INTERVIEWS_PUBLIC_URL` | candidate links **and sign-in** | the public origin. A session code is bound to this exact string at both ends |
+| `NEXT_PUBLIC_STUDIO_URL` | the sign-in link | where the handoff starts |
 | `AI_STT_API_URL` / `AI_STT_API_KEY` / `AI_STT_MODEL` | transcription | Phase 3 |
+
+On the **Studio** project, one variable is needed too:
+
+| Variable | For | Notes |
+|---|---|---|
+| `AUTH_HANDOFF_ORIGINS` | sign-in | this app's origin, exactly. Unset means nobody may be handed a session |
+
+`rescript_session` is host-only, so the Studio's cookie cannot reach this
+origin and a shared cookie domain is not available — `vercel.app` is on the
+Public Suffix List. Sign-in therefore goes through a single-use code; see
+[AUTH-HANDOFF.md](./AUTH-HANDOFF.md).
 
 Without R2, the app runs and the routes that need storage answer **501 naming
 the missing variables**. The candidate's screen says so *before* anybody
