@@ -126,6 +126,21 @@ export function platformInfo(): PlatformInfo {
      * to send. `mailConfig()` applies the same rule.
      */
     mail: !!(process.env.RESEND_API_KEY && (process.env.MAIL_FROM ?? "").trim()),
+    /*
+     * THE SCHEDULED JOBS' ONE PREREQUISITE, AND IT WAS NOT ON THIS PAGE.
+     *
+     * Everything else in the platform is driven by somebody's open tab, so it
+     * fails in front of a person. The cron jobs are the exception: media
+     * delivery and reservation expiry run with nobody watching, and both
+     * REFUSE EVERY RUN when `CRON_SECRET` is unset — deliberately, because an
+     * unauthenticated route that deletes media and moves money is worse than
+     * one that has not shipped. The consequence of that refusal is silence:
+     * recordings are never delivered and never expire, and abandoned holds
+     * accumulate until a wallet reading $25 refuses to spend anything.
+     *
+     * Presence only, like every other row here — the value is never emitted.
+     */
+    cron: !!(process.env.CRON_SECRET ?? "").trim(),
   };
 
   const warnings: string[] = [];
@@ -178,6 +193,9 @@ export function platformInfo(): PlatformInfo {
   }
   if (configured.mail && !(process.env.MAIL_FROM_INVITATIONS ?? "").trim()) {
     warnings.push("MAIL_FROM_INVITATIONS is not set, so respondent invitations send from the same address as password resets. A survey wave that lands in spam folders can then take your password-reset delivery down with it.");
+  }
+  if (!configured.cron) {
+    warnings.push("CRON_SECRET is not set, so every scheduled job refuses to run: qualitative recordings are never delivered and never deleted at 48 hours, and expired billing reservations are never released back to their wallets.");
   }
   if (tier === "production" && (process.env.RESCRIPT_DIAGNOSTICS ?? "") === "1") {
     warnings.push("RESCRIPT_DIAGNOSTICS=1 in production: per-project diagnostics are readable by every project member, not only platform admins.");

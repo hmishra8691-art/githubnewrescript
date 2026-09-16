@@ -52,6 +52,7 @@ const LABELS: Record<string, string> = {
   authSalt: "Auth hash salt",
   qualitySalt: "Quality hash salt",
   mail: "Mail (Resend)",
+  cron: "Scheduled jobs (CRON_SECRET)",
 };
 
 export default function PlatformPage() {
@@ -161,6 +162,9 @@ export default function PlatformPage() {
                   <span className={`chip ${v ? "on" : "warn"}`}>{v ? "set" : "not set"}</span>
                   {k === "mail" && !v && <span className="muted" style={{ fontSize: 12.5, marginLeft: 8 }}>
                     Password resets cannot be delivered; invitations hand back a link to send by hand.
+                  </span>}
+                  {k === "cron" && !v && <span className="muted" style={{ fontSize: 12.5, marginLeft: 8 }}>
+                    Every scheduled run is refused: recordings are not delivered or deleted, and expired billing holds are never released.
                   </span>}
                 </td>
               </tr>

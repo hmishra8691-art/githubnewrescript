@@ -49,6 +49,40 @@ const PROBES: { migration: string; what: string; table: string; column?: string 
   { migration: "0013", what: "respondent lists and distribution", table: "respondents", column: "list_name" },
   { migration: "0014", what: "report templates and viewer filters", table: "analytics_report_templates" },
   { migration: "0015", what: "project configuration", table: "surveys", column: "client_name" },
+  /*
+   * THE LIST USED TO STOP HERE, AND A LIST THAT STOPS SAYS "UP TO DATE".
+   *
+   * Nineteen migrations shipped after 0015 and none of them was probed, so
+   * this page reported a complete database to any instance that had merely
+   * reached 0015 — including one that could not bill, could not store a
+   * recording and could not sign anybody into Interviews. The rule the list
+   * was written under is "one probe per migration that added something a
+   * panel depends on", and every one of these did.
+   *
+   * A probe names a table or a column the migration CREATED, so the answer is
+   * a fact about the database rather than about the code that reads it.
+   */
+  { migration: "0016", what: "password resets and mail delivery records", table: "mail_deliveries" },
+  { migration: "0017", what: "hashed invitation tokens", table: "project_invitations", column: "token_hash" },
+  { migration: "0018", what: "QA test cases and runs", table: "survey_test_cases" },
+  { migration: "0022", what: "the translation cache", table: "translation_cache" },
+  { migration: "0023", what: "billing: wallets, rates and usage", table: "project_wallets" },
+  { migration: "0024", what: "credit transfers", table: "credit_transfers" },
+  { migration: "0025", what: "per-project spending policies", table: "project_spending" },
+  { migration: "0027", what: "stored recordings and transcripts", table: "media_objects" },
+  { migration: "0029", what: "qualitative media delivery", table: "media_deliveries" },
+  { migration: "0030", what: "interview projects", table: "interview_projects" },
+  { migration: "0031", what: "billing by subject kind", table: "project_spending", column: "subject_kind" },
+  { migration: "0032", what: "the sign-in handoff to Interviews", table: "auth_handoff_codes" },
+  { migration: "0033", what: "interview participants", table: "interview_people" },
+  /*
+   * Without this one, removing a collaborator returns them to the workspace
+   * default instead of removing them, and a retried settle debits the wallet
+   * twice — the TypeScript half of both fixes ships in the build that reads
+   * this page, so an instance missing 0034 is the dangerous combination
+   * rather than merely an old one.
+   */
+  { migration: "0034", what: "revocable membership and the billing replay guards", table: "project_members", column: "revoked_at" },
 ];
 
 export async function GET(_req: NextRequest) {
