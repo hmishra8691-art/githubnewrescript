@@ -90,6 +90,12 @@ export interface ResponseXlsxOptions {
   dataset?: DatasetFilter;
   /** add QUALITY_STATUS / QUALITY_SCORE / FRAUD_RISK_SCORE / RESPONSE_STATUS to Main Data */
   qualityColumns?: boolean;
+  /**
+   * add ENVIRONMENT to Main Data. Left undefined, the workbook decides for
+   * itself: a file that carries both TEST and LIVE rows always says which is
+   * which, because a file that mixes them and does not is the bug.
+   */
+  environmentColumn?: boolean;
 }
 
 export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityExportRow[], opts: ResponseXlsxOptions = {}): Promise<Buffer> {
@@ -113,7 +119,9 @@ export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityEx
    * client's tab script that reads column N must keep reading column N.
    */
   const sampleCols = rows.some((r) => r.state.sampleSource) ? [...SAMPLE_COLUMNS] : [];
-  const header = ["Response ID", "Status", "Start Time", "End Time", ...varNames, ...qualityCols, ...sampleCols];
+  const mixed = rows.some((r) => r.state.isTest) && rows.some((r) => !r.state.isTest);
+  const envCols = (opts.environmentColumn ?? mixed) ? [...ENVIRONMENT_COLUMNS] : [];
+  const header = ["Response ID", "Status", "Start Time", "End Time", ...varNames, ...qualityCols, ...sampleCols, ...envCols];
   main.columns = header.map((h) => ({ header: h, key: h, width: Math.min(40, Math.max(12, h.length + 2)) }));
   const included = rows.filter((r) => inDataset(r, filter));
   for (const r of included) {
@@ -124,6 +132,7 @@ export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityEx
       line.push(r.quality?.classification ?? "UNSCORED", r.quality?.qualityScore ?? "", r.quality?.riskScore ?? "", r.review.status === "REMOVE" ? "REMOVED" : r.review.status === "KEEP" ? "KEPT" : r.review.status === "REVIEW_LATER" ? "REVIEW_LATER" : "ACTIVE");
     }
     if (sampleCols.length) line.push(...sampleCells(r));
+    if (envCols.length) line.push(...environmentCells(r));
     main.addRow(line);
   }
   styleHeader(main);
@@ -166,6 +175,9 @@ export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityEx
     ["Survey", `${def.meta.code} — ${def.meta.title} (v${def.meta.version})`],
     ["Dataset", filter.kind === "all" ? "All responses (REMOVED responses included — see Response Quality → Researcher Decision)" : filter.kind === "clean" ? "Clean dataset: KEEP decisions plus unreviewed CLEAN responses; REMOVED excluded" : `Custom dataset: excludes ${filter.exclude.join(", ")} and REMOVED`],
     ["Rows in Main Data", included.length],
+    ["Environment", mixed
+      ? "TEST and LIVE responses in one file — see the ENVIRONMENT column on Main Data"
+      : rows.some((r) => r.state.isTest) ? "TEST responses only" : "LIVE responses only"],
     ["Rows assessed", rows.filter((r) => r.quality).length],
     ["Quality Score", "0–100, 100 = very high-quality response (answers, attention, open ends)"],
     ["Fraud Risk Score", "0–100, 100 = extremely suspicious (duplicates, automation, coordination, network). Kept separate from quality on purpose."],
@@ -190,6 +202,24 @@ export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityEx
 export const SAMPLE_COLUMNS = ["SAMPLE_SOURCE", "SAMPLE_SOURCE_RESPONDENT"] as const;
 export function sampleCells(row: QualityExportRow): string[] {
   return [row.state.sampleSource ?? "", row.state.sampleSourceRespondent ?? ""];
+}
+
+/**
+ * WHICH SIDE OF THE FENCE EACH ROW CAME FROM.
+ *
+ * `include=all` puts test and live responses in one file, and until this
+ * existed nothing in that file said which was which: the CSV's system columns
+ * are RESP_ID / SESSION_ID / SURVEY_VERSION / START_TIME / STATUS, the quality
+ * sheet's header is built the same way, and only the JSON branch carried
+ * `isTest`. Sixty pilot interviews left in the same delivered file as real
+ * fieldwork with no column that distinguished them.
+ *
+ * Appended last, like the sample columns and for the same reason: a client's
+ * tab script that reads column N must keep reading column N.
+ */
+export const ENVIRONMENT_COLUMNS = ["ENVIRONMENT"] as const;
+export function environmentCells(row: QualityExportRow): string[] {
+  return [row.state.isTest ? "TEST" : "LIVE"];
 }
 
 /** CSV columns appended to the main data when quality columns are requested. */

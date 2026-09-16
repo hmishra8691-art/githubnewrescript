@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { assertNotReadOnly, getMeter, projectContext, recordUsage } from "@/lib/metering";
 import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
-import { responsesToCSV, exportResponsesXlsx, inDataset, QUALITY_CSV_COLUMNS, qualityCsvCells, SAMPLE_COLUMNS, sampleCells, type DatasetFilter, type QualityExportRow } from "@rescript/exporters";
+import { responsesToCSV, exportResponsesXlsx, inDataset, ENVIRONMENT_COLUMNS, environmentCells, QUALITY_CSV_COLUMNS, qualityCsvCells, SAMPLE_COLUMNS, sampleCells, type DatasetFilter, type QualityExportRow } from "@rescript/exporters";
 import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
 import { audit, isFailure, requireProject } from "@/lib/guard";
 
@@ -101,13 +101,50 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
    * export is a dataset. Rows are recoverable from the recycle bin until they
    * are purged, so nothing is lost by excluding them here.
    */
-  let query = db.from("responses")
-    .select("session_id, respondent_id, status, seed, answers, calculated, embedded, flags, started_at, completed_at, is_test, quality, review_status, review_reason, reviewed_by, reviewed_at, sample_source, sample_source_respondent")
-    .eq("survey_id", params.id)
-    .is("deleted_at", null);
-  if (include === "live") query = query.eq("is_test", false);
-  else if (include === "test") query = query.eq("is_test", true);
-  let { data: resp, error: qerr } = (await query.order("started_at")) as { data: any[] | null; error: { message: string } | null };
+  /*
+   * PAGED, BECAUSE POSTGREST TRUNCATES SILENTLY.
+   *
+   * This was one unbounded `select … order by started_at`. PostgREST caps the
+   * result at `db-max-rows` and answers **200 OK**, so a 4,000-complete study
+   * exported 1,000 rows under the right filename, with the right header and no
+   * warning anywhere — the researcher delivers a quarter of their fieldwork and
+   * nothing tells them. Where the cap is NOT configured the same line instead
+   * loaded every response with its full answer payload into one function's
+   * memory, which is the other way to lose the export.
+   *
+   * Every other bulk reader here already chunks (`lib/analytics.ts`,
+   * `lib/responseData.ts`, both at 1000, both stopping on a short chunk); this
+   * is that pattern, and `range()` overrides the cap rather than colliding with
+   * it. `MAX_EXPORT_ROWS` is a real ceiling rather than an accident of
+   * configuration, and crossing it is REPORTED (see below) instead of quietly
+   * shortening the file.
+   */
+  const CHUNK = 1000;
+  const MAX_EXPORT_ROWS = 500_000;
+  const COLUMNS = "session_id, respondent_id, status, seed, answers, calculated, embedded, flags, started_at, completed_at, is_test, quality, review_status, review_reason, reviewed_by, reviewed_at, sample_source, sample_source_respondent";
+  const FALLBACK_COLUMNS = "session_id, respondent_id, status, seed, answers, calculated, embedded, flags, started_at, completed_at, is_test";
+
+  const page = (columns: string, softDelete: boolean, start: number) => {
+    let q = db.from("responses").select(columns).eq("survey_id", params.id);
+    if (softDelete) q = q.is("deleted_at", null);
+    if (include === "live") q = q.eq("is_test", false);
+    else if (include === "test") q = q.eq("is_test", true);
+    return q.order("started_at").range(start, start + CHUNK - 1);
+  };
+
+  const readAll = async (columns: string, softDelete: boolean): Promise<{ rows: any[]; error: { message: string } | null; capped: boolean }> => {
+    const rows: any[] = [];
+    for (let start = 0; start < MAX_EXPORT_ROWS; start += CHUNK) {
+      const { data, error } = (await page(columns, softDelete, start)) as { data: any[] | null; error: { message: string } | null };
+      if (error) return { rows, error, capped: false };
+      const chunk = data ?? [];
+      rows.push(...chunk);
+      if (chunk.length < CHUNK) return { rows, error: null, capped: false };
+    }
+    return { rows, error: null, capped: true };
+  };
+
+  let { rows: resp, error: qerr, capped } = await readAll(COLUMNS, true);
   if (qerr && /quality|review_status|sample_source|deleted_at|does not exist|schema cache/i.test(qerr.message)) {
     /*
      * A column the database has not got yet — migration 0005 (quality), 0006
@@ -120,12 +157,25 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
      * database without the column has no soft delete, so it has no binned
      * rows to leak.
      */
-    let q2 = db.from("responses")
-      .select("session_id, respondent_id, status, seed, answers, calculated, embedded, flags, started_at, completed_at, is_test")
-      .eq("survey_id", params.id);
-    if (include === "live") q2 = q2.eq("is_test", false);
-    else if (include === "test") q2 = q2.eq("is_test", true);
-    resp = ((await q2.order("started_at")).data ?? []) as any[];
+    const fallback = await readAll(FALLBACK_COLUMNS, false);
+    resp = fallback.rows;
+    qerr = fallback.error;
+    capped = fallback.capped;
+  }
+  if (qerr) return NextResponse.json({ error: qerr.message }, { status: 500 });
+  /*
+   * A file that is short is not a file. The old code could not even detect
+   * this; now that it can, it refuses rather than handing over a plausible
+   * download that is missing four fifths of the fieldwork.
+   */
+  if (capped) {
+    return NextResponse.json(
+      {
+        error: `This export is larger than ${MAX_EXPORT_ROWS.toLocaleString("en")} responses. Narrow it with a date range or a dataset filter, or ask for it to be delivered in parts — a truncated file would look complete.`,
+        code: "export_too_large",
+      },
+      { status: 413 },
+    );
   }
   // the dataset filter (REMOVED never in a clean dataset; raw rows untouched)
   const exportRows: QualityExportRow[] = (resp ?? []).map((r: any) => ({
@@ -133,8 +183,16 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     quality: r.quality ?? null,
     review: { status: r.review_status ?? null, reason: r.review_reason ?? null, by: r.reviewed_by ?? null, at: r.reviewed_at ?? null },
   }));
+  /*
+   * `include=all` runs neither `is_test` branch above, so the file carries
+   * both — and until this was added nothing in it said which row was which.
+   * The column goes on whenever the file CAN mix, not only when it happens to:
+   * a study whose pilot has not started yet still exports the column, so the
+   * client's script does not gain one halfway through fieldwork.
+   */
+  const withEnvironment = include === "all";
   if (format === "xlsx") {
-    const buf = await exportResponsesXlsx(parsed.data, exportRows, { dataset, qualityColumns: withQuality || dataset.kind !== "all" || exportRows.some((r) => r.quality) });
+    const buf = await exportResponsesXlsx(parsed.data, exportRows, { dataset, environmentColumn: withEnvironment, qualityColumns: withQuality || dataset.kind !== "all" || exportRows.some((r) => r.quality) });
     return new NextResponse(new Uint8Array(buf), {
       headers: {
         "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -196,6 +254,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const extraColumns = [
     ...(withQuality ? QUALITY_CSV_COLUMNS : []),
     ...(withSample ? SAMPLE_COLUMNS : []),
+    ...(withEnvironment ? ENVIRONMENT_COLUMNS : []),
   ];
   const csv = responsesToCSV(
     parsed.data,
@@ -206,6 +265,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
           cells: (i) => [
             ...(withQuality ? qualityCsvCells(kept[i]) : []),
             ...(withSample ? sampleCells(kept[i]) : []),
+            ...(withEnvironment ? environmentCells(kept[i]) : []),
           ],
         }
       : undefined,

@@ -253,6 +253,38 @@ export interface BuildOptions {
   weighting?: WeightingSpec | null;
 }
 
+/**
+ * "CLEAN" HAS TO MEAN ONE THING.
+ *
+ * It did not. The export excluded anything the researcher marked REMOVE and
+ * admitted anything they marked KEEP (`inDataset`, in @rescript/exporters);
+ * analytics did not read `review_status` at all and went by the classification
+ * alone. So the researcher's own decisions were honoured by the file they
+ * delivered and ignored by every crosstab, NPS and report deck built from the
+ * same study — two deliverables that disagree, with nothing on screen to
+ * explain it.
+ *
+ * This is `inDataset`'s rule, stated for an analytics row. It is deliberately
+ * not an import: `@rescript/analytics` does not depend on the exporters, and a
+ * dependency in that direction would be the wrong shape. The two are kept
+ * honest by `dataset.test.ts`, which asserts they agree case for case.
+ *
+ * The one deliberate difference stays: a `custom` dataset NAMES the
+ * classifications to keep here, where the export names the ones to drop. Both
+ * of them drop REMOVE.
+ */
+export function inAnalyticsDataset(row: AnalyticsRow, spec: DatasetSpec): boolean {
+  if (spec.dataset === "all") return true;
+  /* a response the researcher binned is in no dataset but the raw one */
+  if (row.review_status === "REMOVE") return false;
+  /* …and one they explicitly kept is in every other one, whatever it scored */
+  if (row.review_status === "KEEP") return true;
+  const cls = row.quality?.classification ?? null;
+  if (spec.dataset === "clean") return !cls || cls === "CLEAN";
+  if (spec.qualityClasses?.length) return spec.qualityClasses.includes(cls ?? "UNKNOWN");
+  return true;
+}
+
 export function buildDataset(def: SurveyDefinition, rows: AnalyticsRow[], opts: BuildOptions): Dataset {
   const variables = variableMetadata(def);
   const byName = new Map(variables.map((v) => [v.name, v]));
@@ -262,8 +294,7 @@ export function buildDataset(def: SurveyDefinition, rows: AnalyticsRow[], opts: 
     if (opts.spec.environment === "TEST" && !row.is_test) continue;
     if (opts.spec.environment === "LIVE" && row.is_test) continue;
     if (!statuses.has(row.status ?? "complete")) continue;
-    if (opts.spec.dataset === "clean" && row.quality && row.quality.classification && row.quality.classification !== "CLEAN") continue;
-    if (opts.spec.dataset === "custom" && opts.spec.qualityClasses?.length && !opts.spec.qualityClasses.includes(row.quality?.classification ?? "UNKNOWN")) continue;
+    if (!inAnalyticsDataset(row, opts.spec)) continue;
     if (opts.filter && !matchesResponseCondition(def, opts.filter, row)) continue;
     cases.push(rowToCase(def, row));
   }

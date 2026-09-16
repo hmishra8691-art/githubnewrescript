@@ -9,6 +9,10 @@ import {
   importSurveyJson,
   responsesToCSV,
   variableDictionaryToCSV,
+  exportResponsesXlsx,
+  ENVIRONMENT_COLUMNS,
+  environmentCells,
+  type QualityExportRow,
   type ResponseStateLike,
 } from "./index.js";
 
@@ -307,6 +311,50 @@ test("§37: the XLSX dictionary gains a Loops sheet relating Loop → Item → R
   const wb2 = new ExcelJS.Workbook();
   await wb2.xlsx.load(await exportVariableDictionaryXlsx(plain) as any);
   assert.deepEqual(wb2.worksheets.map((w) => w.name), ["Variables", "Survey", "Questions"]);
+});
+
+test("A FILE THAT MIXES TEST AND LIVE SAYS SO — and the column goes last", async () => {
+  /*
+   * The audit's finding 10. `include=all` runs neither `is_test` branch, so
+   * both environments leave in one file — and neither exporter emitted a
+   * marker: SYSTEM_COLUMNS is RESP_ID / SESSION_ID / SURVEY_VERSION /
+   * START_TIME / STATUS, the quality sheet's header is built the same way, and
+   * only the JSON branch carried `isTest`. Sixty pilot interviews were
+   * delivered alongside real fieldwork with nothing to tell them apart.
+   */
+  const def = makeSurvey();
+  const rows: QualityExportRow[] = [
+    { state: { ...makeState(), isTest: false }, quality: null, review: { status: null } },
+    { state: { ...makeState({ sessionId: "sess_pilot" }), isTest: true }, quality: null, review: { status: null } },
+  ];
+
+  /* CSV: appended after everything, so a client's tab script keeps its columns */
+  const csv = responsesToCSV(def, rows.map((r) => r.state), {
+    columns: ENVIRONMENT_COLUMNS,
+    cells: (i) => environmentCells(rows[i]),
+  });
+  const lines = csv.trimEnd().split("\n");
+  const header = lines[0].split(",");
+  assert.equal(header[header.length - 1], "ENVIRONMENT");
+  assert.deepEqual(header.slice(0, 5), ["RESP_ID", "SESSION_ID", "SURVEY_VERSION", "START_TIME", "STATUS"], "and nothing moved");
+  assert.equal(lines[1].split(",").pop(), "LIVE");
+  assert.equal(lines[2].split(",").pop(), "TEST");
+
+  /* XLSX: decides for itself when the caller does not say */
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(await exportResponsesXlsx(def, rows, {}) as any);
+  const main = wb.getWorksheet("Main Data")!;
+  const head = (main.getRow(1).values as unknown[]).slice(1).map(String);
+  assert.equal(head[head.length - 1], "ENVIRONMENT", "a mixed workbook labels its rows");
+  assert.deepEqual(
+    [2, 3].map((r) => String((main.getRow(r).values as unknown[]).slice(1).pop())),
+    ["LIVE", "TEST"],
+  );
+
+  const liveOnly = new ExcelJS.Workbook();
+  await liveOnly.xlsx.load(await exportResponsesXlsx(def, [rows[0]], {}) as any);
+  const h2 = (liveOnly.getWorksheet("Main Data")!.getRow(1).values as unknown[]).slice(1).map(String);
+  assert.ok(!h2.includes("ENVIRONMENT"), "a file that cannot mix gains no column");
 });
 
 test("loop iterations reach the CSV — which they never did before", () => {

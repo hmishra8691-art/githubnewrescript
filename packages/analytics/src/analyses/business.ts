@@ -187,11 +187,30 @@ export function turf(def: AnalysisDefinition, ds: Dataset, totalCases: number): 
   const maxSize = Math.min(opt(def, "maxSize", 5) as number, items.length);
   const w = weights(ds);
   const n = ds.cases.length;
-  const W = w ? w.reduce((a, b) => a + b, 0) : n;
   if (items.length < 2) return makeResult(def, ds, { tables: [], chart: {}, warnings: ["TURF needs a multi-select question or several 0/1 items."], recommendedCharts: ["bar_horizontal"], totalCases });
-  // reach matrix: case × item
-  const cols = items.map((v) => numericColumn(ds, v).map((x) => (x != null && x > 0 ? 1 : 0)));
-  const reachOf = (set: number[]) => { let r = 0, f = 0; for (let i = 0; i < n; i++) { let hit = 0; for (const j of set) hit += cols[j][i]; if (hit) { r += w?.[i] ?? 1; f += hit * (w?.[i] ?? 1); } } return { reach: (r / W) * 100, frequency: r ? f / r : 0 }; };
+  /*
+   * REACH IS BASED ON WHO WAS ASKED, NOT ON EVERYONE.
+   *
+   * The raw columns were folded straight to 0/1 with `x != null && x > 0`,
+   * which puts "never saw this question" in the same bucket as "saw it and did
+   * not choose it", and the denominator was `W = n`, the whole sample. So a
+   * battery asked only to 600 category users of 1,000 completes reported 45%
+   * where `frequencies` — which bases on the valid count
+   * (`stats/descriptive.ts`) — reported 75%, from the same data on the same
+   * screen.
+   *
+   * A respondent counts here when they answered ANY item in the battery: a
+   * multi-select with none ticked is a real "none of these" and belongs in the
+   * base, while somebody routed past the question has null for every item and
+   * does not.
+   */
+  const raw = items.map((v) => numericColumn(ds, v));
+  const cols = raw.map((c) => c.map((x) => (x != null && x > 0 ? 1 : 0)));
+  const asked: number[] = [];
+  for (let i = 0; i < n; i++) if (raw.some((c) => c[i] != null)) asked.push(i);
+  const base = asked.length;
+  const W = w ? asked.reduce((a, i) => a + w[i], 0) : base;
+  const reachOf = (set: number[]) => { let r = 0, f = 0; for (const i of asked) { let hit = 0; for (const j of set) hit += cols[j][i]; if (hit) { r += w?.[i] ?? 1; f += hit * (w?.[i] ?? 1); } } return { reach: W ? (r / W) * 100 : 0, frequency: r ? f / r : 0 }; };
   const single = items.map((v, j) => ({ item: itemLabelOf(ds, v), j, reach: reachOf([j]).reach }));
   // greedy forward selection + exhaustive best for small k
   const best: { size: number; items: string[]; reach: number; frequency: number; incremental: number }[] = [];
@@ -217,7 +236,10 @@ export function turf(def: AnalysisDefinition, ds: Dataset, totalCases: number): 
   const dim = best.findIndex((b) => b.incremental < 2);
   if (dim > 0) insights.push(`Returns diminish after ${dim} item${dim === 1 ? "" : "s"} — each further item adds under 2 points of reach.`);
   return makeResult(def, ds, {
-    tables: [{ id: "turf", title: "Best combinations by size", columns: [{ key: "size", label: "Items" }, { key: "items", label: "Combination" }, { key: "reach", label: "Reach %", type: "pct", decimals: 1 }, { key: "frequency", label: "Frequency", type: "number", decimals: 2 }, { key: "incremental", label: "Incremental reach", type: "pct", decimals: 1 }], rows: best.map((b) => ({ ...b, items: b.items.join(" + "), reach: pct(b.reach), frequency: round(b.frequency), incremental: pct(b.incremental) })), base: { n } },
+    warnings: base < n
+      ? [`Based on the ${base} of ${n} respondents who were asked this battery — those routed past it are not counted as non-choosers.`]
+      : [],
+    tables: [{ id: "turf", title: "Best combinations by size", columns: [{ key: "size", label: "Items" }, { key: "items", label: "Combination" }, { key: "reach", label: "Reach %", type: "pct", decimals: 1 }, { key: "frequency", label: "Frequency", type: "number", decimals: 2 }, { key: "incremental", label: "Incremental reach", type: "pct", decimals: 1 }], rows: best.map((b) => ({ ...b, items: b.items.join(" + "), reach: pct(b.reach), frequency: round(b.frequency), incremental: pct(b.incremental) })), base: { n: base } },
       { id: "single", title: "Reach by item", columns: [{ key: "item", label: "Item" }, { key: "reach", label: "Reach %", type: "pct", decimals: 1 }], rows: single.sort((a, b) => b.reach - a.reach).map((s) => ({ item: s.item, reach: pct(s.reach) })) },
       { id: "greedy", title: "Incremental reach (greedy order)", columns: [{ key: "step", label: "Step" }, { key: "item", label: "Item added" }, { key: "reach", label: "Cumulative reach %", type: "pct", decimals: 1 }, { key: "incremental", label: "Incremental", type: "pct", decimals: 1 }], rows: greedy.map((x, i) => ({ step: i + 1, item: x.item, reach: pct(x.reach), incremental: pct(x.incremental) })) }],
     chart: { categories: greedy.map((x) => x.item), series: [{ name: "Cumulative reach", values: greedy.map((x) => pct(x.reach)) }, { name: "Incremental", values: greedy.map((x) => pct(x.incremental)) }], valueFormat: "pct" },

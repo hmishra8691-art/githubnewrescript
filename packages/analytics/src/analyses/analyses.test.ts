@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildDataset } from "../dataset.js";
+import { buildDataset, inAnalyticsDataset, type AnalyticsRow } from "../dataset.js";
 import { runAnalysis } from "./index.js";
 import { recommendCharts, chartsAvailable } from "../recommend.js";
 import { executiveSummary } from "../summary.js";
@@ -143,6 +143,80 @@ test("TURF and brand funnel", () => {
   const alpha = b.tables[0].rows.find((x) => x.brand === "Alpha")!;
   assert.ok((alpha.s0 as number) > 80 && (alpha.s1 as number) < (alpha.s0 as number));
   assert.ok(b.insights[0].includes("Alpha"));
+});
+
+test("ONE DEFINITION OF \"CLEAN\" — the dataset rule matches the exporters' `inDataset`, case for case", () => {
+  /*
+   * The audit's finding 12. Analytics filtered on the classification alone and
+   * never read `review_status`; the export excluded REMOVE and admitted KEEP.
+   * So the researcher's own decisions were honoured by the file they delivered
+   * and ignored by every crosstab built from the same study.
+   *
+   * `inDataset` is restated here rather than imported: @rescript/analytics does
+   * not depend on the exporters and should not start. This test is what keeps
+   * the two copies honest — if one changes, this fails.
+   */
+  const inDataset = (row: { review_status?: string | null; quality?: { classification?: string } | null }, filter: { kind: "all" } | { kind: "clean" } | { kind: "custom"; exclude: string[] }) => {
+    const removed = row.review_status === "REMOVE";
+    if (filter.kind === "all") return true;
+    if (removed) return false;
+    if (row.review_status === "KEEP") return true;
+    const cls = row.quality?.classification ?? "UNSCORED";
+    if (filter.kind === "clean") return cls === "CLEAN" || cls === "UNSCORED";
+    return !filter.exclude.includes(cls);
+  };
+
+  const CLASSES = [null, "CLEAN", "REVIEW", "SUSPICIOUS", "CRITICAL"];
+  const REVIEWS = [null, "KEEP", "REMOVE", "REVIEW_LATER"];
+  for (const cls of CLASSES) {
+    for (const rev of REVIEWS) {
+      const row = { review_status: rev, quality: cls ? { classification: cls } : null } as AnalyticsRow;
+      for (const kind of ["all", "clean"] as const) {
+        assert.equal(
+          inAnalyticsDataset(row, { ...dsSpec, dataset: kind }),
+          inDataset(row, { kind }),
+          `${kind}: classification=${cls} review=${rev}`,
+        );
+      }
+    }
+  }
+  /* and it reaches the built dataset, not only the predicate */
+  const rows = synthRows(50, 3).map((r, i) => ({ ...r, review_status: i < 10 ? "REMOVE" : i < 20 ? "KEEP" : null }));
+  const clean = buildDataset(def, rows, { spec: { ...dsSpec, dataset: "clean" } });
+  const kept = new Set(clean.cases.map((c) => c.id));
+  assert.ok(rows.slice(0, 10).every((r) => !kept.has(r.id!)), "the ten REMOVEd are out");
+  assert.ok(rows.slice(10, 20).every((r) => kept.has(r.id!)), "every KEEP is in, whatever it scored");
+  assert.ok(rows.slice(20).every((r) => kept.has(r.id!) === (r.quality?.classification === "CLEAN")),
+    "and the undecided rest go by their classification, as before");
+  assert.ok(rows.slice(10, 20).some((r) => r.quality?.classification !== "CLEAN"),
+    "the fixture actually exercises a KEEP that would otherwise be dropped");
+});
+
+test("TURF IS BASED ON WHO WAS ASKED — a respondent routed past the battery is not a non-chooser", () => {
+  /*
+   * The audit's finding 16. The reach matrix folded `null` into the zero
+   * bucket and divided by the whole sample, so a battery asked to 600 of 1,000
+   * completes reported 45% where `frequencies`, which bases on the valid
+   * count, reported 75% — two numbers for one question on one screen.
+   */
+  const asked = synthRows(200, 5);
+  const routedPast = synthRows(200, 9).map((r, i) => ({
+    ...r, id: `x${i}`, session_id: `x${i}`,
+    answers: { ...r.answers, q_brands: undefined },
+  }));
+  const full = buildDataset(def, [...asked, ...routedPast], { spec: dsSpec });
+  const half = buildDataset(def, asked, { spec: dsSpec });
+
+  const D2 = (d: typeof full) => runAnalysis(D("turf", ["AWARE"], { options: { maxSize: 3 } }), d);
+  const withSkips = D2(full);
+  const askedOnly = D2(half);
+
+  assert.equal(full.cases.length, 400, "both halves are in the dataset");
+  assert.equal(withSkips.tables[0].base!.n, 200, "the base is the people who saw the question");
+  const a = withSkips.tables[0].rows[2].reach as number;
+  const b = askedOnly.tables[0].rows[2].reach as number;
+  assert.ok(Math.abs(a - b) < 0.001, `reach must not depend on who was never asked (${a} vs ${b})`);
+  assert.ok(withSkips.warnings.some((w) => w.includes("200 of 400")), "and it says so");
 });
 
 test("ranking, allocation, gap", () => {

@@ -57,6 +57,8 @@ export interface QualityPayload {
   /** what the LIVE link is running — its version and the quality settings in it */
   live: { version: string; versionId: string; config: QualityConfigSummary } | null;
   total: number;
+  /** the row cap was reached: the figures below describe a prefix, not the study */
+  truncated?: boolean;
   /** finished responses assessed with settings other than the current ones */
   staleAssessed: number;
   byClass: Record<string, number>;
@@ -89,18 +91,55 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     if (parsed?.success) live = { version: String(ver?.version ?? "?"), versionId: dep.version_id as string, config: summarizeConfig(parsed.data) };
   }
 
-  let q = db
-    .from("responses")
-    .select("session_id, status, started_at, completed_at, quality, quality_computed_at, review_status, review_reason, reviewed_at, reviewed_by, is_test")
-    .eq("survey_id", params.id)
-    .neq("status", "in_progress")
-    .order("started_at", { ascending: false })
-    .limit(20000);
-  if (include !== "all") q = q.eq("is_test", isTest);
-  const { data, error } = await q;
-  if (error) {
-    if (missingMigration(error.message)) return NextResponse.json({ error: "Quality columns are missing — apply migration 0005_response_quality.sql.", migration: "0005" }, { status: 503 });
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  /*
+   * BINNED RESPONSES ARE NOT ASSESSED RESPONSES.
+   *
+   * This query had no `deleted_at` filter, and it is the only reader in the
+   * platform that did not: `lib/responseData.ts` has one, `lib/analytics.ts`
+   * has one, the export has one, and the database's own
+   * `rescript_quality_summary` has one. So the researcher binned 40 CRITICAL
+   * responses, the Data tab dropped to 960, and the Quality tab beside it went
+   * on reporting 1,000 assessed and 40 CRITICAL — the screen that offered the
+   * bin action never showed that it had taken effect.
+   *
+   * `.limit(20000)` is replaced by paging for the same reason the export was
+   * (finding 9): a cap that trims the data and returns 200 tells nobody.
+   */
+  const CHUNK = 1000;
+  const MAX_ROWS = 100_000;
+  const COLUMNS = "session_id, status, started_at, completed_at, quality, quality_computed_at, review_status, review_reason, reviewed_at, reviewed_by, is_test";
+  const page = (start: number, softDelete: boolean) => {
+    let q = db
+      .from("responses")
+      .select(COLUMNS)
+      .eq("survey_id", params.id);
+    if (softDelete) q = q.is("deleted_at", null);
+    q = q
+      .neq("status", "in_progress")
+      .order("started_at", { ascending: false })
+      .range(start, start + CHUNK - 1);
+    if (include !== "all") q = q.eq("is_test", isTest);
+    return q;
+  };
+
+  const readAll = async (softDelete: boolean) => {
+    const rows: any[] = [];
+    for (let start = 0; ; start += CHUNK) {
+      if (start >= MAX_ROWS) return { rows, error: null as { message: string } | null, truncated: true };
+      const { data: chunk, error } = (await page(start, softDelete)) as { data: any[] | null; error: { message: string } | null };
+      if (error) return { rows, error, truncated: false };
+      rows.push(...(chunk ?? []));
+      if ((chunk ?? []).length < CHUNK) return { rows, error: null, truncated: false };
+    }
+  };
+
+  let { rows: data, error: qErr, truncated } = await readAll(true);
+  /* a database from before migration 0006 has no soft delete, so it has no
+     binned rows to exclude — and no column to filter on either */
+  if (qErr && /deleted_at/i.test(qErr.message)) ({ rows: data, error: qErr, truncated } = await readAll(false));
+  if (qErr) {
+    if (missingMigration(qErr.message)) return NextResponse.json({ error: "Quality columns are missing — apply migration 0005_response_quality.sql.", migration: "0005" }, { status: 503 });
+    return NextResponse.json({ error: qErr.message }, { status: 500 });
   }
 
   const rows: QualityRow[] = (data ?? []).map((r: any) => {
@@ -149,6 +188,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     version: "def" in loaded ? loaded.version : null,
     live,
     total: rows.length,
+    /* said rather than hidden: a dashboard that silently stops at a cap is the
+       same failure as an export that silently stops at one */
+    truncated,
     staleAssessed,
     byClass, byReview, signals, histogram,
     clusters: [...clusters.entries()].map(([id, size]) => ({ id, size })).sort((a, b) => b.size - a.size),

@@ -523,7 +523,22 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string; 
   const db = supabaseService();
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const { data: cur } = await db.from(coll.table).select("*").eq("id", itemId).is("deleted_at", null).maybeSingle();
-  if (!cur || (cur.survey_id && cur.survey_id !== surveyId)) return bad("Unknown item.", 404);
+  /*
+   * THE ITEM HAS TO BELONG TO SOMEBODY, AND THAT SOMEBODY HAS TO BE YOU.
+   *
+   * The test used to be `cur.survey_id && cur.survey_id !== surveyId`. Every
+   * collection table has a NOT NULL `survey_id` except `analytics_themes`
+   * (0011), where a WORKSPACE theme is stored with `survey_id: null` — so for
+   * exactly those rows the condition short-circuited to false, the row was
+   * accepted whatever workspace it belonged to, and the update ran by `id`
+   * alone through the service-role client, which RLS does not backstop. The
+   * response returns the whole row, so it was a cross-tenant read as well as a
+   * write. The sibling DELETE already carries this scope; the PUT did not.
+   */
+  const ownedByProject = cur?.survey_id === surveyId;
+  const ownedByWorkspace = cur != null && cur.survey_id == null
+    && !!ctx.user.customerId && cur.customer_id === ctx.user.customerId;
+  if (!cur || !(ownedByProject || ownedByWorkspace)) return bad("Unknown item.", 404);
   const patch: Record<string, unknown> = { updated_by: ctx.user.userId };
   let detail: Record<string, unknown> = { name: body.name ?? cur.name };
   if (head === "analyses") {
@@ -556,7 +571,12 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string; 
     if (body.themeId !== undefined) patch.theme_id = body.themeId;
     if (body.mode === "live" || body.mode === "snapshot") patch.mode = body.mode;
   }
-  const { data, error } = await db.from(coll.table).update(patch).eq("id", itemId).select("*").single();
+  /* the scope is repeated on the write, not only checked before it: the read
+     above and the update below are two statements, and the one that changes
+     the row is the one that has to be safe */
+  let q = db.from(coll.table).update(patch).eq("id", itemId);
+  q = ownedByProject ? q.eq("survey_id", surveyId) : q.eq("customer_id", ctx.user.customerId ?? "");
+  const { data, error } = await q.select("*").single();
   if (error) return bad(error.message, 500);
   log(ctx, coll.modified, itemId, detail);
   return json({ item: data });

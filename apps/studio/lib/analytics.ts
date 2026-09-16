@@ -23,7 +23,14 @@ import { loadQualityDefinition } from "./qualityDef";
  * response `updated_at`, so new data or a definition change invalidates it.
  */
 
-const COLUMNS = "id, session_id, respondent_code, respondent_id, status, is_test, answers, calculated, embedded, flags, seed, started_at, completed_at, quality, sample_source";
+/*
+ * `review_status` is READ, and that is finding 12 of the audit, not a column
+ * added for completeness: without it the analytics dataset could not see the
+ * researcher's own KEEP / REMOVE decisions, so the crosstabs disagreed with
+ * the file delivered from the same study. The rule itself lives in
+ * `inAnalyticsDataset` beside the exporters' `inDataset`.
+ */
+const COLUMNS = "id, session_id, respondent_code, respondent_id, status, is_test, answers, calculated, embedded, flags, seed, started_at, completed_at, quality, review_status, sample_source";
 const CHUNK = 1000;
 const MAX_ROWS = 250_000;
 
@@ -53,7 +60,16 @@ export async function loadRows(db: SupabaseClient, surveyId: string, spec: Datas
     else if (spec.environment === "LIVE") q = q.eq("is_test", false);
     if (spec.from) q = q.gte("started_at", spec.from);
     if (spec.to) q = q.lte("started_at", spec.to);
-    if (spec.dataset === "clean") q = q.or("quality.is.null,quality->>classification.eq.CLEAN");
+    /*
+     * The dataset rule is applied in `buildDataset`, not here.
+     *
+     * It used to be half here — `quality.is.null,quality->>classification.eq.CLEAN`
+     * — and half absent, which is how it came to disagree with the export: a
+     * KEEP decision on a SUSPICIOUS response never reached the loader, so the
+     * row was gone before anything could honour it. `custom` was already
+     * filtered downstream only. One rule, one place; the cost is reading rows
+     * that are then dropped, which is what `MAX_ROWS` bounds.
+     */
     const { data, error } = await q;
     if (error) throw new Error(error.message);
     const chunk = (data ?? []) as unknown as AnalyticsRow[];
