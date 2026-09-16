@@ -13,3 +13,6 @@ dist/
 .DS_Store
 coverage/
 *.log
+
+# R2 credentials for scripts/r2-check.mjs — never committed
+.env.r2

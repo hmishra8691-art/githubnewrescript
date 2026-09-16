@@ -32,9 +32,43 @@
  * that reaches the output at all.
  */
 
+import { readFileSync, existsSync } from "node:fs";
 import { R2StorageProvider, planUpload } from "../packages/storage/dist/index.js";
 
 /* ------------------------------------------------------------------ setup */
+
+/**
+ * Read `.env.r2` if it is there, without overriding anything already set.
+ *
+ * Exporting four variables by hand is four chances for a paste to wrap and
+ * for a shell to answer `export: not an identifier:` — which says nothing
+ * about which line was wrong. A file has no quoting rules to get wrong, and
+ * it keeps a 64-character secret out of your shell history, where it would
+ * otherwise sit in plain text for as long as the history file lives.
+ *
+ * `export` prefixes, `quotes`, blank lines and # comments are all tolerated,
+ * because every one of them appears in a file somebody has pasted into.
+ */
+function loadEnvFile(path) {
+  if (!existsSync(path)) return 0;
+  let n = 0;
+  for (const raw of readFileSync(path, "utf8").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const m = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+    if (!m) continue;
+    let value = m[2].trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    /* a value already in the environment wins, so one-off overrides still work */
+    if (process.env[m[1]] === undefined) { process.env[m[1]] = value; n++; }
+  }
+  return n;
+}
+
+const ENV_FILE = process.env.R2_ENV_FILE ?? new URL("../.env.r2", import.meta.url).pathname;
+const loaded = loadEnvFile(ENV_FILE);
 
 const env = process.env;
 const ORIGIN = env.INTERVIEWS_PUBLIC_URL ?? process.argv[2] ?? "";
@@ -53,12 +87,14 @@ if (!accessKeyId) missing.push("R2_ACCESS_KEY_ID");
 if (!secretAccessKey) missing.push("R2_SECRET_ACCESS_KEY");
 if (missing.length) {
   console.error(`\nNot configured. Missing: ${missing.join(", ")}\n`);
-  console.error("Set them in your shell and run again, for example:\n");
-  console.error("  export R2_ACCOUNT_ID=...");
-  console.error("  export R2_BUCKET=rescript-interviews-dev");
-  console.error("  export R2_ACCESS_KEY_ID=...");
-  console.error("  export R2_SECRET_ACCESS_KEY=...");
-  console.error("  node scripts/r2-check.mjs https://your-app.vercel.app\n");
+  console.error("Easiest: put them in a file called .env.r2 at the top of the repo,");
+  console.error("one per line, then run this again. No quoting, no shell history.\n");
+  console.error("  R2_ACCOUNT_ID=your-32-character-account-id");
+  console.error("  R2_BUCKET=rescript-interviews-dev");
+  console.error("  R2_ACCESS_KEY_ID=your-access-key-id");
+  console.error("  R2_SECRET_ACCESS_KEY=your-secret-access-key\n");
+  console.error("Then:  node scripts/r2-check.mjs http://localhost:3002\n");
+  console.error(`(Looked for: ${ENV_FILE})\n`);
   process.exit(2);
 }
 
@@ -69,7 +105,9 @@ console.log(`  endpoint   ${endpoint}`);
 console.log(`  bucket     ${bucket}`);
 console.log(`  region     ${region}`);
 console.log(`  key id     ${mask(accessKeyId)}`);
-console.log(`  origin     ${ORIGIN || "(none given — CORS check will be skipped)"}\n`);
+console.log(`  origin     ${ORIGIN || "(none given — CORS check will be skipped)"}`);
+if (loaded) console.log(`  read ${loaded} setting(s) from ${ENV_FILE}`);
+console.log("");
 
 const storage = new R2StorageProvider({
   endpoint, bucket, accessKeyId, secretAccessKey, region,

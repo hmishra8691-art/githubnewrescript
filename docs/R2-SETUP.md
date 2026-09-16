@@ -21,7 +21,8 @@ candidate who could not upload.
 2. You will be asked to add a website. **Skip it** — R2 does not need one.
    If the flow insists, there is a "Continue without a website" / "I'll do
    this later" link at the bottom.
-3. In the left sidebar, choose **R2 Object Storage**.
+3. In the left sidebar under **Build**, choose **Storage & databases → R2 Object Storage**.
+   (It used to be a top-level item; the current dashboard nests it.)
 4. Click **Purchase R2** / **Enable R2**. It asks for a payment card.
 
    R2's free tier is 10 GB of storage, 1 million writes and 10 million reads
@@ -140,8 +141,14 @@ list cannot match them. Two honest options:
 
 ## Part 4 — The API token
 
-**R2 → API → Manage API tokens → Create API token** (use the **R2 token**
-form, not the generic account token).
+**R2 → API → Manage API tokens.** Two buttons appear, and the choice matters:
+
+- **Create Account API token** ← use this one
+- Create User API token — bound to your personal login. Cloudflare's own
+  wording: *"become inactive if you leave the organization."* If that account
+  is ever removed or renamed, every candidate upload fails at once, mid
+  interview, with a 403 that looks exactly like a code bug. Use it only for
+  throwaway local experiments.
 
 - Token name: `rescript-interviews`
 - Permissions: **Object Read & Write**
@@ -220,16 +227,27 @@ first. Both pass here against PostgreSQL 16 with the full chain applied.
 
 From the repo on your own machine, with the dev bucket:
 
+Put the four settings in a file at the top of the repo — no shell quoting to
+get wrong, and a 64-character secret does not end up in your shell history:
+
 ```bash
 cd ~/Downloads/rescript-push
-
-export R2_ACCOUNT_ID=your-account-id
-export R2_BUCKET=rescript-interviews-dev
-export R2_ACCESS_KEY_ID=your-key-id
-export R2_SECRET_ACCESS_KEY=your-secret
+cat > .env.r2 <<'EOF'
+R2_ACCOUNT_ID=your-32-character-account-id
+R2_BUCKET=rescript-interviews-dev
+R2_ACCESS_KEY_ID=your-access-key-id
+R2_SECRET_ACCESS_KEY=your-secret-access-key
+EOF
 
 node scripts/r2-check.mjs http://localhost:3002
 ```
+
+`.env.r2` is in `.gitignore`, so it cannot be committed by accident. Delete it
+when you are done, or keep it for the next time you rotate the token.
+
+Exported environment variables still win over the file, so a one-off
+`R2_BUCKET=rescript-interviews-prod node scripts/r2-check.mjs …` works without
+editing anything.
 
 It does the real thing, against the real bucket: a signed PUT, a HEAD, a
 presigned GET fetched over the network, a two-part multipart upload assembled
@@ -252,7 +270,11 @@ delete of everything it made.
   delete everything this check created          ok   bucket is clean
 ```
 
-Then repeat with `R2_BUCKET=rescript-interviews-prod` and your production URL.
+Then repeat against production:
+
+```bash
+R2_BUCKET=rescript-interviews-prod node scripts/r2-check.mjs https://your-app.vercel.app
+```
 
 **Run it on your Mac, not in a Claude session** — this container's network
 allowlist does not include Cloudflare, so it would fail for reasons that have
@@ -268,6 +290,7 @@ nothing to do with your configuration.
 | CORS: no `Access-Control-Allow-Origin` | the policy is not saved on **this** bucket. It is per bucket, not per account. |
 | CORS: `ExposeHeaders does not include ETag` | Part 3's line is missing. Long answers will fail and short ones will not. |
 | `an UNSIGNED request read the object` | public access is on. Turn it off before any real candidate records anything. |
+| `export: not an identifier:` from your shell | a pasted `export` line wrapped. Use the `.env.r2` file above instead — that is what it is for. |
 
 ---
 
