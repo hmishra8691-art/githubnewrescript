@@ -195,8 +195,22 @@ export function QuotaDashboard() {
     const ok = await s.flushDraft();
     setSaving(false);
     if (!ok) {
-      // the store still holds the edit; undo so what is on screen is what is on the server
-      s.undo();
+      /*
+       * The store still holds the edit; put the quota back so what is on
+       * screen is what is on the server.
+       *
+       * This was `s.undo()`, and it was wrong twice. `undo` read the
+       * render-time history, which the awaited `s` cannot see — so it restored
+       * the state from before the PRECEDING edit, and a failed quota save
+       * could overwrite an already-saved question edit. And when the quota
+       * change was the session's first edit the history was empty and `undo`
+       * did nothing at all: the change stayed on screen under a message saying
+       * it had not been applied. Restoring the one quota by value is exact in
+       * both cases, and `undo` returning a boolean is the other half of the
+       * fix (`store.tsx`).
+       */
+      s.labelNextEdit?.("revert quota edit");
+      s.update((d) => { const i = d.quotas.findIndex((x) => x.id === q.id); if (i >= 0) d.quotas[i] = q; });
       const why = s.saveState.kind === "conflict" || s.saveState.kind === "lock_lost" || s.saveState.kind === "error" || s.saveState.kind === "signed_out" || s.saveState.kind === "unavailable"
         ? ` (${(s.saveState as { message?: string }).message ?? s.saveState.kind})` : "";
       setNote({ text: `Unable to save quota changes. Your changes have not been applied.${why}`, ok: false });

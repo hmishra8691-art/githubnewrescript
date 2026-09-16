@@ -111,8 +111,10 @@ export interface StudioState {
    * (req §21). Structural drags move a lot at once, so being able to take one
    * back is what makes dragging safe to try.
    */
-  undo(): void;
-  redo(): void;
+  /** returns false when there was nothing to undo — a caller reverting a
+      failed save must not believe it reverted something */
+  undo(): boolean;
+  redo(): boolean;
   canUndo: boolean;
   canRedo: boolean;
   /** What undo would take back, for the button's tooltip. */
@@ -132,7 +134,15 @@ export interface StudioState {
   canLeaveTab(): boolean;
   replace(def: SurveyDefinition): void;
   select(questionId: string | null): void;
-  markSaved(versionId: string, revision?: number | null): void;
+  /**
+   * A version was cut (or restored): this editor is now that version.
+   *
+   * `opts.saved` is the definition object that was SENT — pass it and anything
+   * typed during the round trip keeps its pending autosave instead of being
+   * silently dropped. `opts.version` is the number the server assigned, merged
+   * without counting as an edit.
+   */
+  markSaved(versionId: string, revision?: number | null, opts?: { saved?: SurveyDefinition; version?: string }): void;
   /**
    * True once a write has been refused because this editor is behind the
    * server. Read the REF, not `saveState`: any edit after the conflict (even
@@ -242,8 +252,37 @@ export function StudioProvider({
    */
   const [past, setPast] = React.useState<{ def: SurveyDefinition; label: string }[]>([]);
   const [future, setFuture] = React.useState<{ def: SurveyDefinition; label: string }[]>([]);
+  /*
+   * …and the same two in refs, because `undo` is called from `await`ed code.
+   *
+   * Every other store method deliberately reads through a ref (`latest`,
+   * `revisionRef`, `readOnlyRef`) so that a closure created before the last
+   * edit still sees it; `undo` and `redo` read the render-time `past` and
+   * `future` arrays instead. `QuotaDashboard` does `s.update(…)`, awaits
+   * `flushDraft()`, and calls `s.undo()` on failure — and the `s` it awaited
+   * cannot see the entry its own `update` pushed, so `undo` restored the state
+   * from before the PRECEDING edit and `touched()` queued an autosave of it. A
+   * failed quota save could overwrite an already-saved question edit.
+   */
+  const pastRef = React.useRef(past);
+  pastRef.current = past;
+  const futureRef = React.useRef(future);
+  futureRef.current = future;
   const nextLabel = React.useRef<string | null>(null);
   const UNDO_LIMIT = 50;
+
+  /* both halves move together, and the refs move FIRST — a caller that acts on
+     the history before React has re-rendered must see what it just did */
+  const setHistory = React.useCallback((
+    p: { def: SurveyDefinition; label: string }[],
+    f: { def: SurveyDefinition; label: string }[],
+  ) => {
+    pastRef.current = p; futureRef.current = f;
+    setPast(p); setFuture(f);
+  }, []);
+  const pushHistory = React.useCallback((prev: SurveyDefinition, label: string) => {
+    setHistory([...pastRef.current, { def: prev, label }].slice(-UNDO_LIMIT), []);
+  }, [setHistory]);
 
   // The autosave always sends the LATEST definition, never a snapshot taken
   // when the timer was set — that distinction is the whole bug class this
@@ -541,8 +580,7 @@ export function StudioProvider({
        */
       normaliseQuestionOrder(draft);
       latest.current = draft;
-      setPast((p) => [...p, { def: prev, label }].slice(-UNDO_LIMIT));
-      setFuture([]);
+      pushHistory(prev, label);
       setDef(draft);
       touched();
     },
@@ -558,8 +596,7 @@ export function StudioProvider({
          written in; it joins the survey in flow order like everything else */
       normaliseQuestionOrder(next);
       latest.current = next;
-      setPast((p) => [...p, { def: prev, label }].slice(-UNDO_LIMIT));
-      setFuture([]);
+      pushHistory(prev, label);
       setDef(next);
       touched();
     },
@@ -568,43 +605,80 @@ export function StudioProvider({
     canRedo: future.length > 0,
     undoLabel: past.length ? past[past.length - 1].label : null,
     redoLabel: future.length ? future[future.length - 1].label : null,
+    /** true when something was undone — a caller reverting a failed save needs to know */
     undo() {
-      if (past.length === 0) return;
-      const entry = past[past.length - 1];
+      const stack = pastRef.current;
+      if (stack.length === 0) return false;
+      const entry = stack[stack.length - 1];
       const current = latest.current;
       latest.current = entry.def;
-      setPast((p) => p.slice(0, -1));
-      setFuture((f) => [...f, { def: current, label: entry.label }]);
+      setHistory(stack.slice(0, -1), [...futureRef.current, { def: current, label: entry.label }]);
       setDef(entry.def);
       touched();
+      return true;
     },
     redo() {
-      if (future.length === 0) return;
-      const entry = future[future.length - 1];
+      const stack = futureRef.current;
+      if (stack.length === 0) return false;
+      const entry = stack[stack.length - 1];
       const current = latest.current;
       latest.current = entry.def;
-      setFuture((f) => f.slice(0, -1));
-      setPast((p) => [...p, { def: current, label: entry.label }].slice(-UNDO_LIMIT));
+      setHistory([...pastRef.current, { def: current, label: entry.label }].slice(-UNDO_LIMIT), stack.slice(0, -1));
       setDef(entry.def);
       touched();
+      return true;
     },
     select: setSelected,
-    markSaved(vid, nextRevision) {
-      setDirty(false);
+    markSaved(vid, nextRevision, opts) {
       setVersionId(vid);
       if (typeof nextRevision === "number") {
         revisionRef.current = nextRevision;
         setRevision(nextRevision);
       }
-      // cutting a version clears the draft server-side, so there is nothing
-      // pending any more — cancel a queued autosave rather than letting it
-      // recreate a draft that differs from the version by nothing at all
-      if (autosaveTimer.current) {
-        clearTimeout(autosaveTimer.current);
-        autosaveTimer.current = null;
-      }
       blocked.current = false;
-      setSaveState({ kind: "clean", savedAt: new Date().toISOString() });
+
+      /*
+       * "ALL CHANGES SAVED" MUST BE TRUE OF THE DEFINITION ON SCREEN.
+       *
+       * This cleared the pending autosave and declared the editor clean,
+       * unconditionally. The version body was built from the definition as it
+       * was BEFORE the POST and the versions route nulls `draft_definition`
+       * server-side, so anything typed during the round trip scheduled an
+       * autosave that this then cancelled: the header read "All changes
+       * saved", the `beforeunload` guard stayed silent, and closing the tab
+       * lost the edits.
+       *
+       * `opts.saved` is the object that was actually sent. The same identity
+       * test `persistDraft` already makes — `latest.current !== sent` — answers
+       * whether anything landed after it, and if something did, those
+       * keystrokes are still pending and get an autosave rather than a lie.
+       */
+      const pending = !!opts?.saved && latest.current !== opts.saved;
+
+      /*
+       * The assigned version number is merged HERE rather than through
+       * `update()`, which would push an undo entry and mark the editor dirty
+       * for a number the server just chose.
+       */
+      if (opts?.version && latest.current.meta.version !== opts.version) {
+        const merged = { ...latest.current, meta: { ...latest.current.meta, version: opts.version } };
+        latest.current = merged;
+        setDef(merged);
+      }
+
+      setDirty(pending);
+      if (pending) {
+        setSaveState({ kind: "dirty" });
+        scheduleDraftSave();
+      } else {
+        // nothing is pending: cancel a queued autosave rather than letting it
+        // recreate a draft that differs from the version by nothing at all
+        if (autosaveTimer.current) {
+          clearTimeout(autosaveTimer.current);
+          autosaveTimer.current = null;
+        }
+        setSaveState({ kind: "clean", savedAt: new Date().toISOString() });
+      }
     },
     flushDraft,
     currentRevision: () => revisionRef.current,

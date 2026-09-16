@@ -70,10 +70,27 @@ export async function POST(req: NextRequest) {
   const account = identifier.kind === "unknown" ? null : await findAccount(identifier);
   const policies = await loadPolicies(account?.customer_id ?? null);
 
+  /*
+   * ONE ACCOUNT, ONE COUNTER.
+   *
+   * The throttle counted failures against `rawIdentifier` — the literal string
+   * typed — while `findAccount` resolves either the email address or the user
+   * code to the same account. So `a@b.com` and `USR-10001` were two counters
+   * for one person: 16 guesses per window where the policy says 8, and the
+   * per-source counter (25 by default) does not bind first. Counting against
+   * the account's own address whenever the account is known makes the budget
+   * the policy's number again, whichever box the attacker types into.
+   *
+   * An identifier that matches no account keeps its own counter, which is
+   * right: there is no account to protect, and the source counter is what
+   * limits the sweep.
+   */
+  const throttleKey = account?.email ? account.email.toLowerCase() : rawIdentifier;
+
   /* ---------------------------------------------------------- 1. throttle */
   const db = supabaseService();
   const { data: failures } = await db.rpc("rescript_login_failures", {
-    p_identifier: rawIdentifier,
+    p_identifier: throttleKey,
     p_ip_hash: ipHash,
     p_window_seconds: policies.throttle.windowSeconds,
   });
@@ -87,7 +104,7 @@ export async function POST(req: NextRequest) {
     policies.throttle,
   );
   if (throttled.kind === "locked") {
-    await recordAttempt({ identifier: rawIdentifier, userId: account?.id, ipHash, success: false, reason: "throttled" });
+    await recordAttempt({ identifier: throttleKey, userId: account?.id, ipHash, success: false, reason: "throttled" });
     return NextResponse.json(
       { error: throttled.message, code: "throttled" },
       { status: 429, headers: { "retry-after": String(throttled.retryAfterSeconds) } },
@@ -106,7 +123,7 @@ export async function POST(req: NextRequest) {
    * cannot be used to probe for free.
    */
   if (identifier.kind === "unknown") {
-    await recordAttempt({ identifier: rawIdentifier, ipHash, success: false, reason: "malformed_identifier" });
+    await recordAttempt({ identifier: throttleKey, ipHash, success: false, reason: "malformed_identifier" });
     return NextResponse.json(
       {
         error: "That is not an email address or a User ID. Sign in with the email address you registered, or your User ID (it looks like USR-10001).",
@@ -121,21 +138,35 @@ export async function POST(req: NextRequest) {
   // is an account-enumeration oracle
   const GENERIC = "That User ID or email address and password do not match.";
   if (!account) {
-    await recordAttempt({ identifier: rawIdentifier, ipHash, success: false, reason: "unknown_account" });
+    await recordAttempt({ identifier: throttleKey, ipHash, success: false, reason: "unknown_account" });
     await audit({ action: "user.login_failed", userId: null, ipHash, detail: { identifier: rawIdentifier, reason: "unknown_account" } });
     return NextResponse.json({ error: GENERIC }, { status: 401 });
   }
 
   const verified = await verifyPassword(account.email, password);
   if (!verified) {
-    await recordAttempt({ identifier: rawIdentifier, userId: account.id, ipHash, success: false, reason: "bad_password" });
+    await recordAttempt({ identifier: throttleKey, userId: account.id, ipHash, success: false, reason: "bad_password" });
     await audit({ action: "user.login_failed", userId: null, ipHash, customerId: account.customer_id, detail: { identifier: rawIdentifier, reason: "bad_password" } });
+    /*
+     * `profiles.locked_until` is the other arm of `decideThrottle`, and it was
+     * read on every sign-in, cleared by two admin actions, and WRITTEN
+     * NOWHERE — the whole lockout rested on counting rows in `login_attempts`
+     * inside a rolling window, which quietly forgives itself as the window
+     * slides. This is the attempt that crosses the line, so this is where the
+     * lock is taken: `count + 1` because the row above is not yet in the
+     * window's count we read before it.
+     */
+    if (Number(counts?.account_failures ?? 0) + 1 >= policies.throttle.maxAttemptsPerAccount) {
+      const until = new Date(Date.now() + policies.throttle.lockoutSeconds * 1000).toISOString();
+      await db.from("profiles").update({ locked_until: until, updated_at: new Date().toISOString() }).eq("id", account.id);
+      await audit({ action: "user.login_locked", userId: account.id, ipHash, customerId: account.customer_id, detail: { until, failures: Number(counts?.account_failures ?? 0) + 1 } });
+    }
     return NextResponse.json({ error: GENERIC }, { status: 401 });
   }
 
   /* ---------------------------------------------------------- 3. account status */
   if (account.status !== "active") {
-    await recordAttempt({ identifier: rawIdentifier, userId: account.id, ipHash, success: false, reason: "disabled" });
+    await recordAttempt({ identifier: throttleKey, userId: account.id, ipHash, success: false, reason: "disabled" });
     return NextResponse.json(
       { error: "This account has been disabled. Please contact your administrator.", code: "account_disabled" },
       { status: 403 },
@@ -187,7 +218,7 @@ export async function POST(req: NextRequest) {
       deviceLabel: result.blocking_device,
     };
     const decision = decideLogin(existing, policies.session);
-    await recordAttempt({ identifier: rawIdentifier, userId: account.id, ipHash, success: true, reason: "session_conflict" });
+    await recordAttempt({ identifier: throttleKey, userId: account.id, ipHash, success: true, reason: "session_conflict" });
     await audit({
       action: "user.login_blocked", userId: account.id, ipHash, customerId: account.customer_id,
       detail: { device: result.blocking_device, existingSince: existing.createdAt },
@@ -215,7 +246,13 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  await recordAttempt({ identifier: rawIdentifier, userId: account.id, ipHash, success: true });
+  await recordAttempt({ identifier: throttleKey, userId: account.id, ipHash, success: true });
+  /* a lock that has already run out is stale rather than harmful, but leaving
+     it on the row makes the admin list say "Locked until" about somebody who is
+     signed in at that moment */
+  if (account.locked_until) {
+    await db.from("profiles").update({ locked_until: null, updated_at: new Date().toISOString() }).eq("id", account.id);
+  }
   await audit({
     action: result.outcome === "taken_over" ? "session.taken_over" : "user.logged_in",
     userId: account.id, sessionId: result.session_id, ipHash, customerId: account.customer_id,

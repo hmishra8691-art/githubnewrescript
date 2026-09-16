@@ -285,8 +285,33 @@ export async function requireProjectFor(
   return { user, surveyId, role, roleSource, viaAdmin: decision.viaAdmin, survey: survey as ProjectContext["survey"] };
 }
 
+/**
+ * WHAT "LOCKED" REFUSES.
+ *
+ * The comment on the check above says a frozen project "refuses every write,
+ * whatever the role", and this set said otherwise: it listed four capabilities
+ * and left out every administrative and analytics write. An owner froze a
+ * study and an editor could still add an outside collaborator to it, still
+ * change someone's role, still publish a public analytics link from it, still
+ * clone it. The guard was doing exactly what it was told; it was told the
+ * wrong thing.
+ *
+ * `project.lock_settings` is excluded ON PURPOSE and always was — an owner has
+ * to be able to unlock. The read capabilities are not here either: a locked
+ * project is frozen, not hidden, and a reviewer must still be able to look at
+ * it and export what is already collected.
+ */
 const WRITE_CAPABILITIES = new Set<Capability>([
+  /* the survey and its data */
   "survey.edit", "survey.save_version", "responses.manage", "deploy.manage",
+  /* who may see it, and who owns it */
+  "project.share", "project.manage_members", "project.transfer", "project.delete",
+  /* analysis that is saved or published from it */
+  "analytics.edit", "analytics.publish",
+  /* notes on it */
+  "comment.create", "comment.resolve",
+  /* and copying it, which is a creation act (see CAPABILITIES) */
+  "project.clone",
 ]);
 
 /* ------------------------------------------------------------ 3. may they change it now */

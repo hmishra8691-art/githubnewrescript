@@ -24,6 +24,9 @@ export const AUDIT_EVENTS = [
   "user.logged_in",
   "user.login_blocked",
   "user.login_failed",
+  /* enough failures in the window that the account is held shut until a clock
+     says otherwise — the write `profiles.locked_until` never used to get */
+  "user.login_locked",
   "user.logged_out",
   "user.profile_updated",
   "user.password_changed",
@@ -182,6 +185,7 @@ export function describeEvent(r: AuditRow): string {
     case "user.logged_in": return `${who} signed in`;
     case "user.login_blocked": return `${who} tried to sign in while another session was active`;
     case "user.login_failed": return `A failed sign-in attempt for ${str(d.identifier) || "an account"}`;
+    case "user.login_locked": return `${who}'s account was locked after ${str(d.failures) || "repeated"} failed sign-in attempts${d.until ? `, until ${str(d.until)}` : ""}`;
     case "user.logged_out": return `${who} signed out`;
     case "user.profile_updated": return `${who} updated their profile`;
     case "user.password_changed": return `${who} changed their password`;

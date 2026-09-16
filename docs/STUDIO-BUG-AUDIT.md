@@ -11,6 +11,39 @@ whether the user can tell it happened.
 
 ---
 
+## Status — all seventeen are fixed
+
+The findings below are kept in the past tense of the report, not rewritten: the
+description is what the code did, and the fix is named against it. The line
+numbers are the ones the audit was written against and no longer point at the
+same lines.
+
+| # | Fixed in | Proven by |
+|---|---|---|
+| 1 | `share/route.ts` — select-then-insert-or-update; the 409 is a checked precondition, not a regex on a database error | `scripts/audit-fixes-sql-test.sql` (the `ON CONFLICT` error still raises, which is why) |
+| 2 | `project_members.revoked_at` (0034) + `members/route.ts` DELETE; an explicit revocation outranks the workspace baseline | `audit-fixes-sql-test.sql` |
+| 3 | `meter.ts` — the reversal carries `reversal:<id>` as its own key and credits only when it wrote the row | `billing.test.ts`, `audit-fixes-sql-test.sql` |
+| 4 | `rescript_billing_settle` replay guard (0034); both SQL functions now return `replayed` | `billing.test.ts`, `audit-fixes-sql-test.sql` (and the pre-fix double debit reproduced against 0031's body) |
+| 5 | `/api/cron/billing-reservations`, every 5 minutes; the SQL function takes a bounded slice | `audit-fixes-sql-test.sql` |
+| 6 | `lib/metering.ts` — a missing `surveyId` is a 400, not the sandbox; the fixture is the literal id or the unauthenticated fake-provider carve-out | read against `requireAiCaller` and the three AI routes |
+| 7 | `share/route.ts` — changing an existing member's role needs `project.manage_members` | — |
+| 8 | analytics PUT — a workspace row must match `customer_id`, and the scope is repeated on the write | — |
+| 9 | `responses/route.ts` — chunked `range()` paging; over the ceiling it refuses with 413 rather than shortening the file | — |
+| 10 | `ENVIRONMENT` column on the CSV and the workbook when `include=all` | `exporters.test.ts` |
+| 11 | `quality/route.ts` — `deleted_at` excluded, and the 20,000 cap replaced by paging that reports truncation | — |
+| 12 | `inAnalyticsDataset` in `packages/analytics` states `inDataset`'s rule; `review_status` is loaded | `analyses.test.ts` asserts the two agree case for case |
+| 13 | `markSaved` takes the definition that was sent and keeps the pending autosave when anything landed during the round trip | — |
+| 14 | `store.tsx` — undo/redo read through refs and return a boolean; `QuotaDashboard` restores the quota by value | — |
+| 15 | `WRITE_CAPABILITIES` covers sharing, membership, analytics, comments and cloning | — |
+| 16 | `turf` bases reach on the respondents who were asked, and says so in a warning | `analyses.test.ts` |
+| 17 | the throttle counts against the account's own address, and `profiles.locked_until` is finally written | — |
+
+**Deploying this needs two things**: migration `0034_audit_fixes.sql` applied,
+and `CRON_SECRET` set (finding 5's job refuses to run without it, exactly as the
+media job does).
+
+---
+
 ## Tier 1 — broken in normal use
 
 ### 1. Every email invitation fails, and the owner is told the opposite

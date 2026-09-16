@@ -392,13 +392,16 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
         return null;
       }
       console.debug("[rescript:save] version start", { surveyId: s.surveyDbId, baseRevision, flushedRevision: s.currentRevision(), label });
+      /* the exact object being versioned, kept so `markSaved` can tell whether
+         anything was typed while the request was in flight */
+      const posted = defRef.current;
       const r = await fetch(`/api/surveys/${s.surveyDbId}/versions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         // the revision this editor is working on top of, so the DATABASE can
         // refuse the finalize too — the client's check is the fast path, not
         // the guarantee
-        body: JSON.stringify({ definition: defRef.current, label, baseRevision: s.currentRevision() }),
+        body: JSON.stringify({ definition: posted, label, baseRevision: s.currentRevision() }),
         cache: "no-store",
       });
       const d = await r.json().catch(() => ({}));
@@ -432,9 +435,11 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
         return null;
       }
       console.debug("[rescript:save] version done", { surveyId: s.surveyDbId, baseRevision, newRevision: d.revision, version: d.version, versionId: d.id, ms: Date.now() - startedAt });
-      // merge ONLY the assigned version number into the live state
-      s.update((draft) => { draft.meta.version = d.version; });
-      s.markSaved(d.id, typeof d.revision === "number" ? d.revision : null);
+      /* the assigned version number is merged by `markSaved` — going through
+         `update()` would push an undo entry and mark the editor dirty for a
+         number the server chose, and it has to happen after the comparison
+         that decides whether anything ELSE is pending */
+      s.markSaved(d.id, typeof d.revision === "number" ? d.revision : null, { saved: posted, version: d.version });
       setPublishState(null); // the gap to live has changed
       s.toast(`Saved version ${d.version} (${d.variables} variables)`);
       return d.id as string;
