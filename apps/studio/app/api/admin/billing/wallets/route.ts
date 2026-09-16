@@ -68,8 +68,12 @@ export async function GET(req: NextRequest) {
      */
     const policies = await gate.meter.store.listSpending({});
     const spending = policies.map((p) => ({
+      subjectKind: p.subjectKind,
       surveyId: p.surveyId,
-      project: projects[p.surveyId] ?? null,
+      subjectId: p.subjectId,
+      /* only a survey has a row in `projects`; an interview project's name
+         comes from its own table and is not this admin view's business */
+      project: p.surveyId ? projects[p.surveyId] ?? null : null,
       mode: p.mode, limit: p.budgetLimit, spent: p.spent, reserved: p.reserved,
       state: p.state, frozenAt: p.frozenAt,
     })).sort((a, b) => b.spent - a.spent);

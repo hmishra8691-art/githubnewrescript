@@ -5,9 +5,12 @@ import type { BillableEventDef, Rate } from "./registry.js";
 import type { MeterStore, TransferFilter, UsageEventInput, UsageFilter } from "./meter.js";
 import {
   walletKind, walletStateFor, defaultSpending, projectHeadroom, spendingStateFor,
+  type BillingSubjectKind,
   type CreditRequest, type CreditTransfer, type LedgerEntry, type LedgerKind, type ProjectSpending, type Reservation, type SpendingMode, type UsageEvent, type Wallet,
 } from "./wallet.js";
 import { billingConfig } from "./config.js";
+
+const spendingKey = (kind: string, id: string) => `${kind}:${id}`;
 
 /**
  * THE IN-MEMORY STORE.
@@ -28,6 +31,12 @@ export class MemoryMeterStore implements MeterStore {
   reservations = new Map<string, Reservation>();
   requests: CreditRequest[] = [];
   transfers: CreditTransfer[] = [];
+  /*
+   * Keyed by kind AND id. A survey and an interview project could in
+   * principle share a uuid, and a map keyed by id alone would then quietly
+   * give one product the other's budget — the kind of bug that never shows up
+   * in testing and is unexplainable in production.
+   */
   spending = new Map<string, ProjectSpending>();
 
   /**
@@ -88,23 +97,26 @@ export class MemoryMeterStore implements MeterStore {
     return w;
   }
 
-  async reserve(input: { walletId: string; customerId: string; surveyId: string | null; userId: string | null; eventType: string; environment: "TEST" | "LIVE"; estimatedCost: number; amount: number; floor: number; ttlMinutes: number }) {
+  async reserve(input: { walletId: string; customerId: string; surveyId: string | null; subjectKind?: BillingSubjectKind; userId: string | null; eventType: string; environment: "TEST" | "LIVE"; estimatedCost: number; amount: number; floor: number; ttlMinutes: number }) {
     const w = this.wallets.get(input.walletId); if (!w) throw new Error("unknown wallet");
     /* the project's own policy first, so the refusal names the limit that actually stopped it */
-    const sp = input.surveyId ? await this.getSpending(input.surveyId, input.customerId, { create: true }) : null;
+    const sp = input.surveyId
+      ? await this.getSpending(input.surveyId, input.customerId, { create: true, subjectKind: input.subjectKind })
+      : null;
     const room = projectHeadroom(sp);
     if (room != null && money6(input.amount) > room) {
       return { ok: false as const, wallet: w, reason: "project_limit" as const, spending: sp, headroom: room };
     }
     if (money6(w.balance - w.reserved - input.amount) < input.floor) return { ok: false as const, wallet: w, reason: "insufficient_balance" as const, spending: sp };
     const r: Reservation = {
-      id: randomUUID(), walletId: w.id, customerId: input.customerId, surveyId: input.surveyId, userId: input.userId, eventType: input.eventType, environment: input.environment,
+      id: randomUUID(), walletId: w.id, customerId: input.customerId, surveyId: input.surveyId,
+      subjectKind: input.subjectKind ?? "survey", userId: input.userId, eventType: input.eventType, environment: input.environment,
       estimatedCost: input.estimatedCost, reservedAmount: money6(input.amount), status: "held", actualCharge: null,
       createdAt: this.now(), expiresAt: new Date(Date.now() + input.ttlMinutes * 60_000).toISOString(), settledAt: null,
     };
     w.reserved = money6(w.reserved + r.reservedAmount); w.updatedAt = this.now();
     this.reservations.set(r.id, r);
-    if (sp) { sp.reserved = money6(sp.reserved + r.reservedAmount); this.spending.set(sp.surveyId, sp); }
+    if (sp) { sp.reserved = money6(sp.reserved + r.reservedAmount); this.spending.set(spendingKey(sp.subjectKind, sp.subjectId), sp); }
     return { ok: true as const, reservation: r, wallet: w, spending: sp };
   }
 
@@ -136,38 +148,39 @@ export class MemoryMeterStore implements MeterStore {
   }
 
   /** A project's meter after a charge: the hold comes off, the spend goes on, the state follows. */
-  private spend(surveyId: string, customerId: string, charge: number, held: number) {
-    const sp = this.spending.get(surveyId) ?? defaultSpending(surveyId, customerId);
+  private spend(subjectId: string, customerId: string, charge: number, held: number, subjectKind: BillingSubjectKind = "survey") {
+    const sp = this.spending.get(spendingKey(subjectKind, subjectId)) ?? defaultSpending(subjectId, customerId, subjectKind);
     sp.reserved = money6(Math.max(0, sp.reserved - held));
     sp.spent = money6(sp.spent + charge);
     const next = spendingStateFor(sp);
     if (next === "frozen" && sp.state !== "frozen") sp.frozenAt = this.now();
     if (next === "active") sp.frozenAt = null;
     sp.state = next;
-    this.spending.set(surveyId, sp);
+    this.spending.set(spendingKey(sp.subjectKind, sp.subjectId), sp);
   }
 
-  async getSpending(surveyId: string, customerId: string, opts: { create?: boolean } = {}) {
-    const cur = this.spending.get(surveyId);
+  async getSpending(subjectId: string, customerId: string, opts: { create?: boolean; subjectKind?: BillingSubjectKind } = {}) {
+    const kind = opts.subjectKind ?? "survey";
+    const cur = this.spending.get(spendingKey(kind, subjectId));
     if (cur) return cur;
     if (!opts.create) return null;
-    const sp = defaultSpending(surveyId, customerId);
-    this.spending.set(surveyId, sp);
+    const sp = defaultSpending(subjectId, customerId, kind);
+    this.spending.set(spendingKey(kind, subjectId), sp);
     return sp;
   }
   async listSpending(filter: { customerId?: string; surveyIds?: string[] }) {
     return [...this.spending.values()].filter((p) =>
-      (!filter.customerId || p.customerId === filter.customerId) && (!filter.surveyIds || filter.surveyIds.includes(p.surveyId)));
+      (!filter.customerId || p.customerId === filter.customerId) && (!filter.surveyIds || filter.surveyIds.includes(p.subjectId)));
   }
-  async setSpending(surveyId: string, customerId: string, patch: { mode: SpendingMode; budgetLimit: number | null }) {
-    const sp = (await this.getSpending(surveyId, customerId, { create: true }))!;
+  async setSpending(subjectId: string, customerId: string, patch: { mode: SpendingMode; budgetLimit: number | null; subjectKind?: BillingSubjectKind }) {
+    const sp = (await this.getSpending(subjectId, customerId, { create: true, subjectKind: patch.subjectKind }))!;
     sp.mode = patch.mode;
     sp.budgetLimit = patch.mode === "budget" ? patch.budgetLimit : null;
     const next = spendingStateFor(sp);
     if (next === "frozen" && sp.state !== "frozen") sp.frozenAt = this.now();
     if (next === "active") sp.frozenAt = null;
     sp.state = next;
-    this.spending.set(surveyId, sp);
+    this.spending.set(spendingKey(sp.subjectKind, sp.subjectId), sp);
     return sp;
   }
 

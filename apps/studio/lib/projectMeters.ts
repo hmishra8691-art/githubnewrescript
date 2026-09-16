@@ -72,7 +72,15 @@ export async function projectMeters(
     usedById.set(e.surveyId!, row);
   }
 
-  const spending = new Map(policies.map((p) => [p.surveyId, p]));
+  /*
+   * Keyed by `subjectId`, and filtered to surveys. `listSpending` can now
+   * return an interview project's policy, and the Studio's project cards are
+   * about surveys — an interview id in this map would silently claim to be a
+   * survey with no budget rather than not appearing.
+   */
+  const spending = new Map(
+    policies.filter((p) => p.subjectKind === "survey").map((p) => [p.subjectId, p] as const),
+  );
   /*
    * A project whose wallet is not this person's — one shared with them by a
    * colleague — is metered against the wallet that actually funds it, so the

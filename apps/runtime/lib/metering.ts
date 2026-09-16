@@ -169,11 +169,12 @@ export async function recordSessionUsage(billing: SessionBilling, spec: UsageSpe
     // could not be charged: keep the record, at no charge, flagged for the administrator
     const priced = await meter.price(spec, billing.environment);
     const { event } = await meter.store.record({
-      customerId: billing.customerId, surveyId: billing.surveyId, userId: null, walletId: r.wallet?.id ?? null,
+      customerId: billing.customerId, surveyId: billing.surveyId, subjectKind: "survey", userId: null, walletId: r.wallet?.id ?? null,
       eventType: spec.eventType, category: priced.category, environment: billing.environment, provider: spec.provider ?? null, service: spec.service ?? null, model: spec.model ?? null,
       quantity: priced.quantity, unit: priced.unit, inputUnits: spec.inputUnits ?? null, outputUnits: spec.outputUnits ?? null,
       providerCost: priced.breakdown.providerCost, infraCost: priced.breakdown.infraCost, paymentFee: 0, taxReserve: 0, customerCharge: 0, grossProfit: -priced.breakdown.actualCost, netProfit: -priced.breakdown.actualCost, marginPct: 0,
-      reservationId: null, adjustsEventId: null, metadata: { ...(spec.metadata ?? {}), unbilled: true, unbilledReason: r.reason, wouldHaveCharged: priced.breakdown.customerCharge },
+      reservationId: null, adjustsEventId: null, idempotencyKey: spec.idempotencyKey ?? null,
+      metadata: { ...(spec.metadata ?? {}), unbilled: true, unbilledReason: r.reason, wouldHaveCharged: priced.breakdown.customerCharge },
     }, (await meter.config()).readOnlyThreshold);
     return event;
   } catch (e) {

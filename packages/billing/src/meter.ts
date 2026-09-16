@@ -7,7 +7,7 @@ import {
 } from "./registry.js";
 import {
   READ_ONLY_MESSAGE, PROJECT_FROZEN_MESSAGE, availableBalance, walletStateFor, transferableBalance, projectHeadroom,
-  type CreditRequest, type CreditTransfer, type Environment, type LedgerEntry, type LedgerKind, type ProjectSpending, type Reservation, type SpendingMode, type UsageEvent, type Wallet,
+  type BillingSubjectKind, type CreditRequest, type CreditTransfer, type Environment, type LedgerEntry, type LedgerKind, type ProjectSpending, type Reservation, type SpendingMode, type UsageEvent, type Wallet,
 } from "./wallet.js";
 
 /**
@@ -32,7 +32,14 @@ import {
 
 export interface MeterContext {
   customerId: string;
+  /**
+   * The subject this work is billed to: a survey id, an interview project id.
+   * The name is historical and every existing caller means a survey by it;
+   * `subjectKind` says which it is and defaults to `survey`, so nothing that
+   * has not been told about a second product changes behaviour.
+   */
   surveyId: string | null;
+  subjectKind?: BillingSubjectKind;
   userId?: string | null;
   environment: Environment;
 }
@@ -53,6 +60,8 @@ export interface UsageSpec {
   /** the infrastructure allocation when known; otherwise the configured estimate for the category */
   infraCost?: number | null;
   metadata?: Record<string, unknown>;
+  /** see `UsageEvent.idempotencyKey` — a retry with the same key charges once */
+  idempotencyKey?: string | null;
 }
 
 export type MeterRefusalReason = "read_only" | "insufficient_balance" | "no_wallet" | "suspended" | "store_error" | "project_limit";
@@ -110,7 +119,7 @@ export interface MeterStore {
    * The refusal says which test failed: "this project has reached its limit"
    * and "your wallet is empty" ask the person to do different things.
    */
-  reserve(input: { walletId: string; customerId: string; surveyId: string | null; userId: string | null; eventType: string; environment: Environment; estimatedCost: number; amount: number; floor: number; ttlMinutes: number }): Promise<{ ok: true; reservation: Reservation; wallet: Wallet; spending?: ProjectSpending | null } | { ok: false; wallet: Wallet; reason?: "insufficient_balance" | "project_limit"; spending?: ProjectSpending | null; headroom?: number | null }>;
+  reserve(input: { walletId: string; customerId: string; surveyId: string | null; subjectKind: BillingSubjectKind; userId: string | null; eventType: string; environment: Environment; estimatedCost: number; amount: number; floor: number; ttlMinutes: number }): Promise<{ ok: true; reservation: Reservation; wallet: Wallet; spending?: ProjectSpending | null } | { ok: false; wallet: Wallet; reason?: "insufficient_balance" | "project_limit"; spending?: ProjectSpending | null; headroom?: number | null }>;
   /** Atomically debit the actual charge, release the hold, write the usage event and its ledger line, recompute the state. */
   settle(reservationId: string, event: UsageEventInput, readOnlyThreshold: number): Promise<{ event: UsageEvent; wallet: Wallet }>;
   release(reservationId: string, status?: "released" | "expired"): Promise<void>;
@@ -129,10 +138,10 @@ export interface MeterStore {
   getTransfer(id: string): Promise<CreditTransfer | null>;
 
   /** This project's spending policy and what it has spent. `create` writes the default row. */
-  getSpending(surveyId: string, customerId: string, opts?: { create?: boolean }): Promise<ProjectSpending | null>;
+  getSpending(subjectId: string, customerId: string, opts?: { create?: boolean; subjectKind?: BillingSubjectKind }): Promise<ProjectSpending | null>;
   listSpending(filter: { customerId?: string; surveyIds?: string[] }): Promise<ProjectSpending[]>;
   /** Change the policy. Moves no money, and unfreezes a project that now has room. */
-  setSpending(surveyId: string, customerId: string, patch: { mode: SpendingMode; budgetLimit: number | null }): Promise<ProjectSpending>;
+  setSpending(subjectId: string, customerId: string, patch: { mode: SpendingMode; budgetLimit: number | null; subjectKind?: BillingSubjectKind }): Promise<ProjectSpending>;
 
   createCreditRequest(input: Omit<CreditRequest, "id" | "status" | "decidedBy" | "decidedAt" | "decidedAmount" | "adminNote" | "createdAt">): Promise<CreditRequest>;
   listCreditRequests(filter: { customerId?: string; surveyId?: string; userId?: string; status?: CreditRequest["status"] }): Promise<CreditRequest[]>;
@@ -265,7 +274,8 @@ export class Meter {
     const overdraft = (wallet.overdraftEnabled ?? cfg.overdraftEnabled) ? (wallet.overdraftLimit ?? cfg.overdraftLimit) : 0;
     const floor = money6(cfg.minimumRemainingBalance - overdraft);
     const r = await this.store.reserve({
-      walletId: wallet.id, customerId: ctx.customerId, surveyId: ctx.surveyId, userId: ctx.userId ?? null,
+      walletId: wallet.id, customerId: ctx.customerId, surveyId: ctx.surveyId,
+      subjectKind: ctx.subjectKind ?? "survey", userId: ctx.userId ?? null,
       eventType: spec.eventType, environment: ctx.environment,
       estimatedCost: priced.breakdown.actualCost, amount: charge, floor, ttlMinutes: cfg.reservationTtlMinutes,
     });
@@ -449,13 +459,14 @@ export function priceSpec(spec: UsageSpec, environment: Environment, cfg: Billin
 function eventInput(ctx: MeterContext, spec: UsageSpec, priced: Priced, walletId: string | null, reservationId: string | null): UsageEventInput {
   const b = priced.breakdown;
   return {
-    customerId: ctx.customerId, surveyId: ctx.surveyId, userId: ctx.userId ?? null, walletId,
+    customerId: ctx.customerId, surveyId: ctx.surveyId, subjectKind: ctx.subjectKind ?? "survey",
+    userId: ctx.userId ?? null, walletId,
     eventType: priced.event.type === "CUSTOM_EVENT" ? spec.eventType : priced.event.type, category: priced.category, environment: ctx.environment,
     provider: spec.provider ?? priced.event.rate?.provider ?? null, service: spec.service ?? priced.event.rate?.service ?? null, model: spec.model ?? priced.event.rate?.model ?? null,
     quantity: priced.quantity, unit: priced.unit, inputUnits: spec.inputUnits ?? null, outputUnits: spec.outputUnits ?? null,
     providerCost: b.providerCost, infraCost: b.infraCost, paymentFee: b.paymentFee, taxReserve: b.taxReserve,
     customerCharge: b.customerCharge, grossProfit: b.grossProfit, netProfit: b.netProfit, marginPct: b.marginPct,
-    reservationId, adjustsEventId: null,
+    reservationId, adjustsEventId: null, idempotencyKey: spec.idempotencyKey ?? null,
     metadata: { ...(spec.metadata ?? {}), billable: priced.billable, testAdjustment: b.testAdjustment, minimumApplied: b.minimumApplied, fixedRate: b.fixedRate, rateId: priced.rate?.id ?? null, rateInId: priced.rateIn?.id ?? null, rateOutId: priced.rateOut?.id ?? null },
   };
 }

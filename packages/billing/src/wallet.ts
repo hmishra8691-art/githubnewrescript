@@ -104,6 +104,8 @@ export function transferableBalance(w: Pick<Wallet, "balance" | "reserved">): nu
 export interface UsageEvent {
   id: string;
   customerId: string;
+  /** which product this charge belongs to; `survey` for everything before 0031 */
+  subjectKind: BillingSubjectKind;
   surveyId: string | null;
   userId: string | null;
   walletId: string | null;
@@ -129,6 +131,17 @@ export interface UsageEvent {
   /** a reversal / adjustment points at the event it corrects; the original is never edited */
   adjustsEventId: string | null;
   metadata: Record<string, unknown>;
+  /**
+   * At-most-once, for callers that need it.
+   *
+   * A retried HTTP request used to take a fresh hold and write a fresh event,
+   * so `Meter.record` double-charged by construction. That was survivable
+   * while every meter was driven by a person waiting for a page; a job queue
+   * retries as its normal mode of operation. A key makes the second charge
+   * free — `rescript_billing_insert_usage` returns the event that already
+   * exists rather than writing another.
+   */
+  idempotencyKey: string | null;
   createdAt: string;
 }
 
@@ -139,6 +152,7 @@ export interface Reservation {
   customerId: string;
   surveyId: string | null;
   userId: string | null;
+  subjectKind: BillingSubjectKind;
   eventType: string;
   environment: Environment;
   estimatedCost: number;
@@ -191,8 +205,30 @@ export interface CreditRequest {
 export const SPENDING_MODES = ["shared", "budget", "priority"] as const;
 export type SpendingMode = (typeof SPENDING_MODES)[number];
 
+/**
+ * WHAT A SPENDING POLICY IS FOR.
+ *
+ * Money, rates, wallets and ledgers were never survey-specific; only the
+ * SUBJECT of a policy was, and it was a survey by assumption rather than by
+ * statement. A second product makes the assumption visible, so the subject is
+ * now a pair — a kind and an id — and `survey` is one of its values.
+ */
+export const BILLING_SUBJECT_KINDS = ["survey", "interview"] as const;
+export type BillingSubjectKind = (typeof BILLING_SUBJECT_KINDS)[number];
+
 export interface ProjectSpending {
-  surveyId: string;
+  subjectKind: BillingSubjectKind;
+  subjectId: string;
+  /**
+   * The survey this policy is for, or null when it is for something else.
+   *
+   * Kept — and narrowed rather than repurposed — because every existing
+   * reader means exactly this by it. A policy for an interview project has
+   * `surveyId: null`, which is true, rather than an interview id under a name
+   * that says survey, which would be the same one-value-two-meanings mistake
+   * this codebase keeps removing.
+   */
+  surveyId: string | null;
   customerId: string;
   mode: SpendingMode;
   /** only meaningful in `budget` mode */
@@ -206,8 +242,15 @@ export interface ProjectSpending {
 }
 
 /** A project with no policy row yet behaves as `shared`, which is the default. */
-export function defaultSpending(surveyId: string, customerId: string): ProjectSpending {
-  return { surveyId, customerId, mode: "shared", budgetLimit: null, spent: 0, reserved: 0, state: "active", frozenAt: null };
+export function defaultSpending(
+  subjectId: string, customerId: string, subjectKind: BillingSubjectKind = "survey",
+): ProjectSpending {
+  return {
+    subjectKind, subjectId,
+    surveyId: subjectKind === "survey" ? subjectId : null,
+    customerId, mode: "shared", budgetLimit: null, spent: 0, reserved: 0,
+    state: "active", frozenAt: null,
+  };
 }
 
 /**
@@ -462,7 +505,7 @@ export function projectMeter(
    */
   const denominator = spending?.mode === "budget" && spending.budgetLimit != null ? spending.budgetLimit : money6(used + walletAvailable);
   return {
-    surveyId: spending?.surveyId ?? w.surveyId ?? "",
+    surveyId: spending?.subjectId ?? w.surveyId ?? "",
     currency: w.currency,
     used,
     limit: spending?.mode === "budget" ? spending.budgetLimit : null,

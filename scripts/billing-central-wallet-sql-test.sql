@@ -59,8 +59,8 @@ begin
   perform public.rescript_billing_set_spending(pa, cust, 'priority', null);
   perform public.rescript_billing_set_spending(pb, cust, 'budget', 1);
   perform public.rescript_billing_set_spending(pc, cust, 'budget', 1);
-  assert (select budget_limit from public.project_spending where survey_id = pb) = 1, 'B is capped at $1';
-  assert (select budget_limit from public.project_spending where survey_id = pa) is null, 'a priority project has no cap of its own';
+  assert (select budget_limit from public.project_spending where subject_kind = 'survey' and subject_id = pb) = 1, 'B is capped at $1';
+  assert (select budget_limit from public.project_spending where subject_kind = 'survey' and subject_id = pa) is null, 'a priority project has no cap of its own';
 
   /* B spends 60c, then is refused the next 60c — its own limit, not the wallet's */
   r := public.rescript_billing_reserve(central_id, cust, pb, own, 'AI_REQUEST', 'LIVE', 0.3, 0.6, 0, 30);
@@ -76,7 +76,7 @@ begin
   r := public.rescript_billing_reserve(central_id, cust, pb, own, 'AI_REQUEST', 'LIVE', 0.2, 0.4, 0, 30);
   assert (r->>'ok')::boolean, 'the last 40c of the budget is B''s to spend';
   perform public.rescript_billing_settle((r->'reservation'->>'id')::uuid, pg_temp.ev(pb, central_id, 0.4), 0);
-  select * into sp from public.project_spending where survey_id = pb;
+  select * into sp from public.project_spending where subject_kind = 'survey' and subject_id = pb;
   assert sp.spent = 1, 'B has spent its whole dollar';
   assert sp.state = 'frozen', 'so B freezes itself';
   assert sp.frozen_at is not null, 'and records when';
@@ -87,8 +87,8 @@ begin
   assert (r->>'ok')::boolean, 'the priority project spends on';
   perform public.rescript_billing_settle((r->'reservation'->>'id')::uuid, pg_temp.ev(pa, central_id, 120), 0);
   assert (select balance from public.project_wallets where id = central_id) = 379, 'A took $120 from the same wallet';
-  assert (select spent from public.project_spending where survey_id = pa) = 120, 'and A''s own meter says so';
-  assert (select state from public.project_spending where survey_id = pb) = 'frozen', 'B is still frozen through all of it';
+  assert (select spent from public.project_spending where subject_kind = 'survey' and subject_id = pa) = 120, 'and A''s own meter says so';
+  assert (select state from public.project_spending where subject_kind = 'survey' and subject_id = pb) = 'frozen', 'B is still frozen through all of it';
 
   /* a frozen project is refused before anything else is considered */
   assert (public.rescript_billing_reserve(central_id, cust, pb, own, 'AI_REQUEST', 'LIVE', 0.01, 0.01, 0, 30)->>'reason') = 'project_limit',
@@ -102,7 +102,7 @@ begin
   r := public.rescript_billing_reserve(central_id, cust, pb, own, 'AI_REQUEST', 'LIVE', 1, 2, 0, 30);
   assert (r->>'ok')::boolean, 'B spends again under its new limit';
   perform public.rescript_billing_release((r->'reservation'->>'id')::uuid, 'released');
-  assert (select reserved from public.project_spending where survey_id = pb) = 0, 'releasing a hold gives the headroom back to the project';
+  assert (select reserved from public.project_spending where subject_kind = 'survey' and subject_id = pb) = 0, 'releasing a hold gives the headroom back to the project';
   assert (select reserved from public.project_wallets where id = central_id) = 0, 'and to the wallet';
 
   /* ------------------------------------- a hold counts against the cap while it is held */
@@ -168,7 +168,7 @@ begin
 
   assert (select count(*) from public.wallet_ledger where kind = 'transfer_out' and wallet_id = old.id) = 1, 'the ledger says where it went';
   assert (select count(*) from public.wallet_ledger where kind = 'transfer_in' and wallet_id = central.id) = 1, 'and where it arrived';
-  assert (select spent from public.project_spending where survey_id = pd) = 43.25, 'what the project had already spent follows it';
+  assert (select spent from public.project_spending where subject_kind = 'survey' and subject_id = pd) = 43.25, 'what the project had already spent follows it';
 
   /* and from now on the project funds itself from its owner */
   old := public.rescript_billing_wallet_for(cust, pd, true, 0);
