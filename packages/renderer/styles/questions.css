@@ -206,10 +206,19 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-msd-actions { display: flex; gap: 10px; align-items: center; margin-top: 6px; font-size: .85em; }
 .rs-msd-actions button { border: none; background: none; color: var(--rs-primary); cursor: pointer; padding: 2px 4px; font: inherit; font-size: .95em; }
 
-/* ---------- N-column option layouts (req §10) ---------- */
-.rs-options.cols-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
-.rs-options.cols-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.rs-options.cols-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+/* ---------- N-column option layouts (req §10) ----------
+   `minmax(0, 1fr)` rather than `1fr`: a grid track's automatic minimum is its
+   content, so a long option label in a 3- or 4-column layout pushed the track
+   — and the whole question — wider than the page. With the min pinned at 0
+   the track shrinks and the label wraps inside its box instead. */
+.rs-options.cols-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.rs-options.cols-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.rs-options.cols-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+/* the option box itself: wrap rather than overflow, whatever the text is */
+.rs-option, .rs-choicebtn, .rs-cardopt, .rs-listrow, .rs-statement { min-width: 0; }
+.rs-option .lbl, .rs-choicebtn > span, .rs-cardopt-title, .rs-listrow-title > span, .rs-statement-text {
+  min-width: 0; overflow-wrap: anywhere; word-break: break-word;
+}
 @media (max-width: 640px) {
   .rs-options.cols-3, .rs-options.cols-4 { grid-template-columns: repeat(2, 1fr); }
 }
@@ -231,9 +240,14 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 /* ---------- variant renderers: buttons, cards, stars, emoji ---------- */
 .rs-choicebtns { display: flex; flex-wrap: wrap; gap: 8px; }
 .rs-choicebtns[class*="cols-"] { display: grid; gap: 8px; }
-.rs-choicebtns.cols-2 { grid-template-columns: repeat(2, 1fr); }
-.rs-choicebtns.cols-3 { grid-template-columns: repeat(3, 1fr); }
-.rs-choicebtns.cols-4 { grid-template-columns: repeat(4, 1fr); }
+/* `.cols-1` did not exist, so "1 column" left the wrapping flex row in place
+   and six buttons sat four-across — the most-reported symptom in the review. */
+.rs-choicebtns.cols-1 { grid-template-columns: minmax(0, 1fr); }
+.rs-choicebtns.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.rs-choicebtns.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.rs-choicebtns.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 640px) { .rs-choicebtns.cols-3, .rs-choicebtns.cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 440px) { .rs-choicebtns[class*="cols-"] { grid-template-columns: minmax(0, 1fr); } }
 .rs-choicebtn {
   font: inherit; cursor: pointer; padding: 11px 20px; text-align: center;
   border: 1.5px solid var(--rs-border); border-radius: calc(var(--rs-radius) - 4px);
@@ -244,10 +258,10 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 
 .rs-cardgrid { display: grid; gap: 12px; }
 .rs-cardgrid.cols-1 { grid-template-columns: 1fr; }
-.rs-cardgrid.cols-2 { grid-template-columns: repeat(2, 1fr); }
-.rs-cardgrid.cols-3 { grid-template-columns: repeat(3, 1fr); }
-.rs-cardgrid.cols-4 { grid-template-columns: repeat(4, 1fr); }
-@media (max-width: 640px) { .rs-cardgrid.cols-3, .rs-cardgrid.cols-4 { grid-template-columns: repeat(2, 1fr); } }
+.rs-cardgrid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.rs-cardgrid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.rs-cardgrid.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 640px) { .rs-cardgrid.cols-3, .rs-cardgrid.cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 440px) { .rs-cardgrid[class*="cols-"] { grid-template-columns: 1fr; } }
 .rs-cardopt {
   position: relative; border: 1.5px solid var(--rs-border); border-radius: var(--rs-radius);

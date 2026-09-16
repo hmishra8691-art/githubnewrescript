@@ -5,6 +5,7 @@ import { CountInput } from "./CountInput";
 import React from "react";
 import type { Question, Option, QuestionColumn, ResponseType, QuestionVariantDef } from "@rescript/schema";
 import { questionTypeRegistry, variantRegistry, resolveVariant } from "@rescript/schema";
+import { honoursColumns } from "@rescript/renderer";
 import { VariantPickerModal, VariantSwitcher, createFromVariant } from "./VariantPicker";
 import { RichTextEditor } from "./RichTextEditor";
 import { OptionLogicEditor } from "./OptionLogicEditor";
@@ -665,6 +666,16 @@ export function QuestionEditor({ q }: { q: Question }) {
   const variantDef = resolveVariant(q.variant);
   const has = (c: string) =>
     variantDef ? variantDef.capabilities.includes(c as any) : true;
+  /*
+   * A control that cannot take effect is worse than a missing one: the
+   * programmer believes they have made a setting. `has()` alone was not
+   * enough for the Layout control on two counts — it answers `true` for any
+   * question with no variant at all (so a legacy dropdown got the control),
+   * and several variants declare `layout_columns` while their renderer never
+   * reads it (Multi-Select Dropdown, Multi-Item Carousel). The renderer
+   * package owns the list, because the renderer is what decides.
+   */
+  const showLayout = has("layout_columns") && honoursColumns(variantDef?.renderer, q.type);
   const patch = (p: Partial<Question>) =>
     s.update((d) => {
       const i = d.questions.findIndex((x) => x.id === q.id);
@@ -744,10 +755,26 @@ export function QuestionEditor({ q }: { q: Question }) {
             showImage={has("images") && (variantDef?.capabilities.includes("images") || q.type.startsWith("image"))}
             metaFields={optionMetaFields(variantDef)} />
           <div className="row" style={{ marginTop: 10, flexWrap: "wrap" }}>
-            {has("layout_columns") && (
-            <label className="f" style={{ marginBottom: 0, width: 130 }}><span>Layout</span>
-              <select className="select" value={q.settings.columnsLayout ?? 1}
-                onChange={(e) => patchSettings({ columnsLayout: Number(e.target.value) === 1 ? undefined : Number(e.target.value) })}>
+            {showLayout && (
+            /*
+             * THE MOST-REPORTED BUG IN THE SEPTEMBER REVIEW, and it was this
+             * control rather than any renderer. Picking "1 column" wrote
+             * `undefined`, which every renderer reads as "the author has not
+             * chosen" and answers with its own default — 2 for cards, 3 for
+             * rich cards, 4 for icons, as-many-as-fit for image grids. So 2,
+             * 3 and 4 worked and 1 did nothing, on eleven variants.
+             *
+             * "Not chosen" is now a value the control can show ("auto"), so 1
+             * can be stored as 1 and mean it. Questions authored before this
+             * still hold `undefined` and still render exactly as they did —
+             * the fix changes what the editor can say, not what any existing
+             * survey looks like.
+             */
+            <label className="f" style={{ marginBottom: 0, width: 150 }}><span>Layout</span>
+              <select className="select" data-testid="layout-columns"
+                value={q.settings.columnsLayout ?? ""}
+                onChange={(e) => patchSettings({ columnsLayout: e.target.value === "" ? undefined : Number(e.target.value) })}>
+                <option value="">auto (fit width)</option>
                 <option value={1}>1 column</option>
                 <option value={2}>2 columns</option>
                 <option value={3}>3 columns</option>
@@ -763,7 +790,7 @@ export function QuestionEditor({ q }: { q: Question }) {
                 <option value="numeric_asc">numeric ascending</option>
                 <option value="numeric_desc">numeric descending</option>
               </select></label>)}
-            {has("layout_columns") && q.options.length >= 10 && !q.settings.columnsLayout && (
+            {showLayout && q.options.length >= 10 && !q.settings.columnsLayout && (
               <button className="btn small" style={{ alignSelf: "flex-end", marginBottom: 7 }}
                 title="A long single column is hard to scan"
                 onClick={() => patchSettings({ columnsLayout: q.options.length >= 16 ? 4 : q.options.length >= 9 ? 3 : 2 })}>

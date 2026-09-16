@@ -197,8 +197,15 @@ export function optionsClass(p: QRProps): string {
  */
 export function gridColumnsStyle(p: QRProps, fallback: string): React.CSSProperties {
   const n = p.q.settings.columnsLayout;
-  return n && n > 1
-    ? { gridTemplateColumns: `repeat(${Math.min(n, 4)}, minmax(0, 1fr))` }
+  /*
+   * `n > 1` was the bug: one column fell through to the fallback, which for
+   * an image grid is `repeat(auto-fill, minmax(150px, 1fr))` — as many
+   * columns as fit. Choosing "1 column" on an image select therefore did
+   * nothing visible, while 2, 3 and 4 worked. The fallback is now only for
+   * questions that have chosen nothing at all.
+   */
+  return n && n >= 1
+    ? { gridTemplateColumns: `repeat(${Math.min(Math.max(n, 1), 4)}, minmax(0, 1fr))` }
     : { gridTemplateColumns: fallback };
 }
 
@@ -1273,7 +1280,7 @@ export function ChoiceButtons(p: QRProps & { multi: boolean }) {
   return (
     <div>
       {searchBox}
-      <div className={`rs-choicebtns ${p.q.settings.columnsLayout ? `cols-${Math.min(p.q.settings.columnsLayout, 4)}` : ""}`}>
+      <div className={`rs-choicebtns ${p.q.settings.columnsLayout ? `cols-${Math.min(Math.max(p.q.settings.columnsLayout, 1), 4)}` : ""}`}>
         {filtered.map((o) => {
           const sel = vals.some((v) => String(v) === String(o.code));
           return (

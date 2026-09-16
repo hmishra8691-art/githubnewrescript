@@ -62,7 +62,10 @@ export function ListSelect(p: QRProps) {
   const multi = multiOf(p);
   const { isSelected, pick } = useChoice(p, multi, options);
   return (
-    <div className="rs-listrows" role={multi ? "group" : "radiogroup"}>
+    /* `colsClass(p, 1)` — list rows stay a single column unless the author
+       asks for more. The control was offered for this variant and did
+       nothing at all before, which is what the review reported twice. */
+    <div className={`rs-listrows ${colsClass(p, 1)}`} role={multi ? "group" : "radiogroup"}>
       {options.map((o) => {
         const sel = isSelected(o);
         const desc = metaText(o, "description");
@@ -160,7 +163,7 @@ export function StatementChoice(p: QRProps) {
   const multi = multiOf(p);
   const { isSelected, pick } = useChoice(p, multi, options);
   return (
-    <div className="rs-statements" role={multi ? "group" : "radiogroup"}>
+    <div className={`rs-statements ${colsClass(p, 1)}`} role={multi ? "group" : "radiogroup"}>
       {options.map((o, i) => {
         const sel = isSelected(o);
         return (

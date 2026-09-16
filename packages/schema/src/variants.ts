@@ -180,6 +180,16 @@ const CAP_MULTI: VariantCapability[] = [...CAP_SINGLE, "exclusive_options", "min
 const VAL_MULTI = ["required", "min_selections", "max_selections", "custom_expression"];
 
 /**
+ * The same capability list minus the ones a particular renderer cannot
+ * honour. Spreading `CAP_MULTI` and leaving the extras in is how a dropdown
+ * came to advertise a column layout it has no way to draw — the review
+ * reported that control as broken three times, on three different variants,
+ * and it was never implemented in the first place.
+ */
+const without = (caps: VariantCapability[], ...drop: VariantCapability[]): VariantCapability[] =>
+  caps.filter((c) => !drop.includes(c));
+
+/**
  * Validation kinds that every question type supports, whatever its variant.
  *
  * The per-variant `validations` lists below describe what is *characteristic*
@@ -410,11 +420,12 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   }),
   stable(F.multi, "dropdown", "Multi-Select Dropdown", "Searchable chip dropdown: select all, clear all, min/max, exclusives.", {
     baseType: "multi_dropdown", responseModel: "multiple_choice",
-    capabilities: [...CAP_MULTI, "search"], validations: VAL_MULTI,
+    /* no layout_columns: a dropdown list is one column by construction */
+    capabilities: [...without(CAP_MULTI, "layout_columns"), "search"], validations: VAL_MULTI,
   }),
   stable(F.multi, "searchable", "Searchable Multi-Select", "Same as Multi-Select Dropdown (search built in).", {
     baseType: "multi_dropdown", responseModel: "multiple_choice",
-    capabilities: [...CAP_MULTI, "search"], validations: VAL_MULTI,
+    capabilities: [...without(CAP_MULTI, "layout_columns"), "search"], validations: VAL_MULTI,
     supersededBy: "multi_select.dropdown",
   }),
   stable(F.multi, "buttons", "Button Multi-Select", "Toggleable buttons; exclusives clear the rest.", {
@@ -447,7 +458,8 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   }),
   stable(F.multi, "multi_item_carousel", "Multi-Item Carousel", "Browse one card at a time and select as many as apply.", {
     baseType: "multi_select", renderer: "multicarousel", responseModel: "multiple_choice",
-    capabilities: [...CAP_MULTI, "images"], validations: VAL_MULTI,
+    /* no layout_columns: a carousel shows one card at a time */
+    capabilities: [...without(CAP_MULTI, "layout_columns"), "images"], validations: VAL_MULTI,
   }),
   stable(F.multi, "product_multi_select", "Product Multi-Select", "Rich product cards — select several.", {
     baseType: "multi_select", renderer: "richcards", responseModel: "multiple_choice",
