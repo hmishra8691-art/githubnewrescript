@@ -253,8 +253,11 @@ function renderToken(t: PipeToken, ctx: EvalContext): string {
   if (q.type === "geo" && isGeoAnswer(value)) {
     const g = value;
     switch (t.property) {
-      case "lat": return g.lat == null ? "" : String(round6(g.lat));
-      case "lng": return g.lng == null ? "" : String(round6(g.lng));
+      /* `isGeoAnswer` accepts any non-array object, so a stored coordinate can
+         be a non-finite number — and `String(NaN)` is the word "NaN" in the
+         middle of a sentence a respondent is reading */
+      case "lat": return Number.isFinite(g.lat as number) ? String(round6(g.lat as number)) : "";
+      case "lng": return Number.isFinite(g.lng as number) ? String(round6(g.lng as number)) : "";
       case "address": return escapeHtml(g.address?.formatted ?? "");
       case "city": return escapeHtml(g.address?.city ?? "");
       case "country": return escapeHtml(g.address?.country ?? "");
@@ -273,7 +276,36 @@ function renderToken(t: PipeToken, ctx: EvalContext): string {
     return escapeHtml(interviewText(value));
   }
 
-  const codes = Array.isArray(value) ? value : [value];
+  /**
+   * A STRUCTURED ANSWER IS NOT A CODE, AND MUST NEVER BE STRINGIFIED AS ONE.
+   *
+   * Everything below this line treats the answer as a code or a list of codes.
+   * The line that produced `codes` was
+   *
+   *     const codes = Array.isArray(value) ? value : [value];
+   *
+   * with no object guard, so a matrix, an allocation, a composite or a hotspot
+   * answer — all of which are objects — was wrapped as a single "code" and
+   * handed to `String()`. `{{Q1.value}}` on a matrix rendered the literal text
+   * `[object Object]` into the question a respondent was reading, and so did
+   * `.first`, `.last`, `.rank` and the default label branch for an array of
+   * objects.
+   *
+   * An object answer has exactly one honest rendering — the per-row summary
+   * that the default branch already built — so every property is routed to it
+   * rather than each one growing its own guard. `.count` is above this and
+   * already counts an object's filled entries, which is correct and stays.
+   */
+  const structured = !Array.isArray(value) && typeof value === "object";
+  if (structured) {
+    return fmt(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, v]) => v != null && v !== "")
+        .map(([r, v]) => `${rowLabelFor(q, r)}: ${cellText(ctx.def, q, v)}`),
+    );
+  }
+
+  const codes = (Array.isArray(value) ? value : [value]).filter((c) => !isPlainObject(c));
 
   /**
    * WHAT A SELECTED "OTHER" PIPES.
@@ -319,16 +351,37 @@ function renderToken(t: PipeToken, ctx: EvalContext): string {
     case "label":
     case "labels":
     default:
-      if (typeof value === "object" && !Array.isArray(value)) {
-        // whole matrix/composite object without row — join row summaries
-        return fmt(
-          Object.entries(value as Record<string, unknown>).map(
-            ([r, v]) => `${rowLabelFor(q, r)}: ${escapeHtml(String(v))}`,
-          ),
-        );
-      }
       return fmt(codes.map((c) => labelOrOther(c)));
   }
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+/**
+ * One cell of a structured answer, as words.
+ *
+ * The row summary used to be `String(v)`, which is right for a scalar and
+ * wrong for the two shapes a cell actually takes: a multi-select row holds an
+ * ARRAY of codes (rendered `1,2`), and a composite or nested grid holds
+ * another OBJECT (rendered `[object Object]`). It also piped the raw code
+ * rather than the label, so a Likert matrix read "Speed: 4" where the
+ * respondent had chosen "Very good".
+ *
+ * One level of nesting is resolved; anything deeper is summarised rather than
+ * expanded, because a question's text is a sentence and not a data dump.
+ */
+function cellText(def: SurveyDefinition, q: Question, v: unknown): string {
+  if (v == null || v === "") return "";
+  if (Array.isArray(v)) return v.map((x) => cellText(def, q, x)).filter(Boolean).join(", ");
+  if (isPlainObject(v)) {
+    return Object.entries(v)
+      .filter(([, x]) => x != null && x !== "")
+      .map(([k, x]) => `${rowLabelFor(q, k)}: ${cellText(def, q, x)}`)
+      .join("; ");
+  }
+  return labelFor(def, q, v);
 }
 
 /** Resolve an option label, following carry-forward to the source question
@@ -350,9 +403,22 @@ function labelFor(def: SurveyDefinition, q: Question, code: unknown): string {
   return code == null ? "" : escapeHtml(String(code));
 }
 
+/**
+ * The label for one key of a structured answer.
+ *
+ * A grid keys its answer by ROW, but an allocation, a constant-sum and a
+ * ranking key theirs by OPTION — so looking only at `q.rows` left those three
+ * piping the bare code (`a: 60` for what the respondent saw as `Apple`).
+ * Columns are checked last, for a cell grid keyed the other way about.
+ */
 function rowLabelFor(q: Question, rowCode: string): string {
-  const row = q.rows.find((r) => String(r.code) === rowCode);
-  return row ? row.label : rowCode;
+  const row = q.rows?.find((r) => String(r.code) === rowCode);
+  if (row) return row.label;
+  const opt = q.options?.find((o) => String(o.code) === rowCode);
+  if (opt) return opt.label;
+  const col = (q.columns as { code?: string; label?: string }[] | undefined)
+    ?.find((c) => String(c.code) === rowCode);
+  return col?.label ?? rowCode;
 }
 
 /**

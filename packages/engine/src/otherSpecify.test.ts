@@ -406,3 +406,41 @@ test("a script reads each box through the same flat names", () => {
   assert.equal(flat.BRAND_other_98, "Samsung");
   assert.equal(flat.BRAND_other_99, "Sony");
 });
+
+test("CLEARING A BOX INSIDE A LOOP DOES NOT PUT THE OUTER ITERATION'S TEXT BACK", () => {
+  /*
+   * `otherTextFor` walks outward through the enclosing iterations to the
+   * survey level, which is right for a box that was never filled in this
+   * iteration and wrong for one the respondent emptied: clearing used to
+   * DELETE the key, so the read fell through and the previous scope's answer
+   * reappeared. A respondent who typed "Tesla" at brand 1 and cleared the box
+   * at brand 2 was recorded as having said "Tesla" twice.
+   */
+  const def = survey();
+  const q = Q(def, "q1");
+  const state = createResponseState(def);
+  const brand1 = { loopVar: "brand", loopId: "l1", code: "apple", label: "Apple", index: 1 } as never;
+
+  setOtherTextFor(state, q, 97, "SurveyLevel");
+  setOtherTextFor(state, q, 97, "InLoop", brand1);
+  assert.equal(otherTextFor(state, q, 97, brand1), "InLoop");
+
+  setOtherTextFor(state, q, 97, "", brand1);
+  assert.equal(otherTextFor(state, q, 97, brand1), "", "emptied here means empty here");
+  assert.equal(otherTextFor(state, q, 97), "SurveyLevel", "and the outer answer is untouched");
+
+  /* an iteration that was never filled still inherits, which is the behaviour
+     the outward walk exists for */
+  const brand2 = { loopVar: "brand", loopId: "l1", code: "google", label: "Google", index: 2 } as never;
+  assert.equal(otherTextFor(state, q, 97, brand2), "SurveyLevel");
+});
+
+test("clearing at the survey level still removes the key rather than storing empty", () => {
+  const def = survey();
+  const q = Q(def, "q1");
+  const state = createResponseState(def);
+  setOtherTextFor(state, q, 97, "Apple");
+  setOtherTextFor(state, q, 97, "");
+  assert.equal(otherKeyFor("q1", 97) in state.answers, false,
+    "there is nothing to shadow at the top, so an absent answer stays absent");
+});

@@ -12,7 +12,8 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { referencesTo, pruneReferencesTo } from "./references.js";
+import { SurveyDefinition, cond as C } from "@rescript/schema";
+import { referencesTo, pruneReferencesTo, pruneReferencesToMany } from "./references.js";
 
 const cond = (qid: string) => ({ all: [{ questionId: qid, operator: "eq", value: "1" }] });
 
@@ -167,4 +168,62 @@ test("the survey itself always survives", () => {
     "pruning removes references; removing the question is the caller's job");
   assert.ok(Array.isArray(def.flow));
   assert.ok(Array.isArray(def.quotas));
+});
+
+/* --------------------------------- references that are not object-shaped ids */
+
+/**
+ * Two blind spots, both of which made the delete dialog say "Nothing else in
+ * this survey refers to it" about a question that three other things needed.
+ */
+const codeRefDef = () => SurveyDefinition.parse({
+  meta: { id: "s", code: "S", title: "t", version: "1" },
+  questions: [
+    { id: "q1", code: "Q1", variableName: "BRAND", type: "single_select", text: "Brand?",
+      options: [{ code: "1", label: "Alpha" }, { code: "2", label: "Beta" }] },
+    /* the expression editor writes `kind: "variable"`, and the runtime resolves
+       it through the same id/code/variableName lookup a picker reference uses */
+    { id: "q2", code: "Q2", variableName: "Q2", type: "open_text", text: "Why {{Q1}}?",
+      displayLogic: C.rule("BRAND", "eq", "1", undefined, { kind: "variable" }) },
+    { id: "q3", code: "Q3", variableName: "Q3", type: "open_text", text: "Anything else?" },
+  ],
+  flow: [{ type: "page", id: "p", questionIds: ["q1", "q2", "q3"] }],
+});
+
+test("a condition that names the question by VARIABLE is a reference, whatever its kind says", () => {
+  const found = referencesTo(codeRefDef(), "q1");
+  assert.ok(found.some((r) => r.path.includes("displayLogic")),
+    `the display rule on Q2 tests BRAND: ${JSON.stringify(found)}`);
+
+  const def = codeRefDef();
+  pruneReferencesTo(def, "q1");
+  assert.equal(def.questions[1].displayLogic, undefined,
+    "and it is pruned, rather than surviving as a rule that can never resolve");
+});
+
+test("a pipe is a reference — the respondent is the one who sees it break", () => {
+  const found = referencesTo(codeRefDef(), "q1");
+  const pipe = found.find((r) => r.effect.includes("{{Q1}}"));
+  assert.ok(pipe, `Q2's text pipes Q1: ${JSON.stringify(found)}`);
+  assert.ok(pipe!.where.includes("Q2"));
+
+  /* reported, not rewritten: the sentence is somebody's work */
+  const def = codeRefDef();
+  pruneReferencesTo(def, "q1");
+  assert.equal(def.questions[1].text, "Why {{Q1}}?");
+});
+
+test("a question nothing points at reports only its own page slot", () => {
+  /* the guard against the opposite failure: a reference check that sees a
+     reference everywhere is as useless as one that sees none */
+  const found = referencesTo(codeRefDef(), "q3");
+  assert.deepEqual(found.map((r) => r.kind), ["unplaced"]);
+});
+
+test("deleting a block still sees the codes of the questions inside it", () => {
+  const def = codeRefDef();
+  /* Q1 goes with the block; Q2 stays and names it by variable and by pipe */
+  const found = pruneReferencesToMany(def, ["q1"]);
+  assert.ok(found.some((r) => r.path.includes("displayLogic")));
+  assert.ok(found.some((r) => r.effect.includes("{{Q1}}")));
 });

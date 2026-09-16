@@ -134,6 +134,37 @@ interface Ctx {
   push(issue: Omit<LogicIssue, "questionId" | "questionCode">): void;
 }
 
+/**
+ * The questions a SET expression reads.
+ *
+ * A set expression is not a Condition — it is keyed on `kind`, not `type` — so
+ * `lintCondition` walks straight past one without looking at it. That is how a
+ * punch reading a deleted question stayed invisible: the only check anywhere
+ * near it was written for the wrong shape.
+ */
+function lintSetExpr(node: unknown, path: string, ctx: Ctx, depth = 0): void {
+  if (!node || typeof node !== "object" || depth > 12) return;
+  if (Array.isArray(node)) { for (const x of node) lintSetExpr(x, path, ctx, depth + 1); return; }
+  const n = node as Record<string, unknown>;
+  if (n.kind === "ref" && typeof n.questionId === "string") {
+    const src = ctx.def.questions.find((x) => x.id === n.questionId)
+      ?? getQuestionByCodeOrVar(ctx.def, n.questionId);
+    if (!src) {
+      ctx.push({ level: "error", path, message: `Punches from “${n.questionId}”, which does not exist in this survey.` });
+    } else if (!(src.options ?? []).length && !(src.rows ?? []).length
+      && !src.carryForward && !(src.listLogic ?? []).length && !(src.optionPipeline ?? []).length) {
+      /* a question whose list is BUILT at runtime — carry-forward, list logic,
+         a list operation — legitimately stores none, and `lintStructure` makes
+         the same exemption for the empty-option-list error */
+      ctx.push({
+        level: "warning", path,
+        message: `Punches from ${src.code}, which has no codes left to read — the rule writes nothing.`,
+      });
+    }
+  }
+  for (const v of Object.values(n)) if (v && typeof v === "object") lintSetExpr(v, path, ctx, depth + 1);
+}
+
 function lintCondition(
   c: Condition | undefined | null,
   path: string,
@@ -628,6 +659,21 @@ function lintQuestionLogicUnsafe(def: SurveyDefinition, q: Question): LogicIssue
   }
 
   lintCondition(q.displayLogic, "displayLogic", ctx);
+  /*
+   * AN AUTO-PUNCH RULE IS LOGIC, AND IT WAS THE ONLY KIND NOBODY CHECKED.
+   *
+   * The word "punch" did not appear in this file. A punch names a question in
+   * its `source` set expression and gates itself on a `when` condition, and
+   * both could point at a question that had been deleted, retyped or emptied
+   * of the codes they read — with `ignoreUnmatched` defaulting to true, so the
+   * rule then wrote nothing at all, silently. The derived variable a quota or
+   * a terminate depends on simply stops being filled, and the first sign of it
+   * is the wrong people finishing the survey.
+   */
+  for (const [i, p] of (q.punches ?? []).entries()) {
+    lintCondition(p.when, `punches[${i}].when`, ctx);
+    lintSetExpr(p.source, `punches[${i}].source`, ctx);
+  }
   /*
    * A follow-up probe is gated by ordinary Conditions, so they get the same
    * reference checks; its own shape rules (probe.ts) surface here as

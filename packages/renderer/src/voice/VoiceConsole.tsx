@@ -58,7 +58,17 @@ export interface VoiceConsoleProps {
   /** validation errors on screen, by question id */
   errors?: Record<string, string>;
   onChange(q: Question, value: unknown): void;
-  onOtherChange?(q: Question, text: string): void;
+  /**
+   * `code` names WHICH "Other, specify" box was spoken into.
+   *
+   * It used to be omitted, so the runtime fell back to `setOtherText`, which
+   * writes to the first flagged option whatever was asked. A question with
+   * three Other boxes collected all three answers under one key in a voice
+   * survey: say "Tesla" at Other 1 and "Rivian" at Other 2, and both read back
+   * as "Rivian". The console has always known the code — it is on the pending
+   * prompt it raised — and simply did not pass it on.
+   */
+  onOtherChange?(q: Question, text: string, code?: string | number): void;
   onNext(): void;
   onBack(): void;
   canGoBack: boolean;
@@ -292,7 +302,7 @@ export function VoiceConsole(p: VoiceConsoleProps) {
     if (pending) {
       if (pending.kind === "other") {
         if (cmd?.kind === "next" || cmd?.kind === "back" || cmd?.kind === "repeat") { setPending(null); }
-        else { p.onOtherChange?.(pending.q, transcript.trim()); setPending(null); setStatus(`Other: ${transcript.trim()}`); say("Thank you.", "ack"); return; }
+        else { p.onOtherChange?.(pending.q, transcript.trim(), pending.code); setPending(null); setStatus(`Other: ${transcript.trim()}`); say("Thank you.", "ack"); return; }
       } else if (cmd?.kind === "confirm" || (cmd?.kind === "none" && /^(no|nope)$/i.test(transcript.trim()))) {
         const yes = cmd.kind === "confirm" ? cmd.yes : false;
         if (yes) { commit(pending.q, pending.value, pending.transcript, pending.confidence); say("Thank you.", "ack"); }

@@ -58,6 +58,7 @@ import {
   FIELD_TYPES, nextCode, nextQuestionNaming, resequenceQuestionCodes,
   parsePastedOptions, planPaste, optionsToPaste, type PasteMode,
   stripHtmlText, referencesTo, pruneReferencesTo, referencesToMany, pruneReferencesToMany,
+  PIPE_TOKEN_RE,
   type QuestionReference,
 } from "@rescript/engine"; // also registers builtin question types
 import { isEmptyOptionLogic } from "@rescript/schema";
@@ -1042,6 +1043,64 @@ function InsertBar({
   );
 }
 
+/**
+ * A COPY IS A NEW QUESTION, AND EVERY ID INSIDE IT IS NEW TOO.
+ *
+ * Duplicating re-minted the question's own `id`, `code` and `variableName` and
+ * then deep-cloned everything under them — so the copy's options, rows,
+ * columns, punches, skip rules and option groups carried the ORIGINAL's
+ * element ids. Two questions then claimed the same option id, which is the
+ * identity the element registry, the live canvas, per-element analytics and
+ * the option-level logic editor all key on. Codes and labels are meant to be
+ * shared by a copy; ids are exactly the thing that must not be.
+ */
+function reidentify(copy: Record<string, any>): void {
+  const mint = (el: any, prefix: string) => {
+    if (el && typeof el === "object" && typeof el.id === "string") el.id = uid(prefix);
+  };
+  for (const [axis, prefix] of [["options", "opt"], ["rows", "row"], ["columns", "col"]] as const) {
+    for (const el of (copy[axis] ?? []) as any[]) {
+      mint(el, prefix);
+      /* a cell grid's column carries its own option list */
+      for (const o of (el?.options ?? []) as any[]) mint(o, "opt");
+    }
+  }
+  for (const key of ["punches", "skipLogic", "optionGroups", "validation", "listLogic", "optionPipeline"]) {
+    for (const el of (copy[key] ?? []) as any[]) mint(el, "r");
+  }
+}
+
+/**
+ * Rewrite every reference inside `node` that names something the copy renamed.
+ *
+ * Deliberately a string rewrite over the whole subtree rather than a list of
+ * known fields: a reference can be a question id in `sourceQuestionId`, a page
+ * id in `skipLogic[].target.ref`, a code inside a condition or a `{{Q3}}` in a
+ * sentence, and a hand-kept list of the places it can appear is how the last
+ * one gets forgotten. Only EXACT matches are rewritten, so a label that happens
+ * to contain a code is left alone; piped tokens are matched on their ref.
+ */
+function remapRefs(node: any, map: Map<string, string>, skipKeys = new Set<string>()): void {
+  if (Array.isArray(node)) { for (const x of node) remapRefs(x, map, skipKeys); return; }
+  if (!node || typeof node !== "object") return;
+  for (const key of Object.keys(node)) {
+    if (skipKeys.has(key)) continue;
+    const v = node[key];
+    if (typeof v === "string") {
+      if (map.has(v)) { node[key] = map.get(v)!; continue; }
+      if (v.includes("{{")) {
+        node[key] = v.replace(PIPE_TOKEN_RE, (whole, body: string) => {
+          const ref = body.trim().split(/[.[|]/)[0].trim();
+          const to = map.get(ref);
+          return to ? whole.replace(ref, to) : whole;
+        });
+      }
+      continue;
+    }
+    remapRefs(v, map, skipKeys);
+  }
+}
+
 export function QuestionsPanel() {
   const s = useStudio();
   const [pickerAt, setPickerAt] = React.useState<{ pageId: string; pos: number } | null>(null);
@@ -1216,6 +1275,21 @@ export function QuestionsPanel() {
     s.update((d) => {
       const hit = blockIn(d, blockId);
       if (!hit) return;
+      /**
+       * A COPIED BLOCK POINTS AT ITSELF, NOT AT THE BLOCK IT CAME FROM.
+       *
+       * Fresh page ids were minted here and nothing was rewritten to use them,
+       * so every `skipLogic.target.ref` in the copy still named the ORIGINAL
+       * block's page: a respondent who took the copy jumped back into the
+       * source. The same held for a display rule inside the block that tested
+       * a question inside the block — it went on testing the original.
+       *
+       * So the copy is made in two passes: mint the new identities first,
+       * building a map of what became what, then rewrite every reference the
+       * copies hold that names something inside the block.
+       */
+      const idMap = new Map<string, string>();
+      const copiedQuestions: any[] = [];
       const copyPage = (page: any) => {
         const newIds: string[] = [];
         for (const qid of page.questionIds) {
@@ -1225,10 +1299,18 @@ export function QuestionsPanel() {
           copy.id = uid("q");
           copy.code = `${q.code}_COPY`;
           copy.variableName = `${q.variableName}_COPY`;
+          reidentify(copy);
+          idMap.set(q.id, copy.id);
+          /* questions are named by code and by variable name as well as by id
+             — see `getQuestionByCodeOrVar` — and all three have to travel */
+          if (q.code) idMap.set(q.code, copy.code);
+          if (q.variableName) idMap.set(q.variableName, copy.variableName);
           d.questions.push(copy);
+          copiedQuestions.push(copy);
           newIds.push(copy.id);
         }
         const out: any = { type: "page", id: uid("page"), questionIds: newIds };
+        idMap.set(page.id, out.id);
         if (page.title) out.title = page.title;
         return out;
       };
@@ -1237,6 +1319,10 @@ export function QuestionsPanel() {
       const node = copies.length === 1
         ? { ...copies[0], ...(title ? { title } : {}) }
         : { type: "block", id: uid("block"), ...(title ? { title } : {}), children: copies };
+      idMap.set(hit.node.id, node.id);
+      /* `questionIds` are already the new ones; everything else is rewritten */
+      for (const q of copiedQuestions) remapRefs(q, idMap);
+      remapRefs(node, idMap, new Set(["questionIds"]));
       hit.parent.splice(hit.parent.indexOf(hit.node) + 1, 0, node);
     });
 
@@ -1428,6 +1514,7 @@ export function QuestionsPanel() {
       copy.id = uid("q");
       copy.code = `${q.code}_COPY`;
       copy.variableName = `${q.variableName}_COPY`;
+      reidentify(copy);
       d.questions.push(copy);
       for (const pg of listPages(d.flow as any[])) {
         const k = pg.node.questionIds.indexOf(id);

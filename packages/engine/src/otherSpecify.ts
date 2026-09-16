@@ -173,6 +173,23 @@ export function setOtherTextFor(
 ): void {
   const key = otherKeyFor(q.id, code, loop);
   if (text === "") {
+    /*
+     * INSIDE AN ITERATION, EMPTY IS STORED — IT IS NOT AN ABSENCE.
+     *
+     * `otherTextFor` walks outward through the enclosing iterations to the
+     * survey level, which is right for a box that was never filled in this
+     * iteration and wrong for one that was emptied: deleting the key made the
+     * read fall through, so clearing a box inside a loop put the OUTER
+     * iteration's text back on the screen and into the data. A respondent who
+     * typed "Tesla" at brand 1 and then cleared the box at brand 2 was
+     * recorded as having said "Tesla" twice.
+     *
+     * Presence decides, and it can only decide if the presence is written. At
+     * the survey level there is nothing to inherit from, so the key goes — and
+     * the legacy key with it, which is what stops text from an older response
+     * coming back.
+     */
+    if (loop) { state.answers[key] = "" as never; return; }
     delete state.answers[key];
     const flagged = otherOptions(q);
     if (flagged.length && String(flagged[0]!.code) === String(code)) {

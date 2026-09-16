@@ -14,7 +14,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Question as QuestionSchema, type Question } from "@rescript/schema";
+import { Question as QuestionSchema, effectiveResponseModel, resolveVariant, type Question } from "@rescript/schema";
 import { migrateQuestionType, staleFields, shapeHasAxis, settingsOf, SHAPES } from "./questionShape.js";
 
 const q = (over: Partial<Question> = {}): Question =>
@@ -213,6 +213,84 @@ test("a change within one response model moves nothing and says so", () => {
   assert.equal(m.safe, true);
   assert.equal(m.q.options.length, 3, "radio to dropdown is a rendering choice");
   assert.equal(m.changes.length, 0, "and there is nothing to warn about");
+});
+
+/* ------------------------------------------- the variant is part of the shape */
+
+const textQ = (variantId: string): Question => {
+  const v = resolveVariant(variantId)!;
+  return q({
+    type: v.baseType, variant: v.id, options: [],
+    validation: (v.defaults?.validation ?? []) as Question["validation"],
+    settings: { readOnly: false, hidden: false, ...(v.defaults?.settings ?? {}) } as Question["settings"],
+  });
+};
+
+test("EMAIL → PHONE swaps the whole preset, not half of it", () => {
+  /*
+   * The bug in the screenshot this pass started from: an input whose
+   * placeholder read `name@example.com` under the message "Please enter a
+   * valid phone number." Email's rule was dropped (Phone does not allow the
+   * `email` kind) and Phone's seeded in its place, while `settings.placeholder`
+   * survived because a value that is already set was read as the programmer's
+   * intent. It was the previous preset's.
+   */
+  const email = textQ("text.email");
+  assert.equal(email.settings.placeholder, "name@example.com");
+
+  const m = migrateQuestionType(email, resolveVariant("text.phone")!);
+  assert.equal(m.q.variant, "text.phone");
+  assert.equal(m.q.settings.placeholder, "+1 555 123 4567", "the placeholder belongs to the preset in force");
+  assert.deepEqual(m.q.validation.map((r) => r.kind), ["pattern"]);
+  assert.match(m.q.validation[0].message ?? "", /phone/i);
+
+  /* and a placeholder the programmer typed is NOT overwritten */
+  const edited = { ...email, settings: { ...email.settings, placeholder: "work address please" } } as Question;
+  const m2 = migrateQuestionType(edited, resolveVariant("text.phone")!);
+  assert.equal(m2.q.settings.placeholder, "work address please", "only a value still equal to the old default is re-derived");
+});
+
+test("OPEN END → EMAIL → NUMERIC → OPEN END leaves nothing of the types it passed through", () => {
+  const start = textQ("text.single_line");
+  const asEmail = migrateQuestionType(start, resolveVariant("text.email")!).q;
+  assert.equal(asEmail.variant, "text.email");
+
+  /* a bare base type, the way an import or a fixture changes one */
+  const asNumeric = migrateQuestionType(asEmail, { baseType: "numeric" });
+  assert.equal(asNumeric.q.type, "numeric");
+  assert.notEqual(asNumeric.q.variant, "text.email",
+    "a numeric question cannot carry a text variant — it decides the response model");
+  assert.equal(resolveVariant(asNumeric.q.variant!)?.baseType, "numeric");
+  assert.equal(asNumeric.q.settings.placeholder, undefined, "the email placeholder is gone");
+  assert.deepEqual(asNumeric.q.validation, [], "and so is the email rule");
+  assert.deepEqual(staleFields(asNumeric.q), [], "the migrated question is clean by its own account");
+
+  const back = migrateQuestionType(asNumeric.q, { baseType: "open_text" });
+  assert.equal(resolveVariant(back.q.variant!)?.baseType, "open_text");
+  assert.deepEqual(staleFields(back.q), []);
+});
+
+test("a variant that cannot store as the new base type is not the target, however it was named", () => {
+  const email = textQ("text.email");
+  const m = migrateQuestionType(email, { baseType: "numeric", id: "text.email" });
+  assert.equal(m.q.type, "numeric");
+  assert.notEqual(m.q.variant, "text.email");
+  assert.equal(effectiveResponseModel(m.q), "numeric",
+    "the response model follows the variant, so an impossible variant is an impossible question");
+});
+
+test("staleFields sees a validation rule the variant cannot use — it never could before", () => {
+  /*
+   * `staleFields` passes a bare base type, and the kind filter used to run only
+   * when the CALLER handed over a `validations` list. So the one function whose
+   * job is to find stale configuration was structurally unable to see any.
+   */
+  const bad = q({ type: "open_text", variant: "text.email", options: [],
+    validation: [{ kind: "min_value", value: 3 }] as Question["validation"] });
+  const found = staleFields(bad);
+  assert.equal(found.length, 1);
+  assert.equal(found[0].field, "validation");
+  assert.match(found[0].detail, /min_value/);
 });
 
 test("the input is never mutated", () => {

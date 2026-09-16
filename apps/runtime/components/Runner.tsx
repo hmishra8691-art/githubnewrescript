@@ -1394,11 +1394,13 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
             if (r.logs.length) setLogs((l) => [...l, ...r.logs]);
             force();
           }}
-          onOtherChange={(q, t) => {
+          onOtherChange={(q, t, code) => {
             /* through the engine, like every other writer — this line used to
                spell the key by hand and is exactly how a second spelling of it
-               would drift again */
-            setOtherText(state, q, t, pageStep.loop ?? null);
+               would drift again. The CODE names the box: without it every
+               Other box on the question collapsed onto the first one. */
+            if (code == null) setOtherText(state, q, t, pageStep.loop ?? null);
+            else setOtherTextFor(state, q, code, t, pageStep.loop ?? null);
             force();
           }}
           onNext={conversational ? convoNext : handleNext}

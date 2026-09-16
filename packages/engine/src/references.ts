@@ -55,6 +55,7 @@
  */
 
 import type { SurveyDefinition } from "@rescript/schema";
+import { pipeTokensIn } from "./pipingTokens.js";
 
 /** Field names that hold a question id, wherever they appear. */
 const ID_KEYS = new Set([
@@ -102,6 +103,19 @@ export interface QuestionReference {
 
 interface Ctx {
   id: string;
+  /**
+   * The id AND the two names the question answers to.
+   *
+   * `getQuestionByCodeOrVar` resolves a reference by `id`, `code` or
+   * `variableName` — those three are one identity at runtime. This walk only
+   * ever compared the id, so a condition stored as `{ kind: "variable", ref:
+   * "Q5" }` (which the Logic Builder writes, and which `lintLogic` treats
+   * exactly like a question source) survived the prune and then resolved to
+   * nothing. A rule that cannot resolve its left-hand side is false, so the
+   * question depending on it silently stopped being shown, and the delete
+   * dialog had reported that nothing referred to Q5.
+   */
+  names: Set<string>;
   out: QuestionReference[];
   /** words for the thing currently being walked, e.g. "Q7" or "Quota 'Age'" */
   owner: string;
@@ -206,7 +220,14 @@ function walkFields(node: any, ctx: Ctx, path: string, protect: boolean): boolea
    * loss, protected element or not.
    */
   for (const key of ID_KEYS) if (node[key] === ctx.id) return true;
-  if (node.kind === "question" && node.ref === ctx.id) return true;
+  /*
+   * A condition leaf names its subject in `ref`. The `kind` beside it says how
+   * the reference was authored — `question` from the picker, `variable` from
+   * the expression editor, and both resolve through the same lookup — so the
+   * KIND is not what decides whether this is a reference; the ref is.
+   */
+  if (typeof node.ref === "string" && node.kind !== "embedded" && node.kind !== "calc"
+    && ctx.names.has(node.ref)) return true;
 
   for (const key of Object.keys(node)) {
     const child = node[key];
@@ -286,10 +307,22 @@ function walkFields(node: any, ctx: Ctx, path: string, protect: boolean): boolea
  * left in place: removing it belongs to the caller, which knows whether it is
  * deleting, replacing, or only asking what would happen.
  */
-function run(def: SurveyDefinition, id: string): QuestionReference[] {
+/** The id and the two names the question answers to — see `Ctx.names`. */
+function namesOf(def: SurveyDefinition, id: string): Set<string> {
+  const target = (def.questions ?? []).find((q) => q.id === id);
+  const names = new Set<string>([id]);
+  if (target?.code) names.add(target.code);
+  if (target?.variableName) names.add(target.variableName);
+  return names;
+}
+
+function run(def: SurveyDefinition, id: string, known?: Set<string>): QuestionReference[] {
   const out: QuestionReference[] = [];
-  const ctx: Ctx = { id, out, owner: "the survey", field: "" };
+  const names = known ?? namesOf(def, id);
+  const ctx: Ctx = { id, names, out, owner: "the survey", field: "" };
+  const pipes = pipesNaming(def, names);
   walk(def as any, ctx, "survey", true);
+  out.push(...pipes);
   /* the same field reported twice (once per nesting level) reads as noise */
   const seen = new Set<string>();
   return out.filter((r) => {
@@ -298,6 +331,48 @@ function run(def: SurveyDefinition, id: string): QuestionReference[] {
     seen.add(k);
     return true;
   });
+}
+
+/**
+ * PIPES ARE REFERENCES TOO, AND THEY ARE THE ONES A RESPONDENT SEES.
+ *
+ * A pipe lives inside a string — `Earlier you said {{Q5}} — why?` — and the
+ * walk above only inspects objects, so deleting Q5 left every one of them
+ * untouched while the dialog said "Nothing else in this survey refers to it."
+ * It then resolved to the empty string for every respondent, so the sentence
+ * they read was "Earlier you said — why?" and nothing anywhere had warned.
+ *
+ * They are REPORTED and not rewritten, on purpose. A pipe is part of a
+ * sentence somebody composed; deleting the token silently leaves a gap in it,
+ * and deleting the sentence throws away work. What the programmer needs is to
+ * be told before pressing Delete, which is exactly what was missing.
+ */
+function pipesNaming(def: SurveyDefinition, names: Set<string>): QuestionReference[] {
+  const out: QuestionReference[] = [];
+  const seen = new Set<string>();
+  const scan = (value: unknown, owner: string, path: string): void => {
+    if (typeof value === "string") {
+      if (!value.includes("{{")) return;
+      for (const t of pipeTokensIn(value)) {
+        if (!names.has(t.ref)) continue;
+        const k = `${owner}|${t.raw}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push({
+          where: `${owner} — the text`, path, kind: "cleared",
+          effect: `${t.text} pipes nothing, so the sentence reads with a gap where it was`,
+        });
+      }
+      return;
+    }
+    if (Array.isArray(value)) { value.forEach((v, i) => scan(v, owner, `${path}[${i}]`)); return; }
+    if (!isObj(value)) return;
+    const next = typeof (value as any).code === "string" && typeof (value as any).variableName === "string"
+      ? String((value as any).code) : owner;
+    for (const key of Object.keys(value)) scan((value as any)[key], next, `${path}.${key}`);
+  };
+  scan(def, "the survey", "survey");
+  return out;
 }
 
 /**
@@ -332,9 +407,13 @@ export function pruneReferencesTo(def: SurveyDefinition, questionId: string): Qu
  */
 export function pruneReferencesToMany(def: SurveyDefinition, questionIds: string[]): QuestionReference[] {
   const gone = new Set(questionIds);
+  /* the codes have to be read BEFORE the questions go — a deleted question
+     cannot tell anyone what it was called, and the references that name it by
+     code are precisely the ones in the questions that remain */
+  const names = new Map(questionIds.map((id) => [id, namesOf(def, id)]));
   def.questions = (def.questions ?? []).filter((q) => !gone.has(q.id));
   const out: QuestionReference[] = [];
-  for (const id of questionIds) out.push(...run(def, id));
+  for (const id of questionIds) out.push(...run(def, id, names.get(id)));
   const seen = new Set<string>();
   return out.filter((r) => {
     const k = `${r.path}|${r.kind}|${r.where}`;

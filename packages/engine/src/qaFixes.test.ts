@@ -240,3 +240,76 @@ test("matrix rows keep their anchor flags through the engine", () => {
     assert.equal(String(rows[rows.length - 1].code), "rn", `seed ${seed} keeps the anchored row last`);
   }
 });
+
+/* ------------------------------- structured answers in respondent-facing text */
+
+/**
+ * `[object Object]` in a question a respondent is reading.
+ *
+ * Everything past the code-resolution point in `resolvePiping` treated the
+ * answer as a code or a list of codes: `const codes = Array.isArray(value) ?
+ * value : [value]`, with no object guard. A matrix, an allocation, a composite
+ * or a hotspot answer is an object, so it was wrapped as one "code" and handed
+ * to `String()` — by `.value`, `.code`, `.first`, `.last` and `.rank`, and by
+ * the default branch for an array of objects.
+ */
+const structuredDef = () => SurveyDefinition.parse({
+  meta: { id: "s", code: "S", title: "t", version: "1" },
+  questions: [
+    {
+      id: "q1", code: "Q1", variableName: "Q1", type: "matrix_single", text: "Rate these",
+      options: [{ code: "1", label: "Bad" }, { code: "4", label: "Very good" }],
+      rows: [{ code: "speed", label: "Speed" }, { code: "price", label: "Price" }],
+    },
+    {
+      id: "q2", code: "Q2", variableName: "Q2", type: "allocation", text: "Split 100",
+      options: [{ code: "a", label: "Apple" }, { code: "b", label: "Banana" }],
+    },
+    {
+      id: "q3", code: "Q3", variableName: "Q3", type: "matrix_multi", text: "Which apply",
+      options: [{ code: "1", label: "Cheap" }, { code: "2", label: "Fast" }],
+      rows: [{ code: "r1", label: "Weekdays" }],
+    },
+  ],
+  flow: [{ type: "page", id: "p", questionIds: ["q1", "q2", "q3"] }],
+});
+
+test("a matrix pipes as words, never as [object Object] — and as LABELS, not codes", () => {
+  const def = structuredDef();
+  const ctx = ctxFor(def, { q1: { speed: "4", price: "1" } });
+  for (const token of ["{{Q1}}", "{{Q1.value}}", "{{Q1.code}}", "{{Q1.first}}", "{{Q1.last}}", "{{Q1.rank}}", "{{Q1.labels}}"]) {
+    const out = resolvePiping(token, ctx);
+    assert.ok(!out.includes("[object"), `${token} rendered ${out}`);
+    assert.ok(!/undefined|null|NaN/.test(out), `${token} rendered ${out}`);
+  }
+  assert.equal(resolvePiping("{{Q1}}", ctx), "Speed: Very good, Price: Bad",
+    "the respondent chose Very good, so that is what the next question says");
+  assert.equal(resolvePiping("{{Q1.count}}", ctx), "2");
+  /* one row on its own still resolves through the row code */
+  assert.equal(resolvePiping("{{Q1[speed]}}", ctx), "Very good");
+});
+
+test("an allocation pipes its OPTION labels — it is not keyed by row", () => {
+  const def = structuredDef();
+  const ctx = ctxFor(def, { q2: { a: 60, b: 40 } });
+  assert.equal(resolvePiping("{{Q2}}", ctx), "Apple: 60, Banana: 40");
+  assert.ok(!resolvePiping("{{Q2.value}}", ctx).includes("[object"));
+});
+
+test("a multi-select grid row holds an ARRAY, and it reads as a list of labels", () => {
+  const def = structuredDef();
+  const ctx = ctxFor(def, { q3: { r1: ["1", "2"] } });
+  assert.equal(resolvePiping("{{Q3}}", ctx), "Weekdays: Cheap, Fast");
+  assert.ok(!resolvePiping("{{Q3}}", ctx).includes("[object"));
+});
+
+test("missing, empty, zero and false stay four different things", () => {
+  const def = structuredDef();
+  assert.equal(resolvePiping("{{Q1}}", ctxFor(def, {})), "", "unanswered is empty, not the word undefined");
+  assert.equal(resolvePiping("{{Q1}}", ctxFor(def, { q1: null })), "");
+  assert.equal(resolvePiping("{{Q1}}", ctxFor(def, { q1: {} })), "", "an object with nothing in it says nothing");
+  assert.equal(resolvePiping("{{Q1.count}}", ctxFor(def, { q1: { speed: "", price: null } })), "0",
+    "and empty cells are not counted as answers");
+  assert.equal(resolvePiping("{{Q2.value}}", ctxFor(def, { q2: { a: 0 } })), "Apple: 0",
+    "zero is a real allocation");
+});

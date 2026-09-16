@@ -44,7 +44,10 @@
  */
 
 import type { Question, ResponseModel, QuestionVariantDef } from "@rescript/schema";
-import { effectiveResponseModel, responseModelOf, allowedValidationKinds } from "@rescript/schema";
+import {
+  effectiveResponseModel, responseModelOf, allowedValidationKinds,
+  resolveVariant, variantForLegacyType,
+} from "@rescript/schema";
 
 /** The three list-valued fields a question can have. */
 export type QuestionAxis = "options" | "rows" | "columns";
@@ -319,6 +322,104 @@ const DONOR: Record<QuestionAxis, readonly QuestionAxis[]> = {
 
 function label(axis: QuestionAxis) { return AXIS_LABEL[axis].toLowerCase(); }
 
+/* ------------------------------------------------ which variant is in force */
+
+/**
+ * THE TARGET OF A TYPE CHANGE IS A VARIANT, WHETHER OR NOT THE CALLER NAMED ONE.
+ *
+ * `q.variant` is not a label either: it decides the response model
+ * (`effectiveResponseModel`), the renderer, the capabilities the properties
+ * panel offers, the validation kinds that are allowed, and the placeholder the
+ * respondent reads. So a question carrying a variant that does not belong to
+ * its type is not a cosmetic inconsistency — it is a question whose shape two
+ * different readers will answer differently.
+ *
+ * That is what used to happen. The only line that touched the variant was
+ *
+ *     if ("id" in to && to.id) q.variant = to.id;
+ *
+ * so every caller that changed the BASE TYPE without naming a variant — an
+ * import, a fixture, `staleFields`, the carousel config — left the old variant
+ * in place. `open_text` + `text.email` became `numeric` + `text.email`: a
+ * numeric question whose effective response model is still text, offering the
+ * email validators and the `name@example.com` placeholder.
+ *
+ * It also meant the two things that ARE gated on the variant — the allowed
+ * validation kinds and the capability-gated settings — were skipped entirely
+ * on those paths, because the caller passed no `validations` and no
+ * `capabilities`. `staleFields` takes exactly that path, so the lint whose job
+ * is to find stale configuration could never see either of them.
+ *
+ * So the target is resolved here instead of trusted:
+ *
+ *   · a named variant wins (following `supersededBy`);
+ *   · otherwise the CURRENT variant is kept if it belongs to the new base type
+ *     — changing a preset's base type to its own base type is not a change;
+ *   · otherwise the base type's default variant;
+ *   · and only a base type with no variant at all leaves `variant` unset.
+ */
+interface ResolvedTarget {
+  baseType: string;
+  variant?: QuestionVariantDef;
+  capabilities?: readonly string[];
+  validations?: readonly string[];
+  responseModel?: ResponseModel;
+  /** the variant was guessed for a question that had none — see below */
+  invented: boolean;
+}
+
+function resolveTarget(
+  from: { type: string; variant?: string | null },
+  to: QuestionVariantDef | { baseType: string; id?: string; capabilities?: readonly string[]; validations?: readonly string[]; responseModel?: ResponseModel },
+): ResolvedTarget {
+  const named = "id" in to && to.id ? resolveVariant(to.id) : undefined;
+  /* a named variant is only the target if it stores as the type being asked
+     for; `{ baseType: "numeric", id: "text.email" }` names an impossibility */
+  const exact = named && named.baseType === to.baseType ? named : undefined;
+  const current = resolveVariant(from.variant ?? undefined);
+  const kept = !exact && current?.baseType === to.baseType ? current : undefined;
+  const fallback = !exact && !kept ? resolveVariant(variantForLegacyType(to.baseType)) : undefined;
+  const variant = exact ?? kept ?? fallback;
+  return {
+    baseType: to.baseType,
+    variant,
+    /*
+     * The question never had a variant and nobody named one, so this is the
+     * registry's best guess at what a legacy question of this base type
+     * probably is — not a fact about the question. Capability-gated pruning is
+     * skipped on a guess (see `invented` at the call site): `image_select`
+     * backs both a single-choice and a multiple-choice variant, and picking
+     * the wrong one would delete a `maxSelections` the question is using.
+     */
+    invented: !exact && !kept && !from.variant,
+    /* an explicitly passed list still wins: a caller describing a variant this
+       registry has never heard of knows more about it than the registry does */
+    capabilities: ("capabilities" in to && to.capabilities) || variant?.capabilities,
+    validations: ("validations" in to && to.validations) || variant?.validations,
+    responseModel: ("responseModel" in to && to.responseModel) || variant?.responseModel,
+  };
+}
+
+/** Structural equality, ignoring `id` and keys explicitly set to undefined —
+ *  a rule stored on a question carries an id that a variant's default has not. */
+function sameValue(a: unknown, b: unknown): boolean {
+  const strip = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(strip);
+    if (v && typeof v === "object") {
+      const out: Record<string, unknown> = {};
+      for (const k of Object.keys(v as object).sort()) {
+        if (k === "id") continue;
+        const val = (v as Record<string, unknown>)[k];
+        if (val === undefined) continue;
+        out[k] = strip(val);
+      }
+      return out;
+    }
+    return v;
+  };
+  return JSON.stringify(strip(a)) === JSON.stringify(strip(b));
+}
+
 /** A matrix's shared scale, written as the one column a cell grid needs. */
 function scaleAsColumn(q: Question, model: ResponseModel): any {
   const responseType =
@@ -355,18 +456,46 @@ export function migrateQuestionType(
   to: QuestionVariantDef | { baseType: string; id?: string; capabilities?: readonly string[]; validations?: readonly string[]; responseModel?: ResponseModel },
 ): TypeMigration {
   const q: Question = JSON.parse(JSON.stringify(input));
+  const fromVariant = resolveVariant(input.variant ?? undefined);
+  const target = resolveTarget(input, to);
   const fromModel = effectiveResponseModel(input);
-  const toModel = ("responseModel" in to && to.responseModel) || responseModelOf(to.baseType);
+  const toModel = target.responseModel || responseModelOf(target.baseType);
   const fromSpec = SHAPES[fromModel] ?? SHAPES.none;
   const toSpec = SHAPES[toModel] ?? SHAPES.none;
-  const caps = new Set<string>(("capabilities" in to && to.capabilities) || []);
-  const hasCaps = caps.size > 0;
+  const caps = new Set<string>(target.capabilities ?? []);
+  /*
+   * Only prune against capabilities and validation kinds when they are KNOWN.
+   * A guessed variant (`invented`) is authority enough to decide what a
+   * question BECOMES — a type change is a deliberate act and the old settings
+   * belong to the old type — but not to sit in judgement on a question nobody
+   * is changing, which is the case `staleFields` walks into for every legacy
+   * question in every survey written before variants existed.
+   */
+  const judge = !target.invented || input.type !== target.baseType;
+  const hasCaps = caps.size > 0 && judge;
   const changes: MigrationChange[] = [];
   const kept: string[] = [];
   const add = (kind: ChangeKind, field: string, detail: string) => changes.push({ kind, field, detail });
 
-  q.type = to.baseType;
-  if ("id" in to && to.id) q.variant = to.id;
+  q.type = target.baseType;
+  if (target.variant) {
+    if (target.variant.id !== input.variant) q.variant = target.variant.id;
+  } else if (q.variant) {
+    /* nothing in the registry stores as this base type, so the variant on the
+       question cannot be right whatever it was */
+    delete (q as { variant?: string | null }).variant;
+  }
+  /*
+   * A variant REPLACED by another is not reported: the dialog's own heading
+   * already says what the question is becoming, and whatever the old variant
+   * had configured is reported below, field by field, where it means
+   * something. A variant DROPPED with nothing to put in its place is reported,
+   * because it is the renderer the respondent met a moment ago going away with
+   * no successor named.
+   */
+  if (fromVariant && !target.variant) {
+    add("removed", "variant", `${fromVariant.name} — ${target.baseType} has no variant of its own`);
+  }
 
   /* ------------------------------------------------------- 1. the three lists */
 
@@ -518,7 +647,17 @@ export function migrateQuestionType(
   /* A punch writes codes into a code-bearing list. With no list, there is
      nowhere for it to write — and a punch that silently does nothing is the
      kind of dead configuration this pass exists to stop. */
-  if (q.punches?.length && !toSpec.axes.length) {
+  /*
+   * …and "has an axis" is not the same as "has codes". A single-select that
+   * becomes a cell grid still HAS an axis (its columns), but its options were
+   * emptied a moment ago, so a punch that wrote option codes now writes them
+   * nowhere. `PunchRule.ignoreUnmatched` defaults to true, so it does that
+   * silently — the derived variable simply stops being written, and the quota
+   * or the terminate that reads it starts behaving differently with nothing
+   * anywhere to say why.
+   */
+  const codesLeft = !!(q.options?.length || q.rows?.length);
+  if (q.punches?.length && (!toSpec.axes.length || !codesLeft)) {
     add("removed", "punches", `${q.punches.length} auto-punch rule(s) — ${toSpec.label} holds no codes to punch`);
     q.punches = [];
   } else if (q.punches?.length) kept.push("Auto punch");
@@ -564,7 +703,15 @@ export function migrateQuestionType(
   /* --------------------------------------------------------- 6. option flags */
 
   if (optionsSurvive && hasCaps && !caps.has("exclusive_options")) {
-    const SPECIAL = ["exclusive", "none_of_above", "dont_know", "refused"];
+    /*
+     * `exclusive_options` governs the MULTI-SELECT idea — "tick this and
+     * nothing else" — and that is `exclusive` and `none_of_above`. "Don't
+     * know" and "Refused" are answer codes, not selection rules: every choice
+     * question in survey research carries them, including the single-selects
+     * and dropdowns that have no exclusivity to configure, and deleting them
+     * on a type change would quietly change what the data can say.
+     */
+    const SPECIAL = ["exclusive", "none_of_above"];
     let hit = 0;
     q.options = (q.options ?? []).map((o) => {
       const flags = (o.flags ?? []).filter((f) => !SPECIAL.includes(f));
@@ -578,8 +725,11 @@ export function migrateQuestionType(
 
   const before = q.validation ?? [];
   if (before.length) {
-    const kinds = ("validations" in to && to.validations)
-      ? allowedValidationKinds(to.validations as any, to.validations as any)
+    /* `target.validations` is resolved rather than taken on trust, so this
+       runs on the paths that pass a bare base type too — `staleFields` among
+       them, which is the one whose whole job is to find rules like these */
+    const kinds = target.validations && judge
+      ? allowedValidationKinds(target.validations, target.validations)
       : null;
     const survivors = kinds ? before.filter((r) => kinds.includes(r.kind)) : before;
     if (survivors.length !== before.length) {
@@ -588,6 +738,91 @@ export function migrateQuestionType(
         `${gone.length} validation rule(s) — ${gone.map((r) => r.kind).join(", ")}`);
     } else if (before.length) kept.push("Validation");
     q.validation = survivors;
+  }
+
+  /* --------------------------------- 8. configuration the OLD variant seeded */
+
+  /**
+   * A PRESET'S DEFAULTS BELONG TO THE PRESET, NOT TO THE PROGRAMMER.
+   *
+   * Every variant may carry `defaults` — Email seeds a `name@example.com`
+   * placeholder and an `email` rule, Phone seeds `+1 555 123 4567` and a
+   * pattern rule with the message "Please enter a valid phone number." They are
+   * applied on creation and on conversion, and from that moment they were
+   * indistinguishable from something a person had typed.
+   *
+   * So switching Email → Phone produced a question with the EMAIL placeholder
+   * and the PHONE error message, which is the screenshot this pass started
+   * from. The email rule was dropped (Phone does not allow `email`), the phone
+   * rule was seeded in its place — and `applyVariantDefaults` would not replace
+   * `settings.placeholder`, because a value that is already set is treated as
+   * the programmer's intent. It was the previous preset's intent.
+   *
+   * Nothing here can tell those apart in general, but it does not have to: a
+   * value that is still EXACTLY what the old variant seeded has not been
+   * touched since, and a value that differs has. The first kind is re-derived
+   * from the new variant; the second kind is left alone, which is why a
+   * hand-written placeholder survives a preset change and a stale one does not.
+   */
+  if (fromVariant && target.variant && fromVariant.id !== target.variant.id) {
+    const od = fromVariant.defaults;
+    const nd = target.variant.defaults;
+
+    if (od?.settings) {
+      const cur = (q.settings ?? {}) as Record<string, unknown>;
+      for (const [k, seeded] of Object.entries(od.settings)) {
+        if (!(k in cur) || !sameValue(cur[k], seeded)) continue;
+        const next = nd?.settings?.[k];
+        if (next === undefined) {
+          delete cur[k];
+          add("removed", `settings.${k}`,
+            `${SETTING_LABEL[k] ?? k} — it came from ${fromVariant.name} and ${target.variant.name} does not set it`);
+        } else if (!sameValue(next, seeded)) {
+          cur[k] = next;
+          add("transformed", `settings.${k}`,
+            `${SETTING_LABEL[k] ?? k} is now ${target.variant.name}'s`);
+        }
+      }
+      q.settings = cur as Question["settings"];
+    }
+
+    /*
+     * The same rule for validation, and it is the other half of the screenshot:
+     * Phone's `pattern` rule is a kind Email also allows, so the kind filter
+     * above has no reason to drop it — but nobody wrote it, Phone did.
+     */
+    if (od?.validation?.length && q.validation?.length) {
+      const nextRules = nd?.validation ?? [];
+      const survivors = q.validation.filter((r) =>
+        !od.validation!.some((seeded) => sameValue(r, seeded))
+        || nextRules.some((seeded) => sameValue(r, seeded)));
+      if (survivors.length !== q.validation.length) {
+        const gone = q.validation.length - survivors.length;
+        q.validation = survivors as Question["validation"];
+        add("removed", "validation",
+          `${gone} validation rule(s) that ${fromVariant.name} had set up`);
+      }
+    }
+    /* …and then the new variant's own rules land, so the question is left
+       configured as the type it now is rather than merely stripped of the
+       type it was */
+    if (nd?.validation?.length && !(q.validation ?? []).length) {
+      q.validation = nd.validation.map((r) => ({ ...r })) as Question["validation"];
+      add("transformed", "validation", `${target.variant.name}'s own validation`);
+    }
+
+    for (const field of ["instruction", "text"] as const) {
+      const seeded = od?.[field];
+      if (seeded === undefined || !sameValue(q[field], seeded)) continue;
+      const next = nd?.[field];
+      if (next === undefined) {
+        (q as Record<string, unknown>)[field] = "";
+        add("removed", field, `The ${field} came from ${fromVariant.name}`);
+      } else if (next !== seeded) {
+        (q as Record<string, unknown>)[field] = next;
+        add("transformed", field, `The ${field} is now ${target.variant.name}'s`);
+      }
+    }
   }
 
   /* `required` is meaningful for every shape that takes an answer; a
@@ -601,7 +836,7 @@ export function migrateQuestionType(
   return {
     q,
     from: { type: input.type, variant: input.variant ?? undefined, model: fromModel, label: fromSpec.label },
-    to: { type: to.baseType, variant: ("id" in to && to.id) || undefined, model: toModel, label: toSpec.label },
+    to: { type: target.baseType, variant: target.variant?.id, model: toModel, label: toSpec.label },
     safe: fromModel === toModel,
     changes,
     kept: [...new Set(kept)],
