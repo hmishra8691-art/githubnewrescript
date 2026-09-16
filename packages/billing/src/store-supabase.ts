@@ -193,7 +193,9 @@ export class SupabaseMeterStore implements MeterStore {
   async settle(reservationId: string, event: UsageEventInput, readOnlyThreshold: number) {
     const { data, error } = await this.db.rpc("rescript_billing_settle", { p_reservation: reservationId, p_event: event, p_read_only_threshold: readOnlyThreshold });
     if (error) fail("settle", error);
-    return { event: usageFromRow(data.event), wallet: walletFromRow(data.wallet) };
+    /* absent on a database that has not had 0034 yet: an old server never
+       reports a replay, which is the behaviour every caller had before */
+    return { event: usageFromRow(data.event), wallet: walletFromRow(data.wallet), replayed: !!data.replayed };
   }
   async release(reservationId: string, status: "released" | "expired" = "released") {
     const { error } = await this.db.rpc("rescript_billing_release", { p_reservation: reservationId, p_status: status });
@@ -202,7 +204,7 @@ export class SupabaseMeterStore implements MeterStore {
   async record(event: UsageEventInput, readOnlyThreshold: number) {
     const { data, error } = await this.db.rpc("rescript_billing_record", { p_event: event, p_read_only_threshold: readOnlyThreshold });
     if (error) fail("record", error);
-    return { event: usageFromRow(data.event), wallet: data.wallet ? walletFromRow(data.wallet) : null };
+    return { event: usageFromRow(data.event), wallet: data.wallet ? walletFromRow(data.wallet) : null, replayed: !!data.replayed };
   }
   /* ------------------------------------------------- project spending policies */
 

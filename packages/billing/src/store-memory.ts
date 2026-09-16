@@ -125,9 +125,11 @@ export class MemoryMeterStore implements MeterStore {
     if (r.status !== "held") throw new Error(`reservation already ${r.status}`);
     const w = this.wallets.get(r.walletId); if (!w) throw new Error("unknown wallet");
     w.reserved = money6(Math.max(0, w.reserved - r.reservedAmount));
-    r.status = "settled"; r.actualCharge = event.customerCharge; r.settledAt = this.now();
-    const ev = this.push(event);
-    if (event.customerCharge !== 0) {
+    const { event: ev, replayed } = this.push(event);
+    /* a replayed event was charged once already: the hold still comes off (it
+       belongs to THIS attempt), the money does not move a second time */
+    r.status = "settled"; r.actualCharge = replayed ? 0 : event.customerCharge; r.settledAt = this.now();
+    if (!replayed && event.customerCharge !== 0) {
       w.balance = money6(w.balance - event.customerCharge); w.totalUsed = money6(w.totalUsed + event.customerCharge);
       /* the ledger line names the PROJECT that spent, not the wallet that paid:
          a central wallet has no project, and taking it from there would leave
@@ -135,8 +137,8 @@ export class MemoryMeterStore implements MeterStore {
       this.ledger.push({ id: randomUUID(), walletId: w.id, customerId: w.customerId, surveyId: event.surveyId ?? w.surveyId, kind: "debit", amount: money6(-event.customerCharge), balanceAfter: w.balance, reason: event.eventType, note: null, usageEventId: ev.id, referenceId: null, transferId: null, createdBy: event.userId, createdAt: this.now(), expiresAt: null });
     }
     this.touch(w, readOnlyThreshold);
-    if (r.surveyId) this.spend(r.surveyId, w.customerId, event.customerCharge, r.reservedAmount);
-    return { event: ev, wallet: w };
+    if (r.surveyId) this.spend(r.surveyId, w.customerId, replayed ? 0 : event.customerCharge, r.reservedAmount);
+    return { event: ev, wallet: w, replayed };
   }
 
   async release(reservationId: string, status: "released" | "expired" = "released") {
@@ -185,15 +187,15 @@ export class MemoryMeterStore implements MeterStore {
   }
 
   async record(event: UsageEventInput, readOnlyThreshold: number) {
-    const ev = this.push(event);
+    const { event: ev, replayed } = this.push(event);
     const w = event.walletId ? this.wallets.get(event.walletId) ?? null : null;
-    if (w && event.customerCharge !== 0 && !event.adjustsEventId) {
+    if (!replayed && w && event.customerCharge !== 0 && !event.adjustsEventId) {
       w.balance = money6(w.balance - event.customerCharge); w.totalUsed = money6(w.totalUsed + event.customerCharge);
       this.ledger.push({ id: randomUUID(), walletId: w.id, customerId: w.customerId, surveyId: event.surveyId ?? w.surveyId, kind: "debit", amount: money6(-event.customerCharge), balanceAfter: w.balance, reason: event.eventType, note: null, usageEventId: ev.id, referenceId: null, transferId: null, createdBy: event.userId, createdAt: this.now(), expiresAt: null });
       this.touch(w, readOnlyThreshold);
       if (event.surveyId) this.spend(event.surveyId, w.customerId, event.customerCharge, 0);
     }
-    return { event: ev, wallet: w };
+    return { event: ev, wallet: w, replayed };
   }
 
   async expireReservations(now: Date) {
@@ -274,9 +276,24 @@ export class MemoryMeterStore implements MeterStore {
     return r;
   }
 
-  private push(event: UsageEventInput): UsageEvent {
+  /**
+   * Write the event — unless one with the same `idempotencyKey` is already
+   * here, in which case that one IS the event and nothing else may happen.
+   *
+   * The database store has had this since 0031 (`usage_events_idempotency_idx`
+   * plus `rescript_billing_insert_usage`); this one had nothing, so the meter
+   * kept one contract against Postgres and a different one against memory —
+   * and the sandbox, the tests and every installation without Supabase got
+   * the double charge the key exists to prevent.
+   */
+  private push(event: UsageEventInput): { event: UsageEvent; replayed: boolean } {
+    const key = event.idempotencyKey ?? null;
+    if (key) {
+      const existing = this.usage.find((e) => e.idempotencyKey === key);
+      if (existing) return { event: existing, replayed: true };
+    }
     const ev: UsageEvent = { ...event, id: randomUUID(), createdAt: this.now() };
     this.usage.push(ev);
-    return ev;
+    return { event: ev, replayed: false };
   }
 }

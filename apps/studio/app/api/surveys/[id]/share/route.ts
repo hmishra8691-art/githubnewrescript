@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { GRANTABLE_ROLES, isProjectRole, parseIdentifier, ROLE_LABEL } from "@rescript/access";
+import { can, GRANTABLE_ROLES, isProjectRole, parseIdentifier, ROLE_LABEL } from "@rescript/access";
 import { newInvitationToken, supabaseService } from "@/lib/authServer";
 import { audit, isFailure, notifyProject, requireProject } from "@/lib/guard";
 import { sendMail } from "@/lib/mail";
@@ -122,12 +122,45 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (person.status !== "active") {
       return NextResponse.json({ error: `${person.full_name}'s account is disabled.` }, { status: 409 });
     }
-    const { error } = await db
-      .from("project_members")
-      .upsert(
-        { survey_id: params.id, user_id: person.id, role, added_by: user.userId, updated_at: new Date().toISOString() },
-        { onConflict: "survey_id,user_id" },
+    /*
+     * SHARING ADDS SOMEBODY; IT DOES NOT RE-RANK SOMEBODY WHO IS ALREADY HERE.
+     *
+     * This route is gated on `project.share`, which an editor holds. The
+     * upsert below is an INSERT-or-UPDATE, so re-POSTing an existing member
+     * with a different role was a role change — and role changes require
+     * `project.manage_members`, which only the owner holds (see `members`
+     * PATCH). The owner demoting a contractor to viewer could be undone by any
+     * editor re-sharing them as editor, audited only as `project.shared`.
+     *
+     * So: an existing member's role is changed only by somebody who could have
+     * changed it through the collaborators panel. Re-sharing at the role they
+     * already hold stays a no-op success, because that is not a change and
+     * refusing it would make the share dialog fail for no reason.
+     */
+    const { data: existingRow } = await db
+      .from("project_members").select("role, revoked_at")
+      .eq("survey_id", params.id).eq("user_id", person.id).maybeSingle();
+    /* a revoked row is history, not a collaborator: re-sharing that person is
+       a grant, not a role change (see the `revoked_at` note in `members`) */
+    const current = existingRow && !existingRow.revoked_at ? existingRow : null;
+    if (current && current.role !== role && !can(ctx.role, "project.manage_members") && !ctx.user.isPlatformAdmin) {
+      return NextResponse.json(
+        {
+          error: `${person.full_name} already has ${ROLE_LABEL[current.role as keyof typeof ROLE_LABEL] ?? current.role} access. Only the project's owner can change someone's role.`,
+          code: "insufficient_role",
+        },
+        { status: 403 },
       );
+    }
+
+    const { error } = existingRow
+      ? await db
+          .from("project_members")
+          .update({ role, revoked_at: null, revoked_by: null, updated_at: new Date().toISOString() })
+          .eq("survey_id", params.id).eq("user_id", person.id)
+      : await db
+          .from("project_members")
+          .insert({ survey_id: params.id, user_id: person.id, role, added_by: user.userId, updated_at: new Date().toISOString() });
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
     await audit({
@@ -181,26 +214,84 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
    */
   const token = newInvitationToken();
   const tokenHash = createHash("sha256").update(token).digest("hex");
-  const { data: invitation, error } = await db
+
+  /*
+   * SELECT, THEN UPDATE OR INSERT — NOT AN UPSERT.
+   *
+   * This was `.upsert(…, { onConflict: "survey_id,email" })`, and it could
+   * never work: the only index on those columns is
+   * `project_invitations_pending_key`, which is PARTIAL (`accepted_at is null
+   * and revoked_at is null and email is not null`) and on an EXPRESSION
+   * (`lower(email)`). Postgres cannot infer either for `ON CONFLICT
+   * (survey_id, email)`, so every single invitation raised
+   *
+   *   there is no unique or exclusion constraint matching the ON CONFLICT
+   *   specification
+   *
+   * — and because that sentence contains the word "unique", the error mapping
+   * below turned a hard schema failure into a 409 reading "That address has
+   * already been invited to this project." No row was written, no token was
+   * minted, no mail was sent, and the owner was told the opposite of what had
+   * happened.
+   *
+   * A plain unique constraint cannot be added instead: accepted and revoked
+   * rows are kept as history, so (survey_id, email) is legitimately repeated.
+   * The partial index stays, and the "one live invitation per project per
+   * email" rule is now applied here, where it can also be *reported*: the 409
+   * below is raised from a checked precondition, never inferred from the text
+   * of a database error.
+   */
+  /* the index matches on `lower(email)`, so the lookup has to as well — and in
+     JS rather than through `ilike`, whose `%` and `_` are wildcards and `_` is
+     an ordinary character in an address */
+  const wanted = identifier.value.toLowerCase();
+  const { data: live } = await db
     .from("project_invitations")
-    .upsert(
-      {
-        survey_id: params.id, email: identifier.value, role,
-        token_hash: tokenHash,
-        /*
-         * Explicitly null, not merely omitted: re-inviting somebody upserts
-         * onto an existing row, which may be a pre-0017 row still carrying a
-         * plaintext token. Leaving it would keep that credential alive.
-         */
-        token: null,
-        invited_by: user.userId,
-      },
-      { onConflict: "survey_id,email" },
-    )
-    .select("id, expires_at")
-    .maybeSingle();
+    .select("id, email, expires_at")
+    .eq("survey_id", params.id)
+    .is("accepted_at", null)
+    .is("revoked_at", null);
+  const pending = (live ?? []).find((i) => (i.email ?? "").toLowerCase() === wanted) ?? null;
+
+  const row = {
+    survey_id: params.id, email: identifier.value, role,
+    token_hash: tokenHash,
+    /*
+     * Explicitly null, not merely omitted: re-inviting somebody reuses an
+     * existing row, which may be a pre-0017 row still carrying a plaintext
+     * token. Leaving it would keep that credential alive.
+     */
+    token: null,
+    invited_by: user.userId,
+  };
+
+  let invitation: { id: string; expires_at: string | null } | null = null;
+  let error: { message: string; code?: string } | null = null;
+  if (pending) {
+    /* re-inviting: the same row is refreshed — a new token, the new role — so
+       one (project, email) still means one invitation and one email; see
+       `dedupeKey` below. `expires_at` is left alone, exactly as the upsert
+       left it, so re-sending a link cannot extend its life indefinitely. */
+    ({ data: invitation, error } = await db
+      .from("project_invitations")
+      .update(row)
+      .eq("id", pending.id)
+      .select("id, expires_at")
+      .maybeSingle());
+  } else {
+    ({ data: invitation, error } = await db
+      .from("project_invitations")
+      .insert(row)
+      .select("id, expires_at")
+      .maybeSingle());
+  }
   if (error) {
-    if (/duplicate|unique/i.test(error.message)) {
+    /*
+     * The partial index is still the authority under concurrency: two owners
+     * inviting the same address at the same moment both read "no pending row"
+     * and one of the inserts loses. That — and only that — is a real 409.
+     */
+    if (error.code === "23505") {
       return NextResponse.json({ error: "That address has already been invited to this project." }, { status: 409 });
     }
     return NextResponse.json({ error: error.message }, { status: 500 });

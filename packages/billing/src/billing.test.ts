@@ -195,6 +195,59 @@ test("usage is never overwritten: a correction is a reversal event that credits 
   assert.equal(await meter.reverse(rev!.reversal.id, "admin", "again"), null, "a reversal cannot be reversed");
 });
 
+test("REVERSING TWICE CREDITS ONCE — the reversal carries its own idempotency key", async () => {
+  const { meter, ctx, store, walletId } = await fixture(100);
+  /*
+   * The audit's finding 3. `reverse` spread the original event, which carried
+   * its `idempotencyKey`; the store returned the ORIGINAL row rather than
+   * writing a reversal, so `adjustsEventId` stayed null, the route's "already
+   * reversed" check never tripped — and the credit ran anyway, every time.
+   */
+  const r = await meter.record(ctx, {
+    eventType: "TRANSLATION_CHARACTER", provider: "google", service: "translate", model: "v2",
+    quantity: 100_000, idempotencyKey: "interview-stt:m1",
+  });
+  assert.ok(r.ok);
+  const afterDebit = (await store.getWallet(walletId))!.balance;
+  const first = await meter.reverse(r.event.id, "admin", "double-billed batch");
+  assert.ok(first, "the first reversal is written");
+  assert.equal(first!.reversal.adjustsEventId, r.event.id, "it is a reversal ROW, not the original handed back");
+  const credited = (await store.getWallet(walletId))!.balance;
+  assert.equal(credited, money6(afterDebit + r.event.customerCharge));
+
+  for (let i = 0; i < 4; i++) {
+    assert.equal(await meter.reverse(r.event.id, "admin", "again"), null, "a second press reverses nothing");
+  }
+  assert.equal((await store.getWallet(walletId))!.balance, credited, "and credits nothing");
+  assert.equal((await store.listUsage({ walletId })).filter((e) => e.adjustsEventId === r.event.id).length, 1);
+});
+
+test("A RETRIED SETTLE DEBITS ONCE — the idempotency key binds the money, not just the row", async () => {
+  const { meter, ctx, store, walletId } = await fixture(100);
+  /*
+   * The audit's finding 4. A job that transcribes, settles `interview-stt:m1`,
+   * fails and retries used to produce one usage event and two wallet debits:
+   * the event was idempotent and the debit beside it was not.
+   */
+  const spec = {
+    eventType: "TRANSLATION_CHARACTER", provider: "google", service: "translate", model: "v2",
+    quantity: 100_000, idempotencyKey: "interview-stt:m1",
+  };
+  const first = await meter.record(ctx, spec);
+  assert.ok(first.ok);
+  const charge = first.event.customerCharge;
+  assert.ok(charge > 0, "the fixture charges for this");
+  const afterFirst = (await store.getWallet(walletId))!.balance;
+  assert.equal(afterFirst, money6(100 - charge));
+
+  const retry = await meter.record(ctx, spec);
+  assert.ok(retry.ok);
+  assert.equal(retry.event.id, first.event.id, "the same event, not a second one");
+  assert.equal((await store.getWallet(walletId))!.balance, afterFirst, "and the same balance");
+  assert.equal((await store.getWallet(walletId))!.reserved, 0, "the retry's hold was released");
+  assert.equal((await store.listLedger(walletId)).filter((l) => l.kind === "debit").length, 1);
+});
+
 test("wallet summary, categories, timeline, forecast and levels", async () => {
   const { meter, ctx, store, walletId } = await fixture(100);
   await meter.record(ctx, { eventType: "AI_REQUEST", provider: "openai-compatible", service: "chat", model: "gpt-4o-mini", inputUnits: 10_000, outputUnits: 2_000 });

@@ -60,6 +60,10 @@ const PUBLIC = {
     "the scheduler has no session and never will: Vercel Cron calls this with a bearer token, checked against "
     + "CRON_SECRET by `timingSafeEqual` in the handler's first statement, and the route REFUSES EVERYTHING when "
     + "that variable is unset. Not exempt from authentication — authenticated by a different credential",
+  "cron/billing-reservations/route.ts":
+    "the same bearer-token credential as the media job, checked the same way in the handler's first statement. "
+    + "It releases reservations whose TTL has passed and touches nothing a caller could name, so there is no "
+    + "project to gate on — and no session, because a scheduler has none",
 };
 
 /**

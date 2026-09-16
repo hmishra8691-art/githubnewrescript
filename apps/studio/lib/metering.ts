@@ -144,9 +144,30 @@ export async function mediaEnvironment(mediaId: string): Promise<Environment> {
  */
 export async function billingProjectFor(user: AuthedUser | null, surveyId: unknown, capability: Capability = "survey.edit"): Promise<{ ctx: MeterContext; meter: Meter } | { response: NextResponse }> {
   const id = typeof surveyId === "string" && surveyId.trim() ? surveyId.trim() : null;
-  if (isSandboxProject(id)) return { ctx: meterContextFor(user, "sandbox", "LIVE"), meter: getSandboxMeter() };
-  if (!user) return { response: NextResponse.json({ error: "sign in to use this project" }, { status: 401 }) };
-  const gate = await requireProjectFor(user, id!, capability);
+  /*
+   * A MISSING `surveyId` IS NOT THE SANDBOX.
+   *
+   * This asked `isSandboxProject(id)`, and that function answers TRUE for
+   * null — it was written for "which meter does this page use", where no
+   * project genuinely means the fixture. Here it meant that OMITTING the field
+   * routed the reservation to the process-local in-memory meter seeded with
+   * 100 credits, while the real provider was called with the installation's
+   * key: no wallet debited, no project permission checked (`requireProjectFor`
+   * is on the other branch), and a frozen or empty wallet never refusing. Any
+   * signed-in account — a viewer who may edit nothing — could translate and
+   * synthesise indefinitely on the operator's spend.
+   *
+   * The sandbox is now what it claims to be: the literal `sandbox` project, or
+   * the unauthenticated carve-out that `requireAiCaller` only allows against
+   * the FAKE provider (free and deterministic, so there is nothing to spend).
+   * A signed-in caller that names no project is asked to name one.
+   */
+  if (!user) return { ctx: meterContextFor(null, "sandbox", "LIVE"), meter: getSandboxMeter() };
+  if (id === "sandbox") return { ctx: meterContextFor(user, "sandbox", "LIVE"), meter: getSandboxMeter() };
+  if (!id) {
+    return { response: NextResponse.json({ error: "Name the project this is billed to (surveyId).", code: "survey_required" }, { status: 400 }) };
+  }
+  const gate = await requireProjectFor(user, id, capability);
   if (isFailure(gate)) return { response: gate.response };
   return { ctx: projectContext(gate, "LIVE"), meter: getMeter() };
 }

@@ -120,11 +120,19 @@ export interface MeterStore {
    * and "your wallet is empty" ask the person to do different things.
    */
   reserve(input: { walletId: string; customerId: string; surveyId: string | null; subjectKind: BillingSubjectKind; userId: string | null; eventType: string; environment: Environment; estimatedCost: number; amount: number; floor: number; ttlMinutes: number }): Promise<{ ok: true; reservation: Reservation; wallet: Wallet; spending?: ProjectSpending | null } | { ok: false; wallet: Wallet; reason?: "insufficient_balance" | "project_limit"; spending?: ProjectSpending | null; headroom?: number | null }>;
-  /** Atomically debit the actual charge, release the hold, write the usage event and its ledger line, recompute the state. */
-  settle(reservationId: string, event: UsageEventInput, readOnlyThreshold: number): Promise<{ event: UsageEvent; wallet: Wallet }>;
+  /**
+   * Atomically debit the actual charge, release the hold, write the usage event
+   * and its ledger line, recompute the state.
+   *
+   * `replayed` says the event was NOT written by this call — an earlier one
+   * with the same `idempotencyKey` wrote it, and no money moved this time. The
+   * hold is still released either way. A caller that does something with the
+   * money afterwards (`Meter.reverse` credits a wallet) must ask.
+   */
+  settle(reservationId: string, event: UsageEventInput, readOnlyThreshold: number): Promise<{ event: UsageEvent; wallet: Wallet; replayed?: boolean }>;
   release(reservationId: string, status?: "released" | "expired"): Promise<void>;
-  /** Write a usage event with no reservation (free events, or a debit the caller has already verified fits). */
-  record(event: UsageEventInput, readOnlyThreshold: number): Promise<{ event: UsageEvent; wallet: Wallet | null }>;
+  /** Write a usage event with no reservation (free events, or a debit the caller has already verified fits). See `settle` on `replayed`. */
+  record(event: UsageEventInput, readOnlyThreshold: number): Promise<{ event: UsageEvent; wallet: Wallet | null; replayed?: boolean }>;
   expireReservations(now: Date): Promise<number>;
 
   credit(input: { walletId: string; amount: number; kind: LedgerKind; reason: string; note: string | null; by: string | null; expiresAt: string | null; referenceId?: string | null; usageEventId?: string | null }, readOnlyThreshold: number): Promise<{ entry: LedgerEntry; wallet: Wallet }>;
@@ -370,9 +378,29 @@ export class Meter {
       providerCost: neg(original.providerCost), infraCost: neg(original.infraCost), paymentFee: neg(original.paymentFee), taxReserve: neg(original.taxReserve),
       customerCharge: neg(original.customerCharge), grossProfit: neg(original.grossProfit), netProfit: neg(original.netProfit),
       reservationId: null, adjustsEventId: original.id, userId: by ?? original.userId,
+      /*
+       * THE REVERSAL GETS ITS OWN KEY, AND IT IS WHAT MAKES "REVERSE" SAFE TO
+       * PRESS TWICE.
+       *
+       * `...original` used to carry the ORIGINAL's `idempotencyKey` through.
+       * For any event that has one — `interview-stt:${mediaId}`,
+       * `interview-analysis:…` — `insert_usage` then matched the key and
+       * returned the ORIGINAL row: no reversal event was written at all, so
+       * `original.adjustsEventId` stayed null and the route's "already
+       * reversed" check never tripped, while the credit below ran
+       * unconditionally. Five presses of Reverse credited five times for one
+       * charge.
+       *
+       * Keying the reversal on the event it adjusts means the unique index
+       * decides, atomically, which call is the real one: the second press gets
+       * `replayed` and credits nothing.
+       */
+      idempotencyKey: `reversal:${original.id}`,
       metadata: { ...original.metadata, reversal: true, note },
     };
-    const { event: reversal } = await this.store.record(input, cfg.readOnlyThreshold);
+    const { event: reversal, replayed } = await this.store.record(input, cfg.readOnlyThreshold);
+    /* somebody else already reversed this one; the money moved with them */
+    if (replayed) return null;
     let entry: LedgerEntry | null = null;
     if (original.walletId && original.customerCharge > 0) {
       ({ entry } = await this.store.credit({ walletId: original.walletId, amount: original.customerCharge, kind: "reversal", reason: "usage_reversed", note, by, expiresAt: null, referenceId: null, usageEventId: reversal.id }, cfg.readOnlyThreshold));

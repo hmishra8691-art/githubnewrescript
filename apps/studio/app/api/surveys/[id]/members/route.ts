@@ -109,13 +109,14 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const db = supabaseService();
   const { data: person } = await db.from("profiles").select("full_name, user_code").eq("id", targetId).maybeSingle();
   const { data: existing } = await db
-    .from("project_members").select("role").eq("survey_id", params.id).eq("user_id", targetId).maybeSingle();
+    .from("project_members").select("role").eq("survey_id", params.id).eq("user_id", targetId)
+    .is("revoked_at", null).maybeSingle();
   if (!existing) return NextResponse.json({ error: "That person is not a collaborator on this project." }, { status: 404 });
   if (existing.role === role) return NextResponse.json({ ok: true, unchanged: true });
 
   const { error } = await db
     .from("project_members")
-    .update({ role, updated_at: new Date().toISOString() })
+    .update({ role, revoked_at: null, revoked_by: null, updated_at: new Date().toISOString() })
     .eq("survey_id", params.id).eq("user_id", targetId);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
@@ -178,8 +179,54 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   }
   await db.from("project_presence").delete().eq("survey_id", params.id).eq("user_id", targetId);
 
-  const { error } = await db.from("project_members").delete().eq("survey_id", params.id).eq("user_id", targetId);
+  /*
+   * REMOVING ACCESS IS RECORDED, NOT ERASED.
+   *
+   * This used to DELETE the membership row, and deleting it did not remove
+   * anybody: `rescript_project_access` falls through a missing member row to
+   * the workspace baseline, and `rescript_workspace_default_role` answers
+   * `editor` when nothing is configured (migration 0009; `DEFAULT_WORKSPACE_ACCESS`).
+   * So removing a VIEWER in the same workspace promoted them to editor — the
+   * API said `ok`, the panel dropped them, they were emailed "your access was
+   * removed", and on their next request they could take the edit lock and
+   * rewrite the questionnaire. Removing an unwanted editor was a no-op.
+   *
+   * The row now stays and is marked revoked (migration 0034), which is a
+   * decision the access function can see: an explicit revocation outranks the
+   * workspace baseline exactly as an explicit share does. Re-sharing the same
+   * person clears the mark (see `share`).
+   */
+  const { data: member } = await db
+    .from("project_members").select("user_id")
+    .eq("survey_id", params.id).eq("user_id", targetId).maybeSingle();
+  const { error } = member
+    ? await db.from("project_members")
+        .update({ revoked_at: new Date().toISOString(), revoked_by: ctx.user.userId, updated_at: new Date().toISOString() })
+        .eq("survey_id", params.id).eq("user_id", targetId)
+    : /* no row at all: they hold the workspace baseline, and removing them
+         means writing the revocation the baseline has to yield to */
+      await db.from("project_members")
+        .insert({
+          survey_id: params.id, user_id: targetId, role: "viewer", added_by: ctx.user.userId,
+          revoked_at: new Date().toISOString(), revoked_by: ctx.user.userId,
+        });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  /* a pending invitation is a standing offer of access; leaving one open would
+     let the person being removed walk back in by accepting it */
+  {
+    const { data: profile } = await db.from("profiles").select("email, user_code").eq("id", targetId).maybeSingle();
+    const revoke = async (column: "email" | "user_code", value: string) => {
+      await db.from("project_invitations")
+        .update({ revoked_at: new Date().toISOString() })
+        .eq("survey_id", params.id).is("accepted_at", null).is("revoked_at", null)
+        .eq(column, value);
+    };
+    /* two statements rather than one `.or(...)`: an address is user input and
+       PostgREST's or-syntax is comma-delimited */
+    if (profile?.email) await revoke("email", profile.email);
+    if (profile?.user_code) await revoke("user_code", profile.user_code);
+  }
 
   await audit({
     action: "project.access_removed", userId: ctx.user.userId, sessionId: ctx.user.sessionId,
