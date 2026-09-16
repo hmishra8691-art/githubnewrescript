@@ -71,6 +71,7 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
       </div>
       <div className="ax-ws-tabs">{TABS.map((t) => <button key={t.key} className={`ax-wstab ${tab === t.key ? "on" : ""}`} onClick={() => setTab(t.key)} data-testid={`ax-tab-${t.key}`}>{t.label}</button>)}</div>
       {error && <div className="ax-error" style={{ margin: "6px 0" }}>{error}</div>}
+      <Kpis env={env} counts={counts} vars={vars.length} analyses={analyses.length} charts={charts.length} reports={reports} shares={shares.length} />
       <div className="ax-ws-body">
         {tab === "home" && <Home home={home} analyses={analyses} onOpen={(a) => openBuilder({ analysis: a })} onNew={(kind) => openBuilder(kind ? { kind } : undefined)} onTab={setTab} canEdit={p.canEdit} api={api} refresh={refresh} />}
         {tab === "analysis" && <AnalysisBuilder key={builder.key} api={api} variables={vars} counts={counts} segments={segments} themes={themes} dataset={dataset} initial={builder.initial} onSaved={() => void refresh()} onChartSaved={() => void refresh()} onAddToReport={(a, spec) => { setPendingAdd({ analysis: a, spec }); setTab("reports"); }} />}
@@ -87,38 +88,104 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
   );
 }
 
+/**
+ * THE METRIC BAND.
+ *
+ * Every figure here is already in the workspace's state: `counts` comes back
+ * with the variable dictionary, and the rest are the lengths of the lists the
+ * tabs are rendered from. So the band adds no request, no calculation and
+ * nothing the product does not already know — which is the whole constraint.
+ * Numbers a research platform would like to show here and this one does not
+ * yet compute (completion rate, median duration, a period-over-period trend)
+ * are deliberately absent rather than invented.
+ */
+function Kpis({ env, counts, vars, analyses, charts, reports, shares }: {
+  env: DatasetSpec["environment"]; counts: Record<string, number>; vars: number;
+  analyses: number; charts: number; reports: Row[]; shares: number;
+}) {
+  const loading = !Object.keys(counts).length;
+  /* ALL is the two environments together — the same sum the dataset selector
+     describes, not a third stored number */
+  const responses = env === "ALL" ? (counts.LIVE ?? 0) + (counts.TEST ?? 0) : counts[env] ?? 0;
+  const envLabel = env === "ALL" ? "all responses" : env === "LIVE" ? "production" : "test";
+  const published = reports.filter((r) => r.published_version).length;
+  const n = (v: number) => v.toLocaleString();
+  const tiles: { label: string; value: string; sub?: string; testid: string }[] = [
+    { label: "Responses", value: loading ? "—" : n(responses), sub: `${envLabel} · complete`, testid: "ax-kpi-responses" },
+    { label: "Variables", value: loading ? "—" : n(vars), sub: "in the dictionary", testid: "ax-kpi-variables" },
+    { label: "Analyses", value: n(analyses), sub: "saved definitions", testid: "ax-kpi-analyses" },
+    { label: "Charts", value: n(charts), sub: "saved styling", testid: "ax-kpi-charts" },
+    { label: "Reports", value: n(reports.length), sub: published ? `${published} published` : "none published", testid: "ax-kpi-reports" },
+    { label: "Shares", value: n(shares), sub: shares ? "live links" : "nothing shared", testid: "ax-kpi-shares" },
+  ];
+  return (
+    <div className="ax-kpis" data-testid="ax-kpis">
+      {tiles.map((t) => (
+        <div key={t.label} className="metric" data-testid={t.testid}>
+          <span className="metric-v">{t.value}</span>
+          <span className="metric-l">{t.label}</span>
+          {t.sub && <span className="ax-kpi-sub">{t.sub}</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** A section with nothing in it is still a designed section — see `.ax-empty`. */
+function Empty({ title, detail }: { title: string; detail: string }) {
+  return <div className="ax-empty"><div className="ax-empty-t">{title}</div><div className="ax-empty-d">{detail}</div></div>;
+}
+
 function Home({ home, analyses, onOpen, onNew, onTab, canEdit, api, refresh }: { home: { analyses: Row[]; charts: Row[]; reports: Row[]; shares: Row[] } | null; analyses: Row[]; onOpen: (a: Row) => void; onNew: (kind?: AnalysisDefinition["kind"]) => void; onTab: (t: WsTab) => void; canEdit: boolean; api: AxApi; refresh: () => Promise<void> }) {
   return (
     <div className="ax-home" data-testid="ax-home">
-      <div className="ax-home-col">
-        <h3>Recent analyses</h3>
-        {(home?.analyses ?? []).map((a) => <div key={a.id} className="card selectable" onClick={() => onOpen(a)} data-testid="ax-home-analysis"><div className="card-title">{a.name}</div><div className="muted" style={{ fontSize: 13 }}>{ANALYSIS_KINDS.find((k) => k.kind === a.kind)?.label ?? a.kind} · v{a.version} · updated {timeAgo(a.updated_at)}</div>{canEdit && <div className="card-actions" style={{ marginTop: 6 }}><button className="btn small danger" onClick={async (e) => { e.stopPropagation(); if (confirm(`Delete analysis “${a.name}”? Charts linked to it are removed; reports keep their published snapshots.`)) { await api.remove("analyses", a.id); await refresh(); } }}>Delete</button></div>}</div>)}
-        {home && !home.analyses.length && <div className="muted">No analyses yet — start with a quick action.</div>}
-        {!home && <div className="muted">Loading…</div>}
-      </div>
-      <div className="ax-home-col">
-        <h3>Saved reports</h3>
-        {(home?.reports ?? []).map((r) => <div key={r.id} className="card selectable" onClick={() => onTab("reports")}><div className="card-title">{r.kind === "dashboard" ? "▦" : "▤"} {r.name}</div><div className="muted" style={{ fontSize: 13 }}>{r.mode} · {r.published_version ? `published v${r.published_version}` : "draft"} · updated {timeAgo(r.updated_at)}</div></div>)}
-        {home && !home.reports.length && <div className="muted">No reports yet.</div>}
-        <h3 style={{ marginTop: 14 }}>Active shares</h3>
-        {(home?.shares ?? []).map((s) => <div key={s.id} className="card" onClick={() => onTab("sharing")} style={{ cursor: "pointer" }}><div className="card-title">{home?.reports.find((r) => r.id === s.report_id)?.name ?? "Report"}</div><div className="muted" style={{ fontSize: 13 }}>{s.access === "link" ? "Anyone with link" : s.access === "users" ? "Specific users" : "Private"} · {s.permission} · {s.view_count} views{s.expires_at ? ` · expires ${new Date(s.expires_at).toLocaleDateString()}` : ""}</div></div>)}
-        {home && !home.shares.length && <div className="muted">Nothing shared yet.</div>}
-      </div>
-      <div className="ax-home-col">
-        <h3>Quick actions</h3>
-        <div className="ax-quick">
-          <button className="btn primary" onClick={() => onNew()} data-testid="ax-quick-analysis">Create analysis</button>
-          <button className="btn" onClick={() => onNew("crosstab")} data-testid="ax-quick-crosstab">Create crosstab</button>
-          <button className="btn" onClick={() => onNew("descriptive")}>Create chart</button>
-          <button className="btn" onClick={() => onNew("nps")}>NPS / CSAT</button>
-          <button className="btn" onClick={() => onTab("reports")} data-testid="ax-quick-report">Create report</button>
-          <button className="btn" onClick={() => onTab("reports")}>Open dashboard</button>
-          <button className="btn" onClick={() => onTab("segments")}>Define segments</button>
-          <button className="btn" onClick={() => onTab("themes")}>Report themes</button>
+      {/* the two ways to start work, side by side — neither is wide enough to
+          deserve a row of its own once the page uses the whole display */}
+      <div className="ax-home-start">
+        <div className="ax-home-col">
+          <div className="ax-sect"><h3>Start something</h3></div>
+          <div className="ax-quick">
+            <button className="btn primary" onClick={() => onNew()} data-testid="ax-quick-analysis">Create analysis</button>
+            <button className="btn" onClick={() => onNew("crosstab")} data-testid="ax-quick-crosstab">Create crosstab</button>
+            <button className="btn" onClick={() => onNew("descriptive")}>Create chart</button>
+            <button className="btn" onClick={() => onNew("nps")}>NPS / CSAT</button>
+            <button className="btn" onClick={() => onTab("reports")} data-testid="ax-quick-report">Create report</button>
+            <button className="btn" onClick={() => onTab("reports")}>Open dashboard</button>
+            <button className="btn" onClick={() => onTab("segments")}>Define segments</button>
+            <button className="btn" onClick={() => onTab("themes")}>Report themes</button>
+          </div>
         </div>
-        <h3 style={{ marginTop: 14 }}>Analysis types</h3>
-        <div className="ax-kind-mini">{ANALYSIS_KINDS.map((k) => <button key={k.kind} className="ax-chip" onClick={() => onNew(k.kind)} title={k.description}>{k.label}</button>)}</div>
-        <div className="muted" style={{ fontSize: 12.5, marginTop: 10 }}>{analyses.length} saved analyses in this survey.</div>
+        <div className="ax-home-col">
+          <div className="ax-sect"><h3>Analysis types</h3><span className="ax-sect-note">{ANALYSIS_KINDS.length} available — each opens the builder on that kind</span></div>
+          <div className="ax-kind-mini">{ANALYSIS_KINDS.map((k) => <button key={k.kind} className="ax-chip" onClick={() => onNew(k.kind)} title={k.description}>{k.label}</button>)}</div>
+        </div>
+      </div>
+
+      <div className="ax-home-split">
+        <div className="ax-home-col">
+          <div className="ax-sect"><h3>Recent analyses</h3><span className="ax-sect-note">{analyses.length} saved in this survey</span></div>
+          {(home?.analyses ?? []).length > 0 && (
+            <div className="ax-home-list">
+              {(home?.analyses ?? []).map((a) => <div key={a.id} className="card selectable" onClick={() => onOpen(a)} data-testid="ax-home-analysis"><div className="card-title">{a.name}</div><div className="muted" style={{ fontSize: 13 }}>{ANALYSIS_KINDS.find((k) => k.kind === a.kind)?.label ?? a.kind} · v{a.version} · updated {timeAgo(a.updated_at)}</div>{canEdit && <div className="card-actions" style={{ marginTop: 6 }}><button className="btn small danger" onClick={async (e) => { e.stopPropagation(); if (confirm(`Delete analysis “${a.name}”? Charts linked to it are removed; reports keep their published snapshots.`)) { await api.remove("analyses", a.id); await refresh(); } }}>Delete</button></div>}</div>)}
+            </div>
+          )}
+          {home && !home.analyses.length && <Empty title="No analyses yet" detail="An analysis is a saved definition — variables, filters, weighting — recomputed against the current data every time it runs. Start one on the left." />}
+          {!home && <div className="muted">Loading…</div>}
+        </div>
+
+        <div className="ax-home-col">
+          <div className="ax-sect"><h3>Saved reports</h3></div>
+          <div className="ax-home-list">
+            {(home?.reports ?? []).map((r) => <div key={r.id} className="card selectable" onClick={() => onTab("reports")}><div className="card-title">{r.kind === "dashboard" ? "▦" : "▤"} {r.name}</div><div className="muted" style={{ fontSize: 13 }}>{r.mode} · {r.published_version ? `published v${r.published_version}` : "draft"} · updated {timeAgo(r.updated_at)}</div></div>)}
+          </div>
+          {home && !home.reports.length && <Empty title="No reports yet" detail="A report gathers charts and tables into a deliverable you can publish, share as a link, and export to PowerPoint or Excel." />}
+
+          <div className="ax-sect" style={{ marginTop: 6 }}><h3>Active shares</h3></div>
+          <div className="ax-home-list">
+            {(home?.shares ?? []).map((s) => <div key={s.id} className="card" onClick={() => onTab("sharing")} style={{ cursor: "pointer" }}><div className="card-title">{home?.reports.find((r) => r.id === s.report_id)?.name ?? "Report"}</div><div className="muted" style={{ fontSize: 13 }}>{s.access === "link" ? "Anyone with link" : s.access === "users" ? "Specific users" : "Private"} · {s.permission} · {s.view_count} views{s.expires_at ? ` · expires ${new Date(s.expires_at).toLocaleDateString()}` : ""}</div></div>)}
+          </div>
+          {home && !home.shares.length && <Empty title="Nothing shared yet" detail="A published report can be given a link that carries its own expiry, password and permission — the reader needs no account." />}
+        </div>
       </div>
     </div>
   );

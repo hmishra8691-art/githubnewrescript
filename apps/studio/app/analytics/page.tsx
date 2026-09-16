@@ -37,7 +37,14 @@ export default function AnalyticsPage() {
   const canRead = can(role, "analytics.read");
 
   return (
-    <div className="dash ax-page" data-testid="ax-page">
+    /*
+     * `dash ax-page` capped this page at 1400px inside a 1440px container and
+     * then, because `.ax-page` is also a printed report's page, wrapped the
+     * whole thing in a second panel. `.ax-shell` is this page's own: fluid to
+     * the viewport, and a flex column so the workspace fills the window
+     * instead of ending halfway down it. The test id is unchanged.
+     */
+    <div className="ax-shell" data-testid="ax-page">
       <AppHeader active="analytics" user={session.state.kind === "signed_in" ? session.state.user : null} onSignOut={() => void session.signOut()}
         crumbs={survey ? <span className="crumbs"><a href="/">Projects</a><span className="sep">/</span><a href={`/studio/${survey.id}`}>{survey.title}</a><span className="sep">/</span><span className="here">Data Analytics</span></span> : undefined} />
       <div className="row" style={{ margin: "18px 0 16px", flexWrap: "wrap", gap: 14 }}>

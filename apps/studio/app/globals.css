@@ -1435,10 +1435,75 @@ p.qs-help { margin: -2px 0 10px; }
 /* ======================================================================
    DATA ANALYTICS (ax-*) — workspace, builder, charts, reports, share view
    ====================================================================== */
-.ax-page { max-width: 1400px; }
-.ax-ws { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px 18px; }
+/**
+ * THE ANALYTICS SHELL — why this page was a column in an empty room.
+ *
+ * It was `<div className="dash ax-page">`, and each of those two classes took
+ * a bite out of the width:
+ *
+ *   `.dash`     max-width: 1440px; margin: 0 auto   (design-system.css)
+ *   `.ax-page`  max-width: 1400px
+ *
+ * so on a 1920px display the workspace sat in 1400px with 260px of dead
+ * canvas down each side, and on anything wider it simply stopped growing.
+ *
+ * Worse, `.ax-page` was ALSO the class a printed report's page carries
+ * (`ReportView`), and that rule — 300 lines further down, so it won —
+ * wrapped the whole analytics page in a second panel with its own border,
+ * 12px margin and 34px of bottom padding. That is where the "sections look
+ * disconnected" reading came from: a panel inside a panel inside `.dash`'s
+ * 64px bottom padding. The report page is now `.ax-report-page`, and this is
+ * a shell of its own.
+ *
+ * `min()` rather than a flat `100%`: past about 2300px a 12-column analytics
+ * grid stops being denser and starts being a long walk for the eye, so the
+ * page centres beyond that. Padding scales with the viewport instead of
+ * stepping at breakpoints.
+ */
+.ax-shell {
+  width: 100%;
+  max-width: min(2280px, 100%);
+  margin: 0 auto;
+  padding: 14px clamp(16px, 2.2vw, 40px) 24px;
+  /* the column fills the window, so a short tab leaves no void beneath it */
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+.ax-shell > .ax-ws { flex: 1 1 auto; }
+.ax-ws { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px 18px; display: flex; flex-direction: column; min-height: 0; }
 .ax-ws-head { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 10px; }
 .ax-ws-title { font-size: 20px; font-weight: 700; letter-spacing: -.01em; }
+/* the body takes whatever height is left, so `min-height: 260px` on a builder
+   step no longer decides where the page ends */
+.ax-ws-body { flex: 1 1 auto; min-height: 0; }
+
+/**
+ * THE METRIC BAND. Every number here is already in the workspace's state —
+ * `counts` from `variables()`, and the lengths of the lists the tabs are
+ * built from — so the band costs no request and can show nothing the product
+ * does not already know. Tiles reuse `.metric` from the design system rather
+ * than inventing a second card treatment.
+ *
+ * `auto-fit` rather than a fixed six: the band is as dense as the window
+ * allows and never leaves a ragged gap at the end of the row.
+ */
+.ax-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(178px, 1fr)); gap: 12px; margin: 2px 0 14px; }
+.ax-kpis .metric { padding: 13px 16px; }
+.ax-kpi-sub { display: block; font-size: 12px; color: var(--subtle); margin-top: 3px; font-variant-numeric: tabular-nums; }
+
+/* a section rule that separates without drawing a heavy line */
+.ax-sect { display: flex; align-items: baseline; gap: 10px; margin: 0 0 10px; }
+.ax-sect h3 { margin: 0; font-size: 14px; text-transform: uppercase; letter-spacing: .05em; color: var(--subtle); }
+.ax-sect .ax-sect-note { font-size: 12.5px; color: var(--subtle); }
+
+/**
+ * An empty section is still a designed section. A bare sentence in a grid
+ * cell reads as a rendering failure; this reads as an answer.
+ */
+.ax-empty { border: 1px dashed var(--border); border-radius: 10px; background: var(--panel2); padding: 18px 16px; text-align: center; }
+.ax-empty-t { font-size: 14px; font-weight: 600; color: var(--text); }
+.ax-empty-d { font-size: 13px; color: var(--subtle); margin-top: 4px; }
 .ax-ws-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin: 6px 0 12px; overflow-x: auto; }
 .ax-wstab { background: none; border: none; border-bottom: 2px solid transparent; padding: 8px 12px; cursor: pointer; color: var(--subtle); font-size: 14px; white-space: nowrap; }
 .ax-wstab:hover { color: var(--text); }
@@ -1460,15 +1525,39 @@ p.qs-help { margin: -2px 0 10px; }
 .ax-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
 .ax-pill { display: inline-flex; align-items: center; gap: 4px; background: var(--tint); border: 1px solid #c7d7fb; color: var(--accent2); border-radius: 999px; padding: 2px 8px; font-size: 13px; margin: 2px; }
 .ax-pill button { background: none; border: none; cursor: pointer; color: inherit; padding: 0 2px; }
-.ax-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+.ax-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px; }
 .ax-panel h2 { font-size: 17px; }
 
-/* home */
-.ax-home { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 18px; }
+/**
+ * HOME — three equal columns of cards became a workspace.
+ *
+ * `1.2fr 1fr 1fr` gave the quick-action buttons and the analysis-type chips a
+ * full column each, so on a wide screen two thirds of the page was a button
+ * rail and the analyses everyone actually came for were squeezed into the
+ * narrow remainder. The bands below put the controls where controls belong —
+ * across the top, where they cost one row — and give the work the width.
+ */
+.ax-home { display: flex; flex-direction: column; gap: 18px; }
+/**
+ * Two bands, each a 12-column split, rather than three equal card columns.
+ *
+ * The first pairs the two things that START work — the action buttons and the
+ * analysis-type chips — so neither is a stretched row of its own. The second
+ * gives the analyses the width and keeps the reports rail narrow enough that a
+ * two-line card is not 750px across, which is the "huge card around nothing"
+ * the old three-column layout produced once the page was allowed to be wide.
+ */
+.ax-home-start { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 18px; align-items: start; }
+.ax-home-split { display: grid; grid-template-columns: minmax(0, 8fr) minmax(0, 4fr); gap: 18px; align-items: start; }
 .ax-home h3 { margin: 0 0 8px; font-size: 14px; text-transform: uppercase; letter-spacing: .05em; color: var(--subtle); }
-.ax-quick { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.ax-kind-mini { display: flex; flex-wrap: wrap; gap: 4px; }
-@media (max-width: 1000px) { .ax-home { grid-template-columns: 1fr; } }
+.ax-home-col { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+/* every list of cards flows into as many columns as its own column affords,
+   so a card is as wide as its content needs and no wider */
+.ax-home-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+.ax-quick { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 8px; }
+.ax-kind-mini { display: flex; flex-wrap: wrap; gap: 5px; align-content: flex-start; }
+@media (max-width: 1240px) { .ax-home-start, .ax-home-split { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) { .ax-quick { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); } }
 
 /* builder */
 .ax-builder { display: flex; flex-direction: column; gap: 10px; }
@@ -1549,7 +1638,10 @@ p.qs-help { margin: -2px 0 10px; }
 .ax-sig-p { color: var(--green); font-weight: 600; }
 .ax-table-notes { font-size: 12.5px; color: var(--subtle); margin-top: 4px; }
 .ax-insights { margin: 0; padding-left: 18px; line-height: 1.55; }
-.ax-chart-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 10px; }
+/* `auto-fill` leaves phantom empty tracks when there are fewer charts than the
+   width allows; `auto-fit` collapses them, so three saved charts are three
+   readable cards rather than three narrow ones beside an empty fourth slot */
+.ax-chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 14px; }
 .ax-chart-card .ax-chart { margin-top: 6px; }
 .ax-seg-card .card-title { gap: 6px; }
 .ax-swatch { display: flex; gap: 3px; align-items: center; margin-bottom: 6px; }
@@ -1601,15 +1693,15 @@ p.qs-help { margin: -2px 0 10px; }
 /* §36 — pages. A page on screen is the page that prints: the same boundaries
    the engine's `reportPages` derives, so a chart cannot be split across two
    leaves in the printout while looking whole in the browser. */
-.ax-page { position: relative; margin: 12px; padding: 4px 0 34px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
-.ax-page-foot { position: absolute; left: 20px; right: 20px; bottom: 8px; display: flex; justify-content: space-between; font-size: 11.5px; }
+.ax-report-page { position: relative; margin: 12px; padding: 4px 0 34px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
+.ax-report-page .ax-page-foot { position: absolute; left: 20px; right: 20px; bottom: 8px; display: flex; justify-content: space-between; font-size: 11.5px; }
 .ax-pagebreak { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; border-top: 1px dashed var(--border); border-bottom: 1px dashed var(--border); margin: 8px 20px; padding: 6px 0; }
 .ax-methodology .ax-insights { font-size: 13px; line-height: 1.6; }
 @media print {
   /* the report is the document: the chrome that helps you build it is not */
   .ax-report-bar, .ax-block-actions, .ax-pagebreak, .leftnav, .ax-rb-bar { display: none !important; }
-  .ax-page { break-after: page; page-break-after: always; border: 0; margin: 0; background: #fff; }
-  .ax-page:last-child { break-after: auto; page-break-after: auto; }
+  .ax-report-page { break-after: page; page-break-after: always; border: 0; margin: 0; background: #fff; }
+  .ax-report-page:last-child { break-after: auto; page-break-after: auto; }
   .ax-report { border: 0; }
   .ax-block { break-inside: avoid; page-break-inside: avoid; }
 }

@@ -164,7 +164,7 @@ export function ReportView(p: ReportViewProps) {
          * prints with a chart split across two leaves.
          */
         reportPages(p.blocks).map((page) => (
-          <div key={page.number} className="ax-page" data-testid="ax-page" data-page={page.number}>
+          <div key={page.number} className="ax-report-page" data-testid="ax-page" data-page={page.number}>
             {page.blocks.map(renderBlock)}
             <div className="ax-page-foot" style={{ color: theme.colors.subtle }}>
               {page.section ? <span>{page.section}</span> : <span />}
