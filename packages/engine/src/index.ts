@@ -29,6 +29,7 @@ export * from "./redirect.js";
 export * from "./quotas.js";
 export * from "./scale.js";
 export * from "./formats.js";
+export * from "./retireVariants.js";
 export * from "./validate.js";
 export * from "./variables.js";
 export * from "./scripts.js";

@@ -377,11 +377,20 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     baseType: "single_select", renderer: "cards", responseModel: "single_choice",
     capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
   }),
+  /*
+   * RETIRED IN THE SEPTEMBER 2026 REVIEW. "Card Select and Tile Select
+   * display the same preview and functionality" — and in the definition they
+   * differed by one number, a default of three columns, which is a setting
+   * rather than a question. `supersededBy` keeps every stored id rendering;
+   * `migrateRetiredVariants` rewrites it the next time the survey is opened.
+   * The defaults were applied when the question was created, so it is still a
+   * three-column card grid afterwards.
+   */
   stable(F.single, "tiles", "Tile Select", "Compact card grid; set 2–4 columns in Layout.", {
     baseType: "single_select", renderer: "cards", responseModel: "single_choice",
     capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
     defaults: { settings: { columnsLayout: 3 } },
-    presetOf: "single_select.cards",
+    supersededBy: "single_select.cards",
   }),
   stable(F.single, "image", "Image Select", "Pick one image from a grid.", {
     baseType: "image_select", responseModel: "single_choice",
@@ -522,11 +531,17 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: [...CAP_MULTI, "images"], validations: VAL_MULTI,
     defaults: { settings: { maxSelections: 99 } },
   }),
+  /*
+   * RETIRED. "Checkbox with Min = 3 and Max = 3 already forces respondents to
+   * select exactly 3 options, which is the same as Select N = 3" — correct,
+   * and it was already implemented that way: this carried no renderer and no
+   * capability of its own, only those two defaults.
+   */
   stable(F.multi, "top_n", "Pick Exactly N", "A multi-select that accepts exactly N answers — \"choose your 3 favourites\". Set N with min/max selections.", {
     baseType: "multi_select", responseModel: "multiple_choice",
     capabilities: CAP_MULTI, validations: VAL_MULTI,
     defaults: { settings: { minSelections: 3, maxSelections: 3 }, instruction: "Please select exactly 3." },
-    presetOf: "multi_select.checkbox",
+    supersededBy: "multi_select.checkbox",
   }),
   stable(F.multi, "icon_multi_select", "Icon Multi-Select", "Select any number of icons.", {
     baseType: "multi_select", renderer: "icons", responseModel: "multiple_choice",
@@ -701,11 +716,18 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: ["numeric_bounds", "scale_labels"], validations: VAL_NUM,
     supersededBy: "slider.single",
   }),
+  /*
+   * RETIRED. "All three have almost the same functionality and preview, with
+   * only the Percentage Slider displaying a percentage sign" — and that sign
+   * was a default end label. It also dropped `numeric_bounds` from its own
+   * capabilities while its defaults set a minimum and a maximum, so its
+   * editor hid the very fields it had filled in.
+   */
   stable(F.numeric, "percentage_slider", "Percentage Slider", "0–100 slider.", {
     baseType: "slider", responseModel: "numeric",
-    capabilities: ["scale_labels"], validations: ["required"],
+    capabilities: ["numeric_bounds", "scale_labels"], validations: VAL_NUM,
     defaults: { settings: { minValue: 0, maxValue: 100, sliderRightLabel: "100%" } },
-    presetOf: "slider.single",
+    supersededBy: "slider.single",
   }),
   stable(F.numeric, "numeric_range", "Numeric Range", "A from–to pair of numbers.", {
     // Two labelled numeric fields — exactly what a numeric list stores — so
@@ -887,19 +909,31 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     validations: ["required", "min_selections", "max_selections"],
     defaults: { settings: { rankMode: "click" } },
   }),
+  /*
+   * RETIRED. "Rank All allows respondents to rank all options, while Click to
+   * Rank can achieve the same functionality when no minimum or maximum
+   * validation is applied." The defaults carry the difference — `rankMode`
+   * and the instruction — and they are applied to the question at creation,
+   * so a Rank All question keeps ranking everything after the rewrite.
+   */
   stable(F.ranking, "rank_all", "Rank All Items", "Every item must receive a rank.", {
     baseType: "ranking", responseModel: "rank_order",
     capabilities: ["options", "sorting", "randomization", "carry_forward", "list_logic"],
     validations: ["required"],
     defaults: { settings: { rankMode: "all" }, instruction: "Please rank every item." },
-    presetOf: "ranking.click",
+    supersededBy: "ranking.click",
   }),
+  /*
+   * RETIRED. "Setting Max = 3 already allows respondents to rank only the top
+   * 3 options, which is the same functionality as Rank Top N = 3." It is —
+   * `rankMode: "top_n"` plus `maxSelections`, both stored on the question.
+   */
   stable(F.ranking, "top_n", "Rank Top N", "Respondents rank only their best N items and leave the rest unranked — \"rank your top 3 of 10\".", {
     baseType: "ranking", responseModel: "rank_order",
     capabilities: ["options", "sorting", "randomization", "carry_forward", "list_logic", "min_max_selections"],
     validations: ["required", "min_selections", "max_selections"],
     defaults: { settings: { rankMode: "top_n", maxSelections: 3 }, instruction: "Rank your top 3." },
-    presetOf: "ranking.click",
+    supersededBy: "ranking.click",
   }),
   stable(F.ranking, "image", "Image Ranking", "Rank images by tapping them in order.", {
     baseType: "image_ranking", responseModel: "rank_order",
@@ -955,11 +989,13 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     baseType: "slider", responseModel: "numeric",
     capabilities: ["numeric_bounds", "scale_labels"], validations: VAL_NUM,
   }),
+  /* RETIRED. Single Slider with `step: 1` — the review counted it as one of
+     the three sliders that are one slider, and it is. */
   stable(F.slider, "discrete", "Discrete Slider", "Slider snapping to whole steps.", {
     baseType: "slider", responseModel: "numeric",
     capabilities: ["numeric_bounds", "scale_labels"], validations: VAL_NUM,
     defaults: { settings: { step: 1 } },
-    presetOf: "slider.single",
+    supersededBy: "slider.single",
   }),
   stable(F.slider, "stars", "Star Rating", "1–N stars stored as a numeric score (up to 10).", {
     baseType: "numeric", renderer: "stars", responseModel: "numeric",

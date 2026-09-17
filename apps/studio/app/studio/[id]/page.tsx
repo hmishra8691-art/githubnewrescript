@@ -4,7 +4,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
 import { newSurveyDefinition } from "@/lib/defaults";
 import { Studio } from "@/components/studio/Studio";
-import { ensureElementIds } from "@rescript/engine";
+import { ensureElementIds, migrateRetiredVariants } from "@rescript/engine";
 import { projectPageGate } from "@/lib/guard";
 import { SESSION_COOKIE_NAME } from "@/lib/authServer";
 
@@ -108,7 +108,7 @@ export default async function StudioPage({ params }: { params: { id: string } })
          * rewritten. Deterministic, so the editor and the runtime agree about
          * what every element is called.
          */
-        definition = ensureElementIds(parsed.data).def;
+        definition = migrateRetiredVariants(ensureElementIds(parsed.data).def).def;
         versionId = ver.id;
       } else {
         loadError =
@@ -131,7 +131,14 @@ export default async function StudioPage({ params }: { params: { id: string } })
   if (survey.draft_definition) {
     const draft = SurveyDefinition.safeParse(survey.draft_definition);
     if (draft.success) {
-      definition = ensureElementIds(draft.data).def;
+      /*
+       * `migrateRetiredVariants` on the way in, beside the element-id
+       * backfill and for the same reason: a definition written before a
+       * variant was retired keeps resolving through `supersededBy`, and this
+       * is where the stored id catches up with it. A survey holding none is
+       * untouched.
+       */
+      definition = migrateRetiredVariants(ensureElementIds(draft.data).def).def;
       draftSavedAt = (survey.draft_updated_at as string) ?? null;
     } else {
       loadError =
