@@ -28,7 +28,7 @@ import { buildVariableDictionary } from "./variables.js";
 import { embeddedCatalog, isNamedEmbeddedField } from "./embedded.js";
 import { gridAxes, gridScaleOptions } from "./gridAxes.js";
 import { staleFields, shapeHasAxis } from "./questionShape.js";
-import { honoursColumns, drawsOptionImages } from "./rendererReads.js";
+import { honoursColumns, drawsOptionImages, honoursOrientation } from "./rendererReads.js";
 import { effectiveScale } from "./scale.js";
 
 /**
@@ -633,6 +633,15 @@ function lintInertSettings(q: Question, push: (i: Omit<LogicIssue, "questionId" 
       level: "warning",
       path: "settings.columnsLayout",
       message: `A column layout is set, but ${variant?.name ?? q.type} does not lay its options out in columns — the setting has no effect.`,
+    });
+  }
+
+  /* a horizontal arrangement on a renderer that has no row to arrange */
+  if (st.optionOrientation && !honoursOrientation(variant?.renderer, q.type)) {
+    push({
+      level: "warning",
+      path: "settings.optionOrientation",
+      message: `A horizontal layout is set, but ${variant?.name ?? q.type} does not arrange its options in a row — the setting has no effect.`,
     });
   }
 

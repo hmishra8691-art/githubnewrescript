@@ -913,6 +913,31 @@ export const Question = z.object({
       currencySymbol: z.string().optional(),
       symbolSide: z.enum(["left", "right"]).optional(),
       /**
+       * A LABEL ON A PARTICULAR POINT OF A SCALE.
+       *
+       * The end labels answer "what do the two extremes mean"; this answers
+       * "what does 5 mean", which is what the review asked for: 0 → Not at all
+       * likely, 5 → Likely, 10 → Extremely likely. Keyed by the point's own
+       * value as a string, so a scale that is re-ranged keeps the labels it
+       * still has points for and quietly drops the rest.
+       *
+       * Absent on every scale that does not want them, which is most of them.
+       */
+      scalePointLabels: z.record(z.string()).optional(),
+      /**
+       * HOW A LIST OF OPTIONS IS ARRANGED, when a column count is not the
+       * right way to say it.
+       *
+       * The review asked for a Horizontal / Vertical choice on Radio Button
+       * and Button Select, so a 0–10 scale can be built from them. That is
+       * the same concern as `columnsLayout` — where do the options go — so it
+       * is not a second control: the Studio offers one "Layout" list with
+       * `auto`, 1–4 columns and `horizontal`, and choosing one clears the
+       * other. Two controls that can contradict each other ("horizontal" and
+       * "3 columns") would be the next stale-state report.
+       */
+      optionOrientation: z.enum(["horizontal"]).optional(),
+      /**
        * Speech input on a text question (`speech_input` capability). The
        * respondent may dictate; the transcript lands in the ordinary text
        * value, so nothing downstream knows or cares that it was spoken.

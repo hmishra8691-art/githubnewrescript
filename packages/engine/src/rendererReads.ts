@@ -97,6 +97,22 @@ export const IMAGE_RENDERERS: ReadonlySet<string> = new Set([
   "base:image_ranking",
 ]);
 
+/**
+ * WHICH RENDERERS ARRANGE THEIR OPTIONS IN A ROW when asked to.
+ *
+ * `optionOrientation: "horizontal"` is read by the plain radio and checkbox
+ * lists (through `optionsClass`) and by the adaptive list; Button Select is
+ * already a wrapping row when no column count is set, so it honours it by
+ * construction. Nothing else does — a card grid arranged "horizontally" is
+ * just a card grid — so the Studio does not offer it there.
+ */
+export const ORIENTATION_RENDERERS: ReadonlySet<string> = new Set([
+  "buttons",
+  "adaptive",
+  "base:single_select",
+  "base:multi_select",
+]);
+
 /** The dispatch key for a question: its variant's renderer, or `base:<type>`. */
 export function rendererKey(renderer: string | undefined, baseType: string): string {
   return renderer ?? `base:${baseType}`;
@@ -117,4 +133,9 @@ export function honoursColumns(renderer: string | undefined, baseType: string): 
  */
 export function drawsOptionImages(renderer: string | undefined, baseType: string): boolean {
   return IMAGE_RENDERERS.has(rendererKey(renderer, baseType));
+}
+
+/** Will a horizontal arrangement change anything for this renderer? */
+export function honoursOrientation(renderer: string | undefined, baseType: string): boolean {
+  return ORIENTATION_RENDERERS.has(rendererKey(renderer, baseType));
 }

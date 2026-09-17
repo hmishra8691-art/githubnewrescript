@@ -184,6 +184,15 @@ export function uiOf(p: QRProps, id: string, params?: Record<string, unknown>, f
 
 /** N-column option layout (req §10) with a mobile fallback in CSS. */
 export function optionsClass(p: QRProps): string {
+  /*
+   * "Horizontal" is a layout, not a second setting fighting the first. The
+   * review asked for a Horizontal / Vertical choice on Radio and Button
+   * Select so a 0–10 scale can be built from them; it is the same question as
+   * "how many columns", so the Studio offers one list and choosing one
+   * clears the other. A question that has neither is a vertical list, exactly
+   * as it always was.
+   */
+  if (p.q.settings.optionOrientation === "horizontal") return "rs-options horizontal";
   const n = p.q.settings.columnsLayout ?? 1;
   return n > 1 ? `rs-options cols-${Math.min(n, 4)}` : "rs-options";
 }
@@ -774,17 +783,28 @@ export function Nps(p: QRProps) {
   return (
     <div className="rs-nps-wrap">
       <div className="rs-nps">
-        {Array.from({ length: max - min + 1 }, (_, i) => min + i).map((n) => (
-          <button
-            key={n}
-            type="button"
-            {...anchor("scalepoint", n)}
-            className={String(p.value) === String(n) ? "selected" : ""}
-            onClick={() => p.onChange(n)}
-          >
-            {n}
-          </button>
-        ))}
+        {Array.from({ length: max - min + 1 }, (_, i) => min + i).map((n) => {
+          /*
+           * A label on THIS point. The end labels say what the extremes
+           * mean; the review asked to be able to say what 5 means too, which
+           * is what a scale with a labelled midpoint needs.
+           */
+          const pointLabel = p.q.settings.scalePointLabels?.[String(n)];
+          return (
+            <span key={n} className={`rs-nps-point ${pointLabel ? "labelled" : ""}`}>
+              <button
+                type="button"
+                {...anchor("scalepoint", n)}
+                className={String(p.value) === String(n) ? "selected" : ""}
+                aria-label={pointLabel ? `${n} — ${pointLabel}` : undefined}
+                onClick={() => p.onChange(n)}
+              >
+                {n}
+              </button>
+              {pointLabel && <span className="rs-nps-point-label">{pointLabel}</span>}
+            </span>
+          );
+        })}
       </div>
       <div className="rs-nps-labels">
         <span>{p.q.settings.npsLeftLabel ?? "Not at all likely"}</span>
@@ -798,6 +818,7 @@ export function Slider(p: QRProps) {
   const min = p.q.settings.minValue ?? 0;
   const max = p.q.settings.maxValue ?? 100;
   const val = p.value == null ? Math.round((min + max) / 2) : Number(p.value);
+  const unit = affixFor(p.q.settings);
   return (
     <div>
       <div className="rs-slider-row">
@@ -807,7 +828,18 @@ export function Slider(p: QRProps) {
           onChange={(e) => p.onChange(Number(e.target.value))}
         />
         <span style={{ fontSize: "0.85em", color: "var(--rs-subtle)" }}>{p.q.settings.sliderRightLabel ?? max}</span>
-        <span className="rs-slider-val">{p.value == null ? "—" : String(p.value)}</span>
+        {/*
+          * The unit the review asked for when it proposed keeping one slider:
+          * "add a unit/symbol toggle in Single Slider so the programmer can
+          * optionally add %, points, or other symbols as required". It is the
+          * same affix mechanism the numeric questions use, so there is one
+          * place to set a symbol and one place that draws it.
+          */}
+        <span className="rs-slider-val">
+          {unit?.side === "left" && <span className="rs-prefix">{unit.text}</span>}
+          {p.value == null ? "—" : String(p.value)}
+          {unit?.side === "right" && <span className="rs-prefix">{unit.text}</span>}
+        </span>
       </div>
     </div>
   );

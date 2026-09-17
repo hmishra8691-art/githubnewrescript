@@ -5,7 +5,7 @@ import { CountInput } from "./CountInput";
 import React from "react";
 import type { Question, Option, QuestionColumn, ResponseType, QuestionVariantDef } from "@rescript/schema";
 import { questionTypeRegistry, variantRegistry, resolveVariant } from "@rescript/schema";
-import { honoursColumns, drawsOptionImages } from "@rescript/renderer";
+import { honoursColumns, drawsOptionImages, honoursOrientation } from "@rescript/renderer";
 import { VariantPickerModal, VariantSwitcher, createFromVariant } from "./VariantPicker";
 import { RichTextEditor } from "./RichTextEditor";
 import { OptionLogicEditor } from "./OptionLogicEditor";
@@ -737,6 +737,18 @@ export function QuestionEditor({ q }: { q: Question }) {
     if (ns.length < 2 || ns.some((n) => !Number.isFinite(n))) return false;
     return ns.some((n, i) => i > 0 && n < ns[i - 1]);
   }, [q.options]);
+  /*
+   * The points a scale actually has, for the per-point label editor. Taken
+   * from the effective scale rather than the raw settings, so a range the
+   * variant does not allow cannot produce labels for points nobody will see.
+   */
+  const scalePoints = React.useMemo(() => {
+    if (q.type !== "nps" && variantDef?.renderer !== "emoji") return [] as number[];
+    const { min, max } = scaleShown;
+    if (!Number.isFinite(min) || !Number.isFinite(max) || max < min) return [] as number[];
+    return Array.from({ length: max - min + 1 }, (_, i) => min + i);
+  }, [q.type, variantDef?.renderer, scaleShown.min, scaleShown.max]);
+  const pointLabelCount = Object.keys(q.settings.scalePointLabels ?? {}).length;
   /** does this question carry a validation rule of this kind? */
   const hasRule = (kind: string) => q.validation.some((r) => r.kind === kind);
   const scaleLabelKeys: readonly [string, string] | null =
@@ -848,15 +860,30 @@ export function QuestionEditor({ q }: { q: Question }) {
              * the fix changes what the editor can say, not what any existing
              * survey looks like.
              */
-            <label className="f" style={{ marginBottom: 0, width: 150 }}><span>Layout</span>
+            <label className="f" style={{ marginBottom: 0, width: 175 }}><span>Layout</span>
               <select className="select" data-testid="layout-columns"
-                value={q.settings.columnsLayout ?? ""}
-                onChange={(e) => patchSettings({ columnsLayout: e.target.value === "" ? undefined : Number(e.target.value) })}>
+                value={q.settings.optionOrientation === "horizontal" ? "horizontal" : String(q.settings.columnsLayout ?? "")}
+                onChange={(e) => {
+                  /*
+                   * ONE CONTROL, NOT TWO. The review asked for a
+                   * Horizontal / Vertical choice on Radio and Button Select;
+                   * that is the same question as "how many columns", so it
+                   * lives in the same list. Choosing one clears the other,
+                   * because "horizontal" and "3 columns" together is a
+                   * contradiction the renderer would have to guess at — and a
+                   * setting that is guessed at is the next report.
+                   */
+                  const v = e.target.value;
+                  if (v === "horizontal") patchSettings({ optionOrientation: "horizontal", columnsLayout: undefined });
+                  else patchSettings({ optionOrientation: undefined, columnsLayout: v === "" ? undefined : Number(v) });
+                }}>
                 <option value="">auto (fit width)</option>
                 <option value={1}>1 column</option>
                 <option value={2}>2 columns</option>
                 <option value={3}>3 columns</option>
                 <option value={4}>4 columns</option>
+                {/* offered only where a row is a thing this renderer can draw */}
+                {honoursOrientation(variantDef?.renderer, q.type) && <option value="horizontal">horizontal row</option>}
               </select></label>)}
             {/*
               * The search box stopped being a surprise. It used to appear on
@@ -1115,6 +1142,38 @@ export function QuestionEditor({ q }: { q: Question }) {
               value={(q.settings as Record<string, unknown>)[scaleLabelKeys[1]] as string ?? ""}
               onChange={(e) => patchSettings({ [scaleLabelKeys[1]]: e.target.value || undefined } as Partial<Question["settings"]>)} /></label>
         </div>
+      )}
+
+      {/*
+        * LABELS ON PARTICULAR SCALE POINTS.
+        *
+        * The end labels say what the extremes mean. The review asked to be
+        * able to say what the middle means too — "0 → Not at all likely,
+        * 5 → Likely, 10 → Extremely likely" — which is what a scale with a
+        * labelled midpoint needs and what nothing in the product offered.
+        * Only drawn for a scale short enough to label point by point.
+        */}
+      {has("scale_labels") && scaleLabelKeys?.[0] === "npsLeftLabel" && scalePoints.length > 0 && scalePoints.length <= 16 && (
+        <details className="card" style={{ padding: 10 }} data-testid="scale-point-labels">
+          <summary style={{ cursor: "pointer", fontSize: 13.5 }}>
+            Label individual points{pointLabelCount ? ` — ${pointLabelCount} set` : ""}
+          </summary>
+          <div className="row" style={{ flexWrap: "wrap", marginTop: 8 }}>
+            {scalePoints.map((n) => (
+              <label key={n} className="f" style={{ width: 150, marginBottom: 6 }}>
+                <span>{n}</span>
+                <input className="input" data-testid={`scale-point-${n}`}
+                  placeholder="(no label)"
+                  value={q.settings.scalePointLabels?.[String(n)] ?? ""}
+                  onChange={(e) => {
+                    const next = { ...(q.settings.scalePointLabels ?? {}) };
+                    if (e.target.value) next[String(n)] = e.target.value; else delete next[String(n)];
+                    patchSettings({ scalePointLabels: Object.keys(next).length ? next : undefined });
+                  }} />
+              </label>
+            ))}
+          </div>
+        </details>
       )}
 
       {q.options.some((o) => o.flags?.includes("other_specify")) && (

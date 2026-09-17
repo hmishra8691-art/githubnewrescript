@@ -985,9 +985,16 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   }),
 
   /* ---------------------------------------------------------------- SLIDER */
-  stable(F.slider, "single", "Single Slider", "One continuous slider.", {
+  /*
+   * One slider, with a unit. The review retired Percentage Slider and
+   * Discrete Slider into this one and asked for "a unit/symbol toggle in
+   * Single Slider so the programmer can optionally add %, points, or other
+   * symbols" — `currency_symbol` is that toggle, the same one the numeric
+   * questions use, so there is one place to set a symbol in the product.
+   */
+  stable(F.slider, "single", "Single Slider", "One continuous slider, with an optional unit.", {
     baseType: "slider", responseModel: "numeric",
-    capabilities: ["numeric_bounds", "scale_labels"], validations: VAL_NUM,
+    capabilities: ["numeric_bounds", "scale_labels", "currency_symbol"], validations: VAL_NUM,
   }),
   /* RETIRED. Single Slider with `step: 1` — the review counted it as one of
      the three sliders that are one slider, and it is. */

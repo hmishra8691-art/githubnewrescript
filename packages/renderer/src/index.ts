@@ -22,7 +22,7 @@ export type { QRProps } from "./QuestionRenderer";
  * on. The names stay importable from here, because "what does this renderer
  * read" is a question you ask the renderer package.
  */
-export { COLUMN_RENDERERS, IMAGE_RENDERERS, rendererKey, honoursColumns, drawsOptionImages } from "@rescript/engine";
+export { COLUMN_RENDERERS, IMAGE_RENDERERS, ORIENTATION_RENDERERS, rendererKey, honoursColumns, drawsOptionImages, honoursOrientation } from "@rescript/engine";
 export { MediaEmbed, SafeImage } from "./Media";
 export { SpeechInputButton, speechInputAvailable } from "./SpeechInput";
 export { startLiveCaptions, liveCaptionsAvailable, type LiveCaptions, type CaptionState } from "./liveCaptions";
