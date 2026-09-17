@@ -129,7 +129,10 @@ function OptionProps({ q, code, ann, patch, onSelect }: {
 
       <h3 className="sec">Behaviour</h3>
       <div className="lc-flags">
-        {["exclusive", "other_specify", "none_of_above", "dont_know", "refused", "anchor_top", "anchor_bottom"].map((f) => (
+        {/* the three retired synonyms of `exclusive` are gone — see schema's
+            `normalizeOptionFlags`; this list and the Questions panel's must
+            agree, or the canvas offers what the panel does not */}
+        {["exclusive", "other_specify", "anchor_top", "anchor_bottom"].map((f) => (
           <label key={f} className="lc-flag-row">
             <input type="checkbox" checked={flag(f)} data-testid={`opt-flag-${f}`} onChange={() => toggleFlag(f)} />
             <span>{f.replace(/_/g, " ")}</span>

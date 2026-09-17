@@ -204,7 +204,7 @@ export function buildScreenerSurvey(surveyId = "screener"): SurveyDefinition {
       text: "Which of these have you bought in the last three months?",
       options: opts([
         "Coffee", "Tea", "Soft drinks", "Bottled water", "Energy drinks",
-        { code: 98, label: "None of these", flags: ["exclusive", "none_of_above", "anchor_bottom"] },
+        { code: 98, label: "None of these", flags: ["exclusive", "anchor_bottom"] },
       ]),
       skipLogic: [screenOut("sk_category", rule("q_category", "selected", 98))],
     },
@@ -242,7 +242,7 @@ export function buildBrandTrackerSurvey(surveyId = "brand-tracker"): SurveyDefin
     {
       id: "q_aware", code: "Q1", variableName: "AWARE", type: "multi_select", required: true,
       text: "Which of these brands have you heard of?",
-      options: [...BRANDS, { code: 98, label: "None of these", flags: ["exclusive", "none_of_above", "anchor_bottom"] }],
+      options: [...BRANDS, { code: 98, label: "None of these", flags: ["exclusive", "anchor_bottom"] }],
       randomization: { enabled: true, scope: "options", method: "shuffle" },
     },
     {

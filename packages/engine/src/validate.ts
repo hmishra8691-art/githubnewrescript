@@ -129,6 +129,19 @@ function asDate(value: unknown): number | null {
 const PHONE_RE = /^[+()\-.\s\d]{7,}$/;
 
 /**
+ * How many things this answer selects, or null when the answer is not a
+ * selection at all (a grid's record, a geo pin). A bare code counts as one:
+ * it is one selection stored without its array, which is exactly the shape
+ * that used to slip past the selection rules unchecked.
+ */
+function selectionCount(value: unknown): number | null {
+  if (Array.isArray(value)) return value.length;
+  if (value == null || value === "") return 0;
+  if (typeof value === "object") return null;
+  return 1;
+}
+
+/**
  * One item's validation rules against one value.
  *
  * Exported because count conditions ask the same question of a single grid
@@ -167,19 +180,43 @@ export function checkScalarRules(
         if (!isEmpty(value) && String(value).length > Number(rule.value))
           fail(ruleError(rule, `Please enter at most ${rule.value} characters.`));
         break;
-      case "min_selections":
-        if (Array.isArray(value) && value.length < Number(rule.value))
+      /*
+       * `selectionCount` rather than `Array.isArray(value) &&`. The guard was
+       * a silent skip: a multi-select whose answer arrived as a bare code
+       * rather than a one-element array — which happens on a resumed session,
+       * on a question whose type was changed, and on any posted save — passed
+       * a "select at least 2" rule without being looked at. Counting instead
+       * of type-testing means an answer that is present is always measured.
+       */
+      case "min_selections": {
+        const n = selectionCount(value);
+        if (n != null && n < Number(rule.value) && !isEmpty(value))
           fail(ruleError(rule, `Select at least ${rule.value}.`));
         break;
-      case "max_selections":
-        if (Array.isArray(value) && value.length > Number(rule.value))
+      }
+      case "max_selections": {
+        const n = selectionCount(value);
+        if (n != null && n > Number(rule.value))
           fail(ruleError(rule, `Select at most ${rule.value}.`));
         break;
+      }
       case "pattern":
+        /*
+         * AN UNPARSEABLE PATTERN IS AN AUTHORING ERROR, NOT A PASS.
+         *
+         * This used to be `catch { /* ignore * / }`, so a regex with a stray
+         * bracket made the question accept literally anything, silently, for
+         * the life of the survey. The review reported the symptom ("the regex
+         * validation is not working properly") without being able to see the
+         * cause. It is reported to the author by the lint now, and here the
+         * rule fails closed with a message rather than passing everything.
+         */
         try {
           if (!isEmpty(value) && !new RegExp(String(rule.value)).test(String(value)))
             fail(ruleError(rule, "Invalid format."));
-        } catch { /* bad regex — ignore */ }
+        } catch {
+          if (!isEmpty(value)) fail(ruleError(rule, "This answer cannot be checked — the question's pattern is not valid."));
+        }
         break;
       case "email":
         if (!isEmpty(value) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value)))
@@ -404,6 +441,28 @@ export function validateQuestion(
       push(uiText(ctx.ui, "min_selections", { n: q.settings.minSelections }));
     if (q.settings.maxSelections != null && value.length > q.settings.maxSelections)
       push(uiText(ctx.ui, "max_selections", { n: q.settings.maxSelections }));
+    /*
+     * EXCLUSIVITY, CHECKED WHERE IT CANNOT BE BYPASSED.
+     *
+     * It lived entirely in the renderer's `toggleMultiValue` — grep for
+     * `exclusive` in this file before this commit and there were no matches.
+     * That was survivable only while every renderer remembered to call it,
+     * and one did not: Image Multi-Select pushed and filtered by hand, so an
+     * exclusive option could be held alongside others (the review reported
+     * exactly that). A value that arrives from a resumed session, a Back
+     * button or a posted save was never re-checked at all.
+     *
+     * So the rule is stated once, here, where every path meets.
+     */
+    if (value.length > 1 && Array.isArray(q.options)) {
+      const excl = q.options.filter((o) => o.flags?.includes("exclusive")).map((o) => String(o.code));
+      const chosen = value.map((v) => String(v));
+      const hit = excl.find((c) => chosen.includes(c));
+      if (hit) {
+        const label = (q.options.find((o) => String(o.code) === hit)?.label ?? "").replace(/<[^>]*>/g, "").trim();
+        push(uiText(ctx.ui, "exclusive_option", { label }, `“${label}” cannot be selected together with other answers.`));
+      }
+    }
   }
 
   // a from–to pair (numeric range, dual slider): the order has to hold

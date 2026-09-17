@@ -940,11 +940,16 @@ function applyMask<T extends ItemWithLogic & { flags?: string[]; code: string | 
    * mask changes behaviour. New masks can state the two independently.
    */
   const protectSpecials = mask.protectAlwaysShow ?? (fallback === "always_show_only");
+  /*
+   * `exclusive` is in this list now and the three retired synonyms are gone —
+   * they fold into it on parse. It was missing before, which meant an option
+   * flagged plainly "exclusive" was NOT protected from a mask while the same
+   * option flagged "none of above" was, for no reason anybody could state.
+   */
   const protectedItem = (i: T) =>
     protectSpecials &&
     (isAlwaysShow(i) ||
-      !!i.flags?.some((f) =>
-        ["other_specify", "none_of_above", "dont_know", "refused"].includes(f)));
+      !!i.flags?.some((f) => ["other_specify", "exclusive"].includes(f)));
 
   let out = items;
   switch (mask.action) {
@@ -1074,8 +1079,10 @@ function alwaysShowCodes<T extends ItemWithLogic>(items: T[]): Set<string> {
 }
 
 const isAnchoredTop = (f?: string[]) => !!f?.includes("anchor_top");
+/* An exclusive option ("None of these", "Don't know") belongs at the bottom of
+   a randomized list — the same rule the three retired flags used to carry. */
 const isAnchoredBottom = (f?: string[]) =>
-  !!f?.some((x) => ["anchor_bottom", "none_of_above", "dont_know", "refused"].includes(x));
+  !!f?.some((x) => ["anchor_bottom", "exclusive"].includes(x));
 
 function randomizeItems<T extends { code: string | number; flags?: string[] }>(
   items: T[],

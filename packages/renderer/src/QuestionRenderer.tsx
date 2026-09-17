@@ -170,9 +170,7 @@ export function OtherSpecifyFallback(p: QRProps) {
   );
 }
 
-export const EXCLUSIVE = (o: Option) =>
-  o.flags?.includes("exclusive") || o.flags?.includes("none_of_above") ||
-  o.flags?.includes("dont_know") || o.flags?.includes("refused");
+export const EXCLUSIVE = (o: Option) => !!o.flags?.includes("exclusive");
 
 export function ctxOf(p: QRProps): EvalContext {
   return { def: p.def, state: p.state, loop: p.loop, ui: p.ui };
@@ -210,8 +208,21 @@ export function gridColumnsStyle(p: QRProps, fallback: string): React.CSSPropert
     : { gridTemplateColumns: fallback };
 }
 
-/** Search box for long option lists (req §9). */
-export function useOptionFilter(options: Option[], threshold = 25, ui?: Record<string, string>) {
+/**
+ * Search box for long option lists (req §9).
+ *
+ * `mode` is the author's choice (`settings.optionSearch`). It used to be the
+ * threshold alone, hard-coded at every call site, so a list of twenty-six
+ * options grew a search field nobody asked for and a list of twenty-four did
+ * not — the review reported exactly that. "auto" keeps the old rule, which is
+ * why no question already in field changes.
+ */
+export function useOptionFilter(
+  options: Option[],
+  threshold = 25,
+  ui?: Record<string, string>,
+  mode?: "auto" | "always" | "never",
+) {
   const [filter, setFilter] = React.useState("");
   const filtered = React.useMemo(() => {
     if (!filter.trim()) return options;
@@ -220,8 +231,12 @@ export function useOptionFilter(options: Option[], threshold = 25, ui?: Record<s
       o.label.replace(/<[^>]*>/g, "").toLowerCase().includes(f),
     );
   }, [options, filter]);
+  const wanted =
+    mode === "never" ? false
+      : mode === "always" ? true
+        : options.length > threshold;
   const searchBox =
-    options.length > threshold ? (
+    wanted ? (
       <input
         className="rs-input rs-optfilter"
         placeholder={uiText(ui, "search_options", { n: options.length })}
@@ -235,7 +250,7 @@ export function useOptionFilter(options: Option[], threshold = 25, ui?: Record<s
 /* ------------------------------------------------ single select / dropdown */
 export function SingleSelect(p: QRProps) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
-  const { filtered, searchBox } = useOptionFilter(options, 25, p.ui);
+  const { filtered, searchBox } = useOptionFilter(options, 25, p.ui, p.q.settings.optionSearch);
   return (
     <div>
     {searchBox}
@@ -264,7 +279,7 @@ export function SingleSelect(p: QRProps) {
 
 export function MultiSelect(p: QRProps) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
-  const { filtered, searchBox } = useOptionFilter(options, 25, p.ui);
+  const { filtered, searchBox } = useOptionFilter(options, 25, p.ui, p.q.settings.optionSearch);
   const vals: (string | number)[] = Array.isArray(p.value) ? (p.value as any) : [];
   const toggle = (o: Option) =>
     p.onChange(toggleMultiValue(vals, o.code, options, p.q.settings.maxSelections));
@@ -439,11 +454,16 @@ export function MultiDropdown(p: QRProps) {
                 >
                   <input type="checkbox" readOnly checked={sel} disabled={disabled} />
                   <span dangerouslySetInnerHTML={{ __html: o.label }} />
-                  {EXCLUSIVE(o) && (
-                    <span style={{ marginLeft: "auto", fontSize: "0.75em", color: "var(--rs-subtle)" }}>
-                      exclusive
-                    </span>
-                  )}
+                  {/*
+                    * There used to be an "exclusive" label here, printed to
+                    * the RESPONDENT next to the option. `exclusive` is a
+                    * programming instruction — it says what selecting the
+                    * option does to the other selections — and it leaked into
+                    * the survey, so a respondent reading a multi-select
+                    * dropdown saw the word beside "Don't know". The review
+                    * asked for it to go and for the behaviour to stay, which
+                    * is what `toggle` below does.
+                    */}
                 </div>
               );
             })}
@@ -880,8 +900,16 @@ export function ImageSelect(p: QRProps & { multi?: boolean; ranking?: boolean })
       const on = vals.some((v) => String(v) === String(o.code));
       p.onChange(on ? vals.filter((v) => String(v) !== String(o.code)) : [...vals, o.code]);
     } else if (p.multi) {
-      const on = vals.some((v) => String(v) === String(o.code));
-      p.onChange(on ? vals.filter((v) => String(v) !== String(o.code)) : [...vals, o.code]);
+      /*
+       * `toggleMultiValue`, like every other multi-select path in this file.
+       * This branch was a raw push/filter, which is why the review found
+       * that an Exclusive option on an Image Multi-Select could be held
+       * alongside other answers: exclusivity lives in `toggleMultiValue`,
+       * and this was the one selection path that never called it. The same
+       * omission meant `maxSelections` was not enforced here either — the
+       * setting was read only to decide single versus multi.
+       */
+      p.onChange(toggleMultiValue(vals, o.code, options, p.q.settings.maxSelections));
     } else {
       p.onChange(o.code);
     }
@@ -1282,7 +1310,7 @@ export const ANCHOR_CHOICES: { value: string; label: string }[] = [
 /** Button Select / Button Multi-Select — large tap targets, exclusive-aware. */
 export function ChoiceButtons(p: QRProps & { multi: boolean }) {
   const { options } = effectiveQuestion(p.q, ctxOf(p));
-  const { filtered, searchBox } = useOptionFilter(options, 25, p.ui);
+  const { filtered, searchBox } = useOptionFilter(options, 25, p.ui, p.q.settings.optionSearch);
   const vals: (string | number)[] = p.multi
     ? Array.isArray(p.value) ? (p.value as any) : []
     : p.value == null ? [] : [p.value as any];

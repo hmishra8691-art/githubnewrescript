@@ -151,7 +151,7 @@ export type MaskEmptySourceFallback = z.infer<typeof MaskEmptySourceFallback>;
 export const OptionMask = z.object({
   expr: SetExpr,
   action: MaskAction.default("display"),
-  /** Options flagged Always Show, or special (other/none/dk/refused), stay. */
+  /** Options flagged Always Show, or special (other/specify, exclusive), stay. */
   keepAlwaysShow: z.boolean().default(true),
   /** See `MaskEmptySourceFallback`. Optional — derived from `keepAlwaysShow` when absent. */
   onEmptySource: MaskEmptySourceFallback.optional(),

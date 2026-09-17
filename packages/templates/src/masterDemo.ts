@@ -38,7 +38,7 @@ export const BRANDS: OptSpec[] = [
   { code: 7, label: "Microsoft" }, { code: 8, label: "Amazon" }, { code: 9, label: "Huawei" },
   { code: 10, label: "Lenovo" }, { code: 11, label: "Dell" }, { code: 12, label: "LG" },
 ];
-const NONE_BRAND: OptSpec = { code: 98, label: "None of these", flags: ["exclusive", "none_of_above", "anchor_bottom"] };
+const NONE_BRAND: OptSpec = { code: 98, label: "None of these", flags: ["exclusive", "anchor_bottom"] };
 
 /**
  * LOOP_001's reference table. It is written ONLY into the loop node
@@ -262,7 +262,7 @@ export function buildMasterDemoSurvey(surveyId = "master-demo"): SurveyDefinitio
   });
   Q({
     id: "q_income", variableName: "INCOME", type: "dropdown", text: "What is your total annual household income before tax?", required: true,
-    options: opts(["Under $25,000", "$25,000 – $49,999", "$50,000 – $74,999", "$75,000 – $99,999", "$100,000 – $149,999", "$150,000 – $199,999", "$200,000 – $299,999", "$300,000 or more", { code: 98, label: "Don't know", flags: ["dont_know", "anchor_bottom"] }, { code: 99, label: "Prefer not to say", flags: ["refused", "anchor_bottom"] }]),
+    options: opts(["Under $25,000", "$25,000 – $49,999", "$50,000 – $74,999", "$75,000 – $99,999", "$100,000 – $149,999", "$150,000 – $199,999", "$200,000 – $299,999", "$300,000 or more", { code: 98, label: "Don't know", flags: ["anchor_bottom"] }, { code: 99, label: "Prefer not to say", flags: ["anchor_bottom"] }]),
     notes: "[DEMO: Display-logic driver] Income ≥ $100k (codes 5–8) unlocks the investment questions in the finance page.",
   });
   single("q_education", "EDUCATION", "What is the highest level of education you have completed?", opts(["Some high school", "High school diploma", "Some college / vocational", "Associate degree", "Bachelor's degree", "Master's degree", "Doctorate / professional degree", { code: 99, label: "Prefer not to say", flags: ["anchor_bottom"] }]));

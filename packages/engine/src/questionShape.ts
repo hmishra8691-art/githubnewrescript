@@ -711,7 +711,7 @@ export function migrateQuestionType(
      * and dropdowns that have no exclusivity to configure, and deleting them
      * on a type change would quietly change what the data can say.
      */
-    const SPECIAL = ["exclusive", "none_of_above"];
+    const SPECIAL = ["exclusive"];
     let hit = 0;
     q.options = (q.options ?? []).map((o) => {
       const flags = (o.flags ?? []).filter((f) => !SPECIAL.includes(f));

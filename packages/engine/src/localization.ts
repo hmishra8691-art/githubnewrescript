@@ -94,6 +94,7 @@ export const UI_STRINGS: { id: string; en: string; hint: string }[] = [
   { id: "max_value", en: "Value must be at most {max}.", hint: "validation" },
   { id: "min_selections", en: "Select at least {n}.", hint: "validation" },
   { id: "max_selections", en: "Select at most {n}.", hint: "validation" },
+  { id: "exclusive_option", en: "“{label}” cannot be selected together with other answers.", hint: "validation — an exclusive option was combined with others" },
   { id: "date_min", en: "Please choose a date on or after {date}.", hint: "validation" },
   { id: "date_max", en: "Please choose a date on or before {date}.", hint: "validation" },
   { id: "date_weekday", en: "That day of the week is not available — please choose another date.", hint: "validation" },

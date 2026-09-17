@@ -260,7 +260,7 @@ export function spokenSegments(def: SurveyDefinition, q: Question, ctx: EvalCont
     const speakable = input.options.filter((o) => {
       const flags = o.flags ?? [];
       if (flags.includes("other_specify") && !r.speakOther) return false;
-      if ((flags.includes("none_of_above") || flags.includes("exclusive")) && !r.speakNone) return false;
+      if (flags.includes("exclusive") && !r.speakNone) return false;
       return true;
     });
     const list = r.optionMode === "first_n" ? speakable.slice(0, r.firstN) : speakable;
@@ -364,7 +364,7 @@ export function applicableCommands(q: Question, hasAnswer: boolean, canGoBack: b
   if (!q.required) out.push("skip");
   if (hasOptions) out.push("read_options", "select");
   if (hasOptions && (q.type === "multi_select" || q.type === "multi_dropdown")) out.push("remove");
-  if (hasOptions && q.options.some((o) => (o.flags ?? []).some((f) => f === "none_of_above" || f === "exclusive"))) out.push("none");
+  if (hasOptions && q.options.some((o) => (o.flags ?? []).includes("exclusive"))) out.push("none");
   if (hasOptions && q.options.some((o) => (o.flags ?? []).includes("other_specify"))) out.push("other");
   if (/^matrix_/.test(q.type)) out.push("row");
   void hasAnswer;
@@ -426,7 +426,7 @@ export function matchSpokenAnswer(q: Question, transcript: string, visible: Opti
   const body = text.replace(removeRe, " ").replace(/\s+/g, " ").trim();
 
   // special options
-  const noneOpt = visible.find((o) => (o.flags ?? []).some((f) => f === "none_of_above" || f === "exclusive"));
+  const noneOpt = visible.find((o) => (o.flags ?? []).includes("exclusive"));
   const otherOpt = visible.find((o) => (o.flags ?? []).includes("other_specify"));
   if (/^(none|none of the above|none of these|nothing|no)$/.test(body) && noneOpt) {
     return { ...result, codes: [String(noneOpt.code)], none: true, confidence: recognitionConfidence };

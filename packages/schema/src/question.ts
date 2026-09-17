@@ -126,14 +126,68 @@ export const FieldType = z.enum([
 export type FieldType = z.infer<typeof FieldType>;
 
 export const OptionFlag = z.enum([
-  "exclusive", // "None of the above" behaviour
+  "exclusive", // selecting it clears every other selection
   "other_specify", // shows a text input when selected
+  /*
+   * RETIRED, AND STILL PARSED. See `RETIRED_OPTION_FLAGS` below: these three
+   * were four names for one behaviour, and are folded into `exclusive` on
+   * parse. They stay in the enum because every survey definition already in
+   * the database may contain them, and a value the parser rejects takes a
+   * live survey dark — `SurveyDefinition.safeParse` failing is not a
+   * migration, it is an outage.
+   */
   "none_of_above",
   "dont_know",
   "refused",
   "anchor_top",
   "anchor_bottom", // excluded from randomization
 ]);
+
+/**
+ * FOUR NAMES FOR ONE BEHAVIOUR.
+ *
+ * The September 2026 question-type review put it plainly: mark an option
+ * "None of the Above", "Don't Know" or "Refused" and it behaves exactly like
+ * "Exclusive" — selecting it clears the rest. That was not an oversight in
+ * the editor, it was the truth about the engine: `isExclusiveOption` has
+ * always treated all four as one thing, and nothing anywhere ever gave them
+ * different behaviour.
+ *
+ * Meanwhile they were read INCONSISTENTLY by everything else. Carry-forward
+ * had two different lists of them in two functions, one of which omitted
+ * `exclusive` entirely; the AI conversation engine counted only two of the
+ * four as "none"; the shape migration kept two and dropped two. Four
+ * synonyms, six opinions.
+ *
+ * So there is one flag now. The three are folded into `exclusive` as a
+ * definition is parsed, which means every consumer — renderer, validator,
+ * exporter, carry-forward, masking, analytics — sees the same single flag
+ * without each having to remember the list. An option that carried two of
+ * them does not end up with a duplicate: the fold de-duplicates.
+ *
+ * What is lost is a label the programmer could see in the editor, and what is
+ * gained is that the label can no longer promise behaviour the engine does
+ * not have. An option that means "Don't know" says so in its own text, which
+ * is what the respondent reads anyway.
+ */
+export const RETIRED_OPTION_FLAGS = ["none_of_above", "dont_know", "refused"] as const;
+
+/** The three retired flags folded into `exclusive`, order preserved, deduped. */
+export function normalizeOptionFlags(flags: readonly string[] | undefined): string[] {
+  if (!flags?.length) return [];
+  const out: string[] = [];
+  for (const f of flags) {
+    const mapped = (RETIRED_OPTION_FLAGS as readonly string[]).includes(f) ? "exclusive" : f;
+    if (!out.includes(mapped)) out.push(mapped);
+  }
+  return out;
+}
+
+/** `z.array(OptionFlag)` with the retirement applied — used by every flag field. */
+const OptionFlags = z
+  .array(OptionFlag)
+  .default([])
+  .transform((fs) => normalizeOptionFlags(fs) as z.infer<typeof OptionFlag>[]);
 
 export const Option = z.object({
   /**
@@ -163,7 +217,7 @@ export const Option = z.object({
    * picture says something the label does not.
    */
   imageAlt: z.string().optional(),
-  flags: z.array(OptionFlag).default([]),
+  flags: OptionFlags,
   /** Show this option only when the condition holds. */
   visibleIf: Condition.optional(),
   /**
@@ -457,7 +511,7 @@ export const QuestionColumn = z.object({
    */
   logic: OptionLogic.optional(),
   /** Mirrors `Option.flags`/`QuestionRow.flags` (e.g. a "Not applicable" column). */
-  flags: z.array(OptionFlag).default([]),
+  flags: OptionFlags,
 });
 export type QuestionColumn = z.infer<typeof QuestionColumn>;
 
@@ -469,7 +523,7 @@ export const QuestionRow = z.object({
   visibleIf: Condition.optional(),
   /** Rows share the option-level logic model (same engine, same editor). */
   logic: OptionLogic.optional(),
-  flags: z.array(OptionFlag).default([]),
+  flags: OptionFlags,
   /** Form-style list questions: the input type of this row's field. */
   fieldType: FieldType.optional(),
   /** Field-level validation for this row (req §5). */
@@ -804,6 +858,20 @@ export const Question = z.object({
       optionOrder: z
         .enum(["original", "az", "za", "numeric_asc", "numeric_desc"])
         .optional(),
+      /**
+       * WHETHER THE RESPONDENT GETS A SEARCH BOX OVER THE OPTION LIST.
+       *
+       * It used to appear by itself the moment a list passed twenty-five
+       * options — a hard-coded literal at three call sites that no setting
+       * could reach. A question with twenty-four options looked one way and
+       * the same question with twenty-six looked another, and the programmer
+       * was never asked. The review called that out as a feature arriving
+       * uninvited, which is what it was.
+       *
+       * "auto" is that old behaviour and stays the default, so nothing in
+       * field changes; "always" and "never" are the author saying so.
+       */
+      optionSearch: z.enum(["auto", "always", "never"]).optional(),
       placeholder: z.string().optional(),
       /**
        * Speech input on a text question (`speech_input` capability). The

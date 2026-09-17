@@ -468,7 +468,7 @@ export function MaskingBuilder({ q, patch, field = "mask" }: {
   const protectedItems = items.filter(
     (o) =>
       o.logic?.visibility === "always_show" ||
-      o.flags?.some((f) => ["other_specify", "none_of_above", "dont_know", "refused"].includes(f)),
+      o.flags?.some((f) => ["other_specify", "exclusive"].includes(f)),
   );
   const itemLabel = (o: (typeof items)[number]) => stripHtmlText(o.label);
 

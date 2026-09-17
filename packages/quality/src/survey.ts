@@ -53,7 +53,7 @@ export function pageQuestionIds(def: SurveyDefinition): Record<string, string[]>
 
 /** Non-substantive options: don't know / prefer not to say / other / none. */
 export function isNonSubstantive(o: Option): boolean {
-  if (o.flags?.some((f) => ["dont_know", "refused", "other_specify", "none_of_above"].includes(f))) return true;
+  if (o.flags?.some((f) => ["exclusive", "other_specify"].includes(f))) return true;
   const l = normalizeText(o.label);
   return /^(don t know|dont know|do not know|not sure|prefer not to say|prefer not to answer|no opinion|not applicable|n a|none of the above|other)\b/.test(l);
 }

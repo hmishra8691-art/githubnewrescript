@@ -43,17 +43,27 @@ export function validationKindsFor(qtype: string): ValidationRule["kind"][] {
   return VALIDATION_KINDS.map((k) => k.value);
 }
 
-const VALIDATION_KINDS: { value: ValidationRule["kind"]; label: string; hasValue: boolean }[] = [
+/**
+ * `numeric: true` marks a kind whose value is a COUNT OR A LENGTH.
+ *
+ * Every kind shared one free-text box, so "min length" happily accepted
+ * "three" and stored it as a string; the engine then coerced it with
+ * `Number(rule.value)`, got NaN, and the rule quietly never fired. The
+ * September review reported that twice — once for selections, once for
+ * lengths — as "it is not clear whether these fields accept only numeric
+ * values", which is the polite version of "this validation does nothing".
+ */
+const VALIDATION_KINDS: { value: ValidationRule["kind"]; label: string; hasValue: boolean; numeric?: boolean }[] = [
   { value: "required", label: "required", hasValue: false },
-  { value: "min_value", label: "min value", hasValue: true },
-  { value: "max_value", label: "max value", hasValue: true },
-  { value: "min_length", label: "min length", hasValue: true },
-  { value: "max_length", label: "max length", hasValue: true },
-  { value: "min_selections", label: "min selections", hasValue: true },
-  { value: "max_selections", label: "max selections", hasValue: true },
-  { value: "sum_equals", label: "sum equals", hasValue: true },
-  { value: "sum_max", label: "sum ≤", hasValue: true },
-  { value: "sum_min", label: "sum ≥", hasValue: true },
+  { value: "min_value", label: "min value", hasValue: true, numeric: true },
+  { value: "max_value", label: "max value", hasValue: true, numeric: true },
+  { value: "min_length", label: "min length", hasValue: true, numeric: true },
+  { value: "max_length", label: "max length", hasValue: true, numeric: true },
+  { value: "min_selections", label: "min selections", hasValue: true, numeric: true },
+  { value: "max_selections", label: "max selections", hasValue: true, numeric: true },
+  { value: "sum_equals", label: "sum equals", hasValue: true, numeric: true },
+  { value: "sum_max", label: "sum ≤", hasValue: true, numeric: true },
+  { value: "sum_min", label: "sum ≥", hasValue: true, numeric: true },
   { value: "pattern", label: "regex pattern", hasValue: true },
   { value: "email", label: "email", hasValue: false },
   { value: "phone", label: "phone number", hasValue: false },
@@ -112,11 +122,25 @@ function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question
                 ))}
               </select>
               {kind?.hasValue && (
-                <input className="input grow mono" value={String(v.value ?? "")}
+                <input className="input grow mono"
+                  type={kind.numeric ? "number" : "text"}
+                  inputMode={kind.numeric ? "numeric" : undefined}
+                  min={kind.numeric ? 0 : undefined}
+                  value={String(v.value ?? "")}
                   placeholder={VALUE_HINT[v.kind] ?? ""}
                   data-testid="validation-value"
                   onChange={(e) => patch({
-                    validation: q.validation.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)),
+                    /*
+                     * A counting rule stores a NUMBER. It used to store the
+                     * text of the box whatever the kind, so `min_length: "3"`
+                     * worked by coincidence (`Number("3")`) and
+                     * `min_length: "three"` became NaN and never fired.
+                     */
+                    validation: q.validation.map((x, j) => (j === i
+                      ? { ...x, value: kind.numeric
+                          ? (e.target.value === "" ? undefined : Number(e.target.value))
+                          : e.target.value }
+                      : x)),
                   })} />
               )}
               {/* which column a column-total rule adds up; blank = every column */}

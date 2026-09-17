@@ -75,12 +75,17 @@ const RESPONSE_TYPES: ResponseType[] = [
   "numeric", "date", "time", "slider", "checkbox",
 ];
 
+/*
+ * "None of above", "don't know" and "refused" used to be here. All three did
+ * exactly what "exclusive" does — `isExclusiveOption` never distinguished
+ * them — so the editor was offering four names for one behaviour, which the
+ * September review reported. They fold into `exclusive` on parse now
+ * (schema `normalizeOptionFlags`), so an existing option keeps working and
+ * the picker stops promising a difference that was never there.
+ */
 const ALL_FLAGS: { value: string; label: string }[] = [
   { value: "exclusive", label: "exclusive" },
   { value: "other_specify", label: "other/specify" },
-  { value: "none_of_above", label: "none of above" },
-  { value: "dont_know", label: "don't know" },
-  { value: "refused", label: "refused" },
   { value: "anchor_top", label: "anchor top" },
   { value: "anchor_bottom", label: "anchor bottom" },
 ];
@@ -103,7 +108,7 @@ export function allowedFlagsFor(qtype: string): string[] {
  */
 export function allowedRowFlagsFor(qtype: string): string[] {
   const base = ["anchor_top", "anchor_bottom", "other_specify"];
-  if (qtype === "matrix_multi") return [...base, "exclusive", "none_of_above"];
+  if (qtype === "matrix_multi") return [...base, "exclusive"];
   return base;
 }
 
@@ -687,6 +692,12 @@ export function QuestionEditor({ q }: { q: Question }) {
    * slider reads `sliderLeftLabel`/`sliderRightLabel`. Stars and hearts draw
    * no labels at all, so there is nothing to offer for them.
    */
+  /** all-numeric codes that no longer ascend — a list that has been reordered */
+  const outOfOrderCodes = React.useMemo(() => {
+    const ns = q.options.map((o) => Number(o.code));
+    if (ns.length < 2 || ns.some((n) => !Number.isFinite(n))) return false;
+    return ns.some((n, i) => i > 0 && n < ns[i - 1]);
+  }, [q.options]);
   const scaleLabelKeys: readonly [string, string] | null =
     q.type === "nps" || variantDef?.renderer === "emoji"
       ? ["npsLeftLabel", "npsRightLabel"] as const
@@ -797,6 +808,24 @@ export function QuestionEditor({ q }: { q: Question }) {
                 <option value={3}>3 columns</option>
                 <option value={4}>4 columns</option>
               </select></label>)}
+            {/*
+              * The search box stopped being a surprise. It used to appear on
+              * its own past twenty-five options, which the review reported as
+              * a feature arriving uninvited — "if search is not an intended
+              * feature for these question types, it should not be
+              * automatically added based only on the number of options".
+              * "automatic" is still the default, so nothing already in field
+              * moves.
+              */}
+            {has("options") && (
+            <label className="f" style={{ marginBottom: 0, width: 190 }}><span>Search box</span>
+              <select className="select" data-testid="option-search"
+                value={q.settings.optionSearch ?? "auto"}
+                onChange={(e) => patchSettings({ optionSearch: e.target.value === "auto" ? undefined : (e.target.value as "always" | "never") })}>
+                <option value="auto">automatic (over 25 options)</option>
+                <option value="always">always show</option>
+                <option value="never">never show</option>
+              </select></label>)}
             {has("sorting") && (
             <label className="f" style={{ marginBottom: 0, width: 170 }}><span>Sort (presentation)</span>
               <select className="select" value={q.settings.optionOrder ?? "original"}
@@ -812,6 +841,26 @@ export function QuestionEditor({ q }: { q: Question }) {
                 title="A long single column is hard to scan"
                 onClick={() => patchSettings({ columnsLayout: q.options.length >= 16 ? 4 : q.options.length >= 9 ? 3 : 2 })}>
                 {q.options.length} options — use {q.options.length >= 16 ? 4 : 3} columns?
+              </button>
+            )}
+            {/*
+              * CODES OUT OF ORDER AFTER A REORDER.
+              * Moving an option with ↑/↓ moves the row and keeps the code,
+              * which is right — the code is the value that lands in the data
+              * and is named by every condition, quota and pipe that points at
+              * it, so renumbering silently would rewrite stored answers'
+              * meaning. But the review saw a list running 1,2,3,4,5,7,…,12,6
+              * and read it as a bug, because nothing said which of the two
+              * was happening. Now it says, and offers the renumber as a
+              * deliberate act — the same one a deletion already performs,
+              * references and all, and frozen once responses exist.
+              */}
+            {!s.codesFrozen && outOfOrderCodes && (
+              <button className="btn small" data-testid="resequence-options"
+                style={{ alignSelf: "flex-end", marginBottom: 7 }}
+                title="Codes keep their value when a row moves, because the code is what lands in the data. This renumbers them 1…N and repoints every reference."
+                onClick={() => resequence("options")}>
+                codes run out of order — renumber 1…{q.options.length}
               </button>
             )}
             <span className="muted" style={{ fontSize: 12.5, alignSelf: "flex-end", paddingBottom: 7 }}>

@@ -8,7 +8,7 @@ import type { Option } from "@rescript/schema";
 
 export function isExclusiveOption(o: Pick<Option, "flags"> | undefined): boolean {
   return !!o?.flags?.some((f) =>
-    ["exclusive", "none_of_above", "dont_know", "refused"].includes(f),
+    ["exclusive"].includes(f),
   );
 }
 

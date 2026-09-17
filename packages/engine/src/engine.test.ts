@@ -356,7 +356,7 @@ test("randomization is seeded and anchors respected", () => {
   const def = demoSurvey();
   const q = def.questions[0];
   q.randomization = { enabled: true, scope: "options", method: "shuffle" } as any;
-  q.options.push({ code: 99, label: "None of these", flags: ["none_of_above"], } as any);
+  q.options.push({ code: 99, label: "None of these", flags: ["exclusive"], } as any);
   const s1 = createResponseState(def, { seed: 123 });
   const s2 = createResponseState(def, { seed: 123 });
   const v1 = effectiveQuestion(q, { def, state: s1 });
@@ -416,9 +416,15 @@ test("nextVersion never collides and honours explicit requests", async () => {
 
 test("exclusive options: one shared implementation (req §2)", async () => {
   const { toggleMultiValue, isExclusiveOption } = await import("./answers.js");
+  /*
+   * `none_of_above` used to appear here as a second exclusive flag. It is not
+   * one any more — it is folded into `exclusive` when a definition is parsed
+   * (schema `normalizeOptionFlags`), so by the time any of this runs there is
+   * one flag with one meaning. The fold itself is proved in the test below.
+   */
   const opts = [
     { code: 1, flags: [] }, { code: 2, flags: [] },
-    { code: 98, flags: ["none_of_above"] }, { code: 99, flags: ["exclusive"] },
+    { code: 98, flags: ["exclusive"] }, { code: 99, flags: ["exclusive"] },
   ] as any[];
   // selecting an exclusive clears others
   assert.deepEqual(toggleMultiValue([1, 2], 98, opts), [98]);
@@ -567,7 +573,7 @@ test("conditional randomization + pick N (req §7–8)", () => {
   assert.deepEqual(picked, [...picked].sort()); // a<b<c<d, original order == sorted
 
   // anchors survive pick
-  q.options.push({ code: "z", label: "None", flags: ["none_of_above"] } as any);
+  q.options.push({ code: "z", label: "None", flags: ["exclusive"] } as any);
   q.randomization = { enabled: true, scope: "options", method: "shuffle", pick: 2 } as any;
   const s4 = createResponseState(def, { seed: 9 });
   const withAnchor = effectiveQuestion(q, { def, state: s4 }).options.map((o) => String(o.code));
