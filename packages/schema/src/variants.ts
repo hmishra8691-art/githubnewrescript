@@ -705,10 +705,15 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     defaults: { settings: { minValue: 0, maxValue: 100, currencySymbol: "%", symbolSide: "right" } },
     presetOf: "numeric.open",
   }),
-  stable(F.numeric, "quantity", "Quantity", "Non-negative whole number.", {
+  /*
+   * A quantity that looks like one. The review said it "currently looks very
+   * similar to other numeric question types" and asked for a dedicated input
+   * — a stepper, or a unit label, or both. It gets both, seeded on.
+   */
+  stable(F.numeric, "quantity", "Quantity", "Non-negative whole number with − / + steppers.", {
     baseType: "numeric", responseModel: "numeric",
-    capabilities: ["numeric_bounds"], validations: VAL_NUM,
-    defaults: { settings: { minValue: 0 }, validation: [{ kind: "integer" }] },
+    capabilities: ["numeric_bounds", "currency_symbol"], validations: VAL_NUM,
+    defaults: { settings: { minValue: 0, stepper: true, step: 1, unitLabel: "items" }, validation: [{ kind: "integer" }] },
     presetOf: "numeric.open",
   }),
   stable(F.numeric, "slider", "Number Slider", "Numeric input as a slider.", {
@@ -742,7 +747,7 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       settings: { rangePair: true },
     },
     /* a from–to pair is two fields of a range-shaped kind, and exactly two */
-    fields: { types: ["number", "decimal", "integer", "date", "time"], fixed: true },
+    fields: { types: ["number", "decimal", "integer", "date", "time", "hours"], fixed: true },
   }),
 
   /* ----------------------------------------------------------------- LIST */

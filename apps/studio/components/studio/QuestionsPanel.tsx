@@ -1087,6 +1087,33 @@ export function QuestionEditor({ q }: { q: Question }) {
         </div>
       )}
 
+      {/*
+        * QUANTITY: the stepper and the unit word beside it. Offered for any
+        * numeric question, because "7 nights" and "3 items" are the same
+        * need as "₹ 1,000" — a number the respondent should be able to see
+        * the meaning of.
+        */}
+      {feats.numericBounds && q.type === "numeric" && (
+        <div className="row">
+          <label className="row" style={{ gap: 8, fontSize: 13.5, alignSelf: "flex-end", paddingBottom: 7 }}>
+            <input type="checkbox" data-testid="stepper"
+              checked={!!q.settings.stepper}
+              onChange={(e) => patchSettings({ stepper: e.target.checked || undefined })} />
+            <span>− / + steppers <span className="muted">a counting input rather than a plain box</span></span>
+          </label>
+          <label className="f" style={{ width: 150 }}><span>Unit label</span>
+            <input className="input" data-testid="unit-label" placeholder="items, nights, kg…"
+              value={q.settings.unitLabel ?? ""}
+              onChange={(e) => patchSettings({ unitLabel: e.target.value || undefined })} /></label>
+          {q.settings.stepper && (
+            <label className="f" style={{ width: 100 }}><span>Step</span>
+              <input className="input" type="number" min={1} data-testid="stepper-step"
+                value={q.settings.step ?? ""}
+                onChange={(e) => patchSettings({ step: e.target.value === "" ? undefined : Number(e.target.value) })} /></label>
+          )}
+        </div>
+      )}
+
       {has("currency_symbol") && (
         <div className="row">
           <label className="f" style={{ minWidth: 200 }}><span>Currency</span>
@@ -1186,6 +1213,25 @@ export function QuestionEditor({ q }: { q: Question }) {
             <span className="muted">respondents who pick Other cannot continue until they say what it is</span>
           </span>
         </label>
+      )}
+
+      {/*
+        * WHAT MAY BE TYPED INTO THE "OTHER" BOX.
+        * It accepted anything, because nothing ever checked it — the only
+        * rule applied to that text was that it must not be empty. "Anything"
+        * stays the default, so no survey already in field starts refusing an
+        * answer it used to take.
+        */}
+      {q.options.some((o) => o.flags?.includes("other_specify")) && (
+        <label className="f" style={{ width: 230 }}><span>“Other” accepts</span>
+          <select className="select" data-testid="other-specify-format"
+            value={q.settings.otherSpecifyFormat ?? ""}
+            onChange={(e) => patchSettings({ otherSpecifyFormat: (e.target.value || undefined) as "text" | "numeric" | "alphanumeric" | undefined })}>
+            <option value="">anything</option>
+            <option value="text">text only</option>
+            <option value="numeric">numbers only</option>
+            <option value="alphanumeric">letters and numbers</option>
+          </select></label>
       )}
 
       {(q.type === "multi_select" || q.type === "multi_dropdown" || q.type === "image_select" || q.type === "ranking") && has("min_max_selections") && (

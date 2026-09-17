@@ -85,6 +85,9 @@ function OtherInput(p: QRProps & { option: Option; below?: boolean }) {
       name={`${p.q.id}__other__${code}`}
       aria-label={`${stripTags(String(p.option.label ?? ""))} — ${uiOf(p, "other_specify")}`}
       placeholder={uiOf(p, "other_specify")}
+      /* the format the author asked for, told to the keyboard as well as to
+         the validator — a numeric box should open a number pad on a phone */
+      inputMode={p.q.settings.otherSpecifyFormat === "numeric" ? "decimal" : undefined}
       value={otherTextOfOption(p, code)}
       disabled={p.q.settings.readOnly}
       onClick={(e) => e.stopPropagation()}
@@ -578,6 +581,50 @@ export function NumericInput(p: QRProps) {
    * other half of the request: "₹ 1,000" or "1,000 ₹".
    */
   const affix = affixFor(p.q.settings);
+  const unit = p.q.settings.unitLabel?.trim();
+  /*
+   * A STEPPER, for a question that counts things. The review asked for a
+   * "dedicated quantity-style input design" with optional − / + buttons,
+   * because a quantity in a plain number box is indistinguishable from every
+   * other number in the survey. The buttons move by `step` and stop at the
+   * question's own bounds, so they cannot produce a value the validator will
+   * then refuse.
+   */
+  if (p.q.settings.stepper) {
+    const step = p.q.settings.step ?? 1;
+    const lo = p.q.settings.minValue;
+    const hi = p.q.settings.maxValue;
+    const cur = p.value == null || p.value === "" ? null : Number(p.value);
+    const nudge = (dir: -1 | 1) => {
+      if (p.q.settings.readOnly) return;
+      const from = cur ?? (dir > 0 ? (lo ?? 0) - step : (hi ?? 0) + step);
+      let next = from + dir * step;
+      if (lo != null) next = Math.max(lo, next);
+      if (hi != null) next = Math.min(hi, next);
+      p.onChange(next);
+    };
+    return (
+      <span className="rs-stepper" data-testid="numeric-stepper">
+        <button type="button" aria-label="Decrease" data-testid="stepper-down"
+          disabled={p.q.settings.readOnly || (cur != null && lo != null && cur <= lo)}
+          onClick={() => nudge(-1)}>−</button>
+        <NumberField
+          className="rs-input rs-stepper-in"
+          value={p.value}
+          min={lo}
+          max={hi}
+          step={step}
+          placeholder={p.q.settings.placeholder}
+          readOnly={p.q.settings.readOnly}
+          onChange={p.onChange}
+        />
+        <button type="button" aria-label="Increase" data-testid="stepper-up"
+          disabled={p.q.settings.readOnly || (cur != null && hi != null && cur >= hi)}
+          onClick={() => nudge(1)}>+</button>
+        {unit && <span className="rs-stepper-unit">{unit}</span>}
+      </span>
+    );
+  }
   const field = (
     <NumberField
       value={p.value}
@@ -589,12 +636,13 @@ export function NumericInput(p: QRProps) {
       onChange={p.onChange}
     />
   );
-  if (!affix) return field;
+  if (!affix && !unit) return field;
   return (
     <span className="rs-affixed" data-testid="numeric-affixed">
-      {affix.side === "left" && <span className="rs-prefix">{affix.text}</span>}
+      {affix?.side === "left" && <span className="rs-prefix">{affix.text}</span>}
       {field}
-      {affix.side === "right" && <span className="rs-prefix">{affix.text}</span>}
+      {affix?.side === "right" && <span className="rs-prefix">{affix.text}</span>}
+      {unit && <span className="rs-stepper-unit">{unit}</span>}
     </span>
   );
 }

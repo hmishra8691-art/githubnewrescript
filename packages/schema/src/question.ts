@@ -120,6 +120,14 @@ export const FieldType = z.enum([
   "currency",
   "date",
   "time",
+  /**
+   * A DURATION, not a clock time. "How many hours a week?" is a different
+   * question from "what time?", and the review asked for it by name while
+   * listing what a Numeric Range's From and To should be allowed to be. It
+   * stores hours as a number so it sums, averages and exports like one; the
+   * input accepts `7`, `7.5` and `7:30`, because people write all three.
+   */
+  "hours",
   "url",
   "zip",
 ]);
@@ -937,6 +945,31 @@ export const Question = z.object({
        * "3 columns") would be the next stale-state report.
        */
       optionOrientation: z.enum(["horizontal"]).optional(),
+      /**
+       * WHAT MAY BE TYPED INTO AN "OTHER (SPECIFY)" BOX.
+       *
+       * It accepted anything, because nothing ever checked it: the
+       * other-specify module is key, storage and export plumbing, and the only
+       * rule applied to the text was that it must not be empty. The review
+       * asked for the obvious three — "Text Only", "Numerical",
+       * "Alphanumeric" — so that a box asking for a brand name cannot come
+       * back as a phone number.
+       *
+       * Absent means what it always meant: anything. Adding the setting does
+       * not retro-fit a rule onto a survey that never asked for one.
+       */
+      otherSpecifyFormat: z.enum(["text", "numeric", "alphanumeric"]).optional(),
+      /**
+       * A QUANTITY LOOKS LIKE A QUANTITY.
+       *
+       * The five numeric subtypes shared one plain box, which the review
+       * summed up as "the Quantity question currently looks very similar to
+       * other numeric question types". A stepper — minus, the number, plus —
+       * is what a quantity field looks like everywhere else, and `unitLabel`
+       * puts the word beside it ("items", "pieces", "nights").
+       */
+      stepper: z.boolean().optional(),
+      unitLabel: z.string().optional(),
       /**
        * Speech input on a text question (`speech_input` capability). The
        * respondent may dictate; the transcript lands in the ordinary text

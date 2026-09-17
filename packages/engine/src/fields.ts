@@ -18,6 +18,7 @@ export const FIELD_TYPES: { value: FieldType; label: string }[] = [
   { value: "currency", label: "Currency" },
   { value: "date", label: "Date" },
   { value: "time", label: "Time" },
+  { value: "hours", label: "Hours (duration)" },
   { value: "url", label: "URL" },
   { value: "zip", label: "ZIP / Postal code" },
 ];
@@ -55,6 +56,8 @@ export function fieldInputProps(t: FieldType | undefined, settings?: {
     }
     case "date": return { inputType: "date" };
     case "time": return { inputType: "time" };
+    /* a duration is typed, not picked — `7`, `7.5` and `7:30` all mean the same */
+    case "hours": return { inputType: "text", inputMode: "decimal", suffix: "hrs" };
     case "url": return { inputType: "url" };
     case "zip": return { inputType: "text", inputMode: "numeric" };
     case "text":
@@ -64,7 +67,7 @@ export function fieldInputProps(t: FieldType | undefined, settings?: {
 
 export function fieldDataType(t: FieldType | undefined): "text" | "numeric" | "date" | "time" {
   switch (t) {
-    case "number": case "decimal": case "integer": case "currency": return "numeric";
+    case "number": case "decimal": case "integer": case "currency": case "hours": return "numeric";
     case "date": return "date";
     case "time": return "time";
     default: return "text";
@@ -110,7 +113,29 @@ export function validateFieldValue(
       return !Number.isNaN(Date.parse(s)) ? null : "Please enter a valid date.";
     case "time":
       return TIME_RE.test(s) ? null : "Please enter a valid time.";
+    case "hours":
+      return parseHours(s) == null
+        ? "Please enter a number of hours — for example 7, 7.5 or 7:30."
+        : null;
     default:
       return null;
   }
+}
+
+/**
+ * HOURS, however they were written.
+ *
+ * `7`, `7.5` and `7:30` all mean seven and a half hours, and a respondent
+ * will use whichever is natural to them. Returns the duration in hours, or
+ * null when it cannot be read. Negative durations and minutes past 59 are
+ * refused — a "7:75" is a typo, not an hour and a quarter.
+ */
+export function parseHours(input: string): number | null {
+  const s = input.trim();
+  if (!s) return null;
+  const clock = /^(\d{1,4}):([0-5]\d)$/.exec(s);
+  if (clock) return Number(clock[1]) + Number(clock[2]) / 60;
+  if (!/^\d+(\.\d+)?$/.test(s)) return null;
+  const n = Number(s);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }

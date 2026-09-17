@@ -369,3 +369,34 @@ export function otherSpecifyEntries(def: SurveyDefinition, state: ResponseState)
   }
   return out;
 }
+
+/**
+ * WHAT AN "OTHER (SPECIFY)" BOX WILL ACCEPT.
+ *
+ * Nothing checked this text before: the box took whatever was typed, and the
+ * only rule was that it must not be empty when the option was selected. The
+ * review asked for the three formats a research team actually wants — text
+ * only, numbers only, or both — so a box asking "which other brand?" cannot
+ * come back holding a phone number.
+ *
+ * Returns null when the text is acceptable, or the reason it is not. A
+ * question that names no format accepts anything, exactly as before.
+ */
+export function checkOtherText(
+  format: "text" | "numeric" | "alphanumeric" | undefined,
+  text: string,
+): string | null {
+  const t = text.trim();
+  if (!format || !t) return null;
+  switch (format) {
+    case "text":
+      /* letters, spaces and the punctuation names actually contain */
+      return /^[\p{L}\p{M}\s.,'’&()\/-]+$/u.test(t) ? null : "Please use letters only.";
+    case "numeric":
+      return /^-?\d+(\.\d+)?$/.test(t) ? null : "Please enter a number.";
+    case "alphanumeric":
+      return /^[\p{L}\p{M}\p{N}\s.,'’&()\/-]+$/u.test(t) ? null : "Please use letters and numbers only.";
+    default:
+      return null;
+  }
+}

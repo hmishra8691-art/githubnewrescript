@@ -4,7 +4,7 @@ import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition } from "./evaluate.js";
 import { effectiveQuestion } from "./carryforward.js";
 import { answerKey, lookupAnswer } from "./state.js";
-import { selectedOtherCodes, otherTextFor } from "./otherSpecify.js";
+import { selectedOtherCodes, otherTextFor, checkOtherText } from "./otherSpecify.js";
 import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
 import { validateFieldValue } from "./fields.js";
@@ -428,6 +428,22 @@ export function validateQuestion(
     const unfilled = selectedOtherCodes(q, value)
       .filter((code) => !otherTextFor(ctx.state, q, code, ctx.loop).trim());
     if (unfilled.length) push(uiText(ctx.ui, "other_required"));
+  }
+  /*
+   * AND WHAT WAS TYPED INTO IT. Emptiness was the only thing ever checked
+   * here; a box asking which other brand could come back holding a phone
+   * number. A question that names no format still accepts anything, so this
+   * cannot start rejecting answers in a survey already in field.
+   */
+  if (q.settings.otherSpecifyFormat && !isEmpty(value) && Array.isArray(q.options)) {
+    for (const code of selectedOtherCodes(q, value)) {
+      const text = otherTextFor(ctx.state, q, code, ctx.loop);
+      const problem = checkOtherText(q.settings.otherSpecifyFormat, text);
+      if (problem) {
+        const label = (q.options.find((o) => String(o.code) === code)?.label ?? "").replace(/<[^>]*>/g, "").trim();
+        push(label ? `${label}: ${problem}` : problem);
+      }
+    }
   }
 
   // bounds from settings

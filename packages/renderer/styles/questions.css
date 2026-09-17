@@ -243,6 +243,17 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-prefix { color: var(--rs-subtle); }
 /* a currency or per-cent symbol sitting beside a numeric input */
 .rs-affixed { display: inline-flex; align-items: center; gap: 6px; }
+/* a quantity input: − value + unit, so it does not read as "another number" */
+.rs-stepper { display: inline-flex; align-items: center; gap: 6px; }
+.rs-stepper > button {
+  font: inherit; font-size: 1.15em; line-height: 1; width: 38px; height: 38px; flex: none;
+  border: 1.5px solid var(--rs-border); border-radius: calc(var(--rs-radius) - 4px);
+  background: var(--rs-surface); color: var(--rs-text); cursor: pointer;
+}
+.rs-stepper > button:hover:not(:disabled) { border-color: var(--rs-primary); color: var(--rs-primary); }
+.rs-stepper > button:disabled { opacity: .4; cursor: not-allowed; }
+.rs-stepper-in { max-width: 96px; text-align: center; }
+.rs-stepper-unit { color: var(--rs-subtle); font-size: .92em; }
 /* a slider inside a grid cell — the control and its current value together */
 .rs-cellslider { display: inline-flex; align-items: center; gap: 8px; min-width: 120px; width: 100%; }
 .rs-cellslider input[type="range"] { flex: 1; min-width: 60px; accent-color: var(--rs-primary); }
