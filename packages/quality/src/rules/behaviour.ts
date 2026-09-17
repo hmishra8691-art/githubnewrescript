@@ -123,6 +123,14 @@ export function behaviourRules(ctx: RuleContext): FlagDraft[] {
       const n = ctx.param<number>("device.duplicate", "count");
       const same = completes.filter((p) => p.deviceHash && p.deviceHash === ctx.response.deviceHash).map((p) => p.sessionId);
       if (same.length >= n) {
+        /*
+         * A device signature is browser family + platform + screen + timezone
+         * + language — coarse. Among the first few dozen completes, two
+         * iPhones on the same carrier collide legitimately; among hundreds,
+         * five on one signature is a fact worth counting. Below the
+         * population floor the firing is informational.
+         */
+        const thin = completes.length + 1 < ctx.config.evidence.minPopulation;
         out.push({
           ruleId: "device.duplicate",
           observed: `${same.length} other complete response${same.length === 1 ? "" : "s"} share this device signature`,
@@ -130,6 +138,7 @@ export function behaviourRules(ctx: RuleContext): FlagDraft[] {
           explanation: "The same browser family, platform, screen, timezone and language produced other responses — the same device, or the same automated setup.",
           relatedSessionIds: same.slice(0, 10),
           intensity: Math.min(1, 0.5 + same.length * 0.15),
+          ...(thin ? { role: "informational" as const, caveat: `only ${completes.length + 1} completes so far — signatures collide by chance in a small sample`, confidence: 0.5 } : {}),
         });
       }
     }
@@ -164,12 +173,21 @@ export function behaviourRules(ctx: RuleContext): FlagDraft[] {
         const minCount = ctx.param<number>("network.ip_density", "minCount");
         const total = completes.length + 1;
         if (same.length + 1 >= minCount && (same.length + 1) / total >= share) {
+          /*
+           * A SHARE MEANS NOTHING IN A SMALL SAMPLE. "7 of 7 completes from
+           * one IP" is the research team testing its own survey, and "5 of 12"
+           * is an office. Until `minPopulation` completes exist, this is an
+           * observation; past it, a single address holding 8% of a real
+           * sample is a finding.
+           */
+          const thin = total < ctx.config.evidence.minPopulation;
           out.push({
             ruleId: "network.ip_density",
             observed: `${same.length + 1} of ${total} completes (${pct((same.length + 1) / total)}) from one IP`,
-            expected: `< ${pct(share)}`,
+            expected: `< ${pct(share)} once ${ctx.config.evidence.minPopulation} completes exist`,
             explanation: "A single network address accounts for an unusual share of all completes.",
             relatedSessionIds: same.slice(0, 10),
+            ...(thin ? { role: "informational" as const, caveat: `only ${total} completes so far — a share is not meaningful yet`, confidence: 0.5 } : {}),
           });
         }
       }

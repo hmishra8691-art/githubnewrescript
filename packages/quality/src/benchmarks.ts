@@ -10,9 +10,11 @@ import { estimatePageSeconds, estimateQuestionSeconds, pageQuestionIds } from ".
  * the definition's reading-time estimate stands in, and the explanation says
  * so ("vs. estimated reading time" rather than "vs. median").
  */
-export const MIN_PEERS = 8;
+/** The default floor; `config.evidence.minPeers` is what actually applies. */
+export const MIN_PEERS = 30;
 
-export function computeBenchmarks(def: SurveyDefinition, peers: PeerRecord[]): Benchmarks {
+export function computeBenchmarks(def: SurveyDefinition, peers: PeerRecord[], minPeers: number = MIN_PEERS): Benchmarks {
+  const MIN_PEERS = Math.max(8, Math.floor(minPeers));
   const pq = pageQuestionIds(def);
   const pageEstimates: Record<string, number> = {};
   for (const [pid, qids] of Object.entries(pq)) pageEstimates[pid] = estimatePageSeconds(def, qids);
@@ -38,9 +40,12 @@ export function computeBenchmarks(def: SurveyDefinition, peers: PeerRecord[]): B
     for (const [qid, xs] of Object.entries(perQ)) { const m = median(xs); if (m !== null && xs.length >= MIN_PEERS) questionMedians[qid] = m; }
   }
 
+  const medianDurationSec = durations.length >= MIN_PEERS ? median(durations) : null;
   return {
     peers: completes.length,
-    medianDurationSec: durations.length >= MIN_PEERS ? median(durations) : null,
+    source: medianDurationSec !== null ? "median" : "estimate",
+    minPeers: MIN_PEERS,
+    medianDurationSec,
     pageMedians,
     questionMedians,
     pageEstimates,

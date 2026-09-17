@@ -173,22 +173,43 @@ export function similarityRules(ctx: RuleContext, mySystem: Partial<Record<strin
   const scored = peerComparables.map(({ p, c }) => {
     const s = pairSimilarity(me, c, freq);
     const shared = sharedSignals({ deviceHash: ctx.response.deviceHash, ipHash: ctx.response.ipHash, system: mySystem }, p);
-    const sharedCount = signalNames(shared).length;
+    /*
+     * A SHARED SIGNAL IS SOMETHING OTHER THAN THE ANSWERS. An identical grid
+     * is answer agreement said twice; it used to count as a second signal and
+     * turn two people with the same opinion into a "multi-signal duplicate".
+     * Device, network, navigation path, timing profile and an identical
+     * open-end sentence are facts about HOW the answers arrived, and those
+     * are what corroborate.
+     */
+    const sharedCount = signalNames({ ...shared, matrix: 0 }).length;
+    const identical = !!sig && answerSignature(c) === sig;
     // blended similarity: weighted agreement, lifted by shared signals
     const blended = Math.min(1, s.weighted * 0.75 + s.agreement * 0.25 + sharedCount * 0.05);
-    return { p, s, shared, sharedCount, blended };
+    return { p, s, shared, sharedCount, identical, blended };
   }).filter((x) => x.s.compared >= Math.min(minQ, Object.keys(me.items).length) || x.sharedCount >= 2);
 
   scored.sort((a, b) => b.blended - a.blended);
   const top = scored[0];
   const similarityScore = top ? Math.round(top.blended * 100) : 0;
 
-  /* duplicate answers */
+  /*
+   * DUPLICATE ANSWERS, ALONE, ARE AN OPINION SHARED. Two satisfied customers
+   * agree with every positive item and disagree with every negative one; on
+   * a Likert survey that is the common case, and rarity weighting cannot
+   * rescue it when many people hold the same view. So agreement on closed
+   * answers with NO other shared signal is classifying only when it is
+   * literally identical — every comparable closed answer the same — and
+   * informational otherwise. `duplicate.multi_signal` is where agreement plus
+   * a shared device, network, path, timing or open-end sentence becomes a
+   * duplicate.
+   */
   const dups = scored.filter((x) => x.s.weighted >= dupThr && x.s.compared >= minQ);
   if (ctx.enabled("duplicate.answers") && dups.length) {
     const d = dups[0];
+    const exact = dups.some((x) => x.identical || (x.s.agreement >= 0.999 && x.s.compared >= minQ));
     flags.push({
       ruleId: "duplicate.answers",
+      ...(exact ? {} : { role: "informational" as const, caveat: "closed answers agree, but nothing else is shared and the answers are not identical — a shared opinion, not evidence of a duplicate" }),
       observed: `${pct(d.s.agreement)} of ${d.s.compared} comparable answers agree with respondent ${d.p.sessionId.slice(0, 8)} (rarity-weighted ${pct(d.s.weighted)})${dups.length > 1 ? `; ${dups.length - 1} more near-identical` : ""}`,
       expected: `weighted agreement < ${pct(dupThr)}`,
       explanation: "Closed-question answers agree with another respondent far beyond what the survey's answer distribution predicts.",
@@ -213,9 +234,15 @@ export function similarityRules(ctx: RuleContext, mySystem: Partial<Record<strin
   /* links → provisional cluster */
   // few comparable answers (a short survey) → answer similarity says little, shared signals carry the link
   const fewItems = Object.keys(me.items).length < 3;
+  /*
+   * A LINK NEEDS SOMETHING BESIDES AGREEMENT. Answer similarity alone links
+   * two responses only when the closed answers are identical; otherwise it
+   * takes a shared signal about how the answers arrived. This is what stops a
+   * dozen satisfied customers reading as a coordinated cluster.
+   */
   const linked = scored.filter((x) =>
     (x.s.weighted >= linkThr && x.sharedCount >= 1 && !fewItems)
-    || (x.s.weighted >= Math.min(0.99, linkThr + 0.1) && !fewItems)
+    || (x.identical && !fewItems)
     || (x.sharedCount >= 2 && x.s.weighted >= linkThr - 0.15)
     || x.sharedCount >= 3);
   const similarIds = linked.map((x) => x.p.sessionId);

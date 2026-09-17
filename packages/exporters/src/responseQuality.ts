@@ -27,9 +27,12 @@ export interface QualityLike {
   qualityScore: number;
   riskScore: number;
   classification: string;
+  /** PASS / REVIEW / FLAGGED — absent on assessments made before the verdict existed */
+  verdict?: string;
+  evidence?: { because?: string };
   recommendation?: string;
   categories?: Record<string, number>;
-  flags?: { ruleId: string; category: string; severity: string; title: string; observed?: string; expected?: string; explanation?: string; riskPoints?: number; qualityPenalty?: number }[];
+  flags?: { ruleId: string; category: string; severity: string; title: string; observed?: string; expected?: string; explanation?: string; riskPoints?: number; qualityPenalty?: number; role?: string; caveat?: string }[];
   reasons?: string[];
   cluster?: { clusterId: string | null; size?: number; similarSessionIds?: string[] };
   system?: Record<string, unknown>;
@@ -146,6 +149,8 @@ export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityEx
     "Total Flags", "High Severity Flags", "Cluster ID", "Similar Respondents",
     "Primary Reason", "Secondary Reasons", "Detailed Explanation",
     "Researcher Decision", "Decision Reason", "Decided By", "Decision Timestamp",
+    /* appended last so existing column positions hold */
+    "Verdict", "Why",
   ];
   q.columns = qHeader.map((h) => ({ header: h, key: h, width: h.includes("Explanation") ? 80 : h.includes("Reason") ? 50 : Math.max(12, h.length + 2) }));
   for (const r of rows) {
@@ -153,7 +158,7 @@ export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityEx
     const flags = a?.flags ?? [];
     const cats = new Set(flags.map((f) => f.category));
     const reasons = a?.reasons ?? [];
-    const detailed = flags.map((f) => `• ${f.title}: ${f.observed ?? ""}${f.expected ? ` (expected ${f.expected})` : ""} — ${f.explanation ?? ""} [${f.severity}, +${f.riskPoints ?? 0} risk, −${f.qualityPenalty ?? 0} quality]`).join("\n");
+    const detailed = flags.map((f) => `• ${f.title}: ${f.observed ?? ""}${f.expected ? ` (expected ${f.expected})` : ""} — ${f.explanation ?? ""}${f.caveat ? ` Caveat: ${f.caveat}` : ""} [${f.severity}, +${f.riskPoints ?? 0} risk, −${f.qualityPenalty ?? 0} quality${f.role === "informational" ? ", informational — does not affect the verdict" : ""}]`).join("\n");
     q.addRow([
       r.state.sessionId, inDataset(r, filter) ? "YES" : "NO",
       a?.qualityScore ?? "", a?.riskScore ?? "", a?.classification ?? "UNSCORED", a?.recommendation ?? "",
@@ -162,11 +167,13 @@ export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityEx
       a?.cluster?.clusterId ?? "", (a?.cluster?.similarSessionIds ?? []).slice(0, 20).join("|"),
       reasons[0] ?? "", reasons.slice(1).join(" | "), detailed,
       r.review.status ?? "", r.review.reason ?? "", r.review.by ?? "", r.review.at ?? "",
+      a?.verdict ?? "", a?.evidence?.because ?? "",
     ]);
   }
   styleHeader(q);
   q.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: qHeader.length } };
   q.getColumn(qHeader.indexOf("Detailed Explanation") + 1).alignment = { wrapText: true, vertical: "top" };
+  q.getColumn(qHeader.indexOf("Why") + 1).width = 70;
 
   /* --------------------------------------------------------- Read Me */
   const info = wb.addWorksheet("About");
@@ -182,6 +189,7 @@ export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityEx
     ["Quality Score", "0–100, 100 = very high-quality response (answers, attention, open ends)"],
     ["Fraud Risk Score", "0–100, 100 = extremely suspicious (duplicates, automation, coordination, network). Kept separate from quality on purpose."],
     ["Classification", `From the fraud-risk bands configured on the survey (${def.quality?.bands ? `REVIEW ≥ ${def.quality.bands.review}, SUSPICIOUS ≥ ${def.quality.bands.suspicious}, HIGHLY_SUSPICIOUS ≥ ${def.quality.bands.highlySuspicious}, CRITICAL ≥ ${def.quality.bands.critical}` : "defaults"})`],
+    ["Verdict", "PASS / REVIEW / FLAGGED — what the evidence supports. FLAGGED needs a strong, confident signal or moderate signals in independent categories; a high risk score made of weak, correlated signals is REVIEW. Informational flags are shown but never move the verdict. The Why column is the one-line reason."],
     ["Strictness", def.quality?.strictness ?? "standard"],
     ["Important", "Every flag is a risk indicator that requires researcher judgement, never proof. Removed responses are retained in the database and can be restored."],
     ["Exported", new Date().toISOString()],

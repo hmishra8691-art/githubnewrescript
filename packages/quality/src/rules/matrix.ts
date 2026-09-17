@@ -57,7 +57,21 @@ export function matrixRules(ctx: RuleContext): FlagDraft[] {
     if (ctx.enabled("matrix.diagonal") && answered.length >= ctx.param<number>("matrix.diagonal", "minRows") && answered.length === pos.length && isDiagonal(answered)) diagonal.push(q.id);
 
     /* alternating / repeating */
-    if (ctx.enabled("matrix.alternating") && answered.length >= ctx.param<number>("matrix.alternating", "minRows") && repeatingPeriod(answered) !== null) alternating.push(q.id);
+    /*
+     * A CYCLE THE WORDING EXPLAINS IS AN ATTITUDE, NOT A MECHANISM. A grid
+     * whose third and sixth rows are reverse-worded is answered 5,5,2,5,5,2
+     * by someone who likes their car — a period-3 cycle to the detector and a
+     * perfectly consistent opinion to a person. The pattern is judged after
+     * folding reverse-worded rows onto the same polarity; a cycle that
+     * survives that is mechanical.
+     */
+    if (ctx.enabled("matrix.alternating") && answered.length >= ctx.param<number>("matrix.alternating", "minRows") && repeatingPeriod(answered) !== null) {
+      const pol = rowPolarities(q);
+      const cats = q.options.length;
+      const folded = pos.map((p, i) => (p === null ? null : pol[i] === -1 ? cats - 1 - p : p)).filter((p): p is number => p !== null);
+      const foldedFlat = new Set(folded).size <= 2 && Math.max(...folded) - Math.min(...folded) <= 1;
+      if (!foldedFlat) alternating.push(q.id);
+    }
 
     /* midpoint / extremes */
     const mid = midpointIndex(q);
@@ -136,7 +150,7 @@ export function matrixRules(ctx: RuleContext): FlagDraft[] {
   /* identical signature across respondents */
   if (ctx.enabled("matrix.signature_match") && ctx.peers.length) {
     const minRows = ctx.param<number>("matrix.signature_match", "minRows");
-    const hits: { q: Question; peers: string[] }[] = [];
+    const hits: { q: Question; peers: string[]; confidence: number }[] = [];
     for (const q of grids) {
       if (q.rows.length < minRows) continue;
       const sig = matrixSignature(q, ctx.response.answers[q.id]);
@@ -145,7 +159,45 @@ export function matrixRules(ctx: RuleContext): FlagDraft[] {
       const pos = gridPositions(q, ctx.response.answers[q.id]).filter((p) => p !== null);
       if (new Set(pos).size <= 1) continue;
       const same = ctx.peers.filter((p) => p.sessionId !== ctx.response.sessionId && p.system?.SYSTEM_MATRIX_SIGNATURE?.[q.id] === sig).map((p) => p.sessionId);
-      if (same.length) hits.push({ q, peers: same });
+      /*
+       * A POPULAR PATTERN IS A POPULAR OPINION. On a five-row, five-point
+       * grid, "agree with everything good, disagree with the bad row" is held
+       * by many sincere people. A match counts only when the shared signature
+       * is RARE among peers — held by at most `rareShare` of them (2%) — and
+       * never when the grid has too few rows to make a coincidence unlikely.
+       */
+      if (!same.length) continue;
+      /*
+       * HOW MANY TWINS WOULD CHANCE PRODUCE? Each row's option has a frequency
+       * among the peers who answered this grid; the chance a random peer
+       * matches this whole grid is the product of those, and that times the
+       * number of peers is the number of identical grids to EXPECT from
+       * like-minded people alone. When that is a fraction of one, a match is
+       * evidence; when it is one or more, a match is a popular opinion.
+       */
+      const peerPositions = ctx.peers
+        .filter((p) => p.sessionId !== ctx.response.sessionId && p.answers?.[q.id])
+        .map((p) => gridPositions(q, p.answers[q.id]));
+      if (peerPositions.length >= 10) {
+        let pMatch = 1;
+        pos.forEach((mine, row) => {
+          const answered = peerPositions.map((pp) => pp[row]).filter((x): x is number => x !== null);
+          if (!answered.length) return;
+          const f = answered.filter((x) => x === mine).length / answered.length;
+          pMatch *= Math.max(0.01, f);
+        });
+        const expectedTwins = pMatch * peerPositions.length;
+        /*
+         * A 5-row, 5-point grid has 3,125 patterns; among two hundred people
+         * somebody's grid has a twin by chance almost surely. Below a 0.5%
+         * chance of a twin the match is full evidence; up to 2% it is half;
+         * beyond that it is a coincidence the population size predicts.
+         */
+        if (expectedTwins >= 0.02) continue;
+        hits.push({ q, peers: same, confidence: expectedTwins >= 0.005 ? 0.5 : 1 });
+        continue;
+      } else if (same.length > 1) continue;
+      hits.push({ q, peers: same, confidence: 0.5 });
     }
     if (hits.length) {
       const related = [...new Set(hits.flatMap((h) => h.peers))];
@@ -156,6 +208,8 @@ export function matrixRules(ctx: RuleContext): FlagDraft[] {
         questionIds: hits.map((h) => h.q.id),
         relatedSessionIds: related.slice(0, 10),
         intensity: Math.min(1, 0.6 + hits.length * 0.2),
+        confidence: Math.max(...hits.map((h) => h.confidence)),
+        caveat: hits.every((h) => h.confidence < 1) ? "a grid this size has a twin by chance in a population this large" : undefined,
       });
     }
   }

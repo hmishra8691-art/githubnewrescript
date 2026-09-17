@@ -10,12 +10,26 @@ const fmtSec = (s: number) => {
 };
 
 export function timingRules(ctx: RuleContext): FlagDraft[] {
-  const out: FlagDraft[] = [];
+  const drafts: FlagDraft[] = [];
   const t = ctx.telemetry;
   const { def, bench } = ctx;
   const total = totalSeconds(t, ctx.response.startedAt, ctx.response.completedAt);
   const tb = totalBenchmark(bench);
   const vs = tb.source === "median" ? `median of ${bench.peers} completes` : "estimated reading time";
+
+  /*
+   * AGAINST AN ESTIMATE, EVERY TIMING FLAG IS A GUESS. The reading-time
+   * estimate assumes every word of every option is read at 250 wpm; real
+   * people skim, and a survey that estimates at five minutes is regularly
+   * completed well in under two. Until this survey has `minPeers` completes
+   * of its own, timing flags carry `estimateConfidence` (default 0.6), which
+   * scales their points and keeps a single one from carrying a verdict.
+   */
+  const estimated = tb.source !== "median";
+  const confidence = estimated ? ctx.config.evidence.estimateConfidence : 1;
+  const caveat = estimated ? `measured against the reading-time estimate (only ${bench.peers} of the ${bench.minPeers} completes needed for a median)` : undefined;
+  const out = drafts;
+  const stamped = () => out.map((d) => ({ ...d, confidence: d.confidence ?? confidence, caveat: d.caveat ?? caveat }));
 
   /* overall speeding — works from timestamps alone, no telemetry needed */
   if (ctx.enabled("timing.overall_speeding") && total !== null && tb.seconds > 0) {
@@ -35,7 +49,7 @@ export function timingRules(ctx: RuleContext): FlagDraft[] {
   const answeredPages = t ? t.pages.filter((v) => (v.questionIds ?? []).some((q) => ctx.response.answers[q] !== undefined && ctx.response.answers[q] !== null)) : [];
   const pageIds = [...new Set(answeredPages.map((v) => v.pageId))];
   const ps = pageSeconds(t);
-  if (!t || ctx.disabledTelemetry.has("timing") || pageIds.length === 0) return out;
+  if (!t || ctx.disabledTelemetry.has("timing") || pageIds.length === 0) return stamped();
 
   /* page-level speeding */
   if (ctx.enabled("timing.page_speeding")) {
@@ -327,5 +341,5 @@ export function timingRules(ctx: RuleContext): FlagDraft[] {
     }
   }
 
-  return out;
+  return stamped();
 }

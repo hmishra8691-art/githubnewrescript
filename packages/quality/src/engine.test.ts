@@ -13,10 +13,16 @@ import { clusterSurvey, comparable, pairSimilarity, valueFrequencies } from "./s
 const scale = ["1", "2", "3", "4", "5"].map((c, i) => ({ code: c, label: ["Strongly disagree", "Disagree", "Neither", "Agree", "Strongly agree"][i] }));
 const brands = [{ code: "a", label: "Alpha" }, { code: "b", label: "Beta" }, { code: "c", label: "Gamma" }, { code: "d", label: "Delta" }, { code: "dk", label: "Don't know", flags: ["dont_know"] }];
 
+/*
+ * These fixtures use twelve peers. The engine's default floor for trusting a
+ * median is thirty (`evidence.minPeers`), so the tests say what they mean:
+ * a survey whose settings trust a median from eight completes, as the engine
+ * did before Phase 2 made the floor configurable and raised the default.
+ */
 const def = (quality: any = { enabled: true, strictness: "standard" }, extraQ: any[] = []) =>
   SurveyDefinition.parse({
     meta: { id: "qx", code: "QX", title: "Quality", version: "1.0" },
-    quality,
+    quality: { evidence: { minPeers: 8, minPopulation: 5 }, ...quality },
     questions: [
       { id: "own", code: "S1", variableName: "S1", type: "single_select", text: "Do you own a car?", options: [{ code: "y", label: "Yes" }, { code: "n", label: "No" }],
         skipLogic: [{ id: "sk", when: { type: "rule", source: { kind: "question", ref: "own" }, operator: "eq", value: "n" }, target: { kind: "end", status: "screened" } }] },

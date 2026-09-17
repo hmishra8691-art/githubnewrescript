@@ -7,6 +7,12 @@ import type { RuleDef, RuleParamDef } from "./types.js";
  * presets. Adding a rule means adding an entry here and an implementation in
  * `rules/`; nothing else knows the list.
  *
+ * Role: a rule marked `role: "informational"` is shown and costs quality
+ * points but never moves the verdict on its own — a pasted answer, one more
+ * response from the same office IP, agreeing with every satisfaction item are
+ * observations, not grounds. The default is classifying. Researchers can
+ * flip either way per survey.
+ *
  * Points: `riskPoints` is what one firing adds to the fraud-risk noisy-OR
  * (see score.ts) before the researcher's weight; `qualityPenalty` is what it
  * subtracts from the quality score. The two are deliberately separate — a
@@ -110,7 +116,7 @@ export const RULES: RuleDef[] = [
   {
     id: "timing.acceleration", category: "timing", title: "End-of-survey acceleration",
     description: "The second half was answered much faster than the first, relative to benchmark — attention ran out.",
-    defaultSeverity: "low", riskPoints: 8, qualityPenalty: 12, enabledIn: STD_UP, needs: ["timing"],
+    defaultSeverity: "low", riskPoints: 8, qualityPenalty: 12, enabledIn: STD_UP, needs: ["timing"], role: "informational",
     params: [p("ratio", "Second-half pace below this share of first-half pace", lvl(0.25, 0.35, 0.45, 0.55))],
   },
   {
@@ -151,19 +157,19 @@ export const RULES: RuleDef[] = [
   {
     id: "matrix.low_variance", category: "matrix", title: "Low response variance",
     description: "Answers across grids barely vary — not a straight line, but nearly.",
-    defaultSeverity: "low", riskPoints: 8, qualityPenalty: 12, enabledIn: STD_UP,
+    defaultSeverity: "low", riskPoints: 8, qualityPenalty: 12, enabledIn: STD_UP, role: "informational",
     params: [p("maxEntropy", "Normalised entropy of columns used below this", lvl(0.15, 0.25, 0.35, 0.45))],
   },
   {
     id: "matrix.midpoint", category: "matrix", title: "Excessive midpoint selection",
     description: "The neutral / middle scale point chosen for most rows across grids.",
-    defaultSeverity: "low", riskPoints: 5, qualityPenalty: 12, enabledIn: STD_UP,
+    defaultSeverity: "low", riskPoints: 5, qualityPenalty: 12, enabledIn: STD_UP, role: "informational",
     params: [p("share", "Midpoint share above this", lvl(0.9, 0.8, 0.7, 0.6))],
   },
   {
     id: "matrix.extremes", category: "matrix", title: "Excessive extreme-point selection",
     description: "Only the end points of scales are ever used.",
-    defaultSeverity: "low", riskPoints: 5, qualityPenalty: 10, enabledIn: STRICT_UP,
+    defaultSeverity: "low", riskPoints: 5, qualityPenalty: 10, enabledIn: STRICT_UP, role: "informational",
     params: [p("share", "Extreme share above this", lvl(0.95, 0.9, 0.85, 0.8))],
   },
   {
@@ -222,25 +228,25 @@ export const RULES: RuleDef[] = [
   {
     id: "pattern.nonsubstantive", category: "pattern", title: "Excessive Don't know / Other / Prefer not to say",
     description: "Non-substantive options chosen for a large share of questions that offer them.",
-    defaultSeverity: "low", riskPoints: 6, qualityPenalty: 15, enabledIn: ALL,
+    defaultSeverity: "low", riskPoints: 6, qualityPenalty: 15, enabledIn: ALL, role: "informational",
     params: [p("share", "Share above this", lvl(0.8, 0.6, 0.5, 0.4)), p("minOffered", "Only when offered on at least this many questions", lvl(4, 3, 3, 2))],
   },
   {
     id: "pattern.middle_bias", category: "pattern", title: "Middle-category bias",
     description: "The midpoint of scales chosen far more than the other points, across scale questions.",
-    defaultSeverity: "low", riskPoints: 4, qualityPenalty: 10, enabledIn: STRICT_UP,
+    defaultSeverity: "low", riskPoints: 4, qualityPenalty: 10, enabledIn: STRICT_UP, role: "informational",
     params: [p("share", "Midpoint share above this", lvl(0.9, 0.8, 0.7, 0.6))],
   },
   {
     id: "pattern.extreme_bias", category: "pattern", title: "Extreme-category bias",
     description: "Only scale end points chosen, across scale questions.",
-    defaultSeverity: "low", riskPoints: 4, qualityPenalty: 8, enabledIn: STRICT_UP,
+    defaultSeverity: "low", riskPoints: 4, qualityPenalty: 8, enabledIn: STRICT_UP, role: "informational",
     params: [p("share", "Extreme share above this", lvl(0.95, 0.9, 0.85, 0.8))],
   },
   {
     id: "pattern.acquiescence", category: "pattern", title: "Acquiescence / disacquiescence bias",
     description: "Agreement (or disagreement) chosen on nearly every agree-type item regardless of wording.",
-    defaultSeverity: "low", riskPoints: 6, qualityPenalty: 12, enabledIn: STD_UP,
+    defaultSeverity: "low", riskPoints: 6, qualityPenalty: 12, enabledIn: STD_UP, role: "informational",
     params: [p("share", "Same polarity share above this", lvl(0.95, 0.9, 0.85, 0.8)), p("minItems", "Only with at least this many agree-type items", lvl(8, 6, 5, 4))],
   },
   {
@@ -278,7 +284,7 @@ export const RULES: RuleDef[] = [
   {
     id: "openend.too_short", category: "open_end", title: "Minimum-length violation / one-word answers",
     description: "Open-ended answers of one word or under the minimum length where more was asked for.",
-    defaultSeverity: "low", riskPoints: 3, qualityPenalty: 12, enabledIn: ALL,
+    defaultSeverity: "low", riskPoints: 3, qualityPenalty: 12, enabledIn: ALL, role: "informational",
     params: [p("minChars", "Fewer characters than this", lvl(3, 5, 8, 12), "chars"), p("share", "Flag when this share of open ends are", lvl(0.9, 0.7, 0.5, 0.4))],
   },
   {
@@ -296,13 +302,13 @@ export const RULES: RuleDef[] = [
   {
     id: "openend.generic", category: "open_end", title: "Generic / template answers",
     description: "Answers that say nothing (\"good\", \"nothing\", \"n/a\") across most open ends.",
-    defaultSeverity: "low", riskPoints: 4, qualityPenalty: 12, enabledIn: STD_UP,
+    defaultSeverity: "low", riskPoints: 4, qualityPenalty: 12, enabledIn: STD_UP, role: "informational",
     params: [p("share", "Share of open ends that are generic above this", lvl(0.9, 0.7, 0.5, 0.4))],
   },
   {
     id: "openend.irrelevant", category: "open_end", title: "Irrelevant to the question",
     description: "No overlap at all between the answer's words and the question's words or option labels, on a long enough answer (a weak semantic relevance check).",
-    defaultSeverity: "low", riskPoints: 5, qualityPenalty: 10, enabledIn: VSTRICT, params: [],
+    defaultSeverity: "low", riskPoints: 5, qualityPenalty: 10, enabledIn: VSTRICT, role: "informational", params: [],
   },
   {
     id: "openend.contradiction", category: "open_end", title: "Text contradicts closed answers",
@@ -318,13 +324,13 @@ export const RULES: RuleDef[] = [
   {
     id: "openend.ai_like", category: "open_end", title: "AI-generated text risk",
     description: "Unusually polished, connector-heavy, evenly structured prose — a risk signal only, never proof.",
-    defaultSeverity: "medium", riskPoints: 12, qualityPenalty: 5, enabledIn: STD_UP,
+    defaultSeverity: "medium", riskPoints: 12, qualityPenalty: 5, enabledIn: STD_UP, role: "informational",
     params: [p("score", "Polish score above this", lvl(0.8, 0.6, 0.5, 0.4))],
   },
   {
     id: "openend.pasted", category: "open_end", title: "Pasted with minimal editing",
     description: "Most of an open-ended answer arrived by paste and was barely edited.",
-    defaultSeverity: "medium", riskPoints: 12, qualityPenalty: 5, enabledIn: STD_UP, needs: ["clipboard"],
+    defaultSeverity: "medium", riskPoints: 12, qualityPenalty: 5, enabledIn: STD_UP, needs: ["clipboard"], role: "informational",
     params: [p("share", "Pasted share of the text above this", lvl(0.95, 0.85, 0.7, 0.6))],
   },
   /*
@@ -336,7 +342,7 @@ export const RULES: RuleDef[] = [
   {
     id: "openend.probe_ignored", category: "open_end", title: "Follow-up probes ignored",
     description: "Follow-up questions (\"could you say more?\") were shown and left blank, repeatedly.",
-    defaultSeverity: "low", riskPoints: 5, qualityPenalty: 10, enabledIn: STD_UP,
+    defaultSeverity: "low", riskPoints: 5, qualityPenalty: 10, enabledIn: STD_UP, role: "informational",
     params: [p("count", "Flag when at least this many follow-ups were left blank", lvl(4, 3, 2, 1), "probes")],
   },
   {
@@ -350,19 +356,19 @@ export const RULES: RuleDef[] = [
   {
     id: "interaction.paste_ratio", category: "interaction", title: "Paste-to-answer ratio",
     description: "Text answers filled mostly by pasting, across the survey.",
-    defaultSeverity: "low", riskPoints: 8, qualityPenalty: 3, enabledIn: STD_UP, needs: ["clipboard"],
+    defaultSeverity: "low", riskPoints: 8, qualityPenalty: 3, enabledIn: STD_UP, needs: ["clipboard"], role: "informational",
     params: [p("ratio", "Pasted questions / text questions above this", lvl(0.9, 0.7, 0.5, 0.4)), p("minPastes", "Only with at least this many pastes", lvl(3, 2, 2, 1))],
   },
   {
     id: "interaction.rapid_paste_submit", category: "interaction", title: "Rapid paste and submit",
     description: "A page submitted within moments of a paste into it.",
-    defaultSeverity: "low", riskPoints: 6, qualityPenalty: 2, enabledIn: STRICT_UP, needs: ["clipboard", "timing"],
+    defaultSeverity: "low", riskPoints: 6, qualityPenalty: 2, enabledIn: STRICT_UP, needs: ["clipboard", "timing"], role: "informational",
     params: [p("withinMs", "Submitted within this many ms of a paste", lvl(500, 1000, 1500, 2000), "ms")],
   },
   {
     id: "interaction.out_of_focus", category: "interaction", title: "Long time out of focus",
     description: "The survey tab was hidden for a large share of the session.",
-    defaultSeverity: "low", riskPoints: 4, qualityPenalty: 6, enabledIn: STRICT_UP, needs: ["focus"],
+    defaultSeverity: "low", riskPoints: 4, qualityPenalty: 6, enabledIn: STRICT_UP, needs: ["focus"], role: "informational",
     params: [p("share", "Out-of-focus share of total time above this", lvl(0.8, 0.6, 0.5, 0.4))],
   },
 
@@ -376,7 +382,7 @@ export const RULES: RuleDef[] = [
   {
     id: "navigation.reloads", category: "navigation", title: "Page reloads / session restarts",
     description: "The page was reloaded repeatedly during the session.",
-    defaultSeverity: "low", riskPoints: 6, qualityPenalty: 2, enabledIn: STD_UP, needs: ["navigation"],
+    defaultSeverity: "low", riskPoints: 6, qualityPenalty: 2, enabledIn: STD_UP, needs: ["navigation"], role: "informational",
     params: [p("count", "More reloads than this", lvl(5, 3, 2, 1))],
   },
   {
@@ -406,7 +412,7 @@ export const RULES: RuleDef[] = [
   {
     id: "device.locale_timezone", category: "device", title: "Timezone vs language mismatch",
     description: "Browser timezone and language point to different regions than the survey expects.",
-    defaultSeverity: "low", riskPoints: 5, qualityPenalty: 0, enabledIn: STRICT_UP, needs: ["device"],
+    defaultSeverity: "low", riskPoints: 5, qualityPenalty: 0, enabledIn: STRICT_UP, needs: ["device"], role: "informational",
     params: [p("expectedTimezonePrefix", "Expected timezone region (e.g. 'America/', 'Europe/'); empty = any", { relaxed: "", standard: "", strict: "", very_strict: "" })],
   },
 
@@ -414,7 +420,7 @@ export const RULES: RuleDef[] = [
   {
     id: "network.duplicate_ip", category: "network", title: "Duplicate IP",
     description: "Other complete responses came from the same (hashed) IP address. Households and offices share addresses — a signal, not a verdict.",
-    defaultSeverity: "low", riskPoints: 8, qualityPenalty: 0, enabledIn: ALL, needs: ["network", "peers"],
+    defaultSeverity: "low", riskPoints: 8, qualityPenalty: 0, enabledIn: ALL, needs: ["network", "peers"], role: "informational",
     params: [p("count", "Flag from this many other responses on the same IP", lvl(6, 3, 2, 1))],
   },
   {
@@ -503,7 +509,7 @@ export const RULES: RuleDef[] = [
   {
     id: "history.poor_record", category: "custom", title: "Poor quality history",
     description: "This external respondent was classified SUSPICIOUS or worse in earlier studies (longitudinal linking enabled).",
-    defaultSeverity: "medium", riskPoints: 12, qualityPenalty: 0, enabledIn: ALL, needs: ["peers"],
+    defaultSeverity: "medium", riskPoints: 12, qualityPenalty: 0, enabledIn: ALL, needs: ["peers"], role: "informational",
     params: [p("count", "From this many prior suspicious studies", lvl(3, 2, 2, 1))],
   },
 ];

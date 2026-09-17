@@ -24,25 +24,36 @@ type Include = "live" | "test" | "all";
 const CLASSES = ["CLEAN", "REVIEW", "SUSPICIOUS", "HIGHLY_SUSPICIOUS", "CRITICAL"] as const;
 const CLASS_COLOR: Record<string, string> = { CLEAN: "#2f9e44", REVIEW: "#f0b429", SUSPICIOUS: "#f76707", HIGHLY_SUSPICIOUS: "#e03131", CRITICAL: "#862e9c", UNSCORED: "#94a3b8" };
 const SEV_COLOR: Record<string, string> = { low: "#94a3b8", medium: "#f0b429", high: "#f76707", critical: "#e03131" };
+const VERDICTS = ["PASS", "REVIEW", "FLAGGED"] as const;
+const VERDICT_COLOR: Record<string, string> = { PASS: "#2f9e44", REVIEW: "#f0b429", FLAGGED: "#e03131", UNSCORED: "#94a3b8" };
+const VERDICT_HINT: Record<string, string> = {
+  PASS: "no confident evidence of a problem",
+  REVIEW: "something worth a look — one strong signal, or several weak ones",
+  FLAGGED: "confident evidence: a strong signal, or moderate signals in two independent categories",
+  UNSCORED: "not assessed",
+};
 
 interface Row {
   sessionId: string; status: string; startedAt: string | null; completedAt: string | null; durationSec: number | null;
   assessed: boolean; configHash: string | null; computedAt: string | null;
   qualityScore: number | null; riskScore: number | null; classification: string | null; recommendation: string | null;
-  categories: Record<string, number>; flags: { ruleId: string; category: string; severity: string; title: string }[];
+  verdict: string | null; because: string | null;
+  categories: Record<string, number>; flags: { ruleId: string; category: string; severity: string; title: string; role: string }[];
   clusterId: string | null; clusterSize: number; reasons: string[];
   reviewStatus: string | null; reviewReason: string | null; reviewedAt: string | null; reviewedBy: string | null;
 }
 interface ConfigSummary {
   enabled: boolean; strictness: string; profile: string | null; bands: { review: number; suspicious: number; highlySuspicious: number; critical: number };
   rulesOn: number; rulesTotal: number; rulesCustomised: number; customRules: number; telemetryOff: string[]; maxPeers: number; configHash: string;
+  evidence: { combination: string; minPeers: number; estimateConfidence: number; minPopulation: number; flagged: string; flaggedMinCategories: number };
+  rolesChanged: number;
 }
 interface Payload {
   enabled: boolean; strictness: string | null; total: number;
   config: ConfigSummary | null; source: "draft" | "version" | null; revision: number | null; savedAt: string | null; version: string | null;
   live: { version: string; versionId: string; config: ConfigSummary } | null;
   staleAssessed: number;
-  byClass: Record<string, number>; byReview: Record<string, number>; signals: Record<string, number>; histogram: number[];
+  byClass: Record<string, number>; byVerdict: Record<string, number>; byReview: Record<string, number>; signals: Record<string, number>; histogram: number[];
   clusters: { id: string; size: number }[]; rows: Row[]; error?: string; migration?: string;
 }
 
@@ -53,7 +64,7 @@ export function QualityPanel({ include }: { include: Include }) {
   const [data, setData] = React.useState<Payload | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
-  const [filter, setFilter] = React.useState<{ cls: string | null; signal: string | null; review: string | null; cluster: string | null; q: string }>({ cls: null, signal: null, review: null, cluster: null, q: "" });
+  const [filter, setFilter] = React.useState<{ cls: string | null; verdict: string | null; signal: string | null; review: string | null; cluster: string | null; q: string }>({ cls: null, verdict: null, signal: null, review: null, cluster: null, q: "" });
   const [sort, setSort] = React.useState<"risk" | "quality" | "time">("risk");
   const [open, setOpen] = React.useState<string | null>(null);
 
@@ -93,10 +104,11 @@ export function QualityPanel({ include }: { include: Include }) {
     if (!data) return [];
     let out = data.rows;
     if (filter.cls) out = out.filter((r) => (r.classification ?? "UNSCORED") === filter.cls);
+    if (filter.verdict) out = out.filter((r) => (r.verdict ?? "UNSCORED") === filter.verdict);
     if (filter.signal) out = out.filter((r) => r.flags.some((f) => f.category === filter.signal));
     if (filter.review) out = out.filter((r) => (r.reviewStatus ?? "NONE") === filter.review);
     if (filter.cluster) out = out.filter((r) => r.clusterId === filter.cluster);
-    if (filter.q) out = out.filter((r) => r.sessionId.includes(filter.q) || r.reasons.some((x) => x.toLowerCase().includes(filter.q.toLowerCase())));
+    if (filter.q) out = out.filter((r) => r.sessionId.includes(filter.q) || r.reasons.some((x) => x.toLowerCase().includes(filter.q.toLowerCase())) || (r.because ?? "").toLowerCase().includes(filter.q.toLowerCase()));
     return [...out].sort((a, b) => sort === "risk" ? (b.riskScore ?? -1) - (a.riskScore ?? -1) : sort === "quality" ? (a.qualityScore ?? 101) - (b.qualityScore ?? 101) : (b.completedAt ?? "").localeCompare(a.completedAt ?? ""));
   }, [data, filter, sort]);
 
@@ -127,6 +139,14 @@ export function QualityPanel({ include }: { include: Include }) {
           <div style={{ fontSize: 22, fontWeight: 600 }} data-testid="q-total">{data.total.toLocaleString()}</div>
           <div className="muted" style={{ fontSize: 12.5 }}>{data.strictness ? `${data.strictness} strictness` : ""}</div>
         </div>
+        {VERDICTS.map((v) => (
+          <button key={v} className="card" data-testid={`q-verdict-${v}`} title={VERDICT_HINT[v]} onClick={() => setFilter((f) => ({ ...f, verdict: f.verdict === v ? null : v }))}
+            style={{ padding: 10, minWidth: 120, textAlign: "left", cursor: "pointer", borderColor: filter.verdict === v ? VERDICT_COLOR[v] : undefined, borderWidth: filter.verdict === v ? 2 : 1 }}>
+            <div className="muted" style={{ fontSize: 12.5 }}><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 4, background: VERDICT_COLOR[v], marginRight: 5 }} />{v}</div>
+            <div style={{ fontSize: 20, fontWeight: 600 }}>{(data.byVerdict?.[v] ?? 0).toLocaleString()}</div>
+          </button>
+        ))}
+        <div className="muted" style={{ alignSelf: "center", fontSize: 12, maxWidth: 150 }} title="The verdict is what the evidence supports; the band is where the risk score falls. A high band with weak, correlated evidence is REVIEW, not FLAGGED.">verdict ← evidence · band ← risk score →</div>
         {[...CLASSES, "UNSCORED"].map((c) => (
           <button key={c} className="card" data-testid={`q-class-${c}`} onClick={() => setFilter((f) => ({ ...f, cls: f.cls === c ? null : c }))}
             style={{ padding: 10, minWidth: 120, textAlign: "left", cursor: "pointer", borderColor: filter.cls === c ? CLASS_COLOR[c] : undefined, borderWidth: filter.cls === c ? 2 : 1 }}>
@@ -175,7 +195,7 @@ export function QualityPanel({ include }: { include: Include }) {
         <select className="select" style={{ width: 160 }} value={sort} onChange={(e) => setSort(e.target.value as any)}>
           <option value="risk">highest risk first</option><option value="quality">lowest quality first</option><option value="time">newest first</option>
         </select>
-        {(filter.cls || filter.signal || filter.review || filter.cluster || filter.q) && <button className="btn small" onClick={() => setFilter({ cls: null, signal: null, review: null, cluster: null, q: "" })}>clear filters</button>}
+        {(filter.cls || filter.verdict || filter.signal || filter.review || filter.cluster || filter.q) && <button className="btn small" onClick={() => setFilter({ cls: null, verdict: null, signal: null, review: null, cluster: null, q: "" })}>clear filters</button>}
         <span className="muted" style={{ fontSize: 12.5 }}>{rows.length} of {data.total}</span>
         <span className="grow" />
         <button className="btn small" data-testid="q-recompute" disabled={busy} onClick={recompute}>{busy ? "Re-assessing…" : "↻ Re-assess all"}</button>
@@ -183,11 +203,12 @@ export function QualityPanel({ include }: { include: Include }) {
 
       <div className="table-wrap">
         <table className="grid" data-testid="q-table">
-          <thead><tr><th>Response</th><th>Class</th><th>Quality</th><th>Risk</th><th>Secs</th><th>Signals</th><th>Top reason</th><th>Decision</th></tr></thead>
+          <thead><tr><th>Response</th><th>Verdict</th><th>Band</th><th>Quality</th><th>Risk</th><th>Secs</th><th>Signals</th><th>Why</th><th>Decision</th></tr></thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.sessionId} style={{ cursor: "pointer" }} data-testid="q-row" onClick={() => setOpen(r.sessionId)}>
                 <td className="mono">{r.sessionId.slice(0, 8)}{r.status !== "complete" ? <span className="muted"> · {r.status}</span> : ""}</td>
+                <td><span className="chip" data-testid="q-row-verdict" title={VERDICT_HINT[r.verdict ?? "UNSCORED"]} style={{ borderColor: VERDICT_COLOR[r.verdict ?? "UNSCORED"], color: VERDICT_COLOR[r.verdict ?? "UNSCORED"], fontWeight: 600 }}>{r.verdict ?? "—"}</span></td>
                 <td>
                   <span className="chip" style={{ borderColor: CLASS_COLOR[r.classification ?? "UNSCORED"], color: CLASS_COLOR[r.classification ?? "UNSCORED"] }}>{fmtClass(r.classification)}</span>
                   {r.assessed && data.config && r.configHash !== data.config.configHash && (
@@ -197,8 +218,8 @@ export function QualityPanel({ include }: { include: Include }) {
                 <td><Score value={r.qualityScore} invert /></td>
                 <td><Score value={r.riskScore} /></td>
                 <td>{r.durationSec ?? ""}</td>
-                <td>{[...new Set(r.flags.map((f) => f.category))].map((c) => <span key={c} className="chip" style={{ marginRight: 2 }}>{CATEGORY_LABELS[c] ?? c}</span>)}{r.clusterId && <span className="chip warn">cluster {r.clusterSize}</span>}</td>
-                <td style={{ maxWidth: 380, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.reasons.join("\n")}>{r.reasons[0] ?? (r.assessed ? "—" : "not assessed")}</td>
+                <td>{[...new Set(r.flags.filter((f) => f.role !== "informational").map((f) => f.category))].map((c) => <span key={c} className="chip" style={{ marginRight: 2 }}>{CATEGORY_LABELS[c] ?? c}</span>)}{(() => { const info = r.flags.filter((f) => f.role === "informational").length; return info ? <span className="chip" style={{ marginRight: 2, opacity: 0.6 }} title="informational — noted, does not affect the verdict">+{info} noted</span> : null; })()}{r.clusterId && <span className="chip warn">cluster {r.clusterSize}</span>}</td>
+                <td style={{ maxWidth: 380, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={[r.because, ...r.reasons].filter(Boolean).join("\n")}>{r.because ?? r.reasons[0] ?? (r.assessed ? "—" : "not assessed")}</td>
                 <td>{r.reviewStatus ? <span className={`chip ${r.reviewStatus === "KEEP" ? "on" : "warn"}`}>{r.reviewStatus.replace("_", " ")}</span> : <span className="muted">—</span>}</td>
               </tr>
             ))}
@@ -236,6 +257,11 @@ function ConfigCard({ data, include, busy, onRecompute, onSettings }: { data: Pa
             <span className="chip" data-testid="q-config-rules">{c.rulesOn} of {c.rulesTotal} rules on{c.rulesCustomised ? ` · ${c.rulesCustomised} customised` : ""}</span>
             <span className="chip" data-testid="q-config-custom">{c.customRules} custom rule{c.customRules === 1 ? "" : "s"}</span>
             <span className="chip" data-testid="q-config-bands">bands {c.bands.review} / {c.bands.suspicious} / {c.bands.highlySuspicious} / {c.bands.critical}</span>
+            {c.evidence && (
+              <span className="chip" data-testid="q-config-evidence" title={`Signals within a category combine as ${c.evidence.combination}; timing benchmarks trusted from ${c.evidence.minPeers} completes (estimates carry ${Math.round(c.evidence.estimateConfidence * 100)}% confidence); share-of-completes rules classify from ${c.evidence.minPopulation} completes; FLAGGED needs ${c.evidence.flagged === "bands_only" ? "the band alone" : `a strong signal or ${c.evidence.flaggedMinCategories} independent categories`}${c.rolesChanged ? ` · ${c.rolesChanged} rule role${c.rolesChanged === 1 ? "" : "s"} changed` : ""}`}>
+                evidence: {c.evidence.combination}{c.evidence.flagged === "bands_only" ? " · bands decide" : ` · strong or ${c.evidence.flaggedMinCategories} categories`}
+              </span>
+            )}
             {c.telemetryOff.length > 0 && <span className="chip warn">not recording: {c.telemetryOff.join(", ")}</span>}
             <span className="chip mono" title="Fingerprint of these settings — the same value is written on every assessment made with them">{c.configHash}</span>
           </div>
@@ -336,10 +362,22 @@ export function ReviewDrawer({ sessionId, onClose, onChanged }: { sessionId: str
                 <div className="row" style={{ gap: 14, margin: "10px 0", flexWrap: "wrap" }} data-testid="review-scores">
                   <Big label="Quality score" value={`${a.qualityScore}/100`} sub="100 = very high quality" color={a.qualityScore >= 70 ? CLASS_COLOR.CLEAN : a.qualityScore >= 40 ? CLASS_COLOR.REVIEW : CLASS_COLOR.HIGHLY_SUSPICIOUS} />
                   <Big label="Fraud risk" value={`${a.riskScore}/100`} sub="100 = extremely suspicious" color={CLASS_COLOR[a.classification]} />
-                  <Big label="Classification" value={fmtClass(a.classification)} sub={a.strictness ? `${a.strictness} strictness` : ""} color={CLASS_COLOR[a.classification]} />
+                  <Big label="Verdict" value={a.verdict ?? "—"} sub={a.verdict ? VERDICT_HINT[a.verdict] : "re-assess for a verdict"} color={VERDICT_COLOR[a.verdict ?? "UNSCORED"]} />
+                  <Big label="Band" value={fmtClass(a.classification)} sub={a.strictness ? `${a.strictness} strictness` : ""} color={CLASS_COLOR[a.classification]} />
                   <Big label="Recommendation" value={a.recommendation} sub={`${a.flags.length} flag${a.flags.length === 1 ? "" : "s"} · ${a.benchmarks?.peers ?? 0} peers`} color="var(--text)" />
                 </div>
 
+                {a.evidence?.because && (
+                  <div className="card" style={{ padding: "8px 10px", marginBottom: 8, borderColor: VERDICT_COLOR[a.verdict ?? "UNSCORED"] }} data-testid="review-because">
+                    <div className="muted" style={{ fontSize: 12 }}>Why {a.verdict === "FLAGGED" ? "was this respondent flagged" : a.verdict === "REVIEW" ? "is this respondent up for review" : "does this respondent pass"}?</div>
+                    <div style={{ fontSize: 13.5 }}>{a.evidence.because}</div>
+                    <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>
+                      Evidence: {a.evidence.strong} strong · {a.evidence.moderate} moderate · {a.evidence.weak} weak · {a.evidence.informational} informational
+                      {a.evidence.categories?.length ? ` · in ${a.evidence.categories.map((c: string) => CATEGORY_LABELS[c] ?? c).join(", ")}` : ""}
+                      {a.evidence.carriedBy?.length ? ` · carried by ${a.evidence.carriedBy.join(", ")}` : ""}
+                    </div>
+                  </div>
+                )}
                 <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 8 }} data-testid="review-groups">
                   {GROUPS.map(([label, cats]) => {
                     const score = Math.max(0, ...cats.map((c) => a.categories?.[c] ?? 0));
@@ -358,7 +396,15 @@ export function ReviewDrawer({ sessionId, onClose, onChanged }: { sessionId: str
                     <ol style={{ paddingLeft: 18, margin: 0 }}>
                       {[...a.flags].sort((x: any, y: any) => (y.riskPoints + y.qualityPenalty) - (x.riskPoints + x.qualityPenalty)).map((f: any, i: number) => (
                         <li key={i} style={{ marginBottom: 8, fontSize: 13 }} data-testid="review-flag">
-                          <div><strong>{f.title}</strong> <span className="chip" style={{ borderColor: SEV_COLOR[f.severity], color: SEV_COLOR[f.severity] }}>{f.severity}</span> <span className="muted">+{f.riskPoints} risk · −{f.qualityPenalty} quality · {CATEGORY_LABELS[f.category] ?? f.category}</span></div>
+                          <div>
+                            <strong style={f.role === "informational" ? { fontWeight: 500 } : undefined}>{f.title}</strong>{" "}
+                            <span className="chip" style={{ borderColor: SEV_COLOR[f.severity], color: SEV_COLOR[f.severity] }}>{f.severity}</span>{" "}
+                            {f.role === "informational"
+                              ? <span className="chip" style={{ opacity: 0.7 }} title="Noted for the researcher; does not move the verdict">informational</span>
+                              : f.strength ? <span className="chip" title={`Evidence strength from the rule's design points${typeof f.confidence === "number" && f.confidence < 1 ? ` · confidence ${Math.round(f.confidence * 100)}%` : ""}`}>{f.strength}{typeof f.confidence === "number" && f.confidence < 1 ? ` · ${Math.round(f.confidence * 100)}% sure` : ""}</span> : null}{" "}
+                            <span className="muted">+{f.riskPoints} risk · −{f.qualityPenalty} quality · {CATEGORY_LABELS[f.category] ?? f.category}</span>
+                          </div>
+                          {f.caveat && <div className="muted" style={{ fontSize: 12.5 }}><span>Caveat:</span> {f.caveat}</div>}
                           <div><span className="muted">What happened:</span> {f.observed}{f.expected ? <> <span className="muted">· expected</span> {f.expected}</> : null}</div>
                           <div><span className="muted">Why it matters:</span> {f.explanation}</div>
                           {(f.questionIds?.length || f.relatedSessionIds?.length) ? (

@@ -42,9 +42,23 @@ export type QualityCategory = z.infer<typeof QualityCategory>;
  * `qualityWeight` its quality penalty. A rule that is not listed here runs
  * with the preset's defaults for the chosen strictness.
  */
+/**
+ * What a rule's firing is FOR.
+ *
+ * `classifying` — it counts toward the fraud-risk score and can move the
+ * verdict. `informational` — it is shown as evidence and costs quality
+ * points, but it never moves the classification on its own. A pasted answer,
+ * one shared IP address, agreeing with every item on a satisfaction grid: real
+ * observations, poor grounds for calling a person fraudulent.
+ */
+export const RuleRole = z.enum(["classifying", "informational"]);
+export type RuleRole = z.infer<typeof RuleRole>;
+
 export const RuleSetting = z.object({
   enabled: z.boolean().optional(),
   severity: Severity.optional(),
+  /** whether the rule may move the classification, or only inform it */
+  role: RuleRole.optional(),
   /** multiplier on the rule's fraud-risk points (1 = as designed) */
   weight: z.number().min(0).max(5).optional(),
   /** multiplier on the rule's quality penalty */
@@ -109,9 +123,50 @@ export const PrivacyConfig = z.object({
 });
 export type PrivacyConfig = z.infer<typeof PrivacyConfig>;
 
+/**
+ * HOW SIGNALS COMBINE INTO A VERDICT — the settings that decide whether a
+ * respondent who merely answered quickly from an office network reads as
+ * "fast" or as "fraud".
+ *
+ * `combination`: `correlated` treats signals within one category as views of
+ * the same fact (five ways of saying "fast" is one fact, not five), taking
+ * the strongest plus a fraction of the rest, and only then combining
+ * categories as independent evidence. `independent` is the old noisy-OR
+ * over every flag — every signal counted in full.
+ *
+ * `minPeers`: below this many completes the timing benchmark is the
+ * definition's reading-time estimate, which assumes every word is read; a
+ * flag against an estimate carries `estimateConfidence` and its points are
+ * scaled by it.
+ *
+ * `minPopulation`: share-of-completes rules (one IP's share, one device's
+ * share) are informational until this many completes exist — "7 of 7 from
+ * one IP" is a test session, not a farm.
+ *
+ * `flagged`: what it takes to be FLAGGED rather than merely REVIEW.
+ * `strong_or_two_categories` requires at least one strong classifying flag
+ * (high-point, confident) or moderate classifying flags in at least
+ * `flaggedMinCategories` distinct categories, on top of the risk band.
+ * `bands_only` trusts the risk score alone.
+ */
+export const EvidenceConfig = z.object({
+  combination: z.enum(["correlated", "independent"]).default("correlated"),
+  minPeers: z.number().int().min(8).max(500).default(30),
+  estimateConfidence: z.number().min(0.1).max(1).default(0.6),
+  minPopulation: z.number().int().min(5).max(2000).default(30),
+  flagged: z.enum(["strong_or_two_categories", "bands_only"]).default("strong_or_two_categories"),
+  flaggedMinCategories: z.number().int().min(1).max(5).default(2),
+});
+export type EvidenceConfig = z.infer<typeof EvidenceConfig>;
+
+/** The three-way verdict a researcher acts on. The five-class scale stays underneath it. */
+export const QualityVerdict = z.enum(["PASS", "REVIEW", "FLAGGED"]);
+export type QualityVerdict = z.infer<typeof QualityVerdict>;
+
 export const QualityConfig = z.object({
   enabled: z.boolean().default(false),
   strictness: Strictness.default("standard"),
+  evidence: EvidenceConfig.default({}),
   /** a saved profile this config was taken from (informational) */
   profile: z.string().optional(),
   bands: ClassificationBands.default({}),

@@ -31,9 +31,13 @@ export interface QualityRow {
   qualityScore: number | null;
   riskScore: number | null;
   classification: string | null;
+  /** PASS / REVIEW / FLAGGED — the evidence-based verdict; derived from the band for assessments made before it existed */
+  verdict: string | null;
+  /** the one-line answer to "why was this respondent flagged?" */
+  because: string | null;
   recommendation: string | null;
   categories: Record<string, number>;
-  flags: { ruleId: string; category: string; severity: string; title: string }[];
+  flags: { ruleId: string; category: string; severity: string; title: string; role: string }[];
   clusterId: string | null;
   clusterSize: number;
   reasons: string[];
@@ -62,11 +66,23 @@ export interface QualityPayload {
   /** finished responses assessed with settings other than the current ones */
   staleAssessed: number;
   byClass: Record<string, number>;
+  byVerdict: Record<string, number>;
   byReview: Record<string, number>;
   signals: Record<string, number>;
   histogram: number[];
   clusters: { id: string; size: number }[];
   rows: QualityRow[];
+}
+
+/**
+ * Assessments written before the verdict existed carry only a band. Until
+ * they are re-assessed the band stands in: CLEAN reads as PASS, REVIEW as
+ * REVIEW, and anything above as FLAGGED — which is what those assessments
+ * meant at the time.
+ */
+function legacyVerdict(a: QualityAssessment): string {
+  if (a.verdict) return a.verdict;
+  return a.classification === "CLEAN" ? "PASS" : a.classification === "REVIEW" ? "REVIEW" : "FLAGGED";
 }
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
@@ -154,8 +170,10 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       computedAt: a?.computedAt ?? r.quality_computed_at ?? null,
       qualityScore: a?.qualityScore ?? null, riskScore: a?.riskScore ?? null,
       classification: a?.classification ?? null, recommendation: a?.recommendation ?? null,
+      verdict: a ? legacyVerdict(a) : null,
+      because: a?.evidence?.because ?? null,
       categories: a?.categories ?? {},
-      flags: (a?.flags ?? []).map((f) => ({ ruleId: f.ruleId, category: f.category, severity: f.severity, title: f.title })),
+      flags: (a?.flags ?? []).map((f) => ({ ruleId: f.ruleId, category: f.category, severity: f.severity, title: f.title, role: f.role ?? "classifying" })),
       clusterId: a?.cluster?.clusterId ?? null, clusterSize: a?.cluster?.size ?? 1,
       reasons: a?.reasons ?? [],
       reviewStatus: r.review_status ?? null, reviewReason: r.review_reason ?? null, reviewedAt: r.reviewed_at ?? null, reviewedBy: r.reviewed_by ?? null,
@@ -163,6 +181,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   });
 
   const byClass: Record<string, number> = { CLEAN: 0, REVIEW: 0, SUSPICIOUS: 0, HIGHLY_SUSPICIOUS: 0, CRITICAL: 0, UNSCORED: 0 };
+  const byVerdict: Record<string, number> = { PASS: 0, REVIEW: 0, FLAGGED: 0, UNSCORED: 0 };
   const byReview: Record<string, number> = { KEEP: 0, REMOVE: 0, REVIEW_LATER: 0, NONE: 0 };
   const signals: Record<string, number> = {};
   const histogram = new Array(10).fill(0);
@@ -170,6 +189,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   let staleAssessed = 0;
   for (const r of rows) {
     byClass[r.classification ?? "UNSCORED"] = (byClass[r.classification ?? "UNSCORED"] ?? 0) + 1;
+    byVerdict[r.verdict ?? "UNSCORED"] = (byVerdict[r.verdict ?? "UNSCORED"] ?? 0) + 1;
     byReview[r.reviewStatus ?? "NONE"] = (byReview[r.reviewStatus ?? "NONE"] ?? 0) + 1;
     for (const c of new Set(r.flags.map((f) => f.category))) signals[c] = (signals[c] ?? 0) + 1;
     if (r.riskScore !== null) histogram[Math.min(9, Math.floor(r.riskScore / 10))]++;
@@ -192,7 +212,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
        same failure as an export that silently stops at one */
     truncated,
     staleAssessed,
-    byClass, byReview, signals, histogram,
+    byClass, byVerdict, byReview, signals, histogram,
     clusters: [...clusters.entries()].map(([id, size]) => ({ id, size })).sort((a, b) => b.size - a.size),
     rows,
   };

@@ -11,3 +11,4 @@ export { attentionResult } from "./rules/attention.js";
 export { matrixSignature, gridPositions } from "./rules/matrix.js";
 export { openEndHash, openEnds } from "./rules/openEnd.js";
 export { navigationFingerprint } from "./rules/behaviour.js";
+export * from "./dataset.js";

@@ -1,6 +1,9 @@
 import type {
-  SurveyDefinition, QualityCategory, QualityClass, Severity, Strictness, QualityConfig,
+  SurveyDefinition, QualityCategory, QualityClass, Severity, Strictness, QualityConfig, RuleRole, QualityVerdict,
 } from "@rescript/schema";
+
+/** How much one firing says on its own. Derived from the rule's design points; see `strengthOf`. */
+export type EvidenceStrength = "weak" | "moderate" | "strong";
 
 /* ============================================================ telemetry */
 
@@ -144,13 +147,26 @@ export interface QualityFlag {
   explanation: string;
   observed: string;
   expected?: string;
-  /** contribution to the fraud-risk score (before weighting), 0–100 */
+  /** contribution to the fraud-risk score after weighting AND confidence, 0–100 */
   riskPoints: number;
   /** contribution to the quality penalty, 0–100 */
   qualityPenalty: number;
   questionIds: string[];
   relatedSessionIds?: string[];
   at: string;
+  /** classifying flags move the verdict; informational ones are shown and cost quality only */
+  role: RuleRole;
+  /** how much this firing says on its own */
+  strength: EvidenceStrength;
+  /**
+   * 0–1. How sure the rule is of its own observation: 1 against a peer
+   * median, lower against a reading-time estimate or a thin population. The
+   * points above are already scaled by it; it is kept so the explanation can
+   * say "against an estimate".
+   */
+  confidence: number;
+  /** why the confidence is less than 1, when it is */
+  caveat?: string;
 }
 
 /**
@@ -292,10 +308,33 @@ export interface QualityAssessment {
   cluster: ClusterInfo;
   /** one line per reason, ordered by contribution — the "Reasons:" list */
   reasons: string[];
+  /**
+   * PASS / REVIEW / FLAGGED — what a researcher acts on. Derived from the
+   * risk score AND the minimum-evidence rule in `config.evidence`, so a pile
+   * of weak, correlated signals cannot add up to FLAGGED on its own.
+   */
+  verdict: QualityVerdict;
+  /** the evidence the verdict rests on, in words and counts — "Why was this respondent flagged?" */
+  evidence: EvidenceSummary;
   recommendation: "INCLUDE" | "REVIEW BEFORE INCLUSION" | "LIKELY EXCLUDE";
   /** which telemetry categories were unavailable (disabled or not collected) */
   notMeasured: string[];
   benchmarks: { peers: number; medianDurationSec: number | null };
+}
+
+export interface EvidenceSummary {
+  /** classifying flags, by strength */
+  strong: number;
+  moderate: number;
+  weak: number;
+  /** flags shown but not counted */
+  informational: number;
+  /** distinct categories with a moderate-or-stronger classifying flag */
+  categories: QualityCategory[];
+  /** the sentence under the verdict */
+  because: string;
+  /** which flags carried the verdict, by rule id, strongest first */
+  carriedBy: string[];
 }
 
 /* ============================================================ rules */
@@ -323,6 +362,8 @@ export interface RuleDef {
   enabledIn: Record<Exclude<Strictness, "custom">, boolean>;
   /** does this rule need telemetry of a given kind (skipped, not failed, when absent) */
   needs?: ("timing" | "focus" | "clipboard" | "navigation" | "interaction" | "device" | "network" | "peers")[];
+  /** informational by design: shown, costs quality, never moves the verdict alone. Default classifying. */
+  role?: RuleRole;
 }
 
 /** Everything a rule implementation receives. */
@@ -357,10 +398,20 @@ export interface FlagDraft {
   /** 0–1 multiplier on the rule's default points, for graded findings */
   intensity?: number;
   severity?: Severity;
+  /** 0–1: how sure the rule is of the observation (estimate vs median, thin population). Default 1. */
+  confidence?: number;
+  /** why the confidence is below 1 */
+  caveat?: string;
+  /** a rule may demote its own firing to informational (e.g. a share rule on a thin population) */
+  role?: RuleRole;
 }
 
 export interface Benchmarks {
   peers: number;
+  /** what "too fast" is measured against: this survey's own completes, or the definition's reading-time estimate */
+  source: "median" | "estimate";
+  /** how many completes are needed before medians are trusted (config.evidence.minPeers) */
+  minPeers: number;
   medianDurationSec: number | null;
   /** page id → median seconds among peers */
   pageMedians: Record<string, number>;

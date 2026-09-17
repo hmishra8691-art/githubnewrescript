@@ -1071,6 +1071,8 @@ p.qs-help { margin: -2px 0 10px; }
 .qs .qs-grid2 + .qs-check { margin-top: 14px; }
 
 .qs-bands { display: grid; gap: 10px; }
+.qs-evidence { display: grid; gap: 8px; margin-bottom: 4px; }
+.qs-evidence .qs-help { max-width: 460px; }
 .qs-bandbar { display: flex; height: 20px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); }
 .qs-bandbar > div { font-size: 11px; font-weight: 600; letter-spacing: .03em; color: #fff; text-align: center; line-height: 20px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding: 0 4px; min-width: 0; }
 .qs-bandfields { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px 14px; align-items: end; }

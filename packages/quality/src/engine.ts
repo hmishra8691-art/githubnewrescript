@@ -15,7 +15,7 @@ import { attentionRules, attentionResult, consistencyRules, stateFor } from "./r
 import { openEndRules, openEndHash, openEnds } from "./rules/openEnd.js";
 import { behaviourRules, navigationFingerprint } from "./rules/behaviour.js";
 import { similarityRules, clusterSurvey } from "./similarity.js";
-import { categoryScores, classify, CLASS_ORDER, finalizeFlags, qualityScore, reasons, recommendation, riskScore } from "./score.js";
+import { categoryScores, classify, CLASS_ORDER, finalizeFlags, qualityScore, reasons, recommendation, riskScore, verdictOf } from "./score.js";
 import { isMatrix } from "./survey.js";
 
 /**
@@ -93,6 +93,10 @@ export interface QualityConfigSummary {
   /** telemetry categories switched off */
   telemetryOff: string[];
   maxPeers: number;
+  /** how signals combine into a verdict — see EvidenceConfig */
+  evidence: QualityConfig["evidence"];
+  /** built-in rules the researcher moved between informational and classifying */
+  rolesChanged: number;
   configHash: string;
 }
 
@@ -109,6 +113,8 @@ export function summarizeConfig(def: SurveyDefinition): QualityConfigSummary {
     customRules: config.customRules.filter((r) => r.enabled).length,
     telemetryOff: (["timing", "focus", "clipboard", "navigation", "interaction", "device", "network"] as const).filter((k) => config.telemetry[k] === false),
     maxPeers: config.maxPeers,
+    evidence: config.evidence,
+    rolesChanged: Object.entries(config.rules).filter(([id, s]) => s?.role && s.role !== (RULES.find((r) => r.id === id)?.role ?? "classifying")).length,
     configHash: configFingerprint(config),
   };
 }
@@ -278,7 +284,7 @@ function applyCustomPoints(flags: ReturnType<typeof finalizeFlags>, config: Qual
 export function assess(input: QualityInput): QualityAssessment {
   const config = resolveConfig(input.def);
   const now = new Date(input.now ?? Date.now()).toISOString();
-  const bench = computeBenchmarks(input.def, input.peers);
+  const bench = computeBenchmarks(input.def, input.peers, config.evidence.minPeers);
   const ctx = makeContext(input, config, bench);
   const t = ctx.telemetry;
   const sys = systemVars(ctx, t, bench);
@@ -311,8 +317,9 @@ export function assess(input: QualityInput): QualityAssessment {
     fillScores(sys, flags, config, custom.floor);
   }
 
-  const cats = categoryScores(flags);
+  const cats = categoryScores(flags, config);
   const cls = sys.SYSTEM_QUALITY_STATUS;
+  const { verdict, evidence } = verdictOf(flags, sys.SYSTEM_FRAUD_RISK_SCORE, config, custom.drafts.length ? (custom as { floor?: QualityClass }).floor : undefined);
   const notMeasured = [...ctx.disabledTelemetry];
   return {
     version: 1,
@@ -328,14 +335,16 @@ export function assess(input: QualityInput): QualityAssessment {
     system: sys,
     cluster: sim.cluster,
     reasons: reasons(flags),
-    recommendation: recommendation(cls, sys.SYSTEM_QUALITY_SCORE),
+    verdict,
+    evidence,
+    recommendation: recommendation(cls, sys.SYSTEM_QUALITY_SCORE, verdict),
     notMeasured,
     benchmarks: { peers: bench.peers, medianDurationSec: bench.medianDurationSec },
   };
 }
 
 function fillScores(sys: SystemVars, flags: ReturnType<typeof finalizeFlags>, config: QualityConfig, floor?: QualityClass) {
-  const cats = categoryScores(flags);
+  const cats = categoryScores(flags, config);
   sys.SYSTEM_SPEEDER_SCORE = cats.timing;
   sys.SYSTEM_STRAIGHTLINE_SCORE = cats.matrix;
   sys.SYSTEM_ATTENTION_SCORE = cats.attention;
@@ -349,9 +358,11 @@ function fillScores(sys: SystemVars, flags: ReturnType<typeof finalizeFlags>, co
   sys.SYSTEM_DEVICE_SCORE = Math.max(cats.device, cats.network);
   sys.SYSTEM_INTERACTION_SCORE = cats.interaction;
   sys.SYSTEM_SCREENER_SCORE = cats.screener;
-  sys.SYSTEM_FRAUD_RISK_SCORE = riskScore(flags);
+  sys.SYSTEM_FRAUD_RISK_SCORE = riskScore(flags, config);
   sys.SYSTEM_QUALITY_SCORE = qualityScore(flags);
-  sys.SYSTEM_QUALITY_STATUS = classify(sys.SYSTEM_FRAUD_RISK_SCORE, config, floor);
+  /* the classification is read through the verdict, so the two never disagree */
+  const { verdict } = verdictOf(flags, sys.SYSTEM_FRAUD_RISK_SCORE, config, floor);
+  sys.SYSTEM_QUALITY_STATUS = classify(sys.SYSTEM_FRAUD_RISK_SCORE, config, floor, verdict);
   sys.SYSTEM_FLAG_COUNT = flags.length;
   sys.SYSTEM_HIGH_SEVERITY_FLAGS = flags.filter((f) => f.severity === "high" || f.severity === "critical").length;
 }
@@ -376,7 +387,7 @@ export function assessSurvey(def: SurveyDefinition, responses: ResponseRecord[],
   }));
   // first pass: system vars for every response (signatures, timings) so peers carry them
   const config = resolveConfig(def);
-  const bench0 = computeBenchmarks(def, peers);
+  const bench0 = computeBenchmarks(def, peers, config.evidence.minPeers);
   for (const p of peers) {
     const r = responses.find((x) => x.sessionId === p.sessionId)!;
     const ctx = makeContext({ def, response: r, peers: [], now }, config, bench0);

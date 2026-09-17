@@ -1,6 +1,6 @@
 "use client";
 import React from "react";
-import type { CustomQualityRule, QualityClass, QualityConfig, RuleSetting, Severity, Strictness } from "@rescript/schema";
+import type { CustomQualityRule, QualityClass, QualityConfig, RuleRole, RuleSetting, Severity, Strictness } from "@rescript/schema";
 import { QualityConfig as QualityConfigSchema } from "@rescript/schema";
 import { RULES, CATEGORY_LABELS, BUILTIN_PROFILES, SYSTEM_VARIABLE_HELP, configFingerprint, type RuleDef, type QualityProfile } from "@rescript/quality";
 import { useStudio, uid } from "./store";
@@ -118,11 +118,17 @@ export function QualitySettings() {
           <h3 className="sec">Classification bands <span className="qs-sec-sub">fraud risk 0–100</span></h3>
           <Bands cfg={cfg} onChange={(b) => set("edit classification bands", (q) => { q.bands = b; })} />
 
+          {/* ------------------------------------------------ evidence */}
+          <h3 className="sec">Evidence &amp; verdict <span className="qs-sec-sub">how signals add up to PASS / REVIEW / FLAGGED</span></h3>
+          <Evidence cfg={cfg} onChange={(e) => set("edit evidence rules", (q) => { q.evidence = e; })} />
+
           {/* ------------------------------------------------ rules */}
           <h3 className="sec">Rules</h3>
           <p className="qs-help">
             Defaults shown are for <strong>{LEVELS.find((l) => l.value === level)?.label}</strong>. Change anything here and the survey
             keeps your value; “Reset” returns a rule to the preset. Weight multiplies a rule's risk points; severity scales them too.
+            A rule marked <em>informational</em> is still checked and shown on the respondent, but it cannot move the verdict — use it for
+            observations that describe a respondent without incriminating them.
             {cfg.strictness !== "custom" && " Editing a rule does not switch the strictness to Custom — presets and overrides layer."}
           </p>
           <div className="qs-cats">
@@ -318,6 +324,51 @@ function SaveStatus() {
 
 /* ================================================================ bands */
 
+/**
+ * The rules that turn flags into a verdict. These are what stopped the "seven
+ * of seven from one office, all a bit fast" problem: correlated combination,
+ * distrust of estimates and tiny populations, and a FLAGGED bar that asks for
+ * either one strong signal or two independent categories.
+ */
+function Evidence({ cfg, onChange }: { cfg: QualityConfig; onChange(e: QualityConfig["evidence"]): void }) {
+  const e = cfg.evidence;
+  const patch = (p: Partial<QualityConfig["evidence"]>) => onChange({ ...e, ...p });
+  return (
+    <div data-testid="quality-evidence" className="qs-evidence">
+      <div className="qrule-fields">
+        <label className="f qs-wide"><span>Signals within one category</span>
+          <select className="select" data-testid="qev-combination" value={e.combination} onChange={(ev) => patch({ combination: ev.target.value as typeof e.combination })}>
+            <option value="correlated">correlated — the strongest counts, the rest add a little (default)</option>
+            <option value="independent">independent — every signal adds in full</option>
+          </select>
+          <span className="qs-help">Five "too fast" rules firing on one quick respondent are one fact seen five ways, not five facts.</span>
+        </label>
+        <label className="f qs-wide"><span>What FLAGGED takes</span>
+          <select className="select" data-testid="qev-flagged" value={e.flagged} onChange={(ev) => patch({ flagged: ev.target.value as typeof e.flagged })}>
+            <option value="strong_or_two_categories">a strong, confident signal — or moderate signals in independent categories (default)</option>
+            <option value="bands_only">the risk band alone, as before</option>
+          </select>
+          <span className="qs-help">Below the bar, a high risk score is REVIEW: worth a look, not a verdict.</span>
+        </label>
+        {e.flagged === "strong_or_two_categories" && (
+          <label className="f"><span>Independent categories needed</span>
+            <CountInput className="input" min={1} max={5} width={90} allowEmpty={false} data-testid="qev-categories" value={e.flaggedMinCategories} onChange={(v) => patch({ flaggedMinCategories: v ?? 2 })} /></label>
+        )}
+        <label className="f"><span>Trust timing benchmarks from</span>
+          <CountInput className="input" min={8} max={500} width={90} allowEmpty={false} data-testid="qev-minpeers" value={e.minPeers} onChange={(v) => patch({ minPeers: v ?? 30 })} />
+          <span className="qs-help">completes. Below this, speed is judged against a reading-time estimate.</span></label>
+        <label className="f"><span>Confidence in an estimate</span>
+          <input className="input" type="number" step={0.05} min={0.1} max={1} style={{ width: 90 }} data-testid="qev-estimate" value={e.estimateConfidence}
+            onChange={(ev) => patch({ estimateConfidence: Math.max(0.1, Math.min(1, Number(ev.target.value) || 0.6)) })} />
+          <span className="qs-help">A flag against an estimate carries this much of its points and cannot be "strong" on its own.</span></label>
+        <label className="f"><span>Share-of-completes rules classify from</span>
+          <CountInput className="input" min={5} max={2000} width={90} allowEmpty={false} data-testid="qev-minpop" value={e.minPopulation} onChange={(v) => patch({ minPopulation: v ?? 30 })} />
+          <span className="qs-help">completes. "Seven of seven from one IP" is informational until the study is this big.</span></label>
+      </div>
+    </div>
+  );
+}
+
 function Bands({ cfg, onChange }: { cfg: QualityConfig; onChange(b: QualityConfig["bands"]): void }) {
   const b = cfg.bands;
   const setB = (k: keyof QualityConfig["bands"], v: number) => {
@@ -378,6 +429,7 @@ function RuleRow({ rule, level, setting, questions, onChange }: {
           {!enabled && <span className="chip">off</span>}
         </button>
         <span className="qrule-points">+{rule.riskPoints} risk · −{rule.qualityPenalty} quality</span>
+        <RoleToggle rule={rule} setting={setting} onChange={(role) => patch({ role })} />
         <button type="button" className="btn small ghost" onClick={() => setOpen((o) => !o)}>{open ? "hide" : "edit"}</button>
       </div>
       {open && (
@@ -426,6 +478,20 @@ function RuleRow({ rule, level, setting, questions, onChange }: {
         </div>
       )}
     </div>
+  );
+}
+
+/** classifying ↔ informational, shown as what it does rather than what it is called */
+function RoleToggle({ rule, setting, onChange }: { rule: RuleDef; setting: RuleSetting | undefined; onChange(role: RuleRole | undefined): void }) {
+  const dflt: RuleRole = rule.role ?? "classifying";
+  const role: RuleRole = setting?.role ?? dflt;
+  const informational = role === "informational";
+  return (
+    <button type="button" className={`chip ${informational ? "" : "on"}`} data-testid="qrule-role" style={{ cursor: "pointer", opacity: informational ? 0.75 : 1 }}
+      title={informational ? "Informational: checked and shown, but does not move the verdict. Click to make it count." : "Counts toward the verdict. Click to make it informational only."}
+      onClick={() => { const next: RuleRole = informational ? "classifying" : "informational"; onChange(next === dflt ? undefined : next); }}>
+      {informational ? "informational" : "counts"}{role !== dflt ? " *" : ""}
+    </button>
   );
 }
 
