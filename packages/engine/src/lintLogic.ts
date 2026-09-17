@@ -18,11 +18,11 @@ import {
   isMultiValuedQuestion,
   resolveVariant,
 } from "@rescript/schema";
-import { getQuestionByCodeOrVar } from "./state.js";
+import { LOOP_BUILTIN_REFS, getQuestionByCodeOrVar } from "./state.js";
 import { PIPE_TOKEN_RE, parsePipeBody } from "./pipingTokens.js";
 import { registerBareNameResolver } from "./piping.js";
 import { describeCycle, detectLogicCycles, orderIndex } from "./dependencies.js";
-import { MAX_LOOP_DEPTH, loopNodes, loopVariableNames, maxLoopIterations, possibleLoopItems, questionIdsInLoop } from "./loops.js";
+import { MAX_LOOP_DEPTH, MAX_LOOP_PRODUCT, loopNodes, loopVariableNames, maxLoopIterations, possibleLoopItems, questionIdsInLoop } from "./loops.js";
 import { listFillVariableNames } from "./listFill.js";
 import { buildVariableDictionary } from "./variables.js";
 import { embeddedCatalog, isNamedEmbeddedField } from "./embedded.js";
@@ -30,6 +30,7 @@ import { gridAxes, gridScaleOptions } from "./gridAxes.js";
 import { staleFields, shapeHasAxis } from "./questionShape.js";
 import { honoursColumns, drawsOptionImages, honoursOrientation } from "./rendererReads.js";
 import { effectiveScale } from "./scale.js";
+import { isServerResolvedExpression } from "./aiFunctions.js";
 
 /**
  * Logic configuration linting (reqs §30–31).
@@ -1165,7 +1166,7 @@ export function lintStructure(def: SurveyDefinition): LogicIssue[] {
 export function lintLoops(def: SurveyDefinition): LogicIssue[] {
   const issues: LogicIssue[] = [];
   const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
-  const BUILTIN = new Set(["code", "label", "index", "count"]);
+  const BUILTIN = new Set<string>(LOOP_BUILTIN_REFS);
   const questionIndex = new Map<string, number>();
   const seen: string[] = [];
   const positionOf = (nodes: (typeof def.flow)[number][]) => {
@@ -1195,6 +1196,21 @@ export function lintLoops(def: SurveyDefinition): LogicIssue[] {
          */
         if (ancestors.length + 1 > MAX_LOOP_DEPTH) {
           push("error", "nesting", `Loop "${n.loopVar}" is nested ${ancestors.length + 1} deep — at most ${MAX_LOOP_DEPTH} levels are allowed, because iterations multiply.`);
+        }
+        /*
+         * The nest's size, from the definition alone: this loop's largest
+         * possible count times each ancestor's. Unbounded sources (a count
+         * from a variable) cannot be sized here and are left to the runtime
+         * cap; a bounded nest that already exceeds the product cap is told
+         * so, because the runtime will trim the innermost loop and the
+         * author would rather know now.
+         */
+        if (ancestors.length) {
+          const sizes = [...ancestors, n].map((l) => maxLoopIterations(def, l));
+          if (sizes.every((s): s is number => typeof s === "number")) {
+            const product = sizes.reduce((a, b) => a * b, 1);
+            if (product > MAX_LOOP_PRODUCT) push("warning", "nesting", `Loop "${n.loopVar}" and the loops around it can produce up to ${product.toLocaleString()} iterations together — the runtime stops at ${MAX_LOOP_PRODUCT.toLocaleString()} and trims the innermost loop.`);
+          }
         }
 
         // column names
@@ -1262,9 +1278,57 @@ export function lintLoops(def: SurveyDefinition): LogicIssue[] {
         };
         walkCond(n.eligibleIf, "eligibleIf");
         walkCond(n.invalidIf, "invalidIf");
+        walkCond(n.skipIf, "skipIf");
+        walkCond(n.breakIf, "breakIf");
+
+        /*
+         * Aggregates are variables: the name must be an identifier, unique
+         * among the loop's aggregates, and over a question the loop body
+         * actually asks — a typo here is a column of blanks in the export.
+         */
+        const aggNames = new Set<string>();
+        for (const agg of n.aggregates ?? []) {
+          if (!IDENT.test(agg.name)) push("error", "aggregates", `Loop "${n.loopVar}": aggregate name "${agg.name}" must be an identifier.`);
+          if (aggNames.has(agg.name)) push("error", "aggregates", `Loop "${n.loopVar}": two aggregates are named "${agg.name}".`);
+          aggNames.add(agg.name);
+          const q = def.questions.find((x) => x.id === agg.questionRef) ?? getQuestionByCodeOrVar(def, agg.questionRef);
+          if (!q) push("error", "aggregates", `Loop "${n.loopVar}": aggregate "${agg.name}" is over a question that does not exist.`);
+          else if (!questionIdsInLoop(n).includes(q.id)) push("warning", "aggregates", `Loop "${n.loopVar}": aggregate "${agg.name}" is over ${q.code}, which is not inside this loop — it will only ever see one value.`);
+        }
+
+        /*
+         * A List Fill runs ONCE per respondent, when its trigger is answered,
+         * and reads and writes the plain answer keys. A question inside a
+         * loop body is answered once per iteration under iteration keys, so
+         * a List Fill that reads one as its source or count sees nothing, and
+         * one that writes a destination inside the loop writes a value no
+         * iteration reads. The construct for "a list per iteration" is a loop
+         * whose source is the List Fill, or a loop over the question itself.
+         */
+        const bodyIds = new Set(questionIdsInLoop(n));
+        for (const lf of def.listFills ?? []) {
+          const reads: string[] = [];
+          if (lf.source.kind === "question" && bodyIds.has(lf.source.questionId)) reads.push("source");
+          if (lf.selection.count.kind === "question" && bodyIds.has(lf.selection.count.questionId)) reads.push("count");
+          if (reads.length) push("warning", "listFill", `List Fill "${lf.name}" takes its ${reads.join(" and ")} from a question inside loop "${n.loopVar}" — a List Fill runs once per respondent and cannot see per-iteration answers. Loop over the List Fill instead, or move the question out of the loop.`);
+          const dests = lf.destinations.filter((d) => bodyIds.has(d.questionId));
+          if (dests.length) push("warning", "listFill", `List Fill "${lf.name}" writes ${dests.length === 1 ? "a destination" : `${dests.length} destinations`} inside loop "${n.loopVar}" — the value is written once and no iteration reads it.`);
+        }
+
         for (const qid of questionIdsInLoop(n)) {
           const q = def.questions.find((x) => x.id === qid);
           if (!q) continue;
+          /*
+           * Two per-respondent mechanisms that are not per-iteration, said
+           * plainly rather than discovered in the data: an AI follow-up's
+           * transcript lives beside the question's plain key, so inside a
+           * loop the probes asked for Apple count against Google's limit;
+           * and an AI-derived variable is resolved by the server from the
+           * plain answer, once.
+           */
+          if (q.probe) push("warning", `${q.code}.probe`, `${q.code} has an AI follow-up and sits inside loop "${n.loopVar}" — follow-ups are counted per respondent, not per iteration, so later iterations get fewer or none.`);
+          if (q.type === "conjoint_task" || q.type === "maxdiff_task") push("warning", `${q.code}.design`, `${q.code} is a design-based task inside loop "${n.loopVar}" — one design version is drawn per respondent and shown in every iteration, and the export carries one ${q.variableName}_VERSION.`);
+          if (q.type === "calculated" && q.settings.expression && isServerResolvedExpression(q.settings.expression)) push("warning", `${q.code}.expression`, `${q.code} is an AI-derived variable inside loop "${n.loopVar}" — it is resolved once from the plain answer, not once per iteration.`);
           walkCond(q.displayLogic as Condition | undefined, `${q.code}.displayLogic`);
           for (const text of [q.text, q.instruction ?? ""]) {
             for (const m of text.matchAll(PIPE_TOKEN_RE)) {

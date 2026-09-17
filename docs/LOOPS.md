@@ -170,7 +170,19 @@ Inside the loop, every question runs with a context:
 | `{{loop.code}}` or `{{CURRENT_ITEM_CODE}}` | its code |
 | `{{loop.index}}` or `{{LOOP_INDEX}}` | 1-based position in this run |
 | `{{loop.count}}` or `{{LOOP_COUNT}}` | how many iterations this run has |
+| `{{loop.first}}` or `{{LOOP_FIRST}}` | `true` on the opening iteration |
+| `{{loop.last}}` or `{{LOOP_LAST}}` | `true` on the closing iteration (empty when the count is unknown) |
+| `{{loop.item}}` | the label again, under the brief's name |
+| `{{loop.depth}}` or `{{LOOP_DEPTH}}` | how many loops enclose this iteration, counting itself |
 | `{{loop.Product_ID}}` or `{{CURRENT_ITEM.Product_ID}}` | **any reference column, by name** |
+
+`first` / `last` are the two questions every loop body eventually asks — a
+different intro on the first pass, a summary or a different button on the
+last — and until now had to be spelled `LOOP_INDEX = 1`, and could not be
+spelled at all for the last (a rule compares a source to a literal, not to
+another source). As conditions: `loop.first = true`, `loop.last = true`. The
+condition builder and the piping picker list them; scripts see them on
+`getCurrentLoopItem().first / .last / .item / .depth`.
 
 Several in one question is ordinary text:
 
@@ -200,6 +212,27 @@ anywhere else the value would always be empty.
 **Display logic, skip logic and validation are evaluated separately for every
 iteration** (§27–§29): Q8 can be shown for Apple and hidden for Xiaomi in the
 same run; Q7 in iteration 2 is validated against iteration 2's answer.
+
+---
+
+## The calc language inside an iteration
+
+An expression evaluated from inside an iteration — an `expr` condition, a
+set-expression `expr` payload, a **calculated question in the loop body**, a
+script's `expr(...)` — resolves the body's questions as THAT iteration
+answered them, under their plain codes: `Q7 * 2 + loop.index`, not `Q7_3`.
+The loop's own properties are in scope as `loop.index`, `loop.count`,
+`loop.first`, `loop.last`, `loop.code`, `loop.label`, `loop.<Column>`, the
+`LOOP_INDEX` / `CURRENT_ITEM` aliases and `<outerLoopVar>.<prop>`. One
+resolver, `calcOptionsFor(def, state, loop)` in `calcContext.ts`, for all of
+them. A calculated question inside a loop is written per iteration
+(`qc@apple`, `qc@google`) — before this it was evaluated once against the bare
+keys and written once, the last iteration's value under a key no iteration
+read.
+
+Masked questions inside a loop report per iteration too: `MASK_Q7_2_COUNT`,
+`MASK_Q7_2_LIST`, `MASK_Q7_2_ITEM_1` for iteration 2 (nested `MASK_Q9_2_1_…`),
+positional like the answer columns `Q7_2`.
 
 ---
 
@@ -276,7 +309,7 @@ columns.
 ## Scripts (§31)
 
 ```js
-getCurrentLoopItem()                 // { code, label, index, count, references }
+getCurrentLoopItem()                 // { code, label, item, index, count, first, last, depth, references }
 getCurrentLoopIndex()                // 1-based; 0 outside a loop
 getLoopCount()
 getCurrentLoopReference("Product_ID")   // any column name — nothing is hardcoded
@@ -288,12 +321,36 @@ Each takes an optional trailing `scope` — a loopVar — to address an outer lo
 `getCurrentLoopReference("Region", "brand")`. `get`/`set` stay loop-scoped, and
 `getLoopAnswer` is the one sanctioned way to cross iterations, so the `@`
 convention stays an engine detail. `loop` (the raw context) is still available.
+`expr("Q7 + 1")` inside an iteration reads that iteration (see *The calc
+language inside an iteration*).
+
+**A page's `on_load` runs when the page is shown** — for a loop body, once per
+iteration (`p6@apple`, `p6@google`), with that iteration as `loop`, so
+`get`/`set` land on the iteration's keys. Survey-wide `on_load` still runs
+once when the session opens. Before this a page-scoped `on_load` never ran at
+all: the session-open call passed no page, so no page script ever matched.
 
 ---
 
 ## Studio
 
 The loop card in **Survey Flow** opens into the loop editor:
+
+- **Source** now offers *a set expression* — "the brands in both screeners" —
+  with the same visual chain / text editors masks use (`SetExprField`,
+  exported from `MaskingBuilder`). The schema and engine had the source; the
+  editor could not produce it and destroyed one on any kind switch.
+- **Custom order** can be typed for an unbounded source too (the engine
+  honoured it; the editor hid the field).
+- **This loop as a statement** — the configuration read back as
+  `FOR EACH brand IN Q2.selected / WHERE … / ORDER BY … / AT MOST … / BREAK
+  WHEN … / RESOLVE ONCE / LOOP_BRAND_AVG = avg(Q7)` (`describeLoop`), in the
+  grammar the condition and mask expression tabs use. One-way on purpose: the
+  conditions round-trip in their own editors, and a parser for the loop's own
+  shape would be a second grammar to keep in step with the editor for ever.
+- The mask builder's **Loop Item** payload takes a `scope` (an enclosing
+  loop's name) as well as a reference column, so a mask inside a nested loop
+  can punch the OUTER item.
 
 - **Source / filter / name** — every source kind, including List Fill (the
   previous editor could not produce one and destroyed it on a kind switch).
@@ -327,6 +384,28 @@ context the block is running with — and an outer block beneath it when nested.
 "Other, specify" text is now per iteration. It was shared across iterations
 while validation read the scoped key, so Apple's text reappeared under Google.
 
+**Randomization is per iteration and stable per respondent.** Option, row and
+column shuffles always were (`rand:<q>@<code>`); now a **randomizer node
+inside a loop body** draws afresh for each iteration (`flow:<id>@<code>`), and
+a **nested loop's random / weighted order** is drawn per outer iteration
+(`loop:<id>@<outer>`) — Apple's products in one order, Google's in another. A
+top-level loop's seed key is unchanged, so a respondent mid-survey keeps their
+order. Design-based tasks (conjoint, MaxDiff) inside a loop still draw one
+version per respondent; the lint says so.
+
+**Safeguards.** `MAX_LOOP_ITERATIONS = 200` per loop, `MAX_LOOP_DEPTH = 5`
+(now enforced at runtime too — a sixth level resolves to nothing), and
+`MAX_LOOP_PRODUCT = 2000` for the nest as a whole: outer × inner × … is
+trimmed at the innermost loop, so five nested loops of 200 cannot compile
+3.2 × 10¹¹ pages. All three truncate rather than error; the lint is where the
+author finds out.
+
+**`resolveSource: "once"` snapshots are stamped** with a fingerprint of the
+loop's definition (source, rules, count, order). A session resumed after the
+programmer changed what the loop iterates over retakes the snapshot instead
+of keeping the old list for ever; a snapshot from before the stamp existed is
+still honoured.
+
 ## Lint
 
 From the definition alone (`lintLoops`, part of `lintSurveyLogic`):
@@ -341,14 +420,24 @@ From the definition alone (`lintLoops`, part of `lintSurveyLogic`):
 - ordering by a column the loop lacks — error
 - a loop token outside every loop — warning
 - an unbounded source (no positional export columns possible) — warning
+- a bounded nest whose outer × inner product exceeds `MAX_LOOP_PRODUCT` — warning
+- aggregate names: non-identifier or duplicate — error; over a question outside the loop — warning
+- a List Fill whose source / count question, or a destination, sits inside a
+  loop body — warning: a List Fill runs once per respondent on the plain
+  keys, so it cannot see or feed per-iteration answers (loop over the List
+  Fill instead)
+- an AI follow-up (probe), an AI-derived variable, or a design-based task
+  inside a loop — warning: these are per respondent, not per iteration
 
 ## Where things are
 
+| `calcContext.ts` | `calcOptionsFor(def, state, loop)` — the one resolver, loop-aware |
+| `loopDescribe.ts` | `describeLoop` — the loop as one statement |
 | | |
 |---|---|
 | schema | `packages/schema/src/flow.ts` — `LoopSource`, `LoopReferences`, `LoopOrder`, `LoopCount`; `conditions.ts` — `scope` on a loop source |
 | engine | `packages/engine/src/loops.ts` (pipeline, variables, simulator), `loopModel.ts` (structure, no evaluation), `state.ts` (`LoopContext`, `loopKeySuffix`, `answerLookupKeys`, `lookupAnswer`, `loopValue`, `findLoopScope`) |
-| tests | `packages/engine/src/loops.test.ts` (28), `packages/exporters/src/exporters.test.ts` (3 loop tests), `scripts/loop-test.mjs` (20, Studio → runtime) |
+| tests | `packages/engine/src/loops.test.ts` (29), `loopControlFlow.test.ts` (19), `loopIntegration.test.ts` (13 — first/last, the calc language and scripts inside an iteration, per-iteration randomization, the nest cap, snapshot stamping, per-iteration masks, dependency edges, the lints, the statement), `packages/exporters/src/exporters.test.ts` (3 loop tests), `scripts/loop-test.mjs` (25, Studio → runtime) |
 | studio | `components/studio/LoopEditor.tsx`, `loopScope.tsx`; `ConditionBuilder`, `PipingPicker`, `PropertiesPanel` |
 | runtime | `Runner.tsx` (full-path keys, per-iteration other-text), `Inspector.tsx` (Loop debug) |
 | export | `packages/exporters/src/variableDictionary.ts` (Loops sheet), `exportConfig.ts` |

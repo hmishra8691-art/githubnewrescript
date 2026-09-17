@@ -29,7 +29,7 @@ export interface SessionUploadArgs {
   sessionId: string;
   kind: SessionUploadKind;
   questionId: string;
-  /** the answer key inside a loop, `<questionId>__<iteration>`; the question id otherwise */
+  /** the answer key inside a loop, `<questionId>@<itemCode>` (nested: `@outer@inner`, see `loopKeySuffix`); the question id otherwise */
   answerKey?: string | null;
   fileName?: string | null;
   mimeType: string;

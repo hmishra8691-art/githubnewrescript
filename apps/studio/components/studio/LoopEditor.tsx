@@ -2,12 +2,13 @@
 import React from "react";
 import type { Condition, LoopCountValue, LoopOrder, LoopReferenceColumn, LoopReferences, LoopSource } from "@rescript/schema";
 import {
-  createResponseState, loopVariablePrefix, parseDelimited, possibleLoopItems, simulateLoop,
+  LOOP_BUILTIN_REFS, createResponseState, describeLoop, loopVariablePrefix, parseDelimited, possibleLoopItems, simulateLoop,
   type LoopFlowNode, type LoopSimulation,
 } from "@rescript/engine";
 import { useStudio } from "./store";
 import { OptionalCondition } from "./ConditionBuilder";
 import { LoopScopeProvider, loopsAroundLoop } from "./loopScope";
+import { SetExprField } from "./MaskingBuilder";
 
 /**
  * THE LOOP EDITOR (§3, §15–18, §34, §44).
@@ -77,6 +78,7 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
       : kind === "design" ? { kind, designId: def.designs[0]?.id ?? "" }
       : kind === "count" ? { kind, count: 3 }
       : kind === "variable" ? { kind, ref: "" }
+      : kind === "setExpression" ? { kind, expr: { kind: "ref", questionId: def.questions[0]?.id ?? "", selection: "selected" } }
       : { kind: "static", items: [] };
     set({ source: next });
   };
@@ -90,7 +92,7 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
   const addColumn = () => {
     const name = newCol.name.trim();
     if (!IDENT.test(name)) return setColError("A column name is an identifier: letters, digits and underscores, not starting with a digit — it has to fit inside {{loop.Name}}.");
-    if (["code", "label", "index", "count"].includes(name)) return setColError(`"${name}" is what the item itself is called; pick another name.`);
+    if ((LOOP_BUILTIN_REFS as readonly string[]).includes(name)) return setColError(`"${name}" is what the item itself is called; pick another name.`);
     if (columns.some((c) => c.name === name)) return setColError(`"${name}" already exists on this loop.`);
     setColError(null);
     setRefs({ ...refs, columns: [...columns, { ...newCol, name }] });
@@ -174,7 +176,7 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
     if (!headers.length) return setImportNote("No header row found.");
     const codeHeader = headers.find((h) => /^(code|option|item|item_code|optioncode)$/i.test(h)) ?? headers[0];
     const refHeaders = headers.filter((h) => h !== codeHeader);
-    const bad = refHeaders.filter((h) => !IDENT.test(h) || ["code", "label", "index", "count"].includes(h));
+    const bad = refHeaders.filter((h) => !IDENT.test(h) || (LOOP_BUILTIN_REFS as readonly string[]).includes(h));
     if (bad.length) return setImportNote(`These headers cannot be reference column names: ${bad.join(", ")}.`);
 
     const nextColumns = [...columns];
@@ -222,6 +224,7 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
           <option value="static">a static list</option>
           <option value="count">a number of iterations</option>
           <option value="variable">a list in a variable</option>
+          <option value="setExpression">a set expression</option>
           <option value="design">design tasks</option>
         </select>
         {src.kind === "question" && (
@@ -281,8 +284,15 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
         {src.kind === "listFill" && "one iteration per item the List Fill allocated to this respondent; the reference table below is this loop’s own, keyed by the allocated codes."}
         {src.kind === "count" && "items 1…N — a plain numeric iteration."}
         {src.kind === "variable" && "a JSON array (codes, or {code,label} objects) or a delimited string left in a calculated variable, embedded field or answer — how a script or an API result feeds a loop."}
+        {src.kind === "setExpression" && "the codes a set expression yields — “the brands in both screeners”, “aware minus considered” — with the same builder and grammar masks use; labels come from the first source question that has the code."}
         {" "}Variables: <code>{prefix}_COUNT</code>, <code>{prefix}_ITEM_1</code>, <code>{prefix}_ITEM_1_CODE</code>{columns.length ? <>, <code>{prefix}_ITEM_1_{columns[0].name.toUpperCase()}</code>…</> : null}.
       </p>
+
+      {src.kind === "setExpression" && (
+        <div style={{ marginBottom: 10 }}>
+          <SetExprField testId="loop-source-setexpr" expr={src.expr} onChange={(expr) => { if (expr) set({ source: { kind: "setExpression", expr } }); }} />
+        </div>
+      )}
 
       {src.kind === "static" && (
         <div style={{ marginBottom: 10 }}>
@@ -392,13 +402,20 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
           </>
         )}
       </div>
-      {node.order?.kind === "custom" && items && (
+      {node.order?.kind === "custom" && (
         <div style={{ marginBottom: 10 }}>
-          <span className="muted" style={{ fontSize: 12.5 }}>Codes in the order wanted (comma-separated); anything unlisted follows in source order.</span>
+          <span className="muted" style={{ fontSize: 12.5 }}>Codes in the order wanted (comma-separated); anything unlisted follows in source order.{!items && " The source is unbounded, so the codes are not known here — type the ones you expect."}</span>
           <input className="input mono" style={{ width: "100%" }} value={(node.order.custom ?? []).join(", ")}
             onChange={(e) => set({ order: { ...node.order!, custom: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) } })} />
         </div>
       )}
+
+      {/* ------------------------------------------------ as one statement */}
+      <details className="qs-details" data-testid="loop-statement" style={{ marginBottom: 12 }}>
+        <summary>This loop as a statement</summary>
+        <pre className="mono" style={{ fontSize: 12.5, margin: "6px 0 0", whiteSpace: "pre-wrap" }} data-testid="loop-statement-text">{describeLoop(def, node)}</pre>
+        <div className="muted" style={{ fontSize: 12 }}>Read from the configuration above, in the same grammar the condition and mask expression tabs use. Edit the loop with the controls; the statement follows.</div>
+      </details>
 
       {/* ------------------------------------------------ aggregates */}
       <div className="loop-refs" data-testid="loop-aggregates" style={{ marginBottom: 12 }}>
@@ -559,7 +576,7 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
           </table>
         </div>
         <p className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>
-          Inside the loop, pipe with <code>{"{{loop.label}}"}</code>, <code>{"{{loop.code}}"}</code>, <code>{"{{loop.index}}"}</code>, <code>{"{{loop.count}}"}</code>
+          Inside the loop, pipe with <code>{"{{loop.label}}"}</code>, <code>{"{{loop.code}}"}</code>, <code>{"{{loop.index}}"}</code>, <code>{"{{loop.count}}"}</code>, <code>{"{{loop.first}}"}</code>, <code>{"{{loop.last}}"}</code>
           {columns.length ? <>, <code>{`{{loop.${columns[0].name}}}`}</code>{columns.length > 1 ? "…" : ""}</> : null}
           {" "}(or <code>{"{{CURRENT_ITEM.Column}}"}</code>). Conditions: <code>loop.{columns[0]?.name ?? "Column"} = "…"</code>.
           {scope.length > 1 ? <> An outer loop is <code>{`{{${scope[1].loopVar}.label}}`}</code>.</> : null}

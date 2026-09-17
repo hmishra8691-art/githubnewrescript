@@ -480,7 +480,26 @@ export function blockDependencies(def: SurveyDefinition, blockId: string): Block
   for (const container of path) {
     conditionRefs(def, container.visibleIf, refs);
     for (const b of container.branches ?? []) conditionRefs(def, b.when, refs);
-    if (container.type === "loop" && container.source?.kind === "question") refs.add(container.source.questionId);
+    if (container.type === "loop") {
+      /*
+       * Every kind of source that can name a question, not just the plain
+       * one: a count read from a question, a set expression over questions,
+       * a List Fill whose candidates come from a question. A loop over any of
+       * these depends on it exactly as a loop over the question does — the
+       * impact view and the ordering check used to see no edge at all.
+       */
+      const src = container.source;
+      if (src?.kind === "question") refs.add(src.questionId);
+      else if (src?.kind === "count" && typeof src.count === "object" && src.count?.kind === "question") {
+        const q = def.questions.find((x) => x.id === src.count.ref) ?? getQuestionByCodeOrVar(def, src.count.ref);
+        if (q) refs.add(q.id);
+      } else if (src?.kind === "setExpression") for (const id of setExprSources(src.expr, undefined, def)) refs.add(id);
+      else if (src?.kind === "listFill") {
+        const lf = def.listFills.find((x) => x.id === src.listFillId);
+        if (lf?.source.kind === "question") refs.add(lf.source.questionId);
+      }
+      for (const rule of [container.eligibleIf, container.skipIf, container.breakIf, container.invalidIf]) conditionRefs(def, rule, refs);
+    }
   }
 
   const collect = (n: any) => {

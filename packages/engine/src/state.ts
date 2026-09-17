@@ -104,8 +104,26 @@ export function lookupAnswer(
   return undefined;
 }
 
-/** The built-in properties of a loop item, which no reference column may shadow. */
-export const LOOP_BUILTIN_REFS = ["code", "label", "index", "count"] as const;
+/**
+ * The built-in properties of a loop item, which no reference column may shadow.
+ *
+ * `item` is the label under the name the brief uses (`loop.item`); `first`
+ * and `last` are the two questions every loop body eventually asks — "is this
+ * the opening iteration?" (a different intro) and "is this the closing one?"
+ * (a summary page, a different button label) — which until now had to be
+ * spelled `LOOP_INDEX = 1` and could not be spelled at all for the last,
+ * because a rule compares a source to a literal, not to another source.
+ * `depth` is how many loops enclose this iteration, counting itself: 1 for a
+ * single loop, 2 for the inner of a nested pair.
+ */
+export const LOOP_BUILTIN_REFS = ["code", "label", "item", "index", "count", "first", "last", "depth"] as const;
+
+/** How many loops enclose this iteration, counting itself. */
+export function loopDepth(loop: LoopContext | null | undefined): number {
+  let d = 0;
+  for (let l: LoopContext | null | undefined = loop; l; l = l.parent) d++;
+  return d;
+}
 
 /**
  * ONE item property, by name — the single place `{{loop.X}}`, `loop.X = …`,
@@ -121,9 +139,14 @@ export const LOOP_BUILTIN_REFS = ["code", "label", "index", "count"] as const;
 export function loopValue(loop: LoopContext, ref: string): LoopReferenceValue {
   switch (ref) {
     case "code": return loop.code;
-    case "label": return loop.label;
+    case "label": case "item": return loop.label;
     case "index": return loop.index;
     case "count": return loop.count ?? null;
+    case "first": return loop.index === 1;
+    /* unknown when the context carries no count (the carry-forward shim, an
+       older inspector snapshot) — null rather than a confident "no" */
+    case "last": return typeof loop.count === "number" && loop.count > 0 ? loop.index === loop.count : null;
+    case "depth": return loopDepth(loop);
     default: {
       const refs = loop.references;
       return refs && Object.prototype.hasOwnProperty.call(refs, ref) ? refs[ref] : null;

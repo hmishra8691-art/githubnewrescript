@@ -123,7 +123,7 @@ export function resolveSourceValue(rule: ConditionRule, ctx: EvalContext): unkno
      * every live quota built on one.
      */
     case "expr":
-      return safeExpression(source.ref, ctx.def, ctx.state);
+      return safeExpression(source.ref, ctx.def, ctx.state, ctx.loop);
     case "option": {
       const o = ctx.option;
       if (!o) return null;

@@ -145,7 +145,11 @@ function SetRow({ node, sources, listFills, onChange, onRemove, onBracket, canBr
         <input className="input mono grow" data-testid="mask-loopitem-ref"
           placeholder="leave blank for the item's own code, or name a reference column"
           value={node.ref ?? ""}
-          onChange={(e) => onChange({ kind: "loopItem", ref: e.target.value.trim() || null })} />
+          onChange={(e) => onChange({ kind: "loopItem", ref: e.target.value.trim() || null, scope: node.scope })} />
+        <input className="input mono" style={{ width: 130 }} data-testid="mask-loopitem-scope" title="Which loop's item — leave blank for the innermost; name an enclosing loop (its loopVar) to take the outer item instead"
+          placeholder="loop (innermost)"
+          value={node.scope ?? ""}
+          onChange={(e) => onChange({ kind: "loopItem", ref: node.ref ?? null, scope: e.target.value.trim() || undefined })} />
         <button className="btn small danger" onClick={onRemove}>×</button>
       </div>
     );
@@ -411,6 +415,34 @@ const EVALUATION_ORDER: Record<MaskField, string> = {
   columnMask: "visible-if → named display rules → eligibility (always-show/"
     + "hide, show/hide-when) → mask (this) → group/randomize",
 };
+
+/**
+ * A set expression on its own — visual chain or text, the same two editors
+ * the mask builder uses — for the places a set expression is a VALUE rather
+ * than a mask: a loop's `setExpression` source ("iterate over the brands in
+ * both screeners"). One editor for one grammar; the loop editor had no way
+ * to produce this source at all, and destroyed one on any kind switch.
+ */
+export function SetExprField({ expr, onChange, testId = "setexpr" }: {
+  expr: SetExpr | null; onChange(next: SetExpr | null): void; testId?: string;
+}) {
+  const s = useStudio();
+  const [mode, setMode] = React.useState<"visual" | "expression">("visual");
+  const sources = s.def.questions.map((x) => ({ id: x.id, code: x.code, label: stripHtmlText(x.text).slice(0, 40) || x.variableName }));
+  const listFills = (s.def.listFills ?? []).map((lf) => ({ id: lf.id, name: lf.name ?? lf.id }));
+  return (
+    <div data-testid={testId}>
+      <div className="cm-tabs" style={{ marginBottom: 6 }}>
+        <button type="button" className={`cm-tab ${mode === "visual" ? "on" : ""}`} onClick={() => setMode("visual")}>Visual</button>
+        <button type="button" className={`cm-tab ${mode === "expression" ? "on" : ""}`} onClick={() => setMode("expression")}>Expression</button>
+      </div>
+      {mode === "visual"
+        ? <SetChainEditor expr={expr} sources={sources} listFills={listFills} onChange={onChange} />
+        : <SetExpressionPane expr={expr} onChange={onChange} />}
+      {expr && <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>{setExpressionSummary(s.def, expr)}</div>}
+    </div>
+  );
+}
 
 export function MaskingBuilder({ q, patch, field = "mask" }: {
   q: Question; patch(p: Partial<Question>): void; field?: MaskField;

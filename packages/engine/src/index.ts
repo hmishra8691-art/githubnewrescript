@@ -49,6 +49,7 @@ export * from "./responseFilter.js";
 export * from "./responseImport.js";
 export * from "./listFill.js";
 export * from "./loops.js";
+export * from "./loopDescribe.js";
 export * from "./quotaDashboard.js";
 export * from "./countCondition.js";
 export * from "./elementIds.js";

@@ -7,7 +7,7 @@ import { evaluateCondition } from "./evaluate.js";
 import { codesFrom, effectiveQuestion, carrySourceOptions, carrySourceRows } from "./carryforward.js";
 import {
   getQuestion, getQuestionByCodeOrVar, findLoopScope, loopValue,
-  type AnswerValue, type ResponseState,
+  type AnswerValue, type LoopContext, type ResponseState,
 } from "./state.js";
 import { activePunchRules } from "./punchChain.js";
 import { listFillLoopItems } from "./listFill.js";
@@ -146,7 +146,7 @@ export function evaluateSetExpr(
        * throws: a broken expression punches nothing rather than crashing the
        * page.
        */
-      const v = safeExpression(expr.expression, ctx.def, ctx.state);
+      const v = safeExpression(expr.expression, ctx.def, ctx.state, ctx.loop);
       return v == null || v === "" ? [] : [v as string | number];
     }
 
@@ -933,10 +933,12 @@ export function maskVariables(
   q: Question,
   target: MaskTarget,
   items: { code: string | number; label: string }[],
+  /** `_2` for iteration 2 of a loop, `_2_1` for the first inner iteration of the second outer — positional, like `Q7_2` */
+  iteration = "",
 ): Record<string, string | number> {
   const mask = q[target];
   if (!mask) return {};
-  const key = `MASK_${String(q.code ?? q.id).toUpperCase()}${MASK_TARGET_SUFFIX[target]}`;
+  const key = `MASK_${String(q.code ?? q.id).toUpperCase()}${iteration}${MASK_TARGET_SUFFIX[target]}`;
   const out: Record<string, string | number> = {
     [`${key}_COUNT`]: items.length,
     [`${key}_LIST`]: items.map((i) => String(i.code)).join(","),
@@ -948,25 +950,44 @@ export function maskVariables(
 }
 
 /**
- * Every masked, non-loop-scoped question's variables, merged in one call
- * (used by `runCalculations`). A question inside a loop is skipped here —
- * its options/rows/columns are still masked correctly for rendering, but a
- * per-iteration `MASK_*` naming scheme is a further decision the brief
- * leaves open ("where possible"), so it is left unbuilt rather than shipped
- * half-specified.
+ * Every masked question's variables, merged in one call (used by
+ * `runCalculations`).
+ *
+ * A question INSIDE a loop is masked per iteration — Apple's options are not
+ * Google's — so its variables are per iteration too, named positionally the
+ * way the iteration's answer is (`Q7_2` ↔ `MASK_Q7_2_COUNT`, `MASK_Q7_2_LIST`,
+ * `MASK_Q7_2_ITEM_1`; nested `MASK_Q9_2_1_…`). `iterationsOf` supplies the
+ * iteration contexts for a looped question; it is injected by `flow.ts`
+ * because this module must not import the loop pipeline (which imports it).
+ * Without the callback, looped questions are skipped as they always were.
  */
-export function maskingVariablesFor(def: SurveyDefinition, state: ResponseState): Record<string, string | number> {
+export function maskingVariablesFor(
+  def: SurveyDefinition,
+  state: ResponseState,
+  iterationsOf?: (q: Question) => LoopContext[] | null,
+): Record<string, string | number> {
   const out: Record<string, string | number> = {};
-  const ctx: EvalContext = { def, state };
+  const emit = (q: Question, ctx: EvalContext, iteration: string) => {
+    const view = effectiveQuestion(q, ctx);
+    if (q.mask) Object.assign(out, maskVariables(def, q, "mask", view.options, iteration));
+    if (q.rowMask) Object.assign(out, maskVariables(def, q, "rowMask", view.rows, iteration));
+    if (q.columnMask) {
+      Object.assign(out, maskVariables(def, q, "columnMask", view.columns.map((c) => ({ code: c.id, label: c.label })), iteration));
+    }
+  };
   for (const q of def.questions) {
     if (!q.mask && !q.rowMask && !q.columnMask) continue;
-    if (isInsideLoop(def, q.id)) continue;
-    const view = effectiveQuestion(q, ctx);
-    if (q.mask) Object.assign(out, maskVariables(def, q, "mask", view.options));
-    if (q.rowMask) Object.assign(out, maskVariables(def, q, "rowMask", view.rows));
-    if (q.columnMask) {
-      Object.assign(out, maskVariables(def, q, "columnMask", view.columns.map((c) => ({ code: c.id, label: c.label }))));
+    if (isInsideLoop(def, q.id)) {
+      const iterations = iterationsOf?.(q);
+      if (!iterations) continue;
+      for (const loop of iterations) {
+        const positions: number[] = [];
+        for (let l: LoopContext | null | undefined = loop; l; l = l.parent) positions.unshift(l.index);
+        emit(q, { def, state, loop }, positions.map((p) => `_${p}`).join(""));
+      }
+      continue;
     }
+    emit(q, { def, state }, "");
   }
   return out;
 }

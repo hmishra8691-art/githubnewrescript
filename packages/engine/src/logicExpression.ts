@@ -508,6 +508,7 @@ export function parseLogicExpression(
     }
     const fixedAlias: Record<string, string> = {
       CURRENT_ITEM_CODE: "code", CURRENT_ITEM_LABEL: "label", LOOP_INDEX: "index", LOOP_COUNT: "count",
+      LOOP_FIRST: "first", LOOP_LAST: "last", LOOP_DEPTH: "depth",
     };
     if (fixedAlias[head] && segments.length === 1) {
       return { source: { kind: "loop", ref: fixedAlias[head] }, segments };

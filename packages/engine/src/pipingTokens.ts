@@ -171,6 +171,7 @@ export function parsePipeBody(raw: string, text = `{{${raw}}}`): PipeToken | nul
   }
   const fixedAlias: Record<string, string> = {
     CURRENT_ITEM_CODE: "code", CURRENT_ITEM_LABEL: "label", LOOP_INDEX: "index", LOOP_COUNT: "count",
+    LOOP_FIRST: "first", LOOP_LAST: "last", LOOP_DEPTH: "depth",
   };
   if (fixedAlias[body]) {
     return { kind: "loop", ref: fixedAlias[body], property: "value", format, joiner, raw, text };

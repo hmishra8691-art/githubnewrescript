@@ -216,6 +216,8 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
               <option value="code">item code</option>
               <option value="index">position (1, 2, …)</option>
               <option value="count">number of iterations</option>
+              <option value="first">is first iteration (true/false)</option>
+              <option value="last">is last iteration (true/false)</option>
               {(scopedLoop?.references?.columns ?? []).length > 0 && (
                 <optgroup label={`Reference columns of “${scopedLoop!.loopVar}”`}>
                   {scopedLoop!.references!.columns.map((c) => (

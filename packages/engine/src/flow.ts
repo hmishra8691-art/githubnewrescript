@@ -6,7 +6,7 @@ import type { LoopContext, ResponseState } from "./state.js";
 import { getQuestion, answerKey, loopKeySuffix } from "./state.js";
 import { syncOtherText } from "./otherSpecify.js";
 import { pruneHiddenSelections } from "./visibility.js";
-import { loopContexts, loopVariables, registerIterationQuestionsResolver } from "./loops.js";
+import { everyLoopContext, innermostLoopOf, loopContexts, loopVariables, registerIterationQuestionsResolver } from "./loops.js";
 import { seededShuffle, subSeed } from "./random.js";
 import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
@@ -132,7 +132,14 @@ export function compileFlow(
           break;
         }
         case "randomizer": {
-          const seed = subSeed(state.seed, `flow:${node.id}`);
+          /*
+           * Inside a loop the seed carries the iteration, the way option and
+           * row randomization already do (`rand:<q>@<code>`): a randomizer in
+           * a loop body draws afresh for Apple and for Google, and each draw
+           * is stable for the respondent. Outside a loop the suffix is empty
+           * and the seed is exactly what it was.
+           */
+          const seed = subSeed(state.seed, `flow:${node.id}${loopKeySuffix(loop)}`);
           /*
            * EVEN PRESENTATION.
            *
@@ -160,7 +167,7 @@ export function compileFlow(
           let children = seededShuffle(node.children, seed);
           if (node.show != null && node.show < children.length) {
             if (node.evenPresentation) {
-              const offset = Math.abs(subSeed(state.seed, `even:${node.id}`)) % node.children.length;
+              const offset = Math.abs(subSeed(state.seed, `even:${node.id}${loopKeySuffix(loop)}`)) % node.children.length;
               const inOrder = node.children;
               children = Array.from({ length: node.show }, (_, i) => inOrder[(offset + i) % inOrder.length]);
               // the WINDOW is rotated for balance; the order within it is
@@ -296,7 +303,10 @@ export function runCalculations(
    * function of the definition and the answers, same as loop variables just
    * above, so it is recomputed on every trigger rather than cached.
    */
-  Object.assign(state.calculated, maskingVariablesFor(def, state));
+  Object.assign(state.calculated, maskingVariablesFor(def, state, (q) => {
+    const enclosing = innermostLoopOf(def, q.id);
+    return enclosing ? everyLoopContext(def, state, enclosing.node, enclosing.ancestors) : null;
+  }));
   /*
    * The resolver comes from `calcOptionsFor` rather than being built here, so
    * a calculation and an `expr` condition resolve names through literally the
@@ -325,6 +335,26 @@ export function runCalculations(
        * would erase that. Skip, and keep.
        */
       if (isServerResolvedExpression(q.settings.expression)) continue;
+      /*
+       * A calculated question INSIDE a loop body is one value per iteration —
+       * "the score for Apple", "the score for Google" — written under the
+       * iteration's key, with the expression resolving the body's questions
+       * as that iteration answered them. It used to be evaluated once against
+       * the bare keys and written once: the last iteration's value, under a
+       * key no iteration reads.
+       */
+      const enclosing = innermostLoopOf(def, q.id);
+      if (enclosing) {
+        for (const ctx of everyLoopContext(def, state, enclosing.node, enclosing.ancestors)) {
+          try {
+            const v = evaluateExpression(q.settings.expression, calcOptionsFor(def, state, ctx));
+            state.answers[answerKey(q.id, ctx)] = v as any;
+          } catch {
+            /* leave unset */
+          }
+        }
+        continue;
+      }
       try {
         const v = evaluateExpression(q.settings.expression, { resolver, names });
         state.answers[q.id] = Array.isArray(v) ? (v as any) : (v as any);

@@ -850,6 +850,33 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [def]);
 
+  /*
+   * A PAGE's on_load runs when the page is shown — once per page id, which
+   * for a loop body is once per iteration (`page@apple`, `page@google`), with
+   * that iteration as the script's `loop`. Survey-wide on_load ran once when
+   * the session opened, above; this is the other half, which never ran at all
+   * before (nothing passed a scopeRef, so no page script ever matched).
+   * Coming BACK to a page runs it again, deliberately: a default the script
+   * sets is a default for the page as shown, and `get` tells it whether an
+   * answer already exists.
+   */
+  const shownPageId = (() => {
+    const s = stateRef.current;
+    const st = s && !booting && !fatal ? steps[s.stepIndex] : undefined;
+    return st?.kind === "page" ? st.pageId : null;
+  })();
+  React.useEffect(() => {
+    const s = stateRef.current;
+    if (!shownPageId || !s) return;
+    const st = steps[s.stepIndex];
+    if (st?.kind !== "page") return;
+    const r = runScripts(def, s, "on_load", { scopeRef: st.pageId.split("@")[0], loop: st.loop ?? null, only: "scoped" });
+    if (!r.ran) return;
+    if (r.logs.length) setLogs((l) => [...l, ...r.logs]);
+    force();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shownPageId]);
+
   const state = stateRef.current;
   if (bootError) {
     return (

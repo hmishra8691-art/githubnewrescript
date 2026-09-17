@@ -6,12 +6,12 @@ import { codesFrom, effectiveQuestion } from "./carryforward.js";
 import { evaluateCondition, type EvalContext } from "./evaluate.js";
 import { listFillLoopItems, listFillVariableNames } from "./listFill.js";
 import type { QuotaCounts } from "./quotas.js";
-import { mulberry32, seededShuffle, subSeed } from "./random.js";
+import { hashString, mulberry32, seededShuffle, subSeed } from "./random.js";
 import {
   getQuestion, getQuestionByCodeOrVar, lookupAnswer, loopKeySuffix,
   type LoopContext, type LoopReferenceValue, type ResponseState,
 } from "./state.js";
-import { directChildLoops, loopNodes, loopVariablePrefix, type LoopFlowNode } from "./loopModel.js";
+import { directChildLoops, directQuestionIdsInLoop, loopNodes, loopVariablePrefix, type LoopFlowNode, type LoopNodeInfo } from "./loopModel.js";
 import { evaluateSetExpr, setExprSources } from "./setExpression.js";
 export * from "./loopModel.js";
 
@@ -30,6 +30,15 @@ export * from "./loopModel.js";
  */
 export const MAX_LOOP_ITERATIONS = 200;
 export const MAX_LOOP_DEPTH = 5;
+/**
+ * The ceiling on iterations a NEST produces: outer × inner × … The per-loop
+ * cap alone let five nested loops of 200 compile 3.2 × 10¹¹ pages — a hang,
+ * not a survey. Nothing sensible is that big; a 20-brand × 10-product ×
+ * 5-attribute study is 1 000 and comfortably inside. Enforced at runtime as
+ * a truncation of the innermost loop, so a mistyped survey still fields,
+ * and reported by the lint where it can be fixed.
+ */
+export const MAX_LOOP_PRODUCT = 2000;
 
 /**
  * A readable label for a code produced by a set expression, found in whichever
@@ -476,9 +485,17 @@ export function effectiveCount(node: LoopFlowNode): LoopCount {
   return { mode: "all" };
 }
 
-function orderItems(items: LoopItem[], node: LoopFlowNode, state: ResponseState): LoopItem[] {
+function orderItems(items: LoopItem[], node: LoopFlowNode, state: ResponseState, parent: LoopContext | null = null): LoopItem[] {
   const order = effectiveOrder(node);
   const dir = order.direction === "desc" ? -1 : 1;
+  /*
+   * A nested loop's random order is drawn per OUTER iteration — Apple's
+   * products in one order, Google's in another — which is what "random"
+   * means for a loop that runs several times. A top-level loop has no parent
+   * and the suffix is empty, so its seed key is exactly what it was and a
+   * respondent already mid-survey keeps their order.
+   */
+  const per = loopKeySuffix(parent);
   switch (order.kind) {
     case "selection":
       return [...items].sort((a, b) =>
@@ -491,9 +508,9 @@ function orderItems(items: LoopItem[], node: LoopFlowNode, state: ResponseState)
     case "random":
       // the same seed key the loop has always used, so a respondent already
       // mid-survey when this shipped keeps the order they started with
-      return seededShuffle(items, subSeed(state.seed, `loop:${node.id}`));
+      return seededShuffle(items, subSeed(state.seed, `loop:${node.id}${per}`));
     case "weightedRandom":
-      return weightedOrder(items, order.column, subSeed(state.seed, `loop:${node.id}:weighted`));
+      return weightedOrder(items, order.column, subSeed(state.seed, `loop:${node.id}${per}:weighted`));
     case "custom": {
       const rank = new Map((order.custom ?? []).map((c, i) => [String(c), i]));
       return [...items].sort((a, b) =>
@@ -539,12 +556,22 @@ export function resolveLoopItems(
    * compile.
    */
   const snapshotKey = `__LOOP_SNAPSHOT_${node.id}${parent ? loopKeySuffix(parent) : ""}`;
+  /*
+   * The snapshot is stamped with a fingerprint of the loop's DEFINITION —
+   * source, filter, rules, count, order — so a session resumed after the
+   * programmer changed what the loop iterates over does not keep iterating
+   * over the old list for ever. A snapshot from before the stamp existed (a
+   * bare array) is still honoured: it was taken under this same rule, the
+   * definition just could not be told apart yet.
+   */
+  const definitionStamp = hashString(JSON.stringify([node.source, node.eligibleIf ?? null, node.skipIf ?? null, node.count ?? null, node.order ?? null]));
   if (node.resolveSource === "once") {
     const saved = state.calculated[snapshotKey];
     if (typeof saved === "string" && saved !== "") {
       try {
-        const parsed = JSON.parse(saved) as LoopItem[];
+        const parsed = JSON.parse(saved) as LoopItem[] | { v: number; items: LoopItem[] };
         if (Array.isArray(parsed) && parsed.length) return parsed;
+        if (parsed && !Array.isArray(parsed) && parsed.v === definitionStamp && Array.isArray(parsed.items) && parsed.items.length) return parsed.items;
       } catch { /* a corrupt snapshot falls through and is retaken */ }
     }
   }
@@ -579,7 +606,7 @@ export function resolveLoopItems(
       !evaluateCondition(rule, { def, state, quotaCounts, loop: contextFor(node, it, 0, 0, parent) }));
   }
 
-  items = orderItems(items, node, state);
+  items = orderItems(items, node, state, parent);
 
   const count = effectiveCount(node);
   const n = resolveLoopCount(def, state, count.value, parent);
@@ -633,7 +660,18 @@ export function resolveLoopItems(
    * loop multiplies. Truncating here rather than erroring keeps a survey in
    * the field; `lintLoops` is where the author is told.
    */
-  const final = items.length > MAX_LOOP_ITERATIONS ? items.slice(0, MAX_LOOP_ITERATIONS) : items;
+  let final = items.length > MAX_LOOP_ITERATIONS ? items.slice(0, MAX_LOOP_ITERATIONS) : items;
+  /*
+   * The nest as a whole: this loop's items × every enclosing loop's count.
+   * Depth beyond MAX_LOOP_DEPTH yields nothing at runtime (the lint already
+   * refuses it at author time); a product beyond MAX_LOOP_PRODUCT trims this
+   * loop to what fits.
+   */
+  let outerProduct = 1;
+  let depth = 1;
+  for (let l: LoopContext | null | undefined = parent; l; l = l.parent) { outerProduct *= Math.max(1, l.count ?? 1); depth++; }
+  if (depth > MAX_LOOP_DEPTH) final = [];
+  else if (outerProduct * final.length > MAX_LOOP_PRODUCT) final = final.slice(0, Math.max(0, Math.floor(MAX_LOOP_PRODUCT / outerProduct)));
 
   /*
    * Take the snapshot only once the loop has something to iterate. A loop
@@ -641,10 +679,50 @@ export function resolveLoopItems(
    * compiles that happen before the respondent reaches it, and freezing THAT
    * would give the loop zero iterations forever.
    */
-  if (node.resolveSource === "once" && final.length > 0 && !state.calculated[snapshotKey]) {
-    state.calculated[snapshotKey] = JSON.stringify(final);
+  if (node.resolveSource === "once" && final.length > 0) {
+    const saved = state.calculated[snapshotKey];
+    let stale = true;
+    if (typeof saved === "string" && saved !== "") {
+      try {
+        const parsed = JSON.parse(saved);
+        stale = !(Array.isArray(parsed) || parsed?.v === definitionStamp);
+      } catch { stale = true; }
+    }
+    if (stale) state.calculated[snapshotKey] = JSON.stringify({ v: definitionStamp, items: final });
   }
   return final;
+}
+
+/**
+ * Every iteration context a loop produces, across every iteration of every
+ * loop that encloses it — the contexts a question in that loop's body is
+ * answered under. For a single loop this is its items; for an inner loop it
+ * is outer × inner. What a per-iteration calculation walks.
+ */
+export function everyLoopContext(
+  def: SurveyDefinition,
+  state: ResponseState,
+  node: LoopFlowNode,
+  ancestors: LoopFlowNode[],
+  quotaCounts?: QuotaCounts,
+): LoopContext[] {
+  const chain = [...ancestors, node];
+  const rec = (i: number, parent: LoopContext | null): LoopContext[] => {
+    const ctxs = loopContexts(def, state, chain[i], parent, quotaCounts);
+    if (i === chain.length - 1) return ctxs;
+    return ctxs.flatMap((c) => rec(i + 1, c));
+  };
+  return rec(0, null);
+}
+
+/** The innermost loop a question sits in, with that loop's ancestors — or null outside every loop. */
+export function innermostLoopOf(def: SurveyDefinition, questionId: string): LoopNodeInfo | null {
+  let best: LoopNodeInfo | null = null;
+  for (const info of loopNodes(def)) {
+    if (!directQuestionIdsInLoop(info.node).includes(questionId)) continue;
+    if (!best || info.ancestors.length > best.ancestors.length) best = info;
+  }
+  return best;
 }
 
 /** The contexts, one per item — what `compileFlow` walks the children with. */

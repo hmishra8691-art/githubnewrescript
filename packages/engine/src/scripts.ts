@@ -3,7 +3,7 @@ import type { ResponseState, LoopContext } from "./state.js";
 import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
 import { resolvePiping } from "./piping.js";
-import { answerKey, findLoopScope, getQuestionByCodeOrVar, lookupAnswer, loopValue } from "./state.js";
+import { answerKey, findLoopScope, getQuestionByCodeOrVar, lookupAnswer, loopDepth, loopValue } from "./state.js";
 import { loopContexts, loopNodes } from "./loops.js";
 import { elementIndex, type ElementRef } from "./elementIds.js";
 
@@ -114,8 +114,15 @@ export interface ScriptCtx {
 export interface LoopItemView {
   code: string;
   label: string;
+  /** the label again, under the brief's name */
+  item: string;
   index: number;
   count: number;
+  /** first / last iteration of this loop — `last` is null when the count is unknown */
+  first: boolean;
+  last: boolean | null;
+  /** how many loops enclose this iteration, counting itself */
+  depth: number;
   references: Record<string, unknown>;
 }
 
@@ -138,6 +145,8 @@ export interface ScriptRunResult {
   logs: string[];
   errors: { message: string; questionRef?: string }[];
   failed?: string;
+  /** how many scripts ran — a caller that re-renders on state changes needs to know whether anything could have changed it */
+  ran?: number;
 }
 
 export function createScriptCtx(
@@ -148,7 +157,9 @@ export function createScriptCtx(
 ): ScriptCtx {
   const refToId = (ref: string) => getQuestionByCodeOrVar(def, ref)?.id ?? ref;
   const viewOf = (l: LoopContext): LoopItemView => ({
-    code: l.code, label: l.label, index: l.index, count: l.count ?? 0, references: { ...(l.references ?? {}) },
+    code: l.code, label: l.label, item: l.label, index: l.index, count: l.count ?? 0,
+    first: loopValue(l, "first") === true, last: loopValue(l, "last") as boolean | null, depth: loopDepth(l),
+    references: { ...(l.references ?? {}) },
   });
   /*
    * Built once per script run and cached, because a script in a loop calls
@@ -193,9 +204,26 @@ export function createScriptCtx(
       state.embedded[name] = value;
     },
     expr(expression) {
+      /*
+       * Seen from THIS iteration: a name that is a question answered inside
+       * the loop body resolves to the iteration's answer, exactly as `get`
+       * does, and falls through to the survey-level variables for everything
+       * else. The bare flatten knew nothing of loops, so an expression run
+       * from inside an iteration read the loop's questions as unanswered.
+       */
       const flat = flattenVariables(def, state);
+      const scoped = (n: string): unknown => {
+        if (loop) {
+          const q = getQuestionByCodeOrVar(def, n);
+          if (q) {
+            const v = lookupAnswer(state.answers, q.id, loop);
+            if (v !== undefined) return v;
+          }
+        }
+        return flat[n];
+      };
       return evaluateExpression(expression, {
-        resolver: (n) => flat[n],
+        resolver: scoped,
         names: () => Object.keys(flat),
       });
     },
@@ -275,20 +303,32 @@ export function runScript(code: string, ctx: ScriptCtx, into?: ScriptRunResult):
   return result;
 }
 
-/** Run every enabled script matching scope/event/ref. */
+/**
+ * Run every enabled script matching scope/event/ref.
+ *
+ * `only: "scoped"` runs the page- and question-scoped scripts and leaves the
+ * survey-wide ones alone. It exists for `on_load`: the survey-wide on_load
+ * runs once per session, when the survey opens, but a PAGE's on_load can only
+ * run when that page is shown — with the iteration it is shown in, so a loop
+ * body's on_load sees `loop` and its `get`/`set` land on that iteration's
+ * keys rather than on one bare key every iteration overwrites. Before this a
+ * page-scoped on_load never ran at all (the session-open call passes no
+ * scopeRef, so nothing matched).
+ */
 export function runScripts(
   def: SurveyDefinition,
   state: ResponseState,
   event: CustomScript["event"],
-  opts?: { scopeRef?: string; loop?: LoopContext | null },
+  opts?: { scopeRef?: string; loop?: LoopContext | null; only?: "scoped" },
 ): ScriptRunResult {
-  const combined: ScriptRunResult = { logs: [], errors: [] };
+  const combined: ScriptRunResult = { logs: [], errors: [], ran: 0 };
   for (const script of def.scripts) {
     if (!script.enabled || script.event !== event) continue;
-    if (script.scope !== "survey" && script.ref !== opts?.scopeRef) continue;
+    if (script.scope === "survey" ? opts?.only === "scoped" : script.ref !== opts?.scopeRef) continue;
     const own: ScriptRunResult = { logs: [], errors: [] };
     const ctx = createScriptCtx(def, state, opts?.loop ?? null, own);
     const r = runScript(script.code, ctx, own);
+    combined.ran = (combined.ran ?? 0) + 1;
     combined.logs.push(...own.logs.map((l) => `[${script.name}] ${l}`));
     combined.errors.push(...own.errors);
     if (r.failed) combined.logs.push(`[${script.name}] ERROR: ${r.failed}`);
