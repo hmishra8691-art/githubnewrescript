@@ -16,6 +16,7 @@ import {
   isOptionValueRef,
   effectiveResponseModel,
   isMultiValuedQuestion,
+  resolveVariant,
 } from "@rescript/schema";
 import { getQuestionByCodeOrVar } from "./state.js";
 import { PIPE_TOKEN_RE, parsePipeBody } from "./pipingTokens.js";
@@ -26,7 +27,9 @@ import { listFillVariableNames } from "./listFill.js";
 import { buildVariableDictionary } from "./variables.js";
 import { embeddedCatalog, isNamedEmbeddedField } from "./embedded.js";
 import { gridAxes, gridScaleOptions } from "./gridAxes.js";
-import { staleFields } from "./questionShape.js";
+import { staleFields, shapeHasAxis } from "./questionShape.js";
+import { honoursColumns, drawsOptionImages } from "./rendererReads.js";
+import { effectiveScale } from "./scale.js";
 
 /**
  * Logic configuration linting (reqs §30–31).
@@ -605,6 +608,121 @@ function lintCounts(q: Question, push: (i: Omit<LogicIssue, "questionId" | "ques
   }
 }
 
+/**
+ * SETTINGS THAT CANNOT TAKE EFFECT.
+ *
+ * The September 2026 review is, read as a whole, largely one complaint: a
+ * control exists, the programmer sets it, and nothing happens. A column
+ * layout on a renderer that draws no columns. A maximum of fifty on a scale
+ * that can draw ten. A maximum selection of forty on a list of six options.
+ * An image URL on a question whose renderer never looks at one. Each was
+ * individually reported, and each was individually fixed — but the class will
+ * come back the next time a variant is added, unless something checks.
+ *
+ * This is that something. It is a lint rather than a refusal because the
+ * author is not wrong to have tried: they are being told the setting will not
+ * do what it says, while the question goes on working.
+ */
+function lintInertSettings(q: Question, push: (i: Omit<LogicIssue, "questionId" | "questionCode">) => void): void {
+  const st = q.settings ?? {};
+  const variant = resolveVariant(q.variant ?? undefined);
+
+  /* a column layout nothing will read */
+  if (st.columnsLayout != null && !honoursColumns(variant?.renderer, q.type)) {
+    push({
+      level: "warning",
+      path: "settings.columnsLayout",
+      message: `A column layout is set, but ${variant?.name ?? q.type} does not lay its options out in columns — the setting has no effect.`,
+    });
+  }
+
+  /* a scale outside what its variant allows, and therefore outside what is drawn */
+  const limit = variant?.scale;
+  if (limit) {
+    const shown = effectiveScale(q, { min: limit.min, max: limit.max });
+    if (shown.clamped) {
+      push({
+        level: "warning",
+        path: "settings.maxValue",
+        message: limit.fixed
+          ? `${variant!.name} has a fixed ${limit.min}–${limit.max} scale — the stored range is ignored and respondents see ${shown.min}–${shown.max}.`
+          : `This scale can only be ${limit.min}–${limit.max}; respondents will see ${shown.min}–${shown.max}, not the range that is stored.`,
+      });
+    }
+  }
+
+  /* more selections demanded than there are options to select */
+  /*
+   * `optionPipeline` defaults to an empty ARRAY, so `!q.optionPipeline` is
+   * always false and a guard written that way silently disables the check —
+   * which is how this rule came not to fire at all the first time it was
+   * written. Length, not truthiness.
+   */
+  const dynamicList = !!q.carryForward || !!q.optionPipeline?.length || !!q.listLogic?.length;
+  const optionCount = shapeHasAxis(q, "options") ? q.options.length : 0;
+  if (optionCount > 0 && st.maxSelections != null && st.maxSelections > optionCount && !dynamicList) {
+    push({
+      level: "warning",
+      path: "settings.maxSelections",
+      message: `Maximum selections is ${st.maxSelections} but there are only ${optionCount} options — the limit can never be reached.`,
+    });
+  }
+  if (optionCount > 0 && st.minSelections != null && st.minSelections > optionCount && !dynamicList) {
+    push({
+      level: "error",
+      path: "settings.minSelections",
+      message: `Minimum selections is ${st.minSelections} but there are only ${optionCount} options — no answer can satisfy it.`,
+    });
+  }
+
+  /* an option image no renderer will draw */
+  if (shapeHasAxis(q, "options") && !drawsOptionImages(variant?.renderer, q.type)) {
+    const withImages = q.options.filter((o) => o.imageUrl).length;
+    if (withImages) {
+      push({
+        level: "warning",
+        path: "options[].imageUrl",
+        message: `${withImages} option image(s) are set, but ${variant?.name ?? q.type} does not show an image per option — they are stored and never drawn.`,
+      });
+    }
+  }
+
+  /* an option with no label is a blank row the respondent can still choose */
+  if (shapeHasAxis(q, "options")) {
+    const blank = q.options.filter((o) => !o.label.replace(/<[^>]*>/g, "").trim()).map((o) => String(o.code));
+    if (blank.length) {
+      push({
+        level: "warning",
+        path: "options[].label",
+        message: `Option${blank.length === 1 ? "" : "s"} ${blank.join(", ")} ${blank.length === 1 ? "has" : "have"} no text — ${blank.length === 1 ? "it renders" : "they render"} as an empty row the respondent can still select.`,
+      });
+    }
+  }
+
+  /*
+   * A PATTERN THAT CANNOT BE COMPILED.
+   *
+   * The validator used to swallow this — one stray bracket and the question
+   * accepted anything, silently, for the life of the survey. It fails closed
+   * now, which is the right runtime behaviour and the wrong thing to find out
+   * from a respondent. This is where the author finds out instead.
+   */
+  for (const [i, rule] of (q.validation ?? []).entries()) {
+    if (rule.kind !== "pattern") continue;
+    const src = String(rule.value ?? "");
+    if (!src) continue;
+    try {
+      new RegExp(src);
+    } catch (err) {
+      push({
+        level: "error",
+        path: `validation[${i}].value`,
+        message: `This regular expression cannot be read (${(err as Error).message}), so the question cannot check anything against it.`,
+      });
+    }
+  }
+}
+
 export function lintQuestionLogic(def: SurveyDefinition, q: Question): LogicIssue[] {
   try {
     return lintQuestionLogicUnsafe(def, q);
@@ -623,6 +741,7 @@ function lintQuestionLogicUnsafe(def: SurveyDefinition, q: Question): LogicIssue
   const issues: LogicIssue[] = [];
   const order = orderIndex(def);
   lintCounts(q, (i) => issues.push({ ...i, questionId: q.id, questionCode: q.code }));
+  lintInertSettings(q, (i) => issues.push({ ...i, questionId: q.id, questionCode: q.code }));
   const base = (perOption: boolean): Ctx => ({
     def,
     q,

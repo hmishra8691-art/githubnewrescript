@@ -16,7 +16,13 @@
  */
 export { QuestionRenderer, ctxOf, optionsClass, gridColumnsStyle, useOptionFilter, OTHER, EXCLUSIVE } from "./QuestionRenderer";
 export type { QRProps } from "./QuestionRenderer";
-export { COLUMN_RENDERERS, IMAGE_RENDERERS, rendererKey, honoursColumns, drawsOptionImages } from "./rendererReads";
+/*
+ * Re-exported from the engine, where the table now lives: the lint needs the
+ * same facts and the engine is the layer both the renderer and the Studio sit
+ * on. The names stay importable from here, because "what does this renderer
+ * read" is a question you ask the renderer package.
+ */
+export { COLUMN_RENDERERS, IMAGE_RENDERERS, rendererKey, honoursColumns, drawsOptionImages } from "@rescript/engine";
 export { MediaEmbed, SafeImage } from "./Media";
 export { SpeechInputButton, speechInputAvailable } from "./SpeechInput";
 export { startLiveCaptions, liveCaptionsAvailable, type LiveCaptions, type CaptionState } from "./liveCaptions";
