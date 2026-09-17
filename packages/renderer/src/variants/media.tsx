@@ -107,18 +107,48 @@ export function VideoRating(p: QRProps) {
   const [ended, setEnded] = React.useState(false);
   const [pct, setPct] = React.useState(0);
   const [broken, setBroken] = React.useState(false);
+  /*
+   * Seconds actually watched, accumulated the way Watch-Time Tracking below
+   * already does it: only small forward steps count, so dragging the scrubber
+   * to the end does not earn the whole clip. The percentage shown was
+   * `currentTime / duration`, which meant a respondent who jumped to the last
+   * second was told they had watched 100%.
+   */
+  const watched = React.useRef({ total: 0, last: 0 });
 
-  const gate = !!p.q.settings.requireComplete && !!p.q.settings.mediaUrl && !broken;
+  /*
+   * THE DEADLOCK THE REVIEW FOUND.
+   *
+   * `requireComplete` is on by default for this variant, and the gate asked
+   * only whether a media URL was set. But a YouTube or Vimeo link renders as
+   * an IFRAME, whose timeline this page cannot observe — `Stimulus` says so
+   * itself, in a note printed directly above these stars. So `ended` never
+   * became true, the fieldset stayed disabled, and a respondent who had
+   * watched the whole clip was told "Watch to the end to rate — 0% watched"
+   * with no way past it. Not a slow question: an unanswerable one.
+   *
+   * A gate that cannot be measured is not applied. The requirement is a real
+   * one where playback can be observed, and where it cannot the question
+   * behaves as an ordinary rating — the same rule this file already follows
+   * for media that will not load, and for the same reason: a respondent must
+   * always be able to finish.
+   */
+  const embedded = resolveMediaUrl(p.q.settings.mediaUrl).kind === "embed";
+  const gate = !!p.q.settings.requireComplete && !!p.q.settings.mediaUrl && !broken && !embedded;
   const locked = gate && !ended;
 
   return (
     <div className="rs-media">
       <Stimulus p={p} vref={vref} handlers={{
         onTimeUpdate: (el) => {
-          if (el.duration > 0) setPct(Math.min(100, Math.round((el.currentTime / el.duration) * 100)));
+          const d = el.currentTime - watched.current.last;
+          if (d > 0 && d < 1.5) watched.current.total += d;
+          watched.current.last = el.currentTime;
+          if (el.duration > 0) setPct(Math.min(100, Math.round((watched.current.total / el.duration) * 100)));
           // some browsers never fire `ended` when the last frame is dropped
           if (el.duration > 0 && el.currentTime >= el.duration - 0.25) setEnded(true);
         },
+        onSeeked: (el) => { watched.current.last = el.currentTime; },
         onEnded: () => { setEnded(true); setPct(100); },
         onError: () => setBroken(true),
       }} />

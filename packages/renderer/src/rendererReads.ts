@@ -1,5 +1,23 @@
 /**
- * WHICH RENDERERS ACTUALLY LAY OPTIONS OUT IN COLUMNS.
+ * WHAT EACH RENDERER ACTUALLY READS.
+ *
+ * The Studio decides which controls to offer from a variant's `capabilities`
+ * list. That list describes a question's SHAPE, which is the right thing for
+ * the schema migration to read — but it is not the same question as "will
+ * anything happen if I set this?", and the September 2026 review found the
+ * gap twice over. A Multi-Select Dropdown offered a column layout its
+ * renderer cannot draw. A card-sort question accepted an image URL on each
+ * option, confirmed it with a green tick, and drew none of them, because that
+ * renderer takes its images from the rows.
+ *
+ * A control that cannot take effect is worse than a missing one: the
+ * programmer believes they have made a setting, and nothing ever tells them
+ * otherwise. So the facts live here, beside the renderers, and the editor
+ * asks. The key is the one the dispatcher uses: a variant's `renderer`, or
+ * `base:<type>` when it has none.
+ *
+ * ---------------------------------------------------------------------------
+ * COLUMNS.
  *
  * "Layout: 1 column" was the single most reported bug in the September
  * question-type review — fourteen separate write-ups of the same complaint
@@ -53,6 +71,32 @@ export const COLUMN_RENDERERS: ReadonlySet<string> = new Set([
   "base:text_list",
 ]);
 
+/**
+ * WHICH RENDERERS DRAW AN OPTION'S OWN IMAGE (`option.imageUrl`).
+ *
+ * Everything else ignores it. A plain radio or checkbox list draws a control
+ * and a label and nothing more; `categorize` draws its pictures from
+ * `row.meta.image`, because in a card-sort the options are the buckets and
+ * the rows are the things being sorted — which is exactly the question the
+ * review filed an image against, with three URLs set on the buckets and no
+ * pictures anywhere in the preview.
+ */
+export const IMAGE_RENDERERS: ReadonlySet<string> = new Set([
+  "cards",
+  "icons",
+  "listrows",
+  "richcards",
+  "flipcards",
+  "carousel",
+  "multicarousel",
+  "compare",
+  "attrcompare",
+  "swipe",
+  "dragrank",
+  "base:image_select",
+  "base:image_ranking",
+]);
+
 /** The dispatch key for a question: its variant's renderer, or `base:<type>`. */
 export function rendererKey(renderer: string | undefined, baseType: string): string {
   return renderer ?? `base:${baseType}`;
@@ -64,4 +108,13 @@ export function rendererKey(renderer: string | undefined, baseType: string): str
  */
 export function honoursColumns(renderer: string | undefined, baseType: string): boolean {
   return COLUMN_RENDERERS.has(rendererKey(renderer, baseType));
+}
+
+/**
+ * Will an image URL set on an option ever be shown to a respondent? The
+ * Studio asks before offering the field — and before telling the author
+ * their image is fine.
+ */
+export function drawsOptionImages(renderer: string | undefined, baseType: string): boolean {
+  return IMAGE_RENDERERS.has(rendererKey(renderer, baseType));
 }

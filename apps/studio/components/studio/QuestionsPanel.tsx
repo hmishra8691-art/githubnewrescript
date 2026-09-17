@@ -5,7 +5,7 @@ import { CountInput } from "./CountInput";
 import React from "react";
 import type { Question, Option, QuestionColumn, ResponseType, QuestionVariantDef } from "@rescript/schema";
 import { questionTypeRegistry, variantRegistry, resolveVariant } from "@rescript/schema";
-import { honoursColumns } from "@rescript/renderer";
+import { honoursColumns, drawsOptionImages } from "@rescript/renderer";
 import { VariantPickerModal, VariantSwitcher, createFromVariant } from "./VariantPicker";
 import { RichTextEditor } from "./RichTextEditor";
 import { OptionLogicEditor } from "./OptionLogicEditor";
@@ -293,7 +293,7 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
               onInsert={(tok) => set(i, { label: `${options[i].label}${tok}` })} />
           )}
           {showImage && (
-            <div style={{ width: 200 }}>
+            <div className="opt-meta" style={{ width: 200, maxWidth: 200 }}>
               <MediaUrlInput compact placeholder="image URL" testId={`option-image-${i}`}
                 value={o.imageUrl} onChange={(v) => set(i, { imageUrl: v })} />
             </div>
@@ -315,7 +315,12 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
               );
             }
             return (
-              <input key={mf.key} className="input" style={{ width: mf.width ?? 120 }}
+              <input key={mf.key} className="input opt-meta"
+                /* `maxWidth`, not `width`: these were fixed pixels that could
+                   not give, so on a product option 520px of them squeezed the
+                   label — the field the option is actually about — down to
+                   nothing. They shrink first now. */
+                style={{ width: mf.width ?? 120, maxWidth: mf.width ?? 120 }}
                 type={mf.kind === "number" ? "number" : "text"}
                 placeholder={mf.placeholder ?? mf.label} title={mf.label}
                 data-testid={`option-meta-${mf.key}-${i}`}
@@ -378,10 +383,14 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
                 : hasLogic ? "⑂ logic" : "⑂"}
             </button>
           )}
-          <button className="btn small" onClick={() => move(i, -1)}>↑</button>
-          <button className="btn small" onClick={() => move(i, 1)}>↓</button>
-          <button className="btn small danger"
-            onClick={() => { onChange(options.filter((_, j) => j !== i)); onAfterDelete?.(); }}>×</button>
+          {/* one group, pinned to the end of the row — these were the buttons
+              the review's screenshot showed cut in half by the panel edge */}
+          <span className="opt-actions">
+            <button className="btn small" onClick={() => move(i, -1)}>↑</button>
+            <button className="btn small" onClick={() => move(i, 1)}>↓</button>
+            <button className="btn small danger"
+              onClick={() => { onChange(options.filter((_, j) => j !== i)); onAfterDelete?.(); }}>×</button>
+          </span>
         </div>
         {enableLogic && logicOpen === String(o.code) && (
           <OptionLogicEditor
@@ -780,7 +789,16 @@ export function QuestionEditor({ q }: { q: Question }) {
           <OptionRows options={q.options} onChange={(options) => patch({ options })}
             onAfterDelete={() => resequence("options")}
             flagChoices={allowedFlagsFor(q.type)} enableLogic questionId={q.id}
-            showImage={has("images") && (variantDef?.capabilities.includes("images") || q.type.startsWith("image"))}
+            /*
+              * `drawsOptionImages` as well as the capability. The capability
+              * says the question shape can carry an image; this says the
+              * renderer will actually put one on screen. A card-sort question
+              * declares `images` and draws its pictures from the ROWS, so the
+              * editor was accepting an image URL on every bucket, ticking it
+              * green, and showing nothing — which is the "image not displayed
+              * in preview" the review filed.
+              */
+            showImage={has("images") && drawsOptionImages(variantDef?.renderer, q.type)}
             metaFields={optionMetaFields(variantDef)} />
           <div className="row" style={{ marginTop: 10, flexWrap: "wrap" }}>
             {showLayout && (

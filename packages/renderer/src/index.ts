@@ -16,7 +16,7 @@
  */
 export { QuestionRenderer, ctxOf, optionsClass, gridColumnsStyle, useOptionFilter, OTHER, EXCLUSIVE } from "./QuestionRenderer";
 export type { QRProps } from "./QuestionRenderer";
-export { COLUMN_RENDERERS, rendererKey, honoursColumns } from "./columns";
+export { COLUMN_RENDERERS, IMAGE_RENDERERS, rendererKey, honoursColumns, drawsOptionImages } from "./rendererReads";
 export { MediaEmbed, SafeImage } from "./Media";
 export { SpeechInputButton, speechInputAvailable } from "./SpeechInput";
 export { startLiveCaptions, liveCaptionsAvailable, type LiveCaptions, type CaptionState } from "./liveCaptions";

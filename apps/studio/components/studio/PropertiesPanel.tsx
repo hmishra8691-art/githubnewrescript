@@ -123,6 +123,10 @@ function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question
               </select>
               {kind?.hasValue && (
                 <input className="input grow mono"
+                  /* A regex needs room to be read back. This shared box was
+                     sized for "3" and the review could not see a pattern well
+                     enough to check it. */
+                  style={v.kind === "pattern" ? { minWidth: 280, flexBasis: 280 } : undefined}
                   type={kind.numeric ? "number" : "text"}
                   inputMode={kind.numeric ? "numeric" : undefined}
                   min={kind.numeric ? 0 : undefined}

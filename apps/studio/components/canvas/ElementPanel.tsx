@@ -1,6 +1,8 @@
 "use client";
 import React from "react";
 import type { Option, Question, QuestionColumn, QuestionRow, ValidationRule } from "@rescript/schema";
+import { resolveVariant } from "@rescript/schema";
+import { drawsOptionImages } from "@rescript/renderer";
 import { useStudio } from "../studio/store";
 import { OptionLogicEditor } from "../studio/OptionLogicEditor";
 import { OptionalCondition } from "../studio/ConditionBuilder";
@@ -123,9 +125,16 @@ function OptionProps({ q, code, ann, patch, onSelect }: {
             onSelect({ type: "option", questionId: q.id, optionCode: next });
           }} /></label>
 
-      <label className="f"><span>Image</span>
-        <input className="input" placeholder="https://…" value={o.imageUrl ?? ""}
-          onChange={(e) => patch(code, { imageUrl: e.target.value || undefined })} /></label>
+      {/*
+        * Offered only where the renderer will draw it. This input used to be
+        * unconditional, so an option image could be set — and confirmed — on
+        * a question that has no picture in it anywhere.
+        */}
+      {drawsOptionImages(resolveVariant(q.variant)?.renderer, q.type) && (
+        <label className="f"><span>Image</span>
+          <input className="input" placeholder="https://…" value={o.imageUrl ?? ""}
+            onChange={(e) => patch(code, { imageUrl: e.target.value || undefined })} /></label>
+      )}
 
       <h3 className="sec">Behaviour</h3>
       <div className="lc-flags">

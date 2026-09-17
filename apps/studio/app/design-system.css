@@ -295,11 +295,37 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .grid tr:hover td { background: var(--c-primary-50); }
 .table-wrap { overflow-x: auto; border: 1px solid var(--c-border); border-radius: var(--r-md); background: var(--c-surface); }
 
-/* ---------- option editor rows ---------- */
-.opt-row { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+/* ---------- option editor rows ----------
+
+   THE ROW USED TO RUN OUT OF THE PANEL. Six separate write-ups in the
+   September review said some version of "the option input boxes are too
+   small" or "the Properties section extends outside the frame", and one
+   screenshot showed the move and delete buttons cut in half by the panel
+   edge. The cause was arithmetic, not styling: everything except the label
+   was `flex: none` or a fixed inline width — 72px of code, 200px of image
+   URL, and for a product option another 520px of subtitle, secondary line,
+   price and badge, plus a 190px properties summary and five buttons. Only
+   the label could give, so it gave until there was nothing left of it, and
+   then the row pushed past the container.
+
+   Two rules fix it. The row wraps, so a wide variant takes two lines inside
+   the panel instead of one line outside it. And the label keeps a floor —
+   it is the field the option is actually about, and it was the only one
+   being squeezed to a sliver. */
+.opt-row {
+  display: flex; gap: 8px; align-items: center; margin-bottom: 6px;
+  flex-wrap: wrap; max-width: 100%;
+}
+.opt-row > * { min-width: 0; }
 .opt-row .input { padding: 6px 10px; font-size: 13.5px; min-height: 34px; }
 .opt-row .code-input { width: 72px; flex: none; font-family: var(--mono); }
+/* the option's own text: never narrower than this, and first to grow */
+.opt-row > .input.grow { flex: 1 1 220px; min-width: 200px; }
+/* the meta fields (secondary line, price, badge…) may shrink before the label does */
+.opt-row .opt-meta { flex: 0 1 auto; min-width: 72px; }
 .opt-row button { flex: none; }
+/* the actions stay together and stay inside — they were the part that fell off */
+.opt-row .opt-actions { display: flex; gap: 6px; flex: none; margin-left: auto; }
 
 /* ---------- modals ---------- */
 .modal-back { position: fixed; inset: 0; background: rgba(19, 26, 43, .38); backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center; z-index: 90; animation: fade-in var(--dur-2) var(--ease); }
