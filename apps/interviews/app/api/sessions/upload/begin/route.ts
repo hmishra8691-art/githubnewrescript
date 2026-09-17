@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { checkParticipants } from "@rescript/interviews";
+import { SESSION_MAX_SECONDS, blockingLimit, checkParticipants, expectedBytes } from "@rescript/interviews";
 import {
   PART_BYTES, UPLOAD_SECONDS, planUpload, responseMediaKey,
 } from "@rescript/storage";
@@ -89,6 +89,54 @@ export async function POST(req: NextRequest) {
   const clientToken = String(body?.clientToken ?? "") || null;
 
   /*
+   * THE COMPANION. A session video's audio-only twin, recorded from the same
+   * microphone, small enough to transcribe. It names its video, and the video
+   * has to be this interview's, a session recording, and not gone — otherwise
+   * a companion could be hung off somebody else's recording by id.
+   */
+  const companionOf = String(body?.companionOf ?? "") || null;
+  if (companionOf) {
+    if (!audioOnly) {
+      return NextResponse.json({ error: "Only an audio recording can be a companion." }, { status: 400 });
+    }
+    const { data: parent } = await db.from("interview_media")
+      .select("id, interview_id, kind, deleted_at")
+      .eq("id", companionOf).maybeSingle();
+    if (!parent || parent.deleted_at || parent.interview_id !== interview.id || parent.kind !== "session_video") {
+      return NextResponse.json({ error: "That recording cannot take a companion." }, { status: 400 });
+    }
+  }
+
+  /*
+   * THE CEILINGS, CHECKED BEFORE ANYTHING IS SIGNED — the same two the
+   * candidate route has had since Phase 1 and this one never did. A session
+   * recording bypassed the project's storage cap entirely, and accepted any
+   * declared size up to what the multipart planner could address (about 80
+   * GB). The length ceiling is `SESSION_MAX_SECONDS`, which the recorder
+   * enforces on its own clock; this is the backstop.
+   */
+  const { data: project } = await db.from("interview_projects")
+    .select("max_storage_bytes").eq("id", interview.project_id).maybeSingle();
+  const { data: storedBytes } = await db.rpc("rescript_interview_storage_bytes", { p_project: interview.project_id });
+  const blocked = blockingLimit(
+    { storageBytes: Number(storedBytes ?? 0), recordingSeconds: 0, transcriptionSeconds: 0, analyses: 0 },
+    { maxStorageBytes: project?.max_storage_bytes ?? null, maxRecordingSeconds: null, maxTranscriptionSeconds: null, maxAiAnalyses: null },
+  );
+  if (blocked) {
+    return NextResponse.json(
+      { error: "This project has reached its storage limit. Raise it in the project settings or delete recordings you no longer need.", reason: "project_limit" },
+      { status: 507 },
+    );
+  }
+  const ceiling = expectedBytes(SESSION_MAX_SECONDS + 60, audioOnly ? "audio" : "video");
+  if (bytes > ceiling) {
+    return NextResponse.json(
+      { error: `That recording is larger than a session may be (${Math.round(SESSION_MAX_SECONDS / 60)} minutes). Record it in parts.` },
+      { status: 413 },
+    );
+  }
+
+  /*
    * A take that reaches us twice — a double-click, a re-sent request after a
    * timeout that actually succeeded — must not start a second upload of the
    * same recording and pay for both. The same partial-unique index the
@@ -166,6 +214,7 @@ export async function POST(req: NextRequest) {
     multipart_upload_id: multipartUploadId,
     client_token: clientToken,
     recorded_by: ctx.user.userId,
+    companion_of: companionOf,
   });
   if (insertError) {
     /* nothing was uploaded, so the multipart is abandoned rather than left to be billed for */

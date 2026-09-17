@@ -433,6 +433,12 @@ export interface TranscribeOptions {
    * Implies `segments`: a speaker label with no timing has nothing to attach to.
    */
   diarize?: boolean;
+  /**
+   * A ceiling on the scaled timeout, for a caller that knows how much of its
+   * own time is left (the job runner). The scaled value is never raised by
+   * this, only capped.
+   */
+  timeoutMs?: number;
 }
 
 export interface TranscriptSegment {
@@ -553,7 +559,10 @@ export async function transcribe(
    * can act on — rather than the platform killing the function and producing
    * none.
    */
-  const budgetMs = Math.min(240_000, Math.max(30_000, Math.round(seconds * 400)));
+  const scaledMs = Math.min(240_000, Math.max(30_000, Math.round(seconds * 400)));
+  const budgetMs = Number.isFinite(opts.timeoutMs) && (opts.timeoutMs as number) > 0
+    ? Math.min(scaledMs, Math.round(opts.timeoutMs as number))
+    : scaledMs;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), budgetMs);
   try {
@@ -781,10 +790,20 @@ function reportFake(kind: "chat", promptText: string, outputTokens: number): voi
  * request, same metering, same timeout: there is one place that talks to a
  * chat provider, not two that will drift.
  */
+export interface CompleteJsonOptions {
+  /**
+   * How long to wait. Defaults to the survey product's `TIMEOUT_MS` (8 s),
+   * which is right for a one-line classification and wrong for a 24k-token
+   * analysis; a background job passes what it can afford. Capped at 300 s.
+   */
+  timeoutMs?: number;
+}
+
 export async function completeJson(
   system: string,
   user: string,
   maxTokens = 160,
+  options: CompleteJsonOptions = {},
 ): Promise<unknown | null> {
   const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
   const model = aiModelName();
@@ -802,8 +821,11 @@ export async function completeJson(
     return {};
   }
 
+  const timeoutMs = Number.isFinite(options.timeoutMs) && (options.timeoutMs as number) > 0
+    ? Math.min(300_000, Math.round(options.timeoutMs as number))
+    : TIMEOUT_MS;
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const r = await fetch(`${base}/chat/completions`, {
       method: "POST", signal: ctrl.signal, cache: "no-store",
@@ -839,6 +861,16 @@ export async function completeJson(
     } catch {
       return null;
     }
+  } catch (e) {
+    /*
+     * "This operation was aborted" tells a job runner nothing. Say what
+     * happened in words it can classify: a timeout is transient, and the
+     * number lets whoever reads the log see whether the budget was the problem.
+     */
+    if ((e as Error)?.name === "AbortError") {
+      throw new Error(`the analysis provider did not answer within ${Math.round(timeoutMs / 1000)} seconds`);
+    }
+    throw e;
   } finally {
     clearTimeout(timer);
   }

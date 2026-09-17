@@ -182,27 +182,42 @@ code on the interview page and in the report, and the analysis receives it
 fenced with its language so it is read as a program while quotes still
 verify verbatim against the stored text.
 
-**Phase 7 — carried findings.** Next: the items below.
+**Phase 7 — carried findings. Done.** The list below, closed (migration 0038).
+A session video now records an audio companion at 64 kbps — `companion_of`
+names the video — and the companion is what is transcribed; the recorder sets
+its bitrates, stops itself at `SESSION_MAX_SECONDS` (40 minutes, the point
+past which the companion would no longer fit a speech provider) and says so;
+the session begin route enforces the project storage cap and a size ceiling
+it never had. Session transcripts are analysis sources under a
+`session:<mediaId>` id, and the evidence they produce names the recording
+(`interview_evidence.media_id`) rather than a response; the report lists
+those findings under "From the moderated session". A wallet refusal is a
+third failure class, `blocked`: the job is handed back as `queued` with its
+attempt refunded and offered again in an hour. `completeJson` takes a timeout
+and the analysis asks for one sized to its prompt — minutes, not eight
+seconds — capped to what is left of the run; transcription accepts the same
+cap. A terminal job failure now writes `failed` onto the transcript row and
+the media row and re-runs the analysis check, so one unreadable recording no
+longer blocks an interview's analysis for ever; an analysis with nothing to
+read because everything failed is itself marked failed rather than retried.
+`identity.read` is a new capability (manager, interviewer): the roster, the
+participant lists and the interview page strip email addresses without it.
+The retake finding was already fixed in Phase 3; the residual — a queued
+transcription for the retired take — is cancelled at retake.
 
-## Carried findings not yet fixed
+## Carried findings
 
-Recorded here so they are not lost between phases.
+All closed in Phase 7 (see above). Kept for the record.
 
 - ~~The retention sweep deletes at most 100 objects but marks every row deleted;
-  the orphan sweep has no caller.~~ Fixed in Phase 5 (`deleteVerified`,
-  `sweepOrphansEverywhere`).
-- `sessions/upload/begin` enforces no byte ceiling at all, and `SessionRecorder`
-  sets no bitrate against a 25 MB transcription cap, so moderated recordings
-  become untranscribable within a minute or two.
-- A retake mints a new client token and leaves the superseded take `stored`,
-  billed and listed with no current-take marker.
-- Session transcripts never reach the analysis: sources are built from
-  `interview_responses` and session media has `response_id: null`.
-- A 402 wallet refusal is classified permanent and never retried, contradicting
-  its own comment.
-- The analysis chat timeout is 8 seconds against a 24k-token prompt.
-- `viewer` can read participant emails through the participants route and the
-  interview page, which is the role designed not to see respondents.
-- Nothing ever writes a `failed` transcript status, so a failed transcription
-  blocks analysis for that interview for ever and renders "Transcribing…"
-  permanently.
+  the orphan sweep has no caller.~~ Phase 5.
+- ~~`sessions/upload/begin` enforces no byte ceiling; `SessionRecorder` sets no
+  bitrate against a 25 MB transcription cap.~~ Phase 7 — and the deeper
+  cause, transcribing the video at all, is gone: the companion is transcribed.
+- ~~A retake leaves the superseded take `stored`, billed and listed.~~ Phase 3;
+  the queued job for it is cancelled since Phase 7.
+- ~~Session transcripts never reach the analysis.~~ Phase 7.
+- ~~A 402 wallet refusal is classified permanent.~~ Phase 7 (`blocked`).
+- ~~The analysis chat timeout is 8 seconds against a 24k-token prompt.~~ Phase 7.
+- ~~`viewer` can read participant emails.~~ Phase 7 (`identity.read`).
+- ~~Nothing ever writes a `failed` transcript status.~~ Phase 7.

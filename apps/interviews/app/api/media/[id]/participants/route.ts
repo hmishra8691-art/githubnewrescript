@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { checkParticipants } from "@rescript/interviews";
-import { isFailure } from "@/lib/auth";
+import { can, isFailure } from "@/lib/auth";
 import { participantsOf, requireMedia, setParticipants } from "@/lib/recordings";
 
 export const dynamic = "force-dynamic";
@@ -25,8 +25,11 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const ctx = await requireMedia(req, params.id, "candidates.read");
   if (isFailure(ctx)) return ctx.response;
 
+  /* names for everybody who may see the recording; addresses only with `identity.read` */
+  const mayIdentify = can(ctx.role, "identity.read");
+  const participants = (await participantsOf(params.id)).map((p) => (mayIdentify ? p : { ...p, email: null }));
   return NextResponse.json(
-    { ok: true, participants: await participantsOf(params.id) },
+    { ok: true, participants },
     { headers: { "cache-control": "no-store" } },
   );
 }

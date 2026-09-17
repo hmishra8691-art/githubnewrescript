@@ -1,7 +1,7 @@
 import "server-only";
 import {
-  buildScorecard, classifyFailure, codeAnswerLanguage, codeForAnalysis, decideAfterFailure, emptyReport, isJobKind, jobKey,
-  noteDecision, planAnalysisPrompt, readClaims, shouldClaimAnother,
+  analysisTimeoutMs, buildScorecard, classifyFailure, codeAnswerLanguage, codeForAnalysis, decideAfterFailure, emptyReport,
+  isJobKind, isTerminalFailure, jobKey, noteDecision, planAnalysisPrompt, readClaims, shouldClaimAnother,
   summariseRequirements, verifyEvidence,
   type DrainBudget, type DrainReport, type Job, type JobDecision, type JobKind,
 } from "@rescript/interviews";
@@ -63,7 +63,18 @@ interface JobRow {
   payload: Record<string, unknown> | null;
 }
 
-export type Handler = (job: Job, row: JobRow) => Promise<void>;
+/**
+ * What a handler may know about time: how many milliseconds of this run are
+ * left. A provider timeout is capped to that, so the abort is ours — with a
+ * message the classifier reads as transient — rather than the platform's,
+ * which produces none and leaves the job `running` until it goes stale.
+ */
+export interface RunClock { remainingMs: () => number }
+
+export type Handler = (job: Job, row: JobRow, clock: RunClock) => Promise<void>;
+
+/** Left for the provider once the bookkeeping around it is paid for. */
+const BOOKKEEPING_MS = 8_000;
 
 /* ------------------------------------------------------------ enqueue */
 
@@ -133,16 +144,18 @@ export async function drain(
       if (!row?.id) break;
 
       report.claimed++;
-      const decision = await runOne(row);
+      const clock: RunClock = { remainingMs: () => Math.max(0, BUDGET.msAvailable - (now() - startedAt)) };
+      const decision = await runOne(row, clock);
       noteDecision(report, decision);
       await finish(row.id, decision);
+      await afterDecision(row, decision);
     }
   }
 
   return report;
 }
 
-async function runOne(row: JobRow): Promise<JobDecision> {
+async function runOne(row: JobRow, clock: RunClock = { remainingMs: () => LONGEST_JOB_MS }): Promise<JobDecision> {
   const job: Job = {
     id: row.id,
     kind: isJobKind(row.kind) ? row.kind : "transcription",
@@ -166,7 +179,7 @@ async function runOne(row: JobRow): Promise<JobDecision> {
   }
 
   try {
-    await handler(job, row);
+    await handler(job, row, clock);
     return { status: "complete" };
   } catch (e) {
     const err = e as Error & { status?: number };
@@ -174,7 +187,7 @@ async function runOne(row: JobRow): Promise<JobDecision> {
     const decision = decideAfterFailure(job, failure);
     console.warn("[rescript:interviews] job failed", JSON.stringify({
       job: row.id, kind: job.kind, attempts: job.attempts,
-      permanent: failure.kind === "permanent",
+      failure: failure.kind,
       retrying: decision.status === "failed" && decision.retrying,
       reason: failure.reason.slice(0, 200),
     }));
@@ -182,18 +195,70 @@ async function runOne(row: JobRow): Promise<JobDecision> {
   }
 }
 
+/**
+ * WHAT A DEAD JOB LEAVES BEHIND.
+ *
+ * A job that will not run again used to be the only record of its own
+ * failure. The transcript row it was about stayed `waiting` or `transcribing`
+ * for ever, the review page said "Transcribing…" indefinitely, the candidate's
+ * feedback screen never stopped counting it, and — the part that mattered —
+ * `maybeQueueAnalysis` treated it as outstanding, so ONE unreadable recording
+ * blocked the analysis of a whole interview with no visible terminal state.
+ *
+ * So a terminal failure is written where its readers look: the transcript row
+ * becomes `failed` with the reason, the media row's processing status says the
+ * same, and the analysis check runs again — the interview is analysed from the
+ * transcripts it does have. Never throws: the job's own decision is already
+ * recorded, and a follow-up that fails must not undo that.
+ */
+async function afterDecision(row: JobRow, decision: JobDecision): Promise<void> {
+  if (!isTerminalFailure(decision)) return;
+  try {
+    const db = supabaseAdmin();
+    if (row.kind === "transcription" && row.subject_id) {
+      const now = new Date().toISOString();
+      await db.from("interview_transcripts")
+        .update({ status: "failed", error: decision.reason.slice(0, 500), completed_at: now })
+        .eq("media_id", row.subject_id)
+        .in("status", ["waiting", "processing", "transcribing"]);
+      await db.from("interview_media")
+        .update({ processing_status: "failed", error: decision.reason.slice(0, 500) })
+        .eq("id", row.subject_id);
+      if (row.interview_id) await maybeQueueAnalysis(row.interview_id);
+    }
+    if (row.kind === "analysis" && row.subject_id) {
+      /* the interview goes back to `completed`, so a later run — or a person — can try again */
+      await db.from("interview_analysis").upsert({
+        interview_id: row.subject_id, project_id: row.project_id,
+        status: "failed", error: decision.reason.slice(0, 500),
+      }, { onConflict: "interview_id" });
+      await db.from("interviews").update({ status: "completed" })
+        .eq("id", row.subject_id).eq("status", "processing");
+    }
+  } catch (e) {
+    console.warn("[rescript:interviews] could not record a terminal failure",
+      JSON.stringify({ job: row.id, error: (e as Error).message }));
+  }
+}
+
 async function finish(jobId: string, decision: JobDecision): Promise<void> {
   const db = supabaseAdmin();
   await db.rpc("rescript_interview_finish_job", {
     p_job: jobId,
-    p_status: decision.status === "complete" ? "complete" : "failed",
+    /*
+     * `queued` is the hand-back: waiting on the wallet, attempt refunded by
+     * the function (0038). It is not a failure of the job and is not counted
+     * as one.
+     */
+    p_status: decision.status === "complete" ? "complete" : decision.status === "blocked" ? "queued" : "failed",
     p_error: decision.status === "complete" ? null : decision.reason.slice(0, 500),
     /*
-     * `run_after` is only moved for a retry. A job that has given up keeps its
-     * old one, so the `attempts < max_attempts` guard is what stops it rather
-     * than a date far in the future that somebody would have to understand.
+     * `run_after` is only moved for a retry or a hand-back. A job that has
+     * given up keeps its old one, so the `attempts < max_attempts` guard is
+     * what stops it rather than a date far in the future that somebody would
+     * have to understand.
      */
-    p_run_after: decision.status === "failed" && decision.retrying
+    p_run_after: decision.status === "blocked" || (decision.status === "failed" && decision.retrying)
       ? decision.runAfter.toISOString()
       : null,
   });
@@ -208,7 +273,7 @@ async function finish(jobId: string, decision: JobDecision): Promise<void> {
  * sees the provider's own words and its HTTP status — which is what decides
  * between "try again in a minute" and "this file will never work".
  */
-const transcription: Handler = async (job, row) => {
+const transcription: Handler = async (job, row, clock) => {
   const db = supabaseAdmin();
   const mediaId = job.subjectId;
   if (!mediaId) throw new Error("the job names no recording");
@@ -293,14 +358,17 @@ const transcription: Handler = async (job, row) => {
       durationSeconds: seconds,
       segments: true,
       diarize: moderated,
+      /* what is left of this run, so the abort is ours and is said in words */
+      timeoutMs: Math.max(15_000, clock.remainingMs() - BOOKKEEPING_MS),
     }),
   );
 
   if (outcome.refused) {
     /*
      * A wallet refusal is not a broken recording and must not burn attempts:
-     * the transcript goes back to waiting, plainly explained, and a retry after
-     * the wallet is topped up will find it.
+     * the transcript goes back to waiting, plainly explained, and the job is
+     * handed back to the queue with its attempt refunded (`blocked`, 0038).
+     * It is offered again in an hour, and a topped-up wallet finds it there.
      */
     await db.from("interview_transcripts")
       .update({ status: "waiting", error: outcome.refused.slice(0, 500) })
@@ -431,7 +499,7 @@ async function maybeQueueAnalysis(interviewId: string): Promise<void> {
  * quoted. Together they mean a fabricated finding cannot reach a reviewer as a
  * finding — it reaches them as "not enough evidence", which is true.
  */
-const analysis: Handler = async (job, row) => {
+const analysis: Handler = async (job, row, clock) => {
   const db = supabaseAdmin();
   const interviewId = job.subjectId;
   if (!interviewId) throw new Error("the job names no interview");
@@ -512,6 +580,49 @@ const analysis: Handler = async (job, row) => {
     if (t.response_id) byResponse.set(t.response_id as string, { text: (t.text as string) ?? "", segments: t.segments });
   }
 
+  /*
+   * A MODERATED SESSION IS WORDS TOO. Its transcript has no response row —
+   * a session is bound to a question, not to a candidate's answer — so it was
+   * never a source, and a fully moderated interview transcribed everything and
+   * then analysed nothing ("no transcript is ready", retried to exhaustion).
+   *
+   * Session transcripts join the sources under a `session:<mediaId>` id. The
+   * verifier keys on that string like any other; the evidence row it produces
+   * carries `media_id` and a null `response_id` (0038). The recording is
+   * named so the question can be, and the code says "session" so the model
+   * and the reviewer both know there is more than one voice in it.
+   */
+  const sessionIds = (transcripts ?? [])
+    .filter((t) => !t.response_id && t.media_id)
+    .map((t) => t.media_id as string);
+  const { data: sessionMedia } = sessionIds.length
+    ? await db.from("interview_media")
+        .select("id, kind, question_id, companion_of")
+        .in("id", sessionIds)
+        .in("kind", ["session_video", "session_audio"])
+        .is("deleted_at", null)
+    : { data: [] as { id: string; kind: string; question_id: string | null; companion_of: string | null }[] };
+  const companionParents = (sessionMedia ?? []).map((m) => m.companion_of).filter((x): x is string => !!x);
+  const { data: parents } = companionParents.length
+    ? await db.from("interview_media").select("id, question_id").in("id", companionParents)
+    : { data: [] as { id: string; question_id: string | null }[] };
+  const parentQuestion = new Map((parents ?? []).map((m) => [m.id as string, m.question_id as string | null]));
+  const transcriptByMedia = new Map((transcripts ?? []).map((t) => [t.media_id as string, t]));
+  const sessionSources = (sessionMedia ?? []).flatMap((m) => {
+    const t = transcriptByMedia.get(m.id as string);
+    const text = ((t?.text as string) ?? "").trim();
+    if (!text) return [];
+    const questionId = (m.question_id as string | null) ?? (m.companion_of ? parentQuestion.get(m.companion_of as string) ?? null : null) ?? "";
+    const code = codeOf.get(questionId) ?? "";
+    return [{
+      responseId: `session:${m.id as string}`,
+      questionId,
+      questionCode: code ? `${code} (moderated session)` : "moderated session",
+      text,
+      segments: (t?.segments as { start: number; end: number; text: string }[] | null) ?? null,
+    }];
+  });
+
   const sources = (responses ?? [])
     .map((r) => {
       const t = byResponse.get(r.id as string);
@@ -532,12 +643,29 @@ const analysis: Handler = async (job, row) => {
       };
     })
     .filter(Boolean) as Parameters<typeof verifyEvidence>[1][number][];
+  sources.push(...sessionSources);
 
   if (!sources.length) {
+    /*
+     * Nothing to read. If every transcript this interview will ever have has
+     * already failed, that is a fact to record, not a job to retry three
+     * times: the analysis is marked failed with the reason and the interview
+     * goes back to `completed` so a person can see it and act.
+     */
+    const { data: pending } = await db.from("interview_transcripts")
+      .select("media_id").eq("interview_id", interviewId)
+      .in("status", ["waiting", "processing", "transcribing"]).limit(1);
+    if (!(pending ?? []).length) {
+      const err = new Error("no transcript could be produced for this interview — every recording failed to transcribe and nothing was typed");
+      (err as Error & { status?: number }).status = 422;
+      throw err;
+    }
     throw new Error("no transcript is ready for this interview yet");
   }
 
   const plan = planAnalysisPrompt(reqs, sources);
+  const outputTokens = 2_000;
+  const timeoutMs = analysisTimeoutMs(plan.approxTokens, outputTokens, Math.max(20_000, clock.remainingMs() - BOOKKEEPING_MS));
 
   const outcome = await meteredAnalysis(
     {
@@ -550,7 +678,7 @@ const analysis: Handler = async (job, row) => {
       operation: "analyse_interview",
       idempotencyKey: `interview-analysis:${interviewId}`,
     },
-    () => completeJson(plan.system, plan.user, 2_000),
+    () => completeJson(plan.system, plan.user, outputTokens, { timeoutMs }),
   );
 
   if (outcome.refused) {
@@ -592,14 +720,17 @@ const analysis: Handler = async (job, row) => {
    * those ids in every number it produces. A score that could not be expanded
    * into stored evidence rows would be a score about nothing.
    */
-  let insertedEvidence: { id: string; requirement_id: string; response_id: string | null; question_id: string | null; verdict: string; quote: string | null; explanation: string | null }[] = [];
+  let insertedEvidence: { id: string; requirement_id: string; response_id: string | null; media_id: string | null; question_id: string | null; verdict: string; quote: string | null; explanation: string | null }[] = [];
   if (verified.evidence.length) {
+    const sessionMediaOf = (id: string | null | undefined) => (id && id.startsWith("session:") ? id.slice("session:".length) : null);
     const { data: inserted, error: evidenceError } = await db.from("interview_evidence").insert(verified.evidence.map((e) => ({
       interview_id: interviewId,
       project_id: interview.project_id,
       requirement_id: e.requirementId,
-      response_id: e.responseId,
-      question_id: e.questionId ?? sources.find((s) => s.responseId === e.responseId)?.questionId ?? null,
+      /* a session source has no response row; the recording is named instead */
+      response_id: sessionMediaOf(e.responseId) ? null : e.responseId,
+      media_id: sessionMediaOf(e.responseId),
+      question_id: (e.questionId ?? sources.find((s) => s.responseId === e.responseId)?.questionId) || null,
       verdict: e.verdict,
       explanation: e.explanation ?? "",
       quote: e.quote ?? null,
@@ -607,7 +738,7 @@ const analysis: Handler = async (job, row) => {
       quote_end_seconds: e.quoteEndSeconds,
       provider: process.env.AI_API_URL === "fake:" ? "fake" : "openai-compatible",
       model: process.env.AI_MODEL ?? null,
-    }))).select("id, requirement_id, response_id, question_id, verdict, quote, explanation");
+    }))).select("id, requirement_id, response_id, media_id, question_id, verdict, quote, explanation");
     /*
      * Previously unchecked: a duplicate pair or an off-vocabulary verdict lost
      * the whole batch silently while the analysis row still said `complete`.
@@ -620,7 +751,10 @@ const analysis: Handler = async (job, row) => {
   const scorecard = buildScorecard(
     reqs,
     insertedEvidence.map((e) => ({
-      id: e.id, requirementId: e.requirement_id, responseId: e.response_id, questionId: e.question_id,
+      id: e.id, requirementId: e.requirement_id,
+      /* the scorecard's per-answer rows key on the same id the sources used */
+      responseId: e.response_id ?? (e.media_id ? `session:${e.media_id}` : null),
+      questionId: e.question_id,
       verdict: e.verdict as never, quote: e.quote, explanation: e.explanation,
     })),
   );

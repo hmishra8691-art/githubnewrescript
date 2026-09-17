@@ -219,6 +219,13 @@ export const INTERVIEW_CAPABILITIES = [
   "billing.read",
   "billing.set_budget",
   "retention.manage",
+  /*
+   * Who a person IS beyond their display name — an email address. Split from
+   * `candidates.read` because a `viewer` follows progress and a `reviewer`
+   * assesses answers, and neither needs to be able to email the respondent.
+   * The roster and the participant lists strip the address without it.
+   */
+  "identity.read",
 ] as const;
 export type InterviewCapability = (typeof INTERVIEW_CAPABILITIES)[number];
 
@@ -230,6 +237,7 @@ const GRANTS: Record<InterviewRole, InterviewCapability[]> = {
     "project.read", "project.edit", "questions.edit", "requirements.edit",
     "candidates.read", "candidates.invite", "media.read", "media.download",
     "transcript.read", "analysis.read", "analysis.run", "review.write", "billing.read",
+    "identity.read",
   ],
   /* watches and assesses; changes nothing about the project itself */
   reviewer: [

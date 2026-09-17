@@ -47,6 +47,8 @@ export interface MediaContext extends ProjectContext {
     client_token: string | null;
     deleted_at: string | null;
     recorded_by: string | null;
+    /** for a session_audio companion: the session_video it belongs to */
+    companion_of: string | null;
     created_at: string;
   };
 }
@@ -57,7 +59,7 @@ export async function requireMedia(
   const db = supabaseAdmin();
   const { data: media, error } = await db
     .from("interview_media")
-    .select("id, customer_id, project_id, interview_id, response_id, question_id, kind, storage_provider, storage_key, mime_type, file_size, duration_seconds, upload_status, processing_status, multipart_upload_id, client_token, deleted_at, recorded_by, created_at")
+    .select("id, customer_id, project_id, interview_id, response_id, question_id, kind, storage_provider, storage_key, mime_type, file_size, duration_seconds, upload_status, processing_status, multipart_upload_id, client_token, deleted_at, recorded_by, companion_of, created_at")
     .eq("id", mediaId)
     .maybeSingle();
 

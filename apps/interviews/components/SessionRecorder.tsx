@@ -1,7 +1,7 @@
 "use client";
 import * as React from "react";
 import {
-  ROLE_SAY, checkParticipants, describeParticipants, sortParticipants,
+  RECORDING_BITRATE, ROLE_SAY, SESSION_MAX_SECONDS, checkParticipants, describeParticipants, sortParticipants,
   type ParticipantRole,
 } from "@rescript/interviews";
 import { RecordingUploader, SESSION_ENDPOINTS, pickRecordingMime, pickAudioMime } from "@/lib/uploader";
@@ -83,7 +83,19 @@ export function SessionRecorder({
   const recorderRef = React.useRef<MediaRecorder | null>(null);
   const uploaderRef = React.useRef<RecordingUploader | null>(null);
   const chunksRef = React.useRef<Blob[]>([]);
+  /*
+   * THE AUDIO COMPANION. A session video is what people watch; it is not what
+   * gets transcribed — at any bitrate a 720p recording passes a speech
+   * provider's 25 MB in a few minutes. So, exactly as a candidate's answer
+   * does, the same microphone is recorded a second time as audio only, at 64
+   * kbps, and that is what is uploaded for transcription (`companion_of`
+   * names the video). If the second recorder cannot start, the video is
+   * still saved and the server is told no companion is coming.
+   */
+  const audioRecorderRef = React.useRef<MediaRecorder | null>(null);
+  const audioChunksRef = React.useRef<Blob[]>([]);
   const startedAt = React.useRef(0);
+  const [stoppedByClock, setStoppedByClock] = React.useState(false);
 
   const list = React.useMemo(
     () => Object.entries(selected).map(([personId, role]) => ({ personId, role })),
@@ -148,7 +160,15 @@ export function SessionRecorder({
     if (previewUrl) { URL.revokeObjectURL(previewUrl); setPreviewUrl(null); }
 
     const mimeType = audioOnly ? pickAudioMime() : pickRecordingMime();
-    const rec = new MediaRecorder(stream, { mimeType });
+    /*
+     * Bitrates, stated. Every other recorder in this repository sets them;
+     * this one did not, and a browser's default for 720p is around 2.5 Mbps —
+     * three times what `expectedBytes` plans for and what the storage cap is
+     * checked against.
+     */
+    const rec = new MediaRecorder(stream, audioOnly
+      ? { mimeType, audioBitsPerSecond: RECORDING_BITRATE.audioOnly }
+      : { mimeType, videoBitsPerSecond: RECORDING_BITRATE.video, audioBitsPerSecond: RECORDING_BITRATE.audio });
     recorderRef.current = rec;
 
     rec.ondataavailable = (e) => { if (e.data.size) chunksRef.current.push(e.data); };
@@ -157,6 +177,22 @@ export function SessionRecorder({
       setPreviewUrl(URL.createObjectURL(blob));
       setPhase("reviewing");
     };
+
+    audioChunksRef.current = [];
+    audioRecorderRef.current = null;
+    if (!audioOnly) {
+      try {
+        const audio = new MediaRecorder(new MediaStream(stream.getAudioTracks()), {
+          mimeType: pickAudioMime(), audioBitsPerSecond: RECORDING_BITRATE.audioOnly,
+        });
+        audio.ondataavailable = (e) => { if (e.data.size) audioChunksRef.current.push(e.data); };
+        audio.start(1000);
+        audioRecorderRef.current = audio;
+      } catch {
+        audioRecorderRef.current = null;
+      }
+    }
+    setStoppedByClock(false);
 
     /*
      * One second per chunk. Small enough that stopping loses almost nothing,
@@ -168,20 +204,34 @@ export function SessionRecorder({
     setPhase("recording");
   };
 
+  const stop = React.useCallback(() => {
+    if (audioRecorderRef.current && audioRecorderRef.current.state !== "inactive") audioRecorderRef.current.stop();
+    recorderRef.current?.stop();
+  }, []);
+
   React.useEffect(() => {
     if (phase !== "recording") return;
-    const id = window.setInterval(
-      () => setSeconds(Math.floor((Date.now() - startedAt.current) / 1000)), 500);
+    const id = window.setInterval(() => {
+      const s = Math.floor((Date.now() - startedAt.current) / 1000);
+      setSeconds(s);
+      /*
+       * THE SESSION CLOCK. Past this the companion would no longer fit a
+       * speech provider and the words would be lost; the recorder stops
+       * itself, keeps what it has, and says why — the researcher saves it and
+       * starts the next recording against the next question.
+       */
+      if (s >= SESSION_MAX_SECONDS) { setStoppedByClock(true); stop(); }
+    }, 500);
     return () => window.clearInterval(id);
-  }, [phase]);
-
-  const stop = () => recorderRef.current?.stop();
+  }, [phase, stop]);
 
   const retake = () => {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(null);
     chunksRef.current = [];
+    audioChunksRef.current = [];
     setSeconds(0);
+    setStoppedByClock(false);
     setPhase("ready");
   };
 
@@ -195,6 +245,11 @@ export function SessionRecorder({
     setPhase("saving");
     setError(null);
 
+    const audioMime = pickAudioMime();
+    const companion = !audioOnly && audioChunksRef.current.length
+      ? new Blob(audioChunksRef.current, { type: audioMime })
+      : null;
+
     const uploader = new RecordingUploader({
       endpoints: SESSION_ENDPOINTS,
       beginExtra: {
@@ -203,6 +258,8 @@ export function SessionRecorder({
         kind: audioOnly ? "session_audio" : "session_video",
         participants: list,
       },
+      /* the server transcribes the companion, not the video, when one is coming */
+      completeExtra: { hasCompanion: !!companion },
       mimeType,
       estimatedBytes: blob.size,
       onState: (s) => {
@@ -216,13 +273,42 @@ export function SessionRecorder({
       await uploader.begin();
       uploader.push(blob);
       const out = await uploader.finish(seconds);
-      if (out.ok) {
-        setPhase("saved");
-        release();
-      } else {
+      if (!out.ok) {
         setPhase("failed");
         setError(out.error);
+        return;
       }
+
+      /*
+       * The companion goes second, after the video is confirmed in storage,
+       * and names it. A companion that fails to upload is said, not hidden:
+       * the video is safe, but nobody will get a transcript of it.
+       */
+      if (companion) {
+        const audioUploader = new RecordingUploader({
+          endpoints: SESSION_ENDPOINTS,
+          beginExtra: {
+            interviewId, questionId, kind: "session_audio", participants: list,
+            companionOf: out.mediaId,
+          },
+          mimeType: audioMime,
+          estimatedBytes: companion.size,
+          onState: (s) => {
+            setProgress(s.partsTotal ? { done: s.partsDone ?? 0, total: s.partsTotal } : null);
+          },
+        });
+        try {
+          await audioUploader.begin();
+          audioUploader.push(companion);
+          const audioOut = await audioUploader.finish(seconds);
+          if (!audioOut.ok) setError(`The video is saved, but its audio track did not upload (${audioOut.error}). It will not be transcribed.`);
+        } catch (e) {
+          setError(`The video is saved, but its audio track did not upload (${(e as Error).message}). It will not be transcribed.`);
+        }
+      }
+
+      setPhase("saved");
+      release();
     } catch (e) {
       setPhase("failed");
       setError((e as Error).message);
@@ -351,6 +437,7 @@ export function SessionRecorder({
             <span data-testid="clock" style={{ fontVariantNumeric: "tabular-nums", fontSize: 20 }}>
               ● {clock}
             </span>
+            <span className="tiny muted">of {Math.round(SESSION_MAX_SECONDS / 60)} min</span>
             <button type="button" className="btn danger" onClick={stop} data-testid="stop">Stop recording</button>
           </>
         )}
@@ -359,6 +446,11 @@ export function SessionRecorder({
             <button type="button" className="btn secondary" onClick={retake} data-testid="retake">Re-record</button>
             <button type="button" className="btn" onClick={save} data-testid="save">Save recording</button>
             <span className="muted small">{clock} recorded</span>
+            {stoppedByClock && (
+              <span className="note small" data-testid="stopped-by-clock">
+                Recording stopped at {Math.round(SESSION_MAX_SECONDS / 60)} minutes — the longest one recording can be and still be transcribed. Save this one and start another for what follows.
+              </span>
+            )}
           </>
         )}
         {phase === "saving" && (

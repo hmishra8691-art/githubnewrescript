@@ -218,15 +218,17 @@ A separate Vercel project, on `apps/interviews`, port 3002 in development.
 | `NEXT_PUBLIC_STUDIO_URL` | the sign-in link **and the way back** | where the handoff starts; also the "Rescript Studio" link in this app's header |
 | `AI_STT_API_URL` / `AI_STT_API_KEY` / `AI_STT_MODEL` | transcription | Phase 3 |
 
-Migrations through **0037** must be applied. 0035 widens `interview_questions.kind`,
+Migrations through **0038** must be applied. 0035 widens `interview_questions.kind`,
 adds `options` / `visible_if` / `skip_logic`, and adds `answer_value` /
 `answer_kind` / `prompt_watched_at` / `skip_reason` on responses. 0036 adds
 `interview_requirements.category`, `interview_analysis.score`, the project's
 `mode` / `category` / `template_key` / `retention_hours`, the
 `interview_deletions` ledger, and replaces `rescript_interview_retention_due`
 so the window runs in hours or days from the last activity. 0037 adds
-`kind = 'code'` and `interview_questions.settings`. All are additive; nothing
-existing changes meaning.
+`kind = 'code'` and `interview_questions.settings`. 0038 adds
+`interview_media.companion_of`, `interview_evidence.media_id`, and teaches
+`rescript_interview_finish_job` to hand a job back as `queued` with its attempt
+refunded. All are additive; nothing existing changes meaning.
 
 On the **Studio** project, one variable is needed too:
 

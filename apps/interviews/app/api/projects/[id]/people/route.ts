@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { findExistingPerson, isParticipantRole, type Person } from "@rescript/interviews";
 import { supabaseAdmin } from "@/lib/admin";
-import { isFailure, requireProject } from "@/lib/auth";
+import { can, isFailure, requireProject } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -77,10 +77,13 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
    * respondents — that is a participant list leaking names across interviews,
    * which is the same class of mistake §18 names across projects.
    */
+  /* the address is identity, and identity is its own capability (`identity.read`) */
+  const mayIdentify = can(ctx.role, "identity.read");
   const rows = (data ?? []) as PersonRow[];
   const people = rows
     .filter((r) => !r.interview_id || (forInterview && r.interview_id === forInterview))
-    .map(toPerson);
+    .map(toPerson)
+    .map((p) => (mayIdentify ? p : { ...p, email: null }));
 
   return NextResponse.json({ ok: true, people }, { headers: { "cache-control": "no-store" } });
 }

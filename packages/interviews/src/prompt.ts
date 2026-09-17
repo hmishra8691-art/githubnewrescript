@@ -174,3 +174,25 @@ export function readClaims(reply: unknown): { claims: RawClaim[]; narrative: str
 
   return { claims, narrative };
 }
+
+/* ------------------------------------------------------------- patience */
+
+/**
+ * HOW LONG TO WAIT FOR THE MODEL, sized to what it was given.
+ *
+ * `completeJson` used to inherit the survey product's eight-second timeout,
+ * written for a sentiment call on one sentence and a page transition that
+ * must not stall. An analysis prompt is up to 24,000 tokens and asks for up
+ * to 2,000 back; eight seconds aborted every real one, and the abort was then
+ * classified transient and retried — three eight-second aborts against the
+ * same prompt, each preceded by a wallet reservation.
+ *
+ * Roughly 6 ms of patience per prompt token plus 40 ms per requested output
+ * token, never less than 45 s and never more than the ceiling the caller
+ * gives (the runner passes what is left of its own budget). The transcription
+ * path learned the same lesson earlier and scales with the clip.
+ */
+export function analysisTimeoutMs(approxPromptTokens: number, maxOutputTokens: number, ceilingMs = 240_000): number {
+  const wanted = Math.round(Math.max(0, approxPromptTokens) * 6 + Math.max(0, maxOutputTokens) * 40);
+  return Math.max(Math.min(45_000, ceilingMs), Math.min(ceilingMs, wanted));
+}

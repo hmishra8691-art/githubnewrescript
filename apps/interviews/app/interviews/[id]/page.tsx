@@ -69,11 +69,13 @@ export default async function InterviewPage({ params }: { params: { id: string }
   const mayWatch = can(gate.ctx.role, "media.read");
   const mayMap = can(gate.ctx.role, "transcript.read");
   const mayReview = can(gate.ctx.role, "review.write");
+  /* an address is identity; a viewer or reviewer gets the name and the role, nothing more */
+  const mayIdentify = can(gate.ctx.role, "identity.read");
 
   const [{ data: media }, { data: questions }, { data: transcripts }, { data: evidenceRows }, { data: analysis }, { data: telemetry }] =
     await Promise.all([
       db.from("interview_media")
-        .select("id, kind, question_id, response_id, duration_seconds, created_at, upload_status")
+        .select("id, kind, question_id, response_id, companion_of, duration_seconds, created_at, upload_status")
         .eq("interview_id", params.id)
         .is("deleted_at", null)
         .eq("upload_status", "stored")
@@ -105,7 +107,7 @@ export default async function InterviewPage({ params }: { params: { id: string }
       person_id: string; display_name: string; email: string | null; role: string;
       user_id: string | null; derived: boolean; speaker_label: string | null;
     }[]).map((r) => ({
-      id: r.person_id, displayName: r.display_name, email: r.email, userId: r.user_id,
+      id: r.person_id, displayName: r.display_name, email: mayIdentify ? r.email : null, userId: r.user_id,
       derived: r.derived, speakerLabel: r.speaker_label,
       role: isParticipantRole(r.role) ? r.role : "observer",
     })));
@@ -134,6 +136,17 @@ export default async function InterviewPage({ params }: { params: { id: string }
     const t = transcriptByMedia.get(m.id as string);
     if (t) transcriptByResponse.set(m.response_id as string, t);
   }
+  /*
+   * A session video's companion is joined by `companion_of` — a session has
+   * no response row to be siblings through. The companion row itself is not
+   * listed, for the same reason the candidate's audio row is not.
+   */
+  const transcriptByCompanionOf = new Map<string, (typeof transcripts extends null ? never : NonNullable<typeof transcripts>)[number]>();
+  for (const m of media ?? []) {
+    if (m.kind !== "session_audio" || !m.companion_of) continue;
+    const t = transcriptByMedia.get(m.id as string);
+    if (t) transcriptByCompanionOf.set(m.companion_of as string, t);
+  }
 
   /*
    * The interviewer's clips are transcribed like everything else; their
@@ -156,11 +169,14 @@ export default async function InterviewPage({ params }: { params: { id: string }
     .eq("interview_id", params.id)
     .in("answer_kind", ["text", "long_text", "single_choice", "multi_choice", "code"]);
 
-  const recordings: RecordingView[] = (media ?? []).filter((m) => m.kind !== "answer_audio" && m.kind !== "question_prompt").map((m) => {
+  const recordings: RecordingView[] = (media ?? [])
+    .filter((m) => m.kind !== "answer_audio" && m.kind !== "question_prompt" && !(m.kind === "session_audio" && m.companion_of))
+    .map((m) => {
     const q = questionById.get((m.question_id as string) ?? "");
     /* its own transcript, or its audio sibling's — see above */
     const t = transcriptByMedia.get(m.id as string)
-      ?? (m.response_id ? transcriptByResponse.get(m.response_id as string) : undefined);
+      ?? (m.response_id ? transcriptByResponse.get(m.response_id as string) : undefined)
+      ?? transcriptByCompanionOf.get(m.id as string);
     return {
       id: m.id as string,
       kind: m.kind as string,
@@ -276,9 +292,15 @@ export default async function InterviewPage({ params }: { params: { id: string }
       {mayWatch && analysis?.status === "complete" && readScorecard(analysis.score) && (
         <Scorecard
           card={readScorecard(analysis.score)!}
-          questionCodes={Object.fromEntries((media ?? []).filter((m) => m.response_id).map((m) => [
-            m.response_id as string, (questionById.get((m.question_id as string) ?? "")?.code as string) ?? "",
-          ]))}
+          questionCodes={Object.fromEntries([
+            ...(media ?? []).filter((m) => m.response_id).map((m) => [
+              m.response_id as string, (questionById.get((m.question_id as string) ?? "")?.code as string) ?? "",
+            ]),
+            /* a session source's id is the recording's, prefixed — see the runner */
+            ...(media ?? []).filter((m) => m.kind === "session_video" || m.kind === "session_audio").map((m) => [
+              `session:${m.id as string}`, `${(questionById.get((m.question_id as string) ?? "")?.code as string) ?? ""} (session)`.trim(),
+            ]),
+          ])}
         />
       )}
 

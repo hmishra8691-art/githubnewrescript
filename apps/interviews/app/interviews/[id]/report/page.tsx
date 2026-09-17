@@ -65,7 +65,7 @@ export default async function ReportPage({ params }: { params: { id: string } })
     db.from("interview_questions").select("id, code, prompt, kind, prompt_media_id, options").eq("project_id", interview.project_id),
     db.from("interview_requirements").select("id, code, title, criteria, weight, category").eq("project_id", interview.project_id).order("position"),
     db.from("interview_analysis").select("narrative, summary, status, score, completed_at, model, provider").eq("interview_id", params.id).maybeSingle(),
-    db.from("interview_evidence").select("id, requirement_id, response_id, question_id, verdict, quote, explanation, quote_start_seconds").eq("interview_id", params.id),
+    db.from("interview_evidence").select("id, requirement_id, response_id, media_id, question_id, verdict, quote, explanation, quote_start_seconds").eq("interview_id", params.id),
     db.from("interview_transcripts").select("media_id, response_id, text, status").eq("interview_id", params.id).eq("status", "completed"),
     db.from("interview_responses").select("id, question_id, position, status, answer_kind, answer_text, answer_value").eq("interview_id", params.id).order("position"),
     db.from("interview_reviews").select("reviewer_id, status, assessments, notes, recommendation, completed_at").eq("interview_id", params.id).eq("status", "complete"),
@@ -82,6 +82,8 @@ export default async function ReportPage({ params }: { params: { id: string } })
     const k = (e.response_id as string) ?? "";
     evidenceByResponse.set(k, [...(evidenceByResponse.get(k) ?? []), e]);
   }
+  /* findings quoted from a moderated session transcript name the recording, not an answer */
+  const sessionEvidence = (evidence ?? []).filter((e) => !e.response_id && e.media_id);
 
   const answerText = (r: NonNullable<typeof responses>[number]): string | null => {
     const t = transcriptByResponse.get(r.id as string);
@@ -242,6 +244,27 @@ export default async function ReportPage({ params }: { params: { id: string } })
             </article>
           );
         })}
+
+        {sessionEvidence.length > 0 && mayRead && (
+          <article className="qa" data-testid="session-evidence">
+            <h3>From the moderated session</h3>
+            <p className="muted small">Quoted from a recording with more than one voice in it. A quote is what was said in the room, not necessarily by the candidate — the recording's speaker mapping says who.</p>
+            <ul className="findings">
+              {sessionEvidence.map((e) => {
+                const req = reqById.get(e.requirement_id as string);
+                const q = e.question_id ? qById.get(e.question_id as string) : undefined;
+                return (
+                  <li key={e.id as string} className={`verdict-${e.verdict}`}>
+                    <strong>{req?.code}</strong> {req?.title} — <em>{VERDICT_SAY[e.verdict as Verdict]}</em>
+                    {q ? <span className="muted small"> · {q.code as string}</span> : null}
+                    {e.quote ? <blockquote>&ldquo;{e.quote as string}&rdquo;{e.quote_start_seconds != null ? <span className="muted small"> at {clock(Number(e.quote_start_seconds))}</span> : null}</blockquote> : null}
+                    {e.explanation ? <div className="small muted">{e.explanation as string}</div> : null}
+                  </li>
+                );
+              })}
+            </ul>
+          </article>
+        )}
       </section>
 
       {/* ----------------------------------------------------- human review */}

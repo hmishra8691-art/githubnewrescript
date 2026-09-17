@@ -72,6 +72,20 @@ export function limitStatus(args: {
  */
 export const PLATFORM_MAX_SECONDS = 15 * 60;
 
+/**
+ * How long ONE moderated session recording may run.
+ *
+ * Not a product opinion about interview length — a session can be as long
+ * as the people in it want. It is the point past which the audio companion
+ * (64 kbps, what actually gets transcribed) would exceed what a speech
+ * provider accepts, with the same 15% margin `expectedBytes` applies. Forty
+ * minutes fits with room to spare; the recorder stops itself there and says
+ * so, and the researcher starts a second recording against the next question.
+ * A recording that cannot be transcribed is a recording nobody can search,
+ * quote or analyse, which is worse than one that stopped.
+ */
+export const SESSION_MAX_SECONDS = 40 * 60;
+
 export function recordingSeconds(args: {
   questionMaxSeconds?: number | null;
   projectMaxSeconds?: number | null;

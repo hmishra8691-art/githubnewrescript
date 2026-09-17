@@ -107,10 +107,22 @@ export async function POST(req: NextRequest) {
      * Marking the old media `deleted_at` here means the retention sweep
      * removes the bytes and the reviewer sees one answer.
      */
-    await db.from("interview_media")
+    const { data: retired } = await db.from("interview_media")
       .update({ deleted_at: now, upload_status: "deleted", error: "superseded by a re-record" })
-      .eq("response_id", responseId).eq("interview_id", gate.interview.id).is("deleted_at", null);
+      .eq("response_id", responseId).eq("interview_id", gate.interview.id).is("deleted_at", null)
+      .select("id");
     await db.from("interview_transcripts").delete().eq("response_id", responseId);
+    /*
+     * A transcription already queued for the retired take is cancelled rather
+     * than left to run into "that recording does not exist" — it would stop
+     * without billing, but as a failed job somebody might chase.
+     */
+    const retiredIds = (retired ?? []).map((m) => m.id as string);
+    if (retiredIds.length) {
+      await db.from("interview_jobs")
+        .update({ status: "cancelled", error: "the take was superseded by a re-record", completed_at: now })
+        .eq("kind", "transcription").in("subject_id", retiredIds).in("status", ["queued", "failed"]);
+    }
     await db.from("interview_responses")
       .update({
         status: "pending", retries: q.retries + 1, answer_text: null, answer_value: null,

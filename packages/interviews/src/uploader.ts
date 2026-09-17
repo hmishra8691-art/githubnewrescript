@@ -92,6 +92,8 @@ export interface UploaderOptions {
   endpoints?: UploaderEndpoints;
   /** merged into the `begin` body — how a session names its interview and question */
   beginExtra?: Record<string, unknown>;
+  /** merged into the `complete` body — how a session video says a companion is coming */
+  completeExtra?: Record<string, unknown>;
   mimeType: string;
   /** Told to the server so the plan and the caps can be computed up front. */
   estimatedBytes: number;
@@ -209,6 +211,11 @@ export class RecordingUploader {
     this.tell("upload_started", { mediaId: reply.mediaId, parts: reply.partCount });
   }
 
+  /** The media id the server assigned at `begin`, so a companion can name it. */
+  get mediaId(): string | null {
+    return this.begun?.mediaId ?? null;
+  }
+
   /**
    * One recorder chunk. Releases a part when there is enough for one, and
    * starts sending it immediately — the whole point of the accumulator.
@@ -266,6 +273,7 @@ export class RecordingUploader {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        ...(this.opts.completeExtra ?? {}),
         token: this.opts.token,
         mediaId: this.begun?.mediaId,
         durationSeconds,

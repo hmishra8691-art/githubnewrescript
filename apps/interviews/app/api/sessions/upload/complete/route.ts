@@ -4,6 +4,9 @@ import { enqueue } from "@/lib/runner";
 import { isFailure } from "@/lib/auth";
 import { assembleAndVerify, readClaimedParts, requireMedia } from "@/lib/recordings";
 
+/** What a speech provider accepts — the same 25 MB the runner checks against. */
+const STT_MAX_BYTES = 25 * 1024 * 1024;
+
 export const dynamic = "force-dynamic";
 
 /**
@@ -17,9 +20,8 @@ export const dynamic = "force-dynamic";
  * What differs is what happens afterwards. A candidate's answer updates an
  * `interview_responses` row; a moderated recording has none, so there is
  * nothing to advance — the recording is the artefact. What it does instead is
- * create the transcript row, for both audio and video, because unlike a
- * candidate answer there is no separate audio companion: the session recording
- * is the only thing there is to transcribe.
+ * create the transcript row for what can actually be transcribed: the audio,
+ * standalone or the companion recorded beside a video (see below).
  */
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
@@ -83,32 +85,43 @@ export async function POST(req: NextRequest) {
   }).eq("id", mediaId);
 
   /*
-   * The transcript row is created for a session recording of either kind.
-   * There is no audio companion here — the session recording IS the audio —
-   * so waiting for one would mean a moderated interview is never transcribed.
-   * `onConflict` makes creating it twice free, which is what lets a retried
-   * completion be a no-op rather than a duplicate.
+   * WHAT GETS TRANSCRIBED.
+   *
+   * The audio: a standalone `session_audio`, or the `session_audio` companion
+   * a session video now records alongside itself. This route used to queue
+   * the VIDEO, on the reasoning that "the session recording is the only thing
+   * there is to transcribe" — true then, and it meant a 720p recording hit a
+   * speech provider's 25 MB limit after about eighty seconds and failed for
+   * ever. A session video is transcribed directly only when its recorder said
+   * no companion is coming (an older client, or the second recorder could not
+   * start) AND it is small enough; otherwise the companion carries the words
+   * and the video is what people watch.
    */
-  await db.from("interview_transcripts").upsert({
-    media_id: mediaId,
-    interview_id: media.interview_id,
-    project_id: media.project_id,
-    response_id: null,
-    status: "waiting",
-  }, { onConflict: "media_id", ignoreDuplicates: true });
+  const hasCompanion = body?.hasCompanion === true;
+  const transcribable = media.kind === "session_audio"
+    || (!hasCompanion && Number(verified.size) <= STT_MAX_BYTES);
+  if (transcribable) {
+    await db.from("interview_transcripts").upsert({
+      media_id: mediaId,
+      interview_id: media.interview_id,
+      project_id: media.project_id,
+      response_id: null,
+      status: "waiting",
+    }, { onConflict: "media_id", ignoreDuplicates: true });
 
-  /*
-   * A moderated recording is transcribed with diarization asked for, because
-   * it has more than one voice in it. The runner decides that from the media
-   * kind; queuing it is the same call either way.
-   */
-  await enqueue({
-    kind: "transcription",
-    subjectId: mediaId,
-    customerId: media.customer_id,
-    projectId: media.project_id,
-    interviewId: media.interview_id,
-  });
+    /*
+     * A moderated recording is transcribed with diarization asked for, because
+     * it has more than one voice in it. The runner decides that from the media
+     * kind; queuing it is the same call either way.
+     */
+    await enqueue({
+      kind: "transcription",
+      subjectId: mediaId,
+      customerId: media.customer_id,
+      projectId: media.project_id,
+      interviewId: media.interview_id,
+    });
+  }
 
-  return NextResponse.json({ ok: true, mediaId, bytes: verified.size, verified: true });
+  return NextResponse.json({ ok: true, mediaId, bytes: verified.size, verified: true, transcribing: transcribable });
 }

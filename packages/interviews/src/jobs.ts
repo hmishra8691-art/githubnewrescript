@@ -61,14 +61,22 @@ export interface Job {
 /* ------------------------------------------------------- failures */
 
 /**
- * Why a job failed, in the only two categories that change what happens next.
+ * Why a job failed, in the three categories that change what happens next.
  *
  * `permanent` is a claim about the FUTURE — trying again cannot help — and it
  * is deliberately hard to earn. Everything unrecognised is transient, because
  * the cost of retrying a doomed job three times is small and the cost of
  * abandoning a recoverable one is a researcher chasing a support ticket.
+ *
+ * `blocked` is the third thing, which the first two could not express: the
+ * job is fine and the provider is fine, but the organisation cannot pay for
+ * it right now. A wallet refusal used to arrive as a 402 and be classified
+ * permanent — the comment beside the throw promised "a retry after the wallet
+ * is topped up will find it", and nothing did. A blocked job is handed back
+ * to the queue with its attempt refunded and a `run_after` an hour out, so an
+ * empty wallet costs time, never attempts.
  */
-export type FailureKind = "transient" | "permanent";
+export type FailureKind = "transient" | "permanent" | "blocked";
 
 export interface JobFailure {
   kind: FailureKind;
@@ -106,16 +114,37 @@ const PERMANENT_PATTERNS: RegExp[] = [
  */
 const TRANSIENT_STATUSES = new Set([408, 409, 425, 429]);
 
+/** How long a blocked job waits before it is offered again. */
+export const BLOCKED_RETRY_MS = 60 * 60 * 1000;
+
+/**
+ * The words a wallet refusal arrives in, for callers that did not set 402.
+ * These are `@rescript/billing`'s own messages (`insufficient_balance`,
+ * `no_wallet`, `suspended`, `read_only`, `project_limit`), not a provider's.
+ */
+const BLOCKED_PATTERNS: RegExp[] = [
+  /\binsufficient (balance|funds|credit)\b/i,
+  /\bno wallet\b/i,
+  /\bwallet (is )?(suspended|read.only|paused|frozen)\b/i,
+  /\bbudget (is )?(exhausted|exceeded|reached)\b/i,
+  /\bspending limit\b/i,
+];
+
 export function classifyFailure(reason: string, status?: number | null): JobFailure {
   const text = (reason || "").trim() || "the job failed without saying why";
 
   if (typeof status === "number" && Number.isFinite(status)) {
+    /* 402 is money, not a bad file and not a bad moment */
+    if (status === 402) return { kind: "blocked", reason: text };
     if (TRANSIENT_STATUSES.has(status)) return { kind: "transient", reason: text };
     if (status >= 400 && status < 500) return { kind: "permanent", reason: text };
     /* 5xx and anything else: the provider had a bad moment, not a bad file */
     return { kind: "transient", reason: text };
   }
 
+  for (const p of BLOCKED_PATTERNS) {
+    if (p.test(text)) return { kind: "blocked", reason: text };
+  }
   for (const p of PERMANENT_PATTERNS) {
     if (p.test(text)) return { kind: "permanent", reason: text };
   }
@@ -129,7 +158,14 @@ export type JobDecision =
   /** try again after `runAfter`; `attemptsLeft` is what remains after this one */
   | { status: "failed"; runAfter: Date; retrying: true; attemptsLeft: number; reason: string }
   /** stop — either no attempts left, or trying again cannot help */
-  | { status: "failed"; retrying: false; reason: string; permanent: boolean };
+  | { status: "failed"; retrying: false; reason: string; permanent: boolean }
+  /** handed back to the queue untouched: waiting on money, not on a fix. The attempt is refunded. */
+  | { status: "blocked"; runAfter: Date; reason: string };
+
+/** A decision that ends the job for good — what a follow-up (a `failed` transcript row) keys on. */
+export function isTerminalFailure(d: JobDecision): d is { status: "failed"; retrying: false; reason: string; permanent: boolean } {
+  return d.status === "failed" && !d.retrying;
+}
 
 /**
  * What to do with a job that has just been tried.
@@ -150,6 +186,9 @@ export function decideAfterFailure(
 ): JobDecision {
   if (failure.kind === "permanent") {
     return { status: "failed", retrying: false, reason: failure.reason, permanent: true };
+  }
+  if (failure.kind === "blocked") {
+    return { status: "blocked", reason: failure.reason, runAfter: new Date(now.getTime() + BLOCKED_RETRY_MS) };
   }
   const attemptsLeft = Math.max(0, job.maxAttempts - job.attempts);
   if (attemptsLeft <= 0) {
@@ -217,15 +256,21 @@ export interface DrainReport {
   completed: number;
   retrying: number;
   abandoned: number;
+  /** handed back to wait for money; not a failure of anything but the wallet */
+  blocked: number;
   warnings: string[];
 }
 
 export function emptyReport(): DrainReport {
-  return { claimed: 0, completed: 0, retrying: 0, abandoned: 0, warnings: [] };
+  return { claimed: 0, completed: 0, retrying: 0, abandoned: 0, blocked: 0, warnings: [] };
 }
 
 export function noteDecision(report: DrainReport, decision: JobDecision): DrainReport {
   if (decision.status === "complete") report.completed++;
+  else if (decision.status === "blocked") {
+    report.blocked++;
+    report.warnings.push(`waiting on the wallet: ${decision.reason}`);
+  }
   else if (decision.retrying) report.retrying++;
   else {
     report.abandoned++;
