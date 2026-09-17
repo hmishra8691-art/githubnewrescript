@@ -2,8 +2,9 @@
 import React from "react";
 import type { Condition, SkipRule } from "@rescript/schema";
 import {
+  CODE_LANGUAGES, CODE_LANGUAGE_SAY, CODE_MAX_CHARS_CEILING, CODE_STARTER_MAX_CHARS,
   KIND_MEANS, KIND_SAY, KINDS_WITH_OPTIONS, MAX_ANSWER_SECONDS, QUESTION_CATEGORIES, QUESTION_KINDS,
-  checkQuestion, forwardReferences, type QuestionKind,
+  checkQuestion, forwardReferences, readCodeSettings, type CodeLanguage, type CodeSettings, type QuestionKind,
 } from "@rescript/interviews";
 import { PromptClip } from "./PromptClip";
 import { ShowIfEditor, SkipRulesEditor, type EarlierQuestion } from "./LogicEditor";
@@ -26,6 +27,8 @@ export interface BuilderQuestion {
   skip_logic: SkipRule[];
   prompt_media_id: string | null;
   pool_id: string | null;
+  /** per-kind settings; `{ code: CodeSettings }` for a code question */
+  settings?: Record<string, unknown> | null;
 }
 
 export interface PoolChoice { id: string; code: string; name: string }
@@ -96,6 +99,7 @@ export function QuestionsPanel({ projectId, questions: initial, mayEdit, pools =
           maxRetries: draft.max_retries, thinkSeconds: draft.think_seconds,
           options: draft.options, visibleIf: draft.visible_if ?? null, skipLogic: draft.skip_logic ?? [],
           poolId: draft.pool_id ?? null,
+          settings: draft.settings ?? {},
         }),
       },
     );
@@ -197,7 +201,7 @@ export function QuestionsPanel({ projectId, questions: initial, mayEdit, pools =
                 <p style={{ margin: "6px 0 0" }}>{q.prompt}</p>
                 {q.guidance && <p className="small muted" style={{ margin: "4px 0 0" }}>{q.guidance}</p>}
                 <p className="tiny muted" style={{ margin: "6px 0 0" }}>
-                  {q.kind === "text" ? "Typed answer" : describeLimits(q)}
+                  {q.kind === "text" ? "Typed answer" : q.kind === "code" ? `Code · ${CODE_LANGUAGE_SAY[readCodeSettings(q.settings).language]}${readCodeSettings(q.settings).allowLanguageChoice ? " or the candidate's choice" : ""}` : describeLimits(q)}
                   {q.think_seconds > 0 ? ` · ${q.think_seconds}s to think first` : ""}
                 </p>
               </div>
@@ -278,8 +282,10 @@ function QuestionForm({ initial, busy, onSave, onCancel, projectId, earlier, lat
   const [visibleIf, setVisibleIf] = React.useState<Condition | null>(initial?.visible_if ?? null);
   const [skipLogic, setSkipLogic] = React.useState<SkipRule[]>(initial?.skip_logic ?? []);
   const [promptMediaId, setPromptMediaId] = React.useState<string | null>(initial?.prompt_media_id ?? null);
+  const [codeSettings, setCodeSettings] = React.useState<CodeSettings>(readCodeSettings(initial?.settings));
   const hasOptions = KINDS_WITH_OPTIONS.includes(kind);
   const recorded = kind === "video" || kind === "audio";
+  const isCode = kind === "code";
 
   const draft = {
     prompt, guidance, kind, category, required,
@@ -288,11 +294,13 @@ function QuestionForm({ initial, busy, onSave, onCancel, projectId, earlier, lat
     options: hasOptions ? options : [],
     visible_if: visibleIf, skip_logic: skipLogic,
     pool_id: poolId,
+    settings: isCode ? { code: codeSettings } : {},
   };
   /* the same function the route runs — see the file header */
   const check = checkQuestion({
     prompt, kind, category, minSeconds, maxSeconds, maxRetries, thinkSeconds,
     options: hasOptions ? options : undefined,
+    settings: isCode ? { code: codeSettings } : undefined,
   });
 
   return (
@@ -353,6 +361,37 @@ function QuestionForm({ initial, busy, onSave, onCancel, projectId, earlier, lat
           ))}
           <button type="button" className="btn small secondary" style={{ marginTop: 6 }} data-testid="option-add"
             onClick={() => setOptions([...options, { code: "", label: "" }])}>+ option</button>
+        </div>
+      )}
+
+      {isCode && (
+        <div style={{ marginTop: 10 }} data-testid="code-settings">
+          <div className="row" style={{ gap: 14, flexWrap: "wrap" }}>
+            <label style={{ flex: "1 1 160px" }}>
+              <span>Language</span>
+              <select value={codeSettings.language} data-testid="code-setting-language"
+                onChange={(e) => setCodeSettings({ ...codeSettings, language: e.target.value as CodeLanguage })}>
+                {CODE_LANGUAGES.map((l) => <option key={l} value={l}>{CODE_LANGUAGE_SAY[l]}</option>)}
+              </select>
+            </label>
+            <label style={{ flex: "1 1 160px" }}>
+              <span>Size limit (characters)</span>
+              <input type="number" min={1} max={CODE_MAX_CHARS_CEILING} value={codeSettings.maxChars} data-testid="code-setting-max"
+                onChange={(e) => setCodeSettings({ ...codeSettings, maxChars: Number(e.target.value) || codeSettings.maxChars })} />
+            </label>
+          </div>
+          <label className="row" style={{ gap: 8, alignItems: "center", marginTop: 8 }}>
+            <input type="checkbox" checked={codeSettings.allowLanguageChoice} data-testid="code-setting-choice"
+              onChange={(e) => setCodeSettings({ ...codeSettings, allowLanguageChoice: e.target.checked })} />
+            <span className="small">The candidate may pick a different language</span>
+          </label>
+          <label style={{ display: "block", marginTop: 8 }}>
+            <span>Starter code <span className="tiny muted">(optional — what the editor opens with; handing it back unchanged is not an answer)</span></span>
+            <textarea value={codeSettings.starter} rows={5} maxLength={CODE_STARTER_MAX_CHARS} spellCheck={false} data-testid="code-setting-starter"
+              style={{ width: "100%", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 13, whiteSpace: "pre", tabSize: 2 }}
+              onChange={(e) => setCodeSettings({ ...codeSettings, starter: e.target.value })} />
+          </label>
+          <p className="tiny muted" style={{ margin: "6px 0 0" }}>Nothing is executed. The reviewer reads the code beside the transcript, and the analysis quotes from it like any typed answer.</p>
         </div>
       )}
 

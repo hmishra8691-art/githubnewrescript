@@ -39,7 +39,7 @@ export default async function ProjectPage({ params }: { params: { id: string } }
       .select("id, code, name, description, draw, position")
       .eq("project_id", params.id).order("position"),
     db.from("interview_questions")
-      .select("id, code, prompt, guidance, kind, required, min_seconds, max_seconds, max_retries, think_seconds, position, category, options, visible_if, skip_logic, prompt_media_id, pool_id")
+      .select("id, code, prompt, guidance, kind, required, min_seconds, max_seconds, max_retries, think_seconds, position, category, options, visible_if, skip_logic, prompt_media_id, pool_id, settings")
       .eq("project_id", params.id).is("archived_at", null).order("position"),
     db.from("interview_requirements")
       .select("id, code, title, description, criteria, weight, category, position")

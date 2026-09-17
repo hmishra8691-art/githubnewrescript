@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  analysisReadiness, checkQuestion, isQuestionCategory, isQuestionKind, nextCode,
+  analysisReadiness, checkQuestion, codeSettingsPatch, isQuestionCategory, isQuestionKind, nextCode, readCodeSettings,
   normaliseCode, normaliseOptions, positionsFor,
 } from "@rescript/interviews";
 import { supabaseAdmin } from "@/lib/admin";
@@ -82,6 +82,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     options: normaliseOptions(body?.options),
     visible_if: visibleIf.value ?? null,
     skip_logic: skipLogic.value ?? [],
+    settings: isQuestionKind(body?.kind) && body.kind === "code" ? codeSettingsPatch(readCodeSettings(body?.settings)) : {},
     position,
   }).select("*").single();
   if (error) return NextResponse.json({ error: "We could not add that question." }, { status: 503 });

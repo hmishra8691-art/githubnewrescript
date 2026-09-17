@@ -162,7 +162,27 @@ get `/projects/[id]/data` — every interview × response with its media,
 transcript, analysis and telemetry ids, and the deletions ledger under it.
 The candidate's first and last screens state the retention period.
 
-**Phase 6 — code responses.** Next. The editor dependency and question type.
+**Phase 6 — code responses. Done.** `kind = 'code'` (migration 0037) joins the
+list the engine walks, as `code_editor`. It is a typed kind: the answer lives in
+`answer_text` with its whitespace kept, and the language beside it in
+`answer_value` so a reviewer sees Python highlighted as Python. The question's
+own knobs — language, whether the candidate may change it, starter code, a
+size ceiling — are the first occupant of a new `interview_questions.settings`
+column, read and checked by `packages/interviews/src/code.ts`; `checkQuestion`
+runs that check so the builder and the route refuse the same drafts. The
+starter is the interviewer's and handing it back unchanged is refused as "not
+an answer", the same rule a blank textarea gets. The editor is CodeMirror 6 —
+the first editor dependency in the repository — loaded inside an effect so a
+candidate with no code question never downloads it (the candidate page's
+first load is unchanged; the editor is a separate chunk) and falling back to a
+plain textarea while it loads or if it fails. Autocompletion is off: an
+interview asks what the person knows. Paste into the editor reports its
+length to telemetry. Nothing is executed anywhere; the reviewer reads the
+code on the interview page and in the report, and the analysis receives it
+fenced with its language so it is read as a program while quotes still
+verify verbatim against the stored text.
+
+**Phase 7 — carried findings.** Next: the items below.
 
 ## Carried findings not yet fixed
 

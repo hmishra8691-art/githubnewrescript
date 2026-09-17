@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { CHOICE_KINDS, TYPED_KINDS, isFlowKind } from "@rescript/interviews";
+import { CHOICE_KINDS, TYPED_KINDS, checkCodeAnswer, isFlowKind, readCodeSettings } from "@rescript/interviews";
 import { supabaseAdmin } from "@/lib/admin";
 import { candidateGate, candidateQuestions, isCandidateFailure, recordTelemetry, touchInterview } from "@/lib/candidate";
 
@@ -160,6 +160,15 @@ export async function POST(req: NextRequest) {
       answer_text: null,
       answer_kind: q.kind,
     };
+  } else if (q.kind === "code") {
+    /*
+     * The same check the editor ran before enabling Save. Whitespace is kept:
+     * indentation is part of a program. The language is stored beside the
+     * text so the reviewer sees it highlighted as what it is.
+     */
+    const verdict = checkCodeAnswer(body?.value, body?.language, readCodeSettings(q.codeSettings));
+    if (!verdict.ok) return NextResponse.json({ error: verdict.error, code: verdict.code }, { status: 400 });
+    patch = { answer_text: verdict.text, answer_value: { language: verdict.language }, answer_kind: "code" };
   } else {
     const text = String(body?.value ?? "").trim();
     if (!text) return NextResponse.json({ error: "Write something first." }, { status: 400 });

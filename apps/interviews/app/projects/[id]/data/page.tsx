@@ -287,6 +287,11 @@ function mb(bytes: number): string {
 
 /** The typed/chosen answer, trimmed — the recording itself is in the media column. */
 function answerCell(r: Record<string, unknown>) {
+  if (r.answer_kind === "code" && r.answer_text) {
+    const s = String(r.answer_text);
+    const lines = s.split("\n").length;
+    return <span className="tiny"><code>{s.slice(0, 60).replace(/\n/g, " ⏎ ")}{s.length > 60 ? "…" : ""}</code> <span className="muted">{lines} line{lines === 1 ? "" : "s"}</span></span>;
+  }
   if (r.answer_value !== null && r.answer_value !== undefined) {
     const s = JSON.stringify(r.answer_value);
     return <span className="tiny"><code>{s.length > 80 ? `${s.slice(0, 80)}…` : s}</code></span>;

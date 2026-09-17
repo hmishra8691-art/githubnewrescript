@@ -4,6 +4,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "./admin";
 import {
+  readCodeSettings, type CodeSettings,
   drawSequence, linkVerdict, seedFor, recordingSeconds,
   type DrawnQuestion, type InterviewStatus, type TelemetryEvent,
   isTelemetryKind, isFlowKind, type FlowKind,
@@ -168,6 +169,8 @@ export interface CandidateQuestion {
   retries: number;
   /** choices for the two choice kinds */
   options: { code: string; label: string }[];
+  /** language, starter and size for a code question; null for every other kind */
+  codeSettings: CodeSettings | null;
   /** what was already answered, so a reload shows it rather than a blank */
   answerText: string | null;
   answerValue: unknown;
@@ -267,7 +270,7 @@ export async function candidateQuestions(
   const ids = sequence.map((s) => s.questionId);
   const [{ data: questions }, { data: responses }] = await Promise.all([
     db.from("interview_questions")
-      .select("id, code, prompt, guidance, kind, required, min_seconds, max_seconds, max_retries, think_seconds, options, visible_if, skip_logic, prompt_media_id")
+      .select("id, code, prompt, guidance, kind, required, min_seconds, max_seconds, max_retries, think_seconds, options, visible_if, skip_logic, prompt_media_id, settings")
       .in("id", ids),
     db.from("interview_responses")
       .select("id, question_id, status, retries, answer_text, answer_value, prompt_watched_at")
@@ -304,6 +307,7 @@ export async function candidateQuestions(
       kind: isFlowKind(q.kind) ? q.kind : "video",
       required: !!q.required,
       options: readOptions(q.options),
+      codeSettings: q.kind === "code" ? readCodeSettings(q.settings) : null,
       answerText: (r.answer_text as string | null) ?? null,
       answerValue: r.answer_value ?? null,
       promptMedia: (() => {

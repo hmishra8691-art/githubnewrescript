@@ -23,6 +23,8 @@
  * regret is not grounds for refusing somebody's work. They are told and they
  * decide.
  */
+import { checkCodeSettings } from "./code.js";
+
 
 /* --------------------------------------------------------------- questions */
 
@@ -35,7 +37,7 @@
  * whatever the column said. The builder can now set them; the runtime honours
  * them.
  */
-export const QUESTION_KINDS = ["video", "audio", "text", "long_text", "single_choice", "multi_choice"] as const;
+export const QUESTION_KINDS = ["video", "audio", "text", "long_text", "single_choice", "multi_choice", "code"] as const;
 export type QuestionKind = (typeof QUESTION_KINDS)[number];
 
 export function isQuestionKind(v: unknown): v is QuestionKind {
@@ -50,6 +52,7 @@ export const KIND_SAY: Record<QuestionKind, string> = {
   long_text: "Long typed answer",
   single_choice: "Choose one option",
   multi_choice: "Choose any that apply",
+  code: "Writes code in an editor",
 };
 
 /**
@@ -67,6 +70,7 @@ export const KIND_MEANS: Record<QuestionKind, string> = {
   long_text: "Use for anything better written than spoken — a short plan, a worked explanation, a code snippet.",
   single_choice: "Use to route the interview: a choice here can decide which questions follow.",
   multi_choice: "Use for 'which of these apply' — experience, tools, preferences.",
+  code: "Use when the answer is a program. Line numbers, indentation and highlighting for the language you choose — or one the candidate picks. Nothing is run; a reviewer reads it.",
 };
 
 /** The kinds whose answer is an option code, and which therefore need options. */
@@ -114,6 +118,8 @@ export interface QuestionDraft {
   maxRetries?: number | null;
   thinkSeconds?: number | null;
   options?: unknown;
+  /** per-kind settings; `code` for a code question */
+  settings?: unknown;
 }
 
 export interface CheckResult {
@@ -204,7 +210,17 @@ export function checkQuestion(
     if (opts.some((o) => !o.label)) errors.push("Every option needs a label.");
   }
 
-  const typed = kind === "text" || kind === "long_text" || KINDS_WITH_OPTIONS.includes(kind);
+  /*
+   * A code question's own settings — language, starter, size — are checked
+   * here so the builder and the route refuse the same drafts.
+   */
+  if (kind === "code") {
+    const c = checkCodeSettings(draft.settings);
+    errors.push(...c.errors);
+    warnings.push(...c.warnings);
+  }
+
+  const typed = kind === "text" || kind === "long_text" || kind === "code" || KINDS_WITH_OPTIONS.includes(kind);
   if (typed) {
     /*
      * A typed answer has no duration, so a time limit on one is a setting that

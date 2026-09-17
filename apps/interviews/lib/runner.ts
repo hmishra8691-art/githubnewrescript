@@ -1,6 +1,6 @@
 import "server-only";
 import {
-  buildScorecard, classifyFailure, decideAfterFailure, emptyReport, isJobKind, jobKey,
+  buildScorecard, classifyFailure, codeAnswerLanguage, codeForAnalysis, decideAfterFailure, emptyReport, isJobKind, jobKey,
   noteDecision, planAnalysisPrompt, readClaims, shouldClaimAnother,
   summariseRequirements, verifyEvidence,
   type DrainBudget, type DrainReport, type Job, type JobDecision, type JobKind,
@@ -515,7 +515,13 @@ const analysis: Handler = async (job, row) => {
   const sources = (responses ?? [])
     .map((r) => {
       const t = byResponse.get(r.id as string);
-      const text = (t?.text ?? chosenText(r) ?? (r.answer_text as string) ?? "").trim();
+      /*
+       * A code answer goes to the model fenced with its language so it is
+       * read as a program. The fence wraps the stored text without altering
+       * it, so a quoted line still verifies against `answer_text` verbatim.
+       */
+      const raw = (t?.text ?? chosenText(r) ?? (r.answer_text as string) ?? "").trim();
+      const text = raw && r.answer_kind === "code" ? codeForAnalysis(raw, codeAnswerLanguage(r.answer_value)) : raw;
       if (!text) return null;
       return {
         responseId: r.id as string,

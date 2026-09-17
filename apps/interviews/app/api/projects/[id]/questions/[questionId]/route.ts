@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { checkQuestion, isQuestionCategory, isQuestionKind, normaliseCode, normaliseOptions } from "@rescript/interviews";
+import { checkQuestion, codeSettingsPatch, isQuestionCategory, isQuestionKind, normaliseCode, normaliseOptions, readCodeSettings } from "@rescript/interviews";
 import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProject } from "@/lib/auth";
 import { readCondition, readSkipRules } from "@/lib/logic";
@@ -27,7 +27,7 @@ export async function PATCH(
   const db = supabaseAdmin();
 
   const { data: all } = await db.from("interview_questions")
-    .select("id, code, prompt, kind, min_seconds, max_seconds, options")
+    .select("id, code, prompt, kind, min_seconds, max_seconds, options, settings")
     .eq("project_id", params.id)
     .is("archived_at", null);
   const mine = (all ?? []).find((q) => q.id === params.questionId);
@@ -49,6 +49,7 @@ export async function PATCH(
     thinkSeconds: body?.thinkSeconds,
     category: body?.category,
     options: Object.hasOwn(body ?? {}, "options") ? body.options : mine.options,
+    settings: Object.hasOwn(body ?? {}, "settings") ? body.settings : mine.settings,
   };
   const check = checkQuestion(
     merged,
@@ -63,6 +64,10 @@ export async function PATCH(
 
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (Object.hasOwn(body ?? {}, "options")) patch.options = normaliseOptions(body.options);
+  /* a code question's bundle is normalised on the way in; any other kind saves none */
+  if (Object.hasOwn(body ?? {}, "settings")) {
+    patch.settings = merged.kind === "code" ? codeSettingsPatch(readCodeSettings(body.settings)) : {};
+  }
   if (visibleIf.value !== undefined) patch.visible_if = visibleIf.value;
   if (skipLogic.value !== undefined) patch.skip_logic = skipLogic.value;
   if (Object.hasOwn(body ?? {}, "prompt")) patch.prompt = String(body.prompt ?? "").trim().slice(0, 4000);

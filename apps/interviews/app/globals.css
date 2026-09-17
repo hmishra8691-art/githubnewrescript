@@ -87,6 +87,7 @@ video { width: 100%; border-radius: 10px; background: #0d0f14; display: block; }
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 th { color: var(--muted); font-weight: 550; font-size: 13px; }
+pre.code-block { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 1.45; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 6px 0 0; max-height: 60vh; overflow: auto; }
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; font-size: 13px; }
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; overflow-wrap: anywhere; }

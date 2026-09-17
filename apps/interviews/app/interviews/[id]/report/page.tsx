@@ -3,6 +3,7 @@ import Link from "next/link";
 import {
   ANALYSIS_CAVEAT, CATEGORY_SAY, SCORE_CAVEAT, describeOverall, readScorecard, VERDICT_SAY,
   type RequirementCategory, type Scorecard as ScorecardData, type Verdict,
+  CODE_LANGUAGE_SAY, codeAnswerLanguage,
 } from "@rescript/interviews";
 import { supabaseAdmin } from "@/lib/admin";
 import { SESSION_COOKIE_NAME, can, projectPageGate, signInUrl } from "@/lib/auth";
@@ -219,7 +220,11 @@ export default async function ReportPage({ params }: { params: { id: string } })
                 {r.status === "skipped" ? "Skipped" : r.status === "stored" ? "Answered" : r.status}
                 {qs && qs.score !== null ? ` · evidence for ${qs.demonstrated.length} requirement${qs.demonstrated.length === 1 ? "" : "s"}${qs.partial.length ? `, ${qs.partial.length} partly` : ""}` : ""}
               </div>
-              {text ? <p className="transcript">{text}</p> : r.status === "stored" ? <p className="muted small">{mayRead ? "No transcript yet." : "Transcript withheld for your role."}</p> : null}
+              {text
+                ? r.answer_kind === "code"
+                  ? <pre className="code" data-language={codeAnswerLanguage(r.answer_value)}><span className="lang muted small">{CODE_LANGUAGE_SAY[codeAnswerLanguage(r.answer_value)]}</span>{"\n"}<code>{text}</code></pre>
+                  : <p className="transcript">{text}</p>
+                : r.status === "stored" ? <p className="muted small">{mayRead ? "No transcript yet." : "Transcript withheld for your role."}</p> : null}
               {ev.length > 0 && mayRead && (
                 <ul className="findings">
                   {ev.map((e) => {
@@ -317,6 +322,8 @@ const REPORT_CSS = `
 .report .qa { padding: 12px 0; border-bottom: 1px solid var(--line, #e5e5e5); break-inside: avoid; }
 .report .qa h3 { margin-top: 0; }
 .report .transcript { white-space: pre-wrap; font-size: 13.5px; line-height: 1.5; }
+.report pre.code { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.45; background: #f6f6f4; border: 1px solid #e3e3df; border-radius: 6px; padding: 10px 12px; margin: 8px 0; page-break-inside: auto; }
+.report pre.code .lang { font-family: inherit; }
 .report .asked { font-size: 13px; }
 .report .narrative { line-height: 1.55; }
 .report .report-footer { text-align: center; margin-top: 8px; }

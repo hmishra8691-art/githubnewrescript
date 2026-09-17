@@ -11,7 +11,7 @@ import {
 } from "@/components/InterviewReview";
 import { ReviewPanel, type ReviewRequirement } from "@/components/ReviewPanel";
 import { Scorecard } from "@/components/Scorecard";
-import { readScorecard } from "@rescript/interviews";
+import { CODE_LANGUAGE_SAY, codeAnswerLanguage, codeStats, readScorecard } from "@rescript/interviews";
 
 export const dynamic = "force-dynamic";
 
@@ -154,7 +154,7 @@ export default async function InterviewPage({ params }: { params: { id: string }
   const { data: written } = await db.from("interview_responses")
     .select("id, question_id, status, answer_kind, answer_text, answer_value, skip_reason")
     .eq("interview_id", params.id)
-    .in("answer_kind", ["text", "long_text", "single_choice", "multi_choice"]);
+    .in("answer_kind", ["text", "long_text", "single_choice", "multi_choice", "code"]);
 
   const recordings: RecordingView[] = (media ?? []).filter((m) => m.kind !== "answer_audio" && m.kind !== "question_prompt").map((m) => {
     const q = questionById.get((m.question_id as string) ?? "");
@@ -292,11 +292,19 @@ export default async function InterviewPage({ params }: { params: { id: string }
             const value = r.answer_kind === "multi_choice" && Array.isArray(r.answer_value)
               ? r.answer_value.map(label).join(", ")
               : r.answer_kind === "single_choice" ? label(r.answer_value) : (r.answer_text as string | null) ?? "";
+            const isCode = r.answer_kind === "code";
+            const lang = isCode ? codeAnswerLanguage(r.answer_value) : null;
+            const stats = isCode ? codeStats(value) : null;
             return (
-              <div key={r.id as string} style={{ borderTop: "1px solid var(--line)", paddingTop: 10, marginTop: 10 }}>
+              <div key={r.id as string} style={{ borderTop: "1px solid var(--line)", paddingTop: 10, marginTop: 10 }} data-testid={isCode ? "code-answer-view" : undefined}>
                 <strong>{(q?.code as string) ?? "?"}</strong>{" "}
                 <span className="muted small">{(q?.prompt as string) ?? ""}</span>
-                <p style={{ margin: "6px 0 0", whiteSpace: "pre-wrap" }}>{value || <span className="muted">—</span>}</p>
+                {isCode && lang && stats && (
+                  <span className="tiny muted"> · <span className="pill">{CODE_LANGUAGE_SAY[lang]}</span> {stats.lines} line{stats.lines === 1 ? "" : "s"}</span>
+                )}
+                {isCode
+                  ? <pre className="code-block" data-language={lang ?? "plain"}><code>{value || "—"}</code></pre>
+                  : <p style={{ margin: "6px 0 0", whiteSpace: "pre-wrap" }}>{value || <span className="muted">—</span>}</p>}
               </div>
             );
           })}

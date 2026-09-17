@@ -6,10 +6,12 @@ import {
   RecordingUploader, pickAudioMime, pickRecordingMime, type UploadState,
 } from "@/lib/uploader";
 import {
-  CHOICE_KINDS, PERMISSION_SAY, RECORDED_KINDS, RESPONSE_SAY, TYPED_KINDS, answerValueOf,
-  continueFlow, expectedBytes, permissionAdvice, resumeFlow, toResponseState, toSurveyDefinition,
-  type FlowKind, type FlowPosition,
+  CHOICE_KINDS, CODE_LANGUAGES, CODE_LANGUAGE_SAY, PERMISSION_SAY, RECORDED_KINDS, RESPONSE_SAY, TYPED_KINDS, answerValueOf,
+  checkCodeAnswer, codeAnswerLanguage, continueFlow, expectedBytes, permissionAdvice, readCodeSettings, resumeFlow,
+  toResponseState, toSurveyDefinition,
+  type CodeLanguage, type CodeSettings, type FlowKind, type FlowPosition,
 } from "@rescript/interviews";
+import { CodeEditor } from "@/components/CodeEditor";
 
 /**
  * THE CANDIDATE'S INTERVIEW — ONE SCREEN, START TO FINISH.
@@ -64,6 +66,8 @@ interface Question {
   promptWatchedAt: string | null;
   visibleIf: Condition | null;
   skipLogic: SkipRule[];
+  /** the code question's own settings; absent for every other kind */
+  codeSettings?: CodeSettings | null;
 }
 
 interface StartReply {
@@ -136,6 +140,7 @@ export function Interview({ token }: { token: string }) {
   const [thinkLeft, setThinkLeft] = React.useState<number | null>(null);
   const [typed, setTyped] = React.useState("");
   const [chosen, setChosen] = React.useState<string[]>([]);
+  const [codeLanguage, setCodeLanguage] = React.useState<CodeLanguage>("python");
   const [saving, setSaving] = React.useState(false);
 
   /* the live transcript preview */
@@ -401,9 +406,17 @@ export function Interview({ token }: { token: string }) {
   React.useEffect(() => {
     if (phase !== "question" || !current) return;
     tell("question_shown", { code: current.code, kind: current.kind });
-    setTyped(current.answerText ?? "");
-    setChosen(Array.isArray(current.answerValue) ? current.answerValue.map(String)
-      : current.answerValue ? [String(current.answerValue)] : []);
+    if (current.kind === "code") {
+      const cs = readCodeSettings(current.codeSettings);
+      /* a reload shows what was written; a fresh question shows the interviewer's starter */
+      setTyped(current.answerText ?? cs.starter);
+      setCodeLanguage(codeAnswerLanguage(current.answerValue, cs.language));
+      setChosen([]);
+    } else {
+      setTyped(current.answerText ?? "");
+      setChosen(Array.isArray(current.answerValue) ? current.answerValue.map(String)
+        : current.answerValue ? [String(current.answerValue)] : []);
+    }
     setLiveText("");
     setUpload(null);
     setElapsed(0);
@@ -683,20 +696,31 @@ export function Interview({ token }: { token: string }) {
   async function submitAnswer() {
     if (!current || !promptGateOpen) return;
     const isChoice = CHOICE_KINDS.includes(current.kind);
-    const value = isChoice ? (current.kind === "single_choice" ? chosen[0] : chosen) : typed.trim();
+    const isCode = current.kind === "code";
+    /*
+     * A code answer keeps its whitespace — indentation is part of the answer —
+     * and is checked by the same rule the server applies, so Save is never
+     * enabled for something the route will refuse.
+     */
+    if (isCode) {
+      const verdict = checkCodeAnswer(typed, codeLanguage, readCodeSettings(current.codeSettings));
+      if (!verdict.ok) { setFatal(verdict.error); return; }
+    }
+    const value = isChoice ? (current.kind === "single_choice" ? chosen[0] : chosen) : isCode ? typed : typed.trim();
     if (isChoice ? !chosen.length : !typed.trim()) return;
     setSaving(true); setFatal(null);
     const res = await fetch("/api/candidate/answer", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ token, responseId: current.responseId, action: "answer", value }),
+      body: JSON.stringify({ token, responseId: current.responseId, action: "answer", value, ...(isCode ? { language: codeLanguage } : {}) }),
     });
     const reply = await res.json().catch(() => ({}));
     setSaving(false);
     if (!res.ok || !reply.ok) { setFatal(reply.error ?? "That answer could not be saved."); return; }
+    const answerValue = isChoice ? value : isCode ? { language: codeLanguage } : null;
     markStored(current, answerValueOf({
       questionId: current.questionId, status: "stored", answerKind: current.kind,
-      answerText: isChoice ? null : String(value), answerValue: isChoice ? value : null,
-    }), isChoice ? { answerValue: value } : { answerText: String(value) });
+      answerText: isChoice ? null : String(value), answerValue,
+    }), isChoice ? { answerValue: value } : isCode ? { answerText: String(value), answerValue } : { answerText: String(value) });
   }
 
   /* ---------------------------------------------------------- navigation */
@@ -903,8 +927,11 @@ export function Interview({ token }: { token: string }) {
   const last = atEnd || shownIndex === ordered.length - 1;
   const busy = recording || saving || (upload?.phase === "uploading" || upload?.phase === "finishing" || upload?.phase === "preparing");
   const recorded = RECORDED_KINDS.includes(q.kind);
-  const typedKind = TYPED_KINDS.includes(q.kind);
+  const codeKind = q.kind === "code";
+  const typedKind = TYPED_KINDS.includes(q.kind) && !codeKind;
   const choiceKind = CHOICE_KINDS.includes(q.kind);
+  const codeSettings = codeKind ? readCodeSettings(q.codeSettings) : null;
+  const codeVerdict = codeKind && codeSettings ? checkCodeAnswer(typed, codeLanguage, codeSettings) : null;
   const canAnswerNow = promptGateOpen && !stored && !busy;
 
   return (
@@ -1062,6 +1089,49 @@ export function Interview({ token }: { token: string }) {
             <span className="tiny muted" data-testid="upload-state">{stored ? RESPONSE_SAY.stored : `${typed.trim().length} characters`}</span>
             {!stored && (
               <button className="btn big" onClick={submitAnswer} disabled={!canAnswerNow || !typed.trim()} data-testid="submit-answer">
+                {saving ? "Saving…" : "Save answer"}
+              </button>
+            )}
+            {stored && (
+              <button className="btn secondary" data-testid="edit-answer"
+                onClick={() => setData((d) => d && ({ ...d, questions: d.questions.map((x) => x.responseId === q.responseId ? { ...x, status: "pending" } : x) }))}>
+                Change answer
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ---- code answers ---- */}
+      {codeKind && codeSettings && (
+        <div className="card" data-testid="code-answer">
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+            <span className="tiny muted">
+              {codeSettings.allowLanguageChoice ? "Write in any language below." : `Write in ${CODE_LANGUAGE_SAY[codeSettings.language]}.`}
+              {" "}Nothing is run — a person reads your code.
+            </span>
+            {codeSettings.allowLanguageChoice ? (
+              <select value={codeLanguage} onChange={(e) => setCodeLanguage(e.target.value as CodeLanguage)}
+                disabled={!promptGateOpen || stored || saving} data-testid="code-language" aria-label="Language">
+                {CODE_LANGUAGES.map((l) => <option key={l} value={l}>{CODE_LANGUAGE_SAY[l]}</option>)}
+              </select>
+            ) : <span className="pill">{CODE_LANGUAGE_SAY[codeSettings.language]}</span>}
+          </div>
+          <CodeEditor
+            value={typed}
+            language={codeLanguage}
+            disabled={!promptGateOpen || stored || saving}
+            maxChars={codeSettings.maxChars}
+            placeholder={promptGateOpen ? "Write your code here" : "Watch the question first"}
+            onChange={(next) => { if (typed === codeSettings.starter && next !== typed) tell("answer_started", { code: q.code, kind: q.kind }); setTyped(next); }}
+            onPaste={(chars) => tell("paste", { code: q.code, kind: q.kind, chars, responseId: q.responseId })}
+          />
+          <div className="row" style={{ marginTop: 12, justifyContent: "space-between", alignItems: "center" }}>
+            <span className="tiny muted" data-testid="upload-state">
+              {stored ? RESPONSE_SAY.stored : codeVerdict && !codeVerdict.ok && codeVerdict.code !== "empty" ? codeVerdict.error : `${typed.split("\n").length} line${typed.split("\n").length === 1 ? "" : "s"}`}
+            </span>
+            {!stored && (
+              <button className="btn big" onClick={submitAnswer} disabled={!canAnswerNow || !codeVerdict?.ok} data-testid="submit-answer">
                 {saving ? "Saving…" : "Save answer"}
               </button>
             )}

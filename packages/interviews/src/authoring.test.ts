@@ -73,8 +73,10 @@ test("every declared kind is accepted and anything else is not", () => {
     /* the choice kinds need options to be valid; the others must not care */
     assert.equal(checkQuestion({ prompt: "Q", kind: k, options: two }).ok, true, `${k} should be allowed`);
   }
-  assert.equal(isQuestionKind("code"), false);
-  assert.equal(checkQuestion({ prompt: "Q", kind: "code" }).ok, false);
+  /* Phase 6: code is a kind now; a made-up kind still is not */
+  assert.equal(isQuestionKind("code"), true);
+  assert.equal(isQuestionKind("whiteboard"), false);
+  assert.equal(checkQuestion({ prompt: "Q", kind: "whiteboard" }).ok, false, "an unknown kind is refused");
 });
 
 test("retries and thinking time have bounds", () => {

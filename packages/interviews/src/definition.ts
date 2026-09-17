@@ -44,13 +44,15 @@ import type { QuestionKind } from "./authoring.js";
  * The engine's `visibleQuestions` filters out `hidden`, `calculated` and
  * `embedded_data`; none of these are.
  */
-export const KIND_TO_TYPE: Record<QuestionKind | "long_text" | "single_choice" | "multi_choice", string> = {
+export const KIND_TO_TYPE: Record<QuestionKind | "long_text" | "single_choice" | "multi_choice" | "code", string> = {
   video: "video",
   audio: "audio",
   text: "open_text",
   long_text: "long_text",
   single_choice: "single_select",
   multi_choice: "multi_select",
+  /* a legal open type today; the renderer has no component for it, this app does */
+  code: "code_editor",
 };
 
 export type FlowKind = keyof typeof KIND_TO_TYPE;
@@ -62,7 +64,7 @@ export function isFlowKind(v: unknown): v is FlowKind {
 /** The choice kinds — the ones whose answers are option codes rather than words or media. */
 export const CHOICE_KINDS: readonly FlowKind[] = ["single_choice", "multi_choice"];
 /** The kinds a respondent types rather than records. */
-export const TYPED_KINDS: readonly FlowKind[] = ["text", "long_text"];
+export const TYPED_KINDS: readonly FlowKind[] = ["text", "long_text", "code"];
 /** The kinds that need a microphone, and possibly a camera. */
 export const RECORDED_KINDS: readonly FlowKind[] = ["video", "audio"];
 
@@ -180,7 +182,7 @@ export function answerValueOf(r: AnsweredResponse): ResponseState["answers"][str
     if (v === null || v === undefined) return null;
     return String(v);
   }
-  if (r.answerKind === "text" || r.answerKind === "long_text") {
+  if (r.answerKind === "text" || r.answerKind === "long_text" || r.answerKind === "code") {
     return r.answerText ?? "";
   }
   /* video, audio, or a legacy row with no kind: the fact of an answer */
