@@ -3,7 +3,7 @@ import Link from "next/link";
 import { SESSION_COOKIE_NAME, projectPageGate } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/admin";
 import { ProjectWorkbench } from "@/components/ProjectWorkbench";
-import { INTERVIEW_SAY, type InterviewStatus } from "@rescript/interviews";
+import { INTERVIEW_SAY, analysisReadiness, type InterviewStatus } from "@rescript/interviews";
 
 export const dynamic = "force-dynamic";
 
@@ -30,10 +30,16 @@ export default async function ProjectPage({ params }: { params: { id: string } }
   }
 
   const db = supabaseAdmin();
-  const [{ data: questions }, { data: interviews }] = await Promise.all([
+  const [{ data: project }, { data: questions }, { data: requirements }, { data: interviews }] = await Promise.all([
+    db.from("interview_projects")
+      .select("id, code, name, description, status, instructions, consent_text, retention_days")
+      .eq("id", params.id).maybeSingle(),
     db.from("interview_questions")
-      .select("id, code, prompt, kind, required, max_seconds, max_retries, position, category")
+      .select("id, code, prompt, guidance, kind, required, min_seconds, max_seconds, max_retries, think_seconds, position, category")
       .eq("project_id", params.id).is("archived_at", null).order("position"),
+    db.from("interview_requirements")
+      .select("id, code, title, description, criteria, weight, position")
+      .eq("project_id", params.id).order("position"),
     db.from("interviews")
       .select("id, candidate_name, candidate_email, status, token_prefix, created_at, completed_at, expires_at, is_test")
       .eq("project_id", params.id).is("deleted_at", null)
@@ -49,9 +55,17 @@ export default async function ProjectPage({ params }: { params: { id: string } }
       </div>
 
       <ProjectWorkbench
-        projectId={params.id}
+        project={(project ?? {
+          id: params.id, code: "", name: gate.ctx.project.name, description: null,
+          status: "draft", instructions: null, consent_text: null, retention_days: null,
+        }) as never}
         role={gate.ctx.role}
-        questions={questions ?? []}
+        questions={(questions ?? []) as never}
+        requirements={(requirements ?? []) as never}
+        readiness={analysisReadiness({
+          requirements: requirements ?? [],
+          questions: questions ?? [],
+        })}
       />
 
       <div className="card">

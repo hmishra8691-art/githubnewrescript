@@ -8,3 +8,4 @@ export * from "./completion.js";
 export * from "./jobs.js";
 export * from "./prompt.js";
 export * from "./sweeps.js";
+export * from "./authoring.js";
