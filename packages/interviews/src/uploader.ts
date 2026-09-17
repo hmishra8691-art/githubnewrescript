@@ -131,6 +131,24 @@ export class RecordingUploader {
 
   private begun: BeginReply | null = null;
   private readonly accepted = new Map<number, string>();   // partNumber -> etag
+  /**
+   * EVERY PART THIS RECORDING ACTUALLY PRODUCED.
+   *
+   * Not how many the plan expected — how many the recorder released. These
+   * are different numbers and conflating them is what broke every long
+   * answer: `estimatedBytes` is `expectedBytes(maxSeconds)`, the bytes a
+   * recording of the MAXIMUM permitted length would occupy, plus a 15%
+   * margin. A recording that runs to the cap therefore produces about 87% of
+   * the estimate, and one that stops early produces far less — so a
+   * completeness test against a part count derived from the estimate can
+   * never pass, and `finish()` refused every answer over the ~59 seconds
+   * where the 8 MiB multipart threshold begins.
+   *
+   * The estimate's job is CAPACITY — sign enough URLs, refuse an upload that
+   * would breach a storage cap. It was never evidence about what was
+   * recorded. This set is.
+   */
+  private readonly released = new Set<number>();
   private readonly pending: { partNumber: number; blob: Blob }[] = [];
   private inFlight: Promise<void> = Promise.resolve();
   private state: UploadState;
@@ -228,6 +246,13 @@ export class RecordingUploader {
      * Our belief is not evidence. One extra request per answer buys the
      * guarantee that what is assembled is what was recorded.
      */
+    /*
+     * The recorder has stopped, so the released set is now final and is the
+     * target. Told to the UI as well, so the progress bar is denominated in
+     * parts that exist rather than parts that were guessed at.
+     */
+    this.set({ partsTotal: this.released.size || this.state.partsTotal, progress: this.fraction() });
+
     if (this.begun && this.begun.kind === "multipart") {
       const recovered = await this.resume();
       if (!recovered) {
@@ -244,6 +269,10 @@ export class RecordingUploader {
         token: this.opts.token,
         mediaId: this.begun?.mediaId,
         durationSeconds,
+        /* what the recording produced, so the server can check completeness
+           against a fact instead of against the opening estimate */
+        partsReleased: this.released.size,
+        bytesRecorded: this.accumulator.totalBytes,
         parts: [...this.accepted.entries()].map(([partNumber, etag]) => ({ partNumber, etag })),
       }),
     });
@@ -279,6 +308,7 @@ export class RecordingUploader {
         token: this.opts.token,
         mediaId: this.begun.mediaId,
         bytes: this.opts.estimatedBytes,
+        partsReleased: this.finished ? this.released.size : undefined,
       }),
     });
     const reply = await res.json().catch(() => ({}));
@@ -306,7 +336,22 @@ export class RecordingUploader {
       const ok = await this.send(part.partNumber, part.blob, url);
       if (!ok) return false;
     }
-    return this.accepted.size >= this.state.partsTotal;
+    return this.complete();
+  }
+
+  /**
+   * Has the store acknowledged every part this recording produced?
+   *
+   * By part NUMBER, not by count: two acknowledgements of part 3 and none of
+   * part 4 is not a finished upload, and a count comparison cannot tell those
+   * apart. Before the recorder stops the answer is always no — there is more
+   * to come.
+   */
+  private complete(): boolean {
+    if (!this.finished) return false;
+    if (this.released.size === 0) return false;
+    for (const n of this.released) if (!this.accepted.has(n)) return false;
+    return true;
   }
 
   /** Give up on this take and stop paying for the parts already stored. */
@@ -319,12 +364,26 @@ export class RecordingUploader {
   /* ------------------------------------------------------------ internals */
 
   private fraction(): number {
-    const total = this.state.partsTotal || 1;
+    /*
+     * Denominated in released parts once the recorder has stopped. Before
+     * that the plan's count is the best guess available, but it is a ceiling
+     * — which is why a full-length answer used to stall the bar at a
+     * fraction of itself and look stuck while it was in fact finishing.
+     */
+    const total = this.finished
+      ? (this.released.size || this.state.partsTotal || 1)
+      : (Math.max(this.state.partsTotal, this.released.size) || 1);
     return Math.min(1, this.accepted.size / total);
   }
 
   private queue(partNumber: number, blob: Blob): void {
     this.pending.push({ partNumber, blob });
+    this.released.add(partNumber);
+    /* the plan's part count is a ceiling; once the recorder overtakes it the
+       honest total is what was released */
+    if (this.released.size > this.state.partsTotal) {
+      this.set({ partsTotal: this.released.size });
+    }
     /*
      * Serialised, not parallel. Two parts in flight on a poor mobile
      * connection compete for the same few hundred kilobits and BOTH time out,
@@ -364,7 +423,7 @@ export class RecordingUploader {
           this.set({
             partsDone: this.accepted.size,
             progress: this.fraction(),
-            phase: this.finished && this.accepted.size >= this.state.partsTotal ? "finishing" : "uploading",
+            phase: this.complete() ? "finishing" : "uploading",
             message: null,
             attempt: 0,
           });

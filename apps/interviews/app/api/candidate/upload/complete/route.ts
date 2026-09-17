@@ -66,6 +66,9 @@ export async function POST(req: NextRequest) {
     storageKey: media.storage_key,
     multipartUploadId: media.multipart_upload_id,
     declaredBytes: media.file_size,
+    /* how many parts the recording produced — the honest completeness target;
+       `file_size` above is the opening estimate and is capacity, not a target */
+    partsReleased: Number.isFinite(Number(body?.partsReleased)) ? Number(body.partsReleased) : null,
     claimedParts: readClaimedParts(body?.parts),
     onFailure: (reason) => markFailed(media.id, media.response_id, reason),
   });

@@ -44,14 +44,19 @@ test("a single PUT has no parts and nothing to assemble", () => {
 
 test("A SHORT UPLOAD IS REFUSED BEFORE ANYTHING IS ASSEMBLED", () => {
   /*
-   * Three parts in the store, five owed by the declared size. Assembling would
+   * Three parts in the store, five PRODUCED BY THE RECORDING. Assembling would
    * produce a playable, wrong recording.
+   *
+   * `partsReleased` is the target, not `declaredBytes`: the declared size is
+   * the maximum the answer was allowed to be, so a recording that came in
+   * under its allowance — which is every recording — used to be refused here.
    */
   const v = checkBeforeAssembly({
     multipartUploadId: "u1",
     knownParts: [part(1), part(2), part(3)],
     claimedParts: [part(1), part(2), part(3), part(4), part(5)],
-    declaredBytes: PART_BYTES * 5,
+    declaredBytes: PART_BYTES * 16,
+    partsReleased: 5,
   });
   assert.equal(v.ok, false);
   assert.equal(!v.ok && v.code, "short");
@@ -70,6 +75,7 @@ test("the CLIENT's optimism does not override the store", () => {
     knownParts: [part(1), part(2), part(3)],
     claimedParts: [part(1), part(2), part(3), part(4), part(5)],
     declaredBytes: PART_BYTES * 5,
+    partsReleased: 5,
   });
   assert.equal(v.ok, false);
 });
@@ -80,6 +86,8 @@ test("a complete upload assembles from the store's list, not the client's", () =
     knownParts: [part(1), part(2)],
     claimedParts: [part(1), part(2), part(99)],
     declaredBytes: PART_BYTES * 2,
+    /* the recorder produced two; part 99 is junk and must not inflate the target */
+    partsReleased: 2,
   });
   assert.equal(v.ok, true);
   assert.deepEqual(v.ok && v.parts?.map((p) => p.partNumber), [1, 2]);
@@ -190,6 +198,7 @@ test("A PART THAT WAS NEVER SENT IS CAUGHT BY THE STORE, NOT BY THE CLIENT", asy
     /* the client's belief, which is wrong */
     claimedParts: [sentOne, { partNumber: 2, etag: "never-arrived" }],
     declaredBytes: declared,
+    partsReleased: 2,
   });
 
   assert.equal(verdict.ok, false, "a short upload must not be assembled");
@@ -198,4 +207,56 @@ test("A PART THAT WAS NEVER SENT IS CAUGHT BY THE STORE, NOT BY THE CLIENT", asy
 
   /* nothing was assembled, so nothing is in the store pretending to be whole */
   assert.equal(await store.exists(key), false);
+});
+
+
+test("A RECORDING UNDER ITS ALLOWANCE IS NOT SHORT", () => {
+  /*
+   * THE BUG. A fifteen-minute allowance plans sixteen parts; a two-minute
+   * answer produces three. Comparing three with sixteen refused every
+   * multipart answer this product ever took, and the respondent was told
+   * "Part of your answer did not reach us" about an answer that had arrived
+   * whole. Because `/api/candidate/finish` requires every required response to
+   * be `stored`, the interview could then never be completed at all.
+   *
+   * The declared size is deliberately still passed here: it must be present
+   * and must not be consulted.
+   */
+  const v = checkBeforeAssembly({
+    multipartUploadId: "u1",
+    knownParts: [part(1), part(2), part(3)],
+    claimedParts: [part(1), part(2), part(3)],
+    declaredBytes: PART_BYTES * 16,
+    partsReleased: 3,
+  });
+  assert.equal(v.ok, true, "three of three released parts is a complete upload");
+  assert.equal(v.ok && v.parts?.length, 3);
+});
+
+test("no released count means the count check is skipped, not guessed", () => {
+  /*
+   * An older client, or a completion arriving long after its uploader is gone.
+   * There is no honest target, so the arithmetic is not attempted — the HEAD
+   * afterwards is what proves the object either way. Falling back to the
+   * estimate here would reinstate the refusal this test exists to prevent.
+   */
+  const v = checkBeforeAssembly({
+    multipartUploadId: "u1",
+    knownParts: [part(1), part(2)],
+    claimedParts: [part(1), part(2)],
+    declaredBytes: PART_BYTES * 16,
+  });
+  assert.equal(v.ok, true);
+});
+
+test("nothing at all is still empty, whatever the released count says", () => {
+  const v = checkBeforeAssembly({
+    multipartUploadId: "u1",
+    knownParts: [],
+    claimedParts: [],
+    declaredBytes: PART_BYTES * 4,
+    partsReleased: 4,
+  });
+  assert.equal(v.ok, false);
+  assert.equal(!v.ok && v.code, "empty");
 });

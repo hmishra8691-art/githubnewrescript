@@ -290,3 +290,46 @@ test("upload: progress never counts a part the store has not taken", async () =>
   }
   assert.equal(stored.body.byteLength, 24 * MB);
 });
+
+test("A RECORDING SHORTER THAN ITS ALLOWANCE STILL SAVES — the estimate is capacity, not a target", async () => {
+  /*
+   * The bug this exists for, and the reason every case above missed it: they
+   * all push at least as many bytes as they declared. Real recordings never
+   * do. `estimatedBytes` is `expectedBytes(maxSeconds)` — the bytes a
+   * recording of the MAXIMUM length would take, plus a 15% margin — so even
+   * an answer that runs the clock out delivers about 87% of it, and one that
+   * ends early delivers far less.
+   *
+   * Deriving an owed part count from that estimate therefore refused every
+   * multipart answer that ever existed. 128 MB of allowance is 16 parts; a
+   * respondent who talks for two of the fifteen minutes produces 3. The old
+   * code compared 3 with 16, said "Part of your answer did not reach us", and
+   * the candidate could not finish the interview — on every question whose
+   * limit crossed the 8 MiB threshold, which is about 59 seconds of video.
+   */
+  const h = harness();
+  const u = uploader(h, 128 * MB);          // a 15-minute allowance
+  await u.begin();
+  for (let i = 0; i < 3; i++) u.push(chunk(8 * MB, i));   // ~2 minutes of talking
+  const out = await u.finish(120);
+
+  assert.equal(out.ok, true, "a short answer is a complete answer");
+  assert.equal(u.snapshot.phase, "stored");
+  assert.equal([...h.store.objects.values()][0]!.body.byteLength, 24 * MB);
+});
+
+test("the progress bar is denominated in parts that exist, not parts that were guessed at", async () => {
+  /*
+   * Same root cause, visible to the respondent: a bar scaled to the estimate
+   * sat at a sixteenth of itself while the upload was in fact finished, which
+   * reads as frozen and is why somebody closes the tab.
+   */
+  const h = harness();
+  const u = uploader(h, 128 * MB);
+  await u.begin();
+  for (let i = 0; i < 3; i++) u.push(chunk(8 * MB, i));
+  await u.finish(120);
+
+  assert.equal(u.snapshot.progress, 1, "a finished upload reads as finished");
+  assert.equal(u.snapshot.partsTotal, 3, "the total is what the recording produced");
+});

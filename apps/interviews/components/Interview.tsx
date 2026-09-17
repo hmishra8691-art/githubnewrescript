@@ -53,6 +53,15 @@ interface StartReply {
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
+/**
+ * How long to wait for the interview to open before saying so.
+ *
+ * `fetch` has no timeout of its own, and the respondent has no way to tell a
+ * slow server from a dead one. Twenty seconds is long enough for a bad mobile
+ * connection and short enough that nobody sits staring at a spinner.
+ */
+const BOOT_TIMEOUT_MS = 20_000;
+
 export function Interview({ token }: { token: string }) {
   const [phase, setPhase] = React.useState<Phase>("loading");
   const [fatal, setFatal] = React.useState<string | null>(null);
@@ -74,6 +83,8 @@ export function Interview({ token }: { token: string }) {
   const recorderRef = React.useRef<MediaRecorder | null>(null);
   const audioRecorderRef = React.useRef<MediaRecorder | null>(null);
   const uploaderRef = React.useRef<RecordingUploader | null>(null);
+  /** the audio-only companion's uploader — what actually gets transcribed */
+  const audioUploaderRef = React.useRef<RecordingUploader | null>(null);
   const startedAtRef = React.useRef(0);
   const tickRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -100,20 +111,53 @@ export function Interview({ token }: { token: string }) {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/candidate/start", {
-          method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ token }),
-        });
-        const reply = (await res.json()) as StartReply;
-        if (cancelled) return;
-        if (!res.ok || !reply.ok) { setFatal(reply.error ?? "This interview could not be opened."); setPhase("gate"); return; }
+        /*
+         * A DEADLINE, because the alternative is a spinner for ever.
+         * `fetch` has no timeout of its own: a request that hangs — a captive
+         * portal, a dead tunnel, a phone that lost signal between DNS and the
+         * first byte — leaves this promise unsettled and the respondent
+         * looking at "Opening your interview…" with nothing to press.
+         */
+        const ctl = new AbortController();
+        const deadline = setTimeout(() => ctl.abort(), BOOT_TIMEOUT_MS);
+        let reply: StartReply;
+        try {
+          const res = await fetch("/api/candidate/start", {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ token }), signal: ctl.signal,
+          });
+          reply = (await res.json()) as StartReply;
+          if (cancelled) return;
+          if (!res.ok || !reply.ok) { setFatal(reply.error ?? "This interview could not be opened."); setPhase("gate"); return; }
+        } finally {
+          clearTimeout(deadline);
+        }
+
+        /*
+         * NO QUESTIONS IS A REFUSAL, NOT A ZERO-LENGTH INTERVIEW.
+         * The question screen reads `current!` and then `q.code`. With an
+         * empty sequence — a project nobody added questions to, or one whose
+         * drawn questions were all archived between the invitation and the
+         * sitting — that is a null dereference during render, and with no
+         * error boundary the respondent gets a white page.
+         */
+        if (!reply.questions.length) {
+          setFatal("This interview has no questions yet. Please tell whoever invited you — there is nothing for you to do here until they add them.");
+          setPhase("gate");
+          return;
+        }
+
         setData(reply);
         const first = reply.questions.findIndex((q) => q.status !== "stored" && q.status !== "skipped");
         setIndex(first < 0 ? Math.max(0, reply.questions.length - 1) : first);
-        setPhase(reply.interview.consentGivenAt ? "devices" : "devices");
+        setPhase("devices");
         setAgreed(!!reply.interview.consentGivenAt);
-      } catch {
-        if (!cancelled) { setFatal("We could not reach the server. Please check your connection and reload."); setPhase("gate"); }
+      } catch (e) {
+        if (cancelled) return;
+        setFatal((e as Error)?.name === "AbortError"
+          ? "The server did not answer in time. Please check your connection and reload this page."
+          : "We could not reach the server. Please check your connection and reload.");
+        setPhase("gate");
       }
     })();
     return () => { cancelled = true; };
@@ -252,12 +296,48 @@ export function Interview({ token }: { token: string }) {
      */
     try {
       const audioMime = pickAudioMime();
+      /*
+       * ITS OWN UPLOADER, AND ITS OWN MEDIA ROW.
+       *
+       * This block used to start the recorder and never assign
+       * `ondataavailable`, so every chunk it produced was dropped on the
+       * floor. Nothing was ever labelled `answer_audio`, and the completion
+       * route only queues transcription for `answer_audio` — so no candidate
+       * answer this product has ever taken was transcribed, and because the
+       * analysis is chained off the last transcript, no self-serve interview
+       * was ever analysed either. The comment above described the intent
+       * exactly; the four lines that carry it out were missing.
+       *
+       * `kind` travels in `beginExtra` because the begin route already reads
+       * it — the plumbing was there, waiting for a caller.
+       */
+      const audioUploader = new RecordingUploader({
+        token,
+        responseId: current.responseId,
+        mimeType: audioMime,
+        estimatedBytes: expectedBytes(current.maxSeconds, "audio"),
+        beginExtra: { kind: "answer_audio" },
+        /* deliberately silent: this one's progress is not the candidate's
+           business, and a transcript is a degradation to lose, not a failure */
+        onState: () => {},
+        onTelemetry: tell,
+      });
       const audio = new MediaRecorder(new MediaStream(streamRef.current.getAudioTracks()), {
         mimeType: audioMime, audioBitsPerSecond: 64_000,
       });
+      audio.ondataavailable = (e) => { if (e.data.size) audioUploader.push(e.data); };
       audioRecorderRef.current = audio;
+      audioUploaderRef.current = audioUploader;
+      await audioUploader.begin();
       audio.start(5000);
-    } catch { audioRecorderRef.current = null; }
+    } catch {
+      /* A browser that refuses a second recorder must still produce a video:
+         losing the transcript is a degradation, losing the answer is a
+         failure. Same for a begin that does not come back. */
+      audioRecorderRef.current = null;
+      void audioUploaderRef.current?.abandon();
+      audioUploaderRef.current = null;
+    }
 
     recorder.start(5000);
     startedAtRef.current = Date.now();
@@ -284,7 +364,12 @@ export function Interview({ token }: { token: string }) {
       r.onstop = () => resolve();
       try { r.stop(); } catch { resolve(); }
     });
-    try { audioRecorderRef.current?.stop(); } catch { /* the video is the answer */ }
+    await new Promise<void>((resolve) => {
+      const a = audioRecorderRef.current;
+      if (!a) return resolve();
+      a.onstop = () => resolve();
+      try { a.stop(); } catch { resolve(); }
+    });
 
     if (current.minSeconds && seconds < current.minSeconds) {
       tell("recording_too_short", { seconds: Math.round(seconds), minimum: current.minSeconds });
@@ -296,7 +381,21 @@ export function Interview({ token }: { token: string }) {
       return;
     }
 
+    /*
+     * The audio companion is finished BESIDE the video, never before it and
+     * never blocking it. Its failure is swallowed: the answer is the video,
+     * and a candidate should not be shown an error about a transcript they
+     * were never told they were producing.
+     */
+    const audioDone = audioUploaderRef.current
+      ? audioUploaderRef.current.finish(seconds).catch(() => ({ ok: false as const }))
+      : Promise.resolve({ ok: false as const });
+
     const out = await uploaderRef.current?.finish(seconds);
+    void audioDone.then((a) => {
+      if (!a.ok) tell("transcript_unavailable", { code: current.code });
+      audioUploaderRef.current = null;
+    });
     if (out?.ok) {
       setData((d) => d && ({
         ...d,
@@ -310,6 +409,10 @@ export function Interview({ token }: { token: string }) {
   async function retake() {
     if (!current) return;
     await uploaderRef.current?.abandon();
+    /* the discarded take's audio goes with it, or the transcript describes an
+       answer the reviewer is not looking at */
+    await audioUploaderRef.current?.abandon().catch(() => {});
+    audioUploaderRef.current = null;
     uploaderRef.current = null;
     setUpload(null);
     setElapsed(0);
@@ -538,8 +641,26 @@ export function Interview({ token }: { token: string }) {
             </button>
           )}
           {stored && !last && <button className="btn" onClick={next} data-testid="next">Next question</button>}
-          {stored && last && <button className="btn big" onClick={finish} data-testid="finish">Finish the interview</button>}
-          {!q.required && !stored && !recording && (
+          {/*
+            * FINISH IS OFFERED WHENEVER FINISHING IS PERMITTED, which is not
+            * the same as "the last answer is stored".
+            *
+            * It used to require `stored`, so a respondent on a last question
+            * that was OPTIONAL and that they chose not to answer had no way
+            * out: "Skip this one" calls `next()`, which clamps the index to
+            * itself on the last question, and no other control appeared. The
+            * interview could not be completed and nothing on screen said why.
+            *
+            * The server decides, not this button: `/api/candidate/finish`
+            * re-reads the rows and refuses while a REQUIRED answer is
+            * missing, sending the respondent back to it by code. Offering the
+            * button to someone who may not use it yet costs one refusal that
+            * explains itself; withholding it cost the whole interview.
+            */}
+          {last && (stored || !q.required) && !recording && (
+            <button className="btn big" onClick={finish} data-testid="finish">Finish the interview</button>
+          )}
+          {!q.required && !stored && !recording && !last && (
             <button className="btn secondary" onClick={next} data-testid="skip">Skip this one</button>
           )}
         </div>

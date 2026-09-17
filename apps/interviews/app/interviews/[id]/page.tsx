@@ -71,7 +71,7 @@ export default async function InterviewPage({ params }: { params: { id: string }
   const [{ data: media }, { data: questions }, { data: transcripts }, { data: evidenceRows }, { data: analysis }, { data: telemetry }] =
     await Promise.all([
       db.from("interview_media")
-        .select("id, kind, question_id, duration_seconds, created_at, upload_status")
+        .select("id, kind, question_id, response_id, duration_seconds, created_at, upload_status")
         .eq("interview_id", params.id)
         .is("deleted_at", null)
         .eq("upload_status", "stored")
@@ -112,9 +112,32 @@ export default async function InterviewPage({ params }: { params: { id: string }
   const questionById = new Map((questions ?? []).map((q) => [q.id as string, q]));
   const transcriptByMedia = new Map((transcripts ?? []).map((t) => [t.media_id as string, t]));
 
-  const recordings: RecordingView[] = (media ?? []).map((m) => {
-    const q = questionById.get((m.question_id as string) ?? "");
+  /*
+   * THE AUDIO COMPANION IS NOT A RECORDING, IT IS THE VIDEO'S TRANSCRIPT.
+   *
+   * A candidate answer is captured twice over the same microphone: the video
+   * the reviewer watches, and an audio-only track small enough for a speech
+   * provider that accepts 25 MB. Both are rows in `interview_media`, so
+   * listing them naively puts a second, unwatchable card on the page and —
+   * worse — hangs the transcript off that card, leaving the video the
+   * reviewer is actually looking at captioned "no transcript".
+   *
+   * They are siblings by `response_id`, which is what joins them back
+   * together. The audio row is then dropped from the list: nobody wants to
+   * play it, and offering it invites somebody to review the wrong artefact.
+   */
+  const transcriptByResponse = new Map<string, (typeof transcripts extends null ? never : NonNullable<typeof transcripts>)[number]>();
+  for (const m of media ?? []) {
+    if (m.kind !== "answer_audio" || !m.response_id) continue;
     const t = transcriptByMedia.get(m.id as string);
+    if (t) transcriptByResponse.set(m.response_id as string, t);
+  }
+
+  const recordings: RecordingView[] = (media ?? []).filter((m) => m.kind !== "answer_audio").map((m) => {
+    const q = questionById.get((m.question_id as string) ?? "");
+    /* its own transcript, or its audio sibling's — see above */
+    const t = transcriptByMedia.get(m.id as string)
+      ?? (m.response_id ? transcriptByResponse.get(m.response_id as string) : undefined);
     return {
       id: m.id as string,
       kind: m.kind as string,

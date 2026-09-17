@@ -1,4 +1,3 @@
-import { planUpload } from "@rescript/storage/upload";
 
 /** The shape the store agrees a part has. Mirrored rather than imported so this
  *  module stays free of the Node-only storage barrel. */
@@ -46,8 +45,29 @@ export interface CompletionCheck {
   knownParts: readonly CompletedPart[] | null;
   /** what the browser says it sent — used only when the store cannot say */
   claimedParts: readonly CompletedPart[];
-  /** the size declared at `begin`; how many parts are owed */
+  /**
+   * The size declared at `begin`.
+   *
+   * CAPACITY, NOT A TARGET. It is `expectedBytes(maxSeconds)` — what a
+   * recording of the maximum permitted length would occupy, plus a margin —
+   * so it sizes the plan and the storage-cap check and says nothing whatever
+   * about how long the answer actually was. It used to be divided into a part
+   * count and compared with what arrived, which meant every recording that
+   * ran anywhere near its limit was declared `short` and refused: the margin
+   * alone guaranteed the comparison could never pass.
+   */
   declaredBytes: number | null;
+  /**
+   * How many parts the recording actually produced, as counted by the
+   * browser that produced them.
+   *
+   * This is the only honest completeness target, and it is a claim about the
+   * client's own output rather than about the network — the thing the client
+   * is the authority on. It cannot be used to wave an upload through: a
+   * client that under-reports simply assembles fewer parts, and the HEAD
+   * afterwards still has to find a non-empty object.
+   */
+  partsReleased?: number | null;
 }
 
 /**
@@ -63,11 +83,30 @@ export function checkBeforeAssembly(check: CompletionCheck): CompletionVerdict {
 
   const known = check.knownParts;
 
-  if (known && known.length && check.declaredBytes) {
-    const expected = planUpload(Number(check.declaredBytes)).partCount;
-    if (known.length < expected) {
-      return { ok: false, code: "short", have: known.length, expected, resumable: true };
-    }
+  /*
+   * Short against WHAT THE RECORDING PRODUCED — never against the allowance.
+   *
+   * The target is `partsReleased` — a STATED count of what the recorder
+   * produced — or there is no count check. Nothing is inferred, and the two
+   * things this used to infer from are both wrong in their own way:
+   *
+   *   · the declared size is the bytes a recording of the MAXIMUM permitted
+   *     length would occupy plus a 15% margin, so measuring a real answer
+   *     against it refused every real answer;
+   *   · the claimed part list is tolerant of junk — a client presenting a
+   *     part number the store never issued would inflate the target and be
+   *     refused for it.
+   *
+   * A stated count cannot wave an upload through: under-report and fewer
+   * parts assemble, and the HEAD afterwards still has to find a non-empty
+   * object. Over-report — the case this check was written for, where a part
+   * returned 200 and then was not there — and the upload is correctly refused
+   * and resumed.
+   */
+  const stated = Number(check.partsReleased);
+  const target = Number.isFinite(stated) ? stated : 0;
+  if (known && known.length && target > 0 && known.length < target) {
+    return { ok: false, code: "short", have: known.length, expected: target, resumable: true };
   }
 
   const use = known && known.length ? [...known] : [...check.claimedParts];

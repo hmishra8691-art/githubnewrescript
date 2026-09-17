@@ -132,6 +132,8 @@ export interface AssembleInput {
   multipartUploadId: string | null;
   /** the size the browser declared at `begin`, which is how many parts are owed */
   declaredBytes: number | null;
+  /** parts the recording produced, as counted by the browser — see CompletionCheck */
+  partsReleased?: number | null;
   /** what the browser says it uploaded; checked against the store, never trusted */
   claimedParts: readonly CompletedPart[];
   /** called before every refusal, so the row records why rather than only the caller */
@@ -187,6 +189,7 @@ export async function assembleAndVerify(
     knownParts,
     claimedParts: input.claimedParts,
     declaredBytes: input.declaredBytes,
+    partsReleased: input.partsReleased ?? null,
   });
   if (!before.ok) {
     await input.onFailure(completionReason(before));
