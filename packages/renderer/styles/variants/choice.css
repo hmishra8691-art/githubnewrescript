@@ -11,7 +11,20 @@
 }
 .rs-iconopt:hover { border-color: var(--rs-primary); }
 .rs-iconopt.selected { border-color: var(--rs-primary); background: color-mix(in srgb, var(--rs-primary) 8%, var(--rs-surface)); }
-.rs-iconopt-icon { font-size: 2.2em; line-height: 1; height: 1.2em; display: flex; align-items: center; }
+/* `height: 1.2em` and no wrap meant a short text of more than a character or
+   two ran straight out of the icon box — the review asked for it to "wrap
+   properly inside the box instead of overflowing outside". The row is now a
+   minimum height rather than a fixed one, and text wraps and shrinks inside
+   it while a single emoji keeps its full size. */
+.rs-iconopt-icon {
+  font-size: 2.2em; line-height: 1; min-height: 1.2em; display: flex; align-items: center;
+  justify-content: center; max-width: 100%; text-align: center; overflow-wrap: anywhere;
+}
+/* A text icon of more than a couple of characters is a word, not a glyph, and
+   is sized like one — the renderer tags it, because CSS cannot count
+   characters. Without this a five-word "short text" ran out of the box. */
+.rs-iconopt-icon > span { max-width: 100%; }
+.rs-iconopt-icon.text > span { font-size: .42em; line-height: 1.25; font-weight: 600; }
 .rs-iconopt-icon img { width: 48px; height: 48px; object-fit: contain; }
 .rs-iconopt-label { font-size: .92em; }
 

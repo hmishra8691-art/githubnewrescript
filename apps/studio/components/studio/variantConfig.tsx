@@ -26,7 +26,7 @@ export type { MetaField, VariantSettingsProps };
 export { registerOptionMetaFields, registerVariantSettings };
 
 // the Single / Multi Select batch, and pre-existing renderers that already read meta.description
-registerOptionMetaFields("icons", [{ key: "icon", label: "icon", placeholder: "emoji / short text", width: 110 }]);
+registerOptionMetaFields("icons", [{ key: "icon", label: "icon", kind: "icon", width: 110 }]);
 registerOptionMetaFields("listrows", [DESC, BADGE, PRICE]);
 registerOptionMetaFields("richcards", [{ key: "subtitle", label: "subtitle", placeholder: "subtitle", width: 130 }, DESC, PRICE, BADGE]);
 registerOptionMetaFields("pairwise", [DESC]);

@@ -115,6 +115,66 @@ export function allowedRowFlagsFor(qtype: string): string[] {
   return base;
 }
 
+
+/**
+ * THE ICON FIELD.
+ *
+ * The review found three things wrong with how an Icon Select option is
+ * authored, and they compound. The icon was a bare text box labelled "emoji /
+ * short text" with no hint of what belongs in it and no way to browse. Beside
+ * it sat an Image URL which, when both were filled, silently won — so the
+ * emoji the programmer had typed simply vanished with no explanation. And
+ * long short-text ran out of the icon box in the preview.
+ *
+ * This is the first two: a picker so an emoji can be chosen rather than
+ * remembered, and a plain statement, on the row itself, when the image beside
+ * it is the one that will actually be drawn. The third is a wrap rule in the
+ * renderer's stylesheet.
+ */
+const ICON_PALETTE = [
+  "🏠", "🏢", "🏭", "🏪", "🏥", "🏫",
+  "💼", "💻", "📱", "📺", "🎧", "📷",
+  "🚗", "🚌", "🚲", "✈️", "🚆", "🛵",
+  "🍎", "🍞", "☕", "🍺", "🥛", "🍫",
+  "👕", "👟", "💄", "🧴", "💊", "🧻",
+  "💳", "💰", "🏦", "📈", "🎁", "🛒",
+  "⭐", "❤️", "👍", "👎", "✅", "❌",
+  "😀", "🙂", "😐", "🙁", "😡", "🤔",
+];
+
+function IconField({ index, value, overridden, onChange }: {
+  index: number; value: string; overridden: boolean; onChange(v: unknown): void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <span className="opt-icon opt-meta">
+      <input className="input" style={{ width: 96, maxWidth: 96 }}
+        placeholder="emoji / text" title="Emoji or a very short label"
+        data-testid={`option-meta-icon-${index}`}
+        value={value} onChange={(e) => onChange(e.target.value)} />
+      <button className="btn small" type="button" title="Choose an icon"
+        data-testid={`option-icon-pick-${index}`}
+        onClick={() => setOpen((v) => !v)}>▾</button>
+      {overridden && (
+        <span className="chip warn" title="This option has an image URL, and an image is drawn instead of the icon"
+          data-testid={`option-icon-overridden-${index}`}>image wins</span>
+      )}
+      {open && (
+        <div className="opt-icon-menu" data-testid={`option-icon-menu-${index}`}>
+          <div className="opt-icon-grid">
+            {ICON_PALETTE.map((e) => (
+              <button key={e} type="button" className="opt-icon-cell" title={e}
+                onClick={() => { onChange(e); setOpen(false); }}>{e}</button>
+            ))}
+          </div>
+          <button className="btn small ghost" type="button"
+            onClick={() => { onChange(""); setOpen(false); }}>clear</button>
+        </div>
+      )}
+    </span>
+  );
+}
+
 const OPTION_WINDOW = 40;
 
 /** Text questions whose answer is one box, so `settings.placeholder` applies. */
@@ -318,6 +378,12 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
                     onChange={(e) => setMeta(e.target.checked)} />
                   {mf.label}
                 </label>
+              );
+            }
+            if (mf.kind === "icon") {
+              return (
+                <IconField key={mf.key} index={i} value={cur == null ? "" : String(cur)}
+                  overridden={!!o.imageUrl} onChange={setMeta} />
               );
             }
             return (

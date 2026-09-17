@@ -978,6 +978,20 @@ body.flow-dragging .flow-dropzone { height: 26px; }
 }
 .opt-flag-row:hover { background: var(--panel2); }
 
+/* ---------- the icon field on an Icon Select option ---------- */
+.opt-icon { position: relative; display: inline-flex; align-items: center; gap: 4px; flex: 0 1 auto; }
+.opt-icon-menu {
+  position: absolute; z-index: 26; left: 0; top: calc(100% + 4px);
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, .15); padding: 8px; width: max-content; max-width: min(320px, 90vw);
+}
+.opt-icon-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px; margin-bottom: 6px; }
+.opt-icon-cell {
+  font-size: 18px; line-height: 1; padding: 5px; border: 1px solid transparent; border-radius: 6px;
+  background: none; cursor: pointer;
+}
+.opt-icon-cell:hover { background: var(--panel2); border-color: var(--border); }
+
 /* ---------- IF → THEN logic framing (Phase 3) ---------- */
 .logic-rule { margin-bottom: 10px; }
 .logic-if, .logic-then-word {

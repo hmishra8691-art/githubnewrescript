@@ -41,7 +41,18 @@ export function IconSelect(p: QRProps) {
             role={multi ? "checkbox" : "radio"} aria-checked={sel} tabIndex={0}
             data-code={String(o.code)} {...anchor("option", String(o.code))}
             onClick={() => pick(o)} onKeyDown={activate(() => pick(o))}>
-            <div className="rs-iconopt-icon">
+            {/*
+              * An image WINS over the icon text, and always did — the review
+              * found an emoji silently disappearing when a URL was also set.
+              * The behaviour is right (a picture is the richer signal); what
+              * was missing was anyone saying so, which the editor now does on
+              * the option row itself.
+              *
+              * `text` marks an icon that is a word rather than a glyph, so
+              * the stylesheet can size it down instead of letting it run out
+              * of the box. CSS cannot count characters; this can.
+              */}
+            <div className={`rs-iconopt-icon ${!o.imageUrl && [...(icon || "")].length > 2 ? "text" : ""}`}>
               {o.imageUrl
                 // eslint-disable-next-line @next/next/no-img-element
                 ? <SafeImage src={o.imageUrl} alt="" />

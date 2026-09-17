@@ -12,8 +12,15 @@ export interface MetaField {
   label: string;
   placeholder?: string;
   width?: number;
-  /** "text" (default) | "number" | "check" */
-  kind?: "text" | "number" | "check";
+  /**
+   * "text" (default) | "number" | "check" | "icon"
+   *
+   * `icon` is a text box with a picker beside it. The review found the Icon
+   * Select's icon field to be a bare text input with no hint of what belongs
+   * in it and no way to browse, sitting next to an Image URL that silently
+   * overrode it.
+   */
+  kind?: "text" | "number" | "check" | "icon";
 }
 
 export interface VariantSettingsProps {
