@@ -6,6 +6,7 @@ import { drawsOptionImages } from "@rescript/renderer";
 import { useStudio } from "../studio/store";
 import { OptionLogicEditor } from "../studio/OptionLogicEditor";
 import { OptionalCondition } from "../studio/ConditionBuilder";
+import { InlineRichText } from "../studio/RichTextEditor";
 import { Icon } from "../ui/Icon";
 import { selectionLabel, type SelectedEntity } from "./selection";
 import type { AuthoringAnnotations } from "./authoringView";
@@ -109,8 +110,8 @@ function OptionProps({ q, code, ann, patch, onSelect }: {
       )}
 
       <label className="f"><span>Label</span>
-        <input className="input" data-testid="opt-label" value={o.label}
-          onChange={(e) => patch(code, { label: e.target.value })} /></label>
+        <InlineRichText testId="opt-label" value={o.label} questionId={q.id}
+          onChange={(label) => patch(code, { label })} /></label>
 
       <label className="f"><span>Code</span>
         <input className="input mono" data-testid="opt-code"
@@ -180,8 +181,8 @@ function RowProps({ q, code, ann, patch, onSelect }: {
       )}
 
       <label className="f"><span>Label</span>
-        <input className="input" data-testid="row-label" value={r.label}
-          onChange={(e) => patch(code, { label: e.target.value })} /></label>
+        <InlineRichText testId="row-label" value={r.label} questionId={q.id}
+          onChange={(label) => patch(code, { label })} /></label>
 
       <label className="f"><span>Code</span>
         <input className="input mono" data-testid="row-code" value={String(r.code)} disabled={s.codesFrozen}
@@ -262,8 +263,8 @@ function ColumnProps({ q, id, patch, patchOption }: {
           On this question type the columns are the answer scale, so this column is an option.
         </div>
         <label className="f"><span>Label</span>
-          <input className="input" data-testid="col-label" value={o.label}
-            onChange={(e) => patchOption(id, { label: e.target.value })} /></label>
+          <InlineRichText testId="col-label" value={o.label} questionId={q.id}
+            onChange={(label) => patchOption(id, { label })} /></label>
         <label className="f"><span>Code</span>
           <input className="input mono" value={String(o.code)} readOnly /></label>
         <h3 className="sec">Column logic</h3>
@@ -276,8 +277,8 @@ function ColumnProps({ q, id, patch, patchOption }: {
   return (
     <>
       <label className="f"><span>Label</span>
-        <input className="input" data-testid="col-label" value={col.label}
-          onChange={(e) => patch(id, { label: e.target.value })} /></label>
+        <InlineRichText testId="col-label" value={col.label} questionId={q.id}
+          onChange={(label) => patch(id, { label })} /></label>
       <label className="f"><span>Variable stem</span>
         <input className="input mono" value={col.variableStem}
           onChange={(e) => patch(id, { variableStem: e.target.value })} /></label>

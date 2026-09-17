@@ -1,5 +1,5 @@
 import type { SurveyDefinition, Question } from "@rescript/schema";
-import { flowOutline, blockSize, type BlockRef } from "@rescript/engine";
+import { flowOutline, blockSize, stripHtmlText, type BlockRef } from "@rescript/engine";
 
 /**
  * What an export contains.
@@ -185,9 +185,7 @@ const ENTITIES: Record<string, string> = {
  * client — entities have to be decoded, not just tolerated.
  */
 const text = (html: string) =>
-  String(html ?? "")
-    .replace(/<br\s*\/?>/gi, " ")
-    .replace(/<[^>]*>/g, "")
+  stripHtmlText(String(html ?? "").replace(/<br\s*\/?>/gi, " "))
     .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
     .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
     .replace(/&([a-z]+);/gi, (m, name) => ENTITIES[String(name).toLowerCase()] ?? m)

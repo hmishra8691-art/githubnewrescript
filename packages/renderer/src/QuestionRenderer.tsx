@@ -17,6 +17,7 @@ import {
   type ResponseState,
   type LoopContext,
   stripHtmlText,
+  sanitizeHtml,
   selectedOtherCodes,
   uiText,
   effectiveScale,
@@ -2173,8 +2174,16 @@ export function QuestionRenderer(props: QRProps) {
    * read here, once, for every question type.
    */
   const a11y = p.q.settings.accessibility;
-  const text = resolvePiping(p.q.text, ctx);
-  const instruction = p.q.instruction ? resolvePiping(p.q.instruction, ctx) : null;
+  /*
+   * Sanitised at render as well as at save (the "defence in depth" html.ts
+   * promised and this file never did): a definition written by an API
+   * client, an import, or before the editor sanitised is injected raw
+   * otherwise. Piped values are already escaped by resolvePiping; a text
+   * with no markup is returned untouched.
+   */
+  const safe = (html: string) => (html.includes("<") ? sanitizeHtml(html) : html);
+  const text = safe(resolvePiping(p.q.text, ctx));
+  const instruction = p.q.instruction ? safe(resolvePiping(p.q.instruction, ctx)) : null;
 
   // Variant renderer dispatch (family/variant architecture). Questions
   // without a variant — every pre-existing survey — fall through to the
@@ -2307,13 +2316,14 @@ export function QuestionRenderer(props: QRProps) {
             */}
           <MediaEmbed
             url={p.q.settings.mediaUrl}
+            display={p.q.settings.mediaDisplay}
             title={stripHtmlText(p.q.text)}
             alt={a11y?.decorative ? "" : (a11y?.altText ?? stripHtmlText(p.q.text))}
           />
         </div>
       )}
       {p.q.customHtml && p.q.type !== "custom_component" && (
-        <div dangerouslySetInnerHTML={{ __html: resolvePiping(p.q.customHtml, ctx) }} />
+        <div dangerouslySetInnerHTML={{ __html: safe(resolvePiping(p.q.customHtml, ctx)) }} />
       )}
       {body}
       {p.q.customJs && p.q.type !== "custom_component" && <QuestionScript {...p} />}

@@ -23,6 +23,30 @@ const BLOCKED_TAGS = /<\s*\/?\s*(script|iframe|object|embed|form|meta|link|base)
 const EVENT_HANDLERS = /\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi;
 const JS_URLS = /(href|src|xlink:href|formaction|action)\s*=\s*(["']?)\s*(javascript|vbscript|data\s*:\s*text\/html)[^"'\s>]*\2/gi;
 const STYLE_EXPRESSION = /expression\s*\(/gi;
+/*
+ * INLINE CSS IS ALLOWED — it is how a sized picture, a centred option or a
+ * coloured word is written — but a few constructions inside a `style`
+ * attribute are executable or exfiltrating in some engines and never
+ * legitimate formatting: `url(javascript:…)`, `url(data:text/html…)`,
+ * IE's `behavior:` and `expression()`, Gecko's `-moz-binding`, and
+ * `@import`. `sanitizeCss` removes those declarations and nothing else, so
+ * the "custom CSS" a researcher types keeps working.
+ */
+const STYLE_ATTR = /\sstyle\s*=\s*("([^"]*)"|'([^']*)')/gi;
+const CSS_BLOCKED = /(behavior|-moz-binding)\s*:[^;]*;?|@import[^;]*;?|url\s*\(\s*["']?\s*(javascript|vbscript|data\s*:\s*(?!image\/))[^)]*\)|expression\s*\([^)]*\)/gi;
+
+/** A declaration list (`a: b; c: d`) with the executable constructions removed. */
+export function sanitizeCss(css: string | null | undefined): string {
+  if (!css) return "";
+  let out = css;
+  for (let i = 0; i < 3; i++) {
+    const before = out;
+    out = out.replace(CSS_BLOCKED, "");
+    if (out === before) break;
+  }
+  // a declaration list, not a stylesheet: braces and comments have no business here
+  return out.replace(/\/\*[\s\S]*?\*\//g, "").replace(/[{}]/g, "").replace(/\s+/g, " ").replace(/;\s*;/g, ";").trim().replace(/;$/, "");
+}
 
 /**
  * Microsoft Word paste residue.
@@ -44,6 +68,8 @@ const STYLE_EXPRESSION = /expression\s*\(/gi;
 const MSO_CONDITIONAL_COMMENT = /<!--\s*\[if[\s\S]*?<!\[endif\]\s*-->/gi;
 const MSO_XML_ISLAND = /<xml[^>]*>[\s\S]*?<\/xml>/gi;
 const STYLE_BLOCK = /<style[^>]*>[\s\S]*?<\/style>/gi;
+/* a script's body is code, not text: removed with its tags, not left behind as "alert(1)" */
+const SCRIPT_BLOCK = /<script\b[^>]*>[\s\S]*?<\/script\s*>/gi;
 const ANY_TAG = /<[^>]*>/g;
 
 function stripMsoArtifacts(html: string): string {
@@ -72,10 +98,15 @@ export function sanitizeHtml(html: string): string {
   for (let i = 0; i < 5; i++) {
     const before = out;
     out = stripMsoArtifacts(out)
+      .replace(SCRIPT_BLOCK, "")
       .replace(BLOCKED_TAGS, "")
       .replace(EVENT_HANDLERS, "")
       .replace(JS_URLS, '$1=$2#$2')
-      .replace(STYLE_EXPRESSION, "blocked(");
+      .replace(STYLE_EXPRESSION, "blocked(")
+      .replace(STYLE_ATTR, (_m, _q, dq, sq) => {
+        const clean = sanitizeCss(dq ?? sq ?? "");
+        return clean ? ` style="${clean.replace(/"/g, "'")}"` : "";
+      });
     if (out === before) break;
   }
   return out;
@@ -93,5 +124,15 @@ export function sanitizeHtml(html: string): string {
  */
 export function stripHtmlText(html: string | null | undefined): string {
   if (!html) return "";
-  return stripMsoArtifacts(html).replace(ANY_TAG, "").trim();
+  /*
+   * A picture stands for its alt text — an option that is only a logo reads
+   * as the brand's name in a block list, a logic summary or an export, not
+   * as an empty string.
+   */
+  const stripped = stripMsoArtifacts(html);
+  if (/<img\b/i.test(stripped)) {
+    const withAlts = stripped.replace(/<img\b[^>]*\balt\s*=\s*("([^"]*)"|'([^']*)')[^>]*>/gi, (_m, _q, dq, sq) => ` ${dq ?? sq ?? ""} `);
+    return withAlts.replace(ANY_TAG, "").replace(/\s+/g, " ").trim();
+  }
+  return stripped.replace(ANY_TAG, "").trim();
 }

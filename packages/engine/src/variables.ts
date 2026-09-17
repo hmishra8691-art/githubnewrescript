@@ -8,6 +8,15 @@ import { otherOptions, otherColumnFor } from "./otherSpecify.js";
 import { fieldDataType } from "./fields.js";
 import { questionAi, voiceOn } from "./aiConversation.js";
 import { embeddedCatalog } from "./embedded.js";
+import { stripHtmlText } from "./html.js";
+
+/*
+ * VALUE LABELS ARE PLAIN TEXT. A code's label goes into the CSV dictionary,
+ * the XLSX value-labels sheet, SPSS syntax and the analytics legend — none of
+ * which render HTML — so the markup a rich option label carries is removed
+ * here, once, and a picture-only option reads as its alt text.
+ */
+const valueLabel = (label: string) => (label.includes("<") ? stripHtmlText(label) : label);
 
 /**
  * Variable / Data Dictionary generator (requirement §9).
@@ -21,7 +30,7 @@ function valueMap(q: { options: { code: string | number; label: string }[] }): {
 } {
   const codes = q.options.map((o) => o.code);
   const labels: Record<string, string> = {};
-  for (const o of q.options) labels[String(o.code)] = o.label;
+  for (const o of q.options) labels[String(o.code)] = valueLabel(o.label);
   return { codes, labels };
 }
 
@@ -45,7 +54,8 @@ function pageLocator(def: SurveyDefinition): Map<string, { pageId: string; secti
   return map;
 }
 
-const strip = (html: string) => html.replace(/<[^>]*>/g, "").replace(/\{\{[^}]*\}\}/g, "…").trim();
+/* through the one stripper, so MSO residue goes whole and a logo-only label reads as its alt text */
+const strip = (html: string) => stripHtmlText(html).replace(/\{\{[^}]*\}\}/g, "…").trim();
 
 /** Rows for dictionary purposes: static rows, or the carry-forward source's
  *  full option universe when rows are dynamic. */
@@ -217,7 +227,7 @@ export function questionVariables(
     case "matrix_dropdown": {
       const colOpts = q.columns[0]?.options?.length ? q.columns[0].options : q.options;
       const labels: Record<string, string> = {};
-      for (const o of colOpts) labels[String(o.code)] = o.label;
+      for (const o of colOpts) labels[String(o.code)] = valueLabel(o.label);
       for (const row of rows) {
         push({
           name: `${q.variableName}_${row.code}`,
@@ -289,7 +299,7 @@ export function questionVariables(
             }
           } else {
             const labels: Record<string, string> = {};
-            for (const o of col.options) labels[String(o.code)] = o.label;
+            for (const o of col.options) labels[String(o.code)] = valueLabel(o.label);
             push({
               name: `${col.variableStem}_${row.code}`,
               label: `${q.code} — ${row.label} / ${col.label}`,

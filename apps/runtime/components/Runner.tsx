@@ -1553,7 +1553,7 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
             <div dangerouslySetInnerHTML={{ __html: resolvePiping(b.headerHtml, ctx) }} />
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
-            b.logoUrl && <SafeImage src={b.logoUrl} alt="logo" imageOnly />
+            b.logoUrl && <SafeImage src={b.logoUrl} alt="logo" imageOnly display={b.logoDisplay} />
           )}
         </div>
       )}

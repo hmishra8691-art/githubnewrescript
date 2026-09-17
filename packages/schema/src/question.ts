@@ -4,6 +4,7 @@ import { ListOperation, OptionLogic } from "./optionLogic.js";
 import { OptionMask, PunchRule } from "./setExpression.js";
 import { AttentionCheck } from "./quality.js";
 import { AiQuestionOverride, SpokenScript } from "./aiConversation.js";
+import { MediaDisplay } from "./mediaDisplay.js";
 
 /**
  * Question model.
@@ -1062,6 +1063,8 @@ export const Question = z.object({
       /* ---- 2026-09 variant batch. Every field optional; absent = old behaviour. */
       /** Video / audio stimulus URL (video rating, timeline, watch-time). */
       mediaUrl: z.string().optional(),
+      /** how `mediaUrl` / `imageUrl` is sized, fitted, aligned and played — see MediaDisplay */
+      mediaDisplay: MediaDisplay.optional(),
       /** Respondent must reach the end of the media before answering. */
       requireComplete: z.boolean().optional(),
       /** Timeline reactions: the option set is offered at each tap. */

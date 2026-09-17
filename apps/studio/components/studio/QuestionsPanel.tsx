@@ -7,11 +7,33 @@ import type { Question, Option, QuestionColumn, ResponseType, QuestionVariantDef
 import { questionTypeRegistry, variantRegistry, resolveVariant } from "@rescript/schema";
 import { honoursColumns, drawsOptionImages, honoursOrientation } from "@rescript/renderer";
 import { VariantPickerModal, VariantSwitcher, createFromVariant } from "./VariantPicker";
-import { RichTextEditor } from "./RichTextEditor";
+import { InlineRichText, RichTextEditor } from "./RichTextEditor";
+
+/** Put the caret at the end of a label field — an input or a contentEditable line. */
+function focusLabel(el: HTMLElement | null | undefined) {
+  if (!el) return;
+  el.focus();
+  if (el instanceof HTMLInputElement) { el.select(); return; }
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(false);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
 import { OptionLogicEditor } from "./OptionLogicEditor";
 import { OptionPreview } from "./OptionPreview";
 import { usePreviewBlock } from "./PreviewBlock";
 import { MediaUrlInput } from "./MediaUrlInput";
+import { MediaDisplayControls, type DisplayKind } from "./MediaDisplayControls";
+
+/** image / video / audio — what the sizing controls should offer for a URL */
+function mediaKindOf(url: string | undefined): DisplayKind {
+  const m = resolveMediaUrl(url);
+  if (m.kind === "video") return m.mimeType?.startsWith("audio/") ? "audio" : "video";
+  return "image";
+}
 import { AttentionCheckEditor } from "./AttentionCheckEditor";
 import { DeleteQuestionDialog } from "./DeleteQuestionDialog";
 import { Icon } from "../ui/Icon";
@@ -60,6 +82,7 @@ import {
   parsePastedOptions, planPaste, optionsToPaste, type PasteMode,
   stripHtmlText, referencesTo, pruneReferencesTo, referencesToMany, pruneReferencesToMany,
   PIPE_TOKEN_RE,
+  resolveMediaUrl,
   effectiveScale,
   PHONE_FORMATS,
   POSTAL_FORMATS,
@@ -224,9 +247,8 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
     if (pendingFocus.current == null) return;
     const idx = pendingFocus.current;
     pendingFocus.current = null;
-    const el = rootRef.current?.querySelector<HTMLInputElement>(`input[data-oidx="${idx}"]`);
-    el?.focus();
-    el?.select();
+    const el = rootRef.current?.querySelector<HTMLElement>(`[data-oidx="${idx}"]`);
+    focusLabel(el);
   });
 
   const set = (i: number, patch: Partial<Option>) =>
@@ -253,40 +275,32 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
     onChange(next);
   };
 
-  /** Enter = new option below (req §5); Backspace on empty = remove + focus
-   *  previous (req §6); arrows move between options. */
-  const onLabelKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, i: number) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      insertAfter(i);
-    } else if (e.key === "Backspace" && options[i].label === "") {
-      if (options.length <= 1) return;
-      e.preventDefault();
-      pendingFocus.current = Math.max(0, i - 1);
-      onChange(options.filter((_, j) => j !== i));
-      onAfterDelete?.();
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      rootRef.current?.querySelector<HTMLInputElement>(`input[data-oidx="${i - 1}"]`)?.focus();
-    } else if (e.key === "ArrowDown") {
-      e.preventDefault();
-      rootRef.current?.querySelector<HTMLInputElement>(`input[data-oidx="${i + 1}"]`)?.focus();
-    }
+  /*
+   * The label is a rich-text field now (`InlineRichText`), with the same
+   * keyboard contract as the input it replaced: Enter = new option below
+   * (req §5); Backspace on an empty label = remove + focus previous (req §6);
+   * arrows move between options; a multi-line paste splits into options
+   * (req §7). The field reports the keys; the list they act on is here.
+   */
+  const removeEmpty = (i: number) => {
+    if (options.length <= 1) return;
+    pendingFocus.current = Math.max(0, i - 1);
+    onChange(options.filter((_, j) => j !== i));
+    onAfterDelete?.();
   };
-
-  /** Pasting multi-line text into any option splits it into options (req §7). */
-  const onLabelPaste = (e: React.ClipboardEvent<HTMLInputElement>, i: number) => {
-    const text = e.clipboardData.getData("text/plain");
-    if (!text.includes("\n")) return;
-    e.preventDefault();
+  const moveFocus = (i: number, dir: -1 | 1) => {
+    focusLabel(rootRef.current?.querySelector<HTMLElement>(`[data-oidx="${i + dir}"]`));
+  };
+  const onLabelPasteLines = (text: string, i: number): boolean => {
     const parsed = parsePastedOptions(text, Number(nextCode(options)));
-    if (parsed.length === 0) return;
+    if (parsed.length === 0) return false;
     const next = [...options];
     next[i] = { ...next[i], label: parsed[0].label, code: options[i].label ? next[i].code : parsed[0].code };
     next.splice(i + 1, 0, ...(parsed.slice(1).map((o) => ({ ...o, id: uid("opt") })) as Option[]));
     pendingFocus.current = i + parsed.length - 1;
     setShowAll(true); // the pasted rows must be mounted for focus to land
     onChange(next);
+    return true;
   };
 
   /*
@@ -349,18 +363,16 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
             title={frozen
               ? "Codes are frozen once this survey has live responses — moving a code would rewrite what a respondent said"
               : "code"} />
-          <input className="input grow" value={o.label} data-oidx={i}
-            onChange={(e) => set(i, { label: e.target.value })}
-            onKeyDown={(e) => onLabelKeyDown(e, i)}
-            onPaste={(e) => onLabelPaste(e, i)}
+          <InlineRichText className="grow" value={o.label} index={i} testId="option-label" questionId={questionId}
+            onChange={(label) => set(i, { label })}
+            onEnter={() => insertAfter(i)}
+            onBackspaceEmpty={() => removeEmpty(i)}
+            onArrow={(dir) => moveFocus(i, dir)}
+            onPasteLines={(text) => onLabelPasteLines(text, i)}
             placeholder="label — Enter adds the next option" />
-          {enableLogic && (
-            <InsertPipingButton className="btn small" label="{{ }}" currentQuestionId={questionId}
-              onInsert={(tok) => set(i, { label: `${options[i].label}${tok}` })} />
-          )}
           {showImage && (
             <div className="opt-meta" style={{ width: 200, maxWidth: 200 }}>
-              <MediaUrlInput compact placeholder="image URL" testId={`option-image-${i}`} questionId={questionId}
+              <MediaUrlInput compact placeholder="image URL" testId={`option-image-${i}`} questionId={questionId} accept={["image"]}
                 value={o.imageUrl} onChange={(v) => set(i, { imageUrl: v })} />
             </div>
           )}
@@ -541,8 +553,8 @@ function ColumnEditor({ q, onChange }: { q: Question; onChange(cols: QuestionCol
       {cols.map((c, i) => (
         <div key={c.id} className="card" style={{ padding: 10 }}>
           <div className="row" style={{ marginBottom: 6 }}>
-            <input className="input grow" value={c.label} placeholder="Column label"
-              onChange={(e) => set(i, { label: e.target.value })} />
+            <InlineRichText className="grow" value={c.label} placeholder="Column label" testId="column-label"
+              onChange={(label) => set(i, { label })} />
             <select className="select" style={{ width: 140 }} value={c.responseType}
               onChange={(e) => set(i, { responseType: e.target.value as ResponseType })}>
               {RESPONSE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
@@ -673,8 +685,8 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
                   ? "Codes are frozen once this survey has live responses — moving a code would rewrite what a respondent said"
                   : "row code / variable suffix"}
                 onChange={(e) => setRow(i, { code: e.target.value })} />
-              <input className="input grow" placeholder="Field label, e.g. Email Address"
-                value={r.label} onChange={(e) => setRow(i, { label: e.target.value })} />
+              <InlineRichText className="grow" placeholder="Field label, e.g. Email Address" testId="field-label"
+                value={r.label} onChange={(label) => setRow(i, { label })} />
               <select className="select" style={{ width: 150 }} value={ft} data-testid={`field-type-${i}`}
                 onChange={(e) => setRow(i, { fieldType: e.target.value as any })}>
                 {/* an already-set type stays listed even if this variant would
@@ -885,9 +897,20 @@ export function QuestionEditor({ q }: { q: Question }) {
           </select></label>
       </div>
       {!MEDIA_OWNING.has(variantDef?.renderer ?? `base:${q.type}`) && (
-        <MediaUrlInput label="Media — shown under the question text (image, video, YouTube or Google Drive URL)"
-          testId="question-media" questionId={q.id} value={q.settings.mediaUrl}
-          onChange={(v) => patchSettings({ mediaUrl: v })} />
+        <>
+          <MediaUrlInput label="Media — shown under the question text (image, video, YouTube or Google Drive URL)"
+            testId="question-media" questionId={q.id} value={q.settings.mediaUrl}
+            onChange={(v) => patchSettings({ mediaUrl: v })} />
+          {q.settings.mediaUrl && resolveMediaUrl(q.settings.mediaUrl).kind !== "embed" && (
+            <details className="qs-details" data-testid="question-media-display" open={!!q.settings.mediaDisplay}>
+              <summary>Size, fit &amp; playback</summary>
+              <MediaDisplayControls
+                kind={mediaKindOf(q.settings.mediaUrl)}
+                value={q.settings.mediaDisplay}
+                onChange={(mediaDisplay) => patchSettings({ mediaDisplay })} />
+            </details>
+          )}
+        </>
       )}
       {(q.options.length > 0 || q.type === "open_text" || q.type === "long_text" || q.type === "numeric") && (
         <AttentionCheckEditor q={q} patch={patch} />

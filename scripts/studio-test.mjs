@@ -29,11 +29,11 @@ await page.keyboard.type("What is your favorite fruit?");
 await page.waitForTimeout(400); // debounce commit
 
 // --- option entry: type, Enter, type, Enter, type
-await page.click('.qcard.selected input[data-oidx="0"]').catch(async () => {
+await page.click('.qcard.selected [data-oidx="0"]').catch(async () => {
   // no option yet — create the first one
   await page.click('.qcard.selected [data-testid="add-option"]');
-  await page.waitForSelector('.qcard.selected input[data-oidx="0"]');
-  await page.click('.qcard.selected input[data-oidx="0"]');
+  await page.waitForSelector('.qcard.selected [data-oidx="0"]');
+  await page.click('.qcard.selected [data-oidx="0"]');
 });
 await page.keyboard.type("Apple");
 await page.keyboard.press("Enter");
@@ -42,16 +42,16 @@ assert.equal(active, "1", "Enter should focus the new option");
 await page.keyboard.type("Banana");
 await page.keyboard.press("Enter");
 await page.keyboard.type("Orange");
-let labels = await page.$$eval(".qcard.selected input[data-oidx]", (els) =>
-  els.map((e) => e.value));
+let labels = await page.$$eval(".qcard.selected [data-oidx]", (els) =>
+  els.map((e) => e.textContent));
 assert.deepEqual(labels, ["Apple", "Banana", "Orange"]);
 console.log("✔ Enter creates and focuses the next option:", labels.join(" / "));
 
 // Backspace on an empty new option removes it and refocuses the previous one
 await page.keyboard.press("Enter"); // creates empty option 4
 await page.keyboard.press("Backspace");
-labels = await page.$$eval(".qcard.selected input[data-oidx]", (els) =>
-  els.map((e) => e.value));
+labels = await page.$$eval(".qcard.selected [data-oidx]", (els) =>
+  els.map((e) => e.textContent));
 assert.deepEqual(labels, ["Apple", "Banana", "Orange"]);
 active = await page.evaluate(() => document.activeElement?.dataset?.oidx);
 assert.equal(active, "2", "Backspace should refocus the previous option");
@@ -67,8 +67,8 @@ assert.ok(await page.isChecked('[data-testid="paste-mode-replace"]'), "Replace i
 await page.click('[data-testid="paste-mode-append"]');
 await page.fill('[data-testid="paste-box"]', "1. Mango\n2) Grapes\n- Papaya\n• Kiwi");
 await page.click('[data-testid="import-options"]');
-labels = await page.$$eval(".qcard.selected input[data-oidx]", (els) =>
-  els.map((e) => e.value));
+labels = await page.$$eval(".qcard.selected [data-oidx]", (els) =>
+  els.map((e) => e.textContent));
 assert.deepEqual(labels, ["Apple", "Banana", "Orange", "Mango", "Grapes", "Papaya", "Kiwi"]);
 console.log("✔ paste box shows the current list, and Append imports cleaned numbered/bulleted options after it");
 

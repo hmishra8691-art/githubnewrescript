@@ -1,6 +1,18 @@
 "use client";
 import React from "react";
-import { resolveMediaUrl, isAllowedEmbed, type ResolvedMedia } from "@rescript/engine";
+import { resolveMediaUrl, isAllowedEmbed, mediaDisplayStyle, type ResolvedMedia } from "@rescript/engine";
+import type { MediaDisplay } from "@rescript/schema";
+
+/**
+ * The `display` object (size, fit, alignment, playback — set with controls in
+ * the Studio) becomes inline style through the engine's one computation, on
+ * top of whatever `style` the caller passes. Its playback flags fill in the
+ * caller's when the caller left them unset.
+ */
+function withDisplay(display: MediaDisplay | null | undefined, style: React.CSSProperties | undefined): React.CSSProperties | undefined {
+  if (!display) return style;
+  return { ...(style ?? {}), ...(mediaDisplayStyle(display) as React.CSSProperties) };
+}
 
 /**
  * The two media elements every renderer uses instead of a raw `<img>` or
@@ -21,14 +33,17 @@ import { resolveMediaUrl, isAllowedEmbed, type ResolvedMedia } from "@rescript/e
 
 type ImgProps = Omit<React.ImgHTMLAttributes<HTMLImageElement>, "src" | "onError"> & {
   src: string | null | undefined;
+  /** size / fit / alignment, from the Studio's controls */
+  display?: MediaDisplay | null;
   /** render nothing but an image (or the failure note) — for clickable stimuli */
   imageOnly?: boolean;
   /** called when the image fails to load (hotspot renderers disable themselves) */
   onBroken?: () => void;
 };
 
-export function SafeImage({ src, imageOnly, onBroken, alt = "", className, style, ...rest }: ImgProps) {
+export function SafeImage({ src, imageOnly, onBroken, alt = "", className, style: rawStyle, display, ...rest }: ImgProps) {
   const media = React.useMemo(() => resolveMediaUrl(src), [src]);
+  const style = withDisplay(display, rawStyle);
   const [broken, setBroken] = React.useState(false);
   React.useEffect(() => setBroken(false), [src]);
 
@@ -37,7 +52,7 @@ export function SafeImage({ src, imageOnly, onBroken, alt = "", className, style
   }
   if (media.kind !== "image") {
     if (imageOnly) return <MediaNote className={className} style={style} text="Unable to load image — this URL is a video, not an image." data-testid="media-not-image" />;
-    return <MediaEmbed url={src} className={className} style={style} />;
+    return <MediaEmbed url={src} className={className} style={rawStyle} display={display} />;
   }
   if (broken) {
     return <MediaNote className={className} style={style} text="Unable to load image" data-testid="media-broken" title={media.url} />;
@@ -59,11 +74,13 @@ export function SafeImage({ src, imageOnly, onBroken, alt = "", className, style
 }
 
 export function MediaEmbed({
-  url, className, style, title, alt, controls = true, autoPlay, muted, loop, onEnded,
+  url, className, style: rawStyle, title, alt, controls: rawControls, autoPlay: rawAutoPlay, muted: rawMuted, loop: rawLoop, onEnded, display,
 }: {
   url: string | null | undefined;
   className?: string;
   style?: React.CSSProperties;
+  /** size / fit / alignment / playback, from the Studio's controls */
+  display?: MediaDisplay | null;
   title?: string;
   /**
    * What a screen reader says about this media. Falls back to `title` — the
@@ -79,12 +96,18 @@ export function MediaEmbed({
 }) {
   const media = React.useMemo(() => resolveMediaUrl(url), [url]);
   if (!url) return null;
-  return <ResolvedView media={media} className={className} style={style} title={title} alt={alt} controls={controls} autoPlay={autoPlay} muted={muted} loop={loop} onEnded={onEnded} />;
+  const style = withDisplay(display, rawStyle);
+  const controls = rawControls ?? display?.controls ?? true;
+  const autoPlay = rawAutoPlay ?? display?.autoplay;
+  // a browser only honours autoplay when the element is muted; say so in the markup
+  const muted = rawMuted ?? display?.muted ?? (autoPlay ? true : undefined);
+  const loop = rawLoop ?? display?.loop;
+  return <ResolvedView media={media} className={className} style={style} title={title} alt={alt} controls={controls} autoPlay={autoPlay} muted={muted} loop={loop} poster={display?.poster} onEnded={onEnded} />;
 }
 
-function ResolvedView({ media, className, style, title, alt, controls, autoPlay, muted, loop, onEnded }: {
+function ResolvedView({ media, className, style, title, alt, controls, autoPlay, muted, loop, poster, onEnded }: {
   media: ResolvedMedia; className?: string; style?: React.CSSProperties; title?: string; alt?: string;
-  controls?: boolean; autoPlay?: boolean; muted?: boolean; loop?: boolean; onEnded?: () => void;
+  controls?: boolean; autoPlay?: boolean; muted?: boolean; loop?: boolean; poster?: string; onEnded?: () => void;
 }) {
   const [broken, setBroken] = React.useState(false);
   React.useEffect(() => setBroken(false), [media.original]);
@@ -99,9 +122,22 @@ function ResolvedView({ media, className, style, title, alt, controls, autoPlay,
           onError={() => setBroken(true)} data-media-provider={media.provider} data-testid="media-image" />
       );
     case "video":
-      if (broken) return <MediaNote className={cls} style={style} text="Unable to load video" data-testid="media-broken" title={media.url} />;
+      if (broken) return <MediaNote className={cls} style={style} text={media.mimeType?.startsWith("audio/") ? "Unable to load audio" : "Unable to load video"} data-testid="media-broken" title={media.url} />;
+      /*
+       * An audio clip is an <audio> element — a player bar, not a black
+       * rectangle with a play button in it. It used to go through <video>,
+       * which "works" and looks like a broken film.
+       */
+      if (media.mimeType?.startsWith("audio/")) {
+        return (
+          <audio className={`${cls} rs-audio`} style={style} src={media.url} controls={controls} autoPlay={autoPlay} muted={muted} loop={loop}
+            aria-label={alt ?? title ?? undefined} preload="metadata" onEnded={onEnded} onError={() => setBroken(true)} data-media-provider={media.provider} data-testid="media-audio">
+            <source src={media.url} type={media.mimeType} />
+          </audio>
+        );
+      }
       return (
-        <video className={cls} style={style} src={media.url} controls={controls} autoPlay={autoPlay} muted={muted} loop={loop}
+        <video className={cls} style={style} src={media.url} controls={controls} autoPlay={autoPlay} muted={muted} loop={loop} poster={poster}
           aria-label={alt ?? title ?? undefined}
           playsInline preload="metadata" onEnded={onEnded} onError={() => setBroken(true)} data-media-provider={media.provider} data-testid="media-video">
           {media.mimeType && <source src={media.url} type={media.mimeType} />}

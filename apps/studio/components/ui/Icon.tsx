@@ -8,6 +8,7 @@ import React from "react";
 export type IconName =
   | "questions" | "settings" | "flow" | "logic" | "variables" | "calc" | "quotas" | "listfill" | "designs" | "branding" | "scripts"
   | "data" | "versions" | "json" | "collaborators" | "notes" | "activity" | "analytics" | "clean" | "reports"
+  | "assets"
   | "search" | "plus" | "play" | "flask" | "download" | "export" | "user" | "bell" | "chevron-down" | "chevron-right" | "check" | "warning" | "info" | "close" | "home" | "grid" | "share" | "shield" | "logout" | "sparkle" | "chart" | "table" | "layers";
 
 const P: Record<IconName, React.ReactNode> = {
@@ -20,6 +21,7 @@ const P: Record<IconName, React.ReactNode> = {
   quotas: <><path d="M12 3a9 9 0 1 0 9 9" /><path d="M12 3v9h9" /></>,
   listfill: <><path d="M4 6h10M4 12h7M4 18h10" /><path d="m16 12 4 4-4 4M20 16h-6" /></>,
   designs: <><path d="M9 3h6M10 3v6l-5 8a3 3 0 0 0 2.6 4.5h8.8A3 3 0 0 0 19 16.5l-5-8V3" /><path d="M7 16h10" /></>,
+  assets: <><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="8.5" cy="10" r="1.5" /><path d="M21 15l-5-5-9 9" /></>,
   branding: <><path d="M12 3l2.5 5 5.5.8-4 3.9.9 5.5L12 15.6 7.1 18.2l.9-5.5-4-3.9L9.5 8z" /></>,
   scripts: <><path d="m8 8-4 4 4 4M16 8l4 4-4 4M14 5l-4 14" /></>,
   data: <><ellipse cx="12" cy="6" rx="8" ry="3" /><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6" /><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" /></>,

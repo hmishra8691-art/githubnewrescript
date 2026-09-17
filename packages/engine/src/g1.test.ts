@@ -154,7 +154,8 @@ test("what the rich-text surface stores is sanitized", () => {
   // the renderer runs every keystroke through sanitizeHtml; formatting stays
   assert.equal(sanitizeHtml("<b>hi</b>"), "<b>hi</b>");
   assert.equal(sanitizeHtml('<b onclick="x()">hi</b>'), "<b>hi</b>");
-  assert.equal(sanitizeHtml("<script>bad()</script>ok"), "bad()ok");
+  // a script's BODY is code, not text — it used to be left behind as the visible word "bad()"
+  assert.equal(sanitizeHtml("<script>bad()</script>ok"), "ok");
 });
 
 /* ------------------------------------------------------ registry contract */

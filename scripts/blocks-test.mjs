@@ -162,9 +162,9 @@ await page.waitForSelector(".qcard.selected .rte-surface");
 await page.keyboard.type("Which products do you use?");
 await page.waitForTimeout(350);
 
-const hasOption = await page.$('.qcard.selected input[data-oidx="0"]');
+const hasOption = await page.$('.qcard.selected [data-oidx="0"]');
 if (!hasOption) await page.click('.qcard.selected [data-testid="add-option"]');
-await page.click('.qcard.selected input[data-oidx="0"]');
+await page.click('.qcard.selected [data-oidx="0"]');
 await page.keyboard.type("Other");
 await page.waitForTimeout(300);
 await page.waitForSelector('.qcard.selected [data-testid="option-flags-0"]');

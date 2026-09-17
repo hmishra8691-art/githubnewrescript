@@ -1,7 +1,8 @@
 "use client";
 import React from "react";
 import { resolveMediaUrl } from "@rescript/engine";
-import { RecordingUploader } from "@rescript/storage/uploader";
+import { ASSET_ACCEPT, uploadAsset, type AssetSummary, type UploadProgress } from "@/lib/assets";
+import { AssetPicker } from "./AssetPicker";
 import { useStudio } from "./store";
 
 /**
@@ -9,66 +10,48 @@ import { useStudio } from "./store";
  * engine's verdict printed under it as it is typed, so a programmer learns
  * "this will embed as a YouTube player" or "Drive files must be shared" while
  * they are still looking at the field, not in the preview.
+ *
+ * Three ways to fill it: paste a URL, **Choose** from the survey's asset
+ * library (or the customer's shared assets), or **Upload** a file straight
+ * into that library. Upload and Choose are the same library — a file
+ * uploaded here appears in the Assets tab and in every other Choose.
  */
-/** What may be attached to a question as a stored asset. */
-const ASSET_ACCEPT = "image/*,video/*,audio/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.csv";
-const ASSET_MAX_MB = 50;
-
-export function MediaUrlInput({ value, onChange, placeholder, compact, testId, label, questionId }: {
+export function MediaUrlInput({ value, onChange, placeholder, compact, testId, label, questionId, accept }: {
   value: string | undefined;
-  onChange(next: string | undefined): void;
+  onChange(next: string | undefined, asset?: AssetSummary): void;
   placeholder?: string;
   compact?: boolean;
   testId?: string;
   label?: string;
-  /** the question this asset belongs to, so its row can be found and cleaned up with the question */
+  /**
+   * The question this media is FOR. It no longer files the asset under the
+   * question (a library asset belongs to the survey — see the ticket route);
+   * it is kept for the piping picker and future per-question defaults.
+   */
   questionId?: string;
+  /** what this slot takes, for the picker's filter and the file dialog */
+  accept?: AssetSummary["family"][];
 }) {
   const media = React.useMemo(() => resolveMediaUrl(value), [value]);
   const studio = useStudioOptional();
   const fileRef = React.useRef<HTMLInputElement | null>(null);
-  const [uploading, setUploading] = React.useState<string | null>(null);
+  const [progress, setProgress] = React.useState<UploadProgress | null>(null);
   const [uploadError, setUploadError] = React.useState<string | null>(null);
+  const [picking, setPicking] = React.useState(false);
   const canUpload = !!studio && studio.surveyDbId !== "sandbox";
+  const tid = testId ?? "media-url";
+  void questionId;
 
-  /*
-   * UPLOAD, NOT PASTE. An image or a PDF a researcher attaches used to be a
-   * URL to somewhere else — a personal Drive, a CDN, a link that expires or
-   * moves. It is a stored object now, straight from the browser to storage
-   * as a `survey_asset`, kept as the survey's own `/api/media/<id>/<name>`
-   * and deleted with the survey like everything else it owns.
-   */
-  const uploadAsset = async (file: File) => {
+  const upload = async (file: File) => {
     if (!studio) return;
     setUploadError(null);
-    if (file.size > ASSET_MAX_MB * 1024 * 1024) { setUploadError(`That file is ${Math.round(file.size / 1048576)} MB — the limit is ${ASSET_MAX_MB} MB.`); return; }
-    setUploading("Uploading…");
-    try {
-      const up = new RecordingUploader({
-        endpoints: {
-          begin: `/api/surveys/${studio.surveyDbId}/media/ticket`,
-          parts: `/api/surveys/${studio.surveyDbId}/media/parts`,
-          complete: `/api/surveys/${studio.surveyDbId}/media/confirm`,
-        },
-        mimeType: file.type || "application/octet-stream", estimatedBytes: file.size,
-        beginExtra: { kind: "survey_asset", questionId: questionId ?? "asset", fileName: file.name },
-        completeExtra: { questionId: questionId ?? "asset" },
-        onState: (st) => setUploading(st.partsTotal > 1 ? `Uploading… ${st.partsDone} of ${st.partsTotal} parts` : st.phase === "finishing" ? "Checking it arrived…" : "Uploading…"),
-      });
-      await up.begin();
-      up.push(file);
-      const out = await up.finish(0);
-      if (!out.ok) { setUploadError(out.error); return; }
-      const stored = out.reply.video as { url?: string } | undefined;
-      if (!stored?.url) { setUploadError("The file was stored but no URL came back."); return; }
-      onChange(stored.url);
-    } catch (e) {
-      setUploadError((e as Error).message);
-    } finally {
-      setUploading(null);
-      if (fileRef.current) fileRef.current.value = "";
-    }
+    const out = await uploadAsset(studio.surveyDbId, file, { onProgress: setProgress });
+    setProgress(null);
+    if (fileRef.current) fileRef.current.value = "";
+    if (!out.ok) { setUploadError(out.error); return; }
+    onChange(out.asset.url, out.asset);
   };
+
   const verdict = !value?.trim()
     ? null
     : media.kind === "unsupported"
@@ -76,20 +59,26 @@ export function MediaUrlInput({ value, onChange, placeholder, compact, testId, l
       : media.kind === "embed"
         ? { tone: "ok", text: `${PROVIDER[media.provider] ?? media.provider} · embedded player${media.note ? " · " + media.note : ""}` }
         : media.kind === "video"
-          ? { tone: "ok", text: `Video (${media.mimeType ?? "direct"})` }
+          ? { tone: "ok", text: media.mimeType?.startsWith("audio/") ? `Audio (${media.mimeType})` : `Video (${media.mimeType ?? "direct"})` }
           : { tone: "ok", text: `Image${media.provider === "data" ? " (inline)" : ""}` };
+
+  const fileAccept = accept?.length
+    ? accept.map((f) => (f === "document" ? ".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.csv" : `${f}/*`)).join(",")
+    : ASSET_ACCEPT;
 
   const input = (
     <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-      <input className="input grow" data-testid={testId ?? "media-url"} placeholder={placeholder ?? "Image, video, YouTube or Google Drive URL — or upload a file"}
+      <input className="input grow" data-testid={tid} placeholder={placeholder ?? "Image, video, YouTube or Google Drive URL — or choose / upload an asset"}
         value={value ?? ""} onChange={(e) => onChange(e.target.value || undefined)} />
       {canUpload && (
         <>
-          <input ref={fileRef} type="file" accept={ASSET_ACCEPT} style={{ display: "none" }} data-testid={`${testId ?? "media-url"}-file`}
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadAsset(f); }} />
-          <button type="button" className="btn ghost small" disabled={!!uploading} data-testid={`${testId ?? "media-url"}-upload`}
-            onClick={() => fileRef.current?.click()} title={`Upload an image, video, audio, PDF or document (up to ${ASSET_MAX_MB} MB) — stored with the survey`}>
-            {uploading ?? "Upload"}
+          <button type="button" className="btn ghost small" data-testid={`${tid}-choose`} onClick={() => setPicking(true)}
+            title="Choose from this survey's asset library">Choose</button>
+          <input ref={fileRef} type="file" accept={fileAccept} style={{ display: "none" }} data-testid={`${tid}-file`}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); }} />
+          <button type="button" className="btn ghost small" disabled={!!progress} data-testid={`${tid}-upload`}
+            onClick={() => fileRef.current?.click()} title="Upload a file into the asset library and use it here">
+            {progress ? progress.label : "Upload"}
           </button>
         </>
       )}
@@ -99,11 +88,12 @@ export function MediaUrlInput({ value, onChange, placeholder, compact, testId, l
     <div className={compact ? "" : "f"} style={compact ? { display: "flex", flexDirection: "column", gap: 2 } : undefined}>
       {label && <span>{label}</span>}
       {input}
+      {progress && <div className="asset-progress" data-testid={`${tid}-progress`}><div style={{ width: `${Math.round(progress.fraction * 100)}%` }} /></div>}
       {uploadError && (
-        <span className="muted" data-testid={`${testId ?? "media-url"}-upload-error`} style={{ fontSize: 12.5, color: "var(--danger, #b91c1c)" }}>⚠ {uploadError}</span>
+        <span className="muted" data-testid={`${tid}-upload-error`} style={{ fontSize: 12.5, color: "var(--danger, #b91c1c)" }}>⚠ {uploadError}</span>
       )}
       {verdict && (
-        <span className="muted" data-testid={`${testId ?? "media-url"}-verdict`} data-tone={verdict.tone}
+        <span className="muted" data-testid={`${tid}-verdict`} data-tone={verdict.tone}
           style={{ fontSize: 12.5, color: verdict.tone === "bad" ? "var(--danger, #b91c1c)" : undefined }}>
           {verdict.tone === "bad" ? "⚠ " : "✓ "}{verdict.text}
         </span>
@@ -112,6 +102,10 @@ export function MediaUrlInput({ value, onChange, placeholder, compact, testId, l
         // eslint-disable-next-line @next/next/no-img-element
         <img src={media.url} alt="" style={{ maxWidth: 240, maxHeight: 140, borderRadius: 8, border: "1px solid var(--border)", marginTop: 4 }}
           onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
+      )}
+      {canUpload && (
+        <AssetPicker open={picking} onClose={() => setPicking(false)} accept={accept}
+          onPick={(a) => onChange(a.url, a)} />
       )}
     </div>
   );

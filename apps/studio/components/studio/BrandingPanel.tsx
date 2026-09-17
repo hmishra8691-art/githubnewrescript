@@ -4,6 +4,8 @@ import { useStudio } from "./store";
 import { THEME_PRESETS } from "@/lib/defaults";
 import { Branding } from "@rescript/schema";
 import { AiConversationSection } from "./AiConversationPanel";
+import { MediaUrlInput } from "./MediaUrlInput";
+import { MediaDisplayControls } from "./MediaDisplayControls";
 
 function Color({ label, value, onChange }: { label: string; value: string; onChange(v: string): void }) {
   return (
@@ -126,16 +128,24 @@ export function BrandingPanel() {
       )}
 
       <h3 className="sec">Identity</h3>
-      <div className="row" style={{ flexWrap: "wrap" }}>
-        <label className="f grow"><span>Logo URL</span>
-          <input className="input" value={b.logoUrl ?? ""}
-            onChange={(e) => set((x) => { x.logoUrl = e.target.value || undefined; })} /></label>
+      <div className="row" style={{ flexWrap: "wrap", alignItems: "flex-start" }}>
+        <div className="grow">
+          <MediaUrlInput label="Logo" testId="branding-logo" accept={["image"]} placeholder="Logo image URL — or choose / upload from Assets"
+            value={b.logoUrl} onChange={(v) => set((x) => { x.logoUrl = v || undefined; })} />
+        </div>
         <label className="f" style={{ width: 120 }}><span>Position</span>
           <select className="select" value={b.logoPosition}
             onChange={(e) => set((x) => { x.logoPosition = e.target.value as any; })}>
             <option value="left">left</option><option value="center">center</option><option value="right">right</option>
           </select></label>
       </div>
+      {b.logoUrl && (
+        <details className="qs-details" data-testid="branding-logo-display" open={!!b.logoDisplay}>
+          <summary>Logo size &amp; fit</summary>
+          <MediaDisplayControls kind="image" value={b.logoDisplay}
+            onChange={(logoDisplay) => set((x) => { x.logoDisplay = logoDisplay; })} />
+        </details>
+      )}
 
       <h3 className="sec">Colors</h3>
       <div className="row" style={{ flexWrap: "wrap" }}>

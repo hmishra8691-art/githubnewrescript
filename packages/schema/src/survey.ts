@@ -6,6 +6,7 @@ import { Question } from "./question.js";
 import { FlowNode, LogicFlow, EmbeddedDataType } from "./flow.js";
 import { QualityConfig } from "./quality.js";
 import { ListFill } from "./listFill.js";
+import { MediaDisplay } from "./mediaDisplay.js";
 
 /** Named display-logic rules that can target anything (requirement §6). */
 export const DisplayRule = z.object({
@@ -94,6 +95,8 @@ export const Branding = z.object({
   themeId: z.string().optional(),
   logoUrl: z.string().optional(),
   logoPosition: z.enum(["left", "center", "right"]).default("left"),
+  /** the logo's size and fit — set with controls in Branding, not CSS */
+  logoDisplay: MediaDisplay.optional(),
   colors: z
     .object({
       primary: z.string().default("#2563eb"),

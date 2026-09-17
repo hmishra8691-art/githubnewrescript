@@ -248,7 +248,7 @@ await studio.waitForTimeout(400);
 
 // a matrix is born with rows rather than an empty grid
 const rowInputs = async () =>
-  studio.$$eval('.qcard.selected input[data-oidx]', (els) => els.map((e) => e.value));
+  studio.$$eval('.qcard.selected [data-oidx]', (els) => els.map((e) => e.textContent));
 const rowCodes = async () =>
   studio.$$eval('.qcard.selected .opt-row .code-input', (els) => els.map((e) => e.value));
 

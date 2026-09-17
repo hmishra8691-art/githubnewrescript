@@ -46,8 +46,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const kind = String(body.kind ?? "question_video") as MediaKind;
   if (!KINDS.includes(kind)) return NextResponse.json({ error: `a survey cannot store ${kind} here` }, { status: 400 });
+  /*
+   * A library asset belongs to the survey, not to a question: it is chosen
+   * from the Assets tab into any number of places, and `purgeQuestionMedia`
+   * deletes by question id — a shared logo filed under one question would go
+   * down with that question. So `questionId` is optional for `survey_asset`
+   * and stored as null; every other kind still requires it.
+   */
   const questionId = String(body.questionId ?? "").trim();
-  if (!questionId) return NextResponse.json({ error: "questionId required" }, { status: 400 });
+  if (!questionId && kind !== "survey_asset") return NextResponse.json({ error: "questionId required" }, { status: 400 });
 
   const handle = mediaDbOrResponse();
   if ("response" in handle) return handle.response;
@@ -58,8 +65,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       kind,
       customerId: gate.survey.customer_id ?? gate.user.customerId!,
       surveyId: params.id,
-      questionId,
+      questionId: questionId || null,
       fileName: typeof body.fileName === "string" ? body.fileName : null,
+      sha256: typeof body.sha256 === "string" ? body.sha256 : null,
+      displayName: typeof body.displayName === "string" ? body.displayName : null,
+      altText: typeof body.altText === "string" ? body.altText : null,
+      createdBy: gate.user.userId,
       mimeType: typeof body.mimeType === "string" ? body.mimeType : null,
       bytes: Number(body.bytes) || null,
       durationSeconds: Number(body.durationSeconds) || null,

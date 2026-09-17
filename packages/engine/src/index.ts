@@ -12,6 +12,7 @@ export * from "./displayRules.js";
 export * from "./setExpression.js";
 export * from "./autoPunch.js";
 export * from "./media.js";
+export * from "./mediaDisplay.js";
 export * from "./optionsPaste.js";
 export * from "./dependencies.js";
 export * from "./renumber.js";

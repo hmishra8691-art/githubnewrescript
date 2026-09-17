@@ -1,5 +1,6 @@
 import type { Option } from "@rescript/schema";
 import { nextCode } from "./renumber.js";
+import { stripHtmlText } from "./html.js";
 
 /**
  * Pasting an option list into a question that already has options.
@@ -69,7 +70,7 @@ function explicitCodes(text: string): Set<string> {
   return out;
 }
 
-const norm = (s: string) => s.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+const norm = (s: string) => stripHtmlText(s).replace(/\s+/g, " ").trim().toLowerCase();
 
 export function planPaste(existing: Option[], text: string, mode: PasteMode): PastePlan {
   const start = Number(nextCode(existing)) || 1;

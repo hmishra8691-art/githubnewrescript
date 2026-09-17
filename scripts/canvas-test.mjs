@@ -28,6 +28,13 @@ const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 1560, height: 1000 } });
 await ctx.addCookies([{ name: "rescript_session", value: "fake", url: STUDIO }]);
 const page = await ctx.newPage();
+/** Type into a rich-text label surface (contentEditable), replacing what is there. */
+const typeLabel = async (selector, text) => {
+  await page.click(selector);
+  await page.keyboard.press("Control+A");
+  await page.keyboard.type(text);
+  await page.keyboard.press("Tab");
+};
 const errors = [];
 page.on("pageerror", (e) => errors.push(String(e)));
 await page.route("**/api/auth/me", (r) => r.fulfill({
@@ -111,7 +118,7 @@ ok("there is no separate Live Canvas tab, page or navigation item");
  * is the price of a new tab, and the assertion is worth keeping precisely
  * because it makes that price visible.
  */
-const SINCE_LIVE_VIEW = ["Data Analytics", "Fieldwork", "Project", "Distribution", "Tests", "Translation", "Usage & Wallet"];
+const SINCE_LIVE_VIEW = ["Data Analytics", "Fieldwork", "Project", "Distribution", "Tests", "Translation", "Usage & Wallet", "Assets"];
 assert.deepEqual(
   navLabels.filter((t) => !SINCE_LIVE_VIEW.includes(t)),
   ["Questions", "Survey Settings", "Survey Flow", "Logic", "Variables", "Calculations", "Quotas", "List Fill",
@@ -180,7 +187,7 @@ assert.equal(await kind(), "option");
 assert.match(await title(), /^Option: /);
 ok("clicking an option selects it and the property panel becomes an option panel (§9, §10, §24)");
 
-await page.fill('[data-testid="opt-label"]', "Desktop PC");
+await typeLabel('[data-testid="opt-label"]', "Desktop PC");
 await page.waitForTimeout(450);
 assert.equal(
   await page.$eval('[data-testid="canvas-stage"] [data-rs-el="option"][data-rs-id="3"]', (e) => e.textContent.trim()),
@@ -188,16 +195,17 @@ assert.equal(
 ok("editing in the panel updates the Live View immediately (§25)");
 
 await standard();
-const stdLabels = await page.$$eval(".opt-row input.grow", (es) => es.map((e) => e.value));
+const stdLabels = await page.$$eval(".opt-row [data-oidx]", (es) => es.map((e) => e.textContent));
 assert.ok(stdLabels.includes("Desktop PC"), `Standard's option editor shows it too, got ${stdLabels.slice(0, 4).join(", ")}`);
 ok("the change made in Live View is already in the Standard editor (§10, §37)");
 
 // and the other direction
 const i = stdLabels.indexOf("Desktop PC");
-await page.$$eval(".opt-row input.grow", (es, idx) => {
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-  setter.call(es[idx], "Desktop workstation");
+await page.$$eval(".opt-row [data-oidx]", (es, idx) => {
+  // the label is a rich-text surface now: set its content and tell React it changed
+  es[idx].textContent = "Desktop workstation";
   es[idx].dispatchEvent(new Event("input", { bubbles: true }));
+  es[idx].dispatchEvent(new Event("blur", { bubbles: true }));
 }, i);
 await page.waitForTimeout(450);
 await live();
@@ -231,7 +239,7 @@ assert.equal(await kind(), "row");
 assert.match(await title(), /^Row: /);
 ok("clicking a row label selects the row and offers row properties (§15)");
 
-await page.fill('[data-testid="row-label"]', "Streaming video");
+await typeLabel('[data-testid="row-label"]', "Streaming video");
 await page.waitForTimeout(450);
 assert.ok((await page.$eval('[data-testid="canvas-stage"]', (e) => e.textContent)).includes("Streaming video"));
 ok("renaming a row redraws the matrix immediately");
@@ -378,7 +386,7 @@ ok("the mode belongs to the question, not the application — each opens in Stan
 await live();
 await page.click('[data-testid="canvas-stage"] [data-rs-el="option"][data-rs-id="1"]');
 await page.waitForTimeout(300);
-await page.fill('[data-testid="opt-label"]', "Undo me");
+await typeLabel('[data-testid="opt-label"]', "Undo me");
 await page.waitForTimeout(400);
 await page.click('[data-testid="live-toolbar"]');
 await page.keyboard.press("Control+z");

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isFailure, requireProject } from "@/lib/guard";
+import { isFailure, requireProject, requireUser } from "@/lib/guard";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
 import { freshUrl, MediaError, PLAYBACK_URL_SECONDS } from "@rescript/media";
 
@@ -37,11 +37,24 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
 
   /* the row first, for the survey to gate on — but nothing is minted yet */
   const { data: row } = await handle.db.from("media_objects")
-    .select("id, survey_id, status").eq("id", id).maybeSingle();
+    .select("id, survey_id, status, kind, shared, customer_id").eq("id", id).maybeSingle();
   if (!row) return NextResponse.json({ error: "no such recording" }, { status: 404 });
 
-  const gate = await requireProject(req, row.survey_id as string, "project.read");
-  if (isFailure(gate)) return gate.response;
+  /*
+   * A SHARED library asset is readable by anyone in the customer, not only
+   * by members of the survey it happened to be uploaded to — that is what
+   * "shared" means, and a logo chosen from the library in survey B must load
+   * for survey B's editors. Everything else gates on the owning survey as
+   * before.
+   */
+  if (row.kind === "survey_asset" && row.shared) {
+    const user = await requireUser(req);
+    if (isFailure(user)) return user.response;
+    if (!user.isPlatformAdmin && user.customerId !== row.customer_id) return NextResponse.json({ error: "no such recording" }, { status: 404 });
+  } else {
+    const gate = await requireProject(req, row.survey_id as string, "project.read");
+    if (isFailure(gate)) return gate.response;
+  }
 
   try {
     const download = req.nextUrl.searchParams.get("download") === "1";

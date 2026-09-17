@@ -36,9 +36,9 @@ const addQuestion = async (text, options) => {
   await page.keyboard.type(text);
   await page.waitForTimeout(350);
 
-  const first = await page.$('.qcard.selected input[data-oidx="0"]');
+  const first = await page.$('.qcard.selected [data-oidx="0"]');
   if (!first) await page.click('.qcard.selected [data-testid="add-option"]');
-  await page.click('.qcard.selected input[data-oidx="0"]');
+  await page.click('.qcard.selected [data-oidx="0"]');
   for (let i = 0; i < options.length; i++) {
     await page.keyboard.type(options[i]);
     if (i < options.length - 1) await page.keyboard.press("Enter");

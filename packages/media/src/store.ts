@@ -22,7 +22,7 @@
  * same reason.
  */
 import {
-  MEDIA_KINDS, mediaPath, safeSegment, withinLimit, acceptsType, secondsThatFit,
+  MEDIA_KINDS, mediaPath, safeSegment, withinLimit, acceptsType, assetWithinLimit, secondsThatFit,
   type MediaKind, type TranscriptStatus,
 } from "./plan.js";
 import { mediaUrl, type MediaStores, type ObjectStore, type PartGrant } from "./objectStore.js";
@@ -86,6 +86,12 @@ export interface MediaRow {
   storage_provider: string;
   multipart_upload_id: string | null;
   client_token: string | null;
+  /* ---- the asset library (0040) */
+  display_name?: string | null;
+  alt_text?: string | null;
+  sha256?: string | null;
+  shared?: boolean | null;
+  created_by?: string | null;
 }
 
 export interface TranscriptRow {
@@ -167,6 +173,12 @@ export interface BeginUpload {
    * upload back (resumed where it stopped) rather than a second object.
    */
   clientToken?: string | null;
+  /** hex SHA-256 of the bytes, computed by the browser — for the library's duplicate check */
+  sha256?: string | null;
+  /** the library's name for the asset (falls back to the file name) */
+  displayName?: string | null;
+  altText?: string | null;
+  createdBy?: string | null;
 }
 
 export interface UploadTicket {
@@ -222,6 +234,10 @@ export async function beginUpload(db: MediaDb, req: BeginUpload): Promise<Upload
   if (typeof req.bytes === "number" && req.bytes > 0) {
     const verdict = withinLimit(req.kind, req.bytes, ceiling);
     if (!verdict.ok) throw new MediaError(verdict.message!, 413);
+    if (req.kind === "survey_asset") {
+      const byFamily = assetWithinLimit(req.mimeType, req.bytes);
+      if (!byFamily.ok) throw new MediaError(byFamily.message!, 413);
+    }
   }
 
   /*
@@ -293,6 +309,10 @@ export async function beginUpload(db: MediaDb, req: BeginUpload): Promise<Upload
       status: "pending",
       storage_provider: store.name,
       client_token: clientToken,
+      ...(req.sha256 && /^[0-9a-f]{64}$/i.test(req.sha256) ? { sha256: req.sha256.toLowerCase() } : {}),
+      ...(req.displayName ? { display_name: String(req.displayName).slice(0, 200) } : {}),
+      ...(req.altText ? { alt_text: String(req.altText).slice(0, 500) } : {}),
+      ...(req.createdBy ? { created_by: req.createdBy } : {}),
     })
     .select("id")
     .single();
@@ -672,6 +692,133 @@ function batches<T>(items: T[], size: number): T[][] {
  * is exactly the state this whole table was added to end.
  */
 export interface RemovableRow { id: string; bucket: string; path: string; storage_provider?: string | null; kind?: string | null; bytes?: number | null; customer_id?: string | null; survey_id?: string | null }
+
+/* ------------------------------------------------------------ the asset library */
+
+/** What the Assets tab and the picker show for one stored asset. */
+export interface AssetSummary {
+  id: string;
+  surveyId: string;
+  customerId: string;
+  name: string;
+  fileName: string | null;
+  altText: string | null;
+  mimeType: string | null;
+  /** image | video | audio | document — from the MIME type */
+  family: "image" | "video" | "audio" | "document";
+  bytes: number | null;
+  width: number | null;
+  height: number | null;
+  durationSeconds: number | null;
+  sha256: string | null;
+  shared: boolean;
+  /** true when the asset was uploaded to another survey and reaches this one because it is shared */
+  fromOtherSurvey: boolean;
+  createdAt: string;
+  /** the stable URL to put in a definition */
+  url: string;
+}
+
+export function mediaFamily(mimeType: string | null | undefined): AssetSummary["family"] {
+  const m = (mimeType ?? "").toLowerCase();
+  if (m.startsWith("image/")) return "image";
+  if (m.startsWith("video/")) return "video";
+  if (m.startsWith("audio/")) return "audio";
+  return "document";
+}
+
+const ASSET_COLUMNS = "id, customer_id, survey_id, kind, original_filename, mime_type, bytes, width, height, duration_seconds, sha256, shared, display_name, alt_text, created_at, status";
+
+function summarize(row: Record<string, unknown>, surveyId: string): AssetSummary {
+  const fileName = (row.original_filename as string | null) ?? null;
+  return {
+    id: row.id as string,
+    surveyId: row.survey_id as string,
+    customerId: row.customer_id as string,
+    name: ((row.display_name as string | null) ?? fileName ?? "asset").toString(),
+    fileName,
+    altText: (row.alt_text as string | null) ?? null,
+    mimeType: (row.mime_type as string | null) ?? null,
+    family: mediaFamily(row.mime_type as string | null),
+    bytes: (row.bytes as number | null) ?? null,
+    width: (row.width as number | null) ?? null,
+    height: (row.height as number | null) ?? null,
+    durationSeconds: (row.duration_seconds as number | null) ?? null,
+    sha256: (row.sha256 as string | null) ?? null,
+    shared: !!row.shared,
+    fromOtherSurvey: (row.survey_id as string) !== surveyId,
+    createdAt: row.created_at as string,
+    url: mediaUrl(row.id as string, fileName ?? undefined),
+  };
+}
+
+/**
+ * The library as one survey sees it: its own stored assets, plus every
+ * asset of the customer that is marked shared. Newest first.
+ */
+export async function listAssets(db: MediaDb, args: { surveyId: string; customerId: string | null }): Promise<AssetSummary[]> {
+  const own = (await db.from("media_objects").select(ASSET_COLUMNS)
+    .eq("survey_id", args.surveyId).eq("kind", "survey_asset").eq("status", "stored")
+    .order("created_at", { ascending: false }).limit(2000)) as DbResult<Record<string, unknown>[]>;
+  if (own.error) throw new MediaError(own.error.message);
+  const rows = new Map<string, Record<string, unknown>>();
+  for (const r of own.data ?? []) rows.set(r.id as string, r);
+  if (args.customerId) {
+    const shared = (await db.from("media_objects").select(ASSET_COLUMNS)
+      .eq("customer_id", args.customerId).eq("kind", "survey_asset").eq("status", "stored").eq("shared", true)
+      .order("created_at", { ascending: false }).limit(2000)) as DbResult<Record<string, unknown>[]>;
+    if (shared.error) throw new MediaError(shared.error.message);
+    for (const r of shared.data ?? []) if (!rows.has(r.id as string)) rows.set(r.id as string, r);
+  }
+  return [...rows.values()]
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+    .map((r) => summarize(r, args.surveyId));
+}
+
+/** One asset, as the library shows it — or null when it is not one this survey may see. */
+export async function assetFor(db: MediaDb, id: string, args: { surveyId: string; customerId: string | null }): Promise<AssetSummary | null> {
+  const { data, error } = (await db.from("media_objects").select(ASSET_COLUMNS).eq("id", id).eq("kind", "survey_asset").maybeSingle()) as DbResult<Record<string, unknown> | null>;
+  if (error) throw new MediaError(error.message);
+  if (!data) return null;
+  const visible = data.survey_id === args.surveyId || (!!data.shared && !!args.customerId && data.customer_id === args.customerId);
+  return visible ? summarize(data, args.surveyId) : null;
+}
+
+/**
+ * THE SAME FILE IS ONE ASSET. Before uploading, the browser hashes the file
+ * and asks; a stored asset with the same bytes in this survey — or shared
+ * across the customer — is handed back and nothing is uploaded.
+ */
+export async function findDuplicateAsset(db: MediaDb, args: { surveyId: string; customerId: string | null; sha256: string; bytes?: number | null }): Promise<AssetSummary | null> {
+  const sha = args.sha256.toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(sha)) return null;
+  let q = db.from("media_objects").select(ASSET_COLUMNS).eq("kind", "survey_asset").eq("status", "stored").eq("sha256", sha);
+  if (typeof args.bytes === "number" && args.bytes > 0) q = q.eq("bytes", args.bytes);
+  const { data, error } = (await q.order("created_at", { ascending: true }).limit(50)) as DbResult<Record<string, unknown>[]>;
+  if (error) throw new MediaError(error.message);
+  const rows = (data ?? []).filter((r) => r.survey_id === args.surveyId || (!!r.shared && !!args.customerId && r.customer_id === args.customerId));
+  // prefer this survey's own copy, then the oldest shared one
+  const own = rows.find((r) => r.survey_id === args.surveyId) ?? rows[0];
+  return own ? summarize(own, args.surveyId) : null;
+}
+
+/** Rename, describe, share — the fields the library edits. Only the survey that owns the row may. */
+export async function updateAsset(
+  db: MediaDb,
+  id: string,
+  surveyId: string,
+  patch: { displayName?: string | null; altText?: string | null; shared?: boolean },
+): Promise<AssetSummary | null> {
+  const upd: Record<string, unknown> = {};
+  if (patch.displayName !== undefined) upd.display_name = patch.displayName ? String(patch.displayName).slice(0, 200) : null;
+  if (patch.altText !== undefined) upd.alt_text = patch.altText ? String(patch.altText).slice(0, 500) : null;
+  if (patch.shared !== undefined) upd.shared = !!patch.shared;
+  if (!Object.keys(upd).length) return assetFor(db, id, { surveyId, customerId: null });
+  const { data, error } = (await db.from("media_objects").update(upd).eq("id", id).eq("survey_id", surveyId).eq("kind", "survey_asset")
+    .select(ASSET_COLUMNS).maybeSingle()) as DbResult<Record<string, unknown> | null>;
+  if (error) throw new MediaError(error.message);
+  return data ? summarize(data, surveyId) : null;
+}
 
 export async function removeMedia(
   db: MediaDb,

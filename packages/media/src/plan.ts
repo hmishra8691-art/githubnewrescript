@@ -26,7 +26,7 @@ export interface MediaKindSpec {
   /** How long a signed URL for this kind lives. */
   readonly signedSeconds: number;
   /** Accepted top-level media type, or null to accept anything. */
-  readonly accept: "video" | "audio" | null;
+  readonly accept: "video" | "audio" | "asset" | null;
   /** Whether this kind is transcribed when it lands. */
   readonly transcribed: boolean;
 }
@@ -52,7 +52,7 @@ export const MEDIA_KINDS: Record<MediaKind, MediaKindSpec> = {
   answer_audio:       { bucket: "rescript-uploads", maxBytes: 25 * 1024 * 1024,  signedSeconds: YEAR,     accept: "audio", transcribed: true },
   answer_upload:      { bucket: "rescript-uploads", maxBytes: 25 * 1024 * 1024,  signedSeconds: YEAR,     accept: null,    transcribed: false },
   localization_audio: { bucket: "rescript-audio",   maxBytes: 20 * 1024 * 1024,  signedSeconds: YEAR * 5, accept: "audio", transcribed: false },
-  survey_asset:       { bucket: "rescript-assets",  maxBytes: 50 * 1024 * 1024,  signedSeconds: YEAR,     accept: null,    transcribed: false },
+  survey_asset:       { bucket: "rescript-assets",  maxBytes: 200 * 1024 * 1024, signedSeconds: YEAR,     accept: "asset", transcribed: false },
 };
 
 export const MEDIA_BUCKETS: readonly string[] =
@@ -215,10 +215,64 @@ export function withinLimit(kind: MediaKind, bytes: number, ceilingBytes?: numbe
   };
 }
 
+/**
+ * WHAT THE ASSET LIBRARY TAKES, and how big each family may be.
+ *
+ * An allowlist, on the server, because the only type gate an asset upload
+ * had was the `accept` attribute of a file input — a hint to the file dialog,
+ * not a rule. Pictures, video, audio and the document types a survey
+ * legitimately attaches; nothing executable, no archives, no HTML (an HTML
+ * file served from the asset store would be a page on this origin).
+ *
+ * SVG is allowed: an <img> never runs a picture's scripts, and the store
+ * serves it with its own content type behind a redirect, not inline on the
+ * application origin. Sizes are per family, because a 200 MB "image" is a
+ * mistake and a 200 MB training video is Tuesday.
+ */
+export const ASSET_MIME_TYPES: Record<"image" | "video" | "audio" | "document", readonly string[]> = {
+  image: ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/svg+xml", "image/bmp"],
+  video: ["video/mp4", "video/webm", "video/quicktime", "video/ogg"],
+  audio: ["audio/mpeg", "audio/mp3", "audio/mp4", "audio/aac", "audio/wav", "audio/x-wav", "audio/ogg", "audio/webm", "audio/flac"],
+  document: [
+    "application/pdf", "text/plain", "text/csv",
+    "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ],
+};
+export const ASSET_MAX_BYTES: Record<keyof typeof ASSET_MIME_TYPES, number> = {
+  image: 25 * 1024 * 1024,
+  video: 200 * 1024 * 1024,
+  audio: 50 * 1024 * 1024,
+  document: 50 * 1024 * 1024,
+};
+
+/** The family an asset MIME type belongs to, or null when the library does not take it. */
+export function assetFamilyFor(mimeType: string | null | undefined): keyof typeof ASSET_MIME_TYPES | null {
+  const m = (mimeType ?? "").toLowerCase().split(";")[0].trim();
+  for (const [family, list] of Object.entries(ASSET_MIME_TYPES) as [keyof typeof ASSET_MIME_TYPES, readonly string[]][]) {
+    if (list.includes(m)) return family;
+  }
+  return null;
+}
+
+/** Size verdict for an asset, by its family's ceiling. */
+export function assetWithinLimit(mimeType: string | null | undefined, bytes: number): SizeVerdict {
+  const family = assetFamilyFor(mimeType);
+  const limit = family ? ASSET_MAX_BYTES[family] : MEDIA_KINDS.survey_asset.maxBytes;
+  if (bytes <= limit) return { ok: true };
+  const mb = (n: number) => `${Math.round(n / 1024 / 1024)} MB`;
+  return { ok: false, message: `That ${family ?? "file"} is ${mb(bytes)} — the library takes ${family ?? "file"}s up to ${mb(limit)}.` };
+}
+
 /** Whether a content type is the kind of media this slot takes. */
 export function acceptsType(kind: MediaKind, mimeType: string | undefined): SizeVerdict {
   const accept = MEDIA_KINDS[kind].accept;
   if (!accept) return { ok: true };
+  if (accept === "asset") {
+    if (assetFamilyFor(mimeType)) return { ok: true };
+    return { ok: false, message: `The asset library does not take ${mimeType || "files of unknown type"} — images, video, audio, PDF and Office documents only.` };
+  }
   if (new RegExp(`^${accept}/`).test(mimeType ?? "")) return { ok: true };
   return {
     ok: false,

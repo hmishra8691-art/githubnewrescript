@@ -21,6 +21,7 @@ import { useCollab } from "@/lib/useCollab";
 import { useSession } from "@/lib/useSession";
 import { DesignsPanel } from "./DesignsPanel";
 import { BrandingPanel, ScriptsPanel } from "./BrandingPanel";
+import { AssetsPanel } from "./AssetsPanel";
 import { VersionsPanel } from "./VersionsPanel";
 import { JsonPanel } from "./JsonPanel";
 import { DataPanel } from "./DataPanel";
@@ -35,7 +36,7 @@ import { fmtMoney } from "@/components/billing/shared";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
-  | "quotas" | "listfill" | "designs" | "branding" | "localization" | "scripts" | "tests" | "data" | "fieldwork"
+  | "quotas" | "listfill" | "designs" | "branding" | "assets" | "localization" | "scripts" | "tests" | "data" | "fieldwork"
   | "distribution" | "project" | "usage" | "versions" | "json"
   | "collaborators" | "notes" | "activity"
   | "settings";
@@ -49,7 +50,7 @@ type Tab =
  */
 const EDITING_TABS = new Set<Tab>([
   "questions", "settings", "flow", "logic", "variables", "calculations",
-  "quotas", "listfill", "designs", "branding", "localization", "scripts", "json",
+  "quotas", "listfill", "designs", "branding", "assets", "localization", "scripts", "json",
 ]);
 
 /*
@@ -69,6 +70,7 @@ const NAV: { key: Tab; label: string; icon: IconName; group: string }[] = [
   { key: "listfill", label: "List Fill", icon: "listfill", group: "Programming" },
   { key: "designs", label: "Design Generators", icon: "designs", group: "Research tools" },
   { key: "branding", label: "Branding", icon: "branding", group: "Research tools" },
+  { key: "assets", label: "Assets", icon: "assets", group: "Research tools" },
   /*
    * Translation & Localization — every language version of the survey (text
    * and audio) over the one language-neutral definition. In Research tools
@@ -789,6 +791,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           {tab === "listfill" && <ListFillPanel />}
           {tab === "designs" && <DesignsPanel />}
           {tab === "branding" && <BrandingPanel />}
+          {tab === "assets" && <AssetsPanel />}
           {tab === "localization" && <LocalizationPanel />}
           {tab === "scripts" && <ScriptsPanel />}
           {tab === "data" && <DataPanel />}

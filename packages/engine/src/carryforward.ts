@@ -19,7 +19,16 @@ import { evaluateCondition, withOption, withLegacyOptionLoop } from "./evaluate.
 import { getQuestion, lookupAnswer, loopKeySuffix } from "./state.js";
 import { resolvePiping, registerDisplayedOptionsResolver, registerEffectiveRowsResolver } from "./piping.js";
 import { evaluateSetExpr, LIST_ACTIONS } from "./setExpression.js";
-import { stripHtmlText } from "./html.js";
+import { sanitizeHtml, stripHtmlText } from "./html.js";
+
+/**
+ * A LABEL IS RENDERED AS HTML EVERYWHERE — every variant hands option, row
+ * and column labels to `dangerouslySetInnerHTML` — so this is the one seam
+ * where they can be made safe at render time: the Studio's editor sanitises
+ * on save, but a label written by an API client, an import, or before the
+ * editor did so never was. A label with no markup is returned as it is.
+ */
+const safeLabel = (label: string): string => (label.includes("<") ? sanitizeHtml(label) : label);
 import { seededShuffle, subSeed, mulberry32 } from "./random.js";
 import { hasDisplayRulesFor, ruleVerdict, visibleByRules } from "./displayRules.js";
 import { hasOptionGroups, groupsFor, orderWithGroups } from "./optionGroups.js";
@@ -1338,6 +1347,7 @@ function runOptions(
     let next = o;
     if (o.label.includes("{{")) next = { ...next, label: resolvePiping(o.label, ctx) };
     if (o.imageUrl?.includes("{{")) next = { ...next, imageUrl: resolvePiping(o.imageUrl, ctx) };
+    if (next.label.includes("<")) next = { ...next, label: safeLabel(next.label) };
     return next;
   });
 
@@ -1420,9 +1430,12 @@ function runRows(q: Question, ctx: EvalContext, rec: Recorder | null): QuestionR
       if (rec) for (const c of pinned) if (rec.byCode[c]) rec.byCode[c].pinned = true;
     }
   }
-  rows = rows.map((r) =>
-    r.label.includes("{{") ? { ...r, label: resolvePiping(r.label, ctx) } : r,
-  );
+  rows = rows.map((r) => {
+    let next = r;
+    if (r.label.includes("{{")) next = { ...next, label: resolvePiping(r.label, ctx) };
+    if (next.label.includes("<")) next = { ...next, label: safeLabel(next.label) };
+    return next;
+  });
 
   if (rec) {
     rows.forEach((r, i) => {
@@ -1496,6 +1509,7 @@ function runColumns(q: Question, ctx: EvalContext): QuestionColumn[] {
       col = { ...col, options: applyEligibility(col.options, ctx, null) };
     }
     if (col.label.includes("{{")) col = { ...col, label: resolvePiping(col.label, ctx) };
+    if (col.label.includes("<")) col = { ...col, label: safeLabel(col.label) };
     return col;
   });
 

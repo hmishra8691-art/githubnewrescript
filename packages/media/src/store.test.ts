@@ -47,12 +47,23 @@ export function stub(opts: { objects?: Set<string>; failUploadUrl?: boolean; sto
       },
       select() { return q; },
       update(patch: Record<string, unknown>) {
-        return {
-          eq(col: string, val: unknown) {
-            for (const r of store.values()) if (r[col] === val) Object.assign(r, patch);
-            return Promise.resolve({ data: null, error: null });
-          },
+        /*
+         * `.update().eq().eq()…` then either awaited, or `.select().maybeSingle()`
+         * for the row back — both shapes the store uses. Filters accumulate;
+         * the write happens when the chain is awaited or selected.
+         */
+        const where: Array<(r: Record<string, unknown>) => boolean> = [];
+        const apply = () => {
+          const hit = [...store.values()].filter((r) => where.every((f) => f(r)));
+          for (const r of hit) Object.assign(r, patch);
+          return hit;
         };
+        const u: Record<string, unknown> = {
+          eq(col: string, val: unknown) { where.push((r) => r[col] === val); return u; },
+          select: () => ({ maybeSingle: async () => ({ data: apply()[0] ?? null, error: null }), single: async () => ({ data: apply()[0] ?? null, error: null }) }),
+          then: (res: (v: { data: unknown; error: null }) => unknown) => { apply(); return res({ data: null, error: null }); },
+        };
+        return u;
       },
       delete() {
         return {
@@ -66,6 +77,8 @@ export function stub(opts: { objects?: Set<string>; failUploadUrl?: boolean; sto
       neq(col: string, val: unknown) { filters.push((r) => r[col] !== val); return q; },
       in(col: string, vals: unknown[]) { filters.push((r) => vals.includes(r[col])); return q; },
       lt(col: string, val: unknown) { filters.push((r) => String(r[col]) < String(val)); return q; },
+      order() { return q; },
+      limit() { return q; },
       maybeSingle: async () => ({ data: match()[0] ?? null, error: null }),
       single: async () => ({ data: match()[0] ?? null, error: null }),
       then: (res: (v: { data: unknown; error: null }) => unknown) => res({ data: match(), error: null }),

@@ -81,6 +81,47 @@ browser ◀──302 to a 15-minute signed URL──── /api/media/<id>  (acc
 - **Retired:** `POST /api/upload` and `POST /api/surveys/[id]/audio` answer
   410 with a sentence.
 
+## The asset library (0040)
+
+Survey Studio has an **Assets** tab: every image, logo, video, audio clip
+and document a survey uses, as `media_objects` rows of kind `survey_asset`,
+in the same R2 bucket through the same browser-direct uploader. The user
+never leaves the Studio to upload or manage media.
+
+- **Upload** with a real progress bar (parts of 8 MB, resumable), multi-file
+  and drag-and-drop. The browser hashes the file first and asks
+  `POST /media/lookup`; an identical file already in the library is reused,
+  so the same logo dragged in three times is one object.
+- **Server-side allowlist** (`ASSET_MIME_TYPES` in `plan.ts`): images,
+  video, audio, PDF and Office documents; never HTML, archives or
+  executables. Ceilings per family (`ASSET_MAX_BYTES`): 25 MB pictures,
+  50 MB audio and documents, 200 MB video. Refused in the browser with the
+  same sentence before a byte moves.
+- **Name, alt text, share.** `display_name` and `alt_text` are the
+  library's; `shared` offers the asset to every survey of the customer
+  (`GET /media` lists own + shared; `/api/media/<id>` lets any member of the
+  customer read a shared asset). The row keeps its `survey_id`; only the
+  owning survey may rename, share or delete it.
+- **Choose asset** wherever media goes — question media, option images, the
+  branding logo, block media, A/B arm media, and inside any rich text via the
+  editor's 🖼 button. One picker (`AssetPicker`), with search, type filter,
+  preview and an upload button of its own.
+- **Deletion asks first.** `GET /media/<id>` returns where the asset is used
+  — every survey of the customer whose draft or published version carries
+  its URL (`rescript_media_usage`, a text scan bounded by the customer) —
+  and the Studio searches this survey's own definition place by place. The
+  researcher sees "Q3 option 2, Branding logo; also S2 (live)" and chooses:
+  remove the references here and delete, delete anyway, or keep it.
+  `DELETE /media/<id>` refuses with 409 and the list unless `?force=1`.
+- **Replace** uploads a new file and points every reference in this survey
+  at it, then deletes the old object.
+
+Routes: `GET /api/surveys/:id/media`, `POST …/media/lookup`,
+`GET|PATCH|DELETE …/media/:mediaId`; `ticket` accepts `survey_asset`
+without a `questionId` (a library asset belongs to the survey, and
+`purgeQuestionMedia` deletes by question). Store: `listAssets`, `assetFor`,
+`findDuplicateAsset`, `updateAsset`. Migration `0040_media_assets.sql`.
+
 ## Deploying it
 
 ### The bucket
@@ -128,7 +169,7 @@ Cloudflare account (refused in production unless `MEDIA_ALLOW_MEMORY_STORAGE=1`)
 
 ### The order
 
-1. Apply `0039`. Additive; the app keeps working on Supabase.
+1. Apply `0039` and `0040`. Both additive; the app keeps working on Supabase.
 2. Deploy. With no `R2_*` set, `buildMediaStores` logs
    `Supabase Storage is primary — R2 is not configured` and behaves as before.
 3. Set the variables and redeploy. From then on new uploads go to R2; the log
