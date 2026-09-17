@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { drain } from "@/lib/runner";
-import { emptySweepReport, sweepAbandonedUploads, sweepRetention } from "@/lib/sweeps";
+import { emptySweepReport, sweepAbandonedUploads, sweepRetention, sweepOrphansEverywhere } from "@/lib/sweeps";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -69,15 +69,21 @@ async function run(req: Request): Promise<NextResponse> {
    * is not an incident — while a transcript nobody is waiting on is a
    * researcher staring at "transcribing".
    *
-   * The orphan sweep is deliberately absent from the schedule. It is the one
-   * that deletes objects the database does not know about, and it runs per
-   * organization from an explicit call rather than on a timer, so nobody
-   * discovers it by finding a bucket emptier than they left it.
+   * The orphan sweep runs last and only with time left: it is the one that
+   * deletes objects the database does not know about, so it gets the least
+   * budget and the most hedging (see `sweepOrphans`).
    */
   const sweeps = emptySweepReport();
   if (Date.now() - startedAt < 120_000) {
     await sweepAbandonedUploads(sweeps);
     await sweepRetention(sweeps);
+    /*
+     * Now scheduled. It had no caller anywhere, so a lost row meant an object
+     * kept for ever. Still per organization, still refusing if more than half
+     * of what it sees looks unclaimed, still a hundred objects per pass — and
+     * it yields the window before the function's own deadline.
+     */
+    await sweepOrphansEverywhere(sweeps, () => Date.now() - startedAt < 200_000);
   } else {
     sweeps.warnings.push("the queue took the whole window, so the sweeps were skipped this pass");
   }

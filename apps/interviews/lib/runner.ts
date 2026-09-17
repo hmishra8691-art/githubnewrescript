@@ -1,6 +1,6 @@
 import "server-only";
 import {
-  classifyFailure, decideAfterFailure, emptyReport, isJobKind, jobKey,
+  buildScorecard, classifyFailure, decideAfterFailure, emptyReport, isJobKind, jobKey,
   noteDecision, planAnalysisPrompt, readClaims, shouldClaimAnother,
   summariseRequirements, verifyEvidence,
   type DrainBudget, type DrainReport, type Job, type JobDecision, type JobKind,
@@ -446,7 +446,7 @@ const analysis: Handler = async (job, row) => {
 
   const [{ data: requirements }, { data: responses }, { data: questions }] = await Promise.all([
     db.from("interview_requirements")
-      .select("id, code, title, criteria, weight")
+      .select("id, code, title, criteria, weight, category")
       .eq("project_id", interview.project_id)
       .order("position", { ascending: true }),
     db.from("interview_responses")
@@ -462,6 +462,7 @@ const analysis: Handler = async (job, row) => {
     id: r.id as string, code: r.code as string, title: r.title as string,
     criteria: (r.criteria as string) || undefined,
     weight: Number(r.weight ?? 1),
+    category: (r.category as string | null) ?? "general",
   }));
 
   /*
@@ -578,8 +579,16 @@ const analysis: Handler = async (job, row) => {
   /* a re-run replaces: stale findings from an earlier model are not evidence */
   await db.from("interview_evidence").delete().eq("interview_id", interviewId);
 
+  /*
+   * THE SCORECARD IS BUILT FROM THE ROWS AS WRITTEN, not from the model's
+   * claims. `verified.evidence` has already had every unquoted claim
+   * downgraded; the insert below returns the ids, and `buildScorecard` names
+   * those ids in every number it produces. A score that could not be expanded
+   * into stored evidence rows would be a score about nothing.
+   */
+  let insertedEvidence: { id: string; requirement_id: string; response_id: string | null; question_id: string | null; verdict: string; quote: string | null; explanation: string | null }[] = [];
   if (verified.evidence.length) {
-    await db.from("interview_evidence").insert(verified.evidence.map((e) => ({
+    const { data: inserted, error: evidenceError } = await db.from("interview_evidence").insert(verified.evidence.map((e) => ({
       interview_id: interviewId,
       project_id: interview.project_id,
       requirement_id: e.requirementId,
@@ -592,8 +601,23 @@ const analysis: Handler = async (job, row) => {
       quote_end_seconds: e.quoteEndSeconds,
       provider: process.env.AI_API_URL === "fake:" ? "fake" : "openai-compatible",
       model: process.env.AI_MODEL ?? null,
-    })));
+    }))).select("id, requirement_id, response_id, question_id, verdict, quote, explanation");
+    /*
+     * Previously unchecked: a duplicate pair or an off-vocabulary verdict lost
+     * the whole batch silently while the analysis row still said `complete`.
+     * Now it is the job's failure, retried like any other.
+     */
+    if (evidenceError) throw new Error(`the evidence could not be saved: ${evidenceError.message}`);
+    insertedEvidence = (inserted ?? []) as typeof insertedEvidence;
   }
+
+  const scorecard = buildScorecard(
+    reqs,
+    insertedEvidence.map((e) => ({
+      id: e.id, requirementId: e.requirement_id, responseId: e.response_id, questionId: e.question_id,
+      verdict: e.verdict as never, quote: e.quote, explanation: e.explanation,
+    })),
+  );
 
   await writeAnalysis(interviewId, interview.project_id, {
     status: "complete",
@@ -602,6 +626,7 @@ const analysis: Handler = async (job, row) => {
     requirements: reqs,
     dropped: verified.dropped.length,
     omitted: plan.omitted,
+    score: scorecard,
   });
 
   await markProcessed(interviewId);
@@ -609,12 +634,13 @@ const analysis: Handler = async (job, row) => {
   async function writeAnalysis(
     iv: string, project: string,
     body: { status: string; summary: Record<string, unknown>; narrative: string | null;
-      requirements: unknown[]; dropped?: number; omitted?: string[] },
+      requirements: unknown[]; dropped?: number; omitted?: string[]; score?: unknown },
   ) {
     await db.from("interview_analysis").upsert({
       interview_id: iv,
       project_id: project,
       status: body.status,
+      score: body.score ?? null,
       summary: {
         ...body.summary,
         ...(body.dropped ? { _unverifiedClaimsDropped: body.dropped } : {}),

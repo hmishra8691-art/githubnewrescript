@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { RESPONDENT_RETENTION_DAYS, RESPONDENT_RETENTION_SCOPE } from "@rescript/interviews";
 import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireUser } from "@/lib/auth";
 
@@ -79,7 +80,15 @@ export async function POST(req: NextRequest) {
     description: String(body?.description ?? "").slice(0, 2000),
     instructions: String(body?.instructions ?? "").slice(0, 8000),
     consent_text: String(body?.consentText ?? DEFAULT_CONSENT).slice(0, 8000),
-    retention_days: Number.isInteger(body?.retentionDays) ? body.retentionDays : 90,
+    /*
+     * SEVEN DAYS, AND EVERYTHING ABOUT THE SITTING. The brief's rule for
+     * respondent data, and a defensible position: a hiring decision is made
+     * within a week or it is made from notes. Existing projects keep their
+     * ninety days and their media-only scope — this is a default for NEW
+     * projects, not a migration of anybody's policy.
+     */
+    retention_days: Number.isInteger(body?.retentionDays) ? body.retentionDays : RESPONDENT_RETENTION_DAYS,
+    retention_scope: RESPONDENT_RETENTION_SCOPE,
   }).select("*").single();
   if (error) return NextResponse.json({ error: "We could not create that project." }, { status: 503 });
 

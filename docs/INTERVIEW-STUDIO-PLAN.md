@@ -119,25 +119,58 @@ re-attached on the question screen (it used to record into a black box), the
 camera is asked for only when a question needs one, and retake and skip are
 server-side facts rather than local state.
 
-**Phase 4 — evaluation and reporting.** Next. Evidence-gated scoring, the recruiter
-dashboard, the paginated printable report.
+**Phase 4 — evaluation and reporting. Done.** Scoring is evidence-gated, as
+decided: `buildScorecard` in `@rescript/interviews` turns the analysis's
+requirement verdicts into points (evidence 1, partial 0.5, insufficient 0),
+but a verdict only counts at its strength if a quoted passage supports it, so
+every number on the card names the evidence ids behind it and a requirement
+with no quote says what a stronger answer *would have shown* — its own
+criteria, never an invention. Weights are per requirement (0 = tracked, not
+scored) and each requirement carries a `category` (migration 0036), so the
+card rolls up by category as well as overall. The runner stores the card in
+`interview_analysis.score` beside the narrative; nothing is recomputed on
+read. The recruiter's project page gained "Evidence score" and "Coverage"
+columns from that snapshot, the interview page shows the expandable
+`Scorecard`, and `/interviews/[id]/report` is the paginated printable report
+(cover, scorecard, strengths and gaps, question by question with transcript
+and quotes, the human assessment) with print CSS page breaks — a browser's
+"Save as PDF" is the PDF, per the repo's precedent. Quotes on the report are
+gated on `transcript.read`, the rest on `analysis.read`. `SCORE_CAVEAT` is the
+first line on every surface.
 
-**Phase 5 — mock interviews and retention.** The mock concept does not exist in
-the schema at all, and the brief's 24-hour rule is currently unrepresentable:
-`retention_days` is an integer with a floor of 1 and the sweep's arithmetic is
-in whole days. Both need schema work. Retention also does not currently touch
-respondent PII, telemetry or responses — only media — and the sweep has a
-truncation bug that orphans objects past the first hundred.
+**Phase 5 — mock interviews and retention. Done.** `interview_projects.mode`
+(`hiring` | `mock`), `category`, `template_key` and `retention_hours` are new
+(0036). A mock interview is an ordinary project created from a code template
+(`mockLibrary.ts`, nine templates across eleven categories) with the signed-in
+person as its only candidate — `POST /api/mock/start` copies the questions and
+requirements and mints the self-invite; `/practice` is the shelf. When the
+sitting finishes, the candidate's own screen polls `POST /api/candidate/feedback`,
+which answers 404 for any non-mock project (so a hiring candidate learns
+nothing, including that the route exists) and otherwise returns
+`buildFeedback(card)` — about the answers, never the person — practice
+suggestions from the same shelf, and signed download URLs for the person's own
+recordings. Retention: `retention_hours` beats `retention_days`, the window
+runs from the LAST activity, and the scope now covers `responses`,
+`telemetry` and `identity` as well as media, transcripts and analysis. New
+hiring projects default to seven days with the full respondent scope; mock
+projects to 24 hours with everything but the analysis (the feedback is the
+person's). The sweep's truncation bug is fixed: `deleteVerified` deletes in
+batches of 100, HEADs each key after, writes `interview_deletions` per object,
+and marks a row only when its objects are confirmed gone. The orphan sweep now
+has a caller (`sweepOrphansEverywhere`, every cron run, time-boxed). Managers
+get `/projects/[id]/data` — every interview × response with its media,
+transcript, analysis and telemetry ids, and the deletions ledger under it.
+The candidate's first and last screens state the retention period.
 
-**Phase 6 — code responses.** The editor dependency and question type.
+**Phase 6 — code responses.** Next. The editor dependency and question type.
 
 ## Carried findings not yet fixed
 
 Recorded here so they are not lost between phases.
 
-- The retention sweep deletes at most 100 objects but marks every row deleted,
-  leaving objects that no row can name and that the orphan sweep classifies as
-  claimed. The orphan sweep itself has no caller.
+- ~~The retention sweep deletes at most 100 objects but marks every row deleted;
+  the orphan sweep has no caller.~~ Fixed in Phase 5 (`deleteVerified`,
+  `sweepOrphansEverywhere`).
 - `sessions/upload/begin` enforces no byte ceiling at all, and `SessionRecorder`
   sets no bitrate against a 25 MB transcription cap, so moderated recordings
   become untranscribable within a minute or two.

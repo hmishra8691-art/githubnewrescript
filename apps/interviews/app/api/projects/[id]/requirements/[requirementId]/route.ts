@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { checkRequirement, normaliseCode, weightOf } from "@rescript/interviews";
+import { checkRequirement, isRequirementCategory, normaliseCode, weightOf } from "@rescript/interviews";
 import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProject } from "@/lib/auth";
 
@@ -38,6 +38,7 @@ export async function PATCH(
   if (Object.hasOwn(body ?? {}, "description")) patch.description = String(body.description ?? "").slice(0, 4000);
   if (Object.hasOwn(body ?? {}, "criteria")) patch.criteria = String(body.criteria ?? "").slice(0, 4000);
   if (Object.hasOwn(body ?? {}, "weight")) patch.weight = weightOf(body.weight);
+  if (Object.hasOwn(body ?? {}, "category") && isRequirementCategory(body.category)) patch.category = body.category;
   if (Object.hasOwn(body ?? {}, "code")) {
     const code = normaliseCode(body.code);
     if (code) patch.code = code;
@@ -47,7 +48,7 @@ export async function PATCH(
     .update(patch)
     .eq("id", params.requirementId)
     .eq("project_id", params.id)
-    .select("id, code, title, description, criteria, weight, position")
+    .select("id, code, title, description, criteria, weight, category, position")
     .maybeSingle();
 
   if (error) return NextResponse.json({ error: "That requirement could not be saved." }, { status: 503 });

@@ -10,3 +10,6 @@ export * from "./prompt.js";
 export * from "./sweeps.js";
 export * from "./authoring.js";
 export * from "./definition.js";
+export * from "./scoring.js";
+export * from "./feedback.js";
+export * from "./mockLibrary.js";

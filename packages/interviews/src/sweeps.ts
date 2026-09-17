@@ -31,6 +31,12 @@ export interface RetentionPlan {
   transcripts: boolean;
   /** the machine's reading of the words */
   analysis: boolean;
+  /** typed and chosen answers, and the transcript copied onto the response */
+  responses: boolean;
+  /** focus, paste, timing events */
+  telemetry: boolean;
+  /** the person's name, email, hashed IP, user agent and roster row */
+  identity: boolean;
   /** true when nothing at all would be removed, so the sweep can skip the interview */
   empty: boolean;
 }
@@ -57,7 +63,26 @@ export function retentionPlan(
   const media = s.media !== false;
   const transcripts = s.transcripts === true;
   const analysis = s.analysis === true;
-  return { media, transcripts, analysis, empty: !media && !transcripts && !analysis };
+  const responses = s.responses === true;
+  const telemetry = s.telemetry === true;
+  const identity = s.identity === true;
+  return {
+    media, transcripts, analysis, responses, telemetry, identity,
+    empty: !media && !transcripts && !analysis && !responses && !telemetry && !identity,
+  };
+}
+
+/**
+ * The retention window, in milliseconds.
+ *
+ * Hours win over days when both are set, because hours were added precisely
+ * to express what days cannot — a practice recording kept for one day. Null
+ * means no policy, and no policy means nothing is ever due.
+ */
+export function retentionWindowMs(days: number | null | undefined, hours: number | null | undefined): number | null {
+  if (hours && hours > 0) return hours * 3_600_000;
+  if (days && days > 0) return days * 86_400_000;
+  return null;
 }
 
 /**
@@ -70,16 +95,25 @@ export function retentionPlan(
  * deletion script.
  */
 export function isRetentionDue(
-  interview: { completedAt: string | Date | null; mediaPurgedAt: string | Date | null },
+  interview: { completedAt: string | Date | null; lastActivityAt?: string | Date | null; mediaPurgedAt: string | Date | null },
   retentionDays: number | null | undefined,
   now: Date = new Date(),
+  retentionHours: number | null | undefined = null,
 ): boolean {
-  if (!retentionDays || retentionDays <= 0) return false;
+  const windowMs = retentionWindowMs(retentionDays, retentionHours);
+  if (windowMs === null) return false;
   if (interview.mediaPurgedAt) return false;
-  if (!interview.completedAt) return false;
-  const completed = new Date(interview.completedAt).getTime();
-  if (!Number.isFinite(completed)) return false;
-  return now.getTime() - completed >= retentionDays * 86_400_000;
+  /*
+   * From the LAST ACTIVITY, not from completion. An interview that was never
+   * finished used to be exempt for ever — a candidate who recorded two answers
+   * and closed the tab kept those recordings indefinitely, which is the
+   * opposite of what a retention policy is for.
+   */
+  const anchor = interview.lastActivityAt ?? interview.completedAt;
+  if (!anchor) return false;
+  const at = new Date(anchor).getTime();
+  if (!Number.isFinite(at)) return false;
+  return now.getTime() - at >= windowMs;
 }
 
 /* ------------------------------------------------------ abandoned uploads */

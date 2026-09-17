@@ -62,6 +62,9 @@ export interface CandidateGate {
     settings: Record<string, unknown>;
     selection: unknown;
     max_recording_seconds: number | null;
+    mode?: string | null;
+    retention_days?: number | null;
+    retention_hours?: number | null;
   };
 }
 
@@ -125,7 +128,7 @@ export async function candidateGate(token: unknown): Promise<CandidateGate | Can
 
   const { data: project } = await db
     .from("interview_projects")
-    .select("id, customer_id, name, instructions, consent_text, status, settings, selection, max_recording_seconds, deleted_at")
+    .select("id, customer_id, name, instructions, consent_text, status, settings, selection, max_recording_seconds, mode, retention_days, retention_hours, deleted_at")
     .eq("id", interview.project_id)
     .maybeSingle();
   if (!project || project.deleted_at) {

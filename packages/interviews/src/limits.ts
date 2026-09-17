@@ -177,7 +177,25 @@ export interface RetentionScope {
   media: boolean;
   transcripts: boolean;
   analysis: boolean;
+  /** typed and chosen answers, and the transcript copied onto the response row */
+  responses?: boolean;
+  /** the behavioural events — focus, paste, timings */
+  telemetry?: boolean;
+  /** the person: name, email, hashed IP, user agent, roster row */
+  identity?: boolean;
 }
+
+/**
+ * The brief's rule for respondent data: seven days, then everything about the
+ * sitting goes. New projects get this; existing projects keep what they had,
+ * because a code change must not decide to destroy things.
+ */
+export const RESPONDENT_RETENTION_SCOPE: RetentionScope = {
+  media: true, transcripts: true, analysis: false, responses: true, telemetry: true, identity: true,
+};
+export const RESPONDENT_RETENTION_DAYS = 7;
+/** A practice recording is the person's own; it is kept a day so they can download it. */
+export const MOCK_RETENTION_HOURS = 24;
 
 export const DEFAULT_RETENTION_SCOPE: RetentionScope = {
   /* the recording is the expensive, sensitive thing and the usual reason a

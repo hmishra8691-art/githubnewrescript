@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { checkRequirement, nextCode, normaliseCode, weightOf } from "@rescript/interviews";
+import { checkRequirement, isRequirementCategory, nextCode, normaliseCode, weightOf } from "@rescript/interviews";
 import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProject } from "@/lib/auth";
 
@@ -35,7 +35,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
   const { data } = await supabaseAdmin()
     .from("interview_requirements")
-    .select("id, code, title, description, criteria, weight, position")
+    .select("id, code, title, description, criteria, weight, category, position")
     .eq("project_id", params.id)
     .order("position");
 
@@ -71,8 +71,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     description: String(body?.description ?? "").slice(0, 4000),
     criteria: String(body?.criteria ?? "").slice(0, 4000),
     weight: weightOf(body?.weight),
+    category: isRequirementCategory(body?.category) ? body.category : "general",
     position: Math.max(0, ...(existing ?? []).map((r) => Number(r.position) || 0)) + 1,
-  }).select("id, code, title, description, criteria, weight, position").maybeSingle();
+  }).select("id, code, title, description, criteria, weight, category, position").maybeSingle();
 
   if (error) return NextResponse.json({ error: "That requirement could not be added." }, { status: 503 });
   return NextResponse.json({ ok: true, requirement: data, warnings: check.warnings }, { status: 201 });

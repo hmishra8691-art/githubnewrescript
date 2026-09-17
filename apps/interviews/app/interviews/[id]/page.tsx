@@ -10,6 +10,8 @@ import {
   InterviewReview, type EvidenceView, type RecordingView,
 } from "@/components/InterviewReview";
 import { ReviewPanel, type ReviewRequirement } from "@/components/ReviewPanel";
+import { Scorecard } from "@/components/Scorecard";
+import { readScorecard } from "@rescript/interviews";
 
 export const dynamic = "force-dynamic";
 
@@ -86,7 +88,7 @@ export default async function InterviewPage({ params }: { params: { id: string }
         .select("requirement_id, verdict, explanation, quote, quote_start_seconds")
         .eq("interview_id", params.id),
       db.from("interview_analysis")
-        .select("narrative, summary, status")
+        .select("narrative, summary, status, score")
         .eq("interview_id", params.id)
         .maybeSingle(),
       db.from("interview_telemetry")
@@ -250,6 +252,9 @@ export default async function InterviewPage({ params }: { params: { id: string }
           </p>
         </div>
         <div className="row" style={{ gap: 8 }}>
+          {analysis?.status === "complete" && (
+            <Link className="btn secondary" href={`/interviews/${params.id}/report`} data-testid="open-report">Report</Link>
+          )}
           <Link className="btn secondary" href={`/interviews/${params.id}/record`}>Record</Link>
           <Link className="btn secondary" href={`/projects/${interview.project_id}`}>Back to project</Link>
         </div>
@@ -259,6 +264,22 @@ export default async function InterviewPage({ params }: { params: { id: string }
         <p className="note warn">
           Your role on this project lets you follow its progress but not watch recordings.
         </p>
+      )}
+
+      {/*
+        * The scorecard, when the analysis has produced one. Above the
+        * recordings because it is the summary, and each of its numbers expands
+        * into quotes. It is gated on `mayWatch` exactly like the transcripts:
+        * a `viewer` who cannot open a score into the words behind it would be
+        * holding precisely the bare number this product refuses to emit.
+        */}
+      {mayWatch && analysis?.status === "complete" && readScorecard(analysis.score) && (
+        <Scorecard
+          card={readScorecard(analysis.score)!}
+          questionCodes={Object.fromEntries((media ?? []).filter((m) => m.response_id).map((m) => [
+            m.response_id as string, (questionById.get((m.question_id as string) ?? "")?.code as string) ?? "",
+          ]))}
+        />
       )}
 
       {(written ?? []).length > 0 && (

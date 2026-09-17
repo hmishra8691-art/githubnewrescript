@@ -81,6 +81,7 @@ export default async function Home({
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 16 }}>
         <h1 style={{ margin: 0 }}>Interviews</h1>
         <div className="row" style={{ gap: 12, alignItems: "center" }}>
+          <Link className="btn secondary small" href="/practice" data-testid="open-practice">Practice interviews</Link>
           {/* the way back. A plain link: the session cookie is already on that origin. */}
           <a className="btn secondary small" href={studioUrl()} data-testid="back-to-studio">
             Rescript Studio

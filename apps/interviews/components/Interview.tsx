@@ -69,7 +69,7 @@ interface Question {
 interface StartReply {
   ok: boolean;
   interview: { id: string; status: string; candidateName: string | null; consentGivenAt: string | null; isTest: boolean };
-  project: { name: string; instructions: string; consentText: string };
+  project: { name: string; instructions: string; consentText: string; mode?: string; retentionSay?: string | null };
   questions: Question[];
   sequence: string[];
   seed: string | null;
@@ -785,11 +785,15 @@ export function Interview({ token }: { token: string }) {
   if (!data) return <main className="wrap"><div className="card"><p className="muted">Opening your interview…</p></div></main>;
 
   if (phase === "done") {
+    if (data.project.mode === "mock") {
+      return <MockFeedback token={token} projectName={data.project.name} />;
+    }
     return (
       <main className="wrap">
         <div className="card" data-testid="done">
           <h1>Thank you</h1>
           <p>Your interview is complete and every answer has been confirmed in storage. You can close this page.</p>
+          {data.project.retentionSay && <p className="tiny muted">{data.project.retentionSay}</p>}
           <p className="muted small">{data.project.name}</p>
         </div>
       </main>
@@ -811,6 +815,9 @@ export function Interview({ token }: { token: string }) {
               ? `You record ${recordedCount === ordered.length ? "each" : `${recordedCount} of the`} answer${recordedCount === 1 ? "" : "s"} and can see exactly when each one has been saved.`
               : "Every answer is typed or chosen — nothing is recorded."}
           </p>
+          {data.project.retentionSay && (
+            <p className="tiny muted" data-testid="retention-notice">{data.project.retentionSay}</p>
+          )}
         </div>
 
         {!data.canRecord && recordedCount > 0 && (
@@ -1145,4 +1152,165 @@ function uploadWord(s: UploadState): string {
     case "failed": return "Not saved";
     default: return "";
   }
+}
+
+
+/* ================================================================== mock */
+
+interface FeedbackReply {
+  ok: boolean;
+  ready: boolean;
+  say?: string;
+  retention?: string;
+  feedback?: {
+    overall: number | null; headline: string; caveat: string;
+    didWell: { code: string; title: string; quotes: string[]; advice: string | null }[];
+    needsWork: { code: string; title: string; quotes: string[]; advice: string | null }[];
+    nearlyThere: { code: string; title: string; quotes: string[]; advice: string | null }[];
+    recommendedChanges: string[];
+    practiceNext: { reason: string; categories: string[] };
+  };
+  narrative?: string | null;
+  practice?: { key: string; title: string; minutes: number; category: string }[];
+  downloads?: { mediaId: string; questionId: string | null; url: string; expiresIn: number }[];
+}
+
+/**
+ * WHAT YOU SAID, READ BACK TO YOU.
+ *
+ * Only a mock interview ever reaches this screen — the route behind it answers
+ * 404 for anything else, so a hiring candidate cannot get here by finishing.
+ * It polls while the transcripts and analysis run, and says what it is waiting
+ * for rather than spinning. The caveat is the first thing on the card and it
+ * says what a gap means: the words were not found, not that you cannot do it.
+ */
+function MockFeedback({ token, projectName }: { token: string; projectName: string }) {
+  const [reply, setReply] = React.useState<FeedbackReply | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    let stop = false;
+    let attempts = 0;
+    const tick = async () => {
+      try {
+        const res = await fetch("/api/candidate/feedback", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token, downloads: true }),
+        });
+        const j = (await res.json().catch(() => ({}))) as FeedbackReply & { error?: string };
+        if (stop) return;
+        if (!res.ok) { setError(j.error ?? "Feedback is not available."); return; }
+        setReply(j);
+        if (!j.ready && attempts++ < 60) setTimeout(tick, 5000);
+      } catch { if (!stop) setError("We could not reach the server."); }
+    };
+    void tick();
+    return () => { stop = true; };
+  }, [token]);
+
+  if (error) {
+    return <main className="wrap"><div className="card"><h1>Thank you</h1><p className="note warn">{error}</p></div></main>;
+  }
+  if (!reply) {
+    return <main className="wrap"><div className="card"><h1>Thank you</h1><p className="muted">Fetching your feedback…</p></div></main>;
+  }
+  if (!reply.ready) {
+    return (
+      <main className="wrap">
+        <div className="card" data-testid="feedback-waiting">
+          <h1>Thank you</h1>
+          <p>Your answers are saved. {reply.say}</p>
+          <p className="tiny muted">This page updates itself. Feedback usually takes a few minutes.</p>
+          {reply.retention && <p className="tiny muted">{reply.retention}</p>}
+          <Downloads items={reply.downloads ?? []} />
+        </div>
+      </main>
+    );
+  }
+
+  const f = reply.feedback!;
+  return (
+    <main className="wrap">
+      <div className="card" data-testid="feedback">
+        <h1>Your feedback</h1>
+        <p className="tiny muted">{projectName}</p>
+        <p className="note">{f.caveat}</p>
+        <div className="row" style={{ gap: 16, alignItems: "flex-end" }}>
+          <div style={{ fontSize: 40, fontWeight: 700, lineHeight: 1 }} data-testid="feedback-overall">
+            {f.overall === null ? "—" : f.overall}{f.overall !== null && <span className="muted" style={{ fontSize: 16, fontWeight: 400 }}> / 100</span>}
+          </div>
+          <p style={{ margin: 0 }}>{f.headline}</p>
+        </div>
+      </div>
+
+      <FeedbackGroup title="What you did well" items={f.didWell} tone="ok" empty="Nothing was clearly shown yet — see below for what to add." />
+      <FeedbackGroup title="Nearly there" items={f.nearlyThere} tone="" empty="" />
+      <FeedbackGroup title="What to add next time" items={f.needsWork} tone="warn" empty="Every requirement had quoted evidence. Well done." />
+
+      {f.recommendedChanges.length > 0 && (
+        <div className="card" data-testid="feedback-changes">
+          <h2 style={{ marginTop: 0 }}>Recommended changes</h2>
+          <ul>{f.recommendedChanges.map((c) => <li key={c} className="small">{c}</li>)}</ul>
+        </div>
+      )}
+
+      {reply.narrative && (
+        <div className="card"><h2 style={{ marginTop: 0 }}>What the transcripts covered</h2><p className="small">{reply.narrative}</p></div>
+      )}
+
+      {reply.practice && reply.practice.length > 0 && (
+        <div className="card" data-testid="feedback-practice">
+          <h2 style={{ marginTop: 0 }}>Practise next</h2>
+          <p className="tiny muted">{f.practiceNext.reason}</p>
+          {reply.practice.map((p) => (
+            <p key={p.key} className="small" style={{ margin: "6px 0" }}>
+              <strong>{p.title}</strong> <span className="muted">· about {p.minutes} min</span>
+            </p>
+          ))}
+          <a className="btn secondary" href="/practice">Choose another practice interview</a>
+        </div>
+      )}
+
+      <div className="card">
+        <Downloads items={reply.downloads ?? []} />
+        {reply.retention && <p className="tiny muted" style={{ marginTop: 8 }}>{reply.retention}</p>}
+      </div>
+    </main>
+  );
+}
+
+function FeedbackGroup({ title, items, tone, empty }: {
+  title: string; tone: string; empty: string;
+  items: { code: string; title: string; quotes: string[]; advice: string | null }[];
+}) {
+  if (!items.length && !empty) return null;
+  return (
+    <div className="card" data-testid={`feedback-${title.toLowerCase().replace(/[^a-z]+/g, "-")}`}>
+      <h2 style={{ marginTop: 0 }}>{title}</h2>
+      {items.length === 0 ? <p className="muted small">{empty}</p> : items.map((it) => (
+        <div key={it.code} style={{ borderTop: "1px solid var(--line)", paddingTop: 8, marginTop: 8 }}>
+          <span className={`pill ${tone}`}>{it.code}</span> <strong>{it.title}</strong>
+          {it.quotes.map((q, i) => (
+            <blockquote key={i} style={{ margin: "6px 0", paddingLeft: 10, borderLeft: "3px solid var(--line)" }}>&ldquo;{q}&rdquo;</blockquote>
+          ))}
+          {!it.quotes.length && it.advice && (
+            <p className="small" style={{ margin: "6px 0 0" }}><span className="muted">A stronger answer would include:</span> {it.advice}</p>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Downloads({ items }: { items: { mediaId: string; url: string; expiresIn: number }[] }) {
+  if (!items.length) return null;
+  return (
+    <div data-testid="feedback-downloads">
+      <h2 style={{ marginTop: 0 }}>Your recordings</h2>
+      <p className="tiny muted">Links work for {Math.round(items[0]!.expiresIn / 60)} minutes; reload this page for fresh ones.</p>
+      <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+        {items.map((d, i) => <a key={d.mediaId} className="btn small secondary" href={d.url}>Download answer {i + 1}</a>)}
+      </div>
+    </div>
+  );
 }

@@ -1,6 +1,6 @@
 "use client";
 import React from "react";
-import { MAX_WEIGHT, checkRequirement } from "@rescript/interviews";
+import { CATEGORY_SAY, MAX_WEIGHT, REQUIREMENT_CATEGORIES, checkRequirement, type RequirementCategory } from "@rescript/interviews";
 
 export interface BuilderRequirement {
   id: string;
@@ -9,6 +9,7 @@ export interface BuilderRequirement {
   description: string | null;
   criteria: string | null;
   weight: number;
+  category?: string | null;
   position: number;
 }
 
@@ -53,7 +54,7 @@ export function RequirementsPanel({ projectId, requirements: initial, mayEdit }:
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           title: draft.title, description: draft.description,
-          criteria: draft.criteria, weight: draft.weight,
+          criteria: draft.criteria, weight: draft.weight, category: draft.category,
         }),
       },
     );
@@ -122,6 +123,9 @@ export function RequirementsPanel({ projectId, requirements: initial, mayEdit }:
                   <span className="pill" title="How much this counts relative to the others">
                     {r.weight === 0 ? "not scored" : `weight ${r.weight}`}
                   </span>
+                  {r.category && r.category !== "general" && (
+                    <span className="pill">{CATEGORY_SAY[r.category as RequirementCategory] ?? r.category}</span>
+                  )}
                 </div>
                 {r.criteria
                   ? <p className="small muted" style={{ margin: "6px 0 0" }}>{r.criteria}</p>
@@ -164,12 +168,13 @@ function RequirementForm({ initial, busy, onSave, onCancel }: {
   const [criteria, setCriteria] = React.useState(initial?.criteria ?? "");
   const [description, setDescription] = React.useState(initial?.description ?? "");
   const [weight, setWeight] = React.useState(initial?.weight ?? 1);
+  const [category, setCategory] = React.useState<RequirementCategory>((initial?.category as RequirementCategory) ?? "general");
 
   const check = checkRequirement({ title, criteria, weight });
 
   return (
     <form data-testid="requirement-form"
-      onSubmit={(e) => { e.preventDefault(); onSave({ title, criteria, description, weight }); }}>
+      onSubmit={(e) => { e.preventDefault(); onSave({ title, criteria, description, weight, category }); }}>
       <label>
         <span>What are you assessing?</span>
         <input value={title} onChange={(e) => setTitle(e.target.value)}
@@ -192,6 +197,14 @@ function RequirementForm({ initial, busy, onSave, onCancel }: {
         <span>Notes for your team (optional — never sent to the model)</span>
         <input value={description ?? ""} onChange={(e) => setDescription(e.target.value)}
           data-testid="requirement-description" />
+      </label>
+
+      <label style={{ maxWidth: 260 }}>
+        <span>Category</span>
+        <select value={category} onChange={(e) => setCategory(e.target.value as RequirementCategory)} data-testid="requirement-category">
+          {REQUIREMENT_CATEGORIES.map((c) => <option key={c} value={c}>{CATEGORY_SAY[c]}</option>)}
+        </select>
+        <span className="tiny muted">Groups requirements for a category-level score on the report.</span>
       </label>
 
       <label style={{ maxWidth: 220 }}>

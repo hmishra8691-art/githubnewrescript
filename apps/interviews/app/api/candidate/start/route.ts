@@ -67,6 +67,17 @@ export async function POST(req: NextRequest) {
       name: gate.project.name,
       instructions: gate.project.instructions,
       consentText: gate.project.consent_text,
+      /*
+       * Said to the candidate on their own screen, because a retention period
+       * nobody is told about is a policy, not a promise. Hours when the
+       * project says hours — a practice recording is kept a day.
+       */
+      mode: gate.project.mode ?? "hiring",
+      retentionSay: gate.project.retention_hours
+        ? `Your recording is kept for ${gate.project.retention_hours} hours after you finish, then deleted.`
+        : gate.project.retention_days
+          ? `Your recording is kept for ${gate.project.retention_days} day${gate.project.retention_days === 1 ? "" : "s"} after you finish, then deleted.`
+          : null,
     },
     questions,
     /*
