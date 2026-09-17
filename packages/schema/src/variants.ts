@@ -52,6 +52,13 @@ export type VariantCapability =
   | "min_max_selections"
   | "numeric_bounds"
   | "scale_labels" // left/right end labels
+  /**
+   * A symbol beside the number, and which side it sits: a currency dropdown
+   * (or a typed symbol for anything not in the list) and left/right. Declared
+   * by Currency and Percentage, which were otherwise indistinguishable from
+   * a plain numeric question.
+   */
+  | "currency_symbol"
   | "sum"
   | "sorting"
   | "randomization"
@@ -107,6 +114,20 @@ export interface QuestionVariantDef {
    * shows the range and offers no way to change it.
    */
   scale?: { min: number; max: number; fixed?: boolean };
+  /**
+   * WHICH FIELD TYPES A FORM-STYLE LIST MAY USE, AND WHETHER ITS FIELD LIST
+   * IS FIXED.
+   *
+   * There is one field-type dropdown in the Studio and it offered all twelve
+   * types to every list question, so a Numeric Range's From and To could be
+   * set to Long Text or Email, and a "+ field" button could turn a two-ended
+   * range into a three-ended one. The review asked for exactly this: "remove
+   * the irrelevant field types", "remove the +Field option if Numeric Range is
+   * intended to support only predefined range-related field types".
+   *
+   * Absent means what it always meant: every type, and fields may be added.
+   */
+  fields?: { types?: string[]; fixed?: boolean };
   /** applied on creation / conversion (merged into the question) */
   defaults?: {
     settings?: Record<string, unknown>;
@@ -246,7 +267,14 @@ export function allowedValidationKinds(
   return [...new Set([...base, ...UNIVERSAL_VALIDATIONS])];
 }
 
-const VAL_TEXT = ["required", "min_length", "max_length", "pattern", "email", "custom_expression"];
+/*
+ * The parent of every text preset declares everything its presets narrow to —
+ * the registry test enforces that, and rightly: a preset that unlocks a
+ * validator its type lacks is a type wearing a preset's label. `phone`, `url`
+ * and `zip` join the list because the specialised subtypes now seed a real
+ * check of their own instead of a regex that only looked like one.
+ */
+const VAL_TEXT = ["required", "min_length", "max_length", "pattern", "email", "phone", "url", "zip", "custom_expression"];
 const VAL_NUM = ["required", "min_value", "max_value", "integer", "custom_expression"];
 
 interface Fam {
@@ -538,29 +566,45 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   }),
   stable(F.text, "email", "Email", "Validated email address.", {
     baseType: "open_text", responseModel: "text",
-    validations: ["required", "email", "min_length", "max_length", "pattern"],
+    validations: ["required", "email"],
     defaults: { validation: [{ kind: "email" }], settings: { placeholder: "name@example.com" } },
     presetOf: "text.single_line",
   }),
-  stable(F.text, "phone", "Phone Number", "Validated phone number.", {
+  /*
+   * THE SPECIALISED TEXT SUBTYPES NOW SEED THEIR OWN CHECK.
+   *
+   * Phone, URL and ZIP each seeded a `pattern` rule carrying a regex, which
+   * had three consequences the review reported. The Validation panel showed
+   * the author an expression instead of "is a phone number". Switching
+   * subtype left the previous subtype's expression sitting there, because one
+   * pattern rule looks like any other. And a pattern is one rule for the
+   * whole world, so there was nowhere to say which country's format applied.
+   *
+   * Each has a kind of its own now — `phone`, `url`, `zip` — which reads the
+   * question's country where there is one. `min_length` / `max_length` are
+   * gone from their validation lists: the review asked for that directly
+   * ("these fields are not necessary for these specialized inputs"), and a
+   * length bound on a postal code is a way to reject a real address.
+   */
+  stable(F.text, "phone", "Phone Number", "Validated phone number, optionally for a chosen country.", {
     baseType: "open_text", responseModel: "text",
-    validations: ["required", "pattern", "min_length", "max_length"],
+    validations: ["required", "phone"],
     defaults: {
-      validation: [{ kind: "pattern", value: "^\\+?[0-9()\\-\\.\\s]{7,20}$", message: "Please enter a valid phone number." }],
+      validation: [{ kind: "phone" }],
       settings: { placeholder: "+1 555 123 4567" },
     },
     presetOf: "text.single_line",
   }),
   stable(F.text, "url", "URL", "Validated web address.", {
     baseType: "open_text", responseModel: "text",
-    validations: ["required", "pattern"],
-    defaults: { validation: [{ kind: "pattern", value: "^(https?:\\/\\/)?[\\w.-]+\\.[A-Za-z]{2,}(\\/\\S*)?$", message: "Please enter a valid URL." }] },
+    validations: ["required", "url"],
+    defaults: { validation: [{ kind: "url" }], settings: { placeholder: "https://example.com" } },
     presetOf: "text.single_line",
   }),
-  stable(F.text, "zip", "ZIP / Postal Code", "Validated postal code.", {
+  stable(F.text, "zip", "ZIP / Postal Code", "Validated postal code, optionally for a chosen country.", {
     baseType: "open_text", responseModel: "text",
-    validations: ["required", "pattern"],
-    defaults: { validation: [{ kind: "pattern", value: "^[A-Za-z0-9][A-Za-z0-9\\- ]{2,9}$", message: "Please enter a valid postal code." }] },
+    validations: ["required", "zip"],
+    defaults: { validation: [{ kind: "zip" }], settings: { placeholder: "Enter ZIP / postal code" } },
     presetOf: "text.single_line",
   }),
   stable(F.text, "regex", "Masked / Regex Text", "Free text constrained by a custom pattern.", {
@@ -608,9 +652,17 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   }),
 
   /* -------------------------------------------------------------- NUMERIC */
-  stable(F.numeric, "open", "Numeric Open End", "Any number.", {
+  /*
+   * `currency_symbol` is declared here, on the type, because its presets —
+   * Currency and Percentage — are the ones that use it, and a preset may not
+   * unlock what its parent lacks. A plain Numeric Open End can therefore take
+   * a symbol too, which is the right answer for a question measured in kg, £
+   * or hours and was the other half of "the five numeric subtypes look the
+   * same": there was no way to say what the number was OF.
+   */
+  stable(F.numeric, "open", "Numeric Open End", "Any number, with an optional unit or currency symbol.", {
     baseType: "numeric", responseModel: "numeric",
-    capabilities: ["numeric_bounds"], validations: VAL_NUM,
+    capabilities: ["numeric_bounds", "currency_symbol"], validations: VAL_NUM,
   }),
   stable(F.numeric, "integer", "Integer", "Whole numbers only.", {
     baseType: "numeric", responseModel: "numeric",
@@ -618,16 +670,24 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     defaults: { validation: [{ kind: "integer" }] },
     presetOf: "numeric.open",
   }),
-  stable(F.numeric, "currency", "Currency", "Monetary amount (0 or more).", {
+  /*
+   * Currency and Percentage now SEED THE SYMBOL that makes them recognisable.
+   * Until this they were Numeric Open End with a different minimum, which is
+   * why the review could not tell the five numeric subtypes apart: a currency
+   * question showed no currency and a percentage question showed no per cent
+   * sign. `currency_symbol` is the capability that puts the dropdown and the
+   * left/right choice in the editor.
+   */
+  stable(F.numeric, "currency", "Currency", "Monetary amount with a currency symbol.", {
     baseType: "numeric", responseModel: "numeric",
-    capabilities: ["numeric_bounds"], validations: VAL_NUM,
-    defaults: { settings: { minValue: 0, placeholder: "0.00" } },
+    capabilities: ["numeric_bounds", "currency_symbol"], validations: VAL_NUM,
+    defaults: { settings: { minValue: 0, placeholder: "0.00", currencyCode: "USD", symbolSide: "left" } },
     presetOf: "numeric.open",
   }),
-  stable(F.numeric, "percentage", "Percentage", "0–100 value.", {
+  stable(F.numeric, "percentage", "Percentage", "0–100 value, shown with a per cent sign.", {
     baseType: "numeric", responseModel: "numeric",
-    capabilities: ["numeric_bounds"], validations: VAL_NUM,
-    defaults: { settings: { minValue: 0, maxValue: 100 } },
+    capabilities: ["numeric_bounds", "currency_symbol"], validations: VAL_NUM,
+    defaults: { settings: { minValue: 0, maxValue: 100, currencySymbol: "%", symbolSide: "right" } },
     presetOf: "numeric.open",
   }),
   stable(F.numeric, "quantity", "Quantity", "Non-negative whole number.", {
@@ -659,6 +719,8 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       ],
       settings: { rangePair: true },
     },
+    /* a from–to pair is two fields of a range-shaped kind, and exactly two */
+    fields: { types: ["number", "decimal", "integer", "date", "time"], fixed: true },
   }),
 
   /* ----------------------------------------------------------------- LIST */
@@ -1522,6 +1584,7 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
         { code: "to", label: "To", fieldType: "date", required: true, flags: [], validation: [] },
       ],
     },
+    fields: { types: ["date", "time"], fixed: true },
     presetOf: "list.text_list",
   }),
   stable(F.datetime, "calendar", "Calendar / Appointment Selection", "Pick slots on a calendar.", {

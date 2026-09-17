@@ -265,6 +265,19 @@ export const ValidationRule = z.object({
     "pattern", // regex
     "email",
     "phone",
+    /**
+     * FORMAT CHECKS THAT KNOW WHAT THEY ARE CHECKING.
+     *
+     * URL and ZIP were seeded as `pattern` rules carrying a regex — which
+     * meant the question's validation said "matches this expression" rather
+     * than "is a web address", the author could not tell one from the other
+     * in the Validation panel, and switching subtype left the previous
+     * subtype's expression in place. The September review asked for
+     * "a dedicated validation option based on the selected subtype"; these
+     * are it, and `phone`/`zip` read the question's country setting.
+     */
+    "url",
+    "zip",
     "date_min", // value is an ISO date (or a variable name resolving to one)
     "date_max",
     /**
@@ -501,6 +514,8 @@ export const QuestionColumn = z.object({
   placeholder: z.string().optional(),
   min: z.number().optional(),
   max: z.number().optional(),
+  /** step for a `slider` column; 1 when unset */
+  step: z.number().optional(),
   carryForward: CarryForward.optional(),
   meta: z.record(z.any()).optional(),
   /**
@@ -873,6 +888,30 @@ export const Question = z.object({
        */
       optionSearch: z.enum(["auto", "always", "never"]).optional(),
       placeholder: z.string().optional(),
+      /**
+       * COUNTRY-SHAPED VALIDATION. `phoneCountry` and `postalCountry` name an
+       * entry in the engine's format tables; unset means the loose,
+       * region-agnostic check the platform has always applied, so no existing
+       * question changes. They apply both to a scalar Phone / ZIP question and
+       * to a phone or zip FIELD inside a List question, which is the same
+       * request the review made in two different places.
+       */
+      phoneCountry: z.string().optional(),
+      postalCountry: z.string().optional(),
+      /**
+       * WHAT SYMBOL SITS BESIDE A NUMBER, AND ON WHICH SIDE.
+       *
+       * The Currency question drew no symbol at all and the Percentage
+       * question drew no per cent sign — the five numeric subtypes were
+       * distinguishable only by their seeded min and max, which is what the
+       * review meant by "most question types look and function almost the
+       * same". `currencyCode` picks from the engine's list, `currencySymbol`
+       * overrides it with anything at all (the review asked for both), and
+       * `symbolSide` answers "₹ 1,000" versus "1,000 ₹".
+       */
+      currencyCode: z.string().optional(),
+      currencySymbol: z.string().optional(),
+      symbolSide: z.enum(["left", "right"]).optional(),
       /**
        * Speech input on a text question (`speech_input` capability). The
        * respondent may dictate; the transcript lands in the ordinary text

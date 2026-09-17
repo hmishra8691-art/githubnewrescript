@@ -26,7 +26,7 @@ export function validationKindsFor(qtype: string): ValidationRule["kind"][] {
   if (["numeric", "slider", "nps", "matrix_numeric"].includes(qtype))
     return ["required", "min_value", "max_value", "integer", "custom_expression", "condition"];
   if (["open_text", "long_text", "text_list"].includes(qtype))
-    return ["required", "min_length", "max_length", "pattern", "email", "phone", "custom_expression", "custom_script", "condition"];
+    return ["required", "min_length", "max_length", "pattern", "email", "phone", "url", "zip", "custom_expression", "custom_script", "condition"];
   if (qtype === "numeric_list")
     return ["required", "min_value", "max_value", "integer", "custom_expression", "condition"];
   if (qtype === "allocation")
@@ -66,7 +66,12 @@ const VALIDATION_KINDS: { value: ValidationRule["kind"]; label: string; hasValue
   { value: "sum_min", label: "sum ≥", hasValue: true, numeric: true },
   { value: "pattern", label: "regex pattern", hasValue: true },
   { value: "email", label: "email", hasValue: false },
+  /* format checks that know what they are checking — `phone` and `zip` read
+     the question's country setting, so the author picks a country rather
+     than writing a regex per market */
   { value: "phone", label: "phone number", hasValue: false },
+  { value: "url", label: "web address", hasValue: false },
+  { value: "zip", label: "postal code", hasValue: false },
   { value: "date_min", label: "date on or after", hasValue: true },
   { value: "date_max", label: "date on or before", hasValue: true },
   { value: "column_sum_equals", label: "column total =", hasValue: true },

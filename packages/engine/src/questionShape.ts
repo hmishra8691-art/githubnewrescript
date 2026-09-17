@@ -275,7 +275,14 @@ export function settingsOf(model: ResponseModel): Set<string> {
 
 /* --------------------------------------------------------------- the migration */
 
-export type ChangeKind = "transformed" | "removed" | "reset";
+/**
+ * `kept` is not a no-op: it is a change worth SAYING that nothing happened.
+ * A form-field question whose fields the programmer edited keeps them across
+ * a type change — which is the right call, they are the programmer's work —
+ * but silence there is how a Name question ends up on an Address type still
+ * asking for a first and last name. It is reported so the dialog can say so.
+ */
+export type ChangeKind = "transformed" | "removed" | "reset" | "kept";
 
 export interface MigrationChange {
   kind: ChangeKind;
@@ -809,6 +816,39 @@ export function migrateQuestionType(
     if (nd?.validation?.length && !(q.validation ?? []).length) {
       q.validation = nd.validation.map((r) => ({ ...r })) as Question["validation"];
       add("transformed", "validation", `${target.variant.name}'s own validation`);
+    }
+
+    /*
+     * THE FIELDS OF A FORM-STYLE LIST.
+     *
+     * Name, Address, Date Range and Numeric Range all store as `fields`, so
+     * the axis rule above counts their rows as "kept" and carries them across
+     * untouched. That is right for a rename and wrong for a type change: the
+     * review reported that switching Name to Address left `first` and `last`
+     * in place, and that the only way out was to delete the question and
+     * build it again — which loses its id, and with it every condition, quota
+     * and pipe that names it.
+     *
+     * The same rule as everything else in this section. Rows that are still
+     * exactly what the old variant seeded have not been touched, so they are
+     * replaced by the new variant's. Rows the programmer edited are theirs and
+     * are kept — but the change is reported, so the confirmation dialog says
+     * the fields do not match the type they are now on rather than leaving
+     * them to find out in preview.
+     */
+    if (nd?.rows?.length && shapeHasAxis(q, "rows")) {
+      const seededRows = od?.rows ?? [];
+      const untouched =
+        q.rows.length === seededRows.length &&
+        q.rows.every((r, i) => sameValue({ code: r.code, label: r.label, fieldType: r.fieldType },
+          { code: seededRows[i]?.code, label: seededRows[i]?.label, fieldType: seededRows[i]?.fieldType }));
+      if (untouched) {
+        q.rows = nd.rows.map((r) => ({ ...r })) as Question["rows"];
+        add("transformed", "rows", `The fields are now ${target.variant.name}'s`);
+      } else if (seededRows.length) {
+        add("kept", "rows",
+          `The fields are still ${fromVariant.name}'s — you edited them, so they were not replaced with ${target.variant.name}'s`);
+      }
     }
 
     for (const field of ["instruction", "text"] as const) {

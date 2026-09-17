@@ -20,6 +20,7 @@ import {
   selectedOtherCodes,
   uiText,
   effectiveScale,
+  affixFor,
 } from "@rescript/engine";
 import { variantRenderers } from "./variants/registry";
 import { MediaEmbed, SafeImage } from "./Media";
@@ -556,7 +557,19 @@ export function NumberField({
 }
 
 export function NumericInput(p: QRProps) {
-  return (
+  /*
+   * A CURRENCY QUESTION NOW LOOKS LIKE ONE.
+   *
+   * The five numeric subtypes — open, integer, currency, percentage,
+   * quantity — shared this renderer and differed only in their seeded min and
+   * max, which is what the review meant by "most question types look and
+   * function almost the same, with no clear differentiation". A currency
+   * question drew no symbol at all and a percentage question drew no per
+   * cent sign. One affix mechanism serves both, and `symbolSide` answers the
+   * other half of the request: "₹ 1,000" or "1,000 ₹".
+   */
+  const affix = affixFor(p.q.settings);
+  const field = (
     <NumberField
       value={p.value}
       min={p.q.settings.minValue}
@@ -566,6 +579,14 @@ export function NumericInput(p: QRProps) {
       readOnly={p.q.settings.readOnly}
       onChange={p.onChange}
     />
+  );
+  if (!affix) return field;
+  return (
+    <span className="rs-affixed" data-testid="numeric-affixed">
+      {affix.side === "left" && <span className="rs-prefix">{affix.text}</span>}
+      {field}
+      {affix.side === "right" && <span className="rs-prefix">{affix.text}</span>}
+    </span>
   );
 }
 
@@ -649,7 +670,7 @@ export function ListInput(p: QRProps & { numeric: boolean }) {
         {view.rows.map((row) => {
           const rc = String(row.code);
           const ft = row.fieldType ?? (p.numeric ? "number" : "text");
-          const ip = fieldInputProps(ft);
+          const ip = fieldInputProps(ft, p.q.settings);
           const v = vals[rc];
           const err = p.errors.find((e) => e.startsWith(row.label.replace(/<[^>]*>/g, "")));
           return (
@@ -688,6 +709,8 @@ export function ListInput(p: QRProps & { numeric: boolean }) {
                     onChange={(e) => setField(rc, e.target.value === "" ? null : e.target.value)}
                   />
                 )}
+                {/* a symbol on the right when the author put it there */}
+                {ip.suffix && <span className="rs-prefix">{ip.suffix}</span>}
               </div>
               {err && <div className="rs-error-msg">{err}</div>}
             </div>
@@ -1018,6 +1041,43 @@ export function Matrix(p: QRProps) {
 }
 
 /* ------------------------------------------- composite (multi-column, §3) */
+/**
+ * A SLIDER COLUMN THAT IS A SLIDER.
+ *
+ * `slider` has been an offered column response type since the column editor
+ * was written, and both cell renderers sent it to a number box — so an author
+ * who chose Column Slider, set Min 0 and Max 100 and pressed Preview got an
+ * empty text field indistinguishable from the Numeric column next to it. The
+ * review reported it as "it shows an empty input box where the respondent can
+ * manually enter a value", which is precisely what it did.
+ *
+ * The range needs both ends to mean anything, so a column that has not been
+ * given them keeps the number box rather than drawing a 0–100 slider the
+ * author never asked for.
+ */
+export function SliderCell({
+  min, max, step, value, onChange, label, readOnly,
+}: {
+  min?: number; max?: number; step?: number;
+  value: unknown; onChange(v: unknown): void; label: string; readOnly?: boolean;
+}) {
+  const lo = min ?? 0;
+  const hi = max ?? 100;
+  const current = value == null || value === "" ? null : Number(value);
+  return (
+    <span className="rs-cellslider">
+      <input
+        type="range" aria-label={label}
+        min={lo} max={hi} step={step ?? 1}
+        disabled={readOnly}
+        value={current ?? Math.round((lo + hi) / 2)}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
+      <span className="rs-cellslider-val">{current == null ? "—" : String(current)}</span>
+    </span>
+  );
+}
+
 function CompositeCell({
   col, value, onChange, p,
 }: { col: QuestionColumn; value: unknown; onChange(v: unknown): void; p: QRProps }) {
@@ -1081,8 +1141,16 @@ function CompositeCell({
           ))}
         </select>
       );
-    case "numeric":
     case "slider":
+      if (col.min != null && col.max != null) {
+        return (
+          <SliderCell label={col.label.replace(/<[^>]*>/g, "")} readOnly={ro}
+            min={col.min} max={col.max} step={col.step}
+            value={value} onChange={onChange} />
+        );
+      }
+    // falls through: a slider with no bounds has nothing to slide between
+    case "numeric":
       return (
         <NumberField className="rs-input" readOnly={ro} min={col.min} max={col.max}
           placeholder={col.placeholder}

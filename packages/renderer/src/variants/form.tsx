@@ -90,7 +90,7 @@ export function RepeatForm(p: QRProps) {
               {rows.map((row) => {
                 const rc = String(row.code);
                 const ft = row.fieldType ?? "text";
-                const ip = fieldInputProps(ft);
+                const ip = fieldInputProps(ft, p.q.settings);
                 const v = entry[rc];
                 const plain = row.label.replace(/<[^>]*>/g, "");
                 return (
@@ -123,6 +123,7 @@ export function RepeatForm(p: QRProps) {
                         readOnly={p.q.settings.readOnly}
                         onChange={(e) => setField(i, rc, e.target.value)} />
                     )}
+                    {ip.suffix && <span className="rs-prefix">{ip.suffix}</span>}
                   </label>
                 );
               })}

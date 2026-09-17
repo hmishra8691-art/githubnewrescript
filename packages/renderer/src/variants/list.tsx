@@ -3,7 +3,7 @@ import React from "react";
 import type { QuestionColumn } from "@rescript/schema";
 import { effectiveQuestion, fieldInputProps } from "@rescript/engine";
 import type { QRProps } from "../QuestionRenderer";
-import { NumberField, ctxOf } from "../QuestionRenderer";
+import { NumberField, SliderCell, ctxOf } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { useRows } from "./shared";
 import { anchor, cellAnchor } from "../authoring";
@@ -55,7 +55,7 @@ export function DynamicList(p: QRProps) {
   const shown = Math.min(max, Math.max(shownState ?? values.length, min, 1));
   const lines = Array.from({ length: shown }, (_, i) => values[i] ?? "");
   const filled = values.filter((v) => v.trim() !== "").length;
-  const ip = fieldInputProps(field.fieldType);
+  const ip = fieldInputProps(field.fieldType, p.q.settings);
 
   /** Commit a line list, with trailing blanks trimmed off the data. */
   const commit = (next: string[]) => {
@@ -167,8 +167,16 @@ function SheetCell({
 }) {
   const ro = readOnly || col.readOnly;
   switch (col.responseType) {
-    case "numeric":
     case "slider":
+      /* the Editable Table's half of the same fix — see `SliderCell` */
+      if (col.min != null && col.max != null) {
+        return (
+          <SliderCell label={label} readOnly={ro} min={col.min} max={col.max} step={col.step}
+            value={value} onChange={onChange} />
+        );
+      }
+    // falls through when the column has no range to slide between
+    case "numeric":
       return (
         <NumberField className="rs-input rs-sheet-in" ariaLabel={label}
           min={col.min} max={col.max} placeholder={col.placeholder}

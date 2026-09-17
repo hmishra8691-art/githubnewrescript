@@ -61,6 +61,9 @@ import {
   stripHtmlText, referencesTo, pruneReferencesTo, referencesToMany, pruneReferencesToMany,
   PIPE_TOKEN_RE,
   effectiveScale,
+  PHONE_FORMATS,
+  POSTAL_FORMATS,
+  CURRENCIES,
   type QuestionReference,
 } from "@rescript/engine"; // also registers builtin question types
 import { isEmptyOptionLogic } from "@rescript/schema";
@@ -113,6 +116,9 @@ export function allowedRowFlagsFor(qtype: string): string[] {
 }
 
 const OPTION_WINDOW = 40;
+
+/** Text questions whose answer is one box, so `settings.placeholder` applies. */
+const SCALAR_TEXT_TYPES = ["open_text", "long_text"];
 
 function OptionRows({ options, onChange, showFlags = true, flagChoices, showImage = false, metaFields = [],
   enableLogic = false, questionId, onAfterDelete }: {
@@ -543,6 +549,20 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
   const rows = q.rows;
   /* a field row's code is its variable suffix — same freeze, same reason */
   const frozen = useStudio().codesFrozen;
+  /*
+   * WHAT THIS VARIANT'S FIELDS MAY BE.
+   *
+   * There is one field-type dropdown in the Studio and it offered all twelve
+   * types to every list question, so a Numeric Range's From could be set to
+   * Long Text or Email and the "+ field" button could turn a two-ended range
+   * into a three-ended one. A variant may now say otherwise; one that says
+   * nothing behaves exactly as before.
+   */
+  const fieldSpec = resolveVariant(q.variant)?.fields;
+  const fieldTypes = fieldSpec?.types
+    ? FIELD_TYPES.filter((t) => fieldSpec.types!.includes(t.value))
+    : FIELD_TYPES;
+  const fieldsFixed = !!fieldSpec?.fixed;
   const [condOpen, setCondOpen] = React.useState<number | null>(null);
   const setRow = (i: number, p: Partial<Question["rows"][number]>) =>
     patch({ rows: rows.map((r, j) => (j === i ? { ...r, ...p } : r)) });
@@ -591,7 +611,11 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
                 value={r.label} onChange={(e) => setRow(i, { label: e.target.value })} />
               <select className="select" style={{ width: 150 }} value={ft} data-testid={`field-type-${i}`}
                 onChange={(e) => setRow(i, { fieldType: e.target.value as any })}>
-                {FIELD_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+                {/* an already-set type stays listed even if this variant would
+                    not offer it, so a question authored earlier is never
+                    silently re-typed by opening its editor */}
+                {(fieldTypes.some((t) => t.value === ft) ? fieldTypes : [...fieldTypes, { value: ft as never, label: ft }])
+                  .map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
               </select>
               <label className="row" style={{ gap: 4, fontSize: 13 }}>
                 <input type="checkbox" checked={r.required ?? false} data-testid={`field-required-${i}`}
@@ -599,8 +623,12 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
               </label>
               <button className="btn small" onClick={() => move(i, -1)}>↑</button>
               <button className="btn small" onClick={() => move(i, 1)}>↓</button>
-              <button className="btn small danger"
-                onClick={() => patch({ rows: rows.filter((_, j) => j !== i) })}>×</button>
+              {/* a from–to pair has two ends; removing one leaves a range that
+                  is not one, so the control is not offered */}
+              {!fieldsFixed && (
+                <button className="btn small danger"
+                  onClick={() => patch({ rows: rows.filter((_, j) => j !== i) })}>×</button>
+              )}
             </div>
             <div className="row" style={{ marginTop: 6, flexWrap: "wrap" }}>
               <input className="input" style={{ width: 200 }} placeholder="placeholder text"
@@ -640,17 +668,19 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
         );
       })}
       <div className="row" style={{ flexWrap: "wrap" }}>
-        <button className="btn small" onClick={() =>
+        {!fieldsFixed && (
+        <button className="btn small" data-testid="add-field" onClick={() =>
           patch({
             rows: [...rows, {
               id: uid("row"),
               code: `f${rows.length + 1}`, label: `Field ${rows.length + 1}`, flags: [],
-              fieldType: q.type === "numeric_list" ? "number" : "text",
+              fieldType: (fieldTypes[0]?.value ?? (q.type === "numeric_list" ? "number" : "text")),
               validation: [], required: false,
             } as any],
           })}>
           + field
         </button>
+        )}
         {rows.length === 0 && (
           <label className="row" style={{ gap: 6, fontSize: 13 }}>
             legacy item count
@@ -707,6 +737,8 @@ export function QuestionEditor({ q }: { q: Question }) {
     if (ns.length < 2 || ns.some((n) => !Number.isFinite(n))) return false;
     return ns.some((n, i) => i > 0 && n < ns[i - 1]);
   }, [q.options]);
+  /** does this question carry a validation rule of this kind? */
+  const hasRule = (kind: string) => q.validation.some((r) => r.kind === kind);
   const scaleLabelKeys: readonly [string, string] | null =
     q.type === "nps" || variantDef?.renderer === "emoji"
       ? ["npsLeftLabel", "npsRightLabel"] as const
@@ -991,6 +1023,72 @@ export function QuestionEditor({ q }: { q: Question }) {
             </>
           )}
         </div>
+      )}
+
+      {/*
+        * SUBTYPE CONFIGURATION: the country a format is checked against, the
+        * symbol beside a number, and the placeholder.
+        *
+        * All three are things the review asked for and none of them had an
+        * editor. The country dropdowns appear where the question actually
+        * carries the matching check, so they cannot be set on a question that
+        * will never use them; the symbol controls follow the `currency_symbol`
+        * capability; and the placeholder had no input at all on a scalar text
+        * question, so it was whatever the preset seeded and could not be
+        * changed without editing JSON.
+        */}
+      {(hasRule("phone") || hasRule("zip")) && (
+        <div className="row">
+          {hasRule("phone") && (
+            <label className="f" style={{ minWidth: 220 }}><span>Phone number country</span>
+              <select className="select" data-testid="phone-country"
+                value={q.settings.phoneCountry ?? ""}
+                onChange={(e) => patchSettings({ phoneCountry: e.target.value || undefined })}>
+                <option value="">any country (loose check)</option>
+                {PHONE_FORMATS.map((f) => <option key={f.code} value={f.code}>{f.name} (+{f.dial})</option>)}
+              </select></label>
+          )}
+          {hasRule("zip") && (
+            <label className="f" style={{ minWidth: 220 }}><span>Postal code country</span>
+              <select className="select" data-testid="postal-country"
+                value={q.settings.postalCountry ?? ""}
+                onChange={(e) => patchSettings({ postalCountry: e.target.value || undefined })}>
+                <option value="">any country (loose check)</option>
+                {POSTAL_FORMATS.map((f) => <option key={f.code} value={f.code}>{f.name}</option>)}
+              </select></label>
+          )}
+        </div>
+      )}
+
+      {has("currency_symbol") && (
+        <div className="row">
+          <label className="f" style={{ minWidth: 200 }}><span>Currency</span>
+            <select className="select" data-testid="currency-code"
+              value={q.settings.currencyCode ?? ""}
+              onChange={(e) => patchSettings({ currencyCode: e.target.value || undefined })}>
+              <option value="">none</option>
+              {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.symbol} {c.code} — {c.name}</option>)}
+            </select></label>
+          <label className="f" style={{ width: 150 }}><span>Or type a symbol</span>
+            <input className="input" data-testid="currency-symbol" placeholder="%, kg, pts…"
+              value={q.settings.currencySymbol ?? ""}
+              onChange={(e) => patchSettings({ currencySymbol: e.target.value || undefined })} /></label>
+          <label className="f" style={{ width: 130 }}><span>Symbol side</span>
+            <select className="select" data-testid="symbol-side"
+              value={q.settings.symbolSide ?? "left"}
+              onChange={(e) => patchSettings({ symbolSide: e.target.value === "right" ? "right" : undefined })}>
+              <option value="left">left (₹ 1,000)</option>
+              <option value="right">right (1,000 ₹)</option>
+            </select></label>
+        </div>
+      )}
+
+      {SCALAR_TEXT_TYPES.includes(q.type) && (
+        <label className="f" style={{ maxWidth: 420 }}><span>Placeholder</span>
+          <input className="input" data-testid="placeholder"
+            placeholder="shown in the empty box"
+            value={q.settings.placeholder ?? ""}
+            onChange={(e) => patchSettings({ placeholder: e.target.value || undefined })} /></label>
       )}
 
       {/*

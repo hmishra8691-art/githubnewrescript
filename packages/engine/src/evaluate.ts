@@ -1,4 +1,4 @@
-import type { Condition, ConditionRule, SurveyDefinition } from "@rescript/schema";
+import type { Condition, ConditionRule, Question, SurveyDefinition } from "@rescript/schema";
 import { isOptionValueRef, isQuestionValueRef } from "@rescript/schema";
 import type { LoopContext, ResponseState } from "./state.js";
 import { interviewText, isInterviewAnswer } from "./interview.js";
@@ -35,6 +35,15 @@ export interface EvalContext {
   loop?: LoopContext | null;
   /** the option being evaluated, for per-option conditions */
   option?: OptionEvalContext | null;
+  /**
+   * The question a validation rule belongs to, when there is one. A format
+   * check may need the question's own configuration — a Phone rule reads
+   * `settings.phoneCountry`, a ZIP rule reads `settings.postalCountry` —
+   * and a rule evaluated outside a question (a grid cell's own rules, a
+   * count condition) simply has none, and falls back to the region-agnostic
+   * check.
+   */
+  question?: Question | null;
   /** live quota counts: quotaId -> cellId -> count */
   quotaCounts?: Record<string, Record<string, number>>;
   /** trace collector for the inspector */

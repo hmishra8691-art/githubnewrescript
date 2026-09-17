@@ -625,7 +625,11 @@ test("variant catalog integrity (family/variant architecture)", async () => {
   const KNOWN_VALIDATIONS = new Set([
     "required", "min_value", "max_value", "min_length", "max_length",
     "min_selections", "max_selections", "sum_equals", "sum_max", "sum_min",
-    "pattern", "email", "integer", "custom_expression", "custom_script",
+    /* `phone`, `url` and `zip` are checks that know what they are checking —
+       the specialised text subtypes seed them instead of a regex that only
+       looked like validation (see variants.ts) */
+    "pattern", "email", "phone", "url", "zip",
+    "integer", "custom_expression", "custom_script",
   ]);
 
   const ids = new Set<string>();

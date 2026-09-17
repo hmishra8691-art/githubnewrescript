@@ -232,6 +232,13 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-field-row .flab { min-width: 150px; font-size: .93em; }
 .rs-req { color: var(--rs-error); }
 .rs-prefix { color: var(--rs-subtle); }
+/* a currency or per-cent symbol sitting beside a numeric input */
+.rs-affixed { display: inline-flex; align-items: center; gap: 6px; }
+/* a slider inside a grid cell — the control and its current value together */
+.rs-cellslider { display: inline-flex; align-items: center; gap: 8px; min-width: 120px; width: 100%; }
+.rs-cellslider input[type="range"] { flex: 1; min-width: 60px; accent-color: var(--rs-primary); }
+.rs-cellslider-val { min-width: 32px; text-align: right; font-variant-numeric: tabular-nums; font-size: .9em; }
+.rs-affixed .rs-prefix { font-weight: 600; color: var(--rs-text); }
 @media (max-width: 520px) {
   .rs-field-row { flex-direction: column; align-items: stretch; gap: 4px; }
   .rs-field-row .flab { min-width: 0; }

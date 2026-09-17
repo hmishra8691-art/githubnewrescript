@@ -16,6 +16,7 @@ import { shapeHasAxis } from "./questionShape.js";
 import { videoCompleted, interviewAnswered, interviewProblems, requiresAudioAnswer } from "./interview.js";
 import { isEmptyAnswer } from "./answers.js";
 import { validationBounds } from "./scale.js";
+import { checkPhone, checkPostal, checkUrl } from "./formats.js";
 
 /**
  * Whether a failed check stops the respondent.
@@ -120,13 +121,13 @@ function asDate(value: unknown): number | null {
   return Number.isNaN(t) ? null : t;
 }
 
-/**
- * Loose enough for the world's numbering plans, strict enough to catch a
- * typo: digits, with the punctuation people actually type, and at least
- * seven of them. Anything narrower rejects a legitimate foreign number,
- * which is worse than accepting a bad one.
+/*
+ * The loose phone check moved to `formats.ts` as `looksLikeAnyPhone`, beside
+ * the per-country ones it is now the fallback for. Its reasoning is unchanged
+ * and is written out there: anything narrower, applied to everybody, rejects
+ * a legitimate foreign number, which is worse than accepting a bad one. What
+ * is new is that a question may say which country it means.
  */
-const PHONE_RE = /^[+()\-.\s\d]{7,}$/;
 
 /**
  * How many things this answer selects, or null when the answer is not a
@@ -222,10 +223,31 @@ export function checkScalarRules(
         if (!isEmpty(value) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value)))
           fail(ruleError(rule, "Please enter a valid email address."));
         break;
-      case "phone":
-        if (!isEmpty(value) && (!PHONE_RE.test(String(value)) || (String(value).match(/\d/g)?.length ?? 0) < 7))
-          fail(ruleError(rule, "Please enter a valid phone number."));
+      /*
+       * `ctx.question` carries the question these rules belong to, so a
+       * phone or postal check can read its country. It is optional: a rule
+       * checked outside a question (a grid cell's own rules, a count
+       * condition) falls back to the loose, region-agnostic check that has
+       * always been the platform's only one.
+       */
+      case "phone": {
+        if (isEmpty(value)) break;
+        const problem = checkPhone(String(value), ctx.question?.settings.phoneCountry);
+        if (problem) fail(ruleError(rule, problem));
         break;
+      }
+      case "url": {
+        if (isEmpty(value)) break;
+        const problem = checkUrl(String(value));
+        if (problem) fail(ruleError(rule, problem));
+        break;
+      }
+      case "zip": {
+        if (isEmpty(value)) break;
+        const problem = checkPostal(String(value), ctx.question?.settings.postalCountry);
+        if (problem) fail(ruleError(rule, problem));
+        break;
+      }
       case "date_min": {
         const bound = dateBound(rule.value, ctx);
         const got = isEmpty(value) ? null : asDate(value);
@@ -300,9 +322,18 @@ export function validateQuestion(
   def: SurveyDefinition,
   q: Question,
   value: unknown,
-  ctx: EvalContext,
+  outerCtx: EvalContext,
 ): ValidationError[] {
   const errors: ValidationError[] = [];
+  /*
+   * Every rule checked below belongs to THIS question, so the question
+   * travels with the context. A format rule needs it: a Phone check reads
+   * `settings.phoneCountry` and a ZIP check reads `settings.postalCountry`,
+   * and neither could see them from a bare rule. Nothing else reads it, and a
+   * caller that evaluates a rule outside a question still gets `undefined`
+   * and the region-agnostic fallback.
+   */
+  const ctx: EvalContext = { ...outerCtx, question: q };
   /*
    * A rule's message is a plain string until it reaches a respondent — piped
    * here, once, the same way question text already is (`resolvePiping`), so
@@ -717,7 +748,7 @@ export function validateQuestion(
       }
       if (!isEmpty(v)) {
         const ft = row.fieldType ?? (q.type === "numeric_list" ? "number" : "text");
-        const typeErr = validateFieldValue(ft, v);
+        const typeErr = validateFieldValue(ft, v, q.settings);
         if (typeErr) push(`${label}: ${typeErr}`, { rowCode: rc });
       }
       checkScalarRules(row.validation ?? [], v, ctx, (m, sev) =>

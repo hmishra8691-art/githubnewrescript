@@ -241,8 +241,14 @@ test("EMAIL → PHONE swaps the whole preset, not half of it", () => {
   const m = migrateQuestionType(email, resolveVariant("text.phone")!);
   assert.equal(m.q.variant, "text.phone");
   assert.equal(m.q.settings.placeholder, "+1 555 123 4567", "the placeholder belongs to the preset in force");
-  assert.deepEqual(m.q.validation.map((r) => r.kind), ["pattern"]);
-  assert.match(m.q.validation[0].message ?? "", /phone/i);
+  /*
+   * `phone`, not `pattern`. Phone used to seed a regex, which meant the
+   * Validation panel showed the author an expression rather than "is a phone
+   * number", and one pattern rule was indistinguishable from another when
+   * the subtype changed. It seeds a check of its own now — and that check
+   * reads `settings.phoneCountry`, which a regex could never do.
+   */
+  assert.deepEqual(m.q.validation.map((r) => r.kind), ["phone"]);
 
   /* and a placeholder the programmer typed is NOT overwritten */
   const edited = { ...email, settings: { ...email.settings, placeholder: "work address please" } } as Question;
@@ -330,4 +336,44 @@ test("a display-only block cannot stay required", () => {
   const m = migrateQuestionType(q({ required: true }), { baseType: "html" });
   assert.equal(m.q.required, false);
   assert.ok(m.changes.some((c) => c.kind === "reset" && c.field === "required"));
+});
+
+test("NAME → ADDRESS re-seeds the fields instead of keeping the ones it had", () => {
+  /*
+   * The review's workaround for this was "the question must be deleted and
+   * recreated", which loses the question's id and with it every condition,
+   * quota and pipe that names it. Name, Address, Date Range and Numeric Range
+   * all store as `fields`, so the axis rule counts their rows as "kept" and
+   * carries them across — right for a rename, wrong for a type change.
+   */
+  const name = q({
+    type: "text_list", variant: "text.name", options: [],
+    rows: (resolveVariant("text.name")!.defaults!.rows ?? []) as Question["rows"],
+  });
+  assert.deepEqual(name.rows.map((r) => r.code), ["first", "last"]);
+
+  const m = migrateQuestionType(name, resolveVariant("text.address")!);
+  assert.deepEqual(m.q.rows.map((r) => r.code), ["street", "city", "state", "zip"],
+    "the fields belong to the type in force");
+  assert.ok(m.changes.some((c) => c.field === "rows" && c.kind === "transformed"),
+    "and the programmer is told the fields changed");
+});
+
+test("fields the programmer edited are kept across a type change, and said so", () => {
+  /*
+   * The other half. Re-seeding unconditionally would throw away authored
+   * work, so a field list that is no longer the preset's is the programmer's
+   * and stays — but silence there is how a Name question ends up on an
+   * Address type still asking for a first and last name.
+   */
+  const edited = q({
+    type: "text_list", variant: "text.name", options: [],
+    rows: [
+      { code: "first", label: "Given name", fieldType: "text", required: true, flags: [], validation: [] },
+      { code: "last", label: "Family name", fieldType: "text", required: true, flags: [], validation: [] },
+    ] as Question["rows"],
+  });
+  const m = migrateQuestionType(edited, resolveVariant("text.address")!);
+  assert.deepEqual(m.q.rows.map((r) => r.label), ["Given name", "Family name"]);
+  assert.ok(m.changes.some((c) => c.field === "rows" && c.kind === "kept"));
 });

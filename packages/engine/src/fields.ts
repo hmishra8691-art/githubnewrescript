@@ -1,4 +1,5 @@
 import type { FieldType } from "@rescript/schema";
+import { checkPhone, checkPostal, checkUrl, affixFor } from "./formats.js";
 
 /**
  * Field-type primitives for form-style list questions (req §4–5).
@@ -21,12 +22,22 @@ export const FIELD_TYPES: { value: FieldType; label: string }[] = [
   { value: "zip", label: "ZIP / Postal code" },
 ];
 
-/** HTML input attributes for a field type. */
-export function fieldInputProps(t: FieldType | undefined): {
+/**
+ * HTML input attributes for a field type.
+ *
+ * `settings` is the owning question's, because two of these depend on it: a
+ * currency field's symbol and which side it sits. It used to be a hard-coded
+ * "$" prefix with no way to change it — a dollar sign shown to studies not
+ * priced in dollars, which the review reported.
+ */
+export function fieldInputProps(t: FieldType | undefined, settings?: {
+  currencyCode?: string; currencySymbol?: string; symbolSide?: "left" | "right";
+}): {
   inputType: string;
   inputMode?: string;
   multiline?: boolean;
   prefix?: string;
+  suffix?: string;
 } {
   switch (t) {
     case "longtext": return { inputType: "text", multiline: true };
@@ -35,7 +46,13 @@ export function fieldInputProps(t: FieldType | undefined): {
     case "number":
     case "decimal": return { inputType: "number", inputMode: "decimal" };
     case "integer": return { inputType: "number", inputMode: "numeric" };
-    case "currency": return { inputType: "number", inputMode: "decimal", prefix: "$" };
+    case "currency": {
+      const affix = affixFor(settings ?? {}, "$");
+      return {
+        inputType: "number", inputMode: "decimal",
+        ...(affix?.side === "right" ? { suffix: affix.text } : { prefix: affix?.text ?? "$" }),
+      };
+    }
     case "date": return { inputType: "date" };
     case "time": return { inputType: "time" };
     case "url": return { inputType: "url" };
@@ -55,29 +72,34 @@ export function fieldDataType(t: FieldType | undefined): "text" | "numeric" | "d
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-const PHONE_RE = /^\+?[0-9()\-.\s]{7,20}$/;
-const ZIP_RE = /^[A-Za-z0-9][A-Za-z0-9\- ]{2,9}$/;
 const TIME_RE = /^([01]?\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
 
-/** Validate a single value against a field type. Returns an error message or null.
- *  Empty values are valid here — required-ness is checked separately. */
-export function validateFieldValue(t: FieldType | undefined, value: unknown): string | null {
+/**
+ * Validate a single value against a field type. Returns an error message or
+ * null. Empty values are valid here — required-ness is checked separately.
+ *
+ * `settings` is the owning question's: a phone or postal field is checked
+ * against the country the question names, and against nothing in particular
+ * when it names none. That is the same country selection the review asked for
+ * on the scalar Phone and ZIP questions — one setting, both places, because
+ * they are the same request about the same data.
+ */
+export function validateFieldValue(
+  t: FieldType | undefined,
+  value: unknown,
+  settings?: { phoneCountry?: string; postalCountry?: string },
+): string | null {
   if (value === null || value === undefined || value === "") return null;
   const s = String(value).trim();
   switch (t) {
     case "email":
       return EMAIL_RE.test(s) ? null : "Please enter a valid email address.";
     case "phone":
-      return PHONE_RE.test(s) ? null : "Please enter a valid phone number.";
+      return checkPhone(s, settings?.phoneCountry);
     case "url":
-      try {
-        const u = new URL(/^https?:\/\//i.test(s) ? s : `https://${s}`);
-        return u.hostname.includes(".") ? null : "Please enter a valid URL.";
-      } catch {
-        return "Please enter a valid URL.";
-      }
+      return checkUrl(s);
     case "zip":
-      return ZIP_RE.test(s) ? null : "Please enter a valid ZIP / postal code.";
+      return checkPostal(s, settings?.postalCountry);
     case "integer":
       return /^-?\d+$/.test(s) ? null : "Please enter a whole number.";
     case "number":

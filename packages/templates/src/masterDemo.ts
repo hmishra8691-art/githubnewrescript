@@ -217,9 +217,9 @@ export function buildMasterDemoSurvey(surveyId = "master-demo"): SurveyDefinitio
     displayLogic: rule("q_contact_ok", "eq", 1),
     validation: [
       { kind: "required", when: rule("q_contact_ok", "eq", 1), message: "A phone number is required when you agree to be contacted." },
-      { kind: "pattern", value: "^\\+?[0-9 ()-]{7,20}$", message: "Please enter digits, spaces, brackets or dashes only." },
+      { kind: "phone" },
     ],
-    notes: "[DEMO: Display logic + conditional required + regex] Required only when CONTACT_OK = Yes; pattern validation.",
+    notes: "[DEMO: Display logic + conditional required + format check] Required only when CONTACT_OK = Yes; the `phone` kind, which reads settings.phoneCountry when one is set.",
   });
 
   /* ====================================================== 02 Screening */
@@ -762,8 +762,8 @@ export function buildMasterDemoSurvey(surveyId = "master-demo"): SurveyDefinitio
     notes: "[DEMO: Exact selection count] minSelections = maxSelections = 3.",
   });
   Q({ id: "q_postcode", variableName: "POSTCODE", type: "open_text", variant: "text.zip", text: "What is your postal / ZIP code?", required: true,
-    validation: [{ kind: "pattern", value: "^[A-Za-z0-9][A-Za-z0-9 -]{2,9}$", message: "Please enter a valid postal code (3–10 letters/digits)." }],
-    notes: "[DEMO: Regex validation]" });
+    validation: [{ kind: "zip" }],
+    notes: "[DEMO: Postal-code validation] the `zip` kind, which follows settings.postalCountry when the study names a country." });
   numeric("q_devices_count", "DEVICES_COUNT", "How many connected devices are in your home in total?", 1, 200, {
     validation: [{ kind: "integer" }, { kind: "custom_expression", value: "value >= count(DEVICES)", message: "This cannot be lower than the number of device types you selected earlier." }],
     notes: "[DEMO: Logical validation against a count()] value ≥ count(DEVICES).",
