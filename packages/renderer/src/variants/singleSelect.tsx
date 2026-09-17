@@ -6,6 +6,8 @@ import { StarRating } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { SafeImage, MediaEmbed } from "../Media";
 import { useOptions, useChoice, activate, colsClass, metaText } from "./shared";
+import { effectiveQuestion } from "@rescript/engine";
+import { ctxOf } from "../QuestionRenderer";
 import { anchor } from "../authoring";
 
 /**
@@ -278,3 +280,79 @@ registerVariantRenderer("richcards", RichCards);
 registerVariantRenderer("statements", StatementChoice);
 registerVariantRenderer("pairwise", PairwiseChoice);
 registerVariantRenderer("multicarousel", MultiCarousel);
+
+/* --------------------------------------------------- Pairwise Comparison Set */
+/**
+ * SEVERAL A-vs-B COMPARISONS IN ONE QUESTION.
+ *
+ * `PairwiseChoice` above shows one pair and, with more than two options, the
+ * rest are simply unreachable — the review reported that, and asked instead
+ * for authored pairs: "Pair 1: Choice 1 vs Choice 2, Pair 2: Choice 3 vs
+ * Choice 4", each pair holding exactly two choices.
+ *
+ * The rows are the pairs and the options are the pool of choices; each row
+ * names its two in `meta.left` / `meta.right` and stores the winner's code.
+ * That is a single-select matrix's answer shape, so the export columns, the
+ * analytics, the logic engine and the variable dictionary all read this
+ * without knowing it is drawn as duels.
+ *
+ * A pair that names a choice the question no longer has says so rather than
+ * rendering an empty card — the editor's lint reports it too, but a
+ * respondent must never be asked to choose between nothing and something.
+ */
+export function PairwiseSet(p: QRProps) {
+  const view = effectiveQuestion(p.q, ctxOf(p));
+  const vals = (p.value ?? {}) as Record<string, unknown>;
+  const byCode = new Map(view.options.map((o) => [String(o.code), o]));
+  const pick = (rowCode: string, code: string | number) => {
+    if (p.q.settings.readOnly) return;
+    const cur = vals[rowCode];
+    p.onChange({ ...vals, [rowCode]: String(cur) === String(code) ? undefined : code });
+  };
+  return (
+    <div className="rs-pairset">
+      {view.rows.map((row) => {
+        const rc = String(row.code);
+        const left = byCode.get(String(row.meta?.left ?? ""));
+        const right = byCode.get(String(row.meta?.right ?? ""));
+        if (!left || !right) {
+          return (
+            <div key={rc} className="rs-error-msg" {...anchor("row", rc)}>
+              This comparison is not set up — it needs two choices.
+            </div>
+          );
+        }
+        const side = (o: Option, which: "a" | "b") => {
+          const sel = String(vals[rc]) === String(o.code);
+          return (
+            <div className={`rs-pair-side ${sel ? "selected" : ""}`}
+              role="radio" aria-checked={sel} tabIndex={0}
+              data-side={which} {...anchor("option", String(o.code))}
+              onClick={() => pick(rc, o.code)} onKeyDown={activate(() => pick(rc, o.code))}>
+              {o.imageUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <SafeImage src={o.imageUrl} alt="" />
+              )}
+              <div dangerouslySetInnerHTML={{ __html: o.label }} />
+              {metaText(o, "description") && (
+                <div className="rs-listrow-desc">{metaText(o, "description")}</div>
+              )}
+            </div>
+          );
+        };
+        return (
+          <div key={rc} className="rs-pairset-row" {...anchor("row", rc)}>
+            {row.label && <div className="rs-pairset-label" dangerouslySetInnerHTML={{ __html: row.label }} />}
+            <div className="rs-pair" role="radiogroup" aria-label={row.label || rc}>
+              {side(left, "a")}
+              <div className="rs-pair-or">or</div>
+              {side(right, "b")}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+registerVariantRenderer("pairwiseset", PairwiseSet);

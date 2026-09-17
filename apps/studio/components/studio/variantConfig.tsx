@@ -78,6 +78,7 @@ import "./variantConfig/swipe";
 import "./variantConfig/carousel";
 import "./variantConfig/card";
 import "./variantConfig/comparison";
+import "./variantConfig/pairwise";
 import "./variantConfig/allocation";
 import "./variantConfig/hotspot";
 import "./variantConfig/datetime";

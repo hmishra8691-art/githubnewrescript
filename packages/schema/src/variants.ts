@@ -502,6 +502,40 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: ["options", "images", "randomization", "carry_forward"], validations: VAL_SINGLE,
     defaults: { options: [{ code: 1, label: "Option A" }, { code: 2, label: "Option B" }] },
   }),
+  /*
+   * PAIRWISE, THE WAY THE REVIEW ASKED FOR IT.
+   *
+   * `pairwise_choice` above is one comparison: it shows the first two options
+   * and the rest are unreachable, which the review found and which the editor
+   * only warned about. Its answer is a single code, so it cannot become
+   * several comparisons without changing what every stored answer means.
+   *
+   * So this is a second variant rather than a rewrite of the first, and it
+   * borrows a response model the platform already has instead of inventing
+   * one. "Pair 1: Choice 1 vs Choice 2, Pair 2: Choice 3 vs Choice 4" is a
+   * question with several items, each taking one answer — which is exactly a
+   * single-select matrix: the ROWS are the pairs, the OPTIONS are the pool of
+   * choices, and each row's answer is the code of the choice that won it. The
+   * exporter, the analytics, the logic engine and the variable dictionary
+   * already know that shape, so none of them had to learn anything.
+   *
+   * Each pair names its two choices in `row.meta.left` / `row.meta.right`.
+   */
+  stable(F.single, "pairwise_set", "Pairwise Comparison Set", "Several A-vs-B comparisons; each pair holds exactly two choices.", {
+    baseType: "matrix_single", renderer: "pairwiseset", responseModel: "per_row",
+    capabilities: ["options", "rows", "images", "randomization"], validations: ["required"],
+    defaults: {
+      options: [
+        { code: 1, label: "Choice 1" }, { code: 2, label: "Choice 2" },
+        { code: 3, label: "Choice 3" }, { code: 4, label: "Choice 4" },
+      ],
+      rows: [
+        { code: "p1", label: "Pair 1", meta: { left: "1", right: "2" } },
+        { code: "p2", label: "Pair 2", meta: { left: "3", right: "4" } },
+      ],
+      instruction: "For each pair, choose the one you prefer.",
+    },
+  }),
 
   /* -------------------------------------------------------- MULTI SELECT */
   stable(F.multi, "checkbox", "Checkbox", "Classic checkbox list with exclusive-option support.", {

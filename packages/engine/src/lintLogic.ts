@@ -709,6 +709,36 @@ function lintInertSettings(q: Question, push: (i: Omit<LogicIssue, "questionId" 
   }
 
   /*
+   * A COMPARISON THAT IS NOT BETWEEN TWO THINGS.
+   *
+   * A pairwise set stores its pairs as rows naming two option codes. Delete
+   * or renumber an option and a pair can end up naming something that is no
+   * longer there — the renderer refuses to draw a half-empty duel, and this
+   * is where the author hears about it instead of a respondent.
+   */
+  if (variant?.renderer === "pairwiseset") {
+    const codes = new Set(q.options.map((o) => String(o.code)));
+    for (const [i, row] of (q.rows ?? []).entries()) {
+      const left = String(row.meta?.left ?? "");
+      const right = String(row.meta?.right ?? "");
+      const gone = [left, right].filter((c) => !c || !codes.has(c));
+      if (gone.length) {
+        push({
+          level: "error",
+          path: `rows[${i}].meta`,
+          message: `“${row.label || row.code}” does not name two choices that exist — a comparison needs both sides.`,
+        });
+      } else if (left === right) {
+        push({
+          level: "error",
+          path: `rows[${i}].meta`,
+          message: `“${row.label || row.code}” compares a choice with itself.`,
+        });
+      }
+    }
+  }
+
+  /*
    * A PATTERN THAT CANNOT BE COMPILED.
    *
    * The validator used to swallow this — one stray bracket and the question
