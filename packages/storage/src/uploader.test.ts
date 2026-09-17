@@ -1,7 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MemoryStorageProvider, planUpload, PART_BYTES } from "@rescript/storage";
-import { RecordingUploader, type UploadState } from "./uploader.js";
+import { MemoryStorageProvider } from "./memory.js";
+import { planUpload, PART_BYTES } from "./upload.js";
+import { RecordingUploader, type UploadState, type UploaderEndpoints } from "./uploader.js";
+
+const TEST_ENDPOINTS: UploaderEndpoints = { begin: "/api/x/begin", parts: "/api/x/parts", complete: "/api/x/complete" };
 
 /**
  * THE UPLOAD PROTOCOL, END TO END, AGAINST A REAL OBJECT STORE.
@@ -144,6 +147,7 @@ function harness(opts: { failEveryNthWrite?: number } = {}) {
 
 function uploader(h: ReturnType<typeof harness>, bytes: number, seen: UploadState[] = []) {
   return new RecordingUploader({
+    endpoints: TEST_ENDPOINTS,
     token: "tok", responseId: "r1", mimeType: "video/webm",
     estimatedBytes: bytes,
     onState: (s) => seen.push(s),
@@ -265,6 +269,7 @@ test("upload: abandoning a take stops it dead", async () => {
 test("upload: a refused begin fails loudly rather than pretending to record", async () => {
   const h = harness();
   const u = new RecordingUploader({
+    endpoints: TEST_ENDPOINTS,
     token: "tok", responseId: "r1", mimeType: "video/webm", estimatedBytes: 1000,
     onState: () => {},
     fetchImpl: (async () =>

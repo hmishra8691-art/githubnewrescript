@@ -21,7 +21,26 @@ export type FlatVars = Record<string, unknown>;
  *   lists                      VAR_1..VAR_n
  *   other specify              VAR_other
  */
-export function flattenVariables(def: SurveyDefinition, state: ResponseState): FlatVars {
+export interface FlattenOptions {
+  /**
+   * Where the platform lives, e.g. `https://studio.example.com`. A recording
+   * stored in Cloudflare is kept in the answer as the stable `/api/media/<id>`
+   * — behind a sign-in, not a bearer credential — and an export is opened
+   * outside the platform, so the path is made absolute here. Legacy signed
+   * URLs and anything else pass through untouched.
+   */
+  mediaBaseUrl?: string | null;
+}
+
+/** `/api/media/<id>` made absolute; every other URL as it was. */
+export function exportMediaUrl(url: unknown, opts?: FlattenOptions): string {
+  const u = typeof url === "string" ? url : "";
+  if (!u) return "";
+  if (/^\/api\/media\/[^/?#]+(?:\/[^/?#]+)?$/.test(u) && opts?.mediaBaseUrl) return `${opts.mediaBaseUrl.replace(/\/+$/, "")}${u}`;
+  return u;
+}
+
+export function flattenVariables(def: SurveyDefinition, state: ResponseState, opts: FlattenOptions = {}): FlatVars {
   const out: FlatVars = {};
 
   /*
@@ -37,7 +56,7 @@ export function flattenVariables(def: SurveyDefinition, state: ResponseState): F
    * fallback for a response stored before the loop variables existed, so those
    * rows keep flattening to what they flattened to before.
    */
-  const placed = placeLoopAnswers(def, state, out);
+  const placed = placeLoopAnswers(def, state, out, opts);
 
   /*
    * The design block each respondent answered.
@@ -64,7 +83,7 @@ export function flattenVariables(def: SurveyDefinition, state: ResponseState): F
       // legacy fallback for loop answers whose loop variables are absent
       const loopSuffix = key.includes("@") ? `_${key.split("@").slice(1).join("_")}` : "";
       if (q.type === "conjoint_task" || q.type === "maxdiff_task") flattenTasks(def, q, value, `${q.variableName}${loopSuffix}`, out);
-      else flattenQuestion(q, value, `${q.variableName}${loopSuffix}`, out);
+      else flattenQuestion(q, value, `${q.variableName}${loopSuffix}`, out, opts);
     }
     /*
      * "Other, specify" — ONE COLUMN PER BOX, the question's own iteration
@@ -166,7 +185,7 @@ function flattenTasks(def: SurveyDefinition, q: Question, value: unknown, varNam
   }
 }
 
-function flattenQuestion(q: Question, value: unknown, varName: string, out: FlatVars): void {
+function flattenQuestion(q: Question, value: unknown, varName: string, out: FlatVars, opts: FlattenOptions = {}): void {
   if (value === undefined) return;
 
   switch (q.type) {
@@ -319,7 +338,7 @@ function flattenQuestion(q: Question, value: unknown, varName: string, out: Flat
       for (let i = 0; i < n; i++) {
         const f = files[i] as { url?: string; name?: string; size?: number } | undefined;
         const stem = n === 1 ? varName : `${varName}_${i + 1}`;
-        out[`${stem}_URL`] = f?.url ?? "";
+        out[`${stem}_URL`] = exportMediaUrl(f?.url, opts);
         out[`${stem}_NAME`] = f?.name ?? "";
         out[`${stem}_SIZE`] = f?.size ?? "";
       }
@@ -334,7 +353,7 @@ function flattenQuestion(q: Question, value: unknown, varName: string, out: Flat
         transcript?: { text?: string; source?: string };
       };
       out[varName] = (a.transcript?.text ?? "").trim();
-      out[`${varName}_AUDIO_URL`] = a.audio?.url ?? "";
+      out[`${varName}_AUDIO_URL`] = exportMediaUrl(a.audio?.url, opts);
       out[`${varName}_DURATION_S`] = a.audio?.durationSeconds ?? "";
       out[`${varName}_RETAKES`] = a.audio?.retakes ?? "";
       out[`${varName}_TRANSCRIPT_SOURCE`] = a.transcript?.source ?? "";
@@ -404,7 +423,7 @@ function flattenQuestion(q: Question, value: unknown, varName: string, out: Flat
  * `Q9_2_1` is the first inner iteration of the second outer one, and the inner
  * loop's own variables are prefixed by the outer item (`loopVariablePrefix`).
  */
-function placeLoopAnswers(def: SurveyDefinition, state: ResponseState, out: FlatVars): Set<string> {
+function placeLoopAnswers(def: SurveyDefinition, state: ResponseState, out: FlatVars, opts: FlattenOptions = {}): Set<string> {
   const placed = new Set<string>();
   const byId = new Map(def.questions.map((q) => [q.id, q]));
 
@@ -425,7 +444,7 @@ function placeLoopAnswers(def: SurveyDefinition, state: ResponseState, out: Flat
         if (!q) continue;
         const key = `${qid}${suffix}`;
         if (state.answers[key] === undefined) continue;
-        flattenQuestion(q, state.answers[key], `${q.variableName}${position}`, out);
+        flattenQuestion(q, state.answers[key], `${q.variableName}${position}`, out, opts);
         placed.add(key);
         /* the same per-box columns, inside the iteration's own prefix */
         for (const o of otherOptions(q)) {

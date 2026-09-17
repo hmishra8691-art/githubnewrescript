@@ -25,6 +25,11 @@ import {
   MEDIA_KINDS, mediaPath, safeSegment, withinLimit, acceptsType, secondsThatFit,
   type MediaKind, type TranscriptStatus,
 } from "./plan.js";
+import { mediaUrl, type MediaStores, type ObjectStore, type PartGrant } from "./objectStore.js";
+import type { CompletedPart } from "@rescript/storage";
+
+/** How long a playback or download URL minted on demand lives. */
+export const PLAYBACK_URL_SECONDS = 15 * 60;
 
 export interface DbError { message: string }
 export interface DbResult<T> { data: T | null; error: DbError | null }
@@ -41,17 +46,21 @@ export interface MediaDb {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   from(table: string): any;
   rpc(fn: string, args: Record<string, unknown>): PromiseLike<DbResult<unknown>>;
-  storage: {
-    listBuckets(): PromiseLike<DbResult<Array<{ name: string; file_size_limit?: number | null }>>>;
-    createBucket(name: string, opts: { public: boolean; fileSizeLimit?: number }): PromiseLike<{ error: DbError | null }>;
-    from(bucket: string): {
-      createSignedUploadUrl(path: string): PromiseLike<DbResult<{ signedUrl: string; token: string; path: string }>>;
-      createSignedUrl(path: string, seconds: number): PromiseLike<DbResult<{ signedUrl: string }>>;
-      download(path: string): PromiseLike<DbResult<{ arrayBuffer(): Promise<ArrayBuffer>; type?: string }>>;
-      remove(paths: string[]): PromiseLike<DbResult<unknown>>;
-      list(path: string, opts?: { limit: number }): PromiseLike<DbResult<{ name: string }[]>>;
-    };
-  };
+  /**
+   * Where the bytes live — see `objectStore.ts`. `primary` takes everything
+   * new; `byName` finds the store a row says holds it, so nothing already
+   * stored has to move.
+   */
+  stores: MediaStores;
+}
+
+/** Everything a store operation needs to know about a row. */
+export interface ObjectRef { bucket: string; path: string; storage_provider?: string | null }
+
+export function storeFor(db: MediaDb, ref: { storage_provider?: string | null }): ObjectStore {
+  const s = db.stores.byName(ref.storage_provider);
+  if (!s) throw new MediaError(`no object store named "${ref.storage_provider}" is configured on this installation`, 501);
+  return s;
 }
 
 export interface MediaRow {
@@ -74,6 +83,9 @@ export interface MediaRow {
   error: string | null;
   uploaded_at: string | null;
   created_at: string;
+  storage_provider: string;
+  multipart_upload_id: string | null;
+  client_token: string | null;
 }
 
 export interface TranscriptRow {
@@ -101,81 +113,25 @@ export class MediaError extends Error {
 
 /* ------------------------------------------------------------ buckets */
 
-const ensured = new Map<string, number>();
-
-/** True for the storage service's refusal of a limit above the project's own. */
-function isLimitRefusal(message: string): boolean {
-  return /exceeded the maximum allowed size|maximum allowed size|exceeds the maximum/i.test(message);
-}
-
 /**
- * Make sure the bucket exists, and find out what it will actually accept.
- *
- * ## Why this is not just `createBucket`
- *
- * A Supabase project has a GLOBAL upload limit — 50 MB by default — and a
- * bucket may not declare a limit above it. `createBucket` with a 150 MB
- * `fileSizeLimit` is therefore refused outright with "The object exceeded the
- * maximum allowed size", which is a sentence about a bucket that reads like a
- * sentence about a file. A researcher recording a one-second clip was told
- * their 0.2 MB take was too big.
- *
- * So the limit we ask for is a preference, not an assertion. If the project
- * will not have it, the bucket is created without one and inherits the
- * project's — and the number that comes back is what everything downstream
- * measures against, rather than the number this package would have liked.
- *
- * Returns the effective ceiling in bytes.
+ * What the PRIMARY store will accept for a bucket, given what this package
+ * would like. The Supabase store answers with the project's own ceiling
+ * (the history of why is in `objectStore.ts`); the provider store answers
+ * with the wish. Kept under its old name for the callers that had it.
  */
 export async function ensureBucket(db: MediaDb, bucket: string, maxBytes: number): Promise<number> {
-  const known = ensured.get(bucket);
-  if (known !== undefined) return known;
-
-  const { data: buckets, error } = await db.storage.listBuckets();
-  if (error) throw new MediaError(`could not check storage buckets: ${error.message}`);
-
-  const existing = buckets?.find((b) => b.name === bucket);
-  if (existing) {
-    const limit = typeof existing.file_size_limit === "number" && existing.file_size_limit > 0
-      ? Math.min(existing.file_size_limit, maxBytes)
-      : maxBytes;
-    ensured.set(bucket, limit);
-    return limit;
-  }
-
-  let made = await db.storage.createBucket(bucket, { public: false, fileSizeLimit: maxBytes });
-  if (made.error && isLimitRefusal(made.error.message)) {
-    /* the project will not allow a bucket this permissive — take its own */
-    made = await db.storage.createBucket(bucket, { public: false });
-  }
-  if (made.error && !/already exists/i.test(made.error.message)) {
-    throw new MediaError(`could not create the storage bucket: ${made.error.message}`);
-  }
-
-  /* read back rather than assume: the bucket may have been created without
-     our limit, either by the retry above or by another process */
-  const after = await db.storage.listBuckets();
-  const row = after.data?.find((b) => b.name === bucket);
-  const limit = row && typeof row.file_size_limit === "number" && row.file_size_limit > 0
-    ? Math.min(row.file_size_limit, maxBytes)
-    : maxBytes;
-  ensured.set(bucket, limit);
-  return limit;
+  return db.stores.primary.ceiling(bucket, maxBytes);
 }
 
-/** Testing seam: forget what this process believes about buckets. */
-export function resetBucketCache(): void { ensured.clear(); }
+/** Testing seam, kept for callers; the cache now lives inside the legacy store. */
+export function resetBucketCache(): void { /* nothing to forget here any more */ }
 
 /**
  * What storage will really accept for this kind, and how long a take fits.
- *
- * The recorder asks this BEFORE the camera is opened, so the duration it
- * offers is one that can actually be stored. A ceiling discovered at upload
- * time is a ceiling discovered after the interview.
  */
 export async function mediaLimits(db: MediaDb, kind: MediaKind): Promise<{ maxBytes: number; maxSeconds: number }> {
   const spec = MEDIA_KINDS[kind];
-  const maxBytes = await ensureBucket(db, spec.bucket, spec.maxBytes);
+  const maxBytes = await db.stores.primary.ceiling(spec.bucket, spec.maxBytes);
   return { maxBytes, maxSeconds: secondsThatFit(kind, maxBytes) };
 }
 
@@ -205,14 +161,35 @@ export interface BeginUpload {
   width?: number | null;
   height?: number | null;
   now?: number;
+  /**
+   * The browser's name for this take. A second begin with the same token —
+   * a double-click, a retried request, a refresh mid-upload — gets THIS
+   * upload back (resumed where it stopped) rather than a second object.
+   */
+  clientToken?: string | null;
 }
 
 export interface UploadTicket {
   mediaId: string;
   bucket: string;
   path: string;
-  /** PUT the bytes here. Valid for two hours, single use. */
-  uploadUrl: string;
+  /** which store took it — what the row records */
+  storageProvider: string;
+  /** "single": PUT the whole object to `uploadUrl`. "multipart": PUT each of `parts`, then confirm with the etags. */
+  kind: "single" | "multipart";
+  /** PUT the bytes here (single). Valid for two hours. */
+  uploadUrl: string | null;
+  /** headers the store wants on that PUT, if any */
+  uploadHeaders: Record<string, string>;
+  uploadId: string | null;
+  partBytes: number;
+  partCount: number;
+  parts: PartGrant[];
+  /** parts the store already has, when this is a resume */
+  uploaded: CompletedPart[];
+  /** the object is already there — a begin repeated after a completed upload */
+  alreadyStored: boolean;
+  /** kept for older clients; the Supabase store used it, nothing else does */
   token: string;
   maxBytes: number;
 }
@@ -234,16 +211,56 @@ export async function beginUpload(db: MediaDb, req: BeginUpload): Promise<Upload
     if (!verdict.ok) throw new MediaError(verdict.message!, 415);
   }
 
+  const store = db.stores.primary;
+
   /*
-   * The bucket is settled BEFORE the size is judged, because what the size is
-   * judged against comes from the bucket. Asking the other way round is how a
-   * 0.2 MB take came to be refused for being too large: the limit this package
-   * would like was never the limit storage would accept.
+   * The ceiling is settled BEFORE the size is judged, because what the size
+   * is judged against comes from the store. Asking the other way round is how
+   * a 0.2 MB take came to be refused for being too large.
    */
-  const ceiling = await ensureBucket(db, spec.bucket, spec.maxBytes);
+  const ceiling = await store.ceiling(spec.bucket, spec.maxBytes);
   if (typeof req.bytes === "number" && req.bytes > 0) {
     const verdict = withinLimit(req.kind, req.bytes, ceiling);
     if (!verdict.ok) throw new MediaError(verdict.message!, 413);
+  }
+
+  /*
+   * THE SAME TAKE TWICE IS ONE UPLOAD. A client token names the take; a row
+   * that already carries it is handed back — complete if it is stored,
+   * resumed from the parts the store has if it is not — instead of a second
+   * row and a second object.
+   */
+  const clientToken = req.clientToken ? String(req.clientToken).slice(0, 120) : null;
+  if (clientToken) {
+    const { data: prior } = await db.from("media_objects")
+      .select("id, bucket, path, status, storage_provider, multipart_upload_id, bytes")
+      .eq("survey_id", req.surveyId).eq("client_token", clientToken).neq("status", "failed")
+      .maybeSingle();
+    if (prior) {
+      const held = storeFor(db, prior);
+      const base = {
+        mediaId: prior.id as string, bucket: prior.bucket as string, path: prior.path as string,
+        storageProvider: prior.storage_provider as string, token: "", maxBytes: ceiling,
+        uploadHeaders: {}, uploaded: [] as CompletedPart[], parts: [] as PartGrant[],
+      };
+      if (prior.status === "stored") {
+        return { ...base, kind: "single", uploadUrl: null, uploadId: null, partBytes: 0, partCount: 0, alreadyStored: true };
+      }
+      if (prior.multipart_upload_id && held.multipart) {
+        const bytes = Number(req.bytes) || Number(prior.bytes) || 0;
+        const r = await held.resumeUpload(prior.bucket, prior.path, prior.multipart_upload_id, bytes);
+        return {
+          ...base, kind: "multipart", uploadUrl: null, uploadId: prior.multipart_upload_id as string,
+          partBytes: r.partBytes, partCount: r.partCount, parts: r.parts, uploaded: r.uploaded, alreadyStored: false,
+        };
+      }
+      const grant = await held.grantUpload(prior.bucket, prior.path, { bytes: req.bytes, contentType: req.mimeType });
+      if (grant.kind === "single") {
+        return { ...base, kind: "single", uploadUrl: grant.url, uploadHeaders: grant.headers ?? {}, uploadId: null, partBytes: 0, partCount: 1, alreadyStored: false };
+      }
+      await db.from("media_objects").update({ multipart_upload_id: grant.uploadId }).eq("id", prior.id);
+      return { ...base, kind: "multipart", uploadUrl: null, uploadId: grant.uploadId, partBytes: grant.partBytes, partCount: grant.partCount, parts: grant.parts, alreadyStored: false };
+    }
   }
 
   const path = mediaPath(req.kind, {
@@ -274,24 +291,75 @@ export async function beginUpload(db: MediaDb, req: BeginUpload): Promise<Upload
       width: req.width ?? null,
       height: req.height ?? null,
       status: "pending",
+      storage_provider: store.name,
+      client_token: clientToken,
     })
     .select("id")
     .single();
   if (error || !row) throw new MediaError(`could not record the upload: ${error?.message ?? "no row"}`);
 
-  const signed = await db.storage.from(spec.bucket).createSignedUploadUrl(path);
-  if (signed.error || !signed.data) {
-    await db.from("media_objects").update({ status: "failed", error: signed.error?.message ?? "no upload url" }).eq("id", row.id);
-    throw new MediaError(`could not open the upload: ${signed.error?.message ?? "no upload url"}`);
+  let grant;
+  try {
+    grant = await store.grantUpload(spec.bucket, path, { bytes: req.bytes, contentType: req.mimeType });
+  } catch (e) {
+    await db.from("media_objects").update({ status: "failed", error: (e as Error).message }).eq("id", row.id);
+    throw new MediaError(`could not open the upload: ${(e as Error).message}`);
+  }
+  if (grant.kind === "multipart") {
+    await db.from("media_objects").update({ multipart_upload_id: grant.uploadId }).eq("id", row.id);
   }
 
   return {
     mediaId: row.id as string,
     bucket: spec.bucket,
     path,
-    uploadUrl: signed.data.signedUrl,
-    token: signed.data.token,
+    storageProvider: store.name,
+    kind: grant.kind,
+    uploadUrl: grant.kind === "single" ? grant.url : null,
+    uploadHeaders: grant.kind === "single" ? (grant.headers ?? {}) : {},
+    uploadId: grant.kind === "multipart" ? grant.uploadId : null,
+    partBytes: grant.kind === "multipart" ? grant.partBytes : 0,
+    partCount: grant.kind === "multipart" ? grant.partCount : 1,
+    parts: grant.kind === "multipart" ? grant.parts : [],
+    uploaded: [],
+    alreadyStored: false,
+    token: "",
     maxBytes: ceiling,
+  };
+}
+
+/**
+ * Which parts of an in-flight multipart upload the store has, and grants for
+ * the rest — what a browser asks after an interruption. Never trusts its own
+ * memory of what it sent; the store's list is the fact.
+ */
+export async function resumeUpload(db: MediaDb, mediaId: string, bytes?: number | null): Promise<UploadTicket> {
+  const { data: row, error } = await db.from("media_objects")
+    .select("id, bucket, path, status, storage_provider, multipart_upload_id, bytes, mime_type")
+    .eq("id", mediaId).maybeSingle();
+  if (error) throw new MediaError(`could not read the upload: ${error.message}`);
+  if (!row) throw new MediaError("no such upload", 404);
+  const store = storeFor(db, row);
+  const base = {
+    mediaId, bucket: row.bucket as string, path: row.path as string, storageProvider: row.storage_provider as string,
+    token: "", maxBytes: 0, uploadHeaders: {}, uploaded: [] as CompletedPart[], parts: [] as PartGrant[],
+  };
+  if (row.status === "stored") {
+    return { ...base, kind: "single", uploadUrl: null, uploadId: null, partBytes: 0, partCount: 0, alreadyStored: true };
+  }
+  if (!row.multipart_upload_id) {
+    const grant = await store.grantUpload(row.bucket, row.path, { bytes, contentType: row.mime_type });
+    if (grant.kind === "single") {
+      return { ...base, kind: "single", uploadUrl: grant.url, uploadHeaders: grant.headers ?? {}, uploadId: null, partBytes: 0, partCount: 1, alreadyStored: false };
+    }
+    await db.from("media_objects").update({ multipart_upload_id: grant.uploadId }).eq("id", mediaId);
+    return { ...base, kind: "multipart", uploadUrl: null, uploadId: grant.uploadId, partBytes: grant.partBytes, partCount: grant.partCount, parts: grant.parts, alreadyStored: false };
+  }
+  const total = Number(bytes) || Number(row.bytes) || 0;
+  const r = await store.resumeUpload(row.bucket, row.path, row.multipart_upload_id, total);
+  return {
+    ...base, kind: "multipart", uploadUrl: null, uploadId: row.multipart_upload_id as string,
+    partBytes: r.partBytes, partCount: r.partCount, parts: r.parts, uploaded: r.uploaded, alreadyStored: false,
   };
 }
 
@@ -320,38 +388,68 @@ export async function confirmUpload(
   db: MediaDb,
   mediaId: string,
   observed: { bytes?: number | null; durationSeconds?: number | null; width?: number | null; height?: number | null } = {},
+  /** the etags of a multipart upload's parts, so the store can assemble it */
+  parts: CompletedPart[] = [],
 ): Promise<StoredMedia> {
   const { data: row, error } = await db
     .from("media_objects")
-    .select("id, bucket, path, kind, mime_type, bytes, duration_seconds, width, height, original_filename")
+    .select("id, bucket, path, kind, mime_type, bytes, duration_seconds, width, height, original_filename, storage_provider, multipart_upload_id, status")
     .eq("id", mediaId)
     .maybeSingle();
   if (error) throw new MediaError(`could not read the upload: ${error.message}`);
   if (!row) throw new MediaError("no such upload", 404);
 
   const spec = MEDIA_KINDS[row.kind as MediaKind];
-  const folder = String(row.path).split("/").slice(0, -1).join("/");
-  const leaf = String(row.path).split("/").pop()!;
-  const listed = await db.storage.from(row.bucket).list(folder, { limit: 1000 });
-  if (listed.error) throw new MediaError(`could not confirm the upload: ${listed.error.message}`);
-  if (!listed.data?.some((f) => f.name === leaf)) {
+  const store = storeFor(db, row);
+
+  /*
+   * A multipart upload is assembled here, from the etags the browser was
+   * handed for each part. Assembling is what makes the object exist; until
+   * then the store holds parts, not a file.
+   */
+  if (row.multipart_upload_id && row.status !== "stored") {
+    if (!parts.length) {
+      throw new MediaError("the upload was sent in parts, and the confirmation names none of them", 400);
+    }
+    try {
+      await store.completeUpload(row.bucket, row.path, row.multipart_upload_id, parts);
+    } catch (e) {
+      await db.from("media_objects").update({ status: "failed", error: `could not assemble the upload: ${(e as Error).message}` }).eq("id", mediaId);
+      throw new MediaError(`the recording could not be assembled from its parts: ${(e as Error).message}`, 409);
+    }
+  }
+
+  /*
+   * PROVE IT. The browser reporting success and the object existing are two
+   * different facts, and the whole reason this row exists is to be the one
+   * that is true. The store's HEAD is the fact; its size is what is recorded.
+   */
+  let head;
+  try {
+    head = await store.head(row.bucket, row.path);
+  } catch (e) {
+    throw new MediaError(`could not confirm the upload: ${(e as Error).message}`);
+  }
+  if (!head) {
     await db.from("media_objects").update({ status: "failed", error: "the object was not found in storage" }).eq("id", mediaId);
     throw new MediaError("the recording did not reach storage. Try the upload again.", 409);
   }
 
-  const bytes = observed.bytes ?? row.bytes ?? null;
+  const bytes = head.size > 0 ? head.size : (observed.bytes ?? row.bytes ?? null);
   if (typeof bytes === "number" && bytes > 0) {
-    const verdict = withinLimit(row.kind as MediaKind, bytes, ensured.get(row.bucket));
+    const ceiling = await store.ceiling(row.bucket, spec.maxBytes);
+    const verdict = withinLimit(row.kind as MediaKind, bytes, ceiling);
     if (!verdict.ok) {
-      await db.storage.from(row.bucket).remove([row.path]);
+      await store.remove(row.bucket, [row.path]);
       await db.from("media_objects").update({ status: "failed", error: verdict.message }).eq("id", mediaId);
       throw new MediaError(verdict.message!, 413);
     }
   }
 
   const uploadedAt = new Date().toISOString();
-  const patch: Record<string, unknown> = { status: "stored", uploaded_at: uploadedAt, error: null };
+  const patch: Record<string, unknown> = { status: "stored", uploaded_at: uploadedAt, error: null, multipart_upload_id: null };
   if (typeof bytes === "number") patch.bytes = bytes;
+  if (head.contentType && !row.mime_type) patch.mime_type = head.contentType;
   if (typeof observed.durationSeconds === "number" && observed.durationSeconds > 0) {
     patch.duration_seconds = Math.round(observed.durationSeconds * 100) / 100;
   }
@@ -360,15 +458,22 @@ export async function confirmUpload(
   const updated = await db.from("media_objects").update(patch).eq("id", mediaId);
   if (updated.error) throw new MediaError(`could not save the upload: ${updated.error.message}`);
 
-  const signed = await db.storage.from(row.bucket).createSignedUrl(row.path, spec.signedSeconds);
-  if (signed.error || !signed.data) throw new MediaError(`could not link the recording: ${signed.error?.message ?? "no url"}`);
+  /*
+   * THE URL A DEFINITION OR AN ANSWER KEEPS. For the legacy store it is the
+   * long-lived signed URL it always was. For a provider store it is the
+   * application's own stable URL: a signed URL there lives fifteen minutes,
+   * and the app mints one on each play, after checking who is asking.
+   */
+  const url = store.name === "supabase"
+    ? await store.signDownload(row.bucket, row.path, { seconds: spec.signedSeconds })
+    : mediaUrl(mediaId, row.original_filename);
 
   return {
     mediaId,
     bucket: row.bucket,
     path: row.path,
-    url: signed.data.signedUrl,
-    mimeType: row.mime_type ?? null,
+    url,
+    mimeType: (patch.mime_type as string | undefined) ?? row.mime_type ?? null,
     bytes: typeof patch.bytes === "number" ? (patch.bytes as number) : (row.bytes ?? null),
     durationSeconds: typeof patch.duration_seconds === "number" ? (patch.duration_seconds as number) : (row.duration_seconds ?? null),
     width: typeof patch.width === "number" ? (patch.width as number) : (row.width ?? null),
@@ -378,15 +483,29 @@ export async function confirmUpload(
   };
 }
 
-/** A fresh signed URL for an object we already hold. */
-export async function freshUrl(db: MediaDb, mediaId: string): Promise<string> {
+/**
+ * A fresh, short-lived URL for an object we already hold — what the
+ * `/api/media/[id]` routes redirect to after their access check. Fifteen
+ * minutes by default, whichever store holds the object.
+ */
+export async function freshUrl(
+  db: MediaDb, mediaId: string,
+  opts: { seconds?: number; download?: boolean } = {},
+): Promise<{ url: string; row: { id: string; kind: MediaKind; survey_id: string; session_id: string | null; response_id: string | null; question_id: string | null; mime_type: string | null; original_filename: string | null; status: string; customer_id: string } }> {
   const { data: row, error } = await db
-    .from("media_objects").select("bucket, path, kind").eq("id", mediaId).maybeSingle();
+    .from("media_objects")
+    .select("id, bucket, path, kind, survey_id, session_id, response_id, question_id, mime_type, original_filename, status, storage_provider, customer_id")
+    .eq("id", mediaId).maybeSingle();
   if (error) throw new MediaError(error.message);
   if (!row) throw new MediaError("no such recording", 404);
-  const signed = await db.storage.from(row.bucket).createSignedUrl(row.path, MEDIA_KINDS[row.kind as MediaKind].signedSeconds);
-  if (signed.error || !signed.data) throw new MediaError(signed.error?.message ?? "no url");
-  return signed.data.signedUrl;
+  if (row.status !== "stored") throw new MediaError("that recording has not finished uploading", 409);
+  const store = storeFor(db, row);
+  const url = await store.signDownload(row.bucket, row.path, {
+    seconds: opts.seconds ?? PLAYBACK_URL_SECONDS,
+    downloadAs: opts.download ? (row.original_filename ?? `${row.kind}-${String(row.id).slice(0, 8)}`) : null,
+    contentType: row.mime_type,
+  });
+  return { url, row: row as never };
 }
 
 /* ------------------------------------------------------------ transcripts */
@@ -427,6 +546,8 @@ export interface ClaimedJob {
   mime_type: string | null;
   duration_seconds: number | null;
   kind: MediaKind;
+  storage_provider?: string | null;
+  bytes?: number | null;
 }
 
 /**
@@ -514,10 +635,17 @@ export async function mergeTranscriptIntoAnswer(
 }
 
 /** Download the stored bytes so a transcript can be re-driven without the recording. */
-export async function readObject(db: MediaDb, bucket: string, path: string): Promise<Uint8Array> {
-  const { data, error } = await db.storage.from(bucket).download(path);
-  if (error || !data) throw new MediaError(`could not read the recording: ${error?.message ?? "not found"}`);
-  return new Uint8Array(await data.arrayBuffer());
+export async function readObject(db: MediaDb, ref: ObjectRef): Promise<Uint8Array> {
+  try {
+    return await storeFor(db, ref).read(ref.bucket, ref.path);
+  } catch (e) {
+    throw new MediaError(`could not read the recording: ${(e as Error).message}`);
+  }
+}
+
+/** The store's account of an object — its size before anybody downloads it. */
+export async function headObject(db: MediaDb, ref: ObjectRef): Promise<{ size: number; contentType: string | null } | null> {
+  return storeFor(db, ref).head(ref.bucket, ref.path);
 }
 
 /* ------------------------------------------------------------ cleanup */
@@ -543,29 +671,71 @@ function batches<T>(items: T[], size: number): T[][] {
  * sweep can clear, while an object without a row is invisible forever — which
  * is exactly the state this whole table was added to end.
  */
-export async function removeMedia(db: MediaDb, rows: Array<{ id: string; bucket: string; path: string }>): Promise<PurgeReport> {
+export interface RemovableRow { id: string; bucket: string; path: string; storage_provider?: string | null; kind?: string | null; bytes?: number | null; customer_id?: string | null; survey_id?: string | null }
+
+export async function removeMedia(
+  db: MediaDb,
+  rows: Array<RemovableRow>,
+  reason = "removed",
+): Promise<PurgeReport> {
   const report: PurgeReport = { objects: 0, rows: 0, warnings: [] };
   if (!rows.length) return report;
 
-  const byBucket = new Map<string, string[]>();
+  /*
+   * Rows may name a store the installation does not have (a provider that
+   * was configured once and removed). Those cannot be deleted from here and
+   * are said, not skipped silently.
+   */
+  const gone = new Set<string>();
+  const groups = new Map<string, RemovableRow[]>();
   for (const r of rows) {
-    const list = byBucket.get(r.bucket) ?? [];
-    list.push(r.path);
-    byBucket.set(r.bucket, list);
+    const k = `${r.storage_provider ?? "supabase"}\u0000${r.bucket}`;
+    groups.set(k, [...(groups.get(k) ?? []), r]);
   }
-  for (const [bucket, paths] of byBucket) {
-    for (const batch of batches(paths, 100)) {
+  for (const [, group] of groups) {
+    const sample = group[0]!;
+    let store: ObjectStore;
+    try { store = storeFor(db, sample); } catch (e) {
+      report.warnings.push(`${group.length} objects in ${sample.bucket}: ${(e as Error).message}`);
+      continue;
+    }
+    for (const batch of batches(group, 100)) {
+      let result;
       try {
-        const { error } = await db.storage.from(bucket).remove(batch);
-        if (error) report.warnings.push(`storage remove failed for ${batch.length} objects in ${bucket}: ${error.message}`);
-        else report.objects += batch.length;
+        result = await store.remove(sample.bucket, batch.map((r) => r.path));
       } catch (e) {
-        report.warnings.push(`storage remove threw for ${batch.length} objects in ${bucket}: ${(e as Error).message}`);
+        report.warnings.push(`storage remove threw for ${batch.length} objects in ${sample.bucket}: ${(e as Error).message}`);
+        continue;
+      }
+      const failed = new Map(result.failed.map((f) => [f.path, f.reason]));
+      const audit: Record<string, unknown>[] = [];
+      for (const r of batch) {
+        const verified = !failed.has(r.path);
+        if (verified) { gone.add(r.id); report.objects++; }
+        else report.warnings.push(`storage remove failed for ${r.bucket}/${r.path}: ${failed.get(r.path)}`);
+        if (r.customer_id) {
+          audit.push({
+            customer_id: r.customer_id, survey_id: r.survey_id ?? null, media_id: r.id,
+            storage_provider: store.name, bucket: r.bucket, path: r.path, kind: r.kind ?? null,
+            bytes: r.bytes ?? null, reason, verified,
+            detail: verified ? {} : { error: failed.get(r.path) },
+          });
+        }
+      }
+      if (audit.length) {
+        const { error } = await db.from("media_deletions").insert(audit);
+        if (error) report.warnings.push(`the deletion audit could not be written: ${error.message}`);
       }
     }
   }
 
-  for (const batch of batches(rows.map((r) => r.id), 200)) {
+  /*
+   * Only rows whose objects are CONFIRMED gone lose their rows. A row whose
+   * object is still there is the one thing that can find it again; the next
+   * sweep tries it.
+   */
+  for (const batch of batches(rows.filter((r) => gone.has(r.id)).map((r) => r.id), 200)) {
+    if (!batch.length) continue;
     const { error } = await db.from("media_objects").delete().in("id", batch);
     if (error) report.warnings.push(`could not delete ${batch.length} media rows: ${error.message}`);
     else report.rows += batch.length;
@@ -573,9 +743,9 @@ export async function removeMedia(db: MediaDb, rows: Array<{ id: string; bucket:
   return report;
 }
 
-async function rowsWhere(db: MediaDb, apply: (q: unknown) => unknown): Promise<Array<{ id: string; bucket: string; path: string }>> {
-  const q = db.from("media_objects").select("id, bucket, path");
-  const { data, error } = await (apply(q) as PromiseLike<DbResult<Array<{ id: string; bucket: string; path: string }>>>);
+async function rowsWhere(db: MediaDb, apply: (q: unknown) => unknown): Promise<RemovableRow[]> {
+  const q = db.from("media_objects").select("id, bucket, path, storage_provider, kind, bytes, customer_id, survey_id");
+  const { data, error } = await (apply(q) as PromiseLike<DbResult<RemovableRow[]>>);
   if (error) throw new MediaError(error.message);
   return data ?? [];
 }
@@ -584,14 +754,14 @@ async function rowsWhere(db: MediaDb, apply: (q: unknown) => unknown): Promise<A
 export async function purgeSurveyMedia(db: MediaDb, surveyId: string): Promise<PurgeReport> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rows = await rowsWhere(db, (q: any) => q.eq("survey_id", surveyId));
-  return removeMedia(db, rows);
+  return removeMedia(db, rows, "purge_survey");
 }
 
 /** One question's recordings — every take, not just the one still referenced. */
 export async function purgeQuestionMedia(db: MediaDb, surveyId: string, questionId: string): Promise<PurgeReport> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rows = await rowsWhere(db, (q: any) => q.eq("survey_id", surveyId).eq("question_id", questionId));
-  return removeMedia(db, rows);
+  return removeMedia(db, rows, "purge_question");
 }
 
 /**
@@ -609,7 +779,7 @@ export async function purgeSessionMedia(db: MediaDb, sessionIds: string[]): Prom
   for (const batch of batches(sessionIds, 100)) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rows = await rowsWhere(db, (q: any) => q.in("session_id", batch));
-    const r = await removeMedia(db, rows);
+    const r = await removeMedia(db, rows, "purge_session");
     out.objects += r.objects;
     out.rows += r.rows;
     out.warnings.push(...r.warnings);
@@ -627,5 +797,61 @@ export async function sweepAbandonedUploads(db: MediaDb, olderThanMinutes = 120)
   const cutoff = new Date(Date.now() - olderThanMinutes * 60_000).toISOString();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rows = await rowsWhere(db, (q: any) => q.eq("status", "pending").lt("created_at", cutoff));
-  return removeMedia(db, rows);
+  /* an in-flight multipart upload is released too, or its parts are billed for ever */
+  for (const r of rows as Array<RemovableRow & { multipart_upload_id?: string | null }>) {
+    if (r.multipart_upload_id) {
+      try { await storeFor(db, r).abortUpload(r.bucket, r.path, r.multipart_upload_id); } catch { /* the object delete below still runs */ }
+    }
+  }
+  return removeMedia(db, rows, "abandoned");
+}
+
+/* ------------------------------------------------------------ copying */
+
+/**
+ * Duplicate a stored object for another survey, inside the store. The bytes
+ * never pass through the application; what comes back is a new row and the
+ * URL to keep. A cloned survey used to point at the original's file, so
+ * deleting the original broke the clone — this is what makes a clone a copy.
+ */
+export async function copyMedia(
+  db: MediaDb, mediaId: string,
+  target: { surveyId: string; questionId?: string | null; now?: number },
+): Promise<StoredMedia> {
+  const { data: row, error } = await db.from("media_objects")
+    .select("id, customer_id, kind, bucket, path, mime_type, bytes, duration_seconds, width, height, original_filename, storage_provider, status")
+    .eq("id", mediaId).maybeSingle();
+  if (error) throw new MediaError(error.message);
+  if (!row) throw new MediaError("no such recording", 404);
+  if (row.status !== "stored") throw new MediaError("that recording has not finished uploading", 409);
+
+  const from = storeFor(db, row);
+  /* the copy lands in the PRIMARY store when the source's store can copy across; otherwise beside its source */
+  const spec = MEDIA_KINDS[row.kind as MediaKind];
+  const path = mediaPath(row.kind as MediaKind, {
+    surveyId: target.surveyId, questionId: target.questionId ?? null,
+    fileName: row.original_filename, mimeType: row.mime_type, now: target.now,
+  });
+  await from.copy(row.bucket, row.path, spec.bucket, path, { contentType: row.mime_type });
+
+  const { data: made, error: insertError } = await db.from("media_objects").insert({
+    customer_id: row.customer_id, survey_id: target.surveyId, question_id: target.questionId ?? null,
+    kind: row.kind, bucket: spec.bucket, path, original_filename: row.original_filename,
+    mime_type: row.mime_type, bytes: row.bytes, duration_seconds: row.duration_seconds,
+    width: row.width, height: row.height, status: "stored", uploaded_at: new Date().toISOString(),
+    storage_provider: from.name,
+  }).select("id").single();
+  if (insertError || !made) {
+    await from.remove(spec.bucket, [path]).catch(() => {});
+    throw new MediaError(`could not record the copy: ${insertError?.message ?? "no row"}`);
+  }
+  const url = from.name === "supabase"
+    ? await from.signDownload(spec.bucket, path, { seconds: spec.signedSeconds })
+    : mediaUrl(made.id as string, row.original_filename);
+  return {
+    mediaId: made.id as string, bucket: spec.bucket, path, url,
+    mimeType: row.mime_type ?? null, bytes: row.bytes ?? null, durationSeconds: row.duration_seconds ?? null,
+    width: row.width ?? null, height: row.height ?? null, fileName: row.original_filename ?? null,
+    uploadedAt: new Date().toISOString(),
+  };
 }

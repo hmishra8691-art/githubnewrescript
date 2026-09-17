@@ -15,7 +15,8 @@
   "dependencies": {
     "@rescript/engine": "workspace:*",
     "@rescript/media": "workspace:*",
-    "@rescript/schema": "workspace:*"
+    "@rescript/schema": "workspace:*",
+    "@rescript/storage": "workspace:*"
   },
   "peerDependencies": {
     "react": "^18.3.1"

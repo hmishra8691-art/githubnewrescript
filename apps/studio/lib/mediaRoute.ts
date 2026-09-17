@@ -6,6 +6,7 @@ import type { Environment } from "@rescript/billing";
 import { collectUsage } from "@rescript/ai";
 import type { ProjectContext } from "@/lib/guard";
 import type { MediaDb, MeteredRun } from "@rescript/media";
+import { buildMediaStores } from "@rescript/media/server";
 
 /**
  * The Studio's half of the media pipeline: a database handle and a wallet.
@@ -18,7 +19,18 @@ import type { MediaDb, MeteredRun } from "@rescript/media";
  * and the runtime (a respondent's answer, charged to the session).
  */
 export function mediaDb(): MediaDb {
-  return supabaseAdmin() as unknown as MediaDb;
+  /*
+   * The database handle, with the stores beside it: Cloudflare R2 for
+   * everything new when it is configured, Supabase Storage for the objects
+   * stored before the switch (and for everything, until it is). See
+   * `@rescript/media/server` — this is the only line that knows.
+   */
+  const admin = supabaseAdmin();
+  return {
+    from: (t: string) => admin.from(t),
+    rpc: (fn: string, args: Record<string, unknown>) => admin.rpc(fn as never, args as never),
+    stores: buildMediaStores(admin.storage as never),
+  } as unknown as MediaDb;
 }
 
 export function mediaDbOrResponse(): { db: MediaDb } | { response: NextResponse } {

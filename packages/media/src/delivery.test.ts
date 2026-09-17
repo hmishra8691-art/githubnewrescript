@@ -221,7 +221,7 @@ function stubDb() {
       calls.push({ op: `rpc:${fn}`, args });
       return { data: state.rpc[fn] ?? [], error: null };
     },
-    storage: {} as MediaDb["storage"],
+    stores: {} as MediaDb["stores"],
   } as unknown as MediaDb;
   return { db, calls, state };
 }

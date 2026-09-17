@@ -4,6 +4,7 @@ import type { AudioAsset, Localization } from "@rescript/schema";
 import { translatableElements, audioAssets, audioFor, audioStale, currentTextFor, textHash, languageName, languageLocale, lintLanguage, type TranslatableElement } from "@rescript/engine";
 import { useLocalization, useEditorName, fmtDate } from "./shared";
 import { uid } from "../store";
+import { RecordingUploader } from "@rescript/storage/uploader";
 
 /**
  * VOICE / AUDIO LOCALIZATION — a recording for every respondent-facing
@@ -52,14 +53,31 @@ export function AudioStudio({ focusKey, onFocused }: { focusKey?: string | null;
     if (s.surveyDbId === "sandbox") {
       url = await new Promise<string>((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result)); fr.onerror = () => rej(fr.error); fr.readAsDataURL(blob); });
     } else {
-      const form = new FormData();
+      /*
+       * Direct to object storage through the survey's media routes, as a
+       * `localization_audio` object. It used to be a multipart POST through
+       * the application to a bucket the route knew by name.
+       */
       const ext = /wav/.test(blob.type) ? "wav" : /webm/.test(blob.type) ? "webm" : /ogg/.test(blob.type) ? "ogg" : "mp3";
-      form.append("file", new File([blob], `${el.key.replace(/[^A-Za-z0-9]+/g, "_")}.${lang}.${ext}`, { type: blob.type || "audio/webm" }));
-      form.append("elementKey", el.key); form.append("language", lang); form.append("kind", kind);
-      const r = await fetch(`/api/surveys/${s.surveyDbId}/audio`, { method: "POST", body: form });
-      const j = await r.json().catch(() => ({})) as { url?: string; fileName?: string; error?: string };
-      if (!r.ok || !j.url) throw new Error(j.error ?? `upload failed (${r.status})`);
-      url = j.url; fileName = j.fileName;
+      const name = `${el.key.replace(/[^A-Za-z0-9]+/g, "_")}.${lang}.${ext}`;
+      const up = new RecordingUploader({
+        endpoints: {
+          begin: `/api/surveys/${s.surveyDbId}/media/ticket`,
+          parts: `/api/surveys/${s.surveyDbId}/media/parts`,
+          complete: `/api/surveys/${s.surveyDbId}/media/confirm`,
+        },
+        mimeType: blob.type || "audio/webm", estimatedBytes: blob.size,
+        beginExtra: { kind: "localization_audio", questionId: el.questionId ?? el.key, fileName: name },
+        completeExtra: { questionId: el.questionId ?? el.key, source: kind === "ai" ? "generated" : "uploaded" },
+        onState: () => {},
+      });
+      await up.begin();
+      up.push(blob);
+      const out = await up.finish(0);
+      if (!out.ok) throw new Error(out.error);
+      const video = out.reply.video as { url?: string; fileName?: string } | undefined;
+      if (!video?.url) throw new Error("the recording was stored but no URL came back");
+      url = video.url; fileName = video.fileName ?? name;
     }
     const prev = audioAssets(s.def, el.key, lang).filter((a) => a.kind === kind);
     const asset: AudioAsset = {

@@ -360,7 +360,7 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
           )}
           {showImage && (
             <div className="opt-meta" style={{ width: 200, maxWidth: 200 }}>
-              <MediaUrlInput compact placeholder="image URL" testId={`option-image-${i}`}
+              <MediaUrlInput compact placeholder="image URL" testId={`option-image-${i}`} questionId={questionId}
                 value={o.imageUrl} onChange={(v) => set(i, { imageUrl: v })} />
             </div>
           )}
@@ -886,7 +886,7 @@ export function QuestionEditor({ q }: { q: Question }) {
       </div>
       {!MEDIA_OWNING.has(variantDef?.renderer ?? `base:${q.type}`) && (
         <MediaUrlInput label="Media — shown under the question text (image, video, YouTube or Google Drive URL)"
-          testId="question-media" value={q.settings.mediaUrl}
+          testId="question-media" questionId={q.id} value={q.settings.mediaUrl}
           onChange={(v) => patchSettings({ mediaUrl: v })} />
       )}
       {(q.options.length > 0 || q.type === "open_text" || q.type === "long_text" || q.type === "numeric") && (

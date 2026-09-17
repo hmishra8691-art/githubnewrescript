@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { meteredSessionStt, type SessionBilling } from "@/lib/metering";
 import type { MediaDb, MeteredRun } from "@rescript/media";
+import { buildMediaStores } from "@rescript/media/server";
 
 /**
  * The runtime's half of the media pipeline: a database handle and the
@@ -14,9 +15,19 @@ import type { MediaDb, MeteredRun } from "@rescript/media";
  * context differs, because a researcher's question is charged to the project
  * and a respondent's answer to the session.
  */
+export function mediaDb(): MediaDb {
+  /* the stores beside the handle — see `apps/studio/lib/mediaRoute.ts` and `@rescript/media/server` */
+  const admin = supabaseAdmin();
+  return {
+    from: (t: string) => admin.from(t),
+    rpc: (fn: string, args: Record<string, unknown>) => admin.rpc(fn as never, args as never),
+    stores: buildMediaStores(admin.storage as never),
+  } as unknown as MediaDb;
+}
+
 export function mediaDbOrResponse(): { db: MediaDb } | { response: NextResponse } {
   try {
-    return { db: supabaseAdmin() as unknown as MediaDb };
+    return { db: mediaDb() };
   } catch (e) {
     return { response: NextResponse.json({ error: (e as Error).message }, { status: 501 }) };
   }

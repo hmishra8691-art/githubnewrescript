@@ -236,7 +236,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         flags: st.flags,
         sampleSource: raw?.sample_source ?? null,
         sampleSourceRespondent: raw?.sample_source_respondent ?? null,
-        vars: flattenVariables(parsed.data, st as any),
+        vars: flattenVariables(parsed.data, st as any, { mediaBaseUrl: process.env.STUDIO_PUBLIC_URL ?? null }),
         quality: raw?.quality ? { classification: raw.quality.classification, qualityScore: raw.quality.qualityScore, riskScore: raw.quality.riskScore, flags: raw.quality.flags?.length ?? 0 } : null,
         review: raw?.review_status ?? null,
       };
@@ -269,6 +269,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
           ],
         }
       : undefined,
+    { mediaBaseUrl: process.env.STUDIO_PUBLIC_URL ?? null },
   );
   return new NextResponse(csv, {
     headers: {

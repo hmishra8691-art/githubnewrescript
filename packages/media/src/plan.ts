@@ -16,7 +16,8 @@ export type MediaKind =
   | "question_audio"       // the audio track of that recording, for transcription
   | "answer_audio"         // the respondent answering out loud
   | "answer_upload"        // any other respondent file answer
-  | "localization_audio";  // a recorded or generated reading of a question
+  | "localization_audio"   // a recorded or generated reading of a question
+  | "survey_asset";        // an image, PDF or document a researcher attaches to a question
 
 export interface MediaKindSpec {
   readonly bucket: string;
@@ -51,6 +52,7 @@ export const MEDIA_KINDS: Record<MediaKind, MediaKindSpec> = {
   answer_audio:       { bucket: "rescript-uploads", maxBytes: 25 * 1024 * 1024,  signedSeconds: YEAR,     accept: "audio", transcribed: true },
   answer_upload:      { bucket: "rescript-uploads", maxBytes: 25 * 1024 * 1024,  signedSeconds: YEAR,     accept: null,    transcribed: false },
   localization_audio: { bucket: "rescript-audio",   maxBytes: 20 * 1024 * 1024,  signedSeconds: YEAR * 5, accept: "audio", transcribed: false },
+  survey_asset:       { bucket: "rescript-assets",  maxBytes: 50 * 1024 * 1024,  signedSeconds: YEAR,     accept: null,    transcribed: false },
 };
 
 export const MEDIA_BUCKETS: readonly string[] =
@@ -183,6 +185,7 @@ export function mediaPath(kind: MediaKind, parts: PathParts): string {
     case "answer_upload":
       return `${safeSegment(parts.sessionId ?? "session")}/${question}/${stamp}-${name}`;
     case "localization_audio":
+    case "survey_asset":
       return `${safeSegment(parts.surveyId)}/${question}/${stamp}-${name}`;
   }
 }

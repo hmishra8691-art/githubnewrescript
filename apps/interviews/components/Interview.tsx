@@ -3,7 +3,7 @@ import React from "react";
 import type { Condition, SkipRule, SurveyDefinition } from "@rescript/schema";
 import type { ResponseState } from "@rescript/engine";
 import {
-  RecordingUploader, pickAudioMime, pickRecordingMime, type UploadState,
+  CANDIDATE_ENDPOINTS, RecordingUploader, pickAudioMime, pickRecordingMime, type UploadState,
 } from "@/lib/uploader";
 import {
   CHOICE_KINDS, CODE_LANGUAGES, CODE_LANGUAGE_SAY, PERMISSION_SAY, RECORDED_KINDS, RESPONSE_SAY, TYPED_KINDS, answerValueOf,
@@ -540,6 +540,7 @@ export function Interview({ token }: { token: string }) {
     setThinkLeft(null);
 
     const uploader = new RecordingUploader({
+      endpoints: CANDIDATE_ENDPOINTS,
       token,
       responseId: current.responseId,
       mimeType: mime,
@@ -570,6 +571,7 @@ export function Interview({ token }: { token: string }) {
       try {
         const audioMime = pickAudioMime();
         const audioUploader = new RecordingUploader({
+          endpoints: CANDIDATE_ENDPOINTS,
           token,
           responseId: current.responseId,
           mimeType: audioMime,

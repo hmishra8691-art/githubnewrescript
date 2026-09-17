@@ -323,6 +323,25 @@ export class R2StorageProvider implements MediaStorageProvider {
     return new Uint8Array(await res.arrayBuffer());
   }
 
+  async copy(fromKey: string, toKey: string, opts: { contentType?: string } = {}): Promise<ObjectMetadata> {
+    /*
+     * CopyObject: a PUT on the destination naming the source in
+     * `x-amz-copy-source` as `/<bucket>/<key>`. The bytes move inside the
+     * store; the response is a small XML document, not the object.
+     */
+    const headers: Record<string, string> = {
+      "x-amz-copy-source": `/${encodeURIComponent(this.bucket)}/${encodeKey(fromKey)}`,
+      "x-amz-metadata-directive": opts.contentType ? "REPLACE" : "COPY",
+    };
+    if (opts.contentType) headers["content-type"] = opts.contentType;
+    const res = await this.send({ method: "PUT", key: toKey, headers });
+    if (res.status === 404) throw new StorageError("That object is not in the store.", 404);
+    if (!res.ok) await this.fail(res, "Copying the object");
+    const meta = await this.getMetadata(toKey);
+    if (!meta) throw new StorageError("The copy did not appear in the store.", 502);
+    return meta;
+  }
+
   async delete(keys: string[]): Promise<void> {
     const list = keys.filter(Boolean);
     if (!list.length) return;

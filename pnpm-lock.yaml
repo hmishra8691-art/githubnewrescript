@@ -122,6 +122,9 @@ importers:
       '@rescript/schema':
         specifier: workspace:*
         version: link:../../packages/schema
+      '@rescript/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
       '@supabase/supabase-js':
         specifier: ^2.45.4
         version: 2.112.4
@@ -189,6 +192,9 @@ importers:
       '@rescript/schema':
         specifier: workspace:*
         version: link:../../packages/schema
+      '@rescript/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
       '@rescript/templates':
         specifier: workspace:*
         version: link:../../packages/templates
@@ -370,6 +376,10 @@ importers:
         version: 5.9.3
 
   packages/media:
+    dependencies:
+      '@rescript/storage':
+        specifier: workspace:*
+        version: link:../storage
     devDependencies:
       '@types/node':
         specifier: ^22.20.1
@@ -405,6 +415,9 @@ importers:
       '@rescript/schema':
         specifier: workspace:*
         version: link:../schema
+      '@rescript/storage':
+        specifier: workspace:*
+        version: link:../storage
       react:
         specifier: ^18.3.1
         version: 18.3.1

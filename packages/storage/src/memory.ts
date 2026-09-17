@@ -220,6 +220,12 @@ export class MemoryStorageProvider implements MediaStorageProvider {
     for (const k of keys) this.objects.delete(k);
   }
 
+  async copy(fromKey: string, toKey: string, opts: { contentType?: string } = {}): Promise<ObjectMetadata> {
+    const row = this.objects.get(fromKey);
+    if (!row) throw new StorageError("That object is not in the store.", 404);
+    return this.put(toKey, row.body, opts.contentType ?? row.contentType, { ...row.metadata });
+  }
+
   async exists(key: string): Promise<boolean> {
     return this.objects.has(key);
   }

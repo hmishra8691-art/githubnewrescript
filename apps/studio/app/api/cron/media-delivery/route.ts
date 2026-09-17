@@ -132,9 +132,20 @@ async function run(req: Request): Promise<NextResponse> {
        * is the transcription JOB, not the transcript. The response keeps its
        * text, its quality scores and its exports.
        */
-      const purge = await removeMedia(db, rows);
-      await markDeleted(db, due.id, purge.warnings);
-      report.deleted++;
+      const purge = await removeMedia(db, rows, "delivered");
+      /*
+       * DELETED MEANS DELETED. `removeMedia` now confirms each object gone
+       * with a HEAD and keeps the row of any that is not; the delivery is
+       * marked deleted only when every object went. Otherwise it stays
+       * `expired` — the link is already dead — and the next run tries the
+       * remaining bytes again, which is what the email promised.
+       */
+      if (purge.objects >= rows.length) {
+        await markDeleted(db, due.id, purge.warnings);
+        report.deleted++;
+      } else {
+        report.warnings.push(`delivery ${due.id}: ${rows.length - purge.objects} of ${rows.length} objects still in storage; will retry`);
+      }
       if (purge.warnings.length) report.warnings.push(...purge.warnings.slice(0, 3));
     }
   } catch (e) {

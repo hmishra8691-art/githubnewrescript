@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { MemoryStorageProvider } from "@rescript/storage";
+import { MemoryStorageProvider } from "./memory.js";
 import { PART_BYTES } from "@rescript/storage/upload";
 import {
   COMPLETION_SAY, checkAfterAssembly, checkBeforeAssembly, completionReason,

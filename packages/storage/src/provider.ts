@@ -165,6 +165,13 @@ export interface MediaStorageProvider {
   /** Idempotent. Keys that are not there are not an error. */
   delete(keys: string[]): Promise<void>;
 
+  /**
+   * Duplicate an object inside the store, server side. The bytes never leave
+   * the store: this is what a survey clone uses so a copied question video is
+   * a copy and not a shared object one deletion away from a broken clone.
+   */
+  copy(fromKey: string, toKey: string, opts?: { contentType?: string }): Promise<ObjectMetadata>;
+
   /** Cheap presence check. Equivalent to `getMetadata(key) !== null`. */
   exists(key: string): Promise<boolean>;
 

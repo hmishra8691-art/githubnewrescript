@@ -1,7 +1,7 @@
 import "server-only";
 import { NextResponse } from "next/server";
 import { mediaDb } from "@/lib/mediaRoute";
-import { readObject, buildZip } from "@rescript/media";
+import { readObject, buildZip, freshUrl, PLAYBACK_URL_SECONDS } from "@rescript/media";
 import {
   deliveryForToken,
   linkUsable,
@@ -97,6 +97,44 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     return GONE("There is nothing in this delivery", "No media was recorded against this response.");
   }
 
+  /*
+   * THE DEFAULT IS A PAGE OF DIRECT LINKS, NOT A ZIP.
+   *
+   * Building an archive here meant every recording's bytes were read out of
+   * the store into this function and sent back out of it — twice through
+   * Vercel for a file that was one signed URL away all along. That was the
+   * largest origin-transfer path in the product. The page mints a
+   * fifteen-minute download URL per file, from whichever store holds it, and
+   * the researcher's browser fetches straight from storage. The archive is
+   * kept behind `?zip=1` for anybody who needs one file.
+   */
+  if (new URL(req.url).searchParams.get("zip") !== "1") {
+    const files: { name: string; url: string | null; bytes: number; kind: string; duration: number | null }[] = [];
+    for (const f of manifest) {
+      try {
+        const { url } = await freshUrl(db, f.mediaId, { download: true, seconds: PLAYBACK_URL_SECONDS });
+        files.push({ name: f.fileName, url, bytes: f.bytes, kind: f.kind, duration: f.durationSeconds });
+      } catch {
+        files.push({ name: f.fileName, url: null, bytes: f.bytes, kind: f.kind, duration: f.durationSeconds });
+      }
+    }
+    if (!files.some((f) => f.url)) {
+      return GONE("These files are no longer in storage", `Recordings are deleted ${RETENTION_HOURS} hours after delivery.`);
+    }
+    void recordDownload(db, row.id);
+    const left = row.expires_at ? hoursRemaining(new Date(row.expires_at), new Date()) : 0;
+    const zipHref = `?k=${encodeURIComponent(token)}&zip=1`;
+    return new NextResponse(linksPage(row.respondent_label ?? "Respondent", files, left, zipHref), {
+      status: 200,
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "private, no-store, max-age=0",
+        "x-robots-tag": "noindex, nofollow",
+        "x-rescript-expires-in-hours": String(left),
+      },
+    });
+  }
+
   /* Read every object, then build. Each is capped at 25 MB by MEDIA_KINDS and
      a delivery is one respondent's sitting, so this is bounded by the same
      limits that bound the recorder. */
@@ -104,7 +142,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const missing: string[] = [];
   for (const f of manifest) {
     try {
-      entries.push({ name: f.fileName, bytes: await readObject(db, f.bucket, f.path) });
+      entries.push({ name: f.fileName, bytes: await readObject(db, { bucket: f.bucket, path: f.path, storage_provider: f.storageProvider ?? null }) });
     } catch {
       missing.push(f.fileName);
     }
@@ -164,5 +202,44 @@ function page(title: string, hint: string): string {
 <div style="max-width:520px;margin:0 auto;background:#fff;border:1px solid #e6e8ef;border-radius:14px;padding:28px">
 <h1 style="margin:0 0 10px;font-size:20px;letter-spacing:-0.01em">${esc(title)}</h1>
 <p style="margin:0;color:#5f6b7d">${esc(hint)}</p>
+</div></body></html>`;
+}
+
+/** The delivery as a page of links. Each URL is good for fifteen minutes; reloading mints fresh ones. */
+function linksPage(
+  respondent: string,
+  files: { name: string; url: string | null; bytes: number; kind: string; duration: number | null }[],
+  hoursLeft: number,
+  zipHref: string,
+): string {
+  const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
+  const mb = (n: number) => (n >= 1_048_576 ? `${(n / 1_048_576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+  const clock = (s: number | null) => (s == null ? "" : ` · ${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`);
+  const rows = files.map((f) => {
+    const leaf = f.name.split("/").pop() ?? f.name;
+    return f.url
+      ? `<li><a href="${esc(f.url)}" download>${esc(leaf)}</a> <span class="m">${mb(f.bytes)}${clock(f.duration)}</span></li>`
+      : `<li><span class="gone">${esc(leaf)}</span> <span class="m">no longer in storage</span></li>`;
+  }).join("");
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Recordings — ${esc(respondent)}</title>
+<style>
+body{font:16px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#131a2b;background:#f7f8fb;margin:0;padding:48px 20px}
+.card{max-width:620px;margin:0 auto;background:#fff;border:1px solid #e6e8ef;border-radius:14px;padding:28px}
+h1{margin:0 0 6px;font-size:20px;letter-spacing:-0.01em}
+p{margin:0 0 14px;color:#5f6b7d}
+ul{list-style:none;padding:0;margin:0}
+li{padding:10px 0;border-top:1px solid #eef0f4}
+a{color:#1d4ed8;text-decoration:none;font-weight:550}a:hover{text-decoration:underline}
+.m{color:#8a94a6;font-size:13px;margin-left:6px}.gone{color:#8a94a6;text-decoration:line-through}
+.tiny{font-size:13px;color:#8a94a6;margin-top:16px}
+</style></head>
+<body><div class="card">
+<h1>Recordings for ${esc(respondent)}</h1>
+<p>${files.filter((f) => f.url).length} file${files.filter((f) => f.url).length === 1 ? "" : "s"}. Each link downloads straight from storage and works for 15 minutes; reload this page for fresh links. This delivery is deleted in about ${hoursLeft} hour${hoursLeft === 1 ? "" : "s"}.</p>
+<ul>${rows}</ul>
+<p class="tiny">Need everything in one file? <a href="${esc(zipHref)}">Download as a ZIP</a> — slower, since the archive is built on request.</p>
 </div></body></html>`;
 }

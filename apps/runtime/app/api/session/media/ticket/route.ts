@@ -57,6 +57,7 @@ export async function POST(req: NextRequest) {
       mimeType: typeof body.mimeType === "string" ? body.mimeType : null,
       bytes: Number(body.bytes) || null,
       durationSeconds: Number(body.durationSeconds) || null,
+      clientToken: typeof body.clientToken === "string" ? body.clientToken : null,
     });
     stageLogger(`session:${gate.row.sessionId.slice(0, 8)}`)("upload_url_issued", { mediaId: ticket.mediaId, kind, questionId });
     return NextResponse.json({ ok: true, ...ticket });

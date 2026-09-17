@@ -1,6 +1,8 @@
 "use client";
 import React from "react";
+import type { UploadState } from "@rescript/storage/uploader";
 import type { QRProps } from "../QuestionRenderer";
+import { playbackUrl, uploadBlobForSession, uploadStateSay } from "../lib/sessionUpload";
 import { registerVariantRenderer } from "./registry";
 
 /**
@@ -31,6 +33,8 @@ export interface UploadedFile {
   size: number;
   type: string;
   path?: string;
+  /** the `media_objects` row, for a file stored on the platform */
+  mediaId?: string;
   /** true when the file never left the browser (preview) */
   local?: boolean;
 }
@@ -44,21 +48,30 @@ export interface UploadedFile {
  */
 export async function uploadFile(
   file: File | Blob,
-  ctx: { sessionId?: string | null; questionId: string; fileName?: string },
+  ctx: { sessionId?: string | null; questionId: string; fileName?: string; onState?: (s: UploadState) => void },
 ): Promise<UploadedFile> {
   const name = (file as File).name ?? ctx.fileName ?? "upload";
   if (!ctx.sessionId) {
     const url = file.size <= 2 * 1024 * 1024 ? await toDataUrl(file) : URL.createObjectURL(file);
     return { url, name, size: file.size, type: file.type, local: true };
   }
-  const form = new FormData();
-  form.append("file", file, name);
-  form.append("sessionId", ctx.sessionId);
-  form.append("questionId", ctx.questionId);
-  const res = await fetch("/api/upload", { method: "POST", body: form });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error ?? `upload failed (${res.status})`);
-  return { url: body.url, path: body.path, name: body.name ?? name, size: body.size ?? file.size, type: body.type ?? file.type };
+  /*
+   * Straight to object storage on a signed URL — in parts when it is large,
+   * resumed if the network drops — and confirmed by the server asking the
+   * store. The file never passes through the application. See
+   * `lib/sessionUpload.ts` for what this replaced.
+   */
+  const out = await uploadBlobForSession(file, {
+    sessionId: ctx.sessionId, kind: "answer_upload", questionId: ctx.questionId,
+    fileName: name, mimeType: file.type || "application/octet-stream", bytes: file.size,
+    onState: ctx.onState,
+  });
+  if (!out.ok) throw new Error(out.error);
+  const stored = (out.reply.file ?? {}) as Partial<UploadedFile>;
+  return {
+    url: stored.url ?? "", path: stored.path, mediaId: out.mediaId,
+    name: stored.name ?? name, size: stored.size ?? file.size, type: stored.type ?? file.type,
+  };
 }
 
 function toDataUrl(blob: Blob): Promise<string> {
@@ -116,13 +129,13 @@ export function tooBig(p: QRProps, file: File | Blob): string | null {
 }
 
 /** A stored file's row: name, size and a remove button. */
-function FileRow({ f, i, onRemove }: { f: UploadedFile; i: number; onRemove(): void }) {
+function FileRow({ f, i, onRemove, sessionId }: { f: UploadedFile; i: number; onRemove(): void; sessionId?: string | null }) {
   const isImage = f.type?.startsWith("image/");
   return (
     <div className="rs-up-row" data-file={i}>
       {isImage ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img className="rs-up-thumb" src={f.url} alt="" />
+        <img className="rs-up-thumb" src={playbackUrl(f.url, sessionId)} alt="" />
       ) : (
         <span className="rs-up-icon" aria-hidden>📄</span>
       )}
@@ -145,6 +158,7 @@ export function FileUpload(p: QRProps) {
   const max = p.q.settings.maxFiles ?? 1;
   const files = filesOf(p);
   const [busy, setBusy] = React.useState(0);
+  const [progress, setProgress] = React.useState<string>("");
   const [error, setError] = React.useState<string | null>(null);
   const [over, setOver] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
@@ -163,7 +177,7 @@ export function FileUpload(p: QRProps) {
       }
       setBusy((b) => b + 1);
       try {
-        const up = await uploadFile(f, { sessionId: liveSessionId(p), questionId: p.q.id });
+        const up = await uploadFile(f, { sessionId: liveSessionId(p), questionId: p.q.id, onState: (s) => setProgress(uploadStateSay(s)) });
         next = max > 1 ? [...next, up] : [up];
         commitFiles(p, next);
       } catch (e) {
@@ -213,11 +227,11 @@ export function FileUpload(p: QRProps) {
         data-testid="upload-input"
         onChange={(e) => void take(e.target.files)}
       />
-      {busy > 0 && <div className="rs-up-busy" data-testid="upload-busy">Uploading…</div>}
+      {busy > 0 && <div className="rs-up-busy" data-testid="upload-busy">{progress || "Uploading…"}</div>}
       {files.length > 0 && (
         <div className="rs-up-list">
           {files.map((f, i) => (
-            <FileRow key={`${f.url}-${i}`} f={f} i={i}
+            <FileRow key={`${f.url}-${i}`} f={f} i={i} sessionId={liveSessionId(p)}
               onRemove={() => commitFiles(p, files.filter((_, j) => j !== i))} />
           ))}
         </div>
@@ -290,7 +304,7 @@ export function CameraCapture(p: QRProps) {
     return (
       <div className="rs-up rs-cam">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className="rs-cam-shot" src={photo.url} alt="The photo you took" data-testid="photo-preview" />
+        <img className="rs-cam-shot" src={playbackUrl(photo.url, liveSessionId(p))} alt="The photo you took" data-testid="photo-preview" />
         <div className="rs-up-actions">
           <span className="rs-up-size">{photo.name} · {fmtSize(photo.size)}</span>
           <button type="button" className="rs-btn secondary" disabled={ro}
@@ -426,7 +440,7 @@ export function SignaturePad(p: QRProps) {
     return (
       <div className="rs-sig">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className="rs-sig-saved" src={saved.url} alt="Your signature" data-testid="signature-saved" />
+        <img className="rs-sig-saved" src={playbackUrl(saved.url, liveSessionId(p))} alt="Your signature" data-testid="signature-saved" />
         <div className="rs-up-actions">
           <span className="rs-up-size">Signed · {fmtSize(saved.size)}</span>
           <button type="button" className="rs-btn secondary" disabled={ro}

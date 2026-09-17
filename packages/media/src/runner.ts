@@ -100,9 +100,21 @@ export async function runTranscription(db: MediaDb, mediaId: string, deps: Runne
 
   log("transcription_started", { mediaId, jobId: job.id, attempt: job.attempts, bucket: job.bucket, path: job.path });
 
+  /*
+   * Size first, from the store's own account, before the bytes are pulled: a
+   * clip the provider will refuse is not worth downloading to find out.
+   */
+  const known = Number(job.bytes ?? 0);
+  if (known > STT_MAX_BYTES) {
+    const error = `That recording is ${Math.round(known / 1024 / 1024)} MB of audio and the transcription service accepts ${STT_MAX_BYTES / 1024 / 1024} MB. Record a shorter take.`;
+    await markTranscript(db, job.id, "failed", { error });
+    log("transcription_failed", { mediaId, jobId: job.id, at: "size_check", error });
+    return outcomeOf(await transcriptFor(db, mediaId), true);
+  }
+
   let bytes: Uint8Array;
   try {
-    bytes = await readObject(db, job.bucket, job.path);
+    bytes = await readObject(db, { bucket: job.bucket, path: job.path, storage_provider: job.storage_provider });
   } catch (e) {
     const message = (e as Error).message;
     await markTranscript(db, job.id, "failed", { error: message });

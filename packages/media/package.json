@@ -12,6 +12,10 @@
     "./delivery": {
       "types": "./dist/delivery.d.ts",
       "default": "./dist/delivery.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "default": "./dist/server.js"
     }
   },
   "scripts": {
@@ -19,7 +23,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test dist/*.test.js"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@rescript/storage": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "^22.20.1",
     "typescript": "^5.6.3"

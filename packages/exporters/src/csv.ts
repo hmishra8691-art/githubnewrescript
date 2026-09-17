@@ -45,6 +45,7 @@ export function responsesToCSV(
   states: ResponseStateLike[],
   /** optional per-row extra columns (e.g. the quality summary), same order as `states` */
   extra?: { columns: readonly string[]; cells: (index: number) => unknown[] },
+  opts: { mediaBaseUrl?: string | null } = {},
 ): string {
   const dict = buildVariableDictionary(def);
   const varNames: string[] = [];
@@ -58,7 +59,7 @@ export function responsesToCSV(
 
   const lines: string[] = [csvLine([...SYSTEM_COLUMNS, ...varNames, ...(extra?.columns ?? [])])];
   states.forEach((state, i) => {
-    const flat = flattenVariables(def, state as any);
+    const flat = flattenVariables(def, state as any, opts);
     const cells: unknown[] = [
       state.respondentId ?? "",
       state.sessionId,

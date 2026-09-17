@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { mediaDb } from "@/lib/mediaRoute";
+import { copyMedia } from "@rescript/media";
 import { SurveyDefinition } from "@rescript/schema";
 import { cloneSurveyDefinition, slugForCode } from "@rescript/engine";
 import { supabaseAdmin } from "@/lib/admin";
@@ -113,6 +115,32 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }, { status: 500 });
   }
 
+  /*
+   * A CLONE IS A COPY OF ITS MEDIA TOO. `cloneSurveyDefinition` re-ids every
+   * entity but a question video's `url`/`path`/`mediaId` named the ORIGINAL's
+   * object, so deleting the original broke the clone's playback. Each stored
+   * object is now duplicated inside the store — the bytes never pass through
+   * here — and the clone's definition names its own row. A copy that cannot
+   * be made (a store that will not copy) keeps the original reference and is
+   * said in the reply rather than failing the clone.
+   */
+  const mediaWarnings: string[] = [];
+  try {
+    const mdb = mediaDb();
+    for (const q of result.def.questions) {
+      const iv = (q.settings as { interviewVideo?: { mediaId?: string; url?: string; path?: string } }).interviewVideo;
+      if (!iv?.mediaId) continue;
+      try {
+        const copy = await copyMedia(mdb, iv.mediaId, { surveyId: created.id, questionId: q.id });
+        Object.assign(iv, { mediaId: copy.mediaId, url: copy.url, path: copy.path });
+      } catch (e) {
+        mediaWarnings.push(`${q.variableName ?? q.id}: the question video could not be copied (${(e as Error).message}); the copy plays the original's file.`);
+      }
+    }
+  } catch (e) {
+    mediaWarnings.push(`media could not be copied: ${(e as Error).message}`);
+  }
+
   const { data: ver, error: verErr } = await db
     .from("survey_versions")
     .insert({ survey_id: created.id, version: "1.0", definition: result.def, label: `Cloned from ${src.code}`, created_by: user.userId })
@@ -146,5 +174,6 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     /* said plainly, because it is the part people are right to worry about */
     responsesCopied: false,
     walletBalance: 0,
+    mediaWarnings,
   });
 }

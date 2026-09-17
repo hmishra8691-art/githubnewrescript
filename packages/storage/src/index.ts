@@ -16,3 +16,4 @@ export * from "./sigv4.js";
 export * from "./r2.js";
 export * from "./memory.js";
 export * from "./upload.js";
+export * from "./completion.js";

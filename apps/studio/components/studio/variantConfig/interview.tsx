@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import type { InterviewVideo } from "@rescript/schema";
+import { RecordingUploader } from "@rescript/storage/uploader";
 import {
   RECORDING_CONSTRAINTS, MEDIA_KINDS, withinLimit, TRANSCRIPT_SAY, transcriptPending,
   type MediaKind, type TranscriptStatus,
@@ -300,34 +301,43 @@ function VideoRecorder({ q, patchSettings }: VariantSettingsProps) {
     const limit = withinLimit(kind, blob.size, kind === "question_video" ? limits.maxBytes : undefined);
     if (!limit.ok) throw new Error(limit.message);
 
-    const ticketRes = await fetch(`/api/surveys/${s.surveyDbId}/media/ticket`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ kind, questionId: q.id, fileName, mimeType: blob.type, bytes: blob.size, ...extra }),
+    /*
+     * ONE UPLOADER FOR EVERY PRODUCT. A question video can be 150 MB, so it
+     * goes in 8 MB parts, each retried on its own, resumed from whatever the
+     * store has after an interruption, and confirmed only once the server has
+     * asked the store what arrived. The take stays in `pendingRef`, so Retry
+     * re-sends the same recording rather than asking anyone to record again.
+     */
+    const uploader = new RecordingUploader({
+      endpoints: {
+        begin: `/api/surveys/${s.surveyDbId}/media/ticket`,
+        parts: `/api/surveys/${s.surveyDbId}/media/parts`,
+        complete: `/api/surveys/${s.surveyDbId}/media/confirm`,
+      },
+      mimeType: blob.type || "application/octet-stream",
+      estimatedBytes: blob.size,
+      beginExtra: { kind, questionId: q.id, fileName, ...extra },
+      completeExtra: { questionId: q.id, ...extra },
+      onState: (st) => {
+        if (st.phase === "uploading" || st.phase === "waiting") setPct(10 + Math.round(st.progress * 60));
+        if (st.phase === "finishing") setPct(75);
+      },
     });
-    const ticket = await ticketRes.json().catch(() => ({}));
-    if (!ticketRes.ok || !ticket?.uploadUrl) throw new Error(ticket?.error ?? `The upload could not be opened (${ticketRes.status}).`);
-    stage("upload_url_issued", { questionId: q.id, kind, mediaId: ticket.mediaId });
-
-    stage("upload_started", { questionId: q.id, kind, mediaId: ticket.mediaId, bytes: blob.size });
-    const put = await fetch(ticket.uploadUrl, {
-      method: "PUT",
-      headers: { "content-type": blob.type || "application/octet-stream", "x-upsert": "false" },
-      body: blob,
-    });
-    if (!put.ok) throw new Error(`The recording could not be uploaded (${put.status}). Your take is still here — press Retry.`);
-    stage("upload_completed", { questionId: q.id, kind, mediaId: ticket.mediaId });
-
-    const confirmRes = await fetch(`/api/surveys/${s.surveyDbId}/media/confirm`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mediaId: ticket.mediaId, questionId: q.id, bytes: blob.size, ...extra }),
-    });
-    const confirmed = await confirmRes.json().catch(() => ({}));
-    if (!confirmRes.ok) throw new Error(confirmed?.error ?? `The recording did not reach storage (${confirmRes.status}).`);
-    stage("storage_confirmed", { questionId: q.id, kind, mediaId: ticket.mediaId });
+    try {
+      await uploader.begin();
+    } catch (e) {
+      throw new Error((e as Error).message || "The upload could not be opened.");
+    }
+    stage("upload_url_issued", { questionId: q.id, kind, mediaId: uploader.mediaId });
+    stage("upload_started", { questionId: q.id, kind, mediaId: uploader.mediaId, bytes: blob.size });
+    uploader.push(blob);
+    const out = await uploader.finish(extra.durationSeconds ?? 0);
+    if (!out.ok) throw new Error(`${out.error} Your take is still here — press Retry.`);
+    stage("upload_completed", { questionId: q.id, kind, mediaId: out.mediaId });
+    const confirmed = out.reply as { video?: InterviewVideo; transcriptStatus?: TranscriptStatus | null; transcriptUnavailable?: string | null };
+    stage("storage_confirmed", { questionId: q.id, kind, mediaId: out.mediaId });
     return {
-      mediaId: ticket.mediaId,
+      mediaId: out.mediaId,
       video: confirmed.video,
       transcriptStatus: confirmed.transcriptStatus ?? null,
       transcriptUnavailable: confirmed.transcriptUnavailable ?? null,

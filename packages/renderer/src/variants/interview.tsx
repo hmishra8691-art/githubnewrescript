@@ -3,6 +3,7 @@ import React from "react";
 import type { QRProps } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { liveSessionId } from "./upload";
+import { playbackUrl, uploadBlobForSession, uploadStateSay } from "../lib/sessionUpload";
 import {
   foldWatchTick, interviewState, requiresWatch, requiresAudioAnswer, transcribes,
   savesAudio, allowsSeek, retakeLimit, videoCompleted, formatSeconds,
@@ -124,6 +125,9 @@ export function VideoInterview(p: QRProps) {
    * the most expensive failure in a qualitative interview.
    */
   const pending = React.useRef<{ blob: Blob; seconds: number; retakes: number } | null>(null);
+  /* one name per take, kept across retries so a resumed upload is the same upload */
+  const takeToken = React.useRef<string | null>(null);
+  const [uploadSay, setUploadSay] = React.useState<string>("");
   /**
    * The browser's own live transcription, running beside the recorder.
    *
@@ -272,49 +276,33 @@ export function VideoInterview(p: QRProps) {
        * respondent their recording could not be saved — which was false, and
        * asked them to record it all again.
        */
-      const ticketRes = await fetch("/api/session/media/ticket", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          sessionId, kind: "answer_audio", questionId: p.q.id,
-          /* inside a loop the answer is keyed per iteration, and the server
-             needs that key to put the finished transcript back on the right
-             answer without the browser's help */
-          answerKey: answerKey(p.q.id, p.loop),
-          fileName: "answer.webm", mimeType: blob.type || "audio/webm",
-          bytes: blob.size, durationSeconds: seconds,
-        }),
+      const out = await uploadBlobForSession(blob, {
+        sessionId, kind: "answer_audio", questionId: p.q.id,
+        /* inside a loop the answer is keyed per iteration, and the server
+           needs that key to put the finished transcript back on the right
+           answer without the browser's help */
+        answerKey: answerKey(p.q.id, p.loop),
+        fileName: "answer.webm", mimeType: blob.type || "audio/webm",
+        bytes: blob.size, durationSeconds: seconds,
+        completeExtra: { retakes },
+        /* the same take keeps the same name across retries, so a retry after a
+           dropped connection resumes the upload rather than starting another */
+        clientToken: takeToken.current ?? (takeToken.current = `${p.q.id}:${Date.now().toString(36)}`),
+        onState: (st) => setUploadSay(uploadStateSay(st)),
       });
-      const ticket = await ticketRes.json().catch(() => ({}));
-      if (!ticketRes.ok || !ticket?.uploadUrl) {
-        setError(ticket?.error ?? "Your recording could not be saved. Please check your connection and try again.");
-        return;
-      }
-
-      const put = await fetch(ticket.uploadUrl, {
-        method: "PUT",
-        headers: { "content-type": blob.type || "audio/webm", "x-upsert": "false" },
-        body: blob,
-      });
-      if (!put.ok) {
+      if (!out.ok) {
         /*
          * The clip did not reach storage. This is the ONE failure the
          * respondent must be told about, because unlike a missing transcript
          * it cannot be repaired later — so it is said plainly, the local
          * recording is kept playable, and Try again is offered.
          */
-        setError("Your recording could not be saved. Please check your connection and try again.");
+        setError(out.error || "Your recording could not be saved. Please check your connection and try again.");
         return;
       }
-
-      const confirmRes = await fetch("/api/session/media/confirm", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sessionId, mediaId: ticket.mediaId, questionId: p.q.id, bytes: blob.size, durationSeconds: seconds, retakes }),
-      });
-      const confirmed = await confirmRes.json().catch(() => ({}));
-      if (!confirmRes.ok || !confirmed?.audio) {
-        setError(confirmed?.error ?? "Your recording could not be saved. Please check your connection and try again.");
+      const confirmed = out.reply as { audio?: Record<string, unknown>; transcriptStatus?: string | null; keepAudio?: boolean; mediaId?: string };
+      if (!confirmed?.audio) {
+        setError("Your recording could not be saved. Please check your connection and try again.");
         return;
       }
 
@@ -345,7 +333,7 @@ export function VideoInterview(p: QRProps) {
 
       if (status) {
         setBusy("transcribing");
-        void driveTranscript(sessionId, String(ticket.mediaId));
+        void driveTranscript(sessionId, String(out.mediaId));
       }
     } catch {
       setError("Your recording could not be saved. Please check your connection and try again.");
@@ -506,7 +494,7 @@ export function VideoInterview(p: QRProps) {
 
   /* ------------------------------------------------------------- rendering */
 
-  const playbackUrl = a.audio?.url || localUrl || undefined;
+  const playbackSrc = playbackUrl(a.audio?.url, liveSessionId(p)) || localUrl || undefined;
   const transcriptText = a.transcript?.text ?? "";
   const showTranscript = p.q.settings.transcriptVisibility === "respondent" || p.q.settings.transcriptVisibility === "editable";
   const editableTranscript = p.q.settings.transcriptVisibility === "editable";
@@ -638,14 +626,14 @@ export function VideoInterview(p: QRProps) {
 
             {busy && (
               <div className="rs-iv-busy" data-testid="interview-busy">
-                {busy === "uploading" ? "Saving your response…" : "Processing your response…"}
+                {busy === "uploading" ? (uploadSay && uploadSay !== "Saved" ? uploadSay : "Saving your response…") : "Processing your response…"}
               </div>
             )}
 
             {a.audio && !recording && !busy && (
               <div className="rs-iv-saved" data-testid="interview-saved">
-                {p.q.settings.reviewBeforeSubmit !== false && playbackUrl && (
-                  <audio controls src={playbackUrl} data-testid="interview-playback" />
+                {p.q.settings.reviewBeforeSubmit !== false && playbackSrc && (
+                  <audio controls src={playbackSrc} data-testid="interview-playback" />
                 )}
                 {a.audio.durationSeconds != null && (
                   <span className="muted mono">{clock(a.audio.durationSeconds)}</span>

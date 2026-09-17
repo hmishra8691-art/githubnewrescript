@@ -100,6 +100,8 @@ export interface DeliveryFile {
   mediaId: string;
   bucket: string;
   path: string;
+  /** which store holds it; absent on manifests written before 0039 (Supabase) */
+  storageProvider?: string | null;
   /** The name inside the ZIP, including its folders. */
   fileName: string;
   kind: string;
@@ -118,6 +120,7 @@ export interface ManifestInput {
     mediaId: string;
     bucket: string;
     path: string;
+    storageProvider?: string | null;
     kind: string;
     bytes: number | null;
     mimeType: string | null;
@@ -192,6 +195,7 @@ export function buildManifest(input: ManifestInput): DeliveryFile[] {
       mediaId: f.mediaId,
       bucket: f.bucket,
       path: f.path,
+      storageProvider: f.storageProvider ?? null,
       fileName: name,
       kind: f.kind,
       bytes: f.bytes ?? 0,
@@ -324,7 +328,7 @@ export async function claimDelivery(
 /** The stored media belonging to one session, in the order it was recorded. */
 export async function sessionMedia(db: MediaDb, sessionId: string): Promise<ManifestInput["files"]> {
   const { data, error } = await db.from("media_objects")
-    .select("id, bucket, path, kind, bytes, mime_type, original_filename, question_id, answer_key, duration_seconds")
+    .select("id, bucket, path, kind, bytes, mime_type, original_filename, question_id, answer_key, duration_seconds, storage_provider")
     .eq("session_id", sessionId)
     .eq("status", "stored")
     .in("kind", DELIVERED_KINDS as unknown as string[])
@@ -335,6 +339,7 @@ export async function sessionMedia(db: MediaDb, sessionId: string): Promise<Mani
     mediaId: r.id,
     bucket: r.bucket,
     path: r.path,
+    storageProvider: r.storage_provider ?? null,
     kind: r.kind,
     bytes: r.bytes == null ? null : Number(r.bytes),
     mimeType: r.mime_type ?? null,

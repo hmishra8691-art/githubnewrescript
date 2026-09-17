@@ -44,11 +44,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (!owned || owned.survey_id !== params.id) return NextResponse.json({ error: "no such recording" }, { status: 404 });
 
     const stored = await confirmUpload(db, mediaId, {
-      bytes: Number(body.bytes) || null,
+      bytes: Number(body.bytes) || Number(body.bytesRecorded) || null,
       durationSeconds: Number(body.durationSeconds) || null,
       width: Number(body.width) || null,
       height: Number(body.height) || null,
-    });
+    }, readParts(body.parts));
     log("storage_confirmed", { mediaId, kind: owned.kind, bytes: stored.bytes, seconds: stored.durationSeconds });
 
     /* question media is authoring content — a stimulus or a recorded prompt
@@ -109,4 +109,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }
+}
+
+/** The etags a multipart upload's parts came back with, as the uploader reports them. */
+function readParts(raw: unknown): { partNumber: number; etag: string }[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((p) => ({ partNumber: Number((p as { partNumber?: unknown })?.partNumber), etag: String((p as { etag?: unknown })?.etag ?? "").replace(/"/g, "") }))
+    .filter((p) => Number.isInteger(p.partNumber) && p.partNumber > 0 && !!p.etag);
 }

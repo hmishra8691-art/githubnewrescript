@@ -4,6 +4,7 @@ import {
   beginUpload, confirmUpload, queueTranscript, removeMedia, purgeSessionMedia,
   resetBucketCache, mergeTranscriptIntoAnswer, MediaError, type MediaDb,
 } from "./store.js";
+import { mediaStores, supabaseObjectStore, type SupabaseStorageLike } from "./objectStore.js";
 import { runTranscription } from "./runner.js";
 
 /**
@@ -15,15 +16,20 @@ import { runTranscription } from "./runner.js";
  * — that second one being the difference between "the browser said it worked"
  * and "it worked".
  */
-function stub(opts: { objects?: Set<string>; failUploadUrl?: boolean } = {}) {
+export function stub(opts: { objects?: Set<string>; failUploadUrl?: boolean; stores?: MediaDb["stores"] } = {}) {
   const rows = new Map<string, Record<string, unknown>>();
   const transcripts = new Map<string, Record<string, unknown>>();
+  const deletions: Record<string, unknown>[] = [];
   const objects = opts.objects ?? new Set<string>();
   const removed: string[] = [];
+  const storage = storageStub(objects, removed, { failUploadUrl: opts.failUploadUrl });
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
   let seq = 0;
 
   const table = (name: string) => {
+    if (name === "media_deletions") {
+      return { insert: async (batch: Record<string, unknown>[]) => { deletions.push(...batch); return { data: null, error: null }; } };
+    }
     const store = name === "media_objects" ? rows : transcripts;
     const filters: Array<(r: Record<string, unknown>) => boolean> = [];
     const q: Record<string, unknown> = {};
@@ -57,6 +63,7 @@ function stub(opts: { objects?: Set<string>; failUploadUrl?: boolean } = {}) {
         };
       },
       eq(col: string, val: unknown) { filters.push((r) => r[col] === val); return q; },
+      neq(col: string, val: unknown) { filters.push((r) => r[col] !== val); return q; },
       in(col: string, vals: unknown[]) { filters.push((r) => vals.includes(r[col])); return q; },
       lt(col: string, val: unknown) { filters.push((r) => String(r[col]) < String(val)); return q; },
       maybeSingle: async () => ({ data: match()[0] ?? null, error: null }),
@@ -89,7 +96,14 @@ function stub(opts: { objects?: Set<string>; failUploadUrl?: boolean } = {}) {
         error: null,
       };
     },
-    storage: {
+    stores: opts.stores ?? mediaStores(supabaseObjectStore(storage)),
+  };
+  return { db, rows, transcripts, objects, removed, rpcCalls, storage, deletions };
+}
+
+/** The Supabase Storage client, as the legacy store sees it. */
+function storageStub(objects: Set<string>, removed: string[], opts: { failUploadUrl?: boolean; failRemove?: boolean } = {}): SupabaseStorageLike {
+  return {
       listBuckets: async () => ({ data: [{ name: "rescript-video" }, { name: "rescript-uploads" }, { name: "rescript-audio" }], error: null }),
       createBucket: async () => ({ error: null }),
       from: (bucket: string) => ({
@@ -100,7 +114,11 @@ function stub(opts: { objects?: Set<string>; failUploadUrl?: boolean } = {}) {
         download: async (path: string) => objects.has(`${bucket}/${path}`)
           ? { data: { arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer, type: "audio/webm" }, error: null }
           : { data: null, error: { message: "not found" } },
-        remove: async (paths: string[]) => { for (const p of paths) { removed.push(`${bucket}/${p}`); objects.delete(`${bucket}/${p}`); } return { data: null, error: null }; },
+        remove: async (paths: string[]) => {
+          if (opts.failRemove) return { data: null, error: { message: "storage is down" } };
+          for (const p of paths) { removed.push(`${bucket}/${p}`); objects.delete(`${bucket}/${p}`); }
+          return { data: null, error: null };
+        },
         list: async (folder: string) => ({
           data: [...objects]
             .filter((o) => o.startsWith(`${bucket}/${folder}/`))
@@ -108,9 +126,7 @@ function stub(opts: { objects?: Set<string>; failUploadUrl?: boolean } = {}) {
           error: null,
         }),
       }),
-    },
   };
-  return { db, rows, transcripts, objects, removed, rpcCalls };
 }
 
 const BEGIN = {
@@ -133,7 +149,7 @@ test("a row exists BEFORE the upload url is handed out", async () => {
   assert.equal(row.survey_id, "sv-1");
   assert.equal(row.question_id, "q-1");
   assert.equal(row.bucket, "rescript-video");
-  assert.match(ticket.uploadUrl, /^https:\/\/storage\.test\//);
+  assert.match(ticket.uploadUrl ?? "", /^https:\/\/storage\.test\//);
 });
 
 test("a file over the limit never gets a url at all", async () => {
@@ -352,17 +368,16 @@ test("a storage failure is reported, never thrown — a delete must not be block
   const ticket = await beginUpload(s.db, BEGIN);
   const broken: MediaDb = {
     ...s.db,
-    storage: {
-      ...s.db.storage,
-      from: () => ({
-        ...s.db.storage.from("rescript-video"),
-        remove: async () => ({ data: null, error: { message: "storage is down" } }),
-      }),
-    },
+    stores: mediaStores(supabaseObjectStore(storageStub(s.objects, s.removed, { failRemove: true }))),
   };
   const report = await removeMedia(broken, [{ id: ticket.mediaId, bucket: "rescript-video", path: ticket.path }]);
   assert.equal(report.objects, 0);
-  assert.equal(report.rows, 1, "the row still goes, so the next sweep is not confused by it");
+  /*
+   * The row STAYS now. It is the only thing that can find the object again;
+   * deleting it because storage was down would orphan the bytes for ever —
+   * the state this table exists to end. The next sweep tries again.
+   */
+  assert.equal(report.rows, 0, "a row whose object is still there is kept for the next sweep");
   assert.match(report.warnings[0], /storage is down/);
 });
 

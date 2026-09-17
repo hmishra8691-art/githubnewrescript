@@ -12,6 +12,14 @@
     "./upload": {
       "types": "./dist/upload.d.ts",
       "default": "./dist/upload.js"
+    },
+    "./uploader": {
+      "types": "./dist/uploader.d.ts",
+      "default": "./dist/uploader.js"
+    },
+    "./completion": {
+      "types": "./dist/completion.d.ts",
+      "default": "./dist/completion.js"
     }
   },
   "scripts": {

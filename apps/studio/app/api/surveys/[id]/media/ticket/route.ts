@@ -29,7 +29,13 @@ export const runtime = "nodejs";
  * `survey.edit` on the project: recording the question IS writing the
  * question.
  */
-const KINDS: readonly MediaKind[] = ["question_video", "question_audio"];
+/*
+ * What a researcher may store against a survey: the question's video and its
+ * audio track, a recorded or generated reading (`localization_audio`, which
+ * used to travel through a multipart POST to `/audio`), and an attached
+ * image, PDF or document (`survey_asset`, which used to be a pasted URL).
+ */
+const KINDS: readonly MediaKind[] = ["question_video", "question_audio", "localization_audio", "survey_asset"];
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const gate = await requireEditRight(req, params.id, "survey.edit");
@@ -59,8 +65,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       durationSeconds: Number(body.durationSeconds) || null,
       width: Number(body.width) || null,
       height: Number(body.height) || null,
+      clientToken: typeof body.clientToken === "string" ? body.clientToken : null,
     });
-    log("upload_url_issued", { mediaId: ticket.mediaId, kind, questionId, bytes: Number(body.bytes) || null });
+    log("upload_url_issued", { mediaId: ticket.mediaId, kind, questionId, bytes: Number(body.bytes) || null, parts: ticket.partCount, resumed: ticket.uploaded.length > 0 });
     return NextResponse.json({ ok: true, ...ticket });
   } catch (e) {
     if (e instanceof MediaError) return NextResponse.json({ error: e.message }, { status: e.status });
