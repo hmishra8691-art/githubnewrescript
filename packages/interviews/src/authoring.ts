@@ -35,7 +35,7 @@
  * whatever the column said. The builder can now set them; the runtime honours
  * them.
  */
-export const QUESTION_KINDS = ["video", "audio", "text"] as const;
+export const QUESTION_KINDS = ["video", "audio", "text", "long_text", "single_choice", "multi_choice"] as const;
 export type QuestionKind = (typeof QUESTION_KINDS)[number];
 
 export function isQuestionKind(v: unknown): v is QuestionKind {
@@ -46,7 +46,10 @@ export function isQuestionKind(v: unknown): v is QuestionKind {
 export const KIND_SAY: Record<QuestionKind, string> = {
   video: "Records video and audio",
   audio: "Records audio only — no camera",
-  text: "Typed answer — nothing is recorded",
+  text: "Short typed answer",
+  long_text: "Long typed answer",
+  single_choice: "Choose one option",
+  multi_choice: "Choose any that apply",
 };
 
 /**
@@ -60,8 +63,35 @@ export const KIND_SAY: Record<QuestionKind, string> = {
 export const KIND_MEANS: Record<QuestionKind, string> = {
   video: "Use when seeing the person answer matters — presentation, demonstration, rapport.",
   audio: "Use when only the words matter. Less intrusive, smaller files, and some people who would decline a camera will answer.",
-  text: "Use for anything better written than spoken — a definition, a short plan, a link.",
+  text: "Use for a line or two — a definition, a link, a number.",
+  long_text: "Use for anything better written than spoken — a short plan, a worked explanation, a code snippet.",
+  single_choice: "Use to route the interview: a choice here can decide which questions follow.",
+  multi_choice: "Use for 'which of these apply' — experience, tools, preferences.",
 };
+
+/** The kinds whose answer is an option code, and which therefore need options. */
+export const KINDS_WITH_OPTIONS: readonly QuestionKind[] = ["single_choice", "multi_choice"];
+
+export interface QuestionOption { code: string; label: string }
+
+/**
+ * Options as the schema's `Option` shape, trimmed.
+ *
+ * Codes are normalised the same way question codes are, because a condition
+ * refers to an option BY CODE — `Q2 is "ts"` — and a code that changes case
+ * between the builder and the runtime is a condition that never fires.
+ */
+export function normaliseOptions(raw: unknown): QuestionOption[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((o): o is Record<string, unknown> => !!o && typeof o === "object")
+    .map((o) => ({
+      code: String(o.code ?? "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 40),
+      label: String(o.label ?? "").trim().slice(0, 200),
+    }))
+    .filter((o) => o.code || o.label)
+    .map((o) => ({ code: o.code || o.label.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 40), label: o.label || o.code }));
+}
 
 export const QUESTION_CATEGORIES = [
   "intro", "hr", "technical", "behavioural", "role", "scenario", "custom",
@@ -83,6 +113,7 @@ export interface QuestionDraft {
   maxSeconds?: number | null;
   maxRetries?: number | null;
   thinkSeconds?: number | null;
+  options?: unknown;
 }
 
 export interface CheckResult {
@@ -156,14 +187,32 @@ export function checkQuestion(
   const min = num(draft.minSeconds);
   const max = num(draft.maxSeconds);
 
-  if (kind === "text") {
+  /*
+   * A choice question with one option is a statement; with none it is a
+   * question nobody can answer. Duplicate codes are refused because a
+   * condition refers to an option by code and two options with one code is
+   * a condition that means two things.
+   */
+  if (KINDS_WITH_OPTIONS.includes(kind)) {
+    const opts = normaliseOptions(draft.options);
+    if (opts.length < 2) errors.push("A choice question needs at least two options.");
+    const seen = new Set<string>();
+    for (const o of opts) {
+      if (seen.has(o.code)) { errors.push(`Two options share the code "${o.code}".`); break; }
+      seen.add(o.code);
+    }
+    if (opts.some((o) => !o.label)) errors.push("Every option needs a label.");
+  }
+
+  const typed = kind === "text" || kind === "long_text" || KINDS_WITH_OPTIONS.includes(kind);
+  if (typed) {
     /*
      * A typed answer has no duration, so a time limit on one is a setting that
      * cannot do anything. Silently ignoring it would leave the interviewer
      * believing they had set a limit.
      */
     if (min || max) {
-      warnings.push("Time limits do not apply to a typed answer — they will be ignored.");
+      warnings.push("Time limits do not apply to a typed or chosen answer — they will be ignored.");
     }
   } else {
     if (max != null && max <= 0) errors.push("A recording limit has to be more than zero seconds.");

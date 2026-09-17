@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { analysisReadiness, checkProject, isProjectStatus } from "@rescript/interviews";
 import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProject } from "@/lib/auth";
+import { setRandomizePools } from "@/lib/pools";
 
 export const dynamic = "force-dynamic";
 
@@ -100,6 +101,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   if (error) return NextResponse.json({ error: "Those changes could not be saved." }, { status: 503 });
   if (!data) return NextResponse.json({ error: "No such project." }, { status: 404 });
+
+  /* the order of the pools themselves — separate write, same column as the per-pool flags */
+  if (Object.hasOwn(body ?? {}, "randomizePools")) await setRandomizePools(params.id, body.randomizePools === true);
 
   /*
    * Changing the consent text does NOT reach back into interviews already

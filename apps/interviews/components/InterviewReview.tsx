@@ -37,6 +37,10 @@ export interface RecordingView {
   createdAt: string;
   questionCode: string | null;
   questionPrompt: string | null;
+  /** the interviewer asking this question on video, when a clip exists */
+  promptMediaId?: string | null;
+  /** the clip's transcript — what was actually asked, in words */
+  promptTranscript?: string | null;
   participants: Participant[];
   transcript: {
     status: string;
@@ -192,8 +196,25 @@ function Recording({
 
   const audioOnly = rec.kind.includes("audio");
 
+  /* the interviewer's clip, minted on demand exactly like the answer's */
+  const [promptUrl, setPromptUrl] = React.useState<string | null>(null);
+  const watchPrompt = async () => {
+    if (!rec.promptMediaId || promptUrl) return;
+    const res = await fetch(`/api/media/${rec.promptMediaId}/url`, { cache: "no-store" });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.ok) setPromptUrl(data.url);
+  };
+
   return (
     <div style={{ borderTop: "1px solid var(--line)", paddingTop: 14, marginTop: 14 }}>
+      {rec.promptMediaId && (
+        <div className="row" style={{ gap: 10, alignItems: "flex-start", marginBottom: 8 }} data-testid="prompt-clip-review">
+          {promptUrl
+            ? <video src={promptUrl} controls playsInline style={{ width: 240, aspectRatio: "16 / 9", background: "#000", borderRadius: 6 }} />
+            : <button type="button" className="btn small secondary" onClick={() => void watchPrompt()}>Watch the question being asked</button>}
+          {rec.promptTranscript && <p className="small muted" style={{ margin: 0, flex: 1 }}>&ldquo;{rec.promptTranscript}&rdquo;</p>}
+        </div>
+      )}
       <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
         <div>
           <strong>{rec.questionCode ?? "Session"}</strong>{" "}

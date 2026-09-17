@@ -1,3 +1,4 @@
+import { hashString, mulberry32 } from "@rescript/engine";
 /**
  * DRAWING ONE CANDIDATE'S QUESTIONS — REPRODUCIBLY.
  *
@@ -36,49 +37,34 @@
 
 /* --------------------------------------------------------------- random */
 
-/** SplitMix64-style mixing, on the 32-bit pairs JavaScript can actually do. */
-function hashSeed(seed: string): [number, number, number, number] {
-  // FNV-1a over the seed, four times with different offsets, so a short seed
-  // still fills the state rather than leaving most of it constant.
-  const out: number[] = [];
-  for (const offset of [0x811c9dc5, 0x01000193, 0x9e3779b9, 0x85ebca6b]) {
-    let h = offset >>> 0;
-    for (let i = 0; i < seed.length; i++) {
-      h ^= seed.charCodeAt(i);
-      h = Math.imul(h, 0x01000193) >>> 0;
-    }
-    out.push(h || 0x9e3779b9);
-  }
-  return out as [number, number, number, number];
-}
+/**
+ * THE ENGINE'S GENERATOR, NOT A SECOND ONE.
+ *
+ * This file used to carry its own xoshiro128** and its own FNV seed-mixing.
+ * `packages/engine/src/random.ts` already had a seeded generator, a string
+ * hash and a Fisher–Yates that every survey randomization in the platform runs
+ * on. Two RNGs in one repository is the actual duplication — not the draw
+ * logic around them, which makes a decision the engine does not (record the
+ * sequence once; explain it later). So the draw stays and the generator goes.
+ *
+ * Draws recorded before this change were made with the previous generator.
+ * `explainDraw` will report those sequences as no longer reproducible from
+ * their seed, which is the truth and is what `explainDraw` exists to say.
+ */
 
 /** A deterministic 0–1 generator. Same seed, same numbers, everywhere. */
 export function seededRandom(seed: string): () => number {
-  let [a, b, c, d] = hashSeed(seed);
-  return () => {
-    // xoshiro128**
-    const t = (b << 9) >>> 0;
-    let r = Math.imul(b, 5) >>> 0;
-    r = (((r << 7) | (r >>> 25)) >>> 0);
-    r = Math.imul(r, 9) >>> 0;
-    c = (c ^ a) >>> 0;
-    d = (d ^ b) >>> 0;
-    b = (b ^ c) >>> 0;
-    a = (a ^ d) >>> 0;
-    c = (c ^ t) >>> 0;
-    d = (((d << 11) | (d >>> 21)) >>> 0);
-    return r / 4294967296;
-  };
+  return mulberry32(hashString(seed));
 }
 
 /**
  * Fisher–Yates, with the generator supplied.
  *
- * Not `sort(() => random() - 0.5)`, which is the shuffle everybody writes
- * first and which is not uniform — with V8's sort it leaves the first and
- * last elements measurably more likely to stay put. On a question bank that
- * means the same two questions coming up more often than the rest, which is
- * a research problem as well as a correctness one.
+ * Kept as a thin wrapper so the draw below can thread ONE generator through
+ * several shuffles in sequence — pool order, then each pool's members — and
+ * stay reproducible from one seed. `seededShuffle(items, seed)` reseeds per
+ * call, which is the right shape for independent survey randomizations and
+ * the wrong one for a single draw that has to be replayable as a whole.
  */
 export function shuffle<T>(items: readonly T[], random: () => number): T[] {
   const out = [...items];

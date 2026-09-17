@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { checkQuestion, isQuestionCategory, isQuestionKind, normaliseCode } from "@rescript/interviews";
+import { checkQuestion, isQuestionCategory, isQuestionKind, normaliseCode, normaliseOptions } from "@rescript/interviews";
 import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProject } from "@/lib/auth";
+import { readCondition, readSkipRules } from "@/lib/logic";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +27,7 @@ export async function PATCH(
   const db = supabaseAdmin();
 
   const { data: all } = await db.from("interview_questions")
-    .select("id, code, prompt, kind, min_seconds, max_seconds")
+    .select("id, code, prompt, kind, min_seconds, max_seconds, options")
     .eq("project_id", params.id)
     .is("archived_at", null);
   const mine = (all ?? []).find((q) => q.id === params.questionId);
@@ -47,6 +48,7 @@ export async function PATCH(
     maxRetries: body?.maxRetries,
     thinkSeconds: body?.thinkSeconds,
     category: body?.category,
+    options: Object.hasOwn(body ?? {}, "options") ? body.options : mine.options,
   };
   const check = checkQuestion(
     merged,
@@ -54,7 +56,15 @@ export async function PATCH(
   );
   if (!check.ok) return NextResponse.json({ error: check.errors[0], errors: check.errors }, { status: 400 });
 
+  const visibleIf = readCondition(body?.visibleIf);
+  if (!visibleIf.ok) return NextResponse.json({ error: visibleIf.error }, { status: 400 });
+  const skipLogic = readSkipRules(body?.skipLogic);
+  if (!skipLogic.ok) return NextResponse.json({ error: skipLogic.error }, { status: 400 });
+
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (Object.hasOwn(body ?? {}, "options")) patch.options = normaliseOptions(body.options);
+  if (visibleIf.value !== undefined) patch.visible_if = visibleIf.value;
+  if (skipLogic.value !== undefined) patch.skip_logic = skipLogic.value;
   if (Object.hasOwn(body ?? {}, "prompt")) patch.prompt = String(body.prompt ?? "").trim().slice(0, 4000);
   if (Object.hasOwn(body ?? {}, "guidance")) patch.guidance = String(body.guidance ?? "").slice(0, 2000);
   if (Object.hasOwn(body ?? {}, "required")) patch.required = body.required !== false;

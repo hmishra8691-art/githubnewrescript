@@ -4,6 +4,7 @@ import { SESSION_COOKIE_NAME, projectPageGate } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/admin";
 import { ProjectWorkbench } from "@/components/ProjectWorkbench";
 import { INTERVIEW_SAY, analysisReadiness, type InterviewStatus } from "@rescript/interviews";
+import { readSelection } from "@/lib/candidate";
 
 export const dynamic = "force-dynamic";
 
@@ -30,12 +31,15 @@ export default async function ProjectPage({ params }: { params: { id: string } }
   }
 
   const db = supabaseAdmin();
-  const [{ data: project }, { data: questions }, { data: requirements }, { data: interviews }] = await Promise.all([
+  const [{ data: project }, { data: pools }, { data: questions }, { data: requirements }, { data: interviews }] = await Promise.all([
     db.from("interview_projects")
-      .select("id, code, name, description, status, instructions, consent_text, retention_days")
+      .select("id, code, name, description, status, instructions, consent_text, retention_days, selection")
       .eq("id", params.id).maybeSingle(),
+    db.from("interview_pools")
+      .select("id, code, name, description, draw, position")
+      .eq("project_id", params.id).order("position"),
     db.from("interview_questions")
-      .select("id, code, prompt, guidance, kind, required, min_seconds, max_seconds, max_retries, think_seconds, position, category")
+      .select("id, code, prompt, guidance, kind, required, min_seconds, max_seconds, max_retries, think_seconds, position, category, options, visible_if, skip_logic, prompt_media_id, pool_id")
       .eq("project_id", params.id).is("archived_at", null).order("position"),
     db.from("interview_requirements")
       .select("id, code, title, description, criteria, weight, position")
@@ -66,6 +70,11 @@ export default async function ProjectPage({ params }: { params: { id: string } }
           requirements: requirements ?? [],
           questions: questions ?? [],
         })}
+        pools={(pools ?? []).map((p) => ({
+          ...p, description: (p.description as string) ?? "",
+          randomize: readSelection(project?.selection).pools.find((x) => x.id === p.id)?.randomize ?? false,
+        })) as never}
+        randomizePools={readSelection(project?.selection).randomizePools}
       />
 
       <div className="card">

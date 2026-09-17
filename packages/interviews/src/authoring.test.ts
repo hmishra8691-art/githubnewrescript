@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_WEIGHT, MAX_ANSWER_SECONDS, QUESTION_KINDS, analysisReadiness, checkProject,
-  checkQuestion, checkRequirement, isQuestionKind, nextCode, normaliseCode, positionsFor,
+  checkQuestion, checkRequirement, isQuestionKind, nextCode, normaliseCode, normaliseOptions, positionsFor,
 } from "./authoring.js";
 
 /* ------------------------------------------------------------- questions */
@@ -40,7 +40,19 @@ test("a very short limit WARNS rather than refusing — it is a choice, not a mi
 test("time limits on a typed answer are a setting that cannot do anything, and say so", () => {
   const r = checkQuestion({ prompt: "Paste the link", kind: "text", maxSeconds: 60 });
   assert.equal(r.ok, true);
-  assert.match(r.warnings.join(" "), /do not apply to a typed answer/i);
+  assert.match(r.warnings.join(" "), /do not apply to a typed or chosen answer/i);
+});
+
+test("a choice question needs at least two distinct options", () => {
+  assert.equal(checkQuestion({ prompt: "Q", kind: "single_choice", options: [] }).ok, false);
+  assert.equal(checkQuestion({ prompt: "Q", kind: "single_choice", options: [{ code: "a", label: "A" }] }).ok, false);
+  assert.equal(checkQuestion({ prompt: "Q", kind: "multi_choice", options: [{ code: "a", label: "A" }, { code: "a", label: "B" }] }).ok, false, "duplicate codes");
+  assert.equal(checkQuestion({ prompt: "Q", kind: "multi_choice", options: [{ code: "a", label: "A" }, { code: "b", label: "B" }] }).ok, true);
+});
+
+test("option codes are normalised so a condition and an answer agree on them", () => {
+  const opts = normaliseOptions([{ code: " TS ", label: "TypeScript" }, { label: "Go lang" }]);
+  assert.deepEqual(opts, [{ code: "ts", label: "TypeScript" }, { code: "go_lang", label: "Go lang" }]);
 });
 
 test("a duplicate code is refused — two columns in an export cannot share a name", () => {
@@ -56,8 +68,10 @@ test("a code is normalised rather than rejected — 'Q 1' means Q1", () => {
 });
 
 test("every declared kind is accepted and anything else is not", () => {
+  const two = [{ code: "a", label: "A" }, { code: "b", label: "B" }];
   for (const k of QUESTION_KINDS) {
-    assert.equal(checkQuestion({ prompt: "Q", kind: k }).ok, true, `${k} should be allowed`);
+    /* the choice kinds need options to be valid; the others must not care */
+    assert.equal(checkQuestion({ prompt: "Q", kind: k, options: two }).ok, true, `${k} should be allowed`);
   }
   assert.equal(isQuestionKind("code"), false);
   assert.equal(checkQuestion({ prompt: "Q", kind: "code" }).ok, false);

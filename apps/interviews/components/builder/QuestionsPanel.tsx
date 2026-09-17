@@ -1,9 +1,12 @@
 "use client";
 import React from "react";
+import type { Condition, SkipRule } from "@rescript/schema";
 import {
-  KIND_MEANS, KIND_SAY, MAX_ANSWER_SECONDS, QUESTION_CATEGORIES, QUESTION_KINDS,
-  checkQuestion, type QuestionKind,
+  KIND_MEANS, KIND_SAY, KINDS_WITH_OPTIONS, MAX_ANSWER_SECONDS, QUESTION_CATEGORIES, QUESTION_KINDS,
+  checkQuestion, forwardReferences, type QuestionKind,
 } from "@rescript/interviews";
+import { PromptClip } from "./PromptClip";
+import { ShowIfEditor, SkipRulesEditor, type EarlierQuestion } from "./LogicEditor";
 
 export interface BuilderQuestion {
   id: string;
@@ -18,7 +21,14 @@ export interface BuilderQuestion {
   max_retries: number;
   think_seconds: number;
   position: number;
+  options: { code: string; label: string }[];
+  visible_if: Condition | null;
+  skip_logic: SkipRule[];
+  prompt_media_id: string | null;
+  pool_id: string | null;
 }
+
+export interface PoolChoice { id: string; code: string; name: string }
 
 /**
  * THE QUESTION BANK, EDITABLE.
@@ -38,10 +48,11 @@ export interface BuilderQuestion {
  * they are typing it, rather than after a round trip that throws their work
  * away.
  */
-export function QuestionsPanel({ projectId, questions: initial, mayEdit }: {
+export function QuestionsPanel({ projectId, questions: initial, mayEdit, pools = [] }: {
   projectId: string;
   questions: BuilderQuestion[];
   mayEdit: boolean;
+  pools?: PoolChoice[];
 }) {
   const [questions, setQuestions] = React.useState(initial);
   const [editing, setEditing] = React.useState<string | null>(null);
@@ -54,6 +65,21 @@ export function QuestionsPanel({ projectId, questions: initial, mayEdit }: {
     () => [...questions].sort((a, b) => a.position - b.position),
     [questions],
   );
+
+  /*
+   * A condition that reads a LATER question can never be true when its own
+   * question is reached, so the engine hides that question for everybody,
+   * silently. Reordering is the usual way this happens — the rule was fine
+   * until somebody dragged its source below it — so it is checked against the
+   * live order, not at save time only.
+   */
+  const forward = React.useMemo(() => forwardReferences(
+    sorted.map((q) => ({
+      id: q.id, code: q.code, kind: q.kind as never, prompt: q.prompt, required: q.required,
+      visibleIf: q.visible_if, skipLogic: q.skip_logic,
+    })),
+    sorted.map((q) => q.id),
+  ), [sorted]);
 
   async function save(draft: Partial<BuilderQuestion> & { id?: string }) {
     setBusy(true); setError(null); setNote(null);
@@ -68,6 +94,8 @@ export function QuestionsPanel({ projectId, questions: initial, mayEdit }: {
           category: draft.category, required: draft.required,
           minSeconds: draft.min_seconds, maxSeconds: draft.max_seconds,
           maxRetries: draft.max_retries, thinkSeconds: draft.think_seconds,
+          options: draft.options, visibleIf: draft.visible_if ?? null, skipLogic: draft.skip_logic ?? [],
+          poolId: draft.pool_id ?? null,
         }),
       },
     );
@@ -131,12 +159,28 @@ export function QuestionsPanel({ projectId, questions: initial, mayEdit }: {
         <p className="muted small">No questions yet. An interview needs at least one.</p>
       )}
 
+      {forward.map((f) => {
+        const q = sorted.find((x) => x.id === f.questionId);
+        const ref = sorted.find((x) => x.id === f.refersTo);
+        return (
+          <p key={`${f.questionId}-${f.refersTo}`} className="note warn" data-testid="forward-reference">
+            <strong>{q?.code}</strong> has a rule that depends on <strong>{ref?.code ?? "a question"}</strong>, which comes
+            after it. That rule can never be true when {q?.code} is reached, so {q?.code} will be hidden from everyone.
+            Move {ref?.code ?? "it"} earlier, or change the rule.
+          </p>
+        );
+      })}
+
       {sorted.map((q, i) => (
         <div key={q.id} data-testid="question-row" data-code={q.code}
           style={{ borderTop: "1px solid var(--line)", paddingTop: 12, marginTop: 12 }}>
           {editing === q.id ? (
             <QuestionForm initial={q} busy={busy} onCancel={() => setEditing(null)}
-              onSave={(d) => save({ ...d, id: q.id })} />
+              projectId={projectId} pools={pools}
+              earlier={sorted.slice(0, i).map(asEarlier)}
+              later={sorted.slice(i + 1).map(asEarlier)}
+              onSave={(d) => save({ ...d, id: q.id })}
+              onPromptChange={(mediaId) => setQuestions((qs) => qs.map((x) => (x.id === q.id ? { ...x, prompt_media_id: mediaId } : x)))} />
           ) : (
             <div className="row" style={{ justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
               <div style={{ flex: 1 }}>
@@ -145,6 +189,10 @@ export function QuestionsPanel({ projectId, questions: initial, mayEdit }: {
                   <span className="pill">{KIND_SAY[q.kind as QuestionKind] ?? q.kind}</span>
                   {!q.required && <span className="pill">optional</span>}
                   {q.category !== "custom" && <span className="pill">{q.category}</span>}
+                  {q.prompt_media_id && <span className="pill" title="The interviewer asks this on video">video prompt</span>}
+                  {q.pool_id && <span className="pill" title="Drawn from a pool">{pools.find((p) => p.id === q.pool_id)?.name ?? "pool"}</span>}
+                  {q.visible_if && <span className="pill" title="Shown only when a condition holds">show-if</span>}
+                  {q.skip_logic?.length > 0 && <span className="pill" title="Can route the interview">skip rules</span>}
                 </div>
                 <p style={{ margin: "6px 0 0" }}>{q.prompt}</p>
                 {q.guidance && <p className="small muted" style={{ margin: "4px 0 0" }}>{q.guidance}</p>}
@@ -172,7 +220,8 @@ export function QuestionsPanel({ projectId, questions: initial, mayEdit }: {
 
       {adding && (
         <div style={{ borderTop: "1px solid var(--line)", paddingTop: 12, marginTop: 12 }}>
-          <QuestionForm busy={busy} onCancel={() => setAdding(false)} onSave={(d) => save(d)} />
+          <QuestionForm busy={busy} onCancel={() => setAdding(false)} onSave={(d) => save(d)}
+            projectId={projectId} pools={pools} earlier={sorted.map(asEarlier)} later={[]} />
         </div>
       )}
 
@@ -181,6 +230,10 @@ export function QuestionsPanel({ projectId, questions: initial, mayEdit }: {
     </section>
   );
 }
+
+const asEarlier = (q: BuilderQuestion): EarlierQuestion => ({
+  id: q.id, code: q.code, prompt: q.prompt, kind: q.kind, options: q.options ?? [],
+});
 
 function describeLimits(q: BuilderQuestion): string {
   const max = q.max_seconds ? `up to ${fmt(q.max_seconds)}` : "no limit";
@@ -198,12 +251,18 @@ const fmt = (s: number) => (s >= 60 ? `${Math.round(s / 60)} min` : `${s}s`);
  * configuring an interview meant walking through disconnected screens, and a
  * question has eight settings, which is a form.
  */
-function QuestionForm({ initial, busy, onSave, onCancel }: {
+function QuestionForm({ initial, busy, onSave, onCancel, projectId, earlier, later, onPromptChange, pools }: {
   initial?: BuilderQuestion;
   busy: boolean;
   onSave: (d: Partial<BuilderQuestion>) => Promise<boolean>;
   onCancel: () => void;
+  projectId: string;
+  earlier: EarlierQuestion[];
+  later: EarlierQuestion[];
+  onPromptChange?: (mediaId: string | null) => void;
+  pools: PoolChoice[];
 }) {
+  const [poolId, setPoolId] = React.useState<string | null>(initial?.pool_id ?? null);
   const [prompt, setPrompt] = React.useState(initial?.prompt ?? "");
   const [guidance, setGuidance] = React.useState(initial?.guidance ?? "");
   const [kind, setKind] = React.useState<QuestionKind>((initial?.kind as QuestionKind) ?? "video");
@@ -213,15 +272,27 @@ function QuestionForm({ initial, busy, onSave, onCancel }: {
   const [maxSeconds, setMaxSeconds] = React.useState<number | null>(initial?.max_seconds ?? 180);
   const [maxRetries, setMaxRetries] = React.useState(initial?.max_retries ?? 0);
   const [thinkSeconds, setThinkSeconds] = React.useState(initial?.think_seconds ?? 0);
+  const [options, setOptions] = React.useState<{ code: string; label: string }[]>(
+    initial?.options?.length ? initial.options : [{ code: "", label: "" }, { code: "", label: "" }],
+  );
+  const [visibleIf, setVisibleIf] = React.useState<Condition | null>(initial?.visible_if ?? null);
+  const [skipLogic, setSkipLogic] = React.useState<SkipRule[]>(initial?.skip_logic ?? []);
+  const [promptMediaId, setPromptMediaId] = React.useState<string | null>(initial?.prompt_media_id ?? null);
+  const hasOptions = KINDS_WITH_OPTIONS.includes(kind);
+  const recorded = kind === "video" || kind === "audio";
 
   const draft = {
     prompt, guidance, kind, category, required,
     min_seconds: minSeconds, max_seconds: maxSeconds,
     max_retries: maxRetries, think_seconds: thinkSeconds,
+    options: hasOptions ? options : [],
+    visible_if: visibleIf, skip_logic: skipLogic,
+    pool_id: poolId,
   };
   /* the same function the route runs — see the file header */
   const check = checkQuestion({
     prompt, kind, category, minSeconds, maxSeconds, maxRetries, thinkSeconds,
+    options: hasOptions ? options : undefined,
   });
 
   return (
@@ -254,9 +325,38 @@ function QuestionForm({ initial, busy, onSave, onCancel }: {
             {QUESTION_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
         </label>
+        {pools.length > 0 && (
+          <label style={{ flex: "1 1 160px" }}>
+            <span>Pool</span>
+            <select value={poolId ?? ""} onChange={(e) => setPoolId(e.target.value || null)} data-testid="question-pool">
+              <option value="">— none (fixed position) —</option>
+              {pools.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <span className="tiny muted">Pooled questions are drawn and ordered by the pool&apos;s settings.</span>
+          </label>
+        )}
       </div>
 
-      {kind !== "text" && (
+      {hasOptions && (
+        <div style={{ marginTop: 10 }} data-testid="options-editor">
+          <span className="small">Options</span>
+          {options.map((o, i) => (
+            <div key={i} className="row" style={{ gap: 8, marginTop: 6, alignItems: "center" }}>
+              <input value={o.label} placeholder={`Option ${i + 1}`} data-testid="option-label"
+                onChange={(e) => setOptions(options.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))} />
+              <input value={o.code} placeholder="code" style={{ maxWidth: 120 }} data-testid="option-code"
+                title="Rules refer to an option by this code. Leave blank to derive it from the label."
+                onChange={(e) => setOptions(options.map((x, j) => (j === i ? { ...x, code: e.target.value } : x)))} />
+              <button type="button" className="btn small secondary" disabled={options.length <= 2}
+                onClick={() => setOptions(options.filter((_, j) => j !== i))} aria-label="Remove option">×</button>
+            </div>
+          ))}
+          <button type="button" className="btn small secondary" style={{ marginTop: 6 }} data-testid="option-add"
+            onClick={() => setOptions([...options, { code: "", label: "" }])}>+ option</button>
+        </div>
+      )}
+
+      {recorded && (
         <div className="row" style={{ gap: 14, flexWrap: "wrap", marginTop: 10 }}>
           <label style={{ flex: "1 1 140px" }}>
             <span>Longest answer (seconds)</span>
@@ -288,6 +388,34 @@ function QuestionForm({ initial, busy, onSave, onCancel }: {
           data-testid="question-required" />
         <span>They must answer this one to finish</span>
       </label>
+
+      {/*
+        * The clip can only be attached to a question that exists — it needs an
+        * id to be stored against — so a brand-new question saves first and
+        * gets its clip on the next edit. The form says so rather than hiding
+        * the control.
+        */}
+      {initial ? (
+        <PromptClip projectId={projectId} questionId={initial.id} promptMediaId={promptMediaId}
+          onChange={(id) => { setPromptMediaId(id); onPromptChange?.(id); }} />
+      ) : (
+        <p className="tiny muted" style={{ marginTop: 10 }}>Save the question first to record yourself asking it.</p>
+      )}
+
+      <details style={{ marginTop: 12 }} open={!!visibleIf || skipLogic.length > 0} data-testid="logic-section">
+        <summary className="small" style={{ cursor: "pointer" }}>Logic — when this is shown, and where it leads</summary>
+        <div style={{ marginTop: 8 }}>
+          <span className="small">Show this question only when…</span>
+          <ShowIfEditor value={visibleIf} earlier={earlier} onChange={setVisibleIf} />
+        </div>
+        {initial && (
+          <div style={{ marginTop: 12 }}>
+            <span className="small">After it is answered…</span>
+            <SkipRulesEditor value={skipLogic} onChange={setSkipLogic} later={later}
+              self={{ id: initial.id, code: initial.code, prompt, kind, options: hasOptions ? options : [] }} />
+          </div>
+        )}
+      </details>
 
       {check.errors.map((e) => (
         <p key={e} className="note bad" style={{ marginTop: 10 }} data-testid="question-form-error">{e}</p>

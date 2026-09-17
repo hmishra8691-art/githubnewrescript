@@ -37,6 +37,15 @@ export const TELEMETRY_KINDS = [
   "copy", "paste", "fullscreen_exited",
   /* timing */
   "question_shown", "question_answered", "question_skipped",
+  /*
+   * The stimulus clip and the moment before answering. `answer_started` is the
+   * one the brief calls "time before starting a response": the gap between a
+   * question being shown (or its clip ending) and the candidate pressing
+   * record or beginning to type. Stated as an event so the gap is a
+   * subtraction a reviewer can see, not a number the product asserts.
+   */
+  "prompt_playback_started", "prompt_playback_completed", "prompt_playback_stalled",
+  "answer_started", "transcript_unavailable", "live_transcript_unsupported",
 ] as const;
 
 export type TelemetryKind = (typeof TELEMETRY_KINDS)[number];
@@ -91,6 +100,12 @@ export const TELEMETRY_SAY: Record<TelemetryKind, string> = {
   question_shown: "A question was displayed",
   question_answered: "A question was answered",
   question_skipped: "A question was skipped",
+  prompt_playback_started: "The interviewer's question video began playing",
+  prompt_playback_completed: "The interviewer's question video played to the end",
+  prompt_playback_stalled: "The interviewer's question video paused to buffer",
+  answer_started: "Began answering",
+  transcript_unavailable: "The audio track for transcription could not be saved",
+  live_transcript_unsupported: "This browser does not offer a live transcript",
 };
 
 /**

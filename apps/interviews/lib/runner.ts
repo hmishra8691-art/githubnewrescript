@@ -282,7 +282,8 @@ const transcription: Handler = async (job, row) => {
     },
     {
       seconds,
-      operation: moderated ? "transcribe_session" : "transcribe_answer",
+      operation: moderated ? "transcribe_session"
+        : media.kind === "question_prompt" ? "transcribe_prompt" : "transcribe_answer",
       /* the same key for the same recording, so a retried settle is a no-op */
       idempotencyKey: `interview-stt:${mediaId}`,
     },
@@ -449,11 +450,11 @@ const analysis: Handler = async (job, row) => {
       .eq("project_id", interview.project_id)
       .order("position", { ascending: true }),
     db.from("interview_responses")
-      .select("id, question_id, answer_text, status")
+      .select("id, question_id, answer_text, answer_value, answer_kind, status")
       .eq("interview_id", interviewId)
       .order("position", { ascending: true }),
     db.from("interview_questions")
-      .select("id, code")
+      .select("id, code, options")
       .eq("project_id", interview.project_id),
   ]);
 
@@ -477,6 +478,27 @@ const analysis: Handler = async (job, row) => {
   }
 
   const codeOf = new Map((questions ?? []).map((q) => [q.id as string, q.code as string]));
+  const optionsOf = new Map((questions ?? []).map((q) => [
+    q.id as string,
+    (Array.isArray((q as { options?: unknown }).options) ? (q as { options: { code: string; label: string }[] }).options : []),
+  ]));
+
+  /*
+   * A CHOSEN ANSWER IS WORDS TOO. A candidate who picked "Go" from a list has
+   * said something the requirements may bear on, and the model needs the
+   * label, not the code — `ts` means nothing to it; "TypeScript" does. A
+   * multi-choice answer is the labels, joined. Typed answers are already
+   * text. Recorded answers arrive through their transcript, as before.
+   */
+  const chosenText = (r: { question_id: unknown; answer_kind: unknown; answer_value: unknown }): string | null => {
+    if (r.answer_kind !== "single_choice" && r.answer_kind !== "multi_choice") return null;
+    const opts = optionsOf.get(r.question_id as string) ?? [];
+    const label = (code: unknown) => opts.find((o) => o.code === String(code))?.label ?? String(code);
+    const v = r.answer_value;
+    if (Array.isArray(v)) return v.map(label).join(", ");
+    if (v === null || v === undefined) return null;
+    return label(v);
+  };
 
   const { data: transcripts } = await db
     .from("interview_transcripts")
@@ -492,7 +514,7 @@ const analysis: Handler = async (job, row) => {
   const sources = (responses ?? [])
     .map((r) => {
       const t = byResponse.get(r.id as string);
-      const text = (t?.text ?? (r.answer_text as string) ?? "").trim();
+      const text = (t?.text ?? chosenText(r) ?? (r.answer_text as string) ?? "").trim();
       if (!text) return null;
       return {
         responseId: r.id as string,

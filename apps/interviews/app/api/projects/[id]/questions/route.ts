@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   analysisReadiness, checkQuestion, isQuestionCategory, isQuestionKind, nextCode,
-  normaliseCode, positionsFor,
+  normaliseCode, normaliseOptions, positionsFor,
 } from "@rescript/interviews";
 import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProject } from "@/lib/auth";
+import { readCondition, readSkipRules } from "@/lib/logic";
 
 export const dynamic = "force-dynamic";
 
@@ -53,6 +54,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const check = checkQuestion(body, taken);
   if (!check.ok) return NextResponse.json({ error: check.errors[0], errors: check.errors }, { status: 400 });
 
+  const visibleIf = readCondition(body?.visibleIf);
+  if (!visibleIf.ok) return NextResponse.json({ error: visibleIf.error }, { status: 400 });
+  const skipLogic = readSkipRules(body?.skipLogic);
+  if (!skipLogic.ok) return NextResponse.json({ error: skipLogic.error }, { status: 400 });
+
   const prompt = String(body?.prompt ?? "").trim();
   const wanted = normaliseCode(body?.code);
   const code = wanted && !taken.some((c) => normaliseCode(c) === wanted) ? wanted : nextCode(taken, "Q");
@@ -73,6 +79,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     max_seconds: intOrNull(body?.maxSeconds) ?? 180,
     max_retries: Math.max(0, Number(body?.maxRetries) || 0),
     think_seconds: Math.max(0, Number(body?.thinkSeconds) || 0),
+    options: normaliseOptions(body?.options),
+    visible_if: visibleIf.value ?? null,
+    skip_logic: skipLogic.value ?? [],
     position,
   }).select("*").single();
   if (error) return NextResponse.json({ error: "We could not add that question." }, { status: 503 });

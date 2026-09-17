@@ -88,22 +88,38 @@ be stranded: a white page on an empty question sequence, an unbounded boot
 fetch, and a Finish button that never appeared when the last question was
 optional and skipped. Added the app's first error boundary.
 
-**Phase 1b — the builder.** Requirements authoring, project settings, per-question
-settings and question kinds, question edit/reorder/delete, pools and draw
-configuration, stimulus video per question (`prompt_media_id` and the
-`question_prompt` media kind both exist and have zero code references).
+**Phase 1b — the builder. Done.** Requirements authoring, project settings,
+per-question settings and kinds, question edit/reorder/archive.
 
-**Phase 2 — the engine adapter.** `toSurveyDefinition`, then logic and
-randomization through the existing engine, then the renderer for text, choice
-and multi-select responses inside the existing recorder shell.
+**Phase 2 — the engine adapter. Done.** `toSurveyDefinition` projects the
+interview rows into the engine's document — one page per question, in the
+drawn order — and `toResponseState` feeds answers back. The browser walks the
+flow with `@rescript/engine` to know what to show next; `finish` walks it again
+server-side and is the only authority on what was owed. Display logic, skip
+rules, AND/OR groups: the engine's own `Condition` and `SkipRule`, stored
+verbatim in `visible_if` and `skip_logic` (migration 0035), validated by the
+schema's zod types at save time. Three new kinds — `long_text`, `single_choice`,
+`multi_choice` — with options and a choice answer the condition language can
+compare. Pools and the draw configuration are reachable: `selection.ts` now runs
+on the engine's generator, `interview_projects.selection` is read for the first
+time, and the Order tab creates pools, sets pick-N and shuffles.
 
-**Phase 3 — video-first flow.** Stimulus playback with watch-gating, automatic
-progression into recording, live interim transcript where the browser supports
-it, and the telemetry that section 10 asks for and that today is never
-attributed to a question because `response_id` and `question_id` are always
-null on telemetry rows.
+**Phase 3 — video-first flow. Done.** An interviewer records or uploads a clip
+against a question (`question_prompt`, `prompt_media_id` — both existed with
+no code). The candidate's screen autoplays it, refuses forward seeking,
+disables every answer control until `ended`, and reports the watch to the
+server; `answer` and `finish` both refuse an unwatched required question, so
+the gate is a rule, not a button. The clip is transcribed like an answer and
+shown beside it on the review page. A live transcript preview appears while
+speaking where the browser has a recogniser, labelled as a preview and never
+stored. Every telemetry event carries `response_id` and `question_id`;
+`question_shown`, `answer_started` and `prompt_playback_*` are new, so time
+per question is a subtraction a reviewer can see. The self-view is
+re-attached on the question screen (it used to record into a black box), the
+camera is asked for only when a question needs one, and retake and skip are
+server-side facts rather than local state.
 
-**Phase 4 — evaluation and reporting.** Evidence-gated scoring, the recruiter
+**Phase 4 — evaluation and reporting.** Next. Evidence-gated scoring, the recruiter
 dashboard, the paginated printable report.
 
 **Phase 5 — mock interviews and retention.** The mock concept does not exist in

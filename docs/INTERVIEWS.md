@@ -218,6 +218,11 @@ A separate Vercel project, on `apps/interviews`, port 3002 in development.
 | `NEXT_PUBLIC_STUDIO_URL` | the sign-in link **and the way back** | where the handoff starts; also the "Rescript Studio" link in this app's header |
 | `AI_STT_API_URL` / `AI_STT_API_KEY` / `AI_STT_MODEL` | transcription | Phase 3 |
 
+Migrations through **0035** must be applied. 0035 widens `interview_questions.kind`,
+adds `options` / `visible_if` / `skip_logic`, and adds `answer_value` /
+`answer_kind` / `prompt_watched_at` / `skip_reason` on responses. It is
+additive; nothing existing changes meaning.
+
 On the **Studio** project, one variable is needed too:
 
 | Variable | For | Notes |

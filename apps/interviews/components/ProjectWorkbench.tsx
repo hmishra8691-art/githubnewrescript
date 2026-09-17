@@ -3,6 +3,7 @@ import React from "react";
 import { QuestionsPanel, type BuilderQuestion } from "./builder/QuestionsPanel";
 import { RequirementsPanel, type BuilderRequirement } from "./builder/RequirementsPanel";
 import { SettingsPanel, type BuilderProject } from "./builder/SettingsPanel";
+import { PoolsPanel, type BuilderPool } from "./builder/PoolsPanel";
 
 /**
  * ONE SCREEN TO BUILD AN INTERVIEW.
@@ -20,22 +21,25 @@ import { SettingsPanel, type BuilderProject } from "./builder/SettingsPanel";
  * not evaluate" — is the answer somebody needs before they invite thirty
  * people, not after.
  */
-type Tab = "questions" | "requirements" | "settings" | "invite";
+type Tab = "questions" | "order" | "requirements" | "settings" | "invite";
 
 export function ProjectWorkbench({
-  project, role, questions, requirements, readiness,
+  project, role, questions, requirements, readiness, pools, randomizePools,
 }: {
   project: BuilderProject;
   role: string;
   questions: BuilderQuestion[];
   requirements: BuilderRequirement[];
   readiness: { ready: boolean; say: string };
+  pools: BuilderPool[];
+  randomizePools: boolean;
 }) {
   const [tab, setTab] = React.useState<Tab>("questions");
   const mayEdit = role === "manager" || role === "interviewer";
 
   const TABS: { id: Tab; label: string; count?: number }[] = [
     { id: "questions", label: "Questions", count: questions.length },
+    { id: "order", label: "Order", count: pools.length || undefined },
     { id: "requirements", label: "Assessing", count: requirements.length },
     { id: "settings", label: "Settings" },
     ...(mayEdit ? [{ id: "invite" as const, label: "Invite" }] : []),
@@ -68,7 +72,15 @@ export function ProjectWorkbench({
       </nav>
 
       {tab === "questions" && (
-        <QuestionsPanel projectId={project.id} questions={questions} mayEdit={mayEdit} />
+        <QuestionsPanel projectId={project.id} questions={questions} mayEdit={mayEdit}
+          pools={pools.map((p) => ({ id: p.id, code: p.code, name: p.name }))} />
+      )}
+      {tab === "order" && (
+        <PoolsPanel projectId={project.id} pools={pools} randomizePools={randomizePools} mayEdit={mayEdit}
+          questionCounts={questions.reduce<Record<string, number>>((acc, q) => {
+            if (q.pool_id) acc[q.pool_id] = (acc[q.pool_id] ?? 0) + 1;
+            return acc;
+          }, {})} />
       )}
       {tab === "requirements" && (
         <RequirementsPanel projectId={project.id} requirements={requirements} mayEdit={mayEdit} />

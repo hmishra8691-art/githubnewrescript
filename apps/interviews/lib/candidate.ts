@@ -1,11 +1,12 @@
 import "server-only";
+import type { Condition, SkipRule } from "@rescript/schema";
 import { createHash, randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "./admin";
 import {
   drawSequence, linkVerdict, seedFor, recordingSeconds,
   type DrawnQuestion, type InterviewStatus, type TelemetryEvent,
-  isTelemetryKind,
+  isTelemetryKind, isFlowKind, type FlowKind,
 } from "@rescript/interviews";
 
 /**
@@ -59,6 +60,7 @@ export interface CandidateGate {
     consent_text: string;
     status: string;
     settings: Record<string, unknown>;
+    selection: unknown;
     max_recording_seconds: number | null;
   };
 }
@@ -123,7 +125,7 @@ export async function candidateGate(token: unknown): Promise<CandidateGate | Can
 
   const { data: project } = await db
     .from("interview_projects")
-    .select("id, customer_id, name, instructions, consent_text, status, settings, max_recording_seconds, deleted_at")
+    .select("id, customer_id, name, instructions, consent_text, status, settings, selection, max_recording_seconds, deleted_at")
     .eq("id", interview.project_id)
     .maybeSingle();
   if (!project || project.deleted_at) {
@@ -153,7 +155,7 @@ export interface CandidateQuestion {
   position: number;
   prompt: string;
   guidance: string;
-  kind: "video" | "audio" | "text";
+  kind: FlowKind;
   required: boolean;
   minSeconds: number | null;
   maxSeconds: number;
@@ -161,6 +163,22 @@ export interface CandidateQuestion {
   thinkSeconds: number;
   status: string;
   retries: number;
+  /** choices for the two choice kinds */
+  options: { code: string; label: string }[];
+  /** what was already answered, so a reload shows it rather than a blank */
+  answerText: string | null;
+  answerValue: unknown;
+  /** the interviewer asking, when a clip was recorded for this question */
+  promptMedia: { id: string; mimeType: string | null; durationSeconds: number | null } | null;
+  promptWatchedAt: string | null;
+  /*
+   * The logic, verbatim, so the browser can run the same engine the server
+   * runs and know what comes next WITHOUT a round trip per answer. The server
+   * re-derives everything at `finish`; the browser's copy is for navigation,
+   * never for authority.
+   */
+  visibleIf: Condition | null;
+  skipLogic: SkipRule[];
 }
 
 /**
@@ -190,10 +208,28 @@ export async function ensureSequence(gate: CandidateGate): Promise<DrawnQuestion
       .is("archived_at", null),
   ]);
 
+  /*
+   * THE PROJECT'S DRAW CONFIGURATION, READ FOR THE FIRST TIME.
+   *
+   * `interview_projects.selection` was created in 0030 to carry exactly this
+   * and was never read by any code, so the one call to `drawSequence` omitted
+   * `randomize` and `randomizePools` and every candidate got the positional
+   * order whatever the builder intended. The pool row's own `draw` column is
+   * the fallback when the config does not mention the pool.
+   */
+  const selection = readSelection(gate.project.selection);
   const seed = gate.interview.selection_seed ?? seedFor(gate.interview.id);
   const { sequence } = drawSequence({
     seed,
-    pools: (pools ?? []).map((p) => ({ id: p.id, code: p.code, draw: p.draw, position: p.position })),
+    randomizePools: selection.randomizePools,
+    pools: (pools ?? []).map((p) => {
+      const cfg = selection.pools.find((x) => x.id === p.id);
+      return {
+        id: p.id, code: p.code, position: p.position,
+        draw: cfg?.draw ?? p.draw,
+        randomize: cfg?.randomize ?? false,
+      };
+    }),
     questions: (questions ?? []).map((q) => ({
       id: q.id, code: q.code, poolId: q.pool_id, position: q.position, required: q.required,
     })),
@@ -228,12 +264,23 @@ export async function candidateQuestions(
   const ids = sequence.map((s) => s.questionId);
   const [{ data: questions }, { data: responses }] = await Promise.all([
     db.from("interview_questions")
-      .select("id, code, prompt, guidance, kind, required, min_seconds, max_seconds, max_retries, think_seconds")
+      .select("id, code, prompt, guidance, kind, required, min_seconds, max_seconds, max_retries, think_seconds, options, visible_if, skip_logic, prompt_media_id")
       .in("id", ids),
     db.from("interview_responses")
-      .select("id, question_id, status, retries")
+      .select("id, question_id, status, retries, answer_text, answer_value, prompt_watched_at")
       .eq("interview_id", gate.interview.id),
   ]);
+
+  /* the interviewer's clips, only the ones that are actually stored */
+  const promptIds = (questions ?? []).map((q) => q.prompt_media_id).filter((x): x is string => !!x);
+  const { data: prompts } = promptIds.length
+    ? await db.from("interview_media")
+        .select("id, mime_type, duration_seconds, upload_status")
+        .in("id", promptIds)
+        .eq("upload_status", "stored")
+        .is("deleted_at", null)
+    : { data: [] as { id: string; mime_type: string | null; duration_seconds: number | null; upload_status: string }[] };
+  const promptById = new Map((prompts ?? []).map((m) => [m.id, m]));
   const byQuestion = new Map((questions ?? []).map((q) => [q.id, q]));
   const byResponse = new Map((responses ?? []).map((r) => [r.question_id, r]));
 
@@ -251,8 +298,18 @@ export async function candidateQuestions(
       position: s.position,
       prompt: q.prompt,
       guidance: q.guidance ?? "",
-      kind: (q.kind ?? "video") as CandidateQuestion["kind"],
+      kind: isFlowKind(q.kind) ? q.kind : "video",
       required: !!q.required,
+      options: readOptions(q.options),
+      answerText: (r.answer_text as string | null) ?? null,
+      answerValue: r.answer_value ?? null,
+      promptMedia: (() => {
+        const m = q.prompt_media_id ? promptById.get(q.prompt_media_id) : undefined;
+        return m ? { id: m.id, mimeType: m.mime_type ?? null, durationSeconds: m.duration_seconds ?? null } : null;
+      })(),
+      promptWatchedAt: (r.prompt_watched_at as string | null) ?? null,
+      visibleIf: (q.visible_if as Condition | null) ?? null,
+      skipLogic: Array.isArray(q.skip_logic) ? (q.skip_logic as SkipRule[]) : [],
       minSeconds: q.min_seconds ?? null,
       maxSeconds: recordingSeconds({
         questionMaxSeconds: q.max_seconds,
@@ -311,4 +368,42 @@ export async function touchInterview(gate: CandidateGate, patch: Record<string, 
       .update({ last_seen_at: new Date().toISOString(), ...patch })
       .eq("id", gate.interview.id);
   } catch { /* a heartbeat that fails is not a reason to stop an interview */ }
+}
+
+
+/* ------------------------------------------------------- draw config */
+
+export interface SelectionConfig {
+  pools: { id: string; draw: number | null; randomize: boolean }[];
+  randomizePools: boolean;
+}
+
+/**
+ * `interview_projects.selection`, read defensively.
+ *
+ * It is jsonb with a default of `{}`, so an installation that never touched
+ * randomization has an empty object here and gets positional order — the
+ * behaviour every existing project has had. Anything malformed degrades to
+ * the same rather than throwing in front of a candidate.
+ */
+export function readSelection(raw: unknown): SelectionConfig {
+  const o = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const pools = Array.isArray(o.pools)
+    ? o.pools
+        .filter((p): p is Record<string, unknown> => !!p && typeof p === "object" && typeof p.id === "string")
+        .map((p) => ({
+          id: p.id as string,
+          draw: typeof p.draw === "number" && Number.isInteger(p.draw) && p.draw >= 0 ? p.draw : null,
+          randomize: p.randomize === true,
+        }))
+    : [];
+  return { pools, randomizePools: o.randomizePools === true };
+}
+
+function readOptions(raw: unknown): { code: string; label: string }[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((o): o is Record<string, unknown> => !!o && typeof o === "object")
+    .map((o) => ({ code: String(o.code ?? ""), label: String(o.label ?? o.code ?? "") }))
+    .filter((o) => o.code);
 }

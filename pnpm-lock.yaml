@@ -19,9 +19,15 @@ importers:
       '@rescript/billing':
         specifier: workspace:*
         version: link:../../packages/billing
+      '@rescript/engine':
+        specifier: workspace:*
+        version: link:../../packages/engine
       '@rescript/interviews':
         specifier: workspace:*
         version: link:../../packages/interviews
+      '@rescript/schema':
+        specifier: workspace:*
+        version: link:../../packages/schema
       '@rescript/storage':
         specifier: workspace:*
         version: link:../../packages/storage
@@ -298,6 +304,12 @@ importers:
 
   packages/interviews:
     dependencies:
+      '@rescript/engine':
+        specifier: workspace:*
+        version: link:../engine
+      '@rescript/schema':
+        specifier: workspace:*
+        version: link:../schema
       '@rescript/storage':
         specifier: workspace:*
         version: link:../storage

@@ -69,6 +69,14 @@ export async function POST(req: NextRequest) {
       consentText: gate.project.consent_text,
     },
     questions,
+    /*
+     * The frozen draw, so the browser can rebuild the same definition the
+     * server rebuilds at `finish` and walk it with the same engine. Ids only —
+     * the question content travels once, above.
+     */
+    sequence: (gate.interview.question_sequence ?? []).map((s) => s.questionId),
+    seed: gate.interview.selection_seed,
+    projectName: gate.project.name,
     progress,
     /* the honest answer about whether this deployment can keep a recording */
     canRecord: !!storageProvider(),

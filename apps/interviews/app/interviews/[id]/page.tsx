@@ -77,7 +77,7 @@ export default async function InterviewPage({ params }: { params: { id: string }
         .eq("upload_status", "stored")
         .order("created_at", { ascending: true }),
       db.from("interview_questions")
-        .select("id, code, prompt")
+        .select("id, code, prompt, kind, prompt_media_id, options")
         .eq("project_id", interview.project_id),
       db.from("interview_transcripts")
         .select("media_id, status, text, segments, diarized, speaker_count")
@@ -133,7 +133,28 @@ export default async function InterviewPage({ params }: { params: { id: string }
     if (t) transcriptByResponse.set(m.response_id as string, t);
   }
 
-  const recordings: RecordingView[] = (media ?? []).filter((m) => m.kind !== "answer_audio").map((m) => {
+  /*
+   * The interviewer's clips are transcribed like everything else; their
+   * transcripts are keyed by media id and have no response. Loaded here so a
+   * reviewer sees what was actually asked beside what was answered — the
+   * brief's section 8 wants both on one screen.
+   */
+  const promptIds = (questions ?? []).map((q) => q.prompt_media_id).filter((x): x is string => !!x);
+  const { data: promptTranscripts } = promptIds.length
+    ? await db.from("interview_transcripts").select("media_id, text").in("media_id", promptIds)
+    : { data: [] as { media_id: string; text: string | null }[] };
+  const promptTextByMedia = new Map((promptTranscripts ?? []).map((t) => [t.media_id as string, t.text as string | null]));
+
+  /*
+   * Typed and chosen answers have no media row. They are the answer itself,
+   * so they are listed as such — with the question, the way a recording is.
+   */
+  const { data: written } = await db.from("interview_responses")
+    .select("id, question_id, status, answer_kind, answer_text, answer_value, skip_reason")
+    .eq("interview_id", params.id)
+    .in("answer_kind", ["text", "long_text", "single_choice", "multi_choice"]);
+
+  const recordings: RecordingView[] = (media ?? []).filter((m) => m.kind !== "answer_audio" && m.kind !== "question_prompt").map((m) => {
     const q = questionById.get((m.question_id as string) ?? "");
     /* its own transcript, or its audio sibling's — see above */
     const t = transcriptByMedia.get(m.id as string)
@@ -145,6 +166,8 @@ export default async function InterviewPage({ params }: { params: { id: string }
       createdAt: m.created_at as string,
       questionCode: (q?.code as string) ?? null,
       questionPrompt: (q?.prompt as string) ?? null,
+      promptMediaId: (q?.prompt_media_id as string | null) ?? null,
+      promptTranscript: q?.prompt_media_id ? promptTextByMedia.get(q.prompt_media_id as string) ?? null : null,
       participants: participantsByMedia.get(m.id as string) ?? [],
       transcript: t
         ? {
@@ -236,6 +259,27 @@ export default async function InterviewPage({ params }: { params: { id: string }
         <p className="note warn">
           Your role on this project lets you follow its progress but not watch recordings.
         </p>
+      )}
+
+      {(written ?? []).length > 0 && (
+        <section className="card" data-testid="written-answers">
+          <h2 style={{ marginTop: 0 }}>Written and chosen answers</h2>
+          {(written ?? []).map((r) => {
+            const q = questionById.get(r.question_id as string);
+            const opts = (Array.isArray(q?.options) ? q!.options : []) as { code: string; label: string }[];
+            const label = (code: unknown) => opts.find((o) => o.code === String(code))?.label ?? String(code);
+            const value = r.answer_kind === "multi_choice" && Array.isArray(r.answer_value)
+              ? r.answer_value.map(label).join(", ")
+              : r.answer_kind === "single_choice" ? label(r.answer_value) : (r.answer_text as string | null) ?? "";
+            return (
+              <div key={r.id as string} style={{ borderTop: "1px solid var(--line)", paddingTop: 10, marginTop: 10 }}>
+                <strong>{(q?.code as string) ?? "?"}</strong>{" "}
+                <span className="muted small">{(q?.prompt as string) ?? ""}</span>
+                <p style={{ margin: "6px 0 0", whiteSpace: "pre-wrap" }}>{value || <span className="muted">—</span>}</p>
+              </div>
+            );
+          })}
+        </section>
       )}
 
       <InterviewReview
