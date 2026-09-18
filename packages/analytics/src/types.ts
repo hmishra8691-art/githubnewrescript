@@ -115,7 +115,25 @@ export interface AnalysisDefinition {
 
 export type CellType = "text" | "number" | "pct" | "sig" | "count";
 
-export interface ResultColumn { key: string; label: string; type?: CellType; decimals?: number }
+export interface ResultColumn {
+  key: string; label: string; type?: CellType; decimals?: number;
+  /** banner tables: the column variable this category belongs to (header group) */
+  group?: string;
+  /** the significance letter this column answers to */
+  letter?: string;
+  /** the column's base fell under the analysis's minimum and its cells were suppressed */
+  suppressed?: boolean;
+}
+
+/**
+ * Row markers a crosstab writes beside its cells (all optional, all prefixed
+ * `__` so they never collide with a column key):
+ * - `__kind`: `category` | `noanswer` | `summary` | `total` | `base` | `section` | `group`
+ * - `__level`: nesting depth (0 = top); `__group`: the key of the group row this row belongs to
+ * - `__format`: cell type override for the whole row
+ * - `<key>__sig` letters, `<key>__vs` "+" / "−" against Total, `<key>__n` unweighted cell count
+ */
+export type CrosstabRowKind = "category" | "noanswer" | "summary" | "total" | "base" | "section" | "group";
 
 export interface ResultTable {
   id: string;

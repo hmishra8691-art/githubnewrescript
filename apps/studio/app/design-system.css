@@ -477,3 +477,72 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 
 /* ---------- tabs (module tab bars) ---------- */
 .ax-wstab, .ax-tab, .cm-tab, .rm-tab, .dp-tab { font-size: 14px; }
+
+/* ============================================================================
+   STUDIO SHELL — September 2026 polish. The shell around a survey: the top
+   bar's hierarchy, the navigation's rhythm, cards, loading and empty states,
+   and how it behaves on a narrow window. Tokens only; no new colours.
+   ========================================================================== */
+
+/* top bar: one primary action, two working actions, the rest quiet */
+.topbar { gap: 8px; box-shadow: 0 1px 0 var(--c-border), 0 6px 18px -14px rgba(19, 26, 43, .25); }
+.topbar .logo-mark { margin-right: 4px; }
+.topbar > .btn { --btn-bg: transparent; --btn-bd: transparent; box-shadow: none; color: var(--c-text-2); font-weight: 500; }
+.topbar > .btn:hover { --btn-bg: var(--c-surface-2); color: var(--c-text); }
+.topbar > .btn[data-testid="test-survey"], .topbar > .btn:has(.ico[data-icon="play"]) { --btn-bg: var(--c-surface); --btn-bd: var(--c-border); box-shadow: var(--sh-1); color: var(--c-text); }
+.topbar > .btn.primary { --btn-bg: var(--c-primary); --btn-bd: var(--c-primary); background: var(--grad-primary); color: #fff; font-weight: 600; box-shadow: 0 1px 2px rgba(79,70,229,.25), 0 6px 14px -6px rgba(79,70,229,.45); margin-left: 4px; }
+.topbar > .btn.primary:hover { color: #fff; }
+.topbar .avatar.sm { width: 28px; height: 28px; font-size: 11px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; }
+.ctx-title { font-size: 15.5px; }
+.ctx-meta .badge { padding: 1px 8px; font-size: 11.5px; }
+
+/* left navigation: groups breathe, the active item is unmistakable, counts stay quiet */
+.leftnav { padding: 10px 10px 24px; gap: 1px; }
+.nav-group { padding: 16px 12px 6px; font-size: 11px; letter-spacing: .12em; color: var(--c-text-4); }
+.nav-group:first-child { padding-top: 6px; }
+.leftnav .nav-item { padding: 8px 10px 8px 12px; font-size: 13.75px; }
+.leftnav .nav-item .ico { transition: color var(--dur-1) var(--ease); }
+.leftnav .nav-item:hover .ico { color: var(--c-text-2); }
+.leftnav .nav-count { font-size: 11px; min-width: 20px; text-align: center; }
+.leftnav a.nav-item { text-decoration: none; }
+.leftnav .nav-item:focus-visible { box-shadow: var(--sh-focus); outline: none; }
+
+/* the centre: a readable measure, consistent headers */
+.center { padding: 22px 28px 48px; }
+.center > h2:first-child, .center > div > h2:first-child { font-size: 17px; font-weight: 650; letter-spacing: -.01em; margin: 0 0 14px; }
+.center .card { border-radius: var(--r-lg); }
+.center .card .card-title { font-size: 15px; }
+.center .empty { margin: 12px 0; }
+.center .empty h3 { font-size: 16px; }
+
+/* the properties panel: section rhythm */
+.rightpanel h2 { margin: 0 0 12px; }
+.rightpanel h3.sec { margin: 22px 0 8px; }
+.rightpanel .card { padding: 14px 16px; }
+
+/* loading and empty states — one voice everywhere */
+.loading { display: flex; flex-direction: column; gap: 8px; padding: 14px 12px; }
+.loading .sk { display: block; }
+.loading-label { font-size: var(--fs-caption); color: var(--c-text-3); margin-top: 2px; }
+.empty .btn { margin-top: 4px; }
+
+/* bars that sit under the top bar read as one system */
+.publish-bar, .lockbar, .bl-readonly-bar { border-bottom: 1px solid var(--c-border); }
+
+/* a narrow window: the shell folds instead of clipping */
+@media (max-width: 1100px) {
+  .topbar { gap: 6px; }
+  .topbar > .btn { padding: 0 9px; }
+  .topbar > .btn .ico + * { display: inline; }
+}
+@media (max-width: 900px) {
+  .ide { height: auto; min-height: 100vh; overflow: visible; }
+  .ide-body { grid-template-columns: 1fr; }
+  .leftnav { flex-direction: row; flex-wrap: wrap; border-right: none; border-bottom: 1px solid var(--c-border); padding: 8px 10px; gap: 2px; overflow: visible; }
+  .nav-group { display: none; }
+  .leftnav .nav-item { width: auto; padding: 6px 10px; font-size: 13px; }
+  .leftnav .nav-item.active::before { display: none; }
+  .center { padding: 16px; }
+  .rightpanel { border-left: none; border-top: 1px solid var(--c-border); }
+  .ax-shell { padding: 0 12px; }
+}

@@ -321,5 +321,7 @@ export function rimWeights(cases: Record<string, string | null | undefined>[], t
     cases.forEach((c, i) => { const cat = c[d.variable]; if (cat == null) return; totals[String(cat)] = (totals[String(cat)] ?? 0) + w[i]; W += w[i]; });
     for (const [cat, t] of Object.entries(d.targets)) achieved.push({ variable: d.variable, category: cat, target: t, achieved: W ? (totals[cat] ?? 0) / W : 0 });
   }
-  return { weights: w, iterations: iter + 1, converged, efficiency: 1 / deff, designEffect: deff, min: Math.min(...w), max: Math.max(...w), achieved };
+  let min = Infinity, max = -Infinity;
+  for (const x of w) { if (x < min) min = x; if (x > max) max = x; }
+  return { weights: w, iterations: iter + 1, converged, efficiency: 1 / deff, designEffect: deff, min, max, achieved };
 }

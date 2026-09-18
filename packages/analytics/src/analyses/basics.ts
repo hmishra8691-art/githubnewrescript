@@ -1,7 +1,7 @@
 import type { AnalysisDefinition, AnalysisResult, ChartData, ChartType, ResultTable } from "../types.js";
 import { categoricalColumn, categoriesOf, itemLabelOf, labelOf, numericColumn, scaleCodes, segmentDatasets, weights, type Dataset } from "../dataset.js";
 import { boxShares, describe, frequencies } from "../stats/descriptive.js";
-import { chiSquare, proportionCI, significanceLetters, oneWayAnova, type TestResult } from "../stats/tests.js";
+import { proportionCI } from "../stats/tests.js";
 import { fmtNum, fmtPct, makeResult, opt, pct, round } from "./common.js";
 
 /* ============================================================ descriptive */
@@ -172,145 +172,8 @@ export function topbox(def: AnalysisDefinition, ds: Dataset, totalCases: number)
   });
 }
 
-/* ============================================================ crosstab */
-
-interface Cell { count: number; w: number }
-
-export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: number): AnalysisResult {
-  const rowVars = def.rows?.length ? def.rows : def.variables.slice(0, 1);
-  const colVars = def.columns?.length ? def.columns : def.variables.slice(1, 2);
-  const layerVar = def.layers?.[0];
-  const measure = def.measure ?? "pct_col";
-  const alpha = opt(def, "alpha", 0.05) as number;
-  const showSig = opt(def, "significance", true) as boolean;
-  const w = weights(ds);
-  const warnings: string[] = [];
-  const tables: ResultTable[] = [];
-  const tests: TestResult[] = [];
-  const insights: string[] = [];
-  let chart: ChartData = {};
-
-  if (!rowVars.length || !colVars.length) {
-    return makeResult(def, ds, { tables, chart, warnings: ["A crosstab needs at least one row variable and one column variable."], recommendedCharts: ["table"], totalCases });
-  }
-
-  const layers: { label: string; ds: Dataset }[] = layerVar
-    ? categoriesOf(ds, layerVar).map((c) => ({ label: `${labelOf(ds, layerVar)}: ${c.label}`, ds: { ...ds, cases: ds.cases.filter((x) => String(x.vars[layerVar]) === c.code || (Array.isArray(x.vars[layerVar]) && (x.vars[layerVar] as unknown[]).map(String).includes(c.code))) } }))
-    : [{ label: "", ds }];
-
-  for (const layer of layers) {
-    const lw = weights(layer.ds);
-    for (const rv of rowVars) for (const cv of colVars) {
-      const rCats = categoriesOf(ds, rv), cCats = categoriesOf(ds, cv);
-      const rMeta = ds.byName.get(rv);
-      const rowsIsNumeric = rMeta?.role === "numeric" && !rMeta.categories;
-      const rVals = categoricalColumn(layer.ds, rv), cVals = categoricalColumn(layer.ds, cv);
-      const rNum = rowsIsNumeric ? numericColumn(layer.ds, rv) : null;
-      // column keys: Total + each column category
-      const colKeys = ["__total", ...cCats.map((c) => c.code)];
-      const grid = new Map<string, Map<string, Cell>>();
-      const colBase = new Map<string, Cell>(colKeys.map((k) => [k, { count: 0, w: 0 }]));
-      const rowBase = new Map<string, Cell>();
-      const numSums = new Map<string, { sum: number; w: number; n: number; vals: number[] }>();
-      const inc = (m: Map<string, Cell>, k: string, wt: number) => { const c = m.get(k) ?? { count: 0, w: 0 }; c.count++; c.w += wt; m.set(k, c); };
-      layer.ds.cases.forEach((_, i) => {
-        const wt = lw?.[i] ?? 1;
-        const rc = rVals[i], cc = cVals[i];
-        if (cc == null) return;
-        const cols = ["__total", ...(Array.isArray(cc) ? cc : [cc])];
-        if (rowsIsNumeric) {
-          const v = rNum![i];
-          if (v == null) return;
-          for (const ck of cols) { const s = numSums.get(ck) ?? { sum: 0, w: 0, n: 0, vals: [] }; s.sum += v * wt; s.w += wt; s.n++; s.vals.push(v); numSums.set(ck, s); inc(colBase, ck, wt); }
-          return;
-        }
-        if (rc == null) return;
-        const rcs = Array.isArray(rc) ? rc : [rc];
-        for (const ck of cols) inc(colBase, ck, wt);
-        for (const r of rcs) {
-          inc(rowBase, r, wt);
-          const rowMap = grid.get(r) ?? new Map<string, Cell>();
-          for (const ck of cols) inc(rowMap, ck, wt);
-          grid.set(r, rowMap);
-        }
-      });
-      const title = `${labelOf(ds, rv)} × ${labelOf(ds, cv)}${layer.label ? ` — ${layer.label}` : ""}`;
-      const columns = [{ key: "row", label: labelOf(ds, rv) }, { key: "__total", label: "Total", type: measure === "mean" ? "number" as const : measure === "count" ? "count" as const : "pct" as const, decimals: 1 }, ...cCats.map((c, j) => ({ key: c.code, label: `${c.label}${showSig ? ` (${String.fromCharCode(97 + (j % 26))})` : ""}`, type: measure === "mean" ? "number" as const : measure === "count" ? "count" as const : "pct" as const, decimals: 1 }))];
-      const out: Record<string, unknown>[] = [];
-      const totalW = colBase.get("__total")!.w;
-      if (rowsIsNumeric) {
-        const row: Record<string, unknown> = { row: "Mean" };
-        const sdRow: Record<string, unknown> = { row: "Std. deviation" };
-        const nRow: Record<string, unknown> = { row: "n" };
-        for (const ck of colKeys) {
-          const s = numSums.get(ck);
-          const d = s ? describe(s.vals) : null;
-          row[ck] = s && s.w ? round(s.sum / s.w) : null; sdRow[ck] = round(d?.sd); nRow[ck] = s?.n ?? 0;
-        }
-        out.push(row, sdRow, nRow);
-        const groups = cCats.map((c) => ({ label: c.label, values: numSums.get(c.code)?.vals ?? [] })).filter((g) => g.values.length > 1);
-        if (groups.length >= 2) tests.push({ ...oneWayAnova(groups), note: `${labelOf(ds, rv)} by ${labelOf(ds, cv)}` });
-        chart = { categories: cCats.map((c) => c.label), series: [{ name: `Mean ${labelOf(ds, rv)}`, values: cCats.map((c) => { const s = numSums.get(c.code); return s && s.w ? round(s.sum / s.w) : null; }) }] };
-      } else {
-        const rowKeys = rCats.map((c) => c.code);
-        for (const rk of rowKeys) {
-          const label = rCats.find((c) => c.code === rk)?.label ?? rk;
-          const row: Record<string, unknown> = { row: label };
-          const rowMap = grid.get(rk) ?? new Map<string, Cell>();
-          const counts = cCats.map((c) => rowMap.get(c.code)?.count ?? 0), bases = cCats.map((c) => colBase.get(c.code)?.count ?? 0);
-          const letters = showSig ? significanceLetters(counts, bases, alpha) : [];
-          for (const ck of colKeys) {
-            const cell = rowMap.get(ck) ?? { count: 0, w: 0 };
-            const base = colBase.get(ck)!;
-            let v: number | null;
-            if (measure === "count") v = round(cell.w, 1);
-            else if (measure === "pct_row") v = pct(rowBase.get(rk)?.w ? (cell.w / rowBase.get(rk)!.w) * 100 : 0);
-            else if (measure === "pct_total") v = pct(totalW ? (cell.w / totalW) * 100 : 0);
-            else v = pct(base.w ? (cell.w / base.w) * 100 : 0);
-            row[ck] = v;
-            row[`${ck}__n`] = cell.count;
-            const j = cCats.findIndex((c) => c.code === ck);
-            if (j >= 0 && letters[j]) row[`${ck}__sig`] = letters[j];
-          }
-          out.push(row);
-        }
-        const baseRow: Record<string, unknown> = { row: "Base (n)", __format: "count" };
-        for (const ck of colKeys) baseRow[ck] = colBase.get(ck)?.count ?? 0;
-        out.push(baseRow);
-        if (ds.weighted) { const wb: Record<string, unknown> = { row: "Weighted base", __format: "number" }; for (const ck of colKeys) wb[ck] = round(colBase.get(ck)?.w, 1); out.push(wb); }
-        // chi-square over the raw count table (single-response rows/cols only)
-        const table = rowKeys.map((rk) => cCats.map((c) => grid.get(rk)?.get(c.code)?.count ?? 0)).filter((r) => r.some((x) => x));
-        if (table.length >= 2 && cCats.length >= 2 && rMeta?.role !== "multi" && ds.byName.get(cv)?.role !== "multi") {
-          const cs = chiSquare(table);
-          tests.push({ ...cs, note: `${labelOf(ds, rv)} × ${labelOf(ds, cv)}` });
-          if (cs.p != null) insights.push(`${labelOf(ds, rv)} ${cs.p < alpha ? "differs significantly" : "does not differ significantly"} by ${labelOf(ds, cv)} (χ² = ${fmtNum(cs.statistic, 2)}, p ${cs.p < 0.001 ? "< .001" : "= " + cs.p.toFixed(3)}${cs.effectSize?.value != null ? `, Cramér's V = ${cs.effectSize.value.toFixed(2)}` : ""}).`);
-        }
-        // biggest column gap
-        let best: { row: string; col: string; diff: number; total: number } | null = null;
-        for (const rk of rowKeys) for (const c of cCats) {
-          const cell = grid.get(rk)?.get(c.code)?.w ?? 0, base = colBase.get(c.code)?.w ?? 0, tot = totalW ? ((grid.get(rk)?.get("__total")?.w ?? 0) / totalW) * 100 : 0;
-          if (!base || (colBase.get(c.code)?.count ?? 0) < 10) continue;
-          const p = (cell / base) * 100, diff = p - tot;
-          if (!best || Math.abs(diff) > Math.abs(best.diff)) best = { row: rCats.find((x) => x.code === rk)?.label ?? rk, col: c.label, diff, total: tot };
-        }
-        if (best && Math.abs(best.diff) >= 5) insights.push(`Largest gap: “${best.row}” is ${fmtNum(Math.abs(best.diff), 1)} points ${best.diff > 0 ? "higher" : "lower"} among ${best.col} (${fmtPct(best.total + best.diff, 1)} vs ${fmtPct(best.total, 1)} overall).`);
-        if (!chart.categories) chart = {
-          categories: rCats.map((c) => c.label),
-          series: cCats.map((c) => ({ name: c.label, values: rowKeys.map((rk) => { const cell = grid.get(rk)?.get(c.code)?.w ?? 0, base = colBase.get(c.code)?.w ?? 0; return pct(base ? (cell / base) * 100 : 0); }), sig: rowKeys.map((rk) => { const counts = cCats.map((cc) => grid.get(rk)?.get(cc.code)?.count ?? 0), bases = cCats.map((cc) => colBase.get(cc.code)?.count ?? 0); return showSig ? significanceLetters(counts, bases, alpha)[cCats.indexOf(c)] : ""; }) })),
-          matrix: { rows: rCats.map((c) => c.label), columns: cCats.map((c) => c.label), values: rowKeys.map((rk) => cCats.map((c) => { const cell = grid.get(rk)?.get(c.code)?.w ?? 0, base = colBase.get(c.code)?.w ?? 0; return pct(base ? (cell / base) * 100 : 0); })) },
-          valueFormat: "pct",
-        };
-      }
-      const colBases: Record<string, number> = {}; for (const ck of colKeys) colBases[ck] = colBase.get(ck)?.count ?? 0;
-      tables.push({ id: `xt_${rv}_${cv}${layerVar ? "_" + layer.label : ""}`, title, columns, rows: out, base: { n: colBase.get("__total")?.count ?? 0, weightedN: round(totalW, 1) ?? 0 }, columnBases: colBases,
-        notes: [measure === "pct_col" ? "Column percentages." : measure === "pct_row" ? "Row percentages." : measure === "pct_total" ? "Percent of total." : measure === "mean" ? "Column means." : "Weighted counts.",
-          ...(showSig && !rowsIsNumeric ? [`Letters mark columns significantly lower at the ${Math.round((1 - alpha) * 100)}% level (column proportion z-test).`] : []),
-          ...(Object.values(colBases).some((b, i) => i > 0 && b < 30) ? ["Some columns have a base below 30 — read with caution."] : [])] });
-      for (const [ck, b] of Object.entries(colBases)) if (ck !== "__total" && b > 0 && b < 30) warnings.push(`Column “${cCats.find((c) => c.code === ck)?.label ?? ck}” of ${labelOf(ds, cv)} has a base of ${b}.`);
-    }
-  }
-  return makeResult(def, ds, { tables, chart, tests, insights, warnings: [...new Set(warnings)], recommendedCharts: ["bar_grouped", "bar_stacked_100", "heatmap_crosstab", "bar_horizontal", "table"], variablesUsed: [...rowVars, ...colVars, ...(layerVar ? [layerVar] : [])], totalCases });
-}
+/* the crosstab lives in ./crosstab.ts */
+export { crosstab } from "./crosstab.js";
 
 /* ============================================================ ranking */
 

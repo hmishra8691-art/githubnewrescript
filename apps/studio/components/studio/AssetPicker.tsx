@@ -1,5 +1,6 @@
 "use client";
 import React from "react";
+import { Loading } from "@/components/ui/Loading";
 import { resolveMediaUrl } from "@rescript/engine";
 import {
   ASSET_ACCEPT, FAMILY_ICON, FAMILY_LABEL, fetchAssets, formatBytes, uploadAsset,
@@ -110,7 +111,7 @@ export function AssetPicker({ open, onClose, onPick, accept, title }: {
         {!canUse && <p className="muted" style={{ fontSize: 13 }}>Save the survey first — the library belongs to a saved survey.</p>}
         {error && <p style={{ color: "var(--danger, #b91c1c)", fontSize: 13 }}>⚠ {error}</p>}
         <div className={`asset-grid ${dragging ? "dragging" : ""}`} data-testid="asset-picker-grid">
-          {assets === null && <p className="muted" style={{ fontSize: 13 }}>Loading…</p>}
+          {assets === null && <Loading label="Loading assets…" rows={2} />}
           {assets !== null && visible.length === 0 && (
             <p className="muted" style={{ fontSize: 13, gridColumn: "1 / -1" }}>
               {assets.length === 0 ? "Nothing in the library yet — upload a file, or drop one here." : "No asset matches."}

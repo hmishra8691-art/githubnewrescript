@@ -22,7 +22,7 @@ export function runAnalysis(def: AnalysisDefinition, dataset: Dataset): Analysis
   const ds = def.filter ? filterDataset(dataset, def.filter) : dataset;
   if (!runner) {
     return {
-      kind: def.kind, name: def.name, base: { total: dataset.total, filtered: ds.cases.length, n: ds.cases.length, weightedN: ds.cases.length, label: "All respondents" },
+      kind: def.kind, name: def.name, base: { total: dataset.cases.length, filtered: ds.cases.length, n: ds.cases.length, weightedN: ds.cases.length, label: "All respondents" },
       tables: [], chart: {}, tests: [], insights: [], warnings: [`Unknown analysis kind “${def.kind}”.`], recommendedCharts: ["table"], computedAt: new Date().toISOString(), definitionHash: "", variablesUsed: [],
     };
   }
@@ -30,7 +30,7 @@ export function runAnalysis(def: AnalysisDefinition, dataset: Dataset): Analysis
     return runner(def, ds, dataset.cases.length);
   } catch (e) {
     return {
-      kind: def.kind, name: def.name, base: { total: dataset.total, filtered: ds.cases.length, n: ds.cases.length, weightedN: ds.cases.length, label: "All respondents" },
+      kind: def.kind, name: def.name, base: { total: dataset.cases.length, filtered: ds.cases.length, n: ds.cases.length, weightedN: ds.cases.length, label: "All respondents" },
       tables: [], chart: {}, tests: [], insights: [], warnings: [`The analysis could not be computed: ${(e as Error).message}`], recommendedCharts: ["table"], computedAt: new Date().toISOString(), definitionHash: "", variablesUsed: def.variables,
     };
   }

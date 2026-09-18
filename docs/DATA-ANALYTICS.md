@@ -128,8 +128,51 @@ Download-only. Audit events: `analytics.analysis_created|modified|deleted`,
 `chart_created|modified`, `report_created|modified|published|shared`,
 `share_revoked`, `share_accessed`, `export_generated`, `report_downloaded`.
 
+## The research studio workspace (September 2026)
+
+The Analysis tab is a workbench: an **Analyses rail** on the left (every saved
+analysis in the researcher's own order — open, duplicate, rename, move up /
+down, delete; `POST analyses/<id>/duplicate`, `POST analyses/reorder`,
+`analytics_analyses.position`, migration 0041), and four **stages** on the
+right — *Builder* (type · variables · filters · segments & weighting ·
+options) → *Results* (chart preview, tables, tests, insights) → *Visualization*
+(large chart, gallery, customizer, full screen, PNG / SVG) → *Export*
+(PowerPoint, Excel, PNG, SVG, save chart, add to report). An unsaved
+definition shows a dot in the stage bar, on its rail item and on the workspace
+tab; leaving it asks first. A result older than the definition says so.
+
+### The crosstab
+
+`packages/analytics/src/analyses/crosstab.ts`. One pass accumulates weighted
+and unweighted counts, Σw² and moments per column, so percentages, letters,
+counts and means always describe the same respondents. Options (all on
+`definition.options`, all defaulting to the previous table):
+
+| option | meaning |
+|---|---|
+| `layout` `banner` / `separate` | every column variable side by side in one table, or one table per pair |
+| `stackRows`, `nestRows` | row variables under section rows, or the second nested inside the first (group rows the UI collapses) |
+| `base` `answered` / `all` | base on people who answered both, or everyone in the column with a "No answer" row |
+| `minBase` | suppress cells of columns under this base; the column is starred |
+| `sortRows`, `hideEmptyRows`, `totalRow` | row order by Total, drop empty rows, a 100 % check row |
+| `summaryRows` | `mean`, `top1`, `top2`, `bottom1`, `bottom2`, `net` for numerically coded frames |
+| `decimals`, `significance`, `alpha`, `sigVsTotal` | precision; letters (weighted proportions with effective bases; `aa`… after `z`); ▲▼ against the rest of the sample |
+| `formatting` | how the table looks on screen (heat, counts under %, highlight, dense) — never a new version |
+
+Rows carry `__kind` (`category` · `noanswer` · `summary` · `total` · `base` ·
+`section` · `group`), `__level` and `__group`; columns carry `group`, `letter`
+and `suppressed`. `ProTable` (`apps/studio/components/analytics/ProTable.tsx`)
+renders any `ResultTable` with sticky header and stub, header groups,
+expand / collapse, column sort, heat shading and windowing past 150 rows;
+reports and the share view use it through `ResultTableView`.
+
+`measure: "mean"` now works for scale rows (weighted mean, SD, n, letters by
+a Welch z on effective bases). The audit that preceded this work, and the
+engine fixes it produced, are in `docs/ANALYTICS-AUDIT-2026-09.md`.
+
 ## Tests
 
 * `pnpm --filter @rescript/analytics test` — 35 tests (stats vs scipy, every runner against planted data, PPTX/XLSX builders).
-* `node scripts/analytics-test.mjs` — 38 browser checks (workspace, builder, filters, charts, gallery, customisation, save/version, segments, report builder, publish/immutability, share link, read-only view, downloads, revoke, password, expiry, exports, table builder, themes, dashboard, existing navigation unchanged). Uses an in-process fake backend over the real engine because the dev container has no database credentials.
+* `node scripts/analytics-test.mjs` — 55 browser checks (workspace, builder, the analyses rail, the four stages, the professional table, nested rows, filters, charts, gallery, customisation, save/version, segments, report builder, publish/immutability, share link, read-only view, downloads, revoke, password, expiry, exports, table builder, themes, dashboard, existing navigation unchanged). Uses an in-process fake backend over the real engine because the dev container has no database credentials.
+* `packages/analytics/src/analyses/crosstab.test.ts` — the crosstab’s options one by one (banner, nesting, stacking, base, suppression, sorting, summary rows, means, weighted letters) and the audit’s fixes (A1–A6, A11).
 * Share-resolution SQL exercised against the live database in a rolled-back transaction (unknown / unpublished / pinned vs following / expired / revoked / password flag / access counting).

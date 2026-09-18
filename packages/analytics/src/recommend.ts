@@ -153,7 +153,10 @@ export function recommendCharts(result: AnalysisResult, limit = 6): ChartRecomme
   // the runner's own order carries weight
   result.recommendedCharts.forEach((t, i) => add(t, 60 - i * 6, `Suggested for ${result.kind} results`));
   if (nCat && nSer === 1) {
-    if (isPct && nCat <= 6 && !["topbox", "csat"].includes(result.kind)) add("pie", 55, `${nCat} categories that sum to a whole`), add("donut", 52, "Shares with room for a headline figure");
+    // a pie needs shares of ONE whole: not a crosstab's column series, not a multi-select whose bars pass 100, not a brand's share of mentions
+    const sums = (d.series?.[0]?.values ?? []).reduce<number>((a, v) => a + (v ?? 0), 0);
+    const wholeish = isPct && sums > 95 && sums < 105 && !["crosstab", "topbox", "csat", "brand", "turf"].includes(result.kind);
+    if (wholeish && nCat <= 6) add("pie", 55, `${nCat} categories that sum to a whole`), add("donut", 52, "Shares with room for a headline figure");
     if (nCat > 6) add("bar_horizontal", 58, `${nCat} categories — horizontal bars keep labels readable`);
     else add("bar_vertical", 50, "Few categories, one measure");
     if (nCat >= 5) add("lollipop", 40, "A lighter alternative to bars for ranked values");

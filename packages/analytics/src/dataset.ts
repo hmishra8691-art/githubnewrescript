@@ -317,7 +317,10 @@ export function applyWeighting(ds: Dataset, w: WeightingSpec): void {
     const res = rimWeights(rows, targets, { cap: w.cap });
     ds.cases.forEach((c, i) => { c.weight = res.weights[i]; });
     ds.weighted = true;
-    ds.weightInfo = { efficiency: res.efficiency, designEffect: res.designEffect, min: res.min, max: res.max, converged: res.converged };
+    // `rimWeights` reports efficiency as a proportion; `weightInfo` — like the
+    // variable-weight path above — carries a percent, which is what every
+    // table, warning and KPI prints.
+    ds.weightInfo = { efficiency: res.efficiency * 100, designEffect: res.designEffect, min: res.min, max: res.max, converged: res.converged };
   }
 }
 
@@ -332,7 +335,10 @@ function normaliseTargets(t: Record<string, number>): Record<string, number> {
 function summariseWeights(ws: number[]) {
   const n = ws.length, sum = ws.reduce((a, b) => a + b, 0), sq = ws.reduce((a, b) => a + b * b, 0);
   const eff = (sum * sum) / (n * sq);
-  return { efficiency: eff * 100, designEffect: 1 / eff, min: Math.min(...ws), max: Math.max(...ws), converged: true };
+  // a loop, not `Math.min(...ws)`: spreading a quarter-million weights overflows the call stack
+  let min = Infinity, max = -Infinity;
+  for (const x of ws) { if (x < min) min = x; if (x > max) max = x; }
+  return { efficiency: eff * 100, designEffect: 1 / eff, min, max, converged: true };
 }
 
 /* ------------------------------------------------------------ subsets */

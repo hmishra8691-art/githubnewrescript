@@ -35,6 +35,8 @@ export const maxDuration = 60;
  *   GET|POST  analyses|charts|segments|themes|reports|shares
  *   GET|PUT|DELETE  <collection>/<id>
  *   GET  analyses/<id>/versions       definition versions (§17)
+ *   POST analyses/<id>/duplicate      a copy of the analysis ("<name> (copy)", version 1)
+ *   POST analyses/reorder             { ids: [...] } — the researcher's own order of the rail
  *   POST reports/<id>/publish         freeze a version: definition + theme + computed snapshot (§34, §35)
  *   GET  reports/<id>/versions
  *   GET  reports/<id>/results         live results for every analysis a report references
@@ -69,6 +71,8 @@ const isUuid = (s: string) => /^[0-9a-f-]{36}$/i.test(s);
 async function gate(req: NextRequest, surveyId: string, cap: Capability) {
   return requireProject(req, surveyId, cap);
 }
+/** the survey and workspace a theme may be read from */
+const themeScope = (ctx: ProjectContext) => ({ surveyId: ctx.surveyId, customerId: ctx.user.customerId ?? ctx.survey.customer_id ?? null });
 
 function log(ctx: ProjectContext, action: AuditEvent | null, entityId: string | null, detail: Record<string, unknown>) {
   if (!action) return;
@@ -138,6 +142,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
     if (!itemId) {
       let q = db.from(coll.table).select("*").eq("survey_id", surveyId).order(head === "shares" ? "created_at" : "updated_at", { ascending: false });
       if (head !== "shares") q = q.is("deleted_at", null);
+      // the Analyses rail: arranged analyses first, in their order; the rest newest first
+      if (head === "analyses") q = db.from(coll.table).select("*").eq("survey_id", surveyId).is("deleted_at", null).order("position", { ascending: true, nullsFirst: false }).order("updated_at", { ascending: false });
       if (head === "themes") {
         // themes are shared across the customer (§11): the survey's own plus the workspace's
         q = db.from(coll.table).select("*").is("deleted_at", null).or(`survey_id.eq.${surveyId}${ctx.user.customerId ? `,customer_id.eq.${ctx.user.customerId}` : ""}`).order("updated_at", { ascending: false });
@@ -145,7 +151,14 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
       const kind = req.nextUrl.searchParams.get("kind"); if (kind && (head === "segments" || head === "reports")) q = q.eq("kind", kind);
       const analysisId = req.nextUrl.searchParams.get("analysisId"); if (analysisId && head === "charts") q = q.eq("analysis_id", analysisId);
       const { data, error } = await q; if (error) return bad(error.message, 500);
-      return json({ items: (data ?? []).map((row) => head === "shares" ? { ...row, password_hash: undefined, has_password: !!row.password_hash } : row) });
+      /*
+       * A share's TOKEN is the link. Listing shares is a read capability so a
+       * viewer can see what is out there; the link itself is for whoever may
+       * create one — a viewer without export rights could otherwise lift a
+       * "download" link and take the deck through it.
+       */
+      const canLink = head === "shares" ? !isFailure(await gate(req, surveyId, "analytics.publish")) : true;
+      return json({ items: (data ?? []).map((row) => head === "shares" ? { ...row, password_hash: undefined, has_password: !!row.password_hash, ...(canLink ? {} : { token: undefined }) } : row) });
     }
     if (!isUuid(itemId)) return bad("Unknown item.", 404);
     if (action === "versions" && (head === "analyses" || head === "reports")) {
@@ -167,7 +180,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
       }
       const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
       const results = await computeReport(db, surveyId, loaded, report.definition as ReportDefinition);
-      return json({ mode: "live", definition: report.definition, theme: await loadTheme(db, report.theme_id), results, computedAt: new Date().toISOString() });
+      return json({ mode: "live", definition: report.definition, theme: await loadTheme(db, report.theme_id, themeScope(ctx)), results, computedAt: new Date().toISOString() });
     }
     if (action === "access" && head === "shares") {
       const { data, error } = await db.from("analytics_share_access").select("id, viewer_user_id, viewer_email, event, created_at").eq("share_id", itemId).eq("survey_id", surveyId).order("created_at", { ascending: false }).limit(200);
@@ -240,6 +253,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
 
   if (head === "export") {
     const ctx = await gate(req, surveyId, "analytics.export"); if (isFailure(ctx)) return ctx.response;
+    if (body.format != null && body.format !== "xlsx" && body.format !== "pptx") return bad(`Unknown export format “${String(body.format)}” — use pptx or xlsx.`);
     const format = body.format === "xlsx" ? "xlsx" : "pptx";
     /*
      * METERING: report generation respects READ_ONLY (unless exports are
@@ -268,7 +282,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
         const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
         report = r.definition as ReportDefinition; results = await computeReport(db, surveyId, loaded, report);
       }
-      if (!themeId && !themeSrc) themeSrc = await loadTheme(db, r.theme_id);
+      if (!themeId && !themeSrc) themeSrc = await loadTheme(db, r.theme_id, themeScope(ctx));
       const ids = Object.keys(results);
       if (ids.length) {
         const { data: defs } = await db.from("analytics_analyses").select("definition").in("id", ids);
@@ -294,7 +308,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
       const chart = (body.chart as ChartSpec | undefined) ?? { type: result.recommendedCharts[0] ?? "bar_vertical", options: {} };
       report = { title: name, subtitle: ctx.survey.title, mode: "live", blocks: [{ id: "c", type: "chart", analysisId: "adhoc", chart }, ...result.tables.map((t, i) => ({ id: `t${i}`, type: "table" as const, analysisId: "adhoc", tableId: t.id }))] };
     } else return bad("reportId, analysisId or definition is required.");
-    const theme = themeId ? await loadTheme(db, themeId) : (themeSrc as ReportTheme | null) ?? DEFAULT_THEME;
+    const theme = themeId ? await loadTheme(db, themeId, themeScope(ctx)) : (themeSrc as ReportTheme | null) ?? DEFAULT_THEME;
     const meta = { survey: ctx.survey.title, generatedBy: ctx.user.fullName || ctx.user.email };
     const buf = format === "pptx" ? await buildPptx({ report: { ...report, author: report.author ?? ctx.user.fullName }, results, theme, settings: settings as never, meta }) : await buildXlsx({ report, results, theme, settings: settings as never, meta: { Survey: ctx.survey.title, "Generated by": ctx.user.fullName || ctx.user.email } });
     await db.from("analytics_exports").insert({ survey_id: surveyId, report_id: reportId, analysis_id: analysisId, format, settings, report_version: reportVersion, bytes: buf.length, created_by: ctx.user.userId });
@@ -312,7 +326,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
     const definition = r.definition as ReportDefinition;
     const snapshot = await computeReport(db, surveyId, loaded, definition);
-    const theme = await loadTheme(db, r.theme_id);
+    const theme = await loadTheme(db, r.theme_id, themeScope(ctx));
     const { data: last } = await db.from("analytics_report_versions").select("version").eq("report_id", itemId).order("version", { ascending: false }).limit(1);
     const version = (last?.[0]?.version ?? 0) + 1;
     const first = Object.values(snapshot)[0];
@@ -461,6 +475,31 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     return json({ definition, appliedTemplate: template.name });
   }
 
+  if (head === "analyses" && itemId === "reorder") {
+    const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;
+    const ids = Array.isArray(body.ids) ? (body.ids as unknown[]).filter((x): x is string => typeof x === "string" && isUuid(x)) : [];
+    if (!ids.length) return bad("ids are required.");
+    // every id has to be one of this survey's analyses; positions are dense from 0 in the order given
+    const { data: mine } = await db.from("analytics_analyses").select("id").eq("survey_id", surveyId).is("deleted_at", null).in("id", ids);
+    const ok = new Set((mine ?? []).map((r) => r.id as string));
+    let pos = 0;
+    for (const id of ids) { if (!ok.has(id)) continue; const { error } = await db.from("analytics_analyses").update({ position: pos++, updated_by: ctx.user.userId }).eq("id", id).eq("survey_id", surveyId); if (error) return bad(error.message, 500); }
+    return json({ ok: true, ordered: pos });
+  }
+  if (head === "analyses" && itemId && action === "duplicate") {
+    const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;
+    if (!isUuid(itemId)) return bad("Unknown item.", 404);
+    const { data: src } = await db.from("analytics_analyses").select("*").eq("id", itemId).eq("survey_id", surveyId).is("deleted_at", null).maybeSingle();
+    if (!src) return bad("Unknown item.", 404);
+    const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : `${src.name} (copy)`;
+    const definition = { ...(src.definition as AnalysisDefinition), name };
+    const row = { survey_id: surveyId, name, kind: src.kind, definition, version: 1, folder: src.folder ?? null, tags: src.tags ?? [], position: null, created_by: ctx.user.userId, updated_by: ctx.user.userId };
+    const { data, error } = await db.from("analytics_analyses").insert(row).select("*").single();
+    if (error) return bad(error.message, 500);
+    await db.from("analytics_analysis_versions").insert({ analysis_id: data.id, survey_id: surveyId, version: 1, definition, summary: `Duplicated from “${src.name}”`, created_by: ctx.user.userId });
+    log(ctx, "analytics.analysis_created", data.id, { name, kind: data.kind, duplicatedFrom: itemId });
+    return json({ item: data }, 201);
+  }
   if (head && head in COLLECTIONS && !itemId) {
     const coll = COLLECTIONS[head as Collection];
     const ctx = await gate(req, surveyId, coll.write); if (isFailure(ctx)) return ctx.response;
@@ -510,7 +549,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
 
 /** Decide whether a definition change is a real analysis change (new version) or only cosmetic (§17). */
 function analysisChanged(a: AnalysisDefinition, b: AnalysisDefinition): boolean {
-  const pick = (d: AnalysisDefinition) => JSON.stringify({ kind: d.kind, dataset: d.dataset, variables: d.variables, rows: d.rows, columns: d.columns, layers: d.layers, measure: d.measure, filter: d.filter, filterIds: d.filterIds, segments: d.segments, weighting: d.weighting, options: d.options });
+  // `options.formatting` is how the table LOOKS (heat, counts, decimals) — not what it computes
+  const opts = (d: AnalysisDefinition) => { const { formatting: _f, ...rest } = (d.options ?? {}) as Record<string, unknown>; void _f; return rest; };
+  const pick = (d: AnalysisDefinition) => JSON.stringify({ kind: d.kind, dataset: d.dataset, variables: d.variables, rows: d.rows, columns: d.columns, layers: d.layers, measure: d.measure, filter: d.filter, filterIds: d.filterIds, segments: d.segments, weighting: d.weighting, options: opts(d) });
   return pick(a) !== pick(b);
 }
 
@@ -545,6 +586,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string; 
     if (typeof body.name === "string") patch.name = body.name.trim();
     if (body.folder !== undefined) patch.folder = body.folder;
     if (Array.isArray(body.tags)) patch.tags = body.tags;
+    if (body.position === null || typeof body.position === "number") patch.position = body.position;
     if (body.definition) {
       const next = { ...(body.definition as AnalysisDefinition), name: (patch.name as string) ?? cur.name };
       if (analysisChanged(cur.definition as AnalysisDefinition, next)) {

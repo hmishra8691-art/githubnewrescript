@@ -99,8 +99,23 @@ async function fakeApi(route) {
   }
   if (action === "versions") return json(route, { versions: (head === "analyses" ? store.analysisVersions.filter((v) => v.analysis_id === itemId) : store.reportVersions.filter((v) => v.report_id === itemId)).sort((a, b) => b.version - a.version) });
   if (action === "access") return json(route, { events: [] });
+  /* the rail's verbs (route: POST analyses/reorder, POST analyses/<id>/duplicate; PUT accepts position) */
+  if (head === "analyses" && itemId === "reorder" && m === "POST") { let pos = 0; for (const id of body.ids) { const a = store.analyses.find((x) => x.id === id); if (a) a.position = pos++; } return json(route, { ok: true, ordered: pos }); }
+  if (head === "analyses" && action === "duplicate" && m === "POST") {
+    const src = store.analyses.find((x) => x.id === itemId); if (!src) return json(route, { error: "Unknown item." }, 404);
+    const name = body.name?.trim() || `${src.name} (copy)`;
+    const row = { id: uid(), survey_id: SURVEY, created_at: now(), updated_at: now(), name, kind: src.kind, definition: { ...src.definition, name }, version: 1, position: null };
+    store.analyses.push(row); store.analysisVersions.push({ analysis_id: row.id, version: 1, definition: row.definition, summary: `Duplicated from “${src.name}”`, created_at: now() }); store.audit.push("analytics.analysis_created");
+    return json(route, { item: row }, 201);
+  }
   if (!store[head]) return json(route, { error: "Unknown analytics endpoint." }, 404);
-  if (m === "GET" && !itemId) { const kind = url.searchParams.get("kind"); return json(route, { items: coll(head).filter((x) => !x.deleted_at && (!kind || x.kind === kind)) }); }
+  if (m === "GET" && !itemId) {
+    const kind = url.searchParams.get("kind");
+    const items = coll(head).filter((x) => !x.deleted_at && (!kind || x.kind === kind));
+    // analyses: arranged first in their order, then newest first — the route's ORDER BY
+    if (head === "analyses") items.sort((a, b) => (a.position ?? Infinity) - (b.position ?? Infinity) || (a.updated_at < b.updated_at ? 1 : -1));
+    return json(route, { items });
+  }
   if (m === "GET") return json(route, { item: coll(head).find((x) => x.id === itemId) });
   if (m === "POST") {
     const row = { id: uid(), survey_id: SURVEY, created_at: now(), updated_at: now() };
@@ -115,7 +130,8 @@ async function fakeApi(route) {
   }
   if (m === "PUT") {
     const row = coll(head).find((x) => x.id === itemId);
-    if (head === "analyses" && body.definition) { const changed = JSON.stringify({ ...row.definition, name: 0 }) !== JSON.stringify({ ...body.definition, name: 0 }); row.definition = body.definition; if (changed) { row.version++; store.analysisVersions.push({ analysis_id: row.id, version: row.version, definition: body.definition, created_at: now() }); } }
+    if (head === "analyses" && body.definition) { const strip = (d) => { const { formatting: _f, ...o } = d.options ?? {}; return JSON.stringify({ ...d, name: 0, options: o }); }; const changed = strip(row.definition) !== strip(body.definition); row.definition = body.definition; if (changed) { row.version++; store.analysisVersions.push({ analysis_id: row.id, version: row.version, definition: body.definition, created_at: now() }); } }
+    if (head === "analyses" && (body.position === null || typeof body.position === "number")) row.position = body.position;
     if (head === "charts" && body.spec) { row.spec = body.spec; row.style_version++; }
     for (const k of ["name", "definition", "mode", "condition", "theme", "description", "color"]) if (body[k] !== undefined && !(head === "analyses" && k === "definition")) row[k] = body[k];
     if (body.themeId !== undefined) row.theme_id = body.themeId;
@@ -173,6 +189,8 @@ await page.route(`**/api/surveys/${SURVEY}/analytics`, fakeApi);
 await page.route("**/api/share/**", fakeShare);
 
 const text = (sel) => page.$eval(sel, (e) => e.textContent.replace(/\s+/g, " ").trim());
+/* AX_SHOTS=<dir> writes a screenshot at each named point — for visual review, not assertions */
+const shot = async (name) => { if (process.env.AX_SHOTS) await page.screenshot({ path: `${process.env.AX_SHOTS}/${name}.png`, fullPage: false }); };
 const count = (sel) => page.$$eval(sel, (es) => es.length);
 
 console.log("\n§1 WORKSPACE & HOME");
@@ -184,6 +202,7 @@ ok("Data Analytics page opens with survey and dataset selectors (400 production 
 await page.waitForSelector('[data-testid="ax-home"]');
 assert.equal(await count('[data-testid="ax-tab-home"], [data-testid="ax-tab-analysis"], [data-testid="ax-tab-charts"], [data-testid="ax-tab-tables"], [data-testid="ax-tab-segments"], [data-testid="ax-tab-filters"], [data-testid="ax-tab-reports"], [data-testid="ax-tab-themes"], [data-testid="ax-tab-exports"], [data-testid="ax-tab-sharing"]'), 10);
 ok("home page with Recent analyses / Saved reports / Quick actions and all ten workspace tabs");
+await shot("01-home");
 
 console.log("\n§2 ANALYSIS BUILDER — crosstab with significance");
 await page.click('[data-testid="ax-quick-crosstab"]');
@@ -197,6 +216,7 @@ await page.click('.ax-var:has-text("SAT · Scale") input');
 await page.click('.ax-var:has-text("GENDER · Categorical") input');
 assert.match(await text('[data-testid="ax-drop-rows"]'), /Overall satisfaction/);
 assert.match(await text('[data-testid="ax-drop-columns"]'), /Gender/);
+await shot("02-variables");
 ok("variable picker fills Rows then Columns; drop zones show labels");
 await page.click('[data-testid="ax-step-2"]');
 await page.click('[data-testid="ax-add-rule"]');
@@ -207,6 +227,7 @@ await page.locator('[data-testid="ax-rule"] select').nth(1).selectOption("gte");
 await page.fill('[data-testid="ax-rule"] input.input', "25");
 assert.match(await text('[data-testid="ax-filter-text"]'), /Age greater than or equal 25/);
 ok("filter builder: Age ≥ 25 as an engine Condition, summarised in words");
+await shot("03-filters");
 await page.click('[data-testid="ax-run"]');
 await page.waitForSelector('[data-testid="ax-result"]');
 const base = await text('[data-testid="ax-base"]');
@@ -217,7 +238,9 @@ ok(`analysis runs server-side and reports its base honestly (${base})`);
 assert.ok(await page.$('[data-testid="ax-chart"][data-chart-type="bar_grouped"]'), "recommended chart selected automatically");
 assert.ok((await count('[data-testid="ax-gallery"] .ax-gitem')) >= 3);
 ok("recommended chart drawn (grouped bar) with a ranked recommendation gallery");
+await shot("04-result-chart");
 await page.click('.ax-tab:has-text("Tables")');
+await shot("05-result-table");
 const xt = await text('[data-testid="ax-table"]');
 assert.match(xt, /Total.*Male \(a\).*Female \(b\)/);
 assert.match(xt, /Base \(n\)/);
@@ -260,6 +283,7 @@ await page.click('[data-testid="ax-save"]');
 await page.waitForSelector('[data-testid="ax-msg"]:has-text("version 1")');
 assert.equal(store.analyses[0].version, 1);
 ok("re-saving with only styling changed keeps analysis version 1");
+await page.click('[data-testid="ax-stage-builder"]');
 await page.click('[data-testid="ax-step-4"]');
 await page.selectOption('.ax-options select', { label: "Row %" });
 await page.click('[data-testid="ax-run"]'); await page.waitForSelector('[data-testid="ax-result"]');
@@ -293,6 +317,120 @@ await runKind("text", "Open ends", ["TEXT · Text"]);
 assert.ok(await page.$('[data-testid="ax-chart"][data-chart-type="word_cloud"]'));
 ok("text analytics: word cloud recommended and drawn");
 assert.equal(store.analyses.length, 4);
+
+console.log("\n§5b THE ANALYSES RAIL, THE FOUR STAGES, THE PROFESSIONAL TABLE");
+// the rail lists every saved analysis; the open one is highlighted; the stage bar reads Builder → Results → Visualization → Export
+await page.waitForSelector('[data-testid="ax-rail"]');
+assert.equal(await count('[data-testid="ax-rail-item"]'), 4);
+assert.match(await text('[data-testid="ax-rail-item"].on'), /Open ends/);
+assert.deepEqual(await page.$$eval('.ax-stage', (es) => es.map((e) => e.textContent.replace(/^\d/, "").trim())), ["Builder", "Results", "Visualization", "Export"]);
+assert.equal(await text('[data-testid="ax-savestate"]'), "Saved · v1");
+ok("Analyses rail lists the four saved analyses with the open one highlighted; stages read Builder → Results → Visualization → Export");
+// Visualization: the chart workbench with full screen and PNG / SVG; Export: the deliverables stage
+await page.click('[data-testid="ax-stage-chart"]');
+await page.waitForSelector('[data-testid="ax-result"][data-view="chart"]');
+assert.ok(await page.$('[data-testid="ax-chart-png"]') && await page.$('[data-testid="ax-chart-svg"]'));
+await shot("07-visualization");
+await page.click('[data-testid="ax-chart-full"]');
+await page.waitForSelector('[data-testid="ax-fullscreen"]');
+await shot("08-fullscreen");
+await page.keyboard.press("Escape");
+await page.waitForSelector('[data-testid="ax-fullscreen"]', { state: "detached" });
+await page.click('[data-testid="ax-stage-export"]');
+await page.waitForSelector('[data-testid="ax-export-stage"]');
+await shot("10-export");
+assert.ok(await page.$('[data-testid="ax-export-pptx"]') && await page.$('[data-testid="ax-export-xlsx"]') && await page.$('[data-testid="ax-export-png"]'));
+ok("Visualization stage: full screen opens and closes with Esc, PNG / SVG offered; Export stage lists PowerPoint, Excel, PNG, SVG");
+// an edit marks the analysis unsaved — in the stage bar, on the rail item and on the workspace tab
+await page.click('[data-testid="ax-stage-builder"]');
+await page.click('[data-testid="ax-step-0"]');
+await page.fill('[data-testid="ax-name"]', "Open ends (verbatims)");
+await page.waitForSelector('[data-testid="ax-savestate"].dirty');
+assert.ok(await page.$('[data-testid="ax-rail-item"].on .ax-dirty'), "the rail shows the unsaved dot");
+assert.ok(await page.$('[data-testid="ax-tab-analysis"] .ax-dirty'), "the Analysis tab shows the unsaved dot");
+await page.click('[data-testid="ax-stage-results"]');
+await page.click('[data-testid="ax-save"]');
+await page.waitForSelector('[data-testid="ax-savestate"]:not(.dirty)');
+assert.equal(store.analyses.find((a) => a.name === "Open ends (verbatims)").version, 1, "a rename alone is not a new version");
+ok("unsaved indicator appears on edit (stage bar, rail, tab) and clears on save; a rename does not bump the version");
+// duplicate → a copy opens; rename inline; move; delete
+await page.hover('[data-testid="ax-rail-item"] >> nth=0');
+await page.click('[data-testid="ax-rail-item"] >> nth=0 >> [data-testid="ax-rail-menu"]');
+await page.click('[data-testid="ax-rail-duplicate"]');
+await page.waitForSelector('[data-testid="ax-rail-item"]:has-text("(copy)")');
+assert.equal(store.analyses.length, 5);
+const copy = store.analyses.find((a) => a.name.endsWith("(copy)"));
+const source = store.analyses.find((a) => a.id !== copy.id && `${a.name} (copy)` === copy.name);
+assert.deepEqual({ ...copy.definition, name: 0 }, { ...source.definition, name: 0 }, "the copy carries the definition");
+assert.match(await text('[data-testid="ax-rail-item"].on'), /\(copy\)/);
+ok("Duplicate creates “<name> (copy)” with the same definition and opens it");
+await page.click(`[data-testid="ax-rail-item"][data-id="${copy.id}"] [data-testid="ax-rail-menu"]`);
+await page.click('[data-testid="ax-rail-rename-start"]');
+await page.fill('[data-testid="ax-rail-rename"]', "Satisfaction by gender — copy");
+await page.keyboard.press("Enter");
+await page.waitForSelector('[data-testid="ax-rail-item"]:has-text("Satisfaction by gender — copy")');
+assert.equal(copy.name, "Satisfaction by gender — copy");
+ok("Rename inline from the rail");
+const before = await page.$$eval('[data-testid="ax-rail-item"] .ax-rail-name', (es) => es.map((e) => e.textContent));
+await page.hover('[data-testid="ax-rail-item"] >> nth=0');
+await page.click('[data-testid="ax-rail-item"] >> nth=0 >> [data-testid="ax-rail-down"]');
+await page.waitForFunction((first) => document.querySelector('[data-testid="ax-rail-item"] .ax-rail-name')?.textContent !== first, before[0]);
+const after = await page.$$eval('[data-testid="ax-rail-item"] .ax-rail-name', (es) => es.map((e) => e.textContent));
+assert.equal(after[1], before[0]); assert.equal(after[0], before[1]);
+assert.equal(store.analyses.find((a) => a.name === before[1]).position, 0, "the order is persisted as positions");
+ok("Move down reorders the rail and persists the order");
+await page.click(`[data-testid="ax-rail-item"][data-id="${copy.id}"] [data-testid="ax-rail-menu"]`);
+await page.click('[data-testid="ax-rail-delete"]');
+await page.waitForSelector(`[data-testid="ax-rail-item"][data-id="${copy.id}"]`, { state: "detached" });
+assert.ok(copy.deleted_at);
+ok("Delete removes the analysis (after confirmation)");
+// the crosstab's options: a banner of two column variables, summary rows, a total row, counts under % — read from the professional table
+await page.click('[data-testid="ax-rail-item"]:has-text("Satisfaction by gender")');
+await page.waitForSelector('[data-testid="ax-result"]');
+await page.click('[data-testid="ax-stage-builder"]');
+await page.click('[data-testid="ax-step-1"]');
+await page.click('.ax-var:has-text("REGION · Categorical") input');
+assert.match(await text('[data-testid="ax-drop-columns"]'), /Gender.*Region/);
+await page.click('[data-testid="ax-step-4"]');
+await page.waitForSelector('[data-testid="ax-xt-options"]');
+await page.selectOption('[data-testid="ax-xt-options"] select >> nth=0', "pct_col");
+await page.click('[data-testid="ax-summary-top2"]'); await page.click('[data-testid="ax-summary-mean"]');
+await shot("09-xt-options");
+await page.click('[data-testid="ax-xt-options"] label:has-text("Total row") input');
+await page.click('[data-testid="ax-run"]'); await page.waitForSelector('[data-testid="ax-result"]');
+await page.click('.ax-tab:has-text("Tables")');
+await page.waitForSelector('.ax-pro-groups');
+const groups = await page.$$eval('.ax-pro-groups th.grp:not(.empty)', (es) => es.map((e) => e.textContent));
+assert.deepEqual(groups, ["Gender", "Region"], "one banner with both column variables as header groups");
+const pro = await text('[data-testid="ax-table"]');
+assert.match(pro, /Top 2 box/); assert.match(pro, /Mean/); assert.match(pro, /Base \(n\)/); assert.ok(await page.$('.ax-pro-table tr.k-total'), "the total row is there");
+assert.match(pro, /Male \(a\).*Female \(b\).*\(c\).*\(d\).*\(e\)/, "letters run across the banner");
+await page.check('[data-testid="ax-table-format"] input >> nth=1'); // counts
+await page.waitForSelector('.ax-pro-n');
+ok("crosstab options: banner (Gender | Region) with header groups, Top 2 box and Mean rows, letters a–e, counts under percentages");
+await shot("06-pro-table");
+// nested rows: Region › Satisfaction, with group rows that collapse
+await page.click('[data-testid="ax-stage-builder"]'); await page.click('[data-testid="ax-step-1"]');
+await page.click('.ax-var:has-text("REGION · Categorical") input'); // remove Region from the columns
+await page.click('[data-testid="ax-xt-target-rows"]');
+await page.click('.ax-var:has-text("REGION · Categorical") input'); // …and add it as the second row variable
+assert.match(await text('[data-testid="ax-drop-rows"]'), /Overall satisfaction.*Region/);
+await page.click('[data-testid="ax-step-4"]');
+await page.click('[data-testid="ax-xt-options"] label:has-text("Nest the second") input');
+await page.click('[data-testid="ax-run"]'); await page.waitForSelector('[data-testid="ax-result"]');
+await page.click('.ax-tab:has-text("Tables")');
+await page.waitForSelector('.ax-pro-table tr.k-group');
+const groupsN = await count('.ax-pro-table tr.k-group');
+assert.equal(groupsN, 5, "one group row per satisfaction level");
+const rowsBefore = Number(await page.getAttribute('[data-testid="ax-table"]', "data-rows"));
+await page.click('.ax-pro-table tr.k-group >> nth=0 >> .ax-pro-caret');
+await page.waitForFunction((n) => Number(document.querySelector('[data-testid="ax-table"]').getAttribute("data-rows")) < n, rowsBefore);
+ok(`nested rows: ${groupsN} group rows (Satisfaction › Region); a group collapses from its caret`);
+// leave the analysis: the unsaved guard asks (auto-accepted here), the rail highlight moves
+await page.click('[data-testid="ax-rail-new"]');
+await page.waitForSelector('[data-testid="ax-rail-draft"]');
+assert.equal(await text('[data-testid="ax-savestate"]'), "New analysis");
+ok("New from the rail starts a blank draft (the unsaved guard asked first)");
 
 console.log("\n§6 SEGMENTS");
 await page.click('[data-testid="ax-tab-segments"]');
@@ -534,7 +672,7 @@ const nav = await page.$$eval(".leftnav .nav-item", (es) => es.map((e) => [...e.
  * two most recent additions and belong on the list for the same reason the
  * others do.
  */
-assert.deepEqual(nav.filter((t) => !["Data Analytics", "Fieldwork", "Distribution", "Project", "Tests", "Translation", "Usage & Wallet"].includes(t)), ["Questions", "Survey Settings", "Survey Flow", "Logic", "Variables", "Calculations", "Quotas", "List Fill", "Design Generators", "Branding", "Scripts", "Data", "Versions & Deploy", "JSON", "Collaborators", "Internal notes", "Activity"]);
+assert.deepEqual(nav.filter((t) => !["Data Analytics", "Fieldwork", "Distribution", "Project", "Tests", "Translation", "Usage & Wallet", "Assets"].includes(t)), ["Questions", "Survey Settings", "Survey Flow", "Logic", "Variables", "Calculations", "Quotas", "List Fill", "Design Generators", "Branding", "Scripts", "Data", "Versions & Deploy", "JSON", "Collaborators", "Internal notes", "Activity"]);
 assert.equal(nav.indexOf("Fieldwork"), nav.indexOf("Data Analytics") + 1, "Fieldwork belongs beside Data in Results");
 assert.equal(nav.indexOf("Distribution"), nav.indexOf("Versions & Deploy") - 1, "Distribution belongs beside Versions & Deploy in Management");
 /*

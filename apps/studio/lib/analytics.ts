@@ -34,9 +34,32 @@ const COLUMNS = "id, session_id, respondent_code, respondent_id, status, is_test
 const CHUNK = 1000;
 const MAX_ROWS = 250_000;
 
-interface CacheEntry { at: number; stamp: string; rows: AnalyticsRow[] }
+interface CacheEntry { at: number; stamp: string; rows: AnalyticsRow[]; bytes: number }
 const rowCache = new Map<string, CacheEntry>();
 const TTL_MS = 60_000;
+/*
+ * THE CACHE IS BOUNDED IN BYTES, NOT ENTRIES. Forty entries of a 250 000-row
+ * survey is not "forty entries", it is the process. Each entry is charged its
+ * serialised size (an over-estimate of the heap it holds, which is the safe
+ * direction) and the oldest entries go until the budget fits; a single result
+ * larger than the whole budget is served but never kept.
+ */
+const CACHE_BUDGET_BYTES = 256 * 1024 * 1024;
+let cacheBytes = 0;
+function remember(key: string, entry: Omit<CacheEntry, "bytes">) {
+  let bytes = 0;
+  for (const r of entry.rows) bytes += JSON.stringify(r).length * 2 + 64;
+  const old = rowCache.get(key); if (old) { cacheBytes -= old.bytes; rowCache.delete(key); }
+  if (bytes > CACHE_BUDGET_BYTES) return;
+  while (cacheBytes + bytes > CACHE_BUDGET_BYTES && rowCache.size) {
+    const oldest = [...rowCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+    if (!oldest) break;
+    cacheBytes -= oldest[1].bytes; rowCache.delete(oldest[0]);
+  }
+  rowCache.set(key, { ...entry, bytes }); cacheBytes += bytes;
+}
+/** for tests and diagnostics */
+export function rowCacheStats() { return { entries: rowCache.size, bytes: cacheBytes, budget: CACHE_BUDGET_BYTES }; }
 
 async function dataStamp(db: SupabaseClient, surveyId: string, spec: DatasetSpec): Promise<string> {
   let q = db.from("responses").select("updated_at", { count: "exact", head: false }).eq("survey_id", surveyId).is("deleted_at", null).order("updated_at", { ascending: false }).limit(1);
@@ -76,8 +99,7 @@ export async function loadRows(db: SupabaseClient, surveyId: string, spec: Datas
     rows.push(...chunk);
     if (chunk.length < CHUNK) break;
   }
-  rowCache.set(key, { at: Date.now(), stamp, rows });
-  if (rowCache.size > 40) { const oldest = [...rowCache.entries()].sort((a, b) => a[1].at - b[1].at)[0]; if (oldest) rowCache.delete(oldest[0]); }
+  remember(key, { at: Date.now(), stamp, rows });
   return rows;
 }
 
@@ -130,9 +152,16 @@ export async function variablesPayload(db: SupabaseClient, surveyId: string, ctx
   return { variables, counts: Object.fromEntries(counts), surveyVersion: ctx.version, revision: ctx.revision };
 }
 
-export async function loadTheme(db: SupabaseClient, themeId: string | null | undefined): Promise<ReportTheme> {
+/**
+ * A theme is the survey's own or its workspace's — never another customer's.
+ * The lookup is scoped the way the themes list is, because this runs through
+ * the service role where RLS is not there to catch an id from elsewhere.
+ */
+export async function loadTheme(db: SupabaseClient, themeId: string | null | undefined, scope?: { surveyId: string; customerId: string | null }): Promise<ReportTheme> {
   if (!themeId) return DEFAULT_THEME;
-  const { data } = await db.from("analytics_themes").select("theme, name").eq("id", themeId).is("deleted_at", null).maybeSingle();
+  let q = db.from("analytics_themes").select("theme, name").eq("id", themeId).is("deleted_at", null);
+  if (scope) q = q.or(`survey_id.eq.${scope.surveyId}${scope.customerId ? `,customer_id.eq.${scope.customerId}` : ""}`);
+  const { data } = await q.maybeSingle();
   return data ? ({ ...(data.theme as ReportTheme), name: data.name as string, id: themeId }) : DEFAULT_THEME;
 }
 

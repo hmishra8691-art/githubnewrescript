@@ -12,6 +12,8 @@ import { fmtNum, fmtP, fmtPct, makeResult, opt, pct, round } from "./common.js";
 import { expandBattery } from "./basics.js";
 
 const sigWord = (p: number | null | undefined, alpha = 0.05) => (p == null ? "could not be tested" : p < alpha ? "is statistically significant" : "is not statistically significant");
+/** "…differs significantly from X" / "…does not differ significantly from X" / "…could not be tested against X" — a sentence, not a suffix. */
+const differsFrom = (p: number | null | undefined, alpha = 0.05) => (p == null ? "could not be tested against" : p < alpha ? "differs significantly from" : "does not differ significantly from");
 
 function groupsBy(ds: Dataset, y: string, g: string): { labels: string[]; groups: number[][]; codes: string[]; labelled: { label: string; values: number[] }[] } {
   const cats = categoriesOf(ds, g);
@@ -32,7 +34,7 @@ function testTable(tests: TestResult[]): ResultTable {
 
 const TEST_LABEL: Record<string, string> = {
   chi_square: "Chi-square test of independence", fisher_exact: "Fisher's exact test", t_one_sample: "One-sample t-test", t_independent: "Independent-samples t-test", t_welch: "Welch's t-test", t_paired: "Paired-samples t-test",
-  anova_one_way: "One-way ANOVA", anova_two_way: "Two-way ANOVA", mann_whitney: "Mann-Whitney U", wilcoxon_signed_rank: "Wilcoxon signed-rank", kruskal_wallis: "Kruskal-Wallis H", friedman: "Friedman test",
+  anova_one_way: "One-way ANOVA", anova_two_way: "Two-way ANOVA", mann_whitney: "Mann-Whitney U", wilcoxon: "Wilcoxon signed-rank", wilcoxon_signed_rank: "Wilcoxon signed-rank", kruskal_wallis: "Kruskal-Wallis H", friedman: "Friedman test",
   proportion_one_sample: "One-sample proportion z-test", proportion_two_sample: "Two-sample proportion z-test",
 };
 
@@ -60,7 +62,7 @@ export function statisticalTest(def: AnalysisDefinition, ds: Dataset, totalCases
       const vals = numericColumn(ds, a);
       const r = oneSampleT(vals, mu); tests.push(r);
       const d = describe(vals, weights(ds));
-      insights.push(`The mean of ${labelOf(ds, a)} (${fmtNum(d.mean, 2)}) ${sigWord(r.p, alpha)}ly different from ${mu} (t = ${fmtNum(r.statistic, 2)}, p ${fmtP(r.p)}).`.replace("significantly different", "significantly different").replace("is statistically significantly", "is significantly").replace("is not statistically significantly", "is not significantly"));
+      insights.push(`The mean of ${labelOf(ds, a)} (${fmtNum(d.mean, 2)}) ${differsFrom(r.p, alpha)} ${mu} (t = ${fmtNum(r.statistic, 2)}, p ${fmtP(r.p)}).`);
       chart = { categories: [labelOf(ds, a)], series: [{ name: "Mean", values: [round(d.mean)], ci: [d.ci95 ? [round(d.ci95[0])!, round(d.ci95[1])!] : null] }], kpis: [{ label: "Mean", value: round(d.mean) ?? 0 }, { label: "Test value", value: mu }] };
     } else {
       const target = String(opt(def, "category", categoriesOf(ds, a)[0]?.code ?? ""));
@@ -70,7 +72,7 @@ export function statisticalTest(def: AnalysisDefinition, ds: Dataset, totalCases
       for (const v of col) { if (v == null) continue; n++; if ((Array.isArray(v) ? v : [v]).includes(target)) x++; }
       const r = proportionTest(x, n, undefined, undefined, p0); tests.push(r);
       const ci = proportionCI(x, n);
-      insights.push(`${fmtPct(n ? (x / n) * 100 : 0, 1)} chose “${categoriesOf(ds, a).find((cc) => cc.code === target)?.label ?? target}” — this ${sigWord(r.p, alpha)}ly different from ${fmtPct(p0 * 100)} (z = ${fmtNum(r.statistic, 2)}, p ${fmtP(r.p)}).`.replace("is statistically significantly", "is significantly").replace("is not statistically significantly", "is not significantly"));
+      insights.push(`${fmtPct(n ? (x / n) * 100 : 0, 1)} chose “${categoriesOf(ds, a).find((cc) => cc.code === target)?.label ?? target}” — this ${differsFrom(r.p, alpha)} ${fmtPct(p0 * 100)} (z = ${fmtNum(r.statistic, 2)}, p ${fmtP(r.p)}).`);
       chart = { categories: [labelOf(ds, a)], series: [{ name: "Proportion", values: [pct(n ? (x / n) * 100 : 0)], ci: [ci ? [round(ci[0] * 100, 1)!, round(ci[1] * 100, 1)!] : null] }], valueFormat: "pct" };
     }
   } else if (["t_independent", "t_welch", "anova_one_way", "mann_whitney", "kruskal_wallis"].includes(chosen)) {
@@ -304,8 +306,8 @@ export function factor(def: AnalysisDefinition, ds: Dataset, totalCases: number)
   const fNames = Array.from({ length: k }, (_, i) => `Factor ${i + 1}`);
   const load: ResultTable = { id: "loadings", title: "Rotated factor loadings", columns: [{ key: "v", label: "Variable" }, ...fNames.map((f, j) => ({ key: `f${j}`, label: f, type: "number" as const, decimals: 2 })), { key: "h2", label: "Communality", type: "number", decimals: 2 }],
     rows: r.variables.map((v, i) => ({ v, ...Object.fromEntries(fNames.map((_, j) => [`f${j}`, round(r.loadings[i][j], 2)])), ...Object.fromEntries(fNames.map((_, j) => [`f${j}__sig`, Math.abs(r.loadings[i][j]) >= 0.4 ? "*" : ""])), h2: round(r.communalities[i], 2) })), notes: ["* loading ≥ .40"] };
-  const eig: ResultTable = { id: "eigen", title: "Eigenvalues and variance explained", columns: [{ key: "c", label: "Component" }, { key: "e", label: "Eigenvalue", type: "number", decimals: 3 }, { key: "v", label: "% variance", type: "pct", decimals: 1 }, { key: "cum", label: "Cumulative %", type: "pct", decimals: 1 }], rows: r.eigenvalues.map((e, i) => ({ c: i + 1, e: round(e, 3), v: pct(r.explained[i] * 100), cum: pct(r.cumulative[i] * 100) })) };
-  const insights = [`${k} factor${k === 1 ? "" : "s"} retained, explaining ${fmtPct(r.cumulative[k - 1] * 100, 1)} of the variance. KMO = ${fmtNum(r.kmo, 2)} (${r.kmo == null ? "n/a" : r.kmo >= 0.8 ? "meritorious" : r.kmo >= 0.7 ? "middling" : r.kmo >= 0.6 ? "mediocre" : "poor"} sampling adequacy).`];
+  const eig: ResultTable = { id: "eigen", title: "Eigenvalues and variance explained", columns: [{ key: "c", label: "Component" }, { key: "e", label: "Eigenvalue", type: "number", decimals: 3 }, { key: "v", label: "% variance", type: "pct", decimals: 1 }, { key: "cum", label: "Cumulative %", type: "pct", decimals: 1 }], rows: r.eigenvalues.map((e, i) => ({ c: i + 1, e: round(e, 3), v: pct(r.explained[i]), cum: pct(r.cumulative[i]) })) };
+  const insights = [`${k} factor${k === 1 ? "" : "s"} retained, explaining ${fmtPct(r.cumulative[k - 1], 1)} of the variance. KMO = ${fmtNum(r.kmo, 2)} (${r.kmo == null ? "n/a" : r.kmo >= 0.8 ? "meritorious" : r.kmo >= 0.7 ? "middling" : r.kmo >= 0.6 ? "mediocre" : "poor"} sampling adequacy).`];
   for (let j = 0; j < k; j++) { const top = r.variables.map((v, i) => ({ v, l: r.loadings[i][j] })).filter((x) => Math.abs(x.l) >= 0.4).sort((a, b) => Math.abs(b.l) - Math.abs(a.l)); if (top.length) insights.push(`Factor ${j + 1}: ${top.map((t) => t.v).slice(0, 4).join(", ")}.`); }
   return makeResult(def, ds, {
     tables: [eig, load], chart: { matrix: { rows: r.variables, columns: fNames, values: r.loadings.map((row) => row.map((x) => round(x, 2))) }, categories: r.eigenvalues.map((_, i) => `${i + 1}`), series: [{ name: "Eigenvalue", values: r.eigenvalues.map((e) => round(e, 3)) }] },
@@ -395,7 +397,8 @@ export function segmentation(def: AnalysisDefinition, ds: Dataset, totalCases: n
     if (!meta) continue;
     if (meta.role === "numeric" || meta.role === "scale") {
       const groups = segs.map(({ data }) => numericColumn(data, v).filter((x): x is number => x != null));
-      const means = groups.map((g, i) => describe(g, weights(segs[i].data)));
+      // `describe` drops the missing values itself, so the weights stay aligned with the cases
+      const means = segs.map(({ data }) => describe(numericColumn(data, v), weights(data)));
       const t = groups.filter((g) => g.length > 1).length >= 2 ? (groups.length === 2 ? independentT(groups[0], groups[1]) : oneWayAnova(groups.map((g, i) => ({ label: segs[i].segment.name, values: g })))) : null;
       if (t) { t.note = labelOf(ds, v); tests.push(t); }
       tables.push({ id: `seg_${v}`, title: `${labelOf(ds, v)} — mean by segment`, columns: [{ key: "s", label: "Segment" }, { key: "n", label: "n", type: "count" }, { key: "mean", label: "Mean", type: "number", decimals: 2 }, { key: "sd", label: "SD", type: "number", decimals: 2 }], rows: segs.map(({ segment }, i) => ({ s: segment.name, n: means[i].n, mean: round(means[i].mean), sd: round(means[i].sd) })), notes: t ? [`${TEST_LABEL[t.test] ?? t.test}: p ${fmtP(t.p)}`] : undefined });

@@ -1,5 +1,6 @@
 "use client";
 import React from "react";
+import { Loading } from "@/components/ui/Loading";
 import { useStudio } from "./store";
 import { QualityPanel } from "./QualityPanel";
 import { ResponseManager } from "./ResponseManager";
@@ -179,7 +180,7 @@ export function DataPanel() {
       </p>
 
       {error && <div className="card" style={{ borderColor: "var(--red)", color: "var(--red)" }}>{error}</div>}
-      {rows === null && !error && <p className="muted">Loading…</p>}
+      {rows === null && !error && <Loading label="Loading responses…" rows={4} />}
       {rows?.length === 0 && !error && (
         <p className="muted">
           No {include === "all" ? "" : include} responses yet.{" "}

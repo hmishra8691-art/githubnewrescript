@@ -25,8 +25,14 @@ export function hashDefinition(def: AnalysisDefinition): string {
   return h.toString(16).padStart(8, "0");
 }
 
-export function baseOf(ds: Dataset, total: number, filtered: number, label = "All respondents") {
-  return { total, filtered, n: ds.cases.length, weightedN: round(weightedN(ds), 1) ?? ds.cases.length, label };
+/**
+ * `total` — respondents in the dataset the researcher chose (environment,
+ * status, quality); `filtered` — of those, the ones the analysis's own filter
+ * kept; `n` — of those, the ones the analysis could actually use (answered
+ * the variables it needs), when the runner knows it.
+ */
+export function baseOf(ds: Dataset, total: number, filtered: number, label = "All respondents", validN?: number) {
+  return { total, filtered, n: validN ?? ds.cases.length, weightedN: round(weightedN(ds), 1) ?? ds.cases.length, label };
 }
 
 export function lowBaseWarning(n: number, what = "This analysis"): string | null {
@@ -38,7 +44,7 @@ export function lowBaseWarning(n: number, what = "This analysis"): string | null
 export function makeResult(
   def: AnalysisDefinition,
   ds: Dataset,
-  parts: { tables: ResultTable[]; chart: ChartData; tests?: TestResult[]; insights?: string[]; warnings?: string[]; recommendedCharts: ChartType[]; segments?: AnalysisResult["segments"]; variablesUsed?: string[]; baseLabel?: string; totalCases: number },
+  parts: { tables: ResultTable[]; chart: ChartData; tests?: TestResult[]; insights?: string[]; warnings?: string[]; recommendedCharts: ChartType[]; segments?: AnalysisResult["segments"]; variablesUsed?: string[]; baseLabel?: string; totalCases: number; validN?: number },
 ): AnalysisResult {
   const warnings = [...(parts.warnings ?? [])];
   const lb = lowBaseWarning(ds.cases.length);
@@ -46,7 +52,7 @@ export function makeResult(
   if (ds.weighted && ds.weightInfo && ds.weightInfo.efficiency < 70) warnings.push(`Weighting efficiency is ${ds.weightInfo.efficiency.toFixed(0)}% (design effect ${ds.weightInfo.designEffect.toFixed(2)}) — effective sample size is reduced.`);
   return {
     kind: def.kind, name: def.name,
-    base: baseOf(ds, parts.totalCases, ds.cases.length, parts.baseLabel),
+    base: baseOf(ds, parts.totalCases, ds.cases.length, parts.baseLabel, parts.validN),
     tables: parts.tables, chart: parts.chart, tests: parts.tests ?? [], insights: parts.insights ?? [], warnings,
     recommendedCharts: parts.recommendedCharts, segments: parts.segments,
     computedAt: new Date().toISOString(), definitionHash: hashDefinition(def), variablesUsed: parts.variablesUsed ?? def.variables,

@@ -1,5 +1,6 @@
 "use client";
 import React from "react";
+import { Loading } from "@/components/ui/Loading";
 import { questionTypeRegistry } from "@rescript/schema";
 import type { Quota } from "@rescript/schema";
 import {
@@ -662,7 +663,7 @@ function QuotaDetail({ row, env, onClose, onLogic }: { row: QuotaRow | undefined
           </tbody>
         </table>
         <h4 style={{ margin: "12px 0 6px" }}>Change history</h4>
-        {history == null ? <div className="muted">Loading…</div> : history.length === 0 ? <div className="muted" style={{ fontSize: 13 }}>No recorded changes yet (changes made from this dashboard are recorded with who, when, before and after).</div> : (
+        {history == null ? <Loading label="Loading history…" rows={2} /> : history.length === 0 ? <div className="muted" style={{ fontSize: 13 }}>No recorded changes yet (changes made from this dashboard are recorded with who, when, before and after).</div> : (
           <ul className="qd-history" data-testid="quota-history">
             {history.map((h) => (
               <li key={String(h.id)}><span className="muted mono">{new Date(h.createdAt).toLocaleString()}</span> — {h.text}

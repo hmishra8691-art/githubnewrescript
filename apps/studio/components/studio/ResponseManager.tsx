@@ -1,5 +1,6 @@
 "use client";
 import React from "react";
+import { Loading } from "@/components/ui/Loading";
 import type { Condition, Question, SurveyDefinition } from "@rescript/schema";
 import { stripHtmlText } from "@rescript/engine";
 import { useStudio } from "./store";
@@ -601,7 +602,7 @@ function ResponseEditor({ surveyDbId, def, responseId, onClose, onSaved }: {
   return (
     <div className="modal-back" onClick={onClose}>
       <div className="modal rm-editor" role="dialog" aria-modal="true" data-testid="rm-editor" onClick={(e) => e.stopPropagation()}>
-        {!rec ? <p className="muted">Loading…</p> : (
+        {!rec ? <Loading label="Loading response…" /> : (
           <>
             <div className="row" style={{ alignItems: "center", gap: 10 }}>
               <h2 style={{ fontSize: 15, margin: 0 }}>

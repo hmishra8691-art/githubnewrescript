@@ -1,5 +1,6 @@
 "use client";
 import React from "react";
+import { Loading } from "@/components/ui/Loading";
 import { CATEGORY_LABELS } from "@rescript/quality";
 import { useStudio } from "./store";
 
@@ -346,7 +347,7 @@ export function ReviewDrawer({ sessionId, onClose, onChanged }: { sessionId: str
   return (
     <div className="modal-back" onClick={onClose}>
       <div className="modal" role="dialog" aria-modal="true" data-testid="review-drawer" style={{ width: 860 }} onClick={(e) => e.stopPropagation()}>
-        {!d ? <p className="muted">Loading…</p> : (
+        {!d ? <Loading label="Loading quality assessment…" /> : (
           <>
             <div className="row" style={{ alignItems: "center", gap: 10 }}>
               <h2 style={{ fontSize: 15, margin: 0 }}>Respondent <span className="mono">{d.sessionId.slice(0, 12)}</span></h2>

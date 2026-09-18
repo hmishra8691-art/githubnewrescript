@@ -2,6 +2,7 @@
 import React from "react";
 import type { AnalysisResult, ChartSpec, ChartType, ReportTheme, ChartData, TreeNode } from "@rescript/analytics";
 import { DEFAULT_THEME, seriesForChart } from "@rescript/analytics";
+import { ProTable } from "../ProTable";
 
 /**
  * THE CHART LIBRARY — one SVG renderer for every chart family (§8, §10, §15).
@@ -46,6 +47,9 @@ export function Chart(props: ChartProps) {
   const W = props.width ?? o.width ?? 720, H = props.height ?? o.height ?? (props.compact ? 240 : 380);
   const [hover, setHover] = React.useState<string | null>(null);
   const [hidden, setHidden] = React.useState<Set<string>>(new Set());
+  // the tooltip follows the pointer (kept inside the chart's own box)
+  const [pos, setPos] = React.useState<{ x: number; y: number } | null>(null);
+  const boxRef = React.useRef<HTMLDivElement | null>(null);
   const series = React.useMemo(() => seriesForChart(props.result, spec), [props.result, spec]);
   const shown = series.filter((s) => !hidden.has(s.name));
   const ctx: Ctx = {
@@ -84,7 +88,8 @@ export function Chart(props: ChartProps) {
 
   const base = props.result.base;
   return (
-    <div className="ax-chart" style={{ position: "relative", fontFamily: ctx.font, background: o.background ?? theme.colors.background, borderRadius: 8 }} data-testid="ax-chart" data-chart-type={t}>
+    <div className="ax-chart" ref={boxRef} style={{ position: "relative", fontFamily: ctx.font, background: o.background ?? theme.colors.background, borderRadius: 8 }} data-testid="ax-chart" data-chart-type={t}
+      onMouseMove={(e) => { const b = boxRef.current?.getBoundingClientRect(); if (b) setPos({ x: e.clientX - b.left, y: e.clientY - b.top }); }} onMouseLeave={() => setPos(null)}>
       <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: "block", maxWidth: "100%" }} role="img" aria-label={title ?? props.result.name}>
         {title && <text x={0} y={16} fontSize={ctx.fs + 3} fontWeight={700} fill={ctx.textColor} fontFamily={ctx.font}>{title}</text>}
         {o.subtitle && <text x={0} y={title ? 34 : 16} fontSize={ctx.fs - 1} fill={ctx.subtle} fontFamily={ctx.font}>{o.subtitle}</text>}
@@ -98,7 +103,7 @@ export function Chart(props: ChartProps) {
           </text>
         )}
       </svg>
-      {hover && <div className="ax-tip" style={{ position: "absolute", left: 8, top: 8, pointerEvents: "none" }}>{hover}</div>}
+      {hover && <div className="ax-tip" style={{ position: "absolute", left: pos ? Math.min(pos.x + 14, Math.max(8, (boxRef.current?.clientWidth ?? 400) - 220)) : 8, top: pos ? Math.max(4, pos.y - 34) : 8, pointerEvents: "none" }}>{hover}</div>}
     </div>
   );
 }
@@ -617,21 +622,11 @@ function ParallelChart({ ctx, inner, series }: { ctx: Ctx; inner: { x: number; y
   return <g fontFamily={ctx.font} fontSize={ctx.fs - 3}>{axes.map((a, i) => <g key={a}><line x1={X(i)} x2={X(i)} y1={py} y2={py + ph} stroke={ctx.grid} /><text x={X(i)} y={py + ph + 16} textAnchor="middle" fill={ctx.textColor}>{trunc(a, 14)}</text><text x={X(i)} y={py - 6} textAnchor="middle" fill={ctx.subtle}>{fmt(maxs[i], 1)}</text></g>)}{series.map((s, j) => <polyline key={s.name} points={s.values.map((v, i) => `${X(i)},${Y(i, v ?? 0)}`).join(" ")} fill="none" stroke={ctx.colors[j % ctx.colors.length]} strokeWidth={2} />)}</g>;
 }
 
-/* ------------------------------------------------------------ table view (shared by chart fallback and Table Builder) */
+/* ------------------------------------------------------------ table view (shared by chart fallback, reports and the share view) */
 export function ResultTableView({ table, dense, maxRows }: { table?: AnalysisResult["tables"][number]; dense?: boolean; maxRows?: number }) {
   if (!table) return <div className="muted">No table.</div>;
-  const rows = maxRows ? table.rows.slice(0, maxRows) : table.rows;
-  return (
-    <div className="ax-table-wrap">
-      <table className={`ax-table ${dense ? "dense" : ""}`} data-testid="ax-table">
-        <thead><tr>{table.columns.map((c) => <th key={c.key} className={c.type && c.type !== "text" ? "num" : ""}>{c.label}</th>)}</tr></thead>
-        <tbody>
-          {rows.map((r, i) => <tr key={i}>{table.columns.map((c) => { const v = r[c.key]; const sig = r[`${c.key}__sig`]; const n = r[`${c.key}__n`]; const ct = (r.__format as string | undefined) ?? c.type; return <td key={c.key} className={typeof v === "number" ? "num" : ""} title={typeof n === "number" ? `n = ${n}` : undefined}>{v == null ? "" : typeof v === "number" ? (ct === "pct" ? `${v.toFixed(c.decimals ?? 1)}%` : ct === "count" ? Math.round(v).toLocaleString() : v.toLocaleString("en-US", { maximumFractionDigits: c.decimals ?? 2 })) : String(v)}{sig ? <sup className="ax-sig">{String(sig)}</sup> : null}</td>; })}</tr>)}
-        </tbody>
-      </table>
-      {(table.base || table.notes?.length) && <div className="ax-table-notes">{table.base ? `Base: n = ${table.base.n}${table.base.weightedN != null && table.base.weightedN !== table.base.n ? ` · weighted n = ${table.base.weightedN}` : ""}${table.base.label ? ` · ${table.base.label}` : ""}` : ""}{table.notes?.map((n, i) => <div key={i}>{n}</div>)}</div>}
-    </div>
-  );
+  const t = maxRows && table.rows.length > maxRows ? { ...table, rows: table.rows.slice(0, maxRows) } : table;
+  return <ProTable table={t} formatting={{ dense }} />;
 }
 
 export default Chart;
