@@ -72,7 +72,18 @@ export async function buildXlsx(input: XlsxInput): Promise<Buffer> {
   const used = new Set<string>();
   const nameFor = (key: string, fallback: string) => safeSheetName(x.sheetNames?.[key] ?? fallback, used);
   const font = (x.fontFamily ?? theme.fontFamily).split(",")[0].trim();
-  const results = input.report.blocks.flatMap((b) => ("analysisId" in b && b.analysisId && input.results[b.analysisId] ? [{ id: b.analysisId, title: ("title" in b && b.title) || input.results[b.analysisId].name, result: input.results[b.analysisId], block: b }] : [])).filter((x, i, a) => a.findIndex((y) => y.id === x.id) === i);
+  /*
+   * §37 — a `panel_grid` has no single `analysisId` (one per panel), so its
+   * panels are flattened in here too: a workbook has no notion of "several
+   * analyses on one page", but every analysis referenced by the deck still
+   * gets its own sheet rather than silently disappearing from the export
+   * that isn't PowerPoint.
+   */
+  const results = input.report.blocks.flatMap((b) =>
+    b.type === "panel_grid"
+      ? b.panels.filter((pnl) => pnl.analysisId && input.results[pnl.analysisId]).map((pnl) => ({ id: pnl.analysisId, title: pnl.title || input.results[pnl.analysisId].name, result: input.results[pnl.analysisId], block: b as ReportDefinition["blocks"][number] }))
+      : ("analysisId" in b && b.analysisId && input.results[b.analysisId] ? [{ id: b.analysisId, title: ("title" in b && b.title) || input.results[b.analysisId].name, result: input.results[b.analysisId], block: b }] : []),
+  ).filter((x, i, a) => a.findIndex((y) => y.id === x.id) === i);
 
   // Summary
   const summary = wb.addWorksheet(nameFor("summary", "Summary"));
@@ -116,17 +127,19 @@ export async function buildXlsx(input: XlsxInput): Promise<Buffer> {
   if (settings.include.charts) {
     const cs = wb.addWorksheet(nameFor("charts", "Chart data"));
     let row = 1;
-    for (const b of input.report.blocks) {
-      if (b.type !== "chart" || !input.results[b.analysisId]) continue;
-      const res = input.results[b.analysisId];
-      const spec: ChartSpec = b.chart;
+    /** one chart-data table, wherever it appears in a "chart" block or in a panel_grid panel */
+    const writeChartData = (title: string, res: AnalysisResult, spec: ChartSpec) => {
       const series = seriesForChart(res, spec);
-      if (!series.length) continue;
-      cs.getCell(row, 1).value = b.title ?? spec.options.title ?? res.name; cs.getCell(row, 1).font = { bold: true, size: 12, color: { argb: argb(theme.colors.primary) } }; row++;
+      if (!series.length) return;
+      cs.getCell(row, 1).value = title; cs.getCell(row, 1).font = { bold: true, size: 12, color: { argb: argb(theme.colors.primary) } }; row++;
       cs.getCell(row, 1).value = `Chart type: ${spec.type} · base n = ${res.base.n}`; cs.getCell(row, 1).font = { size: 9, color: { argb: "FF64748B" } }; row++;
       const hr = cs.getRow(row); hr.getCell(1).value = "Category"; series.forEach((s, i) => { hr.getCell(i + 2).value = s.name; }); hr.font = { bold: true }; row++;
       series[0].labels.forEach((lab, li) => { cs.getCell(row, 1).value = lab; series.forEach((s, si) => { const c = cs.getCell(row, si + 2); c.value = s.meta?.pct && s.values[li] != null ? s.values[li]! / 100 : s.values[li]; if (s.meta?.pct) c.numFmt = x.percentFormat ?? "0.0%"; }); row++; });
       row++;
+    };
+    for (const b of input.report.blocks) {
+      if (b.type === "chart" && input.results[b.analysisId]) writeChartData(b.title ?? b.chart.options.title ?? input.results[b.analysisId].name, input.results[b.analysisId], b.chart);
+      else if (b.type === "panel_grid") for (const pnl of b.panels) if (pnl.chart && pnl.analysisId && input.results[pnl.analysisId]) writeChartData(pnl.title ?? input.results[pnl.analysisId].name, input.results[pnl.analysisId], pnl.chart);
     }
     cs.columns = [{ width: 34 }, ...Array.from({ length: 10 }, () => ({ width: 16 }))];
   }

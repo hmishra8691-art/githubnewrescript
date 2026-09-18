@@ -103,7 +103,7 @@ function BlockEditor({ block, analyses, onChange, onClose }: { block: ReportBloc
   return (
     <div className="modal-back" onClick={onClose}><div className="modal" onClick={(e) => e.stopPropagation()}>
       <h2>Edit {b.type.replace("_", " ")}</h2>
-      {"title" in b || ["chart", "table", "kpi", "text", "section", "cover", "insights", "executive_summary", "methodology"].includes(b.type) ? <label className="ax-field"><span>Title</span><input className="input" value={(b.title as string) ?? ""} onChange={(e) => set({ title: e.target.value })} /></label> : null}
+      {"title" in b || ["chart", "table", "kpi", "text", "section", "cover", "insights", "executive_summary", "methodology", "panel_grid"].includes(b.type) ? <label className="ax-field"><span>Title</span><input className="input" value={(b.title as string) ?? ""} onChange={(e) => set({ title: e.target.value })} /></label> : null}
       {(b.type === "cover" || b.type === "section") && <label className="ax-field"><span>Subtitle</span><input className="input" value={(b.subtitle as string) ?? ""} onChange={(e) => set({ subtitle: e.target.value })} /></label>}
       {b.type === "cover" && <label className="ax-field"><span>Author</span><input className="input" value={(b.author as string) ?? ""} onChange={(e) => set({ author: e.target.value })} /></label>}
       {b.type === "text" && <label className="ax-field"><span>Text (markdown: #, **bold**, - lists)</span><textarea className="ta" rows={6} value={(b.markdown as string) ?? (b.text as string) ?? ""} onChange={(e) => set(b.markdown !== undefined || !("text" in b) ? { markdown: e.target.value } : { text: e.target.value })} /></label>}
@@ -112,6 +112,40 @@ function BlockEditor({ block, analyses, onChange, onClose }: { block: ReportBloc
       {(b.type === "chart" || b.type === "table") && <label className="ax-field"><span>Caption</span><input className="input" value={(b.caption as string) ?? ""} onChange={(e) => set({ caption: e.target.value })} /></label>}
       {(b.type === "insights" || b.type === "executive_summary") && <div className="ax-field"><span>Analyses</span><div className="ax-chips">{analyses.map((a) => { const ids = (b.analysisIds as string[]) ?? []; const on = ids.includes(a.id); return <button key={a.id} type="button" className={`ax-chip ${on ? "on" : ""}`} onClick={() => set({ analysisIds: on ? ids.filter((x) => x !== a.id) : [...ids, a.id] })}>{a.name}</button>; })}</div></div>}
       {b.type === "executive_summary" && <label className="ax-field"><span>Introduction</span><textarea className="ta" rows={3} value={(b.text as string) ?? ""} onChange={(e) => set({ text: e.target.value })} /></label>}
+      {/*
+        * §37 — a panel grid: a headline sentence, then several analyses
+        * side by side. Each panel is the same {analysis, chart or table}
+        * shape a lone chart/table block already has, so a funnel next to
+        * its sources — or eight small trend lines in a row — is built from
+        * pieces this editor already knows how to offer, just one per panel.
+        */}
+      {b.type === "panel_grid" && <>
+        <label className="ax-field"><span>Headline (the one-line takeaway shown above the panels)</span><textarea className="ta" rows={2} placeholder="e.g. Strong loyalty signals this brand's potential." value={(b.headline as string) ?? ""} onChange={(e) => set({ headline: e.target.value })} /></label>
+        <label className="ax-field"><span>Columns</span><input className="input small" type="number" min={1} max={6} value={(b.columns as number) ?? ""} onChange={(e) => set({ columns: e.target.value ? Number(e.target.value) : undefined })} placeholder="auto" /></label>
+        <div className="ax-field">
+          <span>Panels</span>
+          {(((b.panels as { id: string; analysisId: string; title?: string; caption?: string; chart?: ChartSpec }[]) ?? [])).map((pnl, i) => {
+            const panels = (b.panels as typeof pnl[]) ?? [];
+            const setPanel = (patch: Record<string, unknown>) => { const next = [...panels]; next[i] = { ...next[i], ...patch }; set({ panels: next }); };
+            return (
+              <div key={pnl.id} className="row ax-panel-row" style={{ gap: 4, marginBottom: 4, flexWrap: "wrap" }}>
+                <input className="input small" style={{ maxWidth: 150 }} placeholder="Panel title" value={pnl.title ?? ""} onChange={(e) => setPanel({ title: e.target.value })} />
+                <select className="select small" value={pnl.analysisId} onChange={(e) => setPanel({ analysisId: e.target.value })} data-testid="ax-panel-analysis">
+                  <option value="">— pick an analysis —</option>
+                  {analyses.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.kind})</option>)}
+                </select>
+                <select className="select small" data-testid="ax-panel-chart" value={pnl.chart?.type ?? ""} onChange={(e) => setPanel({ chart: e.target.value ? { ...(pnl.chart ?? { options: {} }), type: e.target.value } : undefined })}>
+                  <option value="">Table</option>
+                  {chartTypes.map((c) => <option key={c.type} value={c.type}>{c.label}</option>)}
+                </select>
+                <button type="button" className="btn small ghost" onClick={() => set({ panels: panels.filter((_, j) => j !== i) })} title="Remove panel">×</button>
+              </div>
+            );
+          })}
+          <button type="button" className="btn small" data-testid="ax-panel-add" onClick={() => set({ panels: [...((b.panels as unknown[]) ?? []), { id: `pnl_${Math.random().toString(36).slice(2, 10)}`, analysisId: "", title: "" }] })}>+ panel</button>
+          {!((b.panels as unknown[]) ?? []).length && <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>No panels yet — add one and pick an analysis for it.</div>}
+        </div>
+      </>}
       {/*
         * §36 — the methodology, in the team's own words.
         *
@@ -267,12 +301,16 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
   const publish = async () => { if (!open) return; if (dirty) await save(); try { const r = await api.publish(open.id, prompt("Version note (optional)") ?? undefined); setMsg(`Published version ${r.version}. Share links pinned to older versions keep showing those; unpinned links now show v${r.version}.`); const v = await api.versions("reports", open.id); setVersions(v.versions); setOpen({ ...open, published_version: r.version }); onChange(); } catch (e) { setError((e as Error).message); } };
   const create = async () => { if (!newName.trim() || !creating) return; try { const r = await api.create("reports", { name: newName.trim(), kind: creating, mode: "live" }); setCreating(null); setNewName(""); onChange(); await openReport(r.item); } catch (e) { setError((e as Error).message); } };
 
+  /** every analysisId a block or widget touches — one per panel for a panel_grid — so `ensure` can fetch results for all of them. */
+  const idsOf = (b: ReportBlock | DashboardWidget): (string | undefined)[] =>
+    "panels" in b ? b.panels.map((pnl) => pnl.analysisId) : "analysisId" in b ? [b.analysisId] : "analysisIds" in b ? b.analysisIds : [];
+
   const addBlock = (type: ReportBlock["type"]) => {
     if (!def || isDash) return;
     const first = analyses[0]?.id ?? "", firstName = analyses[0]?.name;
-    const b: ReportBlock = type === "cover" ? { id: uid(), type, title: (def as ReportDefinition).title } : type === "section" ? { id: uid(), type, title: "New section" } : type === "text" ? { id: uid(), type, markdown: "Write here…" } : type === "page_break" ? { id: uid(), type } : type === "methodology" ? { id: uid(), type, title: "Methodology", includeStandardNotes: true, items: [] } : type === "chart" ? { id: uid(), type, title: firstName, analysisId: first, chart: { type: (analyses[0]?.kind === "nps" ? "gauge" : "bar_vertical"), options: {} } } : type === "table" ? { id: uid(), type, title: firstName, analysisId: first } : type === "kpi" ? { id: uid(), type, title: firstName, analysisId: first } : type === "insights" ? { id: uid(), type, analysisIds: analyses.slice(0, 3).map((a) => a.id) } : { id: uid(), type: "executive_summary", analysisIds: analyses.slice(0, 5).map((a) => a.id) };
+    const b: ReportBlock = type === "cover" ? { id: uid(), type, title: (def as ReportDefinition).title } : type === "section" ? { id: uid(), type, title: "New section" } : type === "text" ? { id: uid(), type, markdown: "Write here…" } : type === "page_break" ? { id: uid(), type } : type === "methodology" ? { id: uid(), type, title: "Methodology", includeStandardNotes: true, items: [] } : type === "chart" ? { id: uid(), type, title: firstName, analysisId: first, chart: { type: (analyses[0]?.kind === "nps" ? "gauge" : "bar_vertical"), options: {} } } : type === "table" ? { id: uid(), type, title: firstName, analysisId: first } : type === "kpi" ? { id: uid(), type, title: firstName, analysisId: first } : type === "insights" ? { id: uid(), type, analysisIds: analyses.slice(0, 3).map((a) => a.id) } : type === "panel_grid" ? { id: uid(), type, title: "Panel grid", headline: "", panels: [{ id: uid(), analysisId: first, title: firstName }, { id: uid(), analysisId: first, title: firstName }] } : { id: uid(), type: "executive_summary", analysisIds: analyses.slice(0, 5).map((a) => a.id) };
     setDef({ ...(def as ReportDefinition), blocks: [...(def as ReportDefinition).blocks, b] }); setDirty(true); setEditing(b.id);
-    void ensure("analysisId" in b ? [b.analysisId] : "analysisIds" in b ? b.analysisIds : []);
+    void ensure(idsOf(b));
   };
   const addWidget = (type: DashboardWidget["type"]) => {
     if (!def || !isDash) return;
@@ -328,7 +366,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
           <div className="flabel">Add {isDash ? "widget" : "block"}</div>
           <div className="ax-addlist">{isDash
             ? (["kpi", "chart", "table", "text", "filter"] as DashboardWidget["type"][]).map((t) => <button key={t} className="btn small" onClick={() => addWidget(t)} disabled={t !== "text" && t !== "filter" && !analyses.length}>{t}</button>)
-            : (["cover", "executive_summary", "section", "chart", "table", "kpi", "insights", "text", "methodology", "page_break"] as ReportBlock["type"][]).map((t) => <button key={t} className="btn small" onClick={() => addBlock(t)} disabled={["chart", "table", "kpi", "insights", "executive_summary"].includes(t) && !analyses.length} data-testid={`ax-add-${t}`}>{t === "page_break" ? "page break" : t.replace("_", " ")}</button>)}</div>
+            : (["cover", "executive_summary", "section", "chart", "table", "kpi", "panel_grid", "insights", "text", "methodology", "page_break"] as ReportBlock["type"][]).map((t) => <button key={t} className="btn small" onClick={() => addBlock(t)} disabled={["chart", "table", "kpi", "panel_grid", "insights", "executive_summary"].includes(t) && !analyses.length} data-testid={`ax-add-${t}`}>{t === "page_break" ? "page break" : t.replace("_", " ")}</button>)}</div>
           {!analyses.length && <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>Save an analysis first to add charts, tables and KPIs.</div>}
           <div className="flabel" style={{ marginTop: 12 }}>Order (drag to reorder)</div>
           <ol className="ax-order">{items_.map((b) => <li key={b.id} draggable onDragStart={() => { dragId.current = b.id; }} onDragOver={(e) => e.preventDefault()} onDrop={() => onDrop(b.id)} className={editing === b.id ? "on" : ""} onClick={() => setEditing(b.id)} data-testid="ax-order-item"><span className="ax-order-type">{b.type.replace("_", " ")}</span> {("title" in b && b.title) || ("analysisId" in b && b.analysisId ? analyses.find((a) => a.id === b.analysisId)?.name : "") || ""}</li>)}</ol>
@@ -393,7 +431,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
           {def && <ReportView title={rd.title ?? open.name} subtitle={rd.subtitle} blocks={isDash ? undefined : rd.blocks} widgets={isDash ? dd.widgets : undefined} crossFilter={isDash ? dd.crossFilter !== false : false} results={results} theme={theme} mode={shownVersion ? "snapshot" : "live"} version={shownVersion} publishedAt={shownVersion ? versions.find((v) => v.version === shownVersion)?.published_at : undefined} branding={rd.branding} viewerSegments={rd.viewerSegments} onBlockAction={viewVersion ? undefined : onBlockAction} />}
         </div>
       </div>
-      {editing && items_.find((b) => b.id === editing) && <BlockEditor block={items_.find((b) => b.id === editing)!} analyses={analyses} onChange={(nb) => { setItems(items_.map((b) => (b.id === nb.id ? nb : b))); void ensure([(nb as { analysisId?: string }).analysisId, ...(((nb as { analysisIds?: string[] }).analysisIds) ?? [])]); }} onClose={() => setEditing(null)} />}
+      {editing && items_.find((b) => b.id === editing) && <BlockEditor block={items_.find((b) => b.id === editing)!} analyses={analyses} onChange={(nb) => { setItems(items_.map((b) => (b.id === nb.id ? nb : b))); void ensure(idsOf(nb)); }} onClose={() => setEditing(null)} />}
       {templatesOpen && (
         <div className="modal-back" onClick={() => setTemplatesOpen(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()} data-testid="ax-template-dialog">

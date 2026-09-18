@@ -213,7 +213,12 @@ async function computeReport(
   extraFilterIds: string[] = [],
 ) {
   const ids = new Set<string>();
-  for (const b of (report as ReportDefinition).blocks ?? []) { if ("analysisId" in b && b.analysisId) ids.add(b.analysisId); if ("analysisIds" in b) for (const id of b.analysisIds) ids.add(id); }
+  for (const b of (report as ReportDefinition).blocks ?? []) {
+    if ("analysisId" in b && b.analysisId) ids.add(b.analysisId);
+    if ("analysisIds" in b) for (const id of b.analysisIds) ids.add(id);
+    // §37 — a panel_grid has no analysisId of its own; every one of its panels does.
+    if (b.type === "panel_grid") for (const pnl of b.panels) if (pnl.analysisId) ids.add(pnl.analysisId);
+  }
   for (const w of (report as { widgets?: { analysisId?: string }[] }).widgets ?? []) if (w.analysisId) ids.add(w.analysisId);
   if (!ids.size) return {};
   const reportFilter = (report as ReportDefinition).filterId;
@@ -408,6 +413,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
           if (b.type === "insights" || b.type === "executive_summary") {
             const { analysisIds, ...rest } = b as Record<string, unknown>;
             return { ...rest, placeholder: (b as { title?: string }).title ?? b.type } as never;
+          }
+          /*
+           * §37 — a panel grid's panels are the one other place a real
+           * analysis id lives. Stripped the same way, per panel, so saving a
+           * tracker snapshot's shape never hands the next survey a pointer
+           * into this one's analyses.
+           */
+          if (b.type === "panel_grid") {
+            return { ...b, panels: b.panels.map((pnl) => ({ ...pnl, analysisId: "" })) } as never;
           }
           return b as never;
         }),

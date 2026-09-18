@@ -13,7 +13,7 @@ const PptxCtor = (((PptxModule as unknown as { default?: unknown }).default ?? P
 type Pres = InstanceType<PptxCtorType>;
 type Slide = ReturnType<Pres["addSlide"]>;
 type ChartName = Extract<Parameters<Slide["addChart"]>[0], string>;
-import type { AnalysisResult, ChartSpec, ChartType, ExportSettings, ReportDefinition, ReportTheme, ResultTable } from "../types.js";
+import type { AnalysisResult, ChartSpec, ChartType, ExportSettings, ReportBlock, ReportDefinition, ReportTheme, ResultTable } from "../types.js";
 import { DEFAULT_EXPORT_SETTINGS, DEFAULT_THEME } from "../types.js";
 import { executiveSummary } from "../summary.js";
 import { chartTitleFor, seriesForChart } from "./shared.js";
@@ -54,7 +54,7 @@ function pptChartType(p: Pres, type: ChartType): { type: ChartName; opts: Record
   }
 }
 
-function addTable(slide: Slide, table: ResultTable, theme: ReportTheme, y: number, maxRows = 14, fontSize = 9): number {
+function addTable(slide: Slide, table: ResultTable, theme: ReportTheme, box: { x: number; y: number; w: number }, maxRows = 14, fontSize = 9): number {
   const cols = table.columns;
   const head = cols.map((c) => ({ text: c.label, options: { bold: true, color: "FFFFFF", fill: { color: hex(theme.colors.primary) }, fontSize, align: "center" as const } }));
   const body = table.rows.slice(0, maxRows).map((r, i) => cols.map((c) => {
@@ -65,9 +65,110 @@ function addTable(slide: Slide, table: ResultTable, theme: ReportTheme, y: numbe
     return { text: sig ? `${text} ${sig}` : text, options: { fontSize, align: (typeof v === "number" ? "right" : "left") as "left" | "right", fill: { color: i % 2 ? "F5F7FA" : "FFFFFF" }, color: hex(theme.colors.text) } };
   }));
   const rowsAll = [head, ...body];
-  const h = Math.min(0.32 * rowsAll.length, 4.6);
-  slide.addTable(rowsAll as never, { x: 0.5, y, w: 9, h, colW: cols.map((_, i) => (i === 0 ? 9 * 0.3 : (9 * 0.7) / Math.max(1, cols.length - 1))), border: { type: "solid", pt: 0.5, color: "D9DEE6" }, fontFace: theme.fontFamily.split(",")[0].trim() });
-  return y + h + 0.15;
+  const h = Math.min((fontSize / 9) * 0.32 * rowsAll.length, 4.6);
+  slide.addTable(rowsAll as never, { x: box.x, y: box.y, w: box.w, h, colW: cols.map((_, i) => (i === 0 ? box.w * 0.3 : (box.w * 0.7) / Math.max(1, cols.length - 1))), border: { type: "solid", pt: 0.5, color: "D9DEE6" }, fontFace: theme.fontFamily.split(",")[0].trim() });
+  return box.y + h + 0.15;
+}
+
+/**
+ * Draw one analysis as a chart or table inside an arbitrary box (§37).
+ *
+ * This is the same decision the "chart" block has always made — a table
+ * when the spec says table, or the data is empty, or the chart type is
+ * inherently a table (heatmap, word cloud, …) — factored out so a panel in a
+ * `panel_grid` gets exactly the same drawing logic as a full-slide chart
+ * block, just inside a smaller box. `tableBox` defaults to the full-width
+ * table geometry the export has always used, so an existing "chart" block
+ * that happens to fall back to a table renders pixel-identical to before.
+ */
+function drawAnalysisVisual(
+  p: Pres, s: Slide, result: AnalysisResult, spec: ChartSpec, theme: ReportTheme,
+  box: { x: number; y: number; w: number; h: number },
+  ctx: { font: string; text: string; subtle: string; primary: string; palette: string[] },
+  opts: { tableBox?: { x: number; w: number }; fontSize?: number; maxRows?: number } = {},
+): void {
+  const data = seriesForChart(result, spec);
+  const isTable = spec.type === "table" || !data.length || ["heatmap", "heatmap_crosstab", "heatmap_correlation", "correlation_matrix", "word_cloud", "treemap", "sunburst", "dendrogram", "network", "sankey", "kpi_card", "gauge", "scorecard", "table"].includes(spec.type);
+  if (isTable) {
+    const table = result.tables[0];
+    const tb = opts.tableBox ?? { x: 0.5, w: 9 };
+    if (table) addTable(s, table, theme, { x: tb.x, y: box.y, w: tb.w }, opts.maxRows ?? 14, opts.fontSize ?? 9);
+    return;
+  }
+  const { type, opts: chartOpts } = pptChartType(p, spec.type);
+  const pctAxis = data[0]?.meta?.pct;
+  const isScatter = type === p.ChartType.scatter;
+  const chartData = isScatter && result.chart.points?.length
+    ? [{ name: "X", values: result.chart.points.map((pt) => pt.x) }, { name: spec.options.yLabel ?? "Y", values: result.chart.points.map((pt) => pt.y) }]
+    : data.map((d) => ({ name: d.name, labels: d.labels, values: d.values.map((v) => v ?? 0) }));
+  const fs = opts.fontSize ?? 9;
+  s.addChart(type, chartData as never, {
+    x: box.x, y: box.y, w: box.w, h: box.h, ...chartOpts,
+    chartColors: spec.options.colors?.map(hex) ?? ctx.palette,
+    showValue: spec.options.dataLabels ?? theme.chart?.dataLabels ?? true,
+    dataLabelFormatCode: pctAxis ? '0.0"%"' : `0${(spec.options.decimals ?? theme.chart?.decimals ?? 0) > 0 ? "." + "0".repeat(spec.options.decimals ?? theme.chart?.decimals ?? 1) : ""}`,
+    dataLabelFontSize: fs, dataLabelColor: ctx.text, dataLabelFontFace: ctx.font,
+    showLegend: (spec.options.legend ?? (data.length > 1 ? "bottom" : "none")) !== "none", legendPos: (spec.options.legend === "right" ? "r" : spec.options.legend === "top" ? "t" : "b") as "r" | "t" | "b", legendFontSize: fs + 1, legendFontFace: ctx.font,
+    catAxisLabelFontSize: fs + 1, valAxisLabelFontSize: fs, catAxisLabelFontFace: ctx.font, valAxisLabelFontFace: ctx.font,
+    valGridLine: (spec.options.gridLines ?? theme.chart?.gridLines) === false ? { style: "none" } : { color: "E5E9F0", style: "solid", size: 0.5 },
+    catAxisTitle: spec.options.xLabel, showCatAxisTitle: !!spec.options.xLabel, valAxisTitle: spec.options.yLabel, showValAxisTitle: !!spec.options.yLabel,
+    valAxisMaxVal: pctAxis && ["bar_stacked_100", "diverging_likert"].includes(spec.type) ? 100 : undefined,
+    ...(type === p.ChartType.pie || type === p.ChartType.doughnut ? { showLegend: true, legendPos: "r" as const, showValue: !!pctAxis, showPercent: !pctAxis, dataLabelPosition: "bestFit", dataLabelFormatCode: pctAxis ? '0"%"' : "0%" } : {}),
+  } as never);
+}
+
+/**
+ * A `panel_grid` block (§37): a headline sentence, then N analyses laid out
+ * in a grid on one slide — the shape a tracker snapshot or a monthly trend
+ * page actually needs, built from the same chart/table drawing every other
+ * block uses. A panel with no analysis yet (or one that isn't in this bag of
+ * results) draws a labelled placeholder instead of being skipped silently,
+ * the same "say what is missing" choice `ReportView` makes on screen.
+ */
+function panelGridSlide(
+  p: Pres, decorate: (s: Slide, title?: string) => void,
+  block: Extract<ReportBlock, { type: "panel_grid" }>,
+  results: Record<string, AnalysisResult>,
+  theme: ReportTheme, W: number, H: number,
+  ctx: { font: string; text: string; subtle: string; primary: string; palette: string[] },
+): void {
+  const s = p.addSlide();
+  decorate(s, block.title);
+  let top = 1.05;
+  if (block.headline) {
+    s.addText(block.headline, { x: 0.6, y: top, w: W - 1.2, h: 0.42, fontSize: 13, italic: true, color: ctx.primary, fontFace: ctx.font, valign: "top" });
+    top += 0.52;
+  }
+  const panels = block.panels.length ? block.panels : [{ id: "empty", analysisId: "" }];
+  const n = panels.length;
+  const cols = Math.max(1, Math.min(n, block.columns ?? (n <= 2 ? n : n === 3 ? 3 : n <= 4 ? 2 : 4)));
+  const rows = Math.ceil(n / cols);
+  const gap = 0.22;
+  const areaW = W - 1.2, areaH = Math.max(1, H - 0.55 - top);
+  const panelW = (areaW - gap * (cols - 1)) / cols;
+  const panelH = (areaH - gap * (rows - 1)) / rows;
+  panels.forEach((panel, i) => {
+    const col = i % cols, row = Math.floor(i / cols);
+    const x = 0.6 + col * (panelW + gap);
+    const y = top + row * (panelH + gap);
+    const hasLabel = !!panel.title;
+    if (hasLabel) s.addText(panel.title!, { x, y, w: panelW, h: 0.26, fontSize: 10.5, bold: true, color: ctx.text, fontFace: ctx.font });
+    const bodyY = y + (hasLabel ? 0.28 : 0);
+    const bodyH = Math.max(0.3, panelH - (hasLabel ? 0.28 : 0) - 0.2);
+    const result = panel.analysisId ? results[panel.analysisId] : undefined;
+    if (!result) {
+      s.addShape(p.ShapeType.roundRect, { x, y: bodyY, w: panelW, h: bodyH, fill: { color: "F5F7FA" }, line: { color: "E5E9F0" }, rectRadius: 0.05 });
+      s.addText(panel.analysisId ? "Not available" : "No analysis selected yet", { x, y: bodyY, w: panelW, h: bodyH, fontSize: 9, color: ctx.subtle, align: "center", valign: "middle", fontFace: ctx.font });
+    } else if (panel.chart) {
+      drawAnalysisVisual(p, s, result, panel.chart, theme, { x, y: bodyY, w: panelW, h: bodyH }, ctx, { tableBox: { x, w: panelW }, fontSize: 7.5, maxRows: 8 });
+    } else {
+      const table = panel.tableId ? result.tables.find((t) => t.id === panel.tableId) ?? result.tables[0] : result.tables[0];
+      if (table) addTable(s, table, theme, { x, y: bodyY, w: panelW }, 8, 7.5);
+    }
+    const noteY = y + panelH - 0.19;
+    if (panel.caption) s.addText(panel.caption, { x, y: noteY, w: panelW, h: 0.19, fontSize: 6.5, color: ctx.subtle, fontFace: ctx.font });
+    else if (result) s.addText(`n = ${result.base.n}`, { x, y: noteY, w: panelW, h: 0.19, fontSize: 6.5, color: ctx.subtle, fontFace: ctx.font });
+  });
 }
 
 export async function buildPptx(input: PptxInput): Promise<Buffer> {
@@ -79,7 +180,8 @@ export async function buildPptx(input: PptxInput): Promise<Buffer> {
   p.title = input.report.title;
   p.author = input.report.author ?? "Rescript";
   const font = (px.fontFamily ?? theme.fontFamily).split(",")[0].trim();
-  const W = px.slideSize === "4x3" ? 10 : 10, primary = hex(theme.colors.primary), text = hex(theme.colors.text), subtle = hex(theme.colors.subtle);
+  const W = px.slideSize === "4x3" ? 10 : 10, H = px.slideSize === "4x3" ? 7.5 : px.slideSize === "16x10" ? 6.25 : 5.625;
+  const primary = hex(theme.colors.primary), text = hex(theme.colors.text), subtle = hex(theme.colors.subtle);
   const palette = theme.colors.palette.map(hex);
   const footer = px.footer ?? theme.footer ?? input.report.branding?.footer ?? "";
   let slideNo = 0;
@@ -134,6 +236,12 @@ export async function buildPptx(input: PptxInput): Promise<Buffer> {
      * put it.
      */
     if (block.type === "page_break" || block.type === "methodology") continue;
+    /*
+     * §37 — a panel grid has no single `analysisId` (it has one per panel),
+     * so it is drawn before the generic lookup below rather than falling
+     * through it.
+     */
+    if (block.type === "panel_grid") { panelGridSlide(p, decorate, block, input.results, theme, W, H, { font, text, subtle, primary, palette }); continue; }
     const result = input.results[block.analysisId];
     if (!result) continue;
     if (block.type === "kpi") {
@@ -146,34 +254,8 @@ export async function buildPptx(input: PptxInput): Promise<Buffer> {
     if (block.type === "chart" && settings.include.charts) {
       const spec = block.chart;
       const s = p.addSlide(); decorate(s, block.title ?? chartTitleFor(result, spec));
-      const data = seriesForChart(result, spec);
-      const isTable = spec.type === "table" || !data.length || ["heatmap", "heatmap_crosstab", "heatmap_correlation", "correlation_matrix", "word_cloud", "treemap", "sunburst", "dendrogram", "network", "sankey", "kpi_card", "gauge", "scorecard", "table"].includes(spec.type);
       const chartW = px.chartWidth ?? W - 1.2, chartH = px.chartHeight ?? 3.7;
-      if (isTable) {
-        const table = result.tables[0];
-        if (table) addTable(s, table, theme, 1.1);
-      } else {
-        const { type, opts } = pptChartType(p, spec.type);
-        const pctAxis = data[0]?.meta?.pct;
-        const isScatter = type === p.ChartType.scatter;
-        const chartData = isScatter && result.chart.points?.length
-          ? [{ name: "X", values: result.chart.points.map((pt) => pt.x) }, { name: spec.options.yLabel ?? "Y", values: result.chart.points.map((pt) => pt.y) }]
-          : data.map((d) => ({ name: d.name, labels: d.labels, values: d.values.map((v) => v ?? 0) }));
-        s.addChart(type, chartData as never, {
-          x: 0.6, y: 1.1, w: chartW, h: chartH, ...opts,
-          chartColors: spec.options.colors?.map(hex) ?? palette,
-          showValue: spec.options.dataLabels ?? theme.chart?.dataLabels ?? true,
-          dataLabelFormatCode: pctAxis ? '0.0"%"' : `0${(spec.options.decimals ?? theme.chart?.decimals ?? 0) > 0 ? "." + "0".repeat(spec.options.decimals ?? theme.chart?.decimals ?? 1) : ""}`,
-          dataLabelFontSize: 9, dataLabelColor: text, dataLabelFontFace: font,
-          showLegend: (spec.options.legend ?? (data.length > 1 ? "bottom" : "none")) !== "none", legendPos: (spec.options.legend === "right" ? "r" : spec.options.legend === "top" ? "t" : "b") as "r" | "t" | "b", legendFontSize: 10, legendFontFace: font,
-          catAxisLabelFontSize: 10, valAxisLabelFontSize: 9, catAxisLabelFontFace: font, valAxisLabelFontFace: font,
-          valGridLine: (spec.options.gridLines ?? theme.chart?.gridLines) === false ? { style: "none" } : { color: "E5E9F0", style: "solid", size: 0.5 },
-          catAxisTitle: spec.options.xLabel, showCatAxisTitle: !!spec.options.xLabel, valAxisTitle: spec.options.yLabel, showValAxisTitle: !!spec.options.yLabel,
-          valAxisMaxVal: pctAxis && ["bar_stacked_100", "diverging_likert"].includes(spec.type) ? 100 : undefined,
-          // pies: values are already shares (%) when the analysis says so — label the value, not pptx's recomputed fraction
-          ...(type === p.ChartType.pie || type === p.ChartType.doughnut ? { showLegend: true, legendPos: "r" as const, showValue: !!pctAxis, showPercent: !pctAxis, dataLabelPosition: "bestFit", dataLabelFormatCode: pctAxis ? '0"%"' : "0%" } : {}),
-        } as never);
-      }
+      drawAnalysisVisual(p, s, result, spec, theme, { x: 0.6, y: 1.1, w: chartW, h: chartH }, { font, text, subtle, primary, palette });
       const notes = [`Base: n = ${result.base.n}${result.base.weightedN !== result.base.n ? ` (weighted ${result.base.weightedN})` : ""}`, ...(block.caption ? [block.caption] : []), ...(spec.options.footnote ? [spec.options.footnote] : []), ...(settings.include.footnotes ? (result.tables[0]?.notes ?? []).slice(0, 2) : []), ...(settings.include.tests && result.tests[0] ? [`${result.tests[0].test.replace(/_/g, " ")}: p ${result.tests[0].p == null ? "—" : result.tests[0].p < 0.001 ? "< .001" : "= " + result.tests[0].p.toFixed(3)}`] : [])];
       s.addText(notes.join("  ·  "), { x: 0.6, y: 4.85, w: W - 1.2, h: 0.35, fontSize: 8, color: subtle, fontFace: font });
       continue;
@@ -184,7 +266,7 @@ export async function buildPptx(input: PptxInput): Promise<Buffer> {
       const perSlide = 14;
       for (let start = 0; start < Math.max(1, table.rows.length); start += perSlide) {
         const s = p.addSlide(); decorate(s, `${block.title ?? table.title}${table.rows.length > perSlide ? ` (${Math.floor(start / perSlide) + 1}/${Math.ceil(table.rows.length / perSlide)})` : ""}`);
-        addTable(s, { ...table, rows: table.rows.slice(start, start + perSlide) }, theme, 1.1, perSlide);
+        addTable(s, { ...table, rows: table.rows.slice(start, start + perSlide) }, theme, { x: 0.5, y: 1.1, w: 9 }, perSlide);
         s.addText([`Base: n = ${table.base?.n ?? result.base.n}`, ...(settings.include.footnotes ? table.notes ?? [] : [])].join("  ·  "), { x: 0.6, y: 4.95, w: W - 1.2, h: 0.3, fontSize: 8, color: subtle, fontFace: font });
       }
     }

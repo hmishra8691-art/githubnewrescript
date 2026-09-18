@@ -74,8 +74,8 @@ changes bump `style_version` only and never touch the analysis.
 ## Reports, publishing, sharing (§12, §18–§22, §33–§36)
 
 Reports are ordered blocks (cover, executive summary, section, chart, table, KPI,
-insights, text); dashboards are widget grids with optional cross-filter
-highlighting. **Publish** computes every referenced analysis and freezes
+insights, text, **panel grid** — see below); dashboards are widget grids with
+optional cross-filter highlighting. **Publish** computes every referenced analysis and freezes
 definition + theme + results into `analytics_report_versions` (immutable).
 Editing the draft afterwards does not change any published version; **Publish**
 again to create v2.
@@ -170,9 +170,54 @@ reports and the share view use it through `ResultTableView`.
 a Welch z on effective bases). The audit that preceded this work, and the
 engine fixes it produced, are in `docs/ANALYTICS-AUDIT-2026-09.md`.
 
+## Panel grids and the Innovation post-launch tracker (§37, September 2026)
+
+A single chart or table is a page; a tracker snapshot is a headline sentence
+and two or more analyses read together — a brand funnel next to its sources,
+a trial rate next to its motivations, eight small monthly trend lines side by
+side. `ReportBlock` gained one new case for it, `panel_grid`, rather than a
+family of new block types: a headline string, a `columns` hint, and a list of
+panels — each one the same `{ analysisId, chart? | tableId?, title?,
+caption? }` shape a lone chart/table block already has. Every existing
+analysis (a funnel, a crosstab with significance letters, a wave-trend line,
+a driver/regression table) drops into a panel unchanged.
+
+* **Builder** (`apps/studio/components/analytics/ReportsPanel.tsx`) — add a
+  panel grid from the block picker, edit its headline/columns, and add,
+  reorder-free, or remove panels, each with its own analysis and chart-type
+  (or table) pick.
+* **On screen** (`ReportView.tsx`) — a CSS grid of mini charts/tables under
+  the headline; an unfilled or deleted-analysis panel shows the same
+  "waiting for an analysis" / "not available" placeholder a lone chart block
+  already shows, never a blank space.
+* **PowerPoint** (`packages/analytics/src/export/pptx.ts`) — `drawAnalysisVisual`
+  factors the chart-or-table decision out of the old "chart" block handler so
+  a panel draws with exactly the same logic, just inside a smaller box;
+  `panelGridSlide` lays panels into an auto-sized grid under the headline,
+  drawing a labelled placeholder for anything missing rather than skipping it.
+* **Excel** — a workbook has no notion of several analyses on one page, so
+  `buildXlsx` flattens a panel grid's panels the same way it already flattens
+  a lone chart/table/kpi block: every referenced analysis still gets its own
+  sheet and its chart-data rows.
+* **Templates** — `applyTemplate` treats a panel grid exactly like a lone
+  chart/table/kpi: a filled one from the existing report survives into the
+  template's shape rather than being discarded, and its panels get fresh ids
+  on every application. Saving a report's shape as a template, and the
+  server's `computeReport` (which decides which analyses to fetch for a
+  report at all), both know about panel-grid panels too — the first gap
+  found while building this, since a report with a panel grid the server
+  didn't look inside would render every panel as "not available" forever.
+* **`BUILT_IN_REPORT_TEMPLATES`** ships a fourth shape, **"Innovation
+  post-launch tracker"** (`builtin:innovation_tracker`): cover, headline KPI,
+  an awareness-snapshot and a trial-snapshot panel grid per tracked
+  innovation (duplicate the pair per innovation), a monthly trend panel grid,
+  a lettered brand-comparison table, a driver-analysis chart, cohort tables,
+  methodology — the shape of a Post-Launch Tracker deck, built entirely from
+  analyses this platform already runs.
+
 ## Tests
 
-* `pnpm --filter @rescript/analytics test` — 35 tests (stats vs scipy, every runner against planted data, PPTX/XLSX builders).
-* `node scripts/analytics-test.mjs` — 55 browser checks (workspace, builder, the analyses rail, the four stages, the professional table, nested rows, filters, charts, gallery, customisation, save/version, segments, report builder, publish/immutability, share link, read-only view, downloads, revoke, password, expiry, exports, table builder, themes, dashboard, existing navigation unchanged). Uses an in-process fake backend over the real engine because the dev container has no database credentials.
+* `pnpm --filter @rescript/analytics test` — 120 tests (stats vs scipy, every runner against planted data, report pages/templates, PPTX/XLSX builders including panel grids).
+* `node scripts/analytics-test.mjs` — 59 browser checks (workspace, builder, the analyses rail, the four stages, the professional table, nested rows, filters, charts, gallery, customisation, save/version, segments, report builder, publish/immutability, panel grids and the tracker template, share link, read-only view, downloads, revoke, password, expiry, exports, table builder, themes, dashboard, existing navigation unchanged). Uses an in-process fake backend over the real engine because the dev container has no database credentials.
 * `packages/analytics/src/analyses/crosstab.test.ts` — the crosstab’s options one by one (banner, nesting, stacking, base, suppression, sorting, summary rows, means, weighted letters) and the audit’s fixes (A1–A6, A11).
 * Share-resolution SQL exercised against the live database in a rolled-back transaction (unknown / unpublished / pinned vs following / expired / revoked / password flag / access counting).

@@ -212,3 +212,48 @@ test("a template describes itself in terms a person can choose by", () => {
   assert.match(d, /pages/);
   assert.match(d, /cover/);
 });
+
+/* ------------------------------------------------------------- panel_grid (§37) */
+
+const panelGrid = (id: string, panels: { id: string; analysisId: string; title?: string }[]): ReportBlock =>
+  ({ id, type: "panel_grid", panels });
+
+test("a panel grid with an unfilled panel counts as unfinished", () => {
+  const filled = panelGrid("g1", [{ id: "p1", analysisId: "a1" }, { id: "p2", analysisId: "a2" }]);
+  const partial = panelGrid("g2", [{ id: "p1", analysisId: "a1" }, { id: "p2", analysisId: "" }]);
+  assert.equal(unfilledBlocks([filled]).length, 0);
+  assert.equal(unfilledBlocks([partial]).length, 1);
+});
+
+test("the platform ships an innovation post-launch tracker template built from panel grids", () => {
+  const t = BUILT_IN_REPORT_TEMPLATES.find((x) => x.id === "builtin:innovation_tracker");
+  assert.ok(t, "the tracker template is missing");
+  assert.equal(t!.builtIn, true);
+  const grids = t!.blocks.filter((b) => b.type === "panel_grid") as Extract<ReportBlock, { type: "panel_grid" }>[];
+  assert.ok(grids.length >= 2, "expected an awareness snapshot and a trial snapshot at least");
+  for (const g of grids) {
+    assert.ok(g.panels.length >= 2, `${g.title} has too few panels to be a snapshot`);
+    for (const p of g.panels) assert.equal(p.analysisId, "", "a template panel must not carry a real analysis id");
+  }
+  assert.match(describeTemplate(t!), /panel grid/);
+});
+
+test("applying a template twice gives every panel a fresh id too, not just every block", () => {
+  const t = BUILT_IN_REPORT_TEMPLATES.find((x) => x.id === "builtin:innovation_tracker")!;
+  const a = applyTemplate(t);
+  const b = applyTemplate(t);
+  const panelIds = (def: ReportDefinition) => def.blocks.filter((x): x is Extract<ReportBlock, { type: "panel_grid" }> => x.type === "panel_grid").flatMap((x) => x.panels.map((p) => p.id));
+  const shared = panelIds(a).filter((id) => panelIds(b).includes(id));
+  assert.deepEqual(shared, []);
+});
+
+test("applying the tracker template keeps a panel grid that already has an analysis", () => {
+  // a panel_grid with real content follows the same "never discard a finished
+  // block" rule as a lone chart, table or kpi
+  const existingGrid: ReportBlock = panelGrid("mine", [{ id: "mp1", analysisId: "funnel-analysis", title: "Brand funnel" }]);
+  const t = BUILT_IN_REPORT_TEMPLATES.find((x) => x.id === "builtin:innovation_tracker")!;
+  const def = applyTemplate(t, { blocks: [existingGrid] });
+  assert.ok(def.blocks.some((b) => b.type === "panel_grid" && b.panels.some((p) => p.analysisId === "funnel-analysis")), "the filled panel was dropped");
+  // it slotted into the template's first panel_grid placeholder, not appended as an extra block
+  assert.equal(def.blocks.filter((b) => b.type === "panel_grid").length, t.blocks.filter((b) => b.type === "panel_grid").length);
+});

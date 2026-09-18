@@ -311,6 +311,39 @@ export type ReportBlock =
   | { id: string; type: "insights"; title?: string; analysisIds: string[] }
   | { id: string; type: "executive_summary"; title?: string; analysisIds: string[]; text?: string }
   /*
+   * §37 — A PANEL GRID: SEVERAL ANALYSES, ONE PAGE, ONE TAKEAWAY.
+   *
+   * A tracker snapshot — "here is where this innovation's awareness and
+   * trial stand" — is never one chart. It is a headline sentence and two or
+   * three small panels read together: a funnel next to its sources, a trial
+   * rate next to its motivations, eight small monthly trend lines side by
+   * side. The old report model could only put one chart or table per block,
+   * which meant per page, which meant this shape did not exist — a team
+   * wanting it had to hand-build the slide outside the platform every wave.
+   *
+   * A panel is deliberately the same shape as a chart/table block (an
+   * analysisId plus either a ChartSpec or a tableId) rather than a new kind
+   * of thing, so every existing analysis — a brand funnel, a crosstab with
+   * significance letters, a wave-trend line — drops into a panel unchanged.
+   * `columns` is a layout hint the export/renderer may still wrap; leaving it
+   * out means "pick something sensible for how many panels there are."
+   */
+  | {
+      id: string; type: "panel_grid"; title?: string;
+      /** the one sentence a reader sees before the panels — "so what" */
+      headline?: string;
+      columns?: number;
+      panels: {
+        id: string;
+        /** empty = unfilled placeholder, same convention as a chart/table block */
+        analysisId: string;
+        title?: string;
+        caption?: string;
+        chart?: ChartSpec;
+        tableId?: string;
+      }[];
+    }
+  /*
    * §36 — WHERE ONE PAGE ENDS.
    *
    * A report has always been a flat list of blocks and a single scroll, which

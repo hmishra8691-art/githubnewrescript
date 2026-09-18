@@ -38,7 +38,12 @@ const compute = (definition) => {
 };
 const reportResults = (definition) => {
   const ids = new Set();
-  for (const b of definition.blocks ?? []) { if (b.analysisId) ids.add(b.analysisId); for (const id of b.analysisIds ?? []) ids.add(id); }
+  for (const b of definition.blocks ?? []) {
+    if (b.analysisId) ids.add(b.analysisId);
+    for (const id of b.analysisIds ?? []) ids.add(id);
+    // §37 — a panel_grid has no analysisId of its own; every one of its panels does
+    if (b.type === "panel_grid") for (const pnl of b.panels ?? []) if (pnl.analysisId) ids.add(pnl.analysisId);
+  }
   for (const w of definition.widgets ?? []) if (w.analysisId) ids.add(w.analysisId);
   const out = {};
   for (const id of ids) { const a = store.analyses.find((x) => x.id === id && !x.deleted_at); if (a) out[id] = compute({ ...a.definition, id, name: a.name }); }
@@ -59,7 +64,10 @@ async function fakeApi(route) {
     if (m === "GET") return json(route, { templates: [...BUILT_IN_REPORT_TEMPLATES, ...store.reportTemplates], available: true });
     if (m === "POST") {
       const src = store.reports.find((r) => r.id === body.fromReportId);
-      const blocks = (src?.definition?.blocks ?? []).map((b) => { const { analysisId, analysisIds, ...rest } = b; return { ...rest, placeholder: b.title ?? b.type }; });
+      const blocks = (src?.definition?.blocks ?? []).map((b) => {
+        if (b.type === "panel_grid") return { ...b, panels: b.panels.map((pnl) => ({ ...pnl, analysisId: "" })) };
+        const { analysisId, analysisIds, ...rest } = b; return { ...rest, placeholder: b.title ?? b.type };
+      });
       const t = { id: uid(), name: body.name, description: body.description, builtIn: false, blocks };
       store.reportTemplates.push(t);
       return json(route, { template: t }, 201);
@@ -562,6 +570,45 @@ assert.ok(store.reportTemplates[0].blocks.every((b) => !b.analysisId), "a saved 
 ok("saving this report's shape strips every analysis reference — a template is a shape, not a study");
 await page.click('[data-testid="ax-template-dialog"] .btn:has-text("Close")');
 promptAnswer = "";
+
+console.log("\n§7c PANEL GRID — a tracker snapshot, several analyses on one page (§37)");
+await page.click('[data-testid="ax-add-panel_grid"]');
+await page.waitForSelector('[data-testid="ax-panel-analysis"]');
+assert.equal(await count('[data-testid="ax-panel-analysis"]'), 2, "a new panel grid starts with two panels, ready to fill in");
+await page.fill('.modal input[placeholder="Panel title"] >> nth=0', "Brand funnel");
+await page.selectOption('[data-testid="ax-panel-analysis"] >> nth=0', { label: "Satisfaction by gender (crosstab)" });
+await page.selectOption('[data-testid="ax-panel-chart"] >> nth=0', { label: "Vertical bar" });
+await page.fill('.modal input[placeholder="Panel title"] >> nth=1', "Awareness by gender");
+await page.selectOption('[data-testid="ax-panel-analysis"] >> nth=1', { label: "NPS (nps)" });
+await page.fill('.modal textarea', "A one-line takeaway, once the panels below say something.");
+await page.click('[data-testid="ax-panel-add"]');
+await page.fill('.modal input[placeholder="Panel title"] >> nth=2', "Not chosen yet");
+assert.equal(await count('[data-testid="ax-panel-analysis"]'), 3, "+ panel adds a third, empty panel");
+await page.click('.modal .btn.primary:has-text("Done")');
+await page.waitForSelector('[data-testid="ax-panelgrid"]');
+assert.equal(await count('[data-testid="ax-panel"]'), 3, "all three panels render");
+assert.match(await text('[data-testid="ax-panelgrid"]'), /A one-line takeaway/);
+assert.ok(await page.$('[data-testid="ax-panelgrid"] [data-testid="ax-chart"]'), "a panel with a chart type draws a chart");
+assert.ok(await page.$('[data-testid="ax-panelgrid"] .ax-pro-table'), "a panel with no chart type falls back to a table, same as a lone table block");
+assert.match(await text('[data-testid="ax-panelgrid"] [data-testid="ax-panel"] >> nth=2'), /Waiting for an analysis/, "an unfilled panel says so, exactly like a lone chart/table block");
+ok("panel grid: headline, a chart panel, a table panel, a third panel added inline, and a graceful placeholder for the one left unfilled");
+await page.click('[data-testid="ax-report-save"]');
+await page.waitForSelector('[data-testid="ax-report-save"]:has-text("Saved")');
+const savedGrid = store.reports[0].definition.blocks.find((b) => b.type === "panel_grid");
+assert.equal(savedGrid?.panels.length, 3);
+assert.equal(savedGrid.panels[1].analysisId, store.analyses.find((a) => a.name === "NPS").id);
+ok("the panel grid persists with its panels — titles, chart choice and analysis references — in the report definition");
+await page.click('[data-testid="ax-report-export"]');
+await page.waitForSelector('[data-testid="ax-export-dialog"]');
+const [dlPanel] = await Promise.all([page.waitForEvent("download"), page.click('[data-testid="ax-export-go"]')]);
+assert.match(dlPanel.suggestedFilename(), /\.pptx$/);
+assert.ok(store.lastExport.bytes > 15000);
+ok("exporting a report that includes a panel grid still produces a PowerPoint deck, unfilled panel and all");
+await page.click('[data-testid="ax-templates"]');
+await page.waitForSelector('[data-testid="ax-template-dialog"]');
+assert.ok(await page.$('[data-testid="ax-apply-builtin:innovation_tracker"]'), "the innovation tracker template should be offered alongside the others");
+ok("the built-in “Innovation post-launch tracker” template — built from panel grids — is offered in the picker");
+await page.click('[data-testid="ax-template-dialog"] .btn:has-text("Close")');
 
 console.log("\n§8 SHARE — link, read-only view, downloads, revoke");
 await page.click('[data-testid="ax-report-share"]');

@@ -167,8 +167,11 @@ export function applyTemplate(
 ): ReportDefinition {
   const keep: ReportBlock[] = (existing?.blocks ?? []).filter(
     (b) =>
-      (b.type === "chart" || b.type === "table" || b.type === "kpi") &&
-      !!(b as { analysisId?: string }).analysisId,
+      ((b.type === "chart" || b.type === "table" || b.type === "kpi") &&
+        !!(b as { analysisId?: string }).analysisId) ||
+      // §37 — a panel grid with at least one filled panel is real content too;
+      // it must never be silently dropped just because it isn't a lone chart/table/kpi.
+      (b.type === "panel_grid" && b.panels.some((p) => p.analysisId)),
   );
 
   const blocks: ReportBlock[] = [];
@@ -221,6 +224,23 @@ export function applyTemplate(
         analysisIds: (rest.analysisIds as string[]) ?? [],
         ...(placeholder ? { title: (rest.title as string) || String(placeholder) } : {}),
       } as ReportBlock);
+      continue;
+    }
+    /*
+     * §37 — a panel grid follows the same "keep what already has content"
+     * rule as a lone chart/table/kpi: a filled grid from the existing report
+     * fills the first unused placeholder of the same type, title included,
+     * rather than being overwritten by the template's empty version of it.
+     * Either way its own panels get fresh ids — applying the same template
+     * twice (one snapshot per innovation) must not leave two panels sharing
+     * an id, and neither must reusing a kept grid across two applications.
+     */
+    if (fresh.type === "panel_grid") {
+      const match = keep.find((k) => k.type === "panel_grid" && !used.has(k.id)) as Extract<ReportBlock, { type: "panel_grid" }> | undefined;
+      const base = match ?? fresh;
+      if (match) used.add(match.id);
+      const title = fresh.title || base.title;
+      blocks.push({ ...base, id: fresh.id, ...(title ? { title } : {}), panels: base.panels.map((pnl) => ({ ...pnl, id: bid("panel") })) });
       continue;
     }
     blocks.push(fresh);
@@ -310,6 +330,82 @@ export const BUILT_IN_REPORT_TEMPLATES: ReportTemplate[] = [
       { id: "w10", type: "methodology", title: "Methodology", includeStandardNotes: true },
     ],
   },
+  /*
+   * §37 — THE INNOVATION POST-LAUNCH TRACKER.
+   *
+   * The shape a launch-tracking deck takes wave after wave: a cover, the
+   * headline number, one awareness-then-trial snapshot per tracked
+   * innovation, a monthly trend grid, a lettered brand comparison, a driver
+   * analysis, cohort breakdowns, and a methodology appendix. Every panel here
+   * is an ordinary chart or table block wearing a `panel_grid` — a brand
+   * funnel, a crosstab with significance letters, a wave-trend line — so
+   * applying this template plugs a team's own saved analyses in without
+   * asking the analytics engine to know what "an innovation" is.
+   *
+   * Two snapshot pairs ship as a starting point, not a limit: a team tracking
+   * five innovations duplicates the pair (in the report builder, or by
+   * copying the two panel_grid blocks) once per innovation. Applying the
+   * template again never removes a snapshot that already has an analysis —
+   * `applyTemplate`'s keep-what-already-has-content rule covers panel_grid
+   * the same way it covers a lone chart or table.
+   */
+  {
+    id: "builtin:innovation_tracker",
+    name: "Innovation post-launch tracker",
+    description: "Cover, headline KPI, an awareness + trial snapshot per innovation, a monthly trend grid, brand comparison and driver analysis, cohort breakdowns, methodology.",
+    builtIn: true,
+    blocks: [
+      { id: "pt1", type: "cover", title: "{study} — Post-Launch Tracker", subtitle: "{business unit} · {category} · {country} · wave {n}" },
+      { id: "pt2", type: "kpi", placeholder: "The tracked measure, this wave" },
+      { id: "pt3", type: "text", markdown: "**Overall performance.** Two or three sentences on where awareness and trial stand, before anybody scrolls." },
+      { id: "pt4", type: "page_break" },
+      { id: "pt5", type: "section", title: "Innovation pathways", subtitle: "Performance summaries per innovation" },
+      {
+        id: "pt6", type: "panel_grid", title: "Innovation snapshot — Awareness",
+        headline: "Add the one-line takeaway once the panels below are filled in.",
+        columns: 2,
+        panels: [
+          { id: "pt6p1", analysisId: "", title: "Brand funnel" },
+          { id: "pt6p2", analysisId: "", title: "Source of awareness" },
+        ],
+      },
+      {
+        id: "pt7", type: "panel_grid", title: "Innovation snapshot — Trial",
+        headline: "Add the one-line takeaway once the panels below are filled in.",
+        columns: 2,
+        panels: [
+          { id: "pt7p1", analysisId: "", title: "Trial rate" },
+          { id: "pt7p2", analysisId: "", title: "Trial motivations" },
+          { id: "pt7p3", analysisId: "", title: "Reasons non-trialists haven't tried" },
+        ],
+      },
+      { id: "pt8", type: "page_break" },
+      { id: "pt9", type: "section", title: "Monthly progress", subtitle: "Awareness and trial momentum" },
+      {
+        id: "pt10", type: "panel_grid", title: "Brand awareness (rolling) trend",
+        headline: "Which brands are moving, and since when.",
+        columns: 4,
+        panels: [
+          { id: "pt10p1", analysisId: "", title: "Brand A" },
+          { id: "pt10p2", analysisId: "", title: "Brand B" },
+          { id: "pt10p3", analysisId: "", title: "Brand C" },
+          { id: "pt10p4", analysisId: "", title: "Brand D" },
+        ],
+      },
+      { id: "pt11", type: "page_break" },
+      { id: "pt12", type: "section", title: "Targeting strategy", subtitle: "Innovation performance by cohort" },
+      { id: "pt13", type: "table", placeholder: "Brand comparison — significance letters vs. the total" },
+      { id: "pt14", type: "chart", placeholder: "Driver analysis — what moves awareness or trial", chart: { type: "attribute_importance", options: {} } },
+      { id: "pt15", type: "table", placeholder: "Demographic / cohort breakdown" },
+      { id: "pt16", type: "page_break" },
+      { id: "pt17", type: "section", title: "Conclusion & recommendations" },
+      { id: "pt18", type: "insights", placeholder: "Findings" },
+      { id: "pt19", type: "text", markdown: "**Recommendations.**\n\n1. \n2. \n3. " },
+      { id: "pt20", type: "page_break" },
+      { id: "pt21", type: "section", title: "Appendix" },
+      { id: "pt22", type: "methodology", title: "About this tracker", includeStandardNotes: true },
+    ],
+  },
 ];
 
 /** A template's structure in words, for a picker. */
@@ -317,7 +413,7 @@ export function describeTemplate(t: ReportTemplate): string {
   const counts = new Map<string, number>();
   for (const b of t.blocks) counts.set(b.type, (counts.get(b.type) ?? 0) + 1);
   const pages = t.blocks.filter((b) => b.type === "page_break").length + 1;
-  const order = ["cover", "executive_summary", "section", "chart", "table", "kpi", "insights", "text", "methodology"];
+  const order = ["cover", "executive_summary", "section", "panel_grid", "chart", "table", "kpi", "insights", "text", "methodology"];
   const parts = order
     .filter((k) => counts.has(k))
     .map((k) => `${counts.get(k)} ${k.replace("_", " ")}${counts.get(k)! > 1 ? "s" : ""}`);
@@ -328,8 +424,10 @@ export function describeTemplate(t: ReportTemplate): string {
 export function unfilledBlocks(blocks: ReportBlock[]): ReportBlock[] {
   return blocks.filter(
     (b) =>
-      (b.type === "chart" || b.type === "table" || b.type === "kpi") &&
-      !(b as { analysisId?: string }).analysisId,
+      ((b.type === "chart" || b.type === "table" || b.type === "kpi") &&
+        !(b as { analysisId?: string }).analysisId) ||
+      // §37 — a panel grid is unfinished as soon as ONE of its panels has no analysis yet.
+      (b.type === "panel_grid" && b.panels.some((p) => !p.analysisId)),
   );
 }
 

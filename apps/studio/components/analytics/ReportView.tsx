@@ -102,6 +102,38 @@ export function ReportView(p: ReportViewProps) {
           case "table": { const r = results[b.analysisId]; const t = r ? (b.tableId ? r.tables.find((x) => x.id === b.tableId) ?? r.tables[0] : r.tables[0]) : undefined; return <section key={b.id} className="ax-block"><Actions id={b.id} /><h3>{b.title ?? t?.title ?? "Table"}</h3>{r ? <ResultTableView table={t} /> : <Missing id={b.analysisId} />}{b.caption && <p className="ax-caption">{b.caption}</p>}</section>; }
           case "kpi": { const r = results[b.analysisId]; return <section key={b.id} className="ax-block"><Actions id={b.id} />{b.title && <h3>{b.title}</h3>}{r ? <Chart result={r} spec={{ type: r.chart.kpis && r.chart.kpis.length === 1 ? "gauge" : "kpi_card", options: { showBase: true } }} theme={theme} height={160} /> : <Missing id={b.analysisId} />}</section>; }
           case "insights": return <section key={b.id} className="ax-block"><Actions id={b.id} /><h3>{b.title ?? "Key insights"}</h3><ul className="ax-insights">{(b.analysisIds ?? []).flatMap((id) => (results[id]?.insights ?? []).map((s, i) => <li key={`${id}-${i}`}>{s}</li>))}</ul></section>;
+          /*
+           * §37 — a panel grid: a headline sentence, then several analyses
+           * side by side. Each panel is drawn exactly the way a lone chart
+           * or table block is (same `renderChart`, same `Missing`), so a
+           * funnel next to its sources, or eight small trend lines in a row,
+           * behave on screen exactly as the export draws them.
+           */
+          case "panel_grid": {
+            const nPanels = b.panels.length || 1;
+            const cols = b.columns ?? (nPanels <= 2 ? nPanels : nPanels === 3 ? 3 : nPanels <= 4 ? 2 : 4);
+            return (
+              <section key={b.id} className="ax-block ax-panelgrid" data-testid="ax-panelgrid">
+                <Actions id={b.id} />
+                {b.title && <h3>{b.title}</h3>}
+                {b.headline && <p className="ax-panelgrid-headline">{b.headline}</p>}
+                <div className="ax-panelgrid-grid" style={{ gridTemplateColumns: `repeat(${Math.max(1, Math.min(cols, nPanels))}, minmax(0, 1fr))` }}>
+                  {b.panels.map((panel) => {
+                    const r = panel.analysisId ? results[panel.analysisId] : undefined;
+                    const table = r ? (panel.tableId ? r.tables.find((t) => t.id === panel.tableId) ?? r.tables[0] : r.tables[0]) : undefined;
+                    return (
+                      <div key={panel.id} className="ax-panel" data-testid="ax-panel">
+                        {panel.title && <div className="ax-panel-title">{panel.title}</div>}
+                        {!r ? <Missing id={panel.analysisId} /> : panel.chart ? renderChart(panel.analysisId, panel.chart, 180) : <ResultTableView table={table} dense maxRows={8} />}
+                        {panel.caption ? <p className="ax-caption">{panel.caption}</p> : r ? <p className="ax-caption muted">n = {r.base.n}</p> : null}
+                      </div>
+                    );
+                  })}
+                  {!b.panels.length && <div className="muted" style={{ padding: 8 }}>No panels yet. Open this block and add one.</div>}
+                </div>
+              </section>
+            );
+          }
           case "executive_summary": { const items = executiveSummary((b.analysisIds ?? []).map((id) => ({ name: results[id]?.name ?? id, result: results[id] })).filter((x) => x.result)); return <section key={b.id} className="ax-block ax-exec"><Actions id={b.id} /><h3>{b.title ?? "Executive summary"}</h3>{b.text && <p>{b.text}</p>}{items.map((it) => <div key={it.analysis} className="ax-exec-item"><strong>{it.analysis}</strong> — {it.headline} <span className="muted">({it.base})</span></div>)}{!items.length && <p className="muted">Add analyses to this summary.</p>}</section>; }
           /*
            * §36 — a page break is a boundary, not a thing on the page. It
