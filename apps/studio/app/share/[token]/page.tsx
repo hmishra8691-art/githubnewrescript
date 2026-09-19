@@ -78,6 +78,14 @@ export default function SharePage({ params }: { params: { token: string } }) {
         toolbar={<>
           {data.dataset?.responses != null && <span className="muted" style={{ fontSize: 13 }}>{data.dataset.responses} responses</span>}
           {data.permission === "download" && <><button className="btn small" disabled={busy} onClick={() => download("pptx")} data-testid="ax-share-ppt">Download PPT</button><button className="btn small" disabled={busy} onClick={() => download("xlsx")} data-testid="ax-share-xlsx">Download Excel</button></>}
+          {/*
+            * §43 — a shared DASHBOARD has no deck or workbook to download, so
+            * printing is the only way to take it away. It is offered whatever
+            * the share's permission: printing what you can already see on the
+            * page is not a download permission, it is a browser.
+            */}
+          {rep.widgets && <button className="btn small" onClick={() => window.print()} data-testid="ax-share-print"
+            title="Opens your browser's print dialog — choose “Save as PDF” there.">Print / PDF</button>}
         </>} />
       <div className="ax-share-foot muted">Read-only view of a published report snapshot · Powered by Rescript Analytics</div>
     </div>

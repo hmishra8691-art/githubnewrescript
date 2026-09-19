@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import ExcelJS from "exceljs";
-import { buildPptx } from "./pptx.js";
+import { buildPptx, isEmbeddableImage, MAX_EMBEDDED_IMAGE_BYTES } from "./pptx.js";
 import { buildXlsx } from "./xlsx.js";
 import { synthDataset, D } from "../analyses/fixture.js";
 import { runAnalysis } from "../analyses/index.js";
@@ -77,6 +77,61 @@ test("pptx: a map chart exports as bars and says on the slide that it did", asyn
   const raw = buf.toString("latin1");
   assert.ok(raw.length > 10000);
   assert.ok(buf.length > 15000, "a deck with a geographic chart still builds");
+});
+
+test("only a real, bounded image is allowed into a deck", () => {
+  /*
+   * §43 — the client hands the export pictures it rendered. A deck is a
+   * document the customer forwards, so what goes into one is checked rather
+   * than trusted: a PNG or JPEG data URI, base64, and within a size cap.
+   */
+  const png = "data:image/png;base64," + "A".repeat(200);
+  assert.equal(isEmbeddableImage(png), true);
+  assert.equal(isEmbeddableImage("data:image/jpeg;base64," + "B".repeat(200)), true);
+
+  assert.equal(isEmbeddableImage(undefined), false);
+  assert.equal(isEmbeddableImage(12), false);
+  assert.equal(isEmbeddableImage(""), false);
+  assert.equal(isEmbeddableImage("https://example.com/map.png"), false, "a URL is not an image this builder fetches");
+  assert.equal(isEmbeddableImage("data:text/html;base64," + "A".repeat(200)), false, "not every data URI is a picture");
+  assert.equal(isEmbeddableImage("data:image/svg+xml;base64," + "A".repeat(200)), false, "svg can carry script, and PowerPoint does not want it");
+  assert.equal(isEmbeddableImage("data:image/png;base64,<script>"), false, "the payload has to look like base64");
+  assert.equal(isEmbeddableImage("data:image/png;base64,QUJD"), false, "a few bytes is not a rendered chart");
+  const huge = "data:image/png;base64," + "A".repeat(Math.ceil((MAX_EMBEDDED_IMAGE_BYTES * 4) / 3) + 8);
+  assert.equal(isEmbeddableImage(huge), false, "and an oversized one is refused rather than embedded");
+});
+
+test("pptx: a map block carries the picture the renderer made, instead of bars", async () => {
+  const geoResults = { ...results, a5: runAnalysis(D("crosstab", [], { rows: ["COUNTRY"], columns: ["GENDER"] }), ds) };
+  const geoReport: ReportDefinition = {
+    title: "Geo", mode: "snapshot",
+    blocks: [{ id: "g1", type: "chart", title: "Satisfaction by country", analysisId: "a5", chart: { type: "map_country", options: {} } }],
+  };
+  // a real 1×1 PNG, padded past the "too small to be a chart" floor
+  const onePixel = "data:image/png;base64," +
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==".padEnd(200, "A");
+  const withImage = await buildPptx({ report: geoReport, results: geoResults, images: { g1: onePixel }, meta: { survey: "Synthetic" } });
+  const withoutImage = await buildPptx({ report: geoReport, results: geoResults, meta: { survey: "Synthetic" } });
+  assert.equal(withImage.subarray(0, 2).toString("latin1"), "PK");
+  /*
+   * The deck with a picture must not also carry the apology for not having
+   * one — that note is only true when the substitution actually happened.
+   */
+  const raw = (b: Buffer) => b.toString("latin1");
+  assert.match(raw(withoutImage), /Shown as ranked bars/, "without a picture the slide still says what it did");
+  assert.doesNotMatch(raw(withImage), /Shown as ranked bars/, "with one, there is nothing to apologise for");
+  assert.ok(withImage.length !== withoutImage.length, "the two decks are not the same file");
+});
+
+test("pptx: a rejected image falls back to the chart rather than failing the export", async () => {
+  const geoResults = { ...results, a5: runAnalysis(D("crosstab", [], { rows: ["COUNTRY"], columns: ["GENDER"] }), ds) };
+  const geoReport: ReportDefinition = {
+    title: "Geo", mode: "snapshot",
+    blocks: [{ id: "g1", type: "chart", analysisId: "a5", chart: { type: "map_country", options: {} } }],
+  };
+  const buf = await buildPptx({ report: geoReport, results: geoResults, images: { g1: "data:text/html;base64,bogus" }, meta: {} });
+  assert.equal(buf.subarray(0, 2).toString("latin1"), "PK", "the deck still builds");
+  assert.match(buf.toString("latin1"), /Shown as ranked bars/, "and honestly reports the substitution it fell back to");
 });
 
 test("the fixture's country labels all resolve to real countries", async () => {

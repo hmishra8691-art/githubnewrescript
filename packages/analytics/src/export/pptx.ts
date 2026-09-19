@@ -28,6 +28,31 @@ export interface PptxInput {
   settings?: Partial<ExportSettings>;
   /** survey / dataset metadata for the methodology slide */
   meta?: { survey?: string; environment?: string; dataset?: string; responses?: number; generatedBy?: string; weighting?: string };
+  /**
+   * §43 — pictures of blocks PowerPoint cannot draw, keyed by block id.
+   *
+   * A map is the case this exists for: pptxgenjs has no map chart, and the
+   * only thing that can draw one is the renderer that already did, in the
+   * browser. So the client rasterises what is on screen and hands it over,
+   * and the deck carries the real map instead of the ranked bars it used to
+   * substitute. No image supplied (an export started from a tab where the
+   * report is not rendered) falls back to those bars, with the note.
+   */
+  images?: Record<string, string>;
+}
+
+/**
+ * A data URI this builder is willing to put in a deck: a PNG or JPEG, base64,
+ * and small enough not to be a way of stuffing a file with something else.
+ * Anything failing that is dropped rather than embedded — the export is a
+ * document the customer sends on, not a channel for arbitrary bytes.
+ */
+export const MAX_EMBEDDED_IMAGE_BYTES = 6 * 1024 * 1024;
+export function isEmbeddableImage(uri: unknown): uri is string {
+  if (typeof uri !== "string") return false;
+  if (!/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(uri)) return false;
+  const b64 = uri.slice(uri.indexOf(",") + 1);
+  return b64.length > 64 && (b64.length * 3) / 4 <= MAX_EMBEDDED_IMAGE_BYTES;
 }
 
 const hex = (c: string) => c.replace("#", "").slice(0, 6).toUpperCase();
@@ -85,8 +110,16 @@ function drawAnalysisVisual(
   p: Pres, s: Slide, result: AnalysisResult, spec: ChartSpec, theme: ReportTheme,
   box: { x: number; y: number; w: number; h: number },
   ctx: { font: string; text: string; subtle: string; primary: string; palette: string[] },
-  opts: { tableBox?: { x: number; w: number }; fontSize?: number; maxRows?: number } = {},
+  opts: { tableBox?: { x: number; w: number }; fontSize?: number; maxRows?: number; image?: string } = {},
 ): void {
+  /*
+   * §43 — a picture of this block, rendered by the only thing that can draw
+   * it. It replaces the chart entirely rather than sitting beside it.
+   */
+  if (opts.image && isEmbeddableImage(opts.image)) {
+    s.addImage({ data: opts.image, x: box.x, y: box.y, w: box.w, h: box.h, sizing: { type: "contain", w: box.w, h: box.h } } as never);
+    return;
+  }
   const data = seriesForChart(result, spec);
   const isTable = spec.type === "table" || !data.length || ["heatmap", "heatmap_crosstab", "heatmap_correlation", "correlation_matrix", "word_cloud", "treemap", "sunburst", "dendrogram", "network", "sankey", "kpi_card", "gauge", "scorecard", "table"].includes(spec.type);
   if (isTable) {
@@ -105,6 +138,8 @@ function drawAnalysisVisual(
    * picture in the deck is the next step, not a silent one.)
    */
   const isGeo = ["map_country", "map_state", "choropleth", "map_bubble", "map_heat"].includes(spec.type);
+  // §43 — the note is only honest when the substitution actually happened; with
+  // a picture from the renderer the slide carries the real map.
   if (isGeo) {
     s.addText("Shown as ranked bars — PowerPoint has no map chart; the map is on the dashboard.", {
       x: box.x, y: Math.max(0.1, box.y - 0.22), w: box.w, h: 0.2,
@@ -270,7 +305,7 @@ export async function buildPptx(input: PptxInput): Promise<Buffer> {
       const spec = block.chart;
       const s = p.addSlide(); decorate(s, block.title ?? chartTitleFor(result, spec));
       const chartW = px.chartWidth ?? W - 1.2, chartH = px.chartHeight ?? 3.7;
-      drawAnalysisVisual(p, s, result, spec, theme, { x: 0.6, y: 1.1, w: chartW, h: chartH }, { font, text, subtle, primary, palette });
+      drawAnalysisVisual(p, s, result, spec, theme, { x: 0.6, y: 1.1, w: chartW, h: chartH }, { font, text, subtle, primary, palette }, { image: input.images?.[block.id] });
       const notes = [`Base: n = ${result.base.n}${result.base.weightedN !== result.base.n ? ` (weighted ${result.base.weightedN})` : ""}`, ...(block.caption ? [block.caption] : []), ...(spec.options.footnote ? [spec.options.footnote] : []), ...(settings.include.footnotes ? (result.tables[0]?.notes ?? []).slice(0, 2) : []), ...(settings.include.tests && result.tests[0] ? [`${result.tests[0].test.replace(/_/g, " ")}: p ${result.tests[0].p == null ? "—" : result.tests[0].p < 0.001 ? "< .001" : "= " + result.tests[0].p.toFixed(3)}`] : [])];
       s.addText(notes.join("  ·  "), { x: 0.6, y: 4.85, w: W - 1.2, h: 0.35, fontSize: 8, color: subtle, fontFace: font });
       continue;

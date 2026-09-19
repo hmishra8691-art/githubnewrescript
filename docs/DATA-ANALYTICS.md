@@ -487,9 +487,56 @@ were always missing.
   grid lines stay visible without competing with the data, and no palette
   colour disappears into its own background.
 
+## Getting it out — maps in the deck, dashboards on paper (§43, September 2026)
+
+Two gaps left over from the phases above, and the phone.
+
+**The map in the deck.** PowerPoint has no map chart, so §39 exported a
+geographic chart as ranked bars and said so on the slide. The honest note was
+the right stopgap, but the right answer is the map — and the only thing in the
+system that can draw one is the renderer that already did, in the browser. So
+the export now rasterises what is on screen (`svgToPngDataUrl`, the promise
+form of the PNG download the chart workbench has always had) and hands the
+picture to the builder keyed by block id; `drawAnalysisVisual` draws it instead
+of the chart. No picture — an export started from a tab where the report is not
+rendered — falls back to the bars, with the note, exactly as before.
+
+What arrives is checked rather than trusted: `isEmbeddableImage` takes a PNG or
+JPEG data URI, base64, above a floor and under a 6 MB cap, and the route caps
+the number of them. An export is a document the customer forwards, not a
+channel for arbitrary bytes, and anything failing the check is dropped so the
+slide falls back to the chart rather than the export failing.
+
+**The dashboard on paper.** A dashboard has no PowerPoint or Excel form: its
+tables, ranked lists and pictogram panels are HTML, and rasterising HTML needs
+a library this codebase does not carry. What the browser already does perfectly
+is lay the whole thing out — so the route to a PDF is its own print dialog, and
+the work is the stylesheet that makes the printed page worth having: the widget
+rail, tabs, grips and handles are dropped; the hero, the bands and the
+photographs are kept (with `print-color-adjust`, or the browser's ink-saving
+default would quietly delete every background the §41 work exists for); and the
+canvas keeps its arrangement rather than collapsing into one column, because a
+reflowed dashboard is a different dashboard. The button says **Print / PDF**
+rather than "Export PDF" because that is what actually happens, and the share
+page offers it too — printing what you can already see is a browser, not a
+download permission.
+
+**The phone.** The narrow layout was written in §40 and never looked at. It
+holds: one column, full width, stacked in reading order (which is only true
+because the renderer sorts by position), no grips, no sideways scroll.
+
+One test in this section was worth more than the feature. The first version of
+the map-in-deck check passed while proving nothing: the export builds from the
+SAVED definition, the test had not saved the report, so the deck it inspected
+contained no map at all — no map meant no "shown as bars" note, which the test
+read as success. Its other assertion was just as hollow: it looked for
+`ppt/media/` in the zip, which is present as a folder entry even when empty. The
+deck's media folder was empty the whole time. Both are now real — the report is
+saved first, and the check looks for an actual file under `ppt/media/image`.
+
 ## Tests
 
-* `pnpm --filter @rescript/analytics test` — 181 tests (stats vs scipy, every runner against planted data, report pages/templates, PPTX/XLSX builders including panel grids, the geography: region resolution, aliases, scope choice, unmatched reporting, projection fitting; and the dashboard canvas: the legacy flow, overlap resolution, idempotence, tidying, free-slot placement; the scenery: scrim defaults, overlay text colour, hero sizing, band normalization; the dashboard templates: carrying work across, overflow, layout integrity, kind detection; and the themes: derived surfaces, preset contrast).
-* `node scripts/analytics-test.mjs` — 89 browser checks (workspace, builder, the analyses rail, the four stages, the professional table, nested rows, filters, charts, gallery, customisation, save/version, segments, report builder, publish/immutability, panel grids and the tracker template, share link, read-only view, downloads, revoke, password, expiry, exports, table builder, themes, dashboard, the four operational-dashboard widgets — photo/icon panel/steps/ranked list, real country and bubble maps, the dashboard canvas — drag, resize, the pre-canvas flow and the no-overlap rule, the hero/band scenery and its trip to a shared viewer, the dashboard template gallery and its cross-kind refusal, dark theme presets rendering dark end to end, existing navigation unchanged). Uses an in-process fake backend over the real engine because the dev container has no database credentials.
+* `pnpm --filter @rescript/analytics test` — 184 tests (stats vs scipy, every runner against planted data, report pages/templates, PPTX/XLSX builders including panel grids, the geography: region resolution, aliases, scope choice, unmatched reporting, projection fitting; and the dashboard canvas: the legacy flow, overlap resolution, idempotence, tidying, free-slot placement; the scenery: scrim defaults, overlay text colour, hero sizing, band normalization; the dashboard templates: carrying work across, overflow, layout integrity, kind detection; the themes: derived surfaces, preset contrast; and the embedded-image guard the PowerPoint export screens pictures with).
+* `node scripts/analytics-test.mjs` — 92 browser checks (workspace, builder, the analyses rail, the four stages, the professional table, nested rows, filters, charts, gallery, customisation, save/version, segments, report builder, publish/immutability, panel grids and the tracker template, share link, read-only view, downloads, revoke, password, expiry, exports, table builder, themes, dashboard, the four operational-dashboard widgets — photo/icon panel/steps/ranked list, real country and bubble maps, the dashboard canvas — drag, resize, the pre-canvas flow and the no-overlap rule, the hero/band scenery and its trip to a shared viewer, the dashboard template gallery and its cross-kind refusal, dark theme presets rendering dark end to end, a map reaching PowerPoint as a picture, a dashboard's print layout, the phone layout, existing navigation unchanged). Uses an in-process fake backend over the real engine because the dev container has no database credentials.
 * `packages/analytics/src/analyses/crosstab.test.ts` — the crosstab’s options one by one (banner, nesting, stacking, base, suppression, sorting, summary rows, means, weighted letters) and the audit’s fixes (A1–A6, A11).
 * Share-resolution SQL exercised against the live database in a rolled-back transaction (unknown / unpublished / pinned vs following / expired / revoked / password flag / access counting).

@@ -129,6 +129,58 @@ export function downloadPng(host: HTMLElement | null, name: string, scale = 3) {
   img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(xml)}`;
 }
 
+/**
+ * §43 — the same raster as `downloadPng`, handed back instead of downloaded.
+ *
+ * The PowerPoint export uses it for maps: pptxgenjs has no map chart, and the
+ * only thing in the system that can draw one is the renderer that already
+ * did. Resolves null rather than rejecting — and gives up after a moment —
+ * because an export must not hang or fail on a picture it can do without.
+ */
+export function svgToPngDataUrl(host: HTMLElement | null, scale = 2, timeoutMs = 4000): Promise<string | null> {
+  const svg = svgOf(host);
+  if (!svg) return Promise.resolve(null);
+  let xml: string;
+  try { xml = serialize(svg); } catch { return Promise.resolve(null); }
+  const vb = svg.viewBox.baseVal;
+  const w = Math.max(1, Math.round((vb.width || svg.clientWidth) * scale));
+  const h = Math.max(1, Math.round((vb.height || svg.clientHeight) * scale));
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (v: string | null) => { if (!settled) { settled = true; resolve(v); } };
+    const timer = setTimeout(() => done(null), timeoutMs);
+    const img = new Image();
+    img.onload = () => {
+      clearTimeout(timer);
+      try {
+        const c = document.createElement("canvas"); c.width = w; c.height = h;
+        const g = c.getContext("2d");
+        if (!g) return done(null);
+        g.fillStyle = "#ffffff"; g.fillRect(0, 0, w, h); g.drawImage(img, 0, 0, w, h);
+        done(c.toDataURL("image/png"));
+      } catch { done(null); }
+    };
+    img.onerror = () => { clearTimeout(timer); done(null); };
+    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(xml)}`;
+  });
+}
+
+/** Every geographic chart on screen, rastered and keyed by the block it belongs to. */
+export async function mapImagesOnScreen(): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  if (typeof document === "undefined") return out;
+  const hosts = Array.from(document.querySelectorAll<HTMLElement>("[data-block-id]"));
+  for (const host of hosts) {
+    const id = host.dataset.blockId;
+    const chart = host.querySelector<HTMLElement>('[data-testid="ax-chart"]');
+    const type = chart?.getAttribute("data-chart-type") ?? "";
+    if (!id || !/^(map_|choropleth$)/.test(type)) continue;
+    const png = await svgToPngDataUrl(chart, 2);
+    if (png) out[id] = png;
+  }
+  return out;
+}
+
 /** the chart with its workbench chrome: full screen, PNG, SVG */
 export function ChartFrame({ result, spec, theme, onSelect, selected, name, large }: { result: AnalysisResult; spec: ChartSpec; theme: ReportTheme | null; onSelect?: (c: string | null) => void; selected?: string | null; name: string; large?: boolean }) {
   const host = React.useRef<HTMLDivElement | null>(null);

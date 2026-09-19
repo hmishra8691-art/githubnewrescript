@@ -4,6 +4,7 @@ import type { AnalysisDefinition, AnalysisResult, ChartSpec, DashboardBand, Dash
 import { CHART_CATALOG, DEFAULT_EXPORT_SETTINGS, describeTemplate, compactLayout, describeDashboardTemplate, firstFreeSlot, layoutRows, normalizeLayout, placeWidget, scrimFor, templateKind, type LayoutBox, type ReportTemplate } from "@rescript/analytics";
 import { AxApi, type Row, timeAgo } from "./api";
 import { ReportView } from "./ReportView";
+import { mapImagesOnScreen } from "./ResultView";
 import { ICON_OPTIONS } from "./charts/Icons";
 import { MediaUrlInput } from "../studio/MediaUrlInput";
 
@@ -26,7 +27,22 @@ export function ExportDialog({ api, reportId, analysisId, definition, chart, the
   const [error, setError] = React.useState<string | null>(null);
   const inc = settings.include;
   const setInc = (k: keyof ExportSettings["include"], v: boolean) => setSettings({ ...settings, include: { ...inc, [k]: v } });
-  const go = async () => { setBusy(true); setError(null); try { await api.export({ format: settings.format, reportId, analysisId, definition, chart, themeId: themeId || null, settings, version: version ? Number(version) : undefined }); onClose(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } };
+  const go = async () => {
+    setBusy(true); setError(null);
+    try {
+      /*
+       * §43 — PowerPoint has no map chart, so the deck used to substitute
+       * ranked bars. The renderer on screen has already drawn the real map;
+       * rastering it here is what lets the slide carry it. Only for pptx, and
+       * only for what is actually rendered — an export started from a tab
+       * where the report is not on screen simply sends nothing and the slide
+       * falls back to the bars, as before.
+       */
+      const images = settings.format === "pptx" ? await mapImagesOnScreen() : {};
+      await api.export({ format: settings.format, reportId, analysisId, definition, chart, themeId: themeId || null, settings, version: version ? Number(version) : undefined, ...(Object.keys(images).length ? { images } : {}) });
+      onClose();
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
   return (
     <div className="modal-back" onClick={onClose}><div className="modal" onClick={(e) => e.stopPropagation()} data-testid="ax-export-dialog">
       <h2>Export</h2>
@@ -457,6 +473,17 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
         <button className="btn small" onClick={() => setTemplatesOpen((o) => !o)} data-testid="ax-templates">Templates</button>
         <button className="btn small" onClick={() => setShare(true)} data-testid="ax-report-share">Share</button>
         <button className="btn small" onClick={() => setExp(true)} data-testid="ax-report-export">Export</button>
+        {/*
+          * §43 — a dashboard has no PowerPoint or Excel form: its tables,
+          * ranked lists and pictogram panels are HTML, and there is no
+          * rasteriser here to turn them into a picture. The browser lays the
+          * whole thing out correctly already, so the honest route to a PDF is
+          * its own print dialog, with a stylesheet that makes the result worth
+          * keeping. Saying "Print / PDF" rather than "Export PDF" is the point:
+          * it is what actually happens.
+          */}
+        {isDash && <button className="btn small" onClick={() => window.print()} data-testid="ax-dash-print"
+          title="Opens your browser's print dialog — choose “Save as PDF” there. The canvas keeps its arrangement on the page.">Print / PDF</button>}
       </div>
       {(msg || error) && <div className={error ? "ax-error" : "ax-ok"} style={{ margin: "6px 0" }}>{error ?? msg}</div>}
       <div className="ax-rb-body">

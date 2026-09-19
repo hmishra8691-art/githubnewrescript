@@ -17,7 +17,7 @@
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
 import assert from "node:assert/strict";
 import { buildDataset, runAnalysis, recommendCharts, DEFAULT_THEME, BUILT_IN_REPORT_TEMPLATES, BUILT_IN_DASHBOARD_TEMPLATES, applyTemplate, applyDashboardTemplate, dashboardAsTemplate, templateKind, reportPages } from "../packages/analytics/dist/index.js";
-import { buildPptx, buildXlsx } from "../packages/analytics/dist/export/index.js";
+import { buildPptx, buildXlsx, isEmbeddableImage } from "../packages/analytics/dist/export/index.js";
 import { def, synthRows } from "../packages/analytics/dist/analyses/fixture.js";
 import { variableMetadata } from "../packages/analytics/dist/dataset.js";
 
@@ -101,8 +101,23 @@ async function fakeApi(route) {
     let report, results;
     if (body.reportId) { const r = store.reports.find((x) => x.id === body.reportId); report = r.definition; results = body.version ? store.reportVersions.find((v) => v.report_id === r.id && v.version === body.version).snapshot : reportResults(r.definition); }
     else { const a = body.analysisId ? store.analyses.find((x) => x.id === body.analysisId) : { id: "adhoc", name: body.definition.name, definition: body.definition }; const res = compute({ ...a.definition, name: a.name }); results = { [a.id]: res }; report = { title: a.name, mode: "live", blocks: [{ id: "c", type: "chart", analysisId: a.id, chart: body.chart ?? { type: res.recommendedCharts[0], options: {} } }, ...res.tables.map((t, i) => ({ id: `t${i}`, type: "table", analysisId: a.id, tableId: t.id }))] }; }
-    const buf = body.format === "xlsx" ? await buildXlsx({ report, results, theme: DEFAULT_THEME, settings: body.settings }) : await buildPptx({ report, results, theme: DEFAULT_THEME, settings: body.settings });
-    store.lastExport = { format: body.format ?? "pptx", bytes: buf.length };
+    /*
+     * §43 — the same validation the real route does, so the test exercises the
+     * path a customer's deck actually takes. AX_DEBUG_IMG prints what arrived
+     * and which blocks the export is building from: the first version of this
+     * check passed while exporting an UNSAVED report that contained no map at
+     * all, and that is what showed it.
+     */
+    const images = {};
+    for (const [blockId, uri] of Object.entries(body.images ?? {}).slice(0, 40)) {
+      const okImg = isEmbeddableImage(uri);
+      if (process.env.AX_DEBUG_IMG) console.log("  [img]", blockId, typeof uri === "string" ? `${uri.slice(0, 32)}… len=${uri.length}` : typeof uri, "accepted:", okImg);
+      if (typeof blockId === "string" && blockId.length <= 64 && okImg) images[blockId] = uri;
+    }
+    if (process.env.AX_DEBUG_IMG) console.log("  [img] blocks being exported:", (report.blocks ?? []).map((b) => `${b.id}:${b.type}`).join(", "));
+    const buf = body.format === "xlsx" ? await buildXlsx({ report, results, theme: DEFAULT_THEME, settings: body.settings }) : await buildPptx({ report, results, theme: DEFAULT_THEME, settings: body.settings, images });
+    store.lastExport = { format: body.format ?? "pptx", bytes: buf.length, images: Object.keys(images).length, mapNote: buf.toString("latin1").includes("Shown as ranked bars"), hasMedia: /ppt\/media\/image/.test(buf.toString("latin1")) };
+    if (process.env.AX_SHOTS && Object.keys(images).length) (await import("node:fs")).writeFileSync(`${process.env.AX_SHOTS}/map-deck.pptx`, buf);
     return route.fulfill({ status: 200, contentType: "application/octet-stream", headers: { "content-disposition": `attachment; filename="x.${body.format ?? "pptx"}"` }, body: buf });
   }
   if (head === "reports" && itemId && action === "publish") {
@@ -1128,6 +1143,100 @@ assert.ok(lum(darkSurfaces.card) < 0.3, `and its widget cards must not stay whit
 assert.ok(lum(darkSurfaces.card) > lum(darkSurfaces.page), "the card still lifts off the page");
 await shot("09e-dark-theme");
 ok("a dark theme renders dark end to end — the widget cards follow the theme instead of the stylesheet");
+
+console.log("\n§9g GETTING IT OUT — the map in the deck, and the dashboard on paper (§43)");
+/*
+ * A report containing a map: the deck used to substitute ranked bars and say
+ * so. The renderer on screen has already drawn the real map, so the export
+ * rasterises it and the slide carries the picture instead.
+ */
+await page.click('[data-testid="ax-tab-reports"]');
+// we are inside a builder from the previous section; the list is where reports are made
+if (await page.$('.ax-rb-bar .btn:has-text("← Reports")')) await page.click('.ax-rb-bar .btn:has-text("← Reports")');
+await page.waitForSelector('[data-testid="ax-new-report"]');
+await page.click('[data-testid="ax-new-report"]');
+await page.fill('[data-testid="ax-report-name"]', "Map report");
+await page.click('[data-testid="ax-report-create"]');
+await page.waitForSelector('[data-testid="ax-report-builder"]');
+await page.click('[data-testid="ax-add-chart"]');
+await page.selectOption('.modal select >> nth=0', { label: "Satisfaction by country (crosstab)" });
+await page.selectOption('.modal select >> nth=1', { label: "Country map" });
+await page.click('.modal .btn.primary:has-text("Done")');
+await page.waitForSelector('[data-testid="ax-chart"][data-chart-type="map_country"]');
+assert.ok(await page.$('[data-block-id] [data-testid="ax-chart"][data-chart-type="map_country"]'), "the map is rendered inside a block that can be keyed to a picture");
+/*
+ * The export builds from the SAVED definition, so an unsaved draft exports a
+ * report that does not contain the map at all — which is how the first
+ * version of this check passed while proving nothing.
+ */
+await page.click('[data-testid="ax-report-save"]');
+await page.waitForSelector('[data-testid="ax-report-save"]:has-text("Saved")');
+const savedMapBlocks = store.reports.find((r) => r.name === "Map report").definition.blocks;
+assert.ok(savedMapBlocks.some((b) => b.chart?.type === "map_country"), "the saved report really contains the map");
+await page.click('[data-testid="ax-report-export"]');
+await page.waitForSelector('[data-testid="ax-export-dialog"]');
+const [dlMap] = await Promise.all([page.waitForEvent("download"), page.click('[data-testid="ax-export-go"]')]);
+assert.match(dlMap.suggestedFilename(), /\.pptx$/);
+assert.equal(store.lastExport.images, 1, `the export should carry one rendered map, got ${store.lastExport.images}`);
+assert.equal(store.lastExport.mapNote, false, "and the slide should no longer apologise for drawing bars");
+assert.equal(store.lastExport.hasMedia, true, "the picture is really embedded in the deck, not merely accepted");
+ok("a map in a report reaches PowerPoint as the map that was on screen, not as ranked bars");
+
+// a dashboard has no deck or workbook, so printing is the route out — and it is offered
+await page.click('.ax-rb-bar .btn:has-text("← Reports")');
+await page.click('[data-testid="ax-report-card"]:has-text("Executive Dashboard")');
+await page.waitForSelector('[data-testid="ax-widget"]');
+assert.ok(await page.$('[data-testid="ax-dash-print"]'), "a dashboard offers Print / PDF");
+assert.equal(await count('[data-testid="ax-dash-print"]'), 1);
+/*
+ * And the printed page is the dashboard, not the builder around it: the
+ * widget rail, the tabs and the drag grips are all print-hidden, while the
+ * canvas keeps its arrangement rather than collapsing into one column.
+ */
+await page.emulateMedia({ media: "print" });
+await page.waitForTimeout(120);
+const printed = await page.evaluate(() => {
+  const vis = (sel) => Array.from(document.querySelectorAll(sel)).filter((e) => getComputedStyle(e).display !== "none").length;
+  const ws = Array.from(document.querySelectorAll('[data-testid="ax-widget"]'));
+  return {
+    side: vis(".ax-rb-side"), grips: vis('[data-testid="ax-widget-grip"]'), resizers: vis('[data-testid="ax-widget-resize"]'),
+    hero: vis('[data-testid="ax-hero"]'),
+    widths: [...new Set(ws.map((e) => Math.round(e.getBoundingClientRect().width)))].length,
+  };
+});
+assert.equal(printed.side, 0, "the builder's rail is not part of the document");
+assert.equal(printed.grips + printed.resizers, 0, "nor are the drag handles");
+assert.equal(printed.hero, 1, "the hero banner is");
+assert.ok(printed.widths > 1, "and the canvas keeps its arrangement rather than stacking into one column");
+await page.emulateMedia({ media: null });
+ok("printing a dashboard gives the dashboard — hero and layout kept, builder chrome dropped");
+
+console.log("\n§9f THE DASHBOARD ON A PHONE (§43)");
+/*
+ * The canvas is a 12-column grid; a phone has no such thing. The narrow
+ * layout was written in §40 and never actually looked at, which is the usual
+ * way a responsive rule turns out to be wrong.
+ */
+await page.setViewportSize({ width: 390, height: 844 });
+await page.waitForTimeout(150);
+const phone = await page.$$eval('[data-testid="ax-widget"]', (es) => es.map((e) => {
+  const r = e.getBoundingClientRect();
+  return { id: e.dataset.id, y: Math.round(r.y), left: Math.round(r.left), width: Math.round(r.width) };
+}));
+assert.ok(phone.length > 3, "the dashboard still has its widgets");
+const widths = [...new Set(phone.map((w) => w.width))];
+assert.equal(widths.length, 1, `every widget should be the same full width on a phone, got ${widths.join(", ")}`);
+assert.ok(phone.every((w) => w.left === phone[0].left), "and all start at the same left edge — one column, not twelve");
+// stacked in reading order, which is only true because the renderer sorts by position
+const tops = phone.map((w) => w.y);
+assert.deepEqual(tops, [...tops].sort((a, b) => a - b), "widgets stack down the page in the order they are read");
+assert.equal(await count('[data-testid="ax-widget-grip"]:visible'), 0, "no drag grips on a touch screen");
+const noHScroll = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
+assert.ok(noHScroll, "and the page does not scroll sideways");
+await shot("09f-phone");
+ok("on a phone the canvas becomes one column, in reading order, with no grips and no sideways scroll");
+await page.setViewportSize({ width: 1300, height: 1000 });
+await page.waitForTimeout(150);
 
 console.log("\n§10 EXISTING NAVIGATION UNCHANGED + NEW ENTRY POINTS");
 await page.goto(`${STUDIO}/`, { waitUntil: "networkidle" });
