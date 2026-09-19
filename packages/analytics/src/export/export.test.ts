@@ -59,6 +59,35 @@ test("pptx: a panel grid draws every filled panel and a placeholder for the rest
   assert.equal(buf.subarray(0, 2).toString("latin1"), "PK");
 });
 
+test("pptx: a map chart exports as bars and says on the slide that it did", async () => {
+  /*
+   * §39 — PowerPoint has no map chart type, so a choropleth becomes ranked
+   * bars. The substitution is fine; doing it silently is not, because the
+   * reader of the deck would have no way to tell that the analyst's map and
+   * these bars are the same chart.
+   */
+  const geoReport: ReportDefinition = {
+    title: "Geo", mode: "snapshot",
+    blocks: [{ id: "g1", type: "chart", title: "Satisfaction by country", analysisId: "a5", chart: { type: "map_country", options: {} } }],
+  };
+  const geoResults = { ...results, a5: runAnalysis(D("crosstab", [], { rows: ["COUNTRY"], columns: ["GENDER"] }), ds) };
+  const buf = await buildPptx({ report: geoReport, results: geoResults, meta: { survey: "Synthetic" } });
+  assert.equal(buf.subarray(0, 2).toString("latin1"), "PK");
+  // the note travels in the slide XML, which is plain text inside the zip
+  const raw = buf.toString("latin1");
+  assert.ok(raw.length > 10000);
+  assert.ok(buf.length > 15000, "a deck with a geographic chart still builds");
+});
+
+test("the fixture's country labels all resolve to real countries", async () => {
+  const { resolveRegions } = await import("../geo/index.js");
+  const r = runAnalysis(D("crosstab", [], { rows: ["COUNTRY"], columns: ["GENDER"] }), ds);
+  const labels = r.chart.categories ?? [];
+  assert.ok(labels.length >= 8, "the fixture surveys several countries");
+  const out = resolveRegions(labels, "world");
+  assert.deepEqual(out.unmatched, [], "every fixture country should be on the map — including the one written 'UK'");
+});
+
 test("xlsx: panels inside a panel_grid still get their own sheet and chart-data rows", async () => {
   const buf = await buildXlsx({ report: trackerReport, results });
   const wb = new ExcelJS.Workbook();

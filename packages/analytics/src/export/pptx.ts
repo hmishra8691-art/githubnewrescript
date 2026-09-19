@@ -96,6 +96,21 @@ function drawAnalysisVisual(
     return;
   }
   const { type, opts: chartOpts } = pptChartType(p, spec.type);
+  /*
+   * §39 — PowerPoint has no map. A geographic chart therefore leaves this
+   * export as ranked bars of the same numbers, which is a fair substitute but
+   * NOT what the author laid out on screen. It says so on the slide: a reader
+   * handed a deck of bars, when the analyst was looking at a choropleth, has
+   * no other way to know the two are the same chart. (Drawing the map as a
+   * picture in the deck is the next step, not a silent one.)
+   */
+  const isGeo = ["map_country", "map_state", "choropleth", "map_bubble", "map_heat"].includes(spec.type);
+  if (isGeo) {
+    s.addText("Shown as ranked bars — PowerPoint has no map chart; the map is on the dashboard.", {
+      x: box.x, y: Math.max(0.1, box.y - 0.22), w: box.w, h: 0.2,
+      fontSize: 8, italic: true, color: ctx.subtle, fontFace: ctx.font,
+    });
+  }
   const pctAxis = data[0]?.meta?.pct;
   const isScatter = type === p.ChartType.scatter;
   const chartData = isScatter && result.chart.points?.length

@@ -20,6 +20,13 @@ export const def = SurveyDefinition.parse({
     { id: "q_gender", code: "Q1", variableName: "GENDER", type: "single_select", text: "Gender", options: [{ code: 1, label: "Male" }, { code: 2, label: "Female" }] },
     { id: "q_age", code: "Q2", variableName: "AGE", type: "numeric", text: "Age" },
     { id: "q_region", code: "Q3", variableName: "REGION", type: "single_select", text: "Region", options: [{ code: 1, label: "North" }, { code: 2, label: "South" }, { code: 3, label: "East" }] },
+    /*
+     * §39 — a real geography, so the map charts have something to draw and the
+     * demo dataset can show a country map at all. Labels are written the way a
+     * questionnaire writes them (including "UK", which only resolves because
+     * the geo module carries the alias).
+     */
+    { id: "q_country", code: "Q3b", variableName: "COUNTRY", type: "single_select", text: "Country", options: [{ code: 1, label: "Germany" }, { code: 2, label: "France" }, { code: 3, label: "Spain" }, { code: 4, label: "Italy" }, { code: 5, label: "UK" }, { code: 6, label: "Sweden" }, { code: 7, label: "Poland" }, { code: 8, label: "Netherlands" }] },
     { id: "q_sat", code: "Q4", variableName: "SAT", type: "single_select", text: "Overall satisfaction", options: [1, 2, 3, 4, 5].map((c) => ({ code: c, label: `${c}` })) },
     { id: "q_nps", code: "Q5", variableName: "NPS", type: "nps", text: "Recommend?", settings: { minValue: 0, maxValue: 10 } },
     { id: "q_brands", code: "Q6", variableName: "AWARE", type: "multi_select", text: "Brands aware of", options: [{ code: 1, label: "Alpha" }, { code: 2, label: "Beta" }, { code: 3, label: "Gamma" }] },
@@ -35,7 +42,7 @@ export const def = SurveyDefinition.parse({
     { id: "q_cbc", code: "Q16", variableName: "CBC", type: "conjoint_task", text: "Choose", settings: { designRef: "d_cbc" } },
     { id: "q_md", code: "Q17", variableName: "MD", type: "maxdiff_task", text: "Best/worst", settings: { designRef: "d_md" } },
   ],
-  flow: [{ type: "page", id: "p1", questionIds: ["q_gender", "q_age", "q_region", "q_sat", "q_nps", "q_brands", "q_consider", "q_items", "q_rank", "q_alloc", "q_text", "q_cheap", "q_bargain", "q_exp", "q_tooexp", "q_cbc", "q_md"] }],
+  flow: [{ type: "page", id: "p1", questionIds: ["q_gender", "q_age", "q_region", "q_country", "q_sat", "q_nps", "q_brands", "q_consider", "q_items", "q_rank", "q_alloc", "q_text", "q_cheap", "q_bargain", "q_exp", "q_tooexp", "q_cbc", "q_md"] }],
 });
 
 const PRICE_U: Record<string, number> = { $10: 1.2, $20: 0, $30: -1.2 }, BRAND_U: Record<string, number> = { Alpha: 0.4, Beta: -0.4 }, WARR_U: Record<string, number> = { "1 year": -0.2, "2 years": 0.2 };
@@ -51,8 +58,18 @@ export function synthRows(n = 400, seed = 11): AnalyticsRow[] {
     const gender = r() < 0.5 ? 1 : 2;
     const age = Math.round(18 + r() * 60);
     const region = 1 + Math.floor(r() * 3);
+    /*
+     * Country is assigned from the row index, NOT from `r()`. Drawing it from
+     * the shared stream would shift every random draw after it and silently
+     * re-roll the whole fixture — the planted gender effect, the conjoint
+     * utilities, the significance tests every other suite asserts against.
+     * The modest per-market lift keeps gender the dominant effect while still
+     * giving a country map a gradient to show.
+     */
+    const country = 1 + (i % 8);
+    const countryLift = [0, 0.3, -0.25, 0.15, -0.15, 0.35, 0.4, -0.3, 0.2][country];
     // women more satisfied
-    const satBase = gender === 2 ? 3.8 : 3.0;
+    const satBase = (gender === 2 ? 3.8 : 3.0) + countryLift;
     const sat = Math.max(1, Math.min(5, Math.round(satBase + (r() - 0.5) * 2.4)));
     const npsv = Math.max(0, Math.min(10, Math.round(sat * 1.8 + (r() - 0.5) * 3)));
     const aware = [1, 2, 3].filter((b) => r() < [0.9, 0.7, 0.4][b - 1]);
@@ -79,7 +96,7 @@ export function synthRows(n = 400, seed = 11): AnalyticsRow[] {
     rows.push({
       id: `r${i}`, session_id: `s${i}`, respondent_code: `LIVE_${i}`, status: "complete", is_test: false, started_at: started.toISOString(), completed_at: new Date(started.getTime() + (300 + r() * 600) * 1000).toISOString(),
       quality: { classification: r() < 0.9 ? "CLEAN" : "SUSPECT", qualityScore: 80, riskScore: 10 },
-      answers: { q_gender: gender, q_age: age, q_region: region, q_sat: sat, q_nps: npsv, q_brands: aware, q_consider: consider, q_items: items, q_rank: rank, q_alloc: { 1: a1, 2: a2, 3: 100 - a1 - a2 }, q_text: sat >= 4 ? WORDS_POS[i % 4] : sat <= 2 ? WORDS_NEG[i % 4] : "", q_cheap: cheap, q_bargain: bargain, q_exp: exp, q_tooexp: tooexp, q_cbc: cbcAns, q_md: mdAns },
+      answers: { q_gender: gender, q_age: age, q_region: region, q_country: country, q_sat: sat, q_nps: npsv, q_brands: aware, q_consider: consider, q_items: items, q_rank: rank, q_alloc: { 1: a1, 2: a2, 3: 100 - a1 - a2 }, q_text: sat >= 4 ? WORDS_POS[i % 4] : sat <= 2 ? WORDS_NEG[i % 4] : "", q_cheap: cheap, q_bargain: bargain, q_exp: exp, q_tooexp: tooexp, q_cbc: cbcAns, q_md: mdAns },
       calculated: {}, embedded: {}, flags: [],
     });
   }

@@ -100,8 +100,16 @@ export const CHART_CATALOG: { type: ChartType; family: ChartFamily; label: strin
   { type: "map_country", family: "geographic", label: "Country map", description: "Values by country", needs: ["categories", "series"] },
   { type: "map_state", family: "geographic", label: "State / region map", description: "Values by region", needs: ["categories", "series"] },
   { type: "choropleth", family: "geographic", label: "Choropleth", description: "Shaded regions", needs: ["categories", "series"] },
-  { type: "map_bubble", family: "geographic", label: "Bubble map", description: "Sized markers on a map", needs: ["points"] },
-  { type: "map_heat", family: "geographic", label: "Heat map (geo)", description: "Density on a map", needs: ["points"] },
+  /*
+   * §39 — these two ask for CATEGORIES, not points, because that is what a
+   * survey produces: "Germany → 72", not a longitude. The marker goes on the
+   * region's centroid. They still draw real coordinates when an analysis
+   * supplies them and the author confirms the points are lon/lat
+   * (`pointsAreCoordinates`), which is opt-in precisely because a scatter of
+   * satisfaction against age would otherwise pass for a map of West Africa.
+   */
+  { type: "map_bubble", family: "geographic", label: "Bubble map", description: "Sized markers on a map", needs: ["categories", "series"] },
+  { type: "map_heat", family: "geographic", label: "Heat map (geo)", description: "Density on a map", needs: ["categories", "series"] },
   { type: "word_cloud", family: "text", label: "Word cloud", description: "Word frequency", needs: ["words"] },
   { type: "keyword_bar", family: "text", label: "Keyword bar", description: "Top keywords", needs: ["words"] },
   { type: "theme_distribution", family: "text", label: "Theme distribution", description: "Coded themes", needs: ["tree"] },

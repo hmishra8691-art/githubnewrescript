@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { AnalysisResult, ChartSpec, ChartType, ReportTheme, ChartData, TreeNode } from "@rescript/analytics";
-import { DEFAULT_THEME, seriesForChart } from "@rescript/analytics";
+import { DEFAULT_THEME, seriesForChart, fitProjection, regionPath, regionsFor, resolveRegions, worldViewRegions, type Region } from "@rescript/analytics";
 import { ProTable } from "../ProTable";
 
 /**
@@ -70,7 +70,8 @@ export function Chart(props: ChartProps) {
   if (t === "table") body = <foreignObject x={0} y={inner.y} width={W} height={inner.h}><div style={{ overflow: "auto", maxHeight: inner.h }}><ResultTableView table={props.result.tables[0]} /></div></foreignObject>;
   else if (["pie", "donut", "donut_semi", "donut_nested", "donut_radial", "segment_size"].includes(t)) body = <PieChart ctx={ctx} inner={inner} series={shown} type={t} />;
   else if (["line", "line_multi", "spline", "step_line", "rolling_average", "wave_trend", "yoy_trend", "mom_trend", "area", "area_stacked", "sentiment_trend", "demand_curve", "purchase_probability", "revenue_curve", "price_elasticity", "price_sensitivity", "bump"].includes(t)) body = <LineChart ctx={ctx} inner={inner} series={shown} type={t} />;
-  else if (["scatter", "bubble", "scatter_trendline", "scatter_ci", "heatmap_ipa", "segment_bubble", "map_bubble", "map_heat"].includes(t)) body = <ScatterChart ctx={ctx} inner={inner} data={d} type={t} />;
+  else if (["map_country", "map_state", "choropleth", "map_bubble", "map_heat"].includes(t)) body = <MapChart ctx={ctx} inner={inner} data={d} series={shown} type={t} />;
+  else if (["scatter", "bubble", "scatter_trendline", "scatter_ci", "heatmap_ipa", "segment_bubble"].includes(t)) body = <ScatterChart ctx={ctx} inner={inner} data={d} type={t} />;
   else if (["heatmap", "heatmap_crosstab", "heatmap_correlation", "heatmap_satisfaction", "heatmap_quota", "correlation_matrix", "correlogram", "rank_heatmap", "segment_heatmap", "maxdiff_heatmap", "maxdiff_segment", "theme_segment_heatmap", "marimekko"].includes(t)) body = <HeatmapChart ctx={ctx} inner={inner} data={d} series={shown} type={t} />;
   else if (["radar", "spider", "radar_multi", "radar_brand", "radar_segment"].includes(t)) body = <RadarChart ctx={ctx} inner={inner} series={shown} type={t} />;
   else if (["funnel", "funnel_brand", "funnel_purchase", "funnel_awareness", "funnel_dropout"].includes(t)) body = <FunnelChart ctx={ctx} inner={inner} series={shown} />;
@@ -83,7 +84,6 @@ export function Chart(props: ChartProps) {
   else if (["waterfall"].includes(t)) body = <WaterfallChart ctx={ctx} inner={inner} series={shown} />;
   else if (t === "parallel_coordinates") body = <ParallelChart ctx={ctx} inner={inner} series={shown} />;
   else if (["histogram", "density"].includes(t)) body = <BarChart ctx={ctx} inner={inner} series={shown} type={t === "density" ? "area" : "bar_vertical"} tight />;
-  else if (["map_country", "map_state", "choropleth"].includes(t)) body = <BarChart ctx={ctx} inner={inner} series={shown} type="bar_horizontal" note="Geographic rendering shows values by region as ranked bars" />;
   else body = <BarChart ctx={ctx} inner={inner} series={shown} type={t} />;
 
   const base = props.result.base;
@@ -357,6 +357,222 @@ function ScatterChart({ ctx, inner, data, type }: { ctx: Ctx; inner: { x: number
       {groups.length > 1 && groups.map((g, i) => <g key={g} transform={`translate(${px + 6 + i * 130},${py + ph + 30})`}><circle r={5} cx={5} cy={0} fill={ctx.colors[i % ctx.colors.length]} /><text x={14} y={4} fill={ctx.textColor}>{trunc(g, 18)}</text></g>)}
       {ctx.opts.xLabel && <text x={px + pw / 2} y={inner.y + inner.h - 2} textAnchor="middle" fill={ctx.subtle}>{ctx.opts.xLabel}</text>}
       {ctx.opts.yLabel && <text x={12} y={py + ph / 2} textAnchor="middle" fill={ctx.subtle} transform={`rotate(-90 12 ${py + ph / 2})`}>{ctx.opts.yLabel}</text>}
+    </g>
+  );
+}
+
+/* ------------------------------------------------------------ maps */
+
+/**
+ * §39 — REAL MAPS. Until now every geographic chart type quietly drew
+ * something else: `map_country` / `map_state` / `choropleth` fell back to a
+ * ranked bar chart, and `map_bubble` / `map_heat` to a scatter plot whose axes
+ * were longitude and latitude in name only. A researcher who picked "Country
+ * map" got bars and a footnote explaining that they were bars.
+ *
+ * This draws the map. Outlines come from `@rescript/analytics`'s geo module —
+ * baked into the package at authoring time so the chart library still has no
+ * runtime dependency, the same rule every other chart here follows.
+ *
+ * Two shapes of data arrive:
+ *  - CATEGORIES ("Germany" → 72), the ordinary survey shape, which shades a
+ *    region (choropleth) or drops a sized marker on its centroid (bubble);
+ *  - POINTS (lon/lat), which drop markers where they actually are.
+ *
+ * Labels that resolve to no region are counted and named under the map rather
+ * than dropped, because a country missing from a choropleth reads as "nobody
+ * there" — a claim about the data, not about the spelling.
+ */
+function MapChart({ ctx, inner, data, series, type }: { ctx: Ctx; inner: { x: number; y: number; w: number; h: number }; data: ChartData; series: ReturnType<typeof seriesForChart>; type: string }) {
+  const asBubbles = type === "map_bubble" || type === "map_heat";
+  const s = series[0];
+  /*
+   * Points are only ever coordinates when someone has SAID they are. Survey
+   * scatter data (satisfaction against age, price against rating) is made of
+   * numbers that pass every "is this a valid lon/lat" check there is, so
+   * sniffing the range would quietly relocate a study to the Atlantic.
+   */
+  const geoPoints = (ctx.opts.pointsAreCoordinates ? data.points : undefined)?.filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y) && Math.abs(p.x) <= 180 && Math.abs(p.y) <= 90) ?? [];
+  const usePoints = asBubbles && geoPoints.length > 0;
+
+  const labels = s?.labels ?? [];
+  const resolved = resolveRegions(labels, ctx.opts.mapScope as "world" | "us" | undefined);
+  const values = new Map<string, number | null>();
+  for (const m of resolved.matched) values.set(m.region.code, s?.values[m.index] ?? null);
+
+  const [, setHover] = ctx.hover;
+  const noteH = 16;
+  const legendH = 20;
+  const mapH = Math.max(40, inner.h - legendH - noteH - 4);
+  const mapW = inner.w;
+
+  /*
+   * The view is fitted to the regions that CARRY DATA, not to the whole
+   * scope, so a study run in six European countries draws a map of Europe
+   * rather than a world map with six specks on it. Points, when given, fit to
+   * themselves the same way.
+   */
+  const fitTargets: Region[] = usePoints
+    ? [{ code: "", name: "", a3: "", lon: 0, lat: 0, rings: [geoPoints.flatMap((p) => [p.x, p.y])] }]
+    : resolved.matched.map((m) => m.region);
+  const scopeRegions = regionsFor(resolved.scope);
+  const proj = fitProjection(fitTargets.length ? fitTargets : worldViewRegions(resolved.scope), mapW, mapH, usePoints ? 0.12 : 0.06);
+
+  const nums = [...values.values()].filter((v): v is number => v != null);
+  const pointVals = geoPoints.map((p) => p.size ?? 1);
+  const min = Math.min(...(usePoints ? pointVals : nums.length ? nums : [0]));
+  const max = Math.max(...(usePoints ? pointVals : nums.length ? nums : [1]));
+  const diverging = nums.some((v) => v < 0);
+  /*
+   * When every value rounds to the same figure, the map prints the same
+   * number on every region and reads as broken data rather than as a narrow
+   * spread. One borrowed decimal makes the differences visible; the shading
+   * was always accurate, only the labels were not.
+   */
+  const span = max - min;
+  const valueDecimals = span > 0 && span < Math.pow(10, -ctx.decimals) * 5 ? ctx.decimals + 1 : ctx.decimals;
+
+  /*
+   * A marker's AREA carries its value, not its radius. Scaling the radius
+   * linearly between the smallest and largest value drew 9% as a 5px dot next
+   * to 15% as a 21px disc — a seventeen-fold difference in ink for a
+   * difference of two thirds. Radius therefore goes as the square root of the
+   * value against the largest one, which is the encoding a reader's eye
+   * actually decodes.
+   */
+  const markerRadius = (v: number) => {
+    const top = Math.max(Math.abs(max), Math.abs(min), 1e-9);
+    return clamp(Math.sqrt(Math.abs(v) / top) * 22, 3, 24);
+  };
+
+  const dy = (v: number) => inner.y + v;
+  const nothingResolved = !usePoints && resolved.matched.length === 0;
+
+  return (
+    <g fontFamily={ctx.font} fontSize={ctx.fs - 3}>
+      {/* the basemap: every region in scope, so a shaded one has context around it */}
+      <g transform={`translate(0,${inner.y})`}>
+        {scopeRegions.map((r) => {
+          const v = values.get(r.code);
+          const has = !asBubbles && v != null;
+          return (
+            <path key={r.code} d={regionPath(r, proj)}
+              fill={has ? heat(v, min, max, diverging, ctx.theme.colors.primary) : "#eef1f6"}
+              stroke={ctx.sel === r.name ? ctx.theme.colors.accent : "#ffffff"} strokeWidth={ctx.sel === r.name ? 2 : 0.6}
+              style={{ cursor: has && ctx.onSelect ? "pointer" : "default" }}
+              onClick={has && ctx.onSelect ? () => ctx.onSelect!(ctx.sel === r.name ? null : r.name) : undefined}
+              onMouseEnter={has ? () => setHover(`${r.name}: ${fmt(v, valueDecimals, ctx.pct)}`) : undefined}
+              onMouseLeave={has ? () => setHover(null) : undefined} />
+          );
+        })}
+
+        {/* choropleth value labels, only where the shape is big enough to hold one */}
+        {!asBubbles && (ctx.opts.dataLabels ?? true) && resolved.matched.map(({ region, index }) => {
+          const v = s?.values[index];
+          if (v == null) return null;
+          let largest: number[] | null = null;
+          for (const ring of region.rings) if (!largest || ring.length > largest.length) largest = ring;
+          if (!largest) return null;
+          let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+          /*
+           * The label goes on the shape's AREA centroid, not its bounding-box
+           * centre. For the United Kingdom the box is mostly sea, and the box
+           * centre put "9%" in the Irish Sea, reading as a label for nothing.
+           * The area centroid lands on the landmass that dominates the shape.
+           */
+          let a2 = 0, cxAcc = 0, cyAcc = 0, prevX = 0, prevY = 0;
+          for (let i = 0; i < largest.length; i += 2) {
+            const x = proj.x(largest[i], largest[i + 1]), y = proj.y(largest[i], largest[i + 1]);
+            if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y;
+            if (i > 0) { const cross = prevX * y - x * prevY; a2 += cross; cxAcc += (prevX + x) * cross; cyAcc += (prevY + y) * cross; }
+            prevX = x; prevY = y;
+          }
+          if (maxX - minX < 26 || maxY - minY < 14) return null;
+          const usable = Math.abs(a2) > 1e-6;
+          const cx = usable ? cxAcc / (3 * a2) : (minX + maxX) / 2;
+          const cy = usable ? cyAcc / (3 * a2) : (minY + maxY) / 2;
+          const t = (max === min ? 0.5 : (v - min) / (max - min));
+          return <text key={region.code} x={cx} y={cy + 3} textAnchor="middle" pointerEvents="none"
+            fill={t > 0.55 ? "#fff" : ctx.textColor} fontWeight={600}>{fmt(v, valueDecimals, ctx.pct)}</text>;
+        })}
+
+        {/* bubbles: on real coordinates when given, else on each region's centroid */}
+        {asBubbles && (usePoints
+          ? geoPoints.map((p, i) => {
+            const r = markerRadius(p.size ?? 1);
+            return <g key={i} onMouseEnter={() => setHover(`${p.label ?? ""}${p.label ? ": " : ""}${fmt(p.size ?? 0, ctx.decimals, ctx.pct)}`)} onMouseLeave={() => setHover(null)}>
+              <circle cx={proj.x(p.x, p.y)} cy={proj.y(p.x, p.y)} r={r} fill={ctx.theme.colors.primary} opacity={type === "map_heat" ? 0.35 : 0.72} stroke="#fff" strokeWidth={1} />
+            </g>;
+          })
+          : resolved.matched.map(({ region, index }) => {
+            const v = s?.values[index]; if (v == null) return null;
+            const r = markerRadius(v);
+            const x = proj.x(region.lon, region.lat), y = proj.y(region.lon, region.lat);
+            return <g key={region.code} style={{ cursor: ctx.onSelect ? "pointer" : "default" }}
+              onClick={ctx.onSelect ? () => ctx.onSelect!(ctx.sel === region.name ? null : region.name) : undefined}
+              onMouseEnter={() => setHover(`${region.name}: ${fmt(v, ctx.decimals, ctx.pct)}`)} onMouseLeave={() => setHover(null)}>
+              <circle cx={x} cy={y} r={r} fill={ctx.theme.colors.primary} opacity={0.75} stroke="#fff" strokeWidth={1.5} />
+              {r >= 11 && <text x={x} y={y + 3} textAnchor="middle" fill="#fff" fontWeight={700} pointerEvents="none">{fmt(v, 0, false)}</text>}
+            </g>;
+          }))}
+      </g>
+
+      {nothingResolved && (
+        <text x={inner.x + mapW / 2} y={dy(mapH / 2)} textAnchor="middle" fill={ctx.subtle} fontSize={ctx.fs}>
+          {labels.length ? "No category matched a country or state — check the labels." : "No data to map."}
+        </text>
+      )}
+
+      {/*
+        * WHICH NUMBER IS ON THE MAP. A region can only be shaded by one
+        * series, so a crosstab — which has one series per column — gets its
+        * first. Saying so is not a nicety: an unlabelled choropleth of
+        * "Satisfaction: 1" is indistinguishable from one of "Satisfaction: 5",
+        * and the reader would have no way to know they were looking at the
+        * wrong one. The chart's own legend switches series by hiding the rest.
+        */}
+      {!nothingResolved && !usePoints && series.length > 1 && s?.name && (
+        <text x={inner.x + 2} y={dy(12)} fill={ctx.subtle} data-testid="ax-map-series">{asBubbles ? "Sizing" : "Shading"}: {trunc(s.name, 32)}</text>
+      )}
+
+      {/* the scale, so a shade means something */}
+      {!nothingResolved && !asBubbles && nums.length > 0 && (() => {
+        const lw = Math.min(160, mapW * 0.4), lx = inner.x + 2, ly = dy(mapH + 6);
+        /*
+         * The ends of the scale use the same borrowed precision as the
+         * region labels, so a narrow spread does not print "0%" twice.
+         */
+        return <g>
+          {Array.from({ length: 24 }, (_, i) => <rect key={i} x={lx + (i / 24) * lw} y={ly} width={lw / 24 + 0.5} height={8}
+            fill={heat(min + ((max - min) * i) / 23, min, max, diverging, ctx.theme.colors.primary)} />)}
+          <text x={lx} y={ly + 19} fill={ctx.subtle}>{fmt(min, valueDecimals, ctx.pct)}</text>
+          <text x={lx + lw} y={ly + 19} textAnchor="end" fill={ctx.subtle}>{fmt(max, valueDecimals, ctx.pct)}</text>
+        </g>;
+      })()}
+
+      {/*
+        * On a bubble map the VALUE is the marker's size, so the colour ramp
+        * above would explain nothing. The range does: without it a reader can
+        * see that one circle is bigger than another and still not know what
+        * either one is worth.
+        */}
+      {!nothingResolved && asBubbles && (nums.length > 0 || usePoints) && (
+        <text x={inner.x + 2} y={dy(mapH + 19)} fill={ctx.subtle} data-testid="ax-map-size-scale">
+          Marker size: {fmt(min, valueDecimals, ctx.pct)} – {fmt(max, valueDecimals, ctx.pct)}
+        </text>
+      )}
+
+      {/*
+        * What the map could NOT show. This is the line that keeps a map
+        * honest: three unreadable labels are three regions left blank, and a
+        * reader has no way to tell that from three regions with no
+        * respondents.
+        */}
+      {!usePoints && resolved.unmatched.length > 0 && (
+        <text x={inner.x + mapW} y={dy(mapH + 25)} textAnchor="end" fill={ctx.subtle} data-testid="ax-map-unmatched">
+          {resolved.unmatched.length} not on the map: {trunc(resolved.unmatched.join(", "), 58)}
+        </text>
+      )}
     </g>
   );
 }

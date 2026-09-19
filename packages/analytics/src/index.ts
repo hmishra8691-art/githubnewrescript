@@ -6,4 +6,5 @@ export * from "./recommend.js";
 export * from "./summary.js";
 export * from "./export/shared.js";
 export * from "./reportPages.js";
+export * from "./geo/index.js";
 export * from "./fieldwork.js";

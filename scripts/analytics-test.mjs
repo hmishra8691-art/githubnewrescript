@@ -269,6 +269,20 @@ assert.ok(await page.$('[data-testid="ax-chart"][data-chart-type="heatmap_crosst
 await page.click('.ax-fam:has-text("Text")');
 assert.ok(await page.$('[data-testid="ax-chart-word_cloud"][disabled]'), "word cloud disabled for a crosstab");
 ok("chart families browsable; unsuitable charts (word cloud) are disabled, heatmap renders");
+/*
+ * §39 — the honest-failure path. This analysis's categories are satisfaction
+ * scores, which are not places. The map must SAY so rather than drawing an
+ * empty world that reads as "no respondents anywhere".
+ */
+await page.click('.ax-fam:text-is("Maps")');
+await page.click('[data-testid="ax-chart-map_country"]');
+await page.waitForSelector('[data-testid="ax-chart"][data-chart-type="map_country"]');
+assert.match(await text('[data-testid="ax-chart"]'), /No category matched a country or state/);
+ok("a map whose categories are not places says so instead of drawing an empty world");
+// put the heatmap back: the rest of this suite saves and asserts on THAT chart
+await page.click('.ax-fam:text-is("Heatmaps")');
+await page.click('[data-testid="ax-chart-heatmap_crosstab"]');
+await page.waitForSelector('[data-testid="ax-chart"][data-chart-type="heatmap_crosstab"]');
 await page.click('[data-testid="ax-customize-toggle"]');
 await page.waitForSelector('[data-testid="ax-customize"]');
 await page.fill('.ax-customize input[placeholder="Satisfaction by gender"]', "Satisfaction × Gender (25+)");
@@ -326,14 +340,50 @@ assert.ok(await page.$('[data-testid="ax-chart"][data-chart-type="word_cloud"]')
 ok("text analytics: word cloud recommended and drawn");
 assert.equal(store.analyses.length, 4);
 
+console.log("\n§5c GEOGRAPHIC CHARTS — a real map, not bars with a footnote (§39)");
+await page.click('[data-testid="ax-tab-home"]'); await page.click('[data-testid="ax-quick-analysis"]');
+await page.waitForSelector('[data-testid="ax-builder"]');
+await page.click('[data-testid="ax-kind-crosstab"]'); await page.fill('[data-testid="ax-name"]', "Satisfaction by country");
+await page.click('[data-testid="ax-step-1"]');
+await page.click('.ax-var:has-text("COUNTRY · Categorical") input');
+await page.click('.ax-var:has-text("GENDER · Categorical") input');
+await page.click('[data-testid="ax-run"]'); await page.waitForSelector('[data-testid="ax-result"]');
+await page.click('.ax-tab:has-text("Chart")');
+await page.click('.ax-fam:text-is("Maps")');
+await page.click('[data-testid="ax-chart-map_country"]');
+await page.waitForSelector('[data-testid="ax-chart"][data-chart-type="map_country"]');
+const mapPaths = await count('[data-testid="ax-chart"] path');
+assert.ok(mapPaths > 100, `a country map draws the whole basemap, got ${mapPaths} paths`);
+// the eight surveyed countries are shaded; the rest of the world is the basemap
+const shaded = await page.$$eval('[data-testid="ax-chart"] path', (ps) => ps.filter((p) => (p.getAttribute("fill") ?? "").startsWith("rgba")).length);
+assert.equal(shaded, 8, `the eight countries in the data should be shaded, got ${shaded}`);
+assert.equal(await count('[data-testid="ax-map-unmatched"]'), 0, "every country label resolved, so there is nothing to warn about");
+// a crosstab has one series per column, and only one can be shaded — the map says which
+assert.match(await text('[data-testid="ax-map-series"]'), /^Shading: /, "the map names the series it is shading");
+await shot("05c-country-map");
+ok("country map: a real projected basemap, the surveyed countries shaded, the shaded series named, no unmatched labels");
+await page.click('[data-testid="ax-chart-map_bubble"]');
+await page.waitForSelector('[data-testid="ax-chart"][data-chart-type="map_bubble"]');
+assert.equal(await count('[data-testid="ax-chart"] circle'), 8, "a bubble map drops one marker per country, on its centroid");
+// a bubble map encodes the value as size, so it must not also shade the regions
+const bubbleShaded = await page.$$eval('[data-testid="ax-chart"] path', (ps) => ps.filter((p) => (p.getAttribute("fill") ?? "").startsWith("rgba")).length);
+assert.equal(bubbleShaded, 0, "a bubble map leaves the basemap neutral instead of also drawing a choropleth under the markers");
+assert.match(await text('[data-testid="ax-map-size-scale"]'), /^Marker size: /, "and says what a marker's size is worth");
+await shot("05c-bubble-map");
+ok("bubble map: one sized marker per country, placed on the map rather than on a scatter plot");
+await page.click('[data-testid="ax-save"]'); await page.waitForSelector('[data-testid="ax-msg"]:has-text("Analysis saved")');
+// hand the workspace back the way §5b expects to find it: "Open ends" open
+await page.click('[data-testid="ax-rail-item"]:has-text("Open ends")');
+await page.waitForSelector('[data-testid="ax-rail-item"].on:has-text("Open ends")');
+
 console.log("\n§5b THE ANALYSES RAIL, THE FOUR STAGES, THE PROFESSIONAL TABLE");
 // the rail lists every saved analysis; the open one is highlighted; the stage bar reads Builder → Results → Visualization → Export
 await page.waitForSelector('[data-testid="ax-rail"]');
-assert.equal(await count('[data-testid="ax-rail-item"]'), 4);
+assert.equal(await count('[data-testid="ax-rail-item"]'), 5);
 assert.match(await text('[data-testid="ax-rail-item"].on'), /Open ends/);
 assert.deepEqual(await page.$$eval('.ax-stage', (es) => es.map((e) => e.textContent.replace(/^\d/, "").trim())), ["Builder", "Results", "Visualization", "Export"]);
 assert.equal(await text('[data-testid="ax-savestate"]'), "Saved · v1");
-ok("Analyses rail lists the four saved analyses with the open one highlighted; stages read Builder → Results → Visualization → Export");
+ok("Analyses rail lists the five saved analyses with the open one highlighted; stages read Builder → Results → Visualization → Export");
 // Visualization: the chart workbench with full screen and PNG / SVG; Export: the deliverables stage
 await page.click('[data-testid="ax-stage-chart"]');
 await page.waitForSelector('[data-testid="ax-result"][data-view="chart"]');
@@ -366,7 +416,7 @@ await page.hover('[data-testid="ax-rail-item"] >> nth=0');
 await page.click('[data-testid="ax-rail-item"] >> nth=0 >> [data-testid="ax-rail-menu"]');
 await page.click('[data-testid="ax-rail-duplicate"]');
 await page.waitForSelector('[data-testid="ax-rail-item"]:has-text("(copy)")');
-assert.equal(store.analyses.length, 5);
+assert.equal(store.analyses.length, 6);
 const copy = store.analyses.find((a) => a.name.endsWith("(copy)"));
 const source = store.analyses.find((a) => a.id !== copy.id && `${a.name} (copy)` === copy.name);
 assert.deepEqual({ ...copy.definition, name: 0 }, { ...source.definition, name: 0 }, "the copy carries the definition");

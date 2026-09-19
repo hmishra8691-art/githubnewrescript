@@ -247,6 +247,23 @@ export interface ChartOptions {
   width?: number;
   height?: number;
   orientation?: "horizontal" | "vertical";
+  /**
+   * §39 — which gazetteer a map chart resolves its categories against.
+   * Left unset, the map picks whichever explains more of the labels, so a
+   * banner of US states and one of countries both just work; set it when the
+   * data is ambiguous (a "Georgia" that is the country, not the state).
+   */
+  mapScope?: "world" | "us";
+  /**
+   * §39 — treat this result's `points` as longitude/latitude.
+   *
+   * Off by default, and deliberately opt-in: a scatter of satisfaction (1–5)
+   * against age (18–78) consists of numbers that are perfectly valid
+   * coordinates, and a map that plotted them would place this study's
+   * respondents in the Gulf of Guinea without ever admitting it. A map draws
+   * points only when someone has said they are places.
+   */
+  pointsAreCoordinates?: boolean;
   sort?: "none" | "asc" | "desc" | "value" | "label";
   topN?: number;
   hiddenCategories?: string[];
