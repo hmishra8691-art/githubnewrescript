@@ -2,6 +2,7 @@ import ExcelJS from "exceljs";
 import type { SurveyDefinition } from "@rescript/schema";
 import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
 import type { ResponseStateLike } from "./csv.js";
+import { renderValue, renderHeader, type ValueMode, type HeaderMode } from "./valueRendering.js";
 
 /**
  * Response data with the quality assessment — two sheets, as the researcher
@@ -99,14 +100,23 @@ export interface ResponseXlsxOptions {
    * which, because a file that mixes them and does not is the bug.
    */
   environmentColumn?: boolean;
+  /**
+   * How a coded answer is written into the cells, and what the column heading
+   * says. Both default to the codes-and-names workbook this has always
+   * produced, so an existing caller sees no change.
+   */
+  valueMode?: ValueMode;
+  headerMode?: HeaderMode;
 }
 
 export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityExportRow[], opts: ResponseXlsxOptions = {}): Promise<Buffer> {
   const filter = opts.dataset ?? { kind: "all" };
+  const valueMode = opts.valueMode ?? "code";
+  const headerMode = opts.headerMode ?? "name";
   const dict = buildVariableDictionary(def);
   const varNames: string[] = [];
-  const seen = new Set<string>();
-  for (const v of dict) { if (v.responseType === "system" || seen.has(v.name)) continue; seen.add(v.name); varNames.push(v.name); }
+  const defs = new Map<string, (typeof dict)[number]>();
+  for (const v of dict) { if (v.responseType === "system" || defs.has(v.name)) continue; defs.set(v.name, v); varNames.push(v.name); }
 
   const wb = new ExcelJS.Workbook();
   wb.creator = "rescript";
@@ -124,13 +134,13 @@ export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityEx
   const sampleCols = rows.some((r) => r.state.sampleSource) ? [...SAMPLE_COLUMNS] : [];
   const mixed = rows.some((r) => r.state.isTest) && rows.some((r) => !r.state.isTest);
   const envCols = (opts.environmentColumn ?? mixed) ? [...ENVIRONMENT_COLUMNS] : [];
-  const header = ["Response ID", "Status", "Start Time", "End Time", ...varNames, ...qualityCols, ...sampleCols, ...envCols];
+  const header = ["Response ID", "Status", "Start Time", "End Time", ...varNames.map((n) => renderHeader(defs.get(n), n, headerMode)), ...qualityCols, ...sampleCols, ...envCols];
   main.columns = header.map((h) => ({ header: h, key: h, width: Math.min(40, Math.max(12, h.length + 2)) }));
   const included = rows.filter((r) => inDataset(r, filter));
   for (const r of included) {
     const flat = flattenVariables(def, r.state as any);
     const line: unknown[] = [r.state.sessionId, r.state.status, r.state.startedAt ?? "", r.state.completedAt ?? ""];
-    for (const v of varNames) line.push(cell(flat[v]));
+    for (const v of varNames) line.push(cell(renderValue(flat[v], defs.get(v), valueMode)));
     if (opts.qualityColumns) {
       line.push(r.quality?.classification ?? "UNSCORED", r.quality?.qualityScore ?? "", r.quality?.riskScore ?? "", r.review.status === "REMOVE" ? "REMOVED" : r.review.status === "KEEP" ? "KEPT" : r.review.status === "REVIEW_LATER" ? "REVIEW_LATER" : "ACTIVE");
     }

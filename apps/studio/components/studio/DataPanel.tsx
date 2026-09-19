@@ -66,6 +66,13 @@ export function DataPanel() {
   const [view, setView] = React.useState<"responses" | "manage" | "quality">("responses");
   const [dataset, setDataset] = React.useState<Dataset>("all");
   const [exclude, setExclude] = React.useState<string[]>(["SUSPICIOUS", "HIGHLY_SUSPICIOUS", "CRITICAL"]);
+  /*
+   * How coded answers are written into the downloaded file. `code` is the
+   * default and always has been — a data processor's file — so a researcher
+   * who never opens this control keeps getting exactly what they got before.
+   */
+  const [values, setValues] = React.useState<"code" | "label" | "code_label">("code");
+  const [showExports, setShowExports] = React.useState(false);
   const [meta, setMeta] = React.useState<{ total: number; included: number } | null>(null);
   const datasetParam = dataset === "custom" ? `custom:${exclude.join(",")}` : dataset;
 
@@ -105,8 +112,19 @@ export function DataPanel() {
   }, [columns, rows, onlyAnswered]);
 
   const hasQuality = !!rows?.some((r) => r.quality);
-  const csvHref = `/api/surveys/${s.surveyDbId}/responses?format=csv&include=${include}&dataset=${encodeURIComponent(datasetParam)}${hasQuality || dataset !== "all" ? "&quality=1" : ""}`;
-  const xlsxHref = `/api/surveys/${s.surveyDbId}/responses?format=xlsx&include=${include}&dataset=${encodeURIComponent(datasetParam)}&quality=1`;
+  const exportUrl = (format: string, extra = "") =>
+    `/api/surveys/${s.surveyDbId}/responses?format=${format}&include=${include}&dataset=${encodeURIComponent(datasetParam)}${extra}`;
+  /*
+   * `values` is sent only to the formats it applies to. SPSS and SAS carry
+   * the codes with the labels attached as metadata, which is the reason to
+   * ask for those formats at all; passing the parameter to them would imply
+   * a choice that does not exist there.
+   */
+  const valuesParam = values === "code" ? "" : `&values=${values}`;
+  const csvHref = exportUrl("csv", `${hasQuality || dataset !== "all" ? "&quality=1" : ""}${valuesParam}`);
+  const xlsxHref = exportUrl("xlsx", `&quality=1${valuesParam}`);
+  const savHref = exportUrl("sav");
+  const sasHref = exportUrl("sas");
   const active = include === "test" ? summary?.test : include === "live" ? summary?.live : null;
 
   return (
@@ -133,6 +151,9 @@ export function DataPanel() {
             <button className="btn small" onClick={() => void load()}>↻ refresh</button>
             <a className="btn small" href={csvHref} target="_blank" data-testid="export-csv">⬇ CSV</a>
             <a className="btn small" href={xlsxHref} target="_blank" data-testid="export-xlsx" title="Main Data + Response Quality sheets">⬇ XLSX (data + quality)</a>
+            <button className={`btn small ${showExports ? "primary" : ""}`} data-testid="export-more"
+              onClick={() => setShowExports((v) => !v)}
+              title="SPSS, SAS, and how coded answers are written">⋯ More formats</button>
           </>
         )}
       </div>
@@ -143,6 +164,40 @@ export function DataPanel() {
           onEnvironment={(e) => setInclude(e === "TEST" ? "test" : e === "LIVE" ? "live" : "all")} />
       ) : view === "quality" ? <QualityPanel include={include} /> : (
       <>
+      {showExports && (
+        <div data-testid="export-panel"
+          style={{ marginBottom: 10, padding: "12px 14px", border: "1px solid var(--border, #e5e9f0)", borderRadius: 8, background: "var(--surface-2, #fafbfc)" }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 8 }}>Statistical formats</div>
+          <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+            <a className="btn small" href={savHref} target="_blank" data-testid="export-sav"
+              title="SPSS system file — variable labels, value labels and missing values as metadata">⬇ SPSS (.sav)</a>
+            <a className="btn small" href={sasHref} target="_blank" data-testid="export-sas"
+              title="Zip: SAS transport file, CSV, and a .sas program with PROC FORMAT and LABEL">⬇ SAS (.xpt + syntax)</a>
+            <span className="muted" style={{ fontSize: 12, alignSelf: "center" }}>
+              Codes stay codes in these; the labels travel as metadata, so frequencies come out labelled.
+            </span>
+          </div>
+
+          <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 6 }}>Coded answers in CSV and Excel</div>
+          <div className="row" style={{ gap: 6, flexWrap: "wrap", alignItems: "center" }} data-testid="export-values">
+            {([
+              ["code", "Codes only", "1, 2 — what the survey stored"],
+              ["label", "Labels only", "Male, Female — readable on its own"],
+              ["code_label", "Codes + labels", "2 - Male — both, for reconciling"],
+            ] as const).map(([mode, label, hint]) => (
+              <button key={mode} className={`btn small ${values === mode ? "primary" : ""}`}
+                data-testid={`export-values-${mode}`} title={hint}
+                onClick={() => setValues(mode)}>{label}</button>
+            ))}
+            <span className="muted" style={{ fontSize: 12 }}>
+              {values === "code" ? "The default — what data processing expects."
+                : values === "label" ? "Open text and numbers are untouched; only coded answers change."
+                : "Separated by \u201c - \u201d."}
+            </span>
+          </div>
+        </div>
+      )}
+
       <div className="row" style={{ marginBottom: 10, flexWrap: "wrap", gap: 6, alignItems: "center" }} data-testid="dataset-selector">
         <span className="muted" style={{ fontSize: 12.5 }}>Dataset for table &amp; exports:</span>
         <select className="select" style={{ width: 300 }} data-testid="dataset-select" value={dataset} onChange={(e) => setDataset(e.target.value as Dataset)}>

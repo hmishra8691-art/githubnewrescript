@@ -9,3 +9,8 @@ export * from "./spreadsheetImport.js";
 export * from "./invitations.js";
 export * from "./respondentList.js";
 export * from "./localization.js";
+export * from "./valueRendering.js";
+export * from "./spss.js";
+export * from "./sas.js";
+export * from "./zip.js";
+export * from "./statisticalExport.js";

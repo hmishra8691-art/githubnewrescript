@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { assertNotReadOnly, getMeter, projectContext, recordUsage } from "@/lib/metering";
 import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
-import { responsesToCSV, exportResponsesXlsx, inDataset, ENVIRONMENT_COLUMNS, environmentCells, QUALITY_CSV_COLUMNS, qualityCsvCells, SAMPLE_COLUMNS, sampleCells, type DatasetFilter, type QualityExportRow } from "@rescript/exporters";
+import { responsesToCSV, exportResponsesXlsx, responsesToSav, responsesToSasBundle, inDataset, ENVIRONMENT_COLUMNS, environmentCells, QUALITY_CSV_COLUMNS, qualityCsvCells, SAMPLE_COLUMNS, sampleCells, VALUE_MODES, renderValue, dictionaryIndex, type DatasetFilter, type QualityExportRow, type ValueMode } from "@rescript/exporters";
 import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
 import { audit, isFailure, requireProject } from "@/lib/guard";
 
@@ -35,6 +35,17 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     (req.nextUrl.searchParams.get("test") === "1" ? "all" : "live");
   const dataset = parseDataset(req.nextUrl.searchParams.get("dataset"));
   const withQuality = req.nextUrl.searchParams.get("quality") === "1";
+  /*
+   * `values=code|label|code_label` — whether a coded answer is written as its
+   * code, its label, or both. Anything unrecognised falls back to `code`,
+   * which is what every file produced before this option existed contained:
+   * a mistyped parameter must not silently change what a client receives.
+   *
+   * It applies to the text formats only. SPSS and SAS carry codes in the
+   * cells and the labels as metadata, which is the whole reason to use them.
+   */
+  const valuesParam = req.nextUrl.searchParams.get("values");
+  const valueMode: ValueMode = VALUE_MODES.some((m) => m.mode === valuesParam) ? (valuesParam as ValueMode) : "code";
 
   /*
    * A download is recorded; the summary count on the header is not. The line
@@ -192,7 +203,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
    */
   const withEnvironment = include === "all";
   if (format === "xlsx") {
-    const buf = await exportResponsesXlsx(parsed.data, exportRows, { dataset, environmentColumn: withEnvironment, qualityColumns: withQuality || dataset.kind !== "all" || exportRows.some((r) => r.quality) });
+    const buf = await exportResponsesXlsx(parsed.data, exportRows, { dataset, environmentColumn: withEnvironment, qualityColumns: withQuality || dataset.kind !== "all" || exportRows.some((r) => r.quality), valueMode });
     return new NextResponse(new Uint8Array(buf), {
       headers: {
         "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -217,11 +228,62 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     flags: r.flags ?? [],
     stepIndex: 0,
   }));
+  /*
+   * THE STATISTICAL FORMATS.
+   *
+   * Placed here, after the dataset filter has been applied to `states`, so
+   * they export exactly the rows the CSV does. They deliberately ignore
+   * `values`: in a .sav or a SAS dataset the code IS the value and the label
+   * is metadata attached to it, which is what lets the recipient run a
+   * frequency and see "Male 412" without the file ever containing the word.
+   * Writing labels into the cells would produce a string variable and cost
+   * them every analysis the format exists for.
+   */
+  if (format === "sav" || format === "sas") {
+    const fileBase = `${parsed.data.meta.code}_${include}${dataset.kind !== "all" ? `_${dataset.kind}` : ""}`;
+    const mediaBaseUrl = process.env.STUDIO_PUBLIC_URL ?? null;
+    if (format === "sav") {
+      const buf = responsesToSav(parsed.data, states as any, { mediaBaseUrl });
+      return new NextResponse(new Uint8Array(buf), {
+        headers: {
+          "content-type": "application/x-spss-sav",
+          "content-disposition": `attachment; filename="${fileBase}.sav"`,
+        },
+      });
+    }
+    /*
+     * SAS is a BUNDLE, not a file: the transport file truncates names to 8
+     * characters and labels to 40, so on its own it silently loses part of
+     * the dictionary. The zip carries the CSV and the generated syntax with
+     * the full names, labels and PROC FORMAT value labels beside it.
+     */
+    const csvForSas = responsesToCSV(parsed.data, states as any, undefined, { mediaBaseUrl });
+    const buf = responsesToSasBundle(parsed.data, states as any, { mediaBaseUrl, csv: csvForSas });
+    return new NextResponse(new Uint8Array(buf), {
+      headers: {
+        "content-type": "application/zip",
+        "content-disposition": `attachment; filename="${fileBase}_sas.zip"`,
+      },
+    });
+  }
+
   if (format === "json") {
     // Ordered by the data dictionary, so columns follow questionnaire order.
-    const columns = buildVariableDictionary(parsed.data)
-      .filter((v) => v.responseType !== "system")
-      .map((v) => v.name);
+    const dict = buildVariableDictionary(parsed.data).filter((v) => v.responseType !== "system");
+    const columns = dict.map((v) => v.name);
+    /*
+     * JSON keeps a multiple response as a LIST rather than joining it — the
+     * consumer is code, and a list is what code wants. `renderValue` returns
+     * the array untouched in code mode and element-wise in label mode, so
+     * that shape holds whichever mode is asked for.
+     */
+    const byName = dictionaryIndex(dict);
+    const renderVars = (vars: Record<string, unknown>) => {
+      if (valueMode === "code") return vars;
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(vars)) out[k] = renderValue(v, byName.get(k), valueMode);
+      return out;
+    };
     const rows = states.map((st, i) => {
       const raw = (resp ?? [])[i];
       const started = raw?.started_at ? new Date(raw.started_at).getTime() : null;
@@ -236,7 +298,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         flags: st.flags,
         sampleSource: raw?.sample_source ?? null,
         sampleSourceRespondent: raw?.sample_source_respondent ?? null,
-        vars: flattenVariables(parsed.data, st as any, { mediaBaseUrl: process.env.STUDIO_PUBLIC_URL ?? null }),
+        vars: renderVars(flattenVariables(parsed.data, st as any, { mediaBaseUrl: process.env.STUDIO_PUBLIC_URL ?? null })),
         quality: raw?.quality ? { classification: raw.quality.classification, qualityScore: raw.quality.qualityScore, riskScore: raw.quality.riskScore, flags: raw.quality.flags?.length ?? 0 } : null,
         review: raw?.review_status ?? null,
       };
@@ -269,7 +331,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
           ],
         }
       : undefined,
-    { mediaBaseUrl: process.env.STUDIO_PUBLIC_URL ?? null },
+    { mediaBaseUrl: process.env.STUDIO_PUBLIC_URL ?? null, valueMode },
   );
   return new NextResponse(csv, {
     headers: {

@@ -1,6 +1,7 @@
 import type { SurveyDefinition } from "@rescript/schema";
 import type { ResponseState } from "@rescript/engine";
 import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
+import { renderValue, renderHeader, type ValueMode, type HeaderMode } from "./valueRendering.js";
 
 /** The subset of a ResponseState the CSV exporter needs. */
 export type ResponseStateLike = Pick<
@@ -45,19 +46,32 @@ export function responsesToCSV(
   states: ResponseStateLike[],
   /** optional per-row extra columns (e.g. the quality summary), same order as `states` */
   extra?: { columns: readonly string[]; cells: (index: number) => unknown[] },
-  opts: { mediaBaseUrl?: string | null } = {},
+  /**
+   * `valueMode` / `headerMode` default to the codes-and-names file this has
+   * always produced, so every existing caller — and every client script built
+   * against one of those files — is unaffected by the option existing.
+   */
+  opts: { mediaBaseUrl?: string | null; valueMode?: ValueMode; headerMode?: HeaderMode } = {},
 ): string {
+  const valueMode = opts.valueMode ?? "code";
+  const headerMode = opts.headerMode ?? "name";
   const dict = buildVariableDictionary(def);
   const varNames: string[] = [];
-  const seen = new Set<string>();
+  const defs = new Map<string, (typeof dict)[number]>();
   for (const v of dict) {
     if (v.responseType === "system") continue;
-    if (seen.has(v.name)) continue;
-    seen.add(v.name);
+    if (defs.has(v.name)) continue;
+    defs.set(v.name, v);
     varNames.push(v.name);
   }
 
-  const lines: string[] = [csvLine([...SYSTEM_COLUMNS, ...varNames, ...(extra?.columns ?? [])])];
+  const lines: string[] = [
+    csvLine([
+      ...SYSTEM_COLUMNS,
+      ...varNames.map((name) => renderHeader(defs.get(name), name, headerMode)),
+      ...(extra?.columns ?? []),
+    ]),
+  ];
   states.forEach((state, i) => {
     const flat = flattenVariables(def, state as any, opts);
     const cells: unknown[] = [
@@ -66,7 +80,7 @@ export function responsesToCSV(
       state.surveyVersion,
       state.startedAt,
       state.status,
-      ...varNames.map((name) => flat[name]),
+      ...varNames.map((name) => renderValue(flat[name], defs.get(name), valueMode)),
       ...(extra ? extra.cells(i) : []),
     ];
     lines.push(csvLine(cells));

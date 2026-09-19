@@ -125,7 +125,13 @@ answers of the questions you pick and writes ordinary cells with ordinary
 `selected` conditions as an undoable Studio edit — the runtime cannot tell
 them from hand-built ones.
 
-## 8. Tests
+## 8. Exporting
+
+Which rows leave is settled here; what the file *contains* — CSV, Excel,
+JSON, SPSS `.sav`, SAS transport + syntax, and whether coded answers are
+written as codes, labels or both — is `docs/DATA-EXPORT.md`.
+
+## 9. Tests
 
 - `packages/engine`: `responseFilter.test.ts` (12) — prefilter safety, verdict
   parity, free-text search; `responseImport.test.ts` (9) — mapping, coercion,
