@@ -331,9 +331,59 @@ map" got bars. This phase draws the map.
   per-market satisfaction lift. It is assigned from the row index rather than
   the shared random stream, so no other suite's planted effects moved.
 
+## The dashboard canvas (§40, September 2026)
+
+`DashboardWidget` has always carried `x` and `y`, and nothing ever set them:
+every widget was written at 0,0 and the dashboard was a CSS auto-flow grid that
+placed them in document order. A widget could be made wider or taller but not
+PUT anywhere, which is the difference between a list of charts and a dashboard.
+
+The geometry lives in `packages/analytics/src/dashboardLayout.ts` as pure
+functions over the widget list, separate from the React that handles the
+pointer — placement is the part that has to be right, and it is only testable
+if it is separable from the dragging.
+
+* **Drag by the grip, resize by the corner.** Both are confined to their own
+  controls rather than the widget's whole body: a chart inside a widget has its
+  own click-to-cross-filter and legend toggles, and a body-wide drag would
+  swallow both. Arrow keys nudge a focused widget and shift+arrows resize it,
+  because a canvas that can only be driven by dragging cannot be driven from a
+  keyboard at all.
+* **Nothing is ever hidden under anything else.** A move or resize that lands on
+  an occupied cell pushes the occupant down, cascading as far as it needs to.
+  The widget that was just dropped keeps the cell it was dropped on — otherwise
+  the drag would appear to have failed.
+* **Gaps are kept.** Free placement means the empty column beside a KPI is a
+  decision, not a defect, so nothing is compacted automatically. **Tidy up**
+  closes vertical gaps when the author asks for it.
+* **Dashboards saved before this feature are flowed, not stacked.** Their
+  widgets are all at 0,0; dropping them into a positioned grid as-is would pile
+  every one into the top-left cell. `normalizeLayout` detects that state and
+  lays them out left-to-right exactly as the old auto-flow grid did, so the
+  first thing their author sees is the arrangement they left. It is idempotent,
+  so a positioned dashboard is handed back untouched and reopening never drifts.
+* **Edits apply to the arrangement on screen, not to the stored coordinates.**
+  This one bit: moving a single widget on a pre-canvas dashboard placed it
+  against the raw 0,0 coordinates and restacked every other widget into one
+  column. Both the drag handler and the ↑/↓ buttons normalize first. The
+  browser suite pins it by asserting that no widget ever changes COLUMN when
+  another is moved — making room is only ever vertical.
+* **New widgets land in the first free cell** (`firstFreeSlot`) instead of on
+  top of whatever is at the origin.
+* **Rendering is in reading order**, sorted by position rather than array index,
+  so the DOM order is what the eye sees — which is what the narrow-screen layout
+  stacks and what a screen reader announces. Below 900px the canvas collapses to
+  a single column and the grips disappear.
+* **A widget is exactly as tall as the cells it spans**, so its content stretches
+  to fill that box and anything that still does not fit scrolls. The previous
+  `overflow: hidden` would have cut a table off mid-row with nothing to say it
+  had.
+* **The share page passes no layout callback**, so the same component draws the
+  same arrangement with no grips, no handles and no pointer listeners.
+
 ## Tests
 
-* `pnpm --filter @rescript/analytics test` — 135 tests (stats vs scipy, every runner against planted data, report pages/templates, PPTX/XLSX builders including panel grids, and the geography: region resolution, aliases, scope choice, unmatched reporting, projection fitting).
-* `node scripts/analytics-test.mjs` — 67 browser checks (workspace, builder, the analyses rail, the four stages, the professional table, nested rows, filters, charts, gallery, customisation, save/version, segments, report builder, publish/immutability, panel grids and the tracker template, share link, read-only view, downloads, revoke, password, expiry, exports, table builder, themes, dashboard, the four operational-dashboard widgets — photo/icon panel/steps/ranked list, real country and bubble maps, existing navigation unchanged). Uses an in-process fake backend over the real engine because the dev container has no database credentials.
+* `pnpm --filter @rescript/analytics test` — 152 tests (stats vs scipy, every runner against planted data, report pages/templates, PPTX/XLSX builders including panel grids, the geography: region resolution, aliases, scope choice, unmatched reporting, projection fitting; and the dashboard canvas: the legacy flow, overlap resolution, idempotence, tidying, free-slot placement).
+* `node scripts/analytics-test.mjs` — 76 browser checks (workspace, builder, the analyses rail, the four stages, the professional table, nested rows, filters, charts, gallery, customisation, save/version, segments, report builder, publish/immutability, panel grids and the tracker template, share link, read-only view, downloads, revoke, password, expiry, exports, table builder, themes, dashboard, the four operational-dashboard widgets — photo/icon panel/steps/ranked list, real country and bubble maps, the dashboard canvas — drag, resize, the pre-canvas flow and the no-overlap rule, existing navigation unchanged). Uses an in-process fake backend over the real engine because the dev container has no database credentials.
 * `packages/analytics/src/analyses/crosstab.test.ts` — the crosstab’s options one by one (banner, nesting, stacking, base, suppression, sorting, summary rows, means, weighted letters) and the audit’s fixes (A1–A6, A11).
 * Share-resolution SQL exercised against the live database in a rolled-back transaction (unknown / unpublished / pinned vs following / expired / revoked / password flag / access counting).

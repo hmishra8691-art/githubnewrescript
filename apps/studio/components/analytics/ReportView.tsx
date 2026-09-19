@@ -1,7 +1,11 @@
 "use client";
 import React from "react";
 import type { AnalysisResult, ChartSpec, DashboardWidget, ReportBlock, ReportTheme } from "@rescript/analytics";
-import { DEFAULT_THEME, executiveSummary, methodologyLines, reportPages, seriesForChart } from "@rescript/analytics";
+import {
+  DEFAULT_THEME, executiveSummary, methodologyLines, reportPages, seriesForChart,
+  DASHBOARD_COLUMNS, DASHBOARD_GAP_PX, DASHBOARD_ROW_PX, clampBox, layoutRows, normalizeLayout, sortByPosition,
+  type LayoutBox,
+} from "@rescript/analytics";
 import { Chart, ResultTableView } from "./charts/Chart";
 import { Icon, IconPictogram } from "./charts/Icons";
 
@@ -38,6 +42,14 @@ export interface ReportViewProps {
   filterResults?: Record<string, Record<string, AnalysisResult>> | null;
   toolbar?: React.ReactNode;
   onBlockAction?: (blockId: string, action: "up" | "down" | "remove" | "edit") => void;
+  /**
+   * §40 — a widget was moved or resized on the dashboard canvas.
+   *
+   * Its presence is what makes the canvas editable at all: the share page
+   * passes nothing, so the same component draws the same layout with no
+   * grips, no handles and no pointer listeners.
+   */
+  onLayout?: (widgetId: string, box: LayoutBox) => void;
   /**
    * Draw page boundaries (§36). On in the viewer and on the share page, so
    * what is on screen is what prints; off in the builder's own preview would
@@ -76,6 +88,71 @@ export function ReportView(p: ReportViewProps) {
   for (const w of p.widgets ?? []) if (w.analysisId) usedIds.add(w.analysisId);
   const segmentsAvailable = [...usedIds].map((id) => results[id]).filter(Boolean).flatMap((r) => r.segments ?? []).map((s) => s.name);
   const [globalSeg, setGlobalSeg] = React.useState<string>("");
+
+  /*
+   * §40 — THE DASHBOARD CANVAS.
+   *
+   * `normalizeLayout` runs on the way in, every time, for both the builder and
+   * the share page: it is what gives a dashboard saved before this feature a
+   * real arrangement (all its widgets sit at 0,0) and what guarantees nothing
+   * is hidden underneath anything else. It is idempotent, so a dashboard that
+   * has been positioned is handed back untouched.
+   *
+   * Rendering goes in reading order rather than array order, so the DOM order
+   * is what the eye sees — which is what the phone layout stacks and what a
+   * screen reader announces.
+   */
+  const laidOut = React.useMemo(() => normalizeLayout(p.widgets ?? []), [p.widgets]);
+  const gridRef = React.useRef<HTMLDivElement | null>(null);
+  const [drag, setDrag] = React.useState<{ id: string; mode: "move" | "resize"; origin: LayoutBox; box: LayoutBox; startX: number; startY: number; colStep: number; rowStep: number } | null>(null);
+
+  const beginDrag = (e: React.PointerEvent, w: DashboardWidget, mode: "move" | "resize") => {
+    const grid = gridRef.current;
+    if (!p.onLayout || !grid) return;
+    e.preventDefault();
+    e.stopPropagation();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    const cs = getComputedStyle(grid);
+    const contentW = grid.clientWidth - parseFloat(cs.paddingLeft || "0") - parseFloat(cs.paddingRight || "0");
+    const origin = { x: w.x, y: w.y, w: w.w, h: w.h };
+    setDrag({
+      id: w.id, mode, origin, box: origin,
+      startX: e.clientX, startY: e.clientY,
+      // one column costs its own width plus the gap that follows it
+      colStep: Math.max(1, (contentW + DASHBOARD_GAP_PX) / DASHBOARD_COLUMNS),
+      rowStep: DASHBOARD_ROW_PX + DASHBOARD_GAP_PX,
+    });
+  };
+
+  const onDragMove = (e: React.PointerEvent) => {
+    if (!drag) return;
+    const dx = Math.round((e.clientX - drag.startX) / drag.colStep);
+    const dy = Math.round((e.clientY - drag.startY) / drag.rowStep);
+    const box = drag.mode === "move"
+      ? clampBox({ ...drag.origin, x: drag.origin.x + dx, y: drag.origin.y + dy })
+      : clampBox({ ...drag.origin, w: drag.origin.w + dx, h: drag.origin.h + dy });
+    if (box.x !== drag.box.x || box.y !== drag.box.y || box.w !== drag.box.w || box.h !== drag.box.h) setDrag({ ...drag, box });
+  };
+
+  const endDrag = () => {
+    if (!drag) return;
+    const { id, box, origin } = drag;
+    setDrag(null);
+    // a click that moved nothing is not an edit, and must not mark the report dirty
+    if (box.x !== origin.x || box.y !== origin.y || box.w !== origin.w || box.h !== origin.h) p.onLayout?.(id, box);
+  };
+
+  /* Arrows move a focused widget a cell at a time: a canvas that can only be
+   * driven by dragging cannot be driven from a keyboard at all. */
+  const onGripKey = (e: React.KeyboardEvent, w: DashboardWidget) => {
+    if (!p.onLayout) return;
+    const step: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+    const d = step[e.key];
+    if (!d) return;
+    e.preventDefault();
+    const box = clampBox({ x: w.x + d[0], y: w.y + d[1], w: e.shiftKey ? w.w + d[0] : w.w, h: e.shiftKey ? w.h + d[1] : w.h });
+    p.onLayout(w.id, e.shiftKey ? { ...box, x: w.x, y: w.y } : box);
+  };
   const segFor = (id: string): number | undefined => { const r = results[id]; if (!r?.segments) return undefined; const local = segIdx[id]; if (local != null) return local; if (globalSeg) { const i = r.segments.findIndex((s) => s.name === globalSeg); return i >= 0 ? i : undefined; } return undefined; };
   const font = theme.fontFamily;
   const style: React.CSSProperties = { fontFamily: font, color: theme.colors.text, background: theme.colors.background };
@@ -216,17 +293,44 @@ export function ReportView(p: ReportViewProps) {
         ))
       ) : p.blocks?.map(renderBlock)}
       {p.widgets && (
-        <div className="ax-dashboard" data-testid="ax-dashboard">
-          {p.widgets.map((w) => {
+        <div className="ax-dashboard" data-testid="ax-dashboard" ref={gridRef} data-editable={p.onLayout ? "1" : undefined}
+          style={{
+            gridTemplateColumns: `repeat(${DASHBOARD_COLUMNS}, minmax(0, 1fr))`,
+            gridAutoRows: `${DASHBOARD_ROW_PX}px`,
+            gap: DASHBOARD_GAP_PX,
+            // room to drop a widget below the last row while editing
+            minHeight: (layoutRows(laidOut) + (p.onLayout ? 2 : 0)) * (DASHBOARD_ROW_PX + DASHBOARD_GAP_PX),
+          }}>
+          {sortByPosition(laidOut).map((w) => {
             const r = w.analysisId ? results[w.analysisId] : undefined;
-            const style: React.CSSProperties = { gridColumn: `span ${Math.min(12, Math.max(2, w.w))}`, minHeight: w.h * 60 };
-            return <div key={w.id} className="ax-widget" style={style}>
+            const live = drag?.id === w.id ? drag.box : w;
+            const style: React.CSSProperties = {
+              gridColumn: `${live.x + 1} / span ${live.w}`,
+              gridRow: `${live.y + 1} / span ${live.h}`,
+            };
+            return <div key={w.id} className={`ax-widget${drag?.id === w.id ? " dragging" : ""}`} style={style}
+              data-testid="ax-widget" data-id={w.id} data-x={live.x} data-y={live.y} data-w={live.w} data-h={live.h}>
               <Actions id={w.id} />
+              {/*
+                * §40 — the grip and the corner handle. Dragging is confined to
+                * these rather than to the widget's whole body: a chart inside
+                * a widget has its own click-to-cross-filter and legend
+                * toggles, and a body-wide drag would swallow both.
+                */}
+              {p.onLayout && (
+                <button type="button" className="ax-widget-grip" data-testid="ax-widget-grip" title="Drag to move — arrow keys nudge, shift + arrows resize"
+                  onPointerDown={(e) => beginDrag(e, w, "move")} onPointerMove={onDragMove} onPointerUp={endDrag} onPointerCancel={endDrag}
+                  onKeyDown={(e) => onGripKey(e, w)} aria-label={`Move ${w.title ?? w.type} widget`}>⠿</button>
+              )}
+              {p.onLayout && (
+                <span className="ax-widget-resize" data-testid="ax-widget-resize" title="Drag to resize"
+                  onPointerDown={(e) => beginDrag(e, w, "resize")} onPointerMove={onDragMove} onPointerUp={endDrag} onPointerCancel={endDrag} />
+              )}
               {w.title && <div className="ax-widget-title">{w.title}</div>}
               {w.type === "text" && <div dangerouslySetInnerHTML={{ __html: mdToHtml(w.text ?? "") }} />}
-              {w.type === "kpi" && (r ? <Chart result={r} spec={{ type: r.chart.kpis && r.chart.kpis.length === 1 ? "gauge" : "kpi_card", options: { showBase: false } }} theme={theme} height={Math.max(120, w.h * 60 - 30)} /> : w.analysisId ? <Missing id={w.analysisId} /> : null)}
-              {w.type === "chart" && w.analysisId && (r ? renderChart(w.analysisId, w.chart ?? { type: r.recommendedCharts[0] ?? "bar_vertical", options: {} }, Math.max(160, w.h * 60 - 30)) : <Missing id={w.analysisId} />)}
-              {w.type === "table" && w.analysisId && (r ? <ResultTableView table={r.tables[0]} dense maxRows={Math.max(4, w.h * 2)} /> : <Missing id={w.analysisId} />)}
+              {w.type === "kpi" && (r ? <Chart result={r} spec={{ type: r.chart.kpis && r.chart.kpis.length === 1 ? "gauge" : "kpi_card", options: { showBase: false } }} theme={theme} height={Math.max(120, live.h * DASHBOARD_ROW_PX - 30)} /> : w.analysisId ? <Missing id={w.analysisId} /> : null)}
+              {w.type === "chart" && w.analysisId && (r ? renderChart(w.analysisId, w.chart ?? { type: r.recommendedCharts[0] ?? "bar_vertical", options: {} }, Math.max(160, live.h * DASHBOARD_ROW_PX - 30)) : <Missing id={w.analysisId} />)}
+              {w.type === "table" && w.analysisId && (r ? <ResultTableView table={r.tables[0]} dense maxRows={Math.max(4, live.h * 2)} /> : <Missing id={w.analysisId} />)}
               {w.type === "filter" && <div className="muted" style={{ fontSize: 13 }}>Segment switch: use the selector in the bar above.</div>}
               {/*
                 * §38 — the operational-dashboard widgets, modelled on

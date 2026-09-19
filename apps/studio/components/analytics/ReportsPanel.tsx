@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { AnalysisDefinition, AnalysisResult, ChartSpec, DashboardDefinition, DashboardWidget, ExportSettings, ReportBlock, ReportDefinition, ReportTheme } from "@rescript/analytics";
-import { CHART_CATALOG, DEFAULT_EXPORT_SETTINGS, describeTemplate, type ReportTemplate } from "@rescript/analytics";
+import { CHART_CATALOG, DEFAULT_EXPORT_SETTINGS, describeTemplate, compactLayout, firstFreeSlot, normalizeLayout, placeWidget, type LayoutBox, type ReportTemplate } from "@rescript/analytics";
 import { AxApi, type Row, timeAgo } from "./api";
 import { ReportView } from "./ReportView";
 import { ICON_OPTIONS } from "./charts/Icons";
@@ -362,11 +362,13 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
   const addWidget = (type: DashboardWidget["type"]) => {
     if (!def || !isDash) return;
     const noAnalysis = type === "text" || type === "filter" || type === "photo" || type === "steps";
+    const wCols = type === "kpi" ? 3 : type === "photo" ? 4 : type === "steps" ? 8 : 6;
+    const hRows = type === "kpi" ? 2 : type === "photo" ? 4 : type === "steps" ? 3 : type === "ranked_list" ? 5 : 4;
     const w: DashboardWidget = {
       id: uid(), type, analysisId: noAnalysis ? undefined : analyses[0]?.id,
-      w: type === "kpi" ? 3 : type === "photo" ? 4 : type === "steps" ? 8 : 6,
-      h: type === "kpi" ? 2 : type === "photo" ? 4 : type === "steps" ? 3 : type === "ranked_list" ? 5 : 4,
-      x: 0, y: 0,
+      w: wCols, h: hRows,
+      /* §40 — a new widget goes in the first gap it fits, not on top of whatever is at the origin */
+      ...firstFreeSlot(normalizeLayout((def as DashboardDefinition).widgets ?? []), wCols, hRows),
       title: type === "text" ? "Summary" : undefined,
       text: type === "text" ? "Summary text…" : undefined,
       icon: type === "icon_panel" ? "person" : type === "ranked_list" ? undefined : undefined,
@@ -381,9 +383,34 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
     const i = items_.findIndex((b) => b.id === id); if (i < 0) return;
     if (action === "edit") return setEditing(id);
     if (action === "remove") return setItems(items_.filter((b) => b.id !== id));
+    /*
+     * §40 — on a dashboard a widget's place is its x/y, not its index, so ↑ and
+     * ↓ move it a row up or down the canvas. Swapping array positions would
+     * look like the button did nothing, because the grid draws from the
+     * coordinates and ignores the order entirely.
+     */
+    if (isDash) {
+      const laid = normalizeLayout(items_ as DashboardWidget[]);
+      const w = laid.find((x) => x.id === id)!;
+      const y = Math.max(0, w.y + (action === "up" ? -1 : 1));
+      if (y === w.y) return;
+      return setItems(placeWidget(laid, id, { x: w.x, y, w: w.w, h: w.h }));
+    }
     const j = action === "up" ? i - 1 : i + 1; if (j < 0 || j >= items_.length) return;
     const next = [...items_]; [next[i], next[j]] = [next[j], next[i]]; setItems(next);
   };
+
+  /**
+   * §40 — a widget was dragged or resized on the canvas.
+   *
+   * The move is applied to the NORMALIZED list, not the stored one. On a
+   * dashboard saved before positioning existed every widget is still at 0,0
+   * and only the renderer has flowed them; placing against the raw
+   * coordinates would take the arrangement the person was looking at and
+   * restack it into one column the instant they moved anything.
+   */
+  const onLayout = (id: string, box: LayoutBox) => setItems(placeWidget(normalizeLayout(items_ as DashboardWidget[]), id, box));
+  const tidy = () => setItems(compactLayout(normalizeLayout(items_ as DashboardWidget[])));
   // drag-and-drop ordering
   const dragId = React.useRef<string | null>(null);
   const onDrop = (targetId: string) => { const from = items_.findIndex((b) => b.id === dragId.current), to = items_.findIndex((b) => b.id === targetId); if (from < 0 || to < 0 || from === to) return; const next = [...items_]; const [m] = next.splice(from, 1); next.splice(to, 0, m); setItems(next); };
@@ -481,12 +508,23 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
             <label className="ax-field"><span>Footer</span><input className="input small" value={rd.branding?.footer ?? ""} onChange={(e) => { setDef({ ...rd, branding: { ...rd.branding, footer: e.target.value } }); setDirty(true); }} /></label>
             <label className="ax-toggle"><input type="checkbox" checked={rd.branding?.showLogo !== false} onChange={(e) => { setDef({ ...rd, branding: { ...rd.branding, showLogo: e.target.checked } }); setDirty(true); }} /> Show theme logo</label>
           </>}
-          {isDash && <label className="ax-toggle" style={{ marginTop: 12 }}><input type="checkbox" checked={dd.crossFilter !== false} onChange={(e) => { setDef({ ...dd, crossFilter: e.target.checked }); setDirty(true); }} /> Cross-filter highlighting between charts</label>}
+          {isDash && <>
+            <label className="ax-toggle" style={{ marginTop: 12 }}><input type="checkbox" checked={dd.crossFilter !== false} onChange={(e) => { setDef({ ...dd, crossFilter: e.target.checked }); setDirty(true); }} /> Cross-filter highlighting between charts</label>
+            {/*
+              * §40 — gaps on the canvas are kept, because an empty column
+              * beside a KPI is usually a decision. Closing them is therefore
+              * something the author asks for, not something that happens to
+              * their layout while they are not looking.
+              */}
+            <div className="flabel" style={{ marginTop: 12 }}>Canvas</div>
+            <div className="muted" style={{ fontSize: 12.5 }}>Drag a widget by its grip to move it, or its bottom-right corner to resize. Arrow keys nudge a focused widget; hold shift to resize.</div>
+            <button className="btn small" style={{ marginTop: 6 }} onClick={tidy} data-testid="ax-dash-tidy">Tidy up — close vertical gaps</button>
+          </>}
           {versions.length > 0 && <><div className="flabel" style={{ marginTop: 12 }}>Published versions</div><ul className="ax-versions">{versions.map((v) => <li key={v.version}>v{v.version} · {new Date(v.published_at).toLocaleString()}{v.note ? ` — ${v.note}` : ""}{v.dataset?.responses != null ? ` · ${v.dataset.responses} responses` : ""}</li>)}</ul></>}
         </aside>
         <div className="ax-rb-main">
           {loading && <div className="muted" style={{ padding: 8 }}>Computing…</div>}
-          {def && <ReportView title={rd.title ?? open.name} subtitle={rd.subtitle} blocks={isDash ? undefined : rd.blocks} widgets={isDash ? dd.widgets : undefined} crossFilter={isDash ? dd.crossFilter !== false : false} results={results} theme={theme} mode={shownVersion ? "snapshot" : "live"} version={shownVersion} publishedAt={shownVersion ? versions.find((v) => v.version === shownVersion)?.published_at : undefined} branding={rd.branding} viewerSegments={rd.viewerSegments} onBlockAction={viewVersion ? undefined : onBlockAction} />}
+          {def && <ReportView title={rd.title ?? open.name} subtitle={rd.subtitle} blocks={isDash ? undefined : rd.blocks} widgets={isDash ? dd.widgets : undefined} crossFilter={isDash ? dd.crossFilter !== false : false} results={results} theme={theme} mode={shownVersion ? "snapshot" : "live"} version={shownVersion} publishedAt={shownVersion ? versions.find((v) => v.version === shownVersion)?.published_at : undefined} branding={rd.branding} viewerSegments={rd.viewerSegments} onBlockAction={viewVersion ? undefined : onBlockAction} onLayout={isDash && !viewVersion ? onLayout : undefined} />}
         </div>
       </div>
       {editing && items_.find((b) => b.id === editing) && <BlockEditor block={items_.find((b) => b.id === editing)!} analyses={analyses} onChange={(nb) => { setItems(items_.map((b) => (b.id === nb.id ? nb : b))); void ensure(idsOf(nb)); }} onClose={() => setEditing(null)} />}

@@ -1811,10 +1811,51 @@ p.qs-help { margin: -2px 0 10px; }
   .ax-block { break-inside: avoid; page-break-inside: avoid; }
   .ax-panel { break-inside: avoid; page-break-inside: avoid; }
 }
-.ax-dashboard { display: grid; grid-template-columns: repeat(12, 1fr); gap: 10px; padding: 12px; }
-.ax-widget { position: relative; border: 1px solid var(--border); border-radius: 10px; padding: 10px; background: var(--panel); min-width: 0; overflow: hidden; }
-.ax-widget-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
-@media (max-width: 900px) { .ax-dashboard { grid-template-columns: repeat(6, 1fr); } .ax-rb-body, .ax-theme-grid, .ax-xt-layout { grid-template-columns: 1fr; } }
+/* §40 — the dashboard canvas. The column count, row height and gap are set
+   inline from the layout module's constants, because the drag arithmetic and
+   the grid have to agree about the size of a cell or a dropped widget lands
+   further from the cursor the further down the canvas it goes. */
+.ax-dashboard { display: grid; padding: 12px; }
+/* A widget is exactly as tall as the cells it spans, so its content has to
+   live inside that box: it stretches to fill it, and anything that still does
+   not fit scrolls. `overflow: hidden` would cut a table off mid-row with
+   nothing to say it had — a reader cannot tell a clipped table from a short
+   one. */
+.ax-widget { position: relative; border: 1px solid var(--border); border-radius: 10px; padding: 10px; background: var(--panel); min-width: 0; overflow: auto; display: flex; flex-direction: column; }
+.ax-widget-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; flex: none; }
+.ax-widget > .ax-chart { flex: 1 1 auto; min-height: 0; }
+.ax-widget > .ax-chart > svg { height: 100%; }
+.ax-dashboard[data-editable] .ax-widget { transition: box-shadow .12s ease; }
+.ax-dashboard[data-editable] .ax-widget:hover { box-shadow: 0 1px 8px rgba(19,26,43,.10); }
+.ax-widget.dragging { z-index: 5; box-shadow: 0 6px 20px rgba(19,26,43,.18); border-color: var(--accent); opacity: .92; }
+
+/* The grip and the corner handle appear on hover (and always on keyboard
+   focus, which is the only way a keyboard user finds them at all). */
+.ax-widget-grip {
+  position: absolute; top: 4px; left: 6px; z-index: 3; opacity: 0;
+  border: 0; background: transparent; color: var(--subtle); cursor: grab;
+  font-size: 13px; line-height: 1; padding: 2px 3px; border-radius: 4px;
+  touch-action: none;
+}
+.ax-widget:hover .ax-widget-grip, .ax-widget-grip:focus-visible { opacity: 1; }
+.ax-widget-grip:focus-visible { outline: 2px solid var(--accent); background: var(--panel2); }
+.ax-widget-grip:active { cursor: grabbing; }
+.ax-widget-resize {
+  position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; z-index: 3;
+  opacity: 0; cursor: nwse-resize; touch-action: none;
+  background: linear-gradient(135deg, transparent 50%, var(--subtle) 50%, var(--subtle) 62%, transparent 62%, transparent 74%, var(--subtle) 74%, var(--subtle) 86%, transparent 86%);
+  border-bottom-right-radius: 10px;
+}
+.ax-widget:hover .ax-widget-resize { opacity: .85; }
+
+/* A phone has no 12-column canvas. Widgets stack in reading order — which is
+   why the renderer sorts them by position rather than by array index. */
+@media (max-width: 900px) {
+  .ax-dashboard { grid-template-columns: 1fr !important; grid-auto-rows: auto !important; min-height: 0 !important; }
+  .ax-dashboard .ax-widget { grid-column: 1 / -1 !important; grid-row: auto !important; min-height: 120px; }
+  .ax-widget-grip, .ax-widget-resize { display: none; }
+  .ax-rb-body, .ax-theme-grid, .ax-xt-layout { grid-template-columns: 1fr; }
+}
 
 /* §38 — the operational-dashboard widgets: a photo tile, a pictogram panel,
    a numbered-step panel, and an iconed ranked list. Modelled on the

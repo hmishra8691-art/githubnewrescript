@@ -800,6 +800,152 @@ assert.ok(dashDef.widgets.some((w) => w.type === "icon_panel" && w.icon === "sta
 assert.ok(dashDef.widgets.some((w) => w.type === "ranked_list" && w.icon === "flag"), "ranked list widget persists its analysis and icon choice");
 ok("all four operational-dashboard widget types persist in the dashboard definition, same as the analytical ones");
 
+console.log("\n§9c THE DASHBOARD CANVAS — widgets go where you put them (§40)");
+/*
+ * A dashboard saved BEFORE positioning existed: every widget at 0,0, which is
+ * what the old builder wrote. Seeded straight into the store because no UI can
+ * produce one any more — and it is the case that matters most, since it is
+ * every dashboard the platform's existing users already have.
+ */
+const legacyId = uid();
+store.reports.push({
+  id: legacyId, kind: "dashboard", name: "Legacy Dashboard", mode: "live", theme_id: null, published_version: null,
+  created_at: now(), updated_at: now(),
+  definition: { title: "Legacy Dashboard", crossFilter: true, widgets: [
+    { id: "lw1", type: "kpi", title: "NPS", analysisId: store.analyses.find((a) => a.name === "NPS").id, w: 6, h: 2, x: 0, y: 0 },
+    { id: "lw2", type: "chart", title: "By country", analysisId: store.analyses.find((a) => a.name === "Satisfaction by country").id, w: 6, h: 3, x: 0, y: 0 },
+    { id: "lw3", type: "table", title: "Crosstab", analysisId: store.analyses.find((a) => a.name === "Satisfaction by gender").id, w: 4, h: 2, x: 0, y: 0 },
+    { id: "lw4", type: "text", title: "Note", text: "Saved before the canvas existed.", w: 12, h: 2, x: 0, y: 0 },
+  ] },
+});
+// the reports list was fetched before this row existed, so pick it up fresh
+await page.reload({ waitUntil: "networkidle" });
+await page.click('[data-testid="ax-tab-reports"]');
+await page.waitForSelector('[data-testid="ax-report-card"]:has-text("Legacy Dashboard")');
+await page.click('[data-testid="ax-report-card"]:has-text("Legacy Dashboard")');
+await page.waitForSelector('[data-testid="ax-widget"]');
+const legacyLayout = await page.$$eval('[data-testid="ax-widget"]', (es) => es.map((e) => [e.dataset.id, +e.dataset.x, +e.dataset.y, +e.dataset.w, +e.dataset.h]));
+assert.equal(legacyLayout.length, 4);
+const legacyCells = new Set(legacyLayout.map(([, x, y]) => `${x},${y}`));
+assert.equal(legacyCells.size, 4, "four widgets stored at 0,0 must not all be drawn in the same cell");
+assert.deepEqual(legacyLayout.find(([id]) => id === "lw1").slice(1, 3), [0, 0]);
+assert.deepEqual(legacyLayout.find(([id]) => id === "lw2").slice(1, 3), [6, 0], "the second widget fills the first row");
+assert.deepEqual(legacyLayout.find(([id]) => id === "lw3").slice(1, 3), [0, 3], "the third wraps below the tallest of that row");
+assert.deepEqual(legacyLayout.find(([id]) => id === "lw4").slice(1, 3), [0, 5], "a full-width widget starts its own row");
+ok("a dashboard saved before positioning existed is flowed into the arrangement its author last saw");
+
+/*
+ * Moving ONE widget on that dashboard must not disturb the rest. The stored
+ * coordinates are all 0,0, so a move applied to them rather than to the
+ * arrangement on screen would restack the whole canvas into a single column.
+ */
+await page.$eval('[data-testid="ax-widget"][data-id="lw3"] [data-testid="ax-widget-grip"]', (e) => e.focus());
+await page.keyboard.press("ArrowRight");
+await page.waitForFunction(() => document.querySelector('[data-testid="ax-widget"][data-id="lw3"]')?.dataset.x === "1");
+const afterNudge = await page.$$eval('[data-testid="ax-widget"]', (es) => es.map((e) => [e.dataset.id, +e.dataset.x, +e.dataset.y]));
+assert.deepEqual(afterNudge.find(([id]) => id === "lw1").slice(1), [0, 0], "lw1 stays where the flow put it");
+assert.deepEqual(afterNudge.find(([id]) => id === "lw2").slice(1), [6, 0], "lw2 keeps its column — it is not restacked at 0");
+assert.deepEqual(afterNudge.find(([id]) => id === "lw4").slice(1), [0, 5], "lw4 keeps its row");
+ok("nudging one widget on a pre-canvas dashboard leaves every other widget exactly where it was");
+await page.click('[data-testid="ax-report-save"]');
+await page.waitForSelector('[data-testid="ax-report-save"]:has-text("Saved")');
+assert.ok(store.reports.find((r) => r.id === legacyId).definition.widgets.every((w) => w.x !== 0 || w.y !== 0 || w.id === "lw1"),
+  "saving writes the real coordinates, so the flow is only needed once");
+ok("the flowed arrangement is written back on the first save, not re-derived forever");
+await page.click('.ax-rb-bar .btn:has-text("← Reports")');
+await page.click('[data-testid="ax-report-card"]:has-text("Executive Dashboard")');
+await page.waitForSelector('[data-testid="ax-widget"]');
+
+const beforeLayout = await page.$$eval('[data-testid="ax-widget"]', (es) => es.map((e) => [e.dataset.id, +e.dataset.x, +e.dataset.y, +e.dataset.w, +e.dataset.h]));
+assert.ok(beforeLayout.length >= 6, `the dashboard has widgets to lay out, got ${beforeLayout.length}`);
+const cells = new Set(beforeLayout.map(([, x, y]) => `${x},${y}`));
+assert.equal(cells.size, beforeLayout.length, "no two widgets share a cell");
+assert.ok(beforeLayout.some(([, x]) => x > 0) && beforeLayout.some(([, , y]) => y > 0), "widgets added through the builder are placed across the canvas, not stacked at the origin");
+ok("widgets added from the picker land in the first free cell rather than on top of each other");
+
+// drag the first widget two columns right and one row down
+const grip = await page.$('[data-testid="ax-widget"] >> nth=0 >> [data-testid="ax-widget-grip"]');
+const firstId = await page.$eval('[data-testid="ax-widget"] >> nth=0', (e) => e.dataset.id);
+const gb = await grip.boundingBox();
+const canvas = await page.$('[data-testid="ax-dashboard"]');
+const cb = await canvas.boundingBox();
+const colStep = (cb.width - 24 + 10) / 12; // padding 12 each side, gap 10 — the module's own constants
+await page.mouse.move(gb.x + gb.width / 2, gb.y + gb.height / 2);
+await page.mouse.down();
+await page.mouse.move(gb.x + gb.width / 2 + colStep * 2, gb.y + gb.height / 2 + 70, { steps: 8 });
+await page.mouse.up();
+await page.waitForFunction((id) => document.querySelector(`[data-testid="ax-widget"][data-id="${id}"]`)?.dataset.x !== "0", firstId);
+const moved = await page.$eval(`[data-testid="ax-widget"][data-id="${firstId}"]`, (e) => [+e.dataset.x, +e.dataset.y]);
+assert.equal(moved[0], 2, `dragging two columns right should land on column 2, got ${moved[0]}`);
+assert.equal(moved[1], 1, `dragging one row down should land on row 1, got ${moved[1]}`);
+/*
+ * And the widgets NOT dragged stay where the flow put them. This is the check
+ * that catches applying a move to the stored 0,0 coordinates instead of the
+ * arrangement on screen: every other widget would restack into one column,
+ * which still has no overlaps and would otherwise pass unnoticed.
+ */
+const othersAfter = await page.$$eval('[data-testid="ax-widget"]', (es) => es.map((e) => [e.dataset.id, +e.dataset.x, +e.dataset.y]));
+for (const [id, x, y] of beforeLayout.filter(([id]) => id !== firstId)) {
+  const now = othersAfter.find((o) => o[0] === id);
+  /*
+   * A widget the drop landed on is pushed DOWN, and may push others down in
+   * turn — that is the no-overlap rule doing its job. What must never happen
+   * is a column changing: making room is only ever vertical. If the move had
+   * been applied to the stored 0,0 coordinates instead of the arrangement on
+   * screen, every widget would come back at column 0, which is precisely what
+   * this catches.
+   */
+  assert.equal(now[1], x, `${id} should stay in its column — making room is vertical, never sideways`);
+  assert.ok(now[2] >= y, `${id} may be pushed down but never pulled up by someone else's drag`);
+}
+assert.ok(othersAfter.some(([id, x]) => id !== firstId && x > 0), "the canvas still uses more than the first column");
+ok("a widget dragged by its grip lands on the cell it was dropped on, and the rest of the canvas stays put");
+
+// the move is in the definition, not just on screen
+await page.click('[data-testid="ax-report-save"]');
+await page.waitForSelector('[data-testid="ax-report-save"]:has-text("Saved")');
+const savedW = store.reports.find((r) => r.name === "Executive Dashboard").definition.widgets.find((w) => w.id === firstId);
+assert.deepEqual([savedW.x, savedW.y], [2, 1], "the dragged position persists in the saved definition");
+ok("the canvas position is saved with the dashboard, not just drawn");
+
+// resize by the corner handle
+const target = await page.$(`[data-testid="ax-widget"][data-id="${firstId}"]`);
+const sizeBefore = await target.evaluate((e) => [+e.dataset.w, +e.dataset.h]);
+const handle = await page.$(`[data-testid="ax-widget"][data-id="${firstId}"] >> [data-testid="ax-widget-resize"]`);
+const hb = await handle.boundingBox();
+await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
+await page.mouse.down();
+await page.mouse.move(hb.x + hb.width / 2 + colStep * 2, hb.y + hb.height / 2 + 70, { steps: 8 });
+await page.mouse.up();
+await page.waitForFunction((args) => document.querySelector(`[data-testid="ax-widget"][data-id="${args.id}"]`)?.dataset.w !== String(args.w), { id: firstId, w: sizeBefore[0] });
+const sizeAfter = await page.$eval(`[data-testid="ax-widget"][data-id="${firstId}"]`, (e) => [+e.dataset.w, +e.dataset.h]);
+assert.equal(sizeAfter[0], sizeBefore[0] + 2, "two columns wider");
+assert.equal(sizeAfter[1], sizeBefore[1] + 1, "one row taller");
+await shot("09c-canvas");
+ok("a widget resized by its corner grows by the cells it was dragged");
+
+// nothing may end up underneath anything else
+const overlapping = await page.$$eval('[data-testid="ax-widget"]', (es) => {
+  const b = es.map((e) => ({ x: +e.dataset.x, y: +e.dataset.y, w: +e.dataset.w, h: +e.dataset.h }));
+  let hits = 0;
+  for (let i = 0; i < b.length; i++) for (let j = i + 1; j < b.length; j++) {
+    if (b[i].x < b[j].x + b[j].w && b[j].x < b[i].x + b[i].w && b[i].y < b[j].y + b[j].h && b[j].y < b[i].y + b[i].h) hits++;
+  }
+  return hits;
+});
+assert.equal(overlapping, 0, "resizing over a neighbour pushes it down rather than covering it");
+ok("widgets pushed aside by a move or a resize are never left hidden under another");
+
+// tidy closes the vertical gaps the moves opened
+await page.click('[data-testid="ax-dash-tidy"]');
+await page.waitForTimeout(100);
+const tidied = await page.$$eval('[data-testid="ax-widget"]', (es) => es.map((e) => +e.dataset.y));
+assert.equal(Math.min(...tidied), 0, "after tidying something sits on the top row");
+ok("“Tidy up” closes the vertical gaps, which is an action the author asks for rather than one that just happens");
+
+// a shared viewer sees the arrangement but cannot edit it
+assert.ok(await page.$('[data-testid="ax-dashboard"][data-editable]'), "the builder's canvas is editable");
+
 console.log("\n§10 EXISTING NAVIGATION UNCHANGED + NEW ENTRY POINTS");
 await page.goto(`${STUDIO}/`, { waitUntil: "networkidle" });
 await page.waitForSelector('[data-testid="dash-analytics"]');
