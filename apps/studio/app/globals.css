@@ -1821,7 +1821,17 @@ p.qs-help { margin: -2px 0 10px; }
    not fit scrolls. `overflow: hidden` would cut a table off mid-row with
    nothing to say it had — a reader cannot tell a clipped table from a short
    one. */
-.ax-widget { position: relative; border: 1px solid var(--border); border-radius: 10px; padding: 10px; background: var(--panel); min-width: 0; overflow: auto; display: flex; flex-direction: column; }
+.ax-widget { position: relative; border: 1px solid var(--ax-border, var(--border)); border-radius: 10px; padding: 10px; background: var(--ax-surface, var(--panel)); min-width: 0; overflow: auto; display: flex; flex-direction: column; }
+
+/* §42 — surfaces come from the theme. `--ax-*` are published by ReportView
+   from `themeSurfaces(theme)`; the fallbacks keep every other use of these
+   classes (the builder chrome, the studio) on the app's own palette. */
+.ax-report .ax-block { background: var(--ax-surface, var(--panel)); border-color: var(--ax-border, var(--border)); }
+.ax-report .ax-pro-table th, .ax-report .ax-pro-table td { border-color: var(--ax-border, var(--border)); }
+.ax-report[data-dark] .ax-pro-table thead th { background: var(--ax-surface, var(--panel2)); color: var(--ax-text, var(--text)); }
+.ax-report[data-dark] .muted, .ax-report[data-dark] .ax-caption { color: var(--ax-subtle, var(--subtle)); }
+.ax-report[data-dark] .ax-missing { background: rgba(251, 191, 36, .12); border-color: rgba(251, 191, 36, .4); color: #fcd34d; }
+.ax-report[data-dark] .ax-widget.has-bg { border-color: transparent; }
 .ax-widget-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; flex: none; }
 .ax-widget > .ax-chart { flex: 1 1 auto; min-height: 0; }
 .ax-widget > .ax-chart > svg { height: 100%; }
@@ -1893,7 +1903,7 @@ p.qs-help { margin: -2px 0 10px; }
    Forsta/Dapresy-style CX/EX dashboard gallery the team asked to match —
    photography and icon-driven breakdowns alongside the analytical
    chart/table/kpi widgets, in the same 12-column grid. */
-.ax-photo-tile { position: relative; min-height: 120px; height: 100%; border-radius: 8px; background-color: var(--panel2); background-position: center; background-repeat: no-repeat; display: flex; align-items: flex-end; }
+.ax-photo-tile { position: relative; min-height: 120px; height: 100%; border-radius: 8px; background-color: var(--ax-surface, var(--panel2)); background-position: center; background-repeat: no-repeat; display: flex; align-items: flex-end; }
 .ax-photo-empty { padding: 10px; }
 .ax-photo-overlay { margin: 10px; padding: 8px 12px; border-radius: 8px; background: rgba(19,26,43,.72); color: #fff; }
 .ax-photo-value { font-size: 22px; font-weight: 700; line-height: 1.1; }

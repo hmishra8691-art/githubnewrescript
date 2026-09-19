@@ -16,7 +16,7 @@
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
 import assert from "node:assert/strict";
-import { buildDataset, runAnalysis, recommendCharts, DEFAULT_THEME, BUILT_IN_REPORT_TEMPLATES, applyTemplate, reportPages } from "../packages/analytics/dist/index.js";
+import { buildDataset, runAnalysis, recommendCharts, DEFAULT_THEME, BUILT_IN_REPORT_TEMPLATES, BUILT_IN_DASHBOARD_TEMPLATES, applyTemplate, applyDashboardTemplate, dashboardAsTemplate, templateKind, reportPages } from "../packages/analytics/dist/index.js";
 import { buildPptx, buildXlsx } from "../packages/analytics/dist/export/index.js";
 import { def, synthRows } from "../packages/analytics/dist/analyses/fixture.js";
 import { variableMetadata } from "../packages/analytics/dist/dataset.js";
@@ -61,14 +61,20 @@ async function fakeApi(route) {
   const coll = (k) => store[k];
   /* §36 — report templates, and laying one over a report */
   if (head === "report-templates") {
-    if (m === "GET") return json(route, { templates: [...BUILT_IN_REPORT_TEMPLATES, ...store.reportTemplates], available: true });
+    if (m === "GET") return json(route, { templates: [...BUILT_IN_REPORT_TEMPLATES.map((t) => ({ ...t, kind: "report" })), ...BUILT_IN_DASHBOARD_TEMPLATES, ...store.reportTemplates], available: true });
     if (m === "POST") {
       const src = store.reports.find((r) => r.id === body.fromReportId);
+      // §42 — a dashboard's shape is its widgets and scenery, not blocks
+      if (src?.kind === "dashboard") {
+        const t = { id: uid(), builtIn: false, ...dashboardAsTemplate(body.name, src.definition, body.description) };
+        store.reportTemplates.push(t);
+        return json(route, { template: t }, 201);
+      }
       const blocks = (src?.definition?.blocks ?? []).map((b) => {
         if (b.type === "panel_grid") return { ...b, panels: b.panels.map((pnl) => ({ ...pnl, analysisId: "" })) };
         const { analysisId, analysisIds, ...rest } = b; return { ...rest, placeholder: b.title ?? b.type };
       });
-      const t = { id: uid(), name: body.name, description: body.description, builtIn: false, blocks };
+      const t = { id: uid(), name: body.name, description: body.description, builtIn: false, kind: "report", blocks };
       store.reportTemplates.push(t);
       return json(route, { template: t }, 201);
     }
@@ -76,9 +82,14 @@ async function fakeApi(route) {
   }
   if (head === "reports" && action === "apply-template" && m === "POST") {
     const r = store.reports.find((x) => x.id === itemId);
-    const t = [...BUILT_IN_REPORT_TEMPLATES, ...store.reportTemplates].find((x) => x.id === body.templateId);
+    const t = [...BUILT_IN_REPORT_TEMPLATES, ...BUILT_IN_DASHBOARD_TEMPLATES, ...store.reportTemplates].find((x) => x.id === body.templateId);
     if (!r || !t) return json(route, { error: "Unknown template." }, 404);
-    r.definition = applyTemplate(t, r.definition);
+    // §42 — the two kinds share a gallery, so a mismatch is refused rather
+    // than left to produce a definition nothing can render
+    const wantKind = r.kind === "dashboard" ? "dashboard" : "report";
+    const gotKind = templateKind(t);
+    if (wantKind !== gotKind) return json(route, { error: `That is a ${gotKind} template, and this is a ${wantKind}. Pick a ${wantKind} template.` }, 409);
+    r.definition = wantKind === "dashboard" ? applyDashboardTemplate(t, r.definition) : applyTemplate(t, r.definition);
     store.audit.push("analytics.report_modified");
     return json(route, { definition: r.definition, appliedTemplate: t.name });
   }
@@ -1036,6 +1047,87 @@ assert.equal(await pub2.$$eval('[data-testid="ax-widget-grip"]', (es) => es.leng
 assert.equal(await pub2.$$eval('[data-testid="ax-dashboard"][data-editable]', (es) => es.length), 0, "and no editable canvas");
 ok("a shared dashboard reaches its viewer with the banner, the band and the exact layout — and nothing to edit them with");
 await anon2.close();
+
+console.log("\n§9e DASHBOARD TEMPLATES AND THEME PRESETS (§42)");
+await page.click('[data-testid="ax-templates"]');
+await page.waitForSelector('[data-testid="ax-template-dialog"]');
+assert.match(await text('[data-testid="ax-template-dialog"] h3'), /Dashboard templates/);
+/*
+ * The two kinds share one gallery, and a report template over a dashboard
+ * would replace its widgets with blocks nothing can draw. The wrong kind is
+ * therefore not offered at all.
+ */
+assert.ok(await page.$('[data-testid="ax-apply-builtin:cx_overview"]'), "the CX dashboard template is offered");
+assert.ok(await page.$('[data-testid="ax-apply-builtin:ex_overview"]'), "and the EX one");
+assert.equal(await count('[data-testid="ax-apply-builtin:topline"]'), 0, "a REPORT template must not be offered for a dashboard");
+ok("the dashboard gallery offers dashboard templates only — a report template cannot be applied to a canvas");
+
+// the server refuses the mismatch too, for anyone who asks it directly
+const dashId = store.reports.find((r) => r.name === "Executive Dashboard").id;
+const crossKind = await page.evaluate(async ([sid, rid]) => {
+  const res = await fetch(`/api/surveys/${sid}/analytics/reports/${rid}/apply-template`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ templateId: "builtin:topline" }),
+  });
+  return { status: res.status, body: await res.json() };
+}, [SURVEY, dashId]);
+assert.equal(crossKind.status, 409, "the API refuses a report template on a dashboard");
+assert.match(crossKind.body.error, /report template, and this is a dashboard/);
+ok("and the API refuses the same mismatch rather than writing a definition nothing can render");
+
+// applying one keeps the widgets that already point at an analysis
+const beforeAnalyses = store.reports.find((r) => r.id === dashId).definition.widgets.filter((w) => w.analysisId).map((w) => w.analysisId);
+assert.ok(beforeAnalyses.length >= 3, "the dashboard has real work on it to protect");
+await page.click('[data-testid="ax-apply-builtin:cx_overview"]');
+await page.waitForSelector('[data-testid="ax-report-builder"] .ax-ok, [data-testid="ax-report-builder"] [data-testid="ax-widget"]');
+await page.waitForFunction((n) => document.querySelectorAll('[data-testid="ax-widget"]').length >= n, 9);
+const afterDef = store.reports.find((r) => r.id === dashId).definition;
+for (const id of beforeAnalyses) {
+  assert.ok(afterDef.widgets.some((w) => w.analysisId === id), `analysis ${id} survived the template`);
+}
+assert.ok(afterDef.hero, "the template brought its hero banner");
+ok("applying a dashboard template lays out its shape and carries every widget that already had an analysis");
+
+// nothing ended up underneath anything else
+const tplCells = await page.$$eval('[data-testid="ax-widget"]', (es) => es.map((e) => ({ x: +e.dataset.x, y: +e.dataset.y, w: +e.dataset.w, h: +e.dataset.h })));
+let tplOverlaps = 0;
+for (let i = 0; i < tplCells.length; i++) for (let j = i + 1; j < tplCells.length; j++) {
+  const a = tplCells[i], b = tplCells[j];
+  if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h) tplOverlaps++;
+}
+assert.equal(tplOverlaps, 0, "the template's layout plus the carried-over work still has no widget hidden under another");
+ok("the applied layout has nothing hidden — carried-over work is placed, not stacked");
+
+// theme presets, including the dark ones the surfaces exist for
+await page.click('[data-testid="ax-tab-themes"]');
+await page.waitForSelector('[data-testid="ax-theme-presets"]');
+await page.click('[data-testid="ax-theme-preset-midnight"]');
+await page.waitForSelector('[data-testid="ax-theme-editor"]');
+assert.match(await page.$eval('[data-testid="ax-theme-name"]', (e) => e.value), /Midnight/);
+await page.fill('[data-testid="ax-theme-name"]', "Client dark");
+await page.click('[data-testid="ax-theme-save"]');
+await page.waitForSelector('[data-testid="ax-theme-card"]:has-text("Client dark")');
+const darkTheme = store.themes.find((t) => t.name === "Client dark");
+assert.ok(darkTheme, "the dark preset saved as a real theme");
+ok("a dark theme is one click from a preset, not eight colour pickers");
+
+// and a dark theme actually renders dark — surfaces and all
+await page.click('[data-testid="ax-tab-reports"]');
+await page.click('[data-testid="ax-report-card"]:has-text("Executive Dashboard")');
+await page.waitForSelector('[data-testid="ax-widget"]');
+await page.selectOption('.ax-rb-bar select[title="Report theme"]', { label: "Client dark" });
+await page.waitForSelector('[data-testid="ax-report"][data-dark]');
+const darkSurfaces = await page.$eval('[data-testid="ax-widget"]', (e) => {
+  const cs = getComputedStyle(e);
+  const page_ = getComputedStyle(e.closest('[data-testid="ax-report"]'));
+  return { card: cs.backgroundColor, page: page_.backgroundColor };
+});
+const lum = (rgb) => { const [r, g, b] = rgb.match(/\d+/g).map(Number).map((v) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+assert.ok(lum(darkSurfaces.page) < 0.2, `a dark theme's page should be dark, got ${darkSurfaces.page}`);
+assert.ok(lum(darkSurfaces.card) < 0.3, `and its widget cards must not stay white, got ${darkSurfaces.card}`);
+assert.ok(lum(darkSurfaces.card) > lum(darkSurfaces.page), "the card still lifts off the page");
+await shot("09e-dark-theme");
+ok("a dark theme renders dark end to end — the widget cards follow the theme instead of the stylesheet");
 
 console.log("\n§10 EXISTING NAVIGATION UNCHANGED + NEW ENTRY POINTS");
 await page.goto(`${STUDIO}/`, { waitUntil: "networkidle" });

@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { AnalysisResult, ChartSpec, ChartType, ReportTheme, ChartData, TreeNode } from "@rescript/analytics";
-import { DEFAULT_THEME, seriesForChart, fitProjection, regionPath, regionsFor, resolveRegions, worldViewRegions, type Region } from "@rescript/analytics";
+import { DEFAULT_THEME, seriesForChart, themeSurfaces, fitProjection, regionPath, regionsFor, resolveRegions, worldViewRegions, type Region } from "@rescript/analytics";
 import { ProTable } from "../ProTable";
 
 /**
@@ -55,7 +55,10 @@ export function Chart(props: ChartProps) {
   const ctx: Ctx = {
     W, H, theme, colors: o.colors?.length ? o.colors : theme.colors.palette, font: o.fontFamily ?? theme.fontFamily, fs: o.fontSize ?? theme.typography?.baseSize ?? 12,
     decimals: o.decimals ?? theme.chart?.decimals ?? (series[0]?.meta?.pct ? 0 : 1), pct: !!series[0]?.meta?.pct || props.result.chart.valueFormat === "pct", opts: o, sel: props.selected, onSelect: props.onSelect,
-    hover: [hover, setHover], textColor: theme.colors.text, grid: "#e5e9f0", subtle: theme.colors.subtle,
+    hover: [hover, setHover], textColor: theme.colors.text,
+    /* §42 — grid lines come from the theme. Hard-coding "#e5e9f0" drew a
+       near-white cage over every chart on a dark theme. */
+    grid: themeSurfaces(theme).grid, subtle: theme.colors.subtle,
   };
   const d = props.result.chart;
   const title = o.title ?? spec.name;

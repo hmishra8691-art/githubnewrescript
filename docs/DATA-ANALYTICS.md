@@ -429,9 +429,67 @@ than by a failing test:
   space, and on a parenthesis in a filename — the picture simply never appears,
   with no error anywhere. All four call sites now go through `cssUrl`.
 
+## Dashboard templates and theme presets (§42, September 2026)
+
+Reports have had templates since §36; dashboards had none, so every CX or
+engagement dashboard was assembled widget by widget from an empty canvas. This
+adds the dashboard half of the same idea, and the dark themes the surfaces
+were always missing.
+
+**Templates** (`packages/analytics/src/dashboardTemplates.ts`)
+
+* Three built-ins — **Customer experience overview**, **Employee experience**
+  and **Brand tracker** — and they are where the last four phases meet: laid
+  out on the canvas (§40), carrying a hero and a band (§41), built from the
+  operational widgets (§38) and the maps (§39) rather than only charts and
+  tables.
+* `applyDashboardTemplate` follows the report rule that matters most: every
+  widget that already points at an analysis is carried into the first slot of
+  its own type, taking the template's position and house title while keeping
+  its own analysis and chart type. Anything the shape has no room for is
+  appended rather than dropped, and the result is run through
+  `normalizeLayout`, so a template plus carried-over work still has nothing
+  hidden underneath anything else.
+* **The author's own hero photograph outlives the template.** A template
+  supplies a banner's wording and shape; the picture was the author's upload,
+  and replacing it with nothing is the same class of loss as dropping a chart.
+* **One gallery, two kinds, and the wrong kind is refused.** A report template
+  over a dashboard would replace its widgets with blocks nothing can draw. The
+  picker only offers the matching kind, and the API returns 409 for the
+  mismatch rather than writing a definition that cannot render. A stored
+  template from before this feature has no `kind` at all, and `templateKind`
+  reads that as "report" — which is what keeps the existing library working.
+* **A freshly applied template explains itself.** Each empty slot carries the
+  template's own `placeholder` ("Overall satisfaction", "A photograph of the
+  place or product") and renders it where it sits. Before this, an unfilled
+  KPI or chart widget drew nothing at all, so a just-applied template looked
+  like a broken dashboard rather than an unfinished one.
+
+**Themes** (`packages/analytics/src/themes.ts`)
+
+* `THEME_PRESETS` ships the house theme plus **Midnight**, **Graphite** and
+  **Warm paper**. A preset only fills the editor; everything in it stays
+  editable.
+* The point is not the colour values. A theme has always carried a background
+  and a text colour and the report honoured both, but everything AROUND the
+  content did not: widget cards were a stylesheet variable and chart grid
+  lines were the literal `#e5e9f0`. Setting a dark background produced a dark
+  page carrying white cards ruled with near-white lines — a dark theme in name
+  only.
+* So the surfaces are **derived** from the theme. `themeSurfaces` returns the
+  card, border and grid as steps from the background towards the text colour —
+  the same rule in both directions rather than two sets of hard-coded colours —
+  and `ReportView` publishes them as CSS variables so the stylesheet follows
+  the theme too. One colour decision settles the rest, which is also why a dark
+  preset is three colours rather than thirty.
+* The presets are unit-tested for **contrast**, not just for existing: body
+  text clears AAA against both the page and a card, muted text stays legible,
+  grid lines stay visible without competing with the data, and no palette
+  colour disappears into its own background.
+
 ## Tests
 
-* `pnpm --filter @rescript/analytics test` — 157 tests (stats vs scipy, every runner against planted data, report pages/templates, PPTX/XLSX builders including panel grids, the geography: region resolution, aliases, scope choice, unmatched reporting, projection fitting; and the dashboard canvas: the legacy flow, overlap resolution, idempotence, tidying, free-slot placement; and the scenery: scrim defaults, overlay text colour, hero sizing, band normalization).
-* `node scripts/analytics-test.mjs` — 83 browser checks (workspace, builder, the analyses rail, the four stages, the professional table, nested rows, filters, charts, gallery, customisation, save/version, segments, report builder, publish/immutability, panel grids and the tracker template, share link, read-only view, downloads, revoke, password, expiry, exports, table builder, themes, dashboard, the four operational-dashboard widgets — photo/icon panel/steps/ranked list, real country and bubble maps, the dashboard canvas — drag, resize, the pre-canvas flow and the no-overlap rule, the hero/band scenery and its trip to a shared viewer, existing navigation unchanged). Uses an in-process fake backend over the real engine because the dev container has no database credentials.
+* `pnpm --filter @rescript/analytics test` — 181 tests (stats vs scipy, every runner against planted data, report pages/templates, PPTX/XLSX builders including panel grids, the geography: region resolution, aliases, scope choice, unmatched reporting, projection fitting; and the dashboard canvas: the legacy flow, overlap resolution, idempotence, tidying, free-slot placement; the scenery: scrim defaults, overlay text colour, hero sizing, band normalization; the dashboard templates: carrying work across, overflow, layout integrity, kind detection; and the themes: derived surfaces, preset contrast).
+* `node scripts/analytics-test.mjs` — 89 browser checks (workspace, builder, the analyses rail, the four stages, the professional table, nested rows, filters, charts, gallery, customisation, save/version, segments, report builder, publish/immutability, panel grids and the tracker template, share link, read-only view, downloads, revoke, password, expiry, exports, table builder, themes, dashboard, the four operational-dashboard widgets — photo/icon panel/steps/ranked list, real country and bubble maps, the dashboard canvas — drag, resize, the pre-canvas flow and the no-overlap rule, the hero/band scenery and its trip to a shared viewer, the dashboard template gallery and its cross-kind refusal, dark theme presets rendering dark end to end, existing navigation unchanged). Uses an in-process fake backend over the real engine because the dev container has no database credentials.
 * `packages/analytics/src/analyses/crosstab.test.ts` — the crosstab’s options one by one (banner, nesting, stacking, base, suppression, sorting, summary rows, means, weighted letters) and the audit’s fixes (A1–A6, A11).
 * Share-resolution SQL exercised against the live database in a rolled-back transaction (unknown / unpublished / pinned vs following / expired / revoked / password flag / access counting).

@@ -454,6 +454,12 @@ export type TemplateBlock =
 export interface ReportTemplate {
   id?: string;
   name: string;
+  /**
+   * §42 — which gallery this belongs to. Absent means "report": every
+   * template stored before dashboards had any is one, and reading the missing
+   * value that way is what keeps the existing gallery working.
+   */
+  kind?: "report" | "dashboard";
   description?: string;
   /** a built-in template shipped with the platform, not authored here */
   builtIn?: boolean;
@@ -507,6 +513,13 @@ export interface DashboardWidget {
    */
   backgroundImageUrl?: string;
   backgroundScrim?: number;
+  /**
+   * §42 — what a filled-in version of this widget is for, carried over from
+   * the template that created it. A freshly applied template is all empty
+   * slots, and "Your NPS analysis" tells the reader what to pick where a
+   * blank card tells them the dashboard is broken.
+   */
+  placeholder?: string;
 }
 
 /**

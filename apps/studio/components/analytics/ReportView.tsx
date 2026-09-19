@@ -4,7 +4,7 @@ import type { AnalysisResult, ChartSpec, DashboardBand, DashboardHero, Dashboard
 import {
   DEFAULT_THEME, executiveSummary, methodologyLines, reportPages, seriesForChart,
   DASHBOARD_COLUMNS, DASHBOARD_GAP_PX, DASHBOARD_ROW_PX, clampBox, heroRows, layoutRows, normalizeBands,
-  normalizeLayout, overlayTextColor, scrimFor, sortByPosition,
+  normalizeLayout, overlayTextColor, scrimFor, sortByPosition, themeSurfaces,
   type LayoutBox,
 } from "@rescript/analytics";
 import { Chart, ResultTableView } from "./charts/Chart";
@@ -66,7 +66,6 @@ function mdToHtml(md: string): string {
   return md.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/^### (.*)$/gm, "<h4>$1</h4>").replace(/^## (.*)$/gm, "<h3>$1</h3>").replace(/^# (.*)$/gm, "<h2>$1</h2>").replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/\*(.+?)\*/g, "<i>$1</i>").replace(/^- (.*)$/gm, "<li>$1</li>").replace(/(<li>.*<\/li>\n?)+/g, (m) => `<ul>${m}</ul>`).replace(/\n{2,}/g, "<br/><br/>");
 }
 
-/** "+2%" → up, "-2%" → down, "0%" or unsigned → flat — the color/arrow convention the photo tile's trend chip follows. */
 /**
  * A CSS `url()` that survives whatever the author pasted. An unquoted url()
  * breaks on a data: URI, on a space, and on a parenthesis in a filename, and
@@ -74,6 +73,7 @@ function mdToHtml(md: string): string {
  */
 const cssUrl = (u: string) => 'url("' + u.replace(/["\\]/g, "\\$&") + '")';
 
+/** "+2%" → up, "-2%" → down, "0%" or unsigned → flat — the colour convention the photo tile's trend chip follows. */
 function trendTone(s: string): "up" | "down" | "flat" {
   const t = s.trim();
   if (t.startsWith("+") || (t.startsWith("↑"))) return "up";
@@ -167,10 +167,23 @@ export function ReportView(p: ReportViewProps) {
   };
   const segFor = (id: string): number | undefined => { const r = results[id]; if (!r?.segments) return undefined; const local = segIdx[id]; if (local != null) return local; if (globalSeg) { const i = r.segments.findIndex((s) => s.name === globalSeg); return i >= 0 ? i : undefined; } return undefined; };
   const font = theme.fontFamily;
-  const style: React.CSSProperties = { fontFamily: font, color: theme.colors.text, background: theme.colors.background };
+  /*
+   * §42 — the theme's surfaces, published as CSS variables so the stylesheet
+   * follows the theme instead of only the inline styles doing so. Without
+   * this a dark theme produced a dark page carrying white widget cards: the
+   * page colour came from the theme, every card from the stylesheet.
+   */
+  const surfaces = themeSurfaces(theme);
+  const style: React.CSSProperties = {
+    fontFamily: font, color: surfaces.text, background: surfaces.background,
+    ["--ax-surface" as string]: surfaces.surface,
+    ["--ax-border" as string]: surfaces.border,
+    ["--ax-text" as string]: surfaces.text,
+    ["--ax-subtle" as string]: surfaces.subtle,
+  };
   const Actions = ({ id }: { id: string }) => p.onBlockAction ? <span className="ax-block-actions"><button onClick={() => p.onBlockAction!(id, "up")} title="Move up">↑</button><button onClick={() => p.onBlockAction!(id, "down")} title="Move down">↓</button><button onClick={() => p.onBlockAction!(id, "edit")} title="Edit">✎</button><button onClick={() => p.onBlockAction!(id, "remove")} title="Remove">×</button></span> : null;
-  const Missing = ({ id }: { id: string }) => !id
-    ? <div className="ax-missing" data-testid="ax-unfilled">Waiting for an analysis. Open this block and pick one.</div>
+  const Missing = ({ id, hint }: { id: string; hint?: string }) => !id
+    ? <div className="ax-missing" data-testid="ax-unfilled">{hint ? `${hint} — open this widget and pick the analysis.` : "Waiting for an analysis. Open this block and pick one."}</div>
     : <div className="ax-missing">Analysis {id.slice(0, 8)}… is not available{p.mode === "snapshot" ? " in this published version" : " (deleted or not yet computed)"}.</div>;
 
   const renderChart = (id: string, spec: ChartSpec, height?: number) => {
@@ -263,7 +276,7 @@ export function ReportView(p: ReportViewProps) {
   };
 
   return (
-    <div className="ax-report" style={style} data-testid="ax-report" data-mode={p.mode}>
+    <div className="ax-report" style={style} data-testid="ax-report" data-mode={p.mode} data-dark={surfaces.dark ? "1" : undefined}>
       <div className="ax-report-bar">
         <span className={`ax-mode ${p.mode}`} title={p.mode === "snapshot" ? "Frozen at publish time — the numbers do not change until the owner republishes." : "Recomputed from current response data every time it is opened."}>{p.mode === "snapshot" ? `Snapshot${p.version ? ` · v${p.version}` : ""}${p.publishedAt ? ` · published ${new Date(p.publishedAt).toLocaleDateString()}` : ""}` : "Live data"}</span>
         {(p.viewerSegments?.length || segmentsAvailable.length) ? <select className="select small" value={globalSeg} onChange={(e) => { setGlobalSeg(e.target.value); setSegIdx({}); }} data-testid="ax-viewer-segment"><option value="">All respondents</option>{[...new Set(segmentsAvailable)].filter((s) => !p.viewerSegments?.length || p.viewerSegments.includes(s)).map((s) => <option key={s} value={s}>{s}</option>)}</select> : null}
@@ -397,9 +410,9 @@ export function ReportView(p: ReportViewProps) {
               )}
               {w.title && <div className="ax-widget-title">{w.title}</div>}
               {w.type === "text" && <div dangerouslySetInnerHTML={{ __html: mdToHtml(w.text ?? "") }} />}
-              {w.type === "kpi" && (r ? <Chart result={r} spec={{ type: r.chart.kpis && r.chart.kpis.length === 1 ? "gauge" : "kpi_card", options: { showBase: false } }} theme={theme} height={Math.max(120, live.h * DASHBOARD_ROW_PX - 30)} /> : w.analysisId ? <Missing id={w.analysisId} /> : null)}
-              {w.type === "chart" && w.analysisId && (r ? renderChart(w.analysisId, w.chart ?? { type: r.recommendedCharts[0] ?? "bar_vertical", options: {} }, Math.max(160, live.h * DASHBOARD_ROW_PX - 30)) : <Missing id={w.analysisId} />)}
-              {w.type === "table" && w.analysisId && (r ? <ResultTableView table={r.tables[0]} dense maxRows={Math.max(4, live.h * 2)} /> : <Missing id={w.analysisId} />)}
+              {w.type === "kpi" && (r ? <Chart result={r} spec={{ type: r.chart.kpis && r.chart.kpis.length === 1 ? "gauge" : "kpi_card", options: { showBase: false } }} theme={theme} height={Math.max(120, live.h * DASHBOARD_ROW_PX - 30)} /> : <Missing id={w.analysisId ?? ""} hint={w.placeholder} />)}
+              {w.type === "chart" && (w.analysisId && r ? renderChart(w.analysisId, w.chart ?? { type: r.recommendedCharts[0] ?? "bar_vertical", options: {} }, Math.max(160, live.h * DASHBOARD_ROW_PX - 30)) : <Missing id={w.analysisId ?? ""} hint={w.placeholder} />)}
+              {w.type === "table" && (w.analysisId && r ? <ResultTableView table={r.tables[0]} dense maxRows={Math.max(4, live.h * 2)} /> : <Missing id={w.analysisId ?? ""} hint={w.placeholder} />)}
               {w.type === "filter" && <div className="muted" style={{ fontSize: 13 }}>Segment switch: use the selector in the bar above.</div>}
               {/*
                 * §38 — the operational-dashboard widgets, modelled on
@@ -413,7 +426,7 @@ export function ReportView(p: ReportViewProps) {
                 */}
               {w.type === "photo" && (
                 <div className="ax-photo-tile" style={{ backgroundImage: w.imageUrl ? cssUrl(w.imageUrl) : undefined, backgroundSize: w.fit === "contain" ? "contain" : "cover" }} data-testid="ax-widget-photo">
-                  {!w.imageUrl && <div className="ax-photo-empty muted">No image yet — open this widget and choose one.</div>}
+                  {!w.imageUrl && <div className="ax-photo-empty muted">{w.placeholder ? `${w.placeholder} — open this widget and choose one.` : "No image yet — open this widget and choose one."}</div>}
                   {(w.overlayValue || w.overlayTrend) && (
                     <div className="ax-photo-overlay">
                       {w.overlayValue && <div className="ax-photo-value">{w.overlayValue}</div>}
@@ -439,7 +452,7 @@ export function ReportView(p: ReportViewProps) {
                     })}
                   </div>
                 );
-              })() : <Missing id={w.analysisId} />) : <Missing id="" />)}
+              })() : <Missing id={w.analysisId} />) : <Missing id="" hint={w.placeholder} />)}
               {w.type === "steps" && (
                 <div className="ax-steps" data-testid="ax-widget-steps">
                   {(w.steps ?? []).map((s, i) => (
@@ -473,7 +486,7 @@ export function ReportView(p: ReportViewProps) {
                     })}
                   </ol>
                 );
-              })() : <Missing id={w.analysisId} />) : <Missing id="" />)}
+              })() : <Missing id={w.analysisId} />) : <Missing id="" hint={w.placeholder} />)}
             </div>;
           })}
         </div>

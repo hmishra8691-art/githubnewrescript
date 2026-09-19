@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { ReportTheme } from "@rescript/analytics";
-import { DEFAULT_THEME } from "@rescript/analytics";
+import { DEFAULT_THEME, THEME_PRESETS, isDarkTheme } from "@rescript/analytics";
 import { AxApi, type Row } from "./api";
 
 /**
@@ -29,6 +29,24 @@ export function ThemesPanel({ api, items, onChange }: { api: AxApi; items: Row[]
         <span className="muted" style={{ fontSize: 13 }}>Company or client branding for charts, reports, PowerPoint and Excel — independent of the survey's respondent-facing branding.</span>
         <span className="grow" />
         <button className="btn primary small" onClick={() => start()} data-testid="ax-new-theme">+ New theme</button>
+      </div>
+      {/*
+        * §42 — presets. A preset only FILLS the editor; everything in it stays
+        * editable. The dark ones matter most: a dark theme is not one colour
+        * but a background, a text colour and the card, border and grid derived
+        * from them, which is not a thing to reconstruct by hand.
+        */}
+      <div className="row" style={{ gap: 6, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }} data-testid="ax-theme-presets">
+        <span className="muted" style={{ fontSize: 12.5 }}>Start from:</span>
+        {THEME_PRESETS.map((preset) => (
+          <button key={preset.name} type="button" className="chip" style={{ cursor: "pointer" }}
+            data-testid={`ax-theme-preset-${preset.name.toLowerCase().replace(/\s+/g, "-")}`}
+            onClick={() => { setEditing({ id: null }); setTheme({ ...preset, name: `${preset.name} copy` }); setScope("workspace"); setError(null); }}
+            title={`${preset.name}${isDarkTheme(preset) ? " — a dark theme" : ""}`}>
+            <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 3, marginRight: 6, background: preset.colors.background, border: `1px solid ${preset.colors.subtle}`, verticalAlign: "middle" }} />
+            {preset.name}{isDarkTheme(preset) ? " ●" : ""}
+          </button>
+        ))}
       </div>
       {editing && (
         <div className="card" data-testid="ax-theme-editor">

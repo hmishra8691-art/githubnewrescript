@@ -5,8 +5,7 @@ import type { AuditEvent, Capability } from "@rescript/access";
 import { buildPptx, buildXlsx } from "@rescript/analytics/export";
 import {
   DEFAULT_THEME, BUILT_IN_REPORT_TEMPLATES, applyTemplate, describeTemplate,
-  type AnalysisDefinition, type AnalysisResult, type ChartSpec, type ReportDefinition, type ReportTemplate, type ReportTheme,
-} from "@rescript/analytics";
+  type AnalysisDefinition, type AnalysisResult, type ChartSpec, type ReportDefinition, type ReportTemplate, type ReportTheme, BUILT_IN_DASHBOARD_TEMPLATES, applyDashboardTemplate, dashboardAsTemplate, describeDashboardTemplate, templateKind } from "@rescript/analytics";
 import { supabaseService } from "@/lib/authServer";
 import { audit, isFailure, requireProject, type ProjectContext } from "@/lib/guard";
 import { compute, hashPassword, loadDefinition, loadTheme, newToken, variablesPayload } from "@/lib/analytics";
@@ -125,15 +124,25 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
       }
       return bad(error.message, 500);
     }
-    const saved = (data ?? []).map((t) => ({
-      id: t.id as string,
-      name: t.name as string,
-      description: (t.description as string) ?? undefined,
-      builtIn: false,
-      ...((t.template as object) ?? {}),
-      blocks: ((t.template as { blocks?: unknown[] })?.blocks ?? []),
-    }));
-    return json({ templates: [...BUILT_IN_REPORT_TEMPLATES, ...saved], available: true });
+    /*
+     * §42 — one gallery, two kinds. A stored template written before
+     * dashboards had templates carries no `kind`, and every one of those is a
+     * report: `templateKind` reads a missing value that way, which is what
+     * keeps the existing library working.
+     */
+    const saved = (data ?? []).map((t) => {
+      const stored = (t.template as Record<string, unknown>) ?? {};
+      return {
+        id: t.id as string,
+        name: t.name as string,
+        description: (t.description as string) ?? undefined,
+        builtIn: false,
+        ...stored,
+        kind: templateKind(stored as { kind?: string }),
+        blocks: (stored as { blocks?: unknown[] }).blocks ?? [],
+      };
+    });
+    return json({ templates: [...BUILT_IN_REPORT_TEMPLATES.map((t) => ({ ...t, kind: "report" as const })), ...BUILT_IN_DASHBOARD_TEMPLATES, ...saved], available: true });
   }
 
   if (head && head in COLLECTIONS) {
@@ -390,8 +399,19 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
 
     let template: ReportTemplate | null = null;
     if (typeof body.fromReportId === "string" && isUuid(body.fromReportId)) {
-      const { data: r } = await db.from("analytics_reports").select("definition, theme_id").eq("id", body.fromReportId).eq("survey_id", surveyId).is("deleted_at", null).maybeSingle();
+      const { data: r } = await db.from("analytics_reports").select("definition, theme_id, kind").eq("id", body.fromReportId).eq("survey_id", surveyId).is("deleted_at", null).maybeSingle();
       if (!r) return bad("Unknown report.", 404);
+      /*
+       * §42 — a dashboard's shape is a different shape. `dashboardAsTemplate`
+       * keeps the canvas layout and the scenery and drops the analyses, the
+       * same bargain the report branch below makes with its blocks.
+       */
+      if (r.kind === "dashboard") {
+        template = {
+          ...dashboardAsTemplate(name, r.definition as never, typeof body.description === "string" ? body.description : undefined),
+          themeId: (r.theme_id as string) ?? null,
+        } as unknown as ReportTemplate;
+      }
       const def = r.definition as ReportDefinition;
       /*
        * The STRUCTURE is saved, not the study: every analysis reference is
@@ -400,7 +420,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
        * the moment it was reused, which is the one thing a template must
        * never do.
        */
-      template = {
+      if (!template) template = {
         name,
         description: typeof body.description === "string" ? body.description : undefined,
         themeId: (r.theme_id as string) ?? null,
@@ -430,13 +450,26 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
       template = { ...(body.template as ReportTemplate), name };
     }
     if (!template) return bad("Say which report to save the shape of, or supply a template.");
-    if (!template.blocks?.length) return bad("That report has no blocks, so there is no shape to save.");
+    /*
+     * §42 — a dashboard's shape is its widgets, its canvas layout and its
+     * scenery, not blocks. `dashboardAsTemplate` strips the analyses the same
+     * way the report path does: a template is a shape, not a study.
+     */
+    const savingDashboard = templateKind(template as { kind?: string }) === "dashboard";
+    if (savingDashboard) {
+      const widgets = (template as unknown as { widgets?: unknown[] }).widgets ?? [];
+      if (!widgets.length) return bad("That dashboard has no widgets, so there is no shape to save.");
+    } else if (!template.blocks?.length) {
+      return bad("That report has no blocks, so there is no shape to save.");
+    }
 
     const { data, error } = await db.from("analytics_report_templates").insert({
       customer_id: ctx.user.customerId,
       name,
       description: template.description ?? null,
-      template: { blocks: template.blocks, themeId: template.themeId ?? null, exportDefaults: template.exportDefaults ?? null },
+      template: savingDashboard
+        ? { ...dashboardAsTemplate(name, { widgets: (template as unknown as { widgets?: never[] }).widgets ?? [], hero: (template as unknown as { hero?: never }).hero, bands: (template as unknown as { bands?: never[] }).bands }) }
+        : { kind: "report", blocks: template.blocks, themeId: template.themeId ?? null, exportDefaults: template.exportDefaults ?? null },
       source_survey_id: surveyId,
       created_by: ctx.user.userId,
     }).select("id, name").single();
@@ -450,8 +483,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
       }
       return bad(error.message, 500);
     }
-    log(ctx, "analytics.report_created", data.id, { name, template: true, blocks: template.blocks.length, shape: describeTemplate(template) });
-    return json({ template: { id: data.id, name: data.name, builtIn: false, blocks: template.blocks } }, 201);
+    log(ctx, "analytics.report_created", data.id, { name, template: true, kind: savingDashboard ? "dashboard" : "report", shape: savingDashboard ? describeDashboardTemplate(template as never) : describeTemplate(template) });
+    return json({ template: { id: data.id, name: data.name, builtIn: false, kind: savingDashboard ? "dashboard" : "report", blocks: template.blocks ?? [] } }, 201);
   }
 
   if (head === "reports" && itemId && action === "apply-template") {
@@ -460,7 +493,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     const templateId = String(body.templateId ?? "");
     if (!templateId) return bad("templateId is required.");
 
-    let template = BUILT_IN_REPORT_TEMPLATES.find((t) => t.id === templateId) ?? null;
+    let template: (ReportTemplate & { kind?: string; widgets?: unknown[] }) | null =
+      BUILT_IN_REPORT_TEMPLATES.find((t) => t.id === templateId)
+      ?? (BUILT_IN_DASHBOARD_TEMPLATES.find((t) => t.id === templateId) as never)
+      ?? null;
     if (!template) {
       if (!isUuid(templateId)) return bad("Unknown template.", 404);
       const { data: t } = await db.from("analytics_report_templates").select("id, name, description, template").eq("id", templateId).eq("customer_id", ctx.user.customerId ?? "").is("deleted_at", null).maybeSingle();
@@ -468,8 +504,32 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
       template = { id: t.id as string, name: t.name as string, description: (t.description as string) ?? undefined, ...((t.template as object) ?? {}), blocks: ((t.template as { blocks?: never[] })?.blocks ?? []) };
     }
 
-    const { data: r } = await db.from("analytics_reports").select("definition, name, theme_id").eq("id", itemId).eq("survey_id", surveyId).is("deleted_at", null).maybeSingle();
+    const { data: r } = await db.from("analytics_reports").select("definition, name, theme_id, kind").eq("id", itemId).eq("survey_id", surveyId).is("deleted_at", null).maybeSingle();
     if (!r) return bad("Unknown report.", 404);
+
+    /*
+     * §42 — a report template over a dashboard would replace its widgets with
+     * blocks it cannot draw, and the other way round is just as bad. The two
+     * shapes share a gallery, so the mismatch is refused here rather than
+     * left to produce a definition nothing can render.
+     */
+    const wantKind = r.kind === "dashboard" ? "dashboard" : "report";
+    const gotKind = templateKind(template as { kind?: string });
+    if (wantKind !== gotKind) {
+      return bad(`That is a ${gotKind} template, and this is a ${wantKind}. Pick a ${wantKind} template.`, 409);
+    }
+
+    if (wantKind === "dashboard") {
+      const definition = applyDashboardTemplate(template as never, r.definition as never);
+      const { error } = await db.from("analytics_reports").update({
+        definition,
+        ...(definition.themeId ? { theme_id: definition.themeId } : {}),
+        updated_by: ctx.user.userId,
+      }).eq("id", itemId);
+      if (error) return bad(error.message, 500);
+      log(ctx, "analytics.report_modified", itemId, { appliedTemplate: template.name, shape: describeDashboardTemplate(template as never) });
+      return json({ definition });
+    }
 
     /*
      * Applying a template never discards finished work: `applyTemplate`

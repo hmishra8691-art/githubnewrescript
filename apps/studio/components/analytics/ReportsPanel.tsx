@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { AnalysisDefinition, AnalysisResult, ChartSpec, DashboardBand, DashboardDefinition, DashboardWidget, ExportSettings, ReportBlock, ReportDefinition, ReportTheme } from "@rescript/analytics";
-import { CHART_CATALOG, DEFAULT_EXPORT_SETTINGS, describeTemplate, compactLayout, firstFreeSlot, layoutRows, normalizeLayout, placeWidget, scrimFor, type LayoutBox, type ReportTemplate } from "@rescript/analytics";
+import { CHART_CATALOG, DEFAULT_EXPORT_SETTINGS, describeTemplate, compactLayout, describeDashboardTemplate, firstFreeSlot, layoutRows, normalizeLayout, placeWidget, scrimFor, templateKind, type LayoutBox, type ReportTemplate } from "@rescript/analytics";
 import { AxApi, type Row, timeAgo } from "./api";
 import { ReportView } from "./ReportView";
 import { ICON_OPTIONS } from "./charts/Icons";
@@ -326,7 +326,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
 
   const saveAsTemplate = async () => {
     if (!open) return;
-    const name = prompt("Name this report shape, so the team can reuse it:", `${open.name} shape`);
+    const name = prompt(`Name this ${isDash ? "dashboard" : "report"} shape, so the team can reuse it:`, `${open.name} shape`);
     if (!name?.trim()) return;
     if (dirty) await save();
     try {
@@ -454,7 +454,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
         {versions.length > 0 && <select className="select small" value={viewVersion ?? ""} onChange={(e) => { const v = e.target.value ? Number(e.target.value) : null; setViewVersion(v); if (v) void load(open, v); else { setShownVersion(null); setDef(open.definition as ReportDefinition); void load(open); } }} data-testid="ax-version-select"><option value="">Editing draft (live data)</option>{versions.map((v) => <option key={v.version} value={v.version}>Published v{v.version} · {new Date(v.published_at).toLocaleDateString()}</option>)}</select>}
         <button className="btn small" onClick={save} disabled={!dirty} data-testid="ax-report-save">{dirty ? "Save" : "Saved"}</button>
         <button className="btn primary small" onClick={publish} data-testid="ax-report-publish">Publish {open.published_version ? `v${open.published_version + 1}` : "v1"}</button>
-        {!isDash && <button className="btn small" onClick={() => setTemplatesOpen((o) => !o)} data-testid="ax-templates">Templates</button>}
+        <button className="btn small" onClick={() => setTemplatesOpen((o) => !o)} data-testid="ax-templates">Templates</button>
         <button className="btn small" onClick={() => setShare(true)} data-testid="ax-report-share">Share</button>
         <button className="btn small" onClick={() => setExp(true)} data-testid="ax-report-export">Export</button>
       </div>
@@ -599,17 +599,23 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
       {templatesOpen && (
         <div className="modal-back" onClick={() => setTemplatesOpen(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()} data-testid="ax-template-dialog">
-            <h3 style={{ marginTop: 0 }}>Report templates</h3>
+            <h3 style={{ marginTop: 0 }}>{isDash ? "Dashboard templates" : "Report templates"}</h3>
             <p className="muted" style={{ fontSize: 13 }}>
-              The shape of a deliverable, without the study in it. Applying one keeps every block that already points at
+              The shape of a deliverable, without the study in it. Applying one keeps every {isDash ? "widget" : "block"} that already points at
               an analysis and leaves the rest as placeholders — so this is never the action that loses your work.
             </p>
+            {/*
+              * §42 — one gallery, filtered to the kind being edited. A report
+              * template over a dashboard would replace its widgets with blocks
+              * nothing can draw, so the wrong kind is not offered at all (and
+              * the server refuses it too, for anyone who asks directly).
+              */}
             <div className="ax-cards">
-              {templates.map((t) => (
+              {templates.filter((t) => templateKind(t) === (isDash ? "dashboard" : "report")).map((t) => (
                 <div key={t.id} className="card" data-testid="ax-template-card">
                   <div className="card-title">{t.name}{t.builtIn ? <span className="chip" style={{ marginLeft: 6 }}>built in</span> : null}</div>
                   {t.description && <div className="muted" style={{ fontSize: 13 }}>{t.description}</div>}
-                  <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>{describeTemplate(t)}</div>
+                  <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>{templateKind(t) === "dashboard" ? describeDashboardTemplate(t as never) : describeTemplate(t)}</div>
                   <div className="row" style={{ gap: 4, marginTop: 8 }}>
                     <button className="btn small primary" data-testid={`ax-apply-${t.id}`} onClick={() => void applyTemplateTo(t.id!, t.name)}>Apply</button>
                     {!t.builtIn && (
@@ -621,6 +627,9 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
                   </div>
                 </div>
               ))}
+              {!templates.some((t) => templateKind(t) === (isDash ? "dashboard" : "report")) && (
+                <div className="muted" style={{ fontSize: 13 }}>No {isDash ? "dashboard" : "report"} templates yet.</div>
+              )}
             </div>
             <div className="row" style={{ marginTop: 12, gap: 6 }}>
               <button className="btn small" onClick={() => void saveAsTemplate()} data-testid="ax-save-template">Save this report&apos;s shape</button>

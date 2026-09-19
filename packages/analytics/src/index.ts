@@ -8,4 +8,6 @@ export * from "./export/shared.js";
 export * from "./reportPages.js";
 export * from "./geo/index.js";
 export * from "./dashboardLayout.js";
+export * from "./dashboardTemplates.js";
+export * from "./themes.js";
 export * from "./fieldwork.js";
