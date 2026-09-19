@@ -1,4 +1,4 @@
-import type { DashboardWidget } from "./types.js";
+import type { DashboardBand, DashboardHero, DashboardWidget } from "./types.js";
 
 /**
  * DASHBOARD LAYOUT (§40) — where a widget actually sits.
@@ -175,4 +175,56 @@ export function firstFreeSlot(widgets: DashboardWidget[], w: number, h: number):
 /** How many rows the layout needs, for sizing the canvas. */
 export function layoutRows(widgets: DashboardWidget[]): number {
   return widgets.reduce((m, w) => Math.max(m, (w.y ?? 0) + (w.h ?? 1)), 0);
+}
+
+/* ------------------------------------------------------------ §41 scenery */
+
+/**
+ * How dark a wash to lay between a photograph and the text on top of it.
+ *
+ * With no photograph there is nothing to wash, so it is zero. With one, the
+ * default is heavy enough to carry white text over a bright picture, because
+ * the author picks the picture AFTER they write the title and cannot see in
+ * advance which of their images has a white sky in the top-left corner. An
+ * explicit value always wins — including an explicit zero, for someone who
+ * has chosen a dark photograph deliberately.
+ */
+export function scrimFor(hasImage: boolean, scrim?: number): number {
+  if (!hasImage) return 0;
+  if (scrim == null || !Number.isFinite(scrim)) return 45;
+  return Math.max(0, Math.min(100, Math.round(scrim)));
+}
+
+/**
+ * The colour of text laid over a band or hero: white once there is a
+ * photograph under it, and otherwise whatever the theme uses for text, so a
+ * hero with no image still reads as part of the report rather than as white
+ * on white.
+ */
+export function overlayTextColor(hasImage: boolean, themeText: string, explicit?: string): string {
+  if (explicit) return explicit;
+  return hasImage ? "#ffffff" : themeText;
+}
+
+/** The hero's height in rows — a banner with nothing in it takes no space at all. */
+export function heroRows(hero: DashboardHero | undefined): number {
+  if (!hero || (!hero.imageUrl && !hero.title && !hero.subtitle)) return 0;
+  const rows = Math.round(hero.rows ?? 4);
+  return Math.max(1, Math.min(12, Number.isFinite(rows) ? rows : 4));
+}
+
+/**
+ * Bands, in a shape the grid can place: whole rows, the right way round, and
+ * in a stable order so two bands over the same rows always paint the same way.
+ */
+export function normalizeBands(bands: DashboardBand[] | undefined): DashboardBand[] {
+  if (!bands?.length) return [];
+  return bands
+    .map((b) => {
+      const a = Math.max(0, Math.round(b.fromRow) || 0);
+      const z = Math.max(0, Math.round(b.toRow) || 0);
+      // a band written back to front is a slip, not an empty band
+      return { ...b, fromRow: Math.min(a, z), toRow: Math.max(a, z) };
+    })
+    .sort((p, q) => p.fromRow - q.fromRow || p.toRow - q.toRow);
 }

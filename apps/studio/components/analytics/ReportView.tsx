@@ -1,9 +1,10 @@
 "use client";
 import React from "react";
-import type { AnalysisResult, ChartSpec, DashboardWidget, ReportBlock, ReportTheme } from "@rescript/analytics";
+import type { AnalysisResult, ChartSpec, DashboardBand, DashboardHero, DashboardWidget, ReportBlock, ReportTheme } from "@rescript/analytics";
 import {
   DEFAULT_THEME, executiveSummary, methodologyLines, reportPages, seriesForChart,
-  DASHBOARD_COLUMNS, DASHBOARD_GAP_PX, DASHBOARD_ROW_PX, clampBox, layoutRows, normalizeLayout, sortByPosition,
+  DASHBOARD_COLUMNS, DASHBOARD_GAP_PX, DASHBOARD_ROW_PX, clampBox, heroRows, layoutRows, normalizeBands,
+  normalizeLayout, overlayTextColor, scrimFor, sortByPosition,
   type LayoutBox,
 } from "@rescript/analytics";
 import { Chart, ResultTableView } from "./charts/Chart";
@@ -22,6 +23,9 @@ export interface ReportViewProps {
   subtitle?: string;
   blocks?: ReportBlock[];
   widgets?: DashboardWidget[];
+  /** §41 — the banner above the canvas, and the backgrounds behind rows of it */
+  hero?: DashboardHero;
+  bands?: DashboardBand[];
   crossFilter?: boolean;
   results: Record<string, AnalysisResult>;
   theme?: ReportTheme | null;
@@ -63,6 +67,13 @@ function mdToHtml(md: string): string {
 }
 
 /** "+2%" → up, "-2%" → down, "0%" or unsigned → flat — the color/arrow convention the photo tile's trend chip follows. */
+/**
+ * A CSS `url()` that survives whatever the author pasted. An unquoted url()
+ * breaks on a data: URI, on a space, and on a parenthesis in a filename, and
+ * it fails by drawing nothing — no error, just a widget with no picture.
+ */
+const cssUrl = (u: string) => 'url("' + u.replace(/["\\]/g, "\\$&") + '")';
+
 function trendTone(s: string): "up" | "down" | "flat" {
   const t = s.trim();
   if (t.startsWith("+") || (t.startsWith("↑"))) return "up";
@@ -103,6 +114,7 @@ export function ReportView(p: ReportViewProps) {
    * screen reader announces.
    */
   const laidOut = React.useMemo(() => normalizeLayout(p.widgets ?? []), [p.widgets]);
+  const bands = React.useMemo(() => normalizeBands(p.bands), [p.bands]);
   const gridRef = React.useRef<HTMLDivElement | null>(null);
   const [drag, setDrag] = React.useState<{ id: string; mode: "move" | "resize"; origin: LayoutBox; box: LayoutBox; startX: number; startY: number; colStep: number; rowStep: number } | null>(null);
 
@@ -292,15 +304,68 @@ export function ReportView(p: ReportViewProps) {
           </div>
         ))
       ) : p.blocks?.map(renderBlock)}
+      {/*
+        * §41 — THE HERO. The banner across the top of a dashboard: the single
+        * biggest difference between a grid of charts and the branded,
+        * photograph-led dashboards this was modelled on. The scrim between
+        * the picture and the words is not decoration — see `scrimFor`.
+        */}
+      {p.widgets && heroRows(p.hero) > 0 && (() => {
+        const hero = p.hero!;
+        const rows = heroRows(hero);
+        const hasImage = !!hero.imageUrl;
+        const scrim = scrimFor(hasImage, hero.scrim);
+        return (
+          <div className="ax-hero" data-testid="ax-hero"
+            style={{
+              height: rows * DASHBOARD_ROW_PX + (rows - 1) * DASHBOARD_GAP_PX,
+              backgroundImage: hasImage ? cssUrl(hero.imageUrl!) : undefined,
+              backgroundColor: hasImage ? undefined : theme.colors.background,
+              // the banner is a column flex box, so justify-content moves the
+              // text VERTICALLY: setting it from `align` pinned the title to the
+              // top and did nothing for left/centre. Horizontal alignment is the
+              // text's own, and the box stays bottom-anchored.
+              textAlign: hero.align === "center" ? "center" : "left",
+            }}>
+            {scrim > 0 && <span className="ax-hero-scrim" style={{ background: `rgba(19,26,43,${scrim / 100})` }} />}
+            <div className="ax-hero-text" style={{ color: overlayTextColor(hasImage, theme.colors.text, hero.textColor) }}>
+              {hero.title && <div className="ax-hero-title" style={{ fontFamily: theme.headingFontFamily ?? font }}>{hero.title}</div>}
+              {hero.subtitle && <div className="ax-hero-sub">{hero.subtitle}</div>}
+            </div>
+          </div>
+        );
+      })()}
       {p.widgets && (
         <div className="ax-dashboard" data-testid="ax-dashboard" ref={gridRef} data-editable={p.onLayout ? "1" : undefined}
           style={{
             gridTemplateColumns: `repeat(${DASHBOARD_COLUMNS}, minmax(0, 1fr))`,
             gridAutoRows: `${DASHBOARD_ROW_PX}px`,
             gap: DASHBOARD_GAP_PX,
-            // room to drop a widget below the last row while editing
-            minHeight: (layoutRows(laidOut) + (p.onLayout ? 2 : 0)) * (DASHBOARD_ROW_PX + DASHBOARD_GAP_PX),
+            // room to drop a widget below the last row while editing, and for
+            // any band that reaches past the lowest widget
+            minHeight: (Math.max(layoutRows(laidOut), ...bands.map((b) => b.toRow + 1), 0) + (p.onLayout ? 2 : 0)) * (DASHBOARD_ROW_PX + DASHBOARD_GAP_PX),
           }}>
+          {/*
+            * §41 — the bands, drawn first so they sit UNDER the widgets. They
+            * are grid items like everything else, spanning every column of
+            * their row range, which is why a cluster of widgets can sit on a
+            * photograph without any of them overlapping each other.
+            */}
+          {bands.map((b) => {
+            const hasImage = !!b.imageUrl;
+            const scrim = scrimFor(hasImage, b.scrim);
+            return (
+              <div key={b.id} className="ax-band" data-testid="ax-band" data-from={b.fromRow} data-to={b.toRow}
+                style={{
+                  gridColumn: "1 / -1", gridRow: `${b.fromRow + 1} / ${b.toRow + 2}`,
+                  backgroundImage: hasImage ? cssUrl(b.imageUrl!) : undefined,
+                  backgroundColor: b.color || undefined,
+                }}>
+                {scrim > 0 && <span className="ax-band-scrim" style={{ background: `rgba(19,26,43,${scrim / 100})` }} />}
+                {b.title && <span className="ax-band-title" style={{ color: overlayTextColor(hasImage, theme.colors.subtle) }}>{b.title}</span>}
+              </div>
+            );
+          })}
           {sortByPosition(laidOut).map((w) => {
             const r = w.analysisId ? results[w.analysisId] : undefined;
             const live = drag?.id === w.id ? drag.box : w;
@@ -308,8 +373,12 @@ export function ReportView(p: ReportViewProps) {
               gridColumn: `${live.x + 1} / span ${live.w}`,
               gridRow: `${live.y + 1} / span ${live.h}`,
             };
-            return <div key={w.id} className={`ax-widget${drag?.id === w.id ? " dragging" : ""}`} style={style}
+            const bgScrim = w.backgroundImageUrl ? scrimFor(true, w.backgroundScrim) : 0;
+            return <div key={w.id} className={`ax-widget${drag?.id === w.id ? " dragging" : ""}${w.backgroundImageUrl ? " has-bg" : ""}`} style={style}
               data-testid="ax-widget" data-id={w.id} data-x={live.x} data-y={live.y} data-w={live.w} data-h={live.h}>
+              {/* §41 — a photograph behind this widget's own content, with its wash over it */}
+              {w.backgroundImageUrl && <span className="ax-widget-bg" style={{ backgroundImage: cssUrl(w.backgroundImageUrl) }} />}
+              {bgScrim > 0 && <span className="ax-widget-bg-scrim" style={{ background: `rgba(19,26,43,${bgScrim / 100})` }} />}
               <Actions id={w.id} />
               {/*
                 * §40 — the grip and the corner handle. Dragging is confined to
@@ -343,7 +412,7 @@ export function ReportView(p: ReportViewProps) {
                 * icon-heavy dressing the gallery is full of.
                 */}
               {w.type === "photo" && (
-                <div className="ax-photo-tile" style={{ backgroundImage: w.imageUrl ? `url(${w.imageUrl})` : undefined, backgroundSize: w.fit === "contain" ? "contain" : "cover" }} data-testid="ax-widget-photo">
+                <div className="ax-photo-tile" style={{ backgroundImage: w.imageUrl ? cssUrl(w.imageUrl) : undefined, backgroundSize: w.fit === "contain" ? "contain" : "cover" }} data-testid="ax-widget-photo">
                   {!w.imageUrl && <div className="ax-photo-empty muted">No image yet — open this widget and choose one.</div>}
                   {(w.overlayValue || w.overlayTrend) && (
                     <div className="ax-photo-overlay">

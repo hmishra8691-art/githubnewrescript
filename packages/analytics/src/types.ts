@@ -500,6 +500,55 @@ export interface DashboardWidget {
   icon?: IconKey;
   /** steps: an ordered list of numbered process steps, each with its own icon */
   steps?: { icon?: IconKey; title: string; description?: string }[];
+  /**
+   * §41 — a photograph behind THIS widget's own content, with the same scrim
+   * reasoning as the hero: a KPI over a picture needs the wash to stay
+   * readable, whatever picture is chosen.
+   */
+  backgroundImageUrl?: string;
+  backgroundScrim?: number;
+}
+
+/**
+ * §41 — the banner across the top of a dashboard: a photograph, a title over
+ * it, and a scrim between the two.
+ *
+ * The scrim is not decoration. White text over an arbitrary photograph is
+ * legible or not depending on the photograph, and a dashboard whose title
+ * disappears into a bright sky is broken in a way its author cannot see
+ * before they pick the image. A dark wash between the picture and the words
+ * makes the result readable whatever the picture turns out to be.
+ */
+export interface DashboardHero {
+  imageUrl?: string;
+  title?: string;
+  subtitle?: string;
+  /** banner height, in the canvas's own row units */
+  rows?: number;
+  /** 0–100: how much dark wash sits between the photograph and the text */
+  scrim?: number;
+  align?: "left" | "center";
+  textColor?: string;
+}
+
+/**
+ * §41 — a background behind a RANGE OF ROWS of the canvas, so a cluster of
+ * widgets can sit on a photograph.
+ *
+ * Bands are a separate list from `widgets` on purpose: they are scenery, not
+ * content. If they were widgets the no-overlap rule would push them out from
+ * under the very widgets they are meant to sit behind.
+ */
+export interface DashboardBand {
+  id: string;
+  /** inclusive, 0-based canvas rows */
+  fromRow: number;
+  toRow: number;
+  imageUrl?: string;
+  /** a flat colour, for a band that separates sections without a photograph */
+  color?: string;
+  scrim?: number;
+  title?: string;
 }
 
 export interface DashboardDefinition {
@@ -507,6 +556,10 @@ export interface DashboardDefinition {
   themeId?: string | null;
   widgets: DashboardWidget[];
   crossFilter?: boolean;
+  /** §41 */
+  hero?: DashboardHero;
+  /** §41 */
+  bands?: DashboardBand[];
 }
 
 /* ------------------------------------------------------------ export */

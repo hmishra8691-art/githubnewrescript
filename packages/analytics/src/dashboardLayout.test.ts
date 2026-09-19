@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  DASHBOARD_COLUMNS, clampBox, compactLayout, firstFreeSlot, flowLayout, isUnpositioned,
-  layoutRows, normalizeLayout, placeWidget, resolveOverlaps, sortByPosition,
+  DASHBOARD_COLUMNS, clampBox, compactLayout, firstFreeSlot, flowLayout, heroRows, isUnpositioned,
+  layoutRows, normalizeBands, normalizeLayout, overlayTextColor, placeWidget, resolveOverlaps,
+  scrimFor, sortByPosition,
 } from "./dashboardLayout.js";
 import type { DashboardWidget } from "./types.js";
 
@@ -146,4 +147,55 @@ test("a new widget never lands on top of an existing one", () => {
 test("the canvas is tall enough for the lowest widget", () => {
   assert.equal(layoutRows([W("a", 0, 0, 3, 2), W("b", 3, 4, 3, 3)]), 7);
   assert.equal(layoutRows([]), 0);
+});
+
+/* ------------------------------------------------------------ §41 scenery */
+
+test("a scrim appears only where there is a photograph to wash", () => {
+  assert.equal(scrimFor(false), 0, "nothing to wash without an image");
+  assert.equal(scrimFor(false, 80), 0, "…even if a value was left behind by an image that has since been removed");
+  assert.equal(scrimFor(true), 45, "a photograph gets a wash heavy enough for white text by default");
+  assert.equal(scrimFor(true, 0), 0, "an explicit zero is honoured — some photographs are already dark");
+  assert.equal(scrimFor(true, 70), 70);
+  assert.equal(scrimFor(true, 140), 100, "clamped");
+  assert.equal(scrimFor(true, -20), 0, "clamped");
+  assert.equal(scrimFor(true, Number.NaN), 45, "a broken value falls back to the readable default");
+});
+
+test("text over a photograph is white; over no photograph it is the theme's own", () => {
+  assert.equal(overlayTextColor(true, "#131a2b"), "#ffffff");
+  assert.equal(overlayTextColor(false, "#131a2b"), "#131a2b", "a hero with no image must not be white on white");
+  assert.equal(overlayTextColor(true, "#131a2b", "#ffcc00"), "#ffcc00", "an explicit choice always wins");
+});
+
+test("an empty hero takes no space at all", () => {
+  assert.equal(heroRows(undefined), 0);
+  assert.equal(heroRows({}), 0, "a hero with nothing in it must not leave a blank band at the top");
+  assert.equal(heroRows({ title: "Q3" }), 4, "a title alone is still a hero");
+  assert.equal(heroRows({ imageUrl: "x.jpg" }), 4);
+  assert.equal(heroRows({ imageUrl: "x.jpg", rows: 6 }), 6);
+  assert.equal(heroRows({ imageUrl: "x.jpg", rows: 99 }), 12, "clamped");
+  assert.equal(heroRows({ imageUrl: "x.jpg", rows: 0 }), 1, "clamped");
+});
+
+test("bands are put the right way round and in a stable order", () => {
+  const out = normalizeBands([
+    { id: "b", fromRow: 8, toRow: 5 },
+    { id: "a", fromRow: 0, toRow: 3 },
+    { id: "c", fromRow: -4, toRow: 1.6 },
+  ]);
+  assert.deepEqual(out.map((b) => [b.id, b.fromRow, b.toRow]), [
+    ["c", 0, 2],
+    ["a", 0, 3],
+    ["b", 5, 8],  // written back to front, read as 5→8
+  ]);
+  assert.deepEqual(normalizeBands(undefined), []);
+  assert.deepEqual(normalizeBands([]), []);
+});
+
+test("normalizing bands keeps everything else about them", () => {
+  const [band] = normalizeBands([{ id: "b1", fromRow: 2, toRow: 4, imageUrl: "hotel.jpg", title: "Rooms", scrim: 30 }]);
+  assert.equal(band.imageUrl, "hotel.jpg");
+  assert.equal(band.title, "Rooms");
+  assert.equal(band.scrim, 30);
 });

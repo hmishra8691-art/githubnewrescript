@@ -1848,6 +1848,37 @@ p.qs-help { margin: -2px 0 10px; }
 }
 .ax-widget:hover .ax-widget-resize { opacity: .85; }
 
+/* §41 — scenery: the hero banner, the bands behind rows of the canvas, and a
+   photograph behind a single widget. Every one of them puts text over an
+   image the author has not seen yet, so every one of them has a scrim. */
+.ax-hero {
+  position: relative; margin: 12px 12px 0; border-radius: 12px; overflow: hidden;
+  background-size: cover; background-position: center; background-repeat: no-repeat;
+  display: flex; flex-direction: column; justify-content: flex-end;
+}
+.ax-hero-scrim { position: absolute; inset: 0; }
+.ax-hero-text { position: relative; padding: 16px 20px; width: 100%; }
+.ax-hero-title { font-size: 26px; font-weight: 700; line-height: 1.15; }
+.ax-hero-sub { font-size: 14px; opacity: .92; margin-top: 4px; }
+
+.ax-band {
+  position: relative; border-radius: 10px; overflow: hidden; z-index: 0;
+  background-size: cover; background-position: center; background-repeat: no-repeat;
+}
+.ax-band-scrim { position: absolute; inset: 0; }
+.ax-band-title {
+  position: absolute; top: 8px; left: 12px; font-size: 12px; font-weight: 600;
+  letter-spacing: .04em; text-transform: uppercase;
+}
+/* widgets sit above the scenery; the grid places both, so only paint order differs */
+.ax-dashboard .ax-widget { z-index: 1; }
+
+.ax-widget-bg { position: absolute; inset: 0; z-index: 0; background-size: cover; background-position: center; }
+.ax-widget-bg-scrim { position: absolute; inset: 0; z-index: 0; }
+.ax-widget.has-bg { color: #fff; border-color: transparent; }
+.ax-widget.has-bg > *:not(.ax-widget-bg):not(.ax-widget-bg-scrim) { position: relative; z-index: 1; }
+.ax-widget.has-bg .muted { color: rgba(255, 255, 255, .8); }
+
 /* A phone has no 12-column canvas. Widgets stack in reading order — which is
    why the renderer sorts them by position rather than by array index. */
 @media (max-width: 900px) {

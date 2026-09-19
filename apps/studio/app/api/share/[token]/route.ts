@@ -101,7 +101,7 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
   // ONLY the snapshot leaves: no analysis ids that could be used elsewhere, no dataset spec beyond its summary
   const definition = r.definition!;
   return NextResponse.json({
-    report: { name: r.report_name, title: definition.title, subtitle: definition.subtitle, blocks: definition.blocks, viewerSegments: definition.viewerSegments ?? [], branding: definition.branding ?? {}, widgets: (definition as unknown as { widgets?: unknown[] }).widgets ?? null, crossFilter: (definition as unknown as { crossFilter?: boolean }).crossFilter ?? false },
+    report: { name: r.report_name, title: definition.title, subtitle: definition.subtitle, blocks: definition.blocks, viewerSegments: definition.viewerSegments ?? [], branding: definition.branding ?? {}, widgets: (definition as unknown as { widgets?: unknown[] }).widgets ?? null, crossFilter: (definition as unknown as { crossFilter?: boolean }).crossFilter ?? false, /* §41 — the scenery travels with the dashboard, or a shared one loses its banner */ hero: (definition as unknown as { hero?: unknown }).hero ?? null, bands: (definition as unknown as { bands?: unknown[] }).bands ?? null },
     theme: r.theme ?? DEFAULT_THEME,
     results: r.snapshot,
     /* the filters this viewer may switch to, and the answer for each — no ids they could use elsewhere */

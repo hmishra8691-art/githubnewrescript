@@ -1,6 +1,6 @@
 "use client";
 import React from "react";
-import type { AnalysisResult, DashboardWidget, ReportBlock, ReportTheme } from "@rescript/analytics";
+import type { AnalysisResult, DashboardWidget, ReportBlock, ReportTheme, DashboardBand, DashboardHero } from "@rescript/analytics";
 import { ReportView } from "@/components/analytics/ReportView";
 import { downloadBlob } from "@/components/analytics/api";
 
@@ -13,7 +13,7 @@ import { downloadBlob } from "@/components/analytics/api";
  */
 
 interface Payload {
-  report: { name: string | null; title: string; subtitle?: string; blocks?: ReportBlock[]; widgets?: DashboardWidget[] | null; crossFilter?: boolean; viewerSegments: string[]; branding: { showLogo?: boolean; footer?: string; header?: string } };
+  report: { name: string | null; title: string; subtitle?: string; blocks?: ReportBlock[]; widgets?: DashboardWidget[] | null; crossFilter?: boolean; hero?: DashboardHero | null; bands?: DashboardBand[] | null; viewerSegments: string[]; branding: { showLogo?: boolean; footer?: string; header?: string } };
   theme: ReportTheme; results: Record<string, AnalysisResult>; version: number; publishedAt: string; mode: "snapshot"; dataset: { responses?: number; surveyVersion?: string; computedAt?: string } | null; permission: "viewer" | "download";
   /** §36 — allowed viewer filters and their frozen results (absent on versions published before 0014) */
   viewerFilters?: { id: string; name: string }[];
@@ -66,7 +66,7 @@ export default function SharePage({ params }: { params: { token: string } }) {
   const rep = data.report;
   return (
     <div className="ax-share-page" data-testid="ax-share-view">
-      <ReportView title={rep.title} subtitle={rep.subtitle} blocks={rep.widgets ? undefined : rep.blocks} widgets={rep.widgets ?? undefined} crossFilter={!!rep.crossFilter} results={data.results} theme={data.theme} mode="snapshot" version={data.version} publishedAt={data.publishedAt} branding={rep.branding} viewerSegments={rep.viewerSegments}
+      <ReportView title={rep.title} subtitle={rep.subtitle} blocks={rep.widgets ? undefined : rep.blocks} widgets={rep.widgets ?? undefined} hero={rep.hero ?? undefined} bands={rep.bands ?? undefined} crossFilter={!!rep.crossFilter} results={data.results} theme={data.theme} mode="snapshot" version={data.version} publishedAt={data.publishedAt} branding={rep.branding} viewerSegments={rep.viewerSegments}
         /*
          * §36 — the filters this link is allowed to switch, and the answer
          * for each, both frozen at publish time. `showPages` because a

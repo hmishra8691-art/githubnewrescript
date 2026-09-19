@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
-import type { AnalysisDefinition, AnalysisResult, ChartSpec, DashboardDefinition, DashboardWidget, ExportSettings, ReportBlock, ReportDefinition, ReportTheme } from "@rescript/analytics";
-import { CHART_CATALOG, DEFAULT_EXPORT_SETTINGS, describeTemplate, compactLayout, firstFreeSlot, normalizeLayout, placeWidget, type LayoutBox, type ReportTemplate } from "@rescript/analytics";
+import type { AnalysisDefinition, AnalysisResult, ChartSpec, DashboardBand, DashboardDefinition, DashboardWidget, ExportSettings, ReportBlock, ReportDefinition, ReportTheme } from "@rescript/analytics";
+import { CHART_CATALOG, DEFAULT_EXPORT_SETTINGS, describeTemplate, compactLayout, firstFreeSlot, layoutRows, normalizeLayout, placeWidget, scrimFor, type LayoutBox, type ReportTemplate } from "@rescript/analytics";
 import { AxApi, type Row, timeAgo } from "./api";
 import { ReportView } from "./ReportView";
 import { ICON_OPTIONS } from "./charts/Icons";
@@ -411,6 +411,19 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
    */
   const onLayout = (id: string, box: LayoutBox) => setItems(placeWidget(normalizeLayout(items_ as DashboardWidget[]), id, box));
   const tidy = () => setItems(compactLayout(normalizeLayout(items_ as DashboardWidget[])));
+
+  /** §41 — the scenery (hero, bands) lives on the definition, not in the widget list. */
+  const setScenery = (patch: Partial<DashboardDefinition>) => { setDef({ ...(def as DashboardDefinition), ...patch }); setDirty(true); };
+  const addBand = () => {
+    /*
+     * A new band covers the rows the canvas actually uses, so it is visible
+     * the moment it is added. A band defaulted to 0–0 would be a one-row strip
+     * behind the top of the dashboard and read as "nothing happened".
+     */
+    const rows = Math.max(1, layoutRows(normalizeLayout(items_ as DashboardWidget[])));
+    const dd_ = def as DashboardDefinition;
+    setScenery({ bands: [...(dd_.bands ?? []), { id: uid(), fromRow: 0, toRow: Math.min(rows - 1, 3) }] });
+  };
   // drag-and-drop ordering
   const dragId = React.useRef<string | null>(null);
   const onDrop = (targetId: string) => { const from = items_.findIndex((b) => b.id === dragId.current), to = items_.findIndex((b) => b.id === targetId); if (from < 0 || to < 0 || from === to) return; const next = [...items_]; const [m] = next.splice(from, 1); next.splice(to, 0, m); setItems(next); };
@@ -519,12 +532,67 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
             <div className="flabel" style={{ marginTop: 12 }}>Canvas</div>
             <div className="muted" style={{ fontSize: 12.5 }}>Drag a widget by its grip to move it, or its bottom-right corner to resize. Arrow keys nudge a focused widget; hold shift to resize.</div>
             <button className="btn small" style={{ marginTop: 6 }} onClick={tidy} data-testid="ax-dash-tidy">Tidy up — close vertical gaps</button>
+
+            {/*
+              * §41 — the hero banner. The scrim slider is offered rather than
+              * assumed because the author picks the photograph after writing
+              * the title and cannot know in advance whether theirs has a
+              * bright sky exactly where the words go.
+              */}
+            <div className="flabel" style={{ marginTop: 12 }}>Hero banner</div>
+            <MediaUrlInput label="Image" value={dd.hero?.imageUrl} accept={["image"]} testId="ax-hero-image"
+              onChange={(v) => setScenery({ hero: { ...dd.hero, imageUrl: v } })} />
+            <label className="ax-field"><span>Title</span><input className="input small" data-testid="ax-hero-title" value={dd.hero?.title ?? ""}
+              onChange={(e) => setScenery({ hero: { ...dd.hero, title: e.target.value } })} placeholder="e.g. StayLux Resort — Berlin" /></label>
+            <label className="ax-field"><span>Subtitle</span><input className="input small" value={dd.hero?.subtitle ?? ""}
+              onChange={(e) => setScenery({ hero: { ...dd.hero, subtitle: e.target.value } })} /></label>
+            <div className="ax-cust-grid">
+              <label className="ax-field"><span>Height (rows)</span><input className="input small" type="number" min={1} max={12} value={dd.hero?.rows ?? 4}
+                onChange={(e) => setScenery({ hero: { ...dd.hero, rows: Number(e.target.value) } })} /></label>
+              <label className="ax-field"><span>Scrim ({scrimFor(!!dd.hero?.imageUrl, dd.hero?.scrim)}%)</span><input type="range" min={0} max={100} data-testid="ax-hero-scrim"
+                value={scrimFor(!!dd.hero?.imageUrl, dd.hero?.scrim)} onChange={(e) => setScenery({ hero: { ...dd.hero, scrim: Number(e.target.value) } })} /></label>
+              <label className="ax-field"><span>Align</span><select className="select small" value={dd.hero?.align ?? "left"}
+                onChange={(e) => setScenery({ hero: { ...dd.hero, align: e.target.value as "left" | "center" } })}><option value="left">Left</option><option value="center">Centre</option></select></label>
+            </div>
+            {!!(dd.hero?.imageUrl || dd.hero?.title) && <button className="btn small ghost" onClick={() => setScenery({ hero: undefined })} data-testid="ax-hero-clear">Remove banner</button>}
+
+            {/*
+              * §41 — bands: a photograph behind a RANGE OF ROWS, so a cluster
+              * of widgets sits on it. They are scenery, not widgets, so the
+              * no-overlap rule leaves them alone — which is the whole point.
+              */}
+            <div className="flabel" style={{ marginTop: 12 }}>Background bands</div>
+            <div className="muted" style={{ fontSize: 12.5 }}>A photograph or colour behind a range of canvas rows. Widgets sit on top of it.</div>
+            {(dd.bands ?? []).map((b, i) => {
+              const setBand = (patch: Partial<DashboardBand>) => {
+                const next = [...(dd.bands ?? [])]; next[i] = { ...next[i], ...patch }; setScenery({ bands: next });
+              };
+              return (
+                <div key={b.id} className="card" style={{ padding: 8, marginTop: 6 }} data-testid="ax-band-row">
+                  <div className="row" style={{ gap: 4 }}>
+                    <label className="ax-field" style={{ maxWidth: 90 }}><span>From row</span><input className="input small" type="number" min={0} data-testid="ax-band-from"
+                      value={b.fromRow} onChange={(e) => setBand({ fromRow: Number(e.target.value) })} /></label>
+                    <label className="ax-field" style={{ maxWidth: 90 }}><span>To row</span><input className="input small" type="number" min={0} data-testid="ax-band-to"
+                      value={b.toRow} onChange={(e) => setBand({ toRow: Number(e.target.value) })} /></label>
+                    <button className="btn small ghost" onClick={() => setScenery({ bands: (dd.bands ?? []).filter((_, j) => j !== i) })} title="Remove band">×</button>
+                  </div>
+                  <MediaUrlInput label="Image" value={b.imageUrl} accept={["image"]} testId={`ax-band-image-${i}`} onChange={(v) => setBand({ imageUrl: v })} />
+                  <div className="row" style={{ gap: 4 }}>
+                    <label className="ax-field"><span>Label</span><input className="input small" value={b.title ?? ""} onChange={(e) => setBand({ title: e.target.value })} /></label>
+                    <label className="ax-field" style={{ maxWidth: 110 }}><span>Colour</span><input className="input small" value={b.color ?? ""} placeholder="#eef2f8" onChange={(e) => setBand({ color: e.target.value })} /></label>
+                  </div>
+                  <label className="ax-field"><span>Scrim ({scrimFor(!!b.imageUrl, b.scrim)}%)</span><input type="range" min={0} max={100}
+                    value={scrimFor(!!b.imageUrl, b.scrim)} onChange={(e) => setBand({ scrim: Number(e.target.value) })} /></label>
+                </div>
+              );
+            })}
+            <button className="btn small" style={{ marginTop: 6 }} data-testid="ax-band-add" onClick={addBand}>+ band</button>
           </>}
           {versions.length > 0 && <><div className="flabel" style={{ marginTop: 12 }}>Published versions</div><ul className="ax-versions">{versions.map((v) => <li key={v.version}>v{v.version} · {new Date(v.published_at).toLocaleString()}{v.note ? ` — ${v.note}` : ""}{v.dataset?.responses != null ? ` · ${v.dataset.responses} responses` : ""}</li>)}</ul></>}
         </aside>
         <div className="ax-rb-main">
           {loading && <div className="muted" style={{ padding: 8 }}>Computing…</div>}
-          {def && <ReportView title={rd.title ?? open.name} subtitle={rd.subtitle} blocks={isDash ? undefined : rd.blocks} widgets={isDash ? dd.widgets : undefined} crossFilter={isDash ? dd.crossFilter !== false : false} results={results} theme={theme} mode={shownVersion ? "snapshot" : "live"} version={shownVersion} publishedAt={shownVersion ? versions.find((v) => v.version === shownVersion)?.published_at : undefined} branding={rd.branding} viewerSegments={rd.viewerSegments} onBlockAction={viewVersion ? undefined : onBlockAction} onLayout={isDash && !viewVersion ? onLayout : undefined} />}
+          {def && <ReportView title={rd.title ?? open.name} subtitle={rd.subtitle} blocks={isDash ? undefined : rd.blocks} widgets={isDash ? dd.widgets : undefined} hero={isDash ? dd.hero : undefined} bands={isDash ? dd.bands : undefined} crossFilter={isDash ? dd.crossFilter !== false : false} results={results} theme={theme} mode={shownVersion ? "snapshot" : "live"} version={shownVersion} publishedAt={shownVersion ? versions.find((v) => v.version === shownVersion)?.published_at : undefined} branding={rd.branding} viewerSegments={rd.viewerSegments} onBlockAction={viewVersion ? undefined : onBlockAction} onLayout={isDash && !viewVersion ? onLayout : undefined} />}
         </div>
       </div>
       {editing && items_.find((b) => b.id === editing) && <BlockEditor block={items_.find((b) => b.id === editing)!} analyses={analyses} onChange={(nb) => { setItems(items_.map((b) => (b.id === nb.id ? nb : b))); void ensure(idsOf(nb)); }} onClose={() => setEditing(null)} />}

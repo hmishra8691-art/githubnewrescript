@@ -381,9 +381,57 @@ if it is separable from the dragging.
 * **The share page passes no layout callback**, so the same component draws the
   same arrangement with no grips, no handles and no pointer listeners.
 
+## Dashboard scenery — hero banners and photography (§41, September 2026)
+
+The canvas (§40) put widgets where the author wants them; this puts something
+behind them. It is what separates a grid of white cards from the branded,
+photograph-led dashboards this work was modelled on.
+
+* **The hero** is a banner across the top of a dashboard: a photograph, a title
+  and subtitle over it, a height in canvas rows, and left or centre alignment.
+  A hero with nothing in it takes no space at all, so the feature costs nothing
+  to the dashboards that do not use it.
+* **Bands** put a photograph or a flat colour behind a RANGE OF ROWS of the
+  canvas, so a cluster of widgets sits on it. They are a separate list from
+  `widgets` on purpose: if they were widgets the no-overlap rule would push
+  them out from under the very widgets they are meant to sit behind. They are
+  drawn first and painted under the widgets.
+* **Any widget can carry its own photograph** (`backgroundImageUrl`), for a KPI
+  on a picture rather than a card.
+* **The scrim is the point.** White text over an arbitrary photograph is legible
+  or not depending on the photograph, and the author picks the picture after
+  writing the title — they cannot know in advance whether theirs has a bright
+  sky exactly where the words go. So a photograph brings a dark wash with it by
+  default (45%), and text over one turns white; with no photograph there is
+  nothing to wash, and the text stays the theme's own rather than white on
+  white. The strength is a slider, and an explicit zero is honoured for someone
+  who chose a dark image deliberately. `scrimFor` and `overlayTextColor` hold
+  those rules, and are unit-tested, because "did the author's title disappear"
+  is not something a type checker can answer.
+* **Scenery does not move widgets.** Adding a band leaves every widget exactly
+  where it was — checked in the browser suite, since the tempting implementation
+  (a band as a full-width widget) would have shoved the whole canvas down.
+* **It reaches the viewer.** Both the share API and the share page hand-pick the
+  fields they pass on, so a new one on the definition is exactly the kind of
+  thing that works throughout the builder and is then missing for everyone the
+  dashboard was made for. The suite publishes a dashboard, shares it, opens the
+  link in a cookie-less context and checks the banner, the band and the layout
+  all arrived — with no grips and no editable canvas.
+
+Two bugs worth recording, both found by looking at the rendered page rather
+than by a failing test:
+
+* The hero is a column flex box, so `justify-content` moves its text
+  **vertically**. Driving it from the `align` setting pinned the title to the
+  top of the banner and did nothing for left/centre. Horizontal alignment
+  belongs to the text; the box stays bottom-anchored.
+* Every `url()` was unquoted, which silently breaks on a `data:` URI, on a
+  space, and on a parenthesis in a filename — the picture simply never appears,
+  with no error anywhere. All four call sites now go through `cssUrl`.
+
 ## Tests
 
-* `pnpm --filter @rescript/analytics test` — 152 tests (stats vs scipy, every runner against planted data, report pages/templates, PPTX/XLSX builders including panel grids, the geography: region resolution, aliases, scope choice, unmatched reporting, projection fitting; and the dashboard canvas: the legacy flow, overlap resolution, idempotence, tidying, free-slot placement).
-* `node scripts/analytics-test.mjs` — 76 browser checks (workspace, builder, the analyses rail, the four stages, the professional table, nested rows, filters, charts, gallery, customisation, save/version, segments, report builder, publish/immutability, panel grids and the tracker template, share link, read-only view, downloads, revoke, password, expiry, exports, table builder, themes, dashboard, the four operational-dashboard widgets — photo/icon panel/steps/ranked list, real country and bubble maps, the dashboard canvas — drag, resize, the pre-canvas flow and the no-overlap rule, existing navigation unchanged). Uses an in-process fake backend over the real engine because the dev container has no database credentials.
+* `pnpm --filter @rescript/analytics test` — 157 tests (stats vs scipy, every runner against planted data, report pages/templates, PPTX/XLSX builders including panel grids, the geography: region resolution, aliases, scope choice, unmatched reporting, projection fitting; and the dashboard canvas: the legacy flow, overlap resolution, idempotence, tidying, free-slot placement; and the scenery: scrim defaults, overlay text colour, hero sizing, band normalization).
+* `node scripts/analytics-test.mjs` — 83 browser checks (workspace, builder, the analyses rail, the four stages, the professional table, nested rows, filters, charts, gallery, customisation, save/version, segments, report builder, publish/immutability, panel grids and the tracker template, share link, read-only view, downloads, revoke, password, expiry, exports, table builder, themes, dashboard, the four operational-dashboard widgets — photo/icon panel/steps/ranked list, real country and bubble maps, the dashboard canvas — drag, resize, the pre-canvas flow and the no-overlap rule, the hero/band scenery and its trip to a shared viewer, existing navigation unchanged). Uses an in-process fake backend over the real engine because the dev container has no database credentials.
 * `packages/analytics/src/analyses/crosstab.test.ts` — the crosstab’s options one by one (banner, nesting, stacking, base, suppression, sorting, summary rows, means, weighted letters) and the audit’s fixes (A1–A6, A11).
 * Share-resolution SQL exercised against the live database in a rolled-back transaction (unknown / unpublished / pinned vs following / expired / revoked / password flag / access counting).

@@ -172,7 +172,7 @@ async function fakeShare(route) {
     return route.fulfill({ status: 200, contentType: "application/octet-stream", headers: { "content-disposition": `attachment; filename="r.${body.format}"` }, body: buf });
   }
   s.view_count++;
-  return json(route, { report: { name: r.name, title: v.definition.title, subtitle: v.definition.subtitle, blocks: v.definition.blocks, widgets: v.definition.widgets ?? null, viewerSegments: v.definition.viewerSegments ?? [], branding: v.definition.branding ?? {} }, theme: v.theme, results: v.snapshot, version: v.version, publishedAt: v.published_at, mode: "snapshot", dataset: v.dataset, permission: s.permission });
+  return json(route, { report: { name: r.name, title: v.definition.title, subtitle: v.definition.subtitle, blocks: v.definition.blocks, widgets: v.definition.widgets ?? null, hero: v.definition.hero ?? null, bands: v.definition.bands ?? null, viewerSegments: v.definition.viewerSegments ?? [], branding: v.definition.branding ?? {} }, theme: v.theme, results: v.snapshot, version: v.version, publishedAt: v.published_at, mode: "snapshot", dataset: v.dataset, permission: s.permission });
 }
 
 /* ------------------------------------------------------------ browser */
@@ -945,6 +945,97 @@ ok("“Tidy up” closes the vertical gaps, which is an action the author asks f
 
 // a shared viewer sees the arrangement but cannot edit it
 assert.ok(await page.$('[data-testid="ax-dashboard"][data-editable]'), "the builder's canvas is editable");
+
+
+/* §41 — an inline image for the scenery checks. A test that reaches out to a
+ * photo service fails when the network does, and proves nothing extra. */
+const inlineImage = (a, b) => "data:image/svg+xml;utf8," + encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs><rect width="1200" height="400" fill="url(#g)"/></svg>`);
+console.log("\n§9d DASHBOARD SCENERY — a hero banner and photography behind the widgets (§41)");
+await page.fill('[data-testid="ax-hero-title"]', "StayLux Resort — Berlin");
+await page.waitForSelector('[data-testid="ax-hero"]');
+assert.match(await text('[data-testid="ax-hero"]'), /StayLux Resort/);
+// with no photograph there is nothing to wash, and the text must not be white on white
+let heroScrims = await count('[data-testid="ax-hero"] .ax-hero-scrim');
+assert.equal(heroScrims, 0, "a hero with no image gets no scrim");
+const titleColorNoImage = await page.$eval('[data-testid="ax-hero"] .ax-hero-text', (e) => getComputedStyle(e).color);
+assert.notEqual(titleColorNoImage, "rgb(255, 255, 255)", "a hero with no photograph must not draw white text on a light background");
+ok("a hero with a title but no photograph is readable — theme text, no scrim");
+
+await page.fill('[data-testid="ax-hero-image"]', inlineImage("#8fb3e8", "#f3d9a4"));
+await page.waitForSelector('[data-testid="ax-hero"] .ax-hero-scrim');
+const scrimAlpha = await page.$eval('[data-testid="ax-hero"] .ax-hero-scrim', (e) => getComputedStyle(e).backgroundColor);
+assert.match(scrimAlpha, /rgba\(19, 26, 43, 0\.4[0-9]*\)/, `the default wash should be ~45%, got ${scrimAlpha}`);
+const titleColorWithImage = await page.$eval('[data-testid="ax-hero"] .ax-hero-text', (e) => getComputedStyle(e).color);
+assert.equal(titleColorWithImage, "rgb(255, 255, 255)", "text over a photograph turns white");
+ok("adding a photograph brings a scrim with it and turns the title white, without the author asking");
+
+// the scrim is a slider, not a decision made for them
+await page.fill('[data-testid="ax-hero-scrim"]', "0");
+await page.waitForFunction(() => !document.querySelector('[data-testid="ax-hero"] .ax-hero-scrim'));
+ok("an author who chose a dark photograph can turn the wash off entirely");
+await page.fill('[data-testid="ax-hero-scrim"]', "60");
+await page.waitForSelector('[data-testid="ax-hero"] .ax-hero-scrim');
+
+// a band behind a range of rows, under the widgets rather than beside them
+await page.click('[data-testid="ax-band-add"]');
+await page.waitForSelector('[data-testid="ax-band"]');
+await page.fill('[data-testid="ax-band-from"]', "0");
+await page.fill('[data-testid="ax-band-to"]', "3");
+await page.fill('[data-testid="ax-band-image-0"]', inlineImage("#2b3f63", "#7c5c9e"));
+await page.waitForSelector('[data-testid="ax-band"] .ax-band-scrim');
+const bandBox = await page.$eval('[data-testid="ax-band"]', (e) => ({ from: e.dataset.from, to: e.dataset.to, z: getComputedStyle(e).zIndex }));
+assert.deepEqual([bandBox.from, bandBox.to], ["0", "3"]);
+// the band must sit UNDER the widgets, or it would hide the dashboard it is decorating
+const widgetZ = await page.$eval('[data-testid="ax-widget"]', (e) => getComputedStyle(e).zIndex);
+assert.ok(Number(widgetZ) > Number(bandBox.z), `widgets (z=${widgetZ}) must paint above bands (z=${bandBox.z})`);
+ok("a band spans the rows it was given and sits under the widgets, not over them");
+
+// bands are scenery, so the no-overlap rule leaves both them and the widgets alone
+const widgetCells = await page.$$eval('[data-testid="ax-widget"]', (es) => es.map((e) => `${e.dataset.x},${e.dataset.y}`));
+assert.equal(new Set(widgetCells).size, widgetCells.length, "adding a band must not shove any widget around");
+ok("adding scenery does not move a single widget — a band is not a widget");
+
+await page.evaluate(() => document.querySelector('[data-testid="ax-hero"]')?.scrollIntoView({ block: "start" }));
+await page.waitForTimeout(150);
+await shot("09d-scenery");
+await page.click('[data-testid="ax-report-save"]');
+await page.waitForSelector('[data-testid="ax-report-save"]:has-text("Saved")');
+const dashDef2 = store.reports.find((r) => r.name === "Executive Dashboard").definition;
+assert.equal(dashDef2.hero.title, "StayLux Resort — Berlin");
+assert.equal(dashDef2.hero.scrim, 60);
+assert.equal(dashDef2.bands.length, 1);
+assert.deepEqual([dashDef2.bands[0].fromRow, dashDef2.bands[0].toRow], [0, 3]);
+ok("the hero and its bands persist in the dashboard definition");
+
+/*
+ * And the scenery has to REACH A VIEWER. Both the share API and the share page
+ * hand-pick the fields they pass on, so a new one on the definition is exactly
+ * the kind of thing that works all the way through the builder and then turns
+ * out to be missing for everyone the dashboard was made for.
+ */
+await page.click('[data-testid="ax-report-publish"]');
+await page.waitForSelector('.ax-ok:has-text("Published version")');
+await page.click('[data-testid="ax-report-share"]');
+await page.waitForSelector('[data-testid="ax-share-dialog"]');
+await page.click('[data-testid="ax-share-create"]');
+await page.waitForSelector('[data-testid="ax-share-link"] input');
+const dashLink = await page.$eval('[data-testid="ax-share-link"] input', (e) => e.value);
+await page.click('[data-testid="ax-share-dialog"] button:has-text("Close")');
+const anon2 = await browser.newContext({ viewport: { width: 1300, height: 1000 } });
+await anon2.route("**/api/share/**", fakeShare);
+const pub2 = await anon2.newPage();
+pub2.on("pageerror", (e) => console.error("SHARE PAGE ERROR:", e.message));
+await pub2.goto(dashLink, { waitUntil: "networkidle" });
+await pub2.waitForSelector('[data-testid="ax-share-view"]');
+assert.match(await pub2.$eval('[data-testid="ax-hero"]', (e) => e.textContent), /StayLux Resort/, "the shared dashboard keeps its banner");
+assert.equal(await pub2.$$eval('[data-testid="ax-band"]', (es) => es.length), 1, "and its background band");
+const sharedCells = await pub2.$$eval('[data-testid="ax-widget"]', (es) => es.map((e) => `${e.dataset.x},${e.dataset.y}`));
+assert.deepEqual(sharedCells.sort(), widgetCells.slice().sort(), "a viewer sees the same arrangement the author laid out");
+assert.equal(await pub2.$$eval('[data-testid="ax-widget-grip"]', (es) => es.length), 0, "with no grips");
+assert.equal(await pub2.$$eval('[data-testid="ax-dashboard"][data-editable]', (es) => es.length), 0, "and no editable canvas");
+ok("a shared dashboard reaches its viewer with the banner, the band and the exact layout — and nothing to edit them with");
+await anon2.close();
 
 console.log("\n§10 EXISTING NAVIGATION UNCHANGED + NEW ENTRY POINTS");
 await page.goto(`${STUDIO}/`, { waitUntil: "networkidle" });
