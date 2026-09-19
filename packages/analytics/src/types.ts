@@ -445,9 +445,19 @@ export interface ReportTemplate {
   exportDefaults?: ExportSettings;
 }
 
+/**
+ * §38 — a small, self-contained glyph set for the operational-dashboard
+ * widgets (pictogram panels, numbered steps, iconed ranked lists). Deliberately
+ * a closed set of generic shapes, not an icon font or a third-party library:
+ * these dashboards are client-facing and the glyphs need to render identically
+ * on screen with no new dependency, the same reasoning that keeps the chart
+ * library in plain SVG (`Chart.tsx`).
+ */
+export type IconKey = "person" | "star" | "flag" | "check" | "trend_up" | "trend_down" | "building" | "car" | "hotel" | "generic";
+
 export interface DashboardWidget {
   id: string;
-  type: "kpi" | "chart" | "table" | "text" | "filter";
+  type: "kpi" | "chart" | "table" | "text" | "filter" | "photo" | "icon_panel" | "steps" | "ranked_list";
   title?: string;
   analysisId?: string;
   chart?: ChartSpec;
@@ -455,6 +465,24 @@ export interface DashboardWidget {
   /** for filter widgets: the variable a viewer can pick a value of */
   variable?: string;
   w: number; h: number; x: number; y: number;
+  /**
+   * §38 — the operational-dashboard widgets (photo tiles, pictogram panels,
+   * numbered steps, iconed ranked lists), modelled on Forsta/Dapresy-style
+   * CX/EX dashboards: heavy photography, icon-based breakdowns, gauge/ring
+   * KPIs (already served by "kpi") and step-by-step process panels.
+   */
+  /** photo: an image URL — pasted, or chosen/uploaded from the asset library */
+  imageUrl?: string;
+  /** photo: a large figure drawn over the image, e.g. "77%" */
+  overlayValue?: string;
+  /** photo: a small trend chip under the figure, e.g. "+2%" / "-2%" / "0%" — color follows the sign */
+  overlayTrend?: string;
+  /** photo: fill the tile (cropping the image) or letterbox the whole image */
+  fit?: "cover" | "contain";
+  /** icon_panel / ranked_list: which glyph represents one row */
+  icon?: IconKey;
+  /** steps: an ordered list of numbered process steps, each with its own icon */
+  steps?: { icon?: IconKey; title: string; description?: string }[];
 }
 
 export interface DashboardDefinition {

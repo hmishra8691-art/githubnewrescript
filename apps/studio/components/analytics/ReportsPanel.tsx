@@ -4,6 +4,8 @@ import type { AnalysisDefinition, AnalysisResult, ChartSpec, DashboardDefinition
 import { CHART_CATALOG, DEFAULT_EXPORT_SETTINGS, describeTemplate, type ReportTemplate } from "@rescript/analytics";
 import { AxApi, type Row, timeAgo } from "./api";
 import { ReportView } from "./ReportView";
+import { ICON_OPTIONS } from "./charts/Icons";
+import { MediaUrlInput } from "../studio/MediaUrlInput";
 
 /**
  * REPORT & DASHBOARD BUILDER (§12, §16, §17, §26, §34, §35). A report is an
@@ -145,6 +147,51 @@ function BlockEditor({ block, analyses, onChange, onClose }: { block: ReportBloc
           <button type="button" className="btn small" data-testid="ax-panel-add" onClick={() => set({ panels: [...((b.panels as unknown[]) ?? []), { id: `pnl_${Math.random().toString(36).slice(2, 10)}`, analysisId: "", title: "" }] })}>+ panel</button>
           {!((b.panels as unknown[]) ?? []).length && <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>No panels yet — add one and pick an analysis for it.</div>}
         </div>
+      </>}
+      {/*
+        * §38 — the operational-dashboard widgets: a photo tile with an
+        * overlay figure, a pictogram breakdown, a numbered process panel, and
+        * an iconed ranked list. Modelled on the Forsta/Dapresy-style CX/EX
+        * dashboards the team asked to match — the analytical chart/table/kpi
+        * widgets above stay untouched; these are additional widget kinds
+        * next to them.
+        */}
+      {b.type === "photo" && <>
+        <MediaUrlInput label="Image" value={(b.imageUrl as string) ?? ""} onChange={(v) => set({ imageUrl: v })} accept={["image"]} testId="ax-photo-image" />
+        <div className="ax-cust-grid">
+          <label className="ax-field"><span>Overlay figure</span><input className="input" placeholder="e.g. 77%" value={(b.overlayValue as string) ?? ""} onChange={(e) => set({ overlayValue: e.target.value })} /></label>
+          <label className="ax-field"><span>Trend chip</span><input className="input" placeholder="e.g. +2% / -2% / 0%" value={(b.overlayTrend as string) ?? ""} onChange={(e) => set({ overlayTrend: e.target.value })} /></label>
+          <label className="ax-field"><span>Fit</span><select className="select" value={(b.fit as string) ?? "cover"} onChange={(e) => set({ fit: e.target.value })}><option value="cover">Fill (crop)</option><option value="contain">Letterbox (whole image)</option></select></label>
+        </div>
+      </>}
+      {b.type === "icon_panel" && <>
+        <label className="ax-field"><span>Analysis</span><select className="select" value={(b.analysisId as string) ?? ""} onChange={(e) => set({ analysisId: e.target.value })}><option value="">—</option>{analyses.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.kind})</option>)}</select></label>
+        <label className="ax-field"><span>Icon</span><select className="select" data-testid="ax-icon-panel-icon" value={(b.icon as string) ?? "person"} onChange={(e) => set({ icon: e.target.value })}>{ICON_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}</select></label>
+      </>}
+      {b.type === "steps" && (
+        <div className="ax-field">
+          <span>Steps</span>
+          {(((b.steps as { icon?: string; title: string; description?: string }[]) ?? [])).map((st, i) => {
+            const steps = (b.steps as typeof st[]) ?? [];
+            const setStep = (patch: Record<string, unknown>) => { const next = [...steps]; next[i] = { ...next[i], ...patch }; set({ steps: next }); };
+            return (
+              <div key={i} className="row ax-panel-row" style={{ gap: 4, marginBottom: 4, flexWrap: "wrap" }}>
+                <select className="select small" data-testid="ax-step-icon" value={st.icon ?? ""} onChange={(e) => setStep({ icon: e.target.value || undefined })}>
+                  <option value="">No icon</option>
+                  {ICON_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+                </select>
+                <input className="input small" style={{ maxWidth: 160 }} placeholder="Step title" value={st.title} onChange={(e) => setStep({ title: e.target.value })} />
+                <input className="input small" placeholder="Description (optional)" value={st.description ?? ""} onChange={(e) => setStep({ description: e.target.value })} />
+                <button type="button" className="btn small ghost" onClick={() => set({ steps: steps.filter((_, j) => j !== i) })} title="Remove step">×</button>
+              </div>
+            );
+          })}
+          <button type="button" className="btn small" data-testid="ax-step-add" onClick={() => set({ steps: [...(((b.steps as unknown[]) ?? [])), { title: `Step ${(((b.steps as unknown[]) ?? []).length) + 1}` }] })}>+ step</button>
+        </div>
+      )}
+      {b.type === "ranked_list" && <>
+        <label className="ax-field"><span>Analysis</span><select className="select" value={(b.analysisId as string) ?? ""} onChange={(e) => set({ analysisId: e.target.value })}><option value="">—</option>{analyses.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.kind})</option>)}</select></label>
+        <label className="ax-field"><span>Icon (optional)</span><select className="select" data-testid="ax-ranked-icon" value={(b.icon as string) ?? ""} onChange={(e) => set({ icon: e.target.value || undefined })}><option value="">No icon</option>{ICON_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}</select></label>
       </>}
       {/*
         * §36 — the methodology, in the team's own words.
@@ -314,7 +361,18 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
   };
   const addWidget = (type: DashboardWidget["type"]) => {
     if (!def || !isDash) return;
-    const w: DashboardWidget = { id: uid(), type, analysisId: type === "text" || type === "filter" ? undefined : analyses[0]?.id, w: type === "kpi" ? 3 : 6, h: type === "kpi" ? 2 : 4, x: 0, y: 0, title: type === "text" ? "Summary" : undefined, text: type === "text" ? "Summary text…" : undefined };
+    const noAnalysis = type === "text" || type === "filter" || type === "photo" || type === "steps";
+    const w: DashboardWidget = {
+      id: uid(), type, analysisId: noAnalysis ? undefined : analyses[0]?.id,
+      w: type === "kpi" ? 3 : type === "photo" ? 4 : type === "steps" ? 8 : 6,
+      h: type === "kpi" ? 2 : type === "photo" ? 4 : type === "steps" ? 3 : type === "ranked_list" ? 5 : 4,
+      x: 0, y: 0,
+      title: type === "text" ? "Summary" : undefined,
+      text: type === "text" ? "Summary text…" : undefined,
+      icon: type === "icon_panel" ? "person" : type === "ranked_list" ? undefined : undefined,
+      steps: type === "steps" ? [{ title: "Step 1" }, { title: "Step 2" }, { title: "Step 3" }] : undefined,
+      fit: type === "photo" ? "cover" : undefined,
+    };
     setDef({ ...(def as DashboardDefinition), widgets: [...(def as DashboardDefinition).widgets, w] }); setDirty(true); setEditing(w.id); void ensure([w.analysisId]);
   };
   const items_ = isDash ? (def as DashboardDefinition | null)?.widgets ?? [] : (def as ReportDefinition | null)?.blocks ?? [];
@@ -365,7 +423,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
         <aside className="ax-rb-side">
           <div className="flabel">Add {isDash ? "widget" : "block"}</div>
           <div className="ax-addlist">{isDash
-            ? (["kpi", "chart", "table", "text", "filter"] as DashboardWidget["type"][]).map((t) => <button key={t} className="btn small" onClick={() => addWidget(t)} disabled={t !== "text" && t !== "filter" && !analyses.length}>{t}</button>)
+            ? (["kpi", "chart", "table", "text", "filter", "photo", "icon_panel", "steps", "ranked_list"] as DashboardWidget["type"][]).map((t) => <button key={t} className="btn small" onClick={() => addWidget(t)} disabled={["icon_panel", "ranked_list", "kpi", "chart", "table"].includes(t) && !analyses.length} data-testid={`ax-add-widget-${t}`}>{t.replace("_", " ")}</button>)
             : (["cover", "executive_summary", "section", "chart", "table", "kpi", "panel_grid", "insights", "text", "methodology", "page_break"] as ReportBlock["type"][]).map((t) => <button key={t} className="btn small" onClick={() => addBlock(t)} disabled={["chart", "table", "kpi", "panel_grid", "insights", "executive_summary"].includes(t) && !analyses.length} data-testid={`ax-add-${t}`}>{t === "page_break" ? "page break" : t.replace("_", " ")}</button>)}</div>
           {!analyses.length && <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>Save an analysis first to add charts, tables and KPIs.</div>}
           <div className="flabel" style={{ marginTop: 12 }}>Order (drag to reorder)</div>

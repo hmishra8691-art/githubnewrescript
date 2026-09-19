@@ -697,6 +697,59 @@ await page.waitForSelector('[data-testid="ax-dashboard"] .ax-widget >> nth=1');
 assert.equal(await count('[data-testid="ax-dashboard"] .ax-widget'), 2);
 ok("dashboard builder: KPI card + chart widgets on the grid");
 
+console.log("\n§9b OPERATIONAL DASHBOARD WIDGETS — photo tile, pictogram panel, numbered steps, iconed ranked list (§38)");
+await page.click('.ax-addlist .btn:has-text("photo")');
+await page.waitForSelector('[data-testid="ax-photo-image"]');
+await page.fill('[data-testid="ax-photo-image"]', "https://picsum.photos/400/300");
+await page.fill('.modal input[placeholder="e.g. 77%"]', "77%");
+await page.fill('.modal input[placeholder="e.g. +2% / -2% / 0%"]', "-2%");
+await page.click('.modal .btn.primary:has-text("Done")');
+await page.waitForSelector('[data-testid="ax-widget-photo"]');
+assert.match(await page.$eval('[data-testid="ax-widget-photo"]', (e) => e.style.backgroundImage), /picsum/);
+assert.match(await text('[data-testid="ax-widget-photo"]'), /77%/);
+assert.equal(await page.$eval('[data-testid="ax-widget-photo"] .ax-photo-trend', (e) => e.className), "ax-photo-trend ax-trend-down", "a trend chip starting with \"-\" gets the down/red styling");
+ok("photo widget: an image tile with an overlay figure and a colour-coded trend chip");
+
+await page.click('.ax-addlist .btn:has-text("icon panel")');
+await page.waitForSelector('[data-testid="ax-icon-panel-icon"]');
+await page.selectOption('.modal select >> nth=0', { label: "Satisfaction by gender (crosstab)" });
+await page.selectOption('[data-testid="ax-icon-panel-icon"]', { label: "Star" });
+await page.click('.modal .btn.primary:has-text("Done")');
+await page.waitForSelector('[data-testid="ax-widget-icon-panel"]');
+assert.ok((await page.$$eval('[data-testid="ax-widget-icon-panel"] .ax-icon-row', (es) => es.length)) > 0, "one row per category");
+ok("icon panel widget: a pictogram breakdown of a categorical analysis");
+
+await page.click('.ax-addlist .btn:has-text("steps")');
+await page.waitForSelector('[data-testid="ax-step-add"]');
+assert.equal(await count('.modal input[placeholder="Step title"]'), 3, "a new steps widget seeds three steps");
+await page.fill('.modal input[placeholder="Step title"] >> nth=0', "Receive customer issues");
+await page.selectOption('[data-testid="ax-step-icon"] >> nth=0', { label: "Flag" });
+await page.click('[data-testid="ax-step-add"]');
+assert.equal(await count('.modal input[placeholder="Step title"]'), 4, "+ step adds another");
+await page.click('.modal .btn.primary:has-text("Done")');
+await page.waitForSelector('[data-testid="ax-widget-steps"]');
+assert.equal(await count('[data-testid="ax-widget-steps"] .ax-step'), 4);
+assert.match(await text('[data-testid="ax-widget-steps"]'), /Receive customer issues/);
+ok("steps widget: a numbered process panel with per-step icons");
+
+await page.click('.ax-addlist .btn:has-text("ranked list")');
+await page.waitForSelector('[data-testid="ax-ranked-icon"]');
+await page.selectOption('.modal select >> nth=0', { label: "NPS (nps)" });
+await page.selectOption('[data-testid="ax-ranked-icon"]', { label: "Flag" });
+await page.click('.modal .btn.primary:has-text("Done")');
+await page.waitForSelector('[data-testid="ax-widget-ranked-list"]');
+assert.ok((await page.$$eval('[data-testid="ax-widget-ranked-list"] .ax-ranked-row', (es) => es.length)) > 0);
+ok("ranked list widget: an iconed, bar-scaled ranking of a categorical analysis");
+
+await page.click('[data-testid="ax-report-save"]');
+await page.waitForSelector('[data-testid="ax-report-save"]:has-text("Saved")');
+const dashDef = store.reports.find((r) => r.name === "Executive Dashboard").definition;
+assert.ok(dashDef.widgets.some((w) => w.type === "photo" && w.overlayValue === "77%"), "photo widget persists its overlay figure");
+assert.ok(dashDef.widgets.some((w) => w.type === "steps" && w.steps.length === 4), "steps widget persists all four steps");
+assert.ok(dashDef.widgets.some((w) => w.type === "icon_panel" && w.icon === "star"), "icon panel widget persists its analysis and icon choice");
+assert.ok(dashDef.widgets.some((w) => w.type === "ranked_list" && w.icon === "flag"), "ranked list widget persists its analysis and icon choice");
+ok("all four operational-dashboard widget types persist in the dashboard definition, same as the analytical ones");
+
 console.log("\n§10 EXISTING NAVIGATION UNCHANGED + NEW ENTRY POINTS");
 await page.goto(`${STUDIO}/`, { waitUntil: "networkidle" });
 await page.waitForSelector('[data-testid="dash-analytics"]');

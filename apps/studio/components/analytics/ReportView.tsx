@@ -1,8 +1,9 @@
 "use client";
 import React from "react";
 import type { AnalysisResult, ChartSpec, DashboardWidget, ReportBlock, ReportTheme } from "@rescript/analytics";
-import { DEFAULT_THEME, executiveSummary, methodologyLines, reportPages } from "@rescript/analytics";
+import { DEFAULT_THEME, executiveSummary, methodologyLines, reportPages, seriesForChart } from "@rescript/analytics";
 import { Chart, ResultTableView } from "./charts/Chart";
+import { Icon, IconPictogram } from "./charts/Icons";
 
 /**
  * READ-ONLY REPORT / DASHBOARD RENDERER (§12, §16, §19, §20). Draws a report's
@@ -48,6 +49,15 @@ export interface ReportViewProps {
 function mdToHtml(md: string): string {
   return md.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/^### (.*)$/gm, "<h4>$1</h4>").replace(/^## (.*)$/gm, "<h3>$1</h3>").replace(/^# (.*)$/gm, "<h2>$1</h2>").replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/\*(.+?)\*/g, "<i>$1</i>").replace(/^- (.*)$/gm, "<li>$1</li>").replace(/(<li>.*<\/li>\n?)+/g, (m) => `<ul>${m}</ul>`).replace(/\n{2,}/g, "<br/><br/>");
 }
+
+/** "+2%" → up, "-2%" → down, "0%" or unsigned → flat — the color/arrow convention the photo tile's trend chip follows. */
+function trendTone(s: string): "up" | "down" | "flat" {
+  const t = s.trim();
+  if (t.startsWith("+") || (t.startsWith("↑"))) return "up";
+  if (t.startsWith("-") || t.startsWith("−") || t.startsWith("↓")) return "down";
+  return "flat";
+}
+const fmtV = (v: number | null | undefined, pct?: boolean) => (v == null || !Number.isFinite(v) ? "—" : `${Math.round(v).toLocaleString("en-US")}${pct ? "%" : ""}`);
 
 export function ReportView(p: ReportViewProps) {
   const theme = p.theme ?? DEFAULT_THEME;
@@ -218,6 +228,79 @@ export function ReportView(p: ReportViewProps) {
               {w.type === "chart" && w.analysisId && (r ? renderChart(w.analysisId, w.chart ?? { type: r.recommendedCharts[0] ?? "bar_vertical", options: {} }, Math.max(160, w.h * 60 - 30)) : <Missing id={w.analysisId} />)}
               {w.type === "table" && w.analysisId && (r ? <ResultTableView table={r.tables[0]} dense maxRows={Math.max(4, w.h * 2)} /> : <Missing id={w.analysisId} />)}
               {w.type === "filter" && <div className="muted" style={{ fontSize: 13 }}>Segment switch: use the selector in the bar above.</div>}
+              {/*
+                * §38 — the operational-dashboard widgets, modelled on
+                * Forsta/Dapresy-style CX/EX dashboards: a photo tile with an
+                * overlay figure (StayLux's room ratings, Hotel's "77%
+                * satisfied"), a pictogram breakdown (Junicom's person-icon
+                * panel), a numbered process panel (CarFix's 1-2-3), and an
+                * iconed ranked list. The chart/table/kpi widgets above stay
+                * the analytical core; these are the photography- and
+                * icon-heavy dressing the gallery is full of.
+                */}
+              {w.type === "photo" && (
+                <div className="ax-photo-tile" style={{ backgroundImage: w.imageUrl ? `url(${w.imageUrl})` : undefined, backgroundSize: w.fit === "contain" ? "contain" : "cover" }} data-testid="ax-widget-photo">
+                  {!w.imageUrl && <div className="ax-photo-empty muted">No image yet — open this widget and choose one.</div>}
+                  {(w.overlayValue || w.overlayTrend) && (
+                    <div className="ax-photo-overlay">
+                      {w.overlayValue && <div className="ax-photo-value">{w.overlayValue}</div>}
+                      {w.overlayTrend && <span className={`ax-photo-trend ax-trend-${trendTone(w.overlayTrend)}`}>{w.overlayTrend}</span>}
+                    </div>
+                  )}
+                </div>
+              )}
+              {w.type === "icon_panel" && (w.analysisId ? (r ? (() => {
+                const series = seriesForChart(r, w.chart ?? { type: "bar_horizontal", options: {} })[0];
+                if (!series) return <div className="muted" style={{ fontSize: 13 }}>No categories to show.</div>;
+                return (
+                  <div className="ax-icon-panel" data-testid="ax-widget-icon-panel">
+                    {series.labels.map((label, i) => {
+                      const v = series.values[i];
+                      return (
+                        <div key={label} className="ax-icon-row">
+                          <IconPictogram icon={w.icon ?? "person"} pct={Math.max(0, Math.min(100, v ?? 0))} color={theme.colors.primary} />
+                          <span className="ax-icon-label">{label}</span>
+                          <span className="ax-icon-value">{fmtV(v, series.meta?.pct)}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })() : <Missing id={w.analysisId} />) : <Missing id="" />)}
+              {w.type === "steps" && (
+                <div className="ax-steps" data-testid="ax-widget-steps">
+                  {(w.steps ?? []).map((s, i) => (
+                    <div key={i} className="ax-step">
+                      <div className="ax-step-badge" style={{ background: theme.colors.primary }}>{i + 1}</div>
+                      {s.icon && <Icon name={s.icon} size={20} color={theme.colors.primary} />}
+                      <div className="ax-step-title">{s.title}</div>
+                      {s.description && <div className="ax-step-desc muted">{s.description}</div>}
+                    </div>
+                  ))}
+                  {!(w.steps ?? []).length && <div className="muted" style={{ fontSize: 13 }}>No steps yet — open this widget and add one.</div>}
+                </div>
+              )}
+              {w.type === "ranked_list" && (w.analysisId ? (r ? (() => {
+                const series = seriesForChart(r, w.chart ?? { type: "bar_horizontal", options: { sort: "desc" } })[0];
+                if (!series) return <div className="muted" style={{ fontSize: 13 }}>No categories to show.</div>;
+                const max = Math.max(1, ...series.values.map((v) => v ?? 0));
+                return (
+                  <ol className="ax-ranked-list" data-testid="ax-widget-ranked-list">
+                    {series.labels.map((label, i) => {
+                      const v = series.values[i] ?? 0;
+                      return (
+                        <li key={label} className="ax-ranked-row">
+                          <span className="ax-ranked-rank">{i + 1}</span>
+                          {w.icon && <Icon name={w.icon} size={15} color={theme.colors.subtle} />}
+                          <span className="ax-ranked-label">{label}</span>
+                          <span className="ax-ranked-bar-track"><span className="ax-ranked-bar" style={{ width: `${Math.max(4, (v / max) * 100)}%`, background: theme.colors.palette[i % theme.colors.palette.length] }} /></span>
+                          <span className="ax-ranked-value">{fmtV(v, series.meta?.pct)}</span>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                );
+              })() : <Missing id={w.analysisId} />) : <Missing id="" />)}
             </div>;
           })}
         </div>

@@ -215,9 +215,64 @@ a driver/regression table) drops into a panel unchanged.
   methodology — the shape of a Post-Launch Tracker deck, built entirely from
   analyses this platform already runs.
 
+## Operational dashboard widgets — photo, icon panel, steps, ranked list (§38, September 2026)
+
+The Data Analytics Studio's dashboard builder was, until now, five analytical
+widget kinds — kpi, chart, table, text, filter. A researcher shared Forsta/
+Dapresy's public dashboard gallery (Misono, Junicom, StayLux, Neptune, FlyNow,
+Hotel, CarFix — operational CX/EX dashboards, heavy on photography, gauge/ring
+KPIs, colour-coded heatmap tables and icon-driven breakdowns) and asked for
+that visual language here, phased. This is **phase 1 of that roadmap**: four
+new `DashboardWidget` kinds for the pieces the gallery has that the platform
+didn't — photography, pictograms, process panels, iconed rankings. Gauges,
+donut/ring KPIs, KPI cards and heatmap crosstab tables already existed as real
+chart types (`Chart.tsx`) before this work; they needed no new code.
+
+* **`photo`** — an image tile (`imageUrl`, chosen or uploaded through the
+  same `MediaUrlInput`/asset library every other media slot in Studio uses —
+  no second upload system), with an optional big overlay figure
+  (`overlayValue`, e.g. `"77%"`) and a small colour-coded trend chip
+  (`overlayTrend`; a leading `+` is green, `-`/`−` is red, anything else
+  neutral) — StayLux's room ratings, Hotel's "-2% less attractive" callouts.
+* **`icon_panel`** — a pictogram breakdown of a categorical analysis: one row
+  per category, an isotype row of glyphs (10 icons, filled left-to-right by
+  the category's percentage) plus the label and value — Junicom's person-icon
+  demographic panel. Bound to `analysisId` like `chart`/`table`; reuses
+  `seriesForChart` for the same sort/topN/hidden-category rules every other
+  chart already follows, so it never re-derives categories on its own.
+  `icon` picks which glyph represents a row.
+* **`steps`** — a static numbered process panel (`steps: {icon?, title,
+  description?}[]`), no analysis attached — CarFix's "1 Receive actual
+  customer issues → 2 Improve your weak spots → 3 Exchange success stories".
+* **`ranked_list`** — an iconed, bar-scaled ranking of a categorical analysis:
+  rank number, optional icon, label, a bar scaled to the top value, and the
+  value itself — the ranked bar-and-flag lists that recur across the gallery
+  (FlyNow, CarFix v.2).
+* **Icon set** (`apps/studio/components/analytics/charts/Icons.tsx`) — nine
+  plain-SVG glyphs (`person`, `star`, `flag`, `check`, `trend_up`,
+  `trend_down`, `building`, `car`, `hotel`, `generic`) drawn with
+  `currentColor`, the same "plain SVG, no new dependency" choice the chart
+  library itself makes, plus `IconPictogram` for the isotype row.
+* **Builder & viewer** — `ReportsPanel.tsx`'s widget picker and `BlockEditor`
+  gained the four kinds (image picker, analysis + icon pickers, a repeatable
+  step-list editor); `ReportView.tsx` renders all four for both the live
+  builder preview and the read-only share page, since it is the one renderer
+  both use. No server-side change was needed: the id-gathering in
+  `computeReport` and the fake backend already loop over every widget's
+  `analysisId` generically, and dashboards were never exported to
+  PowerPoint/Excel (screen- and share-link-only), so the export builders are
+  untouched.
+* **Not in this phase** — real geographic maps (FlyNow's pinned Europe map;
+  `map_bubble`/`map_country` still fall back to a scatter/bar chart), a
+  free-form drag/resize canvas (widgets still stack in document order; `x`/`y`
+  exist on `DashboardWidget` but are hardcoded to 0), background/hero photos
+  behind a cluster of widgets, dark theme presets, and a dashboard template
+  gallery. Those are phases 2–5 of the plan given to the team; nothing here
+  forecloses any of them.
+
 ## Tests
 
 * `pnpm --filter @rescript/analytics test` — 120 tests (stats vs scipy, every runner against planted data, report pages/templates, PPTX/XLSX builders including panel grids).
-* `node scripts/analytics-test.mjs` — 59 browser checks (workspace, builder, the analyses rail, the four stages, the professional table, nested rows, filters, charts, gallery, customisation, save/version, segments, report builder, publish/immutability, panel grids and the tracker template, share link, read-only view, downloads, revoke, password, expiry, exports, table builder, themes, dashboard, existing navigation unchanged). Uses an in-process fake backend over the real engine because the dev container has no database credentials.
+* `node scripts/analytics-test.mjs` — 64 browser checks (workspace, builder, the analyses rail, the four stages, the professional table, nested rows, filters, charts, gallery, customisation, save/version, segments, report builder, publish/immutability, panel grids and the tracker template, share link, read-only view, downloads, revoke, password, expiry, exports, table builder, themes, dashboard, the four operational-dashboard widgets — photo/icon panel/steps/ranked list, existing navigation unchanged). Uses an in-process fake backend over the real engine because the dev container has no database credentials.
 * `packages/analytics/src/analyses/crosstab.test.ts` — the crosstab’s options one by one (banner, nesting, stacking, base, suppression, sorting, summary rows, means, weighted letters) and the audit’s fixes (A1–A6, A11).
 * Share-resolution SQL exercised against the live database in a rolled-back transaction (unknown / unpublished / pinned vs following / expired / revoked / password flag / access counting).
