@@ -19,6 +19,14 @@ export function VersionsPanel() {
   const [clientSlug, setClientSlug] = React.useState(s.def.deployment.clientSlug);
   const [studySlug, setStudySlug] = React.useState(s.def.deployment.studySlug);
   const [mode, setMode] = React.useState<"test" | "live">("test");
+  /*
+   * R6. Restoring discards the working draft. The server now snapshots it
+   * first so nothing is actually lost, but a programmer with unsaved work
+   * should still be TOLD before it happens rather than after — the old
+   * button said "load / restore", which does not sound like an action that
+   * replaces what is currently on your screen.
+   */
+  const [confirmRestore, setConfirmRestore] = React.useState<VersionRow | null>(null);
 
   const load = React.useCallback(() => {
     fetch(`/api/surveys/${s.surveyDbId}/versions`).then((r) => r.json())
@@ -28,7 +36,14 @@ export function VersionsPanel() {
   }, [s.surveyDbId]);
   React.useEffect(load, [load]);
 
+  /** The two-step: ask when there is unsaved work, act when there is not. */
+  const askRestore = (v: VersionRow) => {
+    if (s.dirty) setConfirmRestore(v);
+    else void restore(v.id);
+  };
+
   const restore = async (versionId: string) => {
+    setConfirmRestore(null);
     const r = await fetch(`/api/surveys/${s.surveyDbId}/versions/${versionId}`);
     const d = await r.json();
     if (!d.version) return s.toast("Could not load version", "err");
@@ -46,7 +61,11 @@ export function VersionsPanel() {
     s.replace(parsed.data);
     // the draft is gone and this version is now current: nothing is pending
     s.markSaved(versionId, typeof out.revision === "number" ? out.revision : null);
-    s.toast(`Restored v${d.version.version} — it is now the current version`);
+    s.toast(
+      out.savedDraftAs
+        ? `Restored v${d.version.version}. Your unsaved work was saved first as v${out.savedDraftAs}, "Autosaved before restore".`
+        : `Restored v${d.version.version} — it is now the current version`,
+    );
     load();
   };
 
@@ -107,6 +126,28 @@ export function VersionsPanel() {
 
       <h3 className="sec">Version history</h3>
       <div className="table-wrap">
+        {confirmRestore && (
+          <div className="note warn" data-testid="restore-confirm" style={{ marginBottom: 10 }}>
+            <strong>You have unsaved changes.</strong>{" "}
+            Restoring v{confirmRestore.version} replaces what is in the editor now. Your current
+            work will be saved first as a new version called “Autosaved before restore”, so you
+            can get it back — but the editor will show v{confirmRestore.version} afterwards.
+            <div style={{ marginTop: 8 }}>
+              <button
+                type="button" className="btn small danger" data-testid="restore-confirm-yes"
+                onClick={() => void restore(confirmRestore.id)}
+              >
+                Save my work and restore v{confirmRestore.version}
+              </button>{" "}
+              <button
+                type="button" className="btn small" data-testid="restore-confirm-no"
+                onClick={() => setConfirmRestore(null)}
+              >
+                Keep editing
+              </button>
+            </div>
+          </div>
+        )}
         <table className="grid">
           <thead><tr><th>Version</th><th>Label</th><th>Saved</th><th>Deployed to</th><th></th></tr></thead>
           <tbody>
@@ -118,7 +159,14 @@ export function VersionsPanel() {
                 <td>{deployments.filter((d) => d.version_id === v.id)
                   .map((d) => `${d.mode}:/${d.client_slug}/${d.study_slug}`).join(", ")}</td>
                 <td>
-                  <button className="btn small" onClick={() => restore(v.id)}>load / restore</button>{" "}
+                  <button
+                    className="btn small"
+                    data-testid="version-restore"
+                    title="Replaces what is currently in the editor with this version"
+                    onClick={() => askRestore(v)}
+                  >
+                    replace editor with this
+                  </button>{" "}
                   <a className="btn small" href={`/api/surveys/${s.surveyDbId}/export/xlsx?versionId=${v.id}`}>vars.xlsx</a>
                 </td>
               </tr>

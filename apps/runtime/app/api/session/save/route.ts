@@ -68,15 +68,49 @@ export async function POST(req: NextRequest) {
     last_saved_at: new Date().toISOString(),
   };
   if (keepTelemetry) { update.telemetry = keepTelemetry; if (deviceHash) update.device_hash = deviceHash; }
-  let { error } = await db.from("responses").update(update).eq("session_id", sessionId).eq("status", "in_progress");
+  /*
+   * Y11 — THE UPDATE IS A COMPARE-AND-SWAP, SO READ WHAT IT SWAPPED.
+   *
+   * `.eq("status", "in_progress")` was already here and is exactly right: it
+   * means only one request can move a response out of in_progress. What was
+   * missing is that nobody looked at whether THIS request was the one that
+   * did it. The status check further up runs on a row read BEFORE the update,
+   * so two clicks 50 ms apart both read `in_progress`, both pass it, and both
+   * fall through to the block below — which increments quota cells, confirms
+   * List Fill claims and meters a billable SURVEY_RESPONSE. A quota cell up
+   * by two, and the customer invoiced twice, for one interview.
+   *
+   * `.select("id")` turns the conditional update into a claim: the request
+   * that actually performed the transition gets a row back, the loser gets an
+   * empty array. Everything with a side effect now happens only for the
+   * winner. No new table, no idempotency key — the condition was always
+   * there, it just was not being read.
+   */
+  const applyUpdate = async () =>
+    db.from("responses").update(update).eq("session_id", sessionId).eq("status", "in_progress").select("id");
+  let { data: changed, error } = await applyUpdate();
   if (error && /last_saved_at/.test(error.message)) {
     // migration 0006 not applied yet — the column is a convenience, not the save
     delete update.last_saved_at;
-    ({ error } = await db.from("responses").update(update).eq("session_id", sessionId).eq("status", "in_progress"));
+    ({ data: changed, error } = await applyUpdate());
   }
   if (error) {
     console.error("[rescript:save] write failed", JSON.stringify({ sessionId: sessionId.slice(0, 8), error: error.message }));
     return NextResponse.json({ error: "save failed" }, { status: 500 });
+  }
+  if (!changed?.length) {
+    /*
+     * Somebody else finalised this session between our read and our write.
+     * Identical answer to the pre-read guard above, and for the same reason:
+     * the interview IS finished and the caller should be told so, not handed
+     * an error — but none of the finalisation below may run a second time.
+     */
+    console.info("[rescript:save] lost the finalise race — side effects skipped", JSON.stringify({ sessionId: sessionId.slice(0, 8) }));
+    return NextResponse.json({
+      ok: true, note: "session already finalized",
+      environment: existing.is_test ? "TEST" : "LIVE",
+      respondentCode: existing.respondent_code ?? null,
+    });
   }
 
   // Finalize: quota counts for THIS environment (test and live are counted

@@ -138,6 +138,11 @@ type SaveOutcome = { ok: true; response?: any } | { ok: false; error: string; st
  * fetch for the completion and awaited neither's result: the engine could run
  * twice, and a failed completion still showed "Thank you".
  */
+/**
+ * The shortest interval between two accepted advances (Y11). See `once`.
+ */
+const MIN_ADVANCE_MS = 350;
+
 async function persist(mode: string, session: RunnerProps["session"], state: ResponseState, done: boolean, telemetry?: ResponseTelemetry | null, build?: RunnerProps["build"]): Promise<SaveOutcome> {
   if (!session || mode === "preview") return { ok: true, skipped: true };
   try {
@@ -546,6 +551,22 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
   const [logs, setLogs] = React.useState<string[]>([]);
   /** the warning set the respondent has already been shown on this page */
   const ackWarnRef = React.useRef<string | null>(null);
+  /*
+   * Y11 — ONE ADVANCE AT A TIME.
+   *
+   * `handleNext` is async and does real work before it returns: List Fill
+   * allocation, AI-derived variables, probe wording, then the save. Nothing
+   * stopped a second click landing in the middle of that, and on the last
+   * page the second click ran the whole completion path again — a quota cell
+   * incremented twice and two billable responses for one interview.
+   *
+   * A ref rather than state because it must be true for the NEXT event in
+   * the same tick; `setState` would not have applied yet and the second
+   * click would sail through. The state below is only so the button can
+   * show it.
+   */
+  const advancingRef = React.useRef(false);
+  const [advancing, setAdvancing] = React.useState(false);
   const [counts] = React.useState<QuotaCounts>(initialCounts ?? {});
   const [device, setDevice] = React.useState<"desktop" | "tablet" | "mobile">("desktop");
   const [epoch, setEpoch] = React.useState(0);
@@ -986,7 +1007,54 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
   const totalPages = Math.max(steps.filter((s) => s.kind === "page").length, 1);
   const progress = ended ? 100 : Math.round((pageIndexAmongPages / (totalPages + 1)) * 100);
 
-  const handleNext = async () => {
+  /**
+   * The latch, shared by every control that can reach `leavePage`.
+   *
+   * There are three: the page's Next, the follow-up probe's Next, and the
+   * conversational mode's Next. They are different handlers reaching the same
+   * completion path, so a latch on one of them alone would leave the other two
+   * able to submit twice — and the conversational one is the mode where a
+   * respondent is most likely to be tapping quickly.
+   */
+  const once = <T,>(fn: () => Promise<T>) => async () => {
+    if (advancingRef.current) return;
+    advancingRef.current = true;
+    setAdvancing(true);
+    const startedAt = Date.now();
+    try {
+      await fn();
+    } finally {
+      /*
+       * THE LATCH IS HELD FOR A MINIMUM, NOT ONLY FOR THE WORK.
+       *
+       * Holding it for the duration of the work alone is enough for the
+       * expensive case — the last page awaits a network round trip — but it
+       * is NOT enough for an ordinary page, where there is no List Fill, no
+       * AI variable and no probe, every await resolves as a microtask, and
+       * the whole advance finishes before the browser has painted. The latch
+       * is then open again by the time a double-click's second event is
+       * dispatched, and the respondent advances two pages: they never see
+       * the page in between, and its answers are blank in the data with
+       * nothing recording that it was skipped.
+       *
+       * So the floor is on the INTERVAL, not on the work: you cannot advance
+       * off a page you have not been shown. A second tap inside it is a
+       * double-click, and a deliberate second advance comes later than this.
+       * Short enough that a fast respondent never notices, long enough that
+       * a trackpad double-click cannot cost a page of data.
+       */
+      const held = Date.now() - startedAt;
+      if (held < MIN_ADVANCE_MS) await new Promise((r) => setTimeout(r, MIN_ADVANCE_MS - held));
+      advancingRef.current = false;
+      setAdvancing(false);
+    }
+  };
+
+  const handleNext = once(async () => {
+    await handleNextInner();
+  });
+
+  const handleNextInner = async () => {
     if (!pageStep) return;
     const errs = validatePage(def, questions, ctx);
     /*
@@ -1080,7 +1148,7 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
   };
 
   /** Next on a probe screen: validate it, then either the next probe or the page's exit. */
-  const handleProbeNext = async () => {
+  const handleProbeNext = once(async () => {
     if (!probe) return;
     const errs = validatePage(def, [probe.pq], ctx);
     if (blockingErrors(errs).length > 0) { setErrors(errs); return; }
@@ -1088,7 +1156,7 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
     setProbe(null);
     if (await showNextProbe()) return;
     await leavePage();
-  };
+  });
 
   /** Back on a probe screen returns to its page; the abandoned follow-up is forgotten. */
   const handleProbeBack = () => {
@@ -1220,7 +1288,7 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
   };
 
   /** Conversational Next: validate just the question on screen, then the next one, or the page's own Next. */
-  const convoNext = async () => {
+  const convoNext = once(async () => {
     if (!pageStep) return;
     const q = questions[convoIndex];
     if (q) {
@@ -1234,8 +1302,14 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
       force();
       return;
     }
-    await handleNext();
-  };
+    /*
+     * The INNER function, not `handleNext` — `once` has already taken the
+     * latch for this click, so calling the latched handler from inside it
+     * would see its own latch and return, and the conversational mode would
+     * simply stop at the last question.
+     */
+    await handleNextInner();
+  });
   const convoBack = () => {
     if (!pageStep) return;
     ackRef.current.text = null; // going back is not an answer — nothing to acknowledge
@@ -1376,7 +1450,11 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
             {b.buttons.backLabel}
           </button>
         ) : <span />}
-        <button type="button" data-testid="rs-next" className={`rs-btn ${b.buttons.style}`} onClick={handleProbeNext}>
+        <button
+          type="button" data-testid="rs-next" className={`rs-btn ${b.buttons.style}`}
+          disabled={advancing} aria-busy={advancing || undefined}
+          onClick={handleProbeNext}
+        >
           {pageIndexAmongPages >= totalPages ? b.buttons.submitLabel : b.buttons.nextLabel}
         </button>
       </div>
@@ -1521,7 +1599,16 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
             {b.buttons.backLabel}
           </button>
         ) : <span />}
-        <button type="button" data-testid="rs-next" className={`rs-btn ${b.buttons.style}`} onClick={conversational ? convoNext : handleNext}>
+        <button
+          type="button"
+          data-testid="rs-next"
+          className={`rs-btn ${b.buttons.style}`}
+          /* the ref above is what actually prevents the second submit; this
+             is so the respondent can see why the button stopped responding */
+          disabled={advancing}
+          aria-busy={advancing || undefined}
+          onClick={conversational ? convoNext : handleNext}
+        >
           {pageIndexAmongPages >= totalPages && (!conversational || convoIndex >= questions.length - 1) ? b.buttons.submitLabel : b.buttons.nextLabel}
         </button>
       </div>

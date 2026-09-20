@@ -87,6 +87,13 @@ export const AUDIT_EVENTS = [
   "version.restored",
   "deployment.started",
   "deployment.completed",
+  /*
+   * R10. A deployment the quality gate REFUSED is a real event in a project's
+   * history — and the one a team argues about later ("why isn't the link
+   * live?"). It records which problems stopped it, so the answer is in the
+   * Activity tab rather than in somebody's memory of a red toast.
+   */
+  "deployment.refused",
   "responses.modified",
   "responses.deleted",
   "responses.imported",
@@ -254,6 +261,7 @@ export function describeEvent(r: AuditRow): string {
     case "version.restored": return `${who} restored version ${str(d.version) || "?"}`;
     case "deployment.started": return `${who} started a ${str(d.mode) || ""} deployment`.replace("  ", " ");
     case "deployment.completed": return `${who} completed a ${str(d.mode) || ""} deployment`.replace("  ", " ");
+    case "deployment.refused": return `A ${str(d.mode) || ""} deployment by ${who.toLowerCase()} was refused by the quality check${d.errors ? ` (${str(d.errors)} problem${Number(d.errors) === 1 ? "" : "s"})` : ""}`.replace("  ", " ");
     case "responses.modified": return `${who} edited response data${d.count ? ` (${str(d.count)} rows)` : ""}`;
     case "responses.deleted": return `${who} deleted response data${d.count ? ` (${str(d.count)} rows)` : ""}`;
     case "responses.imported": return `${who} imported response data${d.count ? ` (${str(d.count)} rows)` : ""}`;
@@ -302,6 +310,8 @@ export const NOTIFIABLE: AuditEvent[] = [
   "lock.force_released",
   "comment.created",
   "deployment.completed",
+  /* the team should hear about this one without going looking for it */
+  "deployment.refused",
 ];
 
 export function isNotifiable(action: string): boolean {

@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
 import { buildVariableDictionary, nextVersion, normaliseQuestionOrder } from "@rescript/engine";
 import { audit, isFailure, requireEditRight, requireProject } from "@/lib/guard";
+import { publishGate, gateRefusal } from "@/lib/publishGate";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +47,37 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   // regenerate the dictionary so every saved version carries its exact variables
   def.variables = buildVariableDictionary(def);
   def.meta.updatedAt = new Date().toISOString();
+
+  /*
+   * R10 — THE LINT, AS A GATE.
+   *
+   * A version is not a private snapshot: the line below this route points
+   * `current_version_id` at it, and that is what the runtime serves and what
+   * every export reads. So a version with errors in it is a broken survey
+   * that respondents can reach, and until now nothing checked.
+   *
+   * ## Why there is a `force`, when deploy has none
+   *
+   * The errors include things a survey legitimately has while it is being
+   * built — no deployment slug, no questions yet. A gate with no way past it
+   * would stop a team checkpointing work in progress, and a gate people
+   * cannot live with is one they route around by not cutting versions at
+   * all, which costs more than it saves. So it can be overridden
+   * deliberately, by a client that has seen the problems, and the override
+   * is AUDITED with the list — an override nobody can see afterwards is the
+   * same as no gate.
+   *
+   * Deploying is different and has no override: that is the step where a
+   * respondent actually opens the link.
+   */
+  const gateVerdict = publishGate(def);
+  const forced = body?.force === true;
+  if (!gateVerdict.ok && !forced) {
+    console.warn("[rescript:version] REFUSED unlinted cut", JSON.stringify({
+      surveyId: params.id, errors: gateVerdict.result.errors, areas: gateVerdict.problems.map((p) => p.area),
+    }));
+    return NextResponse.json(gateRefusal(gateVerdict, "saved as a version"), { status: 422 });
+  }
 
   const db = supabaseAdmin();
 
@@ -215,9 +247,29 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     action: "version.created", userId: gate.user.userId, sessionId: gate.user.sessionId,
     surveyId: params.id, customerId: gate.user.customerId,
     entity: "survey_version", entityId: ver.id,
-    detail: { version, label: body.label ?? null },
+    detail: {
+      version, label: body.label ?? null,
+      /*
+       * An override that leaves no trace is the same as no gate at all. The
+       * problems are recorded as they stood at the moment it was overridden,
+       * not merely the fact that somebody did.
+       */
+      ...(gateVerdict.ok ? {} : {
+        lintOverridden: true,
+        lintErrors: gateVerdict.result.errors,
+        lintProblems: gateVerdict.problems,
+      }),
+    },
   });
   return NextResponse.json({
     id: ver.id, version: ver.version, variables: def.variables.length, revision: newRevision,
+    /* the client shows these whether or not they blocked: a forced cut should still say what it forced past */
+    lint: {
+      status: gateVerdict.result.status,
+      errors: gateVerdict.result.errors,
+      warnings: gateVerdict.result.warnings,
+      summary: gateVerdict.summary,
+      ...(gateVerdict.ok ? {} : { overridden: true, problems: gateVerdict.problems }),
+    },
   });
 }
