@@ -6,6 +6,7 @@ import {
   RECORDING_CONSTRAINTS, MEDIA_KINDS, withinLimit, TRANSCRIPT_SAY, transcriptPending,
   type MediaKind, type TranscriptStatus,
 } from "@rescript/media";
+import { fileSize, typeLabel } from "@/lib/mediaFormat.ts";
 import { registerVariantSettings, type VariantSettingsProps } from "./registry";
 import { CountInput } from "../CountInput";
 import { useStudio } from "../store";
@@ -74,7 +75,6 @@ import { useStudio } from "../store";
  */
 
 const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
-const mb = (n: number) => `${(n / (1024 * 1024)).toFixed(1)} MB`;
 
 /* ----------------------------------------------------------- the recorder */
 
@@ -89,7 +89,26 @@ function VideoRecorder({ q, patchSettings }: VariantSettingsProps) {
   const [secs, setSecs] = React.useState(0);
   const [note, setNote] = React.useState<string | null>(null);
   const [takeUrl, setTakeUrl] = React.useState<string | null>(null);
-  const [takeBytes, setTakeBytes] = React.useState(0);
+  /**
+   * WHAT THE RESEARCHER ACTUALLY CHOSE — name, size, type — captured at the
+   * moment of choosing, from the File or Blob itself.
+   *
+   * There was no such state. A recording set `takeBytes` and nothing else, so
+   * the one line of metadata on the screen was a duration and a size and no
+   * name or type; and a file picked with "Upload a file" set nothing at all,
+   * because `onPick` reads `f.name`, `f.size` and `f.type` only to VALIDATE
+   * them and then calls `save(f, …)` straight away. There is no review step
+   * on that path, so a researcher choosing a video saw a spinner and never
+   * once saw which file they had chosen or how big it was.
+   *
+   * `takeBytes` also outlived its take: it was set on stop and cleared only
+   * by `discardTake`, so the number on the screen could belong to a previous
+   * recording. This is set fresh on every selection and cleared with the
+   * take, which is what makes it safe to display.
+   */
+  const [selected, setSelected] = React.useState<
+    { name: string; size: number; type: string; source: "recorded" | "uploaded" } | null
+  >(null);
   /**
    * The upload's own state, spelled as the brief asks: recording, processing,
    * uploading, uploaded, failed. `busy` used to be a boolean, which is why
@@ -207,7 +226,12 @@ function VideoRecorder({ q, patchSettings }: VariantSettingsProps) {
       const blob = new Blob(chunks.current, { type: rec.mimeType || "video/webm" });
       chunks.current = [];
       blobRef.current = blob;
-      setTakeBytes(blob.size);
+      setSelected({
+        name: "question.webm",
+        size: blob.size,
+        type: blob.type || rec.mimeType || "video/webm",
+        source: "recorded",
+      });
       stage("recording_completed", { questionId: q.id, bytes: blob.size, seconds: secs });
       stage("blob_created", { questionId: q.id, bytes: blob.size });
       setTakeUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(blob); });
@@ -278,7 +302,7 @@ function VideoRecorder({ q, patchSettings }: VariantSettingsProps) {
     blobRef.current = null;
     audioBlobRef.current = null;
     pendingRef.current = null;
-    setTakeBytes(0);
+    setSelected(null);
     setPct(0);
     setPhase("idle");
     setTakeUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
@@ -474,7 +498,32 @@ function VideoRecorder({ q, patchSettings }: VariantSettingsProps) {
 
   const onPick = async (f: File | undefined) => {
     if (!f) return;
-    if (!/^video\//.test(f.type)) { setNote(`“${f.name}” is ${f.type || "an unknown type"} — please choose a video file.`); return; }
+    /*
+     * The chosen file is described BEFORE it is judged, and before a byte
+     * moves. A refusal that does not show what was refused ("that file is too
+     * large") leaves the researcher guessing which of the three videos in
+     * their downloads folder they just clicked; and the old state has to go
+     * whatever happens next, so that nothing on the screen still describes
+     * the previous take.
+     */
+    setSelected({
+      name: f.name,
+      size: f.size,
+      type: f.type || "",
+      source: "uploaded",
+    });
+    setPct(0);
+    setNote(null);
+    /*
+     * A refused file is not a failed upload, and must not leave a Retry
+     * button pointing at whatever was in `pendingRef` from last time.
+     */
+    pendingRef.current = null;
+    setPhase("idle");
+    if (!/^video\//.test(f.type)) {
+      setNote(`“${f.name}” is ${f.type || "an unknown type"} — please choose a video file.`);
+      return;
+    }
     const limit = withinLimit("question_video", f.size, limits.maxBytes);
     if (!limit.ok) { setNote(limit.message!); return; }
     await save(f, null, f.name, "uploaded");
@@ -487,9 +536,10 @@ function VideoRecorder({ q, patchSettings }: VariantSettingsProps) {
         <div className="iv-current" data-testid="iv-current">
           <video src={current.url} controls preload="metadata" data-testid="iv-current-video" />
           <div className="iv-meta mono" data-testid="iv-meta">
+            {current.fileName ? `${current.fileName} · ` : ""}
             {current.durationSeconds ? `${clock(current.durationSeconds)} · ` : ""}
-            {current.bytes ? `${mb(current.bytes)} · ` : ""}
-            {(current.mimeType ?? "video").replace("video/", "")}
+            {current.bytes ? `${fileSize(current.bytes)} · ` : ""}
+            {typeLabel(current.mimeType)}
             {current.width && current.height ? ` · ${current.width}×${current.height}` : ""}
             {current.source === "recorded" ? " · recorded here" : current.source === "url" ? " · external link" : " · uploaded"}
           </div>
@@ -564,7 +614,9 @@ function VideoRecorder({ q, patchSettings }: VariantSettingsProps) {
       {mode === "review" && takeUrl && (
         <div className="iv-stage" data-testid="iv-review">
           <video ref={reviewRef} src={takeUrl} controls playsInline data-testid="iv-take" />
-          <div className="iv-meta mono" data-testid="iv-take-meta">{clock(secs)} · {mb(takeBytes)}</div>
+          <div className="iv-meta mono" data-testid="iv-take-meta">
+            {selected?.name ?? "question.webm"} · {fileSize(selected?.size)} · {typeLabel(selected?.type)} · {clock(secs)}
+          </div>
           <div className="row" style={{ gap: 8 }}>
             <button className="btn primary" data-testid="iv-save" disabled={busy}
               onClick={() => blobRef.current && void save(blobRef.current, audioBlobRef.current, "question.webm", "recorded")}>
@@ -605,9 +657,38 @@ function VideoRecorder({ q, patchSettings }: VariantSettingsProps) {
         recording from processing from uploading from stored from failed, and
         a boolean called `busy` could only ever say one of them.
       */}
+      {/*
+        THE FILE THAT IS IN FLIGHT, NAMED.
+
+        A file chosen with "Upload a file" never reaches the review stage —
+        `onPick` calls `save()` directly — so this is the only place it is
+        ever described, and until now there was nothing here but a chip
+        reading "Uploading…". The researcher could not tell which file they
+        had picked, how big it was, or whether the browser had understood its
+        type. It reads from `selected`, which is set from the File itself at
+        the moment of the click, so it cannot show a previous take's numbers.
+      */}
+      {selected && mode !== "review" && (
+        <div className="iv-meta mono" data-testid="iv-selected-meta">
+          {selected.name} · {fileSize(selected.size)} · {typeLabel(selected.type)}
+          {selected.source === "uploaded" ? " · chosen file" : " · recorded here"}
+        </div>
+      )}
       {phase !== "idle" && (
         <div className={`chip ${phase === "failed" ? "warn" : phase === "uploaded" ? "ok" : ""}`} data-testid="iv-phase" data-phase={phase}>
-          {PHASE_SAY[phase]}{phase === "uploading" && pct ? ` ${pct}%` : ""}
+          {PHASE_SAY[phase]}{phase === "uploading" ? ` ${pct}%` : ""}
+        </div>
+      )}
+      {/*
+        A real progress bar, not only a number. `pct` already existed and was
+        rendered as text — and only when it was non-zero, so the first tick of
+        every upload showed the word "Uploading…" with nothing after it.
+      */}
+      {phase === "uploading" && (
+        <div className="iv-progress" data-testid="iv-progress" role="progressbar"
+          aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}
+          aria-label={`Uploading ${selected?.name ?? "the video"}`}>
+          <span style={{ width: `${Math.min(100, Math.max(0, pct))}%` }} />
         </div>
       )}
       {phase === "failed" && pendingRef.current && (

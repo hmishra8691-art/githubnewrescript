@@ -122,7 +122,32 @@ const ENV_FILE = process.env.R2_ENV_FILE ?? new URL("../.env.r2", import.meta.ur
 const loaded = loadEnvFile(ENV_FILE);
 
 const env = process.env;
-const ORIGIN = env.INTERVIEWS_PUBLIC_URL ?? process.argv[2] ?? "";
+
+/**
+ * EVERY ORIGIN THAT WILL UPLOAD TO THIS BUCKET, NOT JUST ONE.
+ *
+ * A CORS policy is a property of the bucket, and more than one application
+ * writes to it: the interviews app records candidates, and the Studio uploads
+ * question videos and library assets from a DIFFERENT Vercel project on a
+ * different hostname. A policy listing only the first is a bucket the second
+ * cannot upload to at all — and the browser-side failure that produces is
+ * indistinguishable, from the researcher's side, from a permissions error.
+ *
+ * So the check takes as many origins as you give it and holds the bucket to
+ * all of them:
+ *
+ *   node scripts/r2-check.mjs https://rescriptstudio.vercel.app https://rescript-interviews.vercel.app
+ */
+const ORIGINS = [
+  ...process.argv.slice(2),
+  env.STUDIO_PUBLIC_URL ?? "",
+  env.NEXT_PUBLIC_STUDIO_URL ?? "",
+  env.INTERVIEWS_PUBLIC_URL ?? "",
+]
+  .map((o) => o.trim().replace(/\/+$/, ""))
+  .filter(Boolean)
+  .filter((o, i, all) => all.indexOf(o) === i);
+const ORIGIN = ORIGINS[0] ?? "";
 
 const endpoint = env.R2_ENDPOINT
   ?? (env.R2_ACCOUNT_ID ? `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com` : "");
@@ -156,7 +181,7 @@ console.log(`  endpoint   ${endpoint}`);
 console.log(`  bucket     ${bucket}`);
 console.log(`  region     ${region}`);
 console.log(`  key id     ${mask(accessKeyId)}`);
-console.log(`  origin     ${ORIGIN || "(none given — CORS check will be skipped)"}`);
+console.log(`  origins    ${ORIGINS.join("\n             ") || "(none given — CORS checks will be skipped)"}`);
 if (loaded) console.log(`  read ${loaded} setting(s) from ${ENV_FILE}`);
 console.log("");
 
@@ -313,31 +338,100 @@ await step("list objects under a prefix", async () => {
   return `${out.objects.length} objects`;
 });
 
-await step("CORS preflight, as a browser sends it", async () => {
-  if (!ORIGIN) { skipped++; throw fail("skipped — no origin given", "Pass your app's URL: node scripts/r2-check.mjs https://your-app.vercel.app"); }
-  const res = await fetch(uploadUrl, {
-    method: "OPTIONS",
-    headers: {
-      origin: ORIGIN,
-      "access-control-request-method": "PUT",
-      "access-control-request-headers": "content-type",
-    },
-  });
-  const allow = res.headers.get("access-control-allow-origin");
-  if (!allow) {
-    throw fail(`the bucket returned no Access-Control-Allow-Origin (HTTP ${res.status})`,
-      `Add a CORS policy to the bucket allowing ${ORIGIN}. Without it a candidate's browser cannot upload at all.`);
+/*
+ * THE STUDIO'S OWN KEY LAYOUT.
+ *
+ * The interviews app writes under `organizations/<id>/interviews/…`. The
+ * Studio does not: `packages/media` keeps four LOGICAL buckets —
+ * `rescript-video`, `rescript-audio`, `rescript-assets`, `rescript-uploads` —
+ * and folds each into a key prefix inside the one real bucket
+ * (`providerKey` in `objectStore.ts`). So a Studio question video lands at
+ * `video/<survey>/<question>/<ts>-question.webm` and a library asset at
+ * `assets/<survey>/…`.
+ *
+ * Those prefixes were never exercised here, and a check that passes on one
+ * prefix while the product writes to another is a check that proves the
+ * wrong thing. It also matters for lifecycle rules, which are written per
+ * prefix and can silently delete one family and not another.
+ */
+const STUDIO_PREFIXES = ["video", "audio", "assets", "uploads"];
+
+await step("the Studio's four key prefixes accept a write", async () => {
+  const written = [];
+  for (const prefix of STUDIO_PREFIXES) {
+    const key = `${prefix}/_rescript-check/${stamp}/probe.bin`;
+    await storage.upload(key, bytes(64, 5), { contentType: "application/octet-stream" });
+    cleanup.push(key);
+    const meta = await storage.getMetadata(key);
+    if (!meta) throw fail(`wrote ${key} and could not read it back`,
+      `The Studio stores its ${prefix} under this prefix. A token or lifecycle rule that treats prefixes differently would fail exactly here.`);
+    written.push(prefix);
   }
-  if (allow !== "*" && allow !== ORIGIN) {
-    throw fail(`the bucket allows "${allow}", not "${ORIGIN}"`);
-  }
-  const expose = (res.headers.get("access-control-expose-headers") ?? "").toLowerCase();
-  if (!expose.includes("etag")) {
-    throw fail(`ExposeHeaders does not include ETag (it has: "${expose || "nothing"}")`,
-      "A browser cannot read the part ETag without this, so multipart uploads complete with no parts. Short answers would work and long ones would not.");
-  }
-  return "origin allowed, ETag exposed";
+  return `${written.join(", ")}`;
 });
+
+await step("a presigned PUT with the recorder's real content type", async () => {
+  /*
+   * What the Studio's video recorder actually sends: a Blob whose type is
+   * `video/webm;codecs=vp9,opus`, PUT straight at a presigned URL with no
+   * Authorization header. The semicolon and the comma in that value are the
+   * two characters most likely to be canonicalised differently by a signer
+   * and a store — and `createSignedUploadUrl` deliberately leaves
+   * content-type OUT of the signature for that reason, which is a decision
+   * worth proving rather than trusting.
+   */
+  const key = `video/_rescript-check/${stamp}/as-the-browser-sends-it.webm`;
+  const url = await storage.createSignedUploadUrl(key, { expiresIn: 600 });
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: { "content-type": "video/webm;codecs=vp9,opus" },
+    body: bytes(2048, 9),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw fail(`the store refused the presigned PUT (${res.status}) ${body.slice(0, 200)}`,
+      res.status === 403
+        ? "This is the failure the Studio is hitting. A 403 here is the token, the bucket name or the account id — not CORS, because this request is not coming from a browser."
+        : undefined);
+  }
+  cleanup.push(key);
+  const meta = await storage.getMetadata(key);
+  if (!meta || meta.size !== 2048) throw fail(`the object is ${meta ? `${meta.size} bytes` : "absent"} after a 200`);
+  return "2048 bytes, verified";
+});
+
+for (const origin of ORIGINS.length ? ORIGINS : [""]) {
+  await step(`CORS preflight from ${origin || "(no origin given)"}`, async () => {
+    if (!origin) {
+      skipped++;
+      throw fail("skipped — no origin given",
+        "Pass every app URL that uploads to this bucket: node scripts/r2-check.mjs https://your-studio.vercel.app https://your-interviews.vercel.app");
+    }
+    const res = await fetch(uploadUrl, {
+      method: "OPTIONS",
+      headers: {
+        origin,
+        "access-control-request-method": "PUT",
+        "access-control-request-headers": "content-type",
+      },
+    });
+    const allow = res.headers.get("access-control-allow-origin");
+    if (!allow) {
+      throw fail(`the bucket returned no Access-Control-Allow-Origin (HTTP ${res.status})`,
+        `Add a CORS policy to the bucket allowing ${origin}. Without it a browser on that origin cannot upload at all — and the request never reaches R2, so nothing is logged anywhere.`);
+    }
+    if (allow !== "*" && allow !== origin) {
+      throw fail(`the bucket allows "${allow}", not "${origin}"`,
+        "A CORS policy is per bucket and lists origins exactly. Two applications sharing a bucket need both of their URLs in AllowedOrigins.");
+    }
+    const expose = (res.headers.get("access-control-expose-headers") ?? "").toLowerCase();
+    if (!expose.includes("etag")) {
+      throw fail(`ExposeHeaders does not include ETag (it has: "${expose || "nothing"}")`,
+        "A browser cannot read the part ETag without this, so multipart uploads complete with no parts. Short answers would work and long ones would not.");
+    }
+    return "origin allowed, ETag exposed";
+  });
+}
 
 await step("public access is OFF", async () => {
   /* the same key, unsigned. It must be refused. */
@@ -352,8 +446,20 @@ await step("public access is OFF", async () => {
 
 await step("delete everything this check created", async () => {
   await storage.delete(cleanup);
-  const still = await storage.list(`_rescript-check/${stamp}/`, { limit: 10 });
-  if (still.objects.length) throw fail(`${still.objects.length} object(s) survived the delete`);
+  /*
+   * Every prefix this run wrote to, not just the first. The Studio-layout
+   * steps above put probes under `video/`, `audio/`, `assets/` and
+   * `uploads/`, and a cleanup that only looked at the root prefix would
+   * report "bucket is clean" while leaving four objects behind — in a
+   * verifier whose whole job is to not be taken on trust.
+   */
+  const roots = ["", ...STUDIO_PREFIXES.map((p) => `${p}/`)];
+  let left = 0;
+  for (const root of roots) {
+    const still = await storage.list(`${root}_rescript-check/${stamp}/`, { limit: 10 });
+    left += still.objects.length;
+  }
+  if (left) throw fail(`${left} object(s) survived the delete`);
   return "bucket is clean";
 });
 
@@ -369,6 +475,6 @@ if (failed === skipped) {
   process.exit(0);
 }
 console.log(`  ${failed} check(s) failed. The product will not work until they pass.\n`);
-console.log(`  Anything left behind is under the prefix _rescript-check/${stamp}/ and`);
-console.log(`  is safe to delete from the Cloudflare dashboard.\n`);
+console.log(`  Anything left behind is under _rescript-check/${stamp}/ — at the root and`);
+console.log(`  under ${STUDIO_PREFIXES.join("/, ")}/ — and is safe to delete from the dashboard.\n`);
 process.exit(1);

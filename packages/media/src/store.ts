@@ -448,7 +448,32 @@ export async function confirmUpload(
   try {
     head = await store.head(row.bucket, row.path);
   } catch (e) {
-    throw new MediaError(`could not confirm the upload: ${(e as Error).message}`);
+    /*
+     * THE STORE COULD NOT BE ASKED — WHICH IS NOT THE SAME AS "NOT THERE",
+     * AND USED TO BE RECORDED AS NOTHING AT ALL.
+     *
+     * This branch threw without touching the row, so an upload against a
+     * store that answers 403 — a token scoped to the wrong bucket, a rotated
+     * key, an endpoint that is not the account's — left a row at `pending`
+     * with `error` NULL: byte for byte the same trace as a browser that was
+     * closed mid-transfer. Eleven of them accumulated in production over two
+     * days and the only way to tell the two causes apart was to reason about
+     * which code path leaves which nulls.
+     *
+     * The status stays `pending`, because that is the truth: the object may
+     * well be sitting in the bucket and nobody has been able to look. What
+     * changes is that the reason is now ON the row, in the store's own words
+     * — `AccessDenied`, `NoSuchBucket`, `SignatureDoesNotMatch` — so a
+     * configuration fault names itself instead of being inferred.
+     *
+     * The status is carried out too. A 403 from the store is not "try again":
+     * every retry fails identically until somebody changes a setting, and
+     * telling a researcher to retry is a loop with no exit.
+     */
+    const detail = (e as Error).message;
+    const note = `could not confirm the upload: ${detail}`;
+    await db.from("media_objects").update({ error: note.slice(0, 1000) }).eq("id", mediaId);
+    throw new MediaError(note, (e as { status?: number }).status ?? 502);
   }
   if (!head) {
     await db.from("media_objects").update({ status: "failed", error: "the object was not found in storage" }).eq("id", mediaId);

@@ -150,6 +150,24 @@ export class RecordingUploader {
   private state: UploadState;
   private finished = false;
   private abandoned = false;
+  /**
+   * THE LAST THING A PART SAID WHEN IT WOULD NOT GO.
+   *
+   * `queue()` starts a part in the background and nothing awaits its result,
+   * so `send()` returning false was simply dropped on the floor. For a
+   * multipart upload that was survivable — `finish()` asks the store which
+   * parts it has before completing, and the store's answer is better evidence
+   * than ours anyway. For a SINGLE-PUT upload there is no such round trip,
+   * and the only thing standing between a refused PUT and a "Stored" chip was
+   * the server's HEAD at confirm time. One check, on the far side of a
+   * network, for a fact this object already knew.
+   *
+   * It is kept as the reason rather than a boolean because the reason is the
+   * useful half: a browser that cannot PUT is usually looking at a 403 from
+   * the store, and "Upload failed" without it sends somebody to the wrong
+   * half of the system.
+   */
+  private partFailure: string | null = null;
 
   constructor(opts: UploaderOptions) {
     if (!opts.endpoints) throw new Error("RecordingUploader needs its endpoints — each product names its own begin/parts/complete routes");
@@ -264,6 +282,26 @@ export class RecordingUploader {
       }
     }
 
+    /*
+     * WHAT THIS BROWSER ALREADY KNOWS, RECORDED BEFORE ANYBODY IS ASKED.
+     *
+     * A single-PUT upload has no `resume` round trip above, so until now the
+     * ONLY thing that could notice a refused PUT was the server's HEAD at
+     * confirm time. That check is good and it stays — it is the authority,
+     * because the store is the only witness that counts. But it is on the far
+     * side of a network from a fact this object holds: `complete()` knows
+     * whether every part the recorder released was acknowledged.
+     *
+     * Holding it here does two things. The failure gets the store's own words
+     * ("refused the upload (403)") instead of a generic sentence, which is
+     * the difference between a researcher retrying for an hour and somebody
+     * looking at a bucket policy. And if the server ever answers `ok` while
+     * this is false, the two witnesses contradict each other — which is
+     * resolved pessimistically below, because a wrongly-reported success is
+     * the one outcome that cannot be recovered from later.
+     */
+    const knownIncomplete = !this.complete();
+
     this.set({ phase: "finishing" });
     const res = await this.doFetch(this.endpoints.complete, {
       method: "POST",
@@ -282,9 +320,31 @@ export class RecordingUploader {
     });
     const reply = await res.json().catch(() => ({}));
     if (!res.ok || !reply.ok) {
-      this.set({ phase: "failed", message: reply.error ?? "Your answer could not be saved." });
-      this.tell("upload_failed", { reason: reply.error ?? res.status });
-      return { ok: false, error: reply.error ?? "Your answer could not be saved." };
+      /*
+       * The client's reason first when it has one: the server can only report
+       * that the object is not there, while this browser watched it be
+       * refused and knows why.
+       */
+      const why = this.partFailure ?? reply.error ?? "Your answer could not be saved.";
+      this.set({ phase: "failed", message: why });
+      this.tell("upload_failed", { reason: reply.error ?? res.status, partFailure: this.partFailure });
+      return { ok: false, error: why };
+    }
+
+    if (knownIncomplete && !this.complete()) {
+      /*
+       * The server verified an object and this browser knows a part of it
+       * never went. Both cannot be true. Whichever is wrong, saying "Stored"
+       * here would be the one lie the whole verify-before-believe design
+       * exists to prevent — so it is refused, loudly, with both accounts.
+       */
+      const why = this.partFailure
+        ?? "Part of this upload was never acknowledged by the store, although the server reported it complete.";
+      this.set({ phase: "failed", message: why });
+      this.tell("upload_incomplete_but_confirmed", {
+        mediaId: reply.mediaId, released: this.released.size, accepted: this.accepted.size,
+      });
+      return { ok: false, error: why };
     }
 
     this.set({ phase: "stored", progress: 1, message: null });
@@ -402,17 +462,22 @@ export class RecordingUploader {
       const url = this.begun.kind === "single"
         ? this.begun.uploadUrl
         : this.begun.parts.find((p) => p.partNumber === partNumber)?.url ?? null;
-      if (!url) return;
+      if (!url) {
+        this.partFailure = "The store issued no address for part " + partNumber + ".";
+        return;
+      }
       await this.send(partNumber, blob, url);
     });
   }
 
   /** One part, with retries, backed off and jittered. */
   private async send(partNumber: number, blob: Blob, url: string): Promise<boolean> {
+    /* hoisted: the last answer is what the give-up message below reports */
+    let status: number | null = null;
     for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
       if (this.abandoned) return false;
       this.set({ attempt });
-      let status: number | null = null;
+      status = null;
       try {
         const res = await this.doFetch(url, { method: "PUT", body: blob });
         status = res.status;
@@ -445,6 +510,9 @@ export class RecordingUploader {
          * again will fail identically for ever. A fresh ticket is the only
          * thing that helps, so hand off to `resume`.
          */
+        this.partFailure = status === 403
+          ? "The store refused the upload (403). The signed address was rejected — this is a storage configuration fault, not a connection problem."
+          : `The store refused part ${partNumber} (${status ?? "no response"}).`;
         this.set({ phase: "waiting", message: "Reconnecting…" });
         return false;
       }
@@ -453,6 +521,9 @@ export class RecordingUploader {
         await sleep(retryDelayMs(attempt));
       }
     }
+    this.partFailure = status === null
+      ? `Part ${partNumber} could not be sent — no answer from the store after ${MAX_UPLOAD_ATTEMPTS} attempts. A blocked cross-origin request looks exactly like this.`
+      : `Part ${partNumber} was refused ${MAX_UPLOAD_ATTEMPTS} times (last status ${status}).`;
     this.set({ phase: "failed", message: "Part of your answer would not send." });
     return false;
   }

@@ -86,9 +86,27 @@ create index if not exists usage_events_period_idx
   on public.usage_events (billing_period_id)
   where billing_period_id is not null;
 
-alter table public.usage_events
-  add constraint usage_events_period_fk
-  foreign key (billing_period_id) references public.billing_periods(id) on delete set null;
+/*
+ * Guarded like everything else in this file.
+ *
+ * `add constraint` has no `if not exists`, so this was the one statement here
+ * that could not be run twice — and it sits AFTER three `create index if not
+ * exists` calls, so a second run did the indexes and then stopped on this,
+ * leaving the migration half-applied and its own record of having run
+ * ambiguous. Every other statement in this file is re-runnable; a chain is
+ * only as replayable as its least forgiving line.
+ */
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'usage_events_period_fk'
+      and conrelid = 'public.usage_events'::regclass
+  ) then
+    alter table public.usage_events
+      add constraint usage_events_period_fk
+      foreign key (billing_period_id) references public.billing_periods(id) on delete set null;
+  end if;
+end $$;
 
 comment on table public.billing_periods is
   'The window an invoice covers. Events are stamped with their period when written, not matched to one by date at reporting time, so an issued invoice covers the same rows for ever.';

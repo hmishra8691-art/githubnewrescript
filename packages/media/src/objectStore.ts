@@ -283,7 +283,13 @@ export interface SupabaseStorageLike {
     createSignedUrl(path: string, seconds: number, opts?: { download?: string | boolean }): PromiseLike<{ data: { signedUrl: string } | null; error: { message: string } | null }>;
     download(path: string): PromiseLike<{ data: { arrayBuffer(): Promise<ArrayBuffer>; type?: string } | null; error: { message: string } | null }>;
     remove(paths: string[]): PromiseLike<{ data: unknown; error: { message: string } | null }>;
-    list(path: string, opts?: { limit: number }): PromiseLike<{ data: { name: string; metadata?: { size?: number; mimetype?: string } | null }[] | null; error: { message: string } | null }>;
+    /**
+     * `search` narrows the listing to names containing it and `offset` pages
+     * through what is left — both are Supabase's own parameters, and `head`
+     * below needs them to ask about ONE object rather than hoping it is in
+     * the first page of its folder.
+     */
+    list(path: string, opts?: { limit?: number; offset?: number; search?: string }): PromiseLike<{ data: { name: string; metadata?: { size?: number; mimetype?: string } | null }[] | null; error: { message: string } | null }>;
     copy?(from: string, to: string): PromiseLike<{ data: unknown; error: { message: string } | null }>;
   };
 }
@@ -301,13 +307,37 @@ export function supabaseObjectStore(storage: SupabaseStorageLike): ObjectStore {
     return { folder: segs.slice(0, -1).join("/"), leaf: segs[segs.length - 1]! };
   };
 
+  /**
+   * A HEAD this store does not have, emulated by asking for the one name.
+   *
+   * It used to list the folder with `limit: 1000` and look for the leaf in
+   * what came back — so an object really sitting in a folder with more than a
+   * thousand siblings answered "not there". That answer is not a nuisance:
+   * `confirmUpload` reads it as proof the upload failed, marks the row
+   * `failed` and tells the researcher their file did not arrive, for a file
+   * that did. A busy survey's asset folder reaches a thousand objects on its
+   * own, and the failure would start on one particular upload and never stop.
+   *
+   * `search` narrows the listing to that name server-side, which is the whole
+   * question being asked. The paging loop stays as a belt-and-braces for a
+   * deployment where `search` is not honoured: a full page with no hit is the
+   * only case in which "not found" could be an artefact of the page size, so
+   * it is the only case that asks for another page.
+   */
   const head = async (bucket: string, path: string): Promise<ObjectHead | null> => {
     const { folder, leaf } = split(path);
-    const listed = await storage.from(bucket).list(folder, { limit: 1000 });
-    if (listed.error) throw new Error(listed.error.message);
-    const hit = listed.data?.find((f) => f.name === leaf);
-    if (!hit) return null;
-    return { size: Number(hit.metadata?.size ?? 0), contentType: hit.metadata?.mimetype ?? null, etag: null };
+    const PAGE = 1000;
+    for (let offset = 0; offset < 50_000; offset += PAGE) {
+      const listed = await storage.from(bucket).list(folder, { limit: PAGE, offset, search: leaf });
+      if (listed.error) throw new Error(listed.error.message);
+      const page = listed.data ?? [];
+      const hit = page.find((f) => f.name === leaf);
+      if (hit) {
+        return { size: Number(hit.metadata?.size ?? 0), contentType: hit.metadata?.mimetype ?? null, etag: null };
+      }
+      if (page.length < PAGE) return null;
+    }
+    return null;
   };
 
   return {

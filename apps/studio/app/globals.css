@@ -2276,7 +2276,16 @@ p.qs-help { margin: -2px 0 10px; }
   width: 100%; max-width: 420px; aspect-ratio: 16 / 9; object-fit: contain;
   background: #000; border-radius: 8px; display: block;
 }
-.iv-meta { font-size: 11.5px; color: var(--subtle); }
+.iv-meta { font-size: 11.5px; color: var(--subtle); overflow-wrap: anywhere; }
+/* A real bar for the percentage the uploader already reports. */
+.iv-progress {
+  height: 4px; max-width: 420px; border-radius: 999px;
+  background: var(--line, #e5e7eb); overflow: hidden;
+}
+.iv-progress > span {
+  display: block; height: 100%; border-radius: inherit;
+  background: var(--accent, #2563eb); transition: width .2s ease;
+}
 .iv-check { margin-bottom: 6px; }
 .iv-check > .row { align-items: center; }
 

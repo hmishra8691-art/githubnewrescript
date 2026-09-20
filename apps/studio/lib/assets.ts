@@ -175,32 +175,44 @@ export async function uploadAsset(
     if (!out.ok) return { ok: false, error: out.error };
     const stored = out.reply.video as { url?: string; mediaId?: string; fileName?: string; mimeType?: string; bytes?: number } | undefined;
     if (!stored?.url || !stored.mediaId) return { ok: false, error: "The file was stored but no URL came back." };
-    progress({ fraction: 1, label: "Stored", phase: "done" });
-    /* the row as the library will list it — fetched so display name / family come from the server's one summariser */
+    /*
+     * THE LAST STEP IS A READ-BACK, AND IT IS PART OF THE UPLOAD.
+     *
+     * This used to fall back to an asset object assembled here from the local
+     * `File` — a row that had never been read, with `customerId: ""`, the
+     * server's display name lost and `shared` guessed at — and return
+     * `ok: true` with it. The library then drew a tile for an asset nobody
+     * had confirmed was listable, which is the exact shape of the complaint:
+     * the upload "succeeded" and the file was not really there.
+     *
+     * The read-back is the last link in the chain the brief draws — *verify
+     * file exists → persist metadata → return success → display asset* — and
+     * it is the only step that proves the last two. If it cannot be done, the
+     * honest answer is that the upload did not finish, not a picture of one
+     * that did. The bytes are in storage either way, so a retry costs the
+     * user nothing but a moment; a fabricated tile costs them the file.
+     */
+    progress({ fraction: 0.99, label: "Checking it is in the library…", phase: "finishing" });
+    let asset: AssetSummary;
     try {
-      const { asset } = await fetchAssetUsage(surveyDbId, stored.mediaId);
-      return { ok: true, asset, duplicate: false };
-    } catch {
+      asset = (await fetchAssetUsage(surveyDbId, stored.mediaId)).asset;
+    } catch (e) {
       return {
-        ok: true, duplicate: false,
-        asset: {
-          id: stored.mediaId, surveyId: surveyDbId, customerId: "", name: opts.displayName ?? file.name, fileName: file.name, altText: opts.altText ?? null,
-          mimeType: type, family: (assetFamilyFor(type) ?? "document"), bytes: file.size, width: dims?.width ?? null, height: dims?.height ?? null,
-          durationSeconds: null, sha256, shared: false, fromOtherSurvey: false, createdAt: new Date().toISOString(), url: stored.url,
-        },
+        ok: false,
+        error: `The file reached storage but the library could not read it back (${(e as Error).message}). `
+          + "It has not been added — try again.",
       };
     }
+    progress({ fraction: 1, label: "Stored", phase: "done" });
+    return { ok: true, asset, duplicate: false };
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }
 }
 
-export function formatBytes(n: number | null | undefined): string {
-  if (!n) return "";
-  if (n < 1024) return `${n} B`;
-  if (n < 1048576) return `${(n / 1024).toFixed(0)} KB`;
-  return `${(n / 1048576).toFixed(n < 10 * 1048576 ? 1 : 0)} MB`;
-}
+/* One formatter, in `mediaFormat.ts`, re-exported under the name its callers
+   already use — the recorder panel needs the same one. */
+export { formatBytes } from "./mediaFormat.ts";
 
 export const FAMILY_LABEL: Record<AssetSummary["family"], string> = { image: "Image", video: "Video", audio: "Audio", document: "Document" };
 export const FAMILY_ICON: Record<AssetSummary["family"], string> = { image: "🖼", video: "🎬", audio: "🎧", document: "📄" };
