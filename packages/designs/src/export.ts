@@ -5,11 +5,26 @@ export interface DesignFile {
   rows: Record<string, unknown>[];
 }
 
-/** Quote a CSV cell per RFC 4180 (quote when it contains , " \n or \r). */
+/*
+ * RFC-4180 quoting plus the anti-formula-injection guard.
+ *
+ * This is a deliberate copy of `packages/exporters/src/csvCell.ts`, which is
+ * the canonical version — @rescript/designs does not depend on
+ * @rescript/exporters, and adding that edge (and with it docx, exceljs and
+ * qrcode) for three lines is a worse trade than the duplication. Change both,
+ * and keep `export.test.ts` in step with `csvCell.test.ts`.
+ *
+ * The numeric exemption matters most here: a design file is nearly all
+ * integers, and blanket-prefixing every negative one would turn the matrix
+ * into text for whoever loads it.
+ */
+const PLAIN_NUMBER = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/;
+
 function csvCell(value: unknown): string {
   if (value === null || value === undefined) return "";
-  const s = String(value);
-  if (/[",\n\r]/.test(s)) {
+  const raw = String(value);
+  const s = /^[=+\-@\t\r]/.test(raw) && !PLAIN_NUMBER.test(raw) ? `\t${raw}` : raw;
+  if (/[",\n\r\t]/.test(s)) {
     return `"${s.replace(/"/g, '""')}"`;
   }
   return s;

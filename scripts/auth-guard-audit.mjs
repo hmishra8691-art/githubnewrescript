@@ -60,6 +60,11 @@ const PUBLIC = {
     "the scheduler has no session and never will: Vercel Cron calls this with a bearer token, checked against "
     + "CRON_SECRET by `timingSafeEqual` in the handler's first statement, and the route REFUSES EVERYTHING when "
     + "that variable is unset. Not exempt from authentication — authenticated by a different credential",
+  "surveys/[id]/audio/route.ts":
+    "RETIRED: a three-line handler that answers 410 and nothing else. It reads no request, opens no client "
+    + "and names no project — audio now uploads straight to storage through media/{ticket,parts,confirm}, "
+    + "which is guarded. Kept only so a stale tab gets a sentence instead of a 404, and guarding it would "
+    + "mean a signed-out stale tab gets 401 instead of the explanation",
   "cron/billing-reservations/route.ts":
     "the same bearer-token credential as the media job, checked the same way in the handler's first statement. "
     + "It releases reservations whose TTL has passed and touches nothing a caller could name, so there is no "
@@ -105,6 +110,42 @@ const BODY_FIRST = {
     "the body is validated first (action, amount, reason) and the sandbox id answered from memory; every real id goes through requireProject(billing.request_credits)",
   "translation/status/route.ts GET":
     "reports only whether a provider is configured — never a key; the FAKE provider answers without a session so the sandbox tab can render",
+  "auth/handoff/route.ts GET":
+    "it MINTS a credential, so it refuses malformed and non-allowlisted callers before it will look at a "
+    + "session at all: sec-fetch-dest, then the origin allowlist, then requireUser. Nothing is read and "
+    + "nothing is issued in front of the guard — the statements before it only reject",
+};
+
+/**
+ * OWNER LOOKUP — the URL names a resource, not the project that owns it.
+ *
+ * `/api/media/<object id>` cannot guard first, and no amount of restructuring
+ * will change that: the capability to require and the survey to require it on
+ * are properties of the ROW, so the row has to be read to find out which
+ * guard to call. Telling this route to "guard first" would mean guessing, and
+ * the guess that satisfies a lint is `requireUser` — strictly weaker than the
+ * project gate it actually applies.
+ *
+ * So these are held to a THIRD rule, narrower than BODY_FIRST's, checked
+ * below:
+ *
+ *   1. every query before the guard is a `.from()` on the ONE table declared
+ *      here — no `.rpc()`, no second table, no join to anything else;
+ *   2. anything returned to the caller before the guard is an `{ error }`
+ *      shape, so a caller who is refused learns only that the object is not
+ *      there.
+ *
+ * Together those say: the handler may look up who owns the thing, and may
+ * say "no such thing", and may do nothing else.
+ */
+const OWNER_LOOKUP = {
+  "media/[...path]/route.ts GET": {
+    table: "media_objects",
+    why:
+      "the URL names an OBJECT. Which survey owns it — and whether it is a shared library asset, gated on "
+      + "the customer instead — is in the row, so the row must be read before the right guard can be chosen. "
+      + "The lookup selects six columns, returns none of them, and no signed URL is minted in front of it",
+  },
 };
 
 /**
@@ -290,6 +331,30 @@ for (const file of files) {
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/\/\/[^\n]*/g, "")
       .trim();
+    const ownerLookup = OWNER_LOOKUP[`${rel} ${verb}`];
+    if (ownerLookup) {
+      /* 1. one table, by name, and never an rpc */
+      const reads = [...before.matchAll(/\.\s*(from|rpc)\s*\(\s*["'`]([^"'`]+)["'`]/g)];
+      const stray = reads.filter((m) => m[1] !== "from" || m[2] !== ownerLookup.table);
+      if (stray.length) {
+        failures.push(
+          `${rel} ${verb} — may read only ${ownerLookup.table} before its guard, but reads ` +
+          stray.map((m) => `${m[1]}(${m[2]})`).join(", "),
+        );
+        continue;
+      }
+      /* 2. nothing but an { error } may reach the caller in front of the guard */
+      const leaks = [...before.matchAll(/NextResponse\.json\(\s*\{([^}]*)\}/g)]
+        .filter((m) => !/^\s*error\s*:/.test(m[1]));
+      if (leaks.length) {
+        failures.push(
+          `${rel} ${verb} — returns something other than an { error } before its guard: ` +
+          JSON.stringify(leaks[0][0].slice(0, 60)),
+        );
+        continue;
+      }
+      routed.push(`${rel} ${verb} — ${ownerLookup.why}`);
+    } else {
     const exemptFromOrder = ROUTERS[rel] ?? BODY_FIRST[`${rel} ${verb}`];
     if (exemptFromOrder) {
       const QUERY = /\.\s*(?:from|rpc)\s*\(/;
@@ -308,6 +373,7 @@ for (const file of files) {
         failures.push(`${rel} ${verb} — guard is not the first statement; ${JSON.stringify(strippedBefore.slice(0, 90))} runs first`);
         continue;
       }
+    }
     }
 
     // and its refusal must be returned, not discarded

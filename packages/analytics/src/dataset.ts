@@ -122,8 +122,18 @@ function looksOrdinal(v: VariableDef): boolean {
   return hits >= Math.ceil(labels.length / 2);
 }
 
+/*
+ * THE CODES HERE MUST BE THE DATABASE'S OWN.
+ *
+ * `_status` declared `screened_out`; the enum on `responses.status` is
+ * `screened` (`0001_core_schema.sql:132`), and every view filters on that.
+ * So every status banner showed a "Screened out" row at n = 0 beside an
+ * unlabelled row called `screened` — screen-outs fell out of the code frame
+ * in every analysis. `screened_out` appeared nowhere else in the repository;
+ * nothing mapped it.
+ */
 const SYSTEM_VARIABLES: VariableMeta[] = [
-  { name: "_status", label: "Response status", role: "categorical", derived: true, hidden: false, categories: [{ code: "complete", label: "Complete" }, { code: "in_progress", label: "In progress" }, { code: "terminated", label: "Terminated" }, { code: "quota_full", label: "Quota full" }, { code: "screened_out", label: "Screened out" }] },
+  { name: "_status", label: "Response status", role: "categorical", derived: true, hidden: false, categories: [{ code: "complete", label: "Complete" }, { code: "in_progress", label: "In progress" }, { code: "terminated", label: "Terminated" }, { code: "quota_full", label: "Quota full" }, { code: "screened", label: "Screened out" }] },
   { name: "_environment", label: "Environment", role: "categorical", derived: true, hidden: false, categories: [{ code: "TEST", label: "Test" }, { code: "LIVE", label: "Production" }] },
   { name: "_duration", label: "Duration (seconds)", role: "numeric", derived: true, hidden: false },
   { name: "_started_date", label: "Start date", role: "date", derived: true, hidden: false },

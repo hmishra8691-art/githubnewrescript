@@ -444,3 +444,66 @@ test("clearing at the survey level still removes the key rather than storing emp
   assert.equal(otherKeyFor("q1", 97) in state.answers, false,
     "there is nothing to shadow at the top, so an absent answer stays absent");
 });
+
+/* ------------------------------- the export gap (§44 wave 1, N1) */
+
+test("every question type that can collect a verbatim also DECLARES it", async () => {
+  /*
+   * THE BUG THIS EXISTS FOR.
+   *
+   * `flatten.ts` writes the other-specify column for every question with a
+   * flagged option — the loop sits outside its type switch. `variables.ts`
+   * declared it inside two arms of ITS switch, single-select and multi.
+   *
+   * So on a ranking, an allocation or any of the four matrix families the
+   * respondent typed a verbatim, it was validated, stored and written at
+   * interview time, and declared nowhere. Every exporter builds its columns
+   * from the dictionary, so those answers reached no delivered file —
+   * silently, in both directions.
+   *
+   * Reproduced before the fix as:
+   *   ranking       declared=0  written=1  LOST=["V_other"]
+   *   allocation    declared=0  written=1  LOST=["V_other"]
+   *   matrix_single declared=0  written=1  LOST=["V_other"]
+   */
+  const { SurveyDefinition } = await import("@rescript/schema");
+  const { buildVariableDictionary } = await import("./variables.js");
+  const { flattenVariables } = await import("./flatten.js");
+  const { createResponseState } = await import("./state.js");
+
+  const cases: { type: string; answer: unknown; extra?: Record<string, unknown> }[] = [
+    { type: "single_select", answer: "98" },
+    { type: "multi_select", answer: ["98"] },
+    { type: "ranking", answer: ["98", "1"] },
+    { type: "allocation", answer: { "1": 40, "98": 60 } },
+    { type: "matrix_single", answer: { r1: "98" }, extra: { rows: [{ code: "r1", label: "R1" }] } },
+    { type: "matrix_multi", answer: { r1: ["98"] }, extra: { rows: [{ code: "r1", label: "R1" }] } },
+  ];
+
+  for (const c of cases) {
+    const def = SurveyDefinition.parse({
+      meta: { id: "o", code: "O", title: "t", version: "1.0", status: "draft" },
+      questions: [{
+        id: "q", code: "Q1", variableName: "V", type: c.type, text: "t",
+        options: [{ code: "1", label: "A" }, { code: "98", label: "Other", flags: ["other_specify"] }],
+        ...(c.extra ?? {}),
+      }],
+      flow: [{ type: "page", id: "p", questionIds: ["q"] }, { type: "end", id: "e", status: "complete" }],
+    });
+
+    const state = createResponseState(def);
+    state.answers = { q: c.answer, q__other__98: "a verbatim nobody should lose" } as any;
+
+    const declared = new Set(buildVariableDictionary(def).map((v) => v.name));
+    const written = Object.keys(flattenVariables(def, state as any, {}));
+    const verbatimCols = written.filter((n) => /_other/i.test(n));
+
+    assert.ok(verbatimCols.length > 0, `${c.type}: the runtime should write a verbatim column`);
+    for (const col of verbatimCols) {
+      assert.ok(
+        declared.has(col),
+        `${c.type}: "${col}" is written at interview time but not declared, so it reaches no export`,
+      );
+    }
+  }
+});

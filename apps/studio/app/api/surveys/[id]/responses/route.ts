@@ -76,17 +76,46 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     });
   }
 
+  /*
+   * Hoisted above the summary branch, which returns early and now pages its
+   * own count with the same numbers. One pair of constants, so the two
+   * readers cannot drift apart on what a page is or where the ceiling sits.
+   */
+  const CHUNK = 1000;
+  const MAX_EXPORT_ROWS = 500_000;
+
   if (format === "summary") {
     /* binned rows are not data — see the note on the export query below. The
        fallback is for a database from before migration 0006, which has no
        soft delete and therefore nothing to exclude. */
-    let { data, error: sErr } = await db
-      .from("responses")
-      .select("status, is_test")
-      .eq("survey_id", params.id)
-      .is("deleted_at", null);
+    /*
+     * PAGED, for the same reason the export is. This was the one branch left
+     * as a single unbounded `select()` — only two columns, but PostgREST's
+     * `db-max-rows` truncates it exactly the same way, and this count is what
+     * `codesFrozenBy` reads. An under-count here silently UNFREEZES option
+     * codes on the largest studies, which are the ones that can least afford
+     * it.
+     */
+    const countRows = async (softDelete: boolean) => {
+      const out: { status: string; is_test: boolean }[] = [];
+      for (let start = 0; start < MAX_EXPORT_ROWS; start += CHUNK) {
+        let q = db.from("responses").select("status, is_test").eq("survey_id", params.id);
+        if (softDelete) q = q.is("deleted_at", null);
+        const { data, error } = (await q.range(start, start + CHUNK - 1)) as {
+          data: { status: string; is_test: boolean }[] | null;
+          error: { message: string } | null;
+        };
+        if (error) return { rows: out, error };
+        const chunk = data ?? [];
+        out.push(...chunk);
+        if (chunk.length < CHUNK) break;
+      }
+      return { rows: out, error: null as { message: string } | null };
+    };
+
+    let { rows: data, error: sErr } = await countRows(true);
     if (sErr && /deleted_at|does not exist|schema cache/i.test(sErr.message)) {
-      data = (await db.from("responses").select("status, is_test").eq("survey_id", params.id)).data;
+      data = (await countRows(false)).rows;
     }
     const rows = data ?? [];
     const count = (s: string, t: boolean) => rows.filter((r) => r.status === s && r.is_test === t).length;
@@ -137,8 +166,6 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
    * configuration, and crossing it is REPORTED (see below) instead of quietly
    * shortening the file.
    */
-  const CHUNK = 1000;
-  const MAX_EXPORT_ROWS = 500_000;
   const COLUMNS = "session_id, respondent_id, status, seed, answers, calculated, embedded, flags, started_at, completed_at, is_test, quality, review_status, review_reason, reviewed_by, reviewed_at, sample_source, sample_source_respondent";
   const FALLBACK_COLUMNS = "session_id, respondent_id, status, seed, answers, calculated, embedded, flags, started_at, completed_at, is_test";
 
@@ -171,11 +198,18 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
      * responses because a migration is pending has lost the study, not a
      * column.
      *
-     * Dropping the `deleted_at` filter here is safe rather than a hole: a
-     * database without the column has no soft delete, so it has no binned
-     * rows to leak.
+     * THE SOFT-DELETE FILTER IS DROPPED ONLY WHEN `deleted_at` IS THE MISSING
+     * COLUMN. It used to be dropped whenever ANY of these retries fired, on
+     * the reasoning that "a database without the column has no soft delete,
+     * so it has no binned rows to leak" — true, but that premise only holds
+     * when `deleted_at` is the column that is actually absent. A database
+     * with 0006 applied and 0005 or 0012 pending matched on `quality` or
+     * `sample_source` and retried with the filter gone, putting every binned
+     * response back into the delivered file. The researcher bins forty
+     * fraudulent completes and ships all forty.
      */
-    const fallback = await readAll(FALLBACK_COLUMNS, false);
+    const softDeleteMissing = /deleted_at/i.test(qerr.message);
+    const fallback = await readAll(FALLBACK_COLUMNS, !softDeleteMissing);
     resp = fallback.rows;
     qerr = fallback.error;
     capped = fallback.capped;

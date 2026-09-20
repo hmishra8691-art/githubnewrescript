@@ -148,21 +148,6 @@ export function questionVariables(
       }
       const { codes, labels } = valueMap(q);
       push({ name: q.variableName, label: strip(q.text) || q.code, dataType: "numeric", valueCodes: codes, valueLabels: labels });
-      /*
-       * ONE COLUMN PER BOX. `.some(...)` declared a single `VAR_other` no
-       * matter how many flagged options a question carried, so three
-       * respondent answers arrived in the export as one — the same shared
-       * value bug, seen from the dictionary's side. The first flagged option
-       * keeps `VAR_other` so existing exports and syntax files still match.
-       */
-      for (const o of otherOptions(q)) {
-        push({
-          name: otherColumnFor(q, o.code),
-          label: `${q.code} — ${strip(String(o.label ?? "Other"))} (specify)`,
-          dataType: "text",
-          optionCode: String(o.code),
-        });
-      }
       break;
     }
     case "multi_select":
@@ -176,21 +161,6 @@ export function questionVariables(
           valueCodes: [0, 1],
           valueLabels: { "0": "Not selected", "1": "Selected" },
           optionCode: String(opt.code),
-        });
-      }
-      /*
-       * ONE COLUMN PER BOX. `.some(...)` declared a single `VAR_other` no
-       * matter how many flagged options a question carried, so three
-       * respondent answers arrived in the export as one — the same shared
-       * value bug, seen from the dictionary's side. The first flagged option
-       * keeps `VAR_other` so existing exports and syntax files still match.
-       */
-      for (const o of otherOptions(q)) {
-        push({
-          name: otherColumnFor(q, o.code),
-          label: `${q.code} — ${strip(String(o.label ?? "Other"))} (specify)`,
-          dataType: "text",
-          optionCode: String(o.code),
         });
       }
       void labels;
@@ -555,6 +525,39 @@ export function questionVariables(
     }
     default:
       push({ name: q.variableName, label: strip(q.text) || q.code, dataType: "text" });
+  }
+
+  /*
+   * "OTHER, SPECIFY" — DECLARED ONCE, FOR EVERY QUESTION TYPE.
+   *
+   * This used to live inside the single-select and multi-select arms of the
+   * switch, in two identical copies. `flatten.ts:110` writes the column for
+   * EVERY question that has a flagged option — it is outside the type switch
+   * there — so on a ranking, an allocation or any of the four matrix
+   * families the respondent typed a verbatim, it was validated, stored and
+   * written at interview time, and declared nowhere.
+   *
+   * Every exporter builds its columns from this dictionary. So those answers
+   * reached no delivered file, silently, in both directions: nothing warned
+   * the programmer and nothing warned the client. Open ends are the most
+   * expensive data a survey collects.
+   *
+   * Declaring it here mirrors the runtime's own structure, which is the
+   * point — the two files can no longer disagree about WHICH questions have
+   * the column, only about a name, and `namingParity.test.ts` watches that.
+   *
+   * ONE COLUMN PER BOX. `.some(...)` once declared a single `VAR_other` no
+   * matter how many flagged options a question carried, so three respondent
+   * answers arrived in the export as one. The first flagged option keeps
+   * `VAR_other` so existing exports and syntax files still line up.
+   */
+  for (const o of otherOptions(q)) {
+    push({
+      name: otherColumnFor(q, o.code),
+      label: `${q.code} — ${strip(String(o.label ?? "Other"))} (specify)`,
+      dataType: "text",
+      optionCode: String(o.code),
+    });
   }
 
   // ---- gamified / experimental families (variant batch) ----

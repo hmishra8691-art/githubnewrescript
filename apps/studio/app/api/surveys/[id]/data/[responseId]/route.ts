@@ -4,7 +4,8 @@ import { loadQualityDefinition } from "@/lib/qualityDef";
 import { flattenVariables, rowToState, validateQuestion } from "@rescript/engine";
 import { missingResponseMigration, RESPONSE_MIGRATION_MESSAGE } from "@/lib/responseData";
 import { recountQuotas } from "@/lib/quotaRecount";
-import { isFailure, requireProject } from "@/lib/guard";
+import { audit, isFailure, requireProject } from "@/lib/guard";
+import { purgeSessionMedia, type MediaDb } from "@rescript/media";
 
 export const dynamic = "force-dynamic";
 
@@ -173,8 +174,40 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   const reason = req.nextUrl.searchParams.get("reason");
   const by = gate.user.fullName || gate.user.userCode;
 
-  const { data: row } = await db.from("responses").select("id, respondent_code, is_test, deleted_at").eq("survey_id", params.id).eq("id", params.responseId).maybeSingle();
+  const { data: row } = await db.from("responses").select("id, session_id, respondent_code, is_test, deleted_at").eq("survey_id", params.id).eq("id", params.responseId).maybeSingle();
   if (!row) return NextResponse.json({ error: "not found" }, { status: 404 });
+
+  /*
+   * A PURGE MUST TAKE THE RECORDINGS WITH IT.
+   *
+   * The bulk route (`../delete/route.ts`) has done this since the media
+   * pipeline landed; this one — the button on a single response, which is
+   * the one a GDPR erasure request actually goes through — never did. So a
+   * respondent erased one at a time kept their voice recording and their
+   * video in the bucket, reachable by any signed URL already issued.
+   *
+   * It runs BEFORE the RPC, and reads the SESSION rather than the response
+   * id, for the same reason it does there: `rescript_purge_responses`
+   * deletes the row and the cascade takes the `media_objects` rows with it,
+   * so afterwards there is nothing left to say which objects to delete.
+   *
+   * Only on `purge`. A soft delete is reversible, so the recording has to
+   * survive it exactly as the row does.
+   */
+  let mediaRemoved = 0;
+  const mediaWarnings: string[] = [];
+  if (purge) {
+    try {
+      const purged = await purgeSessionMedia(
+        db as unknown as MediaDb,
+        row.session_id ? [row.session_id] : [],
+      );
+      mediaRemoved = purged.objects;
+      mediaWarnings.push(...purged.warnings);
+    } catch (e) {
+      mediaWarnings.push(`media cleanup failed: ${(e as Error).message}`);
+    }
+  }
 
   const fn = purge ? "rescript_purge_responses" : restore ? "rescript_restore_responses" : "rescript_soft_delete_responses";
   const args: Record<string, unknown> = { p_survey: params.id, p_ids: [row.id], p_by: by };
@@ -185,6 +218,26 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
   const quotas = await recountQuotas(db, undefined, params.id, !!row.is_test).catch(() => null);
-  console.info(`[rescript:data] ${purge ? "purge" : restore ? "restore" : "delete"}`, JSON.stringify({ surveyId: params.id, respondentCode: row.respondent_code, environment: row.is_test ? "TEST" : "LIVE", reason, by, affected: data }));
-  return NextResponse.json({ ok: true, affected: typeof data === "number" ? data : 1, action: purge ? "purge" : restore ? "restore" : "delete", quotas });
+  const action = purge ? "purge" : restore ? "restore" : "delete";
+  /*
+   * …and the same audit row the bulk route writes. A console line is not an
+   * audit trail, and erasing one respondent is exactly as irreversible as
+   * erasing a hundred.
+   */
+  if (purge || !restore) {
+    await audit({
+      action: purge ? "responses.purged" : "responses.deleted",
+      userId: gate.user.userId, sessionId: gate.user.sessionId,
+      surveyId: params.id, customerId: gate.user.customerId,
+      entity: "responses", entityId: row.id,
+      detail: {
+        operation: action, environment: row.is_test ? "TEST" : "LIVE",
+        reason: reason ?? null, count: 1, sample: [row.respondent_code].filter(Boolean),
+        ...(purge ? { mediaObjectsRemoved: mediaRemoved } : {}),
+        ...(mediaWarnings.length ? { mediaWarnings } : {}),
+      },
+    });
+  }
+  console.info(`[rescript:data] ${action}`, JSON.stringify({ surveyId: params.id, respondentCode: row.respondent_code, environment: row.is_test ? "TEST" : "LIVE", reason, by, affected: data }));
+  return NextResponse.json({ ok: true, affected: typeof data === "number" ? data : 1, action, quotas, mediaRemoved });
 }

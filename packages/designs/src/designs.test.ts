@@ -311,3 +311,35 @@ test("designFileName builds a clean slug", () => {
     "maxdiff_brand-list_v1.csv",
   );
 });
+
+/*
+ * Y1, the designs half. `csvCell` here is a deliberate copy of
+ * `packages/exporters/src/csvCell.ts` — @rescript/designs does not depend on
+ * @rescript/exporters — so this mirrors `csvCell.test.ts` on purpose. If one
+ * of these two files changes, the other should too.
+ */
+test("designToCSV neutralises formulas without mangling negative numbers", () => {
+  const csv = designToCSV({
+    columns: ["label", "utility"],
+    rows: [
+      { label: "=cmd|' /C calc'!A0", utility: -1.25 },
+      { label: "-Brand A", utility: 0 },
+      { label: "@none", utility: 3 },
+      { label: "plain", utility: -0.5 },
+    ],
+  });
+  const lines = csv.trimEnd().split("\n");
+
+  assert.equal(lines[1], '"\t=cmd|\' /C calc\'!A0",-1.25');
+  assert.equal(lines[2], '"\t-Brand A",0');
+  assert.equal(lines[3], '"\t@none",3');
+  assert.equal(lines[4], "plain,-0.5");
+
+  /*
+   * The numeric exemption is the point of the second column: a design file
+   * is nearly all numbers, and a guard that prefixed every negative one
+   * would hand the analyst a matrix of text.
+   */
+  assert.ok(!csv.includes("\t-1.25"), "a negative utility was turned into text");
+  assert.ok(!csv.includes("\t-0.5"), "a negative utility was turned into text");
+});

@@ -230,7 +230,14 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
    * flags, images, logic — so nothing that refers to them breaks. APPEND is
    * the explicit "add these after what I have" choice.
    */
-  const [pasteMode, setPasteMode] = React.useState<PasteMode>("replace");
+  const [rawPasteMode, setPasteMode] = React.useState<PasteMode>("replace");
+  /*
+   * A frozen survey can only append. Deriving the effective mode rather than
+   * relying on the disabled radio means the default ("replace") cannot leave
+   * the Import button as a silent no-op on a study that went live while the
+   * panel was open.
+   */
+  const pasteMode: PasteMode = frozen ? "append" : rawPasteMode;
   const openPaste = () => {
     if (!pasteOpen) {
       setPasteText(options.some((o) => o.label.trim()) ? optionsToPaste(options) : "");
@@ -312,6 +319,21 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
    */
   const importPaste = () => {
     if (parsePastedOptions(pasteText, 1).length === 0) return;
+    /*
+     * The freeze reaches the paste box too. Every OTHER way of changing a
+     * code is disabled once the survey has live responses, and this one was
+     * not — which made it the one control that could still re-code a fielded
+     * study, and the one most likely to be used for a bulk option edit.
+     * Replace mode removes options and mints fresh codes for any line that
+     * matches neither an explicit code nor a label
+     * (`optionsPaste.ts:103-118`), so every respondent who chose an old code
+     * is silently recorded as something else.
+     *
+     * APPEND stays available: adding options after the existing ones cannot
+     * disturb an answer already collected, and refusing it would make the
+     * freeze more annoying than it needs to be.
+     */
+    if (frozen && pasteMode === "replace") return;
     onChange(pastePlan.options.map((o) => (o.id ? o : { ...o, id: uid("opt") })));
     if (pastePlan.removed > 0) onAfterDelete?.();
     setFilter("");
@@ -497,10 +519,17 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
       </div>
       {pasteOpen && (
         <div className="paste-box" data-testid="paste-panel">
+          {frozen && (
+            <div className="chip warn" data-testid="paste-frozen" style={{ display: "block", marginBottom: 6 }}>
+              This survey has live responses, so option codes are fixed. You can append options; replacing the list is not available.
+            </div>
+          )}
           <div className="row" style={{ alignItems: "center", gap: 10 }}>
             <span className="muted" style={{ fontSize: 12.5 }}>On import:</span>
             <label className="row" style={{ gap: 4, fontSize: 13 }}>
               <input type="radio" name={`paste-mode-${questionId ?? "x"}`} data-testid="paste-mode-replace"
+                disabled={frozen}
+                title={frozen ? "This survey has live responses, so option codes are fixed. You can still append." : undefined}
                 checked={pasteMode === "replace"} onChange={() => setPasteMode("replace")} />
               Replace the list
             </label>
@@ -530,6 +559,7 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
           {pasteMode === "replace" && pastePlan.removed > 0 && (
             <div className="muted" style={{ fontSize: 12.5, color: "var(--warn, #b45309)" }} data-testid="paste-removes">
               ⚠ Removes option{pastePlan.removed === 1 ? "" : "s"} {pastePlan.removedCodes.map(String).join(", ")} — any logic, piping or masking that names them will be flagged by the linter.
+              {" "}Once this survey has live responses, replacing the list is blocked: every respondent who chose a removed code would be recorded as something else.
             </div>
           )}
         </div>

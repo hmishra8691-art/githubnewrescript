@@ -3,6 +3,7 @@ import React from "react";
 import type { Condition, LanguageConfig } from "@rescript/schema";
 import { LANGUAGE_LIBRARY, LANGUAGE_STATUSES, LANGUAGE_ROUTING_MODES, languageInfo } from "@rescript/schema";
 import { lintLocalization, lintLanguage, languageName, languageLocale, languageDirection, searchLanguages, translationRows, applyTranslationRows, languageReady, type LanguageReport, type LocalizationIssue } from "@rescript/engine";
+import { csvRow } from "@rescript/exporters";
 import { useLocalization, useEditorName, useProviderStatus, downloadBlob, PROVIDER_NAMES } from "./shared";
 import { TranslationEditor } from "./TranslationEditor";
 import { GlossaryEditor } from "./GlossaryEditor";
@@ -356,8 +357,9 @@ function ImportExport() {
   const exportCsv = () => {
     const rows = exportRows();
     const head = ["Element ID", "Question ID", "Question", "Element", "Source Language", "Target Language", "Source Text", "Translation", "Status", "Audio URL"];
-    const esc = (v: unknown) => { const t = String(v ?? ""); return /[",\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
-    const csv = [head.join(","), ...rows.map((r) => [r.elementKey, r.questionId, r.questionCode, r.element, r.sourceLanguage, r.targetLanguage, r.sourceText, r.translation, r.status, r.audioUrl].map(esc).join(","))].join("\n");
+    /* csvRow carries the formula-injection guard; translation files go out to
+     * an agency and come back, so the cells are no more trusted than any other. */
+    const csv = [csvRow(head), ...rows.map((r) => csvRow([r.elementKey, r.questionId, r.questionCode, r.element, r.sourceLanguage, r.targetLanguage, r.sourceText, r.translation, r.status, r.audioUrl]))].join("\n");
     downloadBlob(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }), `${base}.csv`);
   };
   const exportJson = () => downloadBlob(new Blob([JSON.stringify({ survey: s.def.meta.code, sourceLanguage: loc.sourceLanguage, languages: langs, rows: exportRows() }, null, 2)], { type: "application/json" }), `${base}.json`);

@@ -36,7 +36,8 @@ export async function GET(req: NextRequest) {
     owner_id: string; owner_name: string; owner_code: string;
     my_role: string; role_source: string;
     collaborators: number; editing_user_id: string | null; editing_name: string | null;
-    editing_since: string | null; current_version: string | null; response_count: number;
+    editing_since: string | null; current_version: string | null;
+    response_count: number; test_response_count: number;
   }[]).map((r) => ({
     id: r.survey_id,
     code: r.code,
@@ -55,7 +56,15 @@ export async function GET(req: NextRequest) {
     roleSourceNote: roleSourceNote(r.role_source as never),
     collaborators: r.collaborators,
     version: r.current_version,
+    /*
+     * 0043: `response_count` is LIVE responses. It used to be every row in
+     * the table, so a project the team had spent a week testing advertised
+     * that testing as delivered data. Both numbers travel, because a card
+     * that shows 0 while the team knows they put 300 through preview reads
+     * as a bug unless it can also say where those 300 went.
+     */
     responses: r.response_count,
+    testResponses: r.test_response_count ?? 0,
     /** §37: "Editing: ● Sarah Lee" straight on the card */
     editing: r.editing_user_id
       ? {

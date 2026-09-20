@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import QRCode from "qrcode";
+import { csvCell } from "./csvCell.js";
 
 /**
  * HANDING OUT THE LINKS (§24).
@@ -66,19 +67,6 @@ function cells(i: Invitation): (string | null)[] {
     i.invitedAt ?? "",
     i.sentAt ?? "",
   ];
-}
-
-/** RFC-4180 quoting, and one thing more — see below. */
-function csvCell(value: string): string {
-  /*
-   * A leading =, +, - or @ is quoted AND prefixed, because Excel and Sheets
-   * evaluate such a cell as a formula. A respondent list is user-supplied
-   * data going into a file a client will open, so a name like "-Ann" or an
-   * external id starting with "=" is a formula-injection vector, not a
-   * curiosity. The tab keeps the value readable while stopping evaluation.
-   */
-  const s = /^[=+\-@\t\r]/.test(value) ? `\t${value}` : value;
-  return /[",\n\r\t]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
 export function invitationsToCSV(rows: Invitation[]): string {

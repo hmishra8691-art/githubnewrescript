@@ -305,8 +305,23 @@ export function VariantSwitcher({ q }: { q: Question }) {
 
   const switchTo = (to: QuestionVariantDef) => {
     const migration = migrateQuestionType(q, to);
-    /* nothing to report is nothing to ask about */
-    if (migration.changes.length === 0) { apply(migration, to); return; }
+    /*
+     * ASK WHENEVER THE RESPONSE MODEL CHANGES, not merely when a setting is
+     * being discarded.
+     *
+     * This gated on `changes.length === 0`, which lists the settings a
+     * migration prunes. A freshly authored single-select carries no prunable
+     * settings, so flipping it to a multi-select produced
+     * `safe: false, changes: []` and applied with NO dialog at all — quietly
+     * changing the shape of every answer already collected, from a code to a
+     * list of codes. A stored `["1","3"]` then exports as the literal string
+     * `1|3` in a column the codebook calls a single coded value.
+     *
+     * `migration.safe` is the response-model comparison itself
+     * (`questionShape.ts:880`: `fromModel === toModel`) and is computed one
+     * line away. It is the question the dialog is actually asking.
+     */
+    if (migration.safe && migration.changes.length === 0) { apply(migration, to); return; }
     setPending({ migration, to });
   };
 

@@ -2,6 +2,7 @@ import type { SurveyDefinition } from "@rescript/schema";
 import type { ResponseState } from "@rescript/engine";
 import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
 import { renderValue, renderHeader, type ValueMode, type HeaderMode } from "./valueRendering.js";
+import { csvRow as csvLine } from "./csvCell.js";
 
 /** The subset of a ResponseState the CSV exporter needs. */
 export type ResponseStateLike = Pick<
@@ -15,18 +16,6 @@ export type ResponseStateLike = Pick<
   | "embedded"
   | "calculated"
 >;
-
-/** RFC-4180 quoting: quote when the value contains comma, quote or newline. */
-function csvEscape(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  const s = Array.isArray(value) ? value.join("|") : String(value);
-  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-}
-
-function csvLine(cells: unknown[]): string {
-  return cells.map(csvEscape).join(",");
-}
 
 const SYSTEM_COLUMNS = [
   "RESP_ID",
