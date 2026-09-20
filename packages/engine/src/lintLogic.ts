@@ -146,9 +146,32 @@ interface Ctx {
  * punch reading a deleted question stayed invisible: the only check anywhere
  * near it was written for the wrong shape.
  */
-function lintSetExpr(node: unknown, path: string, ctx: Ctx, depth = 0): void {
+function lintSetExpr(
+  node: unknown,
+  path: string,
+  ctx: Ctx,
+  depth = 0,
+  /*
+   * R9 — WHOSE CODES ARE THESE?
+   *
+   * A `{ kind: "codes" }` node is a bare list of option codes, and until now
+   * nothing checked that any of them still existed. A mask reading
+   * `codes: [4, 5]` after a resequence shows two entirely different options;
+   * the survey renders, the mask resolves, and the wrong two options appear.
+   * That is precisely the failure R9 is about, and it is invisible without
+   * this check.
+   *
+   * `owner` is the question those literals belong to, supplied by the caller
+   * because the expression cannot say: a mask's literals are the masked
+   * question's own codes, a punch's `mapping[].to` are the punch's question's.
+   * When the caller cannot tell — a punch source combining two questions —
+   * it passes nothing and the literals are not checked, because a wrong
+   * warning on a correct survey is how a lint gets ignored.
+   */
+  owner?: { question: Question; scope: "options" | "rows" },
+): void {
   if (!node || typeof node !== "object" || depth > 12) return;
-  if (Array.isArray(node)) { for (const x of node) lintSetExpr(x, path, ctx, depth + 1); return; }
+  if (Array.isArray(node)) { for (const x of node) lintSetExpr(x, path, ctx, depth + 1, owner); return; }
   const n = node as Record<string, unknown>;
   if (n.kind === "ref" && typeof n.questionId === "string") {
     const src = ctx.def.questions.find((x) => x.id === n.questionId)
@@ -166,7 +189,27 @@ function lintSetExpr(node: unknown, path: string, ctx: Ctx, depth = 0): void {
       });
     }
   }
-  for (const v of Object.values(n)) if (v && typeof v === "object") lintSetExpr(v, path, ctx, depth + 1);
+  if (n.kind === "codes" && owner && Array.isArray(n.codes)) {
+    const items = owner.scope === "rows" ? (owner.question.rows ?? []) : (owner.question.options ?? []);
+    /* a list BUILT at runtime stores no codes of its own — the same exemption
+       the reference check above makes, for the same reason */
+    const dynamic = !items.length
+      && (owner.question.carryForward || (owner.question.listLogic ?? []).length || (owner.question.optionPipeline ?? []).length);
+    if (!dynamic) {
+      const have = new Set(items.map((i) => String(i.code)));
+      const missing = (n.codes as (string | number)[]).map(String).filter((c) => !have.has(c));
+      if (missing.length) {
+        ctx.push({
+          level: "error", path,
+          message:
+            `Reads ${owner.scope === "rows" ? "row" : "option"} code${missing.length === 1 ? "" : "s"} `
+            + `${missing.join(", ")} of ${owner.question.code}, which ${missing.length === 1 ? "does" : "do"} not exist. `
+            + "A code list left behind by a renumber points at whichever option now holds that code.",
+        });
+      }
+    }
+  }
+  for (const v of Object.values(n)) if (v && typeof v === "object") lintSetExpr(v, path, ctx, depth + 1, owner);
 }
 
 function lintCondition(
@@ -831,7 +874,35 @@ function lintQuestionLogicUnsafe(def: SurveyDefinition, q: Question): LogicIssue
    */
   for (const [i, p] of (q.punches ?? []).entries()) {
     lintCondition(p.when, `punches[${i}].when`, ctx);
+    /*
+     * The source reads ANOTHER question, so its literals are not this
+     * question's namespace — no `owner`, and the reference check alone
+     * applies. The mapping's target side is this question's, and is checked
+     * below where that is unambiguous.
+     */
     lintSetExpr(p.source, `punches[${i}].source`, ctx);
+    const targets = (p.mapping ?? []).map((m) => String(m.to));
+    const have = new Set((q.options ?? []).map((o) => String(o.code)));
+    const gone = have.size ? targets.filter((t) => !have.has(t)) : [];
+    if (gone.length) {
+      ctx.push({
+        level: "error", path: `punches[${i}].mapping`,
+        message: `Punches into option code${gone.length === 1 ? "" : "s"} ${[...new Set(gone)].join(", ")}, which ${gone.length === 1 ? "does" : "do"} not exist on ${q.code}.`,
+      });
+    }
+  }
+  /*
+   * MASKS WERE NOT LINTED AT ALL.
+   *
+   * `lintSetExpr` existed and had exactly one caller — punches. A mask is the
+   * same shape and the same risk, and a mask that resolves to the empty set
+   * renders a page with NO OPTIONS on it, which is the case R10's gate was
+   * built to stop reaching a respondent. It could not stop it while nothing
+   * looked.
+   */
+  if (q.mask) lintSetExpr(q.mask.expr, "mask", ctx, 0, { question: q, scope: "options" });
+  if ((q as { rowMask?: { expr: unknown } }).rowMask) {
+    lintSetExpr((q as { rowMask: { expr: unknown } }).rowMask.expr, "rowMask", ctx, 0, { question: q, scope: "rows" });
   }
   /*
    * A follow-up probe is gated by ordinary Conditions, so they get the same

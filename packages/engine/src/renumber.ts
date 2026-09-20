@@ -24,6 +24,22 @@ export interface RenumberResult {
   mapping: Record<string, string>;
   /** how many references were repointed */
   referencesUpdated: number;
+  /**
+   * R9 — WHAT THIS DELIBERATELY DID NOT REWRITE, AND WHO HAS TO LOOK AT IT.
+   *
+   * A calculation's `expression` is free text: `IF(Q7 == 3, 1, 0)`, but also
+   * `AGE / 3` and `SUM(Q9_1..Q9_5) > 3`. The 3s are indistinguishable to
+   * anything short of a parser that knows which operand is a code and which
+   * is arithmetic, and a regex that rewrote all of them would corrupt every
+   * expression that happened to contain the renumbered number.
+   *
+   * Silently skipping them is what this used to do. Rewriting them blindly
+   * would be worse. So they are REPORTED: the caller shows the programmer
+   * exactly which expressions mention the question whose codes moved, and
+   * they check those by eye. One honest sentence beats a silent guess in
+   * both directions.
+   */
+  needsReview: { kind: "calculation"; id: string; label: string; expression: string }[];
 }
 
 export type CodeScope = "options" | "rows";
@@ -117,6 +133,81 @@ function rewritePiping(text: string | undefined, ctx: Ctx): string | undefined {
 
 /* --------------------------------------------------------------- question */
 
+/* --------------------------------------------------- set expressions (R9) */
+
+/**
+ * R9 — MASKS, PUNCHES, OPTION GROUPS AND ATTENTION CHECKS HOLD RAW CODES.
+ *
+ * Everything above rewrites CONDITIONS, and for a long time that was taken to
+ * be the whole job. It is not. Four other structures store bare code lists
+ * with no condition wrapper anywhere near them, and `grep -c` for any of them
+ * in this file returned zero:
+ *
+ *   · `optionGroups[].members`  — which options move together when shuffled
+ *   · `mask` / `rowMask` / `columnMask` — a set expression, whose `codes`
+ *     nodes are literal option codes
+ *   · `punches[]` — a source expression, a from→to mapping, a target row
+ *   · `attentionCheck.expected` — the codes that count as passing
+ *
+ * A mask reading `codes: [4, 5]` after a resequence shows two entirely
+ * different options, and nothing anywhere reports it: the survey still
+ * renders, the mask still resolves, and the wrong two options appear. An
+ * attention check whose `expected` moved now fails every honest respondent
+ * and passes the ones who were not paying attention.
+ */
+
+/** Does this expression read the question being renumbered? */
+function exprReadsTarget(e: unknown, targetId: string): boolean {
+  if (!e || typeof e !== "object") return false;
+  const n = e as Record<string, unknown>;
+  if (n.kind === "ref") return n.questionId === targetId;
+  if (n.kind === "complement") return exprReadsTarget(n.of, targetId);
+  if (n.kind === "op") return exprReadsTarget(n.left, targetId) || exprReadsTarget(n.right, targetId);
+  return false;
+}
+
+/**
+ * Rewrite the literal `codes` nodes of a set expression.
+ *
+ * `inTargetNamespace` is the caller's answer to the one question this cannot
+ * work out for itself: are these literals the renumbered question's codes?
+ * For a mask ON the renumbered question they are — the mask filters that
+ * question's own options. For a punch they are whichever side reads the
+ * renumbered question, which is why the caller checks `exprReadsTarget`
+ * first. Guessing either way would be worse than not rewriting: rewriting
+ * the wrong literals corrupts a mask that was correct.
+ */
+function rewriteSetExpr<T>(e: T, ctx: Ctx, inTargetNamespace: boolean): T {
+  if (!e || typeof e !== "object") return e;
+  const n = e as Record<string, unknown>;
+  if (n.kind === "codes") {
+    if (!inTargetNamespace) return e;
+    const codes = (n.codes as (string | number)[] | undefined) ?? [];
+    return { ...n, codes: codes.map((c) => mapOne(c, ctx) as string | number) } as T;
+  }
+  if (n.kind === "complement") {
+    return { ...n, of: rewriteSetExpr(n.of, ctx, inTargetNamespace) } as T;
+  }
+  if (n.kind === "op") {
+    return {
+      ...n,
+      left: rewriteSetExpr(n.left, ctx, inTargetNamespace),
+      right: rewriteSetExpr(n.right, ctx, inTargetNamespace),
+    } as T;
+  }
+  return e;
+}
+
+/** A mask, with its expression's literals rewritten when they are the target's. */
+function rewriteMask<T>(mask: T | undefined, ctx: Ctx, isTargetDimension: boolean): T | undefined {
+  if (!mask || typeof mask !== "object") return mask;
+  const m = mask as Record<string, unknown>;
+  const before = ctx.count;
+  const expr = rewriteSetExpr(m.expr, ctx, isTargetDimension);
+  if (ctx.count === before && expr === m.expr) return mask;
+  return { ...m, expr } as T;
+}
+
 function rewriteQuestion(q: Question, ctx: Ctx): Question {
   const cond = (c: Condition | undefined) => rewriteCondition(c, ctx);
   const out: Question = {
@@ -190,6 +281,82 @@ function rewriteQuestion(q: Question, ctx: Ctx): Question {
       : c.carryForward,
   }));
 
+  /* ------------------------------------------------------------- R9 */
+
+  const isTarget = q.id === ctx.targetId;
+  const optionsMoved = isTarget && ctx.scope === "options";
+  const rowsMoved = isTarget && ctx.scope === "rows";
+
+  /*
+   * OPTION GROUPS. `members` is a bare list of this question's own option
+   * codes — "these three shuffle together". After a resequence an unrewritten
+   * group holds codes that now belong to different options, so the block that
+   * was meant to keep three brands adjacent keeps three unrelated ones
+   * adjacent instead, on every interview, silently.
+   */
+  if (optionsMoved && (q as any).optionGroups?.length) {
+    (out as any).optionGroups = (q as any).optionGroups.map((g: any) => ({
+      ...g,
+      members: (g.members ?? []).map((c: string | number) => mapOne(c, ctx) as string | number),
+    }));
+  }
+
+  /*
+   * MASKS. A mask's literals are the masked question's own codes, so they
+   * move with the dimension being renumbered: `mask` with the options,
+   * `rowMask` with the rows. `columnMask` is left alone — columns are a
+   * third dimension this function does not renumber.
+   */
+  if (isTarget) {
+    const mask = rewriteMask((q as any).mask, ctx, optionsMoved);
+    if (mask !== (q as any).mask) (out as any).mask = mask;
+    const rowMask = rewriteMask((q as any).rowMask, ctx, rowsMoved);
+    if (rowMask !== (q as any).rowMask) (out as any).rowMask = rowMask;
+  }
+
+  /*
+   * PUNCHES, which have two sides and must not be treated as one.
+   *
+   * The TARGET side — what the punch writes into this question — moves when
+   * this question's codes move: `mapping[].to` with the options,
+   * `targetRow` with the rows.
+   *
+   * The SOURCE side — `source` and `mapping[].from` — is in the namespace of
+   * whatever question the punch READS. Those move only when the punch reads
+   * the question being renumbered, which `exprReadsTarget` answers from the
+   * expression rather than from a guess.
+   */
+  if ((q as any).punches?.length) {
+    (out as any).punches = (q as any).punches.map((p: any) => {
+      const readsTarget = exprReadsTarget(p.source, ctx.targetId);
+      const sourceInTarget = readsTarget && ctx.scope === "options";
+      const next = { ...p, source: rewriteSetExpr(p.source, ctx, sourceInTarget) };
+      if (p.mapping?.length) {
+        next.mapping = p.mapping.map((m: any) => ({
+          ...m,
+          from: sourceInTarget ? (mapOne(m.from, ctx) as string | number) : m.from,
+          to: optionsMoved ? (mapOne(m.to, ctx) as string | number) : m.to,
+        }));
+      }
+      if (rowsMoved && p.targetRow != null) next.targetRow = mapOne(p.targetRow, ctx) as string | number;
+      return next;
+    });
+  }
+
+  /*
+   * ATTENTION CHECKS. `expected` is the set of codes that count as passing —
+   * or, for a `trap`, the ones that fail. Either way an unrewritten list
+   * after a resequence inverts the check: the respondents who read the
+   * instruction are marked as having failed it, and their interviews are
+   * removed from the dataset as low quality.
+   */
+  if (optionsMoved && (q as any).attentionCheck?.expected?.length) {
+    (out as any).attentionCheck = {
+      ...(q as any).attentionCheck,
+      expected: (q as any).attentionCheck.expected.map((c: string | number) => mapOne(c, ctx) as string | number),
+    };
+  }
+
   // finally, the codes themselves — only on the question being renumbered
   if (q.id === ctx.targetId) {
     const remap = <T extends { code: string | number }>(items: T[]): T[] =>
@@ -235,7 +402,7 @@ export function renumberQuestionCodes(
   mapping: Record<string, string>,
 ): RenumberResult {
   if (Object.keys(mapping).length === 0) {
-    return { def, mapping, referencesUpdated: 0 };
+    return { def, mapping, referencesUpdated: 0, needsReview: [] };
   }
   const ctx: Ctx = { def, targetId: questionId, scope, mapping, count: 0 };
 
@@ -264,7 +431,32 @@ export function renumberQuestionCodes(
     flow: rewriteFlow(def.flow as any[], ctx) as SurveyDefinition["flow"],
   };
 
-  return { def: next, mapping, referencesUpdated: ctx.count };
+  return { def: next, mapping, referencesUpdated: ctx.count, needsReview: reviewable(def, questionId) };
+}
+
+/**
+ * Calculations whose expression names the question being renumbered.
+ *
+ * Matched on the question's CODE and its VARIABLE NAME as whole words, which
+ * is how an expression addresses a question. A calculation that does not
+ * mention it cannot be reading its codes, so a survey with fifty
+ * calculations and one that touches Q7 reports one — a list short enough to
+ * actually be read.
+ */
+function reviewable(def: SurveyDefinition, questionId: string): RenumberResult["needsReview"] {
+  const q = def.questions.find((x) => x.id === questionId);
+  if (!q) return [];
+  const names = [q.code, q.variableName].filter(Boolean).map((n) => String(n));
+  if (!names.length) return [];
+  const re = new RegExp(`\\b(${names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b`);
+  const out: RenumberResult["needsReview"] = [];
+  for (const c of def.calculations ?? []) {
+    const expression = String((c as { expression?: unknown }).expression ?? "");
+    if (expression && re.test(expression)) {
+      out.push({ kind: "calculation", id: c.id, label: c.label ?? c.targetVariable ?? c.id, expression });
+    }
+  }
+  return out;
 }
 
 /**
@@ -280,7 +472,7 @@ export function resequenceQuestionCodes(
   const q = def.questions.find((x) => x.id === questionId);
   const items = (scope === "options" ? q?.options : q?.rows) ?? [];
   if (!q || items.length === 0 || !codesAreSequenceable(items)) {
-    return { def, mapping: {}, referencesUpdated: 0 };
+    return { def, mapping: {}, referencesUpdated: 0, needsReview: [] };
   }
   return renumberQuestionCodes(def, questionId, scope, sequentialCodeMap(items));
 }
