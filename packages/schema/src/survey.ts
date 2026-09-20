@@ -365,7 +365,7 @@ export const DataExportPreset = z.object({
   id: z.string(),
   name: z.string(),
   description: z.string().optional(),
-  format: z.enum(["csv", "xlsx", "json", "sav", "sas"]).default("csv"),
+  format: z.enum(["csv", "xlsx", "json", "sav", "sas", "dta"]).default("csv"),
   /** how coded answers are written — ignored by sav/sas, which carry metadata */
   values: z.enum(["code", "label", "code_label"]).default("code"),
   headers: z.enum(["name", "label", "name_label"]).default("name"),

@@ -12,5 +12,6 @@ export * from "./localization.js";
 export * from "./valueRendering.js";
 export * from "./spss.js";
 export * from "./sas.js";
+export * from "./stata.js";
 export * from "./zip.js";
 export * from "./statisticalExport.js";

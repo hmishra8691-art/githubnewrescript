@@ -2,6 +2,7 @@ import type { SurveyDefinition, VariableDef } from "@rescript/schema";
 import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
 import { buildSav, savVariableFor, type SavVariable } from "./spss.js";
 import { buildXpt, buildSasSyntax, sasVariableFor, type SasVariable } from "./sas.js";
+import { buildDta, stataVariableFor, type StataVariable } from "./stata.js";
 import { renderValue, renderHeader, type ValueMode, type HeaderMode } from "./valueRendering.js";
 import type { ResponseStateLike } from "./csv.js";
 import { buildZip } from "./zip.js";
@@ -214,6 +215,54 @@ export function responsesToXpt(
     datasetName: (def.meta.code ?? "SURVEY").replace(/[^A-Za-z0-9_]/g, "").slice(0, 8) || "SURVEY",
     datasetLabel: def.meta.title ?? "",
   });
+}
+
+/**
+ * Stata (.dta), format 118.
+ *
+ * Like SPSS and unlike CSV, the codes stay codes and the labels ride as
+ * metadata — same reasoning, so `valueMode` is not accepted here either.
+ * Stata is the friendliest of the three for a study with accented text: it
+ * is UTF-8 throughout, where SAS transport is ASCII and turns `Café` into
+ * `Cafe`.
+ */
+export function responsesToDta(
+  def: SurveyDefinition,
+  states: ResponseStateLike[],
+  opts: MatrixOptions = {},
+): Buffer {
+  const { names, defs, rows } = buildResponseMatrix(def, states, opts);
+
+  const variables: StataVariable[] = names.map((name) => {
+    const d = defs.get(name);
+    const sys = systemVariable(name);
+    if (d) {
+      const v = stataVariableFor(d);
+      if (v.type === "string") v.stringWidth = widthOf(rows, name, 2045);
+      return v;
+    }
+    if (sys && sys.numeric) return { name, label: sys.label, type: "numeric" };
+    return { name, label: sys?.label ?? name, type: "string", stringWidth: widthOf(rows, name, 2045) };
+  });
+
+  return buildDta({
+    variables,
+    rows: rekey(names, defs, rows),
+    fileLabel: `${def.meta.code} — ${def.meta.title ?? ""}`.trim(),
+  });
+}
+
+/** Stata with the data dictionary beside it, for the same reason as SPSS. */
+export function responsesToDtaBundle(
+  def: SurveyDefinition,
+  states: ResponseStateLike[],
+  opts: MatrixOptions = {},
+): Buffer {
+  const code = def.meta.code ?? "SURVEY";
+  return buildZip([
+    { name: `${code}.dta`, data: responsesToDta(def, states, opts) },
+    { name: `${code}_dictionary.csv`, data: variableDictionaryToCSV(def) },
+  ]);
 }
 
 /** The `.sas` program that labels the exported CSV. */

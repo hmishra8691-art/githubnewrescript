@@ -79,7 +79,7 @@ export function DataPanel() {
   const [presetName, setPresetName] = React.useState("");
   const [presetNote, setPresetNote] = React.useState<string | null>(null);
   const [withDictionary, setWithDictionary] = React.useState(false);
-  const [format, setFormat] = React.useState<"csv" | "xlsx" | "json" | "sav" | "sas">("csv");
+  const [format, setFormat] = React.useState<"csv" | "xlsx" | "json" | "sav" | "sas" | "dta">("csv");
   const [meta, setMeta] = React.useState<{ total: number; included: number } | null>(null);
   const datasetParam = dataset === "custom" ? `custom:${exclude.join(",")}` : dataset;
 
@@ -183,9 +183,11 @@ export function DataPanel() {
   const dictParam = withDictionary ? "&dictionary=1" : "";
   const savHref = exportUrl("sav", dictParam);
   const sasHref = exportUrl("sas", dictParam);
+  const dtaHref = exportUrl("dta", dictParam);
   /* the one the preset selected, so "download" means what the preset says */
   const presetHref =
     format === "sav" ? savHref
+    : format === "dta" ? dtaHref
     : format === "sas" ? sasHref
     : format === "xlsx" ? xlsxHref
     : format === "json" ? exportUrl("json", valuesParam)
@@ -281,6 +283,8 @@ export function DataPanel() {
               title="SPSS system file — variable labels, value labels and missing values as metadata">⬇ SPSS (.sav)</a>
             <a className="btn small" href={sasHref} target="_blank" data-testid="export-sas"
               title="Zip: SAS transport file, CSV, and a .sas program with PROC FORMAT and LABEL">⬇ SAS (.xpt + syntax)</a>
+            <a className="btn small" href={dtaHref} target="_blank" data-testid="export-dta"
+              title="Stata 14+ — UTF-8 throughout, 32-character names, value labels as metadata">⬇ Stata (.dta)</a>
             <span className="muted" style={{ fontSize: 12, alignSelf: "center" }}>
               Codes stay codes in these; the labels travel as metadata, so frequencies come out labelled.
             </span>

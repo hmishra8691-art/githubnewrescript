@@ -17,8 +17,9 @@ decides *which rows* are exported. This is about *what the file contains*.
 | JSON | `format=json` | `{ version, columns, rows }`, for code |
 | SPSS | `format=sav` | An SPSS system file with the dictionary as metadata |
 | SAS | `format=sas` | A zip: transport file, CSV, and a `.sas` program |
+| Stata | `format=dta` | A `.dta`, format 118 (Stata 14+) |
 
-All five export **the same columns in the same order**, because they are all
+All six export **the same columns in the same order**, because they are all
 built from one shared matrix (`buildResponseMatrix`, in
 `packages/exporters/src/statisticalExport.ts`): the system columns, then every
 non-system variable in dictionary order. A client who opens the `.sav` beside
@@ -128,6 +129,43 @@ produces.
 `Cafe`) and anything without an ASCII equivalent becomes a space. The CSV in
 the same zip is UTF-8 and keeps the original text.
 
+## Stata (`.dta`)
+
+Format 118 — Stata 14 and later. Chosen over 117 (Stata 13, Latin-1) and 119
+(only raises the variable ceiling, and nothing older reads it).
+
+Stata is the friendliest of the three for a study with accented text: the file
+is **UTF-8 throughout**, where SAS transport is ASCII and turns `Café` into
+`Cafe`. Names allow 32 characters rather than 8, so far less truncation.
+
+A `.dta` is XML-ish — literal `<tag>` markers around fixed-width binary blocks,
+with a `<map>` of 14 byte offsets near the front. The map is written last, once
+the offsets are known, and a map that disagrees with the real layout gives a
+file Stata opens and misreads. The unit test checks each offset points at the
+tag it claims.
+
+### Two things that differ from SPSS
+
+**Value labels attach to a named SET**, and a variable points at a set by name,
+rather than the labels hanging off the variable. Each variable gets its own set
+here: survey scales that look identical often are not — a "don't know" on one
+question and not another — and silently sharing a set would relabel data.
+
+**Missing values are not declared, they replace the value.** SPSS keeps 99 in
+the cell and marks it missing, so nothing is lost. Stata's extended missings
+(`.a` … `.z`) *are* the value — write 99 as `.a` and the 99 is gone. Converting
+silently would destroy data visible in every other format, so declared codes
+stay as ordinary values with their labels, and the dictionary says which ones
+mean "no answer".
+
+### The bug worth knowing about
+
+Each `<lbl>` block declares its own length, and the reader uses that number to
+find the next one. The length counts the **body only** — not the 129-byte name
+or the three padding bytes after it, even though both sit inside the block.
+Including them overshoots by 132: one label set then carried no labels at all
+(silently), and two made the whole file unreadable. Both states are now tested.
+
 ## Verifying a change to either writer
 
 Three layers, and the middle one is the one people skip:
@@ -160,8 +198,6 @@ four bytes were written.
 ## Deliberate limits
 
 - **No native `.sas7bdat`**, for the reason above.
-- **No Stata `.dta`** yet. It is a documented format and the dictionary this
-  now builds would feed it directly, so it is a small addition if asked for.
 - **The zip is stored, not compressed** (`packages/exporters/src/zip.ts`).
   Pulling a compression library in to archive three text files was not worth
   the dependency; `jszip` is in the tree but only as a transitive dependency

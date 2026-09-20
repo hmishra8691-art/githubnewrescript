@@ -12,6 +12,8 @@ import {
   spssName,
   sasName,
   responsesToSavBundle,
+  responsesToDta,
+  stataName,
   responsesToSasBundle,
   variableDictionaryToCSV,
   BUILT_IN_EXPORT_PRESETS,
@@ -617,4 +619,172 @@ test("the built-in presets are usable settings, not decoration", () => {
 
   const client = BUILT_IN_EXPORT_PRESETS.find((p) => p.name === "Client Data Export");
   assert.equal(client!.values, "label", "the client file reads without the questionnaire beside it");
+});
+
+/* ------------------------------------------------------ Stata (.dta) */
+
+/** A small independent .dta reader — same discipline as the .sav and .xpt ones. */
+function readDta(buf: Buffer): {
+  names: string[];
+  labels: string[];
+  valueLabels: Record<string, Record<string, string>>;
+  rows: Record<string, unknown>[];
+} {
+  const text = buf.toString("latin1");
+  assert.ok(text.startsWith("<stata_dta>"), "the magic marker");
+  assert.match(text, /<release>118<\/release>/, "format 118");
+
+  /*
+   * THE MAP IS CHECKED, NOT TRUSTED. It is 14 byte offsets Stata uses to jump
+   * straight to each section; one that disagrees with the real layout gives a
+   * file that opens and is misread, which is the same class of failure as the
+   * SPSS value-label indexes.
+   */
+  const mapAt = text.indexOf("<map>") + 5;
+  const offs: number[] = [];
+  for (let i = 0; i < 14; i++) offs.push(Number(buf.readBigUInt64LE(mapAt + i * 8)));
+  const tagAt = (o: number) => text.slice(o, o + 24);
+  assert.equal(offs[0], 0, "the map's first entry is the start of the file");
+  assert.ok(tagAt(offs[2]).startsWith("<variable_types>"), `map[2] should be variable_types, found ${tagAt(offs[2])}`);
+  assert.ok(tagAt(offs[3]).startsWith("<varnames>"), `map[3] should be varnames, found ${tagAt(offs[3])}`);
+  assert.ok(tagAt(offs[9]).startsWith("<data>"), `map[9] should be data, found ${tagAt(offs[9])}`);
+  assert.ok(tagAt(offs[11]).startsWith("<value_labels>"), `map[11] should be value_labels, found ${tagAt(offs[11])}`);
+  assert.equal(offs[13], buf.length, "the last entry is the file length");
+
+  const kAt = text.indexOf("<K>") + 3;
+  const nvar = buf.readUInt16LE(kAt);
+  const nAt = text.indexOf("<N>") + 3;
+  const nobs = Number(buf.readBigUInt64LE(nAt));
+
+  let p = offs[2] + "<variable_types>".length;
+  const types: number[] = [];
+  for (let i = 0; i < nvar; i++) { types.push(buf.readUInt16LE(p)); p += 2; }
+
+  p = offs[3] + "<varnames>".length;
+  const names: string[] = [];
+  for (let i = 0; i < nvar; i++) {
+    names.push(buf.toString("utf8", p, p + 129).split("\u0000")[0]);
+    p += 129;
+  }
+
+  p = offs[7] + "<variable_labels>".length;
+  const labels: string[] = [];
+  for (let i = 0; i < nvar; i++) {
+    labels.push(buf.toString("utf8", p, p + 321).split("\u0000")[0]);
+    p += 321;
+  }
+
+  p = offs[9] + "<data>".length;
+  const rows: Record<string, unknown>[] = [];
+  for (let r = 0; r < nobs; r++) {
+    const row: Record<string, unknown> = {};
+    names.forEach((name, i) => {
+      if (types[i] === 65526) {
+        const raw = buf.readDoubleLE(p); p += 8;
+        // Stata's system missing for a double
+        row[name] = Number.isNaN(raw) || raw >= 8.988465674311579e307 ? null : raw;
+      } else {
+        row[name] = buf.toString("utf8", p, p + types[i]).split("\u0000")[0];
+        p += types[i];
+      }
+    });
+    rows.push(row);
+  }
+
+  /* value labels: each <lbl> declares its own body length, and the reader
+   * uses it to find the next one — getting that number wrong is why two
+   * label sets once made the whole file unreadable */
+  const valueLabels: Record<string, Record<string, string>> = {};
+  p = offs[11] + "<value_labels>".length;
+  while (text.startsWith("<lbl>", p)) {
+    p += 5;
+    const bodyLen = buf.readInt32LE(p); p += 4;
+    const setName = buf.toString("utf8", p, p + 129).split("\u0000")[0]; p += 129 + 3;
+    const start = p;
+    const n = buf.readInt32LE(p); p += 4;
+    const txtlen = buf.readInt32LE(p); p += 4;
+    const offsets2: number[] = [];
+    for (let i = 0; i < n; i++) { offsets2.push(buf.readInt32LE(p)); p += 4; }
+    const values: number[] = [];
+    for (let i = 0; i < n; i++) { values.push(buf.readInt32LE(p)); p += 4; }
+    const txt = buf.toString("utf8", p, p + txtlen); p += txtlen;
+    assert.equal(p - start, bodyLen, `the declared body length must match what was written for ${setName}`);
+    const m: Record<string, string> = {};
+    for (let i = 0; i < n; i++) m[String(values[i])] = txt.slice(offsets2[i]).split("\u0000")[0];
+    valueLabels[setName] = m;
+    assert.ok(text.startsWith("</lbl>", p), "each label set must be closed");
+    p += 6;
+  }
+  return { names, labels, valueLabels, rows };
+}
+
+test("Stata: names, labels, value labels and data survive the write", () => {
+  const def = makeSurvey();
+  const dta = readDta(responsesToDta(def, states));
+
+  assert.ok(dta.names.includes("GENDER"), dta.names.join(", "));
+  assert.equal(dta.labels[dta.names.indexOf("GENDER")], "What is your gender?");
+  assert.deepEqual(dta.valueLabels.GENDER, { "1": "Male", "2": "Female", "99": "Prefer not to say" });
+  assert.equal(dta.rows[0].GENDER, 1, "the cell holds the code, as in every statistical format");
+  assert.equal(dta.rows[1].GENDER, 99);
+  assert.equal(dta.rows[0].AGE, 42);
+});
+
+test("Stata: several value-label sets are all readable", () => {
+  /*
+   * The regression. Each <lbl> declares its own BODY length and the reader
+   * uses it to find the next one; counting the 129-byte name and its padding
+   * into that number overshoots by 132, which made one set carry no labels
+   * and two sets make the whole file unreadable.
+   */
+  const def = makeSurvey();
+  const dta = readDta(responsesToDta(def, states));
+  assert.ok(Object.keys(dta.valueLabels).length >= 2,
+    `more than one set must be readable, got ${JSON.stringify(Object.keys(dta.valueLabels))}`);
+  for (const [name, labels] of Object.entries(dta.valueLabels)) {
+    assert.ok(dta.names.includes(name), `labels attached to unknown variable ${name}`);
+    assert.ok(Object.keys(labels).length > 0, `${name} has an empty label set`);
+  }
+});
+
+test("Stata keeps text that SAS transport cannot", () => {
+  /*
+   * The reason to offer Stata as well as SAS: .dta is UTF-8 throughout, so a
+   * study with accented text delivers intact, where the transport file is
+   * ASCII and turns Café into Cafe.
+   */
+  const def = makeSurvey();
+  const accented: ResponseStateLike[] = [{
+    ...states[0],
+    answers: { ...(states[0].answers as object), q_open: "Café — naïve" } as any,
+  }];
+  const dta = readDta(responsesToDta(def, accented));
+  assert.equal(dta.rows[0].COMMENT, "Café — naïve");
+});
+
+test("Stata: a reserved word cannot become a variable name", () => {
+  // `if` and `in` are Stata commands; a variable called `if` makes every
+  // do-file touching the dataset a syntax error
+  const taken = new Set<string>();
+  for (const word of ["if", "in", "_n", "byte"]) {
+    const out = stataName(word, taken);
+    assert.notEqual(out.toLowerCase(), word.toLowerCase(), `${word} must be escaped, got ${out}`);
+  }
+});
+
+test("Stata: truncated names stay unique", () => {
+  const taken = new Set<string>();
+  const a = stataName("A_VARIABLE_NAME_THAT_IS_WELL_PAST_THIRTY_TWO_ONE", taken);
+  const b = stataName("A_VARIABLE_NAME_THAT_IS_WELL_PAST_THIRTY_TWO_TWO", taken);
+  assert.notEqual(a, b);
+  assert.ok(a.length <= 32 && b.length <= 32);
+});
+
+test("every format still exports the same columns, now including Stata", () => {
+  const def = makeSurvey();
+  const matrix = buildResponseMatrix(def, states);
+  const dta = readDta(responsesToDta(def, states));
+  assert.equal(dta.names.length, matrix.names.length, "one Stata variable per column");
+  const taken = new Set<string>();
+  assert.deepEqual(dta.names, matrix.names.map((n) => stataName(n, taken)));
 });

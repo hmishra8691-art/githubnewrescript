@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { assertNotReadOnly, getMeter, projectContext, recordUsage } from "@/lib/metering";
 import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
-import { responsesToCSV, exportResponsesXlsx, responsesToSav, responsesToSavBundle, responsesToSasBundle, inDataset, ENVIRONMENT_COLUMNS, environmentCells, QUALITY_CSV_COLUMNS, qualityCsvCells, SAMPLE_COLUMNS, sampleCells, VALUE_MODES, renderValue, dictionaryIndex, type DatasetFilter, type QualityExportRow, type ValueMode } from "@rescript/exporters";
+import { responsesToCSV, exportResponsesXlsx, responsesToSav, responsesToSavBundle, responsesToDta, responsesToDtaBundle, responsesToSasBundle, inDataset, ENVIRONMENT_COLUMNS, environmentCells, QUALITY_CSV_COLUMNS, qualityCsvCells, SAMPLE_COLUMNS, sampleCells, VALUE_MODES, renderValue, dictionaryIndex, type DatasetFilter, type QualityExportRow, type ValueMode } from "@rescript/exporters";
 import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
 import { audit, isFailure, requireProject } from "@/lib/guard";
 
@@ -246,7 +246,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
    * Writing labels into the cells would produce a string variable and cost
    * them every analysis the format exists for.
    */
-  if (format === "sav" || format === "sas") {
+  if (format === "sav" || format === "sas" || format === "dta") {
     const fileBase = `${parsed.data.meta.code}_${include}${dataset.kind !== "all" ? `_${dataset.kind}` : ""}`;
     const mediaBaseUrl = process.env.STUDIO_PUBLIC_URL ?? null;
     if (format === "sav") {
@@ -264,6 +264,24 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         headers: {
           "content-type": "application/x-spss-sav",
           "content-disposition": `attachment; filename="${fileBase}.sav"`,
+        },
+      });
+    }
+    if (format === "dta") {
+      if (withDictionary) {
+        const buf = responsesToDtaBundle(parsed.data, states as any, { mediaBaseUrl });
+        return new NextResponse(new Uint8Array(buf), {
+          headers: {
+            "content-type": "application/zip",
+            "content-disposition": `attachment; filename="${fileBase}_stata.zip"`,
+          },
+        });
+      }
+      const buf = responsesToDta(parsed.data, states as any, { mediaBaseUrl });
+      return new NextResponse(new Uint8Array(buf), {
+        headers: {
+          "content-type": "application/x-stata-dta",
+          "content-disposition": `attachment; filename="${fileBase}.dta"`,
         },
       });
     }
