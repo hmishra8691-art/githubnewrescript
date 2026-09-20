@@ -9,6 +9,7 @@ import { fieldDataType } from "./fields.js";
 import { questionAi, voiceOn } from "./aiConversation.js";
 import { embeddedCatalog } from "./embedded.js";
 import { stripHtmlText } from "./html.js";
+import { optionColumn, rowColumn, cellColumn, indexColumn, type SuffixPatterns } from "./derivedNames.js";
 
 /*
  * VALUE LABELS ARE PLAIN TEXT. A code's label goes into the CSV dictionary,
@@ -85,6 +86,13 @@ export function questionVariables(
    * MaxDiff question, which is what every design before this was.
    */
   designs?: { id: string; kind?: string; config?: Record<string, unknown>; file?: { columns?: string[]; rows?: Record<string, unknown>[] } }[],
+  /**
+   * The survey's derived-column naming scheme (§44). Optional, and omitted by
+   * every existing caller — the question-type registry, the g* tests — so
+   * they all keep the platform's own suffixes. `buildDerivedVariables` passes
+   * `def.variableNaming` through.
+   */
+  naming?: SuffixPatterns,
 ): VariableDef[] {
   const rows = dictionaryRows(q, all);
   const base = {
@@ -106,10 +114,38 @@ export function questionVariables(
       ...v,
     } as VariableDef);
 
+  /*
+   * AN IMAGE SELECT IS SINGLE OR MULTIPLE, AND THE TWO FILES DISAGREED.
+   *
+   * This file grouped `image_select` with single_select; `flatten.ts` groups
+   * it with multi_select and writes one 0/1 flag per option. So a
+   * multiple-choice image question had its flags written at interview time
+   * and declared nowhere — and since every exporter builds its columns from
+   * this dictionary, they reached no delivered file. The researcher got one
+   * column of `a;b` instead of the per-option columns every crosstab needs.
+   *
+   * Found by `namingParity.test.ts`, which compares what this file declares
+   * against what the runtime actually writes.
+   */
+  const imageMulti = q.type === "image_select" && (q.settings?.maxSelections ?? 1) !== 1;
+
   switch (q.type) {
     case "single_select":
     case "dropdown":
     case "image_select": {
+      if (imageMulti) {
+        for (const opt of q.options ?? []) {
+          push({
+            name: optionColumn(q.variableName, opt.code, naming),
+            label: `${q.code} — ${opt.label}`,
+            dataType: "numeric",
+            valueCodes: [0, 1],
+            valueLabels: { "0": "Not selected", "1": "Selected" },
+            optionCode: String(opt.code),
+          });
+        }
+        break;
+      }
       const { codes, labels } = valueMap(q);
       push({ name: q.variableName, label: strip(q.text) || q.code, dataType: "numeric", valueCodes: codes, valueLabels: labels });
       /*
@@ -134,7 +170,7 @@ export function questionVariables(
       const { labels } = valueMap(q);
       for (const opt of q.options) {
         push({
-          name: `${q.variableName}_${opt.code}`,
+          name: optionColumn(q.variableName, opt.code, naming),
           label: `${q.code} — ${opt.label}`,
           dataType: "numeric",
           valueCodes: [0, 1],
@@ -181,7 +217,7 @@ export function questionVariables(
         // labeled form fields — one variable per row, typed by fieldType
         for (const row of q.rows) {
           push({
-            name: `${q.variableName}_${row.code}`,
+            name: rowColumn(q.variableName, row.code, naming),
             label: `${q.code} — ${strip(row.label)}`,
             dataType: fieldDataType(row.fieldType ?? (q.type === "numeric_list" ? "number" : "text")),
             rowCode: String(row.code),
@@ -191,7 +227,7 @@ export function questionVariables(
         const n = q.settings.listCount ?? 1;
         for (let i = 1; i <= n; i++) {
           push({
-            name: `${q.variableName}_${i}`,
+            name: indexColumn(q.variableName, i, naming),
             label: `${q.code} — item ${i}`,
             dataType: q.type === "numeric_list" ? "numeric" : "text",
           });
@@ -203,7 +239,7 @@ export function questionVariables(
     case "image_ranking": {
       for (const opt of q.options) {
         push({
-          name: `${q.variableName}_${opt.code}`,
+          name: optionColumn(q.variableName, opt.code, naming),
           label: `${q.code} — rank of ${opt.label}`,
           dataType: "numeric",
           optionCode: String(opt.code),
@@ -214,7 +250,7 @@ export function questionVariables(
     case "allocation": {
       for (const opt of q.options) {
         push({
-          name: `${q.variableName}_${opt.code}`,
+          name: optionColumn(q.variableName, opt.code, naming),
           label: `${q.code} — ${opt.label}${q.settings.sumUnit ? ` (${q.settings.sumUnit})` : ""}`,
           dataType: "numeric",
           optionCode: String(opt.code),
@@ -230,7 +266,7 @@ export function questionVariables(
       for (const o of colOpts) labels[String(o.code)] = valueLabel(o.label);
       for (const row of rows) {
         push({
-          name: `${q.variableName}_${row.code}`,
+          name: rowColumn(q.variableName, row.code, naming),
           label: `${q.code} — ${row.label}`,
           dataType: "numeric",
           valueCodes: colOpts.map((o) => o.code),
@@ -245,7 +281,7 @@ export function questionVariables(
       for (const row of rows) {
         for (const opt of colOpts) {
           push({
-            name: `${q.variableName}_${row.code}_${opt.code}`,
+            name: cellColumn(q.variableName, row.code, opt.code, naming),
             label: `${q.code} — ${row.label} / ${opt.label}`,
             dataType: "numeric",
             valueCodes: [0, 1],
@@ -259,13 +295,13 @@ export function questionVariables(
     }
     case "matrix_numeric": {
       for (const row of rows) {
-        push({ name: `${q.variableName}_${row.code}`, label: `${q.code} — ${row.label}`, dataType: "numeric", rowCode: String(row.code) });
+        push({ name: rowColumn(q.variableName, row.code, naming), label: `${q.code} — ${row.label}`, dataType: "numeric", rowCode: String(row.code) });
       }
       break;
     }
     case "matrix_text": {
       for (const row of rows) {
-        push({ name: `${q.variableName}_${row.code}`, label: `${q.code} — ${row.label}`, dataType: "text", rowCode: String(row.code) });
+        push({ name: rowColumn(q.variableName, row.code, naming), label: `${q.code} — ${row.label}`, dataType: "text", rowCode: String(row.code) });
       }
       break;
     }
@@ -691,7 +727,7 @@ export function buildDerivedVariables(def: SurveyDefinition): VariableDef[] {
   for (const q of def.questions) {
     const inLoop = loopOf.get(q.id);
     if (!inLoop || inLoop.positions.length === 0) {
-      const base = questionVariables(q, loc.get(q.id), def.questions, def.designs);
+      const base = questionVariables(q, loc.get(q.id), def.questions, def.designs, def.variableNaming);
       if (inLoop) {
         const innermost = inLoop.chain[inLoop.chain.length - 1];
         for (const v of base) {
@@ -722,7 +758,7 @@ export function buildDerivedVariables(def: SurveyDefinition): VariableDef[] {
       // the SAME variable shapes as outside a loop, renamed per position, so a
       // multi-select still exports its 0/1 columns and a matrix its rows
       const renamed = { ...q, variableName: `${q.variableName}${suffix}` } as typeof q;
-      for (const v of questionVariables(renamed, loc.get(q.id), def.questions, def.designs)) {
+      for (const v of questionVariables(renamed, loc.get(q.id), def.questions, def.designs, def.variableNaming)) {
         out.push({
           ...v,
           loopId: innermost.id,

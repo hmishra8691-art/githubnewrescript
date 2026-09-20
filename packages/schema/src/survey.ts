@@ -342,6 +342,18 @@ export const NamingTemplate = z.object({
   name: z.string(),
   /** e.g. `SEC{section}_Q{number:2}` — see `renderNamingTemplate` for the tokens */
   pattern: z.string(),
+  /**
+   * How the DERIVED columns are named — `Q1_1` per option, `Q1_R2` per row,
+   * `Q1_R2_C1` per cell. Absent means the platform's own scheme, which is
+   * what every survey so far produces. See `derivedNames.ts`, and note these
+   * can only be changed before a survey has responses.
+   */
+  suffixes: z.object({
+    option: z.string().optional(),
+    row: z.string().optional(),
+    cell: z.string().optional(),
+    index: z.string().optional(),
+  }).optional(),
   notes: z.string().optional(),
 });
 export type NamingTemplate = z.infer<typeof NamingTemplate>;
@@ -442,6 +454,21 @@ export const SurveyDefinition = z.object({
    * belongs to a study and travels with it when the study is cloned.
    */
   namingTemplates: z.array(NamingTemplate).default([]),
+  /**
+   * The derived-column naming scheme in force for this survey (§44).
+   *
+   * Absent — which is every survey so far and every survey that never opens
+   * the feature — means the platform's own suffixes, so nothing changes by
+   * this field existing. Changing it renames hundreds of columns and cannot
+   * be repaired automatically (saved analyses name columns directly), so the
+   * Studio only offers it while the survey has no responses.
+   */
+  variableNaming: z.object({
+    option: z.string().optional(),
+    row: z.string().optional(),
+    cell: z.string().optional(),
+    index: z.string().optional(),
+  }).optional(),
   /**
    * TRANSLATIONS AND AUDIO, per language, addressed by stable element keys —
    * a layer over this language-neutral definition, never a copy of it. Absent

@@ -6,6 +6,9 @@ import {
   applyTemplateRename,
   STARTER_TEMPLATES,
   TEMPLATE_TOKENS,
+  SUFFIX_PRESETS,
+  DEFAULT_SUFFIXES,
+  validateSuffixes,
 } from "@rescript/engine";
 import { useStudio, uid } from "./store";
 
@@ -30,6 +33,43 @@ export function NamingTemplatesPanel() {
   const [pattern, setPattern] = React.useState("Q{number}");
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [skipped, setSkipped] = React.useState<Set<string>>(new Set());
+
+  /*
+   * Derived-suffix scheme (§44). Locked once the survey has responses: a
+   * change here renames hundreds of columns at once, and unlike renaming one
+   * variable there is nothing to rewrite — saved analyses name dictionary
+   * columns directly and every stored response's calculated values are keyed
+   * by them. It is a decision made at the start of a study, which is when a
+   * research team actually makes it.
+   */
+  const [responseCount, setResponseCount] = React.useState<number | null>(null);
+  React.useEffect(() => {
+    let live = true;
+    void (async () => {
+      try {
+        const r = await fetch(`/api/surveys/${s.surveyDbId}/responses?format=summary`);
+        const j = await r.json();
+        if (live) setResponseCount((j?.live?.total ?? 0) + (j?.test?.total ?? 0));
+      } catch { if (live) setResponseCount(0); }
+    })();
+    return () => { live = false; };
+  }, [s.surveyDbId]);
+
+  const suffixes = { ...DEFAULT_SUFFIXES, ...(s.def.variableNaming ?? {}) };
+  const suffixLocked = (responseCount ?? 0) > 0;
+  const suffixProblems = validateSuffixes(suffixes);
+
+  const setSuffix = (key: "option" | "row" | "cell" | "index", value: string) => {
+    s.labelNextEdit("variable naming scheme");
+    s.update((d) => {
+      const next = { ...(d.variableNaming ?? {}), [key]: value };
+      // a scheme identical to the default is stored as nothing, so a survey
+      // that never touched this stays byte-identical to before
+      const isDefault = (["option", "row", "cell", "index"] as const)
+        .every((k) => (next[k] ?? DEFAULT_SUFFIXES[k]) === DEFAULT_SUFFIXES[k]);
+      d.variableNaming = isDefault ? undefined : next;
+    });
+  };
 
   /*
    * TWO PLANS, deliberately.
@@ -125,6 +165,52 @@ export function NamingTemplatesPanel() {
           <button key={t.token} className="btn small mono" title={t.describes}
             data-testid={`token-${t.token.replace(/[{}]/g, "")}`}
             onClick={() => setPattern((p) => p + t.token)}>{t.token}</button>
+        ))}
+      </div>
+
+      {/* --------------------------------------------- the derived suffixes */}
+      <div data-testid="suffix-scheme" style={{ marginBottom: 16, padding: "12px 14px", border: "1px solid var(--border, #e5e9f0)", borderRadius: 8 }}>
+        <div className="row" style={{ marginBottom: 6 }}>
+          <span style={{ fontSize: 12.5, fontWeight: 600 }}>Derived column names</span>
+          {suffixLocked && <span className="chip warn" data-testid="suffix-locked">locked — this survey has responses</span>}
+        </div>
+        <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+          How the extra columns are named: one per option, per grid row, per cell, per position.
+          {suffixLocked
+            ? " Changing this renames hundreds of columns and cannot be undone automatically — saved analyses name those columns directly — so it is fixed once fieldwork starts."
+            : " Set this before fieldwork starts; it is locked once responses exist."}
+        </p>
+
+        {!suffixLocked && (
+          <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+            {SUFFIX_PRESETS.map((p) => (
+              <button key={p.name} className="btn small" data-testid="suffix-preset"
+                onClick={() => (["option", "row", "cell", "index"] as const).forEach((k) => setSuffix(k, p.patterns[k]))}>
+                {p.name}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+          {([
+            ["option", "Per option", "Q1_1"],
+            ["row", "Per row", "Q1_r2"],
+            ["cell", "Per cell", "Q1_r2_c1"],
+            ["index", "Per position", "Q1_3"],
+          ] as const).map(([key, label, eg]) => (
+            <label className="f" key={key} style={{ flex: "1 1 160px", marginBottom: 0 }}>
+              <span>{label} <span className="muted">e.g. {eg}</span></span>
+              <input className="input mono" data-testid={`suffix-${key}`}
+                disabled={suffixLocked}
+                value={suffixes[key]}
+                onChange={(e) => setSuffix(key, e.target.value)} />
+            </label>
+          ))}
+        </div>
+        {suffixProblems.map((p, i) => (
+          <div key={i} className="chip warn" data-testid="suffix-problem"
+            style={{ display: "block", marginTop: 6 }}>{p}</div>
         ))}
       </div>
 

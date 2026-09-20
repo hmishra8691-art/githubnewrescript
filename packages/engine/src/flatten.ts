@@ -1,4 +1,5 @@
 import type { SurveyDefinition, Question } from "@rescript/schema";
+import { optionColumn, rowColumn, cellColumn, indexColumn, type SuffixPatterns } from "./derivedNames.js";
 import { loopKeySuffix, type LoopContext, type ResponseState } from "./state.js";
 import { otherOptions, otherTextFor, otherColumnFor, otherKeyFor, legacyOtherKey } from "./otherSpecify.js";
 import { directChildLoops, directQuestionIdsInLoop, loopNodes, loopVariablePrefix, type LoopFlowNode } from "./loopModel.js";
@@ -30,6 +31,14 @@ export interface FlattenOptions {
    * URLs and anything else pass through untouched.
    */
   mediaBaseUrl?: string | null;
+  /**
+   * The survey's derived-column naming scheme (§44). `flattenVariables` fills
+   * this from `def.variableNaming` so that this file and `variables.ts`
+   * compose their names the same way — the two used to spell the suffixes out
+   * separately, and a disagreement meant answers written at interview time
+   * that reached no export.
+   */
+  naming?: SuffixPatterns;
 }
 
 /** `/api/media/<id>` made absolute; every other URL as it was. */
@@ -40,7 +49,9 @@ export function exportMediaUrl(url: unknown, opts?: FlattenOptions): string {
   return u;
 }
 
-export function flattenVariables(def: SurveyDefinition, state: ResponseState, opts: FlattenOptions = {}): FlatVars {
+export function flattenVariables(def: SurveyDefinition, state: ResponseState, options: FlattenOptions = {}): FlatVars {
+  /* one merge, so no call site can forget the naming scheme */
+  const opts: FlattenOptions = { ...options, naming: options.naming ?? def.variableNaming };
   const out: FlatVars = {};
 
   /*
@@ -192,10 +203,25 @@ function flattenQuestion(q: Question, value: unknown, varName: string, out: Flat
     case "multi_select":
     case "multi_dropdown":
     case "image_select": {
+      /*
+       * A single-choice image select is a SINGLE answer, and writing it as a
+       * one-element array with a full set of 0/1 flags disagreed with what
+       * `variables.ts` declares for it. The flags were written and never
+       * exported; the value itself survived only because a one-element array
+       * happens to serialise like its element.
+       *
+       * The two files now agree: single behaves like single_select,
+       * multiple keeps the flags — and those flags are now declared, so a
+       * multiple-choice image question finally reaches the export properly.
+       */
+      if (q.type === "image_select" && (q.settings?.maxSelections ?? 1) === 1) {
+        out[varName] = Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
+        break;
+      }
       const arr = Array.isArray(value) ? value : value == null ? [] : [value];
       out[varName] = arr;
       for (const opt of q.options) {
-        out[`${varName}_${opt.code}`] = arr.some((v) => String(v) === String(opt.code)) ? 1 : 0;
+        out[optionColumn(varName, opt.code, opts.naming)] = arr.some((v) => String(v) === String(opt.code)) ? 1 : 0;
       }
       break;
     }
@@ -204,7 +230,7 @@ function flattenQuestion(q: Question, value: unknown, varName: string, out: Flat
       const arr = Array.isArray(value) ? value : [];
       out[varName] = arr;
       arr.forEach((code, i) => {
-        out[`${varName}_${code}`] = i + 1;
+        out[optionColumn(varName, code as string, opts.naming)] = i + 1;
       });
       break;
     }
@@ -212,7 +238,7 @@ function flattenQuestion(q: Question, value: unknown, varName: string, out: Flat
       if (value && typeof value === "object" && !Array.isArray(value)) {
         let total = 0;
         for (const [code, v] of Object.entries(value as Record<string, unknown>)) {
-          out[`${varName}_${code}`] = v;
+          out[optionColumn(varName, code, opts.naming)] = v;
           const n = Number(v);
           if (Number.isFinite(n)) total += n;
         }
@@ -225,13 +251,13 @@ function flattenQuestion(q: Question, value: unknown, varName: string, out: Flat
       if (value && typeof value === "object" && !Array.isArray(value)) {
         // labeled form fields: keyed by row code
         for (const [rc, v] of Object.entries(value as Record<string, unknown>)) {
-          out[`${varName}_${rc}`] = v;
+          out[rowColumn(varName, rc, opts.naming)] = v;
         }
       } else {
         const arr = Array.isArray(value) ? value : [];
         out[varName] = arr;
         arr.forEach((v, i) => {
-          out[`${varName}_${i + 1}`] = v;
+          out[indexColumn(varName, i + 1, opts.naming)] = v;
         });
       }
       break;
@@ -243,7 +269,7 @@ function flattenQuestion(q: Question, value: unknown, varName: string, out: Flat
     case "slider": {
       if (value && typeof value === "object" && !Array.isArray(value)) {
         for (const [row, v] of Object.entries(value as Record<string, unknown>)) {
-          out[`${varName}_${row}`] = v;
+          out[rowColumn(varName, row, opts.naming)] = v;
         }
       } else {
         out[varName] = value;
@@ -254,10 +280,10 @@ function flattenQuestion(q: Question, value: unknown, varName: string, out: Flat
       if (value && typeof value === "object" && !Array.isArray(value)) {
         for (const [row, v] of Object.entries(value as Record<string, unknown>)) {
           const arr = Array.isArray(v) ? v : v == null ? [] : [v];
-          out[`${varName}_${row}`] = arr;
+          out[rowColumn(varName, row, opts.naming)] = arr;
           for (const col of q.columns.length ? q.columns : []) {
             for (const opt of col.options) {
-              out[`${varName}_${row}_${opt.code}`] = arr.some(
+              out[cellColumn(varName, row, opt.code, opts.naming)] = arr.some(
                 (x) => String(x) === String(opt.code),
               )
                 ? 1
@@ -265,7 +291,7 @@ function flattenQuestion(q: Question, value: unknown, varName: string, out: Flat
             }
           }
           for (const opt of q.options) {
-            out[`${varName}_${row}_${opt.code}`] = arr.some(
+            out[cellColumn(varName, row, opt.code, opts.naming)] = arr.some(
               (x) => String(x) === String(opt.code),
             )
               ? 1
@@ -337,7 +363,7 @@ function flattenQuestion(q: Question, value: unknown, varName: string, out: Flat
       const n = Math.max(1, q.settings.maxFiles ?? 1);
       for (let i = 0; i < n; i++) {
         const f = files[i] as { url?: string; name?: string; size?: number } | undefined;
-        const stem = n === 1 ? varName : `${varName}_${i + 1}`;
+        const stem = n === 1 ? varName : indexColumn(varName, i + 1, opts.naming);
         out[`${stem}_URL`] = exportMediaUrl(f?.url, opts);
         out[`${stem}_NAME`] = f?.name ?? "";
         out[`${stem}_SIZE`] = f?.size ?? "";

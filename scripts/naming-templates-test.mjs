@@ -161,5 +161,42 @@ assert.equal(def.questions.find((q) => q.id === "q1").variableName, "SCREENED_IN
   "and the definition is untouched by the refused rename");
 console.log("✔ a colliding rename is refused in place, with a reason");
 
+/* ------------------- 7. the derived-suffix scheme, and why it locks */
+
+await openNaming();
+await page.waitForSelector('[data-testid="suffix-scheme"]');
+
+/*
+ * The sandbox reports no responses, so the scheme is editable. On a live
+ * study it is locked: changing it renames hundreds of columns and, unlike
+ * renaming one variable, nothing can rewrite the references — saved analyses
+ * name dictionary columns directly.
+ */
+assert.equal(await page.isDisabled('[data-testid="suffix-option"]'), false,
+  "a survey with no responses can still choose its scheme");
+
+const before = await page.inputValue('[data-testid="suffix-cell"]');
+assert.equal(before, "{base}_{row}_{column}", `the default scheme is shown, got ${before}`);
+
+await page.fill('[data-testid="suffix-option"]', "{base}");
+await page.waitForSelector('[data-testid="suffix-problem"]');
+const problem = await page.textContent('[data-testid="suffix-problem"]');
+assert.match(problem, /\{code\}/, `a pattern that collapses columns must be refused: ${problem}`);
+console.log("✔ a suffix pattern that would give every option one column is rejected");
+
+await page.click('[data-testid="suffix-preset"] >> text=Compact');
+await page.waitForTimeout(500);
+def = await h.readDef();
+assert.equal(def.variableNaming?.cell, "{base}r{row}c{column}", "the scheme is stored on the survey");
+console.log("✔ a suffix preset is applied and stored on the survey");
+
+await openNaming();
+await page.click('[data-testid="suffix-preset"] >> text=Underscores');
+await page.waitForTimeout(500);
+def = await h.readDef();
+assert.equal(def.variableNaming, undefined,
+  "returning to the default stores nothing, so an untouched survey stays byte-identical");
+console.log("✔ returning to the default clears the setting rather than storing it");
+
 await h.close();
 console.log("\nALL NAMING TEMPLATE CHECKS PASSED");
