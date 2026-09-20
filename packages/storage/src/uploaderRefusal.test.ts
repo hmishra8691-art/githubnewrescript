@@ -127,6 +127,28 @@ test("a single PUT refused with 403 fails, in the store's words", async () => {
   assert.equal(h.stored.has("m1"), false);
 });
 
+test("both accounts reach the researcher — the store's and the browser's", async () => {
+  /*
+   * The live failure this was written for: the browser saw no answer at all
+   * (consistent with a blocked cross-origin request) while the server, which
+   * has no cross-origin anything, was told 403 by the same store. Either
+   * sentence alone sends somebody to a different half of the system; the pair
+   * says the store is refusing everyone.
+   *
+   * An earlier version of the fix preferred the client's message and dropped
+   * the server's, which is the more diagnostic of the two.
+   */
+  const h = harness({ putThrows: true });
+  const u = upload(h);
+  await u.begin();
+  u.push(file(483_940));
+  const out = await u.finish(0);
+
+  assert.equal(out.ok, false);
+  assert.ok(!out.ok && /did not reach storage/.test(out.error), `the server's account is missing: "${!out.ok && out.error}"`);
+  assert.ok(!out.ok && /cross-origin/i.test(out.error), `the browser's account is missing: "${!out.ok && out.error}"`);
+});
+
 test("a PUT that never gets an answer says so — a blocked cross-origin request looks like this", async () => {
   /*
    * A bucket with no CORS rule for this origin does not answer 403; the

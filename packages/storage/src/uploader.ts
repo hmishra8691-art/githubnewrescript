@@ -321,11 +321,23 @@ export class RecordingUploader {
     const reply = await res.json().catch(() => ({}));
     if (!res.ok || !reply.ok) {
       /*
-       * The client's reason first when it has one: the server can only report
-       * that the object is not there, while this browser watched it be
-       * refused and knows why.
+       * BOTH ACCOUNTS, BECAUSE THEY ARE ABOUT DIFFERENT THINGS.
+       *
+       * The browser's is about the send: whether the bytes left this machine
+       * and what the store said if anything. The server's is about the store:
+       * whether the object can be found afterwards, in the store's own words.
+       *
+       * The first version of this preferred the client's and dropped the
+       * server's, which threw away the more diagnostic half. In the live
+       * failure this was written for, the browser reported "no answer from
+       * the store" — consistent with a blocked cross-origin request — while
+       * the server, which has no cross-origin anything, reported
+       * `Reading the object failed (403)`. Either sentence alone points at a
+       * different fix; together they say the store is refusing everyone, and
+       * that is the true one.
        */
-      const why = this.partFailure ?? reply.error ?? "Your answer could not be saved.";
+      const why = [reply.error, this.partFailure].filter(Boolean).join(" ")
+        || "Your answer could not be saved.";
       this.set({ phase: "failed", message: why });
       this.tell("upload_failed", { reason: reply.error ?? res.status, partFailure: this.partFailure });
       return { ok: false, error: why };
