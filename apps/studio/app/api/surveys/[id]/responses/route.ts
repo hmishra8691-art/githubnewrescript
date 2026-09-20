@@ -6,6 +6,7 @@ import { responsesToCSV, exportResponsesXlsx, responsesToSav, responsesToSavBund
 import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
 import { audit, isFailure, requireProject } from "@/lib/guard";
 import { resolveExportVersions } from "@/lib/exportVersions";
+import { exportEnvironmentOf } from "@/lib/exportEnvironment";
 
 export const dynamic = "force-dynamic";
 
@@ -62,13 +63,21 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
    * anywhere.
    */
   if (format !== "summary") {
-    // METERING: a read-only project may still export only when the configuration allows it; the download is a usage event either way
-    const meter = getMeter();
-    /* the file's own dataset decides this: `include=test` is test work */
-    const mctx = projectContext(gate, include === "test" ? "TEST" : "LIVE");
-    const blocked = await assertNotReadOnly(meter, mctx, "export");
+    /*
+     * The READ-ONLY check happens here, before any work: a project at its
+     * limit should be refused before it spends a large export's worth of
+     * database reads, not after.
+     *
+     * It asks with the environment the REQUEST implies, which is the only
+     * thing known this early and is the right question for a permission
+     * check — "may this project export live data at all".
+     */
+    const blocked = await assertNotReadOnly(
+      getMeter(),
+      projectContext(gate, include === "test" ? "TEST" : "LIVE"),
+      "export",
+    );
     if (blocked) return blocked;
-    void recordUsage(meter, mctx, { eventType: "EXPORT_GENERATION", quantity: 1, metadata: { format, dataset, include } });
     await audit({
       action: "responses.exported", userId: gate.user.userId, sessionId: gate.user.sessionId,
       surveyId: params.id, customerId: gate.user.customerId,
@@ -246,6 +255,38 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
    * comes back in `warnings` for the header of the delivery rather than
    * being silently resolved one way or the other.
    */
+  /*
+   * R12 — THE ENVIRONMENT OF AN EXPORT IS WHAT LEFT THE PLATFORM.
+   *
+   * This used to be `include === "test" ? "TEST" : "LIVE"` — the environment
+   * taken from a request parameter describing which rows to ASK for, not from
+   * what the file turned out to contain. `include=live` and `include=all` both
+   * became LIVE, so exporting a survey that has only ever been tested recorded
+   * production usage. Every one of the 22 such events in the database was
+   * written against a survey with zero live responses, and three of them were
+   * written after R12 was marked done.
+   *
+   * Nothing was mis-BILLED by it — EXPORT_GENERATION is non-billable today —
+   * which is exactly why it survived: the number it corrupts is the usage
+   * record, and nobody reconciles a record that costs nothing. It would have
+   * started mattering at the first period close, against events by then
+   * grouped and invoiced by environment.
+   *
+   * The honest rule is the one a data-protection question actually asks: did
+   * production data leave the platform? So the answer comes from the rows.
+   */
+  const exportEnvironment = exportEnvironmentOf((resp ?? []) as { is_test?: boolean | null }[]);
+  void recordUsage(getMeter(), projectContext(gate, exportEnvironment), {
+    eventType: "EXPORT_GENERATION",
+    quantity: 1,
+    metadata: {
+      format, dataset, include,
+      /* both numbers, so a period close can be reconciled without re-deriving them */
+      rows: (resp ?? []).length,
+      liveRows: (resp ?? []).filter((r: any) => r.is_test === false).length,
+    },
+  });
+
   const versioned = await resolveExportVersions(db, (resp ?? []) as any[], {
     versionId: survey.current_version_id,
     version: String(ver!.version),
