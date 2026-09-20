@@ -75,3 +75,4 @@ export * from "./namingTemplates.js";
 export * from "./derivedNames.js";
 export * from "./questionShape.js";
 export * from "./interview.js";
+export * from "./versionedDictionary.js";
