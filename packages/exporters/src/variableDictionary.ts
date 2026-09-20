@@ -46,6 +46,20 @@ export async function exportVariableDictionaryXlsx(
     { header: "Response Type", key: "responseType", width: 16 },
     { header: "Codes", key: "codes", width: 16 },
     { header: "Value Labels", key: "valueLabels", width: 40 },
+    /*
+     * §44 — the delivery properties. They are appended HERE, next to the
+     * other value-level columns rather than at the end, because a dictionary
+     * is read by a person: "what are the codes, which of them mean nothing,
+     * what is this column called in the file" is one question asked three
+     * ways, and splitting it across the sheet makes the reader hunt.
+     *
+     * Existing column positions after this point shift, which is safe: this
+     * sheet is read by people, not by scripts. The RESPONSE exports are the
+     * ones whose column order is a contract.
+     */
+    { header: "Export Name", key: "exportName", width: 20 },
+    { header: "Missing Values", key: "missingValues", width: 16 },
+    { header: "Measure", key: "measure", width: 10 },
     { header: "Page", key: "pageId", width: 14 },
     { header: "Section", key: "sectionId", width: 16 },
     { header: "Derived", key: "derived", width: 9 },
@@ -71,6 +85,9 @@ export async function exportVariableDictionaryXlsx(
       valueLabels: Object.entries(v.valueLabels)
         .map(([code, label]) => `${code}=${label}`)
         .join("; "),
+      exportName: v.exportName ?? "",
+      missingValues: (v.missingValues ?? []).join("; "),
+      measure: v.measure ?? "",
       pageId: v.pageId ?? "",
       sectionId: v.sectionId ?? "",
       derived: v.derived ? "Y" : "",

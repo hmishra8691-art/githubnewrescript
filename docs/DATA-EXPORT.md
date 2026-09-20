@@ -1,6 +1,6 @@
 # Data export — statistical formats and the code/label choice
 
-§44, phases 1–3. What a response dataset can be downloaded as, and what each
+§44, phases 1–4. What a response dataset can be downloaded as, and what each
 format does with the difference between a code and its label.
 
 `docs/RESPONSE-DATA.md` covers the dataset filter (all / clean / custom) that
@@ -379,7 +379,79 @@ boundary test passed with a naive search-and-replace until the fixture put
 check passed with the check deleted until a case was written that the
 namespace check could not already catch.
 
+---
+
+# Export presets and the data dictionary (phase 4)
+
+## Presets
+
+A saved set of export choices — format, codes or labels, which dataset,
+whether the dictionary travels with it — under a name a team recognises.
+Three ship built in: **SPSS Research Export** (codes, clean dataset,
+dictionary included), **Client Data Export** (labelled Excel, reads without
+the questionnaire) and **Raw Data Export** (everything, codes only).
+
+They are **workspace-scoped**, in `public.data_export_presets`, not on the
+survey. A delivery standard belongs to the team: a tracker's wave 6 has to
+export exactly as wave 1 did, and a new study should start from the house
+standard rather than from whatever was last clicked.
+
+> Not to be confused with `EXPORT_PRESETS` in `exportConfig.ts`, which decides
+> how much of the **questionnaire** to include when sharing a specification.
+> Different thing, same menu — which is exactly why it was not overloaded.
+
+### It works before migration 0042 is applied
+
+Every branch that touches the table treats a missing relation as "no saved
+presets" and names the migration, the same way the responses export already
+handles columns added by later migrations. So the built-in presets work on day
+one, the save box is disabled with the reason on screen, and saving lights up
+when the migration runs. A researcher who cannot download their data because a
+migration is pending has lost the study, not a column.
+
+Stored rows are validated by `DataExportPreset` **on the way out** as well as
+in, and an unparseable row is dropped from the list. A row written by an older
+build must not be able to make a newer one export something it did not mean
+to, and an unrecognised format quietly becoming CSV is the sort of thing
+nobody notices until the client opens it.
+
+## The data dictionary
+
+`variableDictionaryToCSV` and `exportVariableDictionaryXlsx` now carry the
+phase-2 delivery columns — **Export Name**, **Missing Values**, **Measure** —
+next to the other value-level columns rather than appended at the end, because
+"what are the codes, which of them mean nothing, what is this column called in
+the file" is one question asked three ways. That shifts later column positions,
+which is safe here: the dictionary is read by people. The **response** exports
+are the ones whose column order is a contract.
+
+`dictionary=1` ships it with the data:
+
+- **SAS** already delivers a zip, so the dictionary joins it.
+- **SPSS** is a single file, so asking for the dictionary turns the download
+  into a zip (`.sav` + dictionary + README). That is a visible change in what
+  the researcher gets, so a bare `format=sav` still returns the single file it
+  returned in phase 1 and every script pointed at it keeps working.
+
+## Verifying a change here
+
+```bash
+pnpm --filter @rescript/exporters test
+node scripts/export-presets-test.mjs
+```
+
+The browser suite runs against the **degraded** path deliberately — presets
+returning `saveable: false` — because that is what the database looks like
+until 0042 runs, and it is the state most likely to be broken and least likely
+to be noticed.
+
+One note on how that suite is written: it asserts the preset **name box** is
+disabled, not the save button. The button is disabled whenever the box is
+empty, so checking it proved only that the box was empty — the first version
+passed with the `saveable` guard deleted.
+
 ## Still to come in §44
 
-Saved data-export presets, and the generated data dictionary shipped alongside
-the statistical exports.
+Nothing — phases 1 to 4 cover the brief. The remaining known gap is that
+naming templates govern a question's base variable only; derived suffixes
+(`_R1`, `_LAT`) stay with the engine, for the reason given in phase 3.

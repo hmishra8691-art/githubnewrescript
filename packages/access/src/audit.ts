@@ -99,6 +99,10 @@ export const AUDIT_EVENTS = [
    * do to their own data.
    */
   "responses.exported",
+  /* §44.4 — a workspace-wide delivery standard changing is worth recording:
+     it silently changes what every future export of every study looks like */
+  "responses.export_preset_created",
+  "responses.export_preset_deleted",
   "responses.purged",
   "survey.exported",
 
@@ -254,6 +258,8 @@ export function describeEvent(r: AuditRow): string {
     case "responses.deleted": return `${who} deleted response data${d.count ? ` (${str(d.count)} rows)` : ""}`;
     case "responses.imported": return `${who} imported response data${d.count ? ` (${str(d.count)} rows)` : ""}`;
     case "responses.exported": return `${who} exported response data${d.format ? ` as ${str(d.format).toUpperCase()}` : ""}${d.dataset ? ` (${str(d.dataset)})` : ""}`;
+    case "responses.export_preset_created": return `${who} saved the export preset “${str(d.name)}” for the whole workspace`;
+    case "responses.export_preset_deleted": return `${who} deleted an export preset`;
     case "responses.purged": return `${who} permanently purged response data${d.count ? ` (${str(d.count)} rows)` : ""}`;
     case "survey.exported": return `${who} exported the survey${d.format ? ` as ${str(d.format).toUpperCase()}` : ""}`;
 

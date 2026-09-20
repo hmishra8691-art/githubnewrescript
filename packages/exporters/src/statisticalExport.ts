@@ -5,6 +5,7 @@ import { buildXpt, buildSasSyntax, sasVariableFor, type SasVariable } from "./sa
 import { renderValue, renderHeader, type ValueMode, type HeaderMode } from "./valueRendering.js";
 import type { ResponseStateLike } from "./csv.js";
 import { buildZip } from "./zip.js";
+import { variableDictionaryToCSV } from "./csv.js";
 
 /**
  * ONE MATRIX, EVERY FORMAT (§44).
@@ -256,7 +257,7 @@ export function renderMatrix(
 export function responsesToSasBundle(
   def: SurveyDefinition,
   states: ResponseStateLike[],
-  opts: MatrixOptions & { csv: string } = { csv: "" },
+  opts: MatrixOptions & { csv: string; includeDictionary?: boolean } = { csv: "" },
 ): Buffer {
   const code = def.meta.code ?? "SURVEY";
   const csvName = `${code}_responses.csv`;
@@ -264,6 +265,16 @@ export function responsesToSasBundle(
     { name: csvName, data: opts.csv },
     { name: `${code}.sas`, data: responsesToSasSyntax(def, states, { ...opts, csvName }) },
     { name: `${code}.xpt`, data: responsesToXpt(def, states, opts) },
+    /*
+     * §44.5 — the data dictionary travels WITH the data when asked for.
+     * A statistical file already carries labels as metadata, but the person
+     * who has to reconcile the delivery against the questionnaire wants a
+     * table they can read, and a dictionary emailed separately a day later
+     * is a dictionary for a different version of the study.
+     */
+    ...(opts.includeDictionary
+      ? [{ name: `${code}_dictionary.csv`, data: variableDictionaryToCSV(def) }]
+      : []),
     {
       name: "README.txt",
       data: [
@@ -276,6 +287,40 @@ export function responsesToSasBundle(
         "",
         "To use the CSV: open the .sas file, set the `path` macro variable to the",
         "folder holding the CSV, and run it.",
+        "",
+        `Exported ${new Date().toISOString()}`,
+      ].join("\n"),
+    },
+  ]);
+}
+
+/**
+ * SPSS with the data dictionary beside it.
+ *
+ * A `.sav` is one file and cannot carry a second one, so asking for the
+ * dictionary turns the delivery into a zip. That is a visible change in what
+ * the researcher downloads, which is why it only happens when they ask:
+ * `format=sav` on its own still returns a bare `.sav`, as it did in phase 1,
+ * and every script pointed at that endpoint keeps working.
+ */
+export function responsesToSavBundle(
+  def: SurveyDefinition,
+  states: ResponseStateLike[],
+  opts: MatrixOptions = {},
+): Buffer {
+  const code = def.meta.code ?? "SURVEY";
+  return buildZip([
+    { name: `${code}.sav`, data: responsesToSav(def, states, opts) },
+    { name: `${code}_dictionary.csv`, data: variableDictionaryToCSV(def) },
+    {
+      name: "README.txt",
+      data: [
+        `SPSS export — ${code}${def.meta.title ? ` (${def.meta.title})` : ""}`,
+        "",
+        `${code}.sav              the data, with variable labels, value labels and`,
+        "                          declared missing values as metadata",
+        `${code}_dictionary.csv   the same dictionary as a table, for reading and`,
+        "                          for reconciling the delivery against the questionnaire",
         "",
         `Exported ${new Date().toISOString()}`,
       ].join("\n"),

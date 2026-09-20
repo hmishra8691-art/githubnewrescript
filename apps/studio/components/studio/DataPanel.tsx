@@ -73,6 +73,13 @@ export function DataPanel() {
    */
   const [values, setValues] = React.useState<"code" | "label" | "code_label">("code");
   const [showExports, setShowExports] = React.useState(false);
+  /* §44.4 — saved delivery settings, workspace-wide */
+  const [presets, setPresets] = React.useState<any[] | null>(null);
+  const [presetsSaveable, setPresetsSaveable] = React.useState(true);
+  const [presetName, setPresetName] = React.useState("");
+  const [presetNote, setPresetNote] = React.useState<string | null>(null);
+  const [withDictionary, setWithDictionary] = React.useState(false);
+  const [format, setFormat] = React.useState<"csv" | "xlsx" | "json" | "sav" | "sas">("csv");
   const [meta, setMeta] = React.useState<{ total: number; included: number } | null>(null);
   const datasetParam = dataset === "custom" ? `custom:${exclude.join(",")}` : dataset;
 
@@ -112,6 +119,56 @@ export function DataPanel() {
   }, [columns, rows, onlyAnswered]);
 
   const hasQuality = !!rows?.some((r) => r.quality);
+  const loadPresets = React.useCallback(async () => {
+    try {
+      const r = await fetch(`/api/surveys/${s.surveyDbId}/export-presets`);
+      const j = await r.json();
+      setPresets(j.presets ?? []);
+      setPresetsSaveable(j.saveable !== false);
+      setPresetNote(j.note ?? null);
+    } catch {
+      setPresets([]);
+    }
+  }, [s.surveyDbId]);
+
+  React.useEffect(() => { if (showExports && presets === null) void loadPresets(); }, [showExports, presets, loadPresets]);
+
+  /** Put a preset's choices into the controls; the user still presses download. */
+  const usePreset = (p: any) => {
+    setFormat(p.format ?? "csv");
+    setValues(p.values ?? "code");
+    setWithDictionary(!!p.includeDictionary);
+    if (p.dataset === "clean") setDataset("clean");
+    else if (typeof p.dataset === "string" && p.dataset.startsWith("custom:")) {
+      setDataset("custom");
+      setExclude(p.dataset.slice(7).split(",").filter(Boolean));
+    } else setDataset("all");
+  };
+
+  const savePreset = async () => {
+    const name = presetName.trim();
+    if (!name) return;
+    const r = await fetch(`/api/surveys/${s.surveyDbId}/export-presets`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name, format, values, headers: "name",
+        dataset: datasetParam, quality: hasQuality || dataset !== "all",
+        includeDictionary: withDictionary,
+      }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { setPresetNote(j.error ?? "That preset could not be saved."); return; }
+    setPresetName("");
+    setPresetNote(null);
+    await loadPresets();
+  };
+
+  const deletePreset = async (id: string) => {
+    await fetch(`/api/surveys/${s.surveyDbId}/export-presets?preset=${encodeURIComponent(id)}`, { method: "DELETE" });
+    await loadPresets();
+  };
+
   const exportUrl = (format: string, extra = "") =>
     `/api/surveys/${s.surveyDbId}/responses?format=${format}&include=${include}&dataset=${encodeURIComponent(datasetParam)}${extra}`;
   /*
@@ -123,8 +180,16 @@ export function DataPanel() {
   const valuesParam = values === "code" ? "" : `&values=${values}`;
   const csvHref = exportUrl("csv", `${hasQuality || dataset !== "all" ? "&quality=1" : ""}${valuesParam}`);
   const xlsxHref = exportUrl("xlsx", `&quality=1${valuesParam}`);
-  const savHref = exportUrl("sav");
-  const sasHref = exportUrl("sas");
+  const dictParam = withDictionary ? "&dictionary=1" : "";
+  const savHref = exportUrl("sav", dictParam);
+  const sasHref = exportUrl("sas", dictParam);
+  /* the one the preset selected, so "download" means what the preset says */
+  const presetHref =
+    format === "sav" ? savHref
+    : format === "sas" ? sasHref
+    : format === "xlsx" ? xlsxHref
+    : format === "json" ? exportUrl("json", valuesParam)
+    : csvHref;
   const active = include === "test" ? summary?.test : include === "live" ? summary?.live : null;
 
   return (
@@ -167,6 +232,49 @@ export function DataPanel() {
       {showExports && (
         <div data-testid="export-panel"
           style={{ marginBottom: 10, padding: "12px 14px", border: "1px solid var(--border, #e5e9f0)", borderRadius: 8, background: "var(--surface-2, #fafbfc)" }}>
+          {/* ---------------------------------------------- saved deliveries */}
+          <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 6 }}>Export presets</div>
+          <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 6 }} data-testid="export-presets">
+            {(presets ?? []).map((p) => (
+              <span key={p.id} className="row" style={{ gap: 2 }}>
+                <button className="btn small" data-testid="export-preset"
+                  title={p.description ?? ""} onClick={() => usePreset(p)}>{p.name}</button>
+                {!String(p.id).startsWith("builtin_") && (
+                  <button className="btn small" data-testid="export-preset-delete"
+                    title="Delete this preset" onClick={() => void deletePreset(p.id)}>×</button>
+                )}
+              </span>
+            ))}
+            {presets !== null && presets.length === 0 && (
+              <span className="muted" style={{ fontSize: 12 }}>No presets yet.</span>
+            )}
+            <a className="btn small primary" href={presetHref} target="_blank" data-testid="export-preset-download">
+              ⬇ Download as {format.toUpperCase()}
+            </a>
+          </div>
+          <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 4, alignItems: "center" }}>
+            <input className="input" style={{ width: 200 }} placeholder="Save these settings as…"
+              data-testid="export-preset-name" value={presetName}
+              disabled={!presetsSaveable}
+              onChange={(e) => setPresetName(e.target.value)} />
+            <button className="btn small" data-testid="export-preset-save"
+              disabled={!presetsSaveable || !presetName.trim()}
+              onClick={() => void savePreset()}>Save preset</button>
+            <label className="row" style={{ gap: 6, fontSize: 12.5 }}>
+              <input type="checkbox" data-testid="export-with-dictionary"
+                checked={withDictionary} onChange={(e) => setWithDictionary(e.target.checked)} />
+              Include the data dictionary
+            </label>
+          </div>
+          {presetNote && (
+            <div className="muted" data-testid="export-preset-note" style={{ fontSize: 12, marginBottom: 10 }}>{presetNote}</div>
+          )}
+          <p className="muted" style={{ fontSize: 12, margin: "2px 0 14px" }}>
+            A preset is a saved set of these choices, shared across every study in the workspace.
+            Selecting one fills the controls; the download still happens when you press it.
+            {withDictionary ? " With the dictionary included, SPSS and SAS download as a zip." : ""}
+          </p>
+
           <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 8 }}>Statistical formats</div>
           <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
             <a className="btn small" href={savHref} target="_blank" data-testid="export-sav"

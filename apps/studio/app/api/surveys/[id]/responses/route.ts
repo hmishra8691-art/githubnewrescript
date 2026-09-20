@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { assertNotReadOnly, getMeter, projectContext, recordUsage } from "@/lib/metering";
 import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
-import { responsesToCSV, exportResponsesXlsx, responsesToSav, responsesToSasBundle, inDataset, ENVIRONMENT_COLUMNS, environmentCells, QUALITY_CSV_COLUMNS, qualityCsvCells, SAMPLE_COLUMNS, sampleCells, VALUE_MODES, renderValue, dictionaryIndex, type DatasetFilter, type QualityExportRow, type ValueMode } from "@rescript/exporters";
+import { responsesToCSV, exportResponsesXlsx, responsesToSav, responsesToSavBundle, responsesToSasBundle, inDataset, ENVIRONMENT_COLUMNS, environmentCells, QUALITY_CSV_COLUMNS, qualityCsvCells, SAMPLE_COLUMNS, sampleCells, VALUE_MODES, renderValue, dictionaryIndex, type DatasetFilter, type QualityExportRow, type ValueMode } from "@rescript/exporters";
 import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
 import { audit, isFailure, requireProject } from "@/lib/guard";
 
@@ -44,6 +44,13 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
    * It applies to the text formats only. SPSS and SAS carry codes in the
    * cells and the labels as metadata, which is the whole reason to use them.
    */
+  /*
+   * `dictionary=1` ships the data dictionary with the data (§44.5). For a
+   * `.sav` that turns the download into a zip, which is a visible change in
+   * what the researcher gets — so it only happens when asked, and a bare
+   * `format=sav` returns the same single file it did in phase 1.
+   */
+  const withDictionary = req.nextUrl.searchParams.get("dictionary") === "1";
   const valuesParam = req.nextUrl.searchParams.get("values");
   const valueMode: ValueMode = VALUE_MODES.some((m) => m.mode === valuesParam) ? (valuesParam as ValueMode) : "code";
 
@@ -243,6 +250,15 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const fileBase = `${parsed.data.meta.code}_${include}${dataset.kind !== "all" ? `_${dataset.kind}` : ""}`;
     const mediaBaseUrl = process.env.STUDIO_PUBLIC_URL ?? null;
     if (format === "sav") {
+      if (withDictionary) {
+        const buf = responsesToSavBundle(parsed.data, states as any, { mediaBaseUrl });
+        return new NextResponse(new Uint8Array(buf), {
+          headers: {
+            "content-type": "application/zip",
+            "content-disposition": `attachment; filename="${fileBase}_spss.zip"`,
+          },
+        });
+      }
       const buf = responsesToSav(parsed.data, states as any, { mediaBaseUrl });
       return new NextResponse(new Uint8Array(buf), {
         headers: {
@@ -258,7 +274,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
      * the full names, labels and PROC FORMAT value labels beside it.
      */
     const csvForSas = responsesToCSV(parsed.data, states as any, undefined, { mediaBaseUrl });
-    const buf = responsesToSasBundle(parsed.data, states as any, { mediaBaseUrl, csv: csvForSas });
+    const buf = responsesToSasBundle(parsed.data, states as any, { mediaBaseUrl, csv: csvForSas, includeDictionary: withDictionary });
     return new NextResponse(new Uint8Array(buf), {
       headers: {
         "content-type": "application/zip",

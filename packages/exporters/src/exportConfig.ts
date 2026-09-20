@@ -1,5 +1,6 @@
 import type { SurveyDefinition, Question } from "@rescript/schema";
 import { flowOutline, blockSize, stripHtmlText, type BlockRef } from "@rescript/engine";
+import type { DataExportPreset } from "@rescript/schema";
 
 /**
  * What an export contains.
@@ -327,3 +328,54 @@ export function scrubNode(node: any, fields: ExportFields): any {
 }
 
 export const plainText = text;
+
+/* ------------------------------------------------------------------------ */
+
+/**
+ * BUILT-IN DATA EXPORT PRESETS (§44, phase 4).
+ *
+ * Note carefully: these are NOT `EXPORT_PRESETS` above. That set decides how
+ * much of the QUESTIONNAIRE to include when sharing a specification — which
+ * has nothing to do with delivering response data, and overloading it would
+ * have given one name two meanings in a codebase where both appear in the
+ * same menu.
+ *
+ * These three exist so the feature is useful before anyone saves anything.
+ * They are the deliveries a research team actually produces: the file the
+ * data processor wants, the file the client opens, and the raw one.
+ */
+export const BUILT_IN_EXPORT_PRESETS: DataExportPreset[] = [
+  {
+    id: "builtin_spss_research",
+    name: "SPSS Research Export",
+    description: "Codes with labels as metadata, clean dataset, dictionary included.",
+    format: "sav",
+    values: "code",
+    headers: "name",
+    dataset: "clean",
+    quality: false,
+    includeDictionary: true,
+  },
+  {
+    id: "builtin_client_data",
+    name: "Client Data Export",
+    description: "Excel with labels instead of codes, so it reads without the questionnaire.",
+    format: "xlsx",
+    values: "label",
+    headers: "name_label",
+    dataset: "clean",
+    quality: false,
+    includeDictionary: false,
+  },
+  {
+    id: "builtin_raw_data",
+    name: "Raw Data Export",
+    description: "Everything, codes only, including responses under review.",
+    format: "csv",
+    values: "code",
+    headers: "name",
+    dataset: "all",
+    quality: true,
+    includeDictionary: false,
+  },
+];

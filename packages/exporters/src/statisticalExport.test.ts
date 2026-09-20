@@ -11,8 +11,24 @@ import {
   ibmDouble,
   spssName,
   sasName,
+  responsesToSavBundle,
+  responsesToSasBundle,
+  variableDictionaryToCSV,
+  BUILT_IN_EXPORT_PRESETS,
   type ResponseStateLike,
 } from "./index.js";
+import { DataExportPreset } from "@rescript/schema";
+
+/** Entry names in a stored zip, read straight from the central directory. */
+function zipEntryNames(buf: Buffer): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < buf.length - 4; i++) {
+    if (buf.readUInt32LE(i) !== 0x02014b50) continue;   // central directory header
+    const nameLen = buf.readUInt16LE(i + 28);
+    out.push(buf.toString("utf8", i + 46, i + 46 + nameLen));
+  }
+  return out;
+}
 
 /**
  * These tests READ THE FILES BACK.
@@ -534,4 +550,71 @@ test("the SAS syntax marks the codes that mean no answer", () => {
   assert.match(line!, /declared missing/, "and be marked as a missing code");
   const male = sas.split("\n").find((l) => l.includes("'Male'"));
   assert.doesNotMatch(male!, /declared missing/, "a real answer must not be marked");
+});
+
+/* ------------------------------------- §44 phase 4: dictionary and presets */
+
+test("the data dictionary carries the delivery properties", () => {
+  const def = withOverrides(makeSurvey(), [
+    { name: "GENDER", label: "What is your gender?", dataType: "numeric", responseType: "single_select",
+      valueCodes: [], valueLabels: {}, derived: false, hidden: false,
+      missingValues: [99], exportName: "S1_GENDER", measure: "nominal" },
+  ]);
+  const csv = variableDictionaryToCSV(def);
+  const [header, ...rows] = csv.trim().split("\n");
+  assert.ok(header.includes("Export Name"), header);
+  assert.ok(header.includes("Missing Values"), header);
+  assert.ok(header.includes("Measure"), header);
+
+  const line = rows.find((r) => r.startsWith("GENDER,"));
+  assert.ok(line, "the variable must be in the dictionary");
+  assert.ok(line!.includes("S1_GENDER"), `the export name must be there: ${line}`);
+  assert.ok(line!.includes("99"), `the missing code must be there: ${line}`);
+  assert.ok(line!.includes("nominal"), `the measure must be there: ${line}`);
+});
+
+test("asking for the dictionary with SPSS gives a zip containing both", () => {
+  /*
+   * A .sav is one file, so the dictionary cannot ride inside it. Asking for
+   * it changes the shape of the download, which is why it is opt-in — a bare
+   * format=sav must keep returning the single file it returned in phase 1.
+   */
+  const def = makeSurvey();
+  const bundle = responsesToSavBundle(def, states);
+  const names = zipEntryNames(bundle);
+  assert.ok(names.some((n) => n.endsWith(".sav")), names.join(", "));
+  assert.ok(names.some((n) => n.endsWith("_dictionary.csv")), names.join(", "));
+  assert.ok(names.includes("README.txt"));
+
+  // and the plain call is untouched
+  const plain = responsesToSav(def, states);
+  assert.equal(plain.toString("latin1", 0, 4), "$FL2", "format=sav on its own is still a bare .sav");
+});
+
+test("the SAS bundle includes the dictionary only when asked", () => {
+  const def = makeSurvey();
+  const without = zipEntryNames(responsesToSasBundle(def, states, { csv: "a,b\n1,2\n" }));
+  assert.equal(without.some((n) => n.includes("dictionary")), false, without.join(", "));
+
+  const with_ = zipEntryNames(responsesToSasBundle(def, states, { csv: "a,b\n1,2\n", includeDictionary: true }));
+  assert.ok(with_.some((n) => n.endsWith("_dictionary.csv")), with_.join(", "));
+  // the rest of the bundle is unchanged
+  assert.ok(with_.some((n) => n.endsWith(".xpt")) && with_.some((n) => n.endsWith(".sas")));
+});
+
+test("the built-in presets are usable settings, not decoration", () => {
+  assert.ok(BUILT_IN_EXPORT_PRESETS.length >= 3);
+  for (const p of BUILT_IN_EXPORT_PRESETS) {
+    assert.ok(p.id.startsWith("builtin_"), `${p.name} must be identifiable as built in`);
+    assert.ok(p.name.trim().length > 0);
+    // every one must survive the schema it is stored and read through
+    const parsed = DataExportPreset.safeParse(p);
+    assert.equal(parsed.success, true, `${p.name}: ${parsed.success ? "" : parsed.error.message}`);
+  }
+  const spss = BUILT_IN_EXPORT_PRESETS.find((p) => p.format === "sav");
+  assert.ok(spss, "a research export in SPSS is the point of the feature");
+  assert.equal(spss!.values, "code", "a statistical export carries codes, not labels");
+
+  const client = BUILT_IN_EXPORT_PRESETS.find((p) => p.name === "Client Data Export");
+  assert.equal(client!.values, "label", "the client file reads without the questionnaire beside it");
 });

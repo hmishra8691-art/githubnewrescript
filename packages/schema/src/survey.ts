@@ -346,6 +346,37 @@ export const NamingTemplate = z.object({
 });
 export type NamingTemplate = z.infer<typeof NamingTemplate>;
 
+/**
+ * A SAVED SET OF EXPORT CHOICES (§44, phase 4).
+ *
+ * "SPSS Research Export", "Client Data Export", "Raw Data" — the settings a
+ * team delivers with, under a name they recognise. Stored workspace-wide in
+ * `public.data_export_presets`, not on the survey, because a delivery
+ * standard belongs to the team: a tracker's wave 6 has to export exactly as
+ * wave 1 did, and a new study should start from the house standard rather
+ * than from whatever was last clicked.
+ *
+ * Validated on the way OUT of the database as well as in. A row written by an
+ * older build must not be able to make a newer one export something it did
+ * not mean to, and an unknown format silently falling through to CSV is the
+ * sort of thing nobody notices until the client opens it.
+ */
+export const DataExportPreset = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+  format: z.enum(["csv", "xlsx", "json", "sav", "sas"]).default("csv"),
+  /** how coded answers are written — ignored by sav/sas, which carry metadata */
+  values: z.enum(["code", "label", "code_label"]).default("code"),
+  headers: z.enum(["name", "label", "name_label"]).default("name"),
+  /** `all`, `clean`, or `custom:CLS1,CLS2` — the same grammar the route parses */
+  dataset: z.string().default("all"),
+  quality: z.boolean().default(false),
+  /** ship the data dictionary alongside the data */
+  includeDictionary: z.boolean().default(false),
+});
+export type DataExportPreset = z.infer<typeof DataExportPreset>;
+
 export const DeploymentConfig = z.object({
   clientSlug: z.string().default("client"),
   studySlug: z.string().default("study-001"),

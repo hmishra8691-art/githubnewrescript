@@ -100,6 +100,10 @@ export function variableDictionaryToCSV(def: SurveyDefinition): string {
     "Response Type",
     "Codes",
     "Value Labels",
+    /* §44 delivery properties — kept in step with the XLSX dictionary */
+    "Export Name",
+    "Missing Values",
+    "Measure",
     "Page",
     "Section",
     "Derived",
@@ -123,6 +127,9 @@ export function variableDictionaryToCSV(def: SurveyDefinition): string {
         Object.entries(v.valueLabels)
           .map(([code, label]) => `${code}=${label}`)
           .join("; "),
+        v.exportName ?? "",
+        (v.missingValues ?? []).join("; "),
+        v.measure ?? "",
         v.pageId ?? "",
         v.sectionId ?? "",
         v.derived ? "Y" : "",
