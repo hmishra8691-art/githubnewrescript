@@ -10,6 +10,7 @@ import {
 } from "@rescript/engine";
 import { AutoPunchPanel } from "./AutoPunchEditor";
 import { useStudio, uid } from "./store";
+import { VariableNameInput } from "./VariableNameInput";
 import { ConditionEditor, conditionToText, OptionalCondition } from "./ConditionBuilder";
 import { NamedExpressionsPanel } from "./NamedExpressionsPanel";
 import { LogicTracePanel } from "./LogicTracePanel";
@@ -560,9 +561,9 @@ export function CalcPanel() {
       {s.def.calculations.map((c, i) => (
         <div key={c.id} className="card" style={{ padding: 12 }}>
           <div className="row" style={{ marginBottom: 6 }}>
-            <input className="input mono" style={{ width: 180 }} value={c.targetVariable}
-              placeholder="TARGET_VAR"
-              onChange={(e) => s.update((d) => { d.calculations[i].targetVariable = e.target.value.toUpperCase(); })} />
+            {/* renames through the safe path — see VariableNameInput */}
+            <VariableNameInput name={c.targetVariable} testId="calc-target-name"
+              placeholder="TARGET_VAR" style={{ width: 180 }} />
             <span className="muted">=</span>
             <input className="input mono grow" value={c.expression}
               placeholder="Q1 + Q2 + Q3"

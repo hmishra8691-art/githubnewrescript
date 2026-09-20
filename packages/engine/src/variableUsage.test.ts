@@ -363,3 +363,87 @@ test("a variable sharing a name with a calc function is handled honestly", () =>
     `it must warn that the search was incomplete, got: ${outOf.warnings.join(" | ")}`,
   );
 });
+
+test("renaming onto a multi-select's base name is refused", () => {
+  /*
+   * THE BUG THIS EXISTS FOR.
+   *
+   * A multi-select called BRANDS produces BRANDS_1, BRANDS_2 and no bare
+   * BRANDS column — so a collision check that looks only at the derived
+   * dictionary does not see BRANDS at all. The rename went through and left
+   * two questions owning one name; the browser suite caught it as a
+   * definition reading ["V2", "V2", "V3"].
+   */
+  const multi = SurveyDefinition.parse({
+    meta: { id: "m", code: "M1", title: "Multi", version: "1.0", status: "draft" },
+    questions: [
+      { id: "q_age", code: "Q1", variableName: "RESP_AGE", type: "numeric", text: "Age?", settings: {} },
+      { id: "q_brands", code: "Q9", variableName: "BRANDS", type: "multi_select", text: "Which brands?",
+        options: [{ code: "1", label: "A" }, { code: "2", label: "B" }], settings: {} },
+    ],
+    flow: [{ type: "page", id: "p1", questionIds: ["q_age", "q_brands"] }, { type: "end", id: "e", status: "complete" }],
+  });
+
+  // the base name is genuinely absent from the dictionary — that is the trap
+  const dict = buildVariableDictionary(multi).map((v) => v.name);
+  assert.equal(dict.includes("BRANDS"), false, `fixture check: a multi-select has no bare column — got ${dict.join(", ")}`);
+  assert.ok(dict.includes("BRANDS_1"), "fixture check: it has per-option flags");
+
+  const r = renameVariable(multi, "RESP_AGE", "BRANDS");
+  assert.equal(r.ok, false, "renaming onto it must still be refused");
+  assert.ok(r.impact.blockers.some((b) => /already a variable/.test(b)), r.impact.blockers.join(" | "));
+});
+
+test("a rename that would collide two DERIVED columns is refused", () => {
+  /*
+   * Neither base name appears in the dictionary, so only checking the RESULT
+   * catches this: two multi-selects renamed so their per-option flags land on
+   * the same names.
+   */
+  const two = SurveyDefinition.parse({
+    meta: { id: "t", code: "T1", title: "Two", version: "1.0", status: "draft" },
+    questions: [
+      { id: "m1", code: "Q8", variableName: "SET_A", type: "multi_select", text: "A?",
+        options: [{ code: "1", label: "A" }, { code: "2", label: "B" }], settings: {} },
+      { id: "m2", code: "Q9", variableName: "SET_B", type: "multi_select", text: "B?",
+        options: [{ code: "1", label: "A" }, { code: "2", label: "B" }], settings: {} },
+    ],
+    flow: [{ type: "page", id: "p1", questionIds: ["m1", "m2"] }, { type: "end", id: "e", status: "complete" }],
+  });
+  const r = renameVariable(two, "SET_A", "SET_B");
+  assert.equal(r.ok, false);
+  assert.ok(
+    r.impact.blockers.some((b) => /already a variable|two columns called/.test(b)),
+    r.impact.blockers.join(" | "),
+  );
+});
+
+test("a collision only visible in the RESULT is caught", () => {
+  /*
+   * The case no comparison of base names can see. FOO_1 is a text question's
+   * whole column; BAR is a multi-select producing BAR_1 and BAR_2. Renaming
+   * BAR to FOO is fine by every name-level check — nothing is called FOO —
+   * and produces a second column called FOO_1.
+   *
+   * Only rebuilding the dictionary and looking for duplicates catches it,
+   * which is why that check is there as well as the namespace one.
+   */
+  const def = SurveyDefinition.parse({
+    meta: { id: "c", code: "C1", title: "Collide", version: "1.0", status: "draft" },
+    questions: [
+      { id: "t1", code: "Q1", variableName: "FOO_1", type: "text", text: "Text", settings: {} },
+      { id: "m1", code: "Q2", variableName: "BAR", type: "multi_select", text: "Multi",
+        options: [{ code: "1", label: "A" }, { code: "2", label: "B" }], settings: {} },
+    ],
+    flow: [{ type: "page", id: "p1", questionIds: ["t1", "m1"] }, { type: "end", id: "e", status: "complete" }],
+  });
+
+  // nothing is called FOO, so every name-level check passes
+  const names = buildVariableDictionary(def).map((v) => v.name);
+  assert.equal(names.includes("FOO"), false, "fixture check: FOO is free");
+  assert.ok(names.includes("FOO_1") && names.includes("BAR_1"), `fixture check: ${names.join(", ")}`);
+
+  const r = renameVariable(def, "BAR", "FOO");
+  assert.equal(r.ok, false, "BAR → FOO would produce two FOO_1 columns");
+  assert.ok(r.impact.blockers.some((b) => /two columns called "FOO_1"/.test(b)), r.impact.blockers.join(" | "));
+});

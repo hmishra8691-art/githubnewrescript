@@ -1,7 +1,9 @@
 "use client";
 import React from "react";
 import type { VariableDef } from "@rescript/schema";
-import { buildVariableDictionary, buildDerivedVariables, lintVariables, renameImpact, applyRename, questionForVariable } from "@rescript/engine";
+import { buildVariableDictionary, buildDerivedVariables, lintVariables, renameImpact, applyRename, questionForVariable,
+  planTemplateRename, applyTemplateRename, STARTER_TEMPLATES, TEMPLATE_TOKENS } from "@rescript/engine";
+import { NamingTemplatesPanel } from "./NamingTemplatesPanel";
 import { useStudio } from "./store";
 
 /**
@@ -29,6 +31,7 @@ export function VariablesPanel() {
   /* the rename box, per open row */
   const [renameTo, setRenameTo] = React.useState("");
   const [alsoCode, setAlsoCode] = React.useState(true);
+  const [view, setView] = React.useState<"dictionary" | "naming">("dictionary");
 
   const vars: VariableDef[] = React.useMemo(() => buildVariableDictionary(s.def), [s.def]);
   const derived: VariableDef[] = React.useMemo(() => buildDerivedVariables(s.def), [s.def]);
@@ -144,8 +147,16 @@ export function VariablesPanel() {
         {overrides.size > 0 && (
           <span className="chip" data-testid="override-count">{overrides.size} edited</span>
         )}
-        <input className="input" style={{ width: 220 }} placeholder="filter…"
-          value={filter} onChange={(e) => setFilter(e.target.value)} />
+        <div className="row" style={{ gap: 4, marginLeft: 8 }} data-testid="variables-view">
+          <button className={`btn small ${view === "dictionary" ? "primary" : ""}`}
+            data-testid="view-dictionary" onClick={() => setView("dictionary")}>Dictionary</button>
+          <button className={`btn small ${view === "naming" ? "primary" : ""}`}
+            data-testid="view-naming" onClick={() => setView("naming")}>Naming standard</button>
+        </div>
+        {view === "dictionary" && (
+          <input className="input" style={{ width: 220 }} placeholder="filter…"
+            value={filter} onChange={(e) => setFilter(e.target.value)} />
+        )}
         <span className="grow" />
         <a className="btn" href={`/api/surveys/${s.surveyDbId}/export/xlsx`} target="_blank">
           ⬇ Export Variable Dictionary (.xlsx)
@@ -154,6 +165,8 @@ export function VariablesPanel() {
       {problems.map((p, i) => (
         <div key={i} className="chip warn" style={{ marginBottom: 8 }}>{p}</div>
       ))}
+      {view === "naming" ? <NamingTemplatesPanel /> : (
+      <>
       <p className="muted" style={{ fontSize: 13 }}>
         Generated automatically from the programmed survey — always in sync. Edit a row to give a
         variable a different label or value labels for export and analysis; the survey itself is
@@ -334,6 +347,8 @@ export function VariablesPanel() {
           </tbody>
         </table>
       </div>
+      </>
+      )}
     </div>
   );
 }

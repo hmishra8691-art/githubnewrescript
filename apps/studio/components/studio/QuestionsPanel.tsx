@@ -39,6 +39,7 @@ import { DeleteQuestionDialog } from "./DeleteQuestionDialog";
 import { Icon } from "../ui/Icon";
 import { useCanvas } from "../canvas/CanvasContext";
 import { LiveView } from "../canvas/LiveView";
+import { VariableNameInput } from "./VariableNameInput";
 
 /**
  * BLOCK COMMANDS — one identifier per action, on the button that performs it.
@@ -874,8 +875,12 @@ export function QuestionEditor({ q }: { q: Question }) {
         <label className="f" style={{ width: 90, marginBottom: 0 }}><span>Code</span>
           <input className="input mono" value={q.code} onChange={(e) => patch({ code: e.target.value })} /></label>
         <label className="f grow" style={{ marginBottom: 0 }}><span>Variable name</span>
-          <input className="input mono" value={q.variableName}
-            onChange={(e) => patch({ variableName: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "_") })} /></label>
+          {/*
+            * Renames through the safe path (§44 phase 3), so every rule, pipe
+            * and expression that names this variable follows it. This used to
+            * be a raw patch, which left them all pointing at the old name.
+            */}
+          <VariableNameInput name={q.variableName} testId="question-variable-name" /></label>
         <VariantSwitcher q={q} />
       </div>
 

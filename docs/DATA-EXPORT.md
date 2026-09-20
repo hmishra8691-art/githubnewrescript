@@ -1,6 +1,6 @@
 # Data export — statistical formats and the code/label choice
 
-§44, phases 1–2. What a response dataset can be downloaded as, and what each
+§44, phases 1–3. What a response dataset can be downloaded as, and what each
 format does with the difference between a code and its label.
 
 `docs/RESPONSE-DATA.md` covers the dataset filter (all / clean / custom) that
@@ -270,8 +270,116 @@ regressions were confirmed to turn it red — a missed condition `ref`, a missed
 pipe, a search-and-replace that clobbers `RESP_AGE_BAND` while renaming
 `RESP_AGE`, a dropped alias check, and a script allowed through.
 
+---
+
+# Naming templates (phase 3)
+
+A study's variable naming convention, saved on the survey and applied to the
+whole questionnaire. Teams already have these conventions; they keep them in a
+Word document and apply them by hand, which is why names drift halfway through
+fieldwork. Variables tab → **Naming standard**.
+
+## Tokens
+
+| Token | Gives |
+|---|---|
+| `{number}` | position in the survey; `{number:2}` pads to `01` |
+| `{section}` | the page or block number |
+| `{n_in_section}` | position within that section |
+| `{code}` / `{question}` | the question code |
+| `{variable}` | the name it has now |
+| `{shortname}` | first two words of the question text; `{shortname:3}` for three |
+| `{type}` | the question type |
+
+Padding matters more than it looks: `Q1…Q10` sorts as Q1, Q10, Q2 in every
+spreadsheet a client opens, and `Q{number:2}` fixes that.
+
+Numbering follows the **flow**, not `def.questions` — that is the order a
+respondent meets them and the order a researcher counts them in. An unknown
+token is left visible (`Q{numbr}` stays `Q{numbr}`) rather than blanked, so a
+typo fails loudly instead of naming every question `Q`.
+
+## What a template controls
+
+The pattern names each question's **base** variable. The engine composes the
+derived columns from it — `Q3_1`, `Q3_R2`, `Q3_LAT` — and those suffixes are
+fixed. They are spelled out inline at about sixty places in `variables.ts` and
+mirrored, separately, in `flatten.ts`; a template that changed one spelling
+and not the other would declare columns the runtime never fills, which is data
+loss that looks like a clean export.
+
+So the brief's `GRID{question}_{row}_{column}` is written as `GRID{number}` on
+the grid question: the template supplies `GRID5`, the engine supplies
+`_R1_C2`.
+
+## Bulk rename is not a loop over single renames
+
+Validation is on the **final state**. `Q1→Q2` while `Q2→Q3` is perfectly valid
+as a whole and would be rejected by any per-step "that name is taken" check —
+which is exactly what `renameVariable` applies. Hence `planTemplateRename`.
+
+Order then matters: `orderRenames` puts the steps in a sequence where nothing
+is ever renamed onto a name still in use, and breaks cycles (a straight swap
+`A→B, B→A` has no safe order) by parking one variable on a temporary name —
+the same trick a register allocator uses. Each step still goes through
+`applyRename`, so the template chooses names and does not reimplement renaming.
+
+## The everyday rename fields
+
+`VariableNameInput` now backs both the question editor's **Variable name** and
+the calculation editor's **target**. Both previously wrote straight into the
+definition on every keystroke, so renaming there left every rule and pipe
+naming the old variable — and mostly still resolving, through the question
+code, until the code was edited weeks later. The safe rename existed after
+phase 2 but only the Variables tab used it, which is the worst arrangement
+available: the careful path present, and the path people take going round it.
+
+Two details that were bugs first:
+
+- it holds a **local draft** and commits on blur or Enter, because a rename
+  per keystroke rewrites the survey once per character and `GENDE` is a rename
+  as far as the engine is concerned;
+- `commit` re-reads the value from the field and recomputes the impact rather
+  than using the memo, because `onBlur` fires with the previous render's
+  closure. Type a name and tab straight out and the handler could still be
+  holding `dirty: false`, in which case it reset the box and reported nothing.
+
+## A collision check that looked right and was not
+
+`renameImpact` originally checked the new name against
+`buildDerivedVariables`. That misses a whole class of name: **a question's
+`variableName` is not always a column.** A multi-select called `BRANDS`
+produces `BRANDS_1`, `BRANDS_2` and no bare `BRANDS`, so renaming another
+variable onto `BRANDS` passed, applied, and left two questions owning one
+name. The browser suite caught it as a definition reading
+`["V2", "V2", "V3"]`.
+
+There are now two guards, and both are needed:
+
+1. the namespace check covers everything that **owns** a name — dictionary
+   columns, every question's `variableName`, every calculation target,
+   embedded fields, system columns;
+2. the result is rebuilt and checked for **duplicate column names**, which
+   catches collisions no comparison of base names can see. `FOO_1` is a text
+   question's column; `BAR` is a multi-select producing `BAR_1`. Nothing is
+   called `FOO`, so renaming `BAR → FOO` passes every name-level check and
+   produces a second `FOO_1`.
+
+## Verifying a change here
+
+```bash
+pnpm --filter @rescript/engine test        # templates, ordering, rename
+node scripts/naming-templates-test.mjs     # the panel, and the two rename fields
+```
+
+Every guard above has a test that was confirmed to fail when the guard was
+removed — including the two that were originally decorative: the expression
+boundary test passed with a naive search-and-replace until the fixture put
+`RESP_AGE` and `RESP_AGE_BAND` in the same expression, and the result-duplicate
+check passed with the check deleted until a case was written that the
+namespace check could not already catch.
+
 ## Still to come in §44
 
-Variable naming templates (`Q{number}_{shortname}` and friends) applied in
-bulk, saved data-export presets, and the generated data dictionary shipped
-alongside the statistical exports.
+Saved data-export presets, and the generated data dictionary shipped alongside
+the statistical exports.

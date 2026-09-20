@@ -322,6 +322,30 @@ export const VariableDef = z.object({
 });
 export type VariableDef = z.infer<typeof VariableDef>;
 
+/**
+ * A VARIABLE NAMING TEMPLATE (§44, phase 3).
+ *
+ * A house standard, written down once and applied to the whole
+ * questionnaire: `Q{number}`, `SEC{section}_Q{number:2}`, `DEM_{shortname}`.
+ * Research teams have these conventions already — they just keep them in a
+ * Word document and apply them by hand, which is why a study's variable
+ * names drift halfway through fieldwork.
+ *
+ * The pattern names the QUESTION's base variable only. The engine composes
+ * the derived columns from that base (`_<row>`, `_<option>`, `_LAT`), and
+ * those suffixes are fixed: the dictionary builder and the runtime flattener
+ * each spell them out in their own code, and a template that changed one
+ * without the other would declare columns nothing fills.
+ */
+export const NamingTemplate = z.object({
+  id: z.string(),
+  name: z.string(),
+  /** e.g. `SEC{section}_Q{number:2}` — see `renderNamingTemplate` for the tokens */
+  pattern: z.string(),
+  notes: z.string().optional(),
+});
+export type NamingTemplate = z.infer<typeof NamingTemplate>;
+
 export const DeploymentConfig = z.object({
   clientSlug: z.string().default("client"),
   studySlug: z.string().default("study-001"),
@@ -380,6 +404,13 @@ export const SurveyDefinition = z.object({
   designs: z.array(DesignReference).default([]),
   /** Generated dictionary (kept in the JSON so exports reflect exact state). */
   variables: z.array(VariableDef).default([]),
+  /**
+   * Saved variable naming conventions (§44, phase 3). Empty by default, so a
+   * survey that never opens the feature is byte-identical to before. Storing
+   * them on the survey rather than globally is deliberate: a naming standard
+   * belongs to a study and travels with it when the study is cloned.
+   */
+  namingTemplates: z.array(NamingTemplate).default([]),
   /**
    * TRANSLATIONS AND AUDIO, per language, addressed by stable element keys —
    * a layer over this language-neutral definition, never a copy of it. Absent

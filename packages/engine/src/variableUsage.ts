@@ -472,7 +472,22 @@ export function renameImpact(
    * resolved by definition order, which is not a rule anybody should rely on.
    */
   if (newName !== oldName) {
-    const takenVars = new Set(before.map((v) => v.name));
+    /*
+     * THE NAMESPACE IS WIDER THAN THE DICTIONARY.
+     *
+     * This checked `buildDerivedVariables` alone, which sounds right and is
+     * not: a question's `variableName` is not always a column. A multi-select
+     * called `BRANDS` produces `BRANDS_1`, `BRANDS_2` and NO bare `BRANDS`,
+     * so renaming another variable to `BRANDS` passed the check, applied
+     * cleanly, and left two questions owning one name — found by the browser
+     * suite, which ended up with `["V2", "V2", "V3"]`.
+     *
+     * So the check is against everything that OWNS a name, not just
+     * everything that produces a column.
+     */
+    const takenVars = new Set<string>(before.map((v) => v.name));
+    for (const q of def.questions) if (q.variableName !== oldName) takenVars.add(q.variableName);
+    for (const c of def.calculations ?? []) if (c.targetVariable !== oldName) takenVars.add(c.targetVariable);
     if (takenVars.has(newName)) {
       blockers.push(`"${newName}" is already a variable in this survey.`);
     }
@@ -507,6 +522,23 @@ export function renameImpact(
       const gone = beforeNames.filter((n) => !afterNames.includes(n));
       const fresh = afterNames.filter((n) => !beforeNames.includes(n));
       derivedRenames = gone.map((from, i) => ({ from, to: fresh[i] ?? "—" }));
+    }
+
+    /*
+     * The invariant, checked on the actual result rather than inferred from
+     * the inputs: no two columns may share a name afterwards.
+     *
+     * The namespace check above catches the cases we can name. This catches
+     * the ones we cannot — a renamed question whose DERIVED columns collide
+     * with another question's, which no comparison of base names would see.
+     */
+    const seenAfter = new Set<string>();
+    for (const n of afterNames) {
+      if (seenAfter.has(n)) {
+        blockers.push(`Renaming to "${newName}" would produce two columns called "${n}".`);
+        break;
+      }
+      seenAfter.add(n);
     }
   }
 
