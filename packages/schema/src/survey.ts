@@ -277,6 +277,48 @@ export const VariableDef = z.object({
   loopVar: z.string().optional(),
   iteration: z.number().optional(),
   referenceColumn: z.string().optional(),
+
+  /*
+   * DELIVERY PROPERTIES (§44, phase 2).
+   *
+   * Everything above describes what the variable IS, and is derived from the
+   * questionnaire. These three describe how it should LEAVE the platform, and
+   * are the researcher's to set — which is why they are the first structural
+   * fields `applyOverrides` accepts.
+   */
+
+  /*
+   * Codes that mean "no answer" rather than an answer: 99 = Prefer not to
+   * say, 999 = Not asked. SPSS and SAS can declare these, so a mean excludes
+   * them automatically instead of averaging 99s into the result — which is
+   * the kind of error that survives all the way to a client report.
+   *
+   * Declared, never removed. The value stays in the cell and stays readable;
+   * what changes is that the package knows not to treat it as data.
+   *
+   * Optional rather than defaulted to `[]`, so that every existing place that
+   * builds a VariableDef literal stays valid and "nothing declared" is one
+   * state rather than two. Read it as `v.missingValues ?? []`.
+   */
+  missingValues: z.array(z.union([z.string(), z.number()])).optional(),
+
+  /*
+   * The column name in exported data files, when it should differ from the
+   * variable name. A house standard may want `Q1` in the platform and
+   * `S1_GENDER` in every delivery, and renaming the variable to get that
+   * would rewrite the logic that refers to it.
+   *
+   * Empty means "use the variable name", which is the normal case.
+   */
+  exportName: z.string().optional(),
+
+  /*
+   * How a statistical package should treat the variable: nominal categories,
+   * an ordered scale, or a continuous measure. It drives SPSS's measurement
+   * level and what a package offers by default — a mean on a nominal
+   * variable is nonsense, and the file can say so.
+   */
+  measure: z.enum(["nominal", "ordinal", "scale"]).optional(),
 });
 export type VariableDef = z.infer<typeof VariableDef>;
 

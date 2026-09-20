@@ -94,6 +94,22 @@ function scalarise(value: unknown): unknown {
   return Array.isArray(value) ? value.join(";") : value;
 }
 
+/**
+ * Flatten each row and move every value onto its DELIVERED column name, so
+ * the row keys and the variable names the writers emit are the same strings.
+ */
+function rekey(
+  names: string[],
+  defs: Map<string, VariableDef>,
+  rows: Record<string, unknown>[],
+): Record<string, unknown>[] {
+  return rows.map((r) => {
+    const out: Record<string, unknown> = {};
+    for (const name of names) out[outputName(defs.get(name), name)] = scalarise(r[name]);
+    return out;
+  });
+}
+
 /** Longest string a column actually contains, so text columns are not all 255 wide. */
 function widthOf(rows: Record<string, unknown>[], name: string, cap: number): number {
   let w = 1;
@@ -105,6 +121,23 @@ function widthOf(rows: Record<string, unknown>[], name: string, cap: number): nu
     if (w >= cap) return cap;
   }
   return w;
+}
+
+/**
+ * The name a column is DELIVERED under, which is not always the name it is
+ * known by inside the platform.
+ *
+ * `exportName` exists so a house standard can ship `S1_GENDER` while the
+ * logic keeps referring to `Q1` — renaming the variable to achieve that
+ * would rewrite every rule that mentions it.
+ *
+ * The distinction has to be kept all the way through: the writers look up
+ * each row's value by the variable's name, so if the variable is renamed for
+ * output without re-keying the rows, every value silently becomes missing.
+ * `rekey` below does both halves together for exactly that reason.
+ */
+function outputName(v: VariableDef | undefined, name: string): string {
+  return v?.exportName?.trim() || name;
 }
 
 function systemVariable(name: string): { label: string; numeric: boolean } | undefined {
@@ -141,11 +174,7 @@ export function responsesToSav(
     return { name, label: sys?.label ?? name, type: "string", stringWidth: widthOf(rows, name, 32767) };
   });
 
-  const scalarRows = rows.map((r) => {
-    const out: Record<string, unknown> = {};
-    for (const name of names) out[name] = scalarise(r[name]);
-    return out;
-  });
+  const scalarRows = rekey(names, defs, rows);
 
   return buildSav({
     variables,
@@ -177,11 +206,7 @@ export function responsesToXpt(
 ): Buffer {
   const { names, defs, rows } = buildResponseMatrix(def, states, opts);
   const variables = sasVariables(names, defs, rows);
-  const scalarRows = rows.map((r) => {
-    const out: Record<string, unknown> = {};
-    for (const name of names) out[name] = scalarise(r[name]);
-    return out;
-  });
+  const scalarRows = rekey(names, defs, rows);
   return buildXpt({
     variables,
     rows: scalarRows,

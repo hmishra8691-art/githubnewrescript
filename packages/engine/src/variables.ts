@@ -616,6 +616,22 @@ function applyOverrides(def: SurveyDefinition, derived: VariableDef[]): Variable
     if (Object.keys(o.valueLabels ?? {}).length) out.valueLabels = { ...v.valueLabels, ...o.valueLabels };
     if (o.hidden === true) out.hidden = true;
     if (o.notes?.trim()) out.notes = o.notes;
+
+    /*
+     * DELIVERY PROPERTIES (§44, phase 2) — the first structural fields an
+     * override may set, because unlike the rest they describe the delivered
+     * file rather than the questionnaire, and there is nothing in the
+     * questionnaire to derive them from.
+     *
+     * `name` remains NOT overridable and is still only the match key. An
+     * override cannot rename a column: renaming has to rewrite every
+     * reference to the old name, which is `renameVariable`'s job, not a
+     * silent substitution at dictionary-build time. `exportName` is how you
+     * change the delivered column without touching the logic.
+     */
+    if ((o.missingValues ?? []).length) out.missingValues = [...(o.missingValues ?? [])];
+    if (o.exportName?.trim()) out.exportName = o.exportName.trim();
+    if (o.measure) out.measure = o.measure;
     return out;
   });
 }

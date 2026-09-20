@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { VariableDef } from "@rescript/schema";
-import { buildVariableDictionary, buildDerivedVariables, lintVariables } from "@rescript/engine";
+import { buildVariableDictionary, buildDerivedVariables, lintVariables, renameImpact, applyRename, questionForVariable } from "@rescript/engine";
 import { useStudio } from "./store";
 
 /**
@@ -26,6 +26,9 @@ export function VariablesPanel() {
   const s = useStudio();
   const [filter, setFilter] = React.useState("");
   const [editing, setEditing] = React.useState<string | null>(null);
+  /* the rename box, per open row */
+  const [renameTo, setRenameTo] = React.useState("");
+  const [alsoCode, setAlsoCode] = React.useState(true);
 
   const vars: VariableDef[] = React.useMemo(() => buildVariableDictionary(s.def), [s.def]);
   const derived: VariableDef[] = React.useMemo(() => buildDerivedVariables(s.def), [s.def]);
@@ -56,7 +59,17 @@ export function VariablesPanel() {
         (next.label ?? "").trim() ||
         Object.keys(next.valueLabels ?? {}).length ||
         next.hidden === true ||
-        (next.notes ?? "").trim();
+        (next.notes ?? "").trim() ||
+        /*
+         * §44 phase 2. Omitting these here would have been the quiet kind of
+         * bug: the field accepts your typing, the row redraws, and the
+         * override is discarded on the way out because nothing "says"
+         * anything — so the missing values you declared are gone by the next
+         * export.
+         */
+        (next.missingValues ?? []).length ||
+        (next.exportName ?? "").trim() ||
+        !!next.measure;
       if (!says) {
         if (i >= 0) list.splice(i, 1);
         return;
@@ -84,6 +97,43 @@ export function VariablesPanel() {
       if (code?.trim() && label) out[code.trim()] = label;
     }
     return out;
+  };
+
+  /** "99; 999" ⇄ [99, 999] — numbers stay numbers so SPSS can declare them. */
+  const missingToText = (m: (string | number)[] | undefined) => (m ?? []).join("; ");
+  const textToMissing = (t: string): (string | number)[] =>
+    t.split(/[;,\n]/).map((x) => x.trim()).filter(Boolean)
+      .map((x) => (Number.isFinite(Number(x)) && x !== "" ? Number(x) : x));
+
+  /*
+   * Only a question's own variable and a calculation's target can be renamed.
+   * Everything else in the dictionary is a column the engine derives — a
+   * matrix row, a multi-select flag — and its name follows its parent's, so
+   * the rename belongs on the parent.
+   */
+  const renameable = (v: VariableDef) =>
+    !!questionForVariable(s.def, v.name) || (s.def.calculations ?? []).some((c) => c.targetVariable === v.name);
+
+  const impact = React.useMemo(() => {
+    if (!editing || !renameTo.trim() || renameTo === editing) return null;
+    try {
+      return renameImpact(s.def, editing, renameTo.trim());
+    } catch {
+      return null;
+    }
+  }, [s.def, editing, renameTo]);
+
+  const doRename = (from: string) => {
+    const to = renameTo.trim();
+    if (!impact?.ok) return;
+    s.labelNextEdit(`rename ${from} to ${to}`);
+    s.update((d) => {
+      const next = applyRename(d, from, to, { alsoCode });
+      for (const k of Object.keys(d)) delete (d as any)[k];
+      Object.assign(d, next);
+    });
+    setRenameTo("");
+    setEditing(null);
   };
 
   return (
@@ -136,11 +186,15 @@ export function VariablesPanel() {
                     <td>
                       {v.derived && <span className="chip">derived</span>}{" "}
                       {v.hidden && <span className="chip">hidden</span>}{" "}
-                      {edited && <span className="chip" data-testid="var-edited">edited</span>}
+                      {edited && <span className="chip" data-testid="var-edited">edited</span>}{" "}
+                      {v.exportName && <span className="chip" data-testid="var-has-export-name">→ {v.exportName}</span>}{" "}
+                      {(v.missingValues ?? []).length > 0 && (
+                        <span className="chip" data-testid="var-has-missing">missing: {(v.missingValues ?? []).join(", ")}</span>
+                      )}
                     </td>
                     <td>
                       <button className="btn small" data-testid="edit-variable"
-                        onClick={() => setEditing(open ? null : v.name)}>
+                        onClick={() => { setRenameTo(""); setEditing(open ? null : v.name); }}>
                         {open ? "done" : "edit"}
                       </button>
                     </td>
@@ -169,6 +223,92 @@ export function VariablesPanel() {
                               value={overrides.get(v.name)?.notes ?? ""}
                               onChange={(e) => setOverride(v, { notes: e.target.value || undefined })} />
                           </label>
+                          <div className="row" style={{ gap: 12, flexWrap: "wrap" }}>
+                            <label className="f" style={{ flex: "1 1 200px" }}>
+                              <span>Export name — the column name in delivered files</span>
+                              <input className="input mono" data-testid="var-export-name"
+                                placeholder={v.name}
+                                value={overrides.get(v.name)?.exportName ?? ""}
+                                onChange={(e) => setOverride(v, { exportName: e.target.value || undefined })} />
+                            </label>
+                            <label className="f" style={{ flex: "1 1 200px" }}>
+                              <span>Missing values — <span className="mono">99; 999</span></span>
+                              <input className="input mono" data-testid="var-missing"
+                                value={missingToText(overrides.get(v.name)?.missingValues)}
+                                onChange={(e) => setOverride(v, { missingValues: textToMissing(e.target.value) })} />
+                            </label>
+                            <label className="f" style={{ flex: "0 1 160px" }}>
+                              <span>Measure</span>
+                              <select className="select" data-testid="var-measure"
+                                value={overrides.get(v.name)?.measure ?? ""}
+                                onChange={(e) => setOverride(v, { measure: (e.target.value || undefined) as any })}>
+                                <option value="">(derived: {v.measure ?? "—"})</option>
+                                <option value="nominal">Nominal</option>
+                                <option value="ordinal">Ordinal</option>
+                                <option value="scale">Scale</option>
+                              </select>
+                            </label>
+                          </div>
+                          <p className="muted" style={{ fontSize: 12, margin: "2px 0 8px" }}>
+                            Missing values are declared in SPSS and marked in the SAS syntax, so a
+                            mean excludes them instead of averaging the 99s in. The value itself
+                            still appears in the data.
+                          </p>
+
+                          {renameable(v) && (
+                            <div data-testid="var-rename" style={{ borderTop: "1px solid var(--border, #e5e9f0)", paddingTop: 10, marginTop: 4 }}>
+                              <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+                                <label className="f" style={{ flex: "1 1 220px" }}>
+                                  <span>Rename the variable — every rule, pipe and expression is updated</span>
+                                  <input className="input mono" data-testid="var-rename-input"
+                                    placeholder={v.name} value={renameTo}
+                                    onChange={(e) => setRenameTo(e.target.value)} />
+                                </label>
+                                <button className="btn small primary" data-testid="var-rename-apply"
+                                  disabled={!impact?.ok}
+                                  onClick={() => doRename(v.name)}>Rename</button>
+                              </div>
+
+                              {impact?.aliasedByCode && (
+                                <label className="row" style={{ gap: 6, fontSize: 13, marginTop: 6 }}>
+                                  <input type="checkbox" data-testid="var-rename-also-code"
+                                    checked={alsoCode} onChange={(e) => setAlsoCode(e.target.checked)} />
+                                  Rename the question code to match
+                                </label>
+                              )}
+
+                              {impact && (
+                                <div data-testid="var-rename-impact" style={{ marginTop: 8, fontSize: 12.5 }}>
+                                  {impact.blockers.map((b, i) => (
+                                    <div key={`b${i}`} className="chip warn" data-testid="var-rename-blocker"
+                                      style={{ display: "block", marginBottom: 4 }}>{b}</div>
+                                  ))}
+                                  {impact.warnings.map((w, i) => (
+                                    <div key={`w${i}`} className="muted" data-testid="var-rename-warning"
+                                      style={{ marginBottom: 4 }}>⚠ {w}</div>
+                                  ))}
+                                  {impact.ok && (
+                                    <div data-testid="var-rename-summary">
+                                      {impact.usages.length} reference{impact.usages.length === 1 ? "" : "s"} will be updated
+                                      {impact.derivedRenames.length > 1
+                                        ? `, across ${impact.derivedRenames.length} columns`
+                                        : ""}.
+                                      {impact.analysesUnchecked && " Saved analyses are not checked here — repoint them afterwards."}
+                                    </div>
+                                  )}
+                                  {impact.usages.length > 0 && (
+                                    <ul style={{ margin: "6px 0 0 16px", padding: 0 }}>
+                                      {impact.usages.slice(0, 12).map((u, i) => (
+                                        <li key={i} data-testid="var-usage">{u.where}</li>
+                                      ))}
+                                      {impact.usages.length > 12 && <li className="muted">…and {impact.usages.length - 12} more</li>}
+                                    </ul>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
                           <div className="row" style={{ gap: 10, marginTop: 8 }}>
                             <label className="row" style={{ gap: 6, fontSize: 13 }}>
                               <input type="checkbox" data-testid="var-hidden"

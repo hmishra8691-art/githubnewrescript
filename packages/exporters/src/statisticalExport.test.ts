@@ -453,3 +453,85 @@ test("the existing default output is byte-for-byte unchanged", () => {
     responsesToCSV(def, states, undefined, { valueMode: "code", headerMode: "name" }),
   );
 });
+
+/* ------------------------------------- §44 phase 2: the delivery properties */
+
+function withOverrides(def: SurveyDefinition, overrides: any[]): SurveyDefinition {
+  const next = JSON.parse(JSON.stringify(def));
+  next.variables = overrides;
+  return next;
+}
+
+test("declared missing values reach the .sav as missing-value declarations", () => {
+  /*
+   * The point of declaring them: a mean over GENDER must not average the
+   * 99s in. Writing them as ordinary values would leave the file looking
+   * right and every statistic computed from it wrong.
+   */
+  const def = withOverrides(makeSurvey(), [
+    { name: "GENDER", label: "What is your gender?", dataType: "numeric", responseType: "single_select",
+      valueCodes: [], valueLabels: {}, derived: false, hidden: false, missingValues: [99] },
+  ]);
+  const sav = readSav(responsesToSav(def, states));
+  assert.deepEqual(sav.missing.GENDER, [99], `expected 99 declared missing, got ${JSON.stringify(sav.missing)}`);
+});
+
+test("an export name renames the column in every format at once", () => {
+  const def = withOverrides(makeSurvey(), [
+    { name: "GENDER", label: "What is your gender?", dataType: "numeric", responseType: "single_select",
+      valueCodes: [], valueLabels: {}, derived: false, hidden: false, exportName: "S1_GENDER" },
+  ]);
+
+  const csvHeader = responsesToCSV(def, states).split("\n")[0].split(",");
+  assert.ok(csvHeader.includes("S1_GENDER"), `CSV: ${csvHeader.join(",")}`);
+  assert.ok(!csvHeader.includes("GENDER"), "the platform name must not also appear");
+
+  const sav = readSav(responsesToSav(def, states));
+  assert.ok(sav.names.includes("S1_GENDER"), `SPSS: ${sav.names.join(", ")}`);
+
+  const xpt = readXpt(responsesToXpt(def, states));
+  assert.ok(xpt.names.includes("S1_GENDE"), `SAS (8 chars): ${xpt.names.join(", ")}`);
+});
+
+test("an export name does not cost the column its data", () => {
+  /*
+   * The trap: the writers look up each row's value by the variable's name.
+   * Rename the variable for output without re-keying the rows and every
+   * value silently becomes missing — a file with the right columns, the
+   * right labels and no data in it.
+   */
+  const def = withOverrides(makeSurvey(), [
+    { name: "GENDER", label: "What is your gender?", dataType: "numeric", responseType: "single_select",
+      valueCodes: [], valueLabels: {}, derived: false, hidden: false, exportName: "S1_GENDER" },
+  ]);
+  const sav = readSav(responsesToSav(def, states));
+  assert.equal(sav.cases[0].S1_GENDER, 1, "the first respondent's answer must still be there");
+  assert.equal(sav.cases[1].S1_GENDER, 99);
+
+  const xpt = readXpt(responsesToXpt(def, states));
+  assert.equal(xpt.rows[0].S1_GENDE, 1);
+});
+
+test("a missing value that the variable's type cannot hold is dropped, not written", () => {
+  // "n/a" on a numeric variable would corrupt the dictionary record
+  const def = withOverrides(makeSurvey(), [
+    { name: "AGE", label: "How old are you?", dataType: "numeric", responseType: "numeric",
+      valueCodes: [], valueLabels: {}, derived: false, hidden: false, missingValues: ["n/a"] },
+  ]);
+  const sav = readSav(responsesToSav(def, states));
+  assert.equal(sav.missing.AGE, undefined, "a non-numeric missing code must not be declared on a numeric variable");
+  assert.equal(sav.cases[0].AGE, 42, "and the data is unaffected");
+});
+
+test("the SAS syntax marks the codes that mean no answer", () => {
+  const def = withOverrides(makeSurvey(), [
+    { name: "GENDER", label: "What is your gender?", dataType: "numeric", responseType: "single_select",
+      valueCodes: [], valueLabels: {}, derived: false, hidden: false, missingValues: [99] },
+  ]);
+  const sas = responsesToSasSyntax(def, states);
+  const line = sas.split("\n").find((l) => l.includes("Prefer not to say"));
+  assert.ok(line, "the value label must be in the syntax");
+  assert.match(line!, /declared missing/, "and be marked as a missing code");
+  const male = sas.split("\n").find((l) => l.includes("'Male'"));
+  assert.doesNotMatch(male!, /declared missing/, "a real answer must not be marked");
+});

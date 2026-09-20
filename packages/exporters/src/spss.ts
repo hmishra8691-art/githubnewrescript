@@ -307,12 +307,26 @@ function creationTime(d = new Date()): string {
 export function savVariableFor(v: VariableDef, widthHint = 255): SavVariable {
   const numericCodes = (v.valueCodes ?? []).length > 0 && (v.valueCodes ?? []).every((c) => Number.isFinite(Number(c)));
   const numeric = v.dataType === "numeric" || v.dataType === "boolean" || numericCodes;
+  /*
+   * §44 phase 2 — the researcher's delivery settings win over the derived
+   * ones, because they are the only source for these: nothing in a
+   * questionnaire says which codes mean "no answer".
+   *
+   * `missingValues` is filtered to those the variable's own type can hold. A
+   * declared missing value of "99" on a STRING variable is meaningless to
+   * SPSS and writing it produces a file that reads back wrong, so it is
+   * dropped here rather than corrupting the dictionary record.
+   */
+  const declaredMissing = (v.missingValues ?? []).filter((m) =>
+    numeric ? Number.isFinite(Number(m)) : typeof m === "string",
+  );
   return {
-    name: v.name,
+    name: v.exportName?.trim() || v.name,
     label: (v.label ?? "").trim() || v.name,
     type: numeric ? "numeric" : "string",
     stringWidth: numeric ? undefined : widthHint,
     valueLabels: v.valueLabels ?? {},
-    measure: numericCodes || v.responseType?.includes("scale") ? "ordinal" : numeric ? "scale" : "nominal",
+    missingValues: declaredMissing.length ? declaredMissing : undefined,
+    measure: v.measure ?? (numericCodes || v.responseType?.includes("scale") ? "ordinal" : numeric ? "scale" : "nominal"),
   };
 }

@@ -23,6 +23,8 @@ export interface SasVariable {
   type: "numeric" | "string";
   stringWidth?: number;
   valueLabels?: Record<string, string>;
+  /** codes that mean "no answer"; surfaced in the syntax, see `sasVariableFor` */
+  missingValues?: (string | number)[];
 }
 
 export interface XptInput {
@@ -210,9 +212,17 @@ export function buildSasSyntax(vars: SasVariable[], opts: { csvName?: string; da
       const fmt = `${sasName(v.name, new Set())}F`.slice(0, 8);
       const numeric = v.type === "numeric";
       lines.push(`  value ${numeric ? "" : "$"}${fmt}`);
+      const missing = new Set((v.missingValues ?? []).map(String));
       for (const [code, label] of Object.entries(v.valueLabels ?? {})) {
         if (!(label ?? "").trim()) continue;
-        lines.push(`    ${numeric ? code : `'${L(code)}'`} = '${L(label)}'`);
+        /*
+         * SAS has no user-missing DECLARATION the way SPSS does, so the
+         * codes that mean "no answer" are marked in the format instead. The
+         * analyst still has to exclude them, but the file tells them which
+         * ones — rather than the .sav knowing and the SAS export not.
+         */
+        const note = missing.has(String(code)) ? "   /* declared missing */" : "";
+        lines.push(`    ${numeric ? code : `'${L(code)}'`} = '${L(label)}'${note}`);
       }
       lines.push("  ;");
     }
@@ -252,10 +262,17 @@ export function sasVariableFor(v: VariableDef, widthHint = 200): SasVariable {
   const numericCodes = (v.valueCodes ?? []).length > 0 && (v.valueCodes ?? []).every((c) => Number.isFinite(Number(c)));
   const numeric = v.dataType === "numeric" || v.dataType === "boolean" || numericCodes;
   return {
-    name: v.name,
+    name: v.exportName?.trim() || v.name,
     label: (v.label ?? "").trim() || v.name,
     type: numeric ? "numeric" : "string",
     stringWidth: numeric ? undefined : widthHint,
     valueLabels: v.valueLabels ?? {},
+    /*
+     * SAS has no missing-value DECLARATION the way SPSS does, so the codes
+     * are carried into the generated syntax as a comment beside the format
+     * instead. Silently dropping them would leave a .sav and a .sas export of
+     * the same study disagreeing about what counts as an answer.
+     */
+    missingValues: (v.missingValues ?? []).filter((m) => (numeric ? Number.isFinite(Number(m)) : typeof m === "string")),
   };
 }

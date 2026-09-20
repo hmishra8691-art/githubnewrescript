@@ -85,10 +85,18 @@ export function renderValue(raw: unknown, v: VariableDef | undefined, mode: Valu
 export type HeaderMode = "name" | "label" | "name_label";
 
 export function renderHeader(v: VariableDef | undefined, name: string, mode: HeaderMode): string {
-  if (!v || mode === "name") return name;
+  /*
+   * `exportName` (§44 phase 2) overrides the column heading wherever the
+   * name would appear — in every mode and every text format, so that a study
+   * delivering `S1_GENDER` delivers it in the CSV, the Excel sheet, the .sav
+   * and the SAS syntax alike. A house standard that held in four formats out
+   * of five would be worse than not having one.
+   */
+  const out = v?.exportName?.trim() || name;
+  if (!v || mode === "name") return out;
   const label = (v.label ?? "").trim();
-  if (!label) return name;
-  return mode === "label" ? label : `${name}${CODE_LABEL_SEPARATOR}${label}`;
+  if (!label) return out;
+  return mode === "label" ? label : `${out}${CODE_LABEL_SEPARATOR}${label}`;
 }
 
 /**

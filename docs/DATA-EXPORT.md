@@ -1,6 +1,6 @@
 # Data export — statistical formats and the code/label choice
 
-§44, phase 1. What a response dataset can be downloaded as, and what each
+§44, phases 1–2. What a response dataset can be downloaded as, and what each
 format does with the difference between a code and its label.
 
 `docs/RESPONSE-DATA.md` covers the dataset filter (all / clean / custom) that
@@ -170,10 +170,108 @@ four bytes were written.
 - **`values` does not reach the variable dictionary export**, which always
   lists codes and labels side by side — that is what a dictionary is.
 
+---
+
+# Variable management (phase 2)
+
+Three properties describe how a variable should LEAVE the platform, and are
+the researcher's to set because nothing in a questionnaire implies them. They
+live on `VariableDef`, are stored as overrides in `def.variables`, and are set
+on the Variables tab.
+
+| Field | What it does |
+|---|---|
+| `missingValues` | Codes that mean "no answer" — 99 = Prefer not to say. Declared in the `.sav`, marked in the SAS syntax. |
+| `exportName` | The column name in delivered files, when it should differ from the variable name. |
+| `measure` | nominal / ordinal / scale — SPSS's measurement level. |
+
+`missingValues` is the one that changes results: declared, a mean over the
+variable excludes them instead of averaging the 99s in. The value still
+appears in the data and is still readable — what changes is that the package
+knows not to treat it as an answer. A code the variable's type cannot hold
+(`"n/a"` on a numeric variable) is dropped rather than written, because SPSS
+reads such a record back wrong.
+
+`exportName` exists so a house standard can deliver `S1_GENDER` while the
+logic keeps referring to `Q1`. It applies in **every** format — CSV, Excel,
+SPSS, SAS — since a naming standard that held in four formats out of five
+would be worse than not having one. Note the trap it creates: the writers look
+up each row's value by the variable's name, so the rows have to be re-keyed to
+the delivered name at the same time (`rekey`, in `statisticalExport.ts`).
+Renaming for output without re-keying produces a file with the right columns,
+the right labels, and no data in it.
+
+## Renaming a variable
+
+`packages/engine/src/variableUsage.ts`. `variableUsages(def, name)` finds
+every mention; `renameImpact` says what would happen; `renameVariable` does it
+or refuses with reasons. The Variables tab drives all three, so a rename
+through the UI is checked exactly as hard as one through the API.
+
+What gets rewritten automatically: the question's own `variableName`, a
+calculation's `targetVariable`, structured condition `ref`s, `$question`
+comparisons, `{{PIPE}}` tokens, calc expressions wherever they appear, and the
+variable's own override row.
+
+### The trap this mostly exists for
+
+`getQuestionByCodeOrVar` resolves a stored reference against a question's
+**id, code or variableName interchangeably** — and a new question gets the
+same string for `code` and `variableName`.
+
+So renaming `variableName` from `Q1` to `GENDER` usually breaks nothing *that
+day*: every `ref: "Q1"` keeps resolving, through the code. Then somebody edits
+the code, or a piped `{{Q1}}` is re-parsed where no question of that code
+exists, and rules that have "worked" for weeks stop resolving. A rename tool
+reporting "0 references affected" because everything still resolves is worse
+than no tool. `renameImpact` reports this as `aliasedByCode` and the panel
+offers to carry the code along.
+
+### What it will not do
+
+- **A variable whose name is also a calc function name** (`AGE`, `COUNT`,
+  `TEXT`, `DATE` — the full list is `CALC_FUNCTION_NAMES`) is invisible to the
+  expression scanner, which skips function names so `upper(X)` does not report
+  `upper` as a variable. Renaming *onto* such a name is refused; renaming
+  *away* from one is allowed, because that is the cure, but it warns that
+  expressions need checking by hand. Found the hard way — the first test
+  fixture was called `AGE` and the expression scan silently returned nothing.
+- **A wildcard** — `sum(ALLOC_*)` never spells `ALLOC_A`, so renaming
+  `ALLOC_A` changes what that sum captures without appearing in its text.
+  Reported for review; there is nothing to rewrite.
+- **Custom scripts** (`def.scripts[].code`) are arbitrary JavaScript, and a
+  variable name can be assembled at runtime. Any substitution would be a
+  guess, so a script mentioning the name **blocks** the rename.
+- **Saved analyses** live in their own database tables, outside the
+  definition. The engine cannot reach them, so the caller passes them in; when
+  none are supplied the report says `analysesUnchecked` rather than implying
+  it checked. Published report versions are frozen snapshots and are never
+  rewritten.
+- **Derived columns** cannot be renamed on their own — a matrix row's
+  `Q1_R1` follows its parent, so the rename belongs on the parent.
+
+Renaming onto an existing variable, another question's **code** (which would
+make rules ambiguous), an embedded field, or a system column is refused.
+
+## Verifying a change here
+
+```bash
+pnpm --filter @rescript/engine test        # usage index + rename
+pnpm --filter @rescript/exporters test     # the delivery properties in the files
+node scripts/verify-statistical-exports.mjs
+node scripts/variable-management-test.mjs  # the panel is wired to the engine
+```
+
+The engine suite is deliberately **behavioural**: it renames, then re-evaluates
+the survey's display logic and re-flattens the response, and asserts the
+answers are identical. Counting usages proves the finder found things;
+re-evaluating proves the rewriter wrote them correctly. Five deliberate
+regressions were confirmed to turn it red — a missed condition `ref`, a missed
+pipe, a search-and-replace that clobbers `RESP_AGE_BAND` while renaming
+`RESP_AGE`, a dropped alias check, and a script allowed through.
+
 ## Still to come in §44
 
-Phase 1 is the formats and the code/label choice. The rest of the brief:
-a variable management interface (editable name, export name, data type,
-missing values), variable naming templates, automatic variable mapping with
-rename-impact checking, saved export presets, and the generated data
-dictionary alongside the statistical exports.
+Variable naming templates (`Q{number}_{shortname}` and friends) applied in
+bulk, saved data-export presets, and the generated data dictionary shipped
+alongside the statistical exports.
