@@ -7,6 +7,7 @@ import { renderValue, renderHeader, type ValueMode, type HeaderMode } from "./va
 import type { ResponseStateLike } from "./csv.js";
 import { buildZip } from "./zip.js";
 import { variableDictionaryToCSV } from "./csv.js";
+import { dictionaryFor, defForRow, type VersionedSource } from "./versionedSource.js";
 
 /**
  * ONE MATRIX, EVERY FORMAT (§44).
@@ -27,6 +28,8 @@ export interface MatrixOptions {
   mediaBaseUrl?: string | null;
   /** extra columns appended after the variables (quality, sample, environment) */
   extra?: { columns: readonly string[]; cells: (index: number) => unknown[] };
+  /** R7: the union dictionary and each row's own definition. Absent = today's behaviour. */
+  versioned?: VersionedSource;
 }
 
 export interface ResponseMatrix {
@@ -51,7 +54,7 @@ export function buildResponseMatrix(
   states: ResponseStateLike[],
   opts: MatrixOptions = {},
 ): ResponseMatrix {
-  const dict = buildVariableDictionary(def);
+  const dict = dictionaryFor(def, opts.versioned);
   const defs = new Map<string, VariableDef>();
   const varNames: string[] = [];
   for (const v of dict) {
@@ -65,7 +68,7 @@ export function buildResponseMatrix(
   const names = [...SYSTEM.map((s) => s.name), ...varNames, ...extraColumns];
 
   const rows = states.map((state, i) => {
-    const flat = flattenVariables(def, state as any, { mediaBaseUrl: opts.mediaBaseUrl ?? null });
+    const flat = flattenVariables(defForRow(def, i, opts.versioned), state as any, { mediaBaseUrl: opts.mediaBaseUrl ?? null });
     const row: Record<string, unknown> = {
       RESP_ID: state.respondentId ?? "",
       SESSION_ID: state.sessionId,

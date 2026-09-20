@@ -3,6 +3,7 @@ import type { SurveyDefinition } from "@rescript/schema";
 import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
 import type { ResponseStateLike } from "./csv.js";
 import { renderValue, renderHeader, type ValueMode, type HeaderMode } from "./valueRendering.js";
+import { dictionaryFor, defForRow, type VersionedSource } from "./versionedSource.js";
 
 /**
  * Response data with the quality assessment — two sheets, as the researcher
@@ -107,13 +108,22 @@ export interface ResponseXlsxOptions {
    */
   valueMode?: ValueMode;
   headerMode?: HeaderMode;
+  /** R7: the union dictionary and each row's own definition. Absent = today's behaviour. */
+  versioned?: VersionedSource;
+  /**
+   * R7: the versions this file spans, and anything the union could not
+   * reconcile between them. They go on the About sheet, because that is
+   * where somebody checking a delivery already looks — a warning nobody sees
+   * is the same as no warning.
+   */
+  versionNote?: { versions: string[]; warnings: string[] };
 }
 
 export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityExportRow[], opts: ResponseXlsxOptions = {}): Promise<Buffer> {
   const filter = opts.dataset ?? { kind: "all" };
   const valueMode = opts.valueMode ?? "code";
   const headerMode = opts.headerMode ?? "name";
-  const dict = buildVariableDictionary(def);
+  const dict = dictionaryFor(def, opts.versioned);
   const varNames: string[] = [];
   const defs = new Map<string, (typeof dict)[number]>();
   for (const v of dict) { if (v.responseType === "system" || defs.has(v.name)) continue; defs.set(v.name, v); varNames.push(v.name); }
@@ -136,9 +146,20 @@ export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityEx
   const envCols = (opts.environmentColumn ?? mixed) ? [...ENVIRONMENT_COLUMNS] : [];
   const header = ["Response ID", "Status", "Start Time", "End Time", ...varNames.map((n) => renderHeader(defs.get(n), n, headerMode)), ...qualityCols, ...sampleCols, ...envCols];
   main.columns = header.map((h) => ({ header: h, key: h, width: Math.min(40, Math.max(12, h.length + 2)) }));
-  const included = rows.filter((r) => inDataset(r, filter));
-  for (const r of included) {
-    const flat = flattenVariables(def, r.state as any);
+  /*
+   * The dataset filter removes rows, so the position in `included` is NOT
+   * the position in `rows` — and `versioned.defFor` is indexed by the
+   * latter, because that is the order the caller resolved versions in.
+   * Carrying the original index is the whole fix; taking the loop index
+   * would read every row after the first excluded one through its
+   * neighbour's questionnaire, which is a subtler version of the bug this
+   * is meant to remove.
+   */
+  const included = rows
+    .map((r, index) => ({ r, index }))
+    .filter(({ r }) => inDataset(r, filter));
+  for (const { r, index } of included) {
+    const flat = flattenVariables(defForRow(def, index, opts.versioned), r.state as any);
     const line: unknown[] = [r.state.sessionId, r.state.status, r.state.startedAt ?? "", r.state.completedAt ?? ""];
     for (const v of varNames) line.push(cell(renderValue(flat[v], defs.get(v), valueMode)));
     if (opts.qualityColumns) {
@@ -204,6 +225,24 @@ export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityEx
     ["Important", "Every flag is a risk indicator that requires researcher judgement, never proof. Removed responses are retained in the database and can be restored."],
     ["Exported", new Date().toISOString()],
   ]);
+
+  /*
+   * MULTI-VERSION DELIVERIES SAY SO, ON THE SHEET SOMEBODY READS.
+   *
+   * A file whose columns are the union of two questionnaires is not wrong,
+   * but it is not self-explanatory either: a blank in a column can mean "did
+   * not answer" or "was never asked, because that question did not exist
+   * yet", and those are different facts. The About sheet is where the
+   * difference gets stated.
+   */
+  if (opts.versionNote && opts.versionNote.versions.length > 1) {
+    info.addRow([
+      "Questionnaire versions",
+      `${opts.versionNote.versions.join(", ")} — each response is read through the version it was collected under. `
+      + "A blank in a column may mean the question did not exist in that respondent's version; the Data Dictionary says which versions each column had.",
+    ]);
+    for (const w of opts.versionNote.warnings) info.addRow(["⚠ Between versions", w]);
+  }
   styleHeader(info);
 
   return Buffer.from(await wb.xlsx.writeBuffer());

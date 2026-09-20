@@ -5,6 +5,7 @@ import { SurveyDefinition } from "@rescript/schema";
 import { responsesToCSV, exportResponsesXlsx, responsesToSav, responsesToSavBundle, responsesToDta, responsesToDtaBundle, responsesToSasBundle, inDataset, ENVIRONMENT_COLUMNS, environmentCells, QUALITY_CSV_COLUMNS, qualityCsvCells, SAMPLE_COLUMNS, sampleCells, VALUE_MODES, renderValue, dictionaryIndex, type DatasetFilter, type QualityExportRow, type ValueMode } from "@rescript/exporters";
 import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
 import { audit, isFailure, requireProject } from "@/lib/guard";
+import { resolveExportVersions } from "@/lib/exportVersions";
 
 export const dynamic = "force-dynamic";
 
@@ -166,8 +167,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
    * configuration, and crossing it is REPORTED (see below) instead of quietly
    * shortening the file.
    */
-  const COLUMNS = "session_id, respondent_id, status, seed, answers, calculated, embedded, flags, started_at, completed_at, is_test, quality, review_status, review_reason, reviewed_by, reviewed_at, sample_source, sample_source_respondent";
-  const FALLBACK_COLUMNS = "session_id, respondent_id, status, seed, answers, calculated, embedded, flags, started_at, completed_at, is_test";
+  const COLUMNS = "session_id, version_id, respondent_id, status, seed, answers, calculated, embedded, flags, started_at, completed_at, is_test, quality, review_status, review_reason, reviewed_by, reviewed_at, sample_source, sample_source_respondent";
+  const FALLBACK_COLUMNS = "session_id, version_id, respondent_id, status, seed, answers, calculated, embedded, flags, started_at, completed_at, is_test";
 
   const page = (columns: string, softDelete: boolean, start: number) => {
     let q = db.from("responses").select(columns).eq("survey_id", params.id);
@@ -229,9 +230,40 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       { status: 413 },
     );
   }
+  /*
+   * R7 — EVERY ROW IS READ THROUGH THE VERSION IT WAS COLLECTED UNDER.
+   *
+   * Until this line existed, `parsed.data` (the CURRENT version) described
+   * every row in the file. A question deleted after fieldwork took its
+   * collected answers out of the delivery with it; an option relabelled
+   * after fieldwork reported last month's respondents as having said the new
+   * thing. `version_id` has been on the row since migration 0001 and no
+   * export path read it.
+   *
+   * The column list is now the UNION across the versions the responses span,
+   * each row is flattened against its own definition, and anything the union
+   * cannot reconcile — a code that changed meaning, a type that changed —
+   * comes back in `warnings` for the header of the delivery rather than
+   * being silently resolved one way or the other.
+   */
+  const versioned = await resolveExportVersions(db, (resp ?? []) as any[], {
+    versionId: survey.current_version_id,
+    version: String(ver!.version),
+    def: parsed.data,
+  });
+  if (versioned.union.mixed) {
+    console.info("[rescript:export] multi-version export", JSON.stringify({
+      surveyId: params.id,
+      versions: versioned.union.versions,
+      columns: versioned.union.variables.length,
+      conflicts: versioned.union.conflicts.codes.length + versioned.union.conflicts.types.length,
+      unplaced: versioned.unplaced.length,
+    }));
+  }
+
   // the dataset filter (REMOVED never in a clean dataset; raw rows untouched)
   const exportRows: QualityExportRow[] = (resp ?? []).map((r: any) => ({
-    state: { sessionId: r.session_id, respondentId: r.respondent_id ?? undefined, surveyVersion: ver!.version, startedAt: r.started_at, completedAt: r.completed_at, status: r.status, answers: r.answers ?? {}, embedded: r.embedded ?? {}, calculated: r.calculated ?? {}, isTest: !!r.is_test, sampleSource: r.sample_source ?? null, sampleSourceRespondent: r.sample_source_respondent ?? null },
+    state: { sessionId: r.session_id, respondentId: r.respondent_id ?? undefined, surveyVersion: versioned.forSession(r.session_id).version, startedAt: r.started_at, completedAt: r.completed_at, status: r.status, answers: r.answers ?? {}, embedded: r.embedded ?? {}, calculated: r.calculated ?? {}, isTest: !!r.is_test, sampleSource: r.sample_source ?? null, sampleSourceRespondent: r.sample_source_respondent ?? null },
     quality: r.quality ?? null,
     review: { status: r.review_status ?? null, reason: r.review_reason ?? null, by: r.reviewed_by ?? null, at: r.reviewed_at ?? null },
   }));
@@ -244,7 +276,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
    */
   const withEnvironment = include === "all";
   if (format === "xlsx") {
-    const buf = await exportResponsesXlsx(parsed.data, exportRows, { dataset, environmentColumn: withEnvironment, qualityColumns: withQuality || dataset.kind !== "all" || exportRows.some((r) => r.quality), valueMode });
+    const buf = await exportResponsesXlsx(parsed.data, exportRows, { dataset, environmentColumn: withEnvironment, qualityColumns: withQuality || dataset.kind !== "all" || exportRows.some((r) => r.quality), valueMode, versioned: versioned.sourceFor(resp ?? []), versionNote: { versions: versioned.union.versions, warnings: versioned.warnings } });
     return new NextResponse(new Uint8Array(buf), {
       headers: {
         "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -255,9 +287,37 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const kept = exportRows.filter((r) => inDataset(r, dataset));
   resp = (resp ?? []).filter((r: any) => kept.some((k) => k.state.sessionId === r.session_id));
 
+  /*
+   * Rebuilt AFTER the filter, from the filtered list. `sourceFor` indexes by
+   * position into whatever list it is given, so a source built before this
+   * line would point every row after the first excluded one at its
+   * neighbour's questionnaire.
+   */
+  const versionedSource = versioned.sourceFor(resp ?? []);
+
+  /*
+   * A CSV or a .sav cannot carry a note inside it without corrupting the
+   * file, so the warnings travel as a response header. It is not a
+   * substitute for telling a person — the Studio reads it — but it means an
+   * API consumer pulling deliveries on a schedule can notice a study that
+   * has started mixing versions, instead of finding out from the client.
+   */
+  const versionHeaders: Record<string, string> = {
+    "x-rescript-versions": versioned.union.versions.join(","),
+    ...(versioned.warnings.length
+      ? { "x-rescript-export-warnings": String(versioned.warnings.length) }
+      : {}),
+  };
+  if (versioned.warnings.length) {
+    console.warn("[rescript:export] delivered with warnings", JSON.stringify({
+      surveyId: params.id, format, warnings: versioned.warnings,
+    }));
+  }
+
   const states = (resp ?? []).map((r) => ({
     surveyId: params.id,
-    surveyVersion: ver!.version,
+    /* the row's OWN version, not the survey's current one — see R7 above */
+    surveyVersion: versioned.forSession(r.session_id).version,
     sessionId: r.session_id,
     respondentId: r.respondent_id ?? undefined,
     seed: r.seed,
@@ -285,17 +345,19 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const mediaBaseUrl = process.env.STUDIO_PUBLIC_URL ?? null;
     if (format === "sav") {
       if (withDictionary) {
-        const buf = responsesToSavBundle(parsed.data, states as any, { mediaBaseUrl });
+        const buf = responsesToSavBundle(parsed.data, states as any, { mediaBaseUrl, versioned: versionedSource });
         return new NextResponse(new Uint8Array(buf), {
           headers: {
+            ...versionHeaders,
             "content-type": "application/zip",
             "content-disposition": `attachment; filename="${fileBase}_spss.zip"`,
           },
         });
       }
-      const buf = responsesToSav(parsed.data, states as any, { mediaBaseUrl });
+      const buf = responsesToSav(parsed.data, states as any, { mediaBaseUrl, versioned: versionedSource });
       return new NextResponse(new Uint8Array(buf), {
         headers: {
+          ...versionHeaders,
           "content-type": "application/x-spss-sav",
           "content-disposition": `attachment; filename="${fileBase}.sav"`,
         },
@@ -303,17 +365,19 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     }
     if (format === "dta") {
       if (withDictionary) {
-        const buf = responsesToDtaBundle(parsed.data, states as any, { mediaBaseUrl });
+        const buf = responsesToDtaBundle(parsed.data, states as any, { mediaBaseUrl, versioned: versionedSource });
         return new NextResponse(new Uint8Array(buf), {
           headers: {
+            ...versionHeaders,
             "content-type": "application/zip",
             "content-disposition": `attachment; filename="${fileBase}_stata.zip"`,
           },
         });
       }
-      const buf = responsesToDta(parsed.data, states as any, { mediaBaseUrl });
+      const buf = responsesToDta(parsed.data, states as any, { mediaBaseUrl, versioned: versionedSource });
       return new NextResponse(new Uint8Array(buf), {
         headers: {
+          ...versionHeaders,
           "content-type": "application/x-stata-dta",
           "content-disposition": `attachment; filename="${fileBase}.dta"`,
         },
@@ -325,10 +389,11 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
      * the dictionary. The zip carries the CSV and the generated syntax with
      * the full names, labels and PROC FORMAT value labels beside it.
      */
-    const csvForSas = responsesToCSV(parsed.data, states as any, undefined, { mediaBaseUrl });
-    const buf = responsesToSasBundle(parsed.data, states as any, { mediaBaseUrl, csv: csvForSas, includeDictionary: withDictionary });
+    const csvForSas = responsesToCSV(parsed.data, states as any, undefined, { mediaBaseUrl, versioned: versionedSource });
+    const buf = responsesToSasBundle(parsed.data, states as any, { mediaBaseUrl, csv: csvForSas, includeDictionary: withDictionary, versioned: versionedSource });
     return new NextResponse(new Uint8Array(buf), {
       headers: {
+        ...versionHeaders,
         "content-type": "application/zip",
         "content-disposition": `attachment; filename="${fileBase}_sas.zip"`,
       },
@@ -337,7 +402,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
   if (format === "json") {
     // Ordered by the data dictionary, so columns follow questionnaire order.
-    const dict = buildVariableDictionary(parsed.data).filter((v) => v.responseType !== "system");
+    /* the union, so a consumer's column list does not change under it when a
+     * version is cut — and so a question deleted after fieldwork is still here */
+    const dict = versioned.union.variables.filter((v) => v.responseType !== "system");
     const columns = dict.map((v) => v.name);
     /*
      * JSON keeps a multiple response as a LIST rather than joining it — the
@@ -366,12 +433,20 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         flags: st.flags,
         sampleSource: raw?.sample_source ?? null,
         sampleSourceRespondent: raw?.sample_source_respondent ?? null,
-        vars: renderVars(flattenVariables(parsed.data, st as any, { mediaBaseUrl: process.env.STUDIO_PUBLIC_URL ?? null })),
+        /* read through the version this response was collected under */
+        surveyVersion: st.surveyVersion,
+        vars: renderVars(flattenVariables(versioned.forSession(st.sessionId).def, st as any, { mediaBaseUrl: process.env.STUDIO_PUBLIC_URL ?? null })),
         quality: raw?.quality ? { classification: raw.quality.classification, qualityScore: raw.quality.qualityScore, riskScore: raw.quality.riskScore, flags: raw.quality.flags?.length ?? 0 } : null,
         review: raw?.review_status ?? null,
       };
     });
-    return NextResponse.json({ version: ver!.version, columns, rows, dataset: dataset.kind, total: exportRows.length, included: rows.length });
+    return NextResponse.json({
+      version: ver!.version, columns, rows, dataset: dataset.kind,
+      total: exportRows.length, included: rows.length,
+      /* R7: what this file actually spans, and anything the union could not reconcile */
+      versions: versioned.union.versions,
+      ...(versioned.warnings.length ? { warnings: versioned.warnings } : {}),
+    });
   }
 
   /*
@@ -399,10 +474,11 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
           ],
         }
       : undefined,
-    { mediaBaseUrl: process.env.STUDIO_PUBLIC_URL ?? null, valueMode },
+    { mediaBaseUrl: process.env.STUDIO_PUBLIC_URL ?? null, valueMode, versioned: versionedSource },
   );
   return new NextResponse(csv, {
     headers: {
+      ...versionHeaders,
       "content-type": "text/csv; charset=utf-8",
       "content-disposition": `attachment; filename="${parsed.data.meta.code}_${include}${dataset.kind !== "all" ? `_${dataset.kind}` : ""}_responses.csv"`,
     },

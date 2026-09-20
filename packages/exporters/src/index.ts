@@ -2,6 +2,7 @@ export * from "./variableDictionary.js";
 export * from "./json.js";
 export * from "./csv.js";
 export { csvCell, csvRow, needsFormulaGuard } from "./csvCell.js";
+export { dictionaryFor, defForRow, type VersionedSource } from "./versionedSource.js";
 export * from "./exportConfig.js";
 export * from "./docx.js";
 export * from "./surveyJson.js";

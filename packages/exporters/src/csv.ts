@@ -3,6 +3,7 @@ import type { ResponseState } from "@rescript/engine";
 import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
 import { renderValue, renderHeader, type ValueMode, type HeaderMode } from "./valueRendering.js";
 import { csvRow as csvLine } from "./csvCell.js";
+import { dictionaryFor, defForRow, type VersionedSource } from "./versionedSource.js";
 
 /** The subset of a ResponseState the CSV exporter needs. */
 export type ResponseStateLike = Pick<
@@ -40,11 +41,15 @@ export function responsesToCSV(
    * always produced, so every existing caller — and every client script built
    * against one of those files — is unaffected by the option existing.
    */
-  opts: { mediaBaseUrl?: string | null; valueMode?: ValueMode; headerMode?: HeaderMode } = {},
+  opts: {
+    mediaBaseUrl?: string | null; valueMode?: ValueMode; headerMode?: HeaderMode;
+    /** R7: the union dictionary and each row's own definition. Absent = today's behaviour. */
+    versioned?: VersionedSource;
+  } = {},
 ): string {
   const valueMode = opts.valueMode ?? "code";
   const headerMode = opts.headerMode ?? "name";
-  const dict = buildVariableDictionary(def);
+  const dict = dictionaryFor(def, opts.versioned);
   const varNames: string[] = [];
   const defs = new Map<string, (typeof dict)[number]>();
   for (const v of dict) {
@@ -62,7 +67,7 @@ export function responsesToCSV(
     ]),
   ];
   states.forEach((state, i) => {
-    const flat = flattenVariables(def, state as any, opts);
+    const flat = flattenVariables(defForRow(def, i, opts.versioned), state as any, opts);
     const cells: unknown[] = [
       state.respondentId ?? "",
       state.sessionId,
