@@ -11,3 +11,4 @@ export * from "./dashboardLayout.js";
 export * from "./dashboardTemplates.js";
 export * from "./themes.js";
 export * from "./fieldwork.js";
+export * from "./versionedMetadata.js";

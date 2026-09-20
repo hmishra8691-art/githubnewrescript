@@ -26,6 +26,12 @@ export interface AnalyticsRow extends ResponseRow {
   review_status?: string | null;
   /** §23 — the supplier this respondent came from (migration 0012). */
   sample_source?: string | null;
+  /**
+   * R7 — the version this response was collected under. NOT NULL in the
+   * database since migration 0001; optional here only because the row types
+   * are also used by callers that select a narrower column list.
+   */
+  version_id?: string | null;
 }
 
 export type VariableRole = "categorical" | "multi" | "numeric" | "scale" | "text" | "date" | "system" | "complex";
@@ -261,6 +267,15 @@ export interface BuildOptions {
   spec: DatasetSpec;
   filter?: Condition | null;
   weighting?: WeightingSpec | null;
+  /*
+   * R7 — the variable list and the per-response definition, when a study
+   * spans more than one version. Absent means what it has always meant: one
+   * definition describes everything, which is true until a version is cut.
+   */
+  versioned?: {
+    variables: VariableMeta[];
+    defFor: (row: AnalyticsRow) => SurveyDefinition;
+  };
 }
 
 /**
@@ -296,7 +311,7 @@ export function inAnalyticsDataset(row: AnalyticsRow, spec: DatasetSpec): boolea
 }
 
 export function buildDataset(def: SurveyDefinition, rows: AnalyticsRow[], opts: BuildOptions): Dataset {
-  const variables = variableMetadata(def);
+  const variables = opts.versioned?.variables ?? variableMetadata(def);
   const byName = new Map(variables.map((v) => [v.name, v]));
   const statuses = opts.spec.statuses?.length ? new Set(opts.spec.statuses) : new Set(["complete"]);
   let cases: Case[] = [];
@@ -306,7 +321,13 @@ export function buildDataset(def: SurveyDefinition, rows: AnalyticsRow[], opts: 
     if (!statuses.has(row.status ?? "complete")) continue;
     if (!inAnalyticsDataset(row, opts.spec)) continue;
     if (opts.filter && !matchesResponseCondition(def, opts.filter, row)) continue;
-    cases.push(rowToCase(def, row));
+    /*
+     * The response's OWN questionnaire. Reading a v1 interview through v2 is
+     * how a relabelled option comes to rewrite what somebody said, and how a
+     * question deleted after fieldwork disappears from the base it belongs
+     * to — in the crosstab as much as in the delivered file.
+     */
+    cases.push(rowToCase(opts.versioned ? opts.versioned.defFor(row) : def, row));
   }
   const ds: Dataset = { def, variables, byName, cases, total: rows.length, weighted: false, spec: opts.spec, weightInfo: null };
   if (opts.weighting) applyWeighting(ds, opts.weighting);

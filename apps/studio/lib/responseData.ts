@@ -5,6 +5,7 @@ import {
   buildVariableDictionary, compileResponseFilter, flattenVariables, matchesResponseCondition,
   responseMatchesText, rowToState, type PrefilterClause,
 } from "@rescript/engine";
+import { getCachedVersionDefinition } from "@rescript/quality/server";
 
 /**
  * The one service every response reader goes through.
@@ -33,7 +34,8 @@ export function parseEnvironment(raw: string | null | undefined): Environment | 
 
 /** Columns a grid row needs — deliberately not `telemetry` or `quality`. */
 const ROW_COLUMNS =
-  "id, session_id, respondent_code, respondent_id, status, is_test, environment, revision, source, " +
+  /* `version_id`: R7 — a row is read through the questionnaire it was collected under */
+  "id, version_id, session_id, respondent_code, respondent_id, status, is_test, environment, revision, source, " +
   "answers, calculated, embedded, flags, seed, started_at, completed_at, updated_at, last_saved_at, " +
   "deleted_at, deleted_by, deletion_reason, quality, review_status, sample_source, sample_source_respondent";
 
@@ -186,6 +188,39 @@ function baseQuery(db: SupabaseClient, q: ResponseQuery, columns: string, count:
 
 const CHUNK = 1000;
 
+/**
+ * R7 — the definition to read each of these rows through.
+ *
+ * Returns a lookup from row to definition. For the overwhelmingly common case
+ * — every row under one version, or a build that has not recorded versions —
+ * it hands back the definition it was given and touches the database not at
+ * all, so the Data tab costs exactly what it did before.
+ *
+ * `getCachedVersionDefinition` memoises by version id across the process, so
+ * paging through a long study resolves each version once however many pages
+ * are turned.
+ */
+async function rowDefinitions(
+  db: SupabaseClient,
+  current: SurveyDefinition,
+  rows: { version_id?: string | null }[],
+): Promise<(row: { version_id?: string | null }) => SurveyDefinition> {
+  const ids = [...new Set(rows.map((r) => r.version_id).filter((v): v is string => !!v))];
+  if (ids.length <= 1) return () => current;
+
+  const byId = new Map<string, SurveyDefinition>();
+  for (const id of ids) {
+    const def = await getCachedVersionDefinition(db, id);
+    if (def) byId.set(id, def);
+  }
+  /*
+   * A row whose version cannot be read falls back to the current definition
+   * rather than disappearing from the grid. The researcher needs to see the
+   * response; the alternative is a row count that does not match the file.
+   */
+  return (row) => (row.version_id ? byId.get(row.version_id) ?? current : current);
+}
+
 /** One page of the dataset, with the total that matches the whole query. */
 export async function queryResponses(db: SupabaseClient, def: SurveyDefinition, q: ResponseQuery): Promise<ResponsePage> {
   const limit = Math.min(Math.max(q.limit ?? 50, 1), 500);
@@ -202,8 +237,9 @@ export async function queryResponses(db: SupabaseClient, def: SurveyDefinition, 
     let sel = applyClauses(baseQuery(db, q, ROW_COLUMNS, true), clauses);
     const { data, error, count } = await sel.order(sort.field, { ascending: sort.dir === "asc", nullsFirst: false }).range(offset, offset + limit - 1);
     if (error) throw new Error(error.message);
+    const defFor = await rowDefinitions(db, def, (data ?? []) as unknown as { version_id?: string | null }[]);
     return {
-      rows: (data ?? []).map((r) => toRecord(def, r)),
+      rows: (data ?? []).map((r: any) => toRecord(defFor(r), r)),
       total: count ?? 0, exact: true, limit, offset, columns, environment: q.environment,
     };
   }
@@ -216,11 +252,12 @@ export async function queryResponses(db: SupabaseClient, def: SurveyDefinition, 
     const { data, error } = await sel.order(sort.field, { ascending: sort.dir === "asc", nullsFirst: false }).range(start, start + CHUNK - 1);
     if (error) throw new Error(error.message);
     const chunk = data ?? [];
+    const defForScan = await rowDefinitions(db, def, chunk as unknown as { version_id?: string | null }[]);
     for (const raw of chunk) {
       if (q.filter && !matchesResponseCondition(def, q.filter, raw as never)) continue;
       if (needsText && !responseMatchesText(def, raw as never, q.search!)) continue;
       total++;
-      if (total > offset && rows.length < limit) rows.push(toRecord(def, raw));
+      if (total > offset && rows.length < limit) rows.push(toRecord(defForScan(raw as any), raw));
     }
     if (chunk.length < CHUNK) break;
   }
@@ -280,6 +317,15 @@ export async function matchingResponseIds(db: SupabaseClient, def: SurveyDefinit
   return { ids, codes, capped: false };
 }
 
+/**
+ * R7 — `def` is THIS ROW'S definition, not the survey's current one.
+ *
+ * The Data tab shows `vars`, the flattened answers. Flattening a v1 interview
+ * against v2 is the same defect the export had: a question deleted after
+ * fieldwork shows nothing where there is an answer, and an option relabelled
+ * after fieldwork shows the new label against the old choice. The caller
+ * resolves the definition per row; this function only has to be given it.
+ */
 function toRecord(def: SurveyDefinition, r: any): ResponseRecord {
   return {
     id: r.id,

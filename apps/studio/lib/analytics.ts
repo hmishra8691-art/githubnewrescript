@@ -3,8 +3,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Condition, SurveyDefinition } from "@rescript/schema";
 import {
   buildDataset, runAnalysis, variableMetadata, recommendCharts, DEFAULT_THEME,
+  unionVariableMetadata, definitionResolver,
   type AnalysisDefinition, type AnalysisResult, type AnalyticsRow, type Dataset, type DatasetSpec, type ReportTheme, type SegmentDef, type VariableMeta,
 } from "@rescript/analytics";
+import type { VersionedDefinition } from "@rescript/engine";
+import { getCachedVersionDefinition } from "@rescript/quality/server";
 import { loadQualityDefinition } from "./qualityDef";
 
 /**
@@ -30,7 +33,7 @@ import { loadQualityDefinition } from "./qualityDef";
  * the file delivered from the same study. The rule itself lives in
  * `inAnalyticsDataset` beside the exporters' `inDataset`.
  */
-const COLUMNS = "id, session_id, respondent_code, respondent_id, status, is_test, answers, calculated, embedded, flags, seed, started_at, completed_at, quality, review_status, sample_source";
+const COLUMNS = "id, version_id, session_id, respondent_code, respondent_id, status, is_test, answers, calculated, embedded, flags, seed, started_at, completed_at, quality, review_status, sample_source";
 const CHUNK = 1000;
 const MAX_ROWS = 250_000;
 
@@ -103,16 +106,23 @@ export async function loadRows(db: SupabaseClient, surveyId: string, spec: Datas
   return rows;
 }
 
-export interface LoadedContext { def: SurveyDefinition; version: string | null; revision: number | null; customerId: string | null }
+export interface LoadedContext {
+  def: SurveyDefinition;
+  version: string | null;
+  revision: number | null;
+  customerId: string | null;
+  /** the version row the definition came from, when it came from one (R7) */
+  versionId?: string | null;
+}
 
 export async function loadDefinition(db: SupabaseClient, surveyId: string): Promise<LoadedContext | { error: string; status: number }> {
   const loaded = await loadQualityDefinition(db, surveyId, "draft");
   if ("error" in loaded) {
     const v = await loadQualityDefinition(db, surveyId, "version");
     if ("error" in v) return v;
-    return { def: v.def, version: v.version, revision: v.revision, customerId: v.customerId };
+    return { def: v.def, version: v.version, revision: v.revision, customerId: v.customerId, versionId: v.versionId };
   }
-  return { def: loaded.def, version: loaded.version, revision: loaded.revision, customerId: loaded.customerId };
+  return { def: loaded.def, version: loaded.version, revision: loaded.revision, customerId: loaded.customerId, versionId: loaded.versionId };
 }
 
 /** Resolve saved filter / segment ids into the definition's inline conditions. */
@@ -130,7 +140,60 @@ export async function resolveSaved(db: SupabaseClient, surveyId: string, def: An
 
 export async function buildFor(db: SupabaseClient, surveyId: string, ctx: LoadedContext, def: AnalysisDefinition): Promise<Dataset> {
   const rows = await loadRows(db, surveyId, def.dataset);
-  return buildDataset(ctx.def, rows, { spec: def.dataset, weighting: def.weighting ?? null });
+  const versioned = await resolveAnalyticsVersions(db, rows, ctx);
+  return buildDataset(ctx.def, rows, { spec: def.dataset, weighting: def.weighting ?? null, versioned });
+}
+
+/**
+ * R7 — READ EACH RESPONSE THROUGH THE VERSION IT WAS COLLECTED UNDER.
+ *
+ * The export was fixed first, and until this existed the platform disagreed
+ * with itself: the delivered CSV read each response through its own
+ * questionnaire, and the crosstab on the screen beside it read every response
+ * through the current one. Same study, two numbers, and whichever a
+ * researcher quotes the other one contradicts.
+ *
+ * Returns `undefined` for a single-version study, which is every study until
+ * somebody cuts a second version — so the common path allocates nothing and
+ * behaves exactly as it did.
+ */
+async function resolveAnalyticsVersions(
+  db: SupabaseClient,
+  rows: AnalyticsRow[],
+  ctx: LoadedContext,
+): Promise<{ variables: VariableMeta[]; defFor: (row: AnalyticsRow) => SurveyDefinition } | undefined> {
+  const ids = [...new Set(rows.map((r) => r.version_id).filter((v): v is string => !!v))];
+  /*
+   * Nothing to reconcile: no version on the rows at all, or every row under
+   * the one the context already holds.
+   */
+  if (ids.length === 0) return undefined;
+  if (ids.length === 1 && ctx.versionId && ids[0] === ctx.versionId) return undefined;
+
+  const { data } = await db.from("survey_versions").select("id, version").in("id", ids);
+  const numbers = new Map((data ?? []).map((v: { id: string; version: string }) => [v.id, String(v.version)]));
+
+  const versions: VersionedDefinition[] = [];
+  for (const id of ids) {
+    const def = await getCachedVersionDefinition(db, id);
+    if (def) versions.push({ versionId: id, version: numbers.get(id) ?? "?", def });
+  }
+  /*
+   * The context's own definition joins the union. For a live study that is
+   * the current version; for a draft-backed context it is what the analyst
+   * is looking at, and leaving it out would drop a variable they can see in
+   * the builder from the list they can analyse.
+   */
+  if (ctx.versionId && !versions.some((v) => v.versionId === ctx.versionId)) {
+    versions.push({ versionId: ctx.versionId, version: ctx.version ?? "?", def: ctx.def });
+  }
+  if (!versions.length) return undefined;
+
+  const union = unionVariableMetadata(versions);
+  if (!union.mixed) return undefined;
+
+  const resolve = definitionResolver(versions, ctx.def);
+  return { variables: union.variables, defFor: (row) => resolve(row.version_id) };
 }
 
 export async function compute(db: SupabaseClient, surveyId: string, ctx: LoadedContext, definition: AnalysisDefinition): Promise<AnalysisResult & { recommendations: ReturnType<typeof recommendCharts> }> {
