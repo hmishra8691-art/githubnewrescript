@@ -669,40 +669,49 @@ export function SurveySettings() {
 
   return (
     <div data-testid="survey-settings">
-      <label className="f"><span>Title</span>
-        <input className="input" value={s.def.meta.title}
-          onChange={(e) => s.update((d) => { d.meta.title = e.target.value; })} /></label>
-      <label className="f"><span>Survey code</span>
-        <input className="input mono" value={s.def.meta.code}
-          onChange={(e) => s.update((d) => { d.meta.code = e.target.value; })} /></label>
+      {/*
+        * Sept 21 follow-up: these used to be single fields stacked full
+        * width in a 620px column. `.settings-grid` (design-system.css)
+        * reflows them into 2+ columns on a wide window instead of forcing
+        * one field to stretch edge to edge — every input, onChange and
+        * data-testid below is untouched, only the wrapping layout changed.
+        */}
+      <div className="settings-grid">
+        <label className="f"><span>Title</span>
+          <input className="input" value={s.def.meta.title}
+            onChange={(e) => s.update((d) => { d.meta.title = e.target.value; })} /></label>
+        <label className="f"><span>Survey code</span>
+          <input className="input mono" value={s.def.meta.code}
+            onChange={(e) => s.update((d) => { d.meta.code = e.target.value; })} /></label>
+      </div>
 
       <h3 className="sec">Survey URL</h3>
       <p className="muted" style={{ fontSize: 12.5, marginTop: -4 }}>
         Must be unique across surveys — respondents get
         <span className="mono"> /s/{dep.clientSlug || "client"}/{dep.studySlug || "study-001"}</span>
       </p>
-      <div className="row">
-        <label className="f grow"><span>Client slug</span>
+      <div className="settings-grid">
+        <label className="f"><span>Client slug</span>
           <input className="input mono" value={dep.clientSlug}
             placeholder="acme"
             onChange={(e) => s.update((d) => {
               d.deployment.clientSlug = e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-");
             })} /></label>
-        <label className="f grow"><span>Study slug</span>
+        <label className="f"><span>Study slug</span>
           <input className="input mono" value={dep.studySlug}
             placeholder="brand-tracker-2026"
             onChange={(e) => s.update((d) => {
               d.deployment.studySlug = e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-");
             })} /></label>
+        {/* white labelling stops at CSS unless the domain in the address bar
+            changes too; the field existed and nothing read it */}
+        <label className="f"><span>Custom domain (optional)</span>
+          <input className="input mono" value={dep.customDomain ?? ""} data-testid="custom-domain"
+            placeholder="survey.acme.com"
+            onChange={(e) => s.update((d) => {
+              d.deployment.customDomain = e.target.value.trim().replace(/^https?:\/\//i, "").replace(/\/.*$/, "") || undefined;
+            })} /></label>
       </div>
-      {/* white labelling stops at CSS unless the domain in the address bar
-          changes too; the field existed and nothing read it */}
-      <label className="f"><span>Custom domain (optional)</span>
-        <input className="input mono" value={dep.customDomain ?? ""} data-testid="custom-domain"
-          placeholder="survey.acme.com"
-          onChange={(e) => s.update((d) => {
-            d.deployment.customDomain = e.target.value.trim().replace(/^https?:\/\//i, "").replace(/\/.*$/, "") || undefined;
-          })} /></label>
       {dep.customDomain && (
         <p className="muted" style={{ fontSize: 12.5, marginTop: -4 }}>
           Respondent links will use <span className="mono">https://{dep.customDomain}</span>. Point it
@@ -712,21 +721,23 @@ export function SurveySettings() {
       )}
 
       <h3 className="sec">Who can take this survey</h3>
-      <label className="f"><span>Access mode</span>
-        <select className="select" data-testid="access-mode" value={mode}
-          onChange={(e) => s.update((d) => { d.deployment.access.mode = e.target.value as any; })}>
-          <option value="open">Open link — anyone with the URL</option>
-          <option value="password">Password protected</option>
-          <option value="unique_links">Unique respondent links</option>
-          <option value="invitation">Email invitations</option>
-        </select></label>
+      <div className="settings-grid">
+        <label className="f"><span>Access mode</span>
+          <select className="select" data-testid="access-mode" value={mode}
+            onChange={(e) => s.update((d) => { d.deployment.access.mode = e.target.value as any; })}>
+            <option value="open">Open link — anyone with the URL</option>
+            <option value="password">Password protected</option>
+            <option value="unique_links">Unique respondent links</option>
+            <option value="invitation">Email invitations</option>
+          </select></label>
 
-      {mode === "password" && (
-        <label className="f"><span>Password</span>
-          <input className="input" value={dep.access.password ?? ""}
-            placeholder="respondents are asked for this"
-            onChange={(e) => s.update((d) => { d.deployment.access.password = e.target.value; })} /></label>
-      )}
+        {mode === "password" && (
+          <label className="f"><span>Password</span>
+            <input className="input" value={dep.access.password ?? ""}
+              placeholder="respondents are asked for this"
+              onChange={(e) => s.update((d) => { d.deployment.access.password = e.target.value; })} /></label>
+        )}
+      </div>
 
       {/*
         * This used to be a warning that no invitation screen existed, and

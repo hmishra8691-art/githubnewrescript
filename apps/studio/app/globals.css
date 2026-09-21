@@ -341,8 +341,17 @@ textarea.xe-input:focus { border-color: var(--accent); }
 /* ---------- Survey Flow, read at block level ---------- */
 /* The flow is a vertical spine: START, then cards, then END. Every gap is an
    insertion point AND a drop target, so "put a branch between these two
-   blocks" and "move this block into that group" are the same gesture. */
-.flow-panel { max-width: 940px; }
+   blocks" and "move this block into that group" are the same gesture.
+   Sept 21 follow-up ("Priority UI Fix: Survey Flow & Survey Settings — Right
+   Panel Layout"): 940px was sized for when the right panel reserved
+   ~390-440px beside this column; now that it's hidden on this tab (see
+   RightPanel in Studio.tsx), that cap just left a large blank gutter on
+   wide windows. Widened to match the same generous-but-bounded width this
+   app already uses elsewhere for pages that use their space well (`.dash`,
+   `.ax-page` below) — every card inside still reads fine at this width,
+   since branch/condition rows and flow-card summaries are already
+   flex-wrapping content, not fixed-width text blocks. */
+.flow-panel { max-width: 1400px; }
 .flow-start, .flow-end {
   font-size: 11.5px; font-weight: 800; letter-spacing: .12em; color: var(--subtle);
   text-align: center; padding: 4px 0;

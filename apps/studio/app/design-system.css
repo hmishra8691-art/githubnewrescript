@@ -127,6 +127,23 @@ small { font-size: var(--fs-small); }
 label.f { display: block; margin-bottom: 14px; }
 h3.sec { font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: .08em; color: var(--c-primary-700); margin: 24px 0 10px; font-weight: 700; }
 
+/*
+ * Survey Settings (Sept 21 follow-up: "Priority UI Fix: Survey Flow &
+ * Survey Settings — Right Panel Layout"). This tab used to be a flat 620px
+ * column, sized for when the right panel reserved space beside it; that
+ * panel is now hidden on this tab (RightPanel in Studio.tsx), so 620px just
+ * left a large blank gutter on wide windows. `.settings-wrap` widens the
+ * cap to match this app's own "uses its space well" pages (`.dash`,
+ * `.ax-page` in globals.css), and `.settings-grid` reflows the short-value
+ * fields it wraps (Title/Survey code, Client/Study slug/Custom domain) into
+ * 2-3 columns on a wide window instead of one field stretched edge to
+ * edge — every `<input>`'s own width stays sane (capped per column) even
+ * though the page around it is much wider.
+ */
+.settings-wrap { max-width: 1400px; }
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 420px)); gap: 2px 24px; }
+.settings-grid label.f { margin-bottom: 14px; }
+
 /* ---------- buttons ---------- */
 .btn {
   --btn-bg: var(--c-surface); --btn-bd: var(--c-border); --btn-fg: var(--c-text);

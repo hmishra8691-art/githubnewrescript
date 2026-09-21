@@ -839,7 +839,21 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           )}
           {tab === "questions" && <QuestionsPanel />}
           {tab === "settings" && (
-            <div style={{ maxWidth: 620 }}>
+            /*
+             * Sept 21 follow-up ("Priority UI Fix: Survey Flow & Survey
+             * Settings — Right Panel Layout"): this used to be capped at a
+             * flat 620px — reasonable back when the right panel reserved
+             * ~390-440px beside it, a dead cap once that panel is hidden on
+             * this tab (see RightPanel in this file) and `main` has the
+             * space to itself. `.settings-wrap` widens the cap to match the
+             * same generous-but-bounded width this app already uses for its
+             * other "uses available space well" pages (`.dash`, `.ax-page`
+             * in globals.css), and `SurveySettings`'s own fields now sit in
+             * a responsive grid (`.settings-grid`) that reflows into more
+             * columns as space allows, rather than one field stretched
+             * edge to edge.
+             */
+            <div className="settings-wrap">
               <h2 style={{ margin: "0 0 14px", fontSize: 17 }}>Survey settings</h2>
               <SurveySettings />
             </div>
