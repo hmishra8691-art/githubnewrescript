@@ -8,7 +8,7 @@ import { QuestionRenderer, brandingVars, widthModeClass } from "@rescript/render
 import { AiConversationSection } from "./AiConversationPanel";
 import { MediaUrlInput } from "./MediaUrlInput";
 import { MediaDisplayControls } from "./MediaDisplayControls";
-import { dominantColorsFromImage, generatePaletteFromHex, type GeneratedColors } from "@/lib/paletteFromImage";
+import { dominantColorsFromImage, generatePalette, generatePaletteFromHex, hexToRgb, type GeneratedColors, type RGB } from "@/lib/paletteFromImage";
 
 function Color({ label, value, onChange }: { label: string; value: string; onChange(v: string): void }) {
   return (
@@ -247,28 +247,40 @@ function ThemeLivePreview({ branding, logoUrl }: { branding: Branding; logoUrl?:
 /* ================================================== logo detection / brand color */
 
 /**
- * "Detect Logo Colors" (req §4) and "generate from a brand color" (req §5's
- * hex path — the website-URL path is a separate, much larger fetch/CORS/
- * scraping problem and is intentionally not part of this).
+ * Three sources feeding one destination: "Detect Logo Colors" (req §4),
+ * "generate from a brand color" (a typed hex), and — Sept 21 follow-up —
+ * "Import Brand from URL", which analyzes a website's own CSS/meta/logo
+ * server-side (`/api/surveys/{id}/brand-scrape`) and hands back seed
+ * colors for the exact same generator.
  *
- * Both paths end at the same place: a generated palette shown for review,
+ * All three end at the same place: a generated palette shown for review,
  * applied only on "Use this palette" — never silently overwriting the
- * survey's colors the moment a logo loads.
+ * survey's colors the moment a URL or logo loads. And all three ultimately
+ * call the one `generatePalette` — there is no second, URL-specific palette
+ * generator; the URL path's only job is producing seed colors the other two
+ * paths already know how to turn into a full theme.
  */
 function ThemeGenerator({ b, set }: { b: Branding; set(path: (draft: Branding) => void): void }) {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [generated, setGenerated] = React.useState<GeneratedColors | null>(null);
   const [brandHex, setBrandHex] = React.useState("#2563eb");
+  const [siteUrl, setSiteUrl] = React.useState("");
+  const [siteStatus, setSiteStatus] = React.useState<string | null>(null);
+  const [detectedColors, setDetectedColors] = React.useState<{ hex: string; role: string }[] | null>(null);
+
+  // toast/survey id live on the store; grabbed lazily so this file doesn't
+  // need the whole store type threaded through this small component's props
+  const s = useStudio();
+  const sandboxed = s.surveyDbId === "sandbox";
+
+  const fromRgbSeeds = (rgbs: RGB[]) => setGenerated(generatePalette(rgbs));
 
   const fromLogo = async () => {
     if (!b.logoUrl) return;
-    setBusy(true); setError(null); setGenerated(null);
+    setBusy(true); setError(null); setGenerated(null); setDetectedColors(null); setSiteStatus(null);
     try {
-      const colors = await dominantColorsFromImage(b.logoUrl);
-      const rgbs = colors.map((c) => c);
-      const { generatePalette } = await import("@/lib/paletteFromImage");
-      setGenerated(generatePalette(rgbs));
+      fromRgbSeeds(await dominantColorsFromImage(b.logoUrl));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -277,7 +289,7 @@ function ThemeGenerator({ b, set }: { b: Branding; set(path: (draft: Branding) =
   };
 
   const fromHex = () => {
-    setError(null);
+    setError(null); setDetectedColors(null); setSiteStatus(null);
     try {
       setGenerated(generatePaletteFromHex(brandHex));
     } catch (e) {
@@ -285,22 +297,90 @@ function ThemeGenerator({ b, set }: { b: Branding; set(path: (draft: Branding) =
     }
   };
 
+  /**
+   * WEBSITE URL -> BRAND COLORS -> SURVEY THEME (Sept 21 follow-up brief).
+   *
+   * The server (`/api/surveys/{id}/brand-scrape`) does the actual
+   * fetching/parsing and returns only short hex-color strings plus, at
+   * most, a logo/favicon URL — never the page's HTML or CSS. If it found
+   * usable colors, they become the palette generator's seeds directly. If
+   * it found NONE but did find a logo, this reuses the exact same
+   * browser-side `dominantColorsFromImage` the "Detect logo colors" button
+   * uses — the brief's §6 fallback chain (CSS → logo image → manual entry),
+   * implemented as "try the next existing path", not new image-decoding
+   * code. If both come up empty, the error simply says so; the hex input
+   * right below is the manual-entry fallback and needs nothing extra.
+   */
+  const fromUrl = async () => {
+    if (!siteUrl.trim() || sandboxed) return;
+    setBusy(true); setError(null); setGenerated(null); setDetectedColors(null);
+    setSiteStatus("Analyzing website…");
+    try {
+      const res = await fetch(`/api/surveys/${s.surveyDbId}/brand-scrape`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url: siteUrl.trim() }),
+      });
+      const data = await res.json().catch(() => ({ ok: false, error: "That didn't come back as a usable response." }));
+
+      if (data.ok && Array.isArray(data.seeds) && data.seeds.length) {
+        const rgbs = (data.seeds as { hex: string; role: string }[]).map((s2) => hexToRgb(s2.hex)).filter((x: RGB | null): x is RGB => !!x);
+        if (rgbs.length) {
+          fromRgbSeeds(rgbs);
+          setDetectedColors(data.seeds);
+          setSiteStatus(`Found ${data.seeds.length} brand color${data.seeds.length === 1 ? "" : "s"} from the site's ${data.source === "meta" ? "declared theme color" : "styles"}.`);
+          return;
+        }
+      }
+
+      // no CSS/meta colors — try the site's own logo/favicon image, the
+      // same way "Detect logo colors" already works, just with a
+      // discovered URL instead of this survey's own b.logoUrl
+      if (data.logoUrl) {
+        setSiteStatus("No brand colors found in the page's styles — trying the site's logo…");
+        try {
+          fromRgbSeeds(await dominantColorsFromImage(data.logoUrl));
+          setSiteStatus("Found colors from the site's logo image.");
+          return;
+        } catch {
+          // falls through to the shared "nothing worked" message below
+        }
+      }
+
+      setSiteStatus(null);
+      setError(data.ok ? "No usable brand colors found on that page — try entering a color below." : (data.error || "Couldn't analyze that site — try entering a color below."));
+    } catch {
+      setSiteStatus(null);
+      setError("Couldn't reach the analysis service — try entering a color below.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const apply = () => {
     if (!generated) return;
     set((x) => { x.colors = { ...x.colors, ...generated }; });
-    s_toast();
+    s.toast("Palette applied — every color below can still be tweaked by hand");
   };
-  // toast lives on the store; grabbed lazily so this file doesn't need the
-  // whole store type threaded through this small component's props
-  const s = useStudio();
-  const s_toast = () => s.toast("Palette applied — every color below can still be tweaked by hand");
 
   return (
     <div className="card" style={{ padding: 12, marginTop: 4 }} data-testid="theme-generator">
       <div className="row" style={{ flexWrap: "wrap", alignItems: "flex-end", gap: 10 }}>
+        <label className="f" style={{ width: 260 }}><span>Import brand from URL</span>
+          <div className="row" style={{ gap: 6 }}>
+            <input className="input" style={{ minWidth: 160 }} placeholder="https://example.com" value={siteUrl}
+              disabled={sandboxed} data-testid="brand-url-input"
+              onChange={(e) => setSiteUrl(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void fromUrl(); } }} />
+            <button type="button" className="btn" disabled={!siteUrl.trim() || busy || sandboxed} data-testid="analyze-brand-url"
+              onClick={() => void fromUrl()} title={sandboxed ? "Save the survey first — brand analysis needs a saved survey." : "Analyze this website's colors and generate a theme from them"}>
+              {busy && siteStatus ? "Analyzing…" : "🔗 Analyze website"}
+            </button>
+          </div>
+        </label>
         <button type="button" className="btn" disabled={!b.logoUrl || busy} data-testid="detect-logo-colors" onClick={() => void fromLogo()}
           title={b.logoUrl ? "Analyze the logo above and generate a palette from its colors" : "Add a logo above first"}>
-          {busy ? "Analyzing…" : "🎨 Detect logo colors"}
+          {busy && !siteStatus ? "Analyzing…" : "🎨 Detect logo colors"}
         </button>
         <span className="muted" style={{ fontSize: 12.5 }}>or</span>
         <label className="f" style={{ width: 130 }}><span>Brand color</span>
@@ -312,7 +392,22 @@ function ThemeGenerator({ b, set }: { b: Branding; set(path: (draft: Branding) =
         </label>
         <button type="button" className="btn" data-testid="generate-from-hex" onClick={fromHex}>Generate theme</button>
       </div>
+      {sandboxed && <p className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>Save the survey first — brand analysis needs a saved survey.</p>}
+      {siteStatus && <p className="muted" style={{ fontSize: 12.5, marginTop: 8 }} data-testid="brand-url-status">{siteStatus}</p>}
       {error && <p className="chip warn" data-testid="theme-generator-error" style={{ marginTop: 8 }}>{error}</p>}
+      {detectedColors && (
+        <div style={{ marginTop: 8 }} data-testid="brand-colors-detected">
+          <p className="muted" style={{ fontSize: 12.5, marginBottom: 4 }}>Brand colors detected:</p>
+          <div className="row" style={{ flexWrap: "wrap", gap: 10 }}>
+            {detectedColors.map((c, i) => (
+              <span key={i} className="row" style={{ gap: 5, alignItems: "center", fontSize: 12.5 }} title={c.role}>
+                <span style={{ width: 16, height: 16, borderRadius: 4, background: c.hex, border: "1px solid var(--border)", display: "inline-block" }} />
+                <span className="mono">{c.hex}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
       {generated && (
         <div style={{ marginTop: 10 }} data-testid="generated-palette">
           <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
