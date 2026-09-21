@@ -2,10 +2,13 @@
 import React from "react";
 import { useStudio } from "./store";
 import { THEME_PRESETS } from "@/lib/defaults";
-import { Branding } from "@rescript/schema";
+import { Branding, SurveyDefinition } from "@rescript/schema";
+import { createResponseState, start, setAnswer } from "@rescript/engine";
+import { QuestionRenderer, brandingVars, widthModeClass } from "@rescript/renderer";
 import { AiConversationSection } from "./AiConversationPanel";
 import { MediaUrlInput } from "./MediaUrlInput";
 import { MediaDisplayControls } from "./MediaDisplayControls";
+import { dominantColorsFromImage, generatePaletteFromHex, type GeneratedColors } from "@/lib/paletteFromImage";
 
 function Color({ label, value, onChange }: { label: string; value: string; onChange(v: string): void }) {
   return (
@@ -16,6 +19,38 @@ function Color({ label, value, onChange }: { label: string; value: string; onCha
           onChange={(e) => onChange(e.target.value)}
           style={{ width: 30, height: 28, padding: 0, border: "1px solid var(--border)", background: "none", borderRadius: 6 }} />
         <input className="input mono" style={{ width: 88 }} value={value} onChange={(e) => onChange(e.target.value)} />
+      </div>
+    </label>
+  );
+}
+
+/**
+ * A color with no schema default — absent means "inherit down the CSS
+ * fallback chain" (see questions.css's `:root` comment), not "black". The
+ * swatch shows what it currently resolves to (the explicit value, or the
+ * `inherits` color passed in) so the box is never just blank, and "Reset"
+ * clears the override rather than requiring the color to be retyped to
+ * whatever it was inheriting a moment ago.
+ */
+function OptionalColor({ label, value, inherits, onChange }: {
+  label: string; value: string | undefined; inherits: string; onChange(v: string | undefined): void;
+}) {
+  const shown = value ?? inherits;
+  const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+  return (
+    <label className="f" style={{ width: 150 }} data-testid={`branding-optcolor-${slug}`}>
+      <span>{label}{!value && <span className="muted" style={{ fontWeight: 400 }} data-testid={`branding-optcolor-${slug}-inherited`}> (inherited)</span>}</span>
+      <div className="row" style={{ gap: 6 }}>
+        <input type="color" value={/^#([0-9a-f]{6})$/i.test(shown) ? shown : "#000000"}
+          onChange={(e) => onChange(e.target.value)}
+          style={{ width: 30, height: 28, padding: 0, border: "1px solid var(--border)", background: "none", borderRadius: 6 }} />
+        <input className="input mono" style={{ width: 82 }} value={value ?? ""} placeholder={inherits}
+          data-testid={`branding-optcolor-${slug}-input`}
+          onChange={(e) => onChange(e.target.value || undefined)} />
+        {value && (
+          <button type="button" className="btn small" data-testid={`branding-optcolor-${slug}-reset`}
+            title={`Inherit ${inherits}`} onClick={() => onChange(undefined)}>×</button>
+        )}
       </div>
     </label>
   );
@@ -97,6 +132,205 @@ function WorkspaceThemes() {
   );
 }
 
+/* ============================================================ live preview */
+
+/**
+ * A small, fixed survey used ONLY to preview a theme — never the survey
+ * being edited, never sent anywhere. Three question types (choice, a
+ * numeric with a validation error already showing, open text) plus the
+ * progress bar and nav buttons cover every element the brief's live-preview
+ * requirement names: "question text, answer options, buttons, input
+ * fields, cards, progress bar, validation message... header/logo".
+ */
+// Parsed through the real schema — like `newSurveyDefinition` — rather than
+// hand-cast, so every question gets the same defaulted shape (option flags,
+// validation array, etc.) a real one has. If this fails to parse, that's a
+// bug in the fixture, not a bug in the preview.
+const PREVIEW_DEF: SurveyDefinition = SurveyDefinition.parse({
+  meta: { id: "00000000-0000-4000-8000-00000preview", code: "PREVIEW", title: "Theme preview", version: "1.0" },
+  questions: [
+    {
+      id: "pv1", code: "Q1", variableName: "PICK", type: "single_select", text: "Which of these best describes you?",
+      options: [
+        { code: "1", label: "Just browsing" },
+        { code: "2", label: "Ready to buy" },
+        { code: "3", label: "Already a customer" },
+      ],
+    },
+    {
+      id: "pv2", code: "Q2", variableName: "QTY", type: "numeric", text: "How many would you like?",
+      instructions: "Enter a whole number.",
+    },
+    {
+      id: "pv3", code: "Q3", variableName: "NOTE", type: "open_text", text: "Anything else you'd like us to know?",
+    },
+  ],
+  flow: [
+    { type: "page", id: "pv_p1", questionIds: ["pv1", "pv2", "pv3"] },
+    { type: "end", id: "pv_e1", status: "complete" },
+  ],
+});
+
+const PREVIEW_ERROR = { questionId: "pv2", message: "Please enter a value greater than 0." };
+
+/**
+ * THE LIVE PREVIEW (req §6, "very important"). Renders through the SAME
+ * `QuestionRenderer` and the SAME `brandingVars()`/`widthModeClass()`
+ * `@rescript/renderer` exports the respondent runtime uses — not a
+ * hand-drawn mockup of what a survey looks like, the real component tree,
+ * fed a small fixed preview definition instead of the survey being edited.
+ * Every render reads `branding` straight from the live draft, so a color,
+ * font, width, alignment or button-label edit appears here on the very next
+ * keystroke, with no save step and no separate Test/Preview tab.
+ */
+function ThemeLivePreview({ branding, logoUrl }: { branding: Branding; logoUrl?: string }) {
+  const s = useStudio();
+  const [answers, setAnswers] = React.useState<Record<string, unknown>>({ pv1: "2" });
+  const state = React.useMemo(() => {
+    const st = createResponseState(PREVIEW_DEF);
+    start(PREVIEW_DEF, st);
+    for (const [qid, v] of Object.entries(answers)) setAnswer(PREVIEW_DEF, st, qid, v);
+    return st;
+  }, [answers]);
+
+  const vars = brandingVars(branding) as React.CSSProperties;
+  const cls = `rs-shell rs-${branding.layout.cardStyle} ${widthModeClass(branding)}`;
+
+  return (
+    <div className="theme-preview" data-testid="theme-live-preview">
+      <div className="theme-preview-frame">
+        <div className={cls} style={{ ...vars, padding: "16px 16px 24px" }}>
+          {logoUrl && (
+            <div className={`rs-header ${branding.logoPosition}`}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={logoUrl} alt="" style={{ maxHeight: 36 }} />
+            </div>
+          )}
+          {branding.layout.progressBar !== "none" && (
+            <>
+              <div className="rs-progress-track"><div className="rs-progress-fill" style={{ width: "38%" }} /></div>
+              {branding.layout.progressStyle === "percent" && <div className="rs-progress-label">38%</div>}
+            </>
+          )}
+          <div className="rs-card" data-testid="theme-preview-q1">
+            <QuestionRenderer def={PREVIEW_DEF} q={PREVIEW_DEF.questions[0]} state={state} loop={null}
+              value={answers.pv1} errors={[]} onChange={(v) => setAnswers((a) => ({ ...a, pv1: v }))} />
+          </div>
+          <div className="rs-card" data-testid="theme-preview-q2">
+            <QuestionRenderer def={PREVIEW_DEF} q={PREVIEW_DEF.questions[1]} state={state} loop={null}
+              value={answers.pv2} errors={[PREVIEW_ERROR]} onChange={(v) => setAnswers((a) => ({ ...a, pv2: v }))} />
+          </div>
+          <div className="rs-card" data-testid="theme-preview-q3">
+            <QuestionRenderer def={PREVIEW_DEF} q={PREVIEW_DEF.questions[2]} state={state} loop={null}
+              value={answers.pv3} errors={[]} onChange={(v) => setAnswers((a) => ({ ...a, pv3: v }))} />
+          </div>
+          <div className="rs-nav">
+            {branding.buttons.showBack && (
+              <button type="button" className={`rs-btn secondary ${branding.buttons.style}`} data-testid="theme-preview-back">
+                {branding.buttons.backLabel}
+              </button>
+            )}
+            <span />
+            <button type="button" className={`rs-btn ${branding.buttons.style}`} data-testid="theme-preview-next">
+              {branding.buttons.nextLabel}
+            </button>
+          </div>
+        </div>
+      </div>
+      <p className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>
+        A fixed preview survey, not {s.def.meta.title || "this survey"} — updates as you edit anything below.
+      </p>
+    </div>
+  );
+}
+
+/* ================================================== logo detection / brand color */
+
+/**
+ * "Detect Logo Colors" (req §4) and "generate from a brand color" (req §5's
+ * hex path — the website-URL path is a separate, much larger fetch/CORS/
+ * scraping problem and is intentionally not part of this).
+ *
+ * Both paths end at the same place: a generated palette shown for review,
+ * applied only on "Use this palette" — never silently overwriting the
+ * survey's colors the moment a logo loads.
+ */
+function ThemeGenerator({ b, set }: { b: Branding; set(path: (draft: Branding) => void): void }) {
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [generated, setGenerated] = React.useState<GeneratedColors | null>(null);
+  const [brandHex, setBrandHex] = React.useState("#2563eb");
+
+  const fromLogo = async () => {
+    if (!b.logoUrl) return;
+    setBusy(true); setError(null); setGenerated(null);
+    try {
+      const colors = await dominantColorsFromImage(b.logoUrl);
+      const rgbs = colors.map((c) => c);
+      const { generatePalette } = await import("@/lib/paletteFromImage");
+      setGenerated(generatePalette(rgbs));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const fromHex = () => {
+    setError(null);
+    try {
+      setGenerated(generatePaletteFromHex(brandHex));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const apply = () => {
+    if (!generated) return;
+    set((x) => { x.colors = { ...x.colors, ...generated }; });
+    s_toast();
+  };
+  // toast lives on the store; grabbed lazily so this file doesn't need the
+  // whole store type threaded through this small component's props
+  const s = useStudio();
+  const s_toast = () => s.toast("Palette applied — every color below can still be tweaked by hand");
+
+  return (
+    <div className="card" style={{ padding: 12, marginTop: 4 }} data-testid="theme-generator">
+      <div className="row" style={{ flexWrap: "wrap", alignItems: "flex-end", gap: 10 }}>
+        <button type="button" className="btn" disabled={!b.logoUrl || busy} data-testid="detect-logo-colors" onClick={() => void fromLogo()}
+          title={b.logoUrl ? "Analyze the logo above and generate a palette from its colors" : "Add a logo above first"}>
+          {busy ? "Analyzing…" : "🎨 Detect logo colors"}
+        </button>
+        <span className="muted" style={{ fontSize: 12.5 }}>or</span>
+        <label className="f" style={{ width: 130 }}><span>Brand color</span>
+          <div className="row" style={{ gap: 6 }}>
+            <input type="color" value={brandHex} onChange={(e) => setBrandHex(e.target.value)}
+              style={{ width: 30, height: 28, padding: 0, border: "1px solid var(--border)", background: "none", borderRadius: 6 }} />
+            <input className="input mono" style={{ width: 82 }} value={brandHex} onChange={(e) => setBrandHex(e.target.value)} />
+          </div>
+        </label>
+        <button type="button" className="btn" data-testid="generate-from-hex" onClick={fromHex}>Generate theme</button>
+      </div>
+      {error && <p className="chip warn" data-testid="theme-generator-error" style={{ marginTop: 8 }}>{error}</p>}
+      {generated && (
+        <div style={{ marginTop: 10 }} data-testid="generated-palette">
+          <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
+            {(Object.entries(generated) as [string, string][]).map(([k, hex]) => (
+              <div key={k} title={`${k}: ${hex}`} style={{
+                width: 26, height: 26, borderRadius: 6, background: hex, border: "1px solid var(--border)",
+              }} />
+            ))}
+          </div>
+          <button type="button" className="btn primary small" style={{ marginTop: 8 }} data-testid="apply-generated-palette" onClick={apply}>
+            Use this palette
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Branding / theming (requirement §19) + presets (§20). */
 export function BrandingPanel() {
   const s = useStudio();
@@ -127,6 +361,8 @@ export function BrandingPanel() {
         </p>
       )}
 
+      <ThemeLivePreview branding={b} logoUrl={b.logoUrl} />
+
       <h3 className="sec">Identity</h3>
       <div className="row" style={{ flexWrap: "wrap", alignItems: "flex-start" }}>
         <div className="grow">
@@ -147,6 +383,8 @@ export function BrandingPanel() {
         </details>
       )}
 
+      <ThemeGenerator b={b} set={set} />
+
       <h3 className="sec">Colors</h3>
       <div className="row" style={{ flexWrap: "wrap" }}>
         <Color label="Primary" value={b.colors.primary} onChange={(v) => set((x) => { x.colors.primary = v; })} />
@@ -158,6 +396,22 @@ export function BrandingPanel() {
         <Color label="Border" value={b.colors.border} onChange={(v) => set((x) => { x.colors.border = v; })} />
         <Color label="Error" value={b.colors.error} onChange={(v) => set((x) => { x.colors.error = v; })} />
       </div>
+      <div className="row" style={{ flexWrap: "wrap", marginTop: 8 }}>
+        <OptionalColor label="Accent" value={b.colors.accent} inherits={b.colors.primary}
+          onChange={(v) => set((x) => { x.colors.accent = v; })} />
+        <OptionalColor label="Heading" value={b.colors.heading} inherits={b.colors.text}
+          onChange={(v) => set((x) => { x.colors.heading = v; })} />
+        <OptionalColor label="Link" value={b.colors.link} inherits={b.colors.accent ?? b.colors.primary}
+          onChange={(v) => set((x) => { x.colors.link = v; })} />
+        <OptionalColor label="Input bg" value={b.colors.inputBackground} inherits={b.colors.surface}
+          onChange={(v) => set((x) => { x.colors.inputBackground = v; })} />
+        <OptionalColor label="Button bg" value={b.colors.buttonBackground} inherits={b.colors.primary}
+          onChange={(v) => set((x) => { x.colors.buttonBackground = v; })} />
+        <OptionalColor label="Button text" value={b.colors.buttonText} inherits="#ffffff"
+          onChange={(v) => set((x) => { x.colors.buttonText = v; })} />
+        <OptionalColor label="Progress" value={b.colors.progress} inherits={b.colors.accent ?? b.colors.primary}
+          onChange={(v) => set((x) => { x.colors.progress = v; })} />
+      </div>
 
       <h3 className="sec">Typography &amp; layout</h3>
       <div className="row" style={{ flexWrap: "wrap" }}>
@@ -167,8 +421,24 @@ export function BrandingPanel() {
         <label className="f" style={{ width: 90 }}><span>Base size</span>
           <input className="input" value={b.typography.baseSize}
             onChange={(e) => set((x) => { x.typography.baseSize = e.target.value; })} /></label>
+        <label className="f" style={{ width: 130 }} title="Full-width uses the whole browser window on desktop, like a modern web app. Contained keeps the classic centered card at Max width below.">
+          <span>Desktop width</span>
+          <select className="select" data-testid="branding-width-mode" value={b.layout.widthMode}
+            onChange={(e) => set((x) => { x.layout.widthMode = e.target.value as any; })}>
+            <option value="full">full width</option>
+            <option value="contained">contained</option>
+          </select></label>
+        <label className="f" style={{ width: 110 }} title="Where survey content sits on the page. Left is standard for LTR languages, Right for RTL, Center suits a branding-forward look.">
+          <span>Content align</span>
+          <select className="select" data-testid="branding-content-align" value={b.layout.contentAlign}
+            onChange={(e) => set((x) => { x.layout.contentAlign = e.target.value as any; })}>
+            <option value="left">left</option>
+            <option value="center">center</option>
+            <option value="right">right</option>
+          </select></label>
         <label className="f" style={{ width: 110 }}><span>Max width</span>
-          <input className="input" value={b.layout.maxWidth}
+          <input className="input" value={b.layout.maxWidth} disabled={b.layout.widthMode === "full"}
+            title={b.layout.widthMode === "full" ? "Only applies in Contained mode" : undefined}
             onChange={(e) => set((x) => { x.layout.maxWidth = e.target.value; })} /></label>
         <label className="f" style={{ width: 100 }}><span>Radius</span>
           <input className="input" value={b.layout.radius}

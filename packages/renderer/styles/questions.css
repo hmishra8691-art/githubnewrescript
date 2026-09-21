@@ -50,25 +50,70 @@
   --rs-max-width: 760px;
   --rs-radius: 12px;
   --rs-gap: 20px;
+  /*
+   * Sept 21 — every one of these is a FALLBACK CHAIN, not a fixed value:
+   * `Runner`'s `brandingVars()` only sets one of these directly on
+   * `.rs-shell` when the survey's Branding actually customizes that color
+   * (see survey.ts's Branding.colors comment). Left unset, `var()` here
+   * resolves the chain down to a color every survey already had, so
+   * nothing anywhere changes appearance until a designer opts in.
+   */
+  --rs-accent: var(--rs-primary);
+  --rs-heading: var(--rs-text);
+  --rs-link: var(--rs-accent);
+  --rs-input-bg: var(--rs-surface);
+  --rs-button-bg: var(--rs-primary);
+  --rs-button-text: #ffffff;
+  --rs-progress: var(--rs-accent);
 }
 
 * { box-sizing: border-box; }
 
-.rs-shell { max-width: var(--rs-max-width); margin: 0 auto; padding: 24px 16px 80px; }
+/*
+ * THE SHELL'S WIDTH is a MODIFIER, not the base rule — `.rs-shell` alone
+ * (no `.rs-width-*` class) keeps exactly the old unconditional behavior,
+ * because the Studio's own Live Question Canvas (`LiveCanvas.tsx`) wears
+ * this same class for its "desktop" authoring frame and never asked for
+ * this change; only the respondent runtime's `Runner.tsx` adds one of the
+ * two modifier classes, from `branding.layout.widthMode`.
+ */
+.rs-shell {
+  max-width: var(--rs-max-width);
+  margin-left: var(--rs-align-ml, auto);
+  margin-right: var(--rs-align-mr, auto);
+  padding: 24px 16px 80px;
+}
+/* "full": the September review's fix — fills the viewport a small gutter
+   aside, instead of a fixed-width card marooned in empty canvas.
+   Gated to desktop-class viewports on purpose: `widthMode` is a brand-new
+   field (see survey.ts's comment on why it defaults to "full" rather than
+   changing `maxWidth`'s own default), so it materializes onto every survey
+   ever saved, tablet- and mobile-bound ones included. Without this
+   @media guard, a survey whose maxWidth (default 760px) is narrower than a
+   tablet's viewport would suddenly render wider than it ever has, on a
+   device this brief explicitly says must not change: "Do not change the
+   current Tablet and Mobile layouts unnecessarily." 1024px keeps every
+   phone and the common tablet widths — portrait and landscape — capped
+   exactly as before; only a genuine desktop/laptop viewport goes full width. */
+@media (min-width: 1024px) {
+  .rs-shell.rs-width-full { max-width: none; }
+}
+.rs-shell.rs-width-contained { max-width: var(--rs-max-width); }
 .rs-header { display: flex; align-items: center; padding: 14px 0; }
 .rs-header img { max-height: 44px; }
 .rs-header.center { justify-content: center; }
 .rs-header.right { justify-content: flex-end; }
 
 .rs-progress-track { height: 6px; background: var(--rs-border); border-radius: 999px; overflow: hidden; margin: 8px 0 24px; }
-.rs-progress-fill { height: 100%; background: var(--rs-primary); border-radius: 999px; transition: width .3s ease; }
+.rs-progress-fill { height: 100%; background: var(--rs-progress); border-radius: 999px; transition: width .3s ease; }
 .rs-progress-label { font-size: 12px; color: var(--rs-subtle); text-align: right; margin-top: -18px; margin-bottom: 18px; }
 
 .rs-card { background: var(--rs-surface); border: 1px solid var(--rs-border); border-radius: var(--rs-radius); padding: 24px; margin-bottom: var(--rs-gap); }
 .rs-flat .rs-card { background: transparent; border: none; padding: 8px 0; }
 .rs-line .rs-card { background: transparent; border: none; border-bottom: 1px solid var(--rs-border); border-radius: 0; padding: 16px 0; }
 
-.rs-qtext { font-weight: var(--rs-heading-weight); font-size: 1.08em; margin: 0 0 4px; }
+.rs-qtext { font-weight: var(--rs-heading-weight); font-size: 1.08em; margin: 0 0 4px; color: var(--rs-heading); }
+.rs-shell a { color: var(--rs-link); }
 .rs-qinstruction { color: var(--rs-subtle); font-size: 0.9em; margin: 0 0 14px; }
 .rs-required { color: var(--rs-error); margin-left: 4px; }
 
@@ -96,7 +141,7 @@
 .rs-option .lbl { flex: 1; }
 
 .rs-input, .rs-select, .rs-textarea {
-  font: inherit; color: inherit; background: var(--rs-surface);
+  font: inherit; color: inherit; background: var(--rs-input-bg);
   border: 1.5px solid var(--rs-border); border-radius: calc(var(--rs-radius) - 4px);
   padding: 9px 12px; width: 100%; max-width: 420px;
 }
@@ -154,17 +199,17 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-nav { display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; }
 .rs-btn {
   font: inherit; font-weight: 600; cursor: pointer; padding: 11px 26px;
-  border-radius: calc(var(--rs-radius) - 2px); border: 1.5px solid var(--rs-primary);
-  background: var(--rs-primary); color: #fff; transition: filter .12s;
+  border-radius: calc(var(--rs-radius) - 2px); border: 1.5px solid var(--rs-button-bg);
+  background: var(--rs-button-bg); color: var(--rs-button-text); transition: filter .12s;
 }
 .rs-btn:hover { filter: brightness(1.08); }
-.rs-btn.secondary { background: transparent; color: var(--rs-primary); }
+.rs-btn.secondary { background: transparent; color: var(--rs-button-bg); }
 .rs-btn.pill { border-radius: 999px; }
-.rs-btn.outline { background: transparent; color: var(--rs-primary); }
+.rs-btn.outline { background: transparent; color: var(--rs-button-bg); }
 .rs-btn:disabled { opacity: .5; cursor: default; }
 
 .rs-end { text-align: center; padding: 60px 20px; }
-.rs-end h2 { font-weight: var(--rs-heading-weight); }
+.rs-end h2 { font-weight: var(--rs-heading-weight); color: var(--rs-heading); }
 
 .rs-footer { color: var(--rs-subtle); font-size: 12px; text-align: center; padding: 20px 0; }
 

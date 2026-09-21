@@ -107,6 +107,22 @@ export const Branding = z.object({
       subtleText: z.string().default("#64748b"),
       border: z.string().default("#e2e8f0"),
       error: z.string().default("#dc2626"),
+      /*
+       * Sept 21 (Desktop layout + Advanced Theming): every one of these is
+       * OPTIONAL and left unset by default, on purpose — each has a CSS
+       * fallback chain (see questions.css's `:root`) back to one of the
+       * eight colors above, so a survey that never touches them renders
+       * byte-for-byte as it did before this existed. Setting one is an
+       * explicit decoupling: "buttons are not the same color as selected
+       * options," not a requirement to restate the whole palette.
+       */
+      accent: z.string().optional(), // falls back to primary
+      heading: z.string().optional(), // falls back to text
+      link: z.string().optional(), // falls back to accent -> primary
+      inputBackground: z.string().optional(), // falls back to surface
+      buttonBackground: z.string().optional(), // falls back to primary
+      buttonText: z.string().optional(), // falls back to white
+      progress: z.string().optional(), // falls back to accent -> primary
     })
     .default({}),
   typography: z
@@ -119,6 +135,31 @@ export const Branding = z.object({
   layout: z
     .object({
       maxWidth: z.string().default("760px"),
+      /*
+       * Sept 21 (Desktop layout fix): "full" is the NEW field's own default —
+       * not a change to `maxWidth`'s default, deliberately. `maxWidth` has
+       * been "760px" since this schema's first version, and every survey
+       * ever saved already has that literal baked into its stored JSON (zod
+       * defaults materialize on parse); changing ITS default would do
+       * nothing for a single already-created survey. `widthMode` is a name
+       * that has never existed in any stored definition, so its default
+       * applies uniformly — old surveys and new ones alike — the next time
+       * each is loaded, with no migration and no guessing at which "760px"
+       * was a deliberate choice.
+       *
+       * "full": the desktop shell ignores `maxWidth` and fills the
+       * available width (a small fixed gutter aside) — the September
+       * review's "the survey should feel like a complete, full-width
+       * experience". "contained": the pre-existing centered, capped-width
+       * look, for a designer who wants it back.
+       */
+      widthMode: z.enum(["full", "contained"]).default("full"),
+      /** Where survey content sits when it is narrower than the shell —
+       *  always in "contained" mode, and whenever `maxWidth` still applies
+       *  in "full" mode via custom CSS. Left is the LTR default; a designer
+       *  building for an RTL locale or a centered brand look picks the
+       *  other two explicitly — this never inverts itself automatically. */
+      contentAlign: z.enum(["left", "center", "right"]).default("left"),
       cardStyle: z.enum(["flat", "card", "line"]).default("card"),
       radius: z.string().default("12px"),
       spacing: z.enum(["compact", "regular", "relaxed"]).default("regular"),

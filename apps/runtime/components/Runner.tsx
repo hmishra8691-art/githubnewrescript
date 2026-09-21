@@ -67,7 +67,7 @@ import {
 import { QuestionRenderer } from "@rescript/renderer";
 import { Inspector } from "./Inspector";
 import { RunnerBoundary, FatalCard, fatalOf, type FatalDetail } from "./RunnerBoundary";
-import { MediaEmbed, SafeImage, VoiceConsole, QuestionAudio } from "@rescript/renderer";
+import { MediaEmbed, SafeImage, VoiceConsole, QuestionAudio, brandingVars, widthModeClass } from "@rescript/renderer";
 import {
   readResume, writeResume, clearResume, resumeLink,
   cachePending, readPending, clearPending, RESUME_MAX_AGE_DAYS,
@@ -106,25 +106,6 @@ export interface RunnerProps {
    */
   startAt?: string;
   seedAnswers?: Record<string, unknown>;
-}
-
-function brandingVars(b: Branding): React.CSSProperties {
-  return {
-    "--rs-primary": b.colors.primary,
-    "--rs-secondary": b.colors.secondary,
-    "--rs-bg": b.colors.background,
-    "--rs-surface": b.colors.surface,
-    "--rs-text": b.colors.text,
-    "--rs-subtle": b.colors.subtleText,
-    "--rs-border": b.colors.border,
-    "--rs-error": b.colors.error,
-    "--rs-font": b.typography.fontFamily,
-    "--rs-base-size": b.typography.baseSize,
-    "--rs-heading-weight": String(b.typography.headingWeight),
-    "--rs-max-width": b.layout.maxWidth,
-    "--rs-radius": b.layout.radius,
-    "--rs-gap": b.layout.spacing === "compact" ? "12px" : b.layout.spacing === "relaxed" ? "28px" : "20px",
-  } as React.CSSProperties;
 }
 
 type SaveOutcome = { ok: true; response?: any } | { ok: false; error: string; status?: number } | { ok: true; skipped: true };
@@ -1462,7 +1443,7 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
   ) : (
     <>
       {pageStep.title && pageStep.showTitle && (
-        <h1 data-testid="rs-block-title" style={{ fontWeight: "var(--rs-heading-weight)" as any, fontSize: "1.3em" }}>
+        <h1 data-testid="rs-block-title" style={{ fontWeight: "var(--rs-heading-weight)" as any, fontSize: "1.3em", color: "var(--rs-heading)" }}>
           {resolvePiping(pageStep.title, ctx)}
         </h1>
       )}
@@ -1617,7 +1598,7 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
   );
 
   const shell = (
-    <div className={`rs-shell rs-${b.layout.cardStyle}`} style={brandingVars(b)} dir={dir} lang={locale} data-language={lang}>
+    <div className={`rs-shell rs-${b.layout.cardStyle} ${widthModeClass(b)}`} style={brandingVars(b) as React.CSSProperties} dir={dir} lang={locale} data-language={lang}>
       {showLanguageSelector && !ended && (
         <div className="rs-language" data-testid="rs-language-bar">
           <label>
