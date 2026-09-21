@@ -642,6 +642,31 @@ body.flow-dragging .flow-dropzone { height: 26px; }
 }
 .rte-inline-toggle:hover { background: var(--tint); }
 .rte-inline-wrap:has(.rte-inline-toggle) .rte-inline { padding-right: 34px; }
+
+/* multi-line mode (validation messages, and any future long inline field):
+   a wrapping, growing paragraph box instead of the one-line label default.
+   Written as `.rte-inline.rte-inline-multiline` — a two-class COMPOUND
+   selector — on purpose: this field lives inside `.rightpanel`, and
+   `.rightpanel .input, .rightpanel .select, .rightpanel textarea.ta` in
+   design-system.css (a descendant selector, also two classes' worth of
+   specificity) pins every plain `.input` in the panel to a 36px min-height.
+   A single-class `.rte-inline-multiline` rule has lower specificity than
+   that and silently loses regardless of source order — which is exactly
+   how the first version of this fix shipped with no visible effect. Matching
+   its specificity, and coming after it in the cascade (this file is
+   appended after design-system.css's `@import`), is what actually wins. */
+.rte-inline.rte-inline-multiline {
+  white-space: normal; overflow-x: hidden; overflow-y: auto;
+  min-height: 96px; max-height: 46vh; height: auto;
+  line-height: 1.5; padding: 10px 12px; display: block;
+}
+.rte-inline-multiline * { white-space: normal; }
+.rte-inline-multiline p { margin: 0 0 6px; }
+.rte-inline-multiline ul, .rte-inline-multiline ol { margin: 4px 0; padding-left: 22px; }
+.rte-inline-multiline img, .rte-inline-multiline video { max-height: none; width: auto; max-width: 100%; }
+.rte-inline-wrap:has(.rte-inline-multiline) .rte-inline-toggle { top: 8px; transform: none; }
+.rte-inline-wrap:has(.rte-inline-multiline):has(.rte-inline-toggle) .rte-inline.rte-inline-multiline { padding-right: 34px; }
+
 .rte-pop {
   position: absolute; z-index: 45; top: calc(100% + 4px); left: 0; min-width: 320px; max-width: 560px;
   background: #fff; border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(15, 23, 42, .12);
@@ -703,6 +728,23 @@ body.flow-dragging .flow-dropzone { height: 26px; }
   color: var(--subtle); margin-bottom: 4px;
 }
 .vm-preview .rs-error-msg { margin-top: 0; }
+
+/* ---------- validation message field: full-width row + expand-to-modal ---------- */
+.vm-field { width: 100%; margin-top: 8px; }
+.vm-field-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px;
+}
+.vm-field-label {
+  font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--subtle);
+}
+/* the large editor: most of the viewport, not a cramped popover */
+.vm-modal { width: 760px; max-width: 94vw; }
+.vm-modal .rte { margin-bottom: 0; }
+.vm-modal .rte-surface {
+  min-height: 320px; max-height: 52vh; overflow-y: auto; font-size: 15.5px;
+}
+.vm-modal .vm-preview { margin-top: 14px; }
+.vm-modal-actions { justify-content: flex-end; gap: 8px; margin-top: 14px; }
 
 .pipe-chip {
   display: inline-block; vertical-align: baseline;

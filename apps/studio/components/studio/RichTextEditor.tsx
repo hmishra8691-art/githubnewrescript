@@ -308,7 +308,7 @@ export function RichTextEditor({ value, onChange, placeholder, autoFocusId, ques
  * `data-oidx` is kept on the editable element so the existing focus logic
  * (`[data-oidx="3"]`) finds it exactly as it found the input.
  */
-export function InlineRichText({ value, onChange, placeholder, questionId, testId, index, onEnter, onBackspaceEmpty, onArrow, onPasteLines, className, disabled, style }: {
+export function InlineRichText({ value, onChange, placeholder, questionId, testId, index, onEnter, onBackspaceEmpty, onArrow, onPasteLines, className, disabled, style, multiline }: {
   value: string;
   onChange(html: string): void;
   placeholder?: string;
@@ -324,6 +324,15 @@ export function InlineRichText({ value, onChange, placeholder, questionId, testI
   className?: string;
   disabled?: boolean;
   style?: React.CSSProperties;
+  /**
+   * Opt-in: a growing, wrapping paragraph box instead of the one-line label
+   * this component was built for (an option/row/column label is always one
+   * line, by design — Enter adds the next option). A validation message is
+   * not a label; it can run to a sentence or two of formatted text, so it
+   * needs to wrap and to let Enter start a new line rather than being
+   * swallowed. Every other caller leaves this unset and is unaffected.
+   */
+  multiline?: boolean;
 }) {
   const [mode, setMode] = React.useState<"visual" | "html">("visual");
   const [focused, setFocused] = React.useState(false);
@@ -384,11 +393,11 @@ export function InlineRichText({ value, onChange, placeholder, questionId, testI
       {mode === "visual" ? (
         <div
           ref={surface}
-          className={`input rte-inline ${disabled ? "disabled" : ""}`}
+          className={`input rte-inline ${multiline ? "rte-inline-multiline" : ""} ${disabled ? "disabled" : ""}`}
           contentEditable={!disabled}
           suppressContentEditableWarning
           role="textbox"
-          aria-multiline="false"
+          aria-multiline={multiline ? "true" : "false"}
           data-oidx={index}
           data-testid={testId}
           data-placeholder={placeholder ?? ""}
@@ -396,11 +405,11 @@ export function InlineRichText({ value, onChange, placeholder, questionId, testI
           onBlur={() => surface.current && commit(surface.current.innerHTML, true)}
           onClick={r.onSurfaceClick}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
+            if (!multiline && e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               if (surface.current) commit(surface.current.innerHTML, true);
               onEnter?.();
-            } else if (e.key === "Enter") {
+            } else if (!multiline && e.key === "Enter") {
               e.preventDefault(); // a label is one line
             } else if (e.key === "Backspace" && onBackspaceEmpty && isEmpty()) {
               e.preventDefault();
@@ -410,19 +419,31 @@ export function InlineRichText({ value, onChange, placeholder, questionId, testI
             } else if (e.key === "ArrowDown" && onArrow) {
               e.preventDefault(); onArrow(1);
             }
+            // multiline + Enter: no handler above claims it, so the browser's
+            // own default runs and starts a new line — the one thing a label
+            // never gets to do and a message always should.
           }}
           onPaste={(e) => {
             const plain = e.clipboardData.getData("text/plain");
-            if (plain.includes("\n") && onPasteLines) {
+            if (!multiline && plain.includes("\n") && onPasteLines) {
               e.preventDefault();
               if (surface.current) commit(surface.current.innerHTML, true);
               if (onPasteLines(plain)) return;
             }
             const html = e.clipboardData.getData("text/html");
             e.preventDefault();
-            // one line: block wrappers a word processor pastes become the text they hold
-            const clean = html ? sanitizeHtml(html).replace(/<\/?(p|div|br|h[1-6])\b[^>]*>/gi, " ") : plain.replace(/\s+/g, " ");
-            document.execCommand("insertHTML", false, html ? clean : clean.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c] as string)));
+            const clean = multiline
+              // a message keeps the paragraph/line breaks a paste carries
+              ? (html
+                  ? sanitizeHtml(html)
+                  : plain.split(/\r\n|\r|\n/).map((line) =>
+                      line.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c] as string)),
+                    ).join("<br>"))
+              // one line: block wrappers a word processor pastes become the text they hold
+              : (html
+                  ? sanitizeHtml(html).replace(/<\/?(p|div|br|h[1-6])\b[^>]*>/gi, " ")
+                  : plain.replace(/\s+/g, " ").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c] as string)));
+            document.execCommand("insertHTML", false, clean);
             if (surface.current) commit(surface.current.innerHTML);
           }}
         />

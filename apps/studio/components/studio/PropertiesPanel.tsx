@@ -13,7 +13,7 @@ import { MaskingBuilder, PunchRules } from "./MaskingBuilder";
 import { QualitySettings } from "./QualitySettings";
 import { OptionGroupsEditor } from "./OptionGroupsEditor";
 import { CollapsibleSection } from "./CollapsibleSection";
-import { InlineRichText } from "./RichTextEditor";
+import { InlineRichText, RichTextEditor } from "./RichTextEditor";
 import { AiQuestionSection } from "./AiQuestionSection";
 
 /** Context-aware validation (req §6/§19): only offer rules that make sense
@@ -130,6 +130,19 @@ function messagePreviewHtml(html: string): string {
  * set. That is a real conversion and it happens exactly when the author
  * chose this editor — not when the panel is merely opened, which is why a
  * commit that changes nothing is dropped below rather than written back.
+ *
+ * ## Sizing (Sept 21 fix)
+ *
+ * This used to be `InlineRichText` at its default one-line size — the same
+ * component an option label uses, correctly, because a label is one line.
+ * A validation message is not: it can carry a full sentence of formatting
+ * and a piped answer, and the September review called the box it lived in
+ * "far too small" — not a cosmetic complaint, a "cannot see what I'm
+ * writing" one. The root cause was the component, not its CSS: `multiline`
+ * (added to `InlineRichText` alongside this) is what actually changes, so
+ * every other caller of that component — options, rows, columns — is
+ * untouched. This field also gets a "Text editor" button straight to
+ * `ValidationMessageModal`, a full-size workspace for anything longer.
  */
 function ValidationMessageField({ value, format, questionId, onChange }: {
   value: string | undefined;
@@ -138,27 +151,108 @@ function ValidationMessageField({ value, format, questionId, onChange }: {
   onChange(next: { message?: string; messageFormat?: "html" }): void;
 }) {
   const shown = format === "html" ? (value ?? "") : escapeHtml(value ?? "");
+  const [expanded, setExpanded] = React.useState(false);
+  /*
+   * Shared by the inline box and the modal: `InlineRichText` commits on
+   * blur whether or not anything changed, so without the equality guard a
+   * programmer who clicked into the field and out again — or opened the
+   * modal and closed it without typing — would silently convert a
+   * plain-text message to markup and dirty the draft.
+   */
+  const commitIfChanged = React.useCallback((html: string) => {
+    if (html === shown) return;
+    const trimmed = html.trim();
+    onChange(trimmed
+      ? { message: trimmed, messageFormat: "html" }
+      : { message: undefined, messageFormat: undefined });
+  }, [shown, onChange]);
+
   return (
-    <InlineRichText
-      value={shown}
-      questionId={questionId}
-      testId="validation-message"
-      placeholder="message (optional) — format it, or pipe an answer in"
-      className="grow"
-      onChange={(html) => {
-        /*
-         * `InlineRichText` commits on blur whether or not anything changed,
-         * so without this a programmer who clicked into the field and out
-         * again would silently convert a plain-text message to markup and
-         * dirty the draft.
-         */
-        if (html === shown) return;
-        const trimmed = html.trim();
-        onChange(trimmed
-          ? { message: trimmed, messageFormat: "html" }
-          : { message: undefined, messageFormat: undefined });
-      }}
-    />
+    <div className="vm-field" data-testid="validation-message-field">
+      <div className="vm-field-head">
+        <span className="vm-field-label">Message</span>
+        <button type="button" className="btn small" data-testid="validation-message-expand"
+          title="Open a larger editing workspace"
+          onClick={() => setExpanded(true)}>
+          ⤢ Text editor
+        </button>
+      </div>
+      <InlineRichText
+        value={shown}
+        questionId={questionId}
+        testId="validation-message"
+        placeholder="message (optional) — format it, or pipe an answer in"
+        className="grow"
+        multiline
+        onChange={commitIfChanged}
+      />
+      {expanded && (
+        <ValidationMessageModal
+          value={shown}
+          questionId={questionId}
+          onCancel={() => setExpanded(false)}
+          onSave={(html) => { commitIfChanged(html); setExpanded(false); }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * THE LARGE EDITOR — the same rich text engine as question text
+ * (`RichTextEditor`: toolbar, Visual/HTML modes, media, piping), at a size
+ * that treats a validation message as the sentence-or-two of real prose it
+ * usually is rather than a table cell.
+ *
+ * Editing here is a draft until Save: the surface is controlled by local
+ * `draft` state, seeded from the current message on open, and only reaches
+ * the rule (via `onSave`) on an explicit click — Cancel, the backdrop, or
+ * Escape all discard it. That is the one behavioral difference from the
+ * inline box, which commits on blur; a modal invites longer edits, and
+ * losing an in-progress edit to a stray click outside it would be worse
+ * than losing one to a stray blur.
+ */
+function ValidationMessageModal({ value, questionId, onCancel, onSave }: {
+  /** already the shown/editable HTML — escaped plain text, or real markup */
+  value: string;
+  questionId: string;
+  onCancel(): void;
+  onSave(html: string): void;
+}) {
+  const [draft, setDraft] = React.useState(value);
+
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onCancel(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  return (
+    <div className="modal-back" onClick={onCancel} data-testid="validation-message-modal">
+      <div className="modal vm-modal" role="dialog" aria-modal="true" aria-label="Edit validation message"
+        onClick={(e) => e.stopPropagation()}>
+        <h2>Edit validation message</h2>
+        <RichTextEditor
+          value={draft}
+          onChange={setDraft}
+          questionId={questionId}
+          placeholder="message (optional) — format it, or pipe an answer in"
+        />
+        <div className="vm-preview" data-testid="validation-message-modal-preview">
+          <span className="vm-preview-label">Respondent sees</span>
+          <div className="rs-error-msg rs-error-rich" dangerouslySetInnerHTML={{ __html: messagePreviewHtml(draft) }} />
+        </div>
+        <div className="row vm-modal-actions">
+          <button type="button" className="btn" data-testid="validation-message-modal-cancel" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="btn primary" data-testid="validation-message-modal-save"
+            onClick={() => onSave(draft)}>
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -238,14 +332,6 @@ function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question
                   {q.columns.map((c) => <option key={c.id} value={c.id}>{c.label || c.id}</option>)}
                 </select>
               )}
-              <ValidationMessageField
-                value={v.message}
-                format={v.messageFormat}
-                questionId={q.id}
-                onChange={(next) => patch({
-                  validation: q.validation.map((x, j) => (j === i ? { ...x, ...next } : x)),
-                })}
-              />
               {/*
                 * Blocks, or only warns. A soft check is how a researcher says
                 * "that is unusual, look again" without making a legitimate
@@ -266,6 +352,22 @@ function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question
               <button className="btn small danger"
                 onClick={() => patch({ validation: q.validation.filter((_, j) => j !== i) })}>×</button>
             </div>
+            {/*
+              * The message gets its own full-width row rather than a slot in
+              * `opt-row` beside the kind/value/severity controls — that row
+              * is exactly as tall as its shortest sibling wants to be, which
+              * is precisely the box the September review called "far too
+              * small". A rich, growing message belongs on a line no other
+              * control constrains the height of.
+              */}
+            <ValidationMessageField
+              value={v.message}
+              format={v.messageFormat}
+              questionId={q.id}
+              onChange={(next) => patch({
+                validation: q.validation.map((x, j) => (j === i ? { ...x, ...next } : x)),
+              })}
+            />
             {pipingIssues.map((p, pi) => (
               <div key={pi} className="chip warn" data-testid="validation-message-piping-warning" style={{ marginTop: 4 }}>
                 {p}

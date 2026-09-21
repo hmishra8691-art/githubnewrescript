@@ -111,7 +111,14 @@ await page.waitForTimeout(400);
 const xeErrors = await page.$$('[data-testid="validation-condition-editor"] [data-testid="xe-error"]');
 assert.equal(xeErrors.length, 0, "Q5 - Q6 > 0 must parse without error in the shared Expression editor");
 
-await page.fill('[data-testid="validation-rule"] input[placeholder="message (optional)"]', "Q5 must not exceed Q6.");
+/*
+ * The message box has been a rich `[data-testid="validation-message"]`
+ * contentEditable since the messages work landed — not the plain
+ * `input[placeholder="message (optional)"]` this selector originally
+ * named. Playwright's `.fill()` works on `[contenteditable]` too, so this
+ * is the same one-line fill, just pointed at what is actually there.
+ */
+await page.fill('[data-testid="validation-rule"] [data-testid="validation-message"]', "Q5 must not exceed Q6.");
 await page.waitForTimeout(300);
 
 let def = await readDef();
@@ -259,7 +266,7 @@ await selectQuestion(0);
 await ensureSectionOpen("validation-rules");
 await page.click('button:has-text("+ rule")');
 await page.waitForSelector('[data-testid="validation-rule"]');
-await page.fill('[data-testid="validation-rule"] input[placeholder="message (optional)"]', "You answered {{Q5}}, but {{NOPE}} is not a real question.");
+await page.fill('[data-testid="validation-rule"] [data-testid="validation-message"]', "You answered {{Q5}}, but {{NOPE}} is not a real question.");
 await page.waitForTimeout(300);
 const warn = await page.$('[data-testid="validation-message-piping-warning"]');
 assert.ok(warn, "a validation message with a bad piping reference must show the same lint warning question text already gets");
@@ -267,7 +274,7 @@ const warnText = await warn.textContent();
 assert.match(warnText, /NOPE/, `the warning should name the bad reference: "${warnText}"`);
 ok(`validation message piping is lint-checked the same way question text already is: "${warnText}"`);
 
-await page.fill('[data-testid="validation-rule"] input[placeholder="message (optional)"]', "You answered {{Q5}}.");
+await page.fill('[data-testid="validation-rule"] [data-testid="validation-message"]', "You answered {{Q5}}.");
 await page.waitForTimeout(300);
 assert.equal(await page.$('[data-testid="validation-message-piping-warning"]'), null, "a message with only a valid reference shows no warning");
 ok("a valid piping reference in a validation message shows no warning");
