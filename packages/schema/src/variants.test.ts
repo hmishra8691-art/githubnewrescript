@@ -111,12 +111,28 @@ test("THE TEN CROSS-FAMILY DUPLICATES RETIRED IN THE TAXONOMY AUDIT resolve to t
   const expected: Record<string, string> = {
     "image.ranking": "ranking.image",
     "dragdrop.ranking": "ranking.drag",
-    "conjoint.maxdiff": "ranking.best_worst",
+    /*
+     * Both of these now resolve one hop further than they did, because the
+     * September review retired their old survivors too:
+     *   · MaxDiff moved out of Ranking into its own family ("since MaxDiff
+     *     uses a different methodology from traditional ranking questions, it
+     *     should be moved into a separate MaxDiff / Best-Worst section"), so
+     *     conjoint.maxdiff → ranking.best_worst → maxdiff.best_worst;
+     *   · Side-by-Side Comparison was found to be Product Choice ("the same
+     *     type of question can already be created using Single Select →
+     *     Product Choice"), so image.comparison → comparison.side_by_side →
+     *     single_select.product_choice.
+     * `resolveVariant` follows the chain, and the test above proves neither
+     * hop changes the base type or the response model.
+     */
+    "conjoint.maxdiff": "maxdiff.best_worst",
+    "ranking.best_worst": "maxdiff.best_worst",
+    "comparison.side_by_side": "single_select.product_choice",
     "comparison.tournament": "ranking.tournament",
     "slider.allocation_slider": "allocation.slider_allocation",
     "dragdrop.allocation": "allocation.drag",
     "image.hotspot": "hotspot.click",
-    "image.comparison": "comparison.side_by_side",
+    "image.comparison": "single_select.product_choice",
     "card.rich": "single_select.product_choice",
     // found by this test on its first run — byte-identical to its parent
     "multi_select.searchable": "multi_select.dropdown",

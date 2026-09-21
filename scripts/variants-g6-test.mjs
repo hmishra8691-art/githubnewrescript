@@ -155,15 +155,45 @@ await h.page.selectOption('[data-testid="timed-ontimeout"]', "lock");
 await h.page.waitForTimeout(250);
 console.log("✔ Studio: timed limit + on-timeout");
 
-/* matching: the answer key table writes row.meta.answer */
+/*
+ * matching: the answer key table writes row.meta.answer — AND one answer can
+ * only key one prompt.
+ *
+ * This block used to point r3 at a1, which a1's own prompt (r1) already
+ * owned. The September review filed that as a bug: "the builder allows the
+ * same Answer Key to be assigned to multiple prompts … in the actual matching
+ * interaction, one option should be matched with only one prompt. Once an
+ * Answer Key has been assigned to a Prompt, it should not be available for
+ * selection as the Answer Key of another Prompt." A duplicated key is
+ * unsatisfiable — whichever prompt the respondent gives the answer to, the
+ * other is scored wrong — so the dropdown no longer offers it, and the test
+ * asserts that instead of performing it.
+ */
 await openEditor(made.matching.id);
-await h.page.selectOption('[data-testid="matching-answer-r3"]', "a1");
+{
+  const offeredToR3 = await h.page.$$eval(
+    '[data-testid="matching-answer-r3"] option',
+    (els) => els.map((e) => e.value),
+  );
+  assert.ok(!offeredToR3.includes("a1"), `a1 keys r1, so r3 must not be offered it: ${offeredToR3}`);
+  assert.ok(offeredToR3.includes("a3"), `r3 keeps its own answer: ${offeredToR3}`);
+}
+/* clearing a prompt frees its answer for another one — the rule is exclusive,
+   not permanent */
+await h.page.selectOption('[data-testid="matching-answer-r3"]', "");
 await h.page.waitForTimeout(300);
-const mq = await readQ(made.matching.id);
-assert.equal(mq.rows[2].meta.answer, "a1", "the key table writes row.meta.answer");
+let mq = await readQ(made.matching.id);
+assert.ok(mq.rows[2].meta?.answer == null, "clearing the key removes row.meta.answer");
+await h.page.selectOption('[data-testid="matching-answer-r1"]', "a3");
+await h.page.waitForTimeout(300);
+mq = await readQ(made.matching.id);
+assert.equal(mq.rows[0].meta.answer, "a3", "the key table writes row.meta.answer");
+/* put it back so the runtime section below sees the seeded 1:1 mapping */
+await h.page.selectOption('[data-testid="matching-answer-r1"]', "a1");
+await h.page.waitForTimeout(200);
 await h.page.selectOption('[data-testid="matching-answer-r3"]', "a3");
 await h.page.waitForTimeout(300);
-console.log("✔ Studio: matching answer key");
+console.log("✔ Studio: matching answer key — one answer keys one prompt");
 
 /* attention check: expected codes, and terminate writes real skip logic */
 await openEditor(made.attention.id);

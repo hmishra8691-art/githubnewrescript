@@ -73,8 +73,8 @@ function explicitCodes(text: string): Set<string> {
 const norm = (s: string) => stripHtmlText(s).replace(/\s+/g, " ").trim().toLowerCase();
 
 export function planPaste(existing: Option[], text: string, mode: PasteMode): PastePlan {
-  const start = Number(nextCode(existing)) || 1;
-  const parsed = parsePastedOptions(text, start);
+  const highWater = Number(nextCode(existing)) || 1;
+  const parsed = parsePastedOptions(text, highWater);
   if (parsed.length === 0) return { options: existing, kept: existing.length, added: 0, removed: 0, removedCodes: [] };
 
   const byCode = new Map(existing.map((o) => [String(o.code), o]));
@@ -85,7 +85,7 @@ export function planPaste(existing: Option[], text: string, mode: PasteMode): Pa
   if (mode === "append") {
     const used = new Set(existing.map((o) => String(o.code)));
     const out = [...existing];
-    let n = start;
+    let n = highWater;
     const fresh = () => { while (used.has(String(n))) n++; const c = String(n++); used.add(c); return c; };
     for (const p of parsed) {
       const code = used.has(String(p.code)) ? fresh() : String(p.code);
@@ -95,26 +95,64 @@ export function planPaste(existing: Option[], text: string, mode: PasteMode): Pa
     return { options: out, kept: existing.length, added: parsed.length, removed: 0, removedCodes: [] };
   }
 
-  // replace: keep identity where a line names an existing option
-  const usedCodes = new Set<string>();
-  const out: Option[] = [];
+  /*
+   * Replace runs in two passes. The FIRST decides which existing options the
+   * paste keeps (by explicit code, else by identical label) without assigning
+   * anything; the SECOND numbers what is left.
+   *
+   * Two passes rather than one because a fresh code must skip the codes of
+   * KEPT options and only those. The single-pass version skipped every code
+   * in the old list, including the ones the paste was removing — which is the
+   * other half of "numbering is starting from 2 instead of 1": with a starter
+   * option coded 1 being replaced, 1 was still treated as taken.
+   */
+  const matches: (Option | undefined)[] = [];
   const keptIds = new Set<Option>();
-  let n = start;
-  const fresh = () => { while (usedCodes.has(String(n)) || byCode.has(String(n))) n++; return String(n++); };
-
   for (const p of parsed) {
     const codeStr = String(p.code);
     let match: Option | undefined;
     if (explicit.has(codeStr) && byCode.has(codeStr)) match = byCode.get(codeStr);
     if (!match) match = byLabel.get(norm(p.label));
-    if (match && !keptIds.has(match)) {
-      keptIds.add(match);
-      usedCodes.add(String(match.code));
+    if (match && keptIds.has(match)) match = undefined; // one line per existing option
+    if (match) keptIds.add(match);
+    matches.push(match);
+  }
+
+  /* the codes that survive this paste — the only ones a new option must avoid */
+  const usedCodes = new Set<string>([...keptIds].map((o) => String(o.code)));
+  const out: Option[] = [];
+  /*
+   * WHERE THE NUMBERING STARTS.
+   *
+   * "When options are pasted directly into the question, the option numbering
+   * is starting from 2 instead of 1 … the first option always starts at 1 and
+   * subsequent options increment sequentially (1, 2, 3, 4…)."
+   *
+   * Numbering began at `nextCode(existing)` — one past the highest code in the
+   * old list — for both modes. For a paste that KEEPS some of the old options
+   * that is the only safe choice: a removed option's code must not be handed
+   * to a different option, or every condition, quota and stored answer naming
+   * that code silently changes meaning (the rule this module opens with).
+   *
+   * But a replace that matches NOTHING is not an edit of the old list, it is
+   * a new list — which is the case the report is about: a question sitting on
+   * its starter "Option 1" coded 1, replaced wholesale, began at 2 and left
+   * nothing coded 1. With no option kept there is no identity to protect, so
+   * the fresh list numbers from 1.
+   */
+  let n = mode === "replace" && keptIds.size === 0 ? 1 : highWater;
+  const fresh = () => { while (usedCodes.has(String(n))) n++; const c = String(n++); usedCodes.add(c); return c; };
+
+  for (let i = 0; i < parsed.length; i++) {
+    const p = parsed[i];
+    const match = matches[i];
+    if (match) {
       out.push({ ...match, label: p.label || match.label });
       continue;
     }
     // new option: keep an explicit, non-colliding code; otherwise mint one
-    const code = explicit.has(codeStr) && !usedCodes.has(codeStr) && !byCode.has(codeStr) ? codeStr : fresh();
+    const codeStr = String(p.code);
+    const code = explicit.has(codeStr) && !usedCodes.has(codeStr) ? codeStr : fresh();
     usedCodes.add(code);
     out.push({ ...p, code });
   }

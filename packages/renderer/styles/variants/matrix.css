@@ -157,3 +157,120 @@ table.rs-summatrix td[data-col] .rs-input { max-width: 84px; min-width: 56px; te
   table.rs-summatrix td[data-col] .rs-input { min-width: 44px; max-width: 56px; padding: 5px 4px; }
   .rs-summatrix-total { font-size: 0.8em; }
 }
+
+/* ------------------------------------------------------------ Likert matrix
+ * An agreement scale drawn as a scale: full column captions, and a whole
+ * tappable band per cell graded from the disagree end to the agree end, so
+ * the direction is visible before a word is read. `--p` is the point's 0–100
+ * position along the scale, set per cell by the renderer.
+ */
+.rs-likert-progress,
+.rs-ratingmatrix-progress { font-size: 0.82em; color: var(--rs-subtle); margin-bottom: 6px; }
+
+.rs-likert-table th.rs-likert-head {
+  font-size: 0.82em;
+  font-weight: 600;
+  line-height: 1.25;
+  padding: 8px 6px;
+  vertical-align: bottom;
+  white-space: normal;
+  min-width: 78px;
+}
+.rs-likert-table td.rs-likert-cell { padding: 3px; }
+.rs-likert-band {
+  --p: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 100%;
+  min-height: 42px;
+  padding: 6px 4px;
+  cursor: pointer;
+  border: 1px solid var(--rs-border);
+  border-radius: 8px;
+  /* disagree end → agree end, as a wash behind the dot */
+  background: color-mix(in srgb, var(--rs-primary) calc(var(--p) * 0.16%), var(--rs-surface));
+  transition: background .12s ease, border-color .12s ease;
+}
+.rs-likert-band:hover:not(:disabled) { border-color: var(--rs-primary); }
+.rs-likert-band .rs-likert-dot {
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--rs-primary) 55%, var(--rs-border));
+  background: var(--rs-surface);
+}
+.rs-likert-band.on {
+  border-color: var(--rs-primary);
+  background: color-mix(in srgb, var(--rs-primary) calc(14% + var(--p) * 0.2%), var(--rs-surface));
+}
+.rs-likert-band.on .rs-likert-dot {
+  background: var(--rs-primary);
+  border-color: var(--rs-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--rs-primary) 25%, transparent);
+}
+/* the caption repeats the column header for narrow screens, where the table
+   header scrolls out of view — hidden on desktop, shown when stacked */
+.rs-likert-band .rs-likert-cap { display: none; font-size: 0.74em; line-height: 1.2; text-align: center; }
+
+/* ------------------------------------------------------------ rating matrix
+ * Numbered points per row, with the scale ends named once above the grid —
+ * "the Preview should clearly look like a rating question".
+ */
+.rs-ratingmatrix { display: flex; flex-direction: column; gap: 6px; }
+.rs-ratingmatrix-ends {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8em;
+  color: var(--rs-subtle);
+  padding: 0 2px 2px;
+}
+.rs-ratingmatrix-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid var(--rs-border);
+  border-radius: 10px;
+  background: var(--rs-surface);
+}
+.rs-ratingmatrix-label { flex: 1 1 160px; min-width: 0; font-weight: 500; }
+.rs-ratingmatrix-scale { display: flex; gap: 6px; flex-wrap: wrap; }
+.rs-ratingmatrix-pt {
+  min-width: 38px;
+  height: 38px;
+  padding: 0 8px;
+  cursor: pointer;
+  font-size: 0.95em;
+  font-weight: 600;
+  color: var(--rs-text);
+  border: 1px solid var(--rs-border);
+  border-radius: 999px;
+  background: var(--rs-surface);
+  transition: background .12s ease, border-color .12s ease, color .12s ease;
+}
+.rs-ratingmatrix-pt:hover:not(:disabled) { border-color: var(--rs-primary); }
+.rs-ratingmatrix-pt.on {
+  background: var(--rs-primary);
+  border-color: var(--rs-primary);
+  color: var(--rs-on-primary, #fff);
+}
+
+/* Stacked layout: on a phone a grid cannot stay a grid, so each row becomes
+   its own block and every band carries its own caption. */
+@media (max-width: 560px) {
+  .rs-likert-table, .rs-likert-table thead, .rs-likert-table tbody,
+  .rs-likert-table tr, .rs-likert-table td { display: block; width: 100%; }
+  .rs-likert-table thead { display: none; }
+  .rs-likert-table tr {
+    border: 1px solid var(--rs-border);
+    border-radius: 10px;
+    padding: 8px;
+    margin-bottom: 8px;
+  }
+  .rs-likert-table td.rowlabel { font-weight: 600; padding: 0 0 6px; }
+  .rs-likert-band { flex-direction: row; justify-content: flex-start; gap: 8px; min-height: 38px; }
+  .rs-likert-band .rs-likert-cap { display: block; text-align: left; }
+}

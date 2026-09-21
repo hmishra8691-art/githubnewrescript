@@ -256,9 +256,39 @@ export function optionsClass(p: QRProps): string {
    * as it always was.
    */
   if (p.q.settings.optionOrientation === "horizontal") return "rs-options horizontal";
-  const n = p.q.settings.columnsLayout ?? 1;
-  return n > 1 ? `rs-options cols-${Math.min(n, 4)}` : "rs-options";
+  const n = p.q.settings.columnsLayout;
+  if (n != null) return n > 1 ? `rs-options cols-${Math.min(n, 4)}` : "rs-options";
+  /*
+   * "AUTO (FIT WIDTH)" NOW FITS THE WIDTH.
+   *
+   * The Studio's Layout control has always labelled the unset value "auto
+   * (fit width)", and the renderer has always drawn it as a single column —
+   * so the default was one tall stack of full-width boxes whatever the
+   * question looked like. The review filed both halves of that:
+   *
+   *   "the option boxes appear unnecessarily large, and when I add around
+   *    10–12 options, all the options are not visible at once in the preview"
+   *   "the preview does not look well-organized when the options are
+   *    displayed in a single column. However, when I use a 2-column layout,
+   *    the options look much better and use the available space efficiently"
+   *
+   * Auto now means what it says: short options flow into as many columns as
+   * fit, long ones keep a line to themselves, and a list stays a single
+   * column until there is enough of it to be worth splitting. An author who
+   * has chosen a number still gets exactly that number — this only changes
+   * the value that never was a choice.
+   */
+  return p.q.options.length >= AUTO_FLOW_FROM ? "rs-options auto" : "rs-options";
 }
+
+/**
+ * How many options before "auto" starts flowing them into columns.
+ *
+ * Below this a single column reads better than a short ragged grid; at and
+ * above it the stack is what the review complained about. Six is the point
+ * where a list stops fitting a phone screen in one go.
+ */
+const AUTO_FLOW_FROM = 6;
 
 /**
  * The Question Layout setting only ever reached the radio/checkbox list, the
@@ -932,20 +962,37 @@ export function Nps(p: QRProps) {
   );
 }
 
+/**
+ * THE END LABELS GO UNDER THE ENDS, AND THE NUMBERS STAY.
+ *
+ * Both were wrong in the same line. `sliderLeftLabel ?? min` meant naming an
+ * end REPLACED its number, and both sat inline on the track's own row, so a
+ * label of any length ate the slider's width from both sides. The review:
+ *
+ *   "Currently, if the user sets Left Label: Not Satisfied and Right Label:
+ *    Very Satisfied, the labels are displayed at the 0 and 100 positions of
+ *    the slider. The labels should appear below the slider, aligned with
+ *    their corresponding endpoints … the label text should not overlap or
+ *    appear directly on top of the slider."
+ *
+ * So the track gets a row to itself at full width, the scale ends print
+ * underneath it where they belong, and a named end prints under its number
+ * rather than instead of it.
+ */
 export function Slider(p: QRProps) {
   const min = p.q.settings.minValue ?? 0;
   const max = p.q.settings.maxValue ?? 100;
   const val = p.value == null ? Math.round((min + max) / 2) : Number(p.value);
   const unit = affixFor(p.q.settings);
+  const leftLabel = p.q.settings.sliderLeftLabel;
+  const rightLabel = p.q.settings.sliderRightLabel;
   return (
-    <div>
+    <div className="rs-slider">
       <div className="rs-slider-row">
-        <span style={{ fontSize: "0.85em", color: "var(--rs-subtle)" }}>{p.q.settings.sliderLeftLabel ?? min}</span>
         <input
           type="range" min={min} max={max} step={p.q.settings.step ?? 1} value={val}
           onChange={(e) => p.onChange(Number(e.target.value))}
         />
-        <span style={{ fontSize: "0.85em", color: "var(--rs-subtle)" }}>{p.q.settings.sliderRightLabel ?? max}</span>
         {/*
           * The unit the review asked for when it proposed keeping one slider:
           * "add a unit/symbol toggle in Single Slider so the programmer can
@@ -957,6 +1004,16 @@ export function Slider(p: QRProps) {
           {unit?.side === "left" && <span className="rs-prefix">{unit.text}</span>}
           {p.value == null ? "—" : String(p.value)}
           {unit?.side === "right" && <span className="rs-prefix">{unit.text}</span>}
+        </span>
+      </div>
+      <div className="rs-slider-scale" aria-hidden="true">
+        <span className="rs-slider-end left">
+          <span className="n">{min}</span>
+          {leftLabel && <span className="lab">{leftLabel}</span>}
+        </span>
+        <span className="rs-slider-end right">
+          <span className="n">{max}</span>
+          {rightLabel && <span className="lab">{rightLabel}</span>}
         </span>
       </div>
     </div>
@@ -1540,7 +1597,13 @@ export function ChoiceButtons(p: QRProps & { multi: boolean }) {
   return (
     <div>
       {searchBox}
-      <div className={`rs-choicebtns ${p.q.settings.columnsLayout ? `cols-${Math.min(Math.max(p.q.settings.columnsLayout, 1), 4)}` : ""}`}>
+      {/* same "auto fits the width" rule as the radio/checkbox list above —
+          Button Select is the variant the review raised it against */}
+      <div className={`rs-choicebtns ${
+        p.q.settings.columnsLayout
+          ? `cols-${Math.min(Math.max(p.q.settings.columnsLayout, 1), 4)}`
+          : filtered.length >= AUTO_FLOW_FROM ? "auto" : ""
+      }`}>
         {filtered.map((o) => {
           const sel = vals.some((v) => String(v) === String(o.code));
           return (
@@ -1640,12 +1703,15 @@ const EMOJI_SCALES: Record<number, string[]> = {
   2: ["😠", "😍"],
   3: ["😠", "😐", "😍"],
   4: ["😠", "😕", "🙂", "😍"],
-  5: ["😠", "😕", "😐", "🙂", "😍"],
+  /* the 5- and 10-point progressions the September review specified by name:
+     "1 to 5  😡 → 😞 → 😐 → 🙂 → 😍" and the ten-row table running
+     Very Dissatisfied → Extremely Happy */
+  5: ["😡", "😞", "😐", "🙂", "😍"],
   6: ["😡", "😠", "😕", "😐", "🙂", "😍"],
   7: ["😡", "😠", "😕", "😐", "🙂", "😃", "😍"],
   8: ["😡", "😠", "☹️", "😕", "😐", "🙂", "😃", "😍"],
   9: ["😡", "😠", "☹️", "😕", "😐", "🙂", "😊", "😃", "😍"],
-  10: ["😡", "😠", "☹️", "😕", "😟", "😐", "🙂", "😊", "😃", "😍"],
+  10: ["😡", "😠", "😞", "😕", "😐", "🙂", "😊", "😃", "😄", "🤩"],
   11: ["😡", "😠", "☹️", "😕", "😟", "😐", "🙂", "😊", "😃", "🤩", "😍"],
 };
 
@@ -1673,13 +1739,22 @@ export function EmojiRating(p: QRProps) {
     <div className="rs-emoji" role="radiogroup" aria-label="Rating">
       {faces.map((e, i) => {
         const score = min + i;
+        /*
+         * "The user should be able to configure or edit the emoji labels if
+         * required." The per-point label editor the Studio already offers for
+         * this renderer writes `settings.scalePointLabels`, so an author who
+         * types their own face (or a word) for a point gets it drawn here
+         * instead of the built-in progression. Unset points keep the default.
+         */
+        const custom = p.q.settings.scalePointLabels?.[String(score)];
+        const face = custom?.trim() ? custom : e;
         return (
           <button key={score} type="button" {...anchor("scalepoint", score)}
             className={val === score ? "on" : ""}
-            aria-label={`${score} of ${max}`}
-            title={String(score)}
+            aria-label={custom?.trim() ? `${custom} (${score} of ${max})` : `${score} of ${max}`}
+            title={custom?.trim() ? `${score} — ${custom}` : String(score)}
             onClick={() => p.onChange(val === score ? null : score)}>
-            {e}
+            {face}
           </button>
         );
       })}

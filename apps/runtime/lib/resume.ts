@@ -149,3 +149,53 @@ export function readPending(sessionId: string): PendingAnswers | null {
 export function clearPending(sessionId: string): void {
   try { window.localStorage.removeItem(CACHE_KEY(sessionId)); } catch { /* ignore */ }
 }
+
+/* ------------------------------------------------------------ preview resume
+ *
+ * A PREVIEW THAT SURVIVES A REFRESH.
+ *
+ * "When the page is refreshed, the survey should resume from the user's last
+ * position instead of restarting from the beginning."
+ *
+ * Live and test interviews already did: every page is saved to the response
+ * row, the pointer to that row outlives the tab (above), and `resumeAt` walks
+ * back to where the respondent was. Preview had none of it — deliberately, in
+ * that a preview writes nothing to the database — so it was the one place a
+ * reload really did start the survey again, and it is the place a programmer
+ * reloads most, because the Studio reloads it for them on every edit.
+ *
+ * So preview gets the same behaviour with no database: the same snapshot
+ * shape, in `sessionStorage`.
+ *
+ *   · sessionStorage, not localStorage — a preview belongs to the tab it was
+ *     opened in. Two previews of two surveys in two tabs must not collide,
+ *     and yesterday's preview must not come back tomorrow.
+ *   · keyed by the definition id AND the entry point, so "Preview block"
+ *     starts where it was asked to start rather than resuming the last full
+ *     run through.
+ *   · dropped when the interview completes, so the next preview starts clean.
+ *
+ * Nothing here can reach a respondent: it is only read when `mode` is
+ * "preview" (Runner.tsx).
+ */
+const PREVIEW_KEY = (previewId: string) => `rescript:preview-state:${previewId}`;
+
+/** A preview's own position and answers, for the length of the tab. */
+export function cachePreviewState(previewId: string, p: Omit<PendingAnswers, "at">): void {
+  try {
+    window.sessionStorage.setItem(PREVIEW_KEY(previewId), JSON.stringify({ ...p, at: Date.now() }));
+  } catch { /* private mode / quota — preview simply starts from the top */ }
+}
+
+export function readPreviewState(previewId: string): PendingAnswers | null {
+  try {
+    const raw = window.sessionStorage.getItem(PREVIEW_KEY(previewId));
+    if (!raw) return null;
+    const p = JSON.parse(raw) as PendingAnswers;
+    return p && typeof p === "object" && p.answers ? p : null;
+  } catch { return null; }
+}
+
+export function clearPreviewState(previewId: string): void {
+  try { window.sessionStorage.removeItem(PREVIEW_KEY(previewId)); } catch { /* ignore */ }
+}

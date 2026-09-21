@@ -71,6 +71,7 @@ import { MediaEmbed, SafeImage, VoiceConsole, QuestionAudio, brandingVars, width
 import {
   readResume, writeResume, clearResume, resumeLink,
   cachePending, readPending, clearPending, RESUME_MAX_AGE_DAYS,
+  cachePreviewState, readPreviewState, clearPreviewState,
 } from "@/lib/resume";
 import { createTelemetryCollector, type TelemetryCollector } from "@/lib/telemetry";
 import type { ResponseTelemetry } from "@rescript/quality";
@@ -417,6 +418,15 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
   /** §24: embedded data from this respondent's row on the invitation list. */
   const respondentEmbeddedRef = React.useRef<Record<string, unknown> | null>(null);
   const [resumed, setResumed] = React.useState(false);
+  /*
+   * WHICH PREVIEW THIS IS, for the tab-scoped preview resume.
+   *
+   * The definition id keeps two surveys previewed in two tabs apart, and the
+   * entry point keeps a "Preview block" run apart from a full run-through —
+   * a block preview is asked to start somewhere specific, so resuming it onto
+   * the last full pass would ignore what the programmer just clicked.
+   */
+  const previewStateId = `${sourceDef.meta.id}:${startAt ?? "full"}`;
   /** answers that were only in this browser until now */
   const [recovered, setRecovered] = React.useState(false);
   /** the final save's state: pending → saving → saved | failed (with Retry) */
@@ -618,6 +628,10 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
       window.location.reload();
       return;
     }
+    /* "Restart" means start again, so the saved preview position must go with
+       it — otherwise the resume would put the tester straight back where they
+       asked to leave (see cachePreviewState) */
+    clearPreviewState(previewStateId);
     setEnded(null);
     setErrors([]);
     setProbe(null);
@@ -745,6 +759,19 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
         console.error("[rescript:script] survey custom JS", e);
         if (mode !== "live") setLogs((l) => [...l, `[survey JS] ERROR: ${e instanceof Error ? e.message : String(e)}`]);
       }
+    }
+    /*
+     * A PREVIEW RESUMES TOO — "when the page is refreshed, the survey should
+     * resume from the user's last position instead of restarting from the
+     * beginning". A live or test interview already does (the response row and
+     * the durable pointer above); preview writes nothing to the database, so
+     * its position lives in `sessionStorage` for the length of the tab. Read
+     * here, into the same `savedRef` the live path fills, so exactly one piece
+     * of code restores a position and `resumeAt` settles it.
+     */
+    if (mode === "preview" && !savedRef.current) {
+      const prev = readPreviewState(previewStateId);
+      if (prev) { savedRef.current = prev; setResumed(true); }
     }
     let nav = start(def, state, counts, startAt ? { startAt } : {});
     /*
@@ -1199,6 +1226,9 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
       }
       setFinalSave({ kind: "saved" });
       if (sessionBoot) clearResume(sessionBoot.mode, sessionBoot.surveyDbId);
+      /* a finished preview starts clean next time, exactly as a finished
+         response does — the resume is for an interview in progress */
+      if (mode === "preview") clearPreviewState(previewStateId);
       if (nav.redirectUrl && mode === "live") {
         // "new window" keeps the completion page in place behind the panel's
         // own page — some panels require the survey tab to stay open
@@ -1216,14 +1246,19 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
        * server acknowledges, so what survives a reload is exactly the work
        * the server has not got.
        */
+      const snapshot = {
+        answers: state.answers as Record<string, unknown>,
+        calculated: state.calculated as Record<string, unknown>,
+        embedded: state.embedded as Record<string, unknown>,
+        flags: state.flags,
+        stepIndex: state.stepIndex,
+      };
       if (session && mode !== "preview") {
-        cachePending(session.sessionId, {
-          answers: state.answers as Record<string, unknown>,
-          calculated: state.calculated as Record<string, unknown>,
-          embedded: state.embedded as Record<string, unknown>,
-          flags: state.flags,
-          stepIndex: state.stepIndex,
-        });
+        cachePending(session.sessionId, snapshot);
+      } else if (mode === "preview") {
+        /* the preview's own position, so a refresh comes back here rather
+           than to page one — see cachePreviewState */
+        cachePreviewState(previewStateId, snapshot);
       }
       void persist(mode, session, state, false, telemetryRef.current?.data ?? null, build).then((o) => {
         if (o.ok) { if (session) clearPending(session.sessionId); return; }

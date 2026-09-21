@@ -603,9 +603,41 @@ export function validateQuestion(
     if (filled.length < min) push(`Please add at least ${min} ${min === 1 ? "entry" : "entries"}.`);
     if (q.settings.maxRepeats != null && filled.length > q.settings.maxRepeats)
       push(`Please keep to at most ${q.settings.maxRepeats} entries.`);
+    /*
+     * EVERY FIELD OF EVERY ENTRY, CHECKED THE WAY THE SAME FIELD WOULD BE
+     * CHECKED ANYWHERE ELSE.
+     *
+     * This loop used to test `r.required` and nothing else, so a Repeating /
+     * Nested Form ignored both the field's TYPE and its own validation rules:
+     * "I applied Short Text validation to the Name field and Email validation
+     * to the Email field. However, even when I enter an invalid value in the
+     * Name field (for example, numbers instead of a name) and enter an
+     * invalid or incomplete email address, the form still allows submission
+     * without showing any validation error."
+     *
+     * It now runs exactly what the form-style lists run a few blocks down —
+     * `validateFieldValue` for the declared field type, then
+     * `checkScalarRules` for the author's rules — so a rule means the same
+     * thing in a repeating form as it does in a flat one, and any rule kind
+     * added later works here without being taught to.
+     */
+    const rgView = effectiveQuestion(q, ctx);
     filled.forEach((e, i) => {
-      for (const r of q.rows ?? []) {
-        if (r.required && isEmpty(e[String(r.code)])) push(`Entry ${i + 1}: ${r.label} is required.`, { rowCode: String(r.code) });
+      for (const r of rgView.rows ?? []) {
+        const rc = String(r.code);
+        const v = e[rc];
+        const label = `Entry ${i + 1}: ${r.label.replace(/<[^>]*>/g, "")}`;
+        if (r.required && isEmpty(v)) {
+          push(`${label} is required.`, { rowCode: rc });
+          continue;
+        }
+        if (!isEmpty(v)) {
+          const typeErr = validateFieldValue(r.fieldType ?? "text", v, q.settings);
+          if (typeErr) push(`${label}: ${typeErr}`, { rowCode: rc });
+        }
+        checkScalarRules(r.validation ?? [], v, ctx, (m, sev) =>
+          push(prefixed(label, m), { rowCode: rc, severity: sev }),
+        );
       }
     });
   }

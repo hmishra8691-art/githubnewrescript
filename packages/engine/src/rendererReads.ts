@@ -113,9 +113,78 @@ export const ORIENTATION_RENDERERS: ReadonlySet<string> = new Set([
   "base:multi_select",
 ]);
 
+/**
+ * WHICH QUESTIONS ACTUALLY STORE AND DRAW CELL COLUMNS (`q.columns`).
+ *
+ * THE SEPTEMBER REVIEW FILED THIS SIX TIMES AS SIX DIFFERENT BUGS, and they
+ * were all one fact. The question-type plugin says `features.columns` for
+ * every type whose name starts with `matrix`, so the Studio drew a Columns
+ * editor for Single-Select Matrix, Numeric/Text/Dropdown Matrix, the swipe
+ * decks, card sort, Matching and Reaction Time. But those base types store
+ * `per_row` — ONE value per row — and their renderers never read `q.columns`
+ * at all. So the section existed, "+ column" appended a column nobody would
+ * ever see, and the reports came in under six different headings:
+ *
+ *   · "two options: Column and Option, which appear to serve the same purpose"
+ *   · "+ Column is not adding additional columns … not actually displayed"
+ *   · "adding any value under Column does not produce any output in preview"
+ *   · "changing the number or settings of columns does not have any effect"   (×3)
+ *
+ * Only the `cells` response model — composite and custom_table, plus the
+ * constant-sum grid built on composite — has columns to configure. Everywhere
+ * else the response choices ARE the columns of the grid the respondent sees,
+ * and they live in `q.options`; the variant's `optionsLabel` is what tells the
+ * editor to call that section "Columns" rather than "Options", which is the
+ * rename the review asked for.
+ */
+export const CELL_COLUMN_RENDERERS: ReadonlySet<string> = new Set([
+  "summatrix",
+  "base:composite",
+  "base:custom_table",
+]);
+
+/**
+ * WHICH RENDERERS CAN DRAW A SEARCH BOX OVER THE OPTION LIST.
+ *
+ * The search control was offered to anything declaring `options`, which put
+ * it on every matrix subtype and every ranking subtype — "a search box is not
+ * generally required for Matrix/Grid responses and adds unnecessary
+ * configuration to the builder", and the same again for the five ranking
+ * methods. A grid draws its options as column headers and a ranking draws
+ * them as draggable items; neither has a list to filter, so neither renderer
+ * has ever read `settings.optionSearch`. Only flat option lists can.
+ */
+export const OPTION_SEARCH_RENDERERS: ReadonlySet<string> = new Set([
+  "buttons",
+  "cards",
+  "icons",
+  "listrows",
+  "statements",
+  "adaptive",
+  "base:single_select",
+  "base:multi_select",
+  "base:dropdown",
+  "base:multi_dropdown",
+  "base:image_select",
+]);
+
 /** The dispatch key for a question: its variant's renderer, or `base:<type>`. */
 export function rendererKey(renderer: string | undefined, baseType: string): string {
   return renderer ?? `base:${baseType}`;
+}
+
+/**
+ * Does this question have cell columns to configure — will anything a Columns
+ * editor writes ever reach a respondent? The Studio asks before drawing the
+ * section at all.
+ */
+export function readsCellColumns(renderer: string | undefined, baseType: string): boolean {
+  return CELL_COLUMN_RENDERERS.has(rendererKey(renderer, baseType));
+}
+
+/** Can this renderer draw a search box over its options? */
+export function offersOptionSearch(renderer: string | undefined, baseType: string): boolean {
+  return OPTION_SEARCH_RENDERERS.has(rendererKey(renderer, baseType));
 }
 
 /**

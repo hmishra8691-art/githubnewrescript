@@ -45,7 +45,16 @@ ok("every variant creates on the base type that owns its response model");
 /* seeded defaults */
 assert.equal(made.slider_matrix.settings.sliderLayout, "grid", "slider matrix defaults to the grid layout");
 assert.equal(made.slider_matrix.settings.minValue, 0);
-assert.equal(made.slider_matrix.settings.maxValue, 100);
+/*
+ * 0–10, not 0–100. The September review specified the Slider Matrix builder
+ * directly — "keep the configuration focused on: Rows, Minimum Value 0,
+ * Maximum Value 10, Step/Increment" — and a slider matrix is read row by row,
+ * where a 0–100 scale asks for a precision nobody gives. Multi-Attribute
+ * Slider keeps 0–100: it is the one meant for fine comparison between
+ * attributes, which is the distinction the same review asked us to make
+ * visible between the two.
+ */
+assert.equal(made.slider_matrix.settings.maxValue, 10);
 assert.equal(made.slider_matrix.rows.length, 3, "row-driven base type seeds starter rows");
 
 assert.equal(made.star_matrix.settings.minValue, 1);
@@ -56,7 +65,16 @@ assert.equal(made.constant_sum.settings.rowSum, true, "the constant-sum rule is 
 assert.equal(made.constant_sum.settings.sumTarget, 100);
 assert.equal(made.constant_sum.rows.length, 3, "composite is not row-driven, so the variant brings rows");
 
-assert.equal(made.dragdrop_matrix.rows.length, 3);
+/*
+ * Four items and four categories, which is the example the September review
+ * gave for this subtype: "Rows / Items: Product A, Product B, Product C,
+ * Product D. Column Categories / Drop Zones: Very Important, Important,
+ * Neutral, Not Important." It arrives configured as the thing it is for,
+ * rather than as three blank rows beside an Options list that the same review
+ * asked to be renamed into drop zones.
+ */
+assert.equal(made.dragdrop_matrix.rows.length, 4);
+assert.equal(made.dragdrop_matrix.options.length, 4, "and four drop categories to put them in");
 
 assert.equal(made.dynamic_list.rows.length, 1, "a dynamic list is one field, repeated");
 assert.equal(made.dynamic_list.rows[0].code, "item");

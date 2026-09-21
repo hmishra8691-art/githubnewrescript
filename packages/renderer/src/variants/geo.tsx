@@ -99,14 +99,35 @@ function SlippyMap(m: MapProps) {
   }, [m.height]);
 
   const drag = React.useRef<{ x: number; y: number; moved: boolean; pin: boolean } | null>(null);
-  const zoom = Math.max(1, Math.min(19, Math.round(m.zoom)));
+  /**
+   * ONE WORLD, NOT THREE.
+   *
+   * "The preview currently displays the world map three times. The map should
+   * be displayed only once."
+   *
+   * It was one map drawing a repeated world. The whole globe is `256 · 2^zoom`
+   * pixels wide, so at zoom 1 it is 512px — and the tile loop below ran from
+   * the left edge of the viewport to the right edge with no bound on x, so a
+   * 1500px-wide panel asked for six columns of a two-column world and got the
+   * continents over and over. (The y loop was already clamped to `[0, n-1]`,
+   * which is why it never repeated vertically.)
+   *
+   * Two things stop it, and both are what a map library does. The zoom can
+   * never go below the point where one world fills the container, and the
+   * tile range is clamped to the world that exists. Either alone would leave
+   * a seam — the floor without the clamp still repeats while the container is
+   * mid-resize, the clamp without the floor leaves blank gutters — so both.
+   */
+  const minZoom = Math.max(1, Math.ceil(Math.log2(Math.max(size.w, 1) / TILE)));
+  const zoom = Math.max(minZoom, Math.min(19, Math.round(m.zoom)));
 
   // the tiles covering the viewport
   const cx = lngToTileX(m.center.lng, zoom), cy = latToTileY(m.center.lat, zoom);
   const tiles: { x: number; y: number; left: number; top: number }[] = [];
-  const x0 = Math.floor(cx - size.w / 2 / TILE), x1 = Math.floor(cx + size.w / 2 / TILE);
-  const y0 = Math.floor(cy - size.h / 2 / TILE), y1 = Math.floor(cy + size.h / 2 / TILE);
   const n = 2 ** zoom;
+  const x0 = Math.max(0, Math.floor(cx - size.w / 2 / TILE));
+  const x1 = Math.min(n - 1, Math.floor(cx + size.w / 2 / TILE));
+  const y0 = Math.floor(cy - size.h / 2 / TILE), y1 = Math.floor(cy + size.h / 2 / TILE);
   for (let x = x0; x <= x1; x++) for (let y = Math.max(0, y0); y <= Math.min(n - 1, y1); y++) {
     tiles.push({ x, y, left: size.w / 2 + (x - cx) * TILE, top: size.h / 2 + (y - cy) * TILE });
   }
@@ -147,7 +168,8 @@ function SlippyMap(m: MapProps) {
     if (!e.deltaY) return;
     e.preventDefault();
     const dir = e.deltaY < 0 ? 1 : -1;
-    const nz = Math.max(1, Math.min(19, zoom + dir));
+    // the same floor the tile loop uses: zooming out past one world would repeat it
+    const nz = Math.max(minZoom, Math.min(19, zoom + dir));
     if (nz === zoom) return;
     // zoom about the cursor: keep the point under the cursor fixed
     const at = toPoint(e);
@@ -156,7 +178,7 @@ function SlippyMap(m: MapProps) {
     const newCenter = unproject(-px, -py, at, nz);
     m.onView(newCenter, nz);
   };
-  const zoomBy = (d: number) => m.onView(m.center, Math.max(1, Math.min(19, zoom + d)));
+  const zoomBy = (d: number) => m.onView(m.center, Math.max(minZoom, Math.min(19, zoom + d)));
 
   const pinPx = m.pin ? project(m.pin, m.center, zoom) : null;
   const radiusPx = m.pin && m.radiusM ? m.radiusM / metresPerPixel(m.pin.lat, zoom) : 0;

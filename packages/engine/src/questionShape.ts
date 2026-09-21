@@ -380,11 +380,20 @@ function resolveTarget(
   to: QuestionVariantDef | { baseType: string; id?: string; capabilities?: readonly string[]; validations?: readonly string[]; responseModel?: ResponseModel },
 ): ResolvedTarget {
   const named = "id" in to && to.id ? resolveVariant(to.id) : undefined;
-  /* a named variant is only the target if it stores as the type being asked
-     for; `{ baseType: "numeric", id: "text.email" }` names an impossibility */
-  const exact = named && named.baseType === to.baseType ? named : undefined;
+  /*
+   * A variant stores as its `baseType`, or as any type it declares in
+   * `altBaseTypes` — which only Carousel + Choice/Slider/Text does, because
+   * its Judgement control is defined as rewriting the base type underneath
+   * one variant. Everything else spans exactly one type, so this stays the
+   * guard it was: `{ baseType: "numeric", id: "text.email" }` still names an
+   * impossibility and still falls through.
+   */
+  const storesAs = (v: QuestionVariantDef | undefined, baseType: string) =>
+    !!v && (v.baseType === baseType || (v.altBaseTypes?.includes(baseType) ?? false));
+  /* a named variant is only the target if it stores as the type being asked for */
+  const exact = storesAs(named, to.baseType) ? named : undefined;
   const current = resolveVariant(from.variant ?? undefined);
-  const kept = !exact && current?.baseType === to.baseType ? current : undefined;
+  const kept = !exact && storesAs(current, to.baseType) ? current : undefined;
   const fallback = !exact && !kept ? resolveVariant(variantForLegacyType(to.baseType)) : undefined;
   const variant = exact ?? kept ?? fallback;
   return {

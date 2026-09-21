@@ -59,7 +59,11 @@ console.log("✔ Backspace on empty option removes it and refocuses");
 
 // --- paste box: opens showing the current list (Replace is the default);
 //     Append adds cleaned numbered/bulleted lines after it
-await page.click(".qcard.selected >> text=📋 paste options");
+// by testid, not by wording: the button was renamed to "📋 paste a list" so
+// it reads as a different job from "+ option" ("having both options can be
+// confusing because it is not clear which one should be used"), and a test
+// that pins the label re-breaks on every such clarification
+await page.click('.qcard.selected >> [data-testid="toggle-paste"]');
 const prefilled = await page.inputValue('[data-testid="paste-box"]');
 assert.equal(prefilled.split("\n").length, 3, "the paste box opens with the existing options");
 assert.match(prefilled, /^1\tApple\n/, "as code<TAB>label lines");

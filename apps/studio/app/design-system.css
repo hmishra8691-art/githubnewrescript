@@ -320,6 +320,31 @@ input[type="range"] { accent-color: var(--c-primary); }
    why) — `display: none` hides it and drops it from `.ide-body`'s grid
    track allocation entirely, same as not rendering it at all. */
 .rightpanel.rp-hidden { display: none; }
+/*
+ * Collapse / reopen — "allow users to collapse the Properties panel when it
+ * is not in use and reopen it when required". The panel keeps the question
+ * selected while collapsed, so reopening returns to exactly what was open.
+ */
+.rightpanel { position: relative; }
+.rp-collapse {
+  position: absolute; top: 10px; right: 12px;
+  width: 24px; height: 24px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--c-border); border-radius: 6px;
+  background: var(--c-surface); color: var(--c-text-subtle);
+  cursor: pointer; font-size: 15px;
+}
+.rp-collapse:hover { border-color: var(--c-primary-500); color: var(--c-primary-700); }
+.rp-reopen {
+  position: fixed; right: 0; top: 96px; z-index: 20;
+  padding: 7px 10px;
+  border: 1px solid var(--c-border); border-right: 0;
+  border-radius: 8px 0 0 8px;
+  background: var(--c-surface); color: var(--c-primary-700);
+  font-size: 12.5px; font-weight: 600; cursor: pointer;
+  box-shadow: -2px 0 6px rgba(0,0,0,.06);
+}
+.rp-reopen:hover { background: var(--c-primary-50, var(--c-surface)); }
 .rightpanel > * { max-width: 100%; }
 .rightpanel .input, .rightpanel .select, .rightpanel textarea.ta { font-size: 14px; min-height: 36px; padding: 7px 11px; }
 .rightpanel h2 { font-size: var(--fs-caption); margin: 0 0 14px; color: var(--c-primary-700); text-transform: uppercase; letter-spacing: .08em; font-weight: 700; }

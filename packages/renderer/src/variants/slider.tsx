@@ -127,8 +127,22 @@ export function VerticalSlider(p: QRProps) {
   const shown = stored ?? Math.round((min + max) / 2);
   return (
     <div className="rs-vslider" data-testid="vslider">
+      {/*
+        * THE NUMBER AND ITS NAME, ONE UNDER THE OTHER, AT EACH END.
+        *
+        * Naming an end used to REPLACE its number (`sliderRightLabel ?? max`),
+        * so "Very Satisfied" was printed where 100 should be: "when the user
+        * edits the left and right labels, the labels are displayed over the 0
+        * and 100 values, which makes the scale difficult to read … maximum
+        * value (100) at the top of the slider, right/maximum label directly
+        * below the 100 value; minimum value (0) at the bottom, minimum label
+        * directly below the 0."
+        */}
       <div className="rs-vslider-col">
-        <div className="rs-vslider-end top">{p.q.settings.sliderRightLabel ?? max}</div>
+        <div className="rs-vslider-end top">
+          <span className="n">{max}</span>
+          {p.q.settings.sliderRightLabel && <span className="lab">{p.q.settings.sliderRightLabel}</span>}
+        </div>
         <input
           type="range" className={`rs-vslider-input ${stored == null ? "untouched" : ""}`}
           aria-label={plain(p.q.text) || "Slider"}
@@ -137,7 +151,10 @@ export function VerticalSlider(p: QRProps) {
           disabled={p.q.settings.readOnly}
           onChange={(e) => p.onChange(Number(e.target.value))}
         />
-        <div className="rs-vslider-end bottom">{p.q.settings.sliderLeftLabel ?? min}</div>
+        <div className="rs-vslider-end bottom">
+          <span className="n">{min}</span>
+          {p.q.settings.sliderLeftLabel && <span className="lab">{p.q.settings.sliderLeftLabel}</span>}
+        </div>
       </div>
       {/* beside the track, not under it: a readout 250px below the handle is
           not where anyone looks while dragging */}

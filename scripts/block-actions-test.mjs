@@ -107,7 +107,7 @@ ok("set up: one block, three questions");
 /*
  * Nothing here shared a callback — but nothing could tell the controls apart
  * either: "+ Add block" appeared twice with one test id between them, and
- * "📋 paste options" (which belongs to the option list) is mounted once per
+ * "📋 paste a list" (which belongs to the option list) is mounted once per
  * matrix column, so an unscoped selector hits whichever came first. Naming the
  * command on the button is what makes a swapped handler a failing assertion.
  */
@@ -295,7 +295,7 @@ if (atBreak) {
  * QUESTION's option editor — several hundred pixels and one selection away
  * from the block toolbar. The likeliest story is that Add Block appeared to do
  * nothing (the bug above), and the next control anybody reaches for is
- * "📋 paste options" beside "+ option".
+ * "📋 paste a list" beside "+ option".
  *
  * Either way the two are now provably independent.
  */

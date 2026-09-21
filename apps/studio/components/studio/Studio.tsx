@@ -314,13 +314,66 @@ function SaveIndicator() {
  */
 function RightPanel({ tab }: { tab: Tab }) {
   const s = useStudio();
-  const showProperties = tab === "questions" && !!selectedQuestion(s);
+  /*
+   * COLLAPSED BY THE AUTHOR, as distinct from hidden because nothing is
+   * selected. "Allow users to collapse the Properties panel when it is not in
+   * use and reopen it when required" — a wide question (a long matrix, a
+   * conjoint grid) wants the whole width for a moment without the author
+   * having to deselect and lose their place. Deliberately NOT persisted to
+   * the definition: it is a view state, like a scroll position.
+   */
+  const [collapsed, setCollapsed] = React.useState(false);
+  const selected = !!selectedQuestion(s);
+  const showProperties = tab === "questions" && selected && !collapsed;
+  const asideRef = React.useRef<HTMLElement>(null);
+
+  /*
+   * CLICKING AWAY CLOSES IT.
+   *
+   * "When we click on Properties for any question type, the properties
+   * options open correctly. However, when we want to close the Properties
+   * panel, we currently have to click on Properties again. Please fix this
+   * behavior so that the Properties panel automatically closes whenever we
+   * click anywhere outside the Properties section."
+   *
+   * The panel is open because a question is selected, so closing it is
+   * deselecting — but only for a click on genuinely empty editor space. A
+   * click on another question card selects that one (the card's own handler
+   * runs, and deselecting here would fight it), and a click on the toolbar,
+   * the left nav, a modal or any menu is a command rather than a dismissal.
+   * `pointerdown` in the capture phase so the decision is made before a
+   * re-render can move the element out from under the event.
+   */
+  React.useEffect(() => {
+    if (!selected || tab !== "questions") return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!t) return;
+      if (asideRef.current?.contains(t)) return;             // inside the panel
+      if (t.closest(".qcard, .leftnav, .topbar, .modal, dialog, [role='dialog'], .rs-card")) return;
+      if (t.closest("input, textarea, select, button, a, [contenteditable='true']")) return;
+      s.select(null);
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+  }, [selected, tab, s]);
 
   return (
     <>
-      <aside className={`rightpanel${showProperties ? "" : " rp-hidden"}`} data-testid="rightpanel-properties">
+      <aside ref={asideRef} className={`rightpanel${showProperties ? "" : " rp-hidden"}`} data-testid="rightpanel-properties">
+        <button className="rp-collapse" data-testid="rightpanel-collapse"
+          title="Collapse the properties panel — the question stays selected"
+          aria-label="Collapse properties panel"
+          onClick={() => setCollapsed(true)}>›</button>
         <PropertiesPanel />
       </aside>
+      {/* reopening it: only worth offering while a question is actually
+          selected, which is the only time it has anything to show */}
+      {tab === "questions" && selected && collapsed && (
+        <button className="rp-reopen" data-testid="rightpanel-reopen"
+          title="Show the properties panel"
+          onClick={() => setCollapsed(false)}>‹ Properties</button>
+      )}
       {tab === "branding" && (
         <aside className="rightpanel rightpanel-preview" data-testid="rightpanel-preview">
           <h2>Live preview</h2>

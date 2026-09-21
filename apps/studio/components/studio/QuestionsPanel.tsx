@@ -5,7 +5,7 @@ import { CountInput } from "./CountInput";
 import React from "react";
 import type { Question, Option, QuestionColumn, ResponseType, QuestionVariantDef } from "@rescript/schema";
 import { questionTypeRegistry, variantRegistry, resolveVariant } from "@rescript/schema";
-import { honoursColumns, drawsOptionImages, honoursOrientation } from "@rescript/renderer";
+import { honoursColumns, drawsOptionImages, honoursOrientation, readsCellColumns, offersOptionSearch } from "@rescript/renderer";
 import { VariantPickerModal, VariantSwitcher, createFromVariant } from "./VariantPicker";
 import { InlineRichText, RichTextEditor } from "./RichTextEditor";
 
@@ -49,7 +49,7 @@ import { VariableNameInput } from "./VariableNameInput";
  * collide in. What there was no way to do was TELL THEM APART from outside:
  * "+ Add block" appeared twice with one `data-testid` between the two,
  * "split block" and "⤵" both split but only one was addressable, and
- * "📋 paste options" — which belongs to the option list, not to blocks — sits
+ * "📋 paste a list" — which belongs to the option list, not to blocks — sits
  * a few pixels from "+ option" and is instantiated once per matrix column, so
  * an unscoped `[data-testid="toggle-paste"]` hits whichever mounted first.
  *
@@ -100,6 +100,26 @@ import { MoveQuestionModal } from "./MoveQuestion";
 const RESPONSE_TYPES: ResponseType[] = [
   "single", "multi", "dropdown", "multi_dropdown", "text", "longtext",
   "numeric", "date", "time", "slider", "checkbox",
+];
+
+/**
+ * THE UNIT AN ALLOCATION IS COUNTED IN.
+ *
+ * Budget Allocation, Percentage Allocation and Point Allocation were three
+ * question types whose only difference was this string — "consolidating their
+ * functionality into the Constant Sum question type with an appropriate
+ * Unit/Scale toggle" is the review's own wording, and this is the toggle.
+ * The value is what `sumUnit` stores and what the renderer prints after each
+ * number, so an empty string is the plain whole-number case.
+ */
+const SUM_UNIT_PRESETS: { label: string; value: string }[] = [
+  { label: "plain number", value: "" },
+  { label: "percentage (%)", value: " %" },
+  { label: "points (pts)", value: " pts" },
+  { label: "currency ($)", value: " $" },
+  { label: "currency (€)", value: " €" },
+  { label: "currency (£)", value: " £" },
+  { label: "currency (₹)", value: " ₹" },
 ];
 
 /*
@@ -205,14 +225,27 @@ const OPTION_WINDOW = 40;
 const SCALAR_TEXT_TYPES = ["open_text", "long_text"];
 
 function OptionRows({ options, onChange, showFlags = true, flagChoices, showImage = false, metaFields = [],
-  enableLogic = false, questionId, onAfterDelete }: {
+  enableLogic = false, questionId, onAfterDelete, countLimit }: {
   options: Option[]; onChange(opts: Option[]): void; showFlags?: boolean;
   flagChoices?: string[]; showImage?: boolean; metaFields?: MetaField[];
   /** per-option logic + piping controls (reqs §1–4, §21) */
   enableLogic?: boolean; questionId?: string;
   /** called after a removal so the owner can re-sequence codes */
   onAfterDelete?(): void;
+  /**
+   * HOW MANY ENTRIES THIS QUESTION'S INTERACTION CAN CARRY (variant
+   * `optionCount`). A Tinder deck draws two edges and a four-direction deck
+   * four; anything past that was accepted by the editor, stored on the
+   * question, and silently never drawn. "Users should not be allowed to add
+   * more than 2 options … the option input should be restricted", and the
+   * same for four. Absent = no limit, which is every ordinary list.
+   */
+  countLimit?: { min?: number; max?: number; reason?: string };
 }) {
+  /** at the ceiling: "+ option" and the paste box must not push past it */
+  const atMax = countLimit?.max != null && options.length >= countLimit.max;
+  /** at the floor: removing one more would leave an unanswerable question */
+  const atMin = countLimit?.min != null && options.length <= countLimit.min;
   /*
    * Codes go read-only once the survey has live responses. The canvas
    * surface froze them from the start; this panel — the one programmers
@@ -495,8 +528,9 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
           <span className="opt-actions">
             <button className="btn small" onClick={() => move(i, -1)}>↑</button>
             <button className="btn small" onClick={() => move(i, 1)}>↓</button>
-            <button className="btn small danger"
-              onClick={() => { onChange(options.filter((_, j) => j !== i)); onAfterDelete?.(); }}>×</button>
+            <button className="btn small danger" disabled={atMin}
+              title={atMin ? `This question needs at least ${countLimit!.min}${countLimit!.reason ? ` — ${countLimit!.reason}` : ""}` : undefined}
+              onClick={() => { if (atMin) return; onChange(options.filter((_, j) => j !== i)); onAfterDelete?.(); }}>×</button>
           </span>
         </div>
         {enableLogic && logicOpen === String(o.code) && (
@@ -510,12 +544,27 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
         );
       })}
       <div className="row">
-        <button className="btn small" data-testid="add-option" onClick={() => insertAfter(options.length - 1)}>
+        <button className="btn small" data-testid="add-option" disabled={atMax}
+          title={atMax ? `This question takes at most ${countLimit!.max}${countLimit!.reason ? ` — ${countLimit!.reason}` : ""}` : undefined}
+          onClick={() => { if (!atMax) insertAfter(options.length - 1); }}>
           + option <span className="muted" style={{ fontSize: 11.5 }}>(or press Enter)</span>
         </button>
-        <button className="btn small" data-testid="toggle-paste" data-command={BLOCK_COMMANDS.PASTE_OPTIONS} onClick={openPaste}>
-          {pasteOpen ? "hide paste box" : "📋 paste options"}
+        {/*
+          * "+ Column" and "Paste Options" side by side read as two ways to do
+          * the same thing — "having both options can be confusing because it
+          * is not clear which one should be used for adding columns". They do
+          * different jobs, so each now says which: one adds a single entry,
+          * the other imports a whole list at once.
+          */}
+        <button className="btn small" data-testid="toggle-paste" data-command={BLOCK_COMMANDS.PASTE_OPTIONS}
+          disabled={atMax && !pasteOpen}
+          title={atMax ? `This question takes at most ${countLimit!.max}` : "Import a whole list at once — one entry per line"}
+          onClick={openPaste}>
+          {pasteOpen ? "hide paste box" : "📋 paste a list"}
         </button>
+        <span className="muted" style={{ fontSize: 11.5, alignSelf: "center" }}>
+          “+ option” adds one; “paste a list” imports many at once.
+        </span>
       </div>
       {pasteOpen && (
         <div className="paste-box" data-testid="paste-panel">
@@ -568,8 +617,39 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
   );
 }
 
-function ColumnEditor({ q, onChange }: { q: Question; onChange(cols: QuestionColumn[]): void }) {
+function ColumnEditor({ q, onChange, allowedTypes }: {
+  q: Question;
+  onChange(cols: QuestionColumn[]): void;
+  /**
+   * WHICH RESPONSE TYPES THIS GRID MAY USE (variant `columnTypes`).
+   *
+   * "Most of these options are not relevant to the selected Matrix subtype …
+   * when Numeric Matrix is selected the column type should automatically be
+   * set to Numeric, remove all other options from the column-type dropdown."
+   * A Numeric Matrix with a Date column is a configuration nobody meant, and
+   * a Constant Sum that cannot add up is worse. Undefined = the full list,
+   * which is what Mixed-Type Matrix is for.
+   */
+  allowedTypes?: string[];
+}) {
   const cols = q.columns;
+  const types = allowedTypes?.length
+    ? RESPONSE_TYPES.filter((t) => allowedTypes.includes(t))
+    : RESPONSE_TYPES;
+  /** the type a new column gets: the first this grid actually allows */
+  const defaultType = (types[0] ?? "text") as ResponseType;
+  /*
+   * A SLIDER COLUMN THAT ARRIVES AS A SLIDER. `SliderCell` draws a real
+   * range control only when the column has BOTH ends — without them it keeps
+   * the number box, which is exactly what the review saw: "when Slider is
+   * selected as the column type, the current Preview only displays an
+   * open-end input box". Choosing the type now seeds the range, so the
+   * control the author picked is the control they get.
+   */
+  const withTypeDefaults = (c: QuestionColumn, responseType: ResponseType): Partial<QuestionColumn> =>
+    responseType === "slider" && c.min == null && c.max == null
+      ? { responseType, min: 0, max: 100, step: 1 }
+      : { responseType };
   const set = (i: number, patch: Partial<QuestionColumn>) =>
     onChange(cols.map((c, j) => (j === i ? { ...c, ...patch } : c)));
   const move = (i: number, dir: -1 | 1) => {
@@ -586,10 +666,18 @@ function ColumnEditor({ q, onChange }: { q: Question; onChange(cols: QuestionCol
           <div className="row" style={{ marginBottom: 6 }}>
             <InlineRichText className="grow" value={c.label} placeholder="Column label" testId="column-label"
               onChange={(label) => set(i, { label })} />
-            <select className="select" style={{ width: 140 }} value={c.responseType}
-              onChange={(e) => set(i, { responseType: e.target.value as ResponseType })}>
-              {RESPONSE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
+            {/* one allowed type is not a choice — say what it is instead of
+                offering a dropdown that can only be re-picked */}
+            {types.length === 1 ? (
+              <span className="chip" data-testid="column-type-fixed" style={{ width: 140, justifyContent: "center" }}>
+                {types[0]}
+              </span>
+            ) : (
+              <select className="select" style={{ width: 140 }} value={c.responseType} data-testid="column-type"
+                onChange={(e) => set(i, withTypeDefaults(c, e.target.value as ResponseType))}>
+                {types.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+            )}
             <input className="input mono" style={{ width: 120 }} value={c.variableStem}
               title="variable stem — variables become STEM_<row>"
               onChange={(e) => set(i, { variableStem: e.target.value.toUpperCase() })} />
@@ -604,10 +692,45 @@ function ColumnEditor({ q, onChange }: { q: Question; onChange(cols: QuestionCol
           <div className="row" style={{ marginTop: 6, flexWrap: "wrap" }}>
             {(c.responseType === "numeric" || c.responseType === "slider") && (
               <>
-                <input className="input" style={{ width: 76 }} type="number" placeholder="min"
+                <input className="input" style={{ width: 76 }} type="number" placeholder="min" data-testid="column-min"
                   value={c.min ?? ""} onChange={(e) => set(i, { min: e.target.value === "" ? undefined : Number(e.target.value) })} />
-                <input className="input" style={{ width: 76 }} type="number" placeholder="max"
+                <input className="input" style={{ width: 76 }} type="number" placeholder="max" data-testid="column-max"
                   value={c.max ?? ""} onChange={(e) => set(i, { max: e.target.value === "" ? undefined : Number(e.target.value) })} />
+                {c.responseType === "slider" && (
+                  <input className="input" style={{ width: 76 }} type="number" placeholder="step" data-testid="column-step"
+                    value={c.step ?? ""} onChange={(e) => set(i, { step: e.target.value === "" ? undefined : Number(e.target.value) })} />
+                )}
+              </>
+            )}
+            {/*
+              * HOW MANY OF A MULTI COLUMN'S OPTIONS MAY BE PICKED.
+              * "When the user selects Multi Select or Multi Dropdown as a
+              * column type, add Minimum Selection and Maximum Selection …
+              * the respondent should be required to select between 1 and 3
+              * options." The cell validator already runs `min_selections` /
+              * `max_selections` per column (validate.ts, composite branch) —
+              * there was simply no way to author them.
+              */}
+            {(c.responseType === "multi" || c.responseType === "multi_dropdown") && (
+              <>
+                <input className="input" style={{ width: 96 }} type="number" min={0} placeholder="min picks"
+                  data-testid="column-min-selections"
+                  value={(c.validation.find((v) => v.kind === "min_selections")?.value as number) ?? ""}
+                  onChange={(e) => set(i, {
+                    validation: [
+                      ...c.validation.filter((v) => v.kind !== "min_selections"),
+                      ...(e.target.value === "" ? [] : [{ kind: "min_selections" as const, value: Number(e.target.value) }]),
+                    ],
+                  })} />
+                <input className="input" style={{ width: 96 }} type="number" min={0} placeholder="max picks"
+                  data-testid="column-max-selections"
+                  value={(c.validation.find((v) => v.kind === "max_selections")?.value as number) ?? ""}
+                  onChange={(e) => set(i, {
+                    validation: [
+                      ...c.validation.filter((v) => v.kind !== "max_selections"),
+                      ...(e.target.value === "" ? [] : [{ kind: "max_selections" as const, value: Number(e.target.value) }]),
+                    ],
+                  })} />
               </>
             )}
             <input className="input" style={{ width: 110 }} placeholder="width e.g. 120px"
@@ -633,11 +756,12 @@ function ColumnEditor({ q, onChange }: { q: Question; onChange(cols: QuestionCol
             onChange={(e) => set(i, { expression: e.target.value || undefined })} />
         </div>
       ))}
-      <button className="btn small" onClick={() =>
+      <button className="btn small" data-testid="add-column" onClick={() =>
         onChange([...cols, {
-          id: uid("col"), label: `Column ${cols.length + 1}`, responseType: "text",
+          id: uid("col"), label: `Column ${cols.length + 1}`, responseType: defaultType,
           variableStem: `${q.variableName}_C${cols.length + 1}`, options: [], validation: [],
           readOnly: false, flags: [],
+          ...(defaultType === "slider" ? { min: 0, max: 100, step: 1 } : {}),
         }])}>
         + column
       </button>
@@ -830,6 +954,32 @@ export function QuestionEditor({ q }: { q: Question }) {
    * package owns the list, because the renderer is what decides.
    */
   const showLayout = has("layout_columns") && honoursColumns(variantDef?.renderer, q.type);
+  /*
+   * MIN/MAX IS A SCALE CONTROL, NOT A UNIVERSAL ONE.
+   *
+   * `features.numericBounds` is true for every `allocation` question, so
+   * Slider Allocation and Drag Allocation offered a per-item Min and Max
+   * beside their sum target — and the two contradict: "if there are 5
+   * sliders with a total allocation of 1000, and we set the Max validation to
+   * 100, the respondent would not be able to reach the required total of
+   * 1000". The variant's capability list already said these questions have no
+   * numeric bounds; the editor now asks it before drawing the control, so an
+   * impossible configuration can no longer be authored. The sum target and
+   * its unit still show — that IS the constraint for an allocation.
+   */
+  const showBounds = feats.numericBounds && has("numeric_bounds");
+  /*
+   * "Instead of using generic labels such as Minimum and Maximum, use labels
+   * that clearly relate to the star-rating functionality: Minimum Stars,
+   * Maximum Stars." The range means a count of symbols for the symbol
+   * renderers and a value everywhere else.
+   */
+  const boundsLabels: [string, string] =
+    variantDef?.renderer === "starmatrix" || variantDef?.renderer === "stars"
+      ? ["Minimum stars", "Maximum stars"]
+      : variantDef?.renderer === "emoji"
+        ? ["Minimum faces", "Maximum faces"]
+        : ["Min", "Max"];
   /* what this variant's scale may be, and what it will actually be drawn as */
   const scaleLimit = variantDef?.scale;
   const scaleShown = effectiveScale(q, { min: scaleLimit?.min ?? 0, max: scaleLimit?.max ?? 10 });
@@ -953,8 +1103,47 @@ export function QuestionEditor({ q }: { q: Question }) {
 
       {feats.options && has("options") && (
         <>
-          <h3 className="sec">Options</h3>
+          {/*
+            * WHAT THIS LIST IS, IN THIS QUESTION.
+            *
+            * For a radio list they are Options. For a grid they are the
+            * COLUMNS the respondent reads across the top, for a card sort
+            * they are the piles, for a drag matrix the drop zones — and
+            * calling all of them "Options" beside a Columns editor that did
+            * nothing is what produced "rename Option to Column and remove the
+            * existing Column field" in two separate reviews. The variant says
+            * which; anything that does not say keeps the plain heading.
+            */}
+          <h3 className="sec">{variantDef?.optionsLabel ?? "Options"}</h3>
+          {variantDef?.optionsHint && (
+            <p className="muted" style={{ fontSize: 12.5, marginTop: -6 }} data-testid="options-hint">
+              {variantDef.optionsHint}
+            </p>
+          )}
+          {/*
+            * A COUNT THE INTERACTION CAN ACTUALLY CARRY.
+            * A Tinder card has two edges and a four-direction card has four;
+            * a deck given seven answers drew the first two and silently
+            * dropped the rest. The editor says so, and the option list itself
+            * refuses to go outside the bound (see OptionRows `countLimit`).
+            */}
+          {variantDef?.optionCount && (() => {
+            const { min, max, reason } = variantDef.optionCount!;
+            const n = q.options.length;
+            const bad = (min != null && n < min) || (max != null && n > max);
+            return (
+              <p className={bad ? "chip warn" : "muted"} data-testid="option-count-rule"
+                style={{ fontSize: 12.5, marginTop: -4, display: "inline-block" }}>
+                {min != null && max != null && min === max
+                  ? `Exactly ${min} required`
+                  : `${min != null ? `At least ${min}` : ""}${min != null && max != null ? ", " : ""}${max != null ? `at most ${max}` : ""}`}
+                {reason ? ` — ${reason}.` : "."}
+                {bad ? ` Currently ${n}.` : ""}
+              </p>
+            );
+          })()}
           <OptionRows options={q.options} onChange={(options) => patch({ options })}
+            countLimit={variantDef?.optionCount}
             onAfterDelete={() => resequence("options")}
             flagChoices={allowedFlagsFor(q.type)} enableLogic questionId={q.id}
             /*
@@ -1018,7 +1207,17 @@ export function QuestionEditor({ q }: { q: Question }) {
               * "automatic" is still the default, so nothing already in field
               * moves.
               */}
-            {has("options") && (
+            {/*
+              * …and only where a search box can exist. It was shown for
+              * anything with options, which put it on every matrix subtype
+              * and every ranking subtype: "remove the Search Box section from
+              * all Grid/Matrix question types — a search box is not generally
+              * required for Matrix/Grid responses", and the same again for
+              * the five ranking methods. A grid draws its options as column
+              * headers and a ranking draws them as draggable items; there is
+              * no list to filter, and those renderers never read the setting.
+              */}
+            {has("options") && offersOptionSearch(variantDef?.renderer, q.type) && (
             <label className="f" style={{ marginBottom: 0, width: 190 }}><span>Search box</span>
               <select className="select" data-testid="option-search"
                 value={q.settings.optionSearch ?? "auto"}
@@ -1113,11 +1312,26 @@ export function QuestionEditor({ q }: { q: Question }) {
         </>
       )}
 
-      {feats.columns && (
+      {/*
+        * CELL COLUMNS, AND ONLY WHERE THERE ARE CELLS.
+        *
+        * `feats.columns` is true for every type whose name starts with
+        * "matrix", so this section used to be drawn for Single-Select Matrix,
+        * the swipe decks, card sort, Matching and Reaction Time — none of
+        * which store cells. The September review filed that as six separate
+        * bugs ("two options: Column and Option, which appear to serve the
+        * same purpose", "+ Column is not adding additional columns",
+        * "changing the number or settings of columns does not have any
+        * effect", ×3 more). One fact underneath all of them: those questions
+        * hold one value per row, so a column had nowhere to be stored and
+        * nothing to draw it. The renderer package owns the answer.
+        */}
+      {feats.columns && readsCellColumns(variantDef?.renderer, q.type) && (
         <>
           <h3 className="sec">Columns {q.type === "composite" || q.type === "custom_table"
             ? "— each column has its own response type, variable, codes, validation" : ""}</h3>
-          <ColumnEditor q={q} onChange={(columns) => patch({ columns })} />
+          <ColumnEditor q={q} onChange={(columns) => patch({ columns })}
+            allowedTypes={variantDef?.columnTypes} />
         </>
       )}
 
@@ -1133,23 +1347,25 @@ export function QuestionEditor({ q }: { q: Question }) {
         * whose scale is a standard, kept and bounded for the ones where the
         * range is a real choice.
         */}
-      {feats.numericBounds && scaleLimit?.fixed && (
+      {showBounds && scaleLimit?.fixed && (
         <p className="muted" style={{ fontSize: 13 }} data-testid="scale-fixed">
           Scale fixed at {scaleLimit.min}–{scaleLimit.max} — the standard for this question type.
         </p>
       )}
-      {feats.numericBounds && !scaleLimit?.fixed && (
+      {(showBounds || feats.sum) && !scaleLimit?.fixed && (
         <div className="row">
-          <label className="f"><span>Min</span>
+          {showBounds && (<>
+          <label className="f"><span>{boundsLabels[0]}</span>
             <input className="input" type="number" style={{ width: 90 }} data-testid="min-value"
               min={scaleLimit?.min} max={scaleLimit?.max}
               value={q.settings.minValue ?? ""}
               onChange={(e) => patchSettings({ minValue: e.target.value === "" ? undefined : Number(e.target.value) })} /></label>
-          <label className="f"><span>Max</span>
+          <label className="f"><span>{boundsLabels[1]}</span>
             <input className="input" type="number" style={{ width: 90 }} data-testid="max-value"
               min={scaleLimit?.min} max={scaleLimit?.max}
               value={q.settings.maxValue ?? ""}
               onChange={(e) => patchSettings({ maxValue: e.target.value === "" ? undefined : Number(e.target.value) })} /></label>
+          </>)}
           {/*
             * The message the review asked for. `min`/`max` on a number input
             * are a hint to the spinner, not a refusal — a typed 50 still
@@ -1166,11 +1382,37 @@ export function QuestionEditor({ q }: { q: Question }) {
           {feats.sum && (
             <>
               <label className="f"><span>Sum target</span>
-                <input className="input" type="number" style={{ width: 90 }} value={q.settings.sumTarget ?? ""}
+                <input className="input" type="number" style={{ width: 90 }} data-testid="sum-target"
+                  value={q.settings.sumTarget ?? ""}
                   onChange={(e) => patchSettings({ sumTarget: e.target.value === "" ? undefined : Number(e.target.value) })} /></label>
-              <label className="f"><span>Unit</span>
-                <input className="input" style={{ width: 70 }} value={q.settings.sumUnit ?? ""}
-                  onChange={(e) => patchSettings({ sumUnit: e.target.value || undefined })} /></label>
+              {/*
+                * THE UNIT TOGGLE THAT REPLACED THREE QUESTION TYPES.
+                *
+                * "Instead of maintaining separate question types, keep only
+                * one Constant Sum question type and provide a Unit/Scale
+                * toggle within it — Currency/Unit for Budget Allocation,
+                * Percentage for Percentage Allocation, Points for Point
+                * Allocation, Discrete/Whole Number." Budget, Percentage and
+                * Point Allocation were three presets differing by this single
+                * string; it is a control now, so the one question type covers
+                * all four cases and the picker stops showing four of them.
+                */}
+              <label className="f" style={{ width: 168 }}><span>Unit / scale</span>
+                <select className="select" data-testid="sum-unit"
+                  value={SUM_UNIT_PRESETS.some((u) => u.value === (q.settings.sumUnit ?? ""))
+                    ? (q.settings.sumUnit ?? "") : "custom"}
+                  onChange={(e) => patchSettings({
+                    sumUnit: e.target.value === "custom" ? (q.settings.sumUnit || " units") : (e.target.value || undefined),
+                  })}>
+                  {SUM_UNIT_PRESETS.map((u) => <option key={u.label} value={u.value}>{u.label}</option>)}
+                  <option value="custom">custom unit…</option>
+                </select></label>
+              {!SUM_UNIT_PRESETS.some((u) => u.value === (q.settings.sumUnit ?? "")) && (
+                <label className="f"><span>Custom unit</span>
+                  <input className="input" style={{ width: 90 }} data-testid="sum-unit-custom"
+                    value={q.settings.sumUnit ?? ""}
+                    onChange={(e) => patchSettings({ sumUnit: e.target.value || undefined })} /></label>
+              )}
             </>
           )}
         </div>
@@ -1673,7 +1915,7 @@ export function QuestionsPanel() {
    *
    * That is almost certainly the "Add Block opens Paste" report: nothing
    * appeared to happen, and the next control anybody reaches for is
-   * "📋 paste options", which sits beside "+ option" in the selected
+   * "📋 paste a list", which sits beside "+ option" in the selected
    * question. Paste was never wired to this button — see the note by
    * BLOCK_COMMANDS below.
    *

@@ -35,9 +35,19 @@ await h.goTab("Questions");
 await h.page.click('[data-testid="add-question-top"]');
 await h.page.waitForSelector('[data-testid="picker-family-comparison"]');
 await h.page.click('[data-testid="picker-family-comparison"]');
-await h.page.waitForSelector('[data-testid="picker-variant-comparison.side_by_side"]');
+await h.page.waitForSelector('[data-testid="picker-variant-comparison.attributes"]');
 assert.equal(await h.page.$('[data-testid="picker-variant-comparison.tournament"]'), null,
   "the retired duplicate must not be offered");
+/*
+ * Side-by-Side Comparison joined it in the September review: "the same type of
+ * question can already be created using Single Select → Product Choice, where
+ * users can select one option and add images and secondary text … Side-by-Side
+ * Comparison appears to be redundant." Same base type, same single_choice
+ * answer, same image-and-description card — so it is retired into Product
+ * Choice, which is the richer of the two.
+ */
+assert.equal(await h.page.$('[data-testid="picker-variant-comparison.side_by_side"]'), null,
+  "Side-by-Side Comparison is retired into single_select.product_choice");
 await h.page.click('[data-testid="picker-family-ranking"]');
 const tourn = await h.page.waitForSelector('[data-testid="picker-variant-ranking.tournament"]');
 assert.equal(await tourn.getAttribute("data-status"), "stable", "tournament ranking lives in the ranking family");
@@ -62,7 +72,21 @@ assert.equal(made.flip.type, "single_select");
 assert.equal(made.flip.options[0].meta.description.length > 0, true, "flip cards seed a description to reveal");
 assert.equal(made.sortable.type, "matrix_single");
 assert.equal(made.sortable.rows.length, 3, "the deck seeds three cards");
-assert.equal(made.sortable.options.length, 2, "the sort seeds two piles");
+/*
+ * THREE piles, not two — the point of the change. The September review found
+ * Sortable Cards indistinguishable from the swipe decks: "the Sortable
+ * Swipeable Card question type has almost the same preview and interaction as
+ * the Statement Swipe, Tinder Style Swipe and Swipe to Rate … if it is
+ * intended to remain as a separate question type, its interaction and preview
+ * should be made sufficiently different."
+ *
+ * What actually separates it is that it sorts a deck into ANY number of
+ * author-named piles, where a Tinder card has exactly two edges and a
+ * four-direction card exactly four (both now enforced). Seeding two piles
+ * made it look like the two-edged deck it is not; three categories show what
+ * it is for on sight.
+ */
+assert.equal(made.sortable.options.length, 3, "the sort seeds three named piles — not a two-edged swipe deck");
 assert.equal(made.attributes.type, "single_select");
 assert.equal(made.attributes.rows.length, 3, "the comparison seeds Price / Warranty / Weight");
 assert.equal(made.attributes.rows[0].code, "price");

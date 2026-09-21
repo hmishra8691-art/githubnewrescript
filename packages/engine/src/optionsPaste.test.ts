@@ -49,3 +49,44 @@ test("optionsToPaste prints what planPaste reads back as identity", () => {
   assert.deepEqual(plan.options, existing());
   assert.equal(planPaste(existing(), "   \n", "replace").options.length, 4);
 });
+
+/*
+ * THE REPORT: "When options are pasted directly into the question, the option
+ * numbering is starting from 2 instead of 1. Please fix the option numbering
+ * so that whenever options are pasted directly, the first option always starts
+ * at 1 and subsequent options increment sequentially (1, 2, 3, 4…)."
+ *
+ * The starter question — one option coded 1 — is exactly where this bit.
+ */
+test("a replace that keeps nothing numbers from 1, not from the old high-water mark", () => {
+  const starter = [{ code: "1", label: "Option 1", flags: [] as any[] }] as any[];
+  const plan = planPaste(starter, "Camera quality\nBattery life\nPerformance\nDesign", "replace");
+  assert.deepEqual(
+    plan.options.map((o) => [String(o.code), o.label]),
+    [["1", "Camera quality"], ["2", "Battery life"], ["3", "Performance"], ["4", "Design"]],
+  );
+  assert.deepEqual({ kept: plan.kept, added: plan.added, removed: plan.removed }, { kept: 0, added: 4, removed: 1 });
+});
+
+test("a replace onto an empty list also starts at 1", () => {
+  const plan = planPaste([], "Alpha\nBeta", "replace");
+  assert.deepEqual(plan.options.map((o) => String(o.code)), ["1", "2"]);
+});
+
+/*
+ * The other half of the same rule, and why the fix is scoped to "keeps
+ * nothing": a paste that KEEPS options must not hand a removed option's code
+ * to a different option, or every condition, quota and stored answer naming
+ * that code changes meaning underneath the survey.
+ */
+test("a replace that keeps options never reuses a removed option's code", () => {
+  const before = [
+    { code: "1", label: "Coke", flags: [] as any[] },
+    { code: "2", label: "Pepsi", flags: [] as any[] },
+  ] as any[];
+  const plan = planPaste(before, "Coke\nDr Pepper", "replace");
+  const codes = plan.options.map((o) => String(o.code));
+  assert.deepEqual(codes[0], "1");            // Coke kept its identity
+  assert.notEqual(codes[1], "2");             // Dr Pepper did NOT inherit Pepsi's code
+  assert.deepEqual(plan.removedCodes.map(String), ["2"]);
+});

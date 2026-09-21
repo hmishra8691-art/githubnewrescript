@@ -92,6 +92,31 @@ export interface QuestionVariantDef {
   description: string;
   /** canonical base type this variant stores as (owns the response model) */
   baseType: string;
+  /**
+   * THE OTHER BASE TYPES THIS ONE VARIANT MAY LEGITIMATELY STORE AS.
+   *
+   * Almost every variant is one presentation over one base type, and the type
+   * migration relies on that: a named variant whose `baseType` does not match
+   * the type being asked for is an impossibility (`{ baseType: "numeric",
+   * id: "text.email" }`) and is refused, falling back to the base type's own
+   * default variant.
+   *
+   * Carousel + Choice/Slider/Text is the exception, and by design — one
+   * variant whose "Judgement" control rewrites `question.type` between
+   * matrix_single, matrix_numeric and matrix_text so the input under the card
+   * can change without spawning three variants. The refusal above turned that
+   * design into the bug the review filed: "changing Choice → Slider
+   * automatically converts the question into a Grid Numeric question type …
+   * changing Choice → Text automatically converts it into a Grid Text
+   * question type. This is not the expected behavior because the question
+   * should remain within the Carousel family."
+   *
+   * It did convert: with `carousel.judge` declaring only matrix_single, the
+   * resolver could not keep it and fell through to `matrix.numeric`. Listing
+   * the types a variant may span keeps the impossibility guard for everything
+   * else while letting this one say what it actually is.
+   */
+  altBaseTypes?: string[];
   /** runtime renderer key; undefined = base type's default renderer */
   renderer?: string;
   responseModel: ResponseModel;
@@ -128,6 +153,45 @@ export interface QuestionVariantDef {
    * Absent means what it always meant: every type, and fields may be added.
    */
   fields?: { types?: string[]; fixed?: boolean };
+  /**
+   * WHAT THIS VARIANT'S OPTION LIST IS CALLED IN THE EDITOR.
+   *
+   * For a flat choice question the response choices are "Options" and there is
+   * nothing to explain. For a grid they are the COLUMNS the respondent reads
+   * across the top, and the review reported the mismatch as duplication —
+   * "there are currently two options: Column and Option, which appear to serve
+   * the same purpose … rename Option to Column and remove the existing Column
+   * field". They were never the same field: one was the response choices, the
+   * other a cell-column editor that this question shape cannot use (see
+   * `readsCellColumns`). The phantom editor is gone; this is the rename.
+   */
+  optionsLabel?: string;
+  /** Optional one-line note under the option list — what these entries become. */
+  optionsHint?: string;
+  /**
+   * HOW MANY OPTIONS THIS VARIANT'S INTERACTION CAN ACTUALLY CARRY.
+   *
+   * A Tinder card has two edges and a four-direction card has four, so a deck
+   * configured with seven "options" draws a card the respondent cannot answer.
+   * The review filed that for both: "2 options should be mandatory … users
+   * should not be allowed to add more than 2", "4 options should be mandatory
+   * … a validation should be applied to enforce a minimum and maximum of 4".
+   * The editor enforces the bound instead of letting the preview disagree.
+   */
+  optionCount?: { min?: number; max?: number; reason?: string };
+  /**
+   * WHICH CELL-COLUMN RESPONSE TYPES THIS VARIANT MAY USE.
+   *
+   * The column-type dropdown offered all eleven types to every grid, so a
+   * Numeric Matrix could be given a Date column and a Constant-Sum Matrix a
+   * checkbox — "most of these options are not relevant to the selected Matrix
+   * subtype … this will prevent invalid combinations". A variant that says
+   * nothing still gets the full list, which is what Mixed-Type Matrix wants:
+   * "it is acceptable for the Mixed-Type Matrix to show the complete
+   * field-type dropdown because its purpose is to support different response
+   * types within the same matrix".
+   */
+  columnTypes?: string[];
   /** applied on creation / conversion (merged into the question) */
   defaults?: {
     settings?: Record<string, unknown>;
@@ -328,6 +392,14 @@ const F = {
   list: { family: "list", familyLabel: "List / Form Fields" },
   matrix: { family: "matrix", familyLabel: "Grid / Matrix" },
   ranking: { family: "ranking", familyLabel: "Ranking" },
+  /*
+   * "Since MaxDiff uses a different methodology from traditional ranking
+   * questions, it should be moved into a separate MaxDiff / Best-Worst
+   * Question section." It is: a MaxDiff answers design-generated TASKS, not
+   * an ordering of the author's own list, so it never belonged beside
+   * Click-to-Rank in the picker.
+   */
+  maxdiff: { family: "maxdiff", familyLabel: "MaxDiff / Best–Worst" },
   slider: { family: "slider", familyLabel: "Slider / Rating" },
   image: { family: "image", familyLabel: "Image" },
   media: { family: "media", familyLabel: "Video / Audio" },
@@ -834,20 +906,51 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   }),
 
   /* --------------------------------------------------------------- MATRIX */
-  stable(F.matrix, "single", "Single-Select Matrix", "One answer per row.", {
+  stable(F.matrix, "single", "Single-Select Matrix", "Statements down the side, response choices across the top — one answer per row.", {
     baseType: "matrix_single", responseModel: "per_row",
     capabilities: ["rows", "options", "randomization", "carry_forward"],
     validations: ["required"],
+    optionsLabel: "Columns",
+    optionsHint: "Each entry is one column of the grid — the response choices a respondent picks between, one per row.",
   }),
   stable(F.matrix, "multi", "Multi-Select Matrix", "Multiple answers per row, exclusive-aware.", {
     baseType: "matrix_multi", responseModel: "per_row",
     capabilities: ["rows", "options", "randomization", "carry_forward", "exclusive_options"],
     validations: ["required", "min_selections", "max_selections"],
+    optionsLabel: "Columns",
+    optionsHint: "Each entry is one column of the grid; respondents may tick more than one per row.",
   }),
-  stable(F.matrix, "likert", "Likert Matrix", "Agreement scale preset (5-point).", {
-    baseType: "matrix_single", responseModel: "per_row",
+  /*
+   * LIKERT, RATING AND SINGLE-SELECT ARE THREE DIFFERENT QUESTIONS AGAIN.
+   *
+   * They were one renderer with three option presets, and both reviews said
+   * so: "all four are displaying essentially the same preview", and then
+   * "Single Select Matrix, Likert Matrix and Rating Matrix (1–5) look very
+   * similar in Preview/Test Survey — they should have clearly different
+   * structures and visual presentation based on their purpose".
+   *
+   * They now differ where the respondent can see it. A Likert grid draws its
+   * agreement scale as a labelled, colour-graded band running disagree →
+   * agree; a Rating grid draws numbered scale points rather than a column of
+   * words. Both still store one code per row through `matrix_single`, so
+   * every export, condition, quota and pipe that reads them is untouched —
+   * which is also why they remain presets rather than separate types.
+   */
+  /*
+   * NOT PRESETS ANY MORE, and that is the whole point of the change. A preset
+   * must share its parent's renderer — it is the same question with different
+   * starting values — and these two were exactly that, which is why all three
+   * grids previewed identically and both reviews said so. Giving them a
+   * renderer of their own is what makes them different questions; they keep
+   * `matrix_single` and `per_row`, so the answer, the exports and every
+   * condition that reads them are unchanged.
+   */
+  stable(F.matrix, "likert", "Likert Matrix", "Agreement scale across the columns — disagree to agree, colour-graded.", {
+    baseType: "matrix_single", renderer: "likert", responseModel: "per_row",
     capabilities: ["rows", "options", "randomization", "carry_forward"],
     validations: ["required"],
+    optionsLabel: "Columns (the Likert scale)",
+    optionsHint: "The scale points, left to right — these are the grid's columns.",
     defaults: {
       options: [
         { code: 1, label: "Strongly disagree" }, { code: 2, label: "Disagree" },
@@ -855,60 +958,178 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
         { code: 4, label: "Agree" }, { code: 5, label: "Strongly agree" },
       ],
     },
-    presetOf: "matrix.single",
   }),
-  stable(F.matrix, "rating", "Rating Matrix (1–5)", "Numbered rating columns.", {
-    baseType: "matrix_single", responseModel: "per_row",
+  stable(F.matrix, "rating", "Rating Matrix (1–5)", "Numbered rating points across the columns.", {
+    baseType: "matrix_single", renderer: "ratingmatrix", responseModel: "per_row",
     capabilities: ["rows", "options", "randomization", "carry_forward"],
     validations: ["required"],
+    optionsLabel: "Columns (the rating scale)",
+    optionsHint: "The rating points — add or remove entries to change the range (1–5, 1–7, 1–10…).",
     defaults: {
       options: [1, 2, 3, 4, 5].map((n) => ({ code: n, label: String(n) })),
     },
-    presetOf: "matrix.single",
   }),
-  stable(F.matrix, "numeric", "Numeric Matrix", "A number per row.", {
-    baseType: "matrix_numeric", responseModel: "per_row",
-    capabilities: ["rows", "randomization", "carry_forward", "numeric_bounds"],
-    validations: ["required", "min_value", "max_value"],
+  /*
+   * NUMERIC / TEXT / DROPDOWN MATRICES ARE CELL GRIDS, NOT ONE-VALUE-PER-ROW.
+   *
+   * "If the user wants to create a Numeric Matrix with 4 columns … the
+   * builder indicates that multiple columns have been added. However, the
+   * additional columns are not actually displayed." They could not be: the
+   * `matrix_numeric` base type stores ONE value per row, so a second column
+   * had nowhere to go. These three are now the `composite` cell grid that
+   * Mixed-Type Matrix and Constant-Sum Matrix already use — the same editor,
+   * the same renderer, the same per-column min/max — narrowed by
+   * `columnTypes` to the field types their name promises, which is the other
+   * half of the same report ("the column type should automatically be set to
+   * Numeric … remove all other options from the column-type dropdown").
+   *
+   * Questions already programmed keep the base type stored on them and go on
+   * rendering exactly as before; a variant's baseType is read at creation.
+   */
+  /*
+   * The bounds are PER COLUMN here, not per question — "if Numeric Matrix is
+   * configured with Min = 0 and Max = 100, values below 0 or above 100 should
+   * not be accepted … the validation should be applied consistently to every
+   * relevant row/column response". A cell grid's min and max live on the
+   * column (ColumnEditor's min/max inputs), which the validator already
+   * checks for every visible row; a question-level pair would have had
+   * nothing to apply itself to.
+   */
+  stable(F.matrix, "numeric", "Numeric Matrix", "A number in every cell — rows × numeric columns, each with its own min and max.", {
+    baseType: "composite", responseModel: "cells",
+    capabilities: ["rows", "columns", "randomization", "carry_forward"],
+    validations: ["required"],
+    columnTypes: ["numeric"],
+    defaults: {
+      rows: [1, 2, 3].map((n) => ({ code: String(n), label: `Item ${n}` })),
+      columns: [{ id: "c1", label: "Amount", responseType: "numeric" }],
+    },
+    presetOf: "matrix.mixed",
   }),
-  stable(F.matrix, "text", "Text Matrix", "A text answer per row.", {
-    baseType: "matrix_text", responseModel: "per_row",
-    capabilities: ["rows", "randomization", "carry_forward"], validations: ["required"],
+  stable(F.matrix, "text", "Text Matrix", "A written answer in every cell — rows × text columns.", {
+    baseType: "composite", responseModel: "cells",
+    capabilities: ["rows", "columns", "randomization", "carry_forward"],
+    validations: ["required"],
+    columnTypes: ["text", "longtext"],
+    defaults: {
+      rows: [1, 2, 3].map((n) => ({ code: String(n), label: `Item ${n}` })),
+      columns: [{ id: "c1", label: "Comment", responseType: "text" }],
+    },
+    presetOf: "matrix.mixed",
   }),
-  stable(F.matrix, "dropdown", "Dropdown Matrix", "A dropdown per row.", {
-    baseType: "matrix_dropdown", responseModel: "per_row",
-    capabilities: ["rows", "options", "randomization", "carry_forward"], validations: ["required"],
+  stable(F.matrix, "dropdown", "Dropdown Matrix", "A dropdown in every cell — rows × dropdown columns.", {
+    baseType: "composite", responseModel: "cells",
+    capabilities: ["rows", "columns", "randomization", "carry_forward"],
+    validations: ["required"],
+    columnTypes: ["dropdown", "multi_dropdown"],
+    defaults: {
+      rows: [1, 2, 3].map((n) => ({ code: String(n), label: `Item ${n}` })),
+      columns: [{
+        id: "c1", label: "Choice", responseType: "dropdown",
+        options: [1, 2, 3].map((n) => ({ code: n, label: `Choice ${n}` })),
+      }],
+    },
+    presetOf: "matrix.mixed",
   }),
+  /*
+   * The one grid that keeps the whole field-type list, and deliberately:
+   * "it is acceptable for the Mixed-Type Matrix to show the complete
+   * field-type dropdown because its purpose is to support different response
+   * types within the same matrix."
+   */
   stable(F.matrix, "mixed", "Mixed-Type Matrix (Composite)", "Each column its own response type, variable and validation.", {
     baseType: "composite", responseModel: "cells",
     capabilities: ["rows", "columns", "randomization", "carry_forward"], validations: ["required"],
   }),
-  stable(F.matrix, "random_rows", "Matrix with Randomized Rows", "Single-select matrix, rows shuffled per respondent.", {
+  /*
+   * "If the user selects this specific subtype, the purpose already indicates
+   * that the rows should be randomized" — so it arrives randomizing, instead
+   * of arriving identical to a plain matrix with a toggle the author still
+   * has to find. `randomizeRowCount` is the "Randomize first N rows" the same
+   * note asked for; unset means all of them.
+   */
+  stable(F.matrix, "random_rows", "Matrix with Randomized Rows", "Single-select matrix that shuffles its rows for every respondent.", {
     baseType: "matrix_single", responseModel: "per_row",
     capabilities: ["rows", "options", "randomization", "carry_forward"], validations: ["required"],
-    defaults: { settings: {} },
+    optionsLabel: "Columns",
+    optionsHint: "Each entry is one column of the grid — the response choices.",
+    defaults: { settings: { randomizeRows: true } },
     presetOf: "matrix.single",
   }),
-  stable(F.matrix, "semantic", "Semantic Differential", "Opposing adjectives at each end — write rows as \"Cheap | Expensive\".", {
+  /*
+   * A BIPOLAR SCALE, NOT A RADIO GRID. "In Preview, the question mainly
+   * appears like a standard Radio Button/Single Select Matrix, which does not
+   * clearly represent a Semantic Differential scale … a respondent should see
+   * the two opposite labels at the ends of the scale and select one point
+   * between them." Each row carries its own pair, written "Left | Right";
+   * the columns are the scale points between them.
+   */
+  stable(F.matrix, "semantic", "Semantic Differential", "Opposing adjectives at each end of every row — write rows as \"Cheap | Expensive\".", {
     baseType: "matrix_single", renderer: "semantic", responseModel: "per_row",
     capabilities: ["rows", "options", "randomization", "carry_forward"],
     validations: ["required"],
+    optionsLabel: "Scale points (columns)",
+    optionsHint: "The points between the two adjectives — add or remove entries for a 5, 7 or 9-point scale.",
     defaults: {
       options: [1, 2, 3, 4, 5, 6, 7].map((n) => ({ code: n, label: String(n) })),
+      rows: [
+        { code: "r1", label: "Expensive | Affordable" },
+        { code: "r2", label: "Difficult | Easy" },
+        { code: "r3", label: "Poor | Excellent" },
+      ],
       instruction: "For each pair, pick the point closest to your view.",
     },
   }),
-  stable(F.matrix, "slider_matrix", "Slider Matrix", "A slider per row.", {
+  /*
+   * "Remove the Columns section from Slider Matrix … keep the configuration
+   * focused on Rows, Minimum, Maximum, Step and a Labels section." The
+   * columns section is gone with the phantom-column fix; `scale_labels` is
+   * the Labels section, and every row draws its own slider.
+   */
+  /*
+   * SLIDER MATRIX IS THE TRADITIONAL GRID; MULTI-ATTRIBUTE IS THE RICH ONE.
+   *
+   * "The Slider Matrix and Multi-Attribute Slider currently look and behave
+   * very similarly … there is not enough difference between the two to
+   * understand when each should be used", with the distinction the review
+   * itself drew: "Slider Matrix: a traditional matrix where each row has its
+   * own independent slider using the same scale. Multi-Attribute Slider: a
+   * more advanced slider question … with additional attribute-level
+   * configuration."
+   *
+   * That is exactly what the two layouts already are — `grid` is
+   * label | slider | value under one pair of end labels, `stack` gives every
+   * attribute its own labelled slider and readout — so the difference is kept
+   * and made real, not removed. (An earlier pass at this brief set both to
+   * `stack`, which would have made them identical again; g2.test.ts caught
+   * it.) The Columns section this one should never have had goes with the
+   * phantom-column fix, and `scale_labels` is the Labels section asked for.
+   */
+  stable(F.matrix, "slider_matrix", "Slider Matrix", "A traditional grid: one slider per row, all on the same scale.", {
     baseType: "matrix_numeric", renderer: "slidermatrix", responseModel: "per_row",
     capabilities: ["rows", "numeric_bounds", "scale_labels", "randomization", "carry_forward"],
     validations: ["required", "min_value", "max_value"],
-    defaults: { settings: { sliderLayout: "grid", minValue: 0, maxValue: 100, step: 1 } },
+    defaults: {
+      settings: { sliderLayout: "grid", minValue: 0, maxValue: 10, step: 1 },
+      rows: [
+        { code: "r1", label: "Quality" },
+        { code: "r2", label: "Price" },
+        { code: "r3", label: "Design" },
+      ],
+    },
   }),
-  stable(F.matrix, "star_matrix", "Star Rating Matrix", "Stars per row.", {
+  /*
+   * "The Builder … allows the user to enter arbitrary values in the Minimum
+   * and Maximum fields, such as 100 or 500. However, the Preview currently
+   * displays only 10 stars." `scale` is the bound the editor now enforces, so
+   * the configured star count and the drawn star count cannot disagree.
+   */
+  stable(F.matrix, "star_matrix", "Star Rating Matrix", "Stars per row — the star count follows the configured range.", {
     baseType: "matrix_numeric", renderer: "starmatrix", responseModel: "per_row",
     capabilities: ["rows", "numeric_bounds", "randomization", "carry_forward"],
     validations: ["required", "min_value", "max_value"],
     defaults: { settings: { minValue: 1, maxValue: 5 } },
+    scale: SCALE_SYMBOLS,
   }),
   /**
    * Each ROW spreads `settings.sumTarget` across the COLUMNS — "split 100
@@ -917,25 +1138,49 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
    * the Mixed-Type Matrix already exports; `settings.rowSum` is what tells
    * the validator to hold each row to the target (see validate.ts).
    */
-  stable(F.matrix, "constant_sum", "Constant-Sum Matrix", "Allocations across a grid.", {
+  /*
+   * "The column-type dropdown should be restricted to Numeric only, because
+   * Constant Sum requires numeric values", and the starter columns ship with
+   * the question so the preview never opens on "NO column configured —
+   * respondents see three starter columns, create them for editing", which
+   * the review read as an error rather than as a default.
+   */
+  stable(F.matrix, "constant_sum", "Constant-Sum Matrix", "Every row's numbers must total the target.", {
     baseType: "composite", renderer: "summatrix", responseModel: "cells",
     capabilities: ["rows", "columns", "sum", "randomization", "carry_forward"],
     validations: ["required"],
+    columnTypes: ["numeric"],
     defaults: {
       // composite is not row-driven, so this variant brings its own rows
       rows: [1, 2, 3].map((n) => ({ code: String(n), label: `Attribute ${n}` })),
       // same ids as the runtime's fallbackSumColumns, so a table authored before
       // this existed and one created now store cells under the same keys
       columns: [1, 2, 3].map((n) => ({ id: `c${n}`, label: `Column ${n}`, responseType: "numeric", min: 0 })),
-      settings: { rowSum: true, sumTarget: 100 },
+      settings: { rowSum: true, sumTarget: 100, sumTotalPosition: "horizontal" },
       instruction: "Split the total across the columns — every row must reach the target.",
     },
   }),
-  stable(F.matrix, "dragdrop_matrix", "Drag-and-Drop Matrix", "Drag answers into a grid.", {
+  /*
+   * "The Options section is not the most suitable configuration for a Drag
+   * and Drop Matrix … the items that respondents drag should be configured as
+   * draggable items, while the Columns should define the categories/drop
+   * zones." Rows are the draggable items and the option list IS the set of
+   * drop zones, so this is the rename plus the starter categories.
+   */
+  stable(F.matrix, "dragdrop_matrix", "Drag-and-Drop Matrix", "Drag each row item into one of the column categories.", {
     baseType: "matrix_single", renderer: "dragmatrix", responseModel: "per_row",
     capabilities: ["rows", "options", "randomization", "carry_forward"],
     validations: ["required"],
-    defaults: { instruction: "Drag each item into a column — or tap the item, then the column." },
+    optionsLabel: "Column categories (drop zones)",
+    optionsHint: "Each entry is a category the respondent can drop an item into.",
+    defaults: {
+      rows: ["Product A", "Product B", "Product C", "Product D"].map((label, i) => ({ code: String(i + 1), label })),
+      options: [
+        { code: 1, label: "Very important" }, { code: 2, label: "Important" },
+        { code: 3, label: "Neutral" }, { code: 4, label: "Not important" },
+      ],
+      instruction: "Drag each item into a category — or tap the item, then the category.",
+    },
   }),
 
   /* -------------------------------------------------------------- RANKING */
@@ -978,7 +1223,18 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     baseType: "image_ranking", responseModel: "rank_order",
     capabilities: ["options", "images", "randomization", "carry_forward"], validations: ["required"],
   }),
+  /*
+   * RETIRED FROM RANKING, not from the product: the same question now lives
+   * in its own MaxDiff / Best–Worst family (`maxdiff.best_worst`). Surveys
+   * that already name `ranking.best_worst` keep resolving through
+   * `supersededBy` to the identical definition, so nothing programmed breaks.
+   */
   stable(F.ranking, "best_worst", "Best–Worst (MaxDiff)", "Best/worst tasks from a generated MaxDiff design.", {
+    baseType: "maxdiff_task", responseModel: "tasks",
+    capabilities: ["design_ref"], validations: [],
+    supersededBy: "maxdiff.best_worst",
+  }),
+  stable(F.maxdiff, "best_worst", "Best–Worst (MaxDiff)", "Best/worst tasks from a generated MaxDiff design (Design Generators tab).", {
     baseType: "maxdiff_task", responseModel: "tasks",
     capabilities: ["design_ref"], validations: [],
   }),
@@ -996,9 +1252,17 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
    * ("stop after top 3", "rank your top 3") completeness follows the cap
    * instead of demanding a rank nobody was ever asked for.
    */
-  stable(F.ranking, "tournament", "Pairwise / Tournament Ranking", "Repeated A-vs-B duels — the respondent only ever answers \"which of these two?\", and binary insertion turns that into a full ranking.", {
+  /*
+   * "For Pairwise / Tournament Ranking, add an Image option so that
+   * respondents can compare items visually … the system should allow the user
+   * to configure whether the comparison is based on text, images, or
+   * products." An option already carries an image URL and a description; the
+   * capability is what lets the editor offer them, and the `tournament`
+   * renderer draws whichever the author fills in.
+   */
+  stable(F.ranking, "tournament", "Pairwise / Tournament Ranking", "Repeated A-vs-B duels — text, images or product cards — and binary insertion turns the answers into a full ranking.", {
     baseType: "ranking", renderer: "tournament", responseModel: "rank_order",
-    capabilities: ["options", "randomization", "carry_forward", "list_logic"],
+    capabilities: ["options", "images", "randomization", "carry_forward", "list_logic"],
     validations: ["required"],
     defaults: {
       settings: { rankMode: "top_n" },
@@ -1009,17 +1273,35 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       instruction: "Pick the one you prefer in each pair.",
     },
   }),
-  stable(F.ranking, "buckets", "Bucket Ranking", "Drag items into numbered rank slots (or tap an item, then a slot).", {
+  /*
+   * NAMED BUCKETS, AND RULES ABOUT WHAT MAY GO IN THEM.
+   *
+   * It drew numbered rank slots and nothing else, so "if the user creates 15
+   * options, they should be able to create 15 buckets and place the options
+   * into those buckets" had no way to be said. The ROWS are now the buckets —
+   * an author names them, or leaves them empty for the numbered slots this
+   * always drew — and the bucket rules live in settings, where the renderer
+   * and the validator both read them.
+   */
+  stable(F.ranking, "buckets", "Bucket Ranking", "Drag items into named buckets or numbered rank slots, under rules you set.", {
     baseType: "ranking", renderer: "rankbuckets", responseModel: "rank_order",
-    capabilities: ["options", "sorting", "randomization", "carry_forward", "list_logic", "min_max_selections"],
+    capabilities: ["options", "rows", "sorting", "randomization", "carry_forward", "list_logic", "min_max_selections"],
     validations: ["required", "min_selections", "max_selections"],
+    optionsLabel: "Items to rank",
+    optionsHint: "The things a respondent places into buckets.",
     defaults: {
-      settings: { rankMode: "top_n" },
+      settings: { rankMode: "top_n", bucketMaxItems: 1, bucketRequireAll: false },
       options: [
         { code: 1, label: "Price" }, { code: 2, label: "Quality" },
         { code: 3, label: "Speed" }, { code: 4, label: "Service" },
       ],
-      instruction: "Put each item in a rank slot — 1 is best.",
+      rows: [
+        { code: "b1", label: "Most important" },
+        { code: "b2", label: "Important" },
+        { code: "b3", label: "Less important" },
+        { code: "b4", label: "Least important" },
+      ],
+      instruction: "Put each item in a bucket.",
     },
   }),
 
@@ -1031,9 +1313,22 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
    * symbols" — `currency_symbol` is that toggle, the same one the numeric
    * questions use, so there is one place to set a symbol in the product.
    */
-  stable(F.slider, "single", "Single Slider", "One continuous slider, with an optional unit.", {
+  /*
+   * "For the Single Slider subtype, remove Currency, Type a Symbol and Symbol
+   * Side — these settings are not required for a standard slider." A slider
+   * that reads 0 … 10 does not want a £ in front of it, and the control was
+   * three rows of builder that never changed the preview.
+   *
+   * And the range is now the range the builder shows: "the Minimum and
+   * Maximum fields in the Framing Builder are currently empty, even though
+   * the Preview automatically shows 0–100 … for a standard Single Slider the
+   * default range should preferably be 0–10". Both ends ship as defaults, so
+   * the two can never open disagreeing.
+   */
+  stable(F.slider, "single", "Single Slider", "One continuous slider between two labelled ends.", {
     baseType: "slider", responseModel: "numeric",
-    capabilities: ["numeric_bounds", "scale_labels", "currency_symbol"], validations: VAL_NUM,
+    capabilities: ["numeric_bounds", "scale_labels"], validations: VAL_NUM,
+    defaults: { settings: { minValue: 0, maxValue: 10, step: 1 } },
   }),
   /* RETIRED. Single Slider with `step: 1` — the review counted it as one of
      the three sliders that are one slider, and it is. */
@@ -1049,23 +1344,43 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     defaults: { settings: { minValue: 1, maxValue: 5 } },
     scale: SCALE_SYMBOLS,
   }),
+  /*
+   * "Emoji Rating should support a clear 10-point scale", with the faces
+   * running 😡 → 🤩 and the author free to relabel any point. The face row is
+   * drawn from the effective scale, so 1–5 gives five faces and 1–10 ten.
+   */
   stable(F.slider, "emoji", "Emoji / Smiley Rating", "Emoji scale; the face count follows min–max (up to 10).", {
     baseType: "numeric", renderer: "emoji", responseModel: "numeric",
     capabilities: ["numeric_bounds"], validations: VAL_NUM,
     defaults: { settings: { minValue: 1, maxValue: 5 } },
     scale: SCALE_SYMBOLS,
   }),
-  stable(F.slider, "dual", "Dual / Range Slider", "Two handles selecting a range.", {
+  /*
+   * A NUMERIC RANGE, NOT TWO FORM FIELDS. The builder offered From and To as
+   * full field rows with the whole type dropdown — "most of these field types
+   * are not relevant to a Dual Range Slider … a Dual Range Slider should use
+   * a numeric value for both slider handles" — and the range itself was
+   * invisible in the builder while the preview drew 0–100 regardless.
+   *
+   * `fields.fixed` stops the pair becoming a triple, `fields.types` holds
+   * both ends numeric, and the range/step/handle defaults are on the question
+   * from the moment it is created, so the builder and the preview agree.
+   */
+  stable(F.slider, "dual", "Dual / Range Slider", "Two handles selecting a from–to range on one numeric scale.", {
     // The same from–to pair as numeric.numeric_range, dragged instead of
     // typed: one response model, one export layout, two presentations.
     baseType: "numeric_list", renderer: "rangeslider", responseModel: "fields",
     capabilities: ["numeric_bounds", "scale_labels"], validations: ["required"],
+    fields: { types: ["number"], fixed: true },
     defaults: {
       rows: [
         { code: "from", label: "From", fieldType: "number" },
         { code: "to", label: "To", fieldType: "number" },
       ],
-      settings: { rangePair: true, minValue: 0, maxValue: 100, step: 1 },
+      settings: {
+        rangePair: true, minValue: 0, maxValue: 100, step: 1,
+        rangeFromDefault: 20, rangeToDefault: 80, showSelectedValues: true,
+      },
     },
   }),
   stable(F.slider, "vertical", "Vertical Slider", "Vertical orientation.", {
@@ -1073,7 +1388,15 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: ["numeric_bounds", "scale_labels"], validations: VAL_NUM,
     defaults: { settings: { minValue: 0, maxValue: 100, step: 1, orientation: "vertical" } },
   }),
-  stable(F.slider, "multi_attribute", "Multi-Attribute Slider", "Several sliders in one question.", {
+  /*
+   * The richer of the two slider grids — "a more advanced slider question
+   * designed specifically for comparing/evaluating multiple attributes, with
+   * additional attribute-level configuration". `stack` gives every attribute
+   * its own labelled slider and its own readout, against Slider Matrix's
+   * single shared header row; `currency_symbol` is the review's "Scale Type —
+   * Number / Percentage / Custom".
+   */
+  stable(F.slider, "multi_attribute", "Multi-Attribute Slider", "Each attribute its own labelled slider and readout — for comparing several at once.", {
     // Rows are the attributes; a number per row is what a numeric matrix
     // stores, so required-per-row, exports and VAR_<row> all come for free.
     baseType: "matrix_numeric", renderer: "slidermatrix", responseModel: "per_row",
@@ -1085,7 +1408,7 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
         { code: "r2", label: "Quality" },
         { code: "r3", label: "Service" },
       ],
-      settings: { minValue: 0, maxValue: 100, step: 1, sliderLayout: "stack" },
+      settings: { minValue: 0, maxValue: 100, step: 1, sliderLayout: "stack", showSelectedValues: true },
     },
     presetOf: "matrix.slider_matrix",
   }),
@@ -1329,10 +1652,22 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     },
     supersededBy: "allocation.drag",
   }),
+  /*
+   * A CARD HAS TWO EDGES, SO IT HAS TWO ANSWERS.
+   *
+   * "Tinder-style swiping should have exactly 2 options only, since the
+   * interaction is based on two actions: Swipe Left and Swipe Right … users
+   * should not be allowed to add more than 2 options." The deck accepted any
+   * number and drew the first two, so a third option was an answer no
+   * respondent could ever give. `optionCount` is the bound the editor holds.
+   */
   stable(F.swipe, "tinder", "Tinder-Style Swipe", "Card deck: swipe right = like, left = dislike (buttons too). One judgement per item.", {
     baseType: "matrix_single", renderer: "swipe", responseModel: "per_row",
     capabilities: ["rows", "options", "randomization", "carry_forward"],
     validations: ["required"],
+    optionsLabel: "Swipe answers (left, then right)",
+    optionsHint: "Exactly two — the first is the left swipe, the second the right.",
+    optionCount: { min: 2, max: 2, reason: "a swipe card has two edges: left and right" },
     defaults: {
       options: [
         { code: 0, label: "👎 Dislike" },
@@ -1341,10 +1676,19 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       instruction: "Swipe right to like, left to dislike — or use the buttons.",
     },
   }),
+  /*
+   * RETIRED. Reported twice, in both files: "the Tinder-style swipe and
+   * statement swipe options appear to have the same preview and provide
+   * essentially the same functionality … keep Tinder Style Swipe and remove
+   * Statement Swipe." Same renderer, same model, same two-edged card — the
+   * only difference was the wording of the two labels, which any author can
+   * type. Kept registered so programmed surveys keep resolving.
+   */
   stable(F.swipe, "statement", "Statement Swipe", "Swipe through statements, agreeing or disagreeing.", {
     baseType: "matrix_single", renderer: "swipe", responseModel: "per_row",
     capabilities: ["rows", "options", "randomization", "carry_forward"],
     validations: ["required"],
+    optionCount: { min: 2, max: 2, reason: "a swipe card has two edges: left and right" },
     defaults: {
       options: [
         { code: 0, label: "✗ Disagree" },
@@ -1352,12 +1696,25 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       ],
       instruction: "Swipe right if you agree, left if you disagree.",
     },
-    presetOf: "swipe.tinder",
+    supersededBy: "swipe.tinder",
   }),
+  /*
+   * THE SCALE IS THE POINT OF THIS ONE, and that is what distinguishes it
+   * from the two-edged deck. "The interaction is based on Left/Right swiping,
+   * while all the added options are also displayed below the card … this
+   * creates confusion about whether the question is intended to work through
+   * swiping or through multiple option selection." Both are true and neither
+   * was said: swiping to an extreme picks the end point of a scale, and the
+   * scale is also tappable. So the option list is named for what it is, and
+   * the instruction says both ways of answering.
+   */
   stable(F.swipe, "rate", "Swipe-to-Rate / Rank / Categorize", "Card deck with a scale under the card: swipe to the extremes, or tap any point on the scale.", {
     baseType: "matrix_single", renderer: "swiperate", responseModel: "per_row",
     capabilities: ["rows", "options", "randomization", "carry_forward"],
     validations: ["required"],
+    optionsLabel: "Scale points",
+    optionsHint: "The scale under the card. A swipe left picks the first, a swipe right the last; any point can be tapped.",
+    optionCount: { min: 2, reason: "a scale needs at least two points" },
     defaults: {
       options: [
         { code: 1, label: "1" }, { code: 2, label: "2" }, { code: 3, label: "3" },
@@ -1369,10 +1726,18 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       instruction: "Swipe left for the lowest, right for the highest — or tap a point on the scale.",
     },
   }),
+  /*
+   * "The preview displays only 4 options for each card … 4 options should be
+   * mandatory, users should not be allowed to add fewer or more than 4." One
+   * per direction, which is the whole interaction.
+   */
   stable(F.swipe, "four_direction", "Four-Direction Swipe", "Card deck with four buckets: up, down, left and right.", {
     baseType: "matrix_single", renderer: "swipe4", responseModel: "per_row",
     capabilities: ["rows", "options", "randomization", "carry_forward"],
     validations: ["required"],
+    optionsLabel: "Directions (left, right, up, down)",
+    optionsHint: "Exactly four — one per direction, in the order left, right, up, down.",
+    optionCount: { min: 4, max: 4, reason: "the card is swiped in four directions" },
     defaults: {
       options: [
         { code: "dislike", label: "Dislike" }, { code: "like", label: "Like" },
@@ -1397,6 +1762,9 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
    */
   stable(F.carousel, "judge", "Carousel + Choice / Slider / Text", "Judge each carousel item — a choice scale, a slider or a comment per card.", {
     baseType: "matrix_single", renderer: "carouseljudge", responseModel: "per_row",
+    /* the Judgement control switches between these three and the question
+       stays a Carousel — see `altBaseTypes` */
+    altBaseTypes: ["matrix_numeric", "matrix_text"],
     capabilities: ["rows", "options", "randomization", "carry_forward", "numeric_bounds", "scale_labels"],
     validations: ["required"],
     defaults: {
@@ -1444,26 +1812,51 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       instruction: "Open a card for details, then select it.",
     },
   }),
-  stable(F.card, "sortable", "Sortable / Swipeable Cards", "Gesture-driven card decks — swipe or tap each card into one of the piles.", {
+  /*
+   * SORTING INTO NAMED PILES IS THE DIFFERENCE, so the piles are what the
+   * option list is called. "The Sortable Swipeable Card question type has
+   * almost the same preview and interaction as the Statement Swipe, Tinder
+   * Style Swipe and Swipe to Rate … if it is intended to remain as a separate
+   * question type, its interaction and preview should be made sufficiently
+   * different." It is the only one of the four that sorts a deck into any
+   * number of author-named piles rather than answering a fixed two-edged or
+   * four-edged card, and it says so now — in its description, in the name of
+   * its option list, and in starter piles that are categories rather than a
+   * verdict. The phantom Column section it also reported is gone with the
+   * cell-column fix.
+   */
+  stable(F.card, "sortable", "Sortable / Swipeable Cards", "Sort a card deck into any number of named piles — swipe, drag or tap.", {
     baseType: "matrix_single", renderer: "cardsort", responseModel: "per_row",
     capabilities: ["rows", "options", "randomization", "carry_forward"],
     validations: ["required"],
+    optionsLabel: "Piles to sort into",
+    optionsHint: "Any number of named piles — this is what separates a card sort from a two-edged swipe deck.",
+    optionCount: { min: 2, reason: "a sort needs at least two piles" },
     defaults: {
       options: [
-        { code: 1, label: "Not for me" },
-        { code: 2, label: "Interested" },
+        { code: 1, label: "Must have" },
+        { code: 2, label: "Nice to have" },
+        { code: 3, label: "Not interested" },
       ],
       rows: [
         { code: 1, label: "Card one" },
         { code: 2, label: "Card two" },
         { code: 3, label: "Card three" },
       ],
-      instruction: "Swipe a card left or right, drag it onto a pile, or tap one.",
+      instruction: "Drag each card onto a pile, or tap the card then the pile.",
     },
   }),
+  /*
+   * RETIRED. "The same type of question can already be created using Single
+   * Select → Product Choice, where users can select one option and add images
+   * and secondary text … Side-by-Side Comparison appears to be redundant."
+   * Same base type, same single_choice answer, same images-and-description
+   * cards; Product Choice is the one with the richer card, so it survives.
+   */
   stable(F.comparison, "side_by_side", "Side-by-Side Comparison", "Large option cards/images side by side — pick one.", {
     baseType: "single_select", renderer: "compare", responseModel: "single_choice",
     capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
+    supersededBy: "single_select.product_choice",
   }),
   /* Same duels, same `tournament` renderer, same rank_order answer as
    * ranking.tournament — it lives in both families because programmers look
@@ -1544,32 +1937,57 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   }),
 
   /* ------------------------------------------------------------ ALLOCATION */
-  stable(F.allocation, "constant_sum", "Constant Sum", "Values must total the target.", {
+  /*
+   * ONE CONSTANT SUM, WITH A UNIT TOGGLE.
+   *
+   * "All four question types appear to have very similar functionality and
+   * previews … instead of maintaining separate question types, keep only one
+   * Constant Sum question type and providing a Unit/Scale toggle within it:
+   * Currency/Unit for Budget Allocation, Percentage for Percentage
+   * Allocation, Points for Point Allocation, Discrete/Whole Number."
+   *
+   * They were already one question — three of them were presets over the same
+   * base type, renderer and answer, differing only in `sumUnit` — so the
+   * toggle is `sumUnit` promoted from a preset's hidden default into a
+   * control the author can see and change (Properties → Allocation total).
+   * The three presets are retired from the picker rather than deleted, so
+   * every survey that names one keeps resolving to the survivor.
+   */
+  stable(F.allocation, "constant_sum", "Constant Sum", "Values must total the target — in currency, per cent, points or plain numbers.", {
     baseType: "allocation", responseModel: "allocation",
     capabilities: ["options", "sum", "sorting", "randomization", "carry_forward", "list_logic"],
     validations: ["required", "sum_equals", "sum_max", "sum_min"],
+    defaults: { settings: { sumTarget: 100 } },
   }),
   stable(F.allocation, "budget", "Budget Allocation", "Distribute a budget (currency).", {
     baseType: "allocation", responseModel: "allocation",
     capabilities: ["options", "sum", "carry_forward", "list_logic"],
     validations: ["required", "sum_equals", "sum_max", "sum_min"],
     defaults: { settings: { sumTarget: 100, sumUnit: " $" } },
-    presetOf: "allocation.constant_sum",
+    supersededBy: "allocation.constant_sum",
   }),
   stable(F.allocation, "percentage", "Percentage Allocation", "Percentages totalling 100.", {
     baseType: "allocation", responseModel: "allocation",
     capabilities: ["options", "sum", "carry_forward", "list_logic"],
     validations: ["required", "sum_equals"],
     defaults: { settings: { sumTarget: 100, sumUnit: " %" } },
-    presetOf: "allocation.constant_sum",
+    supersededBy: "allocation.constant_sum",
   }),
   stable(F.allocation, "points", "Point Allocation", "Distribute N points.", {
     baseType: "allocation", responseModel: "allocation",
     capabilities: ["options", "sum", "carry_forward", "list_logic"],
     validations: ["required", "sum_equals", "sum_max"],
     defaults: { settings: { sumTarget: 100, sumUnit: " pts" } },
-    presetOf: "allocation.constant_sum",
+    supersededBy: "allocation.constant_sum",
   }),
+  /*
+   * NO PER-SLIDER MIN/MAX ON AN ALLOCATION. "If there are 5 sliders with a
+   * total allocation of 1000, and we set the Max validation to 100, the
+   * respondent would not be able to reach the required total of 1000" — the
+   * two rules contradict each other, and the configuration that results is
+   * one no respondent can satisfy. The total is the constraint here, so
+   * `min_value`/`max_value` are not offered; the sum rules remain.
+   */
   stable(F.allocation, "slider_allocation", "Slider Allocation", "Sliders constrained to a total.", {
     // Same renderer and model as slider.allocation_slider — the two families
     // both legitimately offer it, and one implementation serves both.

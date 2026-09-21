@@ -45,8 +45,25 @@ export function CountInput({
 
   const commit = (text: string) => {
     if (text === "" || text === "-") {
-      setDraft(text === "-" ? text : null);
-      if (text === "") onChange(allowEmpty ? undefined : min);
+      /*
+       * AN EMPTIED FIELD STAYS EMPTIED UNTIL BLUR, even when the setting
+       * itself cannot be empty.
+       *
+       * `allowEmpty: false` used to write `min` back the instant the box was
+       * cleared, which put the old number straight back under the caret — so
+       * the next keystroke APPENDED to it. The review found it on Image
+       * Hotspot's Max Point Selection and described the symptom exactly: "we
+       * cannot delete the existing 1 and enter a new number directly … we can
+       * only append digits to it, such as 10, 11. The value can be changed
+       * using the up/down arrows, but direct editing is not working."
+       *
+       * Clearing is now a legitimate intermediate state of typing — the draft
+       * holds the empty box, nothing is stored, and `onBlur` resolves it to
+       * `min` if the user really did leave it empty. Select-all-and-type,
+       * backspace-then-type and the spinner all now do the obvious thing.
+       */
+      setDraft(text);
+      if (text === "" && allowEmpty) onChange(undefined);
       return;
     }
     const n = Number(text);
@@ -68,9 +85,12 @@ export function CountInput({
       value={draft ?? (value == null ? "" : String(value))}
       onChange={(e) => commit(e.target.value)}
       onBlur={() => {
-        // a lone "-" or garbage left in the field resolves to the stored value
+        // a lone "-", an emptied box or garbage resolves on the way out: a
+        // setting that cannot be empty falls back to `min`, one that can is
+        // simply unset
+        const wasEmptied = draft === "" || draft === "-";
         setDraft(null);
-        if (!allowEmpty && value == null) onChange(min);
+        if (!allowEmpty && (value == null || wasEmptied)) onChange(min);
       }}
       onKeyDown={(e) => {
         // the keyboard can't produce a negative count either

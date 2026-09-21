@@ -97,6 +97,34 @@ registerVariantSettings("matching", ({ q, patch, patchSettings }) => {
       ),
     });
   const keyed = q.rows.filter((r) => r.meta?.answer != null && r.meta.answer !== "").length;
+  /*
+   * ONE ANSWER MATCHES ONE PROMPT.
+   *
+   * "The builder allows the same Answer Key to be assigned to multiple
+   * prompts … however, in the actual matching interaction, one option should
+   * be matched with only one prompt. Once an Answer Key has been assigned to
+   * a Prompt, it should not be available for selection as the Answer Key of
+   * another Prompt."
+   *
+   * A matching task pairs prompts with answers, so two prompts sharing an
+   * answer makes a key no respondent can satisfy — whichever prompt they give
+   * it to, the other is marked wrong. The dropdown drops codes another row
+   * has already claimed (keeping this row's own, or it could not show its
+   * current value), and anything already saved in that state is named, since
+   * an existing survey may carry it.
+   */
+  const claimedBy = new Map<string, string>();
+  for (const r of q.rows) {
+    const a = r.meta?.answer;
+    if (a != null && a !== "") {
+      const k = String(a);
+      if (!claimedBy.has(k)) claimedBy.set(k, String(r.code));
+    }
+  }
+  const duplicated = q.rows.filter((r) => {
+    const a = r.meta?.answer;
+    return a != null && a !== "" && claimedBy.get(String(a)) !== String(r.code);
+  });
 
   return (
     <>
@@ -126,11 +154,18 @@ registerVariantSettings("matching", ({ q, patch, patchSettings }) => {
                     value={r.meta?.answer == null ? "" : String(r.meta.answer)}
                     onChange={(e) => setRowAnswer(String(r.code), e.target.value)}>
                     <option value="">— no correct answer —</option>
-                    {q.options.map((o) => (
-                      <option key={String(o.code)} value={String(o.code)}>
-                        {o.label.replace(/<[^>]*>/g, "")}
-                      </option>
-                    ))}
+                    {q.options
+                      /* an answer another prompt already owns is not offered here */
+                      .filter((o) => {
+                        const owner = claimedBy.get(String(o.code));
+                        return owner == null || owner === String(r.code)
+                          || String(r.meta?.answer ?? "") === String(o.code);
+                      })
+                      .map((o) => (
+                        <option key={String(o.code)} value={String(o.code)}>
+                          {o.label.replace(/<[^>]*>/g, "")}
+                        </option>
+                      ))}
                   </select>
                 </td>
               </tr>
@@ -138,10 +173,21 @@ registerVariantSettings("matching", ({ q, patch, patchSettings }) => {
           </tbody>
         </table>
       )}
+      {duplicated.length > 0 && (
+        <div className="chip warn" data-testid="matching-duplicate-key" style={{ display: "block", marginTop: 6 }}>
+          {duplicated.length === 1 ? "One prompt shares" : `${duplicated.length} prompts share`} an answer with
+          another prompt ({duplicated.map((r) => r.label.replace(/<[^>]*>/g, "") || String(r.code)).join(", ")}).
+          One answer can only match one prompt — whichever prompt a respondent gives it to, the other is scored wrong.
+          Pick a different answer, or clear one of them.
+        </div>
+      )}
       <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>
         {keyed === 0
           ? "With no key the task is a free pairing exercise — nothing is scored."
           : `${keyed} of ${q.rows.length} prompts keyed; exports ${q.variableName}_CORRECT (pairs right).`}
+        {q.options.length < q.rows.length && (
+          <> {" "}There are more prompts than answers, so some prompts cannot be keyed.</>
+        )}
       </div>
     </>
   );

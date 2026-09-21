@@ -103,12 +103,19 @@
   align-items: center;
   gap: 8px;
 }
+/* the end value, with its name under it rather than instead of it */
 .rs-vslider-end {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
   font-size: 0.82em;
   color: var(--rs-subtle);
   max-width: 140px;
   text-align: center;
 }
+.rs-vslider-end .n { font-variant-numeric: tabular-nums; }
+.rs-vslider-end .lab { color: var(--rs-text); line-height: 1.25; overflow-wrap: anywhere; }
 /* vertical-lr + rtl puts the minimum at the bottom without a transform, so
    hit testing and keyboard handling stay native. */
 .rs-vslider-input {

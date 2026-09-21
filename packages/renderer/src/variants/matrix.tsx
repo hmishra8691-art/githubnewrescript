@@ -322,6 +322,150 @@ export function DragMatrix(p: QRProps) {
   );
 }
 
+/* ----------------------------------------------------------- Likert Matrix */
+/**
+ * AN AGREEMENT SCALE THAT LOOKS LIKE ONE.
+ *
+ * Likert, Rating and Single-Select Matrix were one renderer with three option
+ * presets, and both September reviews said so — "all four are displaying
+ * essentially the same preview", then "they should have clearly different
+ * structures and visual presentation based on their purpose".
+ *
+ * A Likert grid is a bipolar agreement scale, so it is drawn as one: the
+ * columns are the scale, labelled in full across the top, and each cell is a
+ * whole tappable band rather than a bare radio dot — graded from the
+ * disagree end to the agree end so the direction of the scale is visible
+ * before a respondent reads a single word. The answer is still one option
+ * code per row, exactly as `matrix_single` has always stored it.
+ */
+export function LikertMatrix(p: QRProps) {
+  const rows = useRows(p);
+  const opts = useOptions(p);
+  const vals = (p.value ?? {}) as Record<string, unknown>;
+  if (rows.length === 0) return <NoRows what="Likert grid" />;
+  const set = (rc: string, code: string | number) => {
+    if (p.q.settings.readOnly) return;
+    const next = { ...vals };
+    if (String(next[rc]) === String(code)) delete next[rc];
+    else next[rc] = code;
+    p.onChange(next);
+  };
+  const answered = rows.filter((r) => vals[String(r.code)] != null).length;
+  return (
+    <div className="rs-likert" data-testid="likert-matrix">
+      <div className="rs-likert-progress">{answered} / {rows.length} answered</div>
+      <div className="rs-table-wrap">
+        <table className="rs-matrix rs-likert-table">
+          <thead>
+            <tr>
+              <th className="rowlabel" />
+              {opts.map((o, i) => (
+                <th key={String(o.code)} {...anchor("column", o.code)}
+                  className={`rs-likert-head p${Math.round((i / Math.max(1, opts.length - 1)) * 100)}`}>
+                  <span dangerouslySetInnerHTML={{ __html: o.label }} />
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const rc = String(row.code);
+              return (
+                <tr key={rc} {...anchor("row", rc)}>
+                  <td className="rowlabel" dangerouslySetInnerHTML={{ __html: row.label }} />
+                  {opts.map((o, i) => {
+                    const on = String(vals[rc]) === String(o.code);
+                    /* 0…100 across the scale — the CSS grades the band from it */
+                    const pos = Math.round((i / Math.max(1, opts.length - 1)) * 100);
+                    return (
+                      <td key={String(o.code)} {...cellAnchor(rc, o.code)} className="rs-likert-cell">
+                        <button type="button"
+                          className={`rs-likert-band${on ? " on" : ""}`}
+                          style={{ ["--p" as string]: String(pos) }}
+                          role="radio" aria-checked={on}
+                          disabled={p.q.settings.readOnly}
+                          aria-label={`${row.label.replace(/<[^>]*>/g, "")}: ${o.label.replace(/<[^>]*>/g, "")}`}
+                          onClick={() => set(rc, o.code)}>
+                          <span className="rs-likert-dot" aria-hidden="true" />
+                          <span className="rs-likert-cap">{o.label.replace(/<[^>]*>/g, "")}</span>
+                        </button>
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------------------------------------------- Rating Matrix */
+/**
+ * A NUMBERED RATING, NOT A COLUMN OF WORDS.
+ *
+ * "The Preview should clearly look like a rating question rather than a
+ * standard Single Select Matrix. The rating range should be configurable
+ * where required." The range is the option list — five entries is 1–5, ten
+ * is 1–10 — and each point is drawn as a numbered chip with the ends named,
+ * so the scale reads as a scale. Still one code per row.
+ */
+export function RatingMatrix(p: QRProps) {
+  const rows = useRows(p);
+  const opts = useOptions(p);
+  const vals = (p.value ?? {}) as Record<string, unknown>;
+  if (rows.length === 0) return <NoRows what="rating grid" />;
+  const set = (rc: string, code: string | number) => {
+    if (p.q.settings.readOnly) return;
+    const next = { ...vals };
+    if (String(next[rc]) === String(code)) delete next[rc];
+    else next[rc] = code;
+    p.onChange(next);
+  };
+  const left = p.q.settings.sliderLeftLabel ?? p.q.settings.npsLeftLabel;
+  const right = p.q.settings.sliderRightLabel ?? p.q.settings.npsRightLabel;
+  const answered = rows.filter((r) => vals[String(r.code)] != null).length;
+  return (
+    <div className="rs-ratingmatrix" data-testid="rating-matrix">
+      <div className="rs-ratingmatrix-progress">{answered} / {rows.length} rated</div>
+      {(left || right) && (
+        <div className="rs-ratingmatrix-ends">
+          <span>{left ?? ""}</span><span>{right ?? ""}</span>
+        </div>
+      )}
+      {rows.map((row) => {
+        const rc = String(row.code);
+        return (
+          <div key={rc} className="rs-ratingmatrix-row" {...anchor("row", rc)}>
+            <span className="rs-ratingmatrix-label" dangerouslySetInnerHTML={{ __html: row.label }} />
+            <span className="rs-ratingmatrix-scale" role="radiogroup"
+              aria-label={row.label.replace(/<[^>]*>/g, "")}>
+              {opts.map((o) => {
+                const on = String(vals[rc]) === String(o.code);
+                return (
+                  <button key={String(o.code)} type="button"
+                    className={`rs-ratingmatrix-pt${on ? " on" : ""}`}
+                    {...cellAnchor(rc, o.code)}
+                    role="radio" aria-checked={on}
+                    disabled={p.q.settings.readOnly}
+                    aria-label={`${row.label.replace(/<[^>]*>/g, "")}: ${o.label.replace(/<[^>]*>/g, "")}`}
+                    onClick={() => set(rc, o.code)}>
+                    {o.label.replace(/<[^>]*>/g, "")}
+                  </button>
+                );
+              })}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 registerVariantRenderer("starmatrix", StarMatrix);
 registerVariantRenderer("summatrix", SumMatrix);
 registerVariantRenderer("dragmatrix", DragMatrix);
+registerVariantRenderer("likert", LikertMatrix);
+registerVariantRenderer("ratingmatrix", RatingMatrix);

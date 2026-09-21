@@ -170,6 +170,27 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 @media (max-width: 480px) { .rs-nps-point-label { max-width: 56px; font-size: 10px; } }
 
 .rs-slider-row { display: flex; align-items: center; gap: 14px; }
+/*
+ * The scale printed UNDER the track, each end under its own end — "the labels
+ * should appear below the slider, aligned with their corresponding
+ * endpoints … the label text should not overlap or appear directly on top of
+ * the slider". The right-hand value box is reserved for so the ends line up
+ * with the track rather than with the row.
+ */
+.rs-slider-scale {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 2px;
+  /* the value readout sits to the right of the track; keep the scale under
+     the track alone, not under the whole row */
+  padding-right: 62px;
+}
+.rs-slider-end { display: flex; flex-direction: column; gap: 1px; max-width: 45%; }
+.rs-slider-end.right { text-align: right; align-items: flex-end; }
+.rs-slider-end .n { font-size: .8em; color: var(--rs-subtle); font-variant-numeric: tabular-nums; }
+.rs-slider-end .lab { font-size: .85em; color: var(--rs-text); line-height: 1.25; overflow-wrap: anywhere; }
+@media (max-width: 440px) { .rs-slider-scale { padding-right: 0; } }
 .rs-slider-row input[type="range"] { flex: 1; accent-color: var(--rs-primary); }
 .rs-slider-val { min-width: 48px; text-align: center; font-weight: 600; display: inline-flex; align-items: baseline; gap: 3px; justify-content: center; }
 .rs-slider-val .rs-prefix { font-weight: 600; color: var(--rs-text); }
@@ -265,6 +286,33 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
    content, so a long option label in a 3- or 4-column layout pushed the track
    — and the whole question — wider than the page. With the min pinned at 0
    the track shrinks and the label wraps inside its box instead. */
+/*
+ * "auto (fit width)" — the default the Studio's Layout control has always
+ * NAMED and the renderer never implemented, so every unconfigured list was a
+ * single tall column of full-width boxes: "the option boxes appear
+ * unnecessarily large, and when I add around 10-12 options, all the options
+ * are not visible at once", and "when I use a 2-column layout, the options
+ * look much better and use the available space more efficiently".
+ *
+ * `auto-fit` + `minmax` is that layout without a fixed count: short options
+ * pack into as many tracks as fit, a long label still gets a whole track, and
+ * a narrow screen collapses to one column on its own. An author who picks a
+ * number still gets exactly that number - the `cols-N` rules below win on
+ * source order and specificity alike.
+ */
+.rs-options.auto {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px;
+}
+.rs-choicebtns.auto {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 8px;
+}
+/* a single leftover on the last row should not stretch across the grid */
+.rs-options.auto > .rs-option, .rs-choicebtns.auto > .rs-choicebtn { min-width: 0; }
+
 .rs-options.cols-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .rs-options.cols-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .rs-options.cols-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
