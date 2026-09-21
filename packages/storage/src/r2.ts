@@ -142,13 +142,55 @@ export class R2StorageProvider implements MediaStorageProvider {
   }
 
   /** Turn the store's XML complaint into a sentence with its own words in it. */
-  private async fail(res: Response, what: string): Promise<never> {
+  private async fail(res: Response, what: string, extra?: string): Promise<never> {
     const body = await res.text().catch(() => "");
     const code = tag(body, "Code");
     const message = tag(body, "Message");
-    const detail = [code, message].filter(Boolean).join(": ") || res.statusText;
+    const detail = [code, message].filter(Boolean).join(": ") || extra || res.statusText;
     const status = res.status === 404 ? 404 : res.status === 403 ? 502 : res.status;
     throw new StorageError(`${what} failed (${res.status}) — ${detail.slice(0, 300)}`, status);
+  }
+
+  /**
+   * WHY A FAILED HEAD USED TO SAY NOTHING.
+   *
+   * S3 and R2 explain a refusal in an XML body — `<Code>AccessDenied</Code>`,
+   * `NoSuchBucket`, `InvalidAccessKeyId`, `SignatureDoesNotMatch`. Those four
+   * are four different faults with four different fixes, and the code is the
+   * only thing that tells them apart.
+   *
+   * HTTP forbids a body on a response to HEAD. So `getMetadata` — the call
+   * that `confirmUpload` makes to prove an upload arrived, and therefore the
+   * one that reports a misconfigured store — could never read a code, and
+   * `fail` fell through to `res.statusText`. Every diagnosis it has ever
+   * produced was the single word "Forbidden", which is the status number
+   * spelled out and nothing more. Reading that as evidence of a PARTICULAR
+   * cause is a mistake I made from this very message.
+   *
+   * So on a failed HEAD — and only there, on the error path — the same key is
+   * asked for again with a one-byte ranged GET, purely to be refused with a
+   * body this time. One extra request, never on the happy path, and the
+   * difference between "Forbidden" and "the token is not scoped to this
+   * bucket".
+   */
+  private async explainHead(key: string, res: Response): Promise<never> {
+    let extra: string | undefined;
+    try {
+      const probe = await this.send({ method: "GET", key, headers: { range: "bytes=0-0" } });
+      if (!probe.ok) {
+        const body = await probe.text().catch(() => "");
+        const code = tag(body, "Code");
+        const message = tag(body, "Message");
+        const said = [code, message].filter(Boolean).join(": ");
+        if (said) extra = said;
+      } else {
+        /* the object reads but will not HEAD: worth saying, it is unusual */
+        extra = "the object can be read but not HEADed — the credential may lack ListBucket/HeadObject";
+      }
+    } catch {
+      /* the probe is a courtesy; its failure must not replace the real one */
+    }
+    return this.fail(res, "Reading the object", extra);
   }
 
   private metaFromHeaders(key: string, res: Response, fallbackSize = 0): ObjectMetadata {
@@ -312,7 +354,7 @@ export class R2StorageProvider implements MediaStorageProvider {
   async getMetadata(key: string): Promise<ObjectMetadata | null> {
     const res = await this.send({ method: "HEAD", key });
     if (res.status === 404) return null;
-    if (!res.ok) await this.fail(res, "Reading the object");
+    if (!res.ok) await this.explainHead(key, res);
     return this.metaFromHeaders(key, res);
   }
 
