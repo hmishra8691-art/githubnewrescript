@@ -691,6 +691,19 @@ body.flow-dragging .flow-dropzone { height: 26px; }
 
 /* ---------- piping chips & picker (reqs §16–25) ---------- */
 .pipe-anchor { position: relative; display: inline-block; }
+/* The validation message as the respondent will get it. It borrows the
+   runtime's own `.rs-error-msg` (globals imports the renderer stylesheet), so
+   what is shown here is the real styling rather than an approximation of it. */
+.vm-preview {
+  margin-top: 6px; padding: 8px 10px; border-radius: 8px;
+  border: 1px dashed var(--line); background: var(--surface-2, transparent);
+}
+.vm-preview-label {
+  display: block; font-size: 11px; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--subtle); margin-bottom: 4px;
+}
+.vm-preview .rs-error-msg { margin-top: 0; }
+
 .pipe-chip {
   display: inline-block; vertical-align: baseline;
   font-family: var(--mono); font-size: 13px; font-weight: 600; line-height: 1.35;

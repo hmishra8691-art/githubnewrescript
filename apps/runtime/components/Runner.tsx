@@ -1439,7 +1439,7 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
           loop={null}
           value={state.answers[probe.pq.id]}
           otherValue=""
-          errors={errors.filter((e) => e.questionId === probe.pq.id).map((e) => e.message)}
+          errors={errors.filter((e) => e.questionId === probe.pq.id)}
           onChange={(v) => { state.answers[probe.pq.id] = v as never; telemetryRef.current?.answerChanged(probe.q.id); force(); }}
           onOtherChange={() => {}}
         />
@@ -1549,7 +1549,8 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
              * showed up again under Google, and the validator could not see it.
              */
             otherValues={otherTextsOf(state, q, pageStep.loop ?? null)}
-            errors={errors.filter((e) => e.questionId === q.id).map((e) => e.message)}
+            /* the whole error, not its sentence — see QRProps.errors */
+            errors={errors.filter((e) => e.questionId === q.id)}
             onChange={(v) => {
               setAnswer(def, state, q.id, v, pageStep.loop);
               telemetryRef.current?.answerChanged(q.id);

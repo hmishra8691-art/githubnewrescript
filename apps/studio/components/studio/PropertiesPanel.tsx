@@ -2,7 +2,7 @@
 import { CountInput } from "./CountInput";
 import React from "react";
 import type { Question, ValidationRule, SkipRule, ListOperation, ListSource } from "@rescript/schema";
-import { validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion, shapeHasAxis, staleFields, migrateQuestionType } from "@rescript/engine";
+import { validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion, shapeHasAxis, staleFields, migrateQuestionType, escapeHtml, sanitizeHtml, PIPE_TOKEN_RE, parsePipeBody, describePipeToken } from "@rescript/engine";
 import { resolveVariant, effectiveCapabilities, allowedValidationKinds, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript/schema";
 import { useStudio, selectedQuestion, uid } from "./store";
 import { useCanvas } from "../canvas/CanvasContext";
@@ -13,6 +13,7 @@ import { MaskingBuilder, PunchRules } from "./MaskingBuilder";
 import { QualitySettings } from "./QualitySettings";
 import { OptionGroupsEditor } from "./OptionGroupsEditor";
 import { CollapsibleSection } from "./CollapsibleSection";
+import { InlineRichText } from "./RichTextEditor";
 import { AiQuestionSection } from "./AiQuestionSection";
 
 /** Context-aware validation (req §6/§19): only offer rules that make sense
@@ -95,6 +96,72 @@ const VALUE_HINT: Partial<Record<ValidationRule["kind"], string>> = {
   pattern: "^[A-Z]{2}\\d{4}$",
 };
 
+/**
+ * THE MESSAGE, AS THE RESPONDENT WILL SEE IT.
+ *
+ * Piping cannot be resolved here — at design time there are no answers — so
+ * inventing one would be a preview of a survey nobody is taking. Each token
+ * is shown as the thing it will become ("Q5 · the answer") in the same chip
+ * the editor uses, which is a true statement about the message; a made-up
+ * "42" would not be.
+ */
+function messagePreviewHtml(html: string): string {
+  return sanitizeHtml(html).replace(PIPE_TOKEN_RE, (whole, raw: string) => {
+    const token = parsePipeBody(String(raw), whole);
+    /* the same chip the editor draws, so a token looks the same in both */
+    return `<span class="pipe-chip" data-preview-token="1">${escapeHtml(token ? describePipeToken(token) : String(raw))}</span>`;
+  });
+}
+
+/**
+ * The validation message field: a rich editor over the same string the plain
+ * input used to write.
+ *
+ * ## Why editing converts the rule to markup
+ *
+ * A message stored before this existed is plain text and stays plain text —
+ * `messageFormat` is absent and the runtime escapes it, so "Please enter a
+ * value < 100" keeps its `<`. Loading that string into a contentEditable
+ * means escaping it first, and once escaped it cannot be stored back as
+ * plain text without un-escaping it again and guessing which `&lt;` the
+ * author typed and which the browser added.
+ *
+ * So the moment a message is edited HERE it becomes markup, and the flag is
+ * set. That is a real conversion and it happens exactly when the author
+ * chose this editor — not when the panel is merely opened, which is why a
+ * commit that changes nothing is dropped below rather than written back.
+ */
+function ValidationMessageField({ value, format, questionId, onChange }: {
+  value: string | undefined;
+  format: "text" | "html" | undefined;
+  questionId: string;
+  onChange(next: { message?: string; messageFormat?: "html" }): void;
+}) {
+  const shown = format === "html" ? (value ?? "") : escapeHtml(value ?? "");
+  return (
+    <InlineRichText
+      value={shown}
+      questionId={questionId}
+      testId="validation-message"
+      placeholder="message (optional) — format it, or pipe an answer in"
+      className="grow"
+      onChange={(html) => {
+        /*
+         * `InlineRichText` commits on blur whether or not anything changed,
+         * so without this a programmer who clicked into the field and out
+         * again would silently convert a plain-text message to markup and
+         * dirty the draft.
+         */
+        if (html === shown) return;
+        const trimmed = html.trim();
+        onChange(trimmed
+          ? { message: trimmed, messageFormat: "html" }
+          : { message: undefined, messageFormat: undefined });
+      }}
+    />
+  );
+}
+
 function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question>): void }) {
   const s = useStudio();
   const qVariant = resolveVariant(q.variant);
@@ -107,7 +174,14 @@ function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question
     <div>
       {q.validation.map((v, i) => {
         const kind = VALIDATION_KINDS.find((k) => k.value === v.kind);
-        const pipingIssues = v.message ? lintPipingTokens(s.def, v.message) : [];
+        /*
+         * `q` is the third argument, and leaving it off is what made this
+         * warn about correct tokens: without the question, the linter cannot
+         * know which loop this message sits inside, so `{{loop.Category}}`
+         * — legal on a question inside that loop — was reported as an
+         * unknown reference every time.
+         */
+        const pipingIssues = v.message ? lintPipingTokens(s.def, v.message, q) : [];
         return (
           /*
             * A plain-condition rule (kind:"condition") needs room below the
@@ -164,10 +238,14 @@ function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question
                   {q.columns.map((c) => <option key={c.id} value={c.id}>{c.label || c.id}</option>)}
                 </select>
               )}
-              <input className="input grow" placeholder="message (optional)" value={v.message ?? ""}
-                onChange={(e) => patch({
-                  validation: q.validation.map((x, j) => (j === i ? { ...x, message: e.target.value || undefined } : x)),
-                })} />
+              <ValidationMessageField
+                value={v.message}
+                format={v.messageFormat}
+                questionId={q.id}
+                onChange={(next) => patch({
+                  validation: q.validation.map((x, j) => (j === i ? { ...x, ...next } : x)),
+                })}
+              />
               {/*
                 * Blocks, or only warns. A soft check is how a researcher says
                 * "that is unusual, look again" without making a legitimate
@@ -193,6 +271,20 @@ function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question
                 {p}
               </div>
             ))}
+            {/*
+              * What the respondent gets, in the runtime's own error styling
+              * and through the runtime's own sanitiser — so a tag the
+              * sanitiser strips is visibly absent HERE rather than in field.
+              */}
+            {v.message && (
+              <div className="vm-preview" data-testid="validation-message-preview">
+                <span className="vm-preview-label">Respondent sees</span>
+                {v.messageFormat === "html"
+                  ? <div className="rs-error-msg rs-error-rich"
+                      dangerouslySetInnerHTML={{ __html: messagePreviewHtml(v.message) }} />
+                  : <div className="rs-error-msg">{v.message}</div>}
+              </div>
+            )}
             {v.kind === "condition" && (
               /*
                 * The Universal Logic Engine's own builder — nested AND/OR/
@@ -216,6 +308,29 @@ function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question
       })}
       <button className="btn small"
         onClick={() => patch({ validation: [...q.validation, { kind: "required" }] })}>+ rule</button>
+      {/*
+        * WHERE THE MESSAGES GO — one setting for the question, not one per
+        * rule. They share a single `role="alert"` region so a screen reader
+        * announces them as one group belonging to this question; splitting
+        * them across two places would mean two regions and an
+        * `aria-describedby` that can only point at one of them.
+        */}
+      <label className="f" style={{ marginTop: 10, maxWidth: 320 }}>
+        <span>Message position</span>
+        <select className="select" data-testid="validation-position"
+          title="Where this question's validation messages appear"
+          value={q.settings.validationPosition ?? ""}
+          onChange={(e) => patch({
+            settings: {
+              ...q.settings,
+              validationPosition: e.target.value === "" ? undefined : (e.target.value as "above" | "below"),
+            },
+          })}>
+          <option value="">Default — below the question</option>
+          <option value="above">Above the question</option>
+          <option value="below">Below the question</option>
+        </select>
+      </label>
     </div>
   );
 }

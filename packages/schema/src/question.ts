@@ -312,6 +312,21 @@ export const ValidationRule = z.object({
   ]),
   value: z.any().optional(),
   message: z.string().optional(),
+  /**
+   * How `message` is to be READ — and, deliberately, an opt-in.
+   *
+   * Absent means plain text, which is what every message written before this
+   * existed is. That matters more than it looks: a perfectly ordinary
+   * validation message says "Please enter a value < 100", and rendering that
+   * string as HTML would swallow everything from the `<` onwards. Deciding
+   * the format by sniffing for a `<` would do exactly that to a message
+   * somebody wrote a year ago and has not looked at since.
+   *
+   * So the rich editor sets this flag when it writes markup, and nothing
+   * else changes. A rule with no flag renders as text, for ever, no matter
+   * what characters happen to be in it.
+   */
+  messageFormat: z.enum(["text", "html"]).optional(),
   /** Which column a `column_sum_*` rule totals. */
   ref: z.string().optional(),
   /**
@@ -852,6 +867,24 @@ export const Question = z.object({
 
   settings: z
     .object({
+      /**
+       * WHERE THIS QUESTION'S VALIDATION MESSAGES APPEAR.
+       *
+       * Absent means below the question, which is where they have always
+       * appeared and where a respondent who has just pressed Next looks.
+       * "above" puts them between the card's edge and the question text, for
+       * the long grids where the bottom of the question is off screen by the
+       * time the error is shown.
+       *
+       * It is per QUESTION rather than per RULE on purpose. The messages
+       * share one `role="alert"` region and one `aria-describedby` — that is
+       * what makes a screen reader announce them as a group belonging to this
+       * question — and splitting them across two places would mean two
+       * regions, two announcements, and an `aria-describedby` that can only
+       * point at one of them. A programmer wanting the error "up there"
+       * wants all of it up there.
+       */
+      validationPosition: z.enum(["above", "below"]).optional(),
       minSelections: z.number().optional(),
       maxSelections: z.number().optional(),
       /**

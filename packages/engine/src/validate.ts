@@ -15,6 +15,7 @@ import { acbcDone, isAcbcAnswer } from "./acbc.js";
 import { shapeHasAxis } from "./questionShape.js";
 import { videoCompleted, interviewAnswered, interviewProblems, requiresAudioAnswer } from "./interview.js";
 import { isEmptyAnswer } from "./answers.js";
+import { escapeHtml, sanitizeHtml } from "./html.js";
 import { validationBounds } from "./scale.js";
 import { checkPhone, checkPostal, checkUrl } from "./formats.js";
 
@@ -46,6 +47,43 @@ export interface ValidationError {
    * loop, so nothing that predates it changes.
    */
   loop?: { loopId: string; loopVar: string; itemCode: string; itemLabel: string; index: number };
+  /**
+   * `message` is markup and is to be rendered as such.
+   *
+   * Absent — which is every error this engine has ever produced and every one
+   * it produces from its own default wording — means plain text. A renderer
+   * that does not know about this field keeps escaping everything, which is
+   * the safe direction for a field to be ignored in.
+   */
+  html?: boolean;
+}
+
+/**
+ * A message on its way to becoming a `ValidationError`, carrying whether it
+ * is markup.
+ *
+ * A bare string is plain text, so every `push("…")` in this file — and there
+ * are around sixty of them, all engine-authored English — keeps its meaning
+ * without being touched. Only an author's own message can arrive as markup,
+ * and only when they asked for that.
+ */
+export type ValidationMessage = string | { text: string; html: true };
+
+const messageText = (m: ValidationMessage): string => (typeof m === "string" ? m : m.text);
+const messageIsHtml = (m: ValidationMessage): boolean => typeof m !== "string" && m.html;
+
+/**
+ * `<row label>: <message>` — the shape a per-row or per-cell failure takes.
+ *
+ * The label is a plain string (its tags are stripped by the caller), so when
+ * the message is markup the label has to be escaped before the two are joined
+ * — otherwise a perfectly ordinary row called "Under £10 <br> per week", or
+ * just one with an ampersand in it, would be interpreted rather than shown.
+ */
+function prefixed(label: string, m: ValidationMessage): ValidationMessage {
+  return messageIsHtml(m)
+    ? { text: `${escapeHtml(label)}: ${messageText(m)}`, html: true }
+    : `${label}: ${messageText(m)}`;
 }
 
 /** The checks that actually stop the page. */
@@ -68,8 +106,16 @@ export function warnings(errors: ValidationError[]): ValidationError[] {
  */
 const isEmpty = isEmptyAnswer;
 
-function ruleError(rule: ValidationRule, fallback: string): string {
-  return rule.message ?? fallback;
+function ruleError(rule: ValidationRule, fallback: string): ValidationMessage {
+  if (rule.message === undefined) return fallback;
+  /*
+   * The engine's own fallback is always plain text; only what the author
+   * wrote can be markup, and only when the rule says so. Sniffing the string
+   * for a `<` instead would reinterpret every message written before the
+   * rich editor existed — "Please enter a value < 100" would lose everything
+   * from the `<` onwards, silently, in field.
+   */
+  return rule.messageFormat === "html" ? { text: rule.message, html: true } : rule.message;
 }
 
 /**
@@ -155,12 +201,18 @@ export function checkScalarRules(
   rules: ValidationRule[],
   value: unknown,
   ctx: EvalContext,
-  push: (msg: string, severity: ValidationSeverity) => void,
+  /*
+   * Takes a `ValidationMessage` rather than a string so an author's markup
+   * survives the trip out through the per-row and per-cell callers, which
+   * wrap it in a label. A caller that only cares whether something failed
+   * (see `countCondition.ts`) ignores the argument entirely, as before.
+   */
+  push: (msg: ValidationMessage, severity: ValidationSeverity) => void,
 ): void {
   for (const rule of rules) {
     if (rule.when && !evaluateCondition(rule.when, ctx)) continue;
     const sev: ValidationSeverity = rule.severity ?? "error";
-    const fail = (m: string) => push(m, sev);
+    const fail = (m: ValidationMessage) => push(m, sev);
     switch (rule.kind) {
       case "required":
         if (isEmpty(value)) fail(ruleError(rule, "This question is required."));
@@ -357,13 +409,34 @@ export function validateQuestion(
         index: ctx.loop.index,
       }
     : undefined;
-  const push = (message: string, extra?: Partial<ValidationError>) =>
+  /*
+   * THE ONE PLACE A MESSAGE BECOMES AN ERROR.
+   *
+   * Piping first, then sanitising, and the order is the whole safety
+   * argument. `resolvePiping` escapes every respondent-derived value it
+   * substitutes, so a respondent who types `<script>` into Q1 and is quoted
+   * back in a message arrives here as harmless text. Sanitising afterwards
+   * then covers what the AUTHOR wrote — a different threat, and the only one
+   * left once piping has handled the first.
+   *
+   * Doing it here rather than in the renderer means a message is safe
+   * wherever it is read: the live runtime, the Studio canvas, a test-mode
+   * report, an export. The renderer sanitises again on the way to the DOM,
+   * which is not redundancy for its own sake — it is the rule that nothing
+   * reaches `dangerouslySetInnerHTML` without passing a sanitiser on the
+   * same side of the wire as the DOM it is going into.
+   */
+  const push = (message: ValidationMessage, extra?: Partial<ValidationError>) => {
+    const piped = resolvePiping(messageText(message), ctx);
+    const html = messageIsHtml(message);
     errors.push({
       questionId: q.id,
-      message: resolvePiping(message, ctx),
+      message: html ? sanitizeHtml(piped) : piped,
+      ...(html ? { html: true } : {}),
       ...(iteration ? { loop: iteration } : {}),
       ...extra,
     });
+  };
 
   /*
    * Implicit required — but never on a question the respondent cannot answer.
@@ -740,7 +813,7 @@ export function validateQuestion(
         const cellValue = cells?.[String(row.code)]?.[col.id];
         if (col.readOnly || col.expression) continue;
         checkScalarRules(col.validation, cellValue, ctx, (m, sev) =>
-          push(`${row.label} — ${col.label}: ${m}`, { rowCode: String(row.code), columnId: col.id, severity: sev }),
+          push(prefixed(`${row.label} — ${col.label}`, m), { rowCode: String(row.code), columnId: col.id, severity: sev }),
         );
         if (col.min != null && !isEmpty(cellValue) && Number(cellValue) < col.min)
           push(`${row.label} — ${col.label}: minimum ${col.min}.`, { rowCode: String(row.code), columnId: col.id });
@@ -768,7 +841,7 @@ export function validateQuestion(
         if (typeErr) push(`${label}: ${typeErr}`, { rowCode: rc });
       }
       checkScalarRules(row.validation ?? [], v, ctx, (m, sev) =>
-        push(`${label}: ${m}`, { rowCode: rc, severity: sev }),
+        push(prefixed(label, m), { rowCode: rc, severity: sev }),
       );
     }
   }
@@ -818,11 +891,11 @@ export function validateQuestion(
       const label = row.label.replace(/<[^>]*>/g, "");
       if (cellKinds.length && !isEmpty(cell)) {
         checkScalarRules(cellKinds, cell, ctx, (m, sev) =>
-          push(`${label}: ${m}`, { rowCode: rc, severity: sev }),
+          push(prefixed(label, m), { rowCode: rc, severity: sev }),
         );
       }
       checkScalarRules(row.validation ?? [], cell, ctx, (m, sev) =>
-        push(`${label}: ${m}`, { rowCode: rc, severity: sev }),
+        push(prefixed(label, m), { rowCode: rc, severity: sev }),
       );
     }
   }

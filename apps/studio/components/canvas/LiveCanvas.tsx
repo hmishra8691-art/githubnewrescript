@@ -157,8 +157,7 @@ export function LiveCanvas(p: LiveCanvasProps) {
     if (!simulating) return [];
     try {
       return validatePage(p.def, [p.q], { def: p.def, state, loop: p.loop })
-        .filter((e) => e.questionId === p.q.id)
-        .map((e) => e.message);
+        .filter((e) => e.questionId === p.q.id);
     } catch {
       return [];
     }

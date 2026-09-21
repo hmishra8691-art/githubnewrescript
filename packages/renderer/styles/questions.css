@@ -515,6 +515,27 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
    more than colour, for the same reason. */
 .rs-error-msg::before { content: "! "; font-weight: 700; }
 
+/* A validation message the author wrote as markup.
+
+   It inherits the error colour and the "! " like any other, so a formatted
+   message still reads as an error rather than as content — but its own
+   block elements have to behave: a <p> or a <ul> inside an 0.88em line
+   would otherwise arrive with the browser's default margins and push the
+   question apart. The first child's top margin goes for the same reason. */
+.rs-error-rich > :first-child { margin-top: 0; }
+.rs-error-rich > :last-child { margin-bottom: 0; }
+.rs-error-rich p { margin: 0 0 .4em; }
+.rs-error-rich ul, .rs-error-rich ol { margin: .2em 0 .4em; padding-inline-start: 1.4em; }
+.rs-error-rich a { color: inherit; text-decoration: underline; }
+.rs-error-rich h1, .rs-error-rich h2, .rs-error-rich h3,
+.rs-error-rich h4, .rs-error-rich h5, .rs-error-rich h6 {
+  font-size: 1.05em; margin: 0 0 .3em; font-weight: 700;
+}
+
+/* The block above the question needs the gap under it that the one below
+   gets above it, or the message sits on the question text. */
+.rs-card > .rs-errors:first-of-type { margin-bottom: 4px; }
+
 @media (prefers-reduced-motion: reduce) {
   .rs-shell *, .rs-shell *::before, .rs-shell *::after {
     animation-duration: .001ms !important;

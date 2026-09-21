@@ -2,7 +2,7 @@
 import React from "react";
 import { fieldInputProps } from "@rescript/engine";
 import type { QRProps } from "../QuestionRenderer";
-import { NumberField } from "../QuestionRenderer";
+import { NumberField, ValidationMessageText } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { useRows } from "./shared";
 
@@ -72,8 +72,18 @@ export function RepeatForm(p: QRProps) {
   return (
     <div className="rs-repeatform">
       {entries.map((entry, i) => {
-        // the engine reports per-entry problems as "Entry 3: Name is required."
-        const mine = p.errors.filter((e) => e.startsWith(`Entry ${i + 1}:`));
+        /*
+         * The engine reports per-entry problems as "Entry 3: Name is
+         * required." — a prefix it concatenates on, which is still the only
+         * thing identifying the entry (the error's `rowCode` names the FIELD
+         * within the entry, not which entry it was). So this one keeps
+         * reading the prefix, off `.message` now that the whole error is in
+         * hand. Every message that reaches here is engine-authored plain
+         * text: a repeating group's fields carry no author-written rule
+         * message, so there is no markup for the prefix to be hiding inside.
+         */
+        const label = `Entry ${i + 1}: `;
+        const mine = p.errors.filter((e) => e.message.startsWith(label));
         return (
           <div key={i} className={`rs-entry ${mine.length ? "bad" : ""}`} data-entry={i}>
             <div className="rs-entry-head">
@@ -129,7 +139,8 @@ export function RepeatForm(p: QRProps) {
               })}
             </div>
             {mine.map((m, j) => (
-              <div key={j} className="rs-error-msg">{m.replace(`Entry ${i + 1}: `, "")}</div>
+              <ValidationMessageText key={j}
+                error={{ ...m, message: m.message.slice(label.length) }} />
             ))}
           </div>
         );

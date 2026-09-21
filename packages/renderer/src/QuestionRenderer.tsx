@@ -22,6 +22,7 @@ import {
   uiText,
   effectiveScale,
   affixFor,
+  type ValidationError,
 } from "@rescript/engine";
 import { variantRenderers } from "./variants/registry";
 import { MediaEmbed, SafeImage } from "./Media";
@@ -49,12 +50,70 @@ export interface QRProps {
   otherValues?: Record<string, string>;
   /** @deprecated the first flagged option's text; use `otherValues` */
   otherValue?: string;
-  errors: string[];
+  /**
+   * THE WHOLE ERROR, NOT ITS SENTENCE.
+   *
+   * This was `string[]`, and the Runner flattened `validatePage`'s output
+   * with `.map((e) => e.message)` on the way in — throwing away `rowCode`,
+   * `columnId`, `severity` and the loop iteration. The renderers that needed
+   * a row's own error back then reconstructed it by matching the message
+   * against the row's label as a text prefix, which the engine had
+   * string-concatenated on for exactly that purpose.
+   *
+   * That worked until a message stopped being plain text. It is also how a
+   * row whose label is a prefix of another row's could take the wrong
+   * error. `rowCode` has been on the error object all along; this prop is
+   * widened so the renderer can read it instead of parsing it back out of a
+   * sentence.
+   */
+  errors: ValidationError[];
   onChange(value: unknown): void;
   /** `code` names the box. Absent means the first flagged option. */
   onOtherChange?(text: string, code?: string | number): void;
   /** the respondent's language's interface strings (engine `uiStringsFor`); absent = English */
   ui?: Record<string, string>;
+}
+
+/**
+ * One validation message, rendered the way its author wrote it.
+ *
+ * Every error the engine raises from its own wording is plain text and is
+ * escaped, exactly as before. Only a message an author marked as markup is
+ * put through `dangerouslySetInnerHTML`, and it is sanitised again here even
+ * though the engine sanitised it at the point it was raised: the rule is
+ * that nothing reaches the DOM without passing a sanitiser on this side of
+ * the wire, because this component can be handed an error by anything —
+ * a test harness, the Studio canvas, a future caller that assembled one
+ * itself — and "the engine already did it" is an assumption about a caller
+ * rather than a property of this function.
+ *
+ * `.rs-error-msg::before` puts the "! " on, so the markup does not have to.
+ */
+export function ValidationMessageText({ error }: { error: ValidationError }): React.ReactElement {
+  if (!error.html) return <div className="rs-error-msg">{error.message}</div>;
+  return (
+    <div className="rs-error-msg rs-error-rich"
+      dangerouslySetInnerHTML={{ __html: sanitizeHtml(error.message) }} />
+  );
+}
+
+/**
+ * The block of messages for one question, in the place the author chose.
+ *
+ * Kept as one region wherever it goes: a single `role="alert"` with a single
+ * id, so a screen reader announces the failures as one group belonging to
+ * this question and `aria-describedby` has something to point at. That is
+ * the reason the position is a property of the QUESTION rather than of each
+ * rule — two positions would mean two regions and a description that can
+ * only name one of them.
+ */
+function ValidationBlock({ id, errors }: { id: string; errors: ValidationError[] }) {
+  if (!errors.length) return null;
+  return (
+    <div id={id} role="alert" className="rs-errors" data-testid="rs-errors">
+      {errors.map((e, i) => <ValidationMessageText key={i} error={e} />)}
+    </div>
+  );
 }
 
 export const OTHER = (o: Option) => o.flags?.includes("other_specify");
@@ -730,7 +789,17 @@ export function ListInput(p: QRProps & { numeric: boolean }) {
           const ft = row.fieldType ?? (p.numeric ? "number" : "text");
           const ip = fieldInputProps(ft, p.q.settings);
           const v = vals[rc];
-          const err = p.errors.find((e) => e.startsWith(row.label.replace(/<[^>]*>/g, "")));
+          /*
+           * BY ROW CODE, which the engine has always set on exactly these
+           * errors — not by matching the row's label against the front of
+           * the message.
+           *
+           * The old test was `e.startsWith(row.label)`, reading back a
+           * prefix the validator had string-concatenated on. Two rows called
+           * "Other" and "Other (please say)" took each other's errors, and
+           * a message containing markup would not have matched at all.
+           */
+          const err = p.errors.find((e) => e.rowCode === rc);
           return (
             <div key={rc} {...anchor("row", rc)}>
               <div className="rs-field-row">
@@ -770,7 +839,7 @@ export function ListInput(p: QRProps & { numeric: boolean }) {
                 {/* a symbol on the right when the author put it there */}
                 {ip.suffix && <span className="rs-prefix">{ip.suffix}</span>}
               </div>
-              {err && <div className="rs-error-msg">{err}</div>}
+              {err && <ValidationMessageText error={err} />}
             </div>
           );
         })}
@@ -2300,6 +2369,18 @@ export function QuestionRenderer(props: QRProps) {
       {...anchor("question", p.q.id)}
     >
       {p.q.customCss && <style dangerouslySetInnerHTML={{ __html: p.q.customCss }} />}
+      {/*
+        * ABOVE THE QUESTION, when the author asked for it.
+        *
+        * The default is unchanged and stays at the bottom, which is where a
+        * respondent who has just pressed Next is looking. "above" is for the
+        * long grid whose foot is off the screen by the time the page comes
+        * back with an error on it — there, the message below is a message
+        * nobody sees.
+        */}
+      {p.q.settings.validationPosition === "above" && (
+        <ValidationBlock id={`${p.q.id}__err`} errors={p.errors} />
+      )}
       <p className="rs-qtext" {...anchor("text")}>
         <span dangerouslySetInnerHTML={{ __html: text }} />
         {p.q.required && <span className="rs-required">*</span>}
@@ -2328,12 +2409,8 @@ export function QuestionRenderer(props: QRProps) {
       {body}
       {p.q.customJs && p.q.type !== "custom_component" && <QuestionScript {...p} />}
       {/* announced when it appears, and named by the question that owns it */}
-      {p.errors.length > 0 && (
-        <div id={`${p.q.id}__err`} role="alert">
-          {p.errors.map((e, i) => (
-            <div key={i} className="rs-error-msg">{e}</div>
-          ))}
-        </div>
+      {p.q.settings.validationPosition !== "above" && (
+        <ValidationBlock id={`${p.q.id}__err`} errors={p.errors} />
       )}
     </div>
   );
