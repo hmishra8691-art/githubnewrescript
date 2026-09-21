@@ -49,9 +49,16 @@ const FIXTURE = {
 };
 
 const readDef = async () => {
+  // Sept 21 follow-up: the right panel is now context-aware and no longer
+  // shows Question Properties while on the JSON tab (see Studio.tsx's
+  // RightPanel), so this diagnostic peek must leave the tab exactly as it
+  // found it, or whatever ran right after this call would find its target
+  // in the right panel gone.
+  const activeTab = await page.$(".leftnav .nav-item.active");
   await page.click(".leftnav >> text=JSON");
   await page.waitForSelector("textarea.code");
   const json = await page.$eval("textarea.code", (e) => e.value);
+  if (activeTab) await activeTab.click().catch(() => {});
   return JSON.parse(json);
 };
 const goTab = async (name) => {

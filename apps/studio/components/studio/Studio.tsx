@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
-import { StudioProvider, useStudio } from "./store";
+import { StudioProvider, useStudio, selectedQuestion } from "./store";
 import { openPreview, pushPreview, previewWindowOpen, setPreviewDefinition, setPreviewRevision } from "./previewWindow";
 import { ExportDialog } from "./ExportDialog";
 import { QuestionsPanel } from "./QuestionsPanel";
@@ -20,7 +20,7 @@ import { DiagnosticsPanel } from "./DiagnosticsPanel";
 import { useCollab } from "@/lib/useCollab";
 import { useSession } from "@/lib/useSession";
 import { DesignsPanel } from "./DesignsPanel";
-import { BrandingPanel, ScriptsPanel } from "./BrandingPanel";
+import { BrandingPanel, ScriptsPanel, ThemeLivePreview } from "./BrandingPanel";
 import { AssetsPanel } from "./AssetsPanel";
 import { VersionsPanel } from "./VersionsPanel";
 import { JsonPanel } from "./JsonPanel";
@@ -267,6 +267,68 @@ function SaveIndicator() {
         <span className="save-state" data-testid="save-state" />
       );
   }
+}
+
+/**
+ * THE RIGHT PANEL IS CONTEXTUAL, NOT GLOBAL (Sept 21 follow-up: "Context-Aware
+ * Right Panel & Live Preview UI Fix").
+ *
+ * Before this, `<aside className="rightpanel"><PropertiesPanel /></aside>`
+ * rendered unconditionally on every tab. `PropertiesPanel` itself already
+ * handles "no question selected" — it falls back to a "Select a question…"
+ * message plus a second, duplicate `<SurveySettings/>` — which is exactly
+ * the bug: that fallback appeared on Survey Settings (already showing its
+ * own settings in `main`), on Branding (where a generic Properties panel is
+ * irrelevant clutter), and on Survey Flow / Logic (which already do their
+ * own contextual editing inline — `NodeEditor` in `FlowPanel`, the
+ * `ConditionEditor`/`RuleEditor` family in `LogicPanel` — and never read
+ * from this aside at all).
+ *
+ * Now the aside is context-aware:
+ *   - Questions, with a question selected → `PropertiesPanel`, visible.
+ *   - Questions, nothing selected, or any other non-Branding tab → the same
+ *     `PropertiesPanel` aside stays MOUNTED but is hidden with `.rp-hidden`
+ *     (`display: none`) rather than unmounted. Not a cosmetic choice: its
+ *     children hold real, unsaved-anywhere UI state — which accordion
+ *     sections are expanded, whether the display/skip-logic editor is in
+ *     Visual or Expression mode, the properties search box — and unmounting
+ *     it on every trip through, say, the JSON tab reset all of that on the
+ *     way back, which broke flows as ordinary as "peek at the JSON, then
+ *     keep editing logic" the moment that peek round-tripped through a
+ *     re-render. Keeping it mounted (as it always was pre-Sept-21, just
+ *     never hidden) preserves that state exactly as it did before; only its
+ *     visibility is new.
+ *   - Branding → the live theme preview, moved here from `BrandingPanel`'s
+ *     own scrolling column (see `ThemeLivePreview`'s export comment) so
+ *     controls and preview sit side by side instead of stacked with a
+ *     scroll between them. A second, separate `<aside>` — `PropertiesPanel`
+ *     is still mounted (and hidden) underneath it, for the same reason.
+ *
+ * `.ide-body`'s grid stops reserving the right column's width when no
+ * *visible* `.rightpanel` exists (see
+ * `.ide-body:not(:has(> .rightpanel:not(.rp-hidden)))` in
+ * design-system.css — a `display: none` element takes no grid track
+ * regardless, so the hidden Properties aside never reserves one on its
+ * own), so `main` actually uses the freed space instead of leaving a blank
+ * gutter where the panel used to be.
+ */
+function RightPanel({ tab }: { tab: Tab }) {
+  const s = useStudio();
+  const showProperties = tab === "questions" && !!selectedQuestion(s);
+
+  return (
+    <>
+      <aside className={`rightpanel${showProperties ? "" : " rp-hidden"}`} data-testid="rightpanel-properties">
+        <PropertiesPanel />
+      </aside>
+      {tab === "branding" && (
+        <aside className="rightpanel rightpanel-preview" data-testid="rightpanel-preview">
+          <h2>Live preview</h2>
+          <ThemeLivePreview branding={s.def.branding} logoUrl={s.def.branding.logoUrl} />
+        </aside>
+      )}
+    </>
+  );
 }
 
 function StudioShell({ collaboration }: { collaboration: boolean }) {
@@ -816,9 +878,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
             </>
           )}
         </main>
-        <aside className="rightpanel">
-          <PropertiesPanel />
-        </aside>
+        <RightPanel tab={tab} />
       </div>
       </CanvasProvider>
     </div>

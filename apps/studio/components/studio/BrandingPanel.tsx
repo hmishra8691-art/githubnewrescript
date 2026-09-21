@@ -182,8 +182,18 @@ const PREVIEW_ERROR = { questionId: "pv2", message: "Please enter a value greate
  * Every render reads `branding` straight from the live draft, so a color,
  * font, width, alignment or button-label edit appears here on the very next
  * keystroke, with no save step and no separate Test/Preview tab.
+ *
+ * SEPT 21 FOLLOW-UP ("Context-Aware Right Panel & Live Preview UI Fix"): this
+ * used to render inline, above "Identity", inside this same scrolling column
+ * as every control below it — which is exactly the "preview forces the user
+ * to scroll back and forth" layout that brief flagged. It is now mounted by
+ * `Studio.tsx`'s `RightPanel` in the aside beside this panel instead (a
+ * two-column layout: controls here, preview on the right), so it is exported
+ * rather than kept local. Nothing about the component itself changed — same
+ * fixed preview survey, same live read of `branding`, same `data-testid`s —
+ * only where it is mounted did.
  */
-function ThemeLivePreview({ branding, logoUrl }: { branding: Branding; logoUrl?: string }) {
+export function ThemeLivePreview({ branding, logoUrl }: { branding: Branding; logoUrl?: string }) {
   const s = useStudio();
   const [answers, setAnswers] = React.useState<Record<string, unknown>>({ pv1: "2" });
   const state = React.useMemo(() => {
@@ -456,7 +466,9 @@ export function BrandingPanel() {
         </p>
       )}
 
-      <ThemeLivePreview branding={b} logoUrl={b.logoUrl} />
+      {/* The live preview used to render here — see ThemeLivePreview's export
+          comment above. It now sits in the right-hand panel (Studio.tsx's
+          RightPanel), beside these controls instead of above them. */}
 
       <h3 className="sec">Identity</h3>
       <div className="row" style={{ flexWrap: "wrap", alignItems: "flex-start" }}>
