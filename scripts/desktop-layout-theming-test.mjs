@@ -104,12 +104,82 @@ const shellRect = (page) => page.evaluate(() => {
     questions: baseQuestions, flow: baseFlow,
     branding: { layout: { widthMode: "full" } },
   });
+  /*
+   * "FULL" IS FLUID AND BOUNDED — the pendulum, and both ends of it.
+   *
+   * This block used to assert `max-width: none` and `width > 1400` on a
+   * 1600px viewport, because the review it was written for had asked for "a
+   * complete, full-width experience" instead of a 760px card marooned in
+   * empty canvas. The next review looked at the result and reported the
+   * opposite fault: "the survey content is stretching across almost 100% of
+   * the available screen width, which makes the interface look oversized,
+   * empty, unbalanced".
+   *
+   * Both complaints are the same mistake — one rule that ignores how wide
+   * the viewport is — so the assertions now pin the RANGE rather than either
+   * extreme, and fail if the layout drifts back toward either: too narrow and
+   * it is marooned again, too wide and it is stretched again.
+   */
   const page = await openPreview(browser, RUNTIME, { definition: def }, { viewport: { width: 1600, height: 1000 } });
   const rect = await shellRect(page);
   assert.match(rect.className, /\brs-width-full\b/);
-  assert.equal(rect.maxWidth, "none", "full width mode must not cap max-width");
-  assert.ok(rect.width > 1400, `desktop full-width shell should fill nearly the whole 1600px viewport, got ${rect.width}px`);
-  ok(`desktop, widthMode=full: shell is ${Math.round(rect.width)}px wide on a 1600px viewport (no fixed narrow container)`);
+  assert.notEqual(rect.maxWidth, "none", "full width mode must be bounded, not edge-to-edge");
+  assert.ok(rect.width > 900,
+    `a desktop survey must not be a narrow card marooned in canvas — got ${Math.round(rect.width)}px on 1600px`);
+  assert.ok(rect.width < 1600 - 240,
+    `…and must not stretch across the viewport either — got ${Math.round(rect.width)}px on 1600px, leaving too little margin`);
+  assert.equal(rect.marginLeft, rect.marginRight,
+    "the frame is centred, so the margins are equal — a frame pinned left leaves all the dead space on one side");
+  ok(`desktop, widthMode=full: shell is ${Math.round(rect.width)}px on a 1600px viewport — bounded, centred, real margins`);
+  await page.close();
+}
+
+/*
+ * ...AND THE BOUND IS A CURVE, NOT A NUMBER: "do not create one fixed width
+ * that looks good only on one monitor. The layout must adapt intelligently
+ * across 1366 / 1440 / 1600 / 1920 / large monitors / smaller laptops."
+ */
+{
+  const def = SurveyDefinition.parse({
+    meta: { id: "dt1b", code: "DT1B", title: "Desktop Responsive", version: "1.0" },
+    questions: baseQuestions, flow: baseFlow,
+    branding: { layout: { widthMode: "full" } },
+  });
+  const widths = [];
+  for (const vw of [1366, 1600, 1920]) {
+    const page = await openPreview(browser, RUNTIME, { definition: def }, { viewport: { width: vw, height: 900 } });
+    const rect = await shellRect(page);
+    widths.push({ vw, w: Math.round(rect.width), gutter: Math.round(rect.x) });
+    await page.close();
+  }
+  for (let i = 1; i < widths.length; i++) {
+    assert.ok(widths[i].w > widths[i - 1].w,
+      `the frame must grow with the viewport: ${JSON.stringify(widths)}`);
+  }
+  /* and every one of them keeps a real margin rather than touching the edge */
+  for (const s of widths) {
+    assert.ok(s.gutter > 80, `${s.vw}px viewport left only a ${s.gutter}px margin: ${JSON.stringify(widths)}`);
+  }
+  ok(`desktop frame scales across resolutions: ${widths.map((s) => `${s.vw}→${s.w}`).join(", ")}`);
+}
+
+/*
+ * A LARGE MONITOR IS WHERE THE CEILING MATTERS. Past a point, more width
+ * stops buying readability and starts costing it, so the frame stops growing
+ * and the margins take the rest.
+ */
+{
+  const def = SurveyDefinition.parse({
+    meta: { id: "dt1c", code: "DT1C", title: "Desktop Ceiling", version: "1.0" },
+    questions: baseQuestions, flow: baseFlow,
+    branding: { layout: { widthMode: "full" } },
+  });
+  const page = await openPreview(browser, RUNTIME, { definition: def }, { viewport: { width: 2560, height: 1200 } });
+  const rect = await shellRect(page);
+  assert.ok(rect.width < 1400,
+    `a 2560px monitor must not produce a 2500px survey — got ${Math.round(rect.width)}px`);
+  assert.ok(rect.x > 500, "the ceiling leaves the rest as margin, centred");
+  ok(`large monitor: frame holds at ${Math.round(rect.width)}px on 2560px rather than stretching`);
   await page.close();
 }
 

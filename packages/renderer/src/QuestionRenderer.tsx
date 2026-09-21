@@ -285,10 +285,17 @@ export function optionsClass(p: QRProps): string {
  * How many options before "auto" starts flowing them into columns.
  *
  * Below this a single column reads better than a short ragged grid; at and
- * above it the stack is what the review complained about. Six is the point
- * where a list stops fitting a phone screen in one go.
+ * above it the stack is what the review complained about — first as "all the
+ * options are not visible at once", then as choice boxes stretched across a
+ * desktop with four words at the far left of each.
+ *
+ * Four, not six: five short options in one column is the exact case the
+ * desktop screenshots were taken of, and the CSS behind `auto` is
+ * `auto-fit`/`minmax`, so this is a floor rather than a decision — a list of
+ * four LONG options still occupies one column per row because no second
+ * track fits. It only splits when splitting actually helps.
  */
-const AUTO_FLOW_FROM = 6;
+const AUTO_FLOW_FROM = 4;
 
 /**
  * The Question Layout setting only ever reached the radio/checkbox list, the

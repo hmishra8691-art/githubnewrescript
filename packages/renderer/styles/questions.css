@@ -83,22 +83,94 @@
   margin-right: var(--rs-align-mr, auto);
   padding: 24px 16px 80px;
 }
-/* "full": the September review's fix — fills the viewport a small gutter
-   aside, instead of a fixed-width card marooned in empty canvas.
-   Gated to desktop-class viewports on purpose: `widthMode` is a brand-new
-   field (see survey.ts's comment on why it defaults to "full" rather than
-   changing `maxWidth`'s own default), so it materializes onto every survey
-   ever saved, tablet- and mobile-bound ones included. Without this
-   @media guard, a survey whose maxWidth (default 760px) is narrower than a
-   tablet's viewport would suddenly render wider than it ever has, on a
-   device this brief explicitly says must not change: "Do not change the
-   current Tablet and Mobile layouts unnecessarily." 1024px keeps every
-   phone and the common tablet widths — portrait and landscape — capped
-   exactly as before; only a genuine desktop/laptop viewport goes full width. */
+/*
+ * "FULL" MEANS FLUID AND BOUNDED, NOT EDGE TO EDGE.
+ *
+ * It used to mean `max-width: none`, which fixed the complaint it was written
+ * for — a 760px card marooned in empty canvas — by creating the opposite one:
+ * "the survey content is stretching across almost 100% of the available
+ * screen width, which makes the interface look oversized, empty, unbalanced".
+ * Both are the same mistake from different ends: a single rule that ignores
+ * how wide the viewport actually is.
+ *
+ * So the frame is a range rather than a value. It grows with the viewport
+ * between a floor that keeps a laptop from feeling cramped and a ceiling past
+ * which a survey stops being readable — because line length, not screen
+ * width, is what decides how wide a question may be. The exact curve, and
+ * where each named resolution lands on it, is in the rule below.
+ *
+ * Still gated to desktop-class viewports, for the reason the original gate
+ * had: `widthMode` materializes onto every survey ever saved, tablet- and
+ * mobile-bound ones included, so 1024px keeps every phone and the common
+ * tablet widths — portrait and landscape — rendering exactly as they always
+ * have. Only a genuine desktop/laptop viewport sees any of this.
+ *
+ * And the frame CENTRES here even though `contentAlign` defaults to "left".
+ * That default is not an authoring decision — like `widthMode`, it
+ * materialises onto every stored survey — and its documented job is "where
+ * survey content sits when it is narrower than the shell", which is about
+ * content inside the frame, not the frame inside the window. A frame pinned
+ * to the left edge of a 1920px monitor with 640px of dead space on the right
+ * is exactly the imbalance being reported. An author who explicitly picks
+ * left or right still gets it, on the content within (below).
+ */
 @media (min-width: 1024px) {
-  .rs-shell.rs-width-full { max-width: none; }
+  .rs-shell.rs-width-full {
+    /*
+     * `58vw + 180px` rather than a bare vw: a plain viewport fraction spends
+     * its whole range below 1366 and then sits on the floor, so 1024 and 1366
+     * came out identically wide — "do not create one fixed width that looks
+     * good only on one monitor". The offset lifts the small end so the curve
+     * is live across every size the brief names:
+     *
+     *   1024 → 880 (floor)   1440 → 1015   1920 → 1180 (ceiling)
+     *   1366 → 972           1600 → 1108   2560 → 1180
+     */
+    --rs-frame: clamp(880px, calc(58vw + 180px), 1180px);
+    --rs-gutter: clamp(20px, 3vw, 56px);
+    max-width: min(100%, var(--rs-frame));
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: var(--rs-gutter);
+    padding-right: var(--rs-gutter);
+  }
 }
 .rs-shell.rs-width-contained { max-width: var(--rs-max-width); }
+
+/*
+ * THE FRAME IS THE MEASURE — there is only one column, and nothing floats
+ * inside it.
+ *
+ * The first attempt at this bounded the frame AND capped the option lists
+ * inside it, which just moved the empty space one level in: a 1280px card
+ * with a 760px list of choices in it has a 500px void down its right-hand
+ * side, and the brief is explicit that "the goal is not merely to make the
+ * survey narrower" and "do not introduce unnecessary empty space simply to
+ * reduce the width".
+ *
+ * So the frame above is sized to BE the interaction column (818–1008px of
+ * content across the range the brief names), cards fill it edge to edge, and
+ * the only thing still measured is prose — where the cap is about line
+ * length rather than layout, and produces no box, only an earlier wrap.
+ *
+ * The frame is sized so that the widest thing a survey routinely contains
+ * still fits it: a seven-column matrix with labelled headers measures 956px
+ * at the 1920 frame and does not scroll. An earlier draft let grid cards
+ * break OUT of the frame for extra room; it was removed, for two reasons.
+ * Cards of three different widths down one page is the opposite of
+ * "maintain consistent spacing, padding, typography, and visual hierarchy",
+ * and the technique it needed (`margin-left: 50%` + a translate) puts a
+ * card's paint position out of step with its layout box — which is what
+ * scroll-to-first-error measures against. A matrix genuinely too wide for
+ * any frame still scrolls inside `.rs-table-wrap`, as it always has.
+ */
+@media (min-width: 1024px) {
+  .rs-width-full { --rs-measure: 68ch; }
+  .rs-width-full .rs-qtext,
+  .rs-width-full .rs-qinstruction {
+    max-width: var(--rs-measure);
+  }
+}
 .rs-header { display: flex; align-items: center; padding: 14px 0; }
 .rs-header img { max-height: 44px; }
 .rs-header.center { justify-content: center; }
