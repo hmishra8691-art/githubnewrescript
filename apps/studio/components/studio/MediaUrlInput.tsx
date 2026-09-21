@@ -66,12 +66,28 @@ export function MediaUrlInput({ value, onChange, placeholder, compact, testId, l
     ? accept.map((f) => (f === "document" ? ".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.csv" : `${f}/*`)).join(",")
     : ASSET_ACCEPT;
 
+  /*
+   * COMPACT: THE BUTTONS GO UNDER THE FIELD, NOT BESIDE IT.
+   *
+   * In an option row this whole control lives in a ~200px cell, and putting
+   * the URL box and both buttons on one line left the box a sliver showing
+   * about six characters. The review said so and proposed the fix:
+   * "increase the size of the image upload box slightly … alternatively,
+   * place the Choose/Upload button below the image upload box instead of
+   * keeping it beside the box. Align the upload controls properly to create
+   * a cleaner and more user-friendly layout."
+   *
+   * Stacked, the field gets the full width of the cell and the two buttons
+   * share the line under it. The roomy (non-compact) layout is unchanged —
+   * it has the width to keep everything on one line.
+   */
   const input = (
-    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+    <div className={compact ? "media-url-compact" : ""}
+      style={compact ? undefined : { display: "flex", gap: 6, alignItems: "center" }}>
       <input className="input grow" data-testid={tid} placeholder={placeholder ?? "Image, video, YouTube or Google Drive URL — or choose / upload an asset"}
         value={value ?? ""} onChange={(e) => onChange(e.target.value || undefined)} />
       {canUpload && (
-        <>
+        <span className={compact ? "media-url-actions" : ""} style={compact ? undefined : { display: "contents" }}>
           <button type="button" className="btn ghost small" data-testid={`${tid}-choose`} onClick={() => setPicking(true)}
             title="Choose from this survey's asset library">Choose</button>
           <input ref={fileRef} type="file" accept={fileAccept} style={{ display: "none" }} data-testid={`${tid}-file`}
@@ -80,7 +96,7 @@ export function MediaUrlInput({ value, onChange, placeholder, compact, testId, l
             onClick={() => fileRef.current?.click()} title="Upload a file into the asset library and use it here">
             {progress ? progress.label : "Upload"}
           </button>
-        </>
+        </span>
       )}
     </div>
   );

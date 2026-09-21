@@ -411,8 +411,22 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .opt-row > * { min-width: 0; }
 .opt-row .input { padding: 6px 10px; font-size: 13.5px; min-height: 34px; }
 .opt-row .code-input { width: 72px; flex: none; font-family: var(--mono); }
-/* the option's own text: never narrower than this, and first to grow */
-.opt-row > .input.grow { flex: 1 1 220px; min-width: 200px; }
+/* The option's own text: never narrower than this, and first to grow.
+ *
+ * Written as `.input.grow` this never matched. `InlineRichText` — which is
+ * what actually draws an option label — renders a WRAPPER
+ * (`.rte-inline-wrap.grow`) around the `.input`, so the direct child carrying
+ * `grow` is the wrapper and the rule selected nothing. The label therefore
+ * had no basis and no floor, collapsed to whatever space the row's other
+ * controls left it, and scrolled its own text sideways: "the Option input
+ * field is currently too small, making it difficult to clearly view and edit
+ * the entered option text" — filed against Expandable/Flip Cards, which has
+ * the most controls in the row and so squeezed hardest.
+ *
+ * Selecting on `.grow` itself covers both, and the inner input is told to
+ * fill its wrapper so the floor reaches the field the author types into. */
+.opt-row > .grow { flex: 1 1 260px; min-width: 220px; }
+.opt-row > .rte-inline-wrap.grow > .input { width: 100%; }
 /* the meta fields (secondary line, price, badge…) may shrink before the label does */
 .opt-row .opt-meta { flex: 0 1 auto; min-width: 72px; }
 .opt-row button { flex: none; }
@@ -638,3 +652,13 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
   .rightpanel { border-left: none; border-top: 1px solid var(--c-border); }
   .ax-shell { padding: 0 12px; }
 }
+
+/* ---------- compact media/URL control (option rows)
+ * Stacked rather than side by side: in a ~200px option cell, one line for the
+ * URL box plus Choose plus Upload left the box showing about six characters.
+ * "Place the Choose/Upload button below the image upload box instead of
+ * keeping it beside the box. Align the upload controls properly." */
+.media-url-compact { display: flex; flex-direction: column; gap: 4px; }
+.media-url-compact > .input { width: 100%; min-width: 0; }
+.media-url-actions { display: flex; gap: 6px; }
+.media-url-actions > .btn { flex: 1 1 auto; justify-content: center; }
