@@ -75,7 +75,11 @@ export function findSurveyTemplate(key: string): SurveyTemplate | undefined {
 }
 
 export { simulateRespondent, defaultAnswer } from "./simulate.js";
-export type { SimulationOptions, SimulationResult, VisitedPage } from "./simulate.js";
+export type { SimulationOptions, SimulationResult, VisitedPage, AnswerContext, AnswerFn } from "./simulate.js";
+export { generatePopulation, sampleAnswer, targetedAnswers } from "./generate.js";
+export type {
+  GenerateOptions, GeneratedRespondent, GenerationReport, GenerationIssue, IssueKind, Coverage,
+} from "./generate.js";
 
 export {
   runTestCase, runSuite, describeSuite, outcomeOf, diffOutcomes,
