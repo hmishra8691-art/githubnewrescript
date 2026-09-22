@@ -18,9 +18,30 @@ import {
 } from "@rescript/engine";
 import type { Question, SurveyDefinition } from "@rescript/schema";
 
+/**
+ * What an answer function is told when it is asked to produce a value.
+ *
+ * The loop context and the question were always passed. `state` is the
+ * addition, and it is the one that matters for a sampler: a respondent's
+ * REAL option list is whatever masking, carry-forward and list fill left
+ * them, and `effectiveQuestion(q, { def, state, loop })` is the only way to
+ * see it. Without the state a generator would offer answers the respondent
+ * was never shown, and the walk would reject them.
+ *
+ * Additive, so the existing two-argument functions in the test paths keep
+ * working untouched.
+ */
+export interface AnswerContext {
+  def: SurveyDefinition;
+  state: ReturnType<typeof createResponseState>;
+  loop: LoopContext | null;
+}
+
+export type AnswerFn = (loop: LoopContext | null, q: Question, ctx: AnswerContext) => unknown;
+
 export interface SimulationOptions {
   /** answers keyed by question id; a function receives the loop context and returns the answer for that iteration */
-  answers: Record<string, unknown | ((loop: LoopContext | null, q: Question) => unknown)>;
+  answers: Record<string, unknown | AnswerFn>;
   seed?: number;
   embedded?: Record<string, string>;
   quotaCounts?: QuotaCounts;
@@ -151,7 +172,7 @@ export function simulateRespondent(def: SurveyDefinition, opts: SimulationOption
       const already = state.answers[key];
       const given = opts.answers[q.id];
       let value: unknown;
-      if (typeof given === "function") value = (given as (l: LoopContext | null, q: Question) => unknown)(loop, q);
+      if (typeof given === "function") value = (given as AnswerFn)(loop, q, { def, state, loop });
       else if (given !== undefined) value = given;
       else if (already !== undefined) value = already; // punched / list-fill-written / defaulted earlier
       else value = defaultAnswer(def, q, { state, loop });
