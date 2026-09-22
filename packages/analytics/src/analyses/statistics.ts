@@ -15,13 +15,31 @@ const sigWord = (p: number | null | undefined, alpha = 0.05) => (p == null ? "co
 /** "…differs significantly from X" / "…does not differ significantly from X" / "…could not be tested against X" — a sentence, not a suffix. */
 const differsFrom = (p: number | null | undefined, alpha = 0.05) => (p == null ? "could not be tested against" : p < alpha ? "differs significantly from" : "does not differ significantly from");
 
-function groupsBy(ds: Dataset, y: string, g: string): { labels: string[]; groups: number[][]; codes: string[]; labelled: { label: string; values: number[] }[] } {
+/*
+ * The groups carry their weights, because the table and the test want
+ * different things from them.
+ *
+ * The package's documented position (docs/ANALYTICS-AUDIT-2026-09.md) is that
+ * descriptives are weighted and inferential tests are not, and the tables say
+ * so. This runner followed only half of it: `describe(gr)` with no weights for
+ * the means table, while the paired branch a few lines down called
+ * `describe(x, weights(ds))`. Same runner, same screen, two conventions — so a
+ * weighted study showed one group mean computed one way and another computed
+ * the other, with nothing to tell them apart.
+ *
+ * `weights` is returned alongside `groups` so the descriptives can be weighted
+ * like everything else, while the tests keep taking the bare `number[][]` they
+ * always took.
+ */
+function groupsBy(ds: Dataset, y: string, g: string): { labels: string[]; groups: number[][]; weights: number[][]; codes: string[]; labelled: { label: string; values: number[] }[] } {
   const cats = categoriesOf(ds, g);
   const yv = numericColumn(ds, y), gv = categoricalColumn(ds, g);
+  const w = weights(ds);
   const groups = cats.map(() => [] as number[]);
-  yv.forEach((v, i) => { const c = gv[i]; if (v == null || c == null || Array.isArray(c)) return; const j = cats.findIndex((x) => x.code === c); if (j >= 0) groups[j].push(v); });
+  const gw = cats.map(() => [] as number[]);
+  yv.forEach((v, i) => { const c = gv[i]; if (v == null || c == null || Array.isArray(c)) return; const j = cats.findIndex((x) => x.code === c); if (j >= 0) { groups[j].push(v); gw[j].push(w?.[i] ?? 1); } });
   const keep = groups.map((gr, i) => i).filter((i) => groups[i].length > 0);
-  return { labels: keep.map((i) => cats[i].label), groups: keep.map((i) => groups[i]), codes: keep.map((i) => cats[i].code), labelled: keep.map((i) => ({ label: cats[i].label, values: groups[i] })) };
+  return { labels: keep.map((i) => cats[i].label), groups: keep.map((i) => groups[i]), weights: keep.map((i) => gw[i]), codes: keep.map((i) => cats[i].code), labelled: keep.map((i) => ({ label: cats[i].label, values: groups[i] })) };
 }
 
 function testTable(tests: TestResult[]): ResultTable {
@@ -89,7 +107,7 @@ export function statisticalTest(def: AnalysisDefinition, ds: Dataset, totalCases
       else r = oneWayAnova(g.labelled);
       r.note = `${labelOf(ds, a)} by ${labelOf(ds, b)}`;
       tests.push(r);
-      const means = g.groups.map((gr) => describe(gr));
+      const means = g.groups.map((gr, i) => describe(gr, g.weights[i]));
       tables.push({ id: "groups", title: `${labelOf(ds, a)} by ${labelOf(ds, b)}`, columns: [{ key: "group", label: labelOf(ds, b) }, { key: "n", label: "n", type: "count" }, { key: "mean", label: "Mean", type: "number", decimals: 2 }, { key: "sd", label: "SD", type: "number", decimals: 2 }, { key: "median", label: "Median", type: "number", decimals: 2 }, { key: "lo", label: "95% CI low", type: "number", decimals: 2 }, { key: "hi", label: "95% CI high", type: "number", decimals: 2 }],
         rows: g.labels.map((l, i) => ({ group: l, n: means[i].n, mean: round(means[i].mean), sd: round(means[i].sd), median: round(means[i].median), lo: round(means[i].ci95?.[0]), hi: round(means[i].ci95?.[1]) })) });
       const hi = means.map((m, i) => ({ m: m.mean ?? 0, l: g.labels[i] })).sort((x, y) => y.m - x.m);
@@ -348,6 +366,23 @@ export function cluster(def: AnalysisDefinition, ds: Dataset, totalCases: number
   if (rows.length < k * 5) return makeResult(def, ds, { tables: [], chart: {}, warnings: [`Only ${rows.length} complete cases — too few for ${k} clusters.`], recommendedCharts: ["segment_size"], totalCases });
   const z = opt(def, "standardize", true) ? standardize(rows).rows : rows;
   let assignments: number[], sizes: number[], dendro: ChartData["dendrogram"] | undefined, silhouette: number | null = null;
+  /*
+   * REFUSE, RATHER THAN TIME OUT.
+   *
+   * `hierarchical` documents a limit of about 1,500 rows in a comment and
+   * nothing enforced it. It rebuilds the full pairwise distance set on every
+   * merge, so the work grows roughly with the cube of the row count: at ten
+   * thousand complete cases the request does not run slowly, it exhausts the
+   * sixty-second function budget and the user gets a failed request with no
+   * explanation. Saying so, and naming the method that does scale, is a better
+   * answer than a timeout.
+   */
+  const HIERARCHICAL_MAX_ROWS = 1_500;
+  if (method === "hierarchical" && rows.length > HIERARCHICAL_MAX_ROWS) {
+    return makeResult(def, ds, { tables: [], chart: {},
+      warnings: [`Hierarchical clustering is limited to ${HIERARCHICAL_MAX_ROWS.toLocaleString()} complete cases and this analysis has ${rows.length.toLocaleString()}. Use k-means, which handles this size, or filter to a smaller base.`],
+      recommendedCharts: ["segment_size"], totalCases });
+  }
   if (method === "hierarchical") {
     const h = hierarchical(z, k, opt(def, "linkage", "ward"));
     assignments = h.assignments; sizes = Array.from({ length: k }, (_, c) => assignments.filter((a) => a === c).length); dendro = h.merges;

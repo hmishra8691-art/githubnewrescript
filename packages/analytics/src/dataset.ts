@@ -83,6 +83,12 @@ export interface Dataset {
   total: number;
   weighted: boolean;
   weightInfo?: { efficiency: number; designEffect: number; min: number; max: number; converged: boolean } | null;
+  /**
+   * Set when the loader hit its row ceiling, so every result built from this
+   * dataset can say that it is computed on a prefix of the study rather than
+   * the study. Absent means the whole response set is present.
+   */
+  truncatedAt?: number;
   spec: DatasetSpec;
 }
 
@@ -384,11 +390,27 @@ export function filterDataset(ds: Dataset, condition: Condition | null | undefin
   return subset(ds, rows);
 }
 
+/*
+ * A case is turned back into a row once, not once per filter.
+ *
+ * `matchesCase` reconstructed this object every call — and it is called per
+ * case, per filter, per segment, per crosstab layer. A dataset with an
+ * analysis filter and three segments rebuilt it four times for every
+ * respondent to hand the evaluator the same seven fields each time.
+ *
+ * A WeakMap rather than a field on `Case`, so the cached row is invisible to
+ * anything that reads, serialises or spreads a case, and is collected with it.
+ */
+const rowOfCase = new WeakMap<Case, Parameters<typeof matchesResponseCondition>[2]>();
+
 /** Evaluate a Condition on a built case — the same engine evaluator the survey ran. */
 export function matchesCase(def: SurveyDefinition, condition: Condition, c: Case): boolean {
-  return matchesResponseCondition(def, condition, {
-    session_id: c.id, status: c.status, answers: c.answers, calculated: c.calculated, embedded: c.embedded, flags: c.flags, started_at: c.startedAt,
-  });
+  let row = rowOfCase.get(c);
+  if (!row) {
+    row = { session_id: c.id, status: c.status, answers: c.answers, calculated: c.calculated, embedded: c.embedded, flags: c.flags, started_at: c.startedAt };
+    rowOfCase.set(c, row);
+  }
+  return matchesResponseCondition(def, condition, row);
 }
 
 /** Split into named segments (a case may belong to several). */

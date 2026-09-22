@@ -64,7 +64,30 @@ function remember(key: string, entry: Omit<CacheEntry, "bytes">) {
 /** for tests and diagnostics */
 export function rowCacheStats() { return { entries: rowCache.size, bytes: cacheBytes, budget: CACHE_BUDGET_BYTES }; }
 
+/*
+ * THE STAMP IS ASKED ONCE PER REPORT, NOT ONCE PER WIDGET.
+ *
+ * `dataStamp` is a COUNT(*) over `responses`. It was called before the row
+ * cache was consulted, so a ten-widget report issued ten exact counts to
+ * discover ten times that nothing had changed — and a published report with
+ * viewer filters multiplied that again. Two seconds is shorter than any
+ * render and far shorter than the row cache's own minute, so this cannot make
+ * the dataset staler than it already was; it only stops the same question
+ * being asked ten times in one breath.
+ */
+const stampCache = new Map<string, { at: number; stamp: string }>();
+const STAMP_TTL_MS = 2_000;
+
 async function dataStamp(db: SupabaseClient, surveyId: string, spec: DatasetSpec): Promise<string> {
+  const key = `${surveyId}:${spec.environment}`;
+  const hit = stampCache.get(key);
+  if (hit && Date.now() - hit.at < STAMP_TTL_MS) return hit.stamp;
+  const fresh = await computeStamp(db, surveyId, spec);
+  stampCache.set(key, { at: Date.now(), stamp: fresh });
+  return fresh;
+}
+
+async function computeStamp(db: SupabaseClient, surveyId: string, spec: DatasetSpec): Promise<string> {
   let q = db.from("responses").select("updated_at", { count: "exact", head: false }).eq("survey_id", surveyId).is("deleted_at", null).order("updated_at", { ascending: false }).limit(1);
   if (spec.environment === "TEST") q = q.eq("is_test", true);
   else if (spec.environment === "LIVE") q = q.eq("is_test", false);
@@ -102,9 +125,27 @@ export async function loadRows(db: SupabaseClient, surveyId: string, spec: Datas
     rows.push(...chunk);
     if (chunk.length < CHUNK) break;
   }
+  /*
+   * TRUNCATION IS RECORDED, NOT SWALLOWED.
+   *
+   * The loop stops at MAX_ROWS and used to return quietly, so a survey with
+   * 300,000 responses produced a report computed on the first 250,000 that
+   * looked exactly like a complete one. That is a correctness bug wearing a
+   * performance costume: every base, every percentage and every significance
+   * test in it is wrong, and nothing on the screen says so.
+   *
+   * A side table rather than a field, so the array stays a plain
+   * `AnalyticsRow[]` for its one caller and for the row cache's byte
+   * accounting.
+   */
+  if (rows.length >= MAX_ROWS) truncatedRows.add(rows);
   remember(key, { at: Date.now(), stamp, rows });
   return rows;
 }
+
+/** Row sets that hit MAX_ROWS, so the dataset built from them can say so. */
+const truncatedRows = new WeakSet<AnalyticsRow[]>();
+export function wasTruncated(rows: AnalyticsRow[]): boolean { return truncatedRows.has(rows); }
 
 export interface LoadedContext {
   def: SurveyDefinition;
@@ -138,10 +179,61 @@ export async function resolveSaved(db: SupabaseClient, surveyId: string, def: An
   return { ...def, filter, segments };
 }
 
+/*
+ * THE DATASET IS CACHED, NOT JUST THE ROWS.
+ *
+ * The row cache saved the cheap half. `buildDataset` is the expensive half —
+ * it rebuilds the whole variable dictionary and then runs `rowToState` +
+ * `flattenVariables` for every respondent, and `flattenVariables` walks the
+ * questionnaire twice per case. A ten-widget dashboard did that ten times
+ * over the same rows to produce ten identical `Case[]`.
+ *
+ * Safe to share because nothing downstream writes to it: no runner assigns to
+ * `ds.*` or to a case, `filterDataset` returns `{...ds, cases}` over a fresh
+ * array, and the one mutation in the package — `applyWeighting`, which sets
+ * `c.weight` on the case objects themselves — happens inside `buildDataset`,
+ * before the entry is stored. That mutation is exactly why `weighting` is
+ * part of the key: two analyses weighting the same survey differently must
+ * never be handed the same case objects.
+ *
+ * Keyed on the data stamp as well, so a new response invalidates it the same
+ * way it invalidates the rows.
+ */
+interface DatasetEntry { at: number; key: string; ds: Dataset }
+const datasetCache = new Map<string, DatasetEntry>();
+const DATASET_TTL_MS = 60_000;
+const DATASET_CACHE_MAX = 8;
+
+/** for tests and diagnostics */
+export function datasetCacheStats() { return { entries: datasetCache.size, max: DATASET_CACHE_MAX }; }
+
 export async function buildFor(db: SupabaseClient, surveyId: string, ctx: LoadedContext, def: AnalysisDefinition): Promise<Dataset> {
+  const stamp = await dataStamp(db, surveyId, def.dataset);
+  const key = JSON.stringify([
+    surveyId, stamp, def.dataset, def.weighting ?? null,
+    ctx.versionId ?? ctx.version ?? null, ctx.revision ?? null,
+  ]);
+  const hit = datasetCache.get(key);
+  if (hit && Date.now() - hit.at < DATASET_TTL_MS) return hit.ds;
+
   const rows = await loadRows(db, surveyId, def.dataset);
   const versioned = await resolveAnalyticsVersions(db, rows, ctx);
-  return buildDataset(ctx.def, rows, { spec: def.dataset, weighting: def.weighting ?? null, versioned });
+  const ds = buildDataset(ctx.def, rows, { spec: def.dataset, weighting: def.weighting ?? null, versioned });
+  if (wasTruncated(rows)) ds.truncatedAt = MAX_ROWS;
+
+  /*
+   * Bounded by entry count rather than bytes, unlike the row cache — a
+   * `Dataset` holds the same rows again in a shape whose heap size
+   * `JSON.stringify` would badly misjudge, and eight datasets is already an
+   * unusual number for one process to be serving at once.
+   */
+  datasetCache.set(key, { at: Date.now(), key, ds });
+  while (datasetCache.size > DATASET_CACHE_MAX) {
+    const oldest = [...datasetCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+    if (!oldest) break;
+    datasetCache.delete(oldest[0]);
+  }
+  return ds;
 }
 
 /**

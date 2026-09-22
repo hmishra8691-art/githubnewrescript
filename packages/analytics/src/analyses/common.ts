@@ -49,6 +49,13 @@ export function makeResult(
   const warnings = [...(parts.warnings ?? [])];
   const lb = lowBaseWarning(ds.cases.length);
   if (lb) warnings.unshift(lb);
+  /*
+   * A truncated dataset is not a slow result, it is a wrong one — every base,
+   * percentage and test in it describes a prefix of the study. It goes at the
+   * FRONT of the warnings, ahead of the low-base note, because no other
+   * caveat on the screen matters if this one is true.
+   */
+  if (ds.truncatedAt) warnings.unshift(`This analysis was computed on the first ${ds.truncatedAt.toLocaleString()} responses only — the study has more. Every base, percentage and test below describes that subset, not the whole study. Narrow the dataset (environment, status or date range) to bring it under the limit.`);
   if (ds.weighted && ds.weightInfo && ds.weightInfo.efficiency < 70) warnings.push(`Weighting efficiency is ${ds.weightInfo.efficiency.toFixed(0)}% (design effect ${ds.weightInfo.designEffect.toFixed(2)}) — effective sample size is reduced.`);
   return {
     kind: def.kind, name: def.name,
