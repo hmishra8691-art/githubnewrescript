@@ -32,18 +32,60 @@ export interface Descriptives {
   quartiles: [number | null, number | null, number | null];
 }
 
-/** Weighted quantile by cumulative weight (type-7 style on unweighted data). */
+/**
+ * KISH EFFECTIVE SAMPLE SIZE — (Σw)² / Σw².
+ *
+ * How many respondents a weighted sample is WORTH for inference. Equals the
+ * plain count exactly when every weight is the same, and falls as the weights
+ * spread out: five cases weighted 1,1,1,1,10 carry about 1.9 cases of
+ * information, not five.
+ *
+ * This is the number that belongs in every denominator that answers "how sure
+ * are we" — the Bessel correction, the standard error, the t degrees of
+ * freedom. `crosstab.ts` has computed it since it was written and uses it for
+ * its significance letters; nothing else in the package did, which is why a
+ * weighted confidence interval was up to five times too narrow.
+ */
+export function effectiveN(wv: Weighted[]): number {
+  let w = 0, w2 = 0;
+  for (const x of wv) { w += x.w; w2 += x.w * x.w; }
+  return w2 ? (w * w) / w2 : 0;
+}
+
+/**
+ * Weighted quantile, type-7 for any weights.
+ *
+ * The previous version interpolated (type 7) only when `every(x => x.w === 1)`
+ * and otherwise returned the first value whose cumulative weight crossed the
+ * target — a different estimator, biased low and discontinuous. An exact float
+ * comparison against 1.0 decided which, so a weight vector of all 1.000001 —
+ * i.e. essentially every real rim-weighted study — silently took the second
+ * path, and doubling every weight (a statistical no-op) changed the answer.
+ *
+ * This is the type-7 plotting position generalised to weights: normalise the
+ * weights to sum to n, let each value sit at the cumulative normalised weight
+ * that precedes it, and interpolate between the two values bracketing p(n-1).
+ * With equal weights each gap is exactly 1 and the positions collapse to
+ * (i-1)/(n-1), so unweighted results are bit-for-bit what they were.
+ */
 export function quantile(sorted: Weighted[], p: number): number | null {
-  if (!sorted.length) return null;
+  const n = sorted.length;
+  if (!n) return null;
+  if (n === 1) return sorted[0].value;
   const total = sorted.reduce((t, x) => t + x.w, 0);
-  if (sorted.every((x) => x.w === 1)) {
-    const idx = (sorted.length - 1) * p, lo = Math.floor(idx), hi = Math.ceil(idx);
-    return sorted[lo].value + (sorted[hi].value - sorted[lo].value) * (idx - lo);
+  if (!total) return null;
+  const scale = n / total;              // normalised weights sum to n, so this is scale-invariant
+  const target = p * (n - 1);
+  let pos = 0;                          // cumulative normalised weight before the current value
+  for (let i = 0; i < n - 1; i++) {
+    const gap = sorted[i].w * scale;
+    if (target <= pos + gap || i === n - 2) {
+      const t = gap ? Math.min(1, Math.max(0, (target - pos) / gap)) : 0;
+      return sorted[i].value + (sorted[i + 1].value - sorted[i].value) * t;
+    }
+    pos += gap;
   }
-  let cum = 0;
-  const target = p * total;
-  for (const x of sorted) { cum += x.w; if (cum >= target) return x.value; }
-  return sorted[sorted.length - 1].value;
+  return sorted[n - 1].value;
 }
 
 export function describe(values: (number | null | undefined)[], weights?: number[], confidence = 0.95): Descriptives {
@@ -57,17 +99,31 @@ export function describe(values: (number | null | undefined)[], weights?: number
   const W = wv.reduce((t, x) => t + x.w, 0);
   const sum = wv.reduce((t, x) => t + x.value * x.w, 0);
   const mean = sum / W;
-  // weighted sample variance with the (n-1)/n reliability correction on effective n
+  /*
+   * Weighted sample variance with the Bessel correction on the EFFECTIVE base.
+   *
+   * The comment here used to say "on effective n" while the code used the raw
+   * count — so the correction, the standard error and the t degrees of freedom
+   * all behaved as though a sample of twenty cases weighted 0.3–3.5 carried
+   * twenty cases of information when it carries about fourteen. Every interval
+   * this produced was too narrow, never too wide, which is the direction that
+   * turns a null result into a finding.
+   *
+   * `nEff` collapses to `n` exactly when the weights are equal, so unweighted
+   * output is unchanged to the last bit.
+   */
+  const nEff = effectiveN(wv);
   const ss = wv.reduce((t, x) => t + x.w * (x.value - mean) ** 2, 0);
-  const variance = n > 1 ? ss / (W * (n - 1) / n) : null;
+  const variance = nEff > 1 ? ss / (W * (nEff - 1) / nEff) : null;
   const sd = variance == null ? null : Math.sqrt(variance);
-  const se = sd == null ? null : sd / Math.sqrt(n);
+  const se = sd == null ? null : sd / Math.sqrt(nEff);
   const sorted = [...wv].sort((a, b) => a.value - b.value);
   const counts = new Map<number, number>();
   for (const x of wv) counts.set(x.value, (counts.get(x.value) ?? 0) + x.w);
   let mode: number | null = null, best = -1;
   for (const [v, c] of counts) if (c > best) { best = c; mode = v; }
-  const tcrit = n > 1 ? tQuantile(1 - (1 - confidence) / 2, n - 1) : normalQuantile(1 - (1 - confidence) / 2);
+  // degrees of freedom follow the effective base too, for the same reason
+  const tcrit = nEff > 1 ? tQuantile(1 - (1 - confidence) / 2, nEff - 1) : normalQuantile(1 - (1 - confidence) / 2);
   const pct: Record<string, number | null> = {};
   for (const p of [5, 10, 25, 50, 75, 90, 95]) pct[`p${p}`] = quantile(sorted, p / 100);
   return {

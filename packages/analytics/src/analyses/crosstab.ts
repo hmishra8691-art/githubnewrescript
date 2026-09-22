@@ -45,6 +45,36 @@ const inc = (m: Map<string, Acc>, k: string, wt: number, v?: number | null) => {
 /** effective base of a weighted column: (Σw)² / Σw² — equals the count when every weight is 1 */
 const effN = (a: Acc | undefined) => (!a || !a.w2 ? 0 : (a.w * a.w) / a.w2);
 
+/**
+ * ONE VARIANCE, USED BY BOTH THE TABLE AND THE TEST.
+ *
+ * There were two. The significance test (`zMeans`) corrected by the effective
+ * base; the SD printed in the cell beside it corrected by the raw count. Same
+ * data, same table, two different numbers — and the printed one disagreed with
+ * the letters that were supposed to explain it.
+ *
+ * Both now call this. Where the raw values were retained it takes the two-pass
+ * form, because the one-pass `Σx²w/W − mean²` it used to share with `zMeans`
+ * loses the answer entirely on large values: on 1e10+1 … 1e10+5 the true SD is
+ * 1.58 and cancellation returned 0, clamped silently by `Math.max(0, …)`.
+ * Income, revenue and spend variables live in exactly that range. The moment
+ * form is kept only for the aggregated accumulators built at the banner level,
+ * which never carry the raw values.
+ */
+function accVariance(a: Acc | undefined): number | null {
+  if (!a || !a.w) return null;
+  const nEff = effN(a);
+  if (nEff <= 1) return null;
+  const mean = a.sum / a.w;
+  const bessel = nEff / (nEff - 1);
+  if (a.vals.length) {
+    let ss = 0;
+    for (let i = 0; i < a.vals.length; i++) ss += a.ws[i] * (a.vals[i] - mean) ** 2;
+    return (ss / a.w) * bessel;
+  }
+  return Math.max(0, a.sumSq / a.w - mean * mean) * bessel;
+}
+
 /** a, b … z, aa, ab … — letters for as many columns as a banner carries */
 export function columnLetter(j: number): string {
   const s = String.fromCharCode(97 + (j % 26));
@@ -65,7 +95,8 @@ function zMeans(a: Acc, b: Acc): number | null {
   const na = effN(a), nb = effN(b);
   if (na < 2 || nb < 2 || !a.w || !b.w) return null;
   const ma = a.sum / a.w, mb = b.sum / b.w;
-  const va = Math.max(0, a.sumSq / a.w - ma * ma) * (na / (na - 1)), vb = Math.max(0, b.sumSq / b.w - mb * mb) * (nb / (nb - 1));
+  const va = accVariance(a), vb = accVariance(b);
+  if (va == null || vb == null) return null;
   const se = Math.sqrt(va / na + vb / nb);
   if (!se) return null;
   return 2 * (1 - normalCdf(Math.abs((ma - mb) / se)));
@@ -212,7 +243,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
         const s = b.nums.get(c.key);
         if (suppressed.has(c.key)) { meanRow[c.key] = null; sdRow[c.key] = null; nRow[c.key] = s?.count ?? 0; continue; }
         const m = s && s.w ? s.sum / s.w : null;
-        const variance = s && s.w && s.count > 1 ? Math.max(0, s.sumSq / s.w - (m ?? 0) ** 2) * (s.count / (s.count - 1)) : null;
+        const variance = accVariance(s);
         meanRow[c.key] = round(m, Math.max(decimals, 2)); sdRow[c.key] = round(variance == null ? null : Math.sqrt(variance), Math.max(decimals, 2)); nRow[c.key] = s?.count ?? 0;
         meanRow[`${c.key}__n`] = s?.count ?? 0;
         if (sig[c.key]) meanRow[`${c.key}__sig`] = sig[c.key];

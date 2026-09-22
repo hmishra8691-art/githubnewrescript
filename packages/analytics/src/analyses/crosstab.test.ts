@@ -182,3 +182,42 @@ test("segment profile: weighted means stay aligned with their cases when values 
   // weights were applied to the wrong respondents once missing values had been dropped
   assert.ok(Math.abs(num(profile.rows[0].mean) - num(xt.rows[0].__total)) < 0.02, `${profile.rows[0].mean} vs ${xt.rows[0].__total}`);
 });
+
+/**
+ * The cell SD and the significance test behind it are one calculation.
+ *
+ * They were two: `zMeans` corrected the variance by the effective base while
+ * the SD printed in the cell corrected by the raw count, so the number on
+ * screen disagreed with the letters explaining it. Both now go through
+ * `accVariance`, which also drops the one-pass moment form on raw values —
+ * `Σx²w/W − mean²` returned an SD of 0 for values around 1e10, which is where
+ * income and revenue live.
+ */
+test("weighted numeric cells: SD is corrected on the effective base, not the raw count", () => {
+  const wds = buildDataset(def, rows, { spec: dsSpec, weighting: { variable: "AGE" } });
+  const r = runAnalysis(XT({ rows: ["AGE"], columns: ["GENDER"] }, { measure: "mean", decimals: 4 }), wds);
+  const sdRow = r.tables[0].rows.find((x) => String(x.row).toLowerCase().includes("deviation"));
+  assert.ok(sdRow, "a weighted numeric crosstab should print an SD row");
+
+  // longhand Kish reference for column "1", from the dataset the analysis saw
+  const cases = wds.cases.filter((c) => String(c.vars.GENDER) === "1" && c.vars.AGE != null && c.weight > 0);
+  const W = cases.reduce((t, c) => t + c.weight, 0);
+  const W2 = cases.reduce((t, c) => t + c.weight * c.weight, 0);
+  const nEff = (W * W) / W2;
+  const mean = cases.reduce((t, c) => t + Number(c.vars.AGE) * c.weight, 0) / W;
+  const ss = cases.reduce((t, c) => t + c.weight * (Number(c.vars.AGE) - mean) ** 2, 0);
+  const expected = Math.sqrt((ss / W) * (nEff / (nEff - 1)));
+
+  const got = num(sdRow!["1"]);
+  const rawCount = Math.sqrt((ss / W) * (cases.length / (cases.length - 1)));
+  /*
+   * Two hundred cases make the two corrections converge — they differ here in
+   * the third decimal — so the tolerances have to be tight enough to tell them
+   * apart. The second assertion is the one that keeps this test honest: if the
+   * fixture's weights ever flatten, it fails rather than passing vacuously.
+   */
+  assert.ok(Math.abs(expected - rawCount) > 1e-3, `weights too flat to distinguish: ${expected} vs ${rawCount}`);
+  // the cell is rounded to 4dp, so compare at that resolution — still far
+  // finer than the ~0.005 gap between the two corrections
+  assert.ok(Math.abs(got - expected) < 5e-5, `SD ${got} should be the Kish-corrected ${expected}, not the raw-count ${rawCount}`);
+});

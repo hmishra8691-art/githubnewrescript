@@ -14,12 +14,36 @@ export interface NpsBreakdown { n: number; promoters: number; passives: number; 
 export function npsOf(values: (number | null)[], w?: number[]): NpsBreakdown {
   let P = 0, N = 0, D = 0, W = 0, n = 0;
   const wv: number[] = [];
-  values.forEach((v, i) => { if (v == null) return; const wt = w?.[i] ?? 1; W += wt; n++; if (v >= 9) P += wt; else if (v >= 7) N += wt; else D += wt; wv.push(v >= 9 ? 100 : v >= 7 ? 0 : -100); });
+  const kept: number[] = [];
+  values.forEach((v, i) => {
+    /*
+     * `v == null` alone let NaN through, and NaN fails every comparison — so
+     * `>= 9` and `>= 7` were both false and it fell to the detractor branch.
+     * An unparseable score was silently scored −100 and counted in the base,
+     * while `mean` (which goes through `describe`, which does drop NaN) was
+     * computed on a different, smaller sample in the same returned object.
+     */
+    if (v == null || !Number.isFinite(v)) return;
+    const wt = w?.[i] ?? 1;
+    if (!(wt > 0)) return;              // match describe(): a zero weight is not a case
+    W += wt; n++;
+    if (v >= 9) P += wt; else if (v >= 7) N += wt; else D += wt;
+    wv.push(v >= 9 ? 100 : v >= 7 ? 0 : -100);
+    kept.push(wt);
+  });
   if (!W) return { n: 0, promoters: 0, passives: 0, detractors: 0, nps: null, ci: null, mean: null };
   const p = (P / W) * 100, d = (D / W) * 100, nps = p - d;
-  // CI from the variance of the −100/0/100 scoring
-  const sd = describe(wv).sd ?? 0;
-  const se = sd / Math.sqrt(n);
+  /*
+   * CI from the variance of the −100/0/100 scoring — WEIGHTED, like the point
+   * estimate above it. It used to call `describe(wv)` with no weights and
+   * divide by the raw count, so a weighted NPS came with an interval computed
+   * from a different sample than the number it bracketed: on ten cases where
+   * one carried a weight of 40, the interval was five and a half times too
+   * narrow. `describe` now corrects on the effective base, so passing the
+   * weights is the whole fix.
+   */
+  const dsc = describe(wv, kept);
+  const se = dsc.se ?? 0;
   return { n, promoters: p, passives: (N / W) * 100, detractors: d, nps, ci: [nps - 1.96 * se, nps + 1.96 * se], mean: describe(values, w).mean };
 }
 
