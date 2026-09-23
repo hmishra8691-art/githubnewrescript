@@ -12,6 +12,8 @@ export function VersionsPanel() {
   const s = useStudio();
   const [versions, setVersions] = React.useState<VersionRow[]>([]);
   const [deployments, setDeployments] = React.useState<DeploymentRow[]>([]);
+  /** the test slug to hang a pinned `?v=` link off; there is at most one */
+  const testDeployment = deployments.find((d) => d.mode === "test") ?? null;
   const [compareA, setCompareA] = React.useState<string>("");
   const [compareB, setCompareB] = React.useState<string>("");
   const [diff, setDiff] = React.useState<string | null>(null);
@@ -167,7 +169,25 @@ export function VersionsPanel() {
                   >
                     replace editor with this
                   </button>{" "}
-                  <a className="btn small" href={`/api/surveys/${s.surveyDbId}/export/xlsx?versionId=${v.id}`}>vars.xlsx</a>
+                  <a className="btn small" href={`/api/surveys/${s.surveyDbId}/export/xlsx?versionId=${v.id}`}>vars.xlsx</a>{" "}
+                  {/*
+                    * TEST ONE EXACT BUILD.
+                    *
+                    * The Test Survey button no longer pins `?v=`, so the test
+                    * link follows the autosaved draft and a reload shows the
+                    * latest work — that is what makes the edit/test loop work
+                    * without restarting anything. `?v=` is still the way to
+                    * run one frozen version, which is what you want when
+                    * reproducing something a respondent saw, and this is now
+                    * the place that offers it.
+                    */}
+                  {testDeployment && (
+                    <a className="btn small" target="_blank" rel="noreferrer"
+                      data-testid="version-test-pinned"
+                      title={`Open the test link pinned to v${v.version}. Versions are immutable, so this build cannot change.`}
+                      href={`${runtimeBase}/t/${testDeployment.client_slug}/${testDeployment.study_slug}?v=${encodeURIComponent(v.id)}`}
+                    >test v{v.version}</a>
+                  )}
                 </td>
               </tr>
             ))}

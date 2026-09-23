@@ -603,6 +603,68 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
    * first 45px of each would sit underneath it. Measuring beats hard-coding:
    * the row wraps on a narrow window and the build/position chips come and go.
    */
+  /**
+   * LIVE SYNC: notice that Studio has moved on, without restarting anything.
+   *
+   * The runtime has always served the latest work — `decideTestBuild` reads
+   * `surveys.draft_definition` fresh from Postgres on every request, and that
+   * read is deliberately excluded from the version cache because it changes on
+   * every autosave. A reload has therefore always shown the newest draft. The
+   * missing piece was never the data path: it was that an OPEN tab had no way
+   * to know a reload was worth doing, so a programmer who changed a question
+   * saw nothing change and concluded the runtime needed restarting.
+   *
+   * So the tab asks. One indexed read of the survey's revision counter, every
+   * few seconds, in test mode only, and only for a session running the draft —
+   * a `?v=` session is pinned to an immutable version on purpose and must not
+   * be told it is out of date, because it cannot be.
+   *
+   * The tab PULLS. Studio pushes nothing and knows nothing about who is
+   * testing, which is what keeps the authoring plane and the execution plane
+   * separate; it also means this works across any number of runtime instances
+   * with no socket, queue or shared process.
+   *
+   * Noticing is all it does. Applying is a reload, because the reload path is
+   * the one that already exists, is already correct, and puts the tester back
+   * where they were via the resume pointer. Swapping a definition underneath a
+   * live session is a different and much sharper problem — step indices are
+   * positions in a compiled array, randomisation is re-derived from the seed
+   * on every compile, and loop answers are keyed by item code — so it is not
+   * done silently here.
+   */
+  const [updateAvailable, setUpdateAvailable] = React.useState<number | null>(null);
+  React.useEffect(() => {
+    if (mode !== "test") return;
+    // a pinned version cannot change; saying otherwise would be a lie
+    if (!build || build.source === "requested") return;
+    const surveyId = sessionBoot?.surveyDbId;
+    if (!surveyId || build.revision == null) return;
+
+    let stopped = false;
+    const POLL_MS = 4000;
+    const tick = async () => {
+      try {
+        const r = await fetch(`/api/session/build-stamp?survey=${encodeURIComponent(surveyId)}`, { cache: "no-store" });
+        if (!r.ok) return;
+        const d = await r.json();
+        if (stopped) return;
+        if (typeof d.revision === "number" && build.revision != null && d.revision > build.revision) {
+          setUpdateAvailable(d.revision);
+        }
+      } catch { /* a poll that fails is a poll; the tester is not interrupted */ }
+    };
+    const id = setInterval(() => { void tick(); }, POLL_MS);
+    /*
+     * Ask immediately when the tab comes back to the front. A programmer
+     * switches to Studio, edits, and switches back — the answer should be
+     * waiting for them rather than up to four seconds away.
+     */
+    const onVisible = () => { if (document.visibilityState === "visible") void tick(); };
+    document.addEventListener("visibilitychange", onVisible);
+    void tick();
+    return () => { stopped = true; clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
+  }, [mode, build, sessionBoot?.surveyDbId]);
+
   const toolbarRef = React.useRef<HTMLDivElement | null>(null);
   React.useEffect(() => {
     const el = toolbarRef.current;
@@ -1699,6 +1761,13 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
           {build.revision != null && ` · rev ${build.revision}`}
           {build.source === "draft" && " · autosaved"}
         </span>
+      )}
+      {updateAvailable != null && (
+        <button className="rs-toolbar-update" data-testid="build-update"
+          onClick={() => window.location.reload()}
+          title={`The Studio has saved newer work (revision ${updateAvailable}). Reloading picks it up and returns you to the page you were on.`}>
+          ↻ Studio changes available — apply
+        </button>
       )}
       {blockIndex > 0 && (
         <span className="rs-toolbar-pos" data-testid="block-position">

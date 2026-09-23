@@ -738,8 +738,30 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
       fail(d.error ?? "The test link could not be deployed. Your version was saved; please retry.");
       return;
     }
-    const url = `${d.url}${d.url.includes("?") ? "&" : "?"}v=${encodeURIComponent(versionId)}`;
-    console.info("[rescript:test] opening", { surveyId: s.surveyDbId, versionId, version: defRef.current.meta.version, revision: s.revision, url });
+    /*
+     * THE TEST LINK NO LONGER PINS A VERSION, AND THAT IS THE WHOLE FIX FOR
+     * "I HAVE TO RESTART THE RUNTIME TO SEE MY CHANGE".
+     *
+     * It used to append `?v=<versionId>`. That is branch ONE of
+     * `decideTestBuild` — an explicit version, which the database enforces as
+     * immutable (`rescript_versions_are_immutable`). So every later edit wrote
+     * `surveys.draft_definition` and bumped the revision while the test tab,
+     * reloaded any number of times, kept resolving the same frozen snapshot.
+     * Nothing was stale and no cache was at fault: the URL was asking for the
+     * old build, and the runtime was correctly giving it.
+     *
+     * Without the pin the same link falls to branch TWO — the autosaved draft,
+     * read straight from Postgres on every request and deliberately excluded
+     * from the version cache because it changes on every autosave. A reload
+     * now shows the latest work, and the runtime's resume pointer puts the
+     * tester back on the page they were on.
+     *
+     * The version is still cut, still deployed and still logged: that is what
+     * makes the state reproducible and is what the Versions panel pins with
+     * `?v=` when somebody genuinely wants to test one exact build.
+     */
+    const url = d.url;
+    console.info("[rescript:test] opening", { surveyId: s.surveyDbId, versionId, version: defRef.current.meta.version, revision: s.revision, url, pinned: false });
     setLastTest({ version: defRef.current.meta.version, revision: s.revision });
     if (tab && !tab.closed) tab.location.href = url;
     else {
