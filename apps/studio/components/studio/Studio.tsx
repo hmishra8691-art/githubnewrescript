@@ -434,6 +434,27 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
 
   const [saving, setSaving] = React.useState(false);
   const savingRef = React.useRef(false);
+  /**
+   * WHY THE LAST SAVE WAS REFUSED, KEPT ON SCREEN.
+   *
+   * The server has always said exactly what was wrong. A version cut refused
+   * by the publish gate returns up to twenty blocking problems in `lint`; a
+   * definition that fails the schema returns the offending paths in `issues`.
+   * Every one of them was dropped on the floor: `save()` raised a toast
+   * carrying only `d.error`, and a toast clears itself after 3.5 seconds.
+   *
+   * So the gate's own message — "Fix them in the Quality panel, or see the
+   * list below" — was shown with no list below it, and `testSurvey` then
+   * replaced even that with "could not be saved, please retry", which for a
+   * lint failure is advice that can never work: retrying a survey with a
+   * blocking problem fails identically every time.
+   *
+   * This holds the refusal until the programmer dismisses it.
+   */
+  const [blocker, setBlocker] = React.useState<
+    { title: string; message: string; problems: { area: string; message: string }[]; retryable: boolean } | null
+  >(null);
+
   const [publishState, setPublishState] = React.useState<
     { mode: string; version: string; client_slug: string; study_slug: string }[] | null
   >(null);
@@ -462,7 +483,17 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
    * that is merged into whatever the definition has become.
    */
   const save = async (label?: string): Promise<string | null> => {
-    if (savingRef.current) return null; // one save at a time
+    /*
+     * A save already running is NOT a failed save. This returned a bare
+     * `null`, indistinguishable from a refusal, so a click that arrived while
+     * autosave was mid-flight was reported to the user as "your changes could
+     * not be saved" when nothing had gone wrong at all.
+     */
+    if (savingRef.current) {
+      s.toast("A save is already running — give it a moment and try again.", "err");
+      return null;
+    }
+    setBlocker(null);
     /*
      * A conflict means this editor is BEHIND the server: someone (or another
      * tab) saved newer work. Cutting a version from here would write this
@@ -548,7 +579,30 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
       }
       if (!r.ok) {
         console.warn("[rescript:save] version FAILED", { surveyId: s.surveyDbId, baseRevision, status: r.status, error: d.error, ms: Date.now() - startedAt });
-        s.toast(d.error ?? "save failed", "err");
+        /*
+         * 422 is the server saying the definition is wrong, not that the
+         * network is. It carries the detail — `lint.problems` from the publish
+         * gate, `issues` from the schema — and neither is retryable, so both
+         * get the panel rather than a toast that tells the user to try again.
+         */
+        const problems: { area: string; message: string }[] = Array.isArray(d.lint?.problems)
+          ? d.lint.problems
+          : Array.isArray(d.issues)
+            ? d.issues.map((i: unknown) =>
+                typeof i === "string"
+                  ? { area: "definition", message: i }
+                  : { area: ((i as { path?: unknown[] }).path ?? []).join(".") || "definition", message: String((i as { message?: unknown }).message ?? i) })
+            : [];
+        if (problems.length || r.status === 422) {
+          setBlocker({
+            title: r.status === 422 ? "This version was not saved" : `Save failed (${r.status})`,
+            message: d.error ?? "The server refused this definition.",
+            problems,
+            retryable: r.status !== 422,
+          });
+        } else {
+          s.toast(d.error ?? `save failed (${r.status})`, "err");
+        }
         return null;
       }
       console.debug("[rescript:save] version done", { surveyId: s.surveyDbId, baseRevision, newRevision: d.revision, version: d.version, versionId: d.id, ms: Date.now() - startedAt });
@@ -641,7 +695,16 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
     };
     const versionId = await save("test build");
     if (!versionId) {
-      fail("Your latest changes could not be saved. Please retry before starting the test survey.");
+      /*
+       * `save()` has already said why — in the blocker panel for a refused
+       * definition, or in a toast for everything else. Raising a second,
+       * vaguer message here OVERWROTE it: the toast is a single slot, so the
+       * specific reason lived for a few milliseconds before "could not be
+       * saved, please retry" replaced it. That is the message in the bug
+       * report, and it is the one message that cannot be acted on.
+       */
+      console.warn("[rescript:test] refused", { surveyId: s.surveyDbId, reason: "save did not produce a version" });
+      if (tab && !tab.closed) tab.close();
       return;
     }
     const dep = defRef.current.deployment;
@@ -659,6 +722,19 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
     });
     const d = await r.json().catch(() => ({}));
     if (!r.ok || !d.url) {
+      const problems = Array.isArray(d.lint?.problems) ? d.lint.problems : [];
+      if (problems.length) {
+        // the deploy gate has no override, so this is never "retry"
+        setBlocker({
+          title: "The test link was not deployed",
+          message: d.error ?? "This survey has problems that would reach respondents.",
+          problems,
+          retryable: false,
+        });
+        console.warn("[rescript:test] refused", { surveyId: s.surveyDbId, reason: "deploy gate" });
+        if (tab && !tab.closed) tab.close();
+        return;
+      }
       fail(d.error ?? "The test link could not be deployed. Your version was saved; please retry.");
       return;
     }
@@ -805,6 +881,33 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           {saving ? "Saving…" : "Save version"}
         </button>
       </div>
+      {blocker && (
+        <div className="save-blocker" role="alert" data-testid="save-blocker">
+          <div className="save-blocker-head">
+            <strong>{blocker.title}</strong>
+            <button className="btn small" data-testid="save-blocker-close" onClick={() => setBlocker(null)}>Dismiss</button>
+          </div>
+          <p className="save-blocker-msg">{blocker.message}</p>
+          {blocker.problems.length > 0 && (
+            <ul className="save-blocker-list" data-testid="save-blocker-problems">
+              {blocker.problems.map((pb, i) => (
+                <li key={`${pb.area}:${i}`}>
+                  <span className="save-blocker-area">{pb.area}</span> {pb.message}
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="row" style={{ gap: 8, marginTop: 10 }}>
+            {/* the survey lint lives in the Logic panel — a button, not an instruction */}
+            <button className="btn small" data-testid="save-blocker-checks"
+              onClick={() => { setTab("logic"); setBlocker(null); }}>Open the logic checks</button>
+            {blocker.retryable && (
+              <button className="btn small" data-testid="save-blocker-retry"
+                onClick={() => { setBlocker(null); void save(); }}>Try again</button>
+            )}
+          </div>
+        </div>
+      )}
       {exportOpen && <ExportDialog onClose={() => setExportOpen(false)} />}
       <ReadOnlyBar surveyId={s.surveyDbId} onOpen={() => setTab("usage")} />
       {liveIsBehind && (

@@ -545,6 +545,21 @@ body.flow-dragging .flow-dropzone { height: 26px; }
 .qbar > div.full { background: var(--red); }
 
 /* toast */
+/*
+ * A REFUSED SAVE STAYS ON SCREEN.
+ *
+ * The toast below clears after 3.5 seconds, which is fine for "Saved version
+ * 1.4" and useless for a list of twenty blocking problems. A refusal is not a
+ * notification, it is work the programmer has to do, so it sits above the
+ * editor until dismissed and scrolls if the list is long.
+ */
+.save-blocker { position: fixed; top: 64px; right: 18px; width: min(520px, calc(100vw - 36px)); max-height: min(60vh, 560px); overflow: auto; background: var(--panel); border: 1px solid var(--red); border-radius: 10px; padding: 14px 16px; z-index: 120; box-shadow: 0 10px 34px rgba(15,23,42,.18); }
+.save-blocker-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--red); }
+.save-blocker-msg { margin: 8px 0 0; font-size: .9rem; color: var(--ink-2, inherit); }
+.save-blocker-list { margin: 10px 0 0; padding-left: 0; list-style: none; display: grid; gap: 6px; }
+.save-blocker-list li { font-size: .86rem; line-height: 1.45; padding: 7px 9px; background: var(--mist-2, rgba(127,127,127,.06)); border-radius: 7px; }
+.save-blocker-area { display: inline-block; font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; opacity: .7; margin-right: 6px; }
+
 .toast { position: fixed; bottom: 18px; right: 18px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; z-index: 100; box-shadow: 0 6px 24px rgba(15,23,42,.14); }
 .toast.err { border-color: var(--red); color: var(--red); }
 .toast.ok { border-color: var(--green); }

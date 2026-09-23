@@ -75,9 +75,21 @@ export function publishGate(def: SurveyDefinition): GateVerdict {
  */
 export function gateRefusal(verdict: GateVerdict, what: string) {
   return {
+    /*
+     * It said "Fix them in the Quality panel". There is no Quality panel for
+     * this: `runQualityCheck` is the SURVEY lint and it is rendered by the
+     * Logic panel, while the panel actually called Quality scores collected
+     * responses for speeding and straightlining. A programmer following this
+     * sentence went to the wrong place and found nothing wrong there.
+     *
+     * "See the list below" was also a promise the Studio did not keep — it
+     * rendered this string as a toast and dropped `lint.problems` entirely.
+     * Both halves of the sentence are now true.
+     */
     error:
       `This survey has ${verdict.result.errors} problem${verdict.result.errors === 1 ? "" : "s"} that would ` +
-      `reach respondents, so it was not ${what}. Fix them in the Quality panel, or see the list below.`,
+      `reach respondents, so it was not ${what}. They are listed below, and the Logic panel's checks ` +
+      `show them in context.`,
     lint: {
       status: verdict.result.status,
       errors: verdict.result.errors,
