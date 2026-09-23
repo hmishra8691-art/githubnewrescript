@@ -701,3 +701,82 @@ export function renameVariable(
   if (!impact.ok) return { ok: false, impact };
   return { ok: true, def: applyRename(def, oldName, newName, { alsoCode: opts.alsoCode }), impact };
 }
+
+/* ------------------------------------------------------- naming a copy */
+
+/**
+ * EVERY NAME THAT ALREADY MEANS SOMETHING IN THIS SURVEY.
+ *
+ * Codes and variable names share one namespace, because
+ * `getQuestionByCodeOrVar` resolves both — so a copy whose CODE collides with
+ * another question's VARIABLE NAME is just as broken as two identical
+ * variable names, and a uniqueness check that looks at only one of them finds
+ * only half the collisions. Calculation targets, embedded-data fields and the
+ * reserved system columns are in the same namespace for the same reason.
+ */
+export function usedNames(def: SurveyDefinition): Set<string> {
+  const taken = new Set<string>(RESERVED);
+  for (const q of def.questions ?? []) {
+    if (q.code) taken.add(q.code);
+    if (q.variableName) taken.add(q.variableName);
+  }
+  for (const c of def.calculations ?? []) if (c.targetVariable) taken.add(c.targetVariable);
+  for (const node of def.flow ?? []) collectEmbeddedNames(node as Record<string, unknown>, taken);
+  return taken;
+}
+
+/** Embedded-data fields live on flow nodes, at any depth. */
+function collectEmbeddedNames(node: Record<string, unknown>, into: Set<string>): void {
+  if (!node || typeof node !== "object") return;
+  const fields = (node as { fields?: { name?: string }[] }).fields;
+  if (Array.isArray(fields)) for (const f of fields) if (f?.name) into.add(f.name);
+  for (const key of ["children", "branches", "cases"]) {
+    const kids = (node as Record<string, unknown>)[key];
+    if (Array.isArray(kids)) for (const k of kids) collectEmbeddedNames(k as Record<string, unknown>, into);
+  }
+}
+
+/**
+ * NAME A DUPLICATED QUESTION SO IT CANNOT COLLIDE.
+ *
+ * Both duplicate paths in the Studio appended `_COPY` blindly. Duplicating one
+ * question TWICE therefore produced two questions with the same code and the
+ * same variable name — and a duplicate variable name is a blocking problem at
+ * the publish gate, so the survey then could not be versioned or tested at
+ * all. The reported symptom was "my changes could not be saved"; this is what
+ * was actually wrong.
+ *
+ * The code and the variable name take the SAME suffix, chosen so that neither
+ * collides. They are usually identical (`Q1`/`Q1`) and a programmer reasonably
+ * expects them to stay in step, so numbering them independently — `Q1_COPY`
+ * with `Q1_COPY_2` — would be its own small betrayal.
+ *
+ * `taken` is passed in and mutated by the caller rather than recomputed per
+ * question, because duplicating a BLOCK mints several copies before any of
+ * them is in the definition; recomputing from `def` each time would hand the
+ * same name to every question in the block.
+ */
+export function copyNames(
+  taken: Set<string>,
+  from: { code?: string; variableName?: string },
+): { code: string; variableName: string } {
+  const code = from.code ?? "";
+  const variableName = from.variableName ?? "";
+  for (let n = 1; n < 1000; n++) {
+    const suffix = n === 1 ? "_COPY" : `_COPY_${n}`;
+    const c = `${code}${suffix}`;
+    const v = `${variableName}${suffix}`;
+    // a name is free only if BOTH are, so the two stay in step
+    if (!taken.has(c) && !taken.has(v)) {
+      taken.add(c);
+      taken.add(v);
+      return { code: c, variableName: v };
+    }
+  }
+  /* a thousand copies of one question is not a real survey; rather than loop
+     for ever, fall back to something that cannot collide */
+  const unique = `_COPY_${Date.now().toString(36).toUpperCase()}`;
+  taken.add(`${code}${unique}`);
+  taken.add(`${variableName}${unique}`);
+  return { code: `${code}${unique}`, variableName: `${variableName}${unique}` };
+}

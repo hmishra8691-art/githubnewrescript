@@ -89,6 +89,7 @@ import {
   POSTAL_FORMATS,
   CURRENCIES,
   type QuestionReference,
+  usedNames, copyNames,
 } from "@rescript/engine"; // also registers builtin question types
 import { isEmptyOptionLogic } from "@rescript/schema";
 import { useStudio, uid } from "./store";
@@ -2026,6 +2027,15 @@ export function QuestionsPanel() {
        */
       const idMap = new Map<string, string>();
       const copiedQuestions: any[] = [];
+      /*
+       * ONE `taken` SET FOR THE WHOLE BLOCK.
+       *
+       * The copies are minted before any of them is in the definition, so
+       * recomputing the used names per question would hand the same suffix to
+       * every question in the block — the bug this fixes, multiplied by the
+       * block's length.
+       */
+      const taken = usedNames(d);
       const copyPage = (page: any) => {
         const newIds: string[] = [];
         for (const qid of page.questionIds) {
@@ -2033,8 +2043,9 @@ export function QuestionsPanel() {
           if (!q) continue;
           const copy = structuredClone(q);
           copy.id = uid("q");
-          copy.code = `${q.code}_COPY`;
-          copy.variableName = `${q.variableName}_COPY`;
+          const named = copyNames(taken, q);
+          copy.code = named.code;
+          copy.variableName = named.variableName;
           reidentify(copy);
           idMap.set(q.id, copy.id);
           /* questions are named by code and by variable name as well as by id
@@ -2248,8 +2259,19 @@ export function QuestionsPanel() {
       if (!q) return;
       const copy = structuredClone(q);
       copy.id = uid("q");
-      copy.code = `${q.code}_COPY`;
-      copy.variableName = `${q.variableName}_COPY`;
+      /*
+       * The suffix is chosen against the whole survey, not appended blindly.
+       *
+       * It used to be `${q.code}_COPY` unconditionally, so duplicating the
+       * SAME question twice produced two questions with the same code and the
+       * same variable name. A duplicate variable name is a blocking problem at
+       * the publish gate, so the survey could then no longer be versioned or
+       * tested — which is how this surfaced as "my changes could not be saved"
+       * rather than as anything to do with duplication.
+       */
+      const named = copyNames(usedNames(d), q);
+      copy.code = named.code;
+      copy.variableName = named.variableName;
       reidentify(copy);
       d.questions.push(copy);
       for (const pg of listPages(d.flow as any[])) {
