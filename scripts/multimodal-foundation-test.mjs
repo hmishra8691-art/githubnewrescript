@@ -49,7 +49,8 @@ const selectCard = async (n) => {
   throw new Error(`could not select card ${n}`);
 };
 
-await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
+// a previous suite may have left another mode remembered in this browser profile; this suite is about the Studio shell
+await page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "networkidle" });
 await page.waitForSelector(".block-badge");
 
 /* ----------------------------------------------------------- selector */
@@ -62,11 +63,11 @@ await page.waitForSelector(".block-badge");
   ok("Studio is the active, available mode");
   const built = modes.filter((m) => m.available === "1").map((m) => m.id);
   const unbuilt = modes.filter((m) => m.available === "0");
-  assert.deepEqual(built, ["studio", "grid"], "the modes with a renderer so far");
+  assert.deepEqual(built, ["studio", "grid", "architect"], "the modes with a renderer so far");
   for (const m of unbuilt) assert.ok(!m.active && m.disabled, JSON.stringify(m));
   ok(`the ${unbuilt.length} unbuilt modes are visible, disabled and marked coming-soon`);
-  const title = await page.getAttribute('[data-testid="mode-architect"]', "title");
-  assert.match(title, /Control every detail/);
+  const title = await page.getAttribute('[data-testid="mode-flow"]', "title");
+  assert.match(title, /See the survey's behavior/);
   ok("a disabled mode still tells you what it will be");
 }
 
@@ -76,7 +77,7 @@ await page.waitForSelector(".block-badge");
   await page.keyboard.press(`${mod}+k`);
   await page.waitForSelector('[data-testid="command-palette"]');
   ok(`${mod}+K opens the palette`);
-  assert.equal(await page.evaluate(() => document.activeElement?.dataset.testid), "palette-input");
+  await page.waitForFunction(() => document.activeElement?.dataset.testid === "palette-input", null, { timeout: 2000 });
   ok("the search field has focus on open");
   const groups = await page.$$eval(".palette-group", (els) => els.map((e) => e.textContent));
   assert.ok(groups.includes("Add") && groups.includes("Navigate"), groups.join(", "));
@@ -260,13 +261,13 @@ await page.waitForSelector(".block-badge");
 
 /* ----------------------------------------------------------- ?mode= */
 {
-  await page.goto(`${STUDIO}/sandbox?mode=architect`, { waitUntil: "networkidle" });
+  await page.goto(`${STUDIO}/sandbox?mode=flow`, { waitUntil: "networkidle" });
   await page.waitForSelector('[data-testid="mode-selector"]');
   const active = await page.$eval('[data-testid="mode-selector"] .mode-option.active', (e) => e.dataset.mode);
   assert.equal(active, "studio");
-  ok("?mode=architect falls back to Studio while Architect has no renderer — never an empty screen");
+  ok("?mode=flow falls back to Studio while Flow has no renderer — never an empty screen");
   const url = page.url();
-  assert.ok(url.includes("mode=architect") || !url.includes("mode="), "the url is left alone until a real switch happens");
+  assert.ok(url.includes("mode=flow") || !url.includes("mode="), "the url is left alone until a real switch happens");
   ok("the URL is not rewritten by the fallback");
   await page.goto(`${STUDIO}/sandbox?mode=grid`, { waitUntil: "networkidle" });
   await page.waitForSelector('[data-testid="grid-view"]');

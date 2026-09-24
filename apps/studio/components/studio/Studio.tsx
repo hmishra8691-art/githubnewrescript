@@ -40,6 +40,7 @@ import { CommandPalette } from "./CommandPalette";
 import { ModeSelector } from "./ModeSelector";
 import { useMode } from "./ModeContext";
 import { GridView } from "../grid/GridView";
+import { ArchitectView } from "../architect/ArchitectView";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
@@ -319,7 +320,7 @@ function SaveIndicator() {
  * own), so `main` actually uses the freed space instead of leaving a blank
  * gutter where the panel used to be.
  */
-function RightPanel({ tab }: { tab: Tab }) {
+function RightPanel({ tab, hidden = false }: { tab: Tab; hidden?: boolean }) {
   const s = useStudio();
   /*
    * COLLAPSED BY THE AUTHOR, as distinct from hidden because nothing is
@@ -331,7 +332,7 @@ function RightPanel({ tab }: { tab: Tab }) {
    */
   const [collapsed, setCollapsed] = React.useState(false);
   const selected = !!selectedQuestion(s);
-  const showProperties = tab === "questions" && selected && !collapsed;
+  const showProperties = tab === "questions" && selected && !collapsed && !hidden;
   const asideRef = React.useRef<HTMLElement>(null);
 
   /*
@@ -352,7 +353,7 @@ function RightPanel({ tab }: { tab: Tab }) {
    * re-render can move the element out from under the event.
    */
   React.useEffect(() => {
-    if (!selected || tab !== "questions") return;
+    if (!selected || tab !== "questions" || hidden) return;
     const onDown = (e: PointerEvent) => {
       const t = e.target as HTMLElement | null;
       if (!t) return;
@@ -364,7 +365,7 @@ function RightPanel({ tab }: { tab: Tab }) {
     };
     document.addEventListener("pointerdown", onDown, true);
     return () => document.removeEventListener("pointerdown", onDown, true);
-  }, [selected, tab, s]);
+  }, [selected, tab, s, hidden]);
 
   return (
     <>
@@ -1048,7 +1049,11 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
             * been. Grid shows the same questions as rows. Both read and
             * write the same store, so switching is a re-render, not a load.
             */}
-          {tab === "questions" && (programmingMode === "grid" ? <GridView /> : <QuestionsPanel />)}
+          {tab === "questions" && (
+            programmingMode === "grid" ? <GridView />
+            : programmingMode === "architect" ? <ArchitectView />
+            : <QuestionsPanel />
+          )}
           {tab === "settings" && (
             /*
              * Sept 21 follow-up ("Priority UI Fix: Survey Flow & Survey
@@ -1103,7 +1108,8 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
             </>
           )}
         </main>
-        <RightPanel tab={tab} />
+        {/* Architect carries its own inspector, so the outer property panel steps aside there */}
+        <RightPanel tab={tab} hidden={programmingMode === "architect" && tab === "questions"} />
       </div>
       </CanvasProvider>
     </div>

@@ -32,8 +32,11 @@ export function CommandPalette() {
 
   const open = !!api?.paletteOpen;
 
+  // the query is cleared on CLOSE, not on open: clearing on open raced the
+  // first keystrokes of someone (or a test) who typed the instant it appeared
   React.useEffect(() => {
-    if (open) { setQuery(""); setCursor(0); setTimeout(() => inputRef.current?.focus(), 0); }
+    if (open) { setCursor(0); inputRef.current?.focus(); setTimeout(() => inputRef.current?.focus(), 0); }
+    else setQuery("");
   }, [open]);
 
   // Escape closes from anywhere, not only from inside the input — focus may

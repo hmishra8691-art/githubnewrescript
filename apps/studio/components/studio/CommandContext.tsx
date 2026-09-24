@@ -103,6 +103,8 @@ export function CommandProvider({
       },
       setTab,
       setMode(m) { mode?.setMode(m); },
+      focus: mode?.focus ?? false,
+      setFocus(on) { mode?.setFocus(on); },
       uid,
       newQuestion(def: SurveyDefinition): Question {
         const v = variantRegistry.get("single_select.radio")!;

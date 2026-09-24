@@ -32,6 +32,9 @@ export interface StudioCommandContext extends CommandContextBase {
   selectQuestion(id: string | null): void;
   setTab(tab: string): void;
   setMode(mode: ProgrammingMode): void;
+  /** focus mode: dim everything outside the selection's dependency neighbourhood */
+  focus: boolean;
+  setFocus(on: boolean): void;
   /** the Studio's id generator, so ids look the way the browser suites expect */
   uid(prefix: string): string;
   /** build a fresh question of the default variant, named for this survey */
@@ -184,6 +187,13 @@ export function builtinCommands(): C[] {
     id: "palette.open", title: "Command palette", group: "Navigate", shortcut: "mod+k", global: true,
     keywords: ["search", "commands", "find"],
     run(ctx) { ctx.shell?.openPalette?.(); },
+  });
+
+  cmds.push({
+    id: "view.toggleFocus", title: "Toggle focus mode", group: "Navigate", shortcut: "mod+shift+f",
+    keywords: ["focus", "dim", "dependencies only", "isolate"],
+    when: (ctx) => ctx.mode !== "studio",
+    run(ctx) { ctx.setFocus(!ctx.focus); },
   });
 
   /* ------------------------------------------------------------ mode */

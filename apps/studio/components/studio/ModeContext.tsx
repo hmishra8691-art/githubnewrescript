@@ -24,6 +24,14 @@ interface ModeState {
   setMode(mode: ProgrammingMode): void;
   /** the modes, with availability, for selectors and the palette */
   modes: typeof MODES;
+  /**
+   * FOCUS MODE (§14): everything outside the selection's dependency
+   * neighbourhood goes visually secondary. A view-level switch, so it lives
+   * with the mode rather than in any one renderer — Architect dims its map,
+   * Flow will dim its canvas, Grid its rows, all from this one flag.
+   */
+  focus: boolean;
+  setFocus(on: boolean): void;
 }
 
 const Ctx = React.createContext<ModeState | null>(null);
@@ -48,7 +56,8 @@ export function ModeProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const value = React.useMemo<ModeState>(() => ({ mode, setMode, modes: MODES }), [mode, setMode]);
+  const [focus, setFocus] = React.useState(false);
+  const value = React.useMemo<ModeState>(() => ({ mode, setMode, modes: MODES, focus, setFocus }), [mode, setMode, focus]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

@@ -607,3 +607,32 @@ export function validateFlowStructure(flow: FlowNode[]): FlowStructureIssue[] {
 
   return issues;
 }
+
+/**
+ * The list a container addresses, inside `flow` — the root, a container's
+ * `children`, a branch's `otherwise`, or one arm's `children`.
+ */
+export function containerList(flow: FlowNode[], c: FlowContainer): FlowNode[] | null {
+  if (c.ownerId === null) return flow;
+  const owner = findNode(flow, c.ownerId) as unknown as { children?: FlowNode[]; otherwise?: FlowNode[]; branches?: { id: string; children: FlowNode[] }[] } | null;
+  if (!owner) return null;
+  if (c.slot === "children") return owner.children ?? null;
+  if (c.slot === "otherwise") return owner.otherwise ?? [];
+  const b = owner.branches?.find((x) => x.id === c.slot.slice("branch:".length));
+  return b?.children ?? null;
+}
+
+/**
+ * Replace the node with `id` by `next`, wherever it sits, IN PLACE. Returns
+ * false when no such node exists. The Survey Flow panel and the Architect
+ * workspace both edit a node through this, so a node edited in either place
+ * lands in the same slot.
+ */
+export function replaceFlowNode(flow: FlowNode[], id: string, next: FlowNode): boolean {
+  const loc = locateNode(flow, id);
+  if (!loc) return false;
+  const list = containerList(flow, loc.container);
+  if (!list) return false;
+  list[loc.index] = next;
+  return true;
+}

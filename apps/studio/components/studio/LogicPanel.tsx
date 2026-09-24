@@ -266,6 +266,75 @@ const TARGET_KINDS: { kind: DisplayRuleTarget["kind"]; label: string; hint: stri
   { kind: "column", label: "Column", hint: "one column of a composite question" },
 ];
 
+/**
+ * ONE NAMED DISPLAY RULE, EDITABLE. Extracted from the Logic panel's list so
+ * the Architect workspace can show a single rule; the Logic panel renders the
+ * same component per rule, so the two never drift.
+ */
+export function DisplayRuleCard({ index }: { index: number }) {
+  const s = useStudio();
+  const r = s.def.displayRules[index];
+  if (!r) return null;
+  return (
+    <div className="card" style={{ padding: 10 }} data-testid={`display-rule-${index}`}>
+      <div className="row" style={{ marginBottom: 6 }}>
+        <input className="input" style={{ width: 180 }} placeholder="rule label" value={r.label ?? ""}
+          onChange={(e) => s.update((d) => { d.displayRules[index].label = e.target.value; })} />
+        <select className="select" value={r.action}
+          onChange={(e) => s.update((d) => { d.displayRules[index].action = e.target.value as any; })}>
+          <option value="show">SHOW</option><option value="hide">HIDE</option>
+        </select>
+        <RuleTargetPicker index={index} />
+        <button className="btn small danger"
+          onClick={() => s.update((d) => { d.displayRules.splice(index, 1); })}>×</button>
+      </div>
+      <div className="flabel">WHEN</div>
+      <ConditionEditor value={r.when}
+        onChange={(when) => s.update((d) => { d.displayRules[index].when = when; })} />
+    </div>
+  );
+}
+
+/** ONE CALCULATION, EDITABLE — the Calculations tab's card, shared with Architect. */
+export function CalculationCard({ index, error }: { index: number; error?: string | null }) {
+  const s = useStudio();
+  const c = s.def.calculations[index];
+  // the Calculations tab validates in bulk (lazy engine import, see CalcPanel); a
+  // lone card validates itself the same way, only when nothing was passed in
+  const [own, setOwn] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (error !== undefined || !c) return;
+    let live = true;
+    import("@rescript/engine").then(({ validateExpression }) => { if (live) setOwn(validateExpression(c.expression)); });
+    return () => { live = false; };
+  }, [error, c?.expression, c]);
+  if (!c) return null;
+  const err = error === undefined ? own : error;
+  return (
+    <div className="card" style={{ padding: 12 }} data-testid={`calculation-${index}`}>
+      <div className="row" style={{ marginBottom: 6 }}>
+        {/* renames through the safe path — see VariableNameInput */}
+        <VariableNameInput name={c.targetVariable} testId="calc-target-name"
+          placeholder="TARGET_VAR" style={{ width: 180 }} />
+        <span className="muted">=</span>
+        <input className="input mono grow" value={c.expression}
+          placeholder="Q1 + Q2 + Q3"
+          onChange={(e) => s.update((d) => { d.calculations[index].expression = e.target.value; })} />
+        <select className="select" style={{ width: 140 }} value={c.trigger}
+          onChange={(e) => s.update((d) => { d.calculations[index].trigger = e.target.value as any; })}>
+          <option value="on_change">on change</option>
+          <option value="on_page_submit">on page submit</option>
+          <option value="on_complete">on complete</option>
+        </select>
+        <button className="btn small danger" onClick={() => s.update((d) => { d.calculations.splice(index, 1); })}>×</button>
+      </div>
+      {err && <div className="chip warn">syntax: {err}</div>}
+      <OptionalCondition label="Only compute when" value={c.when}
+        onChange={(w) => s.update((d) => { d.calculations[index].when = w; })} />
+    </div>
+  );
+}
+
 function RuleTargetPicker({ index }: { index: number }) {
   const s = useStudio();
   const rule = s.def.displayRules[index];
@@ -481,24 +550,7 @@ export function LogicPanel() {
         <strong> HIDE beats SHOW</strong>, and a SHOW rule whose condition is false hides its target.
       </p>
       <DeadRuleNotice />
-      {s.def.displayRules.map((r, i) => (
-        <div key={r.id} className="card" style={{ padding: 10 }}>
-          <div className="row" style={{ marginBottom: 6 }}>
-            <input className="input" style={{ width: 180 }} placeholder="rule label" value={r.label ?? ""}
-              onChange={(e) => s.update((d) => { d.displayRules[i].label = e.target.value; })} />
-            <select className="select" value={r.action}
-              onChange={(e) => s.update((d) => { d.displayRules[i].action = e.target.value as any; })}>
-              <option value="show">SHOW</option><option value="hide">HIDE</option>
-            </select>
-            <RuleTargetPicker index={i} />
-            <button className="btn small danger"
-              onClick={() => s.update((d) => { d.displayRules.splice(i, 1); })}>×</button>
-          </div>
-          <div className="flabel">WHEN</div>
-          <ConditionEditor value={r.when}
-            onChange={(when) => s.update((d) => { d.displayRules[i].when = when; })} />
-        </div>
-      ))}
+      {s.def.displayRules.map((r, i) => <DisplayRuleCard key={r.id} index={i} />)}
       <button className="btn small" onClick={() =>
         s.update((d) => {
           d.displayRules.push({
@@ -558,29 +610,7 @@ export function CalcPanel() {
         <div key={p} className="chip warn qd-note" data-testid="calc-problem">{p}</div>
       ))}
 
-      {s.def.calculations.map((c, i) => (
-        <div key={c.id} className="card" style={{ padding: 12 }}>
-          <div className="row" style={{ marginBottom: 6 }}>
-            {/* renames through the safe path — see VariableNameInput */}
-            <VariableNameInput name={c.targetVariable} testId="calc-target-name"
-              placeholder="TARGET_VAR" style={{ width: 180 }} />
-            <span className="muted">=</span>
-            <input className="input mono grow" value={c.expression}
-              placeholder="Q1 + Q2 + Q3"
-              onChange={(e) => s.update((d) => { d.calculations[i].expression = e.target.value; })} />
-            <select className="select" style={{ width: 140 }} value={c.trigger}
-              onChange={(e) => s.update((d) => { d.calculations[i].trigger = e.target.value as any; })}>
-              <option value="on_change">on change</option>
-              <option value="on_page_submit">on page submit</option>
-              <option value="on_complete">on complete</option>
-            </select>
-            <button className="btn small danger" onClick={() => s.update((d) => { d.calculations.splice(i, 1); })}>×</button>
-          </div>
-          {exprErrors[c.id] && <div className="chip warn">syntax: {exprErrors[c.id]}</div>}
-          <OptionalCondition label="Only compute when" value={c.when}
-            onChange={(w) => s.update((d) => { d.calculations[i].when = w; })} />
-        </div>
-      ))}
+      {s.def.calculations.map((c, i) => <CalculationCard key={c.id} index={i} error={exprErrors[c.id]} />)}
       <button className="btn small" onClick={() =>
         s.update((d) => {
           d.calculations.push({

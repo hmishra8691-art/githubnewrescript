@@ -32,7 +32,7 @@ export interface ModeInfo {
 export const MODES: readonly ModeInfo[] = [
   { id: "studio", label: "Studio", tagline: "Build visually", audience: "For researchers who want an intuitive modern builder.", available: true, index: 1 },
   { id: "grid", label: "Grid", tagline: "Program at scale", audience: "For high-speed questionnaire programming.", available: true, index: 2 },
-  { id: "architect", label: "Architect", tagline: "Control every detail", audience: "For advanced survey programmers.", available: false, index: 3 },
+  { id: "architect", label: "Architect", tagline: "Control every detail", audience: "For advanced survey programmers.", available: true, index: 3 },
   { id: "flow", label: "Flow", tagline: "See the survey's behavior", audience: "For complex routing and logic.", available: false, index: 4 },
   { id: "intelligent", label: "Intelligent", tagline: "Describe what you want", audience: "For users who want assistance while programming.", available: false, index: 5 },
 ];

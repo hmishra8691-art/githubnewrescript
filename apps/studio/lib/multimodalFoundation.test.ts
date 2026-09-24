@@ -25,14 +25,15 @@ import { builtinCommands, navigationCommands, findCommands, type StudioCommandCo
 test("the URL wins over memory, memory over the default, and an unavailable mode falls back", () => {
   assert.equal(resolveInitialMode("", null), DEFAULT_MODE);
   assert.equal(resolveInitialMode("?mode=studio", "studio"), "studio");
-  // Architect is declared but has no renderer yet: never open on an empty screen
-  const architect = MODES.find((m) => m.id === "architect")!;
-  assert.equal(architect.available, false, "this test assumes Architect is not yet built; update it when it is");
-  assert.equal(resolveInitialMode("?mode=architect", null), DEFAULT_MODE);
-  assert.equal(resolveInitialMode("?tab=logic", "architect"), DEFAULT_MODE);
-  // Grid IS available: the URL and memory both work for it
+  // Flow is declared but has no renderer yet: never open on an empty screen
+  const flow = MODES.find((m) => m.id === "flow")!;
+  assert.equal(flow.available, false, "this test assumes Flow is not yet built; update it when it is");
+  assert.equal(resolveInitialMode("?mode=flow", null), DEFAULT_MODE);
+  assert.equal(resolveInitialMode("?tab=logic", "flow"), DEFAULT_MODE);
+  // Grid and Architect ARE available: the URL and memory both work for them
   assert.equal(resolveInitialMode("?mode=grid", null), "grid");
   assert.equal(resolveInitialMode("", "grid"), "grid");
+  assert.equal(resolveInitialMode("?mode=architect", null), "architect");
   assert.equal(resolveInitialMode("?mode=nonsense", "alsononsense"), DEFAULT_MODE);
   assert.equal(isProgrammingMode("flow"), true);
   assert.equal(isProgrammingMode("Flow"), false);
@@ -172,6 +173,8 @@ function fakeCtx(over: Partial<StudioCommandContext> = {}): StudioCommandContext
     selectQuestion(id) { log.push(`select:${id}`); ctx.questionId = id; ctx.primary = id ? `question:${id}` : null; },
     setTab(t) { log.push(`tab:${t}`); ctx.tab = t; },
     setMode(m) { log.push(`mode:${m}`); ctx.mode = m; },
+    focus: false,
+    setFocus(on) { log.push(`focus:${on}`); ctx.focus = on; },
     uid: (p) => `${p}_${n++}`,
     newQuestion: (d) => ({ id: `q_new${n++}`, code: `Q${d.questions.length + 1}`, variableName: `Q${d.questions.length + 1}`, type: "text", text: "", options: [], rows: [], columns: [] } as unknown as Question),
     newFlowNode: (type) => ({ type, id: `${type}_${n++}`, children: [], branches: [{ id: "b", when: { type: "group", op: "and", children: [] }, children: [] }], otherwise: [] } as unknown as FlowNode),
@@ -237,9 +240,9 @@ test("edits are hidden in read-only; navigation and mode commands are not", () =
 test("mode commands offer only available modes other than the current one", () => {
   const ctx = fakeCtx();
   const ids = applicable(builtinCommands(), ctx).map((c) => c.id).filter((i) => i.startsWith("mode."));
-  assert.deepEqual(ids, ["mode.grid"], "in Studio, Grid is the one other available mode");
+  assert.deepEqual(ids, ["mode.grid", "mode.architect"], "in Studio, Grid and Architect are the other available modes");
   const inGrid = fakeCtx({ mode: "grid" });
-  assert.deepEqual(applicable(builtinCommands(), inGrid).map((c) => c.id).filter((i) => i.startsWith("mode.")), ["mode.studio"]);
+  assert.deepEqual(applicable(builtinCommands(), inGrid).map((c) => c.id).filter((i) => i.startsWith("mode.")), ["mode.studio", "mode.architect"]);
 });
 
 test("navigation commands skip the current tab; find commands locate questions by code, variable and text", () => {
