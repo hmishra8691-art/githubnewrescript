@@ -30,6 +30,8 @@ export interface StudioCommandContext extends CommandContextBase {
   canRedo: boolean;
   /** select a question (mirrors into the store) or clear */
   selectQuestion(id: string | null): void;
+  /** select any object by engine key — a flow node, a rule; absent where no shared selection exists */
+  selectKey?(key: string): void;
   setTab(tab: string): void;
   setMode(mode: ProgrammingMode): void;
   /** focus mode: dim everything outside the selection's dependency neighbourhood */
@@ -113,7 +115,10 @@ export function builtinCommands(): C[] {
           const at = flow.findIndex((n) => n?.type === "end");
           flow.splice(at < 0 ? flow.length : at, 0, node);
         });
-        ctx.setTab("flow");
+        // the Flow canvas shows the new element where it is; anywhere else, go to the Survey Flow tab
+        if (ctx.mode !== "flow") ctx.setTab("flow");
+        ctx.selectQuestion(null);
+        ctx.selectKey?.(`flowNode:${node.id}`);
       },
     });
   }

@@ -2,7 +2,7 @@
 import React from "react";
 import type { FlowNode, SurveyDefinition, Question } from "@rescript/schema";
 import { variantRegistry } from "@rescript/schema";
-import { nextQuestionNaming } from "@rescript/engine";
+import { nextQuestionNaming, type ObjectKey } from "@rescript/engine";
 import { useStudio, uid } from "./store";
 import { useMode } from "./ModeContext";
 import { useSelection } from "./SelectionContext";
@@ -101,6 +101,7 @@ export function CommandProvider({
         if (selection) selection.dispatch(id ? { type: "select", key: `question:${id}` } : { type: "clear" });
         else s.select(id);
       },
+      selectKey(key) { selection?.dispatch({ type: "select", key: key as ObjectKey }); },
       setTab,
       setMode(m) { mode?.setMode(m); },
       focus: mode?.focus ?? false,

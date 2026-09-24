@@ -25,11 +25,12 @@ import { builtinCommands, navigationCommands, findCommands, type StudioCommandCo
 test("the URL wins over memory, memory over the default, and an unavailable mode falls back", () => {
   assert.equal(resolveInitialMode("", null), DEFAULT_MODE);
   assert.equal(resolveInitialMode("?mode=studio", "studio"), "studio");
-  // Flow is declared but has no renderer yet: never open on an empty screen
-  const flow = MODES.find((m) => m.id === "flow")!;
-  assert.equal(flow.available, false, "this test assumes Flow is not yet built; update it when it is");
-  assert.equal(resolveInitialMode("?mode=flow", null), DEFAULT_MODE);
-  assert.equal(resolveInitialMode("?tab=logic", "flow"), DEFAULT_MODE);
+  // Intelligent is declared but has no renderer yet: never open on an empty screen
+  const intelligent = MODES.find((m) => m.id === "intelligent")!;
+  assert.equal(intelligent.available, false, "this test assumes Intelligent is not yet built; update it when it is");
+  assert.equal(resolveInitialMode("?mode=intelligent", null), DEFAULT_MODE);
+  assert.equal(resolveInitialMode("?tab=logic", "intelligent"), DEFAULT_MODE);
+  assert.equal(resolveInitialMode("?mode=flow", null), "flow");
   // Grid and Architect ARE available: the URL and memory both work for them
   assert.equal(resolveInitialMode("?mode=grid", null), "grid");
   assert.equal(resolveInitialMode("", "grid"), "grid");
@@ -240,9 +241,9 @@ test("edits are hidden in read-only; navigation and mode commands are not", () =
 test("mode commands offer only available modes other than the current one", () => {
   const ctx = fakeCtx();
   const ids = applicable(builtinCommands(), ctx).map((c) => c.id).filter((i) => i.startsWith("mode."));
-  assert.deepEqual(ids, ["mode.grid", "mode.architect"], "in Studio, Grid and Architect are the other available modes");
+  assert.deepEqual(ids, ["mode.grid", "mode.architect", "mode.flow"], "in Studio, the three other built modes are offered");
   const inGrid = fakeCtx({ mode: "grid" });
-  assert.deepEqual(applicable(builtinCommands(), inGrid).map((c) => c.id).filter((i) => i.startsWith("mode.")), ["mode.studio", "mode.architect"]);
+  assert.deepEqual(applicable(builtinCommands(), inGrid).map((c) => c.id).filter((i) => i.startsWith("mode.")), ["mode.studio", "mode.architect", "mode.flow"]);
 });
 
 test("navigation commands skip the current tab; find commands locate questions by code, variable and text", () => {

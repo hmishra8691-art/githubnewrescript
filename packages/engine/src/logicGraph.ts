@@ -1,4 +1,4 @@
-import type {
+import type { LogicFlowEdgeKind,
   Condition,
   FlowNode,
   LogicFlow,
@@ -96,7 +96,7 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions = 
     }
     return n.id;
   };
-  const link = (from: string, to: string, when?: Condition | undefined, label?: string): void => {
+  const link = (from: string, to: string, when?: Condition | undefined, label?: string, kind: LogicFlowEdgeKind = "sequence"): void => {
     const id = `e_${from}__${to}${label ? `_${edges.length}` : ""}`;
     edges.push({
       id,
@@ -104,6 +104,7 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions = 
       to,
       ...(when ? { when } : {}),
       ...(label ?? edgeLabel(when, def) ? { label: label ?? edgeLabel(when, def) } : {}),
+      kind,
     });
   };
 
@@ -221,7 +222,7 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions = 
             ref: node.id,
             label: `${clean(node.title) || node.type} — shown when ${edgeLabel(when, def) ?? "condition holds"}`,
           });
-          for (const to of inner.entries) link(gate, to, when);
+          for (const to of inner.entries) link(gate, to, when, undefined, "gate");
           return { entries: [gate], exits: [...inner.exits, gate] };
         }
         return inner;
@@ -244,13 +245,13 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions = 
             continue;
           }
           for (const to of inner.entries) {
-            link(gate, to, arm.when, clean(arm.label) || edgeLabel(arm.when, def));
+            link(gate, to, arm.when, clean(arm.label) || edgeLabel(arm.when, def), "branch");
           }
           exits.push(...inner.exits);
         }
         const other = node.otherwise?.length ? walk(node.otherwise) : EMPTY;
         if (other.entries.length) {
-          for (const to of other.entries) link(gate, to, undefined, "otherwise");
+          for (const to of other.entries) link(gate, to, undefined, "otherwise", "otherwise");
           exits.push(...other.exits);
         } else {
           everyArmClosed = false;
@@ -297,7 +298,7 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions = 
         const inner = walk(node.children);
         for (const to of inner.entries) link(gate, to);
         /* the edge back is what makes it a loop rather than a list */
-        for (const from of inner.exits) link(from, gate, undefined, "next iteration");
+        for (const from of inner.exits) link(from, gate, undefined, "next iteration", "loop");
         return { entries: [gate], exits: [gate] };
       }
 
@@ -320,10 +321,10 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions = 
           ref: node.id,
           label: `quota check (${node.quotaIds.length} quota${node.quotaIds.length === 1 ? "" : "s"})`,
         });
-        if (node.onFull.kind === "terminate") link(id, endNodeFor("quota_full"), undefined, "full");
+        if (node.onFull.kind === "terminate") link(id, endNodeFor("quota_full"), undefined, "full", "quota");
         if (node.onFull.kind === "redirect") {
           const away = add({ id: `${node.id}_redirect`, kind: "action", label: `redirect: ${node.onFull.url ?? ""}` });
-          link(id, away, undefined, "full");
+          link(id, away, undefined, "full", "quota");
         }
         return { entries: [id], exits: [id] };
       }
@@ -382,7 +383,7 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions = 
         to = seen.has(t.ref) ? t.ref : firstInside(def, t.ref, seen);
       }
       if (!to) continue;
-      link(from, to, rule.when, clean(rule.label) || `skip: ${edgeLabel(rule.when, def) ?? "condition"}`);
+      link(from, to, rule.when, clean(rule.label) || `skip: ${edgeLabel(rule.when, def) ?? "condition"}`, "skip");
     }
   }
 

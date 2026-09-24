@@ -63,11 +63,11 @@ await page.waitForSelector(".block-badge");
   ok("Studio is the active, available mode");
   const built = modes.filter((m) => m.available === "1").map((m) => m.id);
   const unbuilt = modes.filter((m) => m.available === "0");
-  assert.deepEqual(built, ["studio", "grid", "architect"], "the modes with a renderer so far");
+  assert.deepEqual(built, ["studio", "grid", "architect", "flow"], "the modes with a renderer so far");
   for (const m of unbuilt) assert.ok(!m.active && m.disabled, JSON.stringify(m));
   ok(`the ${unbuilt.length} unbuilt modes are visible, disabled and marked coming-soon`);
-  const title = await page.getAttribute('[data-testid="mode-flow"]', "title");
-  assert.match(title, /See the survey's behavior/);
+  const title = await page.getAttribute('[data-testid="mode-intelligent"]', "title");
+  assert.match(title, /Describe what you want/);
   ok("a disabled mode still tells you what it will be");
 }
 
@@ -261,13 +261,13 @@ await page.waitForSelector(".block-badge");
 
 /* ----------------------------------------------------------- ?mode= */
 {
-  await page.goto(`${STUDIO}/sandbox?mode=flow`, { waitUntil: "networkidle" });
+  await page.goto(`${STUDIO}/sandbox?mode=intelligent`, { waitUntil: "networkidle" });
   await page.waitForSelector('[data-testid="mode-selector"]');
   const active = await page.$eval('[data-testid="mode-selector"] .mode-option.active', (e) => e.dataset.mode);
   assert.equal(active, "studio");
-  ok("?mode=flow falls back to Studio while Flow has no renderer — never an empty screen");
+  ok("?mode=intelligent falls back to Studio while Intelligent has no renderer — never an empty screen");
   const url = page.url();
-  assert.ok(url.includes("mode=flow") || !url.includes("mode="), "the url is left alone until a real switch happens");
+  assert.ok(url.includes("mode=intelligent") || !url.includes("mode="), "the url is left alone until a real switch happens");
   ok("the URL is not rewritten by the fallback");
   await page.goto(`${STUDIO}/sandbox?mode=grid`, { waitUntil: "networkidle" });
   await page.waitForSelector('[data-testid="grid-view"]');

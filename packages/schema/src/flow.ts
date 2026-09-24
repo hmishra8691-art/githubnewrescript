@@ -539,12 +539,29 @@ export const LogicFlowNode = z.object({
   y: z.number().optional(),
 });
 
+/**
+ * What an edge IS, so a canvas can draw it and a programmer can filter it.
+ * Optional and additive: graphs built before it existed still parse, and a
+ * consumer that does not care reads `when` and `label` as before.
+ *
+ *   sequence   the next page / question, unconditionally
+ *   gate       a container shown only when its condition holds
+ *   branch     one arm of a branch (carries `when`)
+ *   otherwise  the branch's fallthrough
+ *   skip       a skip rule's jump
+ *   loop       a loop's "next iteration" back edge
+ *   quota      what happens when a quota is full
+ */
+export const LogicFlowEdgeKind = z.enum(["sequence", "gate", "branch", "otherwise", "skip", "loop", "quota"]);
+export type LogicFlowEdgeKind = z.infer<typeof LogicFlowEdgeKind>;
+
 export const LogicFlowEdge = z.object({
   id: z.string(),
   from: z.string(),
   to: z.string(),
   when: Condition.optional(),
   label: z.string().optional(),
+  kind: LogicFlowEdgeKind.optional(),
 });
 
 export type LogicFlowNode = z.infer<typeof LogicFlowNode>;
