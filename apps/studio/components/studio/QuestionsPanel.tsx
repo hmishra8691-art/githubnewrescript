@@ -81,7 +81,7 @@ import { InsertPipingButton } from "./PipingPicker";
 import {
   FIELD_TYPES, nextCode, nextQuestionNaming, resequenceQuestionCodes,
   parsePastedOptions, planPaste, optionsToPaste, type PasteMode,
-  stripHtmlText, referencesTo, pruneReferencesTo, referencesToMany, pruneReferencesToMany,
+  stripHtmlText, referencesTo, referencesToMany, pruneReferencesToMany,
   PIPE_TOKEN_RE,
   resolveMediaUrl,
   effectiveScale,
@@ -89,7 +89,8 @@ import {
   POSTAL_FORMATS,
   CURRENCIES,
   type QuestionReference,
-  usedNames, copyNames,
+  usedNames,
+  addQuestion, duplicateQuestion, removeQuestion, moveQuestionBy, cloneQuestion,
 } from "@rescript/engine"; // also registers builtin question types
 import { isEmptyOptionLogic } from "@rescript/schema";
 import { useStudio, uid } from "./store";
@@ -1780,32 +1781,6 @@ function InsertBar({
   );
 }
 
-/**
- * A COPY IS A NEW QUESTION, AND EVERY ID INSIDE IT IS NEW TOO.
- *
- * Duplicating re-minted the question's own `id`, `code` and `variableName` and
- * then deep-cloned everything under them — so the copy's options, rows,
- * columns, punches, skip rules and option groups carried the ORIGINAL's
- * element ids. Two questions then claimed the same option id, which is the
- * identity the element registry, the live canvas, per-element analytics and
- * the option-level logic editor all key on. Codes and labels are meant to be
- * shared by a copy; ids are exactly the thing that must not be.
- */
-function reidentify(copy: Record<string, any>): void {
-  const mint = (el: any, prefix: string) => {
-    if (el && typeof el === "object" && typeof el.id === "string") el.id = uid(prefix);
-  };
-  for (const [axis, prefix] of [["options", "opt"], ["rows", "row"], ["columns", "col"]] as const) {
-    for (const el of (copy[axis] ?? []) as any[]) {
-      mint(el, prefix);
-      /* a cell grid's column carries its own option list */
-      for (const o of (el?.options ?? []) as any[]) mint(o, "opt");
-    }
-  }
-  for (const key of ["punches", "skipLogic", "optionGroups", "validation", "listLogic", "optionPipeline"]) {
-    for (const el of (copy[key] ?? []) as any[]) mint(el, "r");
-  }
-}
 
 /**
  * Rewrite every reference inside `node` that names something the copy renamed.
@@ -1871,17 +1846,7 @@ export function QuestionsPanel() {
   const insertQuestion = (pageId: string, pos: number, variant?: QuestionVariantDef) => {
     const v = variant ?? variantRegistry.get("single_select.radio")!;
     const q = createFromVariant(v, nextQuestionNaming(s.def));
-    s.update((d) => {
-      d.questions.push(q);
-      for (const pg of listPages(d.flow as any[])) {
-        if (pg.node.id === pageId) {
-          pg.node.questionIds.splice(pos, 0, q.id);
-          return;
-        }
-      }
-      const last = listPages(d.flow as any[]).pop();
-      last?.node.questionIds.push(q.id);
-    });
+    s.update((d) => { addQuestion(d, q, { pageId, index: pos }); });
     focusQuestion(q.id);
     if (variant) s.toast(`Added ${variant.familyLabel} → ${variant.name}`);
   };
@@ -2041,12 +2006,7 @@ export function QuestionsPanel() {
         for (const qid of page.questionIds) {
           const q = d.questions.find((x: any) => x.id === qid);
           if (!q) continue;
-          const copy = structuredClone(q);
-          copy.id = uid("q");
-          const named = copyNames(taken, q);
-          copy.code = named.code;
-          copy.variableName = named.variableName;
-          reidentify(copy);
+          const copy = cloneQuestion(q, taken, uid);
           idMap.set(q.id, copy.id);
           /* questions are named by code and by variable name as well as by id
              — see `getQuestionByCodeOrVar` — and all three have to travel */
@@ -2234,51 +2194,18 @@ export function QuestionsPanel() {
     });
 
   /** Reorder within a block; crossing the edge moves to the adjacent block. */
+  /*
+   * The operations themselves live in `@rescript/engine` (`questionOps.ts`)
+   * so that every environment — this panel, the grid, the canvas, the command
+   * palette — adds, copies, moves and removes a question the same way. What
+   * stays here is only what is the panel's own: which id generator to use,
+   * what to focus, what to toast.
+   */
   const move = (qid: string, dir: -1 | 1) =>
-    s.update((d) => {
-      const all = listPages(d.flow as any[]);
-      const pi = all.findIndex((p) => p.node.questionIds.includes(qid));
-      if (pi < 0) return;
-      const ids = all[pi].node.questionIds;
-      const k = ids.indexOf(qid);
-      const t = k + dir;
-      if (t >= 0 && t < ids.length) {
-        [ids[k], ids[t]] = [ids[t], ids[k]];
-      } else {
-        const adj = all[pi + dir];
-        if (!adj) return;
-        ids.splice(k, 1);
-        if (dir === -1) adj.node.questionIds.push(qid);
-        else adj.node.questionIds.unshift(qid);
-      }
-    });
+    s.update((d) => { moveQuestionBy(d, qid, dir); });
 
   const duplicate = (id: string) =>
-    s.update((d) => {
-      const q = d.questions.find((x) => x.id === id);
-      if (!q) return;
-      const copy = structuredClone(q);
-      copy.id = uid("q");
-      /*
-       * The suffix is chosen against the whole survey, not appended blindly.
-       *
-       * It used to be `${q.code}_COPY` unconditionally, so duplicating the
-       * SAME question twice produced two questions with the same code and the
-       * same variable name. A duplicate variable name is a blocking problem at
-       * the publish gate, so the survey could then no longer be versioned or
-       * tested — which is how this surfaced as "my changes could not be saved"
-       * rather than as anything to do with duplication.
-       */
-      const named = copyNames(usedNames(d), q);
-      copy.code = named.code;
-      copy.variableName = named.variableName;
-      reidentify(copy);
-      d.questions.push(copy);
-      for (const pg of listPages(d.flow as any[])) {
-        const k = pg.node.questionIds.indexOf(id);
-        if (k >= 0) { pg.node.questionIds.splice(k + 1, 0, copy.id); return; }
-      }
-    });
+    s.update((d) => { duplicateQuestion(d, id, uid); });
 
   /**
    * DELETING IS A CHANGE TO THE WHOLE SURVEY, so it is shown as one.
@@ -2312,11 +2239,7 @@ export function QuestionsPanel() {
     if (!id) return;
     setPendingDelete(null);
     s.labelNextEdit(`delete ${pendingDelete.code}`);
-    s.update((d) => {
-      pruneReferencesTo(d, id);
-      d.questions = d.questions.filter((q) => q.id !== id);
-      for (const p of flattenPages(d.flow)) p.questionIds = p.questionIds.filter((x) => x !== id);
-    });
+    s.update((d) => { removeQuestion(d, id); });
     if (s.selectedQuestionId === id) s.select(null);
   };
 

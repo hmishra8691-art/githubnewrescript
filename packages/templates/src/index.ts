@@ -74,6 +74,7 @@ export function findSurveyTemplate(key: string): SurveyTemplate | undefined {
   return SURVEY_TEMPLATES.find((t) => t.key === key);
 }
 
+export { buildScaleSurvey } from "./scale.js";
 export { simulateRespondent, defaultAnswer } from "./simulate.js";
 export type { SimulationOptions, SimulationResult, VisitedPage, AnswerContext, AnswerFn } from "./simulate.js";
 export { generatePopulation, sampleAnswer, targetedAnswers } from "./generate.js";

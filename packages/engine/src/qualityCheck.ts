@@ -184,7 +184,11 @@ export function runQualityCheck(def: SurveyDefinition): QualityCheckResult {
         const node = nodeById(f.nodeId);
         if (node?.type === "end" && jumpStatuses.has(String(node.status ?? "complete"))) continue;
       }
-      collected.push({ level: f.level, path: "flow", message: f.message });
+      // the node id survives, so a badge can sit on the exact flow node
+      collected.push({
+        level: f.level, path: "flow", message: f.message,
+        ...(f.nodeId ? { objectKey: `flowNode:${f.nodeId}` as const } : {}),
+      });
     }
   } catch { /* already reported per question */ }
 
@@ -203,6 +207,7 @@ export function runQualityCheck(def: SurveyDefinition): QualityCheckResult {
       level: dead.level,
       path: "displayRules",
       message: `Display rule ${name} ${dead.reason}.`,
+      objectKey: `displayRule:${dead.rule.id}`,
     });
   }
 

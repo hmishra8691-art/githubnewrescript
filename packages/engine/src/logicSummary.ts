@@ -85,7 +85,17 @@ export function conditionSummary(def: SurveyDefinition, c: Condition | undefined
   if (c.type === "group") {
     const parts = c.children.map((ch) => conditionSummary(def, ch)).filter(Boolean);
     if (parts.length === 0) return "";
-    if (c.op === "not") return `not (${parts.join(" and ")})`;
+    /*
+     * A multi-child NOT means "none of these is true" — that is what
+     * `evaluateCondition` computes and what `formatCondition` prints. Joining
+     * the children with "and" described NAND here: true whenever any single
+     * child was false, which is the opposite of what the survey does. This
+     * text is what programmers read in the Logic panel and on Flow edge
+     * labels, so it has to say the same thing the runtime does.
+     */
+    if (c.op === "not") {
+      return parts.length === 1 ? `not ${parts[0]}` : `none of (${parts.join(" or ")})`;
+    }
     const joiner = c.op === "and" ? " AND " : " OR ";
     return parts.length === 1 ? parts[0] : `(${parts.join(joiner)})`;
   }

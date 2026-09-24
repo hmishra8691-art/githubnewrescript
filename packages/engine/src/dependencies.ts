@@ -43,7 +43,10 @@ export function questionOrder(def: SurveyDefinition): string[] {
   };
   walk(def.flow as any[]);
   // questions not placed on any page still exist in the definition
-  for (const q of def.questions) if (!out.includes(q.id)) out.push(q.id);
+  // (a Set, not `includes` — this runs inside per-question loops, and the
+  // array scan made it quadratic on its own)
+  const placed = new Set(out);
+  for (const q of def.questions) if (!placed.has(q.id)) out.push(q.id);
   return out;
 }
 
