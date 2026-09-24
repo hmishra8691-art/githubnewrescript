@@ -5,8 +5,18 @@
 **Status — Phase 0 delivered 2026-09-24** as two commits, "Multi-modal
 foundation (1/2)" (engine) and "(2/2)" (Studio). Everything in Part C's
 Phase 0 exists; the mode selector shows all five environments with only
-Studio enabled. Phases 1–5 are not started. Three things learned while
-building it that the plan did not know:
+Studio enabled.
+
+**Phase 1 (Grid) delivered 2026-09-24** — `apps/studio/components/grid/`,
+`apps/studio/lib/grid/model.ts`, `scripts/grid-mode-test.mjs`. In Grid mode
+the Questions tab renders the grid; every other tab is unchanged. Measured at
+600 questions: 32 rows in the DOM, 413 ms to first paint, ~28 ms per long
+scroll step, 17 keystrokes in a cell in 273 ms. Two shell fixes came with
+it: RightPanel's click-outside deselect now exempts the grid, and the grid
+toolbar never wraps (it moved rows under the cursor mid double-click).
+Phases 2–5 are not started.
+
+Three things learned while building Phase 0 that the plan did not know:
 
 - `lintSurveyLogic` was cubic in question count (5.5 s at 1 000 questions);
   fixed to linear (84 ms). The lint is affordable per keystroke now, so
