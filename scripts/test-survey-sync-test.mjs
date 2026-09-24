@@ -135,14 +135,23 @@ const toastText = (page) => page.$eval(".toast", (e) => e.textContent).catch(() 
   console.log("✔ an edit made during an in-flight save is reported as unsaved until its own save lands");
   await c2.close();
 
-  /* ===================================== 3. Test Survey saves, then opens EXACTLY that */
+  /* ===================================== 3. Test Survey saves, deploys, then opens the LIVE-FOLLOWING link */
+  /*
+   * The link used to carry `?v=<versionId>`, pinning the tab to a frozen
+   * snapshot — which is why every later edit needed "restart the runtime"
+   * to show up. Since the live-sync change the tab opens the plain test link,
+   * which resolves the autosaved draft on every request. A version is still
+   * cut and deployed first, so the build is reproducible; the tab just is not
+   * chained to it.
+   */
   await addQuestion(page, "Q6 added just before testing");     // unsaved at click time
   const popupP = context.waitForEvent("page");
   await page.click('[data-testid="test-survey"]');
   const popup = await popupP;
-  await popup.waitForURL(/\/t\/.*\?v=ver_\d+/, { timeout: 10000 });
+  await popup.waitForURL(/\/t\/client\/study-001(\?.*)?$/, { timeout: 10000 });
   const url = popup.url();
-  assert.match(url, /\/t\/client\/study-001\?v=ver_1$/, `the test tab opened with the saved version's id: ${url}`);
+  assert.doesNotMatch(url, /[?&]v=/, `the test tab must NOT pin a version any more: ${url}`);
+  assert.match(url, /\/t\/client\/study-001/, `the test tab opened the deployed test link: ${url}`);
   assert.equal(server.versions.length, 1, "one version was cut");
   assert.equal(server.versions[0].questions.length, 6, "the version contains the edit made just before the click — save-before-test");
   assert.deepEqual(server.deploys.map((d) => d.versionId), ["ver_1"], "and that exact version was deployed");
@@ -150,15 +159,18 @@ const toastText = (page) => page.$eval(".toast", (e) => e.textContent).catch(() 
   assert.match(order, /draft,version,deploy$/, `draft flush → version → deploy, in that order: ${order}`);
   assert.equal(await page.$eval('[data-testid="test-survey"]', (e) => e.title), await page.$eval('[data-testid="test-survey"]', (e) => e.title));
   assert.match(await page.$eval('[data-testid="test-survey"]', (e) => e.title), /Last test build: v1\.1/, "the button remembers which build it opened");
-  console.log("✔ Test Survey: flush → version (with the last-second edit) → deploy → open ?v=<that id>");
+  console.log("✔ Test Survey: flush → version (with the last-second edit) → deploy → open the unpinned test link");
 
-  // a second click cuts a second version and opens THAT — never the first
+  // a second click cuts a second version carrying the newer edit; the same link keeps following the draft
   await addQuestion(page, "Q7");
-  // the named test window is reused, so the same popup navigates
   await page.click('[data-testid="test-survey"]');
-  await popup.waitForURL(/\?v=ver_2$/, { timeout: 10000 });
+  // the click is async: flush → version → deploy. Wait for the last step.
+  for (let i = 0; i < 100 && server.deploys.length < 2; i++) await page.waitForTimeout(100);
+  assert.equal(server.versions.length, 2, "a second version was cut");
   assert.equal(server.versions[1].questions.length, 7);
-  console.log("✔ the next Test Survey opens the NEXT version, carrying the newer edit");
+  assert.deepEqual(server.deploys.map((d) => d.versionId), ["ver_1", "ver_2"], "and deployed");
+  assert.doesNotMatch(popup.url(), /[?&]v=/, "still unpinned");
+  console.log("✔ the next Test Survey cuts and deploys the NEXT version; the tab is not pinned to either");
   await context.close();
 }
 
@@ -170,8 +182,14 @@ const toastText = (page) => page.$eval(".toast", (e) => e.textContent).catch(() 
   const before = context.pages().length;
   await page.click('[data-testid="test-survey"]');
   await page.waitForSelector(".toast");
-  assert.match(await toastText(page), /could not be saved.*retry before starting the test survey/i,
-    "the tester is told the latest changes were not saved and testing is refused");
+  /*
+   * The server's OWN reason is what shows. It used to be overwritten a few
+   * milliseconds later by "could not be saved, please retry" — the one
+   * message that cannot be acted on, and the one in the bug report.
+   */
+  assert.match(await toastText(page), /database unavailable/i,
+    "the tester is told the server's actual reason, not a generic retry");
+  assert.doesNotMatch(await toastText(page), /retry before starting/i, "the vague overwrite is gone");
   await page.waitForTimeout(500);
   assert.equal(context.pages().length, before, "no test tab is left open on an older build");
   assert.equal(server.deploys.length, 0, "nothing was deployed");

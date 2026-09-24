@@ -33,6 +33,11 @@ import { Icon, type IconName } from "@/components/ui/Icon";
 import { LocalizationPanel } from "./localization/LocalizationPanel";
 import { UsagePanel, useMeterView } from "./UsagePanel";
 import { fmtMoney } from "@/components/billing/shared";
+import { ModeProvider } from "./ModeContext";
+import { SelectionProvider } from "./SelectionContext";
+import { CommandProvider, useCommands, type ShellActions } from "./CommandContext";
+import { CommandPalette } from "./CommandPalette";
+import { ModeSelector } from "./ModeSelector";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
@@ -853,7 +858,22 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
   const live = publishState?.find((p) => p.mode === "live");
   const liveIsBehind = !!live && live.version !== s.def.meta.version;
 
+  /*
+   * The command layer sits over the whole shell: the palette and the
+   * keyboard handler need the tab and its setter, and the shell's own
+   * actions (save, test, preview) are handed to it below so "Save version"
+   * in the palette is the same function as the button.
+   */
+  const navTabs = React.useMemo(() => NAV.map((n) => ({ key: n.key, label: n.label, group: n.group })), []);
+  const setTabGuarded = React.useCallback((t: string) => {
+    if (t === tab || s.canLeaveTab()) setTab(t as Tab);
+  }, [tab, s]);
+  const shellActions: ShellActions = { save: async () => { await save(); }, testSurvey, preview };
+
   return (
+    <CommandProvider tab={tab} setTab={setTabGuarded} tabs={navTabs}>
+    <ShellBridge actions={shellActions} />
+    <CommandPalette />
     <div className="ide">
       <div className="topbar">
         <a href="/" className="logo-mark" style={{ width: 30, height: 30, fontSize: 15 }} title="Dashboard">R</a>
@@ -869,7 +889,9 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           </span>
         </div>
         <SaveIndicator />
+        <ModeSelector />
         <span className="spacer" />
+        <PaletteButton />
         <button className="btn" onClick={preview} disabled={saving}
           title="Full-page preview of the survey you are editing right now"><Icon name="play" size={15} /> Preview</button>
         <button className="btn" onClick={testSurvey} disabled={saving || roWrite} data-testid="test-survey"
@@ -1074,6 +1096,37 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
       </div>
       </CanvasProvider>
     </div>
+    </CommandProvider>
+  );
+}
+
+/** Hands the shell's save/test/preview to the command layer once they exist. */
+function ShellBridge({ actions }: { actions: ShellActions }) {
+  const api = useCommands();
+  const ref = React.useRef(actions);
+  ref.current = actions;
+  const setShell = api?.setShell;
+  React.useEffect(() => {
+    // register once (setShell is stable); the ref keeps the latest closures
+    setShell?.({
+      save: () => ref.current.save?.(),
+      testSurvey: () => ref.current.testSurvey?.(),
+      preview: () => ref.current.preview?.(),
+    });
+  }, [setShell]);
+  return null;
+}
+
+/** The ⌘K affordance in the top bar — for people who do not know the key yet. */
+function PaletteButton() {
+  const api = useCommands();
+  if (!api) return null;
+  const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+  return (
+    <button className="btn palette-open" onClick={api.openPalette} data-testid="palette-open"
+      title="Commands, questions and variables — everything, one search">
+      <Icon name="search" size={15} /> <kbd className="palette-kbd">{mac ? "⌘K" : "Ctrl+K"}</kbd>
+    </button>
   );
 }
 
@@ -1099,7 +1152,13 @@ export function Studio({ definition, surveyDbId, versionId, draftSavedAt, revisi
     <StudioProvider initial={definition} surveyDbId={surveyDbId} versionId={versionId}
       draftSavedAt={draftSavedAt} revision={revision}
       readOnly={collaboration}>
-      <StudioShell collaboration={collaboration} />
+      {/* the programming mode and the shared selection sit above the shell:
+          both survive a tab change, and every environment reads them */}
+      <ModeProvider>
+        <SelectionProvider>
+          <StudioShell collaboration={collaboration} />
+        </SelectionProvider>
+      </ModeProvider>
     </StudioProvider>
   );
 }

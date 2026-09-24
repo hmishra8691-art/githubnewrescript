@@ -10,7 +10,7 @@ import {
   FLOW_TYPE_LABELS, stripHtmlText, referencesToMany, pruneReferencesToMany,
 } from "@rescript/engine";
 import { useStudio, uid } from "./store";
-import { newBlockNode, newGroupNode, ELEMENT_LABELS, INSERTABLE } from "./blockModel";
+import { newFlowNode, ELEMENT_LABELS, INSERTABLE } from "./blockModel";
 import { conditionToText } from "./ConditionBuilder";
 import { NodeEditor } from "./FlowNodeEditors";
 import {
@@ -39,30 +39,8 @@ import {
  * already in the definition. (reqs §1, §11, §22)
  * ======================================================================== */
 
-function newNode(type: FlowNode["type"]): FlowNode {
-  const id = uid(type);
-  switch (type) {
-    case "page": return { type, id, title: "New block", questionIds: [] };
-    case "section": return { type, id, title: "New group", children: [] };
-    case "block": return { type, id, title: "Block", children: [] };
-    case "randomizer": return { type, id, children: [] };
-    case "branch": return {
-      type, id,
-      branches: [{ id: uid("br"), label: "Path 1", when: { type: "group", op: "and", children: [] }, children: [] }],
-      otherwise: [],
-    };
-    case "loop": return { type, id, source: { kind: "static", items: [] }, loopVar: "item", children: [] };
-    case "embedded_data": return { type, id, fields: [{ name: "", source: "url", dataType: "string" }] };
-    case "quota_check": return { type, id, quotaIds: [], onFull: { kind: "terminate" } };
-    case "redirect": return { type, id, url: "https://" };
-    case "end": return { type, id, status: "complete" };
-  }
-}
-
-const makeNode = (type: string): FlowNode =>
-  type === "page" ? (newBlockNode() as FlowNode)
-  : type === "section" ? (newGroupNode() as FlowNode)
-  : newNode(type as FlowNode["type"]);
+/* node defaults live in blockModel.newFlowNode, shared with the command palette */
+const makeNode = (type: string): FlowNode => newFlowNode(type as FlowNode["type"]);
 
 /* ------------------------------------------------------ the element picker */
 

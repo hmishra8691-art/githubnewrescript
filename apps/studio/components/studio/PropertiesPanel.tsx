@@ -776,6 +776,16 @@ export function PropertiesPanel() {
   const s = useStudio();
   const q = selectedQuestion(s);
   const canvas = useCanvas();
+  /*
+   * Every hook before any early return. These two sat below the "no question"
+   * and "element selected" returns, so the panel called a different number of
+   * hooks depending on the selection — React's "change in the order of Hooks"
+   * warning on every select/deselect, and state that could attach to the
+   * wrong slot. Surfaced by the multi-modal suite, which asserts a clean console.
+   */
+  /** What this question carries that its current type cannot read. */
+  const stale = React.useMemo(() => (q ? staleFields(q) : []), [q]);
+  const [search, setSearch] = React.useState("");
 
   /*
    * CONTEXTUAL, NOT SEPARATE.
@@ -826,14 +836,11 @@ export function PropertiesPanel() {
   const exprError =
     q.type === "calculated" && q.settings.expression ? validateExpression(q.settings.expression) : null;
   const logicIssues = lintQuestionLogic(s.def, q);
-  /** What this question carries that its current type cannot read. */
-  const stale = React.useMemo(() => staleFields(q), [q]);
   /*
    * The loops this question sits inside, so its display logic, skip logic and
    * piping picker can offer the loops' reference columns — and only theirs.
    */
   const loopScope = loopsAroundQuestion(s.def, q.id);
-  const [search, setSearch] = React.useState("");
   const showSec = (title: string) =>
     !search.trim() || title.toLowerCase().includes(search.trim().toLowerCase());
 

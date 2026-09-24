@@ -1,5 +1,6 @@
 import { uid } from "./store";
 import type { BlockRef } from "@rescript/engine";
+import type { FlowNode } from "@rescript/schema";
 
 /**
  * Studio-side block operations.
@@ -57,6 +58,31 @@ export function newBlockNode(title?: string): any {
 /** A fresh group. Empty groups are allowed: you make one, then fill it. */
 export function newGroupNode(title = "New group"): any {
   return { type: "section", id: uid("section"), title, children: [] };
+}
+
+/**
+ * A fresh flow node of any type, with the defaults the Survey Flow panel has
+ * always given it. Here rather than in the panel so that the command palette
+ * and every other environment insert exactly the node the panel would.
+ */
+export function newFlowNode(type: FlowNode["type"]): FlowNode {
+  const id = uid(type);
+  switch (type) {
+    case "page": return newBlockNode() as FlowNode;
+    case "section": return newGroupNode() as FlowNode;
+    case "block": return { type, id, title: "Block", children: [] };
+    case "randomizer": return { type, id, children: [] };
+    case "branch": return {
+      type, id,
+      branches: [{ id: uid("br"), label: "Path 1", when: { type: "group", op: "and", children: [] }, children: [] }],
+      otherwise: [],
+    };
+    case "loop": return { type, id, source: { kind: "static", items: [] }, loopVar: "item", children: [] };
+    case "embedded_data": return { type, id, fields: [{ name: "", source: "url", dataType: "string" }] };
+    case "quota_check": return { type, id, quotaIds: [], onFull: { kind: "terminate" } };
+    case "redirect": return { type, id, url: "https://" };
+    case "end": return { type, id, status: "complete" };
+  }
 }
 
 /**
