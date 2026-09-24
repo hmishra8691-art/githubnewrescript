@@ -42,6 +42,7 @@ import { useMode } from "./ModeContext";
 import { GridView } from "../grid/GridView";
 import { ArchitectView } from "../architect/ArchitectView";
 import { FlowCanvas } from "../flow/FlowCanvas";
+import { IntelligentView } from "../intelligent/IntelligentView";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
@@ -1054,6 +1055,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
             programmingMode === "grid" ? <GridView />
             : programmingMode === "architect" ? <ArchitectView />
             : programmingMode === "flow" ? <FlowCanvas />
+            : programmingMode === "intelligent" ? <IntelligentView />
             : <QuestionsPanel />
           )}
           {tab === "settings" && (
@@ -1111,7 +1113,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           )}
         </main>
         {/* Architect carries its own inspector, so the outer property panel steps aside there */}
-        <RightPanel tab={tab} hidden={(programmingMode === "architect" || programmingMode === "flow") && tab === "questions"} />
+        <RightPanel tab={tab} hidden={(programmingMode === "architect" || programmingMode === "flow" || programmingMode === "intelligent") && tab === "questions"} />
       </div>
       </CanvasProvider>
     </div>

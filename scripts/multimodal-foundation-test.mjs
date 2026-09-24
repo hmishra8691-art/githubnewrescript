@@ -62,13 +62,12 @@ await page.waitForSelector(".block-badge");
   assert.ok(modes[0].active && modes[0].available === "1" && !modes[0].disabled, JSON.stringify(modes[0]));
   ok("Studio is the active, available mode");
   const built = modes.filter((m) => m.available === "1").map((m) => m.id);
-  const unbuilt = modes.filter((m) => m.available === "0");
-  assert.deepEqual(built, ["studio", "grid", "architect", "flow"], "the modes with a renderer so far");
-  for (const m of unbuilt) assert.ok(!m.active && m.disabled, JSON.stringify(m));
-  ok(`the ${unbuilt.length} unbuilt modes are visible, disabled and marked coming-soon`);
+  assert.deepEqual(built, ["studio", "grid", "architect", "flow", "intelligent"], "every mode has a renderer");
+  for (const m of modes) assert.ok(!m.disabled, JSON.stringify(m));
+  ok("all five modes are enabled");
   const title = await page.getAttribute('[data-testid="mode-intelligent"]', "title");
   assert.match(title, /Describe what you want/);
-  ok("a disabled mode still tells you what it will be");
+  ok("a mode's tagline is its tooltip");
 }
 
 /* ----------------------------------------------------------- palette */
@@ -261,14 +260,17 @@ await page.waitForSelector(".block-badge");
 
 /* ----------------------------------------------------------- ?mode= */
 {
-  await page.goto(`${STUDIO}/sandbox?mode=intelligent`, { waitUntil: "networkidle" });
+  await page.goto(`${STUDIO}/sandbox?mode=nonsense`, { waitUntil: "networkidle" });
   await page.waitForSelector('[data-testid="mode-selector"]');
   const active = await page.$eval('[data-testid="mode-selector"] .mode-option.active', (e) => e.dataset.mode);
   assert.equal(active, "studio");
-  ok("?mode=intelligent falls back to Studio while Intelligent has no renderer — never an empty screen");
+  ok("?mode=<unknown> falls back to Studio — never an empty screen");
   const url = page.url();
-  assert.ok(url.includes("mode=intelligent") || !url.includes("mode="), "the url is left alone until a real switch happens");
+  assert.ok(url.includes("mode=nonsense") || !url.includes("mode="), "the url is left alone until a real switch happens");
   ok("the URL is not rewritten by the fallback");
+  await page.goto(`${STUDIO}/sandbox?mode=intelligent`, { waitUntil: "networkidle" });
+  await page.waitForSelector('[data-testid="intelligent-view"]');
+  ok("?mode=intelligent opens straight into Intelligent");
   await page.goto(`${STUDIO}/sandbox?mode=grid`, { waitUntil: "networkidle" });
   await page.waitForSelector('[data-testid="grid-view"]');
   ok("?mode=grid opens straight into Grid");

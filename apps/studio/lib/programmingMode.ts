@@ -34,7 +34,7 @@ export const MODES: readonly ModeInfo[] = [
   { id: "grid", label: "Grid", tagline: "Program at scale", audience: "For high-speed questionnaire programming.", available: true, index: 2 },
   { id: "architect", label: "Architect", tagline: "Control every detail", audience: "For advanced survey programmers.", available: true, index: 3 },
   { id: "flow", label: "Flow", tagline: "See the survey's behavior", audience: "For complex routing and logic.", available: true, index: 4 },
-  { id: "intelligent", label: "Intelligent", tagline: "Describe what you want", audience: "For users who want assistance while programming.", available: false, index: 5 },
+  { id: "intelligent", label: "Intelligent", tagline: "Describe what you want", audience: "For users who want assistance while programming.", available: true, index: 5 },
 ];
 
 export const DEFAULT_MODE: ProgrammingMode = "studio";
