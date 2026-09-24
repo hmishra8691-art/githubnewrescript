@@ -19,8 +19,13 @@ architect/`, `apps/studio/lib/architect/map.ts`, `scripts/architect-mode-
 test.mjs`. Map · workspace · inspector; the inspector's Dependencies section
 is §12's Smart Selection; Focus (§14) shipped here as a mode-level flag.
 DisplayRuleCard / CalculationCard were extracted from the Logic and
-Calculations tabs so both surfaces render one component. Phases 3–5 are not
-started.
+Calculations tabs so both surfaces render one component.
+
+**Phase 3 (Flow) delivered 2026-09-24** — `apps/studio/components/flow/`,
+`apps/studio/lib/flow/{layout,debug}.ts`, `scripts/flow-mode-test.mjs`.
+`LogicFlowEdge.kind` added to the schema and set by `buildLogicFlow`. Layout
+is hand-rolled (4 ms at 600 questions); debug mode walks the survey with
+`simulateRespondent`, so skips fire. Phases 4–5 are not started.
 
 Three things learned while building Phase 0 that the plan did not know:
 
