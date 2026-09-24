@@ -29,11 +29,19 @@ export function VariableNameInput({
   testId,
   style,
   placeholder,
+  autoFocus,
+  onDone,
+  inputClassName,
 }: {
   name: string;
   testId?: string;
   style?: React.CSSProperties;
   placeholder?: string;
+  /** focus and select on mount — for a cell editor that appears on Enter */
+  autoFocus?: boolean;
+  /** called after a commit or an Escape, so a host can leave edit mode */
+  onDone?(): void;
+  inputClassName?: string;
 }) {
   const s = useStudio();
   const [draft, setDraft] = React.useState(name);
@@ -70,7 +78,7 @@ export function VariableNameInput({
   const commit = (value: string) => {
     setFocused(false);
     const to = value.trim();
-    if (!to || to === name) { setDraft(name); setError(null); return; }
+    if (!to || to === name) { setDraft(name); setError(null); onDone?.(); return; }
 
     let verdict;
     try {
@@ -90,16 +98,18 @@ export function VariableNameInput({
       for (const k of Object.keys(d)) delete (d as any)[k];
       Object.assign(d, next);
     });
+    onDone?.();
   };
 
   return (
     <span style={{ display: "inline-flex", flexDirection: "column", gap: 2, ...style }}>
       <input
-        className={`input mono${error ? " err" : ""}`}
+        className={`input mono${error ? " err" : ""}${inputClassName ? ` ${inputClassName}` : ""}`}
         data-testid={testId}
         value={draft}
         placeholder={placeholder}
-        onFocus={() => setFocused(true)}
+        autoFocus={autoFocus}
+        onFocus={(e) => { setFocused(true); if (autoFocus) e.target.select(); }}
         onChange={(e) => {
           setDraft(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "_"));
           setError(null);
@@ -107,7 +117,7 @@ export function VariableNameInput({
         onBlur={(e) => commit(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
-          if (e.key === "Escape") { setDraft(name); setError(null); (e.target as HTMLInputElement).blur(); }
+          if (e.key === "Escape") { setDraft(name); setError(null); (e.target as HTMLInputElement).blur(); onDone?.(); }
         }}
       />
       {error && (

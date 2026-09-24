@@ -60,10 +60,13 @@ await page.waitForSelector(".block-badge");
   ok("the mode selector shows all five environments in order");
   assert.ok(modes[0].active && modes[0].available === "1" && !modes[0].disabled, JSON.stringify(modes[0]));
   ok("Studio is the active, available mode");
-  for (const m of modes.slice(1)) assert.ok(!m.active && m.available === "0" && m.disabled, JSON.stringify(m));
-  ok("the four unbuilt modes are visible, disabled and marked coming-soon");
-  const title = await page.getAttribute('[data-testid="mode-grid"]', "title");
-  assert.match(title, /Program at scale/);
+  const built = modes.filter((m) => m.available === "1").map((m) => m.id);
+  const unbuilt = modes.filter((m) => m.available === "0");
+  assert.deepEqual(built, ["studio", "grid"], "the modes with a renderer so far");
+  for (const m of unbuilt) assert.ok(!m.active && m.disabled, JSON.stringify(m));
+  ok(`the ${unbuilt.length} unbuilt modes are visible, disabled and marked coming-soon`);
+  const title = await page.getAttribute('[data-testid="mode-architect"]', "title");
+  assert.match(title, /Control every detail/);
   ok("a disabled mode still tells you what it will be");
 }
 
@@ -257,14 +260,17 @@ await page.waitForSelector(".block-badge");
 
 /* ----------------------------------------------------------- ?mode= */
 {
-  await page.goto(`${STUDIO}/sandbox?mode=grid`, { waitUntil: "networkidle" });
+  await page.goto(`${STUDIO}/sandbox?mode=architect`, { waitUntil: "networkidle" });
   await page.waitForSelector('[data-testid="mode-selector"]');
   const active = await page.$eval('[data-testid="mode-selector"] .mode-option.active', (e) => e.dataset.mode);
   assert.equal(active, "studio");
-  ok("?mode=grid falls back to Studio while Grid has no renderer — never an empty screen");
+  ok("?mode=architect falls back to Studio while Architect has no renderer — never an empty screen");
   const url = page.url();
-  assert.ok(url.includes("mode=grid") || !url.includes("mode="), "the url is left alone until a real switch happens");
+  assert.ok(url.includes("mode=architect") || !url.includes("mode="), "the url is left alone until a real switch happens");
   ok("the URL is not rewritten by the fallback");
+  await page.goto(`${STUDIO}/sandbox?mode=grid`, { waitUntil: "networkidle" });
+  await page.waitForSelector('[data-testid="grid-view"]');
+  ok("?mode=grid opens straight into Grid");
 }
 
 assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join("\n")}`);

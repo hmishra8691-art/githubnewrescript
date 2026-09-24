@@ -259,7 +259,12 @@ export function VariantPickerModal({ onPick, onMode, onClose }: {
 
 /* --------------------------------------------------- switcher (existing q) */
 
-export function VariantSwitcher({ q }: { q: Question }) {
+/**
+ * The type-change machinery without the two selects, so a compact control
+ * (a grid cell, a bulk bar) changes a question's type through exactly the
+ * same migration and the same confirmation as the editor's switcher.
+ */
+export function useTypeSwitch(q: Question) {
   const s = useStudio();
   // a question saved against a retired duplicate resolves to its survivor, so
   // the switcher shows where that type lives now rather than a blank
@@ -325,16 +330,24 @@ export function VariantSwitcher({ q }: { q: Question }) {
     setPending({ migration, to });
   };
 
+  const dialog = pending ? (
+    <TypeChangeDialog
+      migration={pending.migration}
+      toName={pending.to.name}
+      onCancel={() => setPending(null)}
+      onConfirm={() => { apply(pending.migration, pending.to); setPending(null); }}
+    />
+  ) : null;
+
+  return { current, family, families, typesWithPresets, switchTo, dialog };
+}
+
+export function VariantSwitcher({ q }: { q: Question }) {
+  const { current, family, families, typesWithPresets, switchTo, dialog } = useTypeSwitch(q);
+
   return (
     <>
-      {pending && (
-        <TypeChangeDialog
-          migration={pending.migration}
-          toName={pending.to.name}
-          onCancel={() => setPending(null)}
-          onConfirm={() => { apply(pending.migration, pending.to); setPending(null); }}
-        />
-      )}
+      {dialog}
       <label className="f" style={{ width: 150, marginBottom: 0 }}><span>Family</span>
         <select className="select" data-testid="family-switcher" value={family}
           onChange={(e) => {

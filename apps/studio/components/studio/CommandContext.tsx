@@ -41,8 +41,13 @@ interface CommandApi {
   commands: Command<StudioCommandContext>[];
   /** the object-finding commands (questions, calcs, rules) — searched, never listed whole */
   finders: Command<StudioCommandContext>[];
-  run(id: string): void;
-  runCommand(cmd: Command<StudioCommandContext>): void;
+  /**
+   * `override` lets a renderer act on an object that is not the current
+   * selection — a hover action on a grid row runs "duplicate" for THAT row
+   * without first changing what is selected.
+   */
+  run(id: string, override?: Partial<StudioCommandContext>): void;
+  runCommand(cmd: Command<StudioCommandContext>, override?: Partial<StudioCommandContext>): void;
   paletteOpen: boolean;
   openPalette(): void;
   closePalette(): void;
@@ -119,15 +124,15 @@ export function CommandProvider({
   const contextRef = React.useRef(context);
   contextRef.current = context;
 
-  const runCommand = React.useCallback((cmd: Command<StudioCommandContext>) => {
-    const ctx = contextRef.current;
+  const runCommand = React.useCallback((cmd: Command<StudioCommandContext>, override?: Partial<StudioCommandContext>) => {
+    const ctx = override ? { ...contextRef.current, ...override } : contextRef.current;
     if (cmd.when && !cmd.when(ctx)) return;
     if (cmd.edits && ctx.readOnly) { ctx.toast("This project is read-only right now.", "err"); return; }
     void cmd.run(ctx);
   }, []);
-  const run = React.useCallback((id: string) => {
+  const run = React.useCallback((id: string, override?: Partial<StudioCommandContext>) => {
     const cmd = registry.find((c) => c.id === id) ?? finders.find((c) => c.id === id);
-    if (cmd) runCommand(cmd);
+    if (cmd) runCommand(cmd, override);
   }, [registry, finders, runCommand]);
 
   // the one keyboard handler

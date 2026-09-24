@@ -38,6 +38,8 @@ import { SelectionProvider } from "./SelectionContext";
 import { CommandProvider, useCommands, type ShellActions } from "./CommandContext";
 import { CommandPalette } from "./CommandPalette";
 import { ModeSelector } from "./ModeSelector";
+import { useMode } from "./ModeContext";
+import { GridView } from "../grid/GridView";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
@@ -355,7 +357,8 @@ function RightPanel({ tab }: { tab: Tab }) {
       const t = e.target as HTMLElement | null;
       if (!t) return;
       if (asideRef.current?.contains(t)) return;             // inside the panel
-      if (t.closest(".qcard, .leftnav, .topbar, .modal, dialog, [role='dialog'], .rs-card")) return;
+      // the Grid owns its own selection (rows, ranges, toggles) — a click there is never a dismissal
+      if (t.closest(".qcard, .leftnav, .topbar, .modal, dialog, [role='dialog'], .rs-card, .sg")) return;
       if (t.closest("input, textarea, select, button, a, [contenteditable='true']")) return;
       s.select(null);
     };
@@ -865,6 +868,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
    * in the palette is the same function as the button.
    */
   const navTabs = React.useMemo(() => NAV.map((n) => ({ key: n.key, label: n.label, group: n.group })), []);
+  const programmingMode = useMode()?.mode ?? "studio";
   const setTabGuarded = React.useCallback((t: string) => {
     if (t === tab || s.canLeaveTab()) setTab(t as Tab);
   }, [tab, s]);
@@ -1037,7 +1041,14 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
               }}
             />
           )}
-          {tab === "questions" && <QuestionsPanel />}
+          {/*
+            * THE MODE RENDERERS. Each programming mode is another way of
+            * looking at the same survey; here is where the centre column
+            * chooses which. Studio is the Questions panel as it has always
+            * been. Grid shows the same questions as rows. Both read and
+            * write the same store, so switching is a re-render, not a load.
+            */}
+          {tab === "questions" && (programmingMode === "grid" ? <GridView /> : <QuestionsPanel />)}
           {tab === "settings" && (
             /*
              * Sept 21 follow-up ("Priority UI Fix: Survey Flow & Survey
