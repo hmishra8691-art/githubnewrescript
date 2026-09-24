@@ -1,6 +1,21 @@
 # Multi-Modal Survey Programming — audit and build plan
 
-*Audit date: 2026-09-24. Nothing in this document has been built yet.*
+*Audit date: 2026-09-24.*
+
+**Status — Phase 0 delivered 2026-09-24** as two commits, "Multi-modal
+foundation (1/2)" (engine) and "(2/2)" (Studio). Everything in Part C's
+Phase 0 exists; the mode selector shows all five environments with only
+Studio enabled. Phases 1–5 are not started. Three things learned while
+building it that the plan did not know:
+
+- `lintSurveyLogic` was cubic in question count (5.5 s at 1 000 questions);
+  fixed to linear (84 ms). The lint is affordable per keystroke now, so
+  status badges can refresh on every edit without a worker.
+- The store's clone-per-edit costs 15 ms at 1 000 questions. **No selector
+  store is needed for Phase 1** (Part D, risk 2, resolved).
+- `PropertiesPanel` violated the Rules of Hooks on every selection change
+  (two hooks after early returns) — fixed; the Architect inspector will
+  switch object kinds constantly and would have hit it hard.
 
 **One Survey. One Source of Truth. Unlimited Ways to Program It.**
 
