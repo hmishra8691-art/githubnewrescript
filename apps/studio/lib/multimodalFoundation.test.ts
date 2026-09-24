@@ -266,3 +266,47 @@ test("every built-in id is unique and every shortcut is unique", () => {
   const keys = cmds.map((c) => c.shortcut).filter(Boolean) as string[];
   assert.equal(new Set(keys.map((k) => JSON.stringify(parseShortcut(k)))).size, keys.length, `two commands share a key: ${keys.join(", ")}`);
 });
+
+/* ------------------------------------------------------------ split + chooser (Phase 5) */
+
+test("the split comes from the URL, then memory, never the same mode as the primary", async () => {
+  const { resolveInitialSplit, withSplitInUrl, nextPair, shouldShowChooser } = await import("./programmingMode.ts");
+  assert.equal(resolveInitialSplit("?mode=grid&split=flow", null, "grid"), "flow");
+  assert.equal(resolveInitialSplit("?mode=grid&split=grid", "flow", "grid"), null, "a split of a mode with itself is refused, and memory does not rescue it");
+  assert.equal(resolveInitialSplit("", "flow", "grid"), "flow", "memory when the URL says nothing");
+  assert.equal(resolveInitialSplit("?mode=grid", "flow", "grid"), null, "a URL that names a mode but no split is a deliberate single view");
+  assert.equal(resolveInitialSplit("?split=nonsense", "alsononsense", "studio"), null);
+  assert.equal(withSplitInUrl("?mode=grid", "flow"), "?mode=grid&split=flow");
+  assert.equal(withSplitInUrl("?mode=grid&split=flow", null), "?mode=grid");
+  assert.equal(withSplitInUrl("", null), "");
+  // pairs
+  assert.deepEqual(nextPair({ mode: "grid", split: "flow" }, { mode: "flow" }), { mode: "flow", split: "grid" }, "choosing the secondary as primary swaps");
+  assert.deepEqual(nextPair({ mode: "grid", split: "flow" }, { mode: "architect" }), { mode: "architect", split: "flow" }, "another primary keeps the split");
+  assert.deepEqual(nextPair({ mode: "grid", split: "flow" }, { split: "grid" }), { mode: "grid", split: null }, "secondary = primary clears");
+  assert.deepEqual(nextPair({ mode: "grid", split: null }, { split: "intelligent" }), { mode: "grid", split: "intelligent" });
+  assert.deepEqual(nextPair({ mode: "grid", split: "flow" }, { split: null }), { mode: "grid", split: null });
+  // chooser
+  assert.equal(shouldShowChooser("", null, null), true, "first run, nothing asked, nothing remembered");
+  assert.equal(shouldShowChooser("?mode=grid", null, null), false, "a shared link is an answer");
+  assert.equal(shouldShowChooser("", "flow", null), false, "a remembered mode is an answer");
+  assert.equal(shouldShowChooser("", null, "1"), false, "dismissed stays dismissed");
+  assert.equal(shouldShowChooser("?tab=logic", "nonsense", null), true, "junk memory is no answer");
+  assert.equal(shouldShowChooser("", null, null, { sandbox: true }), false, "the sandbox is not a first project");
+  assert.equal(shouldShowChooser("?chooser=1", "grid", "1", { sandbox: true }), true, "?chooser=1 always asks");
+});
+
+test("split commands: offered for other modes when the window is wide enough; off only when split; the chooser reopens", () => {
+  const split = (ctx: StudioCommandContext) => applicable(builtinCommands(), ctx).map((c) => c.id).filter((i) => i.startsWith("split.") || i === "mode.choose");
+  const none = fakeCtx();
+  assert.deepEqual(split(none), [], "no mode layer (setSplit absent): nothing offered");
+  const log: string[] = [];
+  const wide = fakeCtx({ mode: "grid", split: null, splitAllowed: true, setSplit(m) { log.push(`split:${m}`); }, openChooser() { log.push("chooser"); } });
+  assert.deepEqual(split(wide), ["split.studio", "split.architect", "split.flow", "split.intelligent", "mode.choose"], "every other mode, no 'off' while single");
+  const already = fakeCtx({ mode: "grid", split: "flow", splitAllowed: true, setSplit(m) { log.push(`split:${m}`); } });
+  assert.deepEqual(split(already), ["split.studio", "split.architect", "split.intelligent", "split.off"], "the current partner is not offered again; off is");
+  const narrow = fakeCtx({ mode: "grid", split: null, splitAllowed: false, setSplit(m) { log.push(`split:${m}`); } });
+  assert.deepEqual(split(narrow), [], "too narrow: no split offered");
+  const run = (ctx: StudioCommandContext, id: string) => builtinCommands().find((c) => c.id === id)!.run(ctx);
+  run(wide, "split.flow"); run(already, "split.off"); run(wide, "mode.choose");
+  assert.deepEqual(log, ["split:flow", "split:null", "chooser"]);
+});

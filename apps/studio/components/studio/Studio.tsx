@@ -4,7 +4,6 @@ import type { SurveyDefinition } from "@rescript/schema";
 import { StudioProvider, useStudio, selectedQuestion } from "./store";
 import { openPreview, pushPreview, previewWindowOpen, setPreviewDefinition, setPreviewRevision } from "./previewWindow";
 import { ExportDialog } from "./ExportDialog";
-import { QuestionsPanel } from "./QuestionsPanel";
 import { CanvasProvider } from "../canvas/CanvasContext";
 import { PropertiesPanel, SurveySettings } from "./PropertiesPanel";
 import { FlowPanel } from "./FlowPanel";
@@ -39,10 +38,8 @@ import { CommandProvider, useCommands, type ShellActions } from "./CommandContex
 import { CommandPalette } from "./CommandPalette";
 import { ModeSelector } from "./ModeSelector";
 import { useMode } from "./ModeContext";
-import { GridView } from "../grid/GridView";
-import { ArchitectView } from "../architect/ArchitectView";
-import { FlowCanvas } from "../flow/FlowCanvas";
-import { IntelligentView } from "../intelligent/IntelligentView";
+import { ModeRenderer, SplitCenter } from "./ModeRenderers";
+import { ModeChooser } from "./ModeChooser";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
@@ -871,7 +868,10 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
    * in the palette is the same function as the button.
    */
   const navTabs = React.useMemo(() => NAV.map((n) => ({ key: n.key, label: n.label, group: n.group })), []);
-  const programmingMode = useMode()?.mode ?? "studio";
+  const modeCtx = useMode();
+  const programmingMode = modeCtx?.mode ?? "studio";
+  // the split is a pair of renderers; below SPLIT_MIN_WIDTH it folds to the primary and comes back when the window widens
+  const splitMode = modeCtx?.split && modeCtx.splitAllowed ? modeCtx.split : null;
   const setTabGuarded = React.useCallback((t: string) => {
     if (t === tab || s.canLeaveTab()) setTab(t as Tab);
   }, [tab, s]);
@@ -881,6 +881,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
     <CommandProvider tab={tab} setTab={setTabGuarded} tabs={navTabs}>
     <ShellBridge actions={shellActions} />
     <CommandPalette />
+    <ModeChooser />
     <div className="ide">
       <div className="topbar">
         <a href="/" className="logo-mark" style={{ width: 30, height: 30, fontSize: 15 }} title="Dashboard">R</a>
@@ -1052,11 +1053,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
             * write the same store, so switching is a re-render, not a load.
             */}
           {tab === "questions" && (
-            programmingMode === "grid" ? <GridView />
-            : programmingMode === "architect" ? <ArchitectView />
-            : programmingMode === "flow" ? <FlowCanvas />
-            : programmingMode === "intelligent" ? <IntelligentView />
-            : <QuestionsPanel />
+            splitMode ? <SplitCenter primary={programmingMode} secondary={splitMode} /> : <ModeRenderer mode={programmingMode} />
           )}
           {tab === "settings" && (
             /*
@@ -1113,7 +1110,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           )}
         </main>
         {/* Architect carries its own inspector, so the outer property panel steps aside there */}
-        <RightPanel tab={tab} hidden={(programmingMode === "architect" || programmingMode === "flow" || programmingMode === "intelligent") && tab === "questions"} />
+        <RightPanel tab={tab} hidden={(!!splitMode || programmingMode === "architect" || programmingMode === "flow" || programmingMode === "intelligent") && tab === "questions"} />
       </div>
       </CanvasProvider>
     </div>
@@ -1175,7 +1172,7 @@ export function Studio({ definition, surveyDbId, versionId, draftSavedAt, revisi
       readOnly={collaboration}>
       {/* the programming mode and the shared selection sit above the shell:
           both survive a tab change, and every environment reads them */}
-      <ModeProvider>
+      <ModeProvider sandbox={surveyDbId === "sandbox"}>
         <SelectionProvider>
           <StudioShell collaboration={collaboration} />
         </SelectionProvider>

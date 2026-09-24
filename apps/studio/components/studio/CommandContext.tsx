@@ -106,6 +106,10 @@ export function CommandProvider({
       setMode(m) { mode?.setMode(m); },
       focus: mode?.focus ?? false,
       setFocus(on) { mode?.setFocus(on); },
+      split: mode?.split ?? null,
+      setSplit: mode ? (m) => mode.setSplit(m) : undefined,
+      splitAllowed: mode?.splitAllowed ?? false,
+      openChooser: mode ? () => mode.openChooser() : undefined,
       uid,
       newQuestion(def: SurveyDefinition): Question {
         const v = variantRegistry.get("single_select.radio")!;

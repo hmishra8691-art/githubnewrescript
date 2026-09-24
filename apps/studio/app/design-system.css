@@ -1161,3 +1161,168 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
   .iq-divider, .iq-inspector { display: none; }
   .iq-hint { display: none; }
 }
+
+/* ======================================================================
+   PRODUCT SURFACE (Phase 5) — the mode shell's visual language (§11),
+   the chooser (§10), the split (§15), and the collapse rules (§17).
+
+   An EXTENSION of the design system, not a replacement: the `--ide-*`
+   tokens below are read only by the programming-mode chrome (selector,
+   pane heads, chooser, split) and the four mode shells. The respondent
+   renderer and every existing Studio panel keep their tokens untouched.
+   The look is a 2027 enterprise IDE — dense type ramp, mono identifiers,
+   hairlines, restrained status colour, no gradients, no glow.
+   ====================================================================== */
+:root {
+  --ide-fs: 12.5px;            /* body type in the mode shells */
+  --ide-fs-sm: 11.5px;
+  --ide-mono-fs: 10.5px;       /* identifiers, indexes, kickers */
+  --ide-track: .08em;          /* letter-spacing for kickers */
+  --ide-head-h: 38px;          /* every pane head, every toolbar, one height */
+  --ide-hairline: 1px solid var(--c-border);
+  --ide-r: 8px;
+  --ide-ink: var(--c-text);
+  --ide-ink-2: var(--c-text-3);
+  --ide-ink-3: var(--c-text-4);
+  --ide-accent: var(--c-primary-600);
+  --ide-accent-soft: var(--c-primary-100);
+  --ide-ok: var(--c-success);
+  --ide-warn: var(--c-warning);
+  --ide-err: var(--c-error);
+  --ide-dep: #0e7490;          /* dependency — the cyan the Flow canvas already uses upstream */
+  --ide-changed: #7c3aed;      /* changed since the last version */
+}
+
+/* the four mode shells share the type ramp; everything inside inherits */
+.sg, .ar, .fc, .iq { font-size: var(--ide-fs); color: var(--ide-ink); }
+.sg-toolbar, .fc-toolbar, .iq-toolbar, .ar-pane-head { min-height: var(--ide-head-h); }
+
+/* ---------- the selector: numbered ranges on an instrument ---------- */
+.mode-cluster { display: inline-flex; align-items: center; gap: 6px; flex: none; margin-left: 6px; }
+.mode-selector { margin-left: 0; }
+.mode-option { display: inline-flex; align-items: baseline; gap: 6px; padding: 5px 10px 5px 8px; }
+.mode-index { font-family: var(--mono); font-size: var(--ide-mono-fs); letter-spacing: .04em; color: var(--ide-ink-3); }
+.mode-option.active .mode-index { color: var(--ide-accent); }
+.mode-option.paired { box-shadow: 0 0 0 1px var(--c-border) inset; color: var(--ide-ink-2); }
+.mode-option.paired .mode-index::after { content: "·"; margin-left: 3px; color: var(--ide-accent); }
+.mode-tools { display: inline-flex; align-items: center; gap: 2px; position: relative; }
+.mode-tool {
+  appearance: none; display: inline-flex; align-items: center; gap: 5px; border: 1px solid transparent; border-radius: 7px;
+  background: transparent; color: var(--ide-ink-2); font: inherit; font-size: 12px; font-weight: 550; padding: 5px 8px; cursor: pointer; line-height: 1; white-space: nowrap;
+}
+.mode-tool:hover:not(:disabled) { color: var(--ide-ink); background: var(--c-surface-2); }
+.mode-tool.on { color: var(--ide-accent); background: var(--c-surface-2); border-color: var(--ide-accent-soft); }
+.mode-tool:disabled { opacity: .4; cursor: not-allowed; }
+.mode-tool.quiet { padding: 5px 6px; }
+.mode-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 60; min-width: 240px;
+  background: var(--c-surface); border: var(--ide-hairline); border-radius: var(--ide-r); box-shadow: var(--sh-3, 0 8px 24px rgba(19,26,43,.14)); padding: 6px;
+}
+.mode-menu-title { font-family: var(--mono); font-size: var(--ide-mono-fs); letter-spacing: var(--ide-track); text-transform: uppercase; color: var(--ide-ink-3); padding: 6px 8px 4px; }
+.mode-menu-item {
+  appearance: none; display: flex; align-items: baseline; gap: 8px; width: 100%; border: 0; background: transparent; border-radius: 6px;
+  font: inherit; font-size: 12.5px; color: var(--ide-ink); padding: 6px 8px; cursor: pointer; text-align: left;
+}
+.mode-menu-item:hover { background: var(--c-surface-2); }
+.mode-menu-item.on { color: var(--ide-accent); }
+.mode-menu-item.off { color: var(--ide-ink-2); border-top: var(--ide-hairline); border-radius: 0; margin-top: 4px; padding-top: 8px; align-items: center; }
+.mode-menu-tag { margin-left: auto; font-size: var(--ide-fs-sm); color: var(--ide-ink-3); }
+
+/* ---------- the chooser ---------- */
+.chooser-backdrop {
+  position: fixed; inset: 0; z-index: 190; display: flex; align-items: center; justify-content: center; padding: 24px;
+  background: rgba(19, 26, 43, .32); backdrop-filter: blur(3px); animation: palette-in var(--dur-2, 160ms) var(--ease, ease);
+}
+.chooser {
+  width: min(1120px, 100%); max-height: calc(100vh - 48px); overflow: auto; background: var(--c-surface);
+  border: var(--ide-hairline); border-radius: 14px; box-shadow: var(--sh-3, 0 24px 64px rgba(19,26,43,.22)); padding: 28px 28px 20px;
+}
+.chooser-head { text-align: center; margin-bottom: 22px; }
+.chooser-kicker { font-family: var(--mono); font-size: var(--ide-mono-fs); letter-spacing: .14em; text-transform: uppercase; color: var(--ide-ink-3); }
+.chooser-head h2 { margin: 8px 0 6px; font-size: 24px; font-weight: 650; letter-spacing: -.015em; color: var(--ide-ink); }
+.chooser-head p { margin: 0; color: var(--ide-ink-2); font-size: 13.5px; }
+.chooser-cards { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.chooser-card {
+  appearance: none; position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left;
+  border: var(--ide-hairline); border-radius: 12px; background: var(--c-bg); padding: 16px 14px 14px; font: inherit; color: var(--ide-ink); cursor: pointer;
+  transition: border-color var(--dur-1, 120ms) var(--ease, ease), transform var(--dur-1, 120ms) var(--ease, ease), box-shadow var(--dur-1, 120ms) var(--ease, ease);
+}
+.chooser-card:hover:not(:disabled), .chooser-card:focus-visible { border-color: var(--ide-accent); box-shadow: 0 0 0 3px var(--ide-accent-soft); transform: translateY(-1px); outline: none; }
+.chooser-card.current { border-color: var(--c-border-strong); }
+.chooser-card:disabled { opacity: .5; cursor: default; }
+.chooser-glyph { color: var(--ide-accent); margin-bottom: 4px; }
+.chooser-index { font-size: var(--ide-mono-fs); letter-spacing: .1em; color: var(--ide-ink-3); }
+.chooser-name { font-size: 16px; font-weight: 650; letter-spacing: -.01em; }
+.chooser-tagline { font-size: 13px; color: var(--ide-ink); }
+.chooser-audience { font-size: var(--ide-fs-sm); color: var(--ide-ink-2); margin-bottom: 6px; }
+.chooser-detail { margin: auto 0 0; padding: 8px 0 0; list-style: none; border-top: var(--ide-hairline); width: 100%; display: flex; flex-direction: column; gap: 3px; }
+.chooser-detail li { font-size: var(--ide-fs-sm); color: var(--ide-ink-2); padding-left: 12px; position: relative; }
+.chooser-detail li::before { content: ""; position: absolute; left: 0; top: .55em; width: 5px; height: 1px; background: var(--c-border-strong); }
+.chooser-current { position: absolute; top: 10px; right: 10px; font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--ide-accent); border: 1px solid var(--ide-accent-soft); border-radius: 999px; padding: 1px 6px; }
+.chooser-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; padding-top: 14px; border-top: var(--ide-hairline); }
+.chooser-foot-note { display: inline-flex; align-items: center; gap: 6px; font-size: var(--ide-fs-sm); color: var(--ide-ink-2); }
+
+/* ---------- the split ---------- */
+.center:has(> .split) { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+.split { flex: 1 1 auto; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); background: var(--c-bg); }
+.split-divider { cursor: col-resize; background: var(--c-border); position: relative; z-index: 2; }
+.split-divider:hover, .split-divider:active { background: var(--ide-accent-soft); }
+.split-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--c-surface); }
+.split-head {
+  display: flex; align-items: baseline; gap: 8px; padding: 0 10px; height: 30px; flex: none;
+  border-bottom: var(--ide-hairline); background: var(--c-surface-2); font-size: var(--ide-fs-sm);
+}
+.split-index { font-size: var(--ide-mono-fs); letter-spacing: .06em; color: var(--ide-accent); }
+.split-name { font-weight: 650; color: var(--ide-ink); }
+.split-tagline { color: var(--ide-ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.split-spacer { flex: 1 1 auto; }
+.split-btn { appearance: none; align-self: center; display: inline-flex; border: 0; background: transparent; color: var(--ide-ink-3); padding: 3px; border-radius: 5px; cursor: pointer; }
+.split-btn:hover { color: var(--ide-ink); background: var(--c-surface); }
+.split-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+/* the Studio (Questions panel) renderer expects the centre column's padding and scroll */
+.split-pane.studio .split-body { overflow-y: auto; padding: 18px 20px 40px; display: block; }
+
+/* ---------- collapse rules per mode (§17) ---------- */
+@media (max-width: 1400px) {
+  .mode-tool-label { display: none; }
+  .mode-option { padding: 5px 8px; }
+}
+@media (max-width: 1180px) {
+  .mode-index { display: none; }
+  .split-tagline { display: none; }
+}
+@media (max-width: 1100px) {
+  /* two renderers would each be unusable: the shell renders the primary alone (ModeContext.splitAllowed) */
+  .mode-tools .mode-tool[data-testid="split-toggle"] { display: none; }
+  .chooser-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .chooser-detail { display: none; }
+}
+@media (max-width: 900px) {
+  .mode-selector-label, .mode-tools { display: none; }
+  .mode-option .mode-name { font-size: 12px; }
+  .chooser { padding: 18px 16px 14px; }
+  .chooser-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .chooser-head h2 { font-size: 19px; }
+  .chooser-foot { flex-direction: column; align-items: stretch; }
+}
+@media (max-width: 620px) {
+  .chooser-cards { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ---------- a renderer in a narrow home (§17) ----------
+   A split pane is a container; the same rules apply to the whole centre
+   column on a narrow window. Inspectors and side panes fold; the main
+   pane keeps every control. Each shell's own toggle still opens them. */
+.split-pane, .center { container-type: inline-size; }
+@container (max-width: 960px) {
+  .fc, .iq { grid-template-columns: minmax(0, 1fr) !important; }
+  .fc-inspector, .iq-inspector, .iq-divider { display: none; }
+  .ar { grid-template-columns: 220px 6px minmax(0, 1fr) !important; }
+  .ar-inspector, [data-testid="ar-divider-inspector"] { display: none; }
+  .iq-hint { display: none; }
+}
+@container (max-width: 640px) {
+  .ar { grid-template-columns: minmax(0, 1fr) !important; }
+  .ar-map, [data-testid="ar-divider-map"] { display: none; }
+  .sg-toolbar .sg-search { min-width: 120px; }
+}

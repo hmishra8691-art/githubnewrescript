@@ -43,7 +43,33 @@ all-or-nothing and a chain of commands is not. The grammar runs first and
 always; the model is consulted only for a sentence the grammar cannot read
 (or reads but cannot resolve). "Reorder" is not in the vocabulary — it is
 one keystroke in Grid and a drag in Flow, and a sentence for it would be
-longer than either. Phase 5 is not started.
+longer than either.
+
+**Phase 5 (Product surface) delivered 2026-09-24** — `apps/studio/
+components/studio/{ModeChooser,ModeRenderers}.tsx`, `ModeContext.tsx` and
+`ModeSelector.tsx` extended, `lib/programmingMode.ts` (split + chooser
+helpers), `scripts/product-surface-test.mjs`. The chooser ("How do you want
+to program your research?") opens on a first run of a PROJECT with no
+`?mode=` link and no remembered mode, and always on `?chooser=1`, the ⓘ in
+the selector or ⌘K; the sandbox is exempt unless asked, because it is a
+scratch surface and 48 browser suites open it expecting nothing in front
+of the Questions panel. The split is a pair `{mode, split}` in the mode
+layer — URL `?split=`, memory, swap-not-double, refused with itself, folded
+below 1 100 px and restored on widening — rendered by one `ModeRenderer`
+table so the single and split views cannot drift. Two renderers over one
+store were the point: an edit in Grid is on the Flow canvas on the same
+render, with no code written for it. Responsive collapse is per renderer
+via container queries on the pane and on the centre column (inspectors
+fold under 960 px, Architect's map under 640 px), so the same rule serves a
+narrow pane and a narrow window. The visual language is a `--ide-*` token
+extension read only by the mode chrome and the four shells — numbered
+ranges on the selector, one pane-head height, hairlines, mono
+identifiers; nothing the respondent renderer or an existing panel reads
+changed. One Flow bug surfaced by the split and fixed: the first fit used
+a guessed 1200×700 before the canvas was measured. All five phases are
+delivered; Part D's open decisions are closed (hand-rolled everything;
+no selector store; a token extension; the grammar keeps Intelligent
+working without a provider).
 
 Three things learned while building Phase 0 that the plan did not know:
 

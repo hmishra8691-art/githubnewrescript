@@ -117,7 +117,9 @@ export function FlowCanvas() {
 
   /* ------------------------------------------------------------ viewport */
   const hostRef = React.useRef<HTMLDivElement>(null);
-  const [size, setSize] = React.useState({ w: 1200, h: 700 });
+  // 0×0 until measured: the first fit must use the real viewport, or a
+  // canvas mounted in a split pane fits to a width it does not have
+  const [size, setSize] = React.useState({ w: 0, h: 0 });
   const [view, setView] = React.useState<View>({ k: 1, tx: 40, ty: 40 });
   const fitted = React.useRef(false);
   React.useEffect(() => {

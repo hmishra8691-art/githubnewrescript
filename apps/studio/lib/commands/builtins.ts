@@ -37,6 +37,13 @@ export interface StudioCommandContext extends CommandContextBase {
   /** focus mode: dim everything outside the selection's dependency neighbourhood */
   focus: boolean;
   setFocus(on: boolean): void;
+  /** dual-mode split: the secondary renderer, or null; absent where no mode layer exists */
+  split?: ProgrammingMode | null;
+  setSplit?(mode: ProgrammingMode | null): void;
+  /** the window is wide enough for two renderers */
+  splitAllowed?: boolean;
+  /** the onboarding chooser */
+  openChooser?(): void;
   /** the Studio's id generator, so ids look the way the browser suites expect */
   uid(prefix: string): string;
   /** build a fresh question of the default variant, named for this survey */
@@ -211,6 +218,28 @@ export function builtinCommands(): C[] {
       run(ctx) { ctx.setMode(m.id); },
     });
   }
+
+  /* ------------------------------------------------------------ split (§15) */
+  for (const m of MODES) {
+    cmds.push({
+      id: `split.${m.id}`, title: `Split with ${m.label}`, group: "Mode",
+      keywords: ["split", "side by side", "dual", "two modes", m.tagline],
+      when: (ctx) => m.available && !!ctx.setSplit && ctx.splitAllowed !== false && ctx.mode !== m.id && ctx.split !== m.id,
+      run(ctx) { ctx.setSplit!(m.id); },
+    });
+  }
+  cmds.push({
+    id: "split.off", title: "Close split view", group: "Mode",
+    keywords: ["split", "single", "one mode", "unsplit"],
+    when: (ctx) => !!ctx.setSplit && !!ctx.split,
+    run(ctx) { ctx.setSplit!(null); },
+  });
+  cmds.push({
+    id: "mode.choose", title: "Choose how to program…", group: "Mode",
+    keywords: ["onboarding", "chooser", "which mode", "how do you want to program", "environment"],
+    when: (ctx) => !!ctx.openChooser,
+    run(ctx) { ctx.openChooser!(); },
+  });
 
   /* ------------------------------------------------------------ survey */
   cmds.push({

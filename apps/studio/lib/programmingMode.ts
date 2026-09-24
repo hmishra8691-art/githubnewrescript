@@ -70,3 +70,78 @@ export function withModeInUrl(search: string, mode: ProgrammingMode): string {
   const s = p.toString();
   return s ? `?${s}` : "";
 }
+
+/* ================================================================ split */
+
+/**
+ * DUAL-MODE SPLIT (§15). A second renderer beside the first — Grid on the
+ * left, Flow on the right — both over the one store, so an edit in either
+ * shows in the other on the same render. The secondary is a property of
+ * the view like the mode is: URL (`?split=flow`) and memory, never the
+ * survey. A split of a mode with itself is refused; a split whose partner
+ * becomes the primary is dropped rather than doubled.
+ */
+export const SPLIT_STORAGE_KEY = "rescript.programmingSplit";
+
+/** below this width two renderers would each be too narrow to use; the split is not offered */
+export const SPLIT_MIN_WIDTH = 1100;
+
+export function resolveInitialSplit(search: string, remembered: string | null | undefined, primary: ProgrammingMode): ProgrammingMode | null {
+  const fromUrl = new URLSearchParams(search).get("split");
+  const pick = (v: unknown): ProgrammingMode | null =>
+    isProgrammingMode(v) && modeInfo(v).available && v !== primary ? v : null;
+  // a URL that names a mode is a deliberate view: it alone decides whether there is a split
+  if (new URLSearchParams(search).has("mode")) return pick(fromUrl);
+  return pick(fromUrl) ?? pick(remembered);
+}
+
+/** The URL with `?split=` set or removed, other params kept. */
+export function withSplitInUrl(search: string, split: ProgrammingMode | null): string {
+  const p = new URLSearchParams(search);
+  if (split) p.set("split", split); else p.delete("split");
+  const s = p.toString();
+  return s ? `?${s}` : "";
+}
+
+/**
+ * The pair after a change. Setting the primary to the current secondary
+ * swaps them (the programmer clearly wants both, the other way round);
+ * setting it to anything else keeps the secondary unless it would now be
+ * the same mode. `secondary === primary` clears the split.
+ */
+export function nextPair(cur: { mode: ProgrammingMode; split: ProgrammingMode | null }, change: { mode?: ProgrammingMode; split?: ProgrammingMode | null }): { mode: ProgrammingMode; split: ProgrammingMode | null } {
+  let mode = change.mode ?? cur.mode;
+  let split = change.split === undefined ? cur.split : change.split;
+  if (change.mode !== undefined && change.split === undefined && cur.split === change.mode) split = cur.mode;
+  if (split === mode) split = null;
+  if (split && !modeInfo(split).available) split = null;
+  return { mode, split };
+}
+
+/* ============================================================== chooser */
+
+/**
+ * THE ONBOARDING CHOOSER (§10, §20): "How do you want to program your
+ * research?" — shown once, the first time a browser opens the programming
+ * tabs with no mode asked for. A shared `?mode=` link is an answer already;
+ * a remembered mode is an answer already; a dismissed chooser stays
+ * dismissed. It can always be reopened from the selector or ⌘K.
+ */
+export const CHOOSER_STORAGE_KEY = "rescript.modeChooserSeen";
+
+export function shouldShowChooser(search: string, remembered: string | null | undefined, seen: string | null | undefined, opts: { sandbox?: boolean } = {}): boolean {
+  const p = new URLSearchParams(search);
+  // `?chooser=1` asks for it outright — the way to see the first run again, and the way the browser suite reaches it
+  if (p.get("chooser") === "1") return true;
+  if (seen) return false;
+  if (p.has("mode")) return false;
+  if (isProgrammingMode(remembered)) return false;
+  /*
+   * The sandbox is a scratch surface, not a project, and forty-odd browser
+   * suites open it expecting the Questions panel and nothing in front of
+   * it. A first run in the product is a first PROJECT; the sandbox gets
+   * the chooser only when asked (`?chooser=1`, the ⓘ, ⌘K).
+   */
+  if (opts.sandbox) return false;
+  return true;
+}
