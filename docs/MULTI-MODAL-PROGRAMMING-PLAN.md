@@ -25,7 +25,25 @@ Calculations tabs so both surfaces render one component.
 `apps/studio/lib/flow/{layout,debug}.ts`, `scripts/flow-mode-test.mjs`.
 `LogicFlowEdge.kind` added to the schema and set by `buildLogicFlow`. Layout
 is hand-rolled (4 ms at 600 questions); debug mode walks the survey with
-`simulateRespondent`, so skips fire. Phases 4–5 are not started.
+`simulateRespondent`, so skips fire.
+
+**Phase 4 (Intelligent) delivered 2026-09-24** — `packages/engine/src/
+logicProposal.ts`, `apps/studio/lib/intelligent/{proposal,grammar,context,
+ai}.ts`, `apps/studio/components/intelligent/IntelligentView.tsx`,
+`apps/studio/app/api/ai/logic/route.ts`, `scripts/intelligent-mode-test.mjs`.
+All five modes are now enabled. Two departures from the sketch below, both
+deliberate: (1) the model is asked for an **intent** — the same small
+structure the grammar produces (`display | skip | required | add_question |
+rename | find | explain | unknown`, condition as expression text) — rather
+than for expression text alone, so there is one planner and the model
+cannot address anything the grammar cannot; (2) Apply goes through
+`applyLogicProposal` inside one `store.update` (labelled, undoable) rather
+than through a sequence of registry commands, because a proposal must be
+all-or-nothing and a chain of commands is not. The grammar runs first and
+always; the model is consulted only for a sentence the grammar cannot read
+(or reads but cannot resolve). "Reorder" is not in the vocabulary — it is
+one keystroke in Grid and a drag in Flow, and a sentence for it would be
+longer than either. Phase 5 is not started.
 
 Three things learned while building Phase 0 that the plan did not know:
 
