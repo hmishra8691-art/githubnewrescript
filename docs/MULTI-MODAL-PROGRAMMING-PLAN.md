@@ -14,7 +14,13 @@ the Questions tab renders the grid; every other tab is unchanged. Measured at
 scroll step, 17 keystrokes in a cell in 273 ms. Two shell fixes came with
 it: RightPanel's click-outside deselect now exempts the grid, and the grid
 toolbar never wraps (it moved rows under the cursor mid double-click).
-Phases 2–5 are not started.
+**Phase 2 (Architect) delivered 2026-09-24** — `apps/studio/components/
+architect/`, `apps/studio/lib/architect/map.ts`, `scripts/architect-mode-
+test.mjs`. Map · workspace · inspector; the inspector's Dependencies section
+is §12's Smart Selection; Focus (§14) shipped here as a mode-level flag.
+DisplayRuleCard / CalculationCard were extracted from the Logic and
+Calculations tabs so both surfaces render one component. Phases 3–5 are not
+started.
 
 Three things learned while building Phase 0 that the plan did not know:
 
