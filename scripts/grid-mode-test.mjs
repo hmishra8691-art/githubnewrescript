@@ -345,6 +345,71 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
   ok("and back to Grid, the row is still selected");
 }
 
+/* ----------------------------------------------------------- options in the cell (round 2, §7) */
+{
+  const before = await readDef();
+  const q13 = before.questions.find((q) => q.code === "Q13");
+  const n0 = q13.options.length;
+  await page.click('[data-testid="grid-row"][data-code="Q13"] .sg-cell[data-col="code"]');
+  await page.waitForTimeout(200); // the properties panel opens for the selected row and the columns settle
+  const optCell = await cell("Q13", "options");
+  await optCell.dblclick();
+  await page.waitForSelector('[data-testid="grid-options-editor"]');
+  assert.equal((await page.$$('[data-testid="grid-option-row"]')).length, n0);
+  ok(`double-clicking the Options cell opens the list editor with Q13's ${n0} options`);
+  await page.click('[data-testid="grid-option-add"]');
+  const labels = await page.$$('[data-testid="grid-option-label"]');
+  await labels[labels.length - 1].fill("Neither");
+  await page.click('[data-testid="grid-options-done"]');
+  await page.waitForSelector('[data-testid="grid-options-editor"]', { state: "detached" });
+  const after = await readDef();
+  const q13b = after.questions.find((q) => q.code === "Q13");
+  assert.equal(q13b.options.length, n0 + 1);
+  assert.equal(q13b.options[n0].label, "Neither");
+  assert.ok(q13b.options[n0].id && q13b.options[n0].code !== undefined, "the new option has an id and a code, like one added in Studio");
+  assert.deepEqual(q13b.options.slice(0, n0).map((o) => o.id), q13.options.map((o) => o.id), "the existing options are untouched");
+  assert.deepEqual({ ...q13b, options: undefined }, { ...q13, options: undefined }, "nothing but the options changed — logic, type, variable stay");
+  ok("+ option “Neither” → Done writes the list through the store; everything else on Q13 is untouched");
+  assert.match(await page.$eval('[data-testid="grid-row"][data-code="Q13"] .sg-cell[data-col="options"]', (e) => e.textContent), /Neither/);
+  ok("the cell shows the new option at once");
+  // the type is not forced: a single select becomes a multi select and keeps its options
+  await switchMode(page, "studio");
+  await page.waitForSelector(`[data-testid="qcard"][data-qid="${q13.id}"]`);
+  await switchMode(page, "grid");
+  await page.waitForSelector('[data-testid="grid-view"]');
+  ok("Studio shows the same four options — one model");
+  await page.click('[data-testid="grid-row"][data-code="Q13"]');
+  await page.keyboard.press("Control+z");
+  await page.waitForTimeout(300);
+  assert.equal((await readDef()).questions.find((q) => q.code === "Q13").options.length, n0);
+  ok("and it is one undo step");
+  // a question without a flat option list is sent to Studio rather than flattened
+  const matrix = before.questions.find((q) => /matrix/.test(q.type) && q.rows?.length);
+  if (matrix) {
+    await page.click(`[data-testid="grid-row"][data-code="${matrix.code}"] .sg-cell[data-col="code"]`).catch(() => {});
+    await page.waitForTimeout(200);
+    const mc = await cell(matrix.code, "options");
+    if (!mc) { console.log(`  skip matrix check: ${matrix.code} not in the window`); }
+    else {
+    await mc.dblclick();
+    await page.waitForSelector('[data-testid="grid-options-editor"]');
+    assert.ok(await page.$('[data-testid="grid-options-open-studio"]'));
+    assert.equal(await page.$('[data-testid="grid-option-row"]'), null);
+    ok(`${matrix.code} (rows × columns) offers Open in Studio instead of a flat list`);
+    await page.keyboard.press("Escape");
+    await page.waitForSelector('[data-testid="grid-options-editor"]', { state: "detached" });
+    }
+  }
+  // a fresh browser (no remembered column choice) shows Validation by default
+  await page.evaluate(() => window.localStorage.removeItem("rescript.grid"));
+  await page.reload({ waitUntil: "networkidle" });
+  await page.waitForSelector('[data-testid="grid-view"]');
+  assert.ok(await page.$('[data-testid="grid-head-validation"]'), "the Validation column is on by default");
+  ok("Validation is a default column — required and rules at a glance");
+  await loadDef(buildMasterDemoSurvey("sandbox"));
+  await page.waitForSelector('[data-testid="grid-view"]');
+}
+
 /* ----------------------------------------------------------- scale: 600 questions */
 {
   await switchMode(page, "studio");

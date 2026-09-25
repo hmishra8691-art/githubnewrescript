@@ -1,5 +1,5 @@
 import type { SurveyDefinition } from "@rescript/schema";
-import { listPages, questionsInFlowOrder, conditionSummary } from "@rescript/engine";
+import { listPages, questionsInFlowOrder, conditionSummary, formatSetExpression } from "@rescript/engine";
 
 /**
  * THE SURVEY, COMPACTLY, FOR A LANGUAGE MODEL.
@@ -62,6 +62,8 @@ export function surveyContext(def: SurveyDefinition, opts: ContextOptions = {}):
       parts.push(`options: ${opts}${q.options.length > 12 ? `, … (${q.options.length})` : ""}`);
     }
     if (q.rows?.length) parts.push(`${q.rows.length} rows`);
+    if (q.validation?.length) parts.push(`validation: ${q.validation.map((v) => `${String(v.kind).replace(/_/g, " ")}${v.value !== undefined && v.value !== null && typeof v.value !== "object" ? ` ${v.value}` : ""}`).join(", ")}`);
+    if (q.mask) parts.push(`mask: ${q.mask.action} ${formatSetExpression(def, q.mask.expr)}`);
     if (q.displayLogic) parts.push(`shown when ${conditionSummary(def, q.displayLogic)}`);
     if (q.skipLogic?.length) parts.push(`${q.skipLogic.length} skip rule${q.skipLogic.length === 1 ? "" : "s"}`);
     if (q.id === opts.selectedId) parts.push("← selected");

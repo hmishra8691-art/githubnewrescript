@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { SurveyDefinition, cond, type Question } from "@rescript/schema";
 import { buildDependencyIndex, applyLogicProposal } from "@rescript/engine";
 import { parseIntent, EXAMPLES } from "./grammar.ts";
-import { planProposal, normaliseExpression, resolveTarget, variantForWords, type PlannerDeps } from "./proposal.ts";
+import { planProposal, normaliseExpression, normaliseSetExpression, resolveTarget, variantForWords, type PlannerDeps } from "./proposal.ts";
 import { surveyContext } from "./context.ts";
 
 const survey = () =>
@@ -257,4 +257,122 @@ test("coerceIntent admits only the shapes the planner knows", async () => {
   assert.match(LOGIC_SYSTEM_PROMPT, /Never invent codes/);
   // every shape the prompt promises, the coercer accepts
   for (const k of ["display", "skip", "required", "add_question", "rename", "find", "explain", "unknown"]) assert.match(LOGIC_SYSTEM_PROMPT, new RegExp(`"kind":"${k}"`));
+});
+
+/* ------------------------------------------------- validation + masking (round 2) */
+
+const survey2 = () =>
+  SurveyDefinition.parse({
+    meta: { id: "s", code: "S", title: "Round 2" },
+    questions: [
+      { id: "q_age", code: "Q1", variableName: "AGE", type: "numeric", text: "How old are you?" },
+      { id: "q_email", code: "Q2", variableName: "EMAIL", type: "open_text", text: "Your email" },
+      { id: "q_brands", code: "Q3", variableName: "BRANDS", type: "multi_select", text: "Which brands?", options: [{ code: 1, label: "A" }, { code: 2, label: "B" }, { code: 3, label: "C" }, { code: 4, label: "D" }] },
+      { id: "q_used", code: "Q4", variableName: "USED", type: "multi_select", text: "Used?", options: [{ code: 1, label: "A" }, { code: 2, label: "B" }, { code: 3, label: "C" }, { code: 4, label: "D" }] },
+      { id: "q_best", code: "Q5", variableName: "BEST", type: "single_select", text: "Best brand", options: [{ code: 1, label: "A" }, { code: 2, label: "B" }, { code: 3, label: "C" }, { code: 4, label: "D" }] },
+    ],
+    flow: [{ type: "page", id: "p1", questionIds: ["q_age", "q_email", "q_brands", "q_used", "q_best"] }, { type: "end", id: "e", status: "complete" }],
+    deployment: { clientSlug: "c", studySlug: "s" },
+  });
+
+test("grammar: validation in its everyday spellings maps onto the engine's rule kinds", () => {
+  assert.deepEqual(parseIntent("Q1 must be between 18 and 99"), { kind: "validation", target: "Q1", rules: [{ kind: "min_value", value: 18 }, { kind: "max_value", value: 99 }] });
+  assert.deepEqual(parseIntent("make Q1 between 18 and 99"), { kind: "validation", target: "Q1", rules: [{ kind: "min_value", value: 18 }, { kind: "max_value", value: 99 }] });
+  assert.deepEqual(parseIntent("Q1 is at least 18"), { kind: "validation", target: "Q1", rules: [{ kind: "min_value", value: 18 }] });
+  assert.deepEqual(parseIntent("Q1 must be at most 120"), { kind: "validation", target: "Q1", rules: [{ kind: "max_value", value: 120 }] });
+  assert.deepEqual(parseIntent("set the maximum for Q1 to 99"), { kind: "validation", target: "Q1", rules: [{ kind: "max_value", value: 99 }] });
+  assert.deepEqual(parseIntent("limit Q2 to 120 characters"), { kind: "validation", target: "Q2", rules: [{ kind: "max_length", value: 120 }] });
+  assert.deepEqual(parseIntent("Q2 must be at least 10 characters long"), { kind: "validation", target: "Q2", rules: [{ kind: "min_length", value: 10 }] });
+  assert.deepEqual(parseIntent("Q2 between 5 and 50 characters"), { kind: "validation", target: "Q2", rules: [{ kind: "min_length", value: 5 }, { kind: "max_length", value: 50 }] });
+  assert.deepEqual(parseIntent("Q2 must be an email address"), { kind: "validation", target: "Q2", rules: [{ kind: "email" }] });
+  assert.deepEqual(parseIntent("validate Q2 as a phone number"), { kind: "validation", target: "Q2", rules: [{ kind: "phone" }] });
+  assert.deepEqual(parseIntent("Q1 must be a whole number"), { kind: "validation", target: "Q1", rules: [{ kind: "integer" }] });
+  assert.deepEqual(parseIntent("require at least 2 selections on Q3"), { kind: "validation", target: "Q3", rules: [{ kind: "min_selections", value: 2 }] });
+  assert.deepEqual(parseIntent("allow at most 3 options for Q3"), { kind: "validation", target: "Q3", rules: [{ kind: "max_selections", value: 3 }] });
+  assert.deepEqual(parseIntent("Q3 allows at most 3 selections"), { kind: "validation", target: "Q3", rules: [{ kind: "max_selections", value: 3 }] });
+  assert.deepEqual(parseIntent("Q3 must have at least 2 options selected"), { kind: "validation", target: "Q3", rules: [{ kind: "min_selections", value: 2 }] });
+  assert.deepEqual(parseIntent("Q3 between 1 and 3 selections"), { kind: "validation", target: "Q3", rules: [{ kind: "min_selections", value: 1 }, { kind: "max_selections", value: 3 }] });
+  assert.deepEqual(parseIntent("Q2 must match the pattern ^[A-Z]{3}\\d+$"), { kind: "validation", target: "Q2", rules: [{ kind: "pattern", value: "^[A-Z]{3}\\d+$" }] });
+  assert.deepEqual(parseIntent("clear validation on Q1"), { kind: "clear_validation", target: "Q1" });
+  assert.deepEqual(parseIntent("remove the maximum rule from Q1"), { kind: "clear_validation", target: "Q1", kinds: ["max_value", "max_length", "max_selections"] });
+  // a validation sentence never steals a logic sentence
+  assert.equal(parseIntent("show Q5 only when Q3 is Yes and Q1 is at least 18").kind, "display");
+  assert.equal(parseIntent("skip to Q5 when Q1 is at least 18").kind, "skip");
+});
+
+test("grammar: masking sentences become set expressions", () => {
+  assert.deepEqual(parseIntent("At Q5 show only the options selected in Q3"), { kind: "mask", target: "Q5", expression: "selected in Q3", action: "display" });
+  assert.deepEqual(parseIntent("show only the options selected in Q3 at Q5"), { kind: "mask", target: "Q5", expression: "selected in Q3", action: "display" });
+  assert.deepEqual(parseIntent("mask Q5 by Q3.Selected AND Q4.Selected"), { kind: "mask", target: "Q5", expression: "Q3.Selected AND Q4.Selected", action: "display" });
+  assert.deepEqual(parseIntent("hide the options selected in Q3 from Q5"), { kind: "mask", target: "Q5", expression: "selected in Q3", action: "remove" });
+  assert.deepEqual(parseIntent("carry forward the selected options from Q3 to Q5"), { kind: "mask", target: "Q5", expression: "Q3.Selected", action: "display" });
+  assert.deepEqual(parseIntent("carry Q3 to Q5"), { kind: "mask", target: "Q5", expression: "Q3.Selected", action: "display" });
+  assert.deepEqual(parseIntent("remove the mask from Q5"), { kind: "clear_mask", target: "Q5" });
+  assert.equal(parseIntent("limit Q2 to 120 characters").kind, "validation", "‘limit … to N characters’ is validation, not a mask");
+  for (const e of EXAMPLES) assert.notEqual(parseIntent(e.text).kind, "unknown", `example “${e.text}” must parse`);
+});
+
+test("normaliseSetExpression turns words into the mask language", () => {
+  const def = survey2();
+  assert.equal(normaliseSetExpression(def, "selected in Q3"), "Q3.Selected");
+  assert.equal(normaliseSetExpression(def, "the options selected in Q3 and Q4"), "Q3.Selected AND Q4.Selected");
+  assert.equal(normaliseSetExpression(def, "options not selected in Q3"), "Q3.Unselected");
+  assert.equal(normaliseSetExpression(def, "Q3 but not Q4"), "Q3.Selected MINUS Q4.Selected");
+  assert.equal(normaliseSetExpression(def, "BRANDS or USED"), "Q3.Selected OR Q4.Selected", "variable names resolve to codes");
+  assert.equal(normaliseSetExpression(def, "Q3.Selected AND Q4.Selected"), "Q3.Selected AND Q4.Selected", "the language passes through");
+  assert.equal(normaliseSetExpression(def, "NOT Q3.Selected"), "NOT Q3.Selected");
+});
+
+test("validation and mask proposals go through the engine's validation before Apply", () => {
+  const def = survey2();
+  const v = planProposal(def, parseIntent("Q1 must be between 18 and 99"), "grammar", deps(def));
+  assert.deepEqual(v.errors, []);
+  assert.equal(v.summary, "Validate Q1: at least 18, at most 99.");
+  assert.equal(v.changes[0].kind, "set_validation");
+  assert.equal(v.targetKey, "question:q_age");
+  const bad = planProposal(def, parseIntent("Q2 must be between 18 and 99"), "grammar", deps(def));
+  assert.match(bad.errors[0], /not numeric/);
+  applyLogicProposal(def, v.changes);
+  const again = planProposal(def, parseIntent("Q1 is at least 21"), "grammar", deps(def));
+  assert.match(again.warnings[0], /already has a minimum value rule \(18\); this replaces it/);
+  const sel = planProposal(def, parseIntent("allow at most 9 options for Q3"), "grammar", deps(def));
+  assert.match(sel.errors[0], /only 4 options/);
+  const clear = planProposal(def, parseIntent("clear validation on Q1"), "grammar", deps(def));
+  assert.equal(clear.summary, "Remove every validation rule from Q1.");
+
+  const m = planProposal(def, parseIntent("At Q5 show only the options selected in Q3"), "grammar", deps(def));
+  assert.deepEqual(m.errors, []);
+  assert.equal(m.summary, "Show at Q5 only the options Q3.Selected.");
+  assert.equal(m.expression?.canonical, "Q3.Selected");
+  assert.equal(m.changes[0].kind, "set_mask");
+  const both = planProposal(def, parseIntent("show only the options selected in Q3 and Q4 at Q5"), "grammar", deps(def));
+  assert.deepEqual(both.errors, []);
+  assert.equal(both.expression?.canonical, "Q3.Selected INTERSECTION Q4.Selected");
+  const future = planProposal(def, parseIntent("at Q3 show only the options selected in Q5"), "grammar", deps(def));
+  assert.match(future.errors[0], /asked after/);
+  const junk = planProposal(def, parseIntent("mask Q5 by Q3 selected wrongly"), "grammar", deps(def));
+  assert.ok(junk.errors.length >= 1 && junk.changes.length === 0, "a set expression the parser refuses proposes nothing");
+  applyLogicProposal(def, m.changes);
+  assert.equal(def.questions.find((q) => q.id === "q_best")!.mask?.action, "display");
+  const rep = planProposal(def, parseIntent("mask Q5 by Q4"), "grammar", deps(def));
+  assert.match(rep.warnings[0], /already has a mask \(Q3\.Selected\); this replaces it/);
+  const hide = planProposal(def, parseIntent("hide the options selected in Q3 from Q5"), "grammar", deps(def));
+  assert.equal(hide.summary, "Remove from Q5 the options Q3.Selected.", "hide is the remove action, not display");
+  const cm = planProposal(def, parseIntent("remove the mask from Q5"), "grammar", deps(def));
+  assert.equal(cm.summary, "Remove the option mask from Q5.");
+  // the context serializer says what is there, so the model can see it
+  const ctx = surveyContext(def, {});
+  assert.match(ctx, /Q1 \(AGE\) · numeric · "How old are you\?" · validation: min value 18, max value 99/);
+  assert.match(ctx, /Q5 \(BEST\) .* · mask: display Q3\.Selected/);
+});
+
+test("coerceIntent admits the new shapes and drops what it does not know", async () => {
+  const { coerceIntent } = await import("./ai.ts");
+  assert.deepEqual(coerceIntent({ kind: "validation", target: "Q1", rules: [{ kind: "min_value", value: "18" }, { kind: "email" }, { kind: "bogus", value: 1 }, "x"] }), { kind: "validation", target: "Q1", rules: [{ kind: "min_value", value: 18 }, { kind: "email" }] });
+  assert.equal(coerceIntent({ kind: "validation", target: "Q1", rules: [{ kind: "bogus" }] }), null, "no usable rule, no intent");
+  assert.deepEqual(coerceIntent({ kind: "validation", target: "Q2", rules: [{ kind: "pattern", value: "123" }] }), { kind: "validation", target: "Q2", rules: [{ kind: "pattern", value: "123" }] }, "a pattern stays text even when it looks numeric");
+  assert.deepEqual(coerceIntent({ kind: "clear_validation", target: "Q1", kinds: ["max_value", "nope"] }), { kind: "clear_validation", target: "Q1", kinds: ["max_value"] });
+  assert.deepEqual(coerceIntent({ kind: "mask", target: "Q5", expression: "Q3.Selected", action: "nonsense" }), { kind: "mask", target: "Q5", expression: "Q3.Selected", action: "display" });
+  assert.equal(coerceIntent({ kind: "mask", target: "Q5" }), null);
+  assert.deepEqual(coerceIntent({ kind: "clear_mask", target: "Q5" }), { kind: "clear_mask", target: "Q5" });
 });

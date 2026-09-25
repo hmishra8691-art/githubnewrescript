@@ -1349,3 +1349,35 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
   .menubar-menu { position: fixed; left: 8px !important; right: 8px !important; top: calc(var(--topbar-h) + var(--menubar-h)); max-width: none; max-height: calc(100vh - var(--topbar-h) - var(--menubar-h) - 12px); overflow: auto; border-radius: var(--ide-r); }
 }
 .mode-index { font-family: var(--mono); font-size: var(--ide-mono-fs); letter-spacing: .04em; color: var(--ide-ink-3); }
+
+/* Flow zoom: a typed percentage between the − and + (round 2, §5) */
+.fc-zoom-input { width: 56px; border: 0; border-left: 1px solid var(--c-border); border-right: 1px solid var(--c-border); background: transparent; font: inherit; font-family: var(--mono); font-size: 12px; text-align: center; color: var(--c-text); padding: 5px 4px; outline: none; }
+.fc-zoom-input:focus { background: var(--c-surface-2); }
+.ai-open { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--c-border); }
+
+/* Architect: structural editing from the workspace head (round 2, §2–3) */
+.ar-tools { display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; }
+.ar-tool { appearance: none; display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--c-border); border-radius: 7px; background: var(--c-surface); font: inherit; font-size: 12px; font-weight: 550; padding: 4px 8px; color: var(--ide-ink-2); cursor: pointer; line-height: 1.2; white-space: nowrap; }
+.ar-tool:hover:not(:disabled) { color: var(--ide-ink); background: var(--c-surface-2); }
+.ar-tool.primary { background: var(--ide-accent); border-color: var(--ide-accent); color: #fff; }
+.ar-tool.primary:hover:not(:disabled) { background: var(--c-primary-700, #3730a3); color: #fff; }
+.ar-tool.danger:hover:not(:disabled) { color: var(--c-error-fg); border-color: var(--c-error-bd); background: var(--c-error-bg); }
+.ar-tool:disabled { opacity: .4; cursor: not-allowed; }
+.ar-tools-sep { width: 1px; height: 18px; background: var(--c-border); margin: 0 3px; }
+.ar-add { position: relative; }
+.ar-add-menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 30; min-width: 190px; background: var(--c-surface); border: var(--ide-hairline); border-radius: var(--ide-r); box-shadow: 0 10px 24px -10px rgba(19, 26, 43, .25); padding: 4px; }
+.ar-add-item { appearance: none; display: block; width: 100%; text-align: left; border: 0; background: transparent; border-radius: 6px; font: inherit; font-size: 12.5px; padding: 6px 10px; color: var(--ide-ink); cursor: pointer; }
+.ar-add-item:hover { background: var(--c-surface-2); }
+.aw-add { margin: 8px 0 14px; }
+
+/* Grid: the options editor in a cell (round 2, §7) */
+.sg-popover { position: absolute; z-index: 40; top: 100%; left: 0; min-width: 360px; max-width: 520px; background: var(--c-surface); border: var(--ide-hairline); border-radius: var(--ide-r); box-shadow: 0 14px 34px -10px rgba(19, 26, 43, .25); padding: 10px 12px; font-size: 12.5px; cursor: default; }
+.sg-options-head { display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 6px; }
+.sg-options-list { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow: auto; }
+.sg-option-row { display: grid; grid-template-columns: 56px minmax(0, 1fr) 24px 24px 24px; gap: 4px; align-items: center; }
+.sg-option-row .input { min-height: 28px; padding: 2px 6px; font-size: 12.5px; }
+.sg-opt-btn { appearance: none; border: 1px solid var(--c-border); background: var(--c-surface); border-radius: 5px; width: 24px; height: 24px; font-size: 12px; color: var(--ide-ink-2); cursor: pointer; }
+.sg-opt-btn:hover:not(:disabled) { background: var(--c-surface-2); color: var(--ide-ink); }
+.sg-opt-btn.danger:hover:not(:disabled) { color: var(--c-error-fg); border-color: var(--c-error-bd); }
+.sg-opt-btn:disabled { opacity: .35; cursor: default; }
+.sg-cell.sg-col-options { position: relative; }

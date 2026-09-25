@@ -1,9 +1,9 @@
-import type { Condition, Question, SkipRule, SurveyDefinition } from "@rescript/schema";
+import type { Condition, OptionMask, Question, SkipRule, SurveyDefinition, ValidationRule } from "@rescript/schema";
 import { cond } from "@rescript/schema";
 import {
   parseLogicExpression, formatCondition, conditionSummary, questionLogicSummary,
   getQuestionByCodeOrVar, listPages, listBlocks, questionOrder, conditionRefs,
-  validateProposal, describeChange, objectKey, neighbours,
+  validateProposal, describeChange, objectKey, neighbours, parseSetExpression, formatSetExpression, maskSummary, ruleLabel,
   type ProposalChange, type ExpressionError, type DependencyIndex, type ObjectKey,
 } from "@rescript/engine";
 
@@ -37,9 +37,17 @@ export type Intent =
   | { kind: "required"; target: string; required: boolean }
   | { kind: "add_question"; type?: string; text: string; options?: string[]; after?: string; required?: boolean }
   | { kind: "rename"; target: string; newName: string }
+  /** validation rules on a question, as {kind, value} pairs the engine merges by kind */
+  | { kind: "validation"; target: string; rules: ValidationSpec[] }
+  | { kind: "clear_validation"; target: string; kinds?: ValidationRule["kind"][] }
+  /** an option mask: the SET EXPRESSION as text (`Q4.Selected`, `Q4.Selected AND Q5.Selected`, `NOT Q4.Selected`) */
+  | { kind: "mask"; target: string; expression: string; action?: OptionMask["action"] }
+  | { kind: "clear_mask"; target: string }
   | { kind: "find"; target: string; relation: "usedBy" | "dependsOn" | "affects" | "reach" }
   | { kind: "explain"; target: string }
   | { kind: "unknown"; reason: string };
+
+export interface ValidationSpec { kind: ValidationRule["kind"]; value?: number | string }
 
 export interface ProposalExpression {
   /** as typed (after the light normalisation) */
@@ -139,6 +147,32 @@ export function planExpression(def: SurveyDefinition, text: string): ProposalExp
     errors: r.errors,
     warnings: r.warnings,
   };
+}
+
+/**
+ * A set expression in everyday words → the mask language the parser reads:
+ * "selected in Q4" → `Q4.Selected`, "not selected in Q4" → `Q4.Unselected`,
+ * "Q4 and Q5" → `Q4.Selected AND Q5.Selected`, "in Q4 but not in Q5" →
+ * `Q4.Selected MINUS Q5.Selected`. A bare code means its selection. Text
+ * already in the language passes through untouched.
+ */
+export function normaliseSetExpression(def: SurveyDefinition, text: string): string {
+  let t = text.trim().replace(/[.?!]+$/, "");
+  const code = (m: string) => { const q = getQuestionByCodeOrVar(def, m) ?? getQuestionByCodeOrVar(def, m.toUpperCase()); return q ? q.code : m; };
+  t = t.replace(/\b(?:the\s+)?(?:options?|answers?|items?|choices?)\s+(?:that\s+were\s+|that\s+was\s+)?(?:not\s+|un)selected\s+(?:in|at|for)\s+([A-Za-z_][\w]*)/gi, (_, q) => `${code(q)}.Unselected`);
+  t = t.replace(/\b(?:the\s+)?(?:options?|answers?|items?|choices?)\s+(?:that\s+were\s+|that\s+was\s+)?(?:selected|chosen|picked|ticked|answered)\s+(?:in|at|for)\s+([A-Za-z_][\w]*)/gi, (_, q) => `${code(q)}.Selected`);
+  t = t.replace(/\b(?:the\s+)?(?:options?|answers?|items?|choices?)\s+(?:shown|displayed)\s+(?:in|at|for)\s+([A-Za-z_][\w]*)/gi, (_, q) => `${code(q)}.Displayed`);
+  t = t.replace(/\b(?:not\s+|un)selected\s+(?:in|at)\s+([A-Za-z_][\w]*)/gi, (_, q) => `${code(q)}.Unselected`);
+  t = t.replace(/\b(?:selected|chosen|picked)\s+(?:in|at)\s+([A-Za-z_][\w]*)/gi, (_, q) => `${code(q)}.Selected`);
+  t = t.replace(/\b([A-Za-z_][\w]*)'s\s+(?:selected|selection|answers?)\b/gi, (_, q) => `${code(q)}.Selected`);
+  t = t.replace(/\bbut\s+not\s+(?:in\s+)?/gi, "MINUS ").replace(/\b(?:minus|except|excluding|without)\b/gi, "MINUS").replace(/\b(?:and|both|intersect(?:ion)?)\b/gi, "AND").replace(/\b(?:or|either|union|plus)\b/gi, "OR");
+  // a bare question code or variable is its selection
+  t = t.replace(/(^|[\s(])([A-Za-z_][\w]*)(?=$|[\s)])/g, (m, pre, tok) => {
+    if (/^(AND|OR|NOT|MINUS|UNION|INTERSECTION|DIFFERENCE|EXPR|LISTFILL|CURRENT_ITEM_CODE|CURRENT_ITEM)$/i.test(tok)) return m;
+    const q = getQuestionByCodeOrVar(def, tok) ?? getQuestionByCodeOrVar(def, tok.toUpperCase());
+    return q ? `${pre}${q.code}.Selected` : m;
+  });
+  return t.replace(/\s+/g, " ").trim();
 }
 
 /* -------------------------------------------------------------- targets */
@@ -345,6 +379,47 @@ export function planProposal(def: SurveyDefinition, intent: Intent, source: Prop
         changes: [{ kind: "rename_variable", oldName: t.question.variableName, newName }],
         targetKey: withKey(t),
       }));
+    }
+    case "validation": {
+      const t = resolveTarget(def, intent.target);
+      if (!t) return missing(`“${intent.target}”`);
+      if (t.kind !== "question") return base({ errors: [`${t.label} is a ${t.kind}; validation belongs to a question.`] });
+      const rules: ValidationRule[] = intent.rules.map((r) => ({ id: deps.uid("v"), kind: r.kind, ...(r.value !== undefined ? { value: r.value } : {}) }));
+      if (!rules.length) return base({ errors: ["I could not tell which rule to set — say “Q3 must be between 18 and 99” or “limit Q5 to 200 characters”."] });
+      const existing = (t.question.validation ?? []).filter((v) => rules.some((r) => r.kind === v.kind));
+      const warnings = existing.map((v) => `${t.label} already has a ${ruleLabel(v.kind)} rule${v.value !== undefined ? ` (${v.value})` : ""}; this replaces it.`);
+      const change = { kind: "set_validation" as const, questionId: t.id, rules };
+      return finish(base({ summary: describeChange(def, change), changes: [change], targetKey: withKey(t), warnings }));
+    }
+    case "clear_validation": {
+      const t = resolveTarget(def, intent.target);
+      if (!t) return missing(`“${intent.target}”`);
+      if (t.kind !== "question") return base({ errors: [`${t.label} is a ${t.kind}; validation belongs to a question.`] });
+      const change = { kind: "clear_validation" as const, questionId: t.id, ...(intent.kinds?.length ? { kinds: intent.kinds } : {}) };
+      return finish(base({ summary: describeChange(def, change), changes: [change], targetKey: withKey(t) }));
+    }
+    case "mask": {
+      const t = resolveTarget(def, intent.target);
+      if (!t) return missing(`“${intent.target}”`);
+      if (t.kind !== "question") return base({ errors: [`${t.label} is a ${t.kind}; a mask belongs to a question with options.`] });
+      const r = parseSetExpression(def, normaliseSetExpression(def, intent.expression));
+      const errors = r.errors.map((e) => e.message);
+      if (!r.expr) return base({ summary: `Mask ${t.label} by …`, targetKey: withKey(t), errors: errors.length ? errors : ["I could not read that set expression."], expression: { text: intent.expression, canonical: "", summary: "", errors: r.errors, warnings: [] } });
+      const mask: OptionMask = { expr: r.expr, action: intent.action ?? "display", keepAlwaysShow: true };
+      const warnings = t.question.mask ? [`${t.label} already has a mask (${formatSetExpression(def, t.question.mask.expr)}); this replaces it.`] : [];
+      const change = { kind: "set_mask" as const, questionId: t.id, mask };
+      return finish(base({
+        summary: `${maskSummary(def, t.label, mask)}.`,
+        changes: [change], targetKey: withKey(t), warnings,
+        expression: { text: intent.expression, canonical: formatSetExpression(def, r.expr), summary: maskSummary(def, t.label, mask), errors: [], warnings: [] },
+      }));
+    }
+    case "clear_mask": {
+      const t = resolveTarget(def, intent.target);
+      if (!t) return missing(`“${intent.target}”`);
+      if (t.kind !== "question") return base({ errors: [`${t.label} is a ${t.kind}.`] });
+      const change = { kind: "set_mask" as const, questionId: t.id, mask: null };
+      return finish(base({ summary: describeChange(def, change), changes: [change], targetKey: withKey(t) }));
     }
     case "find": {
       const t = resolveTarget(def, intent.target);

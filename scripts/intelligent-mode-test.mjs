@@ -266,6 +266,64 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
   ok("explain says what a question is, when it is shown and what it reads");
 }
 
+/* ------------------------------------------------ validation + masking (round 2, §9–10) */
+{
+  const before = await readDef();
+  const q3 = q(before, "Q3");
+  const turn = await say("Q3 must be between 18 and 99");
+  assert.equal(await turn.getAttribute("data-kind"), "validation");
+  assert.equal(await textOf(turn, '[data-testid="iq-summary"]'), "Validate Q3: at least 18, at most 99.");
+  ok("a validation sentence becomes a proposal in the engine's rule kinds");
+  await page.click('[data-testid="iq-turn"]:last-of-type [data-testid="iq-apply"]');
+  await page.waitForFunction(() => document.querySelector('[data-testid="iq-turn"]:last-of-type')?.dataset.state === "applied");
+  const after = await readDef();
+  const rules = q(after, "Q3").validation;
+  assert.deepEqual(rules.filter((r) => /_value$/.test(r.kind)).map((r) => [r.kind, r.value]), [["min_value", 18], ["max_value", 99]]);
+  assert.deepEqual({ ...q(after, "Q3"), validation: undefined }, { ...q3, validation: undefined }, "nothing else on Q3 changed");
+  ok("Apply writes min/max onto Q3's validation — the same rules the Validation panel writes");
+  // the Studio panel shows them; the same survey
+  await switchMode(page, "studio");
+  await page.waitForSelector('[data-testid="questions-panel"]');
+  await page.click(`[data-testid="qcard"][data-qid="${q3.id}"]`);
+  await page.waitForTimeout(300);
+  assert.match(await page.textContent(".rightpanel"), /Validation/);
+  ok("Studio's property panel is where they now live, editable as ever");
+  await switchMode(page, "intelligent");
+  await page.waitForSelector('[data-testid="intelligent-view"]');
+  const bad = await say("Q6 must be between 1 and 5");
+  assert.ok((await allText(bad, '[data-testid="iq-error"]')).some((e) => /not numeric/.test(e)));
+  assert.equal(await page.$eval('[data-testid="iq-turn"]:last-of-type [data-testid="iq-apply"]', (b) => b.disabled), true);
+  ok("a value range on a text question is refused by the engine before Apply is offered");
+  await page.click('[data-testid="iq-turn"]:last-of-type [data-testid="iq-cancel"]');
+  const email = await say("Q7 must be an email address");
+  assert.equal(await textOf(email, '[data-testid="iq-summary"]'), "Validate Q7: an email address.");
+  await page.click('[data-testid="iq-turn"]:last-of-type [data-testid="iq-apply"]');
+  await page.waitForFunction(() => document.querySelector('[data-testid="iq-turn"]:last-of-type')?.dataset.state === "applied");
+  assert.ok(q(await readDef(), "Q7").validation.some((r) => r.kind === "email"));
+  ok("a format check (email) applies the same way");
+  await page.waitForSelector('[data-testid="intelligent-view"]');
+  // masking: Q13's options limited to what Q11 selected
+  const mask = await say("At Q13 show only the options selected in Q11");
+  assert.equal(await mask.getAttribute("data-kind"), "mask");
+  assert.equal(await textOf(mask, '[data-testid="iq-summary"]'), "Show at Q13 only the options Q11.Selected.");
+  assert.equal(await textOf(mask, '[data-testid="iq-expression"] code'), "Q11.Selected");
+  ok("a masking sentence becomes a set expression the mask parser accepted");
+  await page.click('[data-testid="iq-turn"]:last-of-type [data-testid="iq-apply"]');
+  await page.waitForFunction(() => document.querySelector('[data-testid="iq-turn"]:last-of-type')?.dataset.state === "applied");
+  const masked = q(await readDef(), "Q13");
+  assert.deepEqual(masked.mask.expr, { kind: "ref", questionId: q(before, "Q11").id, selection: "selected" });
+  assert.equal(masked.mask.action, "display");
+  ok("Apply writes the universal OptionMask onto Q13 — the same object the Masking builder edits");
+  await page.waitForSelector('[data-testid="intelligent-view"]');
+  const clear = await say("remove the mask from Q13");
+  await page.click('[data-testid="iq-turn"]:last-of-type [data-testid="iq-apply"]');
+  await page.waitForFunction(() => document.querySelector('[data-testid="iq-turn"]:last-of-type')?.dataset.state === "applied");
+  assert.equal(q(await readDef(), "Q13").mask, undefined);
+  ok("and “remove the mask” takes it off again");
+  await page.waitForSelector('[data-testid="intelligent-view"]');
+  void clear;
+}
+
 /* ------------------------------------------------------- the model route */
 {
   const r = await page.evaluate(async () => {

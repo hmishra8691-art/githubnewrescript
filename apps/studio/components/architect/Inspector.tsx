@@ -2,7 +2,7 @@
 import React from "react";
 import type { FlowNode } from "@rescript/schema";
 import {
-  neighbours, parseObjectKey, conditionSummary, findNode,
+  neighbours, parseObjectKey, conditionSummary, findNode, questionLogicSummary, formatSetExpression,
   type DependencyIndex, type ObjectKey, type ObjectStatusMap, type DependencyEdge,
 } from "@rescript/engine";
 import { useStudio } from "../studio/store";
@@ -31,12 +31,20 @@ const KIND_LABEL: Record<string, string> = {
 };
 
 export function Inspector({
-  primary, index, status, onSelect,
+  primary, index, status, onSelect, readOnly = false, onOpenInStudio,
 }: {
   primary: ObjectKey | null;
   index: DependencyIndex;
   status: ObjectStatusMap;
   onSelect(key: ObjectKey): void;
+  /**
+   * A VISUALISATION mode's inspector (Flow, round 2 §4): everything the
+   * object is and depends on, in words, and a way to Studio — but no
+   * property editor, because the mode's purpose is to understand, and the
+   * one place a property is edited is where it is built.
+   */
+  readOnly?: boolean;
+  onOpenInStudio?(key: ObjectKey): void;
 }) {
   const s = useStudio();
   if (!primary) {
@@ -70,11 +78,20 @@ export function Inspector({
 
       <Dependencies primary={primary} index={index} onSelect={onSelect} />
 
-      {kind === "question" ? (
+      {kind === "question" && !readOnly ? (
         // the property panel reads the store's selectedQuestionId, which mirrors this primary
         <div className="ai-props"><PropertiesPanel /></div>
+      ) : kind === "question" ? (
+        <QuestionSummary id={id} />
       ) : (
         <ObjectSummary primary={primary} />
+      )}
+      {readOnly && onOpenInStudio && (
+        <div className="ai-open">
+          <button type="button" className="btn small primary" data-testid="inspector-open-studio" onClick={() => onOpenInStudio(primary)} title="Edit this in Studio — the one place properties are built">
+            Open in Studio
+          </button>
+        </div>
       )}
     </div>
   );
@@ -137,6 +154,34 @@ function Dependencies({ primary, index, onSelect }: { primary: ObjectKey; index:
 }
 
 /** what a non-question object IS, in one screen */
+/** a question, read-only: what it is, how it validates, when it shows, what masks it */
+function QuestionSummary({ id }: { id: string }) {
+  const s = useStudio();
+  const q = s.def.questions.find((x) => x.id === id);
+  if (!q) return null;
+  const text = String(q.text ?? "").replace(/<[^>]*>/g, "").trim();
+  const rows: [string, React.ReactNode][] = [
+    ["Variable", <span className="mono">{q.variableName}</span>],
+    ["Type", q.type.replace(/_/g, " ")],
+    ["Text", text || <span className="muted">(no text)</span>],
+    ["Required", q.required ? "yes" : "no"],
+  ];
+  if (q.options?.length) rows.push(["Options", `${q.options.length}: ${q.options.slice(0, 6).map((o) => String(o.label ?? o.code).replace(/<[^>]*>/g, "")).join(", ")}${q.options.length > 6 ? ", …" : ""}`]);
+  if (q.rows?.length) rows.push(["Rows", `${q.rows.length}`]);
+  if (q.validation?.length) rows.push(["Validation", q.validation.map((v) => `${String(v.kind).replace(/_/g, " ")}${v.value !== undefined && v.value !== null && typeof v.value !== "object" ? ` ${v.value}` : ""}`).join(", ")]);
+  if (q.mask) rows.push(["Mask", `${q.mask.action} ${formatSetExpression(s.def, q.mask.expr)}`]);
+  for (const line of questionLogicSummary(s.def, q)) rows.push(["Logic", line]);
+  for (const r of q.skipLogic ?? []) rows.push(["Skip", `when ${conditionSummary(s.def, r.when)} → ${r.target.kind}${r.target.status ? ` (${r.target.status})` : ""}`]);
+  return (
+    <section className="ai-sec" data-testid="inspector-summary">
+      <h4>Summary</h4>
+      <dl className="ai-dl">
+        {rows.map(([k, v], i) => <React.Fragment key={i}><dt>{k}</dt><dd>{v}</dd></React.Fragment>)}
+      </dl>
+    </section>
+  );
+}
+
 function ObjectSummary({ primary }: { primary: ObjectKey }) {
   const s = useStudio();
   const { kind, id } = parseObjectKey(primary);

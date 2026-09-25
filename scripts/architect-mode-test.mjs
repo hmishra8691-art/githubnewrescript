@@ -268,6 +268,59 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
   ok("and in Studio the property panel shows Q5 — the outer panel returns when Architect leaves");
 }
 
+/* ----------------------------------------------------------- structural editing (round 2, §2–3) */
+{
+  await switchMode(page, "architect");
+  await page.waitForSelector('[data-testid="architect-view"]');
+  const before = await readDef();
+  // a question into the selected page
+  const firstPage = (function find(nodes) { for (const n of nodes) { if (n.type === "page") return n; if (n.children) { const r = find(n.children); if (r) return r; } } return null; })(before.flow);
+  const pageRow = await mapRow(`flowNode:${firstPage.id}`);
+  if (!pageRow) { await page.click('[data-testid="map-expand-all"]').catch(() => {}); }
+  await (await mapRow(`flowNode:${firstPage.id}`)).click();
+  await page.waitForSelector('[data-testid="workspace-page-questions"]');
+  await page.click('[data-testid="ar-add-question"]');
+  await page.waitForTimeout(400);
+  const after = await readDef();
+  assert.equal(after.questions.length, before.questions.length + 1);
+  const added = after.questions.find((q) => !before.questions.some((b) => b.id === q.id));
+  const pageAfter = (function find(nodes) { for (const n of nodes) { if (n.type === "page" && n.id === firstPage.id) return n; if (n.children) { const r = find(n.children); if (r) return r; } } return null; })(after.flow);
+  assert.equal(pageAfter.questionIds[pageAfter.questionIds.length - 1], added.id, "…at the end of the selected page");
+  ok(`+ Question with a page selected adds ${added.code} to that page, through the engine's addQuestion`);
+  assert.equal(await page.$eval(".am-row.primary", (e) => e.dataset.key), `question:${added.id}`);
+  await page.waitForSelector('[data-testid="workspace-question"]');
+  ok("the new question is selected and its editor opens in the workspace (type, text, options, properties)");
+  // it is the same question in Studio
+  await switchMode(page, "studio");
+  await page.waitForSelector(`[data-testid="qcard"][data-qid="${added.id}"]`);
+  ok("Studio shows the question Architect created — one model");
+  await switchMode(page, "architect");
+  await page.waitForSelector('[data-testid="architect-view"]');
+  // a block, and a flow element
+  const b0 = (await readDef()).flow.length;
+  await page.click('[data-testid="ar-add-block"]');
+  await page.waitForTimeout(300);
+  const d1 = await readDef();
+  assert.equal(d1.flow.length, b0 + 1);
+  ok("+ Block adds a block to the flow");
+  await page.click('[data-testid="ar-add-element"]');
+  await page.waitForSelector('[data-testid="ar-add-menu"]');
+  await page.click('[data-testid="ar-add-randomizer"]');
+  await page.waitForTimeout(300);
+  const d2 = await readDef();
+  assert.equal(d2.flow.filter((n) => n.type === "randomizer").length, d1.flow.filter((n) => n.type === "randomizer").length + 1);
+  ok("+ Element → Randomizer inserts through the same command the palette runs");
+  // remove the question we added
+  await (await mapRow(`question:${added.id}`)).click();
+  await page.click('[data-testid="ar-delete"]');
+  await page.waitForSelector('[data-testid="delete-question-confirm"]');
+  await page.click('[data-testid="delete-question-confirm"]');
+  await page.waitForTimeout(400);
+  const d3 = await readDef();
+  assert.ok(!d3.questions.some((q) => q.id === added.id));
+  ok("Delete removes the question (with the references dialog) — Studio no longer has it either");
+}
+
 assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join("\n")}`);
 ok("no uncaught errors or React warnings through any of it");
 

@@ -1,7 +1,10 @@
 "use client";
 import React from "react";
-import { buildDependencyIndex, objectStatus, parseObjectKey, type ObjectKey } from "@rescript/engine";
+import { buildDependencyIndex, objectStatus, parseObjectKey, referencesTo, removeQuestion, removeFlowNode, findNode, type ObjectKey, type QuestionReference } from "@rescript/engine";
+import type { FlowNode } from "@rescript/schema";
 import { useStudio } from "../studio/store";
+import { useCommands } from "../studio/CommandContext";
+import { DeleteQuestionDialog } from "../studio/DeleteQuestionDialog";
 import { useSelection } from "../studio/SelectionContext";
 import { useMode } from "../studio/ModeContext";
 import { buildSurveyMap, flattenMap, ancestorKeys, containerKeys, findMapNode } from "../../lib/architect/map";
@@ -121,7 +124,47 @@ export function ArchitectView() {
 
   const primaryNode = primary ? findMapNode(root, primary) : null;
 
+  /* ------------------------------------------------------------ structural editing (round 2, §2–3) */
+  const cmd = useCommands();
+  const [addOpen, setAddOpen] = React.useState(false);
+  const [pendingDelete, setPendingDelete] = React.useState<{ id: string; code: string; refs: QuestionReference[] } | null>(null);
+  const primaryKind = primary ? parseObjectKey(primary).kind : null;
+  const primaryId = primary ? parseObjectKey(primary).id : null;
+  const primaryFlowNode = primaryKind === "flowNode" && primaryId ? findNode(s.def.flow as FlowNode[], primaryId) : null;
+  const deletableNode = primaryFlowNode && primaryFlowNode.type !== "end";
+  const run = (id: string) => { setAddOpen(false); cmd?.run(id); };
+  const askDelete = () => {
+    if (s.readOnly || !primaryId) return;
+    if (primaryKind === "question") {
+      const q = s.def.questions.find((x) => x.id === primaryId);
+      if (q) setPendingDelete({ id: q.id, code: q.code, refs: referencesTo(s.def, q.id) });
+    } else if (deletableNode && primaryFlowNode) {
+      const label = primaryNode?.label ?? primaryFlowNode.type;
+      const inside = "children" in primaryFlowNode ? (primaryFlowNode as { children: unknown[] }).children.length : primaryFlowNode.type === "page" ? primaryFlowNode.questionIds.length : 0;
+      if (!window.confirm(`Remove ${primaryFlowNode.type.replace(/_/g, " ")} “${label}”${inside ? ` and everything inside it (${inside} item${inside === 1 ? "" : "s"})` : ""}? Questions inside a removed page stay in the survey, unplaced.`)) return;
+      s.labelNextEdit(`remove ${primaryFlowNode.type}`);
+      s.update((d) => { const r = removeFlowNode(d.flow as FlowNode[], primaryId); d.flow = r.flow as never; });
+      sel?.dispatch({ type: "clear" });
+    }
+  };
+  const confirmDelete = () => {
+    if (!pendingDelete) return;
+    const { id, code } = pendingDelete;
+    setPendingDelete(null);
+    s.labelNextEdit(`delete ${code}`);
+    s.update((d) => { removeQuestion(d, id); });
+    sel?.dispatch({ type: "drop", keys: [`question:${id}` as ObjectKey] });
+  };
+  React.useEffect(() => {
+    if (!addOpen) return;
+    const close = (e: PointerEvent) => { if (!(e.target as HTMLElement).closest?.(".ar-add")) setAddOpen(false); };
+    window.addEventListener("pointerdown", close, true);
+    return () => window.removeEventListener("pointerdown", close, true);
+  }, [addOpen]);
+
   return (
+    <>
+    {pendingDelete && <DeleteQuestionDialog code={pendingDelete.code} refs={pendingDelete.refs} onCancel={() => setPendingDelete(null)} onConfirm={confirmDelete} />}
     <div className="ar" data-testid="architect-view" style={{ gridTemplateColumns: `${prefs.map}px 6px minmax(0, 1fr) 6px ${prefs.inspector}px` }}>
       <aside className="ar-map">
         <div className="ar-pane-head">
@@ -142,6 +185,29 @@ export function ArchitectView() {
           <span className="ar-pane-title">Workspace</span>
           {primaryNode && <span className="ar-crumb mono">{primaryNode.code ?? primaryNode.label}</span>}
           <span className="grow" />
+          {/* STRUCTURE IS EDITED HERE: add a question where the selection is, a block, a flow element; duplicate, move, remove the selection — every one an engine operation through the command registry, the same the Questions panel calls */}
+          <div className="ar-tools" data-testid="ar-tools">
+            <button className="ar-tool primary" data-testid="ar-add-question" disabled={s.readOnly} onClick={() => run("question.add")}
+              title={primaryKind === "flowNode" ? "Add a question at the end of the selected page or block" : primaryKind === "question" ? "Add a question after the selected one" : "Add a question on the last page"}>
+              <Icon name="plus" size={12} /> Question
+            </button>
+            <button className="ar-tool" data-testid="ar-add-block" disabled={s.readOnly} onClick={() => run("block.add")} title="Add a block (a page) after the selected element, or before the End"><Icon name="plus" size={12} /> Block</button>
+            <div className="ar-add">
+              <button className="ar-tool" data-testid="ar-add-element" disabled={s.readOnly} aria-expanded={addOpen} onClick={() => setAddOpen((v) => !v)} title="Add a flow element"><Icon name="plus" size={12} /> Element <Icon name="chevron-down" size={11} /></button>
+              {addOpen && (
+                <div className="ar-add-menu" role="menu" data-testid="ar-add-menu">
+                  {[["flow.add.branch", "Branch / condition"], ["flow.add.randomizer", "Randomizer"], ["flow.add.loop", "Loop"], ["flow.add.quota_check", "Quota check"], ["flow.add.embedded_data", "Embedded data"]].map(([id, label]) => (
+                    <button key={id} role="menuitem" className="ar-add-item" data-testid={`ar-add-${id.split(".").pop()}`} onClick={() => run(id)}>{label}</button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <span className="ar-tools-sep" />
+            <button className="ar-tool" data-testid="ar-duplicate" disabled={s.readOnly || primaryKind !== "question"} onClick={() => run("question.duplicate")} title="Duplicate (⌘⇧D)"><Icon name="layers" size={12} /></button>
+            <button className="ar-tool" data-testid="ar-move-up" disabled={s.readOnly || primaryKind !== "question"} onClick={() => run("question.moveUp")} title="Move up (⌥↑)">↑</button>
+            <button className="ar-tool" data-testid="ar-move-down" disabled={s.readOnly || primaryKind !== "question"} onClick={() => run("question.moveDown")} title="Move down (⌥↓)">↓</button>
+            <button className="ar-tool danger" data-testid="ar-delete" disabled={s.readOnly || !(primaryKind === "question" || deletableNode)} onClick={askDelete} title={primaryKind === "question" ? "Delete this question" : deletableNode ? "Remove this element" : "Select a question or element to remove"}><Icon name="close" size={12} /></button>
+          </div>
           <button
             className={`ar-focus${focus ? " on" : ""}`}
             data-testid="focus-toggle"
@@ -172,5 +238,6 @@ export function ArchitectView() {
         </div>
       </aside>
     </div>
+    </>
   );
 }

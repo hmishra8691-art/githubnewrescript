@@ -17,7 +17,7 @@ import {
   GRID_COLUMNS, DEFAULT_VISIBLE_COLUMNS, EMPTY_FILTER, ROW_HEIGHT,
   type GridRow, type GridColumn, type GridColumnId, type GridFilter, type SortSpec, type Density,
 } from "../../lib/grid/model";
-import { TextCellEditor, VariableCellEditor, TypeCellEditor, BlockCellEditor, RequiredCell, StatusDot } from "./GridCells";
+import { TextCellEditor, VariableCellEditor, TypeCellEditor, BlockCellEditor, OptionsCellEditor, RequiredCell, StatusDot } from "./GridCells";
 
 /**
  * GRID — the survey as a programmable research grid.
@@ -295,7 +295,8 @@ export function GridView() {
         : c.id === "variable" ? <VariableCellEditor q={q} onDone={done} />
           : c.id === "type" ? <TypeCellEditor q={q} onDone={done} />
             : c.id === "block" ? <BlockCellEditor q={q} row={row} onDone={done} />
-              : null;
+              : c.id === "options" ? <OptionsCellEditor q={q} onDone={done} onOpenInStudio={() => { done(); openInStudio(row); }} />
+                : null;
     } else {
       switch (c.id) {
         case "status": body = <StatusDot row={row} />; break;

@@ -178,10 +178,14 @@ await page.waitForSelector(".menubar");
   const dim = await page.$$eval('[data-testid="qcard"]', (els) => els.slice(0, 3).map((e) => Number(getComputedStyle(e).opacity)));
   assert.ok(dim[1] === 1 && dim[0] < 1 && dim[2] < 1, `only the selected card is lit: ${dim.join(",")}`);
   ok("Focus in Studio: the menubar tucks away and unselected questions go quiet");
-  await page.mouse.move(400, top + 2);   // the hairline at the top edge of the workspace
+  // selecting the card may have scrolled the page (the dev banner's 30 px); re-measure before aiming at the hairline
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(100);
+  const tucked2 = await page.$eval(".menubar", (e) => e.getBoundingClientRect().bottom);
+  await page.mouse.move(400, tucked2 - 2);   // the hairline at the top edge of the workspace
   await page.waitForTimeout(300);
   const revealed = await page.$eval(".menubar", (e) => e.getBoundingClientRect().bottom);
-  assert.ok(revealed > tucked + 20, "hovering the top edge reveals it");
+  assert.ok(revealed > tucked2 + 20, `hovering the top edge reveals it: ${tucked2} → ${revealed}`);
   ok("and hovering the top edge brings it back");
   await modeMenuClick(page, "focus-mode-toggle");
   await page.waitForTimeout(200);

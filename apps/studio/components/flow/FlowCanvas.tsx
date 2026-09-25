@@ -2,7 +2,7 @@
 import React from "react";
 import type { FlowNode, LogicFlow } from "@rescript/schema";
 import {
-  buildLogicFlow, buildDependencyIndex, objectStatus, flowNodeIndex, canDropFlowNode, moveFlowNode,
+  buildLogicFlow, buildDependencyIndex, objectStatus, flowNodeIndex,
   type ObjectKey,
 } from "@rescript/engine";
 import { useStudio } from "../studio/store";
@@ -134,6 +134,11 @@ export function FlowCanvas() {
     const k = Math.max(0.05, Math.min(3, v.k * factor));
     return { k, tx: cx - (cx - v.tx) * (k / v.k), ty: cy - (cy - v.ty) * (k / v.k) };
   });
+  /** an exact scale (1 = 100 %), about the viewport's centre — the typed zoom and the reset */
+  const zoomTo = (k0: number, cx = size.w / 2, cy = size.h / 2) => setView((v) => {
+    const k = Math.max(0.05, Math.min(3, k0));
+    return { k, tx: cx - (cx - v.tx) * (k / v.k), ty: cy - (cy - v.ty) * (k / v.k) };
+  });
   const centreOn = React.useCallback((n: LaidOutNode) => setView((v) => ({ k: Math.max(v.k, 0.8), tx: size.w / 2 - (n.x + n.w / 2) * Math.max(v.k, 0.8), ty: size.h / 2 - (n.y + n.h / 2) * Math.max(v.k, 0.8) })), [size]);
 
   const onWheel = (e: React.WheelEvent) => {
@@ -146,12 +151,6 @@ export function FlowCanvas() {
   /* drag: background pans; a node moves (and pins) or drops onto another */
   const drag = React.useRef<{ kind: "pan" | "node"; id?: string; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
   const [dragPos, setDragPos] = React.useState<{ id: string; x: number; y: number } | null>(null);
-  const [dropOn, setDropOn] = React.useState<string | null>(null);
-  const toCanvas = (clientX: number, clientY: number) => { const r = hostRef.current!.getBoundingClientRect(); return { x: (clientX - r.left - view.tx) / view.k, y: (clientY - r.top - view.ty) / view.k }; };
-  const hit = (x: number, y: number, except?: string): LaidOutNode | null => {
-    for (const n of layout.nodes) if (n.id !== except && x >= n.x && x <= n.x + n.w && y >= n.y && y <= n.y + n.h) return n;
-    return null;
-  };
   const onPointerDown = (e: React.PointerEvent, nodeId?: string) => {
     if (e.button !== 0) return;
     (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
@@ -166,20 +165,24 @@ export function FlowCanvas() {
     else if (d.id && d.moved) {
       const x = d.ox + dx / view.k, y = d.oy + dy / view.k;
       setDragPos({ id: d.id, x, y });
-      const p = toCanvas(e.clientX, e.clientY);
-      const over = hit(p.x, p.y, d.id);
-      setDropOn(over && flowIdx.has(over.id) && flowIdx.has(d.id) ? over.id : null);
     }
   };
+  /*
+   * FLOW IS FOR UNDERSTANDING (round 2, §4). A click selects — the one
+   * shared selection, so a Studio pane beside this one lands on the same
+   * question; a drag repositions the node on the canvas (a view concern,
+   * stored by id). Nothing here changes the survey's structure: dropping a
+   * node onto a container used to move it there; that is Architect's and
+   * Studio's work now, and a drop is simply a reposition.
+   */
   const onPointerUp = (e: React.PointerEvent) => {
     const d = drag.current; drag.current = null;
     if (!d) return;
     if (d.kind === "node" && d.id) {
       if (!d.moved) { select(d.id, e); }
-      else if (dropOn) { dropNode(d.id, dropOn); }
       else if (dragPos && !s.readOnly) { pin(d.id, Math.round(dragPos.x), Math.round(dragPos.y)); }
     }
-    setDragPos(null); setDropOn(null);
+    setDragPos(null);
   };
 
   /** store a dragged position on the survey, by node id */
@@ -195,28 +198,22 @@ export function FlowCanvas() {
       dd.logicFlow = lf;
     });
   };
+  /**
+   * "Flow → click Q12 → Studio opens Q12" (round 2, §4). The selection is
+   * already shared; what changes is which environment is on screen. In a
+   * split that already shows Studio, nothing needs to change — the Studio
+   * pane has followed the selection; otherwise the primary becomes Studio.
+   */
+  const openInStudio = () => {
+    if (mode?.mode === "studio" || mode?.split === "studio") return;
+    cmd?.run("mode.studio");
+  };
   const autoArrange = () => {
     s.labelNextEdit("auto-arrange flow");
     s.update((dd) => { dd.logicFlow = { nodes: [], edges: [] }; });
     setTimeout(fit, 0);
   };
 
-  /** drop a flow node onto another: into a container, or after a sibling */
-  const dropNode = (draggedId: string, targetId: string) => {
-    if (s.readOnly) return;
-    const target = flowIdx.get(targetId);
-    if (!target) return;
-    const isContainer = target.type === "block" || target.type === "section" || target.type === "randomizer" || target.type === "loop";
-    const where = isContainer ? { kind: "inside" as const, ownerId: targetId, slot: "children" } : { kind: "after" as const, refId: targetId };
-    const verdict = canDropFlowNode(def.flow as FlowNode[], draggedId, where);
-    if (!verdict.ok) { s.toast(verdict.reason ?? "That cannot go there", "err"); return; }
-    s.labelNextEdit(isContainer ? "move into container" : "reorder flow");
-    s.update((dd) => {
-      const r = moveFlowNode(dd.flow as FlowNode[], draggedId, where);
-      if (r.moved) dd.flow = r.flow;
-    });
-    s.toast(isContainer ? `Moved into ${(target as { title?: string }).title ?? target.type}` : "Reordered");
-  };
 
   /* ------------------------------------------------------------ search, debug */
   const [search, setSearch] = React.useState("");
@@ -261,7 +258,6 @@ export function FlowCanvas() {
     }
     if (matches) cls.push(matches.has(n.id) ? "match" : "nomatch");
     if (debugNodes) cls.push(debugNodes.has(n.id) ? "taken" : "untaken");
-    if (dropOn === n.id) cls.push("drop");
     if (key && status.statusOf(key).level !== "ok") cls.push(`st-${status.statusOf(key).level}`);
     return cls.join(" ");
   };
@@ -295,23 +291,15 @@ export function FlowCanvas() {
           </div>
           <span className="fc-count" data-testid="flow-count">{layout.nodes.length} nodes · {layout.edges.length} edges</span>
           <span className="grow" />
-          <select className="fc-add" data-testid="flow-add" value="" disabled={s.readOnly}
-            onChange={(e) => { if (e.target.value) cmd?.run(e.target.value); }} title="Insert a flow element before the End">
-            <option value="">+ Add…</option>
-            <option value="flow.add.branch">Branch / condition</option>
-            <option value="flow.add.randomizer">Randomizer</option>
-            <option value="flow.add.loop">Loop</option>
-            <option value="flow.add.quota_check">Quota check</option>
-            <option value="flow.add.embedded_data">Embedded data</option>
-            <option value="block.add">Block</option>
-          </select>
           <button className={`fc-chip${debugOn ? " on" : ""}`} data-testid="flow-debug-toggle" onClick={() => setDebugOn((v) => !v)} title="Type answers and see the path a respondent takes"><Icon name="flask" size={12} /> Debug</button>
           <button className={`fc-chip${focus ? " on" : ""}`} data-testid="focus-toggle" aria-pressed={focus} onClick={() => mode?.setFocus(!focus)} title="Focus (⌘⇧F)"><Icon name="sparkle" size={12} /> Focus</button>
           <button className="fc-chip" onClick={autoArrange} disabled={s.readOnly} title="Forget dragged positions and lay out afresh" data-testid="flow-arrange">Auto-arrange</button>
-          <div className="fc-seg">
+          <div className="fc-seg fc-zoom" role="group" aria-label="Zoom">
             <button onClick={() => zoomBy(1 / 1.2)} title="Zoom out (−)" data-testid="flow-zoom-out">−</button>
-            <button onClick={fit} title="Fit (0)" data-testid="flow-fit">{Math.round(view.k * 100)}%</button>
+            <ZoomInput k={view.k} onApply={zoomTo} />
             <button onClick={() => zoomBy(1.2)} title="Zoom in (+)" data-testid="flow-zoom-in">+</button>
+            <button onClick={fit} title="Fit to screen (0)" data-testid="flow-fit">Fit</button>
+            <button onClick={() => zoomTo(1)} title="Reset to 100% (1)" data-testid="flow-zoom-reset">1:1</button>
           </div>
           <button className={`fc-chip${inspectorOpen ? " on" : ""}`} onClick={() => savePrefs({ ...prefs, inspector: !inspectorOpen })} title="Inspector" data-testid="flow-inspector-toggle"><Icon name="info" size={12} /></button>
         </div>
@@ -384,7 +372,7 @@ export function FlowCanvas() {
                   <g key={n.id} className={nodeClass(n)} transform={`translate(${p.x} ${p.y})`}
                     data-testid="flow-node" data-node={n.id} data-kind={n.kind}
                     onPointerDown={(e) => { e.stopPropagation(); onPointerDown(e, n.id); }}
-                    onDoubleClick={() => { if (key) { select(n.id); cmd?.run("mode.architect"); } }}
+                    onDoubleClick={() => { if (key) { select(n.id); openInStudio(); } }}
                   >
                     <rect width={n.w} height={n.h} rx={n.kind === "decision" ? 6 : 8} />
                     {n.kind === "decision" && <rect className="fc-accent" width={4} height={n.h} rx={2} />}
@@ -418,10 +406,37 @@ export function FlowCanvas() {
         <aside className="fc-inspector" data-testid="flow-inspector">
           <div className="ar-pane-head"><span className="ar-pane-title">Inspector</span></div>
           <div className="ar-inspector-body">
-            <Inspector primary={primary} index={index} status={status} onSelect={(k) => { if (sel) sel.dispatch({ type: "select", key: k }); const n = nodeOfKey(k); if (n) centreOn(n); }} />
+            <Inspector primary={primary} index={index} status={status} readOnly onOpenInStudio={() => openInStudio()} onSelect={(k) => { if (sel) sel.dispatch({ type: "select", key: k }); const n = nodeOfKey(k); if (n) centreOn(n); }} />
           </div>
         </aside>
       )}
     </div>
+  );
+}
+
+/* ------------------------------------------------------------ zoom input */
+
+/**
+ * The zoom as a number you can type (round 2, §5): click the percentage,
+ * type 25, 50, 100 or 150, Enter applies; Escape restores; anything that
+ * is not a number between 5 and 300 is refused and the field snaps back.
+ */
+function ZoomInput({ k, onApply }: { k: number; onApply(k: number): void }) {
+  const [text, setText] = React.useState<string | null>(null);
+  const shown = text ?? `${Math.round(k * 100)}%`;
+  const commit = () => {
+    if (text === null) return;
+    const n = Number(text.replace(/[%\s]/g, ""));
+    if (Number.isFinite(n) && n >= 5 && n <= 300) onApply(n / 100);
+    setText(null);
+  };
+  return (
+    <input
+      className="fc-zoom-input" data-testid="flow-zoom-input" value={shown} inputMode="numeric" aria-label="Zoom percentage" title="Type a zoom level, 5–300 %, then Enter"
+      onFocus={(e) => { setText(`${Math.round(k * 100)}`); requestAnimationFrame(() => e.target.select()); }}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") { commit(); (e.target as HTMLInputElement).blur(); } if (e.key === "Escape") { setText(null); (e.target as HTMLInputElement).blur(); } }}
+    />
   );
 }

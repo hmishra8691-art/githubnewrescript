@@ -239,63 +239,37 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
   ok("Auto-arrange forgets the pins (one undoable edit)");
 }
 
-/* ----------------------------------------------------------- add an element from the canvas */
+/* ----------------------------------------------------------- understand, do not edit (round 2, §4) */
 {
-  const before = await readDef();
-  await page.selectOption('[data-testid="flow-add"]', "flow.add.randomizer");
-  await page.waitForTimeout(400);
-  const def = await readDef();
-  const types = def.flow.map((n) => n.type);
-  assert.equal(def.flow.length, before.flow.length + 1);
-  assert.ok(types.indexOf("randomizer") >= 0 && types.indexOf("randomizer") < types.lastIndexOf("end"), "the randomizer sits before the ends");
-  ok("'+ Add… Randomizer' inserts through the command registry, before the End");
-  await page.waitForSelector('[data-testid="flow-view"]');
-  assert.match(await page.$eval('[data-testid="inspector"]', (e) => e.dataset.kind), /flowNode/);
-  ok("and selects the new element, so the inspector opens on it");
-}
-
-/* ----------------------------------------------------------- drop a node into a container */
-{
-  await page.click('[data-testid="flow-fit"]');
+  assert.equal(await page.$('[data-testid="flow-add"]'), null);
+  ok("there is no “+ Add…” on the canvas — Flow is for understanding; Architect and Studio build");
+  await page.waitForSelector('[data-testid="inspector"]');
+  assert.equal(await page.$('[data-testid="inspector"] .ai-props'), null, "no property editor in Flow's inspector");
+  assert.ok(await page.$('[data-testid="inspector-open-studio"]'), "…but a way to Studio");
+  ok("the inspector is read-only, with Open in Studio");
+  // typed zoom
+  await page.click('[data-testid="flow-zoom-input"]');
+  await page.fill('[data-testid="flow-zoom-input"]', "50");
+  await page.keyboard.press("Enter");
   await page.waitForTimeout(150);
-  const def = await readDef();
-  const rnd = def.flow.find((n) => n.type === "randomizer" && n.children.length === 0);
-  assert.ok(rnd, "the empty randomizer we just added");
-  // the demo's top level is all sections; take the last section's first page, which the canvas draws as a node
-  const lastSection = [...def.flow].reverse().find((n) => n.type === "section");
-  const firstIn = (nodes) => { for (const n of nodes) { if (n.type === "page") return n; if (n.children) { const h = firstIn(n.children); if (h) return h; } } return null; };
-  const topPage = firstIn(lastSection.children);
-  assert.ok(topPage, "a page to move");
-  await page.fill('[data-testid="flow-search"]', rnd.id);
-  await page.waitForTimeout(400);
-  const target = await node(rnd.id);
-  assert.ok(target, "the randomizer node is drawn");
-  const tb = await target.boundingBox();
-  await page.fill('[data-testid="flow-search"]', "");
-  await page.waitForTimeout(200);
-  // the source may be far away; zoom out so both are on screen
-  await page.click('[data-testid="flow-fit"]');
+  let k = Number(/scale\(([\d.]+)\)/.exec(await page.$eval('[data-testid="flow-viewport"]', (e) => e.getAttribute("transform")))[1]);
+  assert.ok(Math.abs(k - 0.5) < 1e-6, `typed 50 → scale 0.5, got ${k}`);
+  assert.equal(await page.inputValue('[data-testid="flow-zoom-input"]'), "50%");
+  ok("typing 50 + Enter zooms to exactly 50%");
+  await page.click('[data-testid="flow-zoom-input"]');
+  await page.fill('[data-testid="flow-zoom-input"]', "900");
+  await page.keyboard.press("Enter");
   await page.waitForTimeout(150);
-  const src = await node(topPage.id);
-  const tgt = await node(rnd.id);
-  if (src && tgt) {
-    const sb = await src.boundingBox(); const tb2 = await tgt.boundingBox();
-    await page.mouse.move(sb.x + sb.width / 2, sb.y + sb.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(tb2.x + tb2.width / 2, tb2.y + tb2.height / 2, { steps: 12 });
-    await page.waitForTimeout(100);
-    await page.mouse.up();
-    await page.waitForTimeout(500);
-    const after = await readDef();
-    const rnd2 = after.flow.find((n) => n.id === rnd.id);
-    assert.ok(rnd2 && rnd2.children.some((c) => c.id === topPage.id), `${topPage.id} is now inside the randomizer: ${JSON.stringify(rnd2?.children.map((c) => c.id))}`);
-    ok("dropping a page onto a randomizer moves it inside — moveFlowNode, with canDropFlowNode's verdict");
-    const stillThere = (nodes) => nodes.some((n) => n.id === topPage.id || (n.children && n.id !== rnd.id && stillThere(n.children)) || (n.branches && n.branches.some((b) => stillThere(b.children))) || (n.otherwise && stillThere(n.otherwise)));
-    assert.ok(!stillThere(after.flow), "and it left where it was");
-    ok("the page is no longer in its old section");
-  } else {
-    console.log("  skip drop check: nodes not both drawn at fit zoom", !!src, !!tgt, tb);
-  }
+  k = Number(/scale\(([\d.]+)\)/.exec(await page.$eval('[data-testid="flow-viewport"]', (e) => e.getAttribute("transform")))[1]);
+  assert.ok(Math.abs(k - 0.5) < 1e-6, "an out-of-range value is refused and the zoom stays");
+  assert.equal(await page.inputValue('[data-testid="flow-zoom-input"]'), "50%");
+  ok("900 is refused (5–300 only) and the field snaps back");
+  await page.click('[data-testid="flow-zoom-reset"]');
+  await page.waitForTimeout(150);
+  k = Number(/scale\(([\d.]+)\)/.exec(await page.$eval('[data-testid="flow-viewport"]', (e) => e.getAttribute("transform")))[1]);
+  assert.ok(Math.abs(k - 1) < 1e-6);
+  ok("1:1 resets to 100%; Fit, − and + are still there");
+  await page.click('[data-testid="flow-fit"]');
 }
 
 /* ----------------------------------------------------------- shared selection across modes */
@@ -322,6 +296,16 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
   await page.waitForTimeout(300);
   assert.match(await classesOf("q_age"), /\bprimary\b/);
   ok("and back in Flow, Q3 is the primary node");
+  // double-click → Studio, on the same question
+  const q3b = await node("q_age");
+  await q3b.dblclick();
+  await page.waitForSelector('[data-testid="questions-panel"]');
+  assert.equal(await page.$eval('[data-testid="where-am-i"]', (e) => e.dataset.mode), "studio");
+  assert.equal(await page.$eval('[data-testid="qcard"].selected', (e) => e.dataset.qid), "q_age");
+  ok("double-clicking Q3 on the canvas opens Studio on Q3 (Flow → click → Studio)");
+  await switchMode(page, "flow");
+  await page.waitForSelector('[data-testid="flow-view"]');
+  await page.waitForTimeout(300);
   await page.click('[data-testid="flow-granularity"] [data-granularity="auto"]');
 }
 

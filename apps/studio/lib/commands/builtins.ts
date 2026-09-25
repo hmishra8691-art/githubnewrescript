@@ -1,6 +1,6 @@
 import type { SurveyDefinition, Question, FlowNode } from "@rescript/schema";
 import {
-  addQuestion, duplicateQuestion, moveQuestionBy, nextQuestionNaming, listPages,
+  addQuestion, duplicateQuestion, moveQuestionBy, nextQuestionNaming, listPages, listBlocks, findNode,
 } from "@rescript/engine";
 import type { Command, CommandContextBase } from "./core.ts";
 import { MODES, type ProgrammingMode } from "../programmingMode.ts";
@@ -67,13 +67,34 @@ type C = Command<StudioCommandContext>;
 const selectedQuestion = (ctx: StudioCommandContext): Question | null =>
   ctx.questionId ? ctx.def.questions.find((q) => q.id === ctx.questionId) ?? null : null;
 
-/** the page and position right after the selected question — or the end of the last page */
-function insertionPoint(ctx: StudioCommandContext): { pageId?: string; index?: number } {
+/**
+ * Where a new question goes: right after the selected question; at the end
+ * of the selected page; at the end of the selected block's or section's
+ * last page (Architect selects containers, round 2 §2); else the end of
+ * the last page — the Questions panel's rule.
+ */
+export function insertionPoint(ctx: Pick<StudioCommandContext, "def" | "questionId" | "primary">): { pageId?: string; index?: number } {
   const qid = ctx.questionId;
-  if (!qid) return {};
-  for (const p of listPages(ctx.def.flow as unknown[])) {
-    const k = p.node.questionIds.indexOf(qid);
-    if (k >= 0) return { pageId: p.node.id, index: k + 1 };
+  const pages = listPages(ctx.def.flow as unknown[]);
+  if (qid) {
+    for (const p of pages) {
+      const k = p.node.questionIds.indexOf(qid);
+      if (k >= 0) return { pageId: p.node.id, index: k + 1 };
+    }
+  }
+  if (ctx.primary?.startsWith("flowNode:")) {
+    const id = ctx.primary.slice("flowNode:".length);
+    const page = pages.find((p) => p.node.id === id);
+    if (page) return { pageId: page.node.id, index: page.node.questionIds.length };
+    const block = listBlocks(ctx.def.flow as unknown[]).find((b) => b.id === id || b.node?.id === id);
+    const last = block?.pages[block.pages.length - 1];
+    if (last) return { pageId: last.node.id, index: last.node.questionIds.length };
+    const section = findNode(ctx.def.flow as FlowNode[], id);
+    if (section && "children" in section) {
+      const inside = listPages((section as { children: unknown[] }).children);
+      const end = inside[inside.length - 1];
+      if (end) return { pageId: end.node.id, index: end.node.questionIds.length };
+    }
   }
   return {};
 }
@@ -100,9 +121,13 @@ export function builtinCommands(): C[] {
       const node = ctx.newFlowNode("page");
       ctx.update("add block", (d) => {
         const flow = d.flow as FlowNode[];
-        const at = flow.findIndex((n) => n?.type === "end");
+        // after the selected top-level element when there is one; else before the End
+        const selId = ctx.primary?.startsWith("flowNode:") ? ctx.primary.slice("flowNode:".length) : null;
+        const after = selId ? flow.findIndex((n) => n?.id === selId) : -1;
+        const at = after >= 0 ? after + 1 : flow.findIndex((n) => n?.type === "end");
         flow.splice(at < 0 ? flow.length : at, 0, node);
       });
+      ctx.selectKey?.(`flowNode:${node.id}`);
       ctx.toast("Block added");
     },
   });

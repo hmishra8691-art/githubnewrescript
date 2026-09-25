@@ -1822,6 +1822,28 @@ export function QuestionsPanel() {
   const [moveFor, setMoveFor] = React.useState<string | null>(null);
   const selected = s.def.questions.find((q) => q.id === s.selectedQuestionId);
   const pages = listPages(s.def.flow as any[]);
+
+  /*
+   * FOLLOW A SELECTION MADE ELSEWHERE. A node clicked on the Flow canvas, a
+   * row in Grid, a chip in Intelligent, a palette result — all select
+   * through the one store, and when this panel is on screen (alone or as a
+   * split pane) the card must come into view, or "click Q12 in Flow, see
+   * Q12 in Studio" (round 2, §4) is a selection nobody can see. Scrolls
+   * only when the card is off screen, so a click on the card itself never
+   * jumps the page.
+   */
+  const rootRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    const id = s.selectedQuestionId;
+    const root = rootRef.current;
+    if (!id || !root) return;
+    const el = root.querySelector<HTMLElement>(`[data-testid="qcard"][data-qid="${CSS.escape(id)}"]`);
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const host = root.closest<HTMLElement>(".split-body, .center") ?? root;
+    const h = host.getBoundingClientRect();
+    if (r.top < h.top || r.bottom > h.bottom) el.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [s.selectedQuestionId]);
   const blocks = listBlocks(s.def.flow as any[]);
   const placed = new Set(pages.flatMap((p) => p.node.questionIds));
   const unplaced = s.def.questions.filter((q) => !placed.has(q.id));
@@ -2314,7 +2336,7 @@ export function QuestionsPanel() {
   };
 
   return (
-    <div>
+    <div ref={rootRef} data-testid="questions-panel">
       {pendingDelete && (
         <DeleteQuestionDialog
           code={pendingDelete.code}

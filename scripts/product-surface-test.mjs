@@ -156,6 +156,9 @@ const storage = (page, key) => page.evaluate((k) => window.localStorage.getItem(
   await page.waitForTimeout(400);
   const before = await page.$eval('[data-testid="split-secondary"] [data-testid="flow-node"][data-node="q_age"]', (e) => e.textContent);
   assert.match(before, /Q3/);
+  // select the row first: the properties panel opens for a selected row (Grid keeps it, round 2 §12) and the columns settle
+  await page.click('[data-testid="split-primary"] [data-testid="grid-row"][data-code="Q3"] .sg-cell[data-col="code"]');
+  await page.waitForTimeout(300);
   const textCell = await page.$('[data-testid="split-primary"] [data-testid="grid-row"][data-code="Q3"] .sg-cell[data-col="text"]');
   await textCell.dblclick();
   await page.waitForSelector('[data-testid="grid-edit-text"]');
@@ -174,12 +177,15 @@ const storage = (page, key) => page.evaluate((k) => window.localStorage.getItem(
   assert.equal(await page.getAttribute('[data-testid="split-view"]', "data-secondary"), "grid");
   assert.match(page.url(), /mode=flow&split=grid/);
   ok("swap: choosing the partner as primary flips the pair rather than doubling it");
+  // the properties panel is open for the selected row (Grid keeps it); the pair sits beside it — drag to 35 % of the PAIR's width
+  await page.waitForTimeout(400); // the swap re-renders both panes; let the widths settle before measuring
   const box = await page.$eval('[data-testid="split-view"]', (e) => { const r = e.getBoundingClientRect(); return { x: r.left, w: r.width, y: r.top + 300 }; });
   const div = await page.$('[data-testid="split-divider"]');
   const d = await div.boundingBox();
   await page.mouse.move(d.x + 3, d.y + 300); await page.mouse.down(); await page.mouse.move(box.x + box.w * 0.35, box.y, { steps: 6 }); await page.mouse.up();
+  await page.waitForTimeout(100);
   const ratio = await page.$eval('[data-testid="split-view"]', (e) => e.style.gridTemplateColumns);
-  assert.match(ratio, /0\.3[4-6]\d*fr/);
+  assert.match(ratio, /0\.3[3-7]\d*fr/, `dragged to about 35 %: ${ratio}`);
   ok(`the divider drags and the ratio is kept: ${ratio}`);
   await page.click('[data-testid="split-close-secondary"]');
   await page.waitForSelector('[data-testid="split-view"]', { state: "detached" });

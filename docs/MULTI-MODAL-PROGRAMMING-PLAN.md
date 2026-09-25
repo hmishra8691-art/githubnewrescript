@@ -71,6 +71,29 @@ delivered; Part D's open decisions are closed (hand-rolled everything;
 no selector store; a token extension; the grammar keeps Intelligent
 working without a provider).
 
+**Round 2 — mode permissions, splits, editing (2026-09-25).** The brief
+after the navigation redesign: each mode gets a defined purpose and
+permission set over the one model. `MODE_CAPABILITIES` in
+`lib/programmingMode.ts` records it — Studio *build* (full), Architect
+*structure* (create + structural edits), Flow *understand* (no creation,
+no editing; click selects, double-click opens in Studio, read-only
+inspector with Open in Studio), Grid *review* (fields and bulk edits,
+options in the cell), Intelligent *assist* (proposals only). A split
+keeps each pane's permissions and shows the Properties panel when any
+pane wants it (`propertiesWanted`), which is what Studio + Intelligent
+was missing. The Studio panel now follows a selection made anywhere
+(`QuestionsPanel` scrolls the card into view), so "Flow → click Q12 →
+Q12 in the Studio pane" holds. Architect gained + Question (into the
+selected page or block: `insertionPoint` reads `ctx.primary`), + Block,
++ Element, duplicate/move/delete — all through the command registry.
+Flow lost its "+ Add…" and drop-to-move, gained a typed zoom (5–300 %)
+and a 1:1 reset. Intelligent gained validation (`set_validation` /
+`clear_validation`, merged by rule kind, type-checked against the
+question) and masking (`set_mask`: a set expression parsed by
+`parseSetExpression`, the Masking builder's own language). Verified by
+`scripts/mode-sync-test.mjs` (13) and additions to the Grid (51),
+Architect (38), Flow (40) and Intelligent (41) suites.
+
 Three things learned while building Phase 0 that the plan did not know:
 
 - `lintSurveyLogic` was cubic in question count (5.5 s at 1 000 questions);

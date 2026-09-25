@@ -310,3 +310,40 @@ test("split commands: offered for other modes when the window is wide enough; of
   run(wide, "split.flow"); run(already, "split.off"); run(wide, "mode.choose");
   assert.deepEqual(log, ["split:flow", "split:null", "chooser"]);
 });
+
+test("the permission model: five purposes, and a split keeps the properties panel when any pane wants it", async () => {
+  const { MODE_CAPABILITIES, propertiesWanted, MODES } = await import("./programmingMode.ts");
+  for (const m of MODES) assert.ok(MODE_CAPABILITIES[m.id], `${m.id} has capabilities`);
+  assert.equal(MODE_CAPABILITIES.studio.edit, "full");
+  assert.equal(MODE_CAPABILITIES.flow.create, false);
+  assert.equal(MODE_CAPABILITIES.flow.edit, "none");
+  assert.equal(MODE_CAPABILITIES.flow.opensInStudio, true);
+  assert.equal(MODE_CAPABILITIES.architect.create, true);
+  assert.equal(MODE_CAPABILITIES.grid.edit, "fields");
+  assert.equal(MODE_CAPABILITIES.intelligent.edit, "proposals");
+  assert.equal(propertiesWanted("studio", "intelligent"), true, "Studio beside Intelligent keeps its Properties (§1)");
+  assert.equal(propertiesWanted("intelligent", "studio"), true, "either way round");
+  assert.equal(propertiesWanted("grid", "flow"), true, "Grid selects rows and edits them in the panel");
+  assert.equal(propertiesWanted("flow", "architect"), false, "neither wants it");
+  assert.equal(propertiesWanted("flow", null), false);
+  assert.equal(propertiesWanted("studio", null), true);
+});
+
+test("insertionPoint (round 2): after the selected question, at the end of a selected page, of a selected block's last page, else the last page", async () => {
+  const { insertionPoint } = await import("./commands/builtins.ts");
+  const def = SurveyDefinition.parse({
+    meta: { id: "s", code: "S", title: "t" },
+    questions: [{ id: "q1", code: "Q1", variableName: "Q1", type: "numeric", text: "a" }, { id: "q2", code: "Q2", variableName: "Q2", type: "numeric", text: "b" }, { id: "q3", code: "Q3", variableName: "Q3", type: "numeric", text: "c" }],
+    flow: [
+      { type: "page", id: "p1", questionIds: ["q1", "q2"] },
+      { type: "block", id: "b1", title: "B", children: [{ type: "page", id: "p2", questionIds: [] }, { type: "page", id: "p3", questionIds: ["q3"] }] },
+      { type: "end", id: "e", status: "complete" },
+    ],
+    deployment: { clientSlug: "c", studySlug: "s" },
+  });
+  assert.deepEqual(insertionPoint({ def, questionId: "q1", primary: "question:q1" }), { pageId: "p1", index: 1 });
+  assert.deepEqual(insertionPoint({ def, questionId: null, primary: "flowNode:p1" }), { pageId: "p1", index: 2 });
+  assert.deepEqual(insertionPoint({ def, questionId: null, primary: "flowNode:b1" }), { pageId: "p3", index: 1 }, "a block: its last page");
+  assert.deepEqual(insertionPoint({ def, questionId: null, primary: "flowNode:e" }), {}, "an end: the default (last page)");
+  assert.deepEqual(insertionPoint({ def, questionId: null, primary: null }), {});
+});

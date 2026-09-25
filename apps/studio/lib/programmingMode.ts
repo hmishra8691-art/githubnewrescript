@@ -145,3 +145,45 @@ export function shouldShowChooser(search: string, remembered: string | null | un
   if (opts.sandbox) return false;
   return true;
 }
+
+/* ========================================================== permissions */
+
+/**
+ * WHAT EACH MODE MAY DO (round 2, §12). Five views of one survey, each with
+ * a purpose; the purpose decides which edits a view offers, and nothing a
+ * view offers is its own — every edit goes through the same engine
+ * functions and the same store as Studio's.
+ *
+ *   Studio       build       everything
+ *   Architect    structure   blocks, questions, placement, flow, logic — not every property
+ *   Flow         understand  nothing is edited; click selects, double-click opens in Studio
+ *   Grid         review      supported fields, in bulk — not a second builder
+ *   Intelligent  assist      proposals over the same model, applied only on Apply
+ *
+ * `properties` says whether the Studio properties panel belongs beside the
+ * view; `create` whether the view offers to add questions / blocks /
+ * elements; `edit` whether the view edits fields in place. A split keeps
+ * each pane's own permissions, and the properties panel is shown when ANY
+ * pane wants it (§13: Studio beside Intelligent keeps its Properties).
+ */
+export interface ModeCapabilities {
+  purpose: "build" | "structure" | "understand" | "review" | "assist";
+  properties: boolean;
+  create: boolean;
+  edit: "full" | "structure" | "fields" | "proposals" | "none";
+  /** a click on an object opens it in Studio rather than editing here */
+  opensInStudio: boolean;
+}
+
+export const MODE_CAPABILITIES: Record<ProgrammingMode, ModeCapabilities> = {
+  studio: { purpose: "build", properties: true, create: true, edit: "full", opensInStudio: false },
+  architect: { purpose: "structure", properties: false, create: true, edit: "structure", opensInStudio: false },
+  flow: { purpose: "understand", properties: false, create: false, edit: "none", opensInStudio: true },
+  grid: { purpose: "review", properties: true, create: true, edit: "fields", opensInStudio: false },
+  intelligent: { purpose: "assist", properties: false, create: false, edit: "proposals", opensInStudio: false },
+};
+
+/** whether the properties panel is shown beside a view or a pair of views */
+export function propertiesWanted(mode: ProgrammingMode, split: ProgrammingMode | null): boolean {
+  return MODE_CAPABILITIES[mode].properties || (!!split && MODE_CAPABILITIES[split].properties);
+}

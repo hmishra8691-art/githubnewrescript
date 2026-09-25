@@ -4,6 +4,7 @@ import type { FlowNode } from "@rescript/schema";
 import { parseObjectKey, findNode, replaceFlowNode, summarizeFlowNode, type ObjectKey, type ObjectStatusMap } from "@rescript/engine";
 import { useStudio } from "../studio/store";
 import { QuestionEditor } from "../studio/QuestionsPanel";
+import { useCommands } from "../studio/CommandContext";
 import { NodeEditor } from "../studio/FlowNodeEditors";
 import { DisplayRuleCard, CalculationCard } from "../studio/LogicPanel";
 import { Icon } from "../ui/Icon";
@@ -131,6 +132,17 @@ export function Workspace({ primary, status, onSelect }: { primary: ObjectKey | 
   return <Missing what={kind} />;
 }
 
+/** "+ Question here" — the same `question.add` command, which reads the selection to know where "here" is */
+function AddHere({ what, testId, label }: { what: "question"; testId: string; label: string }) {
+  const s = useStudio();
+  const cmd = useCommands();
+  return (
+    <div className="aw-add">
+      <button className="btn small" data-testid={testId} disabled={s.readOnly} onClick={() => cmd?.run(what === "question" ? "question.add" : "block.add")} title={label}>+ Question here</button>
+    </div>
+  );
+}
+
 function Stat({ n, label }: { n: number; label: string }) {
   return <div className="aw-stat"><span className="aw-stat-n">{n}</span><span className="aw-stat-l">{label}</span></div>;
 }
@@ -159,6 +171,7 @@ function PageWorkspace({ node, onSelect }: { node: Extract<FlowNode, { type: "pa
         })}
         {node.questionIds.length === 0 && <li className="muted">No questions on this page.</li>}
       </ul>
+      <AddHere what="question" testId="workspace-add-question" label="Add a question to this page" />
       <NodeEditor node={node} onChange={(next) => { s.labelNextEdit("edit page"); s.update((d) => { replaceFlowNode(d.flow as FlowNode[], node.id, next); }); }} />
     </div>
   );
@@ -177,6 +190,7 @@ function ContainerWorkspace({ node, onSelect, patch }: { node: Extract<FlowNode,
           </li>
         ))}
       </ul>
+      <AddHere what="question" testId="workspace-add-question" label="Add a question to this block's last page" />
       <NodeEditor node={node} onChange={patch} />
     </div>
   );

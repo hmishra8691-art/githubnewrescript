@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SurveyDefinition, cond, type Question } from "@rescript/schema";
-import { applyLogicProposal, validateProposal, describeChange, proposalTargets, type ProposalChange } from "./logicProposal.js";
+import { applyLogicProposal, validateProposal, describeChange, proposalTargets, setExprRefs, type ProposalChange } from "./logicProposal.js";
 import { evaluateCondition } from "./evaluate.js";
 import { createResponseState } from "./state.js";
 
@@ -127,4 +127,69 @@ test("describeChange says what will happen in the Logic panel's words; targets a
   assert.match(describeChange(def, { kind: "add_display_rule", rule: { id: "d", target: { kind: "page", ref: "p1" }, action: "hide", when: show.condition! } }), /^Hide page Intro when /);
   assert.equal(describeChange(def, { kind: "rename_variable", oldName: "AGE", newName: "A2" }), "Rename AGE to A2 everywhere it is used.");
   assert.deepEqual(proposalTargets([show, { kind: "set_required", questionId: "q_c", required: true }, { kind: "rename_variable", oldName: "A", newName: "B" }]), ["q_c"]);
+});
+
+/* -------------------------------------------------- validation and masks (round 2) */
+
+const survey2 = () =>
+  SurveyDefinition.parse({
+    meta: { id: "s", code: "S", title: "Validation" },
+    questions: [
+      { id: "q_age", code: "Q1", variableName: "AGE", type: "numeric", text: "Age", validation: [{ id: "v1", kind: "min_value", value: 10 }] },
+      { id: "q_email", code: "Q2", variableName: "EMAIL", type: "open_text", text: "Email" },
+      { id: "q_brands", code: "Q3", variableName: "BRANDS", type: "multi_select", text: "Brands", options: [{ code: 1, label: "A" }, { code: 2, label: "B" }, { code: 3, label: "C" }] },
+      { id: "q_best", code: "Q4", variableName: "BEST", type: "single_select", text: "Best", options: [{ code: 1, label: "A" }, { code: 2, label: "B" }, { code: 3, label: "C" }] },
+    ],
+    flow: [{ type: "page", id: "p1", questionIds: ["q_age", "q_email", "q_brands", "q_best"] }, { type: "end", id: "e", status: "complete" }],
+    deployment: { clientSlug: "c", studySlug: "s" },
+  });
+
+test("set_validation merges by kind, keeps other rules, refuses rules that do not fit the type", () => {
+  const def = survey2();
+  const r = applyLogicProposal(def, [{ kind: "set_validation", questionId: "q_age", rules: [{ kind: "min_value", value: 18 }, { kind: "max_value", value: 99 }] }]);
+  assert.deepEqual(r.errors, []);
+  const v = def.questions.find((x) => x.id === "q_age")!.validation;
+  assert.deepEqual(v.map((x) => [x.kind, x.value]), [["min_value", 18], ["max_value", 99]], "the existing min rule was REPLACED, its id kept, and max appended");
+  assert.equal(v[0].id, "v1");
+  assert.match(validateProposal(def, [{ kind: "set_validation", questionId: "q_age", rules: [{ kind: "max_value", value: 5 }] }])[0], /minimum \(18\) is above the maximum \(5\)/);
+  assert.match(validateProposal(def, [{ kind: "set_validation", questionId: "q_email", rules: [{ kind: "min_value", value: 1 }] }])[0], /not numeric/);
+  assert.match(validateProposal(def, [{ kind: "set_validation", questionId: "q_age", rules: [{ kind: "email" }] }])[0], /not a text question/);
+  assert.match(validateProposal(def, [{ kind: "set_validation", questionId: "q_best", rules: [{ kind: "min_selections", value: 2 }] }])[0], /not a multi-select/);
+  assert.match(validateProposal(def, [{ kind: "set_validation", questionId: "q_brands", rules: [{ kind: "max_selections", value: 9 }] }])[0], /only 3 options/);
+  assert.match(validateProposal(def, [{ kind: "set_validation", questionId: "q_age", rules: [{ kind: "max_value", value: "lots" as never }] }])[0], /needs a number/);
+  assert.deepEqual(validateProposal(def, [{ kind: "set_validation", questionId: "q_email", rules: [{ kind: "email" }, { kind: "max_length", value: 120 }] }]), []);
+  assert.equal(describeChange(def, { kind: "set_validation", questionId: "q_email", rules: [{ kind: "email" }, { kind: "max_length", value: 120 }] }), "Validate Q2: an email address, at most 120 characters.");
+});
+
+test("clear_validation drops the named kinds, or everything; refuses when there is nothing to drop", () => {
+  const def = survey2();
+  applyLogicProposal(def, [{ kind: "set_validation", questionId: "q_age", rules: [{ kind: "max_value", value: 99 }, { kind: "integer" }] }]);
+  const r = applyLogicProposal(def, [{ kind: "clear_validation", questionId: "q_age", kinds: ["max_value"] }]);
+  assert.deepEqual(r.errors, []);
+  assert.deepEqual(def.questions[0].validation.map((v) => v.kind), ["min_value", "integer"]);
+  assert.match(validateProposal(def, [{ kind: "clear_validation", questionId: "q_age", kinds: ["max_value"] }])[0], /no maximum value rule/);
+  applyLogicProposal(def, [{ kind: "clear_validation", questionId: "q_age" }]);
+  assert.deepEqual(def.questions[0].validation, []);
+  assert.match(validateProposal(def, [{ kind: "clear_validation", questionId: "q_age" }])[0], /no validation rules/);
+  assert.equal(describeChange(def, { kind: "clear_validation", questionId: "q_age", kinds: ["min_value", "max_value"] }), "Remove the minimum value and maximum value rules from Q1.");
+});
+
+test("set_mask writes the universal mask; the source must exist, differ from the target and come first", () => {
+  const def = survey2();
+  const mask = { expr: { kind: "ref", questionId: "q_brands", selection: "selected" }, action: "display", keepAlwaysShow: true } as const;
+  assert.deepEqual(validateProposal(def, [{ kind: "set_mask", questionId: "q_best", mask }]), []);
+  assert.equal(describeChange(def, { kind: "set_mask", questionId: "q_best", mask }), "Show at Q4 only the options Q3.Selected.");
+  const r = applyLogicProposal(def, [{ kind: "set_mask", questionId: "q_best", mask }]);
+  assert.equal(r.applied, 1);
+  assert.deepEqual(def.questions.find((x) => x.id === "q_best")!.mask, mask);
+  assert.match(validateProposal(def, [{ kind: "set_mask", questionId: "q_brands", mask: { ...mask, expr: { kind: "ref", questionId: "q_best", selection: "selected" } } }])[0], /asked after/);
+  assert.match(validateProposal(def, [{ kind: "set_mask", questionId: "q_best", mask: { ...mask, expr: { kind: "ref", questionId: "q_best", selection: "selected" } } }])[0], /its own answer/);
+  assert.match(validateProposal(def, [{ kind: "set_mask", questionId: "q_best", mask: { ...mask, expr: { kind: "ref", questionId: "q_zzz", selection: "selected" } } }])[0], /does not exist/);
+  assert.match(validateProposal(def, [{ kind: "set_mask", questionId: "q_age", mask }])[0], /no options to mask/);
+  const op = { ...mask, expr: { kind: "op", operator: "intersection", left: { kind: "ref", questionId: "q_brands", selection: "selected" }, right: { kind: "ref", questionId: "q_age", selection: "selected" } } } as const;
+  assert.deepEqual([...setExprRefs(op.expr)], ["q_brands", "q_age"], "both sides of an operation are read");
+  applyLogicProposal(def, [{ kind: "set_mask", questionId: "q_best", mask: null }]);
+  assert.equal(def.questions.find((x) => x.id === "q_best")!.mask, undefined);
+  assert.match(validateProposal(def, [{ kind: "set_mask", questionId: "q_best", mask: null }])[0], /no mask to remove/);
+  assert.deepEqual(proposalTargets([{ kind: "set_mask", questionId: "q_best", mask }, { kind: "set_validation", questionId: "q_age", rules: [] }]), ["q_best", "q_age"]);
 });
