@@ -12,6 +12,7 @@
  *   node scripts/option-groups-test.mjs      (studio on 3000, runtime on 3001)
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 import { sendPreview } from "./lib/preview.mjs";
 
@@ -26,16 +27,16 @@ page.on("pageerror", (e) => errors.push(e.message));
 page.on("dialog", (d) => d.accept());
 
 const readDef = async () => {
-  await page.click(".leftnav >> text=JSON");
+  await openTab(page, "JSON");
   await page.waitForSelector("textarea.code");
   const json = await page.$eval("textarea.code", (e) => e.value);
-  await page.click(".leftnav >> text=Questions");
+  await openTab(page, "Questions");
   await page.waitForSelector(".block-badge");
   return JSON.parse(json);
 };
 
 const applyDef = async (def) => {
-  await page.click(".leftnav >> text=JSON");
+  await openTab(page, "JSON");
   await page.waitForSelector("textarea.code");
   await page.click('[data-testid="json-edit"]');
   await page.waitForTimeout(120);
@@ -46,7 +47,7 @@ const applyDef = async (def) => {
   }, JSON.stringify(def, null, 2));
   await page.click('[data-testid="json-apply"]');
   await page.waitForTimeout(500);
-  await page.click(".leftnav >> text=Questions");
+  await openTab(page, "Questions");
   await page.waitForSelector(".block-badge");
 };
 

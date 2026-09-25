@@ -1,3 +1,4 @@
+import { openTab } from "./lib/nav.mjs";
 /**
  * AI-DERIVED VARIABLES — the whole path, end to end.
  *
@@ -62,14 +63,14 @@ assert.equal(stored.questions.find((q) => q.id === "qcat").settings.expression, 
 console.log("  ok   the expression is stored on a calculated question, nothing else added to the definition");
 
 console.log("\nSTUDIO — lint refuses a nested AI call and names the fix");
-await h.page.click(".leftnav >> text=Calculations");
+await openTab(h.page, "Calculations");
 await h.page.waitForTimeout(400);
 const lintText = await h.page.evaluate(() => document.body.innerText);
 assert.ok(!/must be the whole expression/.test(lintText), "the well-formed definition lints clean");
 const bad = JSON.parse(JSON.stringify(def));
 bad.questions.find((q) => q.id === "qflag").settings.expression = 'if(ai_sentiment(Q5) = "negative", 1, 0)';
 await h.loadDef(bad);
-await h.page.click(".leftnav >> text=Calculations");
+await openTab(h.page, "Calculations");
 await h.page.waitForTimeout(400);
 const lintBad = await h.page.evaluate(() => document.body.innerText);
 assert.match(lintBad, /must be the whole expression/, "the nested form is reported");

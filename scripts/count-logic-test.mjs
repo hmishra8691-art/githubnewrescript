@@ -12,6 +12,7 @@
  *   node scripts/count-logic-test.mjs      (studio on 3000)
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
@@ -25,10 +26,10 @@ page.on("pageerror", (e) => errors.push(e.message));
 page.on("dialog", (d) => d.accept());
 
 const readDef = async () => {
-  await page.click(".leftnav >> text=JSON");
+  await openTab(page, "JSON");
   await page.waitForSelector("textarea.code");
   const json = await page.$eval("textarea.code", (e) => e.value);
-  await page.click(".leftnav >> text=Questions");
+  await openTab(page, "Questions");
   await page.waitForSelector(".block-badge");
   return JSON.parse(json);
 };
@@ -267,7 +268,7 @@ const grid = {
 def.questions.push(grid);
 def.flow[0].questionIds.push(grid.id);
 
-await page.click(".leftnav >> text=JSON");
+await openTab(page, "JSON");
 await page.waitForSelector("textarea.code");
 await page.click('[data-testid="json-edit"]');
 await page.waitForTimeout(150);
@@ -278,7 +279,7 @@ await page.$eval("textarea.code", (el, v) => {
 }, JSON.stringify(def, null, 2));
 await page.click('[data-testid="json-apply"]');
 await page.waitForTimeout(600);
-await page.click(".leftnav >> text=Questions");
+await openTab(page, "Questions");
 await page.waitForSelector(".block-badge");
 
 def = await readDef();

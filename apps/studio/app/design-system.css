@@ -229,7 +229,18 @@ input[type="range"] { accent-color: var(--c-primary); }
 .tip:hover::after, .tip:focus-visible::after { content: attr(data-tip); position: absolute; left: 50%; bottom: calc(100% + 8px); transform: translateX(-50%); width: max-content; max-width: 260px; background: var(--c-text); color: #fff; font-size: 12.5px; font-weight: 400; line-height: 1.45; padding: 8px 10px; border-radius: 8px; box-shadow: var(--sh-3); z-index: 50; white-space: normal; text-align: left; }
 
 /* ---------- IDE shell ---------- */
-.ide { display: grid; grid-template-rows: var(--topbar-h) 1fr; grid-template-columns: minmax(0, 1fr); height: 100vh; width: 100%; max-width: 100vw; overflow: hidden; background: var(--c-bg); }
+/*
+ * THE SHELL (navigation redesign, 2026-09-25). A column: the top bar, the
+ * menubar, any of the optional bars (save blocker, publish, lock, collab),
+ * then the body, which takes whatever height is left. It was a grid of
+ * `58px 1fr`, which put the first optional bar in the 1fr row and the body
+ * in an implicit one; a column with `flex: none` bars and a `flex: 1` body
+ * says what is meant however many bars appear.
+ */
+.ide { display: flex; flex-direction: column; height: 100vh; width: 100%; max-width: 100vw; overflow: hidden; background: var(--c-bg); }
+.ide > * { flex: none; }
+.ide > .ide-body { flex: 1 1 auto; }
+.topbar { min-height: var(--topbar-h); }
 .topbar {
   display: flex; align-items: center; gap: 10px; padding: 0 16px 0 14px; min-width: 0;
   background: rgba(255,255,255,.88); backdrop-filter: saturate(140%) blur(8px);
@@ -256,9 +267,10 @@ input[type="range"] { accent-color: var(--c-primary); }
 .crumbs .sep { color: var(--c-border-strong); }
 .crumbs .here { color: var(--c-text); font-weight: 600; }
 
-.ide-body { display: grid; grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--rightpanel-w); min-height: 0; }
-@media (max-width: 1500px) { .ide-body { grid-template-columns: 216px minmax(0, 1fr) 390px; } }
-@media (max-width: 1180px) { .ide-body { grid-template-columns: 200px minmax(0, 1fr) 340px; } }
+/* the body: the workspace and, when a tool wants one, the properties panel — no sidebar */
+.ide-body { display: grid; grid-template-columns: minmax(0, 1fr) var(--rightpanel-w); min-height: 0; }
+@media (max-width: 1500px) { .ide-body { grid-template-columns: minmax(0, 1fr) 390px; } }
+@media (max-width: 1180px) { .ide-body { grid-template-columns: minmax(0, 1fr) 340px; } }
 
 /*
  * Sept 21 follow-up ("Context-Aware Right Panel"): `RightPanel` in
@@ -285,33 +297,12 @@ input[type="range"] { accent-color: var(--c-primary); }
  * down) — that rule must keep winning on narrow viewports regardless of
  * whether a right panel exists.
  */
-@media (min-width: 1501px) {
-  .ide-body:not(:has(> .rightpanel:not(.rp-hidden))) { grid-template-columns: var(--sidebar-w) minmax(0, 1fr); }
-}
-@media (min-width: 1181px) and (max-width: 1500px) {
-  .ide-body:not(:has(> .rightpanel:not(.rp-hidden))) { grid-template-columns: 216px minmax(0, 1fr); }
-}
-@media (min-width: 901px) and (max-width: 1180px) {
-  .ide-body:not(:has(> .rightpanel:not(.rp-hidden))) { grid-template-columns: 200px minmax(0, 1fr); }
+@media (min-width: 901px) {
+  .ide-body:not(:has(> .rightpanel:not(.rp-hidden))) { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* ---------- sidebar ---------- */
-.leftnav { background: var(--c-surface); border-right: 1px solid var(--c-border); padding: 12px 10px 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
-.nav-group { padding: 14px 10px 6px; font-size: 11.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--c-text-4); }
-.nav-group:first-child { padding-top: 4px; }
-.leftnav .nav-item {
-  position: relative; display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; white-space: nowrap; min-width: 0;
-  padding: 9px 10px 9px 12px; background: none; border: none; border-radius: 9px;
-  color: var(--c-text-2); cursor: pointer; font-size: 14px; font-weight: 500; line-height: 1.2;
-  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
-}
-.leftnav .nav-item:hover { color: var(--c-text); background: var(--c-surface-2); }
-.leftnav .nav-item.active { color: var(--c-primary-700); background: var(--c-primary-50); font-weight: 600; }
-.leftnav .nav-item.active::before { content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 3px; border-radius: 3px; background: var(--c-primary); }
-.leftnav .nav-item .ico { width: 18px; height: 18px; flex: none; color: var(--c-text-3); }
-.leftnav .nav-item.active .ico { color: var(--c-primary); }
-.leftnav .nav-count { margin-left: auto; font-size: 11.5px; font-weight: 600; color: var(--c-text-3); background: var(--c-surface-2); border-radius: var(--r-pill); padding: 1px 7px; font-variant-numeric: tabular-nums; }
-.leftnav .nav-item.active .nav-count { background: var(--c-primary-100); color: var(--c-primary-700); }
+/* (the vertical sidebar lived here until 2026-09-25; its tools are in the menubar, see PRODUCT SHELL below) */
 
 .center { overflow-y: auto; padding: 24px 28px 40px; min-width: 0; }
 .rightpanel { background: var(--c-surface); border-left: 1px solid var(--c-border); overflow-y: auto; overflow-x: hidden; padding: 18px 20px 32px; min-width: 0; }
@@ -602,16 +593,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .ctx-title { font-size: 15.5px; }
 .ctx-meta .badge { padding: 1px 8px; font-size: 11.5px; }
 
-/* left navigation: groups breathe, the active item is unmistakable, counts stay quiet */
-.leftnav { padding: 10px 10px 24px; gap: 1px; }
-.nav-group { padding: 16px 12px 6px; font-size: 11px; letter-spacing: .12em; color: var(--c-text-4); }
-.nav-group:first-child { padding-top: 6px; }
-.leftnav .nav-item { padding: 8px 10px 8px 12px; font-size: 13.75px; }
-.leftnav .nav-item .ico { transition: color var(--dur-1) var(--ease); }
-.leftnav .nav-item:hover .ico { color: var(--c-text-2); }
-.leftnav .nav-count { font-size: 11px; min-width: 20px; text-align: center; }
-.leftnav a.nav-item { text-decoration: none; }
-.leftnav .nav-item:focus-visible { box-shadow: var(--sh-focus); outline: none; }
+
 
 /* the centre: a readable measure, consistent headers */
 .center { padding: 22px 28px 48px; }
@@ -644,10 +626,6 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 @media (max-width: 900px) {
   .ide { height: auto; min-height: 100vh; overflow: visible; }
   .ide-body { grid-template-columns: 1fr; }
-  .leftnav { flex-direction: row; flex-wrap: wrap; border-right: none; border-bottom: 1px solid var(--c-border); padding: 8px 10px; gap: 2px; overflow: visible; }
-  .nav-group { display: none; }
-  .leftnav .nav-item { width: auto; padding: 6px 10px; font-size: 13px; }
-  .leftnav .nav-item.active::before { display: none; }
   .center { padding: 16px; }
   .rightpanel { border-left: none; border-top: 1px solid var(--c-border); }
   .ax-shell { padding: 0 12px; }
@@ -670,34 +648,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
    themselves arrive as renderers in the centre column.
    ====================================================================== */
 
-/* the selector: a segmented control, mono-labelled like an instrument */
-.mode-selector {
-  display: inline-flex; align-items: center; gap: 2px; flex: none;
-  padding: 3px; margin-left: 6px; border-radius: 9px;
-  background: var(--c-surface-2); border: 1px solid var(--c-border);
-}
-.mode-selector-label {
-  font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
-  color: var(--c-text-4); padding: 0 8px 0 6px; user-select: none;
-}
-.mode-option {
-  appearance: none; border: 0; background: transparent; color: var(--c-text-3);
-  font: inherit; font-size: 12.5px; font-weight: 550; letter-spacing: -.005em;
-  padding: 5px 11px; border-radius: 6px; cursor: pointer; line-height: 1;
-  transition: background var(--dur-1, 120ms) var(--ease, ease), color var(--dur-1, 120ms) var(--ease, ease);
-}
-.mode-option:hover:not(:disabled) { color: var(--c-text); background: var(--c-surface); }
-.mode-option.active {
-  color: var(--c-primary-700); background: var(--c-surface);
-  box-shadow: 0 1px 0 var(--c-border), 0 0 0 1px var(--c-primary-100) inset;
-}
-.mode-option.soon { color: var(--c-text-4); cursor: default; }
-.mode-option.soon::after {
-  content: ""; display: inline-block; width: 4px; height: 4px; border-radius: 50%;
-  background: var(--c-border-strong); margin-left: 6px; vertical-align: middle;
-}
-@media (max-width: 1400px) { .mode-selector-label { display: none; } }
-@media (max-width: 1180px) { .mode-option.soon { display: none; } }
+/* (the Phase 0 segmented mode selector lived here; the Mode menu replaced it on 2026-09-25) */
 
 /* the ⌘K button */
 .topbar .btn.palette-open { padding: 0 10px; gap: 6px; color: var(--c-text-3); }
@@ -1197,36 +1148,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .sg, .ar, .fc, .iq { font-size: var(--ide-fs); color: var(--ide-ink); }
 .sg-toolbar, .fc-toolbar, .iq-toolbar, .ar-pane-head { min-height: var(--ide-head-h); }
 
-/* ---------- the selector: numbered ranges on an instrument ---------- */
-.mode-cluster { display: inline-flex; align-items: center; gap: 6px; flex: none; margin-left: 6px; }
-.mode-selector { margin-left: 0; }
-.mode-option { display: inline-flex; align-items: baseline; gap: 6px; padding: 5px 10px 5px 8px; }
-.mode-index { font-family: var(--mono); font-size: var(--ide-mono-fs); letter-spacing: .04em; color: var(--ide-ink-3); }
-.mode-option.active .mode-index { color: var(--ide-accent); }
-.mode-option.paired { box-shadow: 0 0 0 1px var(--c-border) inset; color: var(--ide-ink-2); }
-.mode-option.paired .mode-index::after { content: "·"; margin-left: 3px; color: var(--ide-accent); }
-.mode-tools { display: inline-flex; align-items: center; gap: 2px; position: relative; }
-.mode-tool {
-  appearance: none; display: inline-flex; align-items: center; gap: 5px; border: 1px solid transparent; border-radius: 7px;
-  background: transparent; color: var(--ide-ink-2); font: inherit; font-size: 12px; font-weight: 550; padding: 5px 8px; cursor: pointer; line-height: 1; white-space: nowrap;
-}
-.mode-tool:hover:not(:disabled) { color: var(--ide-ink); background: var(--c-surface-2); }
-.mode-tool.on { color: var(--ide-accent); background: var(--c-surface-2); border-color: var(--ide-accent-soft); }
-.mode-tool:disabled { opacity: .4; cursor: not-allowed; }
-.mode-tool.quiet { padding: 5px 6px; }
-.mode-menu {
-  position: absolute; top: calc(100% + 6px); left: 0; z-index: 60; min-width: 240px;
-  background: var(--c-surface); border: var(--ide-hairline); border-radius: var(--ide-r); box-shadow: var(--sh-3, 0 8px 24px rgba(19,26,43,.14)); padding: 6px;
-}
-.mode-menu-title { font-family: var(--mono); font-size: var(--ide-mono-fs); letter-spacing: var(--ide-track); text-transform: uppercase; color: var(--ide-ink-3); padding: 6px 8px 4px; }
-.mode-menu-item {
-  appearance: none; display: flex; align-items: baseline; gap: 8px; width: 100%; border: 0; background: transparent; border-radius: 6px;
-  font: inherit; font-size: 12.5px; color: var(--ide-ink); padding: 6px 8px; cursor: pointer; text-align: left;
-}
-.mode-menu-item:hover { background: var(--c-surface-2); }
-.mode-menu-item.on { color: var(--ide-accent); }
-.mode-menu-item.off { color: var(--ide-ink-2); border-top: var(--ide-hairline); border-radius: 0; margin-top: 4px; padding-top: 8px; align-items: center; }
-.mode-menu-tag { margin-left: auto; font-size: var(--ide-fs-sm); color: var(--ide-ink-3); }
+/* (the top-bar mode selector lived here until 2026-09-25; the Mode menu in the menubar took its place — see PRODUCT SHELL) */
 
 /* ---------- the chooser ---------- */
 .chooser-backdrop {
@@ -1326,3 +1248,104 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
   .ar-map, [data-testid="ar-divider-map"] { display: none; }
   .sg-toolbar .sg-search { min-width: 120px; }
 }
+
+/* ======================================================================
+   PRODUCT SHELL — the menubar (navigation redesign, 2026-09-25)
+
+   Top navigation = what I can do; workspace = what I am doing;
+   contextual panels = controls for the task. The bar is 38 px, opaque,
+   hairline-bordered; a menu is the only thing that ever sits over the
+   workspace and it is gone the moment the pointer leaves it.
+   ====================================================================== */
+:root { --menubar-h: 38px; }
+.menubar {
+  position: relative; z-index: 30; display: flex; align-items: stretch; gap: 8px; height: var(--menubar-h); padding: 0 10px 0 8px;
+  background: var(--c-surface); border-bottom: var(--ide-hairline); user-select: none;
+}
+.menubar-groups { display: flex; align-items: stretch; gap: 2px; min-width: 0; flex: 1 1 auto; }
+.menubar-measure { position: absolute; visibility: hidden; pointer-events: none; top: 0; left: 0; display: flex; gap: 2px; white-space: nowrap; }
+.menubar-group { position: relative; display: flex; align-items: stretch; }
+.menubar-btn {
+  appearance: none; display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; padding: 0 10px; margin: 5px 0;
+  border-radius: 7px; font: inherit; font-size: 13px; font-weight: 550; color: var(--ide-ink-2); cursor: pointer; white-space: nowrap; line-height: 1;
+  transition: background var(--dur-1, 120ms) var(--ease, ease), color var(--dur-1, 120ms) var(--ease, ease);
+}
+.menubar-btn .ico, .menubar-btn svg:last-child { color: var(--ide-ink-3); transition: transform var(--dur-1, 120ms) var(--ease, ease); }
+.menubar-btn:hover, .menubar-group.open > .menubar-btn { color: var(--ide-ink); background: var(--c-surface-2); }
+.menubar-group.open > .menubar-btn svg:last-child { transform: rotate(180deg); }
+.menubar-group.here > .menubar-btn { color: var(--ide-ink); }
+.menubar-group.here > .menubar-btn::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -5px; height: 2px; border-radius: 2px; background: var(--ide-accent); }
+.menubar-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ide-accent-soft); }
+.menubar-btn-detail { color: var(--ide-ink); font-weight: 600; }
+.menubar-btn .mode-index { color: var(--ide-accent); }
+.menubar-sep { width: 1px; margin: 9px 6px; background: var(--c-border); align-self: stretch; }
+
+/* the menu */
+.menubar-menu {
+  position: absolute; top: calc(100% - 1px); left: 0; min-width: 300px; max-width: min(760px, calc(100vw - 24px)); z-index: 40;
+  background: var(--c-surface); border: var(--ide-hairline); border-radius: 0 0 var(--ide-r) var(--ide-r); box-shadow: 0 14px 34px -10px rgba(19, 26, 43, .22), 0 2px 6px rgba(19, 26, 43, .06);
+  padding: 8px; transform-origin: top left; animation: menubar-in var(--dur-1, 120ms) var(--ease, ease);
+}
+.menubar-menu[hidden] { display: none; }
+.menubar-group:last-of-type .menubar-menu, .menubar-group[data-testid="mode-cluster"] .menubar-menu { left: auto; right: 0; }
+@keyframes menubar-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .menubar-menu { animation: none; } }
+.menubar-grid { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 2px; }
+.menubar-sections { display: flex; flex-direction: column; gap: 8px; }
+.menubar-section-title { font-family: var(--mono); font-size: var(--ide-mono-fs); letter-spacing: var(--ide-track); text-transform: uppercase; color: var(--ide-ink-3); padding: 6px 10px 2px; }
+.menubar-section-note { text-transform: none; letter-spacing: 0; font-family: inherit; }
+.menubar-section + .menubar-section { border-top: var(--ide-hairline); padding-top: 6px; }
+
+/* an item: icon, name, count, one-line preview */
+.menubar .nav-item {
+  appearance: none; display: flex; align-items: flex-start; gap: 10px; width: 100%; text-align: left; border: 0; background: transparent; border-radius: 7px;
+  padding: 8px 10px; color: var(--ide-ink); font: inherit; cursor: pointer; text-decoration: none; min-width: 0;
+  transition: background var(--dur-1, 120ms) var(--ease, ease);
+}
+.menubar .nav-item:hover, .menubar .nav-item:focus-visible { background: var(--c-surface-2); outline: none; }
+.menubar .nav-item.active { background: var(--c-primary-50); }
+.menubar .nav-item.active .nav-label { color: var(--c-primary-700); }
+.menubar .nav-item:disabled { opacity: .45; cursor: default; }
+.menubar .nav-ico { flex: none; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border-radius: 7px; background: var(--c-surface-2); color: var(--ide-ink-2); }
+.menubar .nav-item.active .nav-ico { background: var(--ide-accent-soft); color: var(--ide-accent); }
+.menubar .nav-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.menubar .nav-label { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; line-height: 1.2; white-space: nowrap; }
+.menubar .nav-desc { font-size: var(--ide-fs-sm); color: var(--ide-ink-2); line-height: 1.3; }
+.menubar .nav-count { font-family: var(--mono); font-size: 10.5px; font-weight: 600; color: var(--ide-ink-3); background: var(--c-surface-2); border-radius: 999px; padding: 1px 7px; font-variant-numeric: tabular-nums; }
+.menubar .nav-item.active .nav-count { background: var(--ide-accent-soft); color: var(--c-primary-700); }
+.menubar .mode-option { align-items: center; }
+.menubar .mode-option .mode-index { width: 22px; flex: none; text-align: right; font-family: var(--mono); font-size: var(--ide-mono-fs); color: var(--ide-ink-3); }
+.menubar .mode-option.active .mode-index { color: var(--ide-accent); }
+.menubar .mode-option.compact { padding: 6px 10px; }
+.menubar .mode-option.off { color: var(--ide-ink-2); }
+.mode-menu { min-width: 320px; }
+.mode-menu .mode-selector { display: flex; flex-direction: column; gap: 1px; }
+
+/* WHERE AM I */
+.menubar-here { display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 0 4px; font-size: 12.5px; color: var(--ide-ink-2); white-space: nowrap; }
+.here-group { color: var(--ide-ink-3); }
+.here-sep { color: var(--c-border-strong); }
+.here-tab { color: var(--ide-ink); font-weight: 600; }
+.menubar-here .nav-count { margin-left: -2px; }
+.here-mode { display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; padding-left: 10px; border-left: var(--ide-hairline); color: var(--ide-ink); font-weight: 550; }
+.here-mode .mode-index { font-family: var(--mono); font-size: var(--ide-mono-fs); color: var(--ide-accent); }
+.here-split, .here-focus { color: var(--ide-ink-3); font-weight: 500; }
+
+/* FOCUS in Studio mode (brief §8): the menubar tucks into a hairline you
+   hover to reveal; every question card but the selected one goes quiet */
+.ide.focus-studio .menubar { position: absolute; top: var(--topbar-h); left: 0; right: 0; z-index: 15; transform: translateY(calc(-100% + 4px)); transition: transform var(--dur-2, 160ms) var(--ease, ease); box-shadow: none; }
+.ide.focus-studio .menubar::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: var(--ide-accent-soft); }
+.ide.focus-studio .menubar:hover, .ide.focus-studio .menubar:focus-within, .ide.focus-studio .menubar.is-open { z-index: 30; transform: none; box-shadow: 0 10px 24px -12px rgba(19, 26, 43, .3); }
+.ide.focus-studio { position: relative; }
+.ide.focus-studio .qcard:not(.selected) { opacity: .45; transition: opacity var(--dur-2, 160ms) var(--ease, ease); }
+.ide.focus-studio .qcard:not(.selected):hover { opacity: 1; }
+
+/* responsive: labels stay, the detail goes, then the crumb; the bar itself folds groups into More / Menu */
+@media (max-width: 1400px) { .menubar-btn-detail { display: none; } }
+@media (max-width: 1180px) { .here-group, .here-sep { display: none; } .menubar-grid { grid-template-columns: minmax(220px, 1fr); } }
+@media (max-width: 900px) {
+  .menubar { padding: 0 6px; }
+  .menubar-here { display: none; }
+  .menubar-menu { position: fixed; left: 8px !important; right: 8px !important; top: calc(var(--topbar-h) + var(--menubar-h)); max-width: none; max-height: calc(100vh - var(--topbar-h) - var(--menubar-h) - 12px); overflow: auto; border-radius: var(--ide-r); }
+}
+.mode-index { font-family: var(--mono); font-size: var(--ide-mono-fs); letter-spacing: .04em; color: var(--ide-ink-3); }

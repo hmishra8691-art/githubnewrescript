@@ -24,6 +24,7 @@
  *     literally unmount instead of just hide.
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
@@ -55,7 +56,7 @@ const errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
 page.on("dialog", (d) => d.accept());
 
-const goTab = async (name) => { await page.click(`.leftnav >> text=${name}`); await page.waitForTimeout(200); };
+const goTab = async (name) => { await openTab(page, `${name}`); await page.waitForTimeout(200); };
 const propertiesVisible = () => page.isVisible('[data-testid="rightpanel-properties"]');
 const previewVisible = () => page.isVisible('[data-testid="rightpanel-preview"]');
 /** Nothing rendered claims to be a right panel at all, hidden or not. */
@@ -63,7 +64,7 @@ const anyRightpanelInDom = () => page.$$eval(".rightpanel", (els) => els.length)
 const bodyText = () => page.textContent("body");
 
 await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
-await page.waitForSelector(".leftnav");
+await page.waitForSelector(".menubar");
 await goTab("JSON");
 await page.waitForSelector("textarea.code");
 await page.click('button:has-text("edit")');

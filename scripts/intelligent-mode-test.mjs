@@ -12,6 +12,7 @@
  */
 import assert from "node:assert/strict";
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab, switchMode } from "./lib/nav.mjs";
 import { buildMasterDemoSurvey } from "../packages/templates/dist/index.js";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
@@ -30,7 +31,7 @@ page.on("console", (m) => {
   pageErrors.push(t.slice(0, 400));
 });
 
-const goTab = async (name) => { await page.click(`.leftnav >> text=${name}`); await page.waitForTimeout(150); };
+const goTab = async (name) => { await openTab(page, `${name}`); await page.waitForTimeout(150); };
 const loadDef = async (def) => {
   await goTab("JSON");
   await page.waitForSelector("textarea.code");
@@ -72,7 +73,7 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
 
 /* ------------------------------------------------------------- switch */
 {
-  await page.click('[data-testid="mode-intelligent"]');
+  await switchMode(page, "intelligent");
   await page.waitForSelector('[data-testid="intelligent-view"]');
   ok("Intelligent renders in place — no reload");
   assert.match(page.url(), /mode=intelligent/);
@@ -234,12 +235,12 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
   assert.equal(page1.questionIds[page1.questionIds.indexOf("q_age") + 1], added.id);
   ok("Apply adds it right after Q3 on Q3's page, built by the Studio's own question factory");
   // the added question is selected — and Grid agrees, because selection is shared
-  await page.click('[data-testid="mode-grid"]');
+  await switchMode(page, "grid");
   await page.waitForSelector('[data-testid="grid-view"]');
   const selected = await page.$$eval('[data-testid="grid-row"].selected, .sg-row.selected, [aria-selected="true"]', (els) => els.map((e) => e.dataset.question ?? e.dataset.id ?? e.textContent.slice(0, 40)));
   assert.ok(selected.length >= 1, "the new question is the selection in Grid");
   ok("the selection made by Apply is the Studio's shared selection — Grid opens on it");
-  await page.click('[data-testid="mode-intelligent"]');
+  await switchMode(page, "intelligent");
   await page.waitForSelector('[data-testid="intelligent-view"]');
 }
 
@@ -301,7 +302,7 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
 
 /* ---------------------------------------------------------- ⌘K path */
 {
-  await page.click('[data-testid="mode-grid"]');
+  await switchMode(page, "grid");
   await page.waitForSelector('[data-testid="grid-view"]');
   await page.keyboard.press(`${mod}+k`);
   await page.waitForSelector('[data-testid="command-palette"]');

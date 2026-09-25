@@ -26,6 +26,7 @@
  *   STUDIO_URL=http://localhost:3000 node scripts/collaboration-test.mjs
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
@@ -575,7 +576,7 @@ console.log("\n§10, §21, §22 — sharing by User ID and by email");
   const page = await openPage();
   await page.goto(`${STUDIO}/sandbox?dbid=${SURVEY}&collab=1`, { waitUntil: "networkidle" }).catch(() => {});
   await page.waitForSelector('[data-testid="collab-bar"]', { timeout: 15000 });
-  await page.click(".leftnav >> text=Collaborators");
+  await openTab(page, "Collaborators");
   await page.waitForSelector('[data-testid="collaborators-panel"]');
   ok("§20: the collaborators panel opens");
 

@@ -21,6 +21,7 @@
  *   node scripts/block-actions-test.mjs      (studio on 3000)
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
@@ -34,10 +35,10 @@ page.on("pageerror", (e) => errors.push(e.message));
 page.on("dialog", (d) => d.accept());
 
 const readDef = async () => {
-  await page.click(".leftnav >> text=JSON");
+  await openTab(page, "JSON");
   await page.waitForSelector("textarea.code");
   const json = await page.$eval("textarea.code", (e) => e.value);
-  await page.click(".leftnav >> text=Questions");
+  await openTab(page, "Questions");
   await page.waitForSelector(".block-badge");
   return JSON.parse(json);
 };

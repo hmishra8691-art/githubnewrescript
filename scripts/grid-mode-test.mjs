@@ -10,6 +10,7 @@
  */
 import assert from "node:assert/strict";
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab, switchMode } from "./lib/nav.mjs";
 import { buildMasterDemoSurvey, buildScaleSurvey } from "../packages/templates/dist/index.js";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
@@ -28,7 +29,7 @@ page.on("console", (m) => {
   pageErrors.push(t.slice(0, 400));
 });
 
-const goTab = async (name) => { await page.click(`.leftnav >> text=${name}`); await page.waitForTimeout(150); };
+const goTab = async (name) => { await openTab(page, `${name}`); await page.waitForTimeout(150); };
 const loadDef = async (def) => {
   await goTab("JSON");
   await page.waitForSelector("textarea.code");
@@ -60,12 +61,12 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
 
 /* ----------------------------------------------------------- switch */
 {
-  await page.click('[data-testid="mode-grid"]');
+  await switchMode(page, "grid");
   await page.waitForSelector('[data-testid="grid-view"]');
   ok("clicking Grid in the selector renders the grid — no reload, same tab");
   assert.match(page.url(), /mode=grid/);
   ok("the URL now says ?mode=grid");
-  assert.equal(await page.$eval('[data-testid="mode-grid"]', (e) => e.classList.contains("active")), true);
+  assert.equal(await page.$eval('[data-testid="where-am-i"]', (e) => e.dataset.mode), "grid");
   assert.equal(await count(), "160 questions");
   ok("all 160 Master Demo questions are counted");
   const mounted = (await page.$$('[data-testid="grid-row"]')).length;
@@ -331,14 +332,14 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
 {
   await page.click('[data-testid="grid-row"][data-code="Q5"]');
   await page.waitForTimeout(150);
-  await page.click('[data-testid="mode-studio"]');
+  await switchMode(page, "studio");
   await page.waitForSelector(".block-badge");
   assert.equal(await page.$('[data-testid="grid-view"]'), null);
   assert.match(await page.$eval(".rightpanel h2", (e) => e.textContent), /Q5/);
   ok("switching to Studio keeps the selected question — the selection is shared");
   assert.doesNotMatch(page.url(), /mode=/);
   ok("the URL drops ?mode= for the default");
-  await page.click('[data-testid="mode-grid"]');
+  await switchMode(page, "grid");
   await page.waitForSelector('[data-testid="grid-view"]');
   assert.equal((await page.$$('[data-testid="grid-row"][aria-selected="true"]')).length, 1);
   ok("and back to Grid, the row is still selected");
@@ -346,11 +347,11 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
 
 /* ----------------------------------------------------------- scale: 600 questions */
 {
-  await page.click('[data-testid="mode-studio"]');
+  await switchMode(page, "studio");
   await page.waitForSelector(".block-badge");
   await loadDef(buildScaleSurvey(600));
   const t0 = Date.now();
-  await page.click('[data-testid="mode-grid"]');
+  await switchMode(page, "grid");
   await page.waitForSelector('[data-testid="grid-row"]');
   const switchMs = Date.now() - t0;
   assert.ok(switchMs < 3000, `Grid took ${switchMs}ms to appear at 600 questions`);

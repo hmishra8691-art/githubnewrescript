@@ -7,6 +7,7 @@
  * behaviour: what it sends, when it sends it, and what it refuses to lose.
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 
 const browser = await chromium.launch();
@@ -63,7 +64,7 @@ await page.waitForSelector(".block-badge");
 
 /* ------------------------------------------- the settings are reachable */
 
-await page.click(".leftnav >> text=Survey Settings");
+await openTab(page, "Survey Settings");
 await page.waitForSelector('[data-testid="survey-settings"]');
 await page.selectOption('[data-testid="access-mode"]', "password");
 await page.waitForTimeout(200);
@@ -73,10 +74,10 @@ console.log("✔ Survey Settings is its own tab — the access mode is always re
 
 // and it survives switching to a question and back, which is where it used to
 // disappear entirely
-await page.click(".leftnav >> text=Questions");
+await openTab(page, "Questions");
 await page.click(".insert-bar >> text=+ Question");
 await page.waitForSelector(".qcard.selected");
-await page.click(".leftnav >> text=Survey Settings");
+await openTab(page, "Survey Settings");
 mode = await page.$eval('[data-testid="access-mode"]', (e) => e.value);
 assert.equal(mode, "password", "the mode is still there after selecting a question");
 console.log("✔ selecting a question no longer hides the survey settings");
@@ -142,7 +143,7 @@ await p2.route("**/api/surveys/*/versions", async (route) => {
 });
 
 await p2.goto("http://localhost:3000/sandbox", { waitUntil: "networkidle" });
-await p2.click(".leftnav >> text=Survey Settings");
+await openTab(p2, "Survey Settings");
 await p2.waitForSelector('[data-testid="access-mode"]');
 await p2.selectOption('[data-testid="access-mode"]', "open");
 await p2.waitForTimeout(150);

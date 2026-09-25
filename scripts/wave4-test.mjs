@@ -12,6 +12,7 @@
  *   node scripts/wave4-test.mjs      (studio on 3000, runtime on 3001)
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 import { registerBuiltinDesignGenerators } from "../packages/designs/dist/index.js";
 import { designGeneratorRegistry } from "../packages/schema/dist/index.js";
@@ -113,8 +114,8 @@ ok("and none reaches a respondent's screen");
 console.log("\nA DESIGN BUILT ELSEWHERE CAN BE IMPORTED (§18)");
 
 await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
-await page.waitForSelector(".leftnav");
-await page.click(".leftnav >> text=Design Generators");
+await page.waitForSelector(".menubar");
+await openTab(page, "Design Generators");
 await page.waitForSelector('[data-testid="import-design"]', { state: "attached" });
 ok("the designs panel offers an import, which it never did before");
 

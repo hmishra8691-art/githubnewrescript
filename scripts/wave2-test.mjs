@@ -9,6 +9,7 @@
  *   node scripts/wave2-test.mjs      (studio on 3000, runtime on 3001)
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 import { buildMasterDemoSurvey } from "../packages/templates/dist/index.js";
 import { sendPreview } from "./lib/preview.mjs";
@@ -30,7 +31,7 @@ await page.route("**/api/auth/me", (r) => r.fulfill({
 }));
 
 const apply = async (def) => {
-  await page.click(".leftnav >> text=JSON");
+  await openTab(page, "JSON");
   await page.waitForSelector("textarea.code");
   await page.click('button:has-text("edit")');
   await page.$eval("textarea.code", (el, v) => {
@@ -42,7 +43,7 @@ const apply = async (def) => {
 };
 
 const runCheck = async () => {
-  await page.click(".leftnav >> text=Logic");
+  await openTab(page, "Logic");
   await page.waitForSelector('[data-testid="quality-check"]');
   await page.click('[data-testid="run-quality-check"]');
   await page.waitForTimeout(500);
@@ -56,7 +57,7 @@ const runCheck = async () => {
 console.log("\nRUN QUALITY CHECK (§54)");
 
 await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
-await page.waitForSelector(".leftnav");
+await page.waitForSelector(".menubar");
 const demo = buildMasterDemoSurvey("sandbox");
 await apply(demo);
 

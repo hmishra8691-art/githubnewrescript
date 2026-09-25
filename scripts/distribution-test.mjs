@@ -21,6 +21,7 @@
  *   node scripts/distribution-test.mjs        (needs the Studio on :3000)
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { navLabels, openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 
 const browser = await chromium.launch();
@@ -33,13 +34,12 @@ const ok = (name) => { pass++; console.log(`  ok   ${name}`); };
 await page.goto("http://localhost:3000/sandbox", { waitUntil: "networkidle" });
 await page.waitForSelector(".block-badge");
 
-const nav = await page.$$eval(".leftnav .nav-item", (es) =>
-  es.map((e) => [...e.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join("").trim()));
+const nav = await navLabels(page);
 assert.ok(nav.includes("Distribution"), `no Distribution item in ${JSON.stringify(nav)}`);
 assert.equal(nav[nav.indexOf("Distribution") + 1], "Versions & Deploy", "Distribution belongs beside Versions & Deploy");
 ok("Distribution sits next to Versions & Deploy in Management");
 
-await page.click(".leftnav .nav-item:has-text('Distribution')");
+await openTab(page, "Distribution");
 await page.waitForSelector('[data-testid="ds-env"]');
 await page.waitForSelector('[data-testid="ds-stats"]');
 await page.waitForSelector('[data-testid="ds-people"]');
@@ -81,7 +81,7 @@ if (previewed) {
 }
 
 /* ------------------------------------------- the access-mode setting now points here */
-await page.click(".leftnav .nav-item:has-text('Survey Settings')");
+await openTab(page, "Survey Settings");
 await page.waitForSelector("text=Who can take this survey");
 const select = await page.$("select.select:below(:text('Access mode'))") ?? (await page.$$("select.select"))[0];
 await page.selectOption("select.select >> nth=0", "unique_links").catch(async () => {

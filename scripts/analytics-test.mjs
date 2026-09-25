@@ -15,6 +15,7 @@
  * Needs `pnpm dev:studio` (3000).   node scripts/analytics-test.mjs
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { navLabels } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 import { buildDataset, runAnalysis, recommendCharts, DEFAULT_THEME, BUILT_IN_REPORT_TEMPLATES, BUILT_IN_DASHBOARD_TEMPLATES, applyTemplate, applyDashboardTemplate, dashboardAsTemplate, templateKind, reportPages } from "../packages/analytics/dist/index.js";
 import { buildPptx, buildXlsx, isEmbeddableImage } from "../packages/analytics/dist/export/index.js";
@@ -706,7 +707,7 @@ await pub.goto(link, { waitUntil: "networkidle" });
 await pub.waitForSelector('[data-testid="ax-share-view"]');
 assert.match(await pub.$eval('[data-testid="ax-report"] .ax-mode', (e) => e.textContent), /Snapshot · v1/);
 assert.equal(await pub.$$eval('.ax-block-actions', (es) => es.length), 0, "no edit controls");
-assert.equal(await pub.$$eval('[data-testid="ax-builder"], .ax-ws-tabs, .leftnav', (es) => es.length), 0, "no builder / studio chrome");
+assert.equal(await pub.$$eval('[data-testid="ax-builder"], .ax-ws-tabs, .menubar', (es) => es.length), 0, "no builder / studio chrome");
 assert.ok((await pub.$$eval('[data-testid="ax-chart"]', (es) => es.length)) >= 2);
 ok("anonymous viewer sees the read-only presentation: snapshot v1, charts, no edit controls, no builder");
 const [dl] = await Promise.all([pub.waitForEvent("download"), pub.click('[data-testid="ax-share-ppt"]')]);
@@ -1245,8 +1246,8 @@ assert.equal(await text('[data-testid="dash-analytics"]'), "Data Analytics");
 assert.ok(await page.$('a.btn:has-text("Profile")') && await page.$('a.btn:has-text("Security")') && await page.$('[data-testid="dash-signout"]'));
 ok("dashboard header keeps Profile / Security / Sign out and gains Data Analytics");
 await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
-await page.waitForSelector(".leftnav");
-const nav = await page.$$eval(".leftnav .nav-item", (es) => es.map((e) => [...e.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join("").trim()));
+await page.waitForSelector(".menubar");
+const nav = await navLabels(page);
 // the 17 existing tabs keep their order; Data Analytics, Fieldwork (§23) and
 // Tests (§55/§56) are additions that displace nothing already there
 // Data Analytics and Fieldwork (§23)
@@ -1274,7 +1275,9 @@ assert.ok(nav.indexOf("Project") < nav.indexOf("Distribution"), "Project belongs
 assert.ok(nav.indexOf("Project") > nav.indexOf("Fieldwork"), "…which begins after Results ends");
 assert.equal(nav.filter((t) => t === "Data Analytics").length, 1);
 assert.equal(nav[nav.indexOf("Data") + 1], "Data Analytics", "Data Analytics follows Data");
+await page.hover('.menubar [data-group-button="results"]'); await page.waitForSelector('[data-testid="menu-panel-results"]');
 assert.match(await page.$eval('[data-testid="nav-analytics"]', (e) => e.getAttribute("href")), /^\/analytics/);
+await page.keyboard.press("Escape");
 assert.equal(nav[nav.indexOf("Scripts") + 1], "Tests", "Tests follows Scripts in Research tools");
 ok("Studio left nav: all 17 existing tabs unchanged, Data Analytics and Tests added");
 

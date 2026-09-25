@@ -20,6 +20,7 @@
  *   STUDIO_URL=http://localhost:3000 RUNTIME_URL=http://localhost:3001 node scripts/listfill-test.mjs
  */
 import { openHarness, assert } from "./lib/variantHarness.mjs";
+import { navCount } from "./lib/nav.mjs";
 import { openPreview } from "./lib/preview.mjs";
 
 const h = await openHarness();
@@ -127,10 +128,7 @@ const rowOf = async (code) => {
 
 // the nav count reflects the configuration
 {
-  const n = await page.$$eval(".leftnav .nav-item", (btns) => {
-    const b = btns.find((x) => x.textContent.includes("List Fill"));
-    return b?.querySelector(".nav-count")?.textContent ?? null;
-  });
+  const n = await navCount(page, "List Fill");
   assert.equal(n, "1", `the List Fill nav item counts 1 configured list, got ${n}`);
   ok("the left nav counts the configured List Fills");
 }

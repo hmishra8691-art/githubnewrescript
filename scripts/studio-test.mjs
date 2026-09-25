@@ -7,6 +7,7 @@
  *  - rich text: bold formatting persisted into the definition (JSON tab)
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 
 const browser = await chromium.launch();
@@ -113,7 +114,7 @@ if (menus[1]) {
 await page.waitForTimeout(250);
 
 // --- verify formatting + structure persisted into the definition JSON
-await page.click(".leftnav >> text=JSON");
+await openTab(page, "JSON");
 await page.waitForSelector("textarea.code");
 const json = await page.$eval("textarea.code", (e) => e.value);
 const def = JSON.parse(json);
@@ -123,7 +124,7 @@ assert.equal(def.questions[0].options.length, 7);
 assert.equal(def.questions[1].text.replace(/<[^>]*>/g, ""), "How often do you buy fruit?");
 console.log("✔ rich-text formatting and structure persist in the survey JSON");
 
-await page.click(".leftnav >> text=Questions");
+await openTab(page, "Questions");
 await page.screenshot({ path: "/tmp/st-authoring.png", fullPage: false });
 await browser.close();
 console.log("\nALL STUDIO AUTHORING CHECKS PASSED");

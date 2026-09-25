@@ -17,6 +17,7 @@
  * stay usable (no horizontal overflow) at a narrower width too.
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 
 const browser = await chromium.launch();
@@ -39,12 +40,12 @@ const check = (label, cond) => {
   page.on("pageerror", (e) => errors.push(e.message));
 
   await page.goto("http://localhost:3000/sandbox", { waitUntil: "networkidle" });
-  await page.waitForSelector(".leftnav");
+  await page.waitForSelector(".menubar");
 
   // Survey Settings: the wrapper must be using real width, not the old
   // fixed 620px cap, and the short fields must have reflowed into columns
   // rather than each sitting alone in a full-width row.
-  await page.click(".leftnav >> text=Survey Settings");
+  await openTab(page, "Survey Settings");
   await page.waitForSelector('[data-testid="survey-settings"]');
   const settingsWidth = await page.$eval(".settings-wrap", (e) => e.getBoundingClientRect().width);
   check(`Survey Settings content is wide (${Math.round(settingsWidth)}px, was capped at 620px)`, settingsWidth > 900);
@@ -57,15 +58,15 @@ const check = (label, cond) => {
 
   // Fields still function: editing Title still reaches the definition.
   await page.fill('label.f:has-text("Title") input', "Width Fix Check");
-  await page.click(".leftnav >> text=JSON");
+  await openTab(page, "JSON");
   await page.waitForSelector("textarea.code");
   const def1 = JSON.parse(await page.$eval("textarea.code", (e) => e.value));
   check("editing Title in the new grid layout still writes through to the definition",
     def1.meta.title === "Width Fix Check");
-  await page.click(".leftnav >> text=Survey Settings");
+  await openTab(page, "Survey Settings");
 
   // Survey Flow: the panel must be using real width, not the old 940px cap.
-  await page.click(".leftnav >> text=Survey Flow");
+  await openTab(page, "Survey Flow");
   await page.waitForSelector(".flow-panel");
   const flowWidth = await page.$eval(".flow-panel", (e) => e.getBoundingClientRect().width);
   check(`Survey Flow content is wide (${Math.round(flowWidth)}px, was capped at 940px)`, flowWidth > 1100);
@@ -84,14 +85,14 @@ const check = (label, cond) => {
   const ctx = await browser.newContext({ viewport: { width: 1000, height: 900 } });
   const page = await ctx.newPage();
   await page.goto("http://localhost:3000/sandbox", { waitUntil: "networkidle" });
-  await page.waitForSelector(".leftnav");
+  await page.waitForSelector(".menubar");
 
-  await page.click(".leftnav >> text=Survey Settings");
+  await openTab(page, "Survey Settings");
   await page.waitForSelector('[data-testid="survey-settings"]');
   const settingsOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   check("Survey Settings has no horizontal overflow at a narrower (1000px) window", settingsOverflow <= 1);
 
-  await page.click(".leftnav >> text=Survey Flow");
+  await openTab(page, "Survey Flow");
   await page.waitForSelector(".flow-panel");
   const flowOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   check("Survey Flow has no horizontal overflow at a narrower (1000px) window", flowOverflow <= 1);

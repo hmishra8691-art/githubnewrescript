@@ -19,6 +19,7 @@
  *   node scripts/fieldwork-test.mjs           (needs the Studio on :3000)
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { navLabels, openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
@@ -27,11 +28,11 @@ page.on("pageerror", (e) => errors.push(e.message));
 await page.goto("http://localhost:3000/sandbox", { waitUntil: "networkidle" });
 await page.waitForSelector(".block-badge");
 
-const nav = await page.$$eval("nav button, .sidebar button, aside button", (b) => b.map((x) => x.textContent.trim()));
+const nav = await navLabels(page);
 assert.ok(nav.some((t) => /Fieldwork/.test(t)), `no Fieldwork item in ${JSON.stringify(nav.filter(Boolean).slice(0, 40))}`);
-console.log("ok   Fieldwork appears in the sidebar");
+console.log("ok   Fieldwork appears in the Results menu");
 
-await page.click("text=Fieldwork");
+await openTab(page, "Fieldwork");
 await page.waitForSelector('[data-testid="fw-env"]', { timeout: 8000 });
 console.log("ok   the panel opens");
 

@@ -14,6 +14,7 @@
  * the response model promises.
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./nav.mjs";
 import assert from "node:assert/strict";
 import { openPreview } from "./preview.mjs";
 
@@ -28,7 +29,7 @@ export async function openHarness({
   page.on("pageerror", (e) => console.error("STUDIO PAGE ERROR:", e.message));
   page.on("dialog", (d) => d.accept());
 
-  const goTab = async (name) => { await page.click(`.leftnav >> text=${name}`); await page.waitForTimeout(150); };
+  const goTab = async (name) => { await openTab(page, `${name}`); await page.waitForTimeout(150); };
   const readDef = async () => {
     await goTab("JSON");
     await page.waitForSelector("textarea.code");
@@ -44,7 +45,7 @@ export async function openHarness({
   };
 
   await page.goto(`${studio}/sandbox`, { waitUntil: "networkidle" });
-  await page.waitForSelector(".leftnav");
+  await page.waitForSelector(".menubar");
   // start from a clean, minimal survey
   await loadDef({
     meta: { id: "sandbox", code: "SANDBOX", title: "Variants", version: "1.0" },

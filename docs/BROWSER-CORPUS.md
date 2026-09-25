@@ -127,3 +127,36 @@ checked with 0 problems.
    can be restyled or re-worded around the edges without going red.
 3. **Prefer a test id to a class.** A class is a styling decision; a
    `data-testid` is a promise. Assert on the promise.
+
+## Navigating the Studio from a suite (since 2026-09-25)
+
+The Studio's tools live in a horizontal menubar, not a sidebar. A suite opens a
+tool with `scripts/lib/nav.mjs`:
+
+```js
+import { openTab, openTabKey, switchMode, modeMenuClick, navLabels, navCount } from "./lib/nav.mjs";
+await openTab(page, "JSON");                 // hover the group that lists it, click the item
+await openTabKey(page, "settings");          // by tab key — what `.menubar-here` reports in data-tab
+await switchMode(page, "grid");              // through the Mode menu
+await modeMenuClick(page, "focus-mode-toggle");
+const labels = await navLabels(page);        // every tool label, menu by menu, in order
+```
+
+`page.click(".leftnav >> text=JSON")` no longer works because there is no
+sidebar, and a closed menu's items are not in the DOM (they would shadow every
+`button:has-text("edit")` in the product). The 2026-09-25 migration rewrote 52
+suites mechanically to these helpers; the `where am I` crumb (`.menubar-here`,
+`.here-tab`) is what `.leftnav .nav-item.active` used to be.
+
+## Known red on 2026-09-25, before and after the navigation redesign
+
+Run on the tree before the redesign and on the tree after it, these fail the
+same way in this container and are not the redesign's: `billing-test.mjs`
+(the fake provider answers 200 where a 402 is expected), `p0-runtime-contract-
+test.mjs` and `tester-fixes-test.mjs` (the runtime's "Other" option in the
+preview), `picker-taxonomy-test.mjs` (Percentage Slider card), `qa-fixes-test.
+mjs` (five-point default), `quality-test.mjs` (`.qs-help` missing);
+`version-scoped-export-test.mjs` needs Postgres and belongs on the exclusion
+list. Every other suite passes (98 of 105). `dashboard-outage-test.mjs` needs a
+warm server: its first check gives the dashboard 20 s, which a cold compile
+can exceed.

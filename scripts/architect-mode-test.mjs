@@ -5,6 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab, switchMode } from "./lib/nav.mjs";
 import { buildMasterDemoSurvey } from "../packages/templates/dist/index.js";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
@@ -23,7 +24,7 @@ page.on("console", (m) => {
   pageErrors.push(t.slice(0, 400));
 });
 
-const goTab = async (name) => { await page.click(`.leftnav >> text=${name}`); await page.waitForTimeout(150); };
+const goTab = async (name) => { await openTab(page, `${name}`); await page.waitForTimeout(150); };
 const loadDef = async (def) => {
   await goTab("JSON");
   await page.waitForSelector("textarea.code");
@@ -53,7 +54,7 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
 
 /* ----------------------------------------------------------- switch + panes */
 {
-  await page.click('[data-testid="mode-architect"]');
+  await switchMode(page, "architect");
   await page.waitForSelector('[data-testid="architect-view"]');
   ok("Architect renders in place — no reload");
   assert.match(page.url(), /mode=architect/);
@@ -251,16 +252,16 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
   await page.waitForTimeout(150);
   await (await mapRow("question:q_region")).click();
   await page.waitForTimeout(150);
-  await page.click('[data-testid="mode-grid"]');
+  await switchMode(page, "grid");
   await page.waitForSelector('[data-testid="grid-view"]');
   const sel = await page.$$eval('[data-testid="grid-row"][aria-selected="true"]', (els) => els.map((e) => e.dataset.code));
   assert.deepEqual(sel, ["Q5"]);
   ok("switching to Grid, Q5 is the selected row — one selection across environments");
-  await page.click('[data-testid="mode-architect"]');
+  await switchMode(page, "architect");
   await page.waitForSelector('[data-testid="architect-view"]');
   assert.equal(await page.$eval(".am-row.primary", (e) => e.dataset.key), "question:q_region");
   ok("and back in Architect it is the primary in the map");
-  await page.click('[data-testid="mode-studio"]');
+  await switchMode(page, "studio");
   await page.waitForSelector(".block-badge");
   assert.equal(await page.$eval(".rightpanel", (e) => e.classList.contains("rp-hidden")), false);
   assert.match(await page.$eval(".rightpanel h2", (e) => e.textContent), /Q5/);

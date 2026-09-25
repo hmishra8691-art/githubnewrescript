@@ -12,6 +12,7 @@
  *  - the option preview / debugger showing why an option is hidden
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 
 const browser = await chromium.launch();
@@ -20,10 +21,10 @@ page.on("pageerror", (e) => console.error("PAGE ERROR:", e.message));
 page.on("dialog", (d) => d.accept());
 
 const readDef = async () => {
-  await page.click(".leftnav >> text=JSON");
+  await openTab(page, "JSON");
   await page.waitForSelector("textarea.code");
   const json = await page.$eval("textarea.code", (e) => e.value);
-  await page.click(".leftnav >> text=Questions");
+  await openTab(page, "Questions");
   return JSON.parse(json);
 };
 
@@ -183,7 +184,7 @@ for (const s of statuses.slice(0, 4)) console.log("    ", s);
 
 /* ------------------------------------------------------------ logic check */
 
-await page.click(".leftnav >> text=Logic");
+await openTab(page, "Logic");
 await page.waitForSelector('[data-testid="logic-check"]');
 const errCount = await page.$eval('[data-testid="logic-error-count"]', (e) => e.textContent);
 console.log("✔ survey-wide logic check reports:", errCount.trim());

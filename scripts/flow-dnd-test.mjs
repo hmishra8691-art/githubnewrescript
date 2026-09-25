@@ -7,6 +7,7 @@
  * so a drag that only looked right on screen fails here (req §22).
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 
 const browser = await chromium.launch();
@@ -15,10 +16,10 @@ page.on("pageerror", (e) => console.error("PAGE ERROR:", e.message));
 page.on("dialog", (d) => d.accept());
 
 const readDef = async () => {
-  await page.click(".leftnav >> text=JSON");
+  await openTab(page, "JSON");
   await page.waitForSelector("textarea.code");
   const json = await page.$eval("textarea.code", (e) => e.value);
-  await page.click(".leftnav >> text=Survey Flow");
+  await openTab(page, "Survey Flow");
   await page.waitForSelector('[data-testid="flow-counts"]');
   return JSON.parse(json);
 };
@@ -89,7 +90,7 @@ async function openCard(selector, bodySelector) {
 
 await page.goto("http://localhost:3000/sandbox", { waitUntil: "networkidle" });
 await page.waitForSelector('[data-testid="flow-counts"]').catch(() => {});
-await page.click(".leftnav >> text=Survey Flow");
+await openTab(page, "Survey Flow");
 await page.waitForSelector('[data-testid="flow-block"]');
 
 /* ----------------------------------------------- 1. handles and drop zones */
@@ -333,7 +334,7 @@ console.log("✔ the expression builder composes a formula by clicking");
 
 /* ------------------------------- embedded data is usable in logic (§15–16) */
 
-await page.click(".leftnav >> text=Logic");
+await openTab(page, "Logic");
 await page.waitForSelector('[data-testid="logic-check"]');
 // the Logic tab has no condition open until there is a rule to edit
 await page.click('button:has-text("+ display rule")');
@@ -346,7 +347,7 @@ assert.ok(refTexts.some((t) => /customer_score \(integer\)/.test(t)),
   `embedded data is offered as a condition source with its type: ${refTexts.filter((t) => /customer/.test(t))}`);
 console.log("✔ typed embedded data is selectable as a condition source in the logic builder");
 
-await page.click(".leftnav >> text=Survey Flow");
+await openTab(page, "Survey Flow");
 await page.waitForSelector('[data-testid="flow-counts"]');
 
 /* ============================================== redirect config (§17–18) */
@@ -391,7 +392,7 @@ console.log("✔ a redirect carries survey values and remembers its window setti
 const finalDef = await readDef();
 const shape = JSON.stringify(finalDef.flow);
 await page.reload({ waitUntil: "networkidle" });
-await page.click(".leftnav >> text=Survey Flow");
+await openTab(page, "Survey Flow");
 await page.waitForSelector('[data-testid="flow-counts"]');
 // /sandbox re-seeds on load, so persistence is asserted where it is real:
 // the definition the editor holds after every one of the moves above is the

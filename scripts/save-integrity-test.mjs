@@ -9,6 +9,7 @@
  * A save indicator is not evidence that anything was stored.
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 
 const SURVEY = "11111111-2222-3333-4444-555555555555";
@@ -109,7 +110,7 @@ const saveState = (page) => page.$eval('[data-testid="save-state"]', (e) => e.te
   }
 
   /* ------------------------------------------ flow, blocks, groups, breaks */
-  await page.click(".leftnav >> text=Questions");
+  await openTab(page, "Questions");
   const qbars = await page.$$(".insert-bar");
   // the bar AFTER the first question — a break at the end of a page splits
   // nothing, so it is not offered there
@@ -118,7 +119,7 @@ const saveState = (page) => page.$eval('[data-testid="save-state"]', (e) => e.te
   await pb.click();
   await settle(page);
 
-  await page.click(".leftnav >> text=Survey Flow");
+  await openTab(page, "Survey Flow");
   await page.waitForSelector('[data-testid="flow-block"]');
   await page.click('[data-testid="add-group"]');
   await page.waitForSelector('[data-testid="flow-group"]');

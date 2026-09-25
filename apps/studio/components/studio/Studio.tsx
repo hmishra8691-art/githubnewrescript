@@ -36,7 +36,7 @@ import { ModeProvider } from "./ModeContext";
 import { SelectionProvider } from "./SelectionContext";
 import { CommandProvider, useCommands, type ShellActions } from "./CommandContext";
 import { CommandPalette } from "./CommandPalette";
-import { ModeSelector } from "./ModeSelector";
+import { MenuBar } from "./MenuBar";
 import { useMode } from "./ModeContext";
 import { ModeRenderer, SplitCenter } from "./ModeRenderers";
 import { ModeChooser } from "./ModeChooser";
@@ -358,7 +358,7 @@ function RightPanel({ tab, hidden = false }: { tab: Tab; hidden?: boolean }) {
       if (!t) return;
       if (asideRef.current?.contains(t)) return;             // inside the panel
       // the Grid owns its own selection (rows, ranges, toggles) — a click there is never a dismissal
-      if (t.closest(".qcard, .leftnav, .topbar, .modal, dialog, [role='dialog'], .rs-card, .sg")) return;
+      if (t.closest(".qcard, .menubar, .topbar, .modal, dialog, [role='dialog'], .rs-card, .sg")) return;
       if (t.closest("input, textarea, select, button, a, [contenteditable='true']")) return;
       s.select(null);
     };
@@ -882,7 +882,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
     <ShellBridge actions={shellActions} />
     <CommandPalette />
     <ModeChooser />
-    <div className="ide">
+    <div className={`ide${modeCtx?.focus ? " is-focus" : ""}${modeCtx?.focus && programmingMode === "studio" && tab === "questions" ? " focus-studio" : ""}`} data-testid="ide">
       <div className="topbar">
         <a href="/" className="logo-mark" style={{ width: 30, height: 30, fontSize: 15 }} title="Dashboard">R</a>
         <div className="ctx" data-testid="project-context">
@@ -897,7 +897,6 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           </span>
         </div>
         <SaveIndicator />
-        <ModeSelector />
         <span className="spacer" />
         <PaletteButton />
         <button className="btn" onClick={preview} disabled={saving}
@@ -933,6 +932,14 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           {saving ? "Saving…" : "Save version"}
         </button>
       </div>
+      {/*
+        * THE MENUBAR (navigation redesign, 2026-09-25). The sidebar's four
+        * groups and every one of their tools, horizontal, revealed on hover
+        * or click; the Mode menu beside them; "where am I" on the right.
+        * The workspace below gets the sidebar's width back.
+        */}
+      <MenuBar nav={NAV} tab={tab} setTab={setTabGuarded} counts={counts}
+        analyticsHref={s.surveyDbId ? `/analytics?survey=${encodeURIComponent(s.surveyDbId)}` : "/analytics"} />
       {blocker && (
         <div className="save-blocker" role="alert" data-testid="save-blocker">
           <div className="save-blocker-head">
@@ -1014,26 +1021,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           question data: the definition remains the store's, and there is one
           of it. */}
       <CanvasProvider>
-      <div className={`ide-body ${collab.readOnly && s.surveyDbId !== "sandbox" ? "is-readonly" : ""}`}>
-        <nav className="leftnav" aria-label="Studio">
-          {NAV.map((n, i) => (
-            <React.Fragment key={n.key}>
-              {(i === 0 || NAV[i - 1].group !== n.group) && <div className="nav-group">{n.group}</div>}
-              <button className={`nav-item ${tab === n.key ? "active" : ""}`} aria-current={tab === n.key ? "page" : undefined} onClick={() => { if (n.key === tab || s.canLeaveTab()) setTab(n.key); }}>
-                <Icon name={n.icon} />
-                {n.label}
-                {counts[n.key] != null && <span className="nav-count">{counts[n.key]}</span>}
-              </button>
-              {/* Data Analytics is its own top-level workspace; this is a link out, not a Studio tab — nothing here changes. */}
-              {n.key === "data" && (
-                <a className="nav-item" href={s.surveyDbId ? `/analytics?survey=${encodeURIComponent(s.surveyDbId)}` : "/analytics"} data-testid="nav-analytics" title="Open Data Analytics for this survey">
-                  <Icon name="analytics" />
-                  Data Analytics
-                </a>
-              )}
-            </React.Fragment>
-          ))}
-        </nav>
+      <div className={`ide-body ${collab.readOnly && s.surveyDbId !== "sandbox" ? "is-readonly" : ""}`} data-testid="ide-body">
         <main className={`center${roPanel ? " ro" : ""}`} data-readonly={roPanel ? "1" : "0"}>
           {collaboration && !["collaborators", "notes", "activity", "data"].includes(tab) && (
             <ReadOnlyNotice

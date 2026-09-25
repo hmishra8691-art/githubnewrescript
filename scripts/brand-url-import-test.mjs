@@ -24,6 +24,7 @@
  *     verification — not duplicated here)
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
@@ -52,8 +53,8 @@ const errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
 
 await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
-await page.waitForSelector(".leftnav");
-await page.click(`.leftnav >> text=Branding`);
+await page.waitForSelector(".menubar");
+await openTab(page, `Branding`);
 await page.waitForTimeout(200);
 await page.waitForSelector('[data-testid="theme-generator"]');
 ok("the theme generator card (URL import + logo detect + hex entry) renders in the sandbox");

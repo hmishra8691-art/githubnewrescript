@@ -8,6 +8,7 @@
  *   node scripts/wave3-test.mjs      (studio on 3000)
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 import { SURVEY_TEMPLATES, buildNpsSurvey } from "../packages/templates/dist/index.js";
 
@@ -46,9 +47,9 @@ ok("every template builds a complete, deployable definition");
 console.log("\nVARIABLES A PROGRAMMER CAN RESTATE (§29)");
 
 await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
-await page.waitForSelector(".leftnav");
+await page.waitForSelector(".menubar");
 const def = buildNpsSurvey("sandbox");
-await page.click(".leftnav >> text=JSON");
+await openTab(page, "JSON");
 await page.waitForSelector("textarea.code");
 await page.click('button:has-text("edit")');
 await page.$eval("textarea.code", (el, v) => {
@@ -58,7 +59,7 @@ await page.$eval("textarea.code", (el, v) => {
 await page.click('button:has-text("validate & apply")');
 await page.waitForTimeout(900);
 
-await page.click(".leftnav >> text=Variables");
+await openTab(page, "Variables");
 await page.waitForSelector('[data-testid="variable-row"]');
 const rowCount = await page.$$eval('[data-testid="variable-row"]', (es) => es.length);
 assert.ok(rowCount > 0, "the dictionary is empty");
@@ -77,13 +78,13 @@ assert.equal(label.trim(), "Recommendation score (0–10)",
 ok("a variable's label can be restated, and the dictionary shows it (§29)");
 
 // and it is in the definition the exports read, not just on screen
-await page.click(".leftnav >> text=JSON");
+await openTab(page, "JSON");
 await page.waitForSelector("textarea.code");
 const saved = await page.$eval("textarea.code", (el) => el.value);
 assert.match(saved, /Recommendation score/, "the override must live in the survey definition");
 ok("the override is written into the definition, so exports and analysis see it");
 
-await page.click(".leftnav >> text=Variables");
+await openTab(page, "Variables");
 await page.waitForSelector('[data-testid="variable-row"]');
 await page.locator('[data-testid="variable-row"]').first().locator('[data-testid="edit-variable"]').click();
 await page.click('[data-testid="reset-variable"]');

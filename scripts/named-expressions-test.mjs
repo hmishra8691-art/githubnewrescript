@@ -14,6 +14,7 @@
  *   node scripts/named-expressions-test.mjs      (studio on 3000)
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab, openTabKey } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
@@ -33,16 +34,16 @@ const readDef = async () => {
   // RightPanel), so this diagnostic peek must leave the tab exactly as it
   // found it, or whatever ran right after this call would find its target
   // in the right panel gone.
-  const activeTab = await page.$(".leftnav .nav-item.active");
-  await page.click(".leftnav >> text=JSON");
+  const activeTab = await page.$eval(".menubar-here", (e) => e.dataset.tab).catch(() => null);
+  await openTab(page, "JSON");
   await page.waitForSelector("textarea.code");
   const json = await page.$eval("textarea.code", (e) => e.value);
-  if (activeTab) await activeTab.click().catch(() => {});
+  if (activeTab) await openTabKey(page, activeTab).catch(() => {});
   return JSON.parse(json);
 };
 
 const applyDef = async (def) => {
-  await page.click(".leftnav >> text=JSON");
+  await openTab(page, "JSON");
   await page.waitForSelector("textarea.code");
   await page.click('[data-testid="json-edit"]');
   await page.waitForTimeout(120);
@@ -56,7 +57,7 @@ const applyDef = async (def) => {
 };
 
 const goLogic = async () => {
-  await page.click(".leftnav >> text=Logic");
+  await openTab(page, "Logic");
   await page.waitForSelector('[data-testid="named-expressions"]');
 };
 
@@ -154,7 +155,7 @@ def.questions[0].displayLogic = {
   type: "rule", source: { kind: "rule", ref: neId }, operator: "eq", value: true,
 };
 await applyDef(def);
-await page.click(".leftnav >> text=Questions");
+await openTab(page, "Questions");
 await page.waitForSelector(".block-badge");
 await page.click(".qcard >> nth=0");
 await page.waitForSelector(".qcard.selected");

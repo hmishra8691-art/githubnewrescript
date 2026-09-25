@@ -9,6 +9,7 @@
  *   node scripts/wave5-test.mjs      (studio on 3000, runtime on 3001)
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 import { sendPreview } from "./lib/preview.mjs";
 
@@ -110,8 +111,8 @@ ok("a page whose save never landed is kept locally, keyed to its own session (§
 console.log("\nSETTINGS THAT WERE READ BY NOTHING (§46, §47)");
 
 await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
-await page.waitForSelector(".leftnav");
-await page.click(".leftnav >> text=Survey Settings");
+await page.waitForSelector(".menubar");
+await openTab(page, "Survey Settings");
 await page.waitForSelector('[data-testid="custom-domain"]');
 await page.fill('[data-testid="custom-domain"]', "https://survey.acme.com/s/whatever");
 await page.waitForTimeout(400);
@@ -119,7 +120,7 @@ assert.equal(await page.inputValue('[data-testid="custom-domain"]'), "survey.acm
   "a pasted URL should be reduced to the host — that is what a domain is");
 ok("a custom domain is authorable, and tidied as it is typed (§46)");
 
-await page.click(".leftnav >> text=Versions & Deploy");
+await openTab(page, "Versions & Deploy");
 await page.waitForTimeout(600);
 const note = await page.textContent('[data-testid="custom-domain-note"]');
 assert.match(note, /survey\.acme\.com/);
@@ -128,7 +129,7 @@ ok("respondent links use it, and the panel says what DNS still needs (§46)");
 
 /* ---------------------------------------------------------------- §47 */
 
-await page.click(".leftnav >> text=Branding");
+await openTab(page, "Branding");
 await page.waitForSelector("text=Branding & Theme");
 assert.equal(await page.$('[data-testid="workspace-themes"]'), null,
   "the sandbox has no workspace, so workspace themes are correctly unavailable there");

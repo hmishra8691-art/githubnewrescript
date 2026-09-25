@@ -106,7 +106,10 @@ export function ModeProvider({ children, sandbox = false }: { children: React.Re
   /* the chooser: once, unless asked for again */
   const [chooserOpen, setChooserOpen] = React.useState(false);
   React.useEffect(() => {
-    if (shouldShowChooser(window.location.search, read(MODE_STORAGE_KEY), read(CHOOSER_STORAGE_KEY), { sandbox })) setChooserOpen(true);
+    // the /sandbox page is the scratch surface whatever survey it is pointed at (`?dbid=` is how the
+    // browser suites mount a mocked project there); a first run is a first PROJECT, at /studio/…
+    const scratch = sandbox || window.location.pathname.startsWith("/sandbox");
+    if (shouldShowChooser(window.location.search, read(MODE_STORAGE_KEY), read(CHOOSER_STORAGE_KEY), { sandbox: scratch })) setChooserOpen(true);
   }, [sandbox]);
   const openChooser = React.useCallback(() => setChooserOpen(true), []);
   const closeChooser = React.useCallback(() => { setChooserOpen(false); write(CHOOSER_STORAGE_KEY, "1"); }, []);

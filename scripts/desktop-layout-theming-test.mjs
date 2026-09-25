@@ -22,6 +22,7 @@
  * below don't just hope that stays true, they check it.
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 import zlib from "node:zlib";
 import { SurveyDefinition } from "../packages/schema/dist/index.js";
@@ -298,7 +299,7 @@ const errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
 page.on("dialog", (d) => d.accept());
 
-const goTab = async (name) => { await page.click(`.leftnav >> text=${name}`); await page.waitForTimeout(150); };
+const goTab = async (name) => { await openTab(page, `${name}`); await page.waitForTimeout(150); };
 const loadFixture = async (def) => {
   await goTab("JSON");
   await page.waitForSelector("textarea.code");
@@ -315,7 +316,7 @@ const FIXTURE = SurveyDefinition.parse({
 });
 
 await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
-await page.waitForSelector(".leftnav");
+await page.waitForSelector(".menubar");
 await loadFixture(FIXTURE);
 ok("fixture loaded: one numeric question, default (uncustomized) branding");
 

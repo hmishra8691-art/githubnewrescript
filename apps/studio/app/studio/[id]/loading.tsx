@@ -1,7 +1,7 @@
 /**
  * THE STUDIO WHILE IT LOADS. The server component fetches the survey, the
  * draft and the gate before it can render anything; until then the shell is
- * drawn as itself — top bar, left navigation, canvas, properties — in
+ * drawn as itself — top bar, menubar, canvas, properties — in
  * skeleton, so the page arrives in place rather than as a blank that jumps.
  */
 export default function StudioLoading() {
@@ -14,15 +14,12 @@ export default function StudioLoading() {
         {[88, 110, 120, 84, 70].map((w, i) => <span key={i} className="sk" style={{ width: w, height: 34, borderRadius: 10 }} />)}
         <span className="sk" style={{ width: 118, height: 36, borderRadius: 10, background: "var(--c-primary-100)" }} />
       </div>
+      <nav className="menubar" aria-hidden="true">
+        <div className="menubar-groups">
+          {["Programming", "Research Tools", "Results", "Management", "Mode"].map((g) => <span key={g} className="menubar-btn" style={{ color: "var(--c-text-4)" }}>{g}</span>)}
+        </div>
+      </nav>
       <div className="ide-body">
-        <nav className="leftnav" aria-hidden="true">
-          {[["Programming", 8], ["Research tools", 6], ["Results", 3], ["Management", 6]].map(([g, n]) => (
-            <div key={String(g)}>
-              <div className="nav-group">{g}</div>
-              {Array.from({ length: Number(n) }).map((_, i) => <div key={i} className="nav-item" style={{ gap: 10 }}><span className="sk" style={{ width: 18, height: 18, borderRadius: 5 }} /><span className="sk" style={{ width: 70 + ((i * 37) % 60), height: 12 }} /></div>)}
-            </div>
-          ))}
-        </nav>
         <main className="center">
           <div className="row" style={{ marginBottom: 18 }}><span className="sk" style={{ width: 150, height: 24 }} /><span className="grow" /><span className="sk" style={{ width: 110, height: 38, borderRadius: 10 }} /><span className="sk" style={{ width: 130, height: 38, borderRadius: 10 }} /></div>
           {[0, 1, 2].map((i) => (

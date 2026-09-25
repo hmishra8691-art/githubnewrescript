@@ -15,6 +15,7 @@
  *   node scripts/canvas-test.mjs            (studio dev server on 3000)
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { navLabels, openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 import { buildMasterDemoSurvey } from "../packages/templates/dist/index.js";
 
@@ -45,8 +46,8 @@ await page.route("**/api/auth/me", (r) => r.fulfill({
 /* ---------------------------------------------------------------- fixtures */
 
 await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
-await page.waitForSelector(".leftnav");
-await page.click(".leftnav >> text=JSON");
+await page.waitForSelector(".menubar");
+await openTab(page, "JSON");
 await page.waitForSelector("textarea.code");
 await page.click('button:has-text("edit")');
 await page.$eval("textarea.code", (el, v) => {
@@ -55,7 +56,7 @@ await page.$eval("textarea.code", (el, v) => {
 }, JSON.stringify(def));
 await page.click('button:has-text("validate & apply")');
 await page.waitForTimeout(900);
-await page.click(".leftnav >> text=Questions");
+await openTab(page, "Questions");
 await page.waitForSelector('[data-testid="qcard"]');
 
 /**
@@ -100,10 +101,9 @@ const anchors = (sel) => page.$$eval(`[data-testid="canvas-stage"] ${sel}`, (es)
 
 console.log("\nTHE LIVE VIEW IS INSIDE THE QUESTIONS EDITOR (§1, §2, §39)");
 // text nodes only — the count badges are separate elements
-const navLabels = await page.$$eval(".leftnav .nav-item", (es) =>
-  es.map((e) => [...e.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join("").trim()));
-assert.equal(navLabels.some((t) => /Live Canvas|Live View/i.test(t)), false,
-  `no Live View entry in the navigation, got: ${navLabels.join(" | ")}`);
+const navLabelList = await navLabels(page);
+assert.equal(navLabelList.some((t) => /Live Canvas|Live View/i.test(t)), false,
+  `no Live View entry in the navigation, got: ${navLabelList.join(" | ")}`);
 ok("there is no separate Live Canvas tab, page or navigation item");
 
 /*
@@ -120,7 +120,7 @@ ok("there is no separate Live Canvas tab, page or navigation item");
  */
 const SINCE_LIVE_VIEW = ["Data Analytics", "Fieldwork", "Project", "Distribution", "Tests", "Translation", "Usage & Wallet", "Assets"];
 assert.deepEqual(
-  navLabels.filter((t) => !SINCE_LIVE_VIEW.includes(t)),
+  navLabelList.filter((t) => !SINCE_LIVE_VIEW.includes(t)),
   ["Questions", "Survey Settings", "Survey Flow", "Logic", "Variables", "Calculations", "Quotas", "List Fill",
    "Design Generators", "Branding", "Scripts", "Data", "Versions & Deploy", "JSON", "Collaborators", "Internal notes", "Activity"],
   "the navigation is exactly what it was before the Live View existed",
@@ -215,11 +215,11 @@ assert.equal(
 ok("a Standard edit appears in the Live View without any sync step (§9)");
 
 // and it is the survey's own JSON that changed, not a preview copy
-await page.click(".leftnav >> text=JSON");
+await openTab(page, "JSON");
 await page.waitForSelector("textarea.code");
 assert.ok((await page.$eval("textarea.code", (e) => e.value)).includes("Desktop workstation"));
 ok("both modes write to the one survey definition, visible in the JSON (§37)");
-await page.click(".leftnav >> text=Questions");
+await openTab(page, "Questions");
 await page.waitForSelector('[data-testid="qcard"]');
 
 /* --------------------------------------------- §14–§16 grid and matrix */

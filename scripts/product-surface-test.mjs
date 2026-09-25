@@ -5,6 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { modeMenuClick, openGroup, openTab, switchMode } from "./lib/nav.mjs";
 import { buildMasterDemoSurvey } from "../packages/templates/dist/index.js";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
@@ -22,7 +23,7 @@ const newPage = async (viewport = { width: 1600, height: 950 }) => {
   page.on("console", (m) => { if (m.type() === "error" && !/401|501|ERR_TUNNEL|Failed to load resource/.test(m.text())) pageErrors.push(m.text().slice(0, 300)); });
   return page;
 };
-const goTab = async (page, name) => { await page.click(`.leftnav >> text=${name}`); await page.waitForTimeout(150); };
+const goTab = async (page, name) => { await openTab(page, `${name}`); await page.waitForTimeout(150); };
 const loadDemo = async (page) => {
   await goTab(page, "JSON");
   await page.waitForSelector("textarea.code");
@@ -63,7 +64,7 @@ const storage = (page, key) => page.evaluate((k) => window.localStorage.getItem(
   await page.keyboard.press("Escape");
   await page.waitForSelector('[data-testid="mode-chooser"]', { state: "detached" });
   ok("?chooser=1 asks again on purpose (the way to see the first run again)");
-  await page.click('[data-testid="open-chooser"]');
+  await modeMenuClick(page, "open-chooser");
   await page.waitForSelector('[data-testid="mode-chooser"]');
   assert.equal(await page.$eval('[data-testid="chooser-studio"]', (e) => e.classList.contains("current")), true);
   ok("the ⓘ in the top bar reopens it, marking the current mode");
@@ -98,17 +99,21 @@ const storage = (page, key) => page.evaluate((k) => window.localStorage.getItem(
   const page = await newPage();
   await page.goto(`${STUDIO}/sandbox?mode=grid`, { waitUntil: "networkidle" });
   await page.waitForSelector('[data-testid="grid-view"]');
+  const modePanel = await openGroup(page, '.menubar [data-group-button="mode"]');
   const idx = await page.$$eval('[data-testid="mode-selector"] .mode-index', (els) => els.map((e) => e.textContent));
   assert.deepEqual(idx, ["01", "02", "03", "04", "05"]);
-  ok("the selector numbers the environments like an instrument's ranges");
+  ok("the Mode menu numbers the environments like an instrument's ranges");
   assert.equal(await page.$eval('[data-testid="focus-mode-toggle"]', (b) => b.disabled), false);
   await page.click('[data-testid="focus-mode-toggle"]');
-  assert.equal(await page.getAttribute('[data-testid="focus-mode-toggle"]', "aria-pressed"), "true");
-  await page.click('[data-testid="mode-flow"]');
+  await page.waitForSelector(modePanel, { state: "detached" });
+  await openGroup(page, '.menubar [data-group-button="mode"]');
+  assert.equal(await page.getAttribute('[data-testid="focus-mode-toggle"]', "aria-checked"), "true");
+  await page.keyboard.press("Escape");
+  await switchMode(page, "flow");
   await page.waitForSelector('[data-testid="flow-view"]');
   assert.equal(await page.getAttribute('[data-testid="focus-toggle"]', "aria-pressed"), "true");
-  ok("Focus from the top bar is the same flag Flow's own chip shows — one view-level switch");
-  await page.click('[data-testid="focus-mode-toggle"]');
+  ok("Focus from the Mode menu is the same flag Flow's own chip shows — one view-level switch");
+  await modeMenuClick(page, "focus-mode-toggle");
   await page.context().close();
 }
 
@@ -121,10 +126,10 @@ const storage = (page, key) => page.evaluate((k) => window.localStorage.getItem(
   await page.waitForSelector('[data-testid="grid-view"]');
   assert.equal(await page.$eval('[data-testid="flow-inspector"], [data-testid="grid-view"]', () => true), true);
 
-  await page.click('[data-testid="split-toggle"]');
+  await openGroup(page, '.menubar [data-group-button="mode"]');
   await page.waitForSelector('[data-testid="split-menu"]');
-  const offered = await page.$$eval('[data-testid="split-menu"] .mode-menu-item', (els) => els.map((e) => e.dataset.testid));
-  assert.deepEqual(offered, ["split-studio", "split-architect", "split-flow", "split-intelligent"], "every mode but the current one");
+  const offered = await page.$$eval('[data-testid="split-menu"] .mode-option', (els) => els.map((e) => e.dataset.testid));
+  assert.deepEqual(offered, ["split-studio", "split-architect", "split-flow", "split-intelligent", "focus-mode-toggle", "open-chooser"], "every mode but the current one, then the view switches");
   await page.click('[data-testid="split-flow"]');
   await page.waitForSelector('[data-testid="split-view"]');
   assert.equal(await page.getAttribute('[data-testid="split-view"]', "data-primary"), "grid");
@@ -135,8 +140,11 @@ const storage = (page, key) => page.evaluate((k) => window.localStorage.getItem(
   ok("Split · Flow: Grid on the left, Flow on the right, the URL says so");
   assert.equal(await page.$eval(".rightpanel", (e) => e.classList.contains("rp-hidden")), true);
   ok("the outer property panel steps aside for two renderers");
+  assert.match(await page.textContent('[data-testid="where-am-i"]'), /Grid \+ Flow/);
+  await openGroup(page, '.menubar [data-group-button="mode"]');
   assert.equal(await page.$eval('[data-testid="mode-flow"]', (e) => e.classList.contains("paired")), true);
-  ok("the selector marks the paired mode");
+  await page.keyboard.press("Escape");
+  ok("the crumb reads Grid + Flow and the Mode menu marks the paired mode");
   const inspectorShown = await page.$eval('[data-testid="split-secondary"] [data-testid="flow-inspector"]', (e) => getComputedStyle(e).display !== "none").catch(() => false);
   assert.equal(inspectorShown, false);
   ok("in a narrow pane the Flow inspector folds (container query) — the canvas keeps the room");
@@ -180,7 +188,7 @@ const storage = (page, key) => page.evaluate((k) => window.localStorage.getItem(
   ok("closing the right pane keeps the left one — a single Flow, the URL cleared");
 
   // memory and URL precedence
-  await page.click('[data-testid="split-toggle"]'); await page.click('[data-testid="split-grid"]');
+  await modeMenuClick(page, "split-grid");
   await page.waitForSelector('[data-testid="split-view"]');
   await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
   await page.waitForSelector('[data-testid="split-view"]');
@@ -231,18 +239,21 @@ const storage = (page, key) => page.evaluate((k) => window.localStorage.getItem(
   await page.setViewportSize({ width: 1000, height: 900 });
   await page.waitForSelector('[data-testid="split-view"]', { state: "detached" });
   await page.waitForSelector('[data-testid="grid-view"]');
-  assert.equal(await page.$eval('[data-testid="split-toggle"]', (b) => b.disabled), true);
-  ok("below 1100px the split folds to the primary and the Split control is disabled");
+  await openGroup(page, '.menubar [data-group-button="mode"]');
+  assert.equal(await page.$eval('[data-testid="split-flow"]', (b) => b.disabled), true);
+  await page.keyboard.press("Escape");
+  ok("below 1100px the split folds to the primary and the split choices are disabled");
   await page.setViewportSize({ width: 1600, height: 950 });
   await page.waitForSelector('[data-testid="split-view"]');
   ok("widening the window brings the pair back — the split was kept, not dropped");
-  await page.click('[data-testid="split-toggle"]'); await page.click('[data-testid="split-off"]');
+  await modeMenuClick(page, "split-off");
   await page.waitForSelector('[data-testid="split-view"]', { state: "detached" });
-  await page.click('[data-testid="mode-architect"]');
+  await switchMode(page, "architect");
   await page.waitForSelector('[data-testid="architect-view"]');
   const wide = await page.$eval('[data-testid="architect-view"] .ar-inspector', (e) => getComputedStyle(e).display !== "none");
   assert.equal(wide, true);
-  await page.setViewportSize({ width: 1150, height: 900 });
+  // with no sidebar the centre IS the window in Architect, so the fold comes at the container's 960px
+  await page.setViewportSize({ width: 940, height: 900 });
   await page.waitForTimeout(300);
   const narrow = await page.$eval('[data-testid="architect-view"] .ar-inspector', (e) => getComputedStyle(e).display !== "none");
   assert.equal(narrow, false);
@@ -256,8 +267,8 @@ const storage = (page, key) => page.evaluate((k) => window.localStorage.getItem(
   ok("narrower still, the map folds too — the workspace is what remains");
   await page.setViewportSize({ width: 880, height: 900 });
   await page.waitForTimeout(300);
-  assert.equal(await page.$eval('[data-testid="mode-selector"]', (e) => getComputedStyle(e).display !== "none"), true);
-  ok("the mode selector survives the mobile fold");
+  assert.equal(await page.$eval('.menubar [data-group-button="mode"]', (e) => getComputedStyle(e).display !== "none"), true);
+  ok("the Mode menu survives the mobile fold");
   await page.context().close();
 }
 

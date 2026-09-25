@@ -6,6 +6,7 @@
  * export route. Nothing here trusts a rendered label on its own.
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab, openTabKey } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 
 const browser = await chromium.launch();
@@ -19,15 +20,15 @@ const readDef = async () => {
   // RightPanel), so this diagnostic peek must leave the tab exactly as it
   // found it, or whatever ran right after this call would find its target
   // in the right panel gone.
-  const activeTab = await page.$(".leftnav .nav-item.active");
-  await page.click(".leftnav >> text=JSON");
+  const activeTab = await page.$eval(".menubar-here", (e) => e.dataset.tab).catch(() => null);
+  await openTab(page, "JSON");
   await page.waitForSelector("textarea.code");
   const json = await page.$eval("textarea.code", (e) => e.value);
-  if (activeTab) await activeTab.click().catch(() => {});
+  if (activeTab) await openTabKey(page, activeTab).catch(() => {});
   return JSON.parse(json);
 };
-const toFlow = async () => { await page.click(".leftnav >> text=Survey Flow"); await page.waitForTimeout(200); };
-const toQuestions = async () => { await page.click(".leftnav >> text=Questions"); await page.waitForTimeout(200); };
+const toFlow = async () => { await openTab(page, "Survey Flow"); await page.waitForTimeout(200); };
+const toQuestions = async () => { await openTab(page, "Questions"); await page.waitForTimeout(200); };
 
 const addQuestion = async (text) => {
   const bars = await page.$$(".insert-bar");
@@ -349,7 +350,7 @@ if (await page.$('[data-testid="export-dialog"]')) {
 }
 
 // leaving a group must put the block BEFORE the End node, not after it
-await page.click(".leftnav >> text=Survey Flow");
+await openTab(page, "Survey Flow");
 await page.waitForSelector('[data-testid="flow-block"]');
 await page.click('[data-testid="add-group"]');
 await page.waitForSelector('[data-testid="flow-group"]');

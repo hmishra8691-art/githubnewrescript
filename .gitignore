@@ -4,6 +4,7 @@ node_modules/
 # of `.next` so it cannot overwrite a running dev server's chunks
 .next-p0/
 .next-blockers/
+.next-handoff/
 dist/
 *.tsbuildinfo
 .env

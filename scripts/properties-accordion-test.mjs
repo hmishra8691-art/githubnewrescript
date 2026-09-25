@@ -12,6 +12,7 @@
  * sections are offered without touching any of their content.
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab, openTabKey } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 
 const browser = await chromium.launch();
@@ -54,15 +55,15 @@ const readDef = async () => {
   // RightPanel), so this diagnostic peek must leave the tab exactly as it
   // found it, or whatever ran right after this call would find its target
   // in the right panel gone.
-  const activeTab = await page.$(".leftnav .nav-item.active");
-  await page.click(".leftnav >> text=JSON");
+  const activeTab = await page.$eval(".menubar-here", (e) => e.dataset.tab).catch(() => null);
+  await openTab(page, "JSON");
   await page.waitForSelector("textarea.code");
   const json = await page.$eval("textarea.code", (e) => e.value);
-  if (activeTab) await activeTab.click().catch(() => {});
+  if (activeTab) await openTabKey(page, activeTab).catch(() => {});
   return JSON.parse(json);
 };
 const goTab = async (name) => {
-  await page.click(`.leftnav >> text=${name}`);
+  await openTab(page, `${name}`);
   await page.waitForTimeout(150);
 };
 const isOpen = async (id) =>
@@ -73,7 +74,7 @@ const toggle = async (id) => {
 };
 
 await page.goto("http://localhost:3000/sandbox", { waitUntil: "networkidle" });
-await page.waitForSelector(".leftnav");
+await page.waitForSelector(".menubar");
 await goTab("JSON");
 await page.waitForSelector("textarea.code");
 await page.click('button:has-text("edit")');

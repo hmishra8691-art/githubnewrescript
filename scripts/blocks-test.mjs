@@ -7,6 +7,7 @@
  * "Other + Exclusive" requirement that a single-value control made impossible.
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 import { sendPreview } from "./lib/preview.mjs";
 
@@ -16,10 +17,10 @@ page.on("pageerror", (e) => console.error("PAGE ERROR:", e.message));
 page.on("dialog", (d) => d.accept());
 
 const readDef = async () => {
-  await page.click(".leftnav >> text=JSON");
+  await openTab(page, "JSON");
   await page.waitForSelector("textarea.code");
   const json = await page.$eval("textarea.code", (e) => e.value);
-  await page.click(".leftnav >> text=Questions");
+  await openTab(page, "Questions");
   return JSON.parse(json);
 };
 const blockCount = () => page.$$eval(".block-badge", (els) => els.filter((e) => /BLOCK/.test(e.textContent)).length);

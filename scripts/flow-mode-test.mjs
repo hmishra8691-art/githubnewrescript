@@ -5,6 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab, switchMode } from "./lib/nav.mjs";
 import { buildMasterDemoSurvey, buildScaleSurvey, MASTER_DEMO_TEST_PATHS } from "../packages/templates/dist/index.js";
 
 /** the demo's canonical path "B" as a debug-box string, with one override — codes, not ids */
@@ -35,7 +36,7 @@ page.on("console", (m) => {
   pageErrors.push(t.slice(0, 400));
 });
 
-const goTab = async (name) => { await page.click(`.leftnav >> text=${name}`); await page.waitForTimeout(150); };
+const goTab = async (name) => { await openTab(page, `${name}`); await page.waitForTimeout(150); };
 const loadDef = async (def) => {
   await goTab("JSON");
   await page.waitForSelector("textarea.code");
@@ -66,7 +67,7 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
 
 /* ----------------------------------------------------------- switch + graph */
 {
-  await page.click('[data-testid="mode-flow"]');
+  await switchMode(page, "flow");
   await page.waitForSelector('[data-testid="flow-view"]');
   ok("Flow renders in place — no reload");
   assert.match(page.url(), /mode=flow/);
@@ -312,11 +313,11 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
   assert.ok(q3, "Q3 is a node at question granularity");
   await q3.click();
   await page.waitForTimeout(300);
-  await page.click('[data-testid="mode-grid"]');
+  await switchMode(page, "grid");
   await page.waitForSelector('[data-testid="grid-view"]');
   assert.deepEqual(await page.$$eval('[data-testid="grid-row"][aria-selected="true"]', (els) => els.map((e) => e.dataset.code)), ["Q3"]);
   ok("a question selected on the canvas is the selected row in Grid — one selection");
-  await page.click('[data-testid="mode-flow"]');
+  await switchMode(page, "flow");
   await page.waitForSelector('[data-testid="flow-view"]');
   await page.waitForTimeout(300);
   assert.match(await classesOf("q_age"), /\bprimary\b/);
@@ -326,11 +327,11 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
 
 /* ----------------------------------------------------------- scale */
 {
-  await page.click('[data-testid="mode-studio"]');
+  await switchMode(page, "studio");
   await page.waitForSelector(".block-badge");
   await loadDef(buildScaleSurvey(600));
   const t0 = Date.now();
-  await page.click('[data-testid="mode-flow"]');
+  await switchMode(page, "flow");
   await page.waitForSelector('[data-testid="flow-node"]');
   const ms = Date.now() - t0;
   assert.ok(ms < 4000, `Flow at 600 questions appeared in ${ms}ms`);

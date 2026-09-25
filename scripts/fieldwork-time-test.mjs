@@ -21,6 +21,7 @@
  *   node scripts/fieldwork-time-test.mjs      (studio on 3000)
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
@@ -139,7 +140,7 @@ const open = async () => {
   calls = [];
   await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
   await page.waitForSelector(".block-badge");
-  await page.click(".leftnav >> text=Fieldwork");
+  await openTab(page, "Fieldwork");
   await page.waitForSelector('[data-testid="fw-over-time"]', { timeout: 20_000 });
 };
 

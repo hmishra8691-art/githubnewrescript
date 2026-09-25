@@ -204,7 +204,7 @@ export function builtinCommands(): C[] {
   cmds.push({
     id: "view.toggleFocus", title: "Toggle focus mode", group: "Navigate", shortcut: "mod+shift+f",
     keywords: ["focus", "dim", "dependencies only", "isolate"],
-    when: (ctx) => ctx.mode !== "studio",
+    // in Studio mode the menubar tucks away and unselected cards go quiet; in the others the dependency neighbourhood stays lit
     run(ctx) { ctx.setFocus(!ctx.focus); },
   });
 

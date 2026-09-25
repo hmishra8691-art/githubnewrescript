@@ -22,6 +22,7 @@
  *   node scripts/project-platform-test.mjs      (needs the Studio on :3000)
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { navLabels, openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
@@ -87,13 +88,12 @@ console.log("\n§60 THE PROJECT, NOT THE QUESTIONNAIRE");
 await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
 await page.waitForSelector(".block-badge");
 
-const nav = await page.$$eval(".leftnav .nav-item", (es) =>
-  es.map((e) => [...e.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join("").trim()));
+const nav = await navLabels(page);
 assert.ok(nav.includes("Project"), `no Project item in ${JSON.stringify(nav)}`);
 assert.ok(nav.indexOf("Project") < nav.indexOf("Versions & Deploy"), "Project belongs at the top of Management");
 ok("Project sits at the top of the Management group");
 
-await page.click(".leftnav .nav-item:has-text('Project')");
+await openTab(page, "Project");
 await page.waitForSelector("h2:has-text('Project')", { timeout: 8000 });
 const panel = await page.textContent("main");
 assert.match(panel, /This is the project, not the questionnaire/, "the panel must state the distinction it exists to make");
@@ -109,7 +109,7 @@ assert.equal(errors.length, 0, `page errors: ${errors.join(" | ")}`);
 ok("no page errors — the panel degrades rather than taking the editor down");
 
 /* and the Survey Settings tab is still the questionnaire's */
-await page.click(".leftnav .nav-item:has-text('Survey Settings')");
+await openTab(page, "Survey Settings");
 await page.waitForSelector("text=Who can take this survey", { timeout: 8000 });
 ok("Survey Settings still edits the questionnaire, untouched");
 

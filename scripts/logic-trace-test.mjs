@@ -14,6 +14,7 @@
  *   node scripts/logic-trace-test.mjs      (studio on 3000)
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab, openTabKey } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
@@ -32,15 +33,15 @@ const readDef = async () => {
   // RightPanel), so this diagnostic peek must leave the tab exactly as it
   // found it, or whatever ran right after this call would find its target
   // in the right panel gone.
-  const activeTab = await page.$(".leftnav .nav-item.active");
-  await page.click(".leftnav >> text=JSON");
+  const activeTab = await page.$eval(".menubar-here", (e) => e.dataset.tab).catch(() => null);
+  await openTab(page, "JSON");
   await page.waitForSelector("textarea.code");
   const json = await page.$eval("textarea.code", (e) => e.value);
-  if (activeTab) await activeTab.click().catch(() => {});
+  if (activeTab) await openTabKey(page, activeTab).catch(() => {});
   return JSON.parse(json);
 };
 const applyDef = async (def) => {
-  await page.click(".leftnav >> text=JSON");
+  await openTab(page, "JSON");
   await page.waitForSelector("textarea.code");
   await page.click('[data-testid="json-edit"]');
   await page.waitForTimeout(120);
@@ -53,7 +54,7 @@ const applyDef = async (def) => {
   await page.waitForTimeout(500);
 };
 const goLogic = async () => {
-  await page.click(".leftnav >> text=Logic");
+  await openTab(page, "Logic");
   await page.waitForSelector('[data-testid="logic-trace"], [data-testid="trace-empty"]');
 };
 const q = (id, code, type, extra = {}) => ({
@@ -229,7 +230,7 @@ def.calculations = [
 ];
 await applyDef(def);
 /* the calculation lint lives beside the calculations, on their own tab */
-await page.click(".leftnav >> text=Calculations");
+await openTab(page, "Calculations");
 await page.waitForSelector('[data-testid="calc-problem"], .card');
 await page.waitForTimeout(250);
 const calcProblems = await page.$$eval('[data-testid="calc-problem"]',
@@ -244,7 +245,7 @@ def.calculations = [
   { id: "c2", targetVariable: "B", expression: "A * 2", trigger: "on_change", dataType: "numeric" },
 ];
 await applyDef(def);
-await page.click(".leftnav >> text=Calculations");
+await openTab(page, "Calculations");
 await page.waitForSelector('[data-testid="calc-problem"]');
 const cyc = await page.$$eval('[data-testid="calc-problem"]', (els) => els.map((e) => e.textContent).join(" | "));
 assert.match(cyc, /Circular calculations: A → B → A/, cyc);

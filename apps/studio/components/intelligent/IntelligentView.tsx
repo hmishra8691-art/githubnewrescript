@@ -193,6 +193,29 @@ export function IntelligentView() {
 
   const open = turns.filter((t) => t.state === "open").length;
 
+  /*
+   * CONTEXT-AWARE EXAMPLES: with a question selected, the first examples
+   * are about it — its code, and the question before it as the condition's
+   * subject — so the sentences on offer are ones the programmer can send as
+   * they are. With nothing selected, the general set.
+   */
+  const examples = React.useMemo(() => {
+    const qid = primary?.startsWith("question:") ? primary.slice(9) : null;
+    const q = qid ? s.def.questions.find((x) => x.id === qid) : null;
+    if (!q) return EXAMPLES;
+    const i = s.def.questions.findIndex((x) => x.id === q.id);
+    const prev = i > 0 ? s.def.questions[i - 1] : null;
+    const opt = prev?.options?.[0];
+    const cond = prev ? `${prev.code} ${opt ? `= ${opt.label.replace(/[“”"]/g, "")}` : "answered"}` : "Q1 answered";
+    const about = [
+      { text: `Show ${q.code} only when ${cond}`, about: `display logic on ${q.code}` },
+      { text: `Make ${q.code} ${q.required ? "optional" : "required"}`, about: q.required ? "optional" : "required" },
+      { text: `What depends on ${q.code}?`, about: "dependencies" },
+      { text: `Explain ${q.code}`, about: `how ${q.code} behaves` },
+    ];
+    return [...about, ...EXAMPLES.filter((e) => !/^(Show Q5|Make Q4|What depends|Explain Q5)/.test(e.text))];
+  }, [primary, s.def]);
+
   return (
     <div className="iq" data-testid="intelligent-view" style={{ gridTemplateColumns: showInspector ? `minmax(0, 1fr) 6px ${prefs.inspector}px` : "minmax(0, 1fr)" }}>
       <section className="iq-main">
@@ -214,7 +237,7 @@ export function IntelligentView() {
               <h2>How do you want to program your research?</h2>
               <p>Say it. The Studio proposes the exact rule, shows you what it will do, and waits for you to apply it.</p>
               <div className="iq-examples">
-                {EXAMPLES.map((e) => (
+                {examples.map((e) => (
                   <button key={e.text} type="button" className="iq-example" onClick={() => setText(e.text)} data-testid="iq-example">
                     <span className="iq-example-text">{e.text}</span>
                     <span className="iq-example-about">{e.about}</span>

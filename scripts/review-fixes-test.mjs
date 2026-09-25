@@ -11,6 +11,7 @@
  * builder offers, and what a respondent actually sees.
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 import { openPreview } from "./lib/preview.mjs";
 
@@ -56,7 +57,7 @@ const FIXTURE = {
     { type: "end", id: "e1", status: "complete" }],
 };
 
-const goTab = async (name) => { await page.click(`.leftnav >> text=${name}`); await page.waitForTimeout(200); };
+const goTab = async (name) => { await openTab(page, `${name}`); await page.waitForTimeout(200); };
 const selectQ = async (i) => {
   const cards = await page.$$(".qcard");
   await cards[i].click();
@@ -64,7 +65,7 @@ const selectQ = async (i) => {
 };
 
 await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
-await page.waitForSelector(".leftnav");
+await page.waitForSelector(".menubar");
 await goTab("JSON");
 await page.waitForSelector("textarea.code");
 await page.click('button:has-text("edit")');

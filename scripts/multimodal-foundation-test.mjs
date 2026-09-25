@@ -9,6 +9,7 @@
  */
 import assert from "node:assert/strict";
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openGroup, openTab } from "./lib/nav.mjs";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
 let passed = 0;
@@ -29,15 +30,15 @@ page.on("console", (m) => {
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 
 const readDef = async () => {
-  const before = await page.$eval(".leftnav .nav-item.active", (e) => e.textContent.trim());
-  await page.click(".leftnav >> text=JSON");
+  const before = await page.$eval(".menubar-here .here-tab", (e) => e.textContent.trim());
+  await openTab(page, "JSON");
   await page.waitForSelector("textarea.code");
   const json = await page.$eval("textarea.code", (e) => e.value);
-  await page.click(`.leftnav >> text=${before.replace(/\d+$/, "").trim()}`);
+  await openTab(page, `${before.replace(/\d+$/, "").trim()}`);
   return JSON.parse(json);
 };
 const questionCount = async () => (await readDef()).questions.length;
-const activeTab = () => page.$eval(".leftnav .nav-item.active", (e) => e.textContent.replace(/\d+$/, "").trim());
+const activeTab = () => page.$eval(".menubar-here .here-tab", (e) => e.textContent.replace(/\d+$/, "").trim());
 const paletteOpen = () => page.isVisible('[data-testid="command-palette"]');
 /* a card header TOGGLES: clicking the open question collapses it. Select for sure. */
 const selectCard = async (n) => {
@@ -55,6 +56,7 @@ await page.waitForSelector(".block-badge");
 
 /* ----------------------------------------------------------- selector */
 {
+  const modePanel = await openGroup(page, '.menubar [data-group-button="mode"]');
   const modes = await page.$$eval('[data-testid="mode-selector"] .mode-option', (els) =>
     els.map((e) => ({ id: e.dataset.mode, active: e.classList.contains("active"), available: e.dataset.available, disabled: e.disabled })));
   assert.deepEqual(modes.map((m) => m.id), ["studio", "grid", "architect", "flow", "intelligent"]);
@@ -68,6 +70,9 @@ await page.waitForSelector(".block-badge");
   const title = await page.getAttribute('[data-testid="mode-intelligent"]', "title");
   assert.match(title, /Describe what you want/);
   ok("a mode's tagline is its tooltip");
+  await page.keyboard.press("Escape");
+  await page.waitForSelector(modePanel, { state: "detached" });
+  ok("Escape closes the Mode menu");
 }
 
 /* ----------------------------------------------------------- palette */
@@ -181,7 +186,7 @@ await page.waitForSelector(".block-badge");
   await page.waitForSelector('.palette-item.active[data-testid="palette-item-nav.logic"]');
   await page.keyboard.press("Enter");
   await page.waitForSelector('[data-testid="command-palette"]', { state: "detached" });
-  await page.waitForSelector(".leftnav .nav-item.active >> text=Logic");
+  await page.waitForSelector(".menubar-here .here-tab >> text=Logic");
   assert.equal(await activeTab(), "Logic");
   ok("'Open Logic' switches the tab");
   await page.keyboard.press(`${mod}+k`);
@@ -191,7 +196,7 @@ await page.waitForSelector(".block-badge");
   ok("the current tab is not offered as a destination");
   await page.keyboard.press("Escape");
   await page.waitForSelector('[data-testid="command-palette"]', { state: "detached" });
-  await page.click(".leftnav >> text=Questions");
+  await openTab(page, "Questions");
   await page.waitForSelector(".block-badge");
 }
 
@@ -261,8 +266,8 @@ await page.waitForSelector(".block-badge");
 /* ----------------------------------------------------------- ?mode= */
 {
   await page.goto(`${STUDIO}/sandbox?mode=nonsense`, { waitUntil: "networkidle" });
-  await page.waitForSelector('[data-testid="mode-selector"]');
-  const active = await page.$eval('[data-testid="mode-selector"] .mode-option.active', (e) => e.dataset.mode);
+  await page.waitForSelector(".menubar");
+  const active = await page.$eval('[data-testid="where-am-i"]', (e) => e.dataset.mode);
   assert.equal(active, "studio");
   ok("?mode=<unknown> falls back to Studio — never an empty screen");
   const url = page.url();

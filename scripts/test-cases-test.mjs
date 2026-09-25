@@ -14,6 +14,7 @@
  *   node scripts/test-cases-test.mjs      (studio on 3000)
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { navLabels, openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
@@ -106,17 +107,16 @@ await page.route("**/api/surveys/*/tests**", async (route) => {
 });
 
 await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
-await page.waitForSelector(".leftnav");
+await page.waitForSelector(".menubar");
 
 /* ============================================================= the tab */
 
-const navLabels = await page.$$eval(".leftnav .nav-item", (es) =>
-  es.map((e) => [...e.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join("").trim()));
-assert.equal(navLabels[navLabels.indexOf("Scripts") + 1], "Tests",
-  `Tests sits in Research tools after Scripts: ${navLabels.join(" | ")}`);
+const navLabelList = await navLabels(page);
+assert.equal(navLabelList[navLabelList.indexOf("Scripts") + 1], "Tests",
+  `Tests sits in Research tools after Scripts: ${navLabelList.join(" | ")}`);
 ok("the suite has its own tab, beside Scripts in Research tools");
 
-await page.click(".leftnav >> text=Tests");
+await openTab(page, "Tests");
 await page.waitForSelector('[data-testid="tests-panel"]');
 
 /* ===================================================== what it grades */
@@ -203,7 +203,7 @@ payload = {
   suite: SUITE.map((r) => r.test_case_id === "tc3" ? { ...r, last_verdict: "changed", last_failures: [], last_changes: SUITE[1].last_changes } : r),
 };
 await page.reload({ waitUntil: "networkidle" });
-await page.click(".leftnav >> text=Tests");
+await openTab(page, "Tests");
 await page.waitForSelector('[data-testid="tests-panel"]');
 await page.route("**/api/surveys/*/tests**", async (route) => {
   if (route.request().method() === "POST") {

@@ -75,6 +75,7 @@ const NEEDS_DATABASE = {
   "auth-collaboration-test.mjs": "asserts session and lock behaviour under real 60-way contention; needs Postgres",
   "listfill-allocation-test.mjs": "asserts the atomic allocation claim; needs Postgres",
   "lock-concurrency-test.mjs": "8 connections, 8 transactions, one winner; needs Postgres",
+  "version-scoped-export-test.mjs": "exports a version through the real route; needs Postgres",
 };
 
 /**

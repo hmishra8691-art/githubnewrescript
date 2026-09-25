@@ -1,3 +1,4 @@
+import { openTab } from "./lib/nav.mjs";
 /**
  * QUOTA DASHBOARD — browser checks on the Studio sandbox.
  *
@@ -134,7 +135,7 @@ assert.equal(await page.$('[data-testid="quota-note"]'), null, "nothing saved be
 // leaving the tab with an open edit asks first — decline, and the edit is still there
 page.removeAllListeners("dialog");
 page.once("dialog", (d) => d.dismiss());
-await page.click(".leftnav >> text=Questions");
+await openTab(page, "Questions");
 await page.waitForTimeout(200);
 page.on("dialog", (d) => d.accept());
 assert.ok(await page.$(`${gender} [data-testid="quota-save"]`), "still editing after declining to leave");

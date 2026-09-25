@@ -24,6 +24,7 @@
  *   node scripts/p0-session-test.mjs        (needs the Studio on :3000)
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./lib/nav.mjs";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
 const SURVEY = "11111111-2222-3333-4444-555555555555";
@@ -435,7 +436,7 @@ console.log("\n§27 — the diagnostics view answers 'why can I not save' withou
     }),
   }));
 
-  await page.click(".leftnav >> text=Activity");
+  await openTab(page, "Activity");
   await page.waitForSelector('[data-testid="diagnostics"]');
 
   const verdict = await page.$eval('[data-testid="diagnostics-verdict"]', (e) => ({

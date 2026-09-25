@@ -9,6 +9,7 @@
  *   node scripts/ui-shots.mjs [outDir]        (dev servers on 3000 / 3001)
  */
 import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { openTab } from "./lib/nav.mjs";
 import fs from "node:fs";
 import { buildMasterDemoSurvey } from "../packages/templates/dist/index.js";
 import { buildDataset, runAnalysis, recommendCharts, variableMetadata } from "../packages/analytics/dist/index.js";
@@ -60,20 +61,20 @@ await page.goto(`${STUDIO}/login`, { waitUntil: "networkidle" }); await shot("01
 // 2. dashboard
 await page.goto(`${STUDIO}/`, { waitUntil: "networkidle" }); await page.waitForSelector(".survey-card, .dash"); await shot("02-dashboard", { full: true });
 // 3. studio with the master demo
-await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" }); await page.waitForSelector(".leftnav");
+await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" }); await page.waitForSelector(".menubar");
 const def = buildMasterDemoSurvey("sandbox");
-await page.click(".leftnav >> text=JSON"); await page.waitForSelector("textarea.code"); await page.click('button:has-text("edit")');
+await openTab(page, "JSON"); await page.waitForSelector("textarea.code"); await page.click('button:has-text("edit")');
 await page.$eval("textarea.code", (el, v) => { const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set; setter.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); }, JSON.stringify(def));
 await page.click('button:has-text("validate & apply")'); await page.waitForTimeout(800);
 for (const [tab, name] of [["Questions", "03-studio-questions"], ["Logic", "04-studio-logic"], ["Survey Flow", "05-studio-flow"], ["List Fill", "06-studio-listfill"], ["Quotas", "07-studio-quotas"], ["Variables", "08-studio-variables"], ["Data", "09-studio-data"], ["Design Generators", "10-studio-designs"]]) {
-  await page.click(`.leftnav >> text=${tab}`); await page.waitForTimeout(500); await shot(name);
+  await openTab(page, `${tab}`); await page.waitForTimeout(500); await shot(name);
 }
 // a question selected → properties panel
-await page.click(".leftnav >> text=Questions"); await page.waitForTimeout(300);
+await openTab(page, "Questions"); await page.waitForTimeout(300);
 const card = await page.$(".qcard, .card.selectable"); if (card) { await card.click(); await shot("11-studio-question-properties"); }
 // a condition block in the logic builder, and the Data → Quality (cleaning) workspace
 const addCond = await page.$('.rightpanel button:has-text("add")'); if (addCond) { await addCond.click(); await page.waitForTimeout(300); await shot("11b-studio-condition-builder"); }
-await page.click(".leftnav >> text=Data"); await page.waitForTimeout(300);
+await openTab(page, "Data"); await page.waitForTimeout(300);
 const quality = await page.$('.center button:has-text("Quality")'); if (quality) { await quality.click(); await page.waitForTimeout(500); await shot("11c-studio-data-quality"); }
 const manage = await page.$('.center button:has-text("Manage")'); if (manage) { await manage.click(); await page.waitForTimeout(500); await shot("11d-studio-data-manage"); }
 // 4. analytics
