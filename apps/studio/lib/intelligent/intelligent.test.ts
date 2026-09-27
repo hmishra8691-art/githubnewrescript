@@ -511,3 +511,39 @@ test("coerceIntent admits the structure shapes and normalises their fields", asy
   assert.equal(coerceIntent({ kind: "loop", from: "Q5" }), null);
   assert.deepEqual(coerceIntent({ kind: "screening" }), { kind: "screening" });
 });
+
+/* ------------------------------------------------ diagnose: "why is Q25 not showing?" (import brief §31) */
+
+test("grammar: why is it not showing / unreachable / can't respondents see it → diagnose; why is it shown stays explain", () => {
+  const D = (target: string) => ({ kind: "diagnose", target });
+  assert.deepEqual(parseIntent("Why is Q25 not showing?"), D("Q25"));
+  assert.deepEqual(parseIntent("why isn't Q25 showing up"), D("Q25"));
+  assert.deepEqual(parseIntent("Why does Q12 never appear to respondents?"), D("Q12"));
+  assert.deepEqual(parseIntent("Why is Q20 unreachable?"), D("Q20"));
+  assert.deepEqual(parseIntent("why is the income question always skipped"), D("the income question"));
+  assert.deepEqual(parseIntent("Why can't respondents see Q4?"), D("Q4"));
+  assert.deepEqual(parseIntent("Is Q4 reachable?"), D("Q4"));
+  assert.deepEqual(parseIntent("debug this question"), D("this question"));
+  assert.deepEqual(parseIntent("why is Q4 shown?"), { kind: "explain", target: "Q4" }, "the positive question is still an explanation");
+});
+
+test("diagnose: the answer names every reason, certain ones first-class, and never offers Apply", () => {
+  const def = survey();
+  let p = planProposal(def, parseIntent("Why is Q4 not showing?"), "grammar", deps(def));
+  assert.equal(p.readOnly, true);
+  assert.equal(p.changes.length, 0);
+  assert.match(p.summary, /Q4 is shown only to some respondents/);
+  assert.ok(p.answer!.some((l) => /^Only when: It is shown only when Q3/.test(l.text)), JSON.stringify(p.answer));
+  // make it impossible: it reads Q5, which comes after it
+  def.questions[3].displayLogic = cond.rule("q_end", "answered");
+  p = planProposal(def, parseIntent("Why is Q4 unreachable?"), "grammar", deps(def));
+  assert.match(p.summary, /Q4 can never be shown: its display logic .* reads Q5, which comes after it/);
+  assert.ok(p.answer!.some((l) => l.text.startsWith("Never:")));
+  // an earlier unconditional skip to the end
+  const d2 = survey();
+  d2.questions[2].skipLogic = [{ id: "s", when: { type: "group", op: "and", children: [] }, target: { kind: "end", status: "complete" } }] as never;
+  p = planProposal(d2, parseIntent("why can't respondents see Q5"), "grammar", deps(d2));
+  assert.match(p.summary, /Q5 can never be shown/);
+  assert.ok(p.answer!.some((l) => /Q3 always skips to the end, past Q5/.test(l.text) && l.key === "question:q_car"), "the line links to the question that does it");
+  assert.equal(planProposal(def, parseIntent("why is Q99 not showing"), "grammar", deps(def)).errors.length, 1);
+});

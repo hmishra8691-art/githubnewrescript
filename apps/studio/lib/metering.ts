@@ -209,14 +209,28 @@ export type Metered<T> = { ok: true; value: T; event: UsageEvent | null } | Mete
  * Run an AI call under the meter: reserve from the prompt size and the
  * output ceiling, settle with what the provider actually reported.
  */
-export async function meteredAi<T>(meter: Meter, ctx: MeterContext, eventType: string, est: { estimateText: string; maxTokens: number; requests?: number; operation: string }, fn: () => Promise<T>): Promise<Metered<T>> {
+/** The usage spec an AI call is reserved (and estimated) at — one definition for `meteredAi` and `estimateAi`. */
+function aiSpec(eventType: string, est: { estimateText: string; maxTokens: number; requests?: number; operation: string }): UsageSpec {
   const providerName = process.env.AI_API_URL === "fake:" ? "fake" : "openai-compatible";
   const reqs = est.requests ?? 1;
-  const hold = await meter.reserve(ctx, {
+  return {
     eventType, provider: meterProvider(providerName, "chat"), service: "chat", model: meterModel(providerName, aiModelName(), "chat"),
     inputUnits: (estimateTokens(est.estimateText) + 120) * reqs, outputUnits: est.maxTokens * reqs,
     metadata: { operation: est.operation },
-  });
+  };
+}
+
+/**
+ * What an AI call WOULD cost, priced exactly as `meteredAi` would reserve it —
+ * for the "estimated cost" a person sees before choosing to run it (the
+ * import brief §33). Touches no wallet.
+ */
+export async function estimateAi(meter: Meter, ctx: MeterContext, eventType: string, est: { estimateText: string; maxTokens: number; requests?: number; operation: string }): Promise<number> {
+  try { return (await meter.estimate(ctx, aiSpec(eventType, est))).customerCharge; } catch { return 0; }
+}
+
+export async function meteredAi<T>(meter: Meter, ctx: MeterContext, eventType: string, est: { estimateText: string; maxTokens: number; requests?: number; operation: string }, fn: () => Promise<T>): Promise<Metered<T>> {
+  const hold = await meter.reserve(ctx, aiSpec(eventType, est));
   if (!hold.ok) return hold;
   try {
     const { value, usage } = await collectUsage(fn);

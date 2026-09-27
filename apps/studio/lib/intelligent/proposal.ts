@@ -3,7 +3,7 @@ import { cond } from "@rescript/schema";
 import {
   parseLogicExpression, formatCondition, conditionSummary, questionLogicSummary,
   getQuestionByCodeOrVar, listPages, listBlocks, questionOrder, conditionRefs,
-  validateProposal, describeChange, objectKey, neighbours, parseSetExpression, formatSetExpression, maskSummary, ruleLabel,
+  validateProposal, describeChange, objectKey, neighbours, parseSetExpression, formatSetExpression, maskSummary, ruleLabel, diagnoseQuestion,
   type ProposalChange, type ExpressionError, type DependencyIndex, type ObjectKey,
 } from "@rescript/engine";
 
@@ -45,6 +45,8 @@ export type Intent =
   | { kind: "clear_mask"; target: string }
   | { kind: "find"; target: string; relation: "usedBy" | "dependsOn" | "affects" | "reach" }
   | { kind: "explain"; target: string }
+  /** "why is Q25 not showing?", "why is Q20 unreachable?" — every reason, which are certain (engine `diagnoseQuestion`) */
+  | { kind: "diagnose"; target: string }
   /* STRUCTURE (UI upgrade §17, §24) */
   /** "add a page break after Q10" / "remove the page break after Q10" */
   | { kind: "page_break"; target: string; action: "add" | "remove"; /** the break goes BEFORE the target ("put Q11 on a new page") */ before?: boolean }
@@ -509,6 +511,16 @@ export function planProposal(def: SurveyDefinition, intent: Intent, source: Prop
         if (users.length) lines.push({ text: `It is used by: ${users.map((k) => labelFor(def, ix, k)).join(", ")}.` });
       }
       return base({ summary: `About ${t.label}`, answer: lines, targetKey: withKey(t), readOnly: true });
+    }
+    case "diagnose": {
+      const t = resolveTarget(def, intent.target, deps.selectedId);
+      if (!t) return missing(`“${intent.target}”`);
+      if (t.kind !== "question") return base({ summary: `${t.label} is a ${t.kind}; ask about a question in it.`, readOnly: true, targetKey: withKey(t), answer: [] });
+      const d = diagnoseQuestion(def, t.id);
+      if (!d) return missing(`“${intent.target}”`);
+      const mark = { blocking: "Never:", conditional: "Only when:", info: "Note:" } as const;
+      const lines: AnswerLine[] = d.findings.map((f) => ({ text: `${mark[f.severity]} ${f.message}`, ...(f.refs?.[0] && def.questions.some((q) => q.id === f.refs![0]) ? { key: objectKey("question", f.refs[0]) } : f.refs?.[0] ? { key: objectKey("flowNode", f.refs[0]) } : {}) }));
+      return base({ summary: d.summary, answer: lines, targetKey: withKey(t), readOnly: true });
     }
     case "page_break": {
       const t = resolveTarget(def, intent.target, deps.selectedId);

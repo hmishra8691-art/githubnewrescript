@@ -161,6 +161,22 @@ export async function POST(req: NextRequest) {
   const code = String(body.code ?? `SURVEY_${Date.now().toString(36).toUpperCase()}`).slice(0, 60);
   const db = supabaseAdmin();
 
+  /*
+   * STRICT: an imported questionnaire (and anything else that says so) must
+   * arrive whole or not at all. Without it an invalid definition quietly
+   * became a blank survey — right for a template that has drifted, wrong for
+   * a migration, where "your 180 questions were imported" followed by an
+   * empty project is the worst possible answer. Checked BEFORE the project
+   * row exists, so a refusal leaves nothing behind.
+   */
+  const strict = body.strict === true;
+  if (strict && body.definition) {
+    const pre = SurveyDefinition.safeParse({ ...body.definition, meta: { ...body.definition.meta, id: "pending", code, title, version: "1.0" } });
+    if (!pre.success) {
+      return NextResponse.json({ error: "The survey definition is not valid, so no project was created.", code: "invalid_definition", issues: pre.error.issues.slice(0, 10).map((i) => ({ path: i.path.join("."), message: i.message })) }, { status: 422 });
+    }
+  }
+
   if (!user.customerId) {
     return NextResponse.json(
       { error: "Your account is not attached to a workspace. Contact your administrator." },
@@ -206,7 +222,16 @@ export async function POST(req: NextRequest) {
   await db.from("surveys").update({ current_version_id: ver.id }).eq("id", survey.id);
   await audit({
     action: "project.created", userId: user.userId, sessionId: user.sessionId,
-    surveyId: survey.id, customerId: user.customerId, detail: { code, title },
+    surveyId: survey.id, customerId: user.customerId, detail: { code, title, ...(body.import ? { importedFrom: String(body.import.fileName ?? "").slice(0, 200) } : {}) },
   });
+  if (body.import && typeof body.import === "object") {
+    const im = body.import as Record<string, unknown>;
+    const s = (k: string, n = 200) => (typeof im[k] === "string" ? String(im[k]).slice(0, n) : undefined);
+    const num = (k: string) => (Number.isFinite(Number(im[k])) ? Number(im[k]) : undefined);
+    await audit({
+      action: "survey.imported", userId: user.userId, sessionId: user.sessionId, surveyId: survey.id, customerId: user.customerId,
+      detail: { mode: "new", fileName: s("fileName"), label: s("label"), format: s("format", 20), platform: s("platform", 20), scope: s("scope", 20), fingerprint: s("fingerprint", 40), questions: num("questions"), review: num("review") },
+    });
+  }
   return NextResponse.json({ id: survey.id });
 }

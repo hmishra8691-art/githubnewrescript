@@ -53,6 +53,19 @@ export function parseIntent(input: string): Intent {
     return { kind: "screening" };
   }
 
+  /* ------------------------------------------- diagnose (read-only): why is Q25 not showing? */
+  {
+    const NEG_SHOWN = String.raw`(?:show(?:ing|n)?|display(?:ed|ing)?|appear(?:ing|s)?|visible|asked|reached|reachable|coming up)(?:\s+up)?(?:\s+(?:to\s+)?(?:anyone|respondents?|people|me|us))?`;
+    const d =
+      new RegExp(String.raw`^why\s+(?:is|does|do|are|was|would)\s+(.+?)\s+(?:not|never)\s+(?:being\s+|getting\s+)?${NEG_SHOWN}(?:\s*\?)?$`, "i").exec(text)
+      ?? new RegExp(String.raw`^why\s+(?:isn['’]?t|doesn['’]?t|aren['’]?t|wasn['’]?t|won['’]?t|wouldn['’]?t)\s+(.+?)\s+(?:being\s+|getting\s+)?${NEG_SHOWN}(?:\s*\?)?$`, "i").exec(text)
+      ?? /^why\s+(?:is|are|was)\s+(.+?)\s+(?:unreachable|not\s+reachable|always\s+skipped|never\s+asked|skipped|hidden|missing)(?:\s+(?:for|from)\s+(?:everyone|respondents?|people))?(?:\s*\?)?$/i.exec(text)
+      ?? /^why\s+(?:can['’]?t|cannot|can\s+not|don['’]?t|do\s+not|won['’]?t|doesn['’]?t)\s+(?:respondents?|people|anyone|any(?:one|body)|i|we|they|users?|participants?)\s+(?:ever\s+)?(?:see|get(?:\s+to)?|reach|answer)\s+(.+?)(?:\s*\?)?$/i.exec(text)
+      ?? /^(?:diagnose|debug|troubleshoot)\s+(.+?)(?:\s*\?)?$/i.exec(text)
+      ?? /^(?:is|can)\s+(.+?)\s+(?:reachable|(?:ever\s+)?be\s+reached|ever\s+shown|shown\s+to\s+anyone|ever\s+asked)(?:\s*\?)?$/i.exec(text);
+    if (d) return { kind: "diagnose", target: strip(d[1]) };
+  }
+
   /* ------------------------------------------------------ find / explain */
   if ((m = /^(?:what|which(?: questions| objects)?|who|find(?: everything| all)?|list(?: everything| all)?|show me(?: everything| all)?)\s+(?:questions?\s+|rules?\s+|things?\s+|objects?\s+)?(?:that\s+)?(?:depends?\s+on|uses?|references?|reads?|needs?|relies\s+on|is\s+using)\s+(.+?)(?:\s*\?)?$/i.exec(text))) {
     return { kind: "find", target: strip(m[1]), relation: "usedBy" };

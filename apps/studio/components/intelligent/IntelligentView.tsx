@@ -17,6 +17,8 @@ import { planProposal, type Proposal, type Intent } from "../../lib/intelligent/
 import { surveyContext } from "../../lib/intelligent/context";
 import { coerceIntent } from "../../lib/intelligent/ai";
 import { languageName, pickRecordingMime, type HeardTranscript } from "../../lib/intelligent/voice";
+import { importRequest, importReviewAnswer, codeFromTitle } from "../../lib/import/chat";
+import { ImportCard, ReviewCard, type ImportJob, type ReviewEntry, type ReviewScript } from "./ImportCard";
 
 /**
  * INTELLIGENT — describe the change; review it; apply it.
@@ -42,6 +44,14 @@ import { languageName, pickRecordingMime, type HeardTranscript } from "../../lib
  *
  * Read-only questions ("what depends on Q3?") are answered from the
  * dependency index and never produce an Apply button at all.
+ *
+ * SUPER INTELLIGENT IMPORT (the import brief). A questionnaire file —
+ * attached with the paperclip, dropped on the conversation, or asked for
+ * ("import this file") — becomes an IMPORT turn: estimate, preview, then
+ * Create project or Add to this survey (ImportCard). "What could not be
+ * migrated?" answers from the survey's own import record, with the custom
+ * code the import kept (disabled) offered for Deep analysis — whose reading
+ * comes back as an ordinary proposal, reviewed and applied like any other.
  */
 
 interface Turn {
@@ -55,6 +65,13 @@ interface Turn {
   heard?: HeardTranscript;
 }
 
+interface ImportTurn { id: string; kind: "import"; job: ImportJob }
+interface ReviewTurn { id: string; kind: "review"; text: string; entry: ReviewEntry }
+type Entry = Turn | ImportTurn | ReviewTurn;
+const isProposalTurn = (e: Entry): e is Turn => !("kind" in e);
+/** the files behind import turns — kept out of the turn objects, which stay plain data */
+const importFiles = new Map<string, File>();
+
 /**
  * The conversation outlives the component. Switching to Grid to look at
  * something and coming back must not wipe what was proposed — §9 says the
@@ -62,7 +79,7 @@ interface Turn {
  * survey for the life of the page, never persisted: proposals are about
  * the survey as it was when they were made.
  */
-const sessions = new Map<string, Turn[]>();
+const sessions = new Map<string, Entry[]>();
 /** whether /api/ai/logic answered (true), refused (false) or has not been asked yet — for the page's lifetime */
 let aiKnown: boolean | null = null;
 /** the same for /api/ai/transcribe: null until the first recording is sent */
@@ -88,7 +105,7 @@ export function IntelligentView() {
   const primary = (sel?.primary ?? (s.selectedQuestionId ? `question:${s.selectedQuestionId}` : null)) as ObjectKey | null;
 
   const [text, setText] = React.useState("");
-  const [turns, setTurns] = React.useState<Turn[]>(() => sessions.get(s.surveyDbId) ?? []);
+  const [turns, setTurns] = React.useState<Entry[]>(() => sessions.get(s.surveyDbId) ?? []);
   React.useEffect(() => { sessions.set(s.surveyDbId, turns); }, [turns, s.surveyDbId]);
   const [busy, setBusy] = React.useState(false);
   /** null = unknown yet; false = 501 or no session; true = the route answered */
@@ -123,6 +140,9 @@ export function IntelligentView() {
   const ask = React.useCallback(async (sentence: string, heard?: HeardTranscript) => {
     const t = sentence.trim();
     if (!t || busy) return;
+    const imp = importRequest(t);
+    if (imp === "pick") { setText(""); fileRef.current?.click(); return; }
+    if (imp === "report") { setText(""); showReview(t); return; }
     setBusy(true);
     setText("");
     const selectedLabel = primary?.startsWith("question:") ? (s.def.questions.find((q) => q.id === primary.slice(9))?.code ?? null) : null;
@@ -161,6 +181,7 @@ export function IntelligentView() {
     if (plan.targetKey) selectKey(plan.targetKey);
     setBusy(false);
     inputRef.current?.focus();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busy, primary, s.def, s.surveyDbId, deps, aiAvailable, selectKey]);
 
   /* -------------------------------------------------------------- apply */
@@ -175,7 +196,7 @@ export function IntelligentView() {
     });
     if (outcome.length) {
       s.toast(outcome[0], "err");
-      setTurns((ts) => ts.map((x) => x.id === turn.id ? { ...x, proposal: { ...x.proposal, errors: outcome } } : x));
+      setTurns((ts) => ts.map((x) => x.id === turn.id && isProposalTurn(x) ? { ...x, proposal: { ...x.proposal, errors: outcome } } : x));
       return;
     }
     setTurns((ts) => ts.map((x) => x.id === turn.id ? { ...x, state: "applied" } : x));
@@ -185,7 +206,138 @@ export function IntelligentView() {
   }, [s, selectKey]);
 
   const cancel = (turn: Turn) => setTurns((ts) => ts.map((x) => x.id === turn.id ? { ...x, state: "cancelled" } : x));
-  const review = (turn: Turn) => setTurns((ts) => ts.map((x) => x.id === turn.id ? { ...x, reviewing: !x.reviewing } : x));
+  const review = (turn: Turn) => setTurns((ts) => ts.map((x) => x.id === turn.id && isProposalTurn(x) ? { ...x, reviewing: !x.reviewing } : x));
+
+  /* ------------------------------------------------------------- import */
+  const fileRef = React.useRef<HTMLInputElement>(null);
+  const [dropping, setDropping] = React.useState(false);
+  const sandbox = s.surveyDbId === "sandbox";
+  const patchJob = React.useCallback((id: string, patch: Partial<ImportJob>) => {
+    setTurns((ts) => ts.map((x) => x.id === id && "kind" in x && x.kind === "import" ? { ...x, job: { ...x.job, ...patch } } : x));
+  }, []);
+  const jobOf = (id: string): ImportJob | undefined => { const e = turns.find((x) => x.id === id); return e && "kind" in e && e.kind === "import" ? e.job : undefined; };
+
+  const postImport = React.useCallback(async (id: string, fields: Record<string, string>) => {
+    const file = importFiles.get(id);
+    if (!file) throw new Error("The file is no longer available — attach it again.");
+    const form = new FormData();
+    form.append("file", file, file.name);
+    form.append("surveyId", s.surveyDbId);
+    for (const [k, v] of Object.entries(fields)) form.append(k, v);
+    const r = await fetch("/api/import/analyze", { method: "POST", body: form });
+    const d = await r.json().catch(() => null) as Record<string, any> | null;
+    if (!d) throw new Error(`The import service did not answer (${r.status}).`);
+    if (r.status === 402) throw new Error(String(d.error ?? "The wallet refused this import."));
+    return { status: r.status, d };
+  }, [s.surveyDbId]);
+
+  const startImport = React.useCallback(async (file: File) => {
+    const id = uid("import");
+    importFiles.set(id, file);
+    const job: ImportJob = { fileName: file.name, size: file.size, stage: "estimating", scope: "full", into: "new" };
+    setTurns((ts) => [...ts, { id, kind: "import", job }]);
+    try {
+      const { d } = await postImport(id, { phase: "estimate" });
+      if (!d.ok) { patchJob(id, { stage: "failed", detection: d.detection, error: String(d.error ?? "This file could not be read as a questionnaire.") }); return; }
+      patchJob(id, { stage: "estimated", detection: d.detection, workload: d.workload, title: d.title, estimate: d.estimate });
+    } catch (e) {
+      patchJob(id, { stage: "failed", error: (e as Error).message });
+    }
+  }, [postImport, patchJob]);
+
+  const runImport = React.useCallback(async (id: string) => {
+    const job = jobOf(id);
+    if (!job) return;
+    const basedOn = s.def;
+    patchJob(id, { stage: "running", error: undefined });
+    try {
+      const { d } = await postImport(id, { phase: "run", scope: job.scope, into: job.into, ...(job.into === "merge" ? { existing: JSON.stringify(basedOn) } : {}) });
+      if (!d.report) { patchJob(id, { stage: "failed", error: String(d.error ?? "The import could not be completed.") }); return; }
+      patchJob(id, { stage: "ready", report: d.report, definition: d.definition, mapping: d.mapping, actual: d.actual, basedOn, ...(d.report.ok ? {} : { error: "The file was read, but it did not produce a valid survey — see the issues." }) });
+    } catch (e) {
+      patchJob(id, { stage: "estimated", error: (e as Error).message });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turns, s.def, postImport, patchJob]);
+
+  const importAudit = (job: ImportJob) => ({
+    fileName: job.fileName, label: job.detection?.label, format: job.detection?.format, platform: job.detection?.platform, scope: job.scope,
+    fingerprint: job.definition?.imports?.at(-1)?.fingerprint, questions: job.report?.created?.questions, review: job.report?.review.length,
+  });
+
+  const createFromImport = React.useCallback(async (id: string) => {
+    const job = jobOf(id);
+    if (!job?.definition) return;
+    patchJob(id, { stage: "creating", error: undefined });
+    try {
+      const title = job.definition.meta.title || job.title || job.fileName.replace(/\.[^.]+$/, "");
+      const r = await fetch("/api/surveys", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title, code: codeFromTitle(title), definition: job.definition, strict: true, import: importAudit(job) }) });
+      const d = await r.json().catch(() => null) as { id?: string; error?: string } | null;
+      if (!r.ok || !d?.id) { patchJob(id, { stage: "ready", error: d?.error ?? (r.status === 401 ? "Sign in to create a project." : `The project could not be created (${r.status}).`) }); return; }
+      patchJob(id, { stage: "created", createdId: d.id });
+      s.toast("Project created from the import.");
+    } catch (e) {
+      patchJob(id, { stage: "ready", error: (e as Error).message });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turns, patchJob, s]);
+
+  const mergeImport = React.useCallback((id: string) => {
+    const job = jobOf(id);
+    if (!job?.definition || s.readOnly) return;
+    // the preview was computed against the survey as it was; if it has changed since, the merge would undo that change
+    if (job.basedOn && job.basedOn !== s.def && JSON.stringify(job.basedOn) !== JSON.stringify(s.def)) { patchJob(id, { error: "The survey has changed since this preview was made. Analyze again so nothing you just did is lost." , stage: "estimated", report: undefined, definition: undefined }); return; }
+    s.labelNextEdit(`Imported ${job.fileName}`);
+    s.replace(job.definition);
+    patchJob(id, { stage: "merged", basedOn: undefined });
+    void fetch("/api/import/record", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: s.surveyDbId, ...importAudit(job) }) }).catch(() => {});
+    s.toast("Imported into this survey. Undo with ⌘Z.");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turns, s, patchJob]);
+
+  const cancelImport = (id: string) => { patchJob(id, { stage: "cancelled" }); importFiles.delete(id); };
+
+  const onFiles = (list: FileList | null) => {
+    const f = list?.[0];
+    if (f) void startImport(f);
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  /* "what could not be migrated?" — from the survey's own import record */
+  const showReview = React.useCallback((sentence: string) => {
+    const a = importReviewAnswer(s.def);
+    const scripts: ReviewScript[] = (s.def.scripts ?? []).filter((x) => !x.enabled && /^Imported /.test(x.name)).map((x) => ({
+      id: x.id, name: x.name, code: x.code, questionId: x.ref, questionCode: x.ref ? s.def.questions.find((q) => q.id === x.ref)?.code : undefined,
+    }));
+    setTurns((ts) => [...ts, { id: uid("review"), kind: "review", text: sentence, entry: { summary: a.summary, lines: a.lines, scripts, aiOff: aiAvailable === false } }]);
+  }, [s.def, aiAvailable]);
+
+  const analyzeScript = React.useCallback(async (turnId: string, scriptId: string) => {
+    const e = turns.find((x) => x.id === turnId);
+    if (!e || !("kind" in e) || e.kind !== "review") return;
+    const sc = e.entry.scripts.find((x) => x.id === scriptId);
+    const script = (s.def.scripts ?? []).find((x) => x.id === scriptId);
+    if (!sc || !script) return;
+    const patch = (p: Partial<ReviewScript>) => setTurns((ts) => ts.map((x) => x.id === turnId && "kind" in x && x.kind === "review" ? { ...x, entry: { ...x.entry, scripts: x.entry.scripts.map((y) => y.id === scriptId ? { ...y, ...p } : y) } } : x));
+    patch({ state: "analyzing", error: undefined });
+    try {
+      const refs = /Reads ([^.]+)\./.exec(script.notes ?? "")?.[1].split(/,\s*/) ?? [];
+      const r = await fetch("/api/import/custom-logic", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ surveyId: s.surveyDbId, context: surveyContext(s.def, { selectedId: sc.questionId ?? null }), item: { language: /^Imported (\w+)/.exec(script.name)?.[1] ?? "javascript", code: script.code, location: sc.questionCode ?? "survey", role: script.name.split(" · ")[1] ?? "custom code", refs, questionCode: sc.questionCode } }),
+      });
+      if (r.status === 501 || r.status === 401 || r.status === 403) { setAiAvailable(false); patch({ state: "failed", error: "No language model is available on this Studio for deep analysis." }); return; }
+      const d = await r.json().catch(() => null) as { ok?: boolean; error?: string; analysis?: { explanation: string; dependencies: string[]; equivalent: string; risk: string; intent: unknown } | null; usage?: { charge: number } | null } | null;
+      if (!r.ok || !d?.ok) { patch({ state: "failed", error: d?.error ?? `The analysis failed (${r.status}).` }); return; }
+      const an = d.analysis;
+      const intent = an ? coerceIntent(an.intent) : null;
+      const plan = intent && intent.kind !== "unknown" ? planProposal(s.def, intent, "ai", deps) : null;
+      patch({ state: "done", explanation: an?.explanation ?? "", dependencies: an?.dependencies ?? [], risk: an?.risk ?? "", equivalent: an?.equivalent, proposed: !!plan && !plan.readOnly, charge: d.usage?.charge });
+      if (plan && !plan.readOnly) setTurns((ts) => [...ts, { id: uid("turn"), text: `Rebuild ${script.name}${sc.questionCode ? ` on ${sc.questionCode}` : ""} (from the model's reading of the imported code)`, proposal: plan, state: "open" }]);
+    } catch (err) {
+      patch({ state: "failed", error: (err as Error).message });
+    }
+  }, [turns, s.def, s.surveyDbId, deps, setAiAvailable]);
 
   /* --------------------------------------------------------------- voice */
   /*
@@ -285,7 +437,7 @@ export function IntelligentView() {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void ask(text); }
   };
 
-  const open = turns.filter((t) => t.state === "open").length;
+  const open = turns.filter((t) => isProposalTurn(t) && t.state === "open").length;
 
   /*
    * CONTEXT-AWARE EXAMPLES: with a question selected, the first examples
@@ -312,7 +464,13 @@ export function IntelligentView() {
 
   return (
     <div className="iq" data-testid="intelligent-view" style={{ gridTemplateColumns: showInspector ? `minmax(0, 1fr) 6px ${prefs.inspector}px` : "minmax(0, 1fr)" }}>
-      <section className="iq-main">
+      <section
+        className={`iq-main${dropping ? " iq-dropping" : ""}`}
+        onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDropping(true); } }}
+        onDragLeave={(e) => { if (e.currentTarget === e.target) setDropping(false); }}
+        onDrop={(e) => { if (e.dataTransfer.files.length) { e.preventDefault(); setDropping(false); onFiles(e.dataTransfer.files); } }}
+        data-testid="iq-main"
+      >
         <div className="iq-toolbar">
           <span className="iq-title"><Icon name="sparkle" size={14} /> Intelligent</span>
           <span className="iq-hint">Describe a change in plain language. Every change is shown for review before it is applied — nothing is written until you press Apply.</span>
@@ -330,6 +488,10 @@ export function IntelligentView() {
             <div className="iq-welcome" data-testid="iq-welcome">
               <h2>How do you want to program your research?</h2>
               <p>Say it. The Studio proposes the exact rule, shows you what it will do, and waits for you to apply it.</p>
+              <button type="button" className="iq-example iqi-welcome-import" onClick={() => fileRef.current?.click()} data-testid="iq-import-start">
+                <span className="iq-example-text"><Icon name="paperclip" size={13} /> Import a questionnaire — Qualtrics QSF, Decipher XML, Word, Excel, CSV, PDF or text</span>
+                <span className="iq-example-about">reverse-engineered into Rescript · previewed before anything is created</span>
+              </button>
               <div className="iq-examples">
                 {examples.map((e) => (
                   <button key={e.text} type="button" className="iq-example" onClick={() => setText(e.text)} data-testid="iq-example">
@@ -340,9 +502,17 @@ export function IntelligentView() {
               </div>
             </div>
           )}
-          {turns.map((turn) => (
-            <TurnCard key={turn.id} turn={turn} def={s.def} onApply={() => apply(turn)} onCancel={() => cancel(turn)} onReview={() => review(turn)} onSelect={selectKey} readOnly={s.readOnly} />
-          ))}
+          {turns.map((turn) => {
+            if (!isProposalTurn(turn)) {
+              if (turn.kind === "import") return (
+                <ImportCard key={turn.id} job={turn.job} readOnly={s.readOnly} sandbox={sandbox}
+                  onPatch={(p) => patchJob(turn.id, p)} onRun={() => void runImport(turn.id)} onCreate={() => void createFromImport(turn.id)}
+                  onMerge={() => mergeImport(turn.id)} onCancel={() => cancelImport(turn.id)} onReviewAfter={() => showReview("What needs review after the import?")} />
+              );
+              return <ReviewCard key={turn.id} text={turn.text} entry={turn.entry} onSelect={(qid) => selectKey(`question:${qid}` as ObjectKey)} onAnalyze={(sid) => void analyzeScript(turn.id, sid)} />;
+            }
+            return <TurnCard key={turn.id} turn={turn} def={s.def} onApply={() => apply(turn)} onCancel={() => cancel(turn)} onReview={() => review(turn)} onSelect={selectKey} readOnly={s.readOnly} />;
+          })}
           {busy && <div className="iq-thinking" data-testid="iq-thinking"><span className="iq-dot" /><span className="iq-dot" /><span className="iq-dot" /></div>}
         </div>
 
@@ -353,6 +523,10 @@ export function IntelligentView() {
             placeholder={voice === "recording" ? "Listening… click the microphone again when you have finished." : voice === "transcribing" ? "Transcribing…" : open ? "Apply or cancel the proposal above, or describe another change…" : "Show Q5 only when Q3 = Yes and Q4 > 2 — or press the microphone and say it, in any language"}
             rows={2} data-testid="iq-input" aria-label="Describe a change" disabled={busy || voice !== "idle"}
           />
+          <input ref={fileRef} type="file" hidden onChange={(e) => onFiles(e.target.files)} data-testid="iq-file" accept=".qsf,.xml,.docx,.xlsx,.xls,.csv,.tsv,.pdf,.txt,.json,.doc,application/json,text/xml,application/xml,text/plain,text/csv,application/pdf" />
+          <button type="button" className="iq-attach" onClick={() => fileRef.current?.click()} disabled={busy || voice !== "idle"} data-testid="iq-attach" aria-label="Import a questionnaire file" title="Import a questionnaire — QSF, Decipher XML, Word, Excel, CSV, PDF or text. Read by its content; previewed before anything is created.">
+            <Icon name="paperclip" size={15} />
+          </button>
           <button
             type="button" className={`iq-mic${voice === "recording" ? " recording" : voice === "transcribing" ? " busy" : ""}`} data-testid="iq-mic" data-state={voice}
             onClick={toggleVoice} disabled={busy || voice === "transcribing" || sttAvailable === false} aria-pressed={voice === "recording"}

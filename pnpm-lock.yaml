@@ -177,6 +177,9 @@ importers:
       '@rescript/exporters':
         specifier: workspace:*
         version: link:../../packages/exporters
+      '@rescript/import':
+        specifier: workspace:*
+        version: link:../../packages/import
       '@rescript/mail':
         specifier: workspace:*
         version: link:../../packages/mail
@@ -343,6 +346,25 @@ importers:
       '@types/qrcode':
         specifier: ^1.5.6
         version: 1.5.6
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+
+  packages/import:
+    dependencies:
+      '@rescript/engine':
+        specifier: workspace:*
+        version: link:../engine
+      '@rescript/schema':
+        specifier: workspace:*
+        version: link:../schema
+      exceljs:
+        specifier: ^4.4.0
+        version: 4.4.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.20.1
+        version: 22.20.1
       typescript:
         specifier: ^5.6.3
         version: 5.9.3

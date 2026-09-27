@@ -75,6 +75,52 @@ export const Quota = z.object({
 });
 export type Quota = z.infer<typeof Quota>;
 
+export const ImportMapEntry = z.object({
+  kind: z.enum(["question", "variable", "option", "row", "block", "page", "embedded", "quota", "loop", "branch", "randomizer", "group", "end"]),
+  /** the source's identifier: QID15, Q5, BL_3pT, Country, QID15/choice 3 */
+  source: z.string(),
+  /** what it is in this survey */
+  rescript: z.string(),
+  /** why it differs, when it does: "id already used", "not a valid variable name" */
+  reason: z.string().optional(),
+});
+export type ImportMapEntry = z.infer<typeof ImportMapEntry>;
+
+export const ImportRecord = z.object({
+  id: z.string(),
+  platform: z.string(),
+  format: z.string(),
+  fileName: z.string(),
+  fingerprint: z.string(),
+  importedAt: z.string(),
+  scope: z.string().optional(),
+  /** into a new project, or merged into an existing one */
+  mode: z.enum(["new", "merge"]).default("new"),
+  /**
+   * Identity: every question, variable, block, page, embedded field, quota
+   * and loop, source → Rescript. Option and row entries are kept only where
+   * the code changed (the codes are otherwise the source's own), so the
+   * record stays small in every stored version.
+   */
+  map: z.array(ImportMapEntry).default([]),
+  /**
+   * What the migration left for a person to decide (the report's "requires
+   * review" list), so the project carries it: Intelligent mode answers "what
+   * could not be migrated?" from here in any later session.
+   */
+  review: z.array(z.object({
+    location: z.string(),
+    type: z.string(),
+    severity: z.enum(["high", "medium", "low", "info"]),
+    message: z.string(),
+    suggestion: z.string().optional(),
+    refs: z.array(z.string()).optional(),
+    /** the Rescript question it concerns, when there is one */
+    questionId: z.string().optional(),
+  })).default([]),
+});
+export type ImportRecord = z.infer<typeof ImportRecord>;
+
 /** Custom scripts (requirement §13). Executed by the sandboxed script host. */
 export const CustomScript = z.object({
   id: z.string(),
@@ -542,6 +588,16 @@ export const SurveyDefinition = z.object({
    */
   listFills: z.array(ListFill).default([]),
   meta_extensions: z.record(z.any()).optional(),
+  /**
+   * WHERE THIS SURVEY CAME FROM (Intelligent import, §25–§26). One entry per
+   * import — the source file, its fingerprint, and the source → Rescript map
+   * of every identifier the import touched (QID15 → QID15, QID15 →
+   * QID15_Imported and why). Read by the migration report, by re-imports
+   * (a second upload of the same survey is recognised by fingerprint and by
+   * the map), and by anyone debugging a question that came from elsewhere.
+   * Absent on every survey that was built here.
+   */
+  imports: z.array(ImportRecord).optional(),
 });
 export type SurveyDefinition = z.infer<typeof SurveyDefinition>;
 

@@ -30,6 +30,7 @@ Intent shapes (pick exactly one):
 {"kind":"clear_mask","target":"<question>"}
 {"kind":"find","target":"<question>","relation":"usedBy"|"dependsOn"|"affects"|"reach"}
 {"kind":"explain","target":"<question>"}
+{"kind":"diagnose","target":"<question>"}  — "why is Q25 not showing?", "why is Q20 unreachable?", "why can't respondents see Q12?": every reason the question may not be shown
 {"kind":"page_break","target":"<question>","action":"add"|"remove","before":false}  — "add a page break after Q10"; before:true for "put Q11 on a new page"
 {"kind":"embedded","name":"<VARIABLE>","source":"url"|"panel"|"static"|"expression","value":"<for static: the value; for expression: the expression>"}  — "create an embedded variable called country and set it to India" is {"kind":"embedded","name":"country","source":"static","value":"India"}
 {"kind":"loop","from":"<first question>","to":"<last question>","loopVar":"<name, optional>"}  — "create a loop around Q5 to Q8 for each brand"
@@ -114,7 +115,7 @@ export function coerceIntent(raw: unknown): Intent | null {
       if (!target || (relation !== "usedBy" && relation !== "dependsOn" && relation !== "affects" && relation !== "reach")) return null;
       return { kind, target, relation };
     }
-    case "explain": {
+    case "explain": case "diagnose": {
       const target = str(o.target);
       return target ? { kind, target } : null;
     }

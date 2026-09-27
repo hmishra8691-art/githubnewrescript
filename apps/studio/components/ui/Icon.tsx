@@ -9,7 +9,7 @@ export type IconName =
   | "questions" | "settings" | "flow" | "logic" | "variables" | "calc" | "quotas" | "listfill" | "designs" | "branding" | "scripts"
   | "data" | "versions" | "json" | "collaborators" | "notes" | "activity" | "analytics" | "clean" | "reports"
   | "assets"
-  | "search" | "plus" | "play" | "flask" | "download" | "export" | "user" | "bell" | "chevron-down" | "chevron-right" | "check" | "warning" | "info" | "close" | "home" | "grid" | "share" | "shield" | "logout" | "sparkle" | "chart" | "table" | "layers";
+  | "search" | "plus" | "play" | "flask" | "download" | "export" | "user" | "bell" | "chevron-down" | "chevron-right" | "check" | "warning" | "info" | "close" | "home" | "grid" | "share" | "shield" | "logout" | "sparkle" | "chart" | "table" | "layers" | "upload" | "paperclip";
 
 const P: Record<IconName, React.ReactNode> = {
   questions: <><rect x="4" y="4" width="16" height="16" rx="3" /><path d="M8 9h8M8 13h8M8 17h5" /></>,
@@ -56,6 +56,8 @@ const P: Record<IconName, React.ReactNode> = {
   chart: <><path d="M4 20V4" /><path d="M4 20h16" /><path d="m7 15 4-5 3 3 5-7" /></>,
   table: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 10h18M9 10v10M15 10v10" /></>,
   layers: <><path d="m12 3 9 5-9 5-9-5z" /><path d="m3 13 9 5 9-5M3 17l9 5 9-5" /></>,
+  upload: <><path d="M12 20V9M7 13l5-5 5 5M5 4h14" /></>,
+  paperclip: <><path d="m20 11.5-8.3 8.3a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7L9.4 17.3a1.7 1.7 0 0 1-2.4-2.4l7.6-7.6" /></>,
 };
 
 export function Icon({ name, size = 18, className, title }: { name: IconName; size?: number; className?: string; title?: string }) {

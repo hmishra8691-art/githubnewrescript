@@ -82,6 +82,9 @@ export const AUDIT_EVENTS = [
 
   /* the survey itself */
   "survey.modified",
+  /* Super Intelligent import: a questionnaire read from another platform or a document,
+     as a new project or merged into this one — the file, what was read, what needs review */
+  "survey.imported",
   "survey.saved",
   "version.created",
   "version.restored",
@@ -235,6 +238,7 @@ export function describeEvent(r: AuditRow): string {
     case "lock.requested": return `${who} requested edit access`;
     case "lock.denied": return `${who} was refused an edit because ${target || "another user"} held the lock`;
 
+    case "survey.imported": return `${who} imported ${str(d.fileName) || "a file"}${d.label ? ` (${str(d.label)})` : ""}${d.mode === "merge" ? " into this survey" : ""}${d.questions != null ? ` — ${str(d.questions)} questions${Number(d.review) ? `, ${str(d.review)} to review` : ""}` : ""}`;
     case "survey.modified": return `${who} modified the survey${d.summary ? ` — ${str(d.summary)}` : ""}`;
     case "survey.saved": return `${who} saved the survey`;
     case "version.created": return `${who} created version ${str(d.version) || "?"}`;
