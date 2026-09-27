@@ -207,7 +207,7 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
   await page.waitForTimeout(150);
 }
 
-/* ----------------------------------------------------------- drag to reposition (pinned, persisted) */
+/* ----------------------------------------------------------- nothing moves (UI upgrade §9): a drag on a node pans, writes nothing */
 {
   await page.click('[data-testid="flow-fit"]');
   await page.waitForTimeout(150);
@@ -217,26 +217,76 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
   await page.waitForTimeout(200);
   const br = await node("br_use_type");
   const before = await br.boundingBox();
+  const tx0 = Number(/translate\(([-\d.]+)/.exec(await page.$eval('[data-testid="flow-viewport"]', (e) => e.getAttribute("transform")))[1]);
   await page.mouse.move(before.x + 30, before.y + before.height / 2);
   await page.mouse.down();
   await page.mouse.move(before.x + 30 + 140, before.y + before.height / 2 + 10, { steps: 8 });
   await page.mouse.up();
   await page.waitForTimeout(400);
-  const after = await (await node("br_use_type")).boundingBox();
-  assert.ok(after.x > before.x + 100, `the node moved: ${before.x} → ${after.x}`);
-  ok("dragging a node moves it");
+  const tx1 = Number(/translate\(([-\d.]+)/.exec(await page.$eval('[data-testid="flow-viewport"]', (e) => e.getAttribute("transform")))[1]);
+  assert.ok(tx1 > tx0 + 100, `the canvas panned: ${tx0} → ${tx1}`);
+  const gAfter = await page.$eval('[data-testid="flow-node"][data-node="br_use_type"]', (e) => e.getAttribute("transform"));
+  const gBefore = await page.$eval('[data-testid="flow-node"][data-node="br_use_type"]', (e) => e.getAttribute("transform"));
+  assert.equal(gAfter, gBefore);
+  ok("dragging a node pans the canvas — the node itself does not move");
   const def = await readDef();
-  const stored = def.logicFlow.nodes.find((n) => n.id === "br_use_type");
-  assert.ok(stored && typeof stored.x === "number", "the position is stored on the survey by id");
-  ok("the dragged position is persisted on def.logicFlow — it survives a reload and other environments ignore it");
+  assert.ok(!(def.logicFlow?.nodes ?? []).some((n) => n.id === "br_use_type" && typeof n.x === "number" && n.x !== 0), "no position was written to the survey");
+  ok("nothing is written to def.logicFlow — Flow is a view of the programming, not an arrangement of it");
   await page.waitForSelector('[data-testid="flow-view"]');
-  assert.ok(await page.$('[data-testid="flow-node"][data-node="br_use_type"] .fc-pin'), "the pin marker shows");
-  ok("a pinned node shows its pin");
-  await page.click('[data-testid="flow-arrange"]');
+  assert.equal(await page.$('[data-testid="flow-arrange"]'), null, "no Auto-arrange: there are no pins to forget");
+  assert.equal(await page.$('.fc-pin'), null, "no pin markers");
+  ok("no move, no pin, no arrange — the canvas offers nothing that rearranges");
+}
+
+/* ----------------------------------------------------------- the reader's questions (UI upgrade §10–§15) */
+{
+  await page.click('[data-testid="flow-granularity"] [data-granularity="questions"]');
+  await page.waitForTimeout(600);
+  // badges on the objects that are not plain questions
+  const tags = await page.$$eval('[data-testid="flow-badge"]', (els) => [...new Set(els.map((e) => e.dataset.tag))]);
+  for (const t of ["hidden", "embedded", "loop", "quota", "quota_full", "screened", "branch", "randomizer", "conjoint", "maxdiff", "calculated", "complete"]) assert.ok(tags.includes(t), `badge ${t} drawn: ${tags.join(",")}`);
+  ok(`badges name the special objects: ${tags.join(", ")}`);
+  assert.ok(await page.$('[data-testid="flow-node"][data-node="h_lf_topic"] [data-testid="flow-badge"][data-tag="hidden"]'), "a hidden variable carries H");
+  const legend = await page.$eval('[data-testid="flow-tag-legend"]', (e) => e.textContent);
+  assert.match(legend, /hidden variable/); assert.match(legend, /quota/); assert.match(legend, /embedded data/);
+  ok("a legend explains every badge on the canvas");
+  // pages framed
+  const pages = await page.$$('[data-testid="flow-page"]');
+  assert.ok(pages.length >= 40, `${pages.length} page frames`);
+  await page.click('[data-testid="flow-zoom-input"]');
+  await page.fill('[data-testid="flow-zoom-input"]', "100");
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(200);
+  const p1 = await page.$eval('[data-testid="flow-page"][data-page="p_intro_welcome"] text', (e) => e.textContent);
+  assert.match(p1, /Welcome · 3 questions/);
+  ok(`${pages.length} pages are framed around their questions (${p1 || "labelled"})`);
+  // the display condition on the node
+  const cond = await page.$eval('[data-testid="flow-node"][data-node="q_phone"] [data-testid="flow-node-condition"]', (e) => e.textContent);
+  assert.match(cond, /IF\s*Q8/);
+  ok(`a question shown only sometimes says why, on the node: ${cond}`);
+  assert.equal(await page.$('[data-testid="flow-node"][data-node="q_age"] [data-testid="flow-node-condition"]'), null, "an always-shown question has no IF line");
+  // answer-based routing reads as a decision: the skip's condition and its "otherwise"
+  const out = await page.$$eval('[data-testid="flow-edge"][data-from="q_devices"]', (els) => els.map((e) => [e.dataset.kind, e.dataset.label, e.querySelector("[data-testid=flow-edge-label]")?.dataset.when ?? ""]));
+  assert.ok(out.some(([k, l, w]) => k === "skip" && /screened/.test(l) && /None of these/.test(w)), JSON.stringify(out));
+  assert.ok(out.some(([k, l]) => k === "sequence" && l === "otherwise"), JSON.stringify(out));
+  ok("Q11's two ways out are labelled: the screen-out (its label, its condition on hover), and “otherwise” to Q12");
+  const qc = await page.$$eval('[data-testid="flow-edge"]', (els) => els.map((e) => e.dataset.label).filter((l) => /quota/.test(l)));
+  assert.ok(qc.includes("quota full") && qc.includes("quota available"), qc.join(","));
+  ok("a quota check's edges read “quota full” / “quota available”");
+  // click → the inspector, with routing, page and Open in Studio; never an editor
+  await page.fill('[data-testid="flow-search"]', "Q11 ");
+  await page.waitForTimeout(300);
+  await page.click('[data-testid="flow-node"][data-node="q_devices"]');
+  await page.waitForSelector('[data-testid="inspector-summary"]');
+  const sum = await page.$eval('[data-testid="inspector-summary"]', (e) => e.textContent);
+  assert.match(sum, /Routing.*IF Q11/); assert.match(sum, /otherwise → Q12/); assert.match(sum, /Page.*Block 4/); assert.match(sum, /Screening/);
+  ok("the inspector answers: where it sits, what it is, every way out and why");
+  assert.equal(await page.$('[data-testid="inspector"] .ai-props'), null, "no editor opened by the click");
+  assert.equal(await page.$eval('[data-testid="where-am-i"]', (e) => e.dataset.mode), "flow", "still in Flow");
+  ok("a click inspects; it does not open the question for editing");
+  await page.fill('[data-testid="flow-search"]', "");
+  await page.click('[data-testid="flow-granularity"] [data-granularity="auto"]');
   await page.waitForTimeout(400);
-  const def2 = await readDef();
-  assert.equal(def2.logicFlow.nodes.length, 0);
-  ok("Auto-arrange forgets the pins (one undoable edit)");
 }
 
 /* ----------------------------------------------------------- understand, do not edit (round 2, §4) */

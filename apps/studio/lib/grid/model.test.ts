@@ -138,11 +138,13 @@ test("typesIn counts the types present, most common first", () => {
   assert.equal(t.length, 4);
 });
 
-test("columns: two frozen, one grows, ids unique, defaults sensible", () => {
+test("columns: two frozen, none grows with the viewport, ids unique, defaults sensible", () => {
   const ids = GRID_COLUMNS.map((c) => c.id);
   assert.equal(new Set(ids).size, ids.length);
   assert.deepEqual(GRID_COLUMNS.filter((c) => c.frozen).map((c) => c.id), ["status", "code"]);
-  assert.deepEqual(GRID_COLUMNS.filter((c) => c.grow).map((c) => c.id), ["text"]);
+  // UI upgrade §1: a column that flexed with the spare room slid its neighbours when the panel opened
+  assert.deepEqual(GRID_COLUMNS.filter((c) => c.grow).map((c) => c.id), []);
+  for (const c of GRID_COLUMNS) assert.ok(c.width >= c.minWidth && c.width > 0, `${c.id} has a fixed width`);
   assert.ok(GRID_COLUMNS.filter((c) => c.defaultVisible).length >= 8);
 });
 

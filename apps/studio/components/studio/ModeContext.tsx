@@ -46,6 +46,18 @@ interface ModeState {
   chooserOpen: boolean;
   openChooser(): void;
   closeChooser(): void;
+  /**
+   * THE PROPERTIES PANEL, ON REQUEST. A contextual view (Grid) asks for the
+   * panel when a Display logic, Skip logic or Validation cell is clicked and
+   * dismisses it when ordinary content is; `reveal` names the panel section
+   * to open and scroll to, with a nonce so asking for the same section twice
+   * scrolls to it twice. The Studio decides visibility from `panelRequested`
+   * through `propertiesWanted`; `CollapsibleSection` listens for `reveal`.
+   */
+  panelRequested: boolean;
+  reveal: { section: string; nonce: number } | null;
+  requestPanel(section?: string): void;
+  dismissPanel(): void;
 }
 
 const Ctx = React.createContext<ModeState | null>(null);
@@ -114,11 +126,21 @@ export function ModeProvider({ children, sandbox = false }: { children: React.Re
   const openChooser = React.useCallback(() => setChooserOpen(true), []);
   const closeChooser = React.useCallback(() => { setChooserOpen(false); write(CHOOSER_STORAGE_KEY, "1"); }, []);
 
+  /* the panel on request, and the section to reveal in it */
+  const [panelRequested, setPanelRequested] = React.useState(false);
+  const [reveal, setReveal] = React.useState<{ section: string; nonce: number } | null>(null);
+  const requestPanel = React.useCallback((section?: string) => {
+    setPanelRequested(true);
+    if (section) setReveal((r) => ({ section, nonce: (r?.nonce ?? 0) + 1 }));
+  }, []);
+  const dismissPanel = React.useCallback(() => setPanelRequested(false), []);
+
   const value = React.useMemo<ModeState>(() => ({
     mode: pair.mode, setMode, modes: MODES, focus, setFocus,
     split: pair.split, setSplit, splitAllowed,
     chooserOpen, openChooser, closeChooser,
-  }), [pair, setMode, focus, setSplit, splitAllowed, chooserOpen, openChooser, closeChooser]);
+    panelRequested, reveal, requestPanel, dismissPanel,
+  }), [pair, setMode, focus, setSplit, splitAllowed, chooserOpen, openChooser, closeChooser, panelRequested, reveal, requestPanel, dismissPanel]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

@@ -59,7 +59,8 @@ function loadPrefs(): Prefs {
   return { columns: DEFAULT_VISIBLE_COLUMNS, density: "normal" };
 }
 
-const EDITABLE: Record<string, boolean> = { text: true, variable: true, type: true, block: true, required: true };
+/** the columns whose click opens the Properties panel, and the section each one reveals */
+const LOGIC_SECTION: Partial<Record<GridColumnId, string>> = { display: "display-logic", skip: "skip-logic", validation: "validation-rules" };
 
 export function GridView() {
   const s = useStudio();
@@ -150,6 +151,21 @@ export function GridView() {
     setEditing({ id: row.id, col: col.id });
   };
   const rowCtx = (row: GridRow) => ({ questionId: row.id, primary: row.key });
+  /*
+   * THE PROPERTIES PANEL IS CONTEXTUAL HERE (UI upgrade §2). A click on a
+   * Display logic, Skip logic or Validation cell opens the panel on that
+   * section — the row is selected by the same click, so the panel shows this
+   * question — and a click on anything else (text, variable, options, type…)
+   * closes it again: the spreadsheet is the editor for those, and a panel
+   * that stayed open would only take the width. Leaving Grid drops the
+   * request, so Studio's own rule is what applies there.
+   */
+  const inspectCell = (col: GridColumnId) => {
+    const section = LOGIC_SECTION[col];
+    if (section) mode?.requestPanel(section); else mode?.dismissPanel();
+  };
+  const dismissPanel = mode?.dismissPanel;
+  React.useEffect(() => () => { dismissPanel?.(); }, [dismissPanel]);
 
   const [pendingDelete, setPendingDelete] = React.useState<{ ids: string[]; code: string; refs: QuestionReference[] } | null>(null);
   const askDelete = (ids: string[]) => {
@@ -246,7 +262,7 @@ export function GridView() {
       case "End": if (e.metaKey || e.ctrlKey) move(shown.length, 0); else move(0, columns.length); break;
       case "Tab": move(0, e.shiftKey ? -1 : 1); break;
       case "Enter":
-        if (row && col) { e.preventDefault(); if (col.editable && col.id !== "required") startEdit(row, col); else openInStudio(row); }
+        if (row && col) { e.preventDefault(); if (col.editable && col.id !== "required") startEdit(row, col); else if (LOGIC_SECTION[col.id]) inspectCell(col.id); else openInStudio(row); }
         break;
       case " ":
         if (row && sel) { e.preventDefault(); sel.dispatch({ type: "toggle", key: row.key }); }
@@ -269,10 +285,19 @@ export function GridView() {
     for (const c of columns) { if (c.frozen) { out[c.id] = x; x += c.width; } }
     return out;
   }, [columns]);
+  /*
+   * EVERY COLUMN HAS A WIDTH THAT DOES NOT DEPEND ON THE VIEWPORT (UI upgrade
+   * §1). The question column used to flex with the spare room, which meant the
+   * Properties panel opening — or a hover toolbar appearing — narrowed it and
+   * slid every column to its right. Now it has a fixed width like the others,
+   * and a filler cell at the row's end absorbs the spare room instead; when
+   * there is none, the table scrolls horizontally. Nothing a click does can
+   * change where a column is.
+   */
   const cellStyle = (c: GridColumn): React.CSSProperties => ({
-    width: c.grow ? undefined : c.width,
-    minWidth: c.minWidth,
-    flex: c.grow ? "1 1 360px" : `0 0 ${c.width}px`,
+    width: c.width,
+    minWidth: c.width,
+    flex: `0 0 ${c.width}px`,
     textAlign: c.align,
     ...(c.frozen ? { position: "sticky", left: frozenLeft[c.id] } : {}),
   });
@@ -322,7 +347,7 @@ export function GridView() {
         style={cellStyle(c)}
         data-col={c.id}
         onDoubleClick={() => startEdit(row, c)}
-        onClick={() => setActive({ row: ri, col: ci })}
+        onClick={() => { setActive({ row: ri, col: ci }); inspectCell(c.id); }}
       >
         {body}
       </div>
@@ -415,6 +440,7 @@ export function GridView() {
                 {c.label}{sort?.column === c.id && <span className="sg-sort">{sort.dir === "asc" ? "▲" : "▼"}</span>}
               </div>
             ))}
+            <div className="sg-cell sg-h sg-fill" aria-hidden="true" />
           </div>
           <div className="sg-body" style={{ height: win.totalHeight, position: "relative" }}>
             {shown.length === 0 && (
@@ -439,13 +465,21 @@ export function GridView() {
                   onClick={(e) => { selectRow(row, e); }}
                 >
                   {columns.map((c, ci) => renderCell(row, c, ri, ci))}
+                  {/* the filler takes whatever width the viewport has spare, so the columns keep their widths whether or not the Properties panel is open */}
+                  <div className="sg-cell sg-fill" aria-hidden="true" />
+                  {/*
+                   * HOVER ACTIONS, OUT OF THE FLOW (UI upgrade §1, §3). A zero-width sticky anchor at the
+                   * row's end carries the buttons, so showing them takes no width from the cells — the
+                   * row's columns never shift. Rearranging (move up/down) is not Grid's job: Grid edits
+                   * and inspects; order is changed in Studio and Architect.
+                   */}
                   {(isHover || (hover === null && active.row === ri && !editing)) && (
-                    <div className="sg-actions" data-testid="grid-row-actions" onClick={(e) => e.stopPropagation()}>
-                      <button title="Open in Studio" onClick={() => openInStudio(row)} data-testid="grid-action-open"><Icon name="questions" size={13} /></button>
-                      <button title="Move up" disabled={readOnly} onClick={() => cmd?.run("question.moveUp", rowCtx(row))}>↑</button>
-                      <button title="Move down" disabled={readOnly} onClick={() => cmd?.run("question.moveDown", rowCtx(row))}>↓</button>
-                      <button title="Duplicate" disabled={readOnly} onClick={() => cmd?.run("question.duplicate", rowCtx(row))} data-testid="grid-action-duplicate">⧉</button>
-                      <button title="Delete" disabled={readOnly} className="danger" onClick={() => askDelete([row.id])} data-testid="grid-action-delete">×</button>
+                    <div className="sg-actions-anchor" onClick={(e) => e.stopPropagation()}>
+                      <div className="sg-actions" data-testid="grid-row-actions">
+                        <button title="Open in Studio" onClick={() => openInStudio(row)} data-testid="grid-action-open"><Icon name="questions" size={13} /></button>
+                        <button title="Duplicate" disabled={readOnly} onClick={() => cmd?.run("question.duplicate", rowCtx(row))} data-testid="grid-action-duplicate">⧉</button>
+                        <button title="Delete" disabled={readOnly} className="danger" onClick={() => askDelete([row.id])} data-testid="grid-action-delete">×</button>
+                      </div>
                     </div>
                   )}
                 </div>

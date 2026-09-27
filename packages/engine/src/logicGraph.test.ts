@@ -174,10 +174,52 @@ test("embedded data, quota checks and redirects are actions and decisions", () =
   assert.match(g.nodes.find((n) => n.id === "ed")?.label ?? "", /SRC, PID/);
   assert.equal(g.nodes.find((n) => n.id === "qc")?.kind, "decision");
   assert.ok(
-    g.edges.some((e) => e.from === "qc" && e.label === "full"),
+    g.edges.some((e) => e.from === "qc" && e.label === "quota full" && e.kind === "quota"),
     "a quota that terminates draws the exit it terminates to",
   );
   assert.equal(g.nodes.find((n) => n.id === "rd")?.kind, "action");
+  // the way past the check says what it is, so the two edges read as one decision (UI upgrade §12)
+  assert.ok(g.edges.some((e) => e.from === "qc" && e.kind === "sequence" && e.label === "quota available"), "the fallthrough is labelled");
+  assert.equal(g.nodes.find((n) => n.id === "qc")?.tag, "quota");
+  assert.equal(g.nodes.find((n) => n.id === "ed")?.tag, "embedded");
+  assert.equal(g.nodes.find((n) => n.id === "rd")?.tag, "redirect");
+});
+
+test("nodes carry tags and conditions so a canvas can badge a hidden variable, a loop, a quota check, and say why a question shows (UI upgrade §11, §14)", () => {
+  const q = (id: string, extra: Record<string, unknown>) => ({ id, code: id.toUpperCase(), variableName: id.toUpperCase(), type: "single_select", options: [{ code: 1, label: "Yes" }, { code: 2, label: "No" }], ...extra });
+  const def = survey({
+    questions: [
+      q("q1", { text: "Consent?" }),
+      q("q2", { text: "Age", type: "numeric", displayLogic: cond.rule("q1", "eq", 1), skipLogic: [{ id: "s1", when: cond.rule("q2", "lt", 18), target: { kind: "terminate", status: "screened" } }] }),
+      q("h1", { type: "hidden", text: "" }),
+      q("c1", { type: "conjoint_task", text: "" }),
+      q("m1", { type: "maxdiff_task", text: "" }),
+      q("q3", { text: "Last" }),
+    ],
+    flow: [
+      { type: "page", id: "p1", questionIds: ["q1", "q2", "h1"] },
+      { type: "loop", id: "lp", loopVar: "brand", source: { kind: "static", items: [] }, children: [{ type: "page", id: "p2", questionIds: ["c1", "m1"] }] },
+      { type: "page", id: "p3", questionIds: ["q3"] },
+      { type: "end", id: "e", status: "complete" },
+    ],
+  });
+  const g = buildLogicFlow(def);
+  const node = (id: string) => g.nodes.find((n) => n.id === id)!;
+  assert.equal(node("q1").tag, undefined, "an ordinary question has no badge");
+  assert.equal(node("h1").tag, "hidden");
+  assert.equal(node("c1").tag, "conjoint");
+  assert.equal(node("m1").tag, "maxdiff");
+  assert.equal(node("lp").tag, "loop");
+  assert.equal(node("e").tag, "complete");
+  assert.equal(node("end_screened").tag, "screened", "the synthetic screen-out carries its status");
+  assert.match(node("q2").condition ?? "", /Q1/, "the display condition, in the summary's words");
+  assert.equal(node("q1").condition, undefined);
+  assert.equal(node("q2").page, "p1", "question nodes know their page, so the canvas can draw pages");
+  assert.equal(node("c1").page, "p2");
+  const out = g.edges.filter((e) => e.from === "q2");
+  assert.deepEqual(out.map((e) => [e.kind, e.label?.replace(/:.*/, "")]).sort(), [["sequence", "otherwise"], ["skip", "skip"]], "a skip and its fallthrough read as one decision");
+  assert.match(out.find((e) => e.kind === "skip")?.label ?? "", /Q2 is less than/);
+  assert.equal(g.edges.find((e) => e.from === "q1")?.label, undefined, "a plain sequence edge stays unlabelled");
 });
 
 /* ============================================================== layout */

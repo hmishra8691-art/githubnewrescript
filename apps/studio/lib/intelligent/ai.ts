@@ -30,7 +30,13 @@ Intent shapes (pick exactly one):
 {"kind":"clear_mask","target":"<question>"}
 {"kind":"find","target":"<question>","relation":"usedBy"|"dependsOn"|"affects"|"reach"}
 {"kind":"explain","target":"<question>"}
+{"kind":"page_break","target":"<question>","action":"add"|"remove","before":false}  — "add a page break after Q10"; before:true for "put Q11 on a new page"
+{"kind":"embedded","name":"<VARIABLE>","source":"url"|"panel"|"static"|"expression","value":"<for static: the value; for expression: the expression>"}  — "create an embedded variable called country and set it to India" is {"kind":"embedded","name":"country","source":"static","value":"India"}
+{"kind":"loop","from":"<first question>","to":"<last question>","loopVar":"<name, optional>"}  — "create a loop around Q5 to Q8 for each brand"
+{"kind":"screening"}  — "explain why respondents are screened out": every termination, in words
 {"kind":"unknown","reason":"<one short sentence: what is missing or ambiguous>"}
+
+The listing names objects precisely: a question by CODE (Q5) and variable name; its options by CODE and label, so "Q5 option 3" is the option with code 3 (write the condition as Q5 = 3); pages and blocks by id and title; embedded variables and hidden variables by name. "this question" / "it" is the Selected question; "this block" is its block. A hidden variable is a question of type hidden — "add a hidden variable for respondent type" is {"kind":"add_question","type":"hidden","text":"respondent type"}. The sentence may be in any language; the survey's codes are the same in every language. Read it in that language and answer with the same JSON.
 
 Condition language ("expression"): reference questions by CODE (Q3) or variable name; compare with = != > >= < <= between, contains, selected, answered, unanswered, is empty; combine with AND, OR, NOT and parentheses; option values by code or label, e.g. Q3 = Yes AND (Q1 >= 18 OR Q2 contains Coke); COUNT(Q4) >= 2. Use only questions that appear in the survey listing. Never invent codes.
 
@@ -112,6 +118,26 @@ export function coerceIntent(raw: unknown): Intent | null {
       const target = str(o.target);
       return target ? { kind, target } : null;
     }
+    case "page_break": {
+      const target = str(o.target);
+      if (!target) return null;
+      return { kind, target, action: o.action === "remove" ? "remove" : "add", ...(o.before === true ? { before: true } : {}) };
+    }
+    case "embedded": {
+      const name = str(o.name);
+      if (!name) return null;
+      const source = ["url", "panel", "static", "expression"].includes(o.source as string) ? (o.source as "url" | "panel" | "static" | "expression") : undefined;
+      const value = str(o.value);
+      const dataType = ["string", "number", "boolean", "date"].includes(o.dataType as string) ? (o.dataType as "string" | "number" | "boolean" | "date") : undefined;
+      return { kind, name, ...(source ? { source } : {}), ...(value !== undefined ? { value } : {}), ...(dataType ? { dataType } : {}) };
+    }
+    case "loop": {
+      const from = str(o.from), to = str(o.to);
+      if (!from || !to) return null;
+      return { kind, from, to, ...(str(o.loopVar) ? { loopVar: str(o.loopVar) } : {}), ...(str(o.title) ? { title: str(o.title) } : {}) };
+    }
+    case "screening":
+      return { kind };
     case "unknown":
       return { kind, reason: str(o.reason) ?? "I did not understand that." };
     default:

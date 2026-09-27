@@ -132,3 +132,26 @@ test("ancestorKeys gives the path to expand for a deep selection; containerKeys 
   assert.ok(containers.includes("flowNode:br") && containers.includes("section:rules"));
   assert.ok(!containers.includes("question:q1"));
 });
+
+test("a multi-page block lists its pages as 'Page n of m' with a page-break row between them; questions carry their object tags (UI upgrade §4–5)", () => {
+  const def = {
+    meta: { title: "t" },
+    questions: [
+      { id: "q1", code: "Q1", variableName: "Q1", type: "single_select", text: "one", options: [] },
+      { id: "h1", code: "H1", variableName: "H1", type: "hidden", text: "" },
+      { id: "c1", code: "C1", variableName: "C1", type: "conjoint_task", text: "" },
+    ],
+    flow: [{ type: "block", id: "b", title: "B", children: [{ type: "page", id: "p1", questionIds: ["q1"] }, { type: "page", id: "p2", title: "Second", questionIds: ["h1", "c1"] }] }],
+    displayRules: [], calculations: [], quotas: [],
+  } as never;
+  const root = buildSurveyMap(def);
+  const block = root.children[0];
+  assert.deepEqual(block.children.map((c) => [c.kind, c.label]), [["page", "Page 1 of 2"], ["pageBreak", "Page break"], ["page", "Page 2 of 2 · Second"]]);
+  assert.equal(block.children[1].selectable, false, "a break is a boundary, not an object");
+  const rows = flattenMap(root, new Set());
+  assert.ok(rows.some((r) => r.kind === "pageBreak"), "the break is a row");
+  const h = rows.find((r) => r.key === "question:h1")!;
+  assert.deepEqual(h.tags, ["hidden"]);
+  assert.deepEqual(rows.find((r) => r.key === "question:c1")!.tags, ["conjoint"]);
+  assert.equal(rows.find((r) => r.key === "question:q1")!.tags, undefined, "an ordinary question has none");
+});

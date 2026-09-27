@@ -45,6 +45,15 @@ export type Intent =
   | { kind: "clear_mask"; target: string }
   | { kind: "find"; target: string; relation: "usedBy" | "dependsOn" | "affects" | "reach" }
   | { kind: "explain"; target: string }
+  /* STRUCTURE (UI upgrade §17, §24) */
+  /** "add a page break after Q10" / "remove the page break after Q10" */
+  | { kind: "page_break"; target: string; action: "add" | "remove"; /** the break goes BEFORE the target ("put Q11 on a new page") */ before?: boolean }
+  /** "create an embedded variable called country and set it to India" */
+  | { kind: "embedded"; name: string; source?: "url" | "panel" | "static" | "expression"; value?: string; dataType?: "string" | "number" | "boolean" | "date" }
+  /** "create a loop around Q5 to Q8" */
+  | { kind: "loop"; from: string; to: string; loopVar?: string; title?: string }
+  /** "explain why respondents are screened out" — every screen-out and termination, in words */
+  | { kind: "screening" }
   | { kind: "unknown"; reason: string };
 
 export interface ValidationSpec { kind: ValidationRule["kind"]; value?: number | string }
@@ -89,6 +98,8 @@ export interface PlannerDeps {
   makeQuestion(def: SurveyDefinition, variantId: string): Question;
   /** the dependency index, for find / explain */
   index?: DependencyIndex;
+  /** the selected question, so "this question", "it", "the selected one" mean something (§17) */
+  selectedId?: string | null;
 }
 
 /* ------------------------------------------------------------ expressions */
@@ -101,6 +112,11 @@ export interface PlannerDeps {
  * is spelled, and the parser still has the last word.
  */
 const REWRITES: [RegExp, string][] = [
+  // "Q5 option 3 is selected" / "Q5 is option 2" / "option 3 of Q5 is selected" — an option by its code
+  [/\b([A-Za-z_][\w.]*)\s+(?:option|answer|choice|code)\s+(\w+)\s+(?:is|was|has\s+been)\s+(?:selected|chosen|picked|ticked|answered)\b/gi, "$1 = $2"],
+  [/\b(?:option|answer|choice|code)\s+(\w+)\s+(?:of|in|at|on|for)\s+([A-Za-z_][\w.]*)\s+(?:is|was|has\s+been)\s+(?:selected|chosen|picked|ticked)\b/gi, "$2 = $1"],
+  [/\b([A-Za-z_][\w.]*)\s+(?:is|was|equals|=)\s+(?:option|answer|choice|code)\s+(\w+)\b/gi, "$1 = $2"],
+  [/\b([A-Za-z_][\w.]*)\s+(?:is\s+not|isn't|!=)\s+(?:option|answer|choice|code)\s+(\w+)\b/gi, "$1 != $2"],
   [/\bis\s+(?:greater|more|higher|bigger)\s+than\s+or\s+equal\s+to\b/gi, ">="],
   [/\bis\s+(?:less|lower|smaller|fewer)\s+than\s+or\s+equal\s+to\b/gi, "<="],
   [/\b(?:is\s+)?(?:greater|more|higher|bigger)\s+than\b/gi, ">"],
@@ -188,9 +204,24 @@ const clean = (s: string) => s.replace(/<[^>]+>/g, "").trim().toLowerCase();
  * first (the parser's own resolver), then a page or block by id or title,
  * then a question by the start of its text — "the age question".
  */
-export function resolveTarget(def: SurveyDefinition, raw: string): Resolved | null {
+export function resolveTarget(def: SurveyDefinition, raw: string, selectedId?: string | null): Resolved | null {
   let token = raw.trim().replace(/^(?:the|question|q\.)\s+/i, "").replace(/\s+question$/i, "").replace(/[“”"']/g, "").trim();
   if (!token) return null;
+  /* "this question", "it", "the selected question", "this block", "this page" — the selection is the context (§17) */
+  const sel = selectedId ? def.questions.find((x) => x.id === selectedId) : undefined;
+  if (/^(?:this|it|that|the\s+selected|the\s+current|current|selected)(?:\s+(?:question|one|item))?$/i.test(token)) {
+    return sel ? { kind: "question", id: sel.id, label: sel.code || sel.variableName, question: sel } : null;
+  }
+  const thisContainer = /^(?:this|the\s+selected|the\s+current|current|selected)\s+(block|page|section|group)$/i.exec(token);
+  if (thisContainer) {
+    if (!sel) return null;
+    for (const b of listBlocks(def.flow as unknown[])) {
+      for (const p of b.pages) if (p.node.questionIds.includes(sel.id)) {
+        return /page/i.test(thisContainer[1]) ? { kind: "page", id: p.node.id, label: p.node.title || `the page of ${sel.code}` } : { kind: "block", id: b.id, label: b.title || `the block of ${sel.code}` };
+      }
+    }
+    return null;
+  }
   const q = getQuestionByCodeOrVar(def, token) ?? getQuestionByCodeOrVar(def, token.toUpperCase());
   if (q) return { kind: "question", id: q.id, label: q.code || q.variableName, question: q };
   const pageWord = /^(?:page|screen)\s+(.+)$/i.exec(token);
@@ -227,6 +258,8 @@ export function resolveTarget(def: SurveyDefinition, raw: string): Resolved | nu
 
 /** everyday words for a kind of question → a variant the picker offers */
 const TYPE_WORDS: [RegExp, string][] = [
+  [/\bhidden\b/i, "calculated.hidden"],
+  [/\b(?:calculated|computed|derived)\b/i, "calculated.value"],
   [/\b(?:multi(?:ple)?[\s-]?(?:select|choice|answer)|check ?box(?:es)?|select all|pick all)\b/i, "multi_select.checkbox"],
   [/\bdrop ?down\b/i, "single_select.dropdown"],
   [/\bnps\b|net promoter/i, "single_select.nps"],
@@ -273,7 +306,7 @@ export function planProposal(def: SurveyDefinition, intent: Intent, source: Prop
 
   switch (intent.kind) {
     case "display": {
-      const t = resolveTarget(def, intent.target);
+      const t = resolveTarget(def, intent.target, deps.selectedId);
       if (!t) return missing(`“${intent.target}”`);
       const ex = planExpression(def, intent.expression);
       const errors = ex.errors.map((e) => e.message);
@@ -294,23 +327,26 @@ export function planProposal(def: SurveyDefinition, intent: Intent, source: Prop
       const ex = planExpression(def, intent.expression);
       const errors = ex.errors.map((e) => e.message);
       const warnings = ex.warnings.map((w) => w.message);
-      const toWord = intent.to.trim().toLowerCase();
+      // "skip Q6 and Q7 and go directly to Q8" — the destination is the last "to X"; the skipped names are what the jump passes over
+      const goTo = /\b(?:go|jump|move|continue|proceed)\s+(?:straight\s+|directly\s+|on\s+)?to\s+(.+)$/i.exec(intent.to.trim());
+      const toText = goTo ? goTo[1] : intent.to;
+      const toWord = toText.trim().toLowerCase();
       let target: SkipRule["target"] | null = null;
-      let toLabel = intent.to;
+      let toLabel = toText;
       let toKey: ObjectKey | undefined;
       const status = /screen/.test(toWord) ? "screened" : /quota/.test(toWord) ? "quota_full" : /terminat/.test(toWord) ? "terminated" : /complete|end/.test(toWord) ? "complete" : undefined;
       if (/^(?:the\s+)?(?:end|finish|completion)(?:\s+of\s+the\s+survey)?$/.test(toWord) || (status === "complete" && /end/.test(toWord))) { target = { kind: "end", status: "complete" }; toLabel = "the end"; }
       else if (/terminat|screen|disqualif|quota|out\b|exit/.test(toWord)) { target = { kind: "terminate", status: status ?? "terminated" }; toLabel = `out of the survey (${(status ?? "terminated").replace("_", " ")})`; }
-      else if (/^https?:\/\//.test(intent.to.trim())) { target = { kind: "url", ref: intent.to.trim() }; }
+      else if (/^https?:\/\//.test(toText.trim())) { target = { kind: "url", ref: toText.trim() }; }
       else {
-        const t = resolveTarget(def, intent.to);
-        if (!t) return missing(`“${intent.to}”`);
+        const t = resolveTarget(def, toText, deps.selectedId);
+        if (!t) return missing(`“${toText}”`);
         target = t.kind === "question" ? { kind: "question", ref: t.id } : { kind: t.kind, ref: t.id };
         toLabel = t.label; toKey = withKey(t);
       }
       // the rule lives on the question that triggers it: the one named, else
       // the LAST question the condition reads (its answer is known by then)
-      let from: Resolved | null = intent.from ? resolveTarget(def, intent.from) : null;
+      let from: Resolved | null = intent.from ? resolveTarget(def, intent.from, deps.selectedId) : null;
       if (intent.from && !from) return missing(`“${intent.from}”`);
       if (!from && ex.condition) {
         const order = questionOrder(def);
@@ -329,7 +365,7 @@ export function planProposal(def: SurveyDefinition, intent: Intent, source: Prop
       }));
     }
     case "required": {
-      const t = resolveTarget(def, intent.target);
+      const t = resolveTarget(def, intent.target, deps.selectedId);
       if (!t) return missing(`“${intent.target}”`);
       if (t.kind !== "question") return base({ errors: [`${t.label} is a ${t.kind}; only a question can be required.`] });
       const warnings = t.question.required === intent.required ? [`${t.label} is already ${intent.required ? "required" : "optional"}.`] : [];
@@ -344,13 +380,20 @@ export function planProposal(def: SurveyDefinition, intent: Intent, source: Prop
       const q = deps.makeQuestion(def, variant);
       q.text = intent.text.trim();
       if (intent.required) q.required = true;
+      /* a hidden / calculated variable is named by what it is FOR: "a hidden variable for respondent type" → RESPONDENT_TYPE */
+      if (/^calculated\./.test(variant) && q.text) {
+        const wanted = q.text.replace(/^(?:for|called|named|the)\s+/i, "").replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "").toUpperCase().slice(0, 40);
+        const taken = new Set(def.questions.flatMap((x) => [x.code, x.variableName]));
+        if (/^[A-Z_]\w*$/.test(wanted) && !taken.has(wanted)) q.variableName = wanted;
+        q.text = "";
+      }
       if (intent.options?.length && Array.isArray(q.options)) {
         q.options = intent.options.map((label, i) => ({ code: i + 1, label: label.trim(), flags: [] })) as Question["options"];
       }
       let at: { pageId?: string; index?: number } | undefined;
       let afterLabel = "";
       if (intent.after) {
-        const t = resolveTarget(def, intent.after);
+        const t = resolveTarget(def, intent.after, deps.selectedId);
         if (!t) return missing(`“${intent.after}”`);
         if (t.kind === "question") {
           for (const p of listPages(def.flow as unknown[])) {
@@ -363,14 +406,15 @@ export function planProposal(def: SurveyDefinition, intent: Intent, source: Prop
       const warnings: string[] = [];
       if (!intent.text.trim()) warnings.push("The question has no text yet — add it after applying.");
       if (/select/.test(variant) && !(q.options?.length)) warnings.push("No options given — add them after applying.");
+      const derived = /^calculated\./.test(variant);
       return finish(base({
-        summary: `Add ${q.code}${afterLabel}: “${q.text || "(untitled)"}”.`,
+        summary: derived ? `Add the ${variant === "calculated.hidden" ? "hidden variable" : "calculated value"} ${q.variableName}${afterLabel}.` : `Add ${q.code}${afterLabel}: “${q.text || "(untitled)"}”.`,
         changes: [{ kind: "add_question", question: q, at }],
-        targetKey: objectKey("question", q.id), warnings,
+        targetKey: objectKey("question", q.id), warnings: derived ? warnings.filter((w) => !/no text/.test(w)) : warnings,
       }));
     }
     case "rename": {
-      const t = resolveTarget(def, intent.target);
+      const t = resolveTarget(def, intent.target, deps.selectedId);
       if (!t) return missing(`“${intent.target}”`);
       if (t.kind !== "question") return base({ errors: [`${t.label} is a ${t.kind}; only a question's variable can be renamed.`] });
       const newName = intent.newName.trim().replace(/[“”"']/g, "");
@@ -381,7 +425,7 @@ export function planProposal(def: SurveyDefinition, intent: Intent, source: Prop
       }));
     }
     case "validation": {
-      const t = resolveTarget(def, intent.target);
+      const t = resolveTarget(def, intent.target, deps.selectedId);
       if (!t) return missing(`“${intent.target}”`);
       if (t.kind !== "question") return base({ errors: [`${t.label} is a ${t.kind}; validation belongs to a question.`] });
       const rules: ValidationRule[] = intent.rules.map((r) => ({ id: deps.uid("v"), kind: r.kind, ...(r.value !== undefined ? { value: r.value } : {}) }));
@@ -392,14 +436,14 @@ export function planProposal(def: SurveyDefinition, intent: Intent, source: Prop
       return finish(base({ summary: describeChange(def, change), changes: [change], targetKey: withKey(t), warnings }));
     }
     case "clear_validation": {
-      const t = resolveTarget(def, intent.target);
+      const t = resolveTarget(def, intent.target, deps.selectedId);
       if (!t) return missing(`“${intent.target}”`);
       if (t.kind !== "question") return base({ errors: [`${t.label} is a ${t.kind}; validation belongs to a question.`] });
       const change = { kind: "clear_validation" as const, questionId: t.id, ...(intent.kinds?.length ? { kinds: intent.kinds } : {}) };
       return finish(base({ summary: describeChange(def, change), changes: [change], targetKey: withKey(t) }));
     }
     case "mask": {
-      const t = resolveTarget(def, intent.target);
+      const t = resolveTarget(def, intent.target, deps.selectedId);
       if (!t) return missing(`“${intent.target}”`);
       if (t.kind !== "question") return base({ errors: [`${t.label} is a ${t.kind}; a mask belongs to a question with options.`] });
       const r = parseSetExpression(def, normaliseSetExpression(def, intent.expression));
@@ -415,14 +459,14 @@ export function planProposal(def: SurveyDefinition, intent: Intent, source: Prop
       }));
     }
     case "clear_mask": {
-      const t = resolveTarget(def, intent.target);
+      const t = resolveTarget(def, intent.target, deps.selectedId);
       if (!t) return missing(`“${intent.target}”`);
       if (t.kind !== "question") return base({ errors: [`${t.label} is a ${t.kind}.`] });
       const change = { kind: "set_mask" as const, questionId: t.id, mask: null };
       return finish(base({ summary: describeChange(def, change), changes: [change], targetKey: withKey(t) }));
     }
     case "find": {
-      const t = resolveTarget(def, intent.target);
+      const t = resolveTarget(def, intent.target, deps.selectedId);
       if (!t) return missing(`“${intent.target}”`);
       const key = withKey(t);
       const ix = deps.index;
@@ -446,7 +490,7 @@ export function planProposal(def: SurveyDefinition, intent: Intent, source: Prop
       });
     }
     case "explain": {
-      const t = resolveTarget(def, intent.target);
+      const t = resolveTarget(def, intent.target, deps.selectedId);
       if (!t) return missing(`“${intent.target}”`);
       if (t.kind !== "question") return base({ summary: `${t.label} is a ${t.kind}.`, readOnly: true, targetKey: withKey(t), answer: [] });
       const q = t.question;
@@ -465,6 +509,61 @@ export function planProposal(def: SurveyDefinition, intent: Intent, source: Prop
         if (users.length) lines.push({ text: `It is used by: ${users.map((k) => labelFor(def, ix, k)).join(", ")}.` });
       }
       return base({ summary: `About ${t.label}`, answer: lines, targetKey: withKey(t), readOnly: true });
+    }
+    case "page_break": {
+      const t = resolveTarget(def, intent.target, deps.selectedId);
+      if (!t) return missing(`“${intent.target}”`);
+      if (t.kind !== "question") return base({ errors: [`${t.label} is a ${t.kind}; a page break goes after a question.`] });
+      let qid = t.id;
+      if (intent.before) {
+        // the break before Q is the break after the question before Q on the same page
+        const page = listPages(def.flow as unknown[]).find((p) => p.node.questionIds.includes(t.id));
+        const i = page ? page.node.questionIds.indexOf(t.id) : -1;
+        if (!page) return base({ errors: [`${t.label} is not on any page.`], targetKey: withKey(t) });
+        if (i === 0) return base({ errors: [`${t.label} already starts its page.`], targetKey: withKey(t) });
+        qid = page.node.questionIds[i - 1];
+      }
+      const change: ProposalChange = intent.action === "add" ? { kind: "add_page_break", questionId: qid, pageId: deps.uid("page") } : { kind: "remove_page_break", questionId: qid };
+      return finish(base({ summary: describeChange(def, change), changes: [change], targetKey: withKey(t) }));
+    }
+    case "embedded": {
+      const name = intent.name.trim().replace(/[“”"']/g, "").replace(/[^\w]+/g, "_").replace(/^_+|_+$/g, "");
+      const source = intent.source ?? (intent.value !== undefined ? "static" : "url");
+      const field = { name, source, ...(intent.value !== undefined ? { value: intent.value } : {}), ...(intent.dataType ? { dataType: intent.dataType } : {}) } as const;
+      const change: ProposalChange = { kind: "add_embedded_field", field, nodeId: deps.uid("embedded_data") };
+      const warnings: string[] = [];
+      if (source === "url") warnings.push(`${name} will be read from the survey URL (?${name}=…); say “set it to …” for a fixed value.`);
+      return finish(base({ summary: describeChange(def, change), changes: [change], warnings }));
+    }
+    case "loop": {
+      const a = resolveTarget(def, intent.from, deps.selectedId), b = resolveTarget(def, intent.to, deps.selectedId);
+      if (!a) return missing(`“${intent.from}”`);
+      if (!b) return missing(`“${intent.to}”`);
+      if (a.kind !== "question" || b.kind !== "question") return base({ errors: ["A loop wraps a run of questions — name the first and the last."] });
+      const change: ProposalChange = { kind: "wrap_in_loop", fromId: a.id, toId: b.id, loopId: deps.uid("loop"), ...(intent.loopVar ? { loopVar: intent.loopVar.replace(/[^\w]+/g, "_") } : {}), ...(intent.title ? { title: intent.title } : {}) };
+      return finish(base({ summary: describeChange(def, change), changes: [change], targetKey: withKey(a), warnings: ["The loop starts with no items — choose what it repeats over (a question's answers, a list) in Studio."] }));
+    }
+    case "screening": {
+      const lines: AnswerLine[] = [];
+      for (const q of def.questions) {
+        for (const r of q.skipLogic ?? []) {
+          const t = r.target;
+          if (t.kind === "terminate" || (t.kind === "end" && t.status && t.status !== "complete")) {
+            lines.push({ text: `${q.code}: when ${conditionSummary(def, r.when)} → ${t.kind === "terminate" ? "terminated" : "ends"} as ${(t.status ?? "terminated").replace(/_/g, " ")}${r.label ? ` (${r.label})` : ""}.`, key: objectKey("question", q.id) });
+          }
+        }
+      }
+      const walk = (nodes: unknown[], path: string[]): void => {
+        for (const n of nodes as { type: string; id: string; status?: string; title?: string; branches?: { label?: string; when: Condition; children: unknown[] }[]; otherwise?: unknown[]; children?: unknown[]; quotaIds?: string[]; onFull?: { kind: string } }[]) {
+          if (n.type === "end" && n.status && n.status !== "complete") lines.push({ text: `${path.length ? `${path.join(" › ")}: ` : ""}the flow ends as ${n.status.replace(/_/g, " ")}.`, key: objectKey("flowNode", n.id) });
+          if (n.type === "quota_check") lines.push({ text: `Quota check${path.length ? ` (${path.join(" › ")})` : ""}: when a quota is full → ${n.onFull?.kind ?? "terminate"}.`, key: objectKey("flowNode", n.id) });
+          if (n.branches) for (const arm of n.branches) walk(arm.children, [...path, `${n.title ?? "branch"} · ${arm.label ?? conditionSummary(def, arm.when)}`]);
+          if (n.otherwise) walk(n.otherwise, [...path, `${n.title ?? "branch"} · otherwise`]);
+          if (n.children) walk(n.children, path);
+        }
+      };
+      walk(def.flow as unknown[], []);
+      return base({ summary: lines.length ? `${lines.length} way${lines.length === 1 ? "" : "s"} a respondent leaves the survey early:` : "Nothing screens anyone out: every respondent reaches the end.", answer: lines, readOnly: true });
     }
     case "unknown":
       return base({ errors: [intent.reason], readOnly: true });

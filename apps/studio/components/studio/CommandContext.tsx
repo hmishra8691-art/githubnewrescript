@@ -111,8 +111,8 @@ export function CommandProvider({
       splitAllowed: mode?.splitAllowed ?? false,
       openChooser: mode ? () => mode.openChooser() : undefined,
       uid,
-      newQuestion(def: SurveyDefinition): Question {
-        const v = variantRegistry.get("single_select.radio")!;
+      newQuestion(def: SurveyDefinition, variantId = "single_select.radio"): Question {
+        const v = variantRegistry.get(variantId) ?? variantRegistry.get("single_select.radio")!;
         return createFromVariant(v, nextQuestionNaming(def));
       },
       newFlowNode: (type: FlowNode["type"]) => newFlowNode(type),

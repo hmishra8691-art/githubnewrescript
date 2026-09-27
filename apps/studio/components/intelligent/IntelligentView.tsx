@@ -16,6 +16,7 @@ import { parseIntent, EXAMPLES } from "../../lib/intelligent/grammar";
 import { planProposal, type Proposal, type Intent } from "../../lib/intelligent/proposal";
 import { surveyContext } from "../../lib/intelligent/context";
 import { coerceIntent } from "../../lib/intelligent/ai";
+import { languageName, pickRecordingMime, type HeardTranscript } from "../../lib/intelligent/voice";
 
 /**
  * INTELLIGENT — describe the change; review it; apply it.
@@ -50,6 +51,8 @@ interface Turn {
   /** applied / cancelled / open */
   state: "open" | "applied" | "cancelled";
   reviewing?: boolean;
+  /** when the sentence was spoken: what was heard, and how it was read (§18–§20) */
+  heard?: HeardTranscript;
 }
 
 /**
@@ -62,6 +65,8 @@ interface Turn {
 const sessions = new Map<string, Turn[]>();
 /** whether /api/ai/logic answered (true), refused (false) or has not been asked yet — for the page's lifetime */
 let aiKnown: boolean | null = null;
+/** the same for /api/ai/transcribe: null until the first recording is sent */
+let sttKnown: boolean | null = null;
 
 const PREFS_KEY = "rescript.intelligent";
 function loadPrefs(): { inspector: number } {
@@ -97,6 +102,7 @@ export function IntelligentView() {
   React.useEffect(() => { try { window.localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* fine */ } }, [prefs]);
   React.useEffect(() => { logRef.current?.scrollTo({ top: logRef.current.scrollHeight }); }, [turns.length, busy]);
 
+  const selectedId = primary?.startsWith("question:") ? primary.slice(9) : null;
   const deps = React.useMemo(() => ({
     uid,
     makeQuestion(def: SurveyDefinition, variantId: string) {
@@ -104,7 +110,9 @@ export function IntelligentView() {
       return createFromVariant(v, nextQuestionNaming(def));
     },
     index,
-  }), [index]);
+    // "this question", "it", "this block" — the selection is the context (§17)
+    selectedId,
+  }), [index, selectedId]);
 
   const selectKey = React.useCallback((key: ObjectKey) => {
     if (sel) sel.dispatch({ type: "select", key });
@@ -112,7 +120,7 @@ export function IntelligentView() {
   }, [sel, s]);
 
   /* ---------------------------------------------------------------- ask */
-  const ask = React.useCallback(async (sentence: string) => {
+  const ask = React.useCallback(async (sentence: string, heard?: HeardTranscript) => {
     const t = sentence.trim();
     if (!t || busy) return;
     setBusy(true);
@@ -122,7 +130,8 @@ export function IntelligentView() {
     let source: Proposal["source"] = "grammar";
     let plan = planProposal(s.def, intent, source, deps);
     // the grammar did not understand, or understood but could not find the object: ask the model, if there is one
-    const askModel = intent.kind === "unknown" || plan.errors.some((e) => /could not find/.test(e));
+    // the grammar did not understand, could not find the object, or read a condition the parser rejects: the model may know better (§17)
+    const askModel = intent.kind === "unknown" || plan.errors.some((e) => /could not find/.test(e)) || (plan.expression?.errors.length ?? 0) > 0;
     if (askModel && aiAvailable !== false) {
       try {
         const r = await fetch("/api/ai/logic", {
@@ -144,7 +153,11 @@ export function IntelligentView() {
         }
       } catch { /* offline: the grammar's answer stands */ }
     }
-    setTurns((ts) => [...ts, { id: uid("turn"), text: t, proposal: plan, state: plan.readOnly ? "applied" : "open" }]);
+    // spoken in another language, with nothing to read it into English: say so, rather than "not understood"
+    if (heard && heard.language !== "en" && heard.language !== "und" && !heard.english && intent.kind === "unknown") {
+      plan = { ...plan, errors: [`I heard this in ${languageName(heard.language)}, but no language model is configured on this Studio to read it into English. Say it in English, or type it.`] };
+    }
+    setTurns((ts) => [...ts, { id: uid("turn"), text: t, proposal: plan, state: plan.readOnly ? "applied" : "open", ...(heard ? { heard } : {}) }]);
     if (plan.targetKey) selectKey(plan.targetKey);
     setBusy(false);
     inputRef.current?.focus();
@@ -173,6 +186,87 @@ export function IntelligentView() {
 
   const cancel = (turn: Turn) => setTurns((ts) => ts.map((x) => x.id === turn.id ? { ...x, state: "cancelled" } : x));
   const review = (turn: Turn) => setTurns((ts) => ts.map((x) => x.id === turn.id ? { ...x, reviewing: !x.reviewing } : x));
+
+  /* --------------------------------------------------------------- voice */
+  /*
+   * MICROPHONE → CLOUD TRANSCRIPTION → THE SAME PIPELINE (§18–§21). Click to
+   * start, click to stop (or it stops itself after 45 s). The recording goes
+   * to /api/ai/transcribe, which hears it with the configured speech provider
+   * and, when it was not English, reads it into English with the model. What
+   * comes back is asked exactly as a typed sentence would be, with what was
+   * heard kept on the turn so the programmer can check the reading.
+   */
+  const [voice, setVoice] = React.useState<"idle" | "recording" | "transcribing">("idle");
+  const [sttAvailable, setSttAvailableState] = React.useState<boolean | null>(sttKnown);
+  const setSttAvailable = React.useCallback((v: boolean) => { sttKnown = v; setSttAvailableState(v); }, []);
+  const [voiceError, setVoiceError] = React.useState<string | null>(null);
+  const recorder = React.useRef<{ rec: MediaRecorder; stream: MediaStream; chunks: Blob[]; timer: number } | null>(null);
+  const hintRef = React.useRef<{ hint: string; language: string } | null>(null);
+
+  const sendRecording = React.useCallback(async (blob: Blob) => {
+    setVoice("transcribing");
+    try {
+      const form = new FormData();
+      form.append("audio", blob, "instruction.webm");
+      form.append("surveyId", s.surveyDbId);
+      // the browser suites, against the fake provider, say what the fake should have heard
+      if (hintRef.current) { form.append("hint", hintRef.current.hint); form.append("hintLanguage", hintRef.current.language); hintRef.current = null; }
+      const r = await fetch("/api/ai/transcribe", { method: "POST", body: form });
+      if (r.status === 501) { setSttAvailable(false); setVoiceError("No transcription provider is configured on this Studio."); return; }
+      const d = await r.json().catch(() => null) as { ok?: boolean; text?: string; language?: string; english?: string; model?: string; error?: string } | null;
+      if (!r.ok || !d?.ok) { setVoiceError(d?.error ?? `Transcription failed (${r.status}).`); return; }
+      setSttAvailable(true);
+      const heard: HeardTranscript = { text: d.text ?? "", language: d.language ?? "en", ...(d.english ? { english: d.english } : {}), ...(d.model ? { model: d.model } : {}) };
+      const sentence = (heard.english || heard.text).trim();
+      if (!sentence) { setVoiceError("I could not make out any words — try again, a little closer to the microphone."); return; }
+      setText("");
+      await ask(sentence, heard);
+    } catch (e) {
+      setVoiceError((e as Error).message);
+    } finally {
+      setVoice("idle");
+    }
+  }, [ask, s.surveyDbId, setSttAvailable]);
+
+  const stopRecording = React.useCallback(() => {
+    const r = recorder.current;
+    if (!r) return;
+    window.clearTimeout(r.timer);
+    if (r.rec.state !== "inactive") r.rec.stop();
+  }, []);
+
+  const startRecording = React.useCallback(async () => {
+    setVoiceError(null);
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") { setVoiceError("This browser cannot record audio."); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = pickRecordingMime((m) => MediaRecorder.isTypeSupported(m));
+      const rec = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      const chunks: Blob[] = [];
+      rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+      rec.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        recorder.current = null;
+        const blob = new Blob(chunks, { type: rec.mimeType || mimeType || "audio/webm" });
+        if (blob.size === 0) { setVoice("idle"); setVoiceError("Nothing was recorded."); return; }
+        void sendRecording(blob);
+      };
+      rec.start(250);
+      const timer = window.setTimeout(() => stopRecording(), 45_000);
+      recorder.current = { rec, stream, chunks, timer };
+      setVoice("recording");
+    } catch (e) {
+      setVoiceError(/NotAllowed|Permission/i.test(String((e as Error).name)) ? "Microphone access was refused — allow it in the browser to speak an instruction." : (e as Error).message);
+      setVoice("idle");
+    }
+  }, [sendRecording, stopRecording]);
+  React.useEffect(() => () => { const r = recorder.current; if (r) { window.clearTimeout(r.timer); r.stream.getTracks().forEach((t) => t.stop()); } }, []);
+  const toggleVoice = () => { if (voice === "recording") stopRecording(); else if (voice === "idle") void startRecording(); };
+  // the browser suites set the fake provider's transcript through a global hook, since a fake cannot hear
+  React.useEffect(() => {
+    (window as unknown as { __rescriptVoiceHint?: (hint: string, language?: string) => void }).__rescriptVoiceHint = (hint, language = "en") => { hintRef.current = { hint, language }; };
+    return () => { delete (window as unknown as { __rescriptVoiceHint?: unknown }).__rescriptVoiceHint; };
+  }, []);
 
   /* -------------------------------------------------------------- resize */
   const dragging = React.useRef<{ startX: number; start: number } | null>(null);
@@ -252,13 +346,23 @@ export function IntelligentView() {
           {busy && <div className="iq-thinking" data-testid="iq-thinking"><span className="iq-dot" /><span className="iq-dot" /><span className="iq-dot" /></div>}
         </div>
 
+        {voiceError && <p className="iq-voice-error" data-testid="iq-voice-error" role="alert"><Icon name="warning" size={12} /> {voiceError}</p>}
         <form className="iq-ask" onSubmit={(e) => { e.preventDefault(); void ask(text); }}>
           <textarea
             ref={inputRef} className="iq-input" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={onKey}
-            placeholder={open ? "Apply or cancel the proposal above, or describe another change…" : "Show Q5 only when Q3 = Yes and Q4 > 2"}
-            rows={2} data-testid="iq-input" aria-label="Describe a change" disabled={busy}
+            placeholder={voice === "recording" ? "Listening… click the microphone again when you have finished." : voice === "transcribing" ? "Transcribing…" : open ? "Apply or cancel the proposal above, or describe another change…" : "Show Q5 only when Q3 = Yes and Q4 > 2 — or press the microphone and say it, in any language"}
+            rows={2} data-testid="iq-input" aria-label="Describe a change" disabled={busy || voice !== "idle"}
           />
-          <button type="submit" className="iq-send" disabled={busy || !text.trim()} data-testid="iq-send" title="Propose (Enter)">
+          <button
+            type="button" className={`iq-mic${voice === "recording" ? " recording" : voice === "transcribing" ? " busy" : ""}`} data-testid="iq-mic" data-state={voice}
+            onClick={toggleVoice} disabled={busy || voice === "transcribing" || sttAvailable === false} aria-pressed={voice === "recording"}
+            aria-label={voice === "recording" ? "Stop and transcribe" : "Speak an instruction"}
+            title={sttAvailable === false ? "No transcription provider is configured on this Studio" : voice === "recording" ? "Stop — the recording is transcribed and proposed" : "Speak an instruction — any language; it is transcribed, read into English and proposed for review"}
+          >
+            <MicIcon />
+            {voice === "recording" && <span className="iq-mic-pulse" aria-hidden="true" />}
+          </button>
+          <button type="submit" className="iq-send" disabled={busy || !text.trim() || voice !== "idle"} data-testid="iq-send" title="Propose (Enter)">
             <Icon name="chevron-right" size={14} /> Propose
           </button>
         </form>
@@ -292,6 +396,14 @@ function TurnCard({ turn, def, onApply, onCancel, onReview, onSelect, readOnly }
   return (
     <article className={`iq-turn ${turn.state}`} data-testid="iq-turn" data-state={turn.state} data-kind={p.intent.kind} data-source={p.source}>
       <div className="iq-said" data-testid="iq-said"><Icon name="user" size={13} /> <span>{turn.text}</span></div>
+      {turn.heard && (
+        // what the microphone heard, and — when it was not English — how it was read, so the reading can be checked before Apply (§20)
+        <div className="iq-heard" data-testid="iq-heard" data-language={turn.heard.language}>
+          <MicIcon size={12} />
+          <span><span className="iq-heard-kw">Heard{turn.heard.language && turn.heard.language !== "und" ? ` (${languageName(turn.heard.language)})` : ""}:</span> {turn.heard.text}</span>
+          {turn.heard.english && turn.heard.english !== turn.heard.text && <span><span className="iq-heard-kw">Read as:</span> {turn.heard.english}</span>}
+        </div>
+      )}
 
       {p.readOnly ? (
         <div className="iq-card answer" data-testid="iq-answer">
@@ -367,5 +479,15 @@ function RuleTree({ def, c, depth }: { def: SurveyDefinition; c: Condition; dept
         {c.children.map((k, i) => <RuleTree key={i} def={def} c={k} depth={depth + 1} />)}
       </div>
     </div>
+  );
+}
+
+/** a microphone — inline, since the icon set has none */
+function MicIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" />
+    </svg>
   );
 }

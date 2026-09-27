@@ -1,5 +1,6 @@
 "use client";
 import React from "react";
+import { useMode } from "./ModeContext";
 
 export interface CollapsibleSectionProps {
   /**
@@ -48,9 +49,26 @@ export interface CollapsibleSectionProps {
  */
 export function CollapsibleSection({ id, title, active, defaultOpen, children }: CollapsibleSectionProps) {
   const [open, setOpen] = React.useState(() => defaultOpen ?? active ?? false);
+  const ref = React.useRef<HTMLDivElement>(null);
+
+  /*
+   * REVEALED FROM ELSEWHERE: Grid's Display-logic cell, Architect's logic
+   * chips and Flow's inspector ask for a section by id (`requestPanel`). The
+   * section opens and scrolls into view; the programmer's own toggle is
+   * otherwise untouched. `nonce` makes the same request twice scroll twice.
+   */
+  const reveal = useMode()?.reveal ?? null;
+  const last = React.useRef<number>(0);
+  React.useEffect(() => {
+    if (!reveal || reveal.section !== id || reveal.nonce === last.current) return;
+    last.current = reveal.nonce;
+    setOpen(true);
+    const t = setTimeout(() => ref.current?.scrollIntoView({ block: "start", behavior: "auto" }), 0);
+    return () => clearTimeout(t);
+  }, [reveal, id]);
 
   return (
-    <div className={`psec${open ? "" : " collapsed"}`} data-testid={`psec-${id}`}>
+    <div className={`psec${open ? "" : " collapsed"}`} data-testid={`psec-${id}`} ref={ref}>
       <div className="psec-head" data-testid={`psec-head-${id}`}
         role="button" tabIndex={0}
         aria-expanded={open}

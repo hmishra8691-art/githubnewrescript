@@ -1,6 +1,6 @@
 "use client";
 import React from "react";
-import { buildDependencyIndex, objectStatus, parseObjectKey, referencesTo, removeQuestion, removeFlowNode, findNode, type ObjectKey, type QuestionReference } from "@rescript/engine";
+import { buildDependencyIndex, objectStatus, parseObjectKey, referencesTo, removeQuestion, removeFlowNode, findNode, boundaryAfter, type ObjectKey, type QuestionReference } from "@rescript/engine";
 import type { FlowNode } from "@rescript/schema";
 import { useStudio } from "../studio/store";
 import { useCommands } from "../studio/CommandContext";
@@ -123,6 +123,10 @@ export function ArchitectView() {
   };
 
   const primaryNode = primary ? findMapNode(root, primary) : null;
+  // a new selection shows its workspace from the top: the scroll position of the previous object's
+  // editor must not carry over (a question picked from the bottom of the outline opened half-scrolled)
+  const workRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => { workRef.current?.scrollTo({ top: 0 }); }, [primary]);
 
   /* ------------------------------------------------------------ structural editing (round 2, §2–3) */
   const cmd = useCommands();
@@ -155,6 +159,15 @@ export function ArchitectView() {
     s.update((d) => { removeQuestion(d, id); });
     sel?.dispatch({ type: "drop", keys: [`question:${id}` as ObjectKey] });
   };
+  /* WHERE a new thing goes, in words — the same rule the commands apply (`insertionPoint`, `elementInsertionIndex`) */
+  const canBreak = primaryKind === "question" && primaryId ? boundaryAfter(s.def, primaryId) : null;
+  const where = React.useMemo(() => {
+    const code = primaryNode?.code ?? primaryNode?.label ?? null;
+    if (primaryKind === "question") return { summary: `after ${code}, in its block`, question: `after ${code}`, block: `after ${code}'s block`, element: `after ${code}'s block` };
+    if (primaryKind === "flowNode") return { summary: `inside / after ${code ?? "the selected element"}`, question: `at the end of ${code ?? "the selected element"}`, block: `after ${code ?? "the selected element"}`, element: `after ${code ?? "the selected element"}` };
+    return { summary: "at the end of the survey (nothing is selected)", question: "on the last page", block: "before the End", element: "before the End" };
+  }, [primaryKind, primaryNode]);
+
   React.useEffect(() => {
     if (!addOpen) return;
     const close = (e: PointerEvent) => { if (!(e.target as HTMLElement).closest?.(".ar-add")) setAddOpen(false); };
@@ -187,18 +200,32 @@ export function ArchitectView() {
           <span className="grow" />
           {/* STRUCTURE IS EDITED HERE: add a question where the selection is, a block, a flow element; duplicate, move, remove the selection — every one an engine operation through the command registry, the same the Questions panel calls */}
           <div className="ar-tools" data-testid="ar-tools">
-            <button className="ar-tool primary" data-testid="ar-add-question" disabled={s.readOnly} onClick={() => run("question.add")}
-              title={primaryKind === "flowNode" ? "Add a question at the end of the selected page or block" : primaryKind === "question" ? "Add a question after the selected one" : "Add a question on the last page"}>
+            <button className="ar-tool primary" data-testid="ar-add-question" disabled={s.readOnly} onClick={() => run("question.add")} title={`Add a question ${where.question}`}>
               <Icon name="plus" size={12} /> Question
             </button>
-            <button className="ar-tool" data-testid="ar-add-block" disabled={s.readOnly} onClick={() => run("block.add")} title="Add a block (a page) after the selected element, or before the End"><Icon name="plus" size={12} /> Block</button>
+            <button className="ar-tool" data-testid="ar-add-block" disabled={s.readOnly} onClick={() => run("block.add")} title={`Add a block ${where.block}`}><Icon name="plus" size={12} /> Block</button>
             <div className="ar-add">
-              <button className="ar-tool" data-testid="ar-add-element" disabled={s.readOnly} aria-expanded={addOpen} onClick={() => setAddOpen((v) => !v)} title="Add a flow element"><Icon name="plus" size={12} /> Element <Icon name="chevron-down" size={11} /></button>
+              <button className="ar-tool" data-testid="ar-add-element" disabled={s.readOnly} aria-expanded={addOpen} onClick={() => setAddOpen((v) => !v)} title="Add a page break, a flow element or a data object"><Icon name="plus" size={12} /> Add… <Icon name="chevron-down" size={11} /></button>
               {addOpen && (
+                /*
+                 * THE ADD MENU IS STRUCTURED (UI upgrade §6): what you are adding, where it goes,
+                 * and what it does — STRUCTURE (the respondent's pages), FLOW (changes the path),
+                 * DATA (changes what is recorded, not where the respondent goes).
+                 */
                 <div className="ar-add-menu" role="menu" data-testid="ar-add-menu">
-                  {[["flow.add.branch", "Branch / condition"], ["flow.add.randomizer", "Randomizer"], ["flow.add.loop", "Loop"], ["flow.add.quota_check", "Quota check"], ["flow.add.embedded_data", "Embedded data"]].map(([id, label]) => (
-                    <button key={id} role="menuitem" className="ar-add-item" data-testid={`ar-add-${id.split(".").pop()}`} onClick={() => run(id)}>{label}</button>
+                  <div className="ar-add-where" data-testid="ar-add-where"><span className="ar-add-kw">WHERE</span> {where.summary}</div>
+                  <div className="ar-add-sec">Structure <span className="ar-add-sub">what the respondent sees, page by page</span></div>
+                  <AddItem id="question.add" label="Question" hint={`a question ${where.question}`} run={run} testId="ar-add-question-item" />
+                  <AddItem id="page.breakAfter" label="Page break" hint={canBreak === "none" ? `after ${primaryNode?.code ?? "the selected question"} — its page is split there` : canBreak === "page" ? "there is already a page break after the selected question" : "select a question in the middle of a page"} run={run} disabled={canBreak !== "none"} testId="ar-add-page_break" />
+                  <AddItem id="block.add" label="Block" hint={`a new block (one page) ${where.block}`} run={run} testId="ar-add-block-item" />
+                  <div className="ar-add-sec">Flow <span className="ar-add-sub">changes the path the respondent takes</span></div>
+                  {[["flow.add.branch", "Branch / condition", "send respondents down different paths"], ["flow.add.randomizer", "Randomizer", "shuffle what comes next, or show N of M"], ["flow.add.loop", "Loop", "repeat what is inside, once per item"], ["flow.add.quota_check", "Quota check", "stop or redirect when a quota is full"]].map(([id, label, hint]) => (
+                    <AddItem key={id} id={id} label={label} hint={`${hint} — ${where.element}`} run={run} />
                   ))}
+                  <div className="ar-add-sec">Data <span className="ar-add-sub">changes what is recorded, not where the respondent goes</span></div>
+                  <AddItem id="flow.add.embedded_data" label="Embedded data" hint={`capture URL, panel or computed values — ${where.element}`} run={run} />
+                  <AddItem id="question.addHidden" label="Hidden variable" hint={`an invisible variable set by URL, scripts or piping — ${where.question}`} run={run} testId="ar-add-hidden" />
+                  <AddItem id="question.addCalculated" label="Calculated value" hint={`a derived variable from an expression — ${where.question}`} run={run} testId="ar-add-calculated" />
                 </div>
               )}
             </div>
@@ -226,8 +253,8 @@ export function ArchitectView() {
               : <span className="muted">select something to focus on</span>}
           </div>
         )}
-        <div className="ar-work-body">
-          <Workspace primary={primary} status={status} onSelect={(k) => select(k)} />
+        <div className="ar-work-body" ref={workRef}>
+          <Workspace primary={primary} status={status} index={index} focusSet={focusSet} onSelect={(k) => select(k)} />
         </div>
       </main>
       <div className="ar-divider" onPointerDown={startDrag("inspector")} role="separator" aria-orientation="vertical" data-testid="ar-divider-inspector" />
@@ -239,5 +266,15 @@ export function ArchitectView() {
       </aside>
     </div>
     </>
+  );
+}
+
+/** one row of the Add menu: what, and where it goes */
+function AddItem({ id, label, hint, run, disabled, testId }: { id: string; label: string; hint: string; run(id: string): void; disabled?: boolean; testId?: string }) {
+  return (
+    <button role="menuitem" className="ar-add-item" data-testid={testId ?? `ar-add-${id.split(".").pop()}`} disabled={disabled} onClick={() => run(id)} title={hint}>
+      <span className="ar-add-label">{label}</span>
+      <span className="ar-add-hint">{hint}</span>
+    </button>
   );
 }

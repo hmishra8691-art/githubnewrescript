@@ -44,6 +44,8 @@ export * from "./fields.js";
 export * from "./answers.js";
 export * from "./html.js";
 export * from "./blocks.js";
+export * from "./pageBreaks.js";
+export * from "./structureOps.js";
 export * from "./droppedFields.js";
 export * from "./tournament.js";
 export * from "./adaptive.js";

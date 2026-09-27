@@ -193,3 +193,69 @@ test("set_mask writes the universal mask; the source must exist, differ from the
   assert.match(validateProposal(def, [{ kind: "set_mask", questionId: "q_best", mask: null }])[0], /no mask to remove/);
   assert.deepEqual(proposalTargets([{ kind: "set_mask", questionId: "q_best", mask }, { kind: "set_validation", questionId: "q_age", rules: [] }]), ["q_best", "q_age"]);
 });
+
+/* ------------------------------------------------------------ structure proposals (UI upgrade §17, §24) */
+
+function structural(): any {
+  const q = (id: string) => ({ id, code: id.toUpperCase(), variableName: id.toUpperCase(), type: "single_select", text: id, options: [{ code: 1, label: "Yes" }], required: false });
+  return {
+    meta: { id: "s", code: "S", title: "t", version: "1" },
+    questions: ["q1", "q2", "q3", "q4"].map(q),
+    flow: [
+      { type: "page", id: "pA", questionIds: ["q1", "q2", "q3"] },
+      { type: "page", id: "pB", questionIds: ["q4"] },
+      { type: "end", id: "e", status: "complete" },
+    ],
+    displayRules: [], calculations: [], quotas: [],
+  };
+}
+
+test("add_page_break / remove_page_break: validated by the boundary after the question, described with what moves, applied through the page operations", () => {
+  const d = structural();
+  const add: ProposalChange = { kind: "add_page_break", questionId: "q1", pageId: "p_new" };
+  assert.deepEqual(validateProposal(d, [add]), []);
+  assert.match(describeChange(d, add), /after Q1 in Block 1 — Q2, Q3 move to a new page/);
+  assert.deepEqual(validateProposal(d, [{ kind: "add_page_break", questionId: "q3", pageId: "x" }]), ["Q3 is the last question of its block — the block ends there."]);
+  assert.deepEqual(validateProposal(d, [{ kind: "remove_page_break", questionId: "q1" }]), ["There is no page break after Q1."]);
+  assert.deepEqual(validateProposal(d, [{ kind: "add_page_break", questionId: "nope", pageId: "x" }]), ["nope is not on any page."]);
+  const r = applyLogicProposal(d, [add]);
+  assert.deepEqual(r.errors, []);
+  assert.equal(d.flow[0].type, "block");
+  assert.deepEqual(d.flow[0].children.map((p: any) => [p.id, p.questionIds]), [["pA", ["q1"]], ["p_new", ["q2", "q3"]]], "the new page carries the proposal's id");
+  assert.deepEqual(validateProposal(d, [{ kind: "add_page_break", questionId: "q1", pageId: "y" }]), ["There is already a page break after Q1."]);
+  const rm: ProposalChange = { kind: "remove_page_break", questionId: "q1" };
+  assert.match(describeChange(d, rm), /Remove the page break after Q1 — Q2, Q3 join its page/);
+  assert.deepEqual(applyLogicProposal(d, [rm]).errors, []);
+  assert.equal(d.flow[0].type, "page");
+  assert.deepEqual(d.flow[0].questionIds, ["q1", "q2", "q3"]);
+  assert.deepEqual(proposalTargets([add, rm]), ["q1"]);
+});
+
+test("add_embedded_field: a valid unused name, a value for a static one; applied onto a node created first in the flow", () => {
+  const d = structural();
+  const c: ProposalChange = { kind: "add_embedded_field", nodeId: "ed_new", field: { name: "country", source: "static", value: "India" } };
+  assert.deepEqual(validateProposal(d, [c]), []);
+  assert.equal(describeChange(d, c), "Create the embedded variable country, set to “India”.");
+  assert.deepEqual(validateProposal(d, [{ kind: "add_embedded_field", nodeId: "x", field: { name: "Q1", source: "url" } }]), ["Q1 is already a question's name."]);
+  assert.deepEqual(validateProposal(d, [{ kind: "add_embedded_field", nodeId: "x", field: { name: "wave", source: "static" } }]), ["A static embedded variable needs the value to set."]);
+  assert.deepEqual(validateProposal(d, [{ kind: "add_embedded_field", nodeId: "x", field: { name: "1st", source: "url" } }]).length, 1);
+  assert.deepEqual(applyLogicProposal(d, [c]).errors, []);
+  assert.equal(d.flow[0].type, "embedded_data"); assert.equal(d.flow[0].id, "ed_new");
+  assert.deepEqual(d.flow[0].fields, [{ name: "country", source: "static", value: "India" }]);
+  assert.deepEqual(validateProposal(d, [c]), ["An embedded variable country already exists."], "the same proposal again is refused");
+  assert.match(describeChange(d, { kind: "add_embedded_field", nodeId: "x", field: { name: "PID", source: "url", dataType: "number" } }), /read from the survey URL \(number\)/);
+});
+
+test("wrap_in_loop: both ends on one page, applied with the proposal's loop id", () => {
+  const d = structural();
+  const c: ProposalChange = { kind: "wrap_in_loop", fromId: "q2", toId: "q3", loopId: "loop_x", loopVar: "brand" };
+  assert.deepEqual(validateProposal(d, [c]), []);
+  assert.equal(describeChange(d, c), "Repeat Q2 to Q3 (2 questions) in a loop — once per brand; choose the items in Studio.");
+  assert.deepEqual(validateProposal(d, [{ kind: "wrap_in_loop", fromId: "q3", toId: "q4", loopId: "l" }]), ["Q3 and Q4 are on different pages — a loop wraps questions on one page."]);
+  assert.deepEqual(validateProposal(d, [{ kind: "wrap_in_loop", fromId: "q1", toId: "q1", loopId: "l", loopVar: "2x" }]), ["“2x” is not a valid loop variable name."]);
+  assert.deepEqual(applyLogicProposal(d, [c]).errors, []);
+  assert.deepEqual(d.flow.map((n: any) => n.type), ["page", "loop", "page", "end"]);
+  assert.equal(d.flow[1].id, "loop_x"); assert.equal(d.flow[1].loopVar, "brand");
+  assert.deepEqual(d.flow[1].children[0].questionIds, ["q2", "q3"]);
+  assert.deepEqual(proposalTargets([c]), ["q2"]);
+});

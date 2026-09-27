@@ -1100,7 +1100,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           )}
         </main>
         {/* Architect carries its own inspector, so the outer property panel steps aside there */}
-        <RightPanel tab={tab} hidden={tab === "questions" && !propertiesWanted(programmingMode, splitMode)} />
+        <RightPanel tab={tab} hidden={tab === "questions" && !propertiesWanted(programmingMode, splitMode, modeCtx?.panelRequested ?? false)} />
       </div>
       </CanvasProvider>
     </div>

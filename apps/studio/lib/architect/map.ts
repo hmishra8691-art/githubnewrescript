@@ -3,6 +3,7 @@ import {
   objectKey, stripHtmlText, conditionSummary,
   type ObjectKey, type ObjectStatusMap, type DependencyIndex, type StatusLevel,
 } from "@rescript/engine";
+import { objectTags, type ObjectTag } from "./structure.ts";
 
 /**
  * THE SURVEY MAP — the architecture of a survey as a tree.
@@ -24,7 +25,7 @@ import {
  */
 
 export type MapKind =
-  | "root" | "block" | "group" | "page" | "question"
+  | "root" | "block" | "group" | "page" | "pageBreak" | "question"
   | "branch" | "arm" | "otherwise" | "loop" | "randomizer"
   | "embedded" | "quotaCheck" | "redirect" | "end"
   | "rules" | "rule" | "calculations" | "calculation" | "quotas" | "quota";
@@ -50,6 +51,8 @@ export interface MapNode {
   usedBy: number;
   /** true when the node can be selected and inspected */
   selectable: boolean;
+  /** what kind of object a question is beyond its type — hidden variable, conjoint task… (UI upgrade §4) */
+  tags?: ObjectTag[];
 }
 
 export interface FlatMapRow extends MapNode {
@@ -96,17 +99,18 @@ export function buildSurveyMap(def: SurveyDefinition, d: Deco = {}): MapNode {
     const q = byId.get(qid);
     if (!q) return null;
     const key = objectKey("question", q.id);
+    const tags = objectTags(q);
     return {
       key, kind: "question", id: q.id, label: q.code, code: q.code,
       detail: stripHtmlText(q.text ?? "").trim() || q.variableName,
-      children: [], conditional: !!q.displayLogic, selectable: true, ...deco(key, d),
+      children: [], conditional: !!q.displayLogic, selectable: true, ...deco(key, d), ...(tags.length ? { tags } : {}),
     };
   };
 
-  const page = (n: Extract<FlowNode, { type: "page" }>, asBlock: boolean): MapNode => {
+  const page = (n: Extract<FlowNode, { type: "page" }>, asBlock: boolean, pageNo?: { n: number; of: number }): MapNode => {
     const key = objectKey("flowNode", n.id);
     const kids = n.questionIds.map(question).filter((x): x is MapNode => !!x);
-    const label = asBlock ? `Block ${++blockNo}${n.title ? ` · ${n.title}` : ""}` : (n.title ?? "Page");
+    const label = asBlock ? `Block ${++blockNo}${n.title ? ` · ${n.title}` : ""}` : (pageNo ? `Page ${pageNo.n} of ${pageNo.of}${n.title ? ` · ${n.title}` : ""}` : (n.title ?? "Page"));
     return rollUp({
       key, kind: asBlock ? "block" : "page", id: n.id, label,
       detail: n.visibleIf ? `shown when ${conditionSummary(def, n.visibleIf)}` : undefined,
@@ -120,7 +124,15 @@ export function buildSurveyMap(def: SurveyDefinition, d: Deco = {}): MapNode {
       case "block": {
         const key = objectKey("flowNode", n.id);
         const no = ++blockNo;
-        const pages = n.children.map((c) => c.type === "page" ? page(c, false) : walk([c])[0]);
+        const pageNodes = n.children.filter((c) => c.type === "page");
+        const pages: MapNode[] = [];
+        let seenPages = 0;
+        for (const c of n.children) {
+          if (c.type !== "page") { pages.push(walk([c])[0]); continue; }
+          // THE PAGE BREAK IS A ROW (UI upgrade §5): between two pages of a block, the boundary itself
+          if (seenPages > 0) pages.push({ key: `pageBreak:${c.id}`, kind: "pageBreak", id: `break_${c.id}`, label: "Page break", children: [], conditional: false, selectable: false, ...NONE });
+          pages.push(page(c, false, { n: ++seenPages, of: pageNodes.length }));
+        }
         // a block with one page shows that page's questions directly — one level, not two
         const children = pages.length === 1 && pages[0].kind === "page" ? pages[0].children : pages;
         return rollUp({

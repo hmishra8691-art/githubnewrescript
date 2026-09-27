@@ -47,8 +47,33 @@ export interface Layout {
 
 export const NODE_W = 220;
 export const NODE_H: Record<LogicFlowNode["kind"], number> = { question: 44, decision: 52, action: 40, terminate: 40, end: 40 };
+/** a node that shows only sometimes carries its condition on a third line (UI upgrade §11) */
+export const CONDITION_H = 14;
+export const nodeHeight = (n: LogicFlowNode): number => NODE_H[n.kind] + (n.condition && n.kind === "question" ? CONDITION_H : 0);
+
+/**
+ * A PAGE, DRAWN AROUND ITS QUESTIONS (UI upgrade §15: "page sequence"). At
+ * question granularity every question node knows its page; a page frame is
+ * the bounding box of its nodes, so the reader sees which questions the
+ * respondent gets together.
+ */
+export interface PageFrame { id: string; x: number; y: number; w: number; h: number; count: number }
+const FRAME_PAD = 10;
+/** room under the last node for the page's label — edge labels sit above their targets, so the bottom is clear */
+export const FRAME_LABEL_H = 16;
+export function pageFrames(nodes: LaidOutNode[]): PageFrame[] {
+  const by = new Map<string, LaidOutNode[]>();
+  for (const n of nodes) if (n.page) (by.get(n.page) ?? by.set(n.page, []).get(n.page)!).push(n);
+  const out: PageFrame[] = [];
+  for (const [id, ns] of by) {
+    const x = Math.min(...ns.map((n) => n.x)) - FRAME_PAD, y = Math.min(...ns.map((n) => n.y)) - FRAME_PAD;
+    const r = Math.max(...ns.map((n) => n.x + n.w)) + FRAME_PAD, b = Math.max(...ns.map((n) => n.y + n.h)) + FRAME_PAD + FRAME_LABEL_H;
+    out.push({ id, x, y, w: r - x, h: b - y, count: ns.length });
+  }
+  return out;
+}
 const GAP_X = 40;
-const GAP_Y = 64;
+const GAP_Y = 72;
 const PAD = 40;
 
 /** an edge's kind, for graphs built before `kind` existed */
@@ -57,7 +82,7 @@ export function edgeKind(e: LogicFlowEdge): LogicFlowEdgeKind {
   const l = (e.label ?? "").toLowerCase();
   if (l === "otherwise") return "otherwise";
   if (l === "next iteration") return "loop";
-  if (l === "full") return "quota";
+  if (l === "full" || l === "quota full") return "quota";
   if (l.startsWith("skip")) return "skip";
   if (e.when) return "branch";
   return "sequence";
@@ -161,14 +186,14 @@ export function layoutFlow(graph: LogicFlow, opts: { pinned?: boolean } = {}): L
   const layerY = new Map<number, number>();
   for (let l = 0; l <= maxLayer; l++) {
     const ns = (perLayer.get(l) ?? []).sort((a, b) => (pos.get(a.id) ?? 0) - (pos.get(b.id) ?? 0));
-    const rowH = Math.max(0, ...ns.map((n) => NODE_H[n.kind]));
+    const rowH = Math.max(0, ...ns.map(nodeHeight));
     layerY.set(l, y);
     const rowW = ns.length * NODE_W + (ns.length - 1) * GAP_X;
     let x = (totalW - rowW) / 2;
     for (const n of ns) {
       const pinned = opts.pinned !== false && typeof n.x === "number" && typeof n.y === "number";
       const node: LaidOutNode = {
-        ...n, w: NODE_W, h: NODE_H[n.kind], layer: l, pinned,
+        ...n, w: NODE_W, h: nodeHeight(n), layer: l, pinned,
         x: pinned ? (n.x as number) : x,
         y: pinned ? (n.y as number) : y,
       };

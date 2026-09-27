@@ -1,10 +1,12 @@
 "use client";
 import React from "react";
-import type { FlowNode } from "@rescript/schema";
+import type { FlowNode, SurveyDefinition } from "@rescript/schema";
 import {
-  neighbours, parseObjectKey, conditionSummary, findNode, questionLogicSummary, formatSetExpression,
+  neighbours, parseObjectKey, conditionSummary, findNode, questionLogicSummary, formatSetExpression, objectKey,
+  pagePositionOf, boundaryAfter, listBlocks, questionsInFlowOrder,
   type DependencyIndex, type ObjectKey, type ObjectStatusMap, type DependencyEdge,
 } from "@rescript/engine";
+import { objectTags, logicChips, TAG_LABEL } from "../../lib/architect/structure";
 import { useStudio } from "../studio/store";
 import { PropertiesPanel } from "../studio/PropertiesPanel";
 import { Icon } from "../ui/Icon";
@@ -82,7 +84,7 @@ export function Inspector({
         // the property panel reads the store's selectedQuestionId, which mirrors this primary
         <div className="ai-props"><PropertiesPanel /></div>
       ) : kind === "question" ? (
-        <QuestionSummary id={id} />
+        <QuestionSummary id={id} index={index} />
       ) : (
         <ObjectSummary primary={primary} />
       )}
@@ -155,23 +157,45 @@ function Dependencies({ primary, index, onSelect }: { primary: ObjectKey; index:
 
 /** what a non-question object IS, in one screen */
 /** a question, read-only: what it is, how it validates, when it shows, what masks it */
-function QuestionSummary({ id }: { id: string }) {
+function QuestionSummary({ id, index }: { id: string; index?: DependencyIndex }) {
   const s = useStudio();
   const q = s.def.questions.find((x) => x.id === id);
   if (!q) return null;
+  const def = s.def;
   const text = String(q.text ?? "").replace(/<[^>]*>/g, "").trim();
+  const tags = objectTags(q);
   const rows: [string, React.ReactNode][] = [
     ["Variable", <span className="mono">{q.variableName}</span>],
-    ["Type", q.type.replace(/_/g, " ")],
+    ["Type", <>{q.type.replace(/_/g, " ")}{tags.map((t) => <span key={t} className={`st-tag st-tag-${t}`} style={{ marginLeft: 6 }}>{TAG_LABEL[t]}</span>)}</>],
     ["Text", text || <span className="muted">(no text)</span>],
     ["Required", q.required ? "yes" : "no"],
   ];
+  /* WHERE: the block and page, and what is around it (§13: "relevant metadata") */
+  const pos = pagePositionOf(def, q.id);
+  if (pos) {
+    const blockNo = listBlocks(def.flow as unknown[]).findIndex((b) => b.id === pos.block.id) + 1;
+    rows.push(["Page", `Block ${blockNo}${pos.block.title ? ` · ${pos.block.title}` : ""}${pos.block.pages.length > 1 ? `, page ${pos.pageIndex + 1} of ${pos.block.pages.length}` : ""} — ${pos.index + 1} of ${pos.page.questionIds.length}${boundaryAfter(def, q.id) === "page" ? ", page break after" : ""}`]);
+  } else rows.push(["Page", <span className="muted">not on any page</span>]);
+  const loop = loopAround(def.flow as FlowNode[], q.id);
+  if (loop) rows.push(["Loop", `inside ${loop.title ?? "loop"} — once per ${loop.loopVar}`]);
   if (q.options?.length) rows.push(["Options", `${q.options.length}: ${q.options.slice(0, 6).map((o) => String(o.label ?? o.code).replace(/<[^>]*>/g, "")).join(", ")}${q.options.length > 6 ? ", …" : ""}`]);
   if (q.rows?.length) rows.push(["Rows", `${q.rows.length}`]);
   if (q.validation?.length) rows.push(["Validation", q.validation.map((v) => `${String(v.kind).replace(/_/g, " ")}${v.value !== undefined && v.value !== null && typeof v.value !== "object" ? ` ${v.value}` : ""}`).join(", ")]);
-  if (q.mask) rows.push(["Mask", `${q.mask.action} ${formatSetExpression(s.def, q.mask.expr)}`]);
-  for (const line of questionLogicSummary(s.def, q)) rows.push(["Logic", line]);
-  for (const r of q.skipLogic ?? []) rows.push(["Skip", `when ${conditionSummary(s.def, r.when)} → ${r.target.kind}${r.target.status ? ` (${r.target.status})` : ""}`]);
+  if (q.mask) rows.push(["Mask", `${q.mask.action} ${formatSetExpression(def, q.mask.expr)}`]);
+  for (const line of questionLogicSummary(def, q)) rows.push(["Logic", line]);
+  /* ROUTING: every way out, in order — the skips with their conditions, then what happens otherwise (§13) */
+  const next = nextQuestionAfter(def, q.id);
+  for (const r of q.skipLogic ?? []) {
+    const t = r.target;
+    const where = t.kind === "question" ? (def.questions.find((x) => x.id === t.ref)?.code ?? t.ref) : t.kind === "terminate" ? `terminate (${t.status ?? "terminated"})` : t.kind === "end" ? `end${t.status ? ` (${t.status})` : ""}` : t.kind === "url" ? `leave for ${t.ref}` : `${t.kind} ${t.ref ?? ""}`;
+    rows.push(["Routing", `IF ${conditionSummary(def, r.when)} → ${where}`]);
+  }
+  if (q.skipLogic?.length) rows.push(["Routing", `otherwise → ${next ?? "the next element"}`]);
+  else if (next) rows.push(["Next", next]);
+  /* the objects elsewhere that read this question: calculations, quotas, rules */
+  for (const c of logicChips(def, q, index)) if (c.key) rows.push([c.kind === "quota" ? "Quota" : c.kind === "calculation" ? "Calculation" : "Rule", c.detail]);
+  const piped = (index ? neighbours(index, objectKey("question", q.id), "dependsOn") : []).filter((n) => n.key.startsWith("embedded:") || n.key.startsWith("flowNode:")).map((n) => n.key);
+  if (piped.length) rows.push(["Embedded data", piped.map((k) => index?.nodes.get(k)?.code ?? k).join(", ")]);
   return (
     <section className="ai-sec" data-testid="inspector-summary">
       <h4>Summary</h4>
@@ -180,6 +204,33 @@ function QuestionSummary({ id }: { id: string }) {
       </dl>
     </section>
   );
+}
+
+/** the loop node a question sits inside, if any */
+function loopAround(flow: FlowNode[], qid: string): Extract<FlowNode, { type: "loop" }> | null {
+  const holds = (n: FlowNode): boolean => JSON.stringify(n).includes(`"${qid}"`);
+  const walk = (nodes: FlowNode[], inLoop: Extract<FlowNode, { type: "loop" }> | null): Extract<FlowNode, { type: "loop" }> | null => {
+    for (const n of nodes) {
+      if (!holds(n)) continue;
+      if (n.type === "page") return inLoop;
+      const cur = n.type === "loop" ? n : inLoop;
+      const kids = (n as { children?: FlowNode[] }).children;
+      if (kids) { const hit = walk(kids, cur); if (hit) return hit; }
+      const branches = (n as { branches?: { children: FlowNode[] }[] }).branches;
+      if (branches) for (const b of branches) { const hit = walk(b.children, cur); if (hit) return hit; }
+      const other = (n as { otherwise?: FlowNode[] }).otherwise;
+      if (other) { const hit = walk(other, cur); if (hit) return hit; }
+    }
+    return null;
+  };
+  return walk(flow, null);
+}
+
+/** the question asked next, when nothing skips — in flow order */
+function nextQuestionAfter(def: SurveyDefinition, qid: string): string | null {
+  const order = questionsInFlowOrder(def);
+  const i = order.findIndex((q) => q.id === qid);
+  return i >= 0 && order[i + 1] ? order[i + 1].code : null;
 }
 
 function ObjectSummary({ primary }: { primary: ObjectKey }) {

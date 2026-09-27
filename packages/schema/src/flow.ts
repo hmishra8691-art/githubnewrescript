@@ -537,6 +537,22 @@ export const LogicFlowNode = z.object({
   label: z.string().optional(),
   x: z.number().optional(), // canvas position for the editor
   y: z.number().optional(),
+  /*
+   * WHAT THE NODE IS, beyond its kind — additive, for a canvas that must let
+   * a reader tell a hidden variable from a question and a quota check from a
+   * branch without opening either (Flow, UI upgrade §14). Filled by the
+   * derived graph; absent on graphs stored before it existed.
+   *
+   *   tag        "hidden" | "calculated" | "conjoint" | "maxdiff" | "embedded"
+   *              | "loop" | "quota" | "randomizer" | "branch" | "gate"
+   *              | "redirect" | "screened" | "quota_full" | "terminated" | "complete"
+   *   condition  the display condition in words, when the node is shown
+   *              only sometimes ("Q4 = Male")
+   *   page       the page node the question sits on, for drawing pages
+   */
+  tag: z.string().optional(),
+  condition: z.string().optional(),
+  page: z.string().optional(),
 });
 
 /**

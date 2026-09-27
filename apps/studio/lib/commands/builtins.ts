@@ -1,6 +1,6 @@
 import type { SurveyDefinition, Question, FlowNode } from "@rescript/schema";
 import {
-  addQuestion, duplicateQuestion, moveQuestionBy, nextQuestionNaming, listPages, listBlocks, findNode,
+  addQuestion, duplicateQuestion, moveQuestionBy, nextQuestionNaming, listPages, listBlocks, findNode, splitPageAfter, joinPageAfter, boundaryAfter,
 } from "@rescript/engine";
 import type { Command, CommandContextBase } from "./core.ts";
 import { MODES, type ProgrammingMode } from "../programmingMode.ts";
@@ -46,8 +46,8 @@ export interface StudioCommandContext extends CommandContextBase {
   openChooser?(): void;
   /** the Studio's id generator, so ids look the way the browser suites expect */
   uid(prefix: string): string;
-  /** build a fresh question of the default variant, named for this survey */
-  newQuestion(def: SurveyDefinition): Question;
+  /** build a fresh question of the default variant — or of a named variant — named for this survey */
+  newQuestion(def: SurveyDefinition, variantId?: string): Question;
   /** a fresh flow node with the Survey Flow panel's defaults */
   newFlowNode(type: FlowNode["type"]): FlowNode;
   /** the shell's own actions; absent where the shell does not offer them */
@@ -99,6 +99,15 @@ export function insertionPoint(ctx: Pick<StudioCommandContext, "def" | "question
   return {};
 }
 
+/** the top-level flow index a new element goes at: after the selection's top-level element, else before the End */
+export function elementInsertionIndex(flow: FlowNode[], ctx: Pick<StudioCommandContext, "primary" | "questionId">): number {
+  const containing = (id: string): number => flow.findIndex((n) => n?.id === id || JSON.stringify(n).includes(`"${id}"`));
+  const selId = ctx.primary?.startsWith("flowNode:") ? ctx.primary.slice("flowNode:".length) : ctx.questionId ?? null;
+  const top = selId ? containing(selId) : -1;
+  if (top >= 0 && flow[top]?.type !== "end") return top + 1;
+  return flow.findIndex((n) => n?.type === "end");
+}
+
 export function builtinCommands(): C[] {
   const cmds: C[] = [];
 
@@ -112,6 +121,54 @@ export function builtinCommands(): C[] {
       ctx.update(`add ${q.code}`, (d) => { addQuestion(d, q, at); });
       ctx.selectQuestion(q.id);
       if (ctx.tab !== "questions") ctx.setTab("questions");
+    },
+  });
+  /*
+   * DATA OBJECTS AS QUESTIONS (UI upgrade §6): a hidden variable and a
+   * calculated value are questions of the `calculated` family, placed like
+   * any other. Architect's Add menu lists them under DATA — they change what
+   * is recorded, not where the respondent goes.
+   */
+  for (const [id, variant, title, kw] of [
+    ["question.addHidden", "calculated.hidden", "Add hidden variable", ["hidden variable", "url variable", "invisible"]],
+    ["question.addCalculated", "calculated.value", "Add calculated value", ["calculated variable", "derived", "formula question"]],
+  ] as const) {
+    cmds.push({
+      id, title, group: "Add", edits: true, keywords: [...kw],
+      run(ctx) {
+        const q = ctx.newQuestion(ctx.def, variant);
+        const at = insertionPoint(ctx);
+        ctx.update(`add ${q.code}`, (d) => { addQuestion(d, q, at); });
+        ctx.selectQuestion(q.id);
+        if (ctx.tab !== "questions") ctx.setTab("questions");
+      },
+    });
+  }
+  /*
+   * PAGE BREAKS BY QUESTION (UI upgrade §5): split the selected question's
+   * page after it, or join it with the next page of its block — the engine's
+   * own operations, the ones Architect's outline and the Intelligent mode use.
+   */
+  cmds.push({
+    id: "page.breakAfter", title: "Add page break after question", group: "Edit", edits: true,
+    keywords: ["page break", "new page", "split page"],
+    when: (ctx) => !!selectedQuestion(ctx) && boundaryAfter(ctx.def, ctx.questionId!) === "none",
+    run(ctx) {
+      const q = selectedQuestion(ctx)!;
+      let out: { ok: boolean; reason?: string } = { ok: false };
+      ctx.update(`page break after ${q.code}`, (d) => { out = splitPageAfter(d, q.id, ctx.uid); });
+      ctx.toast(out.ok ? "Page break added — same block, new respondent page" : (out.reason ?? "Could not add a page break there."), out.ok ? "ok" : "err");
+    },
+  });
+  cmds.push({
+    id: "page.joinAfter", title: "Remove page break after question", group: "Edit", edits: true,
+    keywords: ["page break", "merge pages", "join pages"],
+    when: (ctx) => !!selectedQuestion(ctx) && boundaryAfter(ctx.def, ctx.questionId!) === "page",
+    run(ctx) {
+      const q = selectedQuestion(ctx)!;
+      let out: { ok: boolean; reason?: string } = { ok: false };
+      ctx.update(`remove page break after ${q.code}`, (d) => { out = joinPageAfter(d, q.id); });
+      ctx.toast(out.ok ? "Page break removed — the two pages are one" : (out.reason ?? "Could not remove that page break."), out.ok ? "ok" : "err");
     },
   });
   cmds.push({
@@ -144,11 +201,14 @@ export function builtinCommands(): C[] {
         const node = ctx.newFlowNode(type);
         ctx.update(title.toLowerCase(), (d) => {
           const flow = d.flow as FlowNode[];
-          const at = flow.findIndex((n) => n?.type === "end");
+          // WHERE: after the selected top-level element — or after the block holding the selected
+          // question — so "add a branch" in Architect lands where the programmer is looking (UI
+          // upgrade §6); with nothing selected, before the End as it always did
+          const at = elementInsertionIndex(flow, ctx);
           flow.splice(at < 0 ? flow.length : at, 0, node);
         });
-        // the Flow canvas shows the new element where it is; anywhere else, go to the Survey Flow tab
-        if (ctx.mode !== "flow") ctx.setTab("flow");
+        // the Flow canvas and Architect show the new element where it is; anywhere else, go to the Survey Flow tab
+        if (ctx.mode !== "flow" && ctx.mode !== "architect") ctx.setTab("flow");
         ctx.selectQuestion(null);
         ctx.selectKey?.(`flowNode:${node.id}`);
       },

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { SurveyDefinition, cond } from "@rescript/schema";
 import { buildLogicFlow } from "@rescript/engine";
 import { buildScaleSurvey, buildMasterDemoSurvey } from "@rescript/templates";
-import { layoutFlow, assignLayers, upstream, downstream, edgeKind, fitTransform, NODE_W } from "./layout.ts";
+import { layoutFlow, pageFrames, CONDITION_H, NODE_H, assignLayers, upstream, downstream, edgeKind, fitTransform, NODE_W } from "./layout.ts";
 
 /**
  * THE FLOW LAYOUT is deterministic, respects the graph's direction, honours
@@ -132,4 +132,25 @@ test("the Master Demo lays out cleanly, and the 600-question fixture inside budg
   // the page-level graph is the one a 600-question canvas opens on
   const pages = layoutFlow(buildLogicFlow(buildScaleSurvey(600), { questions: false }));
   assert.ok(pages.nodes.length < 200 && pages.nodes.length > 50, `${pages.nodes.length} page nodes`);
+});
+
+test("a question with a condition is taller, and page frames wrap the nodes of one page (UI upgrade §11, §15)", () => {
+  const graph = {
+    nodes: [
+      { id: "a", kind: "question" as const, label: "Q1", page: "p1" },
+      { id: "b", kind: "question" as const, label: "Q2", page: "p1", condition: "Q1 = Yes" },
+      { id: "c", kind: "question" as const, label: "Q3", page: "p2" },
+      { id: "e", kind: "end" as const, label: "End" },
+    ],
+    edges: [{ id: "1", from: "a", to: "b" }, { id: "2", from: "b", to: "c" }, { id: "3", from: "c", to: "e" }],
+  };
+  const l = layoutFlow(graph);
+  assert.equal(l.byId.get("a")!.h, NODE_H.question);
+  assert.equal(l.byId.get("b")!.h, NODE_H.question + CONDITION_H, "room for the condition line");
+  assert.ok(l.byId.get("c")!.y > l.byId.get("b")!.y + l.byId.get("b")!.h, "the next layer starts below the taller node");
+  const frames = pageFrames(l.nodes);
+  assert.deepEqual(frames.map((f) => [f.id, f.count]), [["p1", 2], ["p2", 1]], "one frame per page; the End is on no page");
+  const p1 = frames[0], a = l.byId.get("a")!, b = l.byId.get("b")!;
+  assert.ok(p1.x < a.x && p1.y < a.y && p1.x + p1.w > b.x + b.w && p1.y + p1.h > b.y + b.h, "the frame contains both of its nodes");
+  assert.equal(pageFrames([]).length, 0);
 });

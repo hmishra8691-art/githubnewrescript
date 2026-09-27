@@ -9,7 +9,7 @@ import { selectionReducer, EMPTY_SELECTION, questionIdOf } from "./selection.ts"
 import {
   parseShortcut, matchesShortcut, formatShortcut, fuzzyScore, rank, applicable, commandForKey,
 } from "./commands/core.ts";
-import { builtinCommands, navigationCommands, findCommands, type StudioCommandContext } from "./commands/builtins.ts";
+import { builtinCommands, navigationCommands, findCommands, elementInsertionIndex, type StudioCommandContext } from "./commands/builtins.ts";
 
 /**
  * THE SHARED LAYER UNDER THE FIVE ENVIRONMENTS.
@@ -323,7 +323,11 @@ test("the permission model: five purposes, and a split keeps the properties pane
   assert.equal(MODE_CAPABILITIES.intelligent.edit, "proposals");
   assert.equal(propertiesWanted("studio", "intelligent"), true, "Studio beside Intelligent keeps its Properties (§1)");
   assert.equal(propertiesWanted("intelligent", "studio"), true, "either way round");
-  assert.equal(propertiesWanted("grid", "flow"), true, "Grid selects rows and edits them in the panel");
+  assert.equal(propertiesWanted("grid", "flow"), false, "Grid's panel is contextual: closed until a logic or validation cell asks for it (UI upgrade §2)");
+  assert.equal(propertiesWanted("grid", "flow", true), true, "…and open once it has");
+  assert.equal(propertiesWanted("grid", "studio", false), true, "a Studio pane beside Grid always keeps it");
+  assert.equal(propertiesWanted("flow", null, true), false, "a request means nothing to a mode that never shows it");
+  assert.equal(MODE_CAPABILITIES.grid.properties, "contextual");
   assert.equal(propertiesWanted("flow", "architect"), false, "neither wants it");
   assert.equal(propertiesWanted("flow", null), false);
   assert.equal(propertiesWanted("studio", null), true);
@@ -346,4 +350,52 @@ test("insertionPoint (round 2): after the selected question, at the end of a sel
   assert.deepEqual(insertionPoint({ def, questionId: null, primary: "flowNode:b1" }), { pageId: "p3", index: 1 }, "a block: its last page");
   assert.deepEqual(insertionPoint({ def, questionId: null, primary: "flowNode:e" }), {}, "an end: the default (last page)");
   assert.deepEqual(insertionPoint({ def, questionId: null, primary: null }), {});
+});
+
+/* ------------------------------------------------------------ UI upgrade: page breaks, data objects, element placement */
+
+test("page.breakAfter / page.joinAfter: offered only where they apply, and they split and join the selected question's page", () => {
+  const ctx = fakeCtx();
+  const cmds = builtinCommands();
+  const brk = cmds.find((c) => c.id === "page.breakAfter")!;
+  const join = cmds.find((c) => c.id === "page.joinAfter")!;
+  assert.equal(applicable([brk, join], ctx).length, 0, "nothing selected → neither");
+  ctx.selectQuestion("q1");
+  assert.deepEqual(applicable([brk, join], ctx).map((c) => c.id), ["page.breakAfter"], "Q1 is mid-page: only a break can be added");
+  brk.run(ctx);
+  assert.equal(ctx.def.flow[0].type, "block", "the page became a block of two pages");
+  assert.deepEqual((ctx.def.flow[0] as { children: { questionIds: string[] }[] }).children.map((p) => p.questionIds), [["q1"], ["q2"]]);
+  assert.ok(logOf(ctx).some((l) => /toast:Page break added/.test(l)));
+  assert.deepEqual(applicable([brk, join], ctx).map((c) => c.id), ["page.joinAfter"], "now there is a break after Q1: only removing applies");
+  join.run(ctx);
+  assert.equal(ctx.def.flow[0].type, "page", "joined back into one bare page");
+  assert.deepEqual((ctx.def.flow[0] as { questionIds: string[] }).questionIds, ["q1", "q2"]);
+  ctx.selectQuestion("q2");
+  assert.equal(applicable([brk, join], ctx).length, 0, "Q2 ends its block: neither applies");
+});
+
+test("question.addHidden asks the factory for the hidden-variable variant and places it like any question", () => {
+  const ctx = fakeCtx();
+  let asked: string | undefined;
+  ctx.newQuestion = (d, variant) => { asked = variant; return { id: "q_h", code: `H${d.questions.length}`, variableName: "HIDDEN_1", type: "hidden", text: "" } as unknown as Question; };
+  ctx.selectQuestion("q1");
+  builtinCommands().find((c) => c.id === "question.addHidden")!.run(ctx);
+  assert.equal(asked, "calculated.hidden");
+  assert.deepEqual((ctx.def.flow[0] as { questionIds: string[] }).questionIds, ["q1", "q_h", "q2"]);
+  assert.equal(ctx.questionId, "q_h");
+});
+
+test("flow.add.* lands after the selection's top-level element — the block holding the selected question — and stays in Architect", () => {
+  const ctx = fakeCtx({ mode: "architect" });
+  const flow0 = ctx.def.flow;
+  assert.equal(elementInsertionIndex(flow0 as never, { primary: null, questionId: null }), 1, "nothing selected: before the End");
+  assert.equal(elementInsertionIndex(flow0 as never, { primary: "question:q2", questionId: "q2" }), 1, "a question in the first block: after that block");
+  assert.equal(elementInsertionIndex(flow0 as never, { primary: "flowNode:e", questionId: null }), 1, "the End selected: still before it");
+  ctx.selectQuestion("q1");
+  builtinCommands().find((c) => c.id === "flow.add.branch")!.run(ctx);
+  assert.deepEqual(ctx.def.flow.map((n) => n.type), ["page", "branch", "end"]);
+  assert.ok(!logOf(ctx).some((l) => l === "tab:flow"), "Architect shows the element where it is — no jump to the Survey Flow tab");
+  const ctx2 = fakeCtx({ mode: "studio", tab: "questions" });
+  builtinCommands().find((c) => c.id === "flow.add.loop")!.run(ctx2);
+  assert.ok(logOf(ctx2).includes("tab:flow"), "Studio still goes to the Survey Flow tab, as before");
 });

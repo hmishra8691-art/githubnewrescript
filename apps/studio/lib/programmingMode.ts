@@ -168,7 +168,14 @@ export function shouldShowChooser(search: string, remembered: string | null | un
  */
 export interface ModeCapabilities {
   purpose: "build" | "structure" | "understand" | "review" | "assist";
-  properties: boolean;
+  /**
+   * `true`: the Properties panel is beside the view whenever a question is
+   * selected. `"contextual"`: the view asks for it — Grid opens it when a
+   * Display logic, Skip logic or Validation cell is clicked and closes it
+   * when ordinary question content is, so the spreadsheet keeps its width
+   * (UI upgrade §2). `false`: never.
+   */
+  properties: boolean | "contextual";
   create: boolean;
   edit: "full" | "structure" | "fields" | "proposals" | "none";
   /** a click on an object opens it in Studio rather than editing here */
@@ -179,11 +186,17 @@ export const MODE_CAPABILITIES: Record<ProgrammingMode, ModeCapabilities> = {
   studio: { purpose: "build", properties: true, create: true, edit: "full", opensInStudio: false },
   architect: { purpose: "structure", properties: false, create: true, edit: "structure", opensInStudio: false },
   flow: { purpose: "understand", properties: false, create: false, edit: "none", opensInStudio: true },
-  grid: { purpose: "review", properties: true, create: true, edit: "fields", opensInStudio: false },
+  grid: { purpose: "review", properties: "contextual", create: true, edit: "fields", opensInStudio: false },
   intelligent: { purpose: "assist", properties: false, create: false, edit: "proposals", opensInStudio: false },
 };
 
-/** whether the properties panel is shown beside a view or a pair of views */
-export function propertiesWanted(mode: ProgrammingMode, split: ProgrammingMode | null): boolean {
-  return MODE_CAPABILITIES[mode].properties || (!!split && MODE_CAPABILITIES[split].properties);
+/**
+ * Whether the properties panel is shown beside a view or a pair of views.
+ * `requested` is the contextual view's word: Grid has asked for the panel
+ * (a logic or validation cell was clicked) and not yet dismissed it. A pane
+ * that always wants the panel (Studio) keeps it whatever Grid says.
+ */
+export function propertiesWanted(mode: ProgrammingMode, split: ProgrammingMode | null, requested = false): boolean {
+  const wants = (m: ProgrammingMode) => { const p = MODE_CAPABILITIES[m].properties; return p === true || (p === "contextual" && requested); };
+  return wants(mode) || (!!split && wants(split));
 }

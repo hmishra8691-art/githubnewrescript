@@ -94,6 +94,69 @@ question) and masking (`set_mask`: a set expression parsed by
 `scripts/mode-sync-test.mjs` (13) and additions to the Grid (51),
 Architect (38), Flow (40) and Intelligent (41) suites.
 
+**Round 3 — UI, mode and Intelligent upgrade (2026-09-27).** Grid = Edit,
+Architect = Structure, Flow = Understand, Intelligent = Instruct.
+
+- *Grid.* Every column now has a fixed width (the Question column used to
+  flex, so the Properties panel opening — or the hover toolbar taking room
+  in its row — slid every column to its right); a filler cell takes the
+  spare width and the row actions sit in a zero-width sticky anchor, out of
+  the flow. The panel is *contextual* (`MODE_CAPABILITIES.grid.properties =
+  "contextual"`, `ModeContext.requestPanel(section)` / `dismissPanel()`):
+  closed by default, opened on the Display-logic / Skip-logic / Validation
+  cell with that section revealed (`CollapsibleSection` listens for
+  `reveal`), closed again by a click on ordinary content. Move up/down is
+  gone from the row actions (Open in Studio · Duplicate · Delete remain).
+- *Architect.* `lib/architect/structure.ts` builds the outline — blocks →
+  pages → questions, the PAGE BREAK between two pages drawn as the boundary
+  it is, object tags (H hidden, calculated, conjoint, MaxDiff, screening)
+  and logic chips (DL, SKIP, VAL, MASK, CALC, QUOTA, SHOW/HIDE rule) that
+  open the matching inspector section or select the rule / calculation /
+  quota that holds them. The workspace shows it for the survey, a block or
+  a page; a question gets its crumb (block › page › position, "page break
+  after"), its chips and add/remove-break. "+ page break here" between two
+  questions and "remove" on a break go through the engine's new
+  `splitPageAfter` / `joinPageAfter` (`packages/engine/src/pageBreaks.ts`,
+  which now also owns `wrapBlock` / `unwrapIfSingle`). The Add menu is
+  structured — WHERE, then Structure (question, page break, block) · Flow
+  (branch, randomizer, loop, quota check) · Data (embedded data, hidden
+  variable, calculated value) — and flow elements land after the
+  selection's block (`elementInsertionIndex`) instead of before the End.
+  The map draws page-break rows and tags.
+- *Flow.* No editing at all: a drag pans, nothing is pinned or written,
+  Auto-arrange is gone, stored positions are ignored. `buildLogicFlow`
+  nodes carry `tag`, `condition` and `page` (additive schema fields):
+  badges for hidden / calculated / conjoint / MaxDiff / embedded / loop /
+  quota / randomizer / branch / redirect / screen-out / quota full / end,
+  with a legend; the display condition on the node ("IF Q8 is Yes"); pages
+  framed around their questions; every decision edge labelled — the skip,
+  and "otherwise" on its fallthrough, "quota full" / "quota available".
+  The read-only inspector adds page, loop, routing (each IF → target, then
+  otherwise → next) and the quotas/calculations/rules that read the
+  question, with Open in Studio.
+- *Intelligent.* New intents over the one engine: page breaks (after /
+  before a question, add / remove), embedded variables (`add_embedded_field`),
+  hidden and calculated variables (named for what they are for), loops
+  around a run of questions on one page (`wrap_in_loop` →
+  `structureOps.wrapInLoop`), "skip Q6 and Q7 and go to Q8", options by
+  code ("Q5 option 3 is selected" → `Q5 = 3`), the selection as context
+  ("this question", "it", "this block"), and "explain why respondents are
+  screened out". Every one is validated before Apply is offered. The model
+  prompt and the context listing know blocks, embedded and hidden
+  variables, loops and quotas. **Voice:** a microphone records, posts to
+  `/api/ai/transcribe` (the ai package's `transcribe` — provider set by
+  `AI_STT_API_URL`, swappable, key never in the route — metered per minute
+  through the new shared `meteredStt`), tidies the transcript (`q 5` →
+  `Q5`), and when the language is not English reads it into English with
+  the chat model (`lib/intelligent/voice.ts`). The result goes through the
+  same grammar → model → planner → review card as typed text; the card
+  shows what was heard and how it was read.
+
+Verified: engine 1 314 unit tests (new `pageBreakOps`, `structureOps`,
+logic-graph and proposal tests), Studio lib 194, and the Grid (57),
+Architect (48), Flow (47), Intelligent (54) suites, each new assertion
+mutation-checked.
+
 Three things learned while building Phase 0 that the plan did not know:
 
 - `lintSurveyLogic` was cubic in question count (5.5 s at 1 000 questions);

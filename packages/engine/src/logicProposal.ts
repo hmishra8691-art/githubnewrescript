@@ -6,6 +6,8 @@ import { renameVariable } from "./variableUsage.js";
 import { conditionSummary } from "./logicSummary.js";
 import { findNode } from "./flowTree.js";
 import { formatSetExpression } from "./setExpression.js";
+import { boundaryAfter, pagePositionOf, splitPageAfter, joinPageAfter } from "./pageBreaks.js";
+import { wrapInLoop, addEmbeddedField, embeddedFieldNames, blockLabel } from "./structureOps.js";
 
 /**
  * A LOGIC PROPOSAL — what the Intelligent mode asks permission to do.
@@ -53,7 +55,20 @@ export type ProposalChange =
   /** drop rules — the named kinds, or every rule when `kinds` is absent */
   | { kind: "clear_validation"; questionId: string; kinds?: ValidationRule["kind"][] }
   /** the question's option mask (universal masking); `null` removes it */
-  | { kind: "set_mask"; questionId: string; mask: OptionMask | null };
+  | { kind: "set_mask"; questionId: string; mask: OptionMask | null }
+  /*
+   * STRUCTURE (UI upgrade §17, §24): the flow, not a question. Ids for the
+   * nodes these create come from the caller (the Studio's minter), as with
+   * `add_question`, so the review card can name them before Apply.
+   */
+  /** split the question's page after it */
+  | { kind: "add_page_break"; questionId: string; pageId: string }
+  /** join the question's page with the next page of its block */
+  | { kind: "remove_page_break"; questionId: string }
+  /** a field on the survey's embedded-data node (created first in the flow when there is none) */
+  | { kind: "add_embedded_field"; field: { name: string; source: "url" | "panel" | "static" | "expression"; value?: string; dataType?: "string" | "number" | "boolean" | "date" }; nodeId: string }
+  /** wrap a run of questions on one page in a loop */
+  | { kind: "wrap_in_loop"; fromId: string; toId: string; loopId: string; loopVar?: string; title?: string };
 
 export interface ProposalOutcome {
   /** the definition after the changes — the same object when every change mutates in place */
@@ -160,6 +175,35 @@ export function validateProposal(def: SurveyDefinition, changes: ProposalChange[
         if (!x) { errors.push(`No question ${c.questionId}.`); break; }
         if (c.kinds && !c.kinds.some((k) => (x.validation ?? []).some((v) => v.kind === k))) errors.push(`${name(def, x.id)} has no ${c.kinds.map(ruleLabel).join(" or ")} rule to remove.`);
         if (!c.kinds && !(x.validation ?? []).length) errors.push(`${name(def, x.id)} has no validation rules to remove.`);
+        break;
+      }
+      case "add_page_break": {
+        const b = boundaryAfter(def, c.questionId);
+        if (b === null) errors.push(`${name(def, c.questionId)} is not on any page.`);
+        else if (b === "page") errors.push(`There is already a page break after ${name(def, c.questionId)}.`);
+        else if (b === "block") errors.push(`${name(def, c.questionId)} is the last question of its block — the block ends there.`);
+        break;
+      }
+      case "remove_page_break": {
+        const b = boundaryAfter(def, c.questionId);
+        if (b === null) errors.push(`${name(def, c.questionId)} is not on any page.`);
+        else if (b === "none") errors.push(`There is no page break after ${name(def, c.questionId)}.`);
+        else if (b === "block") errors.push(`${name(def, c.questionId)} ends its block; the next page belongs to the next block.`);
+        break;
+      }
+      case "add_embedded_field": {
+        const n = (c.field.name ?? "").trim();
+        if (!/^[A-Za-z_][\w]*$/.test(n)) errors.push(`“${c.field.name}” is not a valid variable name — letters, digits and underscores, not starting with a digit.`);
+        else if (embeddedFieldNames(def).includes(n)) errors.push(`An embedded variable ${n} already exists.`);
+        else if (def.questions.some((x) => x.variableName === n || x.code === n)) errors.push(`${n} is already a question's name.`);
+        if (c.field.source === "static" && !c.field.value) errors.push(`A static embedded variable needs the value to set.`);
+        break;
+      }
+      case "wrap_in_loop": {
+        const a = pagePositionOf(def, c.fromId), b = pagePositionOf(def, c.toId);
+        if (!a || !b) errors.push(`Both ends of the loop must be questions on a page (${name(def, c.fromId)} … ${name(def, c.toId)}).`);
+        else if (a.page.id !== b.page.id) errors.push(`${name(def, c.fromId)} and ${name(def, c.toId)} are on different pages — a loop wraps questions on one page.`);
+        if (c.loopVar !== undefined && !/^[A-Za-z_][\w]*$/.test(c.loopVar)) errors.push(`“${c.loopVar}” is not a valid loop variable name.`);
         break;
       }
       case "set_mask": {
@@ -290,6 +334,25 @@ export function describeChange(def: SurveyDefinition, c: ProposalChange): string
       return c.kinds ? `Remove the ${c.kinds.map(ruleLabel).join(" and ")} rule${c.kinds.length === 1 ? "" : "s"} from ${name(def, c.questionId)}.` : `Remove every validation rule from ${name(def, c.questionId)}.`;
     case "set_mask":
       return c.mask ? `${maskSummary(def, name(def, c.questionId), c.mask)}.` : `Remove the option mask from ${name(def, c.questionId)}.`;
+    case "add_page_break": {
+      const pos = pagePositionOf(def, c.questionId);
+      const after = pos ? pos.page.questionIds.slice(pos.index + 1).map((id) => name(def, id)) : [];
+      return `Add a page break after ${name(def, c.questionId)}${pos ? ` in ${blockLabel(def, pos.block.id)}` : ""} — ${after.length ? `${after.slice(0, 4).join(", ")}${after.length > 4 ? ` and ${after.length - 4} more` : ""} move to a new page` : "the page is split there"}.`;
+    }
+    case "remove_page_break": {
+      const pos = pagePositionOf(def, c.questionId);
+      const next = pos && pos.block.pages[pos.pageIndex + 1] ? pos.block.pages[pos.pageIndex + 1].node.questionIds.map((id) => name(def, id)) : [];
+      return `Remove the page break after ${name(def, c.questionId)} — ${next.length ? `${next.slice(0, 4).join(", ")}${next.length > 4 ? ` and ${next.length - 4} more` : ""} join its page` : "the two pages become one"}.`;
+    }
+    case "add_embedded_field": {
+      const how = c.field.source === "static" ? `set to “${c.field.value}”` : c.field.source === "url" ? "read from the survey URL" : c.field.source === "panel" ? "read from the panel" : `computed from ${c.field.value ?? "an expression"}`;
+      return `Create the embedded variable ${c.field.name.trim()}, ${how}${c.field.dataType && c.field.dataType !== "string" ? ` (${c.field.dataType})` : ""}.`;
+    }
+    case "wrap_in_loop": {
+      const a = pagePositionOf(def, c.fromId), b = pagePositionOf(def, c.toId);
+      const run = a && b && a.page.id === b.page.id ? a.page.questionIds.slice(Math.min(a.index, b.index), Math.max(a.index, b.index) + 1).map((id) => name(def, id)) : [name(def, c.fromId), name(def, c.toId)];
+      return `Repeat ${run.length > 1 ? `${run[0]} to ${run[run.length - 1]} (${run.length} questions)` : run[0]} in a loop${c.title ? ` “${c.title}”` : ""} — once per ${c.loopVar ?? "item"}; choose the items in Studio.`;
+    }
   }
 }
 
@@ -358,6 +421,27 @@ export function applyLogicProposal(def: SurveyDefinition, changes: ProposalChang
         if (c.mask) x.mask = c.mask; else delete (x as { mask?: OptionMask }).mask;
         break;
       }
+      case "add_page_break": {
+        const r = splitPageAfter(cur, c.questionId, () => c.pageId);
+        if (!r.ok) return { def, applied: 0, errors: [r.reason] };
+        break;
+      }
+      case "remove_page_break": {
+        const r = joinPageAfter(cur, c.questionId);
+        if (!r.ok) return { def, applied: 0, errors: [r.reason] };
+        break;
+      }
+      case "add_embedded_field": {
+        const r = addEmbeddedField(cur, c.field as never, () => c.nodeId);
+        if (!r.ok) return { def, applied: 0, errors: [r.reason] };
+        break;
+      }
+      case "wrap_in_loop": {
+        let minted = 0;
+        const r = wrapInLoop(cur, c.fromId, c.toId, { loopVar: c.loopVar, title: c.title }, (prefix) => (prefix === "loop" ? c.loopId : `${c.loopId}_${prefix}_${++minted}`));
+        if (!r.ok) return { def, applied: 0, errors: [r.reason] };
+        break;
+      }
     }
   }
   return { def: cur, applied: changes.length, errors: [] };
@@ -367,7 +451,8 @@ export function applyLogicProposal(def: SurveyDefinition, changes: ProposalChang
 export function proposalTargets(changes: ProposalChange[]): string[] {
   const out: string[] = [];
   for (const c of changes) {
-    if (c.kind === "set_display_logic" || c.kind === "add_skip_rule" || c.kind === "set_required" || c.kind === "set_validation" || c.kind === "clear_validation" || c.kind === "set_mask") out.push(c.questionId);
+    if (c.kind === "set_display_logic" || c.kind === "add_skip_rule" || c.kind === "set_required" || c.kind === "set_validation" || c.kind === "clear_validation" || c.kind === "set_mask" || c.kind === "add_page_break" || c.kind === "remove_page_break") out.push(c.questionId);
+    else if (c.kind === "wrap_in_loop") out.push(c.fromId);
     else if (c.kind === "add_question") out.push(c.question.id);
     else if (c.kind === "add_display_rule" && c.rule.target.kind === "question") out.push(c.rule.target.ref);
   }

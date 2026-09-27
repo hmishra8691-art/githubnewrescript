@@ -3,6 +3,7 @@ import React from "react";
 import type { ObjectKey } from "@rescript/engine";
 import { Icon, type IconName } from "../ui/Icon";
 import type { FlatMapRow, MapKind } from "../../lib/architect/map";
+import { TAG_LABEL } from "../../lib/architect/structure";
 
 /**
  * THE SURVEY MAP PANE — the tree, drawn.
@@ -19,7 +20,7 @@ import type { FlatMapRow, MapKind } from "../../lib/architect/map";
  */
 
 const ICON: Partial<Record<MapKind, IconName>> = {
-  block: "layers", group: "layers", page: "layers", question: "questions",
+  block: "layers", group: "layers", page: "notes", question: "questions",
   branch: "flow", arm: "chevron-right", otherwise: "chevron-right", loop: "flow", randomizer: "flow",
   embedded: "variables", quotaCheck: "quotas", redirect: "share", end: "check",
   rules: "logic", rule: "logic", calculations: "calc", calculation: "calc", quotas: "quotas", quota: "quotas",
@@ -95,6 +96,14 @@ export function SurveyMap({
           const isPrimary = primary === r.key;
           const dim = focusSet ? !focusSet.has(r.key) : false;
           const section = r.kind === "rules" || r.kind === "calculations" || r.kind === "quotas";
+          if (r.kind === "pageBreak") {
+            // the boundary between two pages of a block, drawn as the line it is (UI upgrade §5)
+            return (
+              <div key={r.rowId} className="am-row am-pagebreak" data-testid="map-row" data-kind="pageBreak" data-index={i} aria-hidden="true" style={{ paddingLeft: 8 + r.depth * 14 }}>
+                <span className="am-break-line" /><span className="am-break-label">page break</span><span className="am-break-line" />
+              </div>
+            );
+          }
           return (
             <div
               key={r.rowId}
@@ -124,6 +133,7 @@ export function SurveyMap({
               <Icon name={ICON[r.kind] ?? "layers"} size={13} />
               <span className="am-label">
                 {r.code && r.kind === "question" ? <span className="mono am-code">{r.code}</span> : null}
+                {r.tags?.map((t) => <span key={t} className={`am-tag am-tag-${t}`} data-testid="map-tag" data-tag={t} title={TAG_LABEL[t]}>{t === "hidden" ? "H" : t === "conjoint" ? "CJ" : t === "maxdiff" ? "MD" : t === "calculated" ? "fx" : t === "screening" ? "S" : t}</span>)}
                 <span className="am-text">{r.kind === "question" ? (r.detail || r.label) : r.label}</span>
                 {r.kind !== "question" && r.detail && <span className="am-detail">{r.detail}</span>}
               </span>

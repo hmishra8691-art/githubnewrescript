@@ -116,12 +116,76 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
 
 /* ----------------------------------------------------------- selection → properties */
 {
+  /*
+   * THE PANEL IS CONTEXTUAL, THE COLUMNS NEVER MOVE (UI upgrade §1–§3). A click on ordinary content
+   * selects the row and leaves the Properties panel closed; a click on Display logic / Skip logic /
+   * Validation opens it on that section; ordinary content closes it again. Through all of it, every
+   * column stays exactly where it was.
+   */
+  const panelOpen = () => page.$eval(".rightpanel", (e) => !e.classList.contains("rp-hidden"));
+  const lefts = (code) => page.$$eval(`[data-testid="grid-row"][data-code="${code}"] .sg-cell[data-col]`, (els) => els.map((e) => `${e.dataset.col}@${Math.round(e.getBoundingClientRect().left)}`).join(" "));
+  const headLefts = () => page.$$eval('.sg-head .sg-cell[data-testid^="grid-head-"]', (els) => els.map((e) => Math.round(e.getBoundingClientRect().left)).join(","));
+  const scrollLeft = () => page.$eval(".sg-scroll", (e) => e.scrollLeft);
+  // a screen wider than the table is where a flexing column used to give way when the panel opened
+  const vp0 = page.viewportSize();
+  await page.setViewportSize({ width: 2400, height: vp0.height });
+  await page.waitForTimeout(300);
   const q3 = await rowByCode("Q3");
-  await q3.click();
+  const base = await lefts("Q3"), baseHead = await headLefts(), baseScroll = await scrollLeft();
+  await q3.$eval('.sg-cell[data-col="text"]', (e) => e.click());
   await page.waitForTimeout(200);
-  assert.equal(await page.$eval(".rightpanel", (e) => e.classList.contains("rp-hidden")), false);
+  assert.equal(await panelOpen(), false, "ordinary content: the panel stays closed");
+  assert.equal(await page.$eval('[data-testid="grid-row"][data-code="Q3"]', (e) => e.getAttribute("aria-selected")), "true");
+  ok("clicking a question's text selects the row and leaves the Properties panel closed");
+  await page.hover('[data-testid="grid-row"][data-code="Q3"]');
+  await page.waitForTimeout(150);
+  assert.equal(await lefts("Q3"), base, "the hover actions take no width from the cells");
+  const titles = await page.$$eval('[data-testid="grid-row"][data-code="Q3"] [data-testid="grid-row-actions"] button', (b) => b.map((x) => x.title));
+  assert.deepEqual(titles, ["Open in Studio", "Duplicate", "Delete"], `no move controls: ${titles.join(",")}`);
+  ok("the row actions are Open in Studio · Duplicate · Delete — no Move up / Move down, and showing them shifts nothing");
+  await (await cell("Q3", "validation")).click();
+  await page.waitForTimeout(250);
+  assert.equal(await panelOpen(), true, "validation: the panel opens");
   assert.match(await page.$eval(".rightpanel h2", (e) => e.textContent), /Q3/);
-  ok("selecting a row opens that question's properties on the right — the shared selection");
+  assert.equal(await page.$eval('[data-testid="psec-validation-rules"]', (e) => e.classList.contains("collapsed")), false, "on the Validation section");
+  ok("clicking the Validation cell opens Q3's Properties on its Validation rules");
+  await (await cell("Q5", "display")).click();
+  await page.waitForTimeout(250);
+  assert.match(await page.$eval(".rightpanel h2", (e) => e.textContent), /Q5/);
+  assert.equal(await page.$eval('[data-testid="psec-display-logic"]', (e) => e.classList.contains("collapsed")), false);
+  ok("clicking Q5's Display logic cell moves the panel to Q5, on its Display logic");
+  await (await cell("Q5", "skip")).click();
+  await page.waitForTimeout(250);
+  assert.equal(await page.$eval('[data-testid="psec-skip-logic"]', (e) => e.classList.contains("collapsed")), false);
+  ok("…and the Skip logic cell opens Skip logic");
+  await (await cell("Q5", "variable")).click();
+  await page.waitForTimeout(250);
+  assert.equal(await panelOpen(), false, "variable name: the panel closes");
+  await (await cell("Q5", "display")).click();
+  await page.waitForTimeout(200);
+  await (await cell("Q5", "options")).click();
+  await page.waitForTimeout(250);
+  assert.equal(await panelOpen(), false, "options: the panel closes");
+  ok("clicking the variable, the options or the text closes the panel again");
+  // the Required checkbox toggles in place
+  await (await cell("Q3", "display")).click();
+  await page.waitForTimeout(200);
+  const withPanel = await lefts("Q3");
+  const req = await page.$('[data-testid="grid-row"][data-code="Q3"] [data-testid="grid-required"]');
+  if (req) {
+    await req.click(); await page.waitForTimeout(150); await req.click(); await page.waitForTimeout(150);
+    assert.equal(await lefts("Q3"), withPanel, "the checkbox moves nothing");
+  }
+  assert.equal(withPanel, base, "opening the panel moved no column");
+  assert.equal(await headLefts(), baseHead, "…in the header either");
+  assert.equal(await scrollLeft(), baseScroll, "and the horizontal scroll is where it was");
+  ok("through every click — text, validation, display, skip, options, required, the panel opening and closing — no column moved a pixel");
+  await page.setViewportSize(vp0);
+  await page.waitForTimeout(300);
+  await (await cell("Q3", "text")).click();
+  await page.waitForTimeout(150);
+  await q3.click();
+  await page.waitForTimeout(150);
   // shift-click selects a range
   const q6 = await rowByCode("Q6");
   await q6.click({ modifiers: ["Shift"] });
@@ -262,13 +326,13 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
 
 /* ----------------------------------------------------------- keyboard + hover actions */
 {
-  await page.click('[data-testid="grid-row"][data-code="Q1"]');
+  await (await cell("Q1", "display")).click(); // open the panel so it can be seen following
   await page.focus('[data-testid="grid-table"]');
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");
   await page.waitForTimeout(150);
   assert.match(await page.$eval(".rightpanel h2", (e) => e.textContent), /Q3/);
-  ok("↓ moves the selection row by row (the property panel follows)");
+  ok("↓ moves the selection row by row (an open property panel follows)");
   await page.keyboard.press("Shift+ArrowDown");
   await page.waitForTimeout(150);
   assert.equal((await page.$$('[data-testid="grid-row"][aria-selected="true"]')).length, 2);
@@ -351,7 +415,7 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
   const q13 = before.questions.find((q) => q.code === "Q13");
   const n0 = q13.options.length;
   await page.click('[data-testid="grid-row"][data-code="Q13"] .sg-cell[data-col="code"]');
-  await page.waitForTimeout(200); // the properties panel opens for the selected row and the columns settle
+  await page.waitForTimeout(200);
   const optCell = await cell("Q13", "options");
   await optCell.dblclick();
   await page.waitForSelector('[data-testid="grid-options-editor"]');

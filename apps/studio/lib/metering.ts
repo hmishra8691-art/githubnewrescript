@@ -229,6 +229,44 @@ export async function meteredAi<T>(meter: Meter, ctx: MeterContext, eventType: s
   }
 }
 
+/**
+ * Run a speech-to-text call under the meter: reserve from the clip's length,
+ * settle with what the provider reported. Shared by the media pipeline's
+ * `projectStt` and the Intelligent mode's voice route, so a minute of
+ * researcher speech is charged exactly as a minute of respondent speech.
+ * A meter that cannot be reached runs the call unmetered and says so in the
+ * log — a recording must not be lost to a billing outage.
+ */
+export async function meteredStt<T>(meter: Meter, ctx: MeterContext, operation: string, seconds: number, fn: () => Promise<T>): Promise<{ value: T } | { refused: string }> {
+  const providerName = process.env.AI_API_URL === "fake:" ? "fake" : "openai-compatible";
+  const minutes = Math.max(0.05, seconds / 60);
+  let hold;
+  try {
+    hold = await meter.reserve(ctx, {
+      eventType: "SPEECH_TO_TEXT_MINUTE",
+      provider: meterProvider(providerName, "stt"),
+      service: "stt",
+      model: meterModel(providerName, (process.env.AI_STT_MODEL ?? "").trim() || "whisper-1", "stt"),
+      quantity: minutes,
+      metadata: { operation, seconds },
+    });
+  } catch (e) {
+    console.warn("[rescript:billing] meter unavailable — running unmetered", JSON.stringify({ error: (e as Error).message }));
+    return { value: await fn() };
+  }
+  if (!hold.ok) return { refused: hold.message };
+  try {
+    const { value, usage } = await collectUsage(fn);
+    if (!usage.length) { await meter.release(hold); return { value }; }
+    const spec = usageToSpec(usage, { kind: "stt" });
+    await meter.settle(hold, { ...spec, eventType: "SPEECH_TO_TEXT_MINUTE", metadata: { operation, ...spec.metadata } });
+    return { value };
+  } catch (e) {
+    await meter.release(hold).catch(() => {});
+    throw e;
+  }
+}
+
 /** Run a translation batch under the meter: reserve from the characters about to be sent, settle with what the adapter reported. */
 export async function meteredTranslation<T>(meter: Meter, ctx: MeterContext, est: { characters: number; providerId: string; operation: string }, fn: () => Promise<T>): Promise<Metered<T>> {
   const prov = est.providerId === "llm" ? "openai-compatible" : est.providerId;

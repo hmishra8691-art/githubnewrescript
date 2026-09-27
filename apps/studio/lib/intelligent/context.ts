@@ -1,5 +1,5 @@
 import type { SurveyDefinition } from "@rescript/schema";
-import { listPages, questionsInFlowOrder, conditionSummary, formatSetExpression } from "@rescript/engine";
+import { listPages, listBlocks, questionsInFlowOrder, conditionSummary, formatSetExpression, embeddedFieldNames } from "@rescript/engine";
 
 /**
  * THE SURVEY, COMPACTLY, FOR A LANGUAGE MODEL.
@@ -71,5 +71,17 @@ export function surveyContext(def: SurveyDefinition, opts: ContextOptions = {}):
   }
   if (brief.length) lines.push(`Other questions (by code): ${brief.join(", ")}`);
   if (def.calculations?.length) lines.push(`Calculations: ${def.calculations.map((c) => `${c.targetVariable} = ${c.expression}`).slice(0, 30).join("; ")}`);
+  /* THE REST OF THE ARCHITECTURE (UI upgrade §23): blocks with their pages, embedded variables, loops, quotas — by id and name, so a sentence can mean them */
+  const blocks = listBlocks(def.flow as unknown[]);
+  if (blocks.length) lines.push(`Blocks: ${blocks.slice(0, 40).map((b, i) => `Block ${i + 1}${b.title ? ` “${plain(b.title, 40)}”` : ""} [${b.id}] ${b.pages.length} page${b.pages.length === 1 ? "" : "s"}`).join("; ")}${blocks.length > 40 ? `; … (${blocks.length})` : ""}`);
+  const embedded = embeddedFieldNames(def);
+  if (embedded.length) lines.push(`Embedded variables: ${embedded.slice(0, 40).join(", ")}`);
+  const hidden = def.questions.filter((q) => q.type === "hidden" || q.type === "calculated").map((q) => `${q.code} (${q.variableName})`);
+  if (hidden.length) lines.push(`Hidden / calculated variables: ${hidden.slice(0, 40).join(", ")}`);
+  const loops: string[] = [];
+  const walk = (nodes: unknown[]): void => { for (const n of nodes as { type: string; id: string; title?: string; loopVar?: string; children?: unknown[]; branches?: { children: unknown[] }[]; otherwise?: unknown[] }[]) { if (n.type === "loop") loops.push(`${n.title ?? "loop"} [${n.id}] once per ${n.loopVar}`); if (n.children) walk(n.children); if (n.branches) for (const b of n.branches) walk(b.children); if (n.otherwise) walk(n.otherwise); } };
+  walk(def.flow as unknown[]);
+  if (loops.length) lines.push(`Loops: ${loops.join("; ")}`);
+  if (def.quotas?.length) lines.push(`Quotas: ${def.quotas.map((q) => `${q.name} [${q.id}] (${q.cells.length} cells)`).slice(0, 20).join("; ")}`);
   return lines.join("\n");
 }

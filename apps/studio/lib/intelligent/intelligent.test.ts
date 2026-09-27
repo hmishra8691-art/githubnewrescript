@@ -376,3 +376,138 @@ test("coerceIntent admits the new shapes and drops what it does not know", async
   assert.equal(coerceIntent({ kind: "mask", target: "Q5" }), null);
   assert.deepEqual(coerceIntent({ kind: "clear_mask", target: "Q5" }), { kind: "clear_mask", target: "Q5" });
 });
+
+/* ------------------------------------------------ UI upgrade: structure, context, screening (§17, §22–§24) */
+
+test("grammar: page breaks, embedded variables, hidden variables, loops, screening", () => {
+  assert.deepEqual(parseIntent("Add a page break after Q10"), { kind: "page_break", target: "Q10", action: "add" });
+  assert.deepEqual(parseIntent("add a page break after this question"), { kind: "page_break", target: "this question", action: "add" });
+  assert.deepEqual(parseIntent("Remove the page break after Q10"), { kind: "page_break", target: "Q10", action: "remove" });
+  assert.deepEqual(parseIntent("Put Q11 on a new page"), { kind: "page_break", target: "Q11", action: "add", before: true });
+  assert.deepEqual(parseIntent("Create an embedded variable called country and set it to India"), { kind: "embedded", name: "country", source: "static", value: "India" });
+  assert.deepEqual(parseIntent("add embedded data WAVE from the url"), { kind: "embedded", name: "WAVE", source: "url" });
+  assert.deepEqual(parseIntent("Add a hidden variable for respondent type"), { kind: "add_question", type: "hidden", text: "respondent type", after: undefined });
+  assert.deepEqual(parseIntent("Create a loop around Q5 to Q8 for each brand"), { kind: "loop", from: "Q5", to: "Q8", loopVar: "brand" });
+  assert.deepEqual(parseIntent("loop Q3 through Q4"), { kind: "loop", from: "Q3", to: "Q4" });
+  assert.deepEqual(parseIntent("Explain why respondents are screened out"), { kind: "screening" });
+  assert.deepEqual(parseIntent("why is this respondent being screened out?"), { kind: "screening" });
+  // the sentences the brief spells out
+  assert.deepEqual(parseIntent("Show Q10 only when Q5 option 3 is selected."), { kind: "display", target: "Q10", action: "show", expression: "Q5 option 3 is selected" });
+  assert.equal(normaliseExpression("Q5 option 3 is selected"), "Q5 = 3");
+  assert.equal(normaliseExpression("Q4 is option 2"), "Q4 = 2");
+  assert.deepEqual(parseIntent("Make this question mandatory"), { kind: "required", target: "this question", required: true });
+  assert.deepEqual(parseIntent("If Q5 is option 2, skip Q6 and Q7 and go directly to Q8"), { kind: "skip", to: "Q6 and Q7 and go directly to Q8", expression: "Q5 is option 2" });
+  assert.deepEqual(parseIntent("Show this block only for respondents who selected option 3"), { kind: "display", target: "this block", action: "show", expression: "selected option 3" });
+  assert.ok(EXAMPLES.some((e) => /page break/.test(e.text)) && EXAMPLES.some((e) => /embedded/.test(e.text)) && EXAMPLES.some((e) => /loop/.test(e.text)));
+});
+
+test("the selection is the context: “this question”, “it”, “this block” resolve against the selected question (§17)", () => {
+  const def = survey();
+  assert.equal(resolveTarget(def, "this question", "q_income")?.id, "q_income");
+  assert.equal(resolveTarget(def, "it", "q_income")?.id, "q_income");
+  assert.equal(resolveTarget(def, "the selected question", "q_income")?.id, "q_income");
+  assert.equal(resolveTarget(def, "this question", null), null, "nothing selected → nothing meant");
+  const blk = resolveTarget(def, "this block", "q_income");
+  assert.deepEqual(blk && [blk.kind, blk.id], ["block", "b_main"]);
+  const pg = resolveTarget(def, "this page", "q_age");
+  assert.deepEqual(pg && [pg.kind, pg.id], ["page", "p1"]);
+  const d = { ...deps(def), selectedId: "q_income" };
+  const p = planProposal(def, parseIntent("Make this question mandatory"), "grammar", d);
+  assert.deepEqual(p.changes, [{ kind: "set_required", questionId: "q_income", required: true }]);
+  const p2 = planProposal(def, parseIntent("Show this block only when Q3 = Yes"), "grammar", d);
+  assert.equal(p2.changes[0].kind, "add_display_rule");
+  assert.deepEqual((p2.changes[0] as { rule: { target: unknown } }).rule.target, { kind: "block", ref: "b_main" });
+  assert.deepEqual(p2.errors, []);
+});
+
+test("a skip past several questions lands on the destination after “go to”", () => {
+  const def = survey();
+  const p = planProposal(def, parseIntent("If Q2 is option A, skip Q3 and Q4 and go directly to Q5"), "grammar", deps(def));
+  assert.deepEqual(p.errors, []);
+  const c = p.changes[0] as { kind: string; questionId: string; rule: { target: { kind: string; ref?: string } } };
+  assert.equal(c.kind, "add_skip_rule"); assert.equal(c.questionId, "q_type");
+  assert.deepEqual(c.rule.target, { kind: "question", ref: "q_end" });
+  assert.match(p.summary, /After Q2, skip to Q5 when Q2 is “Consumer”/);
+});
+
+test("structure proposals: page break, embedded variable, hidden variable, loop — validated, described, applied through the engine", () => {
+  const def = survey();
+  const d = deps(def);
+  const brk = planProposal(def, parseIntent("Add a page break after Q1"), "grammar", d);
+  assert.deepEqual(brk.errors, []);
+  assert.equal(brk.changes[0].kind, "add_page_break");
+  assert.match(brk.summary, /after Q1 in Block 1 · Screener — Q2 move to a new page/);
+  const before = planProposal(def, parseIntent("Put Q2 on a new page"), "grammar", d);
+  assert.deepEqual(before.changes, brk.changes.map((c) => ({ ...c, pageId: (before.changes[0] as { pageId: string }).pageId })), "a break before Q2 is the break after Q1");
+  assert.deepEqual(planProposal(def, parseIntent("Put Q1 on a new page"), "grammar", d).errors, ["Q1 already starts its page."]);
+  assert.deepEqual(planProposal(def, parseIntent("Add a page break after Q2"), "grammar", d).errors, ["Q2 is the last question of its block — the block ends there."]);
+  const rm = planProposal(def, parseIntent("Remove the page break after Q1"), "grammar", d);
+  assert.deepEqual(rm.errors, ["There is no page break after Q1."]);
+  const r = applyLogicProposal(def, brk.changes);
+  assert.deepEqual(r.errors, []);
+  assert.equal(def.flow[0].type, "block");
+  assert.deepEqual(planProposal(def, parseIntent("Remove the page break after Q1"), "grammar", d).errors, []);
+
+  const emb = planProposal(def, parseIntent("Create an embedded variable called country and set it to India"), "grammar", d);
+  assert.deepEqual(emb.errors, []);
+  assert.equal(emb.summary, "Create the embedded variable country, set to “India”.");
+  assert.deepEqual(applyLogicProposal(def, emb.changes).errors, []);
+  assert.equal((def.flow[0] as { type: string }).type, "embedded_data");
+  assert.deepEqual(planProposal(def, parseIntent("add embedded data country"), "grammar", d).errors, ["An embedded variable country already exists."]);
+  const url = planProposal(def, parseIntent("add embedded data WAVE from the url"), "grammar", d);
+  assert.deepEqual(url.errors, []); assert.match(url.warnings[0] ?? "", /read from the survey URL/);
+
+  const hid = planProposal(def, parseIntent("Add a hidden variable for respondent type"), "grammar", d);
+  assert.deepEqual(hid.errors, []);
+  const hq = (hid.changes[0] as { question: Question }).question;
+  assert.equal(hq.variant, "calculated.hidden");
+  assert.equal(hq.variableName, "RESPONDENT_TYPE", "named by what it is for");
+  assert.equal(hq.text, "");
+  assert.match(hid.summary, /Add the hidden variable RESPONDENT_TYPE/);
+  assert.ok(!hid.warnings.some((w) => /no text/.test(w)), "a hidden variable has no text to complain about");
+  assert.equal(variantForWords("hidden"), "calculated.hidden");
+
+  const loop = planProposal(def, parseIntent("Create a loop around Q3 to Q4 for each brand"), "grammar", d);
+  assert.deepEqual(loop.errors, []);
+  assert.equal(loop.summary, "Repeat Q3 to Q4 (2 questions) in a loop — once per brand; choose the items in Studio.");
+  assert.match(loop.warnings[0], /no items/);
+  assert.deepEqual(planProposal(def, parseIntent("loop Q2 through Q3"), "grammar", d).errors, ["Q2 and Q3 are on different pages — a loop wraps questions on one page."]);
+  assert.deepEqual(applyLogicProposal(def, loop.changes).errors, []);
+  assert.ok(def.flow.some((n) => n.type === "loop" && (n as { loopVar: string }).loopVar === "brand"));
+});
+
+test("screening is answered from every skip that terminates and every non-complete end, read-only", () => {
+  const def = survey();
+  def.questions[0].skipLogic = [{ id: "s1", label: "under 18", when: cond.rule("q_age", "lt", 18), target: { kind: "terminate", status: "screened" } }];
+  def.flow.push({ type: "end", id: "e_q", status: "quota_full" } as never);
+  const p = planProposal(def, parseIntent("Explain why respondents are screened out"), "grammar", deps(def));
+  assert.equal(p.readOnly, true);
+  assert.equal(p.changes.length, 0);
+  assert.match(p.summary, /2 ways/);
+  assert.match(p.answer![0].text, /^Q1: when Q1 is less than .*→ terminated as screened \(under 18\)/);
+  assert.equal(p.answer![0].key, "question:q_age");
+  assert.match(p.answer![1].text, /ends as quota full/);
+  const none = planProposal(survey(), parseIntent("Explain why respondents are screened out"), "grammar", deps(survey()));
+  assert.match(none.summary, /Nothing screens anyone out/);
+});
+
+test("the context lists blocks, embedded variables, hidden variables, loops and quotas by id and name (§23)", () => {
+  const def = survey();
+  (def.flow as unknown[]).unshift({ type: "embedded_data", id: "ed", fields: [{ name: "PANEL_ID", source: "url" }] });
+  def.questions.push({ id: "h1", code: "H1", variableName: "SEGMENT", type: "hidden", text: "", options: [] } as never);
+  const ctx = surveyContext(def);
+  assert.match(ctx, /Blocks: Block 1 “Screener” \[p1\] 1 page; Block 2 “Main” \[b_main\] 1 page/);
+  assert.match(ctx, /Embedded variables: PANEL_ID/);
+  assert.match(ctx, /Hidden \/ calculated variables: H1 \(SEGMENT\)/);
+});
+
+test("coerceIntent admits the structure shapes and normalises their fields", async () => {
+  const { coerceIntent } = await import("./ai.ts");
+  assert.deepEqual(coerceIntent({ kind: "page_break", target: "Q10", action: "add" }), { kind: "page_break", target: "Q10", action: "add" });
+  assert.deepEqual(coerceIntent({ kind: "page_break", target: "Q11", action: "nonsense", before: true }), { kind: "page_break", target: "Q11", action: "add", before: true });
+  assert.equal(coerceIntent({ kind: "page_break" }), null);
+  assert.deepEqual(coerceIntent({ kind: "embedded", name: "country", source: "static", value: "India", dataType: "bogus" }), { kind: "embedded", name: "country", source: "static", value: "India" });
+  assert.deepEqual(coerceIntent({ kind: "loop", from: "Q5", to: "Q8", loopVar: "brand" }), { kind: "loop", from: "Q5", to: "Q8", loopVar: "brand" });
+  assert.equal(coerceIntent({ kind: "loop", from: "Q5" }), null);
+  assert.deepEqual(coerceIntent({ kind: "screening" }), { kind: "screening" });
+});

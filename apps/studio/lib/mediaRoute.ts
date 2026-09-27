@@ -1,9 +1,8 @@
 import "server-only";
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
-import { getMeter, projectContext, meterProvider, meterModel, usageToSpec } from "@/lib/metering";
+import { getMeter, projectContext, meteredStt } from "@/lib/metering";
 import type { Environment } from "@rescript/billing";
-import { collectUsage } from "@rescript/ai";
 import type { ProjectContext } from "@/lib/guard";
 import type { MediaDb, MeteredRun } from "@rescript/media";
 import { buildMediaStores } from "@rescript/media/server";
@@ -58,35 +57,5 @@ export function mediaDbOrResponse(): { db: MediaDb } | { response: NextResponse 
  * LIVE and nobody could pass anything else.
  */
 export function projectStt(gate: ProjectContext, operation: string, environment: Environment): MeteredRun {
-  return async <T>(seconds: number, fn: () => Promise<T>): Promise<{ value: T } | { refused: string }> => {
-    const meter = getMeter();
-    const ctx = projectContext(gate, environment);
-    const providerName = process.env.AI_API_URL === "fake:" ? "fake" : "openai-compatible";
-    const minutes = Math.max(0.05, seconds / 60);
-    let hold;
-    try {
-      hold = await meter.reserve(ctx, {
-        eventType: "SPEECH_TO_TEXT_MINUTE",
-        provider: meterProvider(providerName, "stt"),
-        service: "stt",
-        model: meterModel(providerName, (process.env.AI_STT_MODEL ?? "").trim() || "whisper-1", "stt"),
-        quantity: minutes,
-        metadata: { operation, seconds },
-      });
-    } catch (e) {
-      console.warn("[rescript:billing] meter unavailable — running unmetered", JSON.stringify({ error: (e as Error).message }));
-      return { value: await fn() };
-    }
-    if (!hold.ok) return { refused: hold.message };
-    try {
-      const { value, usage } = await collectUsage(fn);
-      if (!usage.length) { await meter.release(hold); return { value }; }
-      const spec = usageToSpec(usage, { kind: "stt" });
-      await meter.settle(hold, { ...spec, eventType: "SPEECH_TO_TEXT_MINUTE", metadata: { operation, ...spec.metadata } });
-      return { value };
-    } catch (e) {
-      await meter.release(hold).catch(() => {});
-      throw e;
-    }
-  };
+  return <T>(seconds: number, fn: () => Promise<T>) => meteredStt(getMeter(), projectContext(gate, environment), operation, seconds, fn);
 }

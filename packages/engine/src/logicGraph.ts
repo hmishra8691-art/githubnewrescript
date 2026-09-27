@@ -141,6 +141,7 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions = 
       id: declared ?? `end_${status}`,
       kind: status === "complete" ? "end" : "terminate",
       label: END_LABELS[status] ?? status,
+      tag: status,
     });
   };
 
@@ -176,11 +177,13 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions = 
           !!node.visibleIf || (hasDisplayRulesFor(def, "page") && namesTarget(def, "page", node.id));
 
         if (!withQuestions || qs.length === 0) {
+          const pageCond = node.visibleIf ? edgeLabel(node.visibleIf, def) : undefined;
           const id = add({
             id: node.id,
             kind: "question",
             ref: node.id,
             label: `${clean(node.title) || codes.join(", ") || "page"}${conditional ? " (conditional)" : ""}`,
+            ...(pageCond ? { condition: pageCond } : {}),
           });
           return { entries: [id], exits: [id] };
         }
@@ -194,11 +197,16 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions = 
           const marks: string[] = [];
           if (q.displayLogic) marks.push("conditional");
           if (q.skipLogic?.length) marks.push(`${q.skipLogic.length} skip`);
+          const tag = QUESTION_TAG[q.type];
+          const condition = q.displayLogic ? edgeLabel(q.displayLogic, def) : undefined;
           return add({
             id: q.id,
             kind: "question",
             ref: q.id,
             label: `${q.code} ${truncate(clean(q.text) || q.variableName, 40)}${marks.length ? ` (${marks.join(", ")})` : ""}`,
+            page: node.id,
+            ...(tag ? { tag } : {}),
+            ...(condition ? { condition } : {}),
           });
         });
         for (let i = 0; i < ids.length - 1; i++) link(ids[i], ids[i + 1]);
@@ -221,6 +229,8 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions = 
             kind: "decision",
             ref: node.id,
             label: `${clean(node.title) || node.type} — shown when ${edgeLabel(when, def) ?? "condition holds"}`,
+            tag: "gate",
+            ...(edgeLabel(when, def) ? { condition: edgeLabel(when, def) } : {}),
           });
           for (const to of inner.entries) link(gate, to, when, undefined, "gate");
           return { entries: [gate], exits: [...inner.exits, gate] };
@@ -234,6 +244,7 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions = 
           kind: "decision",
           ref: node.id,
           label: clean(node.title) || "branch",
+          tag: "branch",
         });
         const exits: string[] = [];
         let everyArmClosed = true;
@@ -271,6 +282,7 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions = 
           label: `${clean(node.title) || "randomizer"} — ${
             node.show ? `shows ${node.show} of ${node.children.length}` : "shuffles"
           }${node.evenPresentation ? ", even presentation" : ""}`,
+          tag: "randomizer",
         });
         const exits: string[] = [];
         /*
@@ -294,6 +306,7 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions = 
           label: `${clean(node.title) || "loop"} — once per ${node.loopVar}${
             node.maxIterations ? `, up to ${node.maxIterations}` : ""
           }`,
+          tag: "loop",
         });
         const inner = walk(node.children);
         for (const to of inner.entries) link(gate, to);
@@ -310,6 +323,7 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions = 
           label: `capture ${node.fields.map((f) => f.name).slice(0, 4).join(", ")}${
             node.fields.length > 4 ? `, +${node.fields.length - 4}` : ""
           }`,
+          tag: "embedded",
         });
         return { entries: [id], exits: [id] };
       }
@@ -320,11 +334,12 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions = 
           kind: "decision",
           ref: node.id,
           label: `quota check (${node.quotaIds.length} quota${node.quotaIds.length === 1 ? "" : "s"})`,
+          tag: "quota",
         });
-        if (node.onFull.kind === "terminate") link(id, endNodeFor("quota_full"), undefined, "full", "quota");
+        if (node.onFull.kind === "terminate") link(id, endNodeFor("quota_full"), undefined, "quota full", "quota");
         if (node.onFull.kind === "redirect") {
-          const away = add({ id: `${node.id}_redirect`, kind: "action", label: `redirect: ${node.onFull.url ?? ""}` });
-          link(id, away, undefined, "full", "quota");
+          const away = add({ id: `${node.id}_redirect`, kind: "action", label: `redirect: ${node.onFull.url ?? ""}`, tag: "redirect" });
+          link(id, away, undefined, "quota full", "quota");
         }
         return { entries: [id], exits: [id] };
       }
@@ -335,6 +350,8 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions = 
           kind: "action",
           ref: node.id,
           label: `redirect to ${truncate(node.url, 40)}`,
+          tag: "redirect",
+          ...(node.when && edgeLabel(node.when, def) ? { condition: edgeLabel(node.when, def) } : {}),
         });
         return { entries: [id], exits: node.when ? [id] : [] };
       }
@@ -345,6 +362,7 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions = 
           kind: node.status === "complete" ? "end" : "terminate",
           ref: node.id,
           label: END_LABELS[node.status] ?? node.status,
+          tag: node.status,
         });
         /* nothing follows an End by falling through */
         return { entries: [id], exits: [] };
@@ -372,7 +390,7 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions = 
       if (t.kind === "terminate") to = endNodeFor(t.status ?? "terminated");
       else if (t.kind === "end") to = t.ref && seen.has(t.ref) ? t.ref : endNodeFor("complete");
       else if (t.kind === "url") {
-        to = add({ id: `url_${rule.id}`, kind: "action", label: `leave for ${truncate(t.ref ?? "", 36)}` });
+        to = add({ id: `url_${rule.id}`, kind: "action", label: `leave for ${truncate(t.ref ?? "", 36)}`, tag: "redirect" });
       } else if (t.ref) {
         /*
          * A skip to a page, block or section lands on whatever the graph put
@@ -385,6 +403,22 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions = 
       if (!to) continue;
       link(from, to, rule.when, clean(rule.label) || `skip: ${edgeLabel(rule.when, def) ?? "condition"}`, "skip");
     }
+  }
+
+  /*
+   * WHY A PATH IS TAKEN, ON EVERY EDGE (UI upgrade §10–§12). A node with a
+   * skip rule or a quota check has a labelled way out ("skip: Q3 = No",
+   * "quota full") and an unlabelled one — the sequence edge. Read together
+   * they are a decision, so the sequence edge says what it is: "otherwise"
+   * after a skip, "quota available" after a check. Labels only; the graph's
+   * shape is untouched.
+   */
+  const branching = new Set<string>();
+  for (const e of edges) if (e.kind === "skip" || e.kind === "quota") branching.add(e.from);
+  for (const e of edges) {
+    if (e.kind !== "sequence" || e.label || !branching.has(e.from)) continue;
+    const from = nodes.find((n) => n.id === e.from);
+    e.label = from?.tag === "quota" ? "quota available" : "otherwise";
   }
 
   /* the layout a person arranged, merged back on by id */
@@ -401,6 +435,11 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions = 
 
   return { nodes, edges };
 }
+
+/** the badge a question node carries when it is not an ordinary question */
+const QUESTION_TAG: Record<string, string> = {
+  hidden: "hidden", calculated: "calculated", conjoint_task: "conjoint", maxdiff_task: "maxdiff",
+};
 
 const END_LABELS: Record<string, string> = {
   complete: "Complete",

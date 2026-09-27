@@ -195,7 +195,12 @@ export interface GridColumn {
   minWidth: number;
   /** sticks to the left edge while scrolling horizontally */
   frozen?: boolean;
-  /** the text column grows to fill */
+  /**
+   * Retired (UI upgrade §1): no column grows with the viewport any more —
+   * a column whose width depends on the spare room moves every column to
+   * its right whenever the panel opens. Kept optional so a stored
+   * preference naming it still parses.
+   */
   grow?: boolean;
   sortable: boolean;
   defaultVisible: boolean;
@@ -210,7 +215,7 @@ export const GRID_COLUMNS: readonly GridColumn[] = [
   { id: "code", label: "ID", width: 92, minWidth: 70, frozen: true, sortable: true, defaultVisible: true, description: "Question code" },
   { id: "type", label: "Type", width: 150, minWidth: 110, sortable: true, defaultVisible: true, editable: true, description: "Question type" },
   { id: "variable", label: "Variable", width: 160, minWidth: 110, sortable: true, defaultVisible: true, editable: true, description: "Exported variable name" },
-  { id: "text", label: "Question", width: 360, minWidth: 200, grow: true, sortable: true, defaultVisible: true, editable: true, description: "Question text" },
+  { id: "text", label: "Question", width: 420, minWidth: 200, sortable: true, defaultVisible: true, editable: true, description: "Question text" },
   { id: "options", label: "Options", width: 240, minWidth: 140, sortable: true, defaultVisible: true, editable: true, description: "Answer options, rows × columns, or range — double-click to edit the list" },
   { id: "display", label: "Display logic", width: 240, minWidth: 140, sortable: true, defaultVisible: true, description: "Shown when…" },
   { id: "skip", label: "Skip logic", width: 200, minWidth: 120, sortable: true, defaultVisible: true, description: "Jumps after this question" },

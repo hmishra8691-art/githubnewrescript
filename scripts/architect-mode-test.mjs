@@ -321,6 +321,98 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
   ok("Delete removes the question (with the references dialog) — Studio no longer has it either");
 }
 
+/* ----------------------------------------------------------- the structure, made visible (UI upgrade §4–§8) */
+{
+  await page.click('[data-testid="map-expand-all"]').catch(() => {});
+  // nothing selected: the overview draws the whole structure
+  await page.keyboard.press("Escape");
+  const sel = await page.$(".am-row.primary");
+  if (sel) { await page.click('[data-testid="architect-view"] .ar-pane-title'); }
+  await page.evaluate(() => document.querySelector('[data-testid="map-list"]')?.focus());
+  await page.keyboard.press("Escape");
+  const d0 = await readDef();
+  await page.waitForSelector('[data-testid="architect-view"]');
+  // the loop block in the Master Demo has three pages: the structure shows them, with the breaks between
+  const loopBlock = (function find(ns) { for (const n of ns) { if (n.type === "block" && n.children.filter((c) => c.type === "page").length >= 3) return n; for (const k of ["children", "otherwise"]) if (n[k]) { const r = find(n[k]); if (r) return r; } if (n.branches) for (const b of n.branches) { const r = find(b.children); if (r) return r; } } return null; })(d0.flow);
+  assert.ok(loopBlock, "a multi-page block in the demo");
+  await (await mapRow(`flowNode:${loopBlock.id}`)).click();
+  await page.waitForSelector(`[data-testid="structure-block"][data-key="flowNode:${loopBlock.id}"]`);
+  const pages = await page.$$eval(`[data-testid="structure-block"][data-key="flowNode:${loopBlock.id}"] [data-testid="structure-page"]`, (els) => els.map((e) => e.dataset.page));
+  const breaks = await page.$$(`[data-testid="structure-block"][data-key="flowNode:${loopBlock.id}"] [data-testid="structure-page-break"]`);
+  assert.deepEqual(pages, ["1", "2", "3"]); assert.equal(breaks.length, 2);
+  ok("a block with three pages is drawn as three pages with a PAGE BREAK between each — which questions share a page is obvious");
+  const mapBreaks = await page.$$eval('[data-testid="map-row"][data-kind="pageBreak"]', (e) => e.length);
+  assert.ok(mapBreaks >= 2, `${mapBreaks} page-break rows in the map`);
+  ok("the survey map draws the same page breaks as rows");
+  // add a break between two questions on one page, then remove it
+  const p1 = loopBlock.children[0];
+  const firstQ = p1.questionIds[0];
+  await page.hover(`[data-testid="structure-gap"][data-after="${firstQ}"]`);
+  await page.click(`[data-testid="structure-gap"][data-after="${firstQ}"] [data-testid="structure-break-add"]`);
+  await page.waitForTimeout(300);
+  const d1 = await readDef();
+  const b1 = (function find(ns) { for (const n of ns) { if (n.id === loopBlock.id) return n; for (const k of ["children", "otherwise"]) if (n[k]) { const r = find(n[k]); if (r) return r; } if (n.branches) for (const b of n.branches) { const r = find(b.children); if (r) return r; } } return null; })(d1.flow);
+  assert.equal(b1.children.filter((c) => c.type === "page").length, 4);
+  assert.deepEqual(b1.children[0].questionIds, [firstQ]);
+  ok("“+ page break here” between two questions splits the page — through the engine, same block, one more page");
+  await page.waitForSelector('[data-testid="architect-view"]');
+  await page.click(`[data-testid="structure-page-break"][data-after="${firstQ}"] [data-testid="structure-break-remove"]`);
+  await page.waitForTimeout(300);
+  const d2 = await readDef();
+  const b2 = (function find(ns) { for (const n of ns) { if (n.id === loopBlock.id) return n; for (const k of ["children", "otherwise"]) if (n[k]) { const r = find(n[k]); if (r) return r; } if (n.branches) for (const b of n.branches) { const r = find(b.children); if (r) return r; } } return null; })(d2.flow);
+  assert.deepEqual(b2.children.map((c) => c.questionIds ?? c.type), loopBlock.children.map((c) => c.questionIds ?? c.type));
+  ok("the break's “remove” joins the pages back exactly");
+  await page.waitForSelector('[data-testid="architect-view"]');
+  // a question: where it sits, its logic as chips, a chip opens its section
+  const q9 = d0.questions.find((q) => q.code === "Q9");
+  await (await mapRow(`question:${q9.id}`)).click();
+  await page.waitForSelector('[data-testid="workspace-place"]');
+  const place = await page.$eval('[data-testid="workspace-place"]', (e) => e.textContent);
+  assert.match(place, /Block 3/); assert.match(place, /3 of 3/); assert.match(place, /ends the block/);
+  ok(`the workspace says where Q9 sits: ${place.replace(/\s+/g, " ").trim().slice(0, 70)}`);
+  const chips = await page.$$eval('[data-testid="workspace-chips"] [data-testid="structure-chip"]', (e) => e.map((x) => x.dataset.chip));
+  assert.ok(chips.includes("display") && chips.includes("validation"), chips.join(","));
+  await page.click('[data-testid="workspace-chips"] [data-chip="display"]');
+  await page.waitForTimeout(250);
+  assert.equal(await page.$eval('.ar-inspector [data-testid="psec-display-logic"]', (e) => e.classList.contains("collapsed")), false);
+  ok("Q9's logic is chips (display, validation…); the display chip opens Display logic in the inspector");
+  // object tags
+  const tags = await page.$$eval('[data-testid="map-tag"]', (e) => [...new Set(e.map((x) => x.dataset.tag))]);
+  assert.ok(tags.includes("hidden") && tags.includes("screening"), tags.join(","));
+  ok(`the map badges the special objects: ${tags.join(", ")}`);
+  // the Add menu says where and what
+  const q3 = d0.questions.find((q) => q.code === "Q3");
+  await (await mapRow(`question:${q3.id}`)).click();
+  await page.click('[data-testid="ar-add-element"]');
+  await page.waitForSelector('[data-testid="ar-add-menu"]');
+  assert.match(await page.$eval('[data-testid="ar-add-where"]', (e) => e.textContent), /after Q3/);
+  const secs = await page.$$eval('.ar-add-sec', (e) => e.map((x) => x.textContent.split(" ")[0]));
+  assert.deepEqual(secs.map((x) => x.replace(/[^A-Za-z]/g, "").slice(0, 9)), ["Structure", "Flow", "Data"]);
+  ok("the Add menu is structured — WHERE (after Q3), then Structure · Flow · Data");
+  await page.click('[data-testid="ar-add-page_break"]');
+  await page.waitForTimeout(300);
+  const d3 = await readDef();
+  const aboutBlock = d3.flow.flatMap((n) => n.type === "section" ? n.children : [n]).find((n) => n.type === "block" && n.children.some((p) => p.questionIds?.includes(q3.id)));
+  assert.ok(aboutBlock && aboutBlock.children[0].questionIds.at(-1) === q3.id, "the break is after Q3");
+  ok("Add → Page break splits Q3's page after Q3");
+  await page.waitForSelector('[data-testid="architect-view"]');
+  await (await mapRow(`question:${q3.id}`)).click();
+  await page.waitForSelector('[data-testid="workspace-break-remove"]');
+  await page.click('[data-testid="workspace-break-remove"]');
+  await page.waitForTimeout(300);
+  await page.click('[data-testid="ar-add-element"]');
+  await page.click('[data-testid="ar-add-hidden"]');
+  await page.waitForTimeout(300);
+  const d4 = await readDef();
+  const h = d4.questions.find((x) => !d0.questions.some((y) => y.id === x.id) && x.type === "hidden");
+  assert.ok(h, "a hidden variable was added");
+  const pg = (function find(ns) { for (const n of ns) { if (n.type === "page" && n.questionIds.includes(h.id)) return n; for (const k of ["children", "otherwise"]) if (n[k]) { const r = find(n[k]); if (r) return r; } } return null; })(d4.flow);
+  assert.equal(pg.questionIds[pg.questionIds.indexOf(q3.id) + 1], h.id, "right after Q3");
+  ok("Add → Hidden variable places a hidden question right after the selection, tagged H in the map");
+  await page.waitForSelector('[data-testid="architect-view"]');
+  assert.ok(await page.$(`[data-testid="map-row"][data-key="question:${h.id}"] [data-testid="map-tag"][data-tag="hidden"]`));
+}
+
 assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join("\n")}`);
 ok("no uncaught errors or React warnings through any of it");
 

@@ -33,7 +33,7 @@ import type { Intent, ValidationSpec } from "./proposal.ts";
  * not "Q5 only".
  */
 const OBJ = String.raw`((?:the\s+)?(?:(?:question|page|screen|block|section|group)\s+[\w.]+|[A-Za-z_][\w.]*(?:\s+(?!only\b|when\b|if\b|where\b|unless\b|then\b|question\b)[A-Za-z_]\w*)?)(?:\s+question)?|"[^"]+"|“[^”]+”)`;
-const WHEN = String.raw`\s+(?:only\s+)?(?:when|if|where|unless)\s+(.+)$`;
+const WHEN = String.raw`\s+(?:only\s+)?(?:when|if|where|unless|(?:to|for)\s+(?:respondents?|people|those|anyone|users|participants)\s+who)\s+(.+)$`;
 
 const strip = (s: string) => s.replace(/^[“"]|[”"]$/g, "").trim();
 
@@ -45,6 +45,13 @@ export function parseIntent(input: string): Intent {
   const text = input.trim().replace(/\s+/g, " ").replace(/[.!]+$/, "");
   if (!text) return { kind: "unknown", reason: "Say what you want to change — for example “show Q5 only when Q3 = Yes”." };
   let m: RegExpExecArray | null;
+
+  /* ------------------------------------------------------------ screening (read-only) */
+  if (/^(?:explain|show|tell me|list|describe)\s+(?:me\s+)?(?:why|how|when|where|which|what)?\s*(?:a\s+|the\s+)?(?:respondents?|people|someone|participants?|anyone)?\s*(?:is|are|get|gets|would be|can be|being)?\s*(?:screened|terminated|disqualified|screen[- ]?outs?|terminations?|screening)(?:\s+out)?(?:\s+(?:of\s+)?(?:the\s+)?survey)?(?:\s*\?)?$/i.test(text)
+    || /^(?:what|which)\s+(?:screens|terminates|disqualifies)\s+(?:respondents?|people|someone)(?:\s+out)?(?:\s*\?)?$/i.test(text)
+    || /^(?:why|when)\s+(?:is|are|would|does|do)\s+(?:this\s+|a\s+|the\s+)?(?:respondent|person|participant|someone|people|respondents)\s+(?:being\s+)?(?:screened|terminated|disqualified)(?:\s+out)?(?:\s*\?)?$/i.test(text)) {
+    return { kind: "screening" };
+  }
 
   /* ------------------------------------------------------ find / explain */
   if ((m = /^(?:what|which(?: questions| objects)?|who|find(?: everything| all)?|list(?: everything| all)?|show me(?: everything| all)?)\s+(?:questions?\s+|rules?\s+|things?\s+|objects?\s+)?(?:that\s+)?(?:depends?\s+on|uses?|references?|reads?|needs?|relies\s+on|is\s+using)\s+(.+?)(?:\s*\?)?$/i.exec(text))) {
@@ -64,6 +71,41 @@ export function parseIntent(input: string): Intent {
   }
   if ((m = /^(?:explain|describe|tell me about|what is|what's|why is|why does|how does|how is)\s+(.+?)(?:\s+(?:shown|hidden|displayed|asked|skipped|work|do|behave|visible))?(?:\s*\?)?$/i.exec(text))) {
     return { kind: "explain", target: strip(m[1]) };
+  }
+
+  /* ---------------------------------------------------------- page breaks */
+  if ((m = /^(?:add|insert|put|create|place|start)\s+(?:a\s+|another\s+)?(?:new\s+)?(?:page\s*break|page)\s+(?:after|below|following|under)\s+(.+)$/i.exec(text))
+    || (m = /^(?:put|move|show|place)\s+(?:the\s+)?(?:questions?\s+)?(?:after|below|following)\s+(.+?)\s+on\s+(?:a\s+)?(?:new|separate|its own|their own)\s+page$/i.exec(text))
+    || (m = /^(?:break|split)\s+(?:the\s+)?page\s+(?:after|below)\s+(.+)$/i.exec(text))) {
+    return { kind: "page_break", target: strip(m[1]), action: "add" };
+  }
+  if ((m = /^(?:remove|delete|drop|take\s+out|clear)\s+(?:the\s+)?(?:page\s*break|break)\s+(?:after|below|following|under)\s+(.+)$/i.exec(text))
+    || (m = /^(?:merge|join)\s+(.+?)(?:'s)?\s+page\s+with\s+(?:the\s+)?(?:next|following)(?:\s+page)?$/i.exec(text))) {
+    return { kind: "page_break", target: strip(m[1]), action: "remove" };
+  }
+  if ((m = /^(?:put|move|show|place|start)\s+(.+?)\s+on\s+(?:a\s+)?(?:new|separate|its own|fresh)\s+page$/i.exec(text))
+    || (m = /^(?:add|insert|put|create|place)\s+(?:a\s+)?(?:new\s+)?(?:page\s*break|page)\s+(?:before|above|in front of)\s+(.+)$/i.exec(text))) {
+    // "put Q11 on a new page" / "page break before Q11" — the break goes after the question BEFORE it
+    return { kind: "page_break", target: strip(m[1]), action: "add", before: true };
+  }
+
+  /* ------------------------------------------------------ embedded data */
+  if ((m = /^(?:add|create|make|define|insert|new)\s+(?:an?\s+|the\s+)?(?:new\s+)?embedded\s+(?:data\s+)?(?:variable|field|value|data)?\s*(?:called|named|for)?\s*[:]?\s*["“]?([A-Za-z_][\w ]*?)["”]?(?:\s*(?:,|and|which is|that is|with(?:\s+(?:the\s+)?value)?|=|:)\s*(?:set\s+(?:it\s+)?to|equal\s+to|value|to)?\s*["“]?([^"”]+?)["”]?)?(?:\s+(?:from|read\s+from|taken\s+from)\s+(?:the\s+)?(url|link|panel|query\s*string))?$/i.exec(text))) {
+    const name = m[1].trim();
+    const value = m[2]?.trim();
+    const src = m[3] ? (/panel/i.test(m[3]) ? "panel" : "url") : undefined;
+    const kind = value && /^(?:from|read from)\s+(?:the\s+)?(url|link|panel)$/i.exec(value);
+    if (kind) return { kind: "embedded", name, source: /panel/i.test(kind[1]) ? "panel" : "url" };
+    return { kind: "embedded", name, ...(src ? { source: src } : value !== undefined ? { source: "static", value } : {}) };
+  }
+
+  /* ---------------------------------------------------------------- loops */
+  if ((m = /^(?:create|add|make|build|put|wrap)\s+(?:a\s+)?loop\s+(?:around|over|for|on|of)\s+(?:the\s+)?(?:questions?\s+)?(.+?)\s+(?:to|through|thru|–|-|until|till)\s+(.+?)(?:\s*,?\s+(?:once\s+)?(?:per|for\s+each|for\s+every)\s+([A-Za-z_][\w]*))?$/i.exec(text))
+    || (m = /^(?:loop|repeat)\s+(?:the\s+)?(?:questions?\s+)?(.+?)\s+(?:to|through|thru|–|-|until|till)\s+(.+?)(?:\s*,?\s+(?:once\s+)?(?:per|for\s+each|for\s+every)\s+([A-Za-z_][\w]*))?$/i.exec(text))) {
+    return { kind: "loop", from: strip(m[1]), to: strip(m[2]), ...(m[3] ? { loopVar: m[3] } : {}) };
+  }
+  if ((m = /^(?:create|add|make|put|wrap)\s+(?:a\s+)?loop\s+(?:around|over)\s+(?:these|the\s+selected|the\s+current)\s+questions?(?:\s*,?\s+(?:once\s+)?(?:per|for\s+each|for\s+every)\s+([A-Za-z_][\w]*))?$/i.exec(text))) {
+    return { kind: "loop", from: "this", to: "this", ...(m[1] ? { loopVar: m[1] } : {}) };
   }
 
   /* ------------------------------------------------------------ required */
@@ -147,6 +189,16 @@ export function parseIntent(input: string): Intent {
     const sel = (m[1] ?? "selected").toLowerCase();
     const word = /not|un/.test(sel) ? "Unselected" : sel === "displayed" ? "Displayed" : sel === "all" ? "Options" : "Selected";
     return { kind: "mask", target: strip(m[3]), expression: `${strip(m[2])}.${word}`, action: "display" };
+  }
+
+  /* ------------------------------------------- hidden / calculated variables */
+  if ((m = /^(?:add|create|make|insert|new|define)\s+(?:an?\s+|the\s+)?(?:new\s+)?(hidden|calculated|computed|derived)\s+(?:variable|value|field|question)\s*(?:called|named|for|:)?\s*(.*)$/i.exec(text))) {
+    const type = /hidden/i.test(m[1]) ? "hidden" : "calculated";
+    let rest = m[2].trim();
+    let after: string | undefined;
+    const pos = /\s*(?:,\s*)?(?:after|below|following)\s+(.+?)\s*$/i.exec(rest);
+    if (pos) { after = strip(pos[1]); rest = rest.slice(0, pos.index).trim(); }
+    return { kind: "add_question", type, text: strip(rest), after };
   }
 
   /* ------------------------------------------------------- add question */
@@ -242,7 +294,12 @@ export const EXAMPLES: { text: string; about: string }[] = [
   { text: "Limit Q6 to 120 characters", about: "a character limit" },
   { text: "Q7 must be an email address", about: "a format check" },
   { text: "At Q13 show only the options selected in Q11", about: "masking" },
+  { text: "Add a page break after Q10", about: "a page break" },
+  { text: "Create an embedded variable called country and set it to India", about: "embedded data" },
+  { text: "Add a hidden variable for respondent type", about: "a hidden variable" },
+  { text: "Create a loop around Q5 to Q8 for each brand", about: "a loop" },
   { text: "Rename AGE to RESP_AGE", about: "a variable rename" },
   { text: "What depends on Q3?", about: "dependencies" },
   { text: "Explain Q5", about: "how a question behaves" },
+  { text: "Explain why respondents are screened out", about: "screening and termination" },
 ];

@@ -20,8 +20,10 @@ let passed = 0;
 const ok = (msg) => { passed++; console.log(`  ok   ${msg}`); };
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 
-const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 1600, height: 950 } });
+// a fake microphone, so the voice path runs end to end: MediaRecorder → /api/ai/transcribe → the pipeline
+const browser = await chromium.launch({ args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] });
+const context = await browser.newContext({ viewport: { width: 1600, height: 950 }, permissions: ["microphone"] });
+const page = await context.newPage();
 const pageErrors = [];
 page.on("pageerror", (e) => pageErrors.push(String(e)));
 page.on("console", (m) => {
@@ -324,6 +326,116 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
   void clear;
 }
 
+/* ------------------------------------------- structure and context (UI upgrade §17, §22–§24) */
+{
+  const d0 = await readDef();
+  // "this question": the selection is the context — an answered question becomes the selection
+  await say("explain Q9");
+  const t2 = await say("make this question optional");
+  assert.match(await textOf(t2, '[data-testid="iq-summary"]'), /Make Q9 optional/);
+  ok("“this question” is the selected question — the selection is the context");
+  await page.click('[data-testid="iq-turn"]:last-of-type [data-testid="iq-cancel"]');
+  // page break
+  const t3 = await say("Add a page break after Q3");
+  assert.match(await textOf(t3, '[data-testid="iq-summary"]'), /Add a page break after Q3 in Block 2 · About you — .*Q4, Q5, Q6 move to a new page/);
+  await t3.$eval('[data-testid="iq-apply"]', (b) => b.click());
+  await page.waitForFunction(() => document.querySelector('[data-testid="iq-turn"]:last-of-type')?.dataset.state === "applied");
+  const d1 = await readDef();
+  const blockAbout = d1.flow.flatMap((n) => n.type === "section" ? n.children : [n]).find((n) => n.type === "block" && n.children?.some((p) => p.questionIds?.includes(q(d0, "Q3").id)));
+  assert.ok(blockAbout, "the About you page became a block");
+  assert.equal(blockAbout.children.length, 2);
+  assert.deepEqual(blockAbout.children[0].questionIds, [q(d0, "Q3").id]);
+  assert.ok(blockAbout.children[1].questionIds.length >= 3);
+  ok("Apply splits the page through the engine — Q3 | the rest, one block");
+  const t4 = await say("Remove the page break after Q3");
+  await t4.$eval('[data-testid="iq-apply"]', (b) => b.click());
+  await page.waitForFunction(() => document.querySelector('[data-testid="iq-turn"]:last-of-type')?.dataset.state === "applied");
+  const d2 = await readDef();
+  const pagesOf = (flow) => { const out = []; const walk = (ns) => { for (const n of ns) { if (n.type === "page") out.push([n.id, n.title ?? "", n.questionIds.join(",")]); if (n.children) walk(n.children); if (n.branches) for (const b of n.branches) walk(b.children); if (n.otherwise) walk(n.otherwise); } }; walk(flow); return JSON.stringify(out); };
+  assert.equal(pagesOf(d2.flow), pagesOf(d0.flow), "and removing it restores the pages exactly");
+  assert.equal(d2.flow.length, d0.flow.length);
+  ok("“Remove the page break after Q3” joins the pages back — the flow is byte-identical to before");
+  // embedded variable
+  const t5 = await say("Create an embedded variable called country and set it to India");
+  assert.equal(await textOf(t5, '[data-testid="iq-summary"]'), "Create the embedded variable country, set to “India”.");
+  await t5.$eval('[data-testid="iq-apply"]', (b) => b.click());
+  await page.waitForFunction(() => document.querySelector('[data-testid="iq-turn"]:last-of-type')?.dataset.state === "applied");
+  const d3 = await readDef();
+  const ed = d3.flow.find((n) => n.type === "embedded_data");
+  assert.ok(ed.fields.some((f) => f.name === "country" && f.source === "static" && f.value === "India"), JSON.stringify(ed.fields));
+  ok("an embedded variable joins the survey's embedded-data node, with its value");
+  const t6 = await say("add embedded data country");
+  assert.ok((await allText(t6, '[data-testid="iq-error"]')).some((e) => /already exists/.test(e)));
+  ok("the same name again is refused before Apply is offered");
+  // hidden variable
+  const t7 = await say("Add a hidden variable for respondent type");
+  assert.match(await textOf(t7, '[data-testid="iq-summary"]'), /Add the hidden variable RESPONDENT_TYPE/);
+  await t7.$eval('[data-testid="iq-apply"]', (b) => b.click());
+  await page.waitForFunction(() => document.querySelector('[data-testid="iq-turn"]:last-of-type')?.dataset.state === "applied");
+  const d4 = await readDef();
+  assert.ok(d4.questions.some((x) => x.variableName === "RESPONDENT_TYPE" && x.type === "hidden"));
+  ok("a hidden variable is a question of type hidden, named for what it is for");
+  // the brief's sentence
+  const t8 = await say("Show Q10 only when Q5 option 3 is selected.");
+  assert.match(await textOf(t8, '[data-testid="iq-summary"]'), /Show Q10 only when Q5 is/);
+  assert.equal(await t8.$$eval('[data-testid="iq-error"]', (e) => e.length), 0);
+  ok("“Show Q10 only when Q5 option 3 is selected” — the option by its code, no errors");
+  await page.click('[data-testid="iq-turn"]:last-of-type [data-testid="iq-cancel"]');
+  const t9 = await say("If Q8 is option 1, skip Q9 and go directly to Q11");
+  assert.match(await textOf(t9, '[data-testid="iq-summary"]'), /After Q8, skip to Q11 when Q8 is “Yes”/);
+  ok("“skip Q9 and go directly to Q11” lands on Q11");
+  await page.click('[data-testid="iq-turn"]:last-of-type [data-testid="iq-cancel"]');
+  const t10 = await say("Explain why respondents are screened out");
+  const lines = await allText(t10, '.iq-answer-list li');
+  assert.ok(lines.length >= 3 && lines.some((l) => /Q1: when/.test(l)) && lines.some((l) => /quota/i.test(l)), lines.join(" | "));
+  ok(`screening is explained from every terminating rule and end: ${lines.length} ways out`);
+}
+
+/* ------------------------------------------------------------ voice (UI upgrade §18–§21) */
+{
+  const mic = await page.$('[data-testid="iq-mic"]');
+  assert.ok(mic, "a microphone button");
+  assert.equal(await mic.getAttribute("data-state"), "idle");
+  // the fake speech provider cannot hear: the suite says what it should have heard (a seam the route honours for the fake only)
+  await page.evaluate(() => window.__rescriptVoiceHint("make q 6 required", "en"));
+  await mic.click();
+  await page.waitForFunction(() => document.querySelector('[data-testid="iq-mic"]')?.dataset.state === "recording");
+  ok("click → recording (the fake microphone is live)");
+  await page.waitForTimeout(700);
+  const before = await page.$$eval('[data-testid="iq-turn"]', (els) => els.length);
+  await page.click('[data-testid="iq-mic"]');
+  await page.waitForFunction((n) => document.querySelectorAll('[data-testid="iq-turn"]').length > n, before, { timeout: 30_000 });
+  await page.waitForSelector('[data-testid="iq-thinking"]', { state: "detached" });
+  const vt = (await page.$$('[data-testid="iq-turn"]')).slice(-1)[0];
+  assert.match(await textOf(vt, '[data-testid="iq-heard"]'), /Heard \(English\): make Q6 required/);
+  assert.match(await textOf(vt, '[data-testid="iq-summary"]'), /Make Q6 required/);
+  assert.ok(await vt.$('[data-testid="iq-apply"]'), "a proposal with Apply, like a typed sentence — nothing applied by itself");
+  ok("click again → transcribed through /api/ai/transcribe → tidied (q 6 → Q6) → proposed for review, not applied");
+  await page.click('[data-testid="iq-turn"]:last-of-type [data-testid="iq-cancel"]');
+  await page.evaluate(() => window.__rescriptVoiceHint("Q5 के option 3 पर Q10 को दिखाना है", "hi"));
+  await page.click('[data-testid="iq-mic"]');
+  await page.waitForFunction(() => document.querySelector('[data-testid="iq-mic"]')?.dataset.state === "recording");
+  await page.waitForTimeout(500);
+  const before2 = await page.$$eval('[data-testid="iq-turn"]', (els) => els.length);
+  await page.click('[data-testid="iq-mic"]');
+  await page.waitForFunction((n) => document.querySelectorAll('[data-testid="iq-turn"]').length > n, before2, { timeout: 30_000 });
+  await page.waitForSelector('[data-testid="iq-thinking"]', { state: "detached" });
+  const ht = (await page.$$('[data-testid="iq-turn"]')).slice(-1)[0];
+  const heard = await ht.$('[data-testid="iq-heard"]');
+  assert.equal(await heard.getAttribute("data-language"), "hi");
+  assert.match(await heard.textContent(), /Heard \(Hindi\): Q5 के option 3 पर Q10 को दिखाना है/);
+  ok("a Hindi instruction is heard as Hindi and shown as heard; the English reading is the model's (the fake gives none, so the transcript stands)");
+  assert.equal(await page.$eval('[data-testid="iq-mic"]', (e) => e.dataset.state), "idle");
+  const r = await page.evaluate(async () => {
+    const form = new FormData(); form.append("audio", new Blob([new Uint8Array(1200)], { type: "audio/webm" }), "x.webm"); form.append("surveyId", "sandbox");
+    const res = await fetch("/api/ai/transcribe", { method: "POST", body: form });
+    return { status: res.status, body: await res.json().catch(() => null) };
+  });
+  assert.equal(r.status, 200);
+  assert.ok(!JSON.stringify(r.body).includes("AI_API"), "nothing about the provider leaks");
+  ok(`the transcribe route answers directly too (${r.body.language}, model ${r.body.model}) and leaks no configuration`);
+}
+
 /* ------------------------------------------------------- the model route */
 {
   const r = await page.evaluate(async () => {
@@ -370,7 +482,7 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
   await page.waitForSelector('[data-testid="intelligent-view"]');
   ok("⌘K → “Intelligent” switches modes like any other command");
   const turns = await page.$$eval('[data-testid="iq-turn"]', (els) => els.length);
-  assert.ok(turns >= 8, `the session's history survives a mode round trip: ${turns} turns`);
+  assert.ok(turns >= 20, `the session's history survives a mode round trip: ${turns} turns`);
   ok("the conversation is kept while the survey is edited elsewhere and you come back");
 }
 
