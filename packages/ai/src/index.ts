@@ -813,6 +813,35 @@ export function parseJsonReply(content: string): { label?: unknown; question?: u
 
 /* ------------------------------------------------------- the http client */
 
+/*
+ * JSON MODE, WHERE THE PROVIDER HAS IT. OpenAI-style servers take
+ * `response_format: {type: "json_object"}`; Anthropic's OpenAI-compatible
+ * endpoint refuses it with a 400 ("response_format.type: Input should be
+ * 'json_schema'"), and some gateways do the same. The reply is read by
+ * `parseJsonReply` either way, so json mode is a nicety, never a requirement:
+ * it is not sent to Anthropic, and any other provider that refuses it with a
+ * 400 naming `response_format` is asked once more without it — and not sent
+ * it again for the life of the process.
+ */
+const NO_JSON_MODE = new Set<string>();
+export function acceptsJsonMode(base: string): boolean {
+  if (NO_JSON_MODE.has(base)) return false;
+  try { return !/(^|\.)anthropic\.com$/i.test(new URL(base).hostname); } catch { return true; }
+}
+async function postChat(base: string, key: string, body: Record<string, unknown>, signal: AbortSignal): Promise<{ r: Response; detail?: string }> {
+  const send = (b: Record<string, unknown>) => fetch(`${base}/chat/completions`, {
+    method: "POST", signal, cache: "no-store", headers: providerHeaders(key), body: JSON.stringify(b),
+  });
+  const { response_format: _format, ...plain } = body;
+  if (!("response_format" in body) || !acceptsJsonMode(base)) return { r: await send(plain) };
+  const r = await send(body);
+  if (r.ok || r.status !== 400) return { r };
+  const detail = (await r.text().catch(() => "")).trim();
+  if (!/response_format/i.test(detail)) return { r, detail };
+  NO_JSON_MODE.add(base);
+  return { r: await send(plain) };
+}
+
 /** The model the Studio / runtime is configured to call. */
 export function aiModelName(): string {
   return (process.env.AI_MODEL ?? "").trim() || "gpt-4o-mini";
@@ -873,17 +902,13 @@ export async function completeJson(
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const r = await fetch(`${base}/chat/completions`, {
-      method: "POST", signal: ctrl.signal, cache: "no-store",
-      headers: providerHeaders(key),
-      body: JSON.stringify({
-        model, temperature: 0, max_tokens: maxTokens,
-        response_format: { type: "json_object" },
-        messages: [{ role: "system", content: system }, { role: "user", content: user }],
-      }),
-    });
+    const { r, detail: refused } = await postChat(base, key, {
+      model, temperature: 0, max_tokens: maxTokens,
+      response_format: { type: "json_object" },
+      messages: [{ role: "system", content: system }, { role: "user", content: user }],
+    }, ctrl.signal);
     if (!r.ok) {
-      const detail = (await r.text().catch(() => "")).trim().slice(0, 200);
+      const detail = (refused ?? (await r.text().catch(() => ""))).trim().slice(0, 200);
       const err = new Error(`the analysis provider refused the request (${r.status}) ${detail}`.trim());
       (err as Error & { status?: number }).status = r.status;
       throw err;
@@ -905,7 +930,8 @@ export async function completeJson(
     try {
       return JSON.parse(content.trim().replace(/^```(?:json)?\s*|\s*```$/g, ""));
     } catch {
-      return null;
+      /* without json mode the object can come after a sentence */
+      return parseJsonReply(content);
     }
   } catch (e) {
     /*
@@ -1007,19 +1033,13 @@ async function complete(system: string, user: string, maxTokens = 160): Promise<
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
-    const r = await fetch(`${base}/chat/completions`, {
-      method: "POST",
-      signal: ctrl.signal,
-      cache: "no-store",
-      headers: providerHeaders(key),
-      body: JSON.stringify({
-        model,
-        temperature: 0,
-        max_tokens: maxTokens,
-        response_format: { type: "json_object" },
-        messages: [{ role: "system", content: system }, { role: "user", content: user }],
-      }),
-    });
+    const { r } = await postChat(base, key, {
+      model,
+      temperature: 0,
+      max_tokens: maxTokens,
+      response_format: { type: "json_object" },
+      messages: [{ role: "system", content: system }, { role: "user", content: user }],
+    }, ctrl.signal);
     if (!r.ok) {
       console.warn("[rescript:ai] provider error", JSON.stringify({ status: r.status }));
       return null;

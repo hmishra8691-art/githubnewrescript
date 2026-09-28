@@ -68,6 +68,8 @@ Apply → store.replace (one labelled undoable edit) → AI Change #00N
 | `AI_VISION_MODEL` | OCR of scanned PDF pages (defaults to `AI_MODEL`) |
 | `AI_EMBEDDINGS_MODEL` | optional semantic retrieval (BM25 alone without it) |
 
+JSON mode (`response_format: json_object`) is sent only to providers that accept it: never to Anthropic, whose OpenAI-compatible endpoint refuses it (“response_format.type: Input should be 'json_schema'”), and a provider that refuses it with a 400 is asked once more without it and not sent it again. The reply is read the same way either way.
+
 ## Decisions
 
 - **Reasoning is separated from execution.** The model's output is data in a
