@@ -16,7 +16,8 @@ import { inflateSync, inflateRawSync } from "node:zlib";
  * encrypted file is reported the same way.
  */
 
-export interface PdfText { pages: string[][]; scanned: boolean; encrypted: boolean; errors: string[] }
+export interface PdfImage { page: number; mime: "image/jpeg" | "image/jp2"; bytes: Uint8Array; width: number; height: number }
+export interface PdfText { pages: string[][]; scanned: boolean; encrypted: boolean; errors: string[]; /** with `{ images: true }`: the scanned image of each page that has (almost) no text — for OCR */ images?: PdfImage[] }
 
 type PdfVal = number | string | boolean | null | PdfName | PdfRef | PdfVal[] | PdfDict | PdfStr;
 interface PdfName { n: string }
@@ -186,7 +187,7 @@ function parseCMap(src: string): FontMap {
 
 /* ------------------------------------------------------------ extraction */
 
-export function extractPdfText(bytes: Uint8Array): PdfText {
+export function extractPdfText(bytes: Uint8Array, opts: { images?: boolean } = {}): PdfText {
   const errors: string[] = [];
   const head = latin(bytes.subarray(0, 1024));
   if (!head.includes("%PDF-")) return { pages: [], scanned: false, encrypted: false, errors: ["not a PDF"] };
@@ -245,7 +246,33 @@ export function extractPdfText(bytes: Uint8Array): PdfText {
   }
   // pages with (almost) no text layer: a scan, or text set as outlines — OCR's job, not ours
   const scanned = pages.length > 0 && totalChars < 10 * pages.length;
-  return { pages: out, scanned, encrypted: false, errors };
+  if (!opts.images) return { pages: out, scanned, encrypted: false, errors };
+  /*
+   * THE PAGE IMAGES OF A SCAN, for OCR. A scanner writes each page as one
+   * image XObject, almost always JPEG (DCTDecode) — whose stream bytes ARE a
+   * JPEG file, so nothing needs rendering: the largest image on each page
+   * with no text layer is handed over as it is. Other encodings (CCITT fax,
+   * raw bitmaps) are not converted here; the caller reports those pages.
+   */
+  const images: PdfImage[] = [];
+  pages.forEach((page, i) => {
+    if ((out[i] ?? []).join("").length >= 20) return;
+    const res = get(page.Resources); if (!isDict(res)) return;
+    const xo = get(res.XObject); if (!isDict(xo)) return;
+    let best: PdfImage | null = null;
+    for (const v of Object.values(xo)) {
+      const o = isRef(v) ? objs.get(v.ref) : undefined;
+      if (!o?.stream || !isDict(o.value) || !isName(o.value.Subtype) || o.value.Subtype.n !== "Image") continue;
+      const f = get(o.value.Filter);
+      const names = (Array.isArray(f) ? f : [f]).map((x) => (isName(x as PdfVal) ? (x as { n: string }).n : ""));
+      const mime = names.includes("DCTDecode") ? "image/jpeg" : names.includes("JPXDecode") ? "image/jp2" : null;
+      if (!mime || names.length !== 1) continue;
+      const w = Number(get(o.value.Width)) || 0, h = Number(get(o.value.Height)) || 0;
+      if (!best || w * h > best.width * best.height) best = { page: i + 1, mime, bytes: o.stream, width: w, height: h };
+    }
+    if (best) images.push(best);
+  });
+  return { pages: out, scanned, encrypted: false, errors, images };
 }
 
 function concat(chunks: Uint8Array[]): Uint8Array {

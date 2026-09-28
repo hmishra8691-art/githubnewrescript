@@ -8,7 +8,7 @@ import {
   pickerTypesOf,
   variantForLegacyType,
   resolveVariant } from "@rescript/schema";
-import { migrateQuestionType, type TypeMigration } from "@rescript/engine";
+import { migrateQuestionType, createQuestionFromVariant, type TypeMigration } from "@rescript/engine";
 import { useStudio, uid } from "./store";
 import { TypeChangeDialog } from "./TypeChangeDialog";
 
@@ -55,35 +55,8 @@ function pickDefined(defaults: Record<string, unknown>, current: Record<string, 
  * specify" text turns up under another in the data.
  */
 export function createFromVariant(v: QuestionVariantDef, naming: number | { code: string; variableName: string }): Question {
-  const { code, variableName } = typeof naming === "number" ? { code: `Q${naming}`, variableName: `Q${naming}` } : naming;
-  const plugin = questionTypeRegistry.get(v.baseType);
-  const q: Question = plugin
-    ? plugin.create({ id: uid("q"), code, variableName })
-    : ({
-        id: uid("q"), code, variableName, type: v.baseType, text: "",
-        options: [], rows: [], columns: [], validation: [], required: false,
-        settings: { readOnly: false, hidden: false }, skipLogic: [], listLogic: [],
-      } as unknown as Question);
-  q.type = v.baseType;
-  q.variant = v.id;
-  // creation: defaults land directly
-  if (v.defaults?.settings) q.settings = { ...q.settings, ...v.defaults.settings } as any;
-  if (v.defaults?.options) q.options = v.defaults.options.map((o) => ({ flags: [], ...o })) as any;
-  if (v.defaults?.rows) q.rows = v.defaults.rows.map((r) => ({ flags: [], validation: [], required: false, ...r })) as any;
-  if (v.defaults?.columns) {
-    q.columns = v.defaults.columns.map((c, i) => ({
-      options: [], validation: [], readOnly: false,
-      variableStem: `${q.variableName}_C${i + 1}`,
-      ...c,
-    })) as any;
-  }
-  if (v.defaults?.validation) q.validation = v.defaults.validation as any;
-  if (v.defaults?.instruction) q.instruction = v.defaults.instruction;
-  // recipe presets: a starter text and a follow-up probe already switched on
-  if (v.defaults?.text) q.text = v.defaults.text;
-  if (v.defaults?.probe) q.probe = v.defaults.probe as any;
-  if (v.defaults?.ai) q.ai = v.defaults.ai as any;
-  return q;
+  // one maker for every creator — the picker, the palette, the copilot (engine `createQuestionFromVariant`)
+  return createQuestionFromVariant(v, naming, uid);
 }
 
 /* -------------------------------------------------------------- the picker */

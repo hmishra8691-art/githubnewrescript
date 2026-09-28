@@ -85,6 +85,9 @@ export const AUDIT_EVENTS = [
   /* Super Intelligent import: a questionnaire read from another platform or a document,
      as a new project or merged into this one — the file, what was read, what needs review */
   "survey.imported",
+  /* Intelligent copilot: an AI change the researcher reviewed and applied (or reverted) —
+     the request, what it created / modified / removed; the change itself is in the version history */
+  "survey.ai_changed",
   "survey.saved",
   "version.created",
   "version.restored",
@@ -238,6 +241,7 @@ export function describeEvent(r: AuditRow): string {
     case "lock.requested": return `${who} requested edit access`;
     case "lock.denied": return `${who} was refused an edit because ${target || "another user"} held the lock`;
 
+    case "survey.ai_changed": return `${who} ${d.reverted ? "reverted" : "applied"} AI change${d.n ? ` #${String(d.n).padStart(3, "0")}` : ""}${d.summary ? ` — ${str(d.summary)}` : ""}`;
     case "survey.imported": return `${who} imported ${str(d.fileName) || "a file"}${d.label ? ` (${str(d.label)})` : ""}${d.mode === "merge" ? " into this survey" : ""}${d.questions != null ? ` — ${str(d.questions)} questions${Number(d.review) ? `, ${str(d.review)} to review` : ""}` : ""}`;
     case "survey.modified": return `${who} modified the survey${d.summary ? ` — ${str(d.summary)}` : ""}`;
     case "survey.saved": return `${who} saved the survey`;

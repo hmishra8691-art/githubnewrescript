@@ -75,6 +75,31 @@ export const Quota = z.object({
 });
 export type Quota = z.infer<typeof Quota>;
 
+export const ResearchConstruct = z.object({
+  name: z.string(),
+  role: z.enum(["independent", "dependent", "mediator", "moderator", "control", "screening", "descriptive"]).default("descriptive"),
+  definition: z.string().optional(),
+  /** question ids that measure it */
+  questionIds: z.array(z.string()).default([]),
+});
+export type ResearchConstruct = z.infer<typeof ResearchConstruct>;
+
+export const ResearchDesign = z.object({
+  objective: z.string().optional(),
+  hypotheses: z.array(z.string()).default([]),
+  population: z.string().optional(),
+  methodology: z.string().optional(),
+  constructs: z.array(ResearchConstruct).default([]),
+  /** analysis the design anticipates: "compare purchase intent by exposure tertile" */
+  analysis: z.array(z.string()).default([]),
+  /** what the design rests on that the researcher has not confirmed */
+  assumptions: z.array(z.string()).default([]),
+  /** the research documents it drew on, by name */
+  sources: z.array(z.string()).default([]),
+  updatedAt: z.string().optional(),
+});
+export type ResearchDesign = z.infer<typeof ResearchDesign>;
+
 export const ImportMapEntry = z.object({
   kind: z.enum(["question", "variable", "option", "row", "block", "page", "embedded", "quota", "loop", "branch", "randomizer", "group", "end"]),
   /** the source's identifier: QID15, Q5, BL_3pT, Country, QID15/choice 3 */
@@ -598,6 +623,16 @@ export const SurveyDefinition = z.object({
    * Absent on every survey that was built here.
    */
   imports: z.array(ImportRecord).optional(),
+  /**
+   * THE RESEARCH DESIGN the survey is built to test (Intelligent copilot):
+   * the objective, the hypotheses, the population, and the constructs with
+   * their roles and the questions that measure them. Written when the
+   * copilot proposes a survey from a hypothesis and the researcher applies
+   * it — and editable like anything else — so a later "review my survey"
+   * can check hypothesis coverage against what the study set out to test.
+   * Absent on every survey that never had one.
+   */
+  research: ResearchDesign.optional(),
 });
 export type SurveyDefinition = z.infer<typeof SurveyDefinition>;
 

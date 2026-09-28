@@ -25,6 +25,8 @@ export interface ContextOptions {
   limit?: number;
   /** characters of question text per line */
   textWidth?: number;
+  /** questions a request names (the copilot's relevant-context slice): always in full, with two neighbours each side */
+  focusIds?: string[];
 }
 
 const plain = (s: string | undefined, width: number): string => {
@@ -45,6 +47,10 @@ export function surveyContext(def: SurveyDefinition, opts: ContextOptions = {}):
   if (opts.selectedId) {
     const k = qs.findIndex((q) => q.id === opts.selectedId);
     if (k >= 0) for (let i = Math.max(0, k - 5); i <= Math.min(qs.length - 1, k + 5); i++) full.add(qs[i].id);
+  }
+  for (const id of opts.focusIds ?? []) {
+    const k = qs.findIndex((q) => q.id === id);
+    if (k >= 0) for (let i = Math.max(0, k - 2); i <= Math.min(qs.length - 1, k + 2); i++) full.add(qs[i].id);
   }
 
   const lines: string[] = [];

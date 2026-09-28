@@ -62,7 +62,10 @@ const NEEDS_ANSWER = new Set(["eq", "gt", "lt", "gte", "lte", "in", "contains", 
 
 interface Gate { kind: "branch" | "branch_shadowed" | "otherwise" | "randomizer" | "loop" | "container_logic"; text: string; when?: Condition; id: string }
 
-export function diagnoseQuestion(def: SurveyDefinition, questionId: string): Diagnosis | null {
+/** what a caller diagnosing many questions computes once (the survey review does) */
+export interface DiagnoseContext { quality?: ReturnType<typeof runQualityCheck>; dead?: ReturnType<typeof unreachableLogicNodes> }
+
+export function diagnoseQuestion(def: SurveyDefinition, questionId: string, pre: DiagnoseContext = {}): Diagnosis | null {
   const q = def.questions.find((x) => x.id === questionId) ?? getQuestionByCodeOrVar(def, questionId);
   if (!q) return null;
   const code = q.code || q.variableName;
@@ -111,8 +114,7 @@ export function diagnoseQuestion(def: SurveyDefinition, questionId: string): Dia
   const placed = walk(def.flow as FlowNode[], []);
   if (!placed) findings.push({ kind: "not_placed", severity: "blocking", message: `${code} is not on any page of the survey flow, so no respondent can reach it.` });
   else {
-    const graph = buildLogicFlow(def);
-    const dead = unreachableLogicNodes(graph);
+    const dead = pre.dead ?? unreachableLogicNodes(buildLogicFlow(def));
     if (dead.some((n) => n.ref === q.id || n.id === q.id || (pageId && n.page === pageId && n.ref === q.id))) {
       findings.push({ kind: "unreachable", severity: "blocking", message: `No path through the flow reaches ${code}: every route before it ends the survey or jumps past it.` });
     }
@@ -158,7 +160,7 @@ export function diagnoseQuestion(def: SurveyDefinition, questionId: string): Dia
   }
 
   /* 7. what the quality check says */
-  const qc = runQualityCheck(def);
+  const qc = pre.quality ?? runQualityCheck(def);
   for (const issue of qc.areas.flatMap((a) => a.issues)) {
     if (issue.questionId !== q.id) continue;
     if (findings.some((f) => f.message === issue.message)) continue;

@@ -211,7 +211,10 @@ export function docxFixture(): Uint8Array {
 /* ------------------------------------------------------------ a real PDF */
 
 /** a two-page PDF: page 1 an uncompressed content stream, page 2 FlateDecode; Helvetica, WinAnsi */
-export function pdfFixture(lines: string[][]): Uint8Array {
+/** a tiny, valid JPEG (1×1 grey) — what a scanner's page image looks like to the extractor */
+export const TINY_JPEG = Uint8Array.from([0xff,0xd8,0xff,0xdb,0x00,0x43,0x00,...Array(64).fill(1),0xff,0xc0,0x00,0x0b,0x08,0x00,0x01,0x00,0x01,0x01,0x01,0x11,0x00,0xff,0xc4,0x00,0x14,0x00,0x01,...Array(15).fill(0),0xff,0xc4,0x00,0x14,0x10,...Array(16).fill(0),0xff,0xda,0x00,0x08,0x01,0x01,0x00,0x00,0x3f,0x00,0x00,0xff,0xd9]);
+
+export function pdfFixture(lines: string[][], opts: { images?: Record<number, Uint8Array | Uint8Array[]> } = {}): Uint8Array {
   const enc = new TextEncoder();
   const objs: (string | { dict: string; stream: Uint8Array })[] = [];
   const add = (o: string | { dict: string; stream: Uint8Array }) => { objs.push(o); return objs.length; };
@@ -221,8 +224,14 @@ export function pdfFixture(lines: string[][]): Uint8Array {
     const ops = ["BT", "/F1 11 Tf", "72 760 Td", ...ls.flatMap((l, k) => [k === 0 ? "" : "0 -16 Td", `(${l.replace(/[()\\]/g, (m) => `\\${m}`)}) Tj`]).filter(Boolean), "ET"].join("\n");
     const raw = enc.encode(ops);
     const stream = i % 2 ? new Uint8Array(deflateSync(raw)) : raw;
-    const content = add({ dict: `<< /Length ${stream.length}${i % 2 ? " /Filter /FlateDecode" : ""} >>`, stream });
-    pageIds.push(add(`<< /Type /Page /Parent ${pages} 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${font} 0 R >> >> /Contents ${content} 0 R >>`));
+    const given = opts.images?.[i];
+    const imgs = given ? (Array.isArray(given) ? given : [given]) : [];
+    // several images on a page get different sizes (a logo and the page scan): the last is the largest
+    const imageIds = imgs.map((img, k) => add({ dict: `<< /Type /XObject /Subtype /Image /Width ${k === imgs.length - 1 ? 1700 : 120} /Height ${k === imgs.length - 1 ? 2200 : 80} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /DCTDecode /Length ${img.length} >>`, stream: img }));
+    // a scanned page: its content draws the image (uncompressed, so the fixture stays readable)
+    const body = imgs.length ? new Uint8Array([...raw, ...enc.encode(imageIds.map((_, k) => `\nq 612 0 0 792 0 0 cm /Im${k + 1} Do Q`).join(""))]) : stream;
+    const content = add({ dict: `<< /Length ${body.length}${i % 2 && !imgs.length ? " /Filter /FlateDecode" : ""} >>`, stream: body });
+    pageIds.push(add(`<< /Type /Page /Parent ${pages} 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${font} 0 R >>${imageIds.length ? ` /XObject << ${imageIds.map((id, k) => `/Im${k + 1} ${id} 0 R`).join(" ")} >>` : ""} >> /Contents ${content} 0 R >>`));
   });
   objs[catalog - 1] = `<< /Type /Catalog /Pages ${pages} 0 R >>`;
   objs[pages - 1] = `<< /Type /Pages /Kids [${pageIds.map((n) => `${n} 0 R`).join(" ")}] /Count ${pageIds.length} >>`;

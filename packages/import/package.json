@@ -16,6 +16,10 @@
     "./fixtures": {
       "types": "./dist/fixtures.d.ts",
       "default": "./dist/fixtures.js"
+    },
+    "./research": {
+      "types": "./dist/research.d.ts",
+      "default": "./dist/research.js"
     }
   },
   "scripts": {

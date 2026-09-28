@@ -876,6 +876,83 @@ export async function completeJson(
   }
 }
 
+/* ------------------------------------------------------------ vision OCR and embeddings (the copilot's research store) */
+
+/** The model that reads page images: AI_VISION_MODEL, else the chat model (most current chat models are multimodal). */
+export function aiVisionModelName(): string {
+  return (process.env.AI_VISION_MODEL ?? "").trim() || aiModelName();
+}
+/** Embeddings are optional: only with AI_EMBEDDINGS_MODEL set. Without them retrieval is BM25 alone. */
+export function aiEmbeddingsModelName(): string | null {
+  return (process.env.AI_EMBEDDINGS_MODEL ?? "").trim() || null;
+}
+
+const OCR_PROMPT = "You transcribe scanned document pages. Return the page's text exactly as printed, in reading order, one paragraph per line; keep headings on their own line prefixed with '## '; write tables as rows of cells separated by ' | '. Do not summarise, translate, correct or comment. If the page has no legible text, return nothing.";
+
+/**
+ * OCR ONE PAGE IMAGE through the configured model (OpenAI-compatible vision
+ * message). The research store calls it for the pages of a scanned PDF that
+ * have no text layer. Returns the text, or "" when the page is blank. The
+ * FAKE provider reads nothing — it cannot see — and says so by returning "".
+ */
+export async function ocrImage(bytes: Uint8Array, mime: string, opts: CompleteJsonOptions = {}): Promise<string> {
+  const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
+  if (!base) throw new Error("no AI provider is configured for OCR");
+  if (aiProviderName() === "fake") { reportFake("chat", OCR_PROMPT + "x".repeat(3000), 0); return ""; }
+  const key = (process.env.AI_API_KEY ?? "").trim();
+  const model = aiVisionModelName();
+  const ctrl = new AbortController();
+  const timeoutMs = Math.min(300_000, opts.timeoutMs ?? 90_000);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await fetch(`${base}/chat/completions`, {
+      method: "POST", signal: ctrl.signal, cache: "no-store",
+      headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
+      body: JSON.stringify({
+        model, temperature: 0, max_tokens: 4000,
+        messages: [
+          { role: "system", content: OCR_PROMPT },
+          { role: "user", content: [{ type: "text", text: "Transcribe this page." }, { type: "image_url", image_url: { url: `data:${mime};base64,${Buffer.from(bytes).toString("base64")}` } }] },
+        ],
+      }),
+    });
+    if (!r.ok) { const detail = (await r.text().catch(() => "")).trim().slice(0, 200); const err = new Error(`the OCR model refused the page (${r.status}) ${detail}`.trim()); (err as Error & { status?: number }).status = r.status; throw err; }
+    const j = await r.json().catch(() => null) as { choices?: { message?: { content?: string } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number }; model?: string } | null;
+    const content = j?.choices?.[0]?.message?.content ?? "";
+    reportUsage({ kind: "chat", provider: "openai-compatible", model: j?.model || model, inputTokens: j?.usage?.prompt_tokens ?? 1200, outputTokens: j?.usage?.completion_tokens ?? approxTokens(content), requests: 1, estimated: typeof j?.usage?.prompt_tokens !== "number" });
+    return content.trim();
+  } catch (e) {
+    if ((e as Error)?.name === "AbortError") throw new Error(`the OCR model did not answer within ${Math.round(timeoutMs / 1000)} seconds`);
+    throw e;
+  } finally { clearTimeout(timer); }
+}
+
+/**
+ * EMBEDDINGS for retrieval, when an embeddings model is configured
+ * (OpenAI-compatible `/embeddings`). Null when none is — the caller then
+ * ranks by BM25 alone. The fake provider has none.
+ */
+export async function embedTexts(texts: string[], opts: CompleteJsonOptions = {}): Promise<number[][] | null> {
+  const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
+  const model = aiEmbeddingsModelName();
+  if (!base || !model || aiProviderName() === "fake" || !texts.length) return null;
+  const key = (process.env.AI_API_KEY ?? "").trim();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), Math.min(120_000, opts.timeoutMs ?? 30_000));
+  try {
+    const r = await fetch(`${base}/embeddings`, {
+      method: "POST", signal: ctrl.signal, cache: "no-store",
+      headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
+      body: JSON.stringify({ model, input: texts.map((t) => t.slice(0, 8000)) }),
+    });
+    if (!r.ok) return null;
+    const j = await r.json().catch(() => null) as { data?: { embedding?: number[]; index?: number }[]; usage?: { prompt_tokens?: number } } | null;
+    const rows = (j?.data ?? []).slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0)).map((d) => d.embedding ?? []);
+    reportUsage({ kind: "chat", provider: "openai-compatible", model, inputTokens: j?.usage?.prompt_tokens ?? approxTokens(texts.join(" ")), outputTokens: 0, requests: 1, estimated: typeof j?.usage?.prompt_tokens !== "number" });
+    return rows.length === texts.length && rows.every((x) => x.length) ? rows : null;
+  } catch { return null; } finally { clearTimeout(timer); }
+}
+
 async function complete(system: string, user: string, maxTokens = 160): Promise<{ label?: unknown; question?: unknown; translations?: unknown } | null> {
   const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
   const model = aiModelName();

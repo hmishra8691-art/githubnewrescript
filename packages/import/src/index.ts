@@ -36,3 +36,4 @@ export async function analyzeImport(bytes: Uint8Array, fileName: string, opts: M
   const result = mapCanonical(read.canonical, opts);
   return { detection: read.detection, canonical: read.canonical, result, report: buildReport(read.detection, read.canonical, result, opts.scope ?? "full"), workload: workload(read.canonical), issues: read.issues };
 }
+export * from "./research.js";

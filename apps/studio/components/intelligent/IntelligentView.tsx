@@ -19,6 +19,11 @@ import { coerceIntent } from "../../lib/intelligent/ai";
 import { languageName, pickRecordingMime, type HeardTranscript } from "../../lib/intelligent/voice";
 import { importRequest, importReviewAnswer, codeFromTitle } from "../../lib/import/chat";
 import { ImportCard, ReviewCard, type ImportJob, type ReviewEntry, type ReviewScript } from "./ImportCard";
+import { useCopilot, type CopilotEntry } from "./copilot/useCopilot";
+import { CopilotCard } from "./copilot/CopilotCard";
+import { CopilotPanel } from "./copilot/CopilotPanel";
+import { StructurePane } from "./copilot/StructurePane";
+import { proposalCounts } from "../../lib/copilot/client";
 
 /**
  * INTELLIGENT — describe the change; review it; apply it.
@@ -52,6 +57,24 @@ import { ImportCard, ReviewCard, type ImportJob, type ReviewEntry, type ReviewSc
  * migrated?" answers from the survey's own import record, with the custom
  * code the import kept (disabled) offered for Deep analysis — whose reading
  * comes back as an ordinary proposal, reviewed and applied like any other.
+ *
+ * THE COPILOT (the AI research + survey-programming brief). With a language
+ * model configured, what the researcher types or says goes to the copilot
+ * (/api/copilot/turn): it reasons about the research — objective,
+ * hypotheses, variables — and programs the survey through the engine's
+ * controlled action layer. Its proposal is shown whole (the Changes panel:
+ * what is created, modified, removed, before/after) and applied as ONE
+ * undoable edit, recorded in the AI change history. Research documents
+ * attach to the project and are read a few relevant passages at a time. The
+ * deterministic grammar stays: for exact read-only questions ("what depends
+ * on Q3?", "why is Q20 not showing?"), and as the whole of the mode when no
+ * model is configured or the model's answer is unusable.
+ *
+ *   ┌──────────┬──────────────────────────────┬────────────────────────┐
+ *   │ SURVEY   │ conversation                 │ Changes · Review ·     │
+ *   │ blocks,  │  (copilot cards, proposals,  │ Research · History ·   │
+ *   │ questions│   imports)                   │ Inspector              │
+ *   └──────────┴──────────────────────────────┴────────────────────────┘
  */
 
 interface Turn {
@@ -67,7 +90,7 @@ interface Turn {
 
 interface ImportTurn { id: string; kind: "import"; job: ImportJob }
 interface ReviewTurn { id: string; kind: "review"; text: string; entry: ReviewEntry }
-type Entry = Turn | ImportTurn | ReviewTurn;
+type Entry = Turn | ImportTurn | ReviewTurn | CopilotEntry;
 const isProposalTurn = (e: Entry): e is Turn => !("kind" in e);
 /** the files behind import turns — kept out of the turn objects, which stay plain data */
 const importFiles = new Map<string, File>();
@@ -113,11 +136,13 @@ export function IntelligentView() {
   const setAiAvailable = React.useCallback((v: boolean) => { aiKnown = v; setAiAvailableState(v); }, []);
   const [prefs, setPrefs] = React.useState(loadPrefs);
   const [showInspector, setShowInspector] = React.useState(true);
+  const [showStructure, setShowStructure] = React.useState(true);
   const inputRef = React.useRef<HTMLTextAreaElement>(null);
   const logRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => { try { window.localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* fine */ } }, [prefs]);
-  React.useEffect(() => { logRef.current?.scrollTo({ top: logRef.current.scrollHeight }); }, [turns.length, busy]);
+  // follow the conversation — but leave the welcome screen at its top
+  React.useEffect(() => { if (turns.length) logRef.current?.scrollTo({ top: logRef.current.scrollHeight }); }, [turns.length, busy]);
 
   const selectedId = primary?.startsWith("question:") ? primary.slice(9) : null;
   const deps = React.useMemo(() => ({
@@ -136,6 +161,23 @@ export function IntelligentView() {
     else if (key.startsWith("question:")) s.select(key.slice("question:".length));
   }, [sel, s]);
 
+  /* ------------------------------------------------------------ copilot */
+  const copilot = useCopilot({
+    entries: turns,
+    selectedId,
+    push: (e) => setTurns((ts) => [...ts, e]),
+    patch: (id, p) => setTurns((ts) => ts.map((x) => (x.id === id && "kind" in x && x.kind === "copilot" ? { ...x, ...(typeof p === "function" ? p(x) : p) } : x))),
+    patchAll: (fn) => setTurns((ts) => ts.map((x) => { if (!("kind" in x) || x.kind !== "copilot") return x; const p = fn(x); return p ? { ...x, ...p } : x; })),
+  });
+  const [applyNote, setApplyNote] = React.useState<string | null>(null);
+  const applyCopilot = React.useCallback(() => {
+    const r = copilot.apply();
+    setApplyNote(r.ok ? null : r.reason ?? null);
+    if (r.ok) s.toast("Applied as one change. Undo from History, or ⌘Z.");
+    else if (r.reason) s.toast(r.reason, "err");
+  }, [copilot, s]);
+  const selectQuestion = React.useCallback((id: string) => selectKey(`question:${id}` as ObjectKey), [selectKey]);
+
   /* ---------------------------------------------------------------- ask */
   const ask = React.useCallback(async (sentence: string, heard?: HeardTranscript) => {
     const t = sentence.trim();
@@ -145,6 +187,20 @@ export function IntelligentView() {
     if (imp === "report") { setText(""); showReview(t); return; }
     setBusy(true);
     setText("");
+    /*
+     * WHO ANSWERS. An exact read-only question the grammar understands —
+     * "what depends on Q3?", "why is Q20 not showing?" — is answered from the
+     * survey itself: exact, instant, free. Everything else goes to the
+     * copilot when a model is configured; the grammar planner below is what
+     * runs when none is, or when the model's answer had nothing usable.
+     */
+    const pre = parseIntent(t);
+    const readOnlyExact = ["find", "explain", "diagnose", "screening"].includes(pre.kind) && !planProposal(s.def, pre, "grammar", deps).errors.length;
+    if (!readOnlyExact && copilot.available !== false) {
+      // an unusable model answer ("empty") falls through to the grammar; anything else is the copilot's
+      const outcome = await copilot.ask(t, heard);
+      if (outcome === "handled") { setBusy(false); inputRef.current?.focus(); return; }
+    }
     const selectedLabel = primary?.startsWith("question:") ? (s.def.questions.find((q) => q.id === primary.slice(9))?.code ?? null) : null;
     let intent: Intent = parseIntent(t);
     let source: Proposal["source"] = "grammar";
@@ -177,12 +233,17 @@ export function IntelligentView() {
     if (heard && heard.language !== "en" && heard.language !== "und" && !heard.english && intent.kind === "unknown") {
       plan = { ...plan, errors: [`I heard this in ${languageName(heard.language)}, but no language model is configured on this Studio to read it into English. Say it in English, or type it.`] };
     }
-    setTurns((ts) => [...ts, { id: uid("turn"), text: t, proposal: plan, state: plan.readOnly ? "applied" : "open", ...(heard ? { heard } : {}) }]);
+    setTurns((ts) => {
+      // the model had nothing usable and the grammar has an answer: show the answer, not the empty turn
+      const lastEntry = ts[ts.length - 1];
+      const drop = lastEntry && "kind" in lastEntry && lastEntry.kind === "copilot" && lastEntry.status === "empty" && lastEntry.text === t && !plan.errors.length ? lastEntry.id : null;
+      return [...ts.filter((x) => x.id !== drop), { id: uid("turn"), text: t, proposal: plan, state: plan.readOnly ? "applied" : "open", ...(heard ? { heard } : {}) }];
+    });
     if (plan.targetKey) selectKey(plan.targetKey);
     setBusy(false);
     inputRef.current?.focus();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [busy, primary, s.def, s.surveyDbId, deps, aiAvailable, selectKey]);
+  }, [busy, primary, s.def, s.surveyDbId, deps, aiAvailable, selectKey, copilot]);
 
   /* -------------------------------------------------------------- apply */
   const apply = React.useCallback((turn: Turn) => {
@@ -301,6 +362,20 @@ export function IntelligentView() {
     const f = list?.[0];
     if (f) void startImport(f);
     if (fileRef.current) fileRef.current.value = "";
+  };
+  /*
+   * A DROPPED FILE is either a questionnaire to import or research for the
+   * copilot to read. A survey export (QSF, Decipher XML, a Rescript JSON) can
+   * only be the first; several files, or a paper-like format, could be either
+   * — so the researcher says which.
+   */
+  const researchRef = React.useRef<HTMLInputElement>(null);
+  const [dropChoice, setDropChoice] = React.useState<File[] | null>(null);
+  const [attachMenu, setAttachMenu] = React.useState(false);
+  const onDropFiles = (list: FileList) => {
+    const files = [...list];
+    if (files.length === 1 && /\.(?:qsf|xml|json)$/i.test(files[0].name)) { void startImport(files[0]); return; }
+    setDropChoice(files);
   };
 
   /* "what could not be migrated?" — from the survey's own import record */
@@ -463,23 +538,28 @@ export function IntelligentView() {
   }, [primary, s.def]);
 
   return (
-    <div className="iq" data-testid="intelligent-view" style={{ gridTemplateColumns: showInspector ? `minmax(0, 1fr) 6px ${prefs.inspector}px` : "minmax(0, 1fr)" }}>
+    <div className="iq cp-workspace" data-testid="intelligent-view" style={{ gridTemplateColumns: `${showStructure ? "240px " : ""}${showInspector ? `minmax(0, 1fr) 6px ${prefs.inspector}px` : "minmax(0, 1fr)"}` }}>
+      {showStructure && <StructurePane def={copilot.state ? copilot.state.after : s.def} diff={copilot.state?.diff ?? null} selectedId={selectedId} onSelect={selectQuestion} />}
       <section
         className={`iq-main${dropping ? " iq-dropping" : ""}`}
         onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDropping(true); } }}
         onDragLeave={(e) => { if (e.currentTarget === e.target) setDropping(false); }}
-        onDrop={(e) => { if (e.dataTransfer.files.length) { e.preventDefault(); setDropping(false); onFiles(e.dataTransfer.files); } }}
+        onDrop={(e) => { if (e.dataTransfer.files.length) { e.preventDefault(); setDropping(false); onDropFiles(e.dataTransfer.files); } }}
         data-testid="iq-main"
       >
         <div className="iq-toolbar">
+          <button type="button" className={`iq-btn${showStructure ? " on" : ""}`} onClick={() => setShowStructure((v) => !v)} aria-pressed={showStructure} data-testid="cp-toggle-structure" title="The survey's structure"><Icon name="layers" size={13} /></button>
           <span className="iq-title"><Icon name="sparkle" size={14} /> Intelligent</span>
-          <span className="iq-hint">Describe a change in plain language. Every change is shown for review before it is applied — nothing is written until you press Apply.</span>
+          <span className="iq-hint">Describe your research or a change — typed or spoken, in any language. Every change is shown for review before it is applied.</span>
           <span className="iq-spacer" />
-          <span className="iq-provider" data-testid="iq-provider" data-ai={aiAvailable === null ? "unknown" : aiAvailable ? "on" : "off"} title={aiAvailable === false ? "No language model is configured on this Studio; the built-in grammar handles the common shapes." : aiAvailable ? "The built-in grammar first; the language model for what it does not catch." : "Built-in grammar; the language model is tried when a sentence is not recognised."}>
-            {aiAvailable === false ? "grammar only" : aiAvailable ? "grammar + model" : "grammar"}
+          <button type="button" className="iq-btn" onClick={() => { setText("My hypothesis is that … Target respondents: … Create a survey that tests it."); inputRef.current?.focus(); }} data-testid="cp-generate" title="Describe an objective or hypothesis; the copilot proposes the whole survey"><Icon name="plus" size={13} /> Generate survey</button>
+          <button type="button" className="iq-btn" onClick={() => { setShowInspector(true); void copilot.runReview(); }} disabled={busy} data-testid="cp-review" title="Check logic, reachability, wording, scales, duplicates, length — and, with a model, research alignment"><Icon name="check" size={13} /> Review</button>
+          <button type="button" className="iq-btn" onClick={() => { const last = [...copilot.history].reverse().find((h) => !h.reverted); if (last) { const r = copilot.revert(last.n); if (!r.ok && r.reason) { setShowInspector(true); copilot.setTab("history"); s.toast(r.reason, "err"); } } }} disabled={!copilot.history.some((h) => !h.reverted)} data-testid="cp-undo-last" title="Undo the last AI change, as one operation">Undo AI change</button>
+          <span className="iq-provider" data-testid="iq-provider" data-ai={aiAvailable === null && copilot.available === null ? "unknown" : copilot.available || aiAvailable ? "on" : "off"} data-copilot={copilot.available === null ? "unknown" : copilot.available ? "on" : "off"} title={copilot.available === false ? "No language model is configured on this Studio; the built-in grammar handles the common shapes." : "The copilot reasons with the configured model and programs through the engine; exact read-only questions are answered by the engine directly."}>
+            {copilot.available === false ? "grammar only" : copilot.available ? "copilot" : aiAvailable ? "grammar + model" : "grammar"}
           </span>
           <button type="button" className={`iq-btn${showInspector ? " on" : ""}`} onClick={() => setShowInspector((v) => !v)} aria-pressed={showInspector} data-testid="iq-toggle-inspector" title="Inspector">
-            <Icon name="info" size={13} /> Inspector
+            <Icon name="info" size={13} /> Panel
           </button>
         </div>
 
@@ -487,7 +567,17 @@ export function IntelligentView() {
           {turns.length === 0 && (
             <div className="iq-welcome" data-testid="iq-welcome">
               <h2>How do you want to program your research?</h2>
-              <p>Say it. The Studio proposes the exact rule, shows you what it will do, and waits for you to apply it.</p>
+              <p>Tell it your objective or hypothesis, attach your research, or describe a change. The copilot proposes the survey — questions, scales, logic — shows you exactly what it will do, and waits for you to apply it.</p>
+              <div className="cp-welcome-row">
+                <button type="button" className="iq-example cp-welcome" onClick={() => { setText("My hypothesis is that younger consumers are more likely to buy premium skincare because of social media influence. Create a survey that tests it."); inputRef.current?.focus(); }} data-testid="cp-welcome-generate">
+                  <span className="iq-example-text"><Icon name="sparkle" size={13} /> Generate a survey from a hypothesis</span>
+                  <span className="iq-example-about">variables, constructs, screening, scales, logic</span>
+                </button>
+                <button type="button" className="iq-example cp-welcome" onClick={() => researchRef.current?.click()} data-testid="cp-welcome-research">
+                  <span className="iq-example-text"><Icon name="paperclip" size={13} /> Attach research — papers, reports, briefs</span>
+                  <span className="iq-example-about">PDF (with OCR), Word, text · read before it designs</span>
+                </button>
+              </div>
               <button type="button" className="iq-example iqi-welcome-import" onClick={() => fileRef.current?.click()} data-testid="iq-import-start">
                 <span className="iq-example-text"><Icon name="paperclip" size={13} /> Import a questionnaire — Qualtrics QSF, Decipher XML, Word, Excel, CSV, PDF or text</span>
                 <span className="iq-example-about">reverse-engineered into Rescript · previewed before anything is created</span>
@@ -509,6 +599,17 @@ export function IntelligentView() {
                   onPatch={(p) => patchJob(turn.id, p)} onRun={() => void runImport(turn.id)} onCreate={() => void createFromImport(turn.id)}
                   onMerge={() => mergeImport(turn.id)} onCancel={() => cancelImport(turn.id)} onReviewAfter={() => showReview("What needs review after the import?")} />
               );
+              if (turn.kind === "copilot") {
+                const open = turn.proposal === "open" && copilot.state;
+                return (
+                  <CopilotCard key={turn.id} entry={turn} def={copilot.state && turn.proposal === "open" ? copilot.state.after : s.def} onSelect={selectQuestion}
+                    onReviewChanges={() => { setShowInspector(true); copilot.setTab("changes"); }} onApply={applyCopilot} onCancel={copilot.cancel}
+                    onAnswer={(q) => { setText(`${q} — `); inputRef.current?.focus(); }}
+                    counts={open ? proposalCounts(copilot.state!.diff, copilot.state!.after) : null}
+                    canApply={!!open && !s.readOnly && !copilot.state!.diff.empty && (!copilot.state!.destructive.length || copilot.confirmed)}
+                    applyTitle={s.readOnly ? "Read-only" : copilot.state?.destructive.length && !copilot.confirmed ? "Some changes remove or rewrite existing content — confirm them in the Changes panel first" : "Apply as one undoable change"} />
+                );
+              }
               return <ReviewCard key={turn.id} text={turn.text} entry={turn.entry} onSelect={(qid) => selectKey(`question:${qid}` as ObjectKey)} onAnalyze={(sid) => void analyzeScript(turn.id, sid)} />;
             }
             return <TurnCard key={turn.id} turn={turn} def={s.def} onApply={() => apply(turn)} onCancel={() => cancel(turn)} onReview={() => review(turn)} onSelect={selectKey} readOnly={s.readOnly} />;
@@ -517,16 +618,33 @@ export function IntelligentView() {
         </div>
 
         {voiceError && <p className="iq-voice-error" data-testid="iq-voice-error" role="alert"><Icon name="warning" size={12} /> {voiceError}</p>}
+        {dropChoice && (
+          <div className="cp-drop-choice" data-testid="cp-drop-choice">
+            <span>{dropChoice.length === 1 ? `“${dropChoice[0].name}”` : `${dropChoice.length} files`} — use as:</span>
+            <button type="button" className="iq-btn primary" onClick={() => { void copilot.uploadDocs(dropChoice); setShowInspector(true); setDropChoice(null); }} data-testid="cp-drop-research">Research for the copilot</button>
+            <button type="button" className="iq-btn" onClick={() => { void startImport(dropChoice[0]); setDropChoice(null); }} disabled={dropChoice.length > 1} data-testid="cp-drop-import">A questionnaire to import</button>
+            <button type="button" className="iq-btn" onClick={() => setDropChoice(null)}>Cancel</button>
+          </div>
+        )}
         <form className="iq-ask" onSubmit={(e) => { e.preventDefault(); void ask(text); }}>
           <textarea
             ref={inputRef} className="iq-input" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={onKey}
-            placeholder={voice === "recording" ? "Listening… click the microphone again when you have finished." : voice === "transcribing" ? "Transcribing…" : open ? "Apply or cancel the proposal above, or describe another change…" : "Show Q5 only when Q3 = Yes and Q4 > 2 — or press the microphone and say it, in any language"}
+            placeholder={voice === "recording" ? "Listening… click the microphone again when you have finished." : voice === "transcribing" ? "Transcribing…" : copilot.proposal ? "Revise the proposal — “reduce this to 20 questions”, “remove demographics” — or apply it…" : open ? "Apply or cancel the proposal above, or describe another change…" : "Describe your research or a change — “Show Q5 only when Q3 = Yes”, “create a survey to test my hypothesis…” — or press the microphone"}
             rows={2} data-testid="iq-input" aria-label="Describe a change" disabled={busy || voice !== "idle"}
           />
           <input ref={fileRef} type="file" hidden onChange={(e) => onFiles(e.target.files)} data-testid="iq-file" accept=".qsf,.xml,.docx,.xlsx,.xls,.csv,.tsv,.pdf,.txt,.json,.doc,application/json,text/xml,application/xml,text/plain,text/csv,application/pdf" />
-          <button type="button" className="iq-attach" onClick={() => fileRef.current?.click()} disabled={busy || voice !== "idle"} data-testid="iq-attach" aria-label="Import a questionnaire file" title="Import a questionnaire — QSF, Decipher XML, Word, Excel, CSV, PDF or text. Read by its content; previewed before anything is created.">
-            <Icon name="paperclip" size={15} />
-          </button>
+          <input ref={researchRef} type="file" hidden multiple onChange={(e) => { void copilot.uploadDocs([...(e.target.files ?? [])]); setShowInspector(true); e.target.value = ""; }} data-testid="cp-research-file" accept=".pdf,.docx,.txt,.md,.csv,.xlsx" />
+          <span className="cp-attach-wrap">
+            <button type="button" className="iq-attach" onClick={() => setAttachMenu((v) => !v)} disabled={busy || voice !== "idle"} data-testid="iq-attach" aria-label="Attach files" aria-expanded={attachMenu} title="Attach research documents for the copilot, or import a questionnaire">
+              <Icon name="paperclip" size={15} />
+            </button>
+            {attachMenu && (
+              <span className="cp-attach-menu" role="menu" data-testid="cp-attach-menu">
+                <button type="button" role="menuitem" onClick={() => { setAttachMenu(false); researchRef.current?.click(); }} data-testid="iq-attach-research"><b>Research documents</b><span className="iqi-dim">papers, reports, briefs — the copilot reads them</span></button>
+                <button type="button" role="menuitem" onClick={() => { setAttachMenu(false); fileRef.current?.click(); }} data-testid="iq-attach-import"><b>Import a questionnaire</b><span className="iqi-dim">QSF, Decipher, Word, Excel, PDF → a Rescript survey</span></button>
+              </span>
+            )}
+          </span>
           <button
             type="button" className={`iq-mic${voice === "recording" ? " recording" : voice === "transcribing" ? " busy" : ""}`} data-testid="iq-mic" data-state={voice}
             onClick={toggleVoice} disabled={busy || voice === "transcribing" || sttAvailable === false} aria-pressed={voice === "recording"}
@@ -545,12 +663,10 @@ export function IntelligentView() {
       {showInspector && (
         <>
           <div className="iq-divider" onPointerDown={onDividerDown} onPointerMove={onDividerMove} onPointerUp={onDividerUp} role="separator" aria-orientation="vertical" />
-          <aside className="iq-inspector" data-testid="iq-inspector">
-            <div className="ar-pane-head"><span className="ar-pane-title">Inspector</span></div>
-            <div className="ar-inspector-body">
-              <Inspector primary={primary} index={index} status={status} onSelect={selectKey} />
-            </div>
-          </aside>
+          <div className="cp-panel-wrap" data-testid="iq-inspector">
+            <CopilotPanel copilot={copilot} def={s.def} onSelect={selectQuestion} onApply={applyCopilot} applyNote={applyNote} readOnly={s.readOnly}
+              inspector={<div className="ar-inspector-body"><Inspector primary={primary} index={index} status={status} onSelect={selectKey} /></div>} />
+          </div>
         </>
       )}
       {/* the command registry is what Apply and the chips share with the other modes */}
