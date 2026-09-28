@@ -276,3 +276,24 @@ test("a default value request reaches the UX guide, which offers set_default_val
   assert.match(COPILOT_UX_GUIDE, /\{"op":"set_default_value","target":"Q2","value":19\}/);
   assert.match(COPILOT_UX_GUIDE, /A script CANNOT fill in or change an answer/);
 });
+
+test("punching and variables are structure: a request that mixes them with the look is not look-only", () => {
+  for (const t of [
+    // one structural signal each
+    "Highlight Q4 and add a punch so Q6 is 1 when Q3 = 1",
+    "Style Q3 as cards and autopunch Q6 from Q3",
+    "Animate Q4 and fill the hidden variable RESP_TYPE from Q3",
+    "Make the options rounded and code Q6 as 2 when Q3 = 2",
+    "Highlight the Next button and put Yes-sayers in the Fans segment",
+  ]) {
+    const c = classifyRequest(t, 20, 0); assert.equal(c.ux, true, t); assert.equal(c.uxOnly, false, `structure allowed: ${t}`);
+  }
+  // look-only still means look-only
+  assert.equal(classifyRequest("Make Q3's options rounded cards with a hover glow", 20, 0).uxOnly, true);
+  assert.equal(classifyRequest("Set the default value of Q2 to 19", 20, 0).uxOnly, true, "a default value is look-and-behaviour");
+  assert.equal(classifyRequest("Set the colour to navy and the font to Georgia", 20, 0).uxOnly, true, "“set … to” on the look is still look-only");
+  // the look-only prompt tells the model where a structural change goes: this chat, as its own request
+  const p = copilotUserPrompt({ message: "rounded cards", outline: "o", surveyLanguage: "en", mode: "ux", ux: true, uxOnly: true });
+  assert.match(p, /ask for it as its own request in this same chat/);
+  assert.match(p, /there is no other mode or session to switch to/);
+});
