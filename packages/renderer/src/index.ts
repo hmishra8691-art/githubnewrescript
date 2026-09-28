@@ -38,4 +38,4 @@ export { speakSegments, useSpeaker } from "./voice/speaker";
 export { registerVoiceProvider, ttsProvider, sttProvider, browserTts, browserStt, chooseVoice } from "./voice/providers";
 export type { TtsProvider, SttProvider, VoiceInfo, SpeakOptions, SttResult, SttSession } from "./voice/providers";
 export { QuestionAudio } from "./QuestionAudio";
-export { brandingVars, widthModeClass } from "./branding";
+export { brandingVars, widthModeClass, brandingClasses, pageThemeVars, brandingResponsiveCss, backgroundLayers, safeCssValue, safeImageUrl, SHADOWS } from "./branding";

@@ -11,7 +11,11 @@ import { getQuestionByCodeOrVar } from "./state.js";
 import { runQualityCheck } from "./qualityCheck.js";
 import { questionOrder } from "./dependencies.js";
 import { applyUxAction, coerceUxAction, isUxOp, UX_ACTION_OPS, type UxAction } from "./uxActions.js";
-import { diffUx, withoutUx, type UxDiff } from "./ux.js";
+import { parsePunchExpression, formatPunchExpression } from "./autoPunch.js";
+import { authoringQuestionView } from "./carryforward.js";
+import { resolveOptionValue, describeOptions, type OptionList } from "./optionCodes.js";
+import { diffUx, type UxDiff } from "./ux.js";
+import { withoutPresentation, diffTheme } from "./theme.js";
 
 /**
  * THE COPILOT'S HANDS — a controlled action layer over the survey.
@@ -68,13 +72,16 @@ export type SurveyAction =
   | { op: "create_loop"; from: string; to: string; over?: string; items?: string[]; loopVar?: string; title?: string }
   | { op: "create_quota"; name: string; cells: { label: string; when: string; limit: number }[]; onFull?: "terminate" | "flag" }
   | { op: "set_research"; objective?: string; hypotheses?: string[]; population?: string; methodology?: string; constructs?: { name: string; role?: string; definition?: string; questions?: string[] }[]; analysis?: string[]; assumptions?: string[]; sources?: string[] }
+  /* criteria-based coding (punching): IF <when> THEN code <target> — on the target question's punch rules */
+  | { op: "add_punch"; target: string; when?: string; action?: "select" | "deselect" | "set_value" | "clear"; codes?: (string | number)[]; value?: string | number; expression?: string; label?: string; mode?: "if" | "else_if" | "else"; recompute?: "once" | "always" }
+  | { op: "remove_punches"; target: string; id?: string }
   /* the survey's look and behaviour — see uxActions.ts; they write def.ux and nothing else */
   | UxAction;
 
 export const SURVEY_ACTION_OPS = [
   "create_block", "rename_block", "delete_block", "create_question", "update_question", "delete_question", "move_question",
   "set_display_logic", "add_skip", "clear_skips", "set_validation", "page_break", "create_embedded", "create_calculation",
-  "create_randomizer", "create_branch", "create_loop", "create_quota", "set_research",
+  "create_randomizer", "create_branch", "create_loop", "create_quota", "set_research", "add_punch", "remove_punches",
   ...UX_ACTION_OPS,
 ] as const;
 
@@ -204,6 +211,18 @@ function coerceOne(item: unknown): SurveyAction | string {
     case "add_skip": { const from = str(o.from), when = str(o.when), to = str(o.to); return from && when && to ? { op, from, when, to } : "add_skip needs from, when and to"; }
     case "clear_skips": { const target = str(o.target); return target ? { op, target } : "clear_skips needs a target"; }
     case "set_validation": { const target = str(o.target); const rules = validations(o.rules); return target && rules ? { op, target, rules } : "set_validation needs a target and rules"; }
+    case "add_punch": case "punch": case "code_response": {
+      const expression = str(o.expression) ?? str(o.rule);
+      const target = str(o.target) ?? str(o.question);
+      if (!expression && !target) return "add_punch needs a target (the question to code) or an expression “IF … THEN SET Q = …”";
+      const action = ["select", "deselect", "set_value", "clear"].includes(String(o.action)) ? (o.action as "select" | "deselect" | "set_value" | "clear") : undefined;
+      const codes = Array.isArray(o.codes) ? o.codes.map((c) => strOrNum(c)).filter((c): c is string | number => c !== undefined).slice(0, 50) : o.code !== undefined && strOrNum(o.code) !== undefined ? [strOrNum(o.code)!] : undefined;
+      const value = strOrNum(o.value);
+      if (!expression && !str(o.when) && o.mode !== "else") return "add_punch needs when (the criteria) — e.g. “Q3 = 1”";
+      if (!expression && !codes?.length && value === undefined && action !== "clear") return "add_punch needs codes or a value to code the response as";
+      return { op: "add_punch", ...(target ? { target } : { target: "" }), ...(str(o.when) ? { when: str(o.when) } : {}), ...(action ? { action } : {}), ...(codes?.length ? { codes } : {}), ...(value !== undefined ? { value } : {}), ...(expression ? { expression } : {}), ...(str(o.label) ? { label: str(o.label)!.slice(0, 120) } : {}), ...(["if", "else_if", "else"].includes(String(o.mode)) ? { mode: o.mode as "if" } : {}), ...(o.recompute === "once" || o.recompute === "always" ? { recompute: o.recompute } : {}) };
+    }
+    case "remove_punches": case "clear_punches": { const target = str(o.target); return target ? { op: "remove_punches", target, ...(str(o.id) ? { id: str(o.id) } : {}) } : "remove_punches needs a target"; }
     case "page_break": { const after = str(o.after); return after ? { op, after, ...(bool(o.remove) ? { remove: true } : {}) } : "page_break needs after"; }
     case "create_embedded": {
       const name = str(o.name); if (!name) return "create_embedded needs a name";
@@ -310,7 +329,7 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
   }
   const after = parsed.data;
   const baseline = SurveyDefinitionSchema.safeParse(before);
-  const structureUnchanged = JSON.stringify(withoutUx(baseline.success ? baseline.data : before)) === JSON.stringify(withoutUx(after));
+  const structureUnchanged = JSON.stringify(withoutPresentation(baseline.success ? baseline.data : before)) === JSON.stringify(withoutPresentation(after));
   const applied = results.filter((r) => r.ok);
   const uxOnly = applied.length > 0 && applied.every((r) => isUxOp(r.op));
   const beforeIssues = new Set(runQualityCheck(before).areas.flatMap((x) => x.issues).filter((i) => i.level === "error").map((i) => i.message));
@@ -606,6 +625,60 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       } as never;
       return { description: `Research design: ${[a.objective ? "objective" : "", a.hypotheses?.length ? `${a.hypotheses.length} hypothes${a.hypotheses.length === 1 ? "is" : "es"}` : "", a.constructs?.length ? `${a.constructs.length} constructs` : ""].filter(Boolean).join(", ") || "updated"}`, touched: [] };
     }
+    case "add_punch": {
+      /*
+       * "IF Q3 = 1 THEN code SEGMENT as 2". The criteria go through the
+       * expression parser (option values as CODES, labels read as their
+       * codes); what the response is coded as goes through the same option
+       * resolution against the TARGET's options — a choice target takes an
+       * option code, a text / numeric / hidden value takes its value.
+       */
+      if (a.expression) {
+        const parsed = parsePunchExpression(def, withRefs(ctx, a.expression));
+        if (parsed.errors.length || !parsed.rules.length) fail(`the rule “${a.expression}” does not parse: ${parsed.errors[0]?.message ?? "empty"}`);
+        const touched: string[] = [];
+        for (const r of parsed.rules) {
+          const q = def.questions.find((x) => x.id === r.targetQuestionId)!;
+          q.punches = [...(q.punches ?? []), { ...r.rule, id: ctx.ids("punch"), ...(a.label ? { label: a.label } : {}), ...(a.mode ? { mode: a.mode } : {}), ...(a.recompute ? { recompute: a.recompute } : {}) }] as never;
+          touched.push(q.id);
+        }
+        const target = def.questions.find((x) => x.id === touched[0])!;
+        return { description: `Punch ${target.code}: ${formatPunchExpression(def, target, target.punches!.at(-1)! as never)}`, touched };
+      }
+      const q = resolveQuestion(ctx, a.target);
+      const when = a.mode === "else" && !a.when ? undefined : parseCondition(def, withRefs(ctx, a.when ?? ""));
+      const view = authoringQuestionView(q, def);
+      const choice = view.options.length > 0;
+      let action = a.action ?? (choice ? "select" : "set_value");
+      let codes: (string | number)[] = [];
+      if (action !== "clear") {
+        const wanted = a.codes?.length ? a.codes : a.value !== undefined ? [a.value] : [];
+        if (choice) {
+          for (const w of wanted) {
+            const r = resolveOptionValue(view.options as OptionList, w);
+            if (r.kind === "none") fail(`${q.code} has no option “${w}” to code the response as — its options are ${describeOptions(view.options as OptionList)}`);
+            codes.push((r as { code: string | number }).code);
+          }
+          if (action === "set_value") action = "select";
+        } else {
+          if (action === "select" || action === "deselect") fail(`${q.code} has no options — code it with action set_value and a value`);
+          codes = wanted.slice(0, 1);
+        }
+        if (!codes.length) fail("nothing to code the response as");
+      }
+      const rule = { id: ctx.ids("punch"), ...(a.label ? { label: a.label } : {}), source: { kind: "codes", codes }, action, mapping: [], ignoreUnmatched: true, recompute: a.recompute ?? "always", ...(when ? { when } : {}), ...(a.mode ? { mode: a.mode } : {}) };
+      q.punches = [...(q.punches ?? []), rule] as never;
+      return { description: `Punch ${q.code}: ${formatPunchExpression(def, q, rule as never)}`, touched: [q.id] };
+    }
+    case "remove_punches": {
+      const q = resolveQuestion(ctx, a.target);
+      const had = q.punches ?? [];
+      const keep = a.id ? had.filter((r) => r.id !== a.id && (r.label ?? "") !== a.id) : [];
+      if (had.length === keep.length) fail(a.id ? `${q.code} has no punch rule “${a.id}”` : `${q.code} has no punch rules`);
+      q.punches = keep as never;
+      const n = had.length - keep.length;
+      return { description: `Remove ${n} punch rule${n === 1 ? "" : "s"} from ${q.code}`, destructive: `Removes ${n} punch rule${n === 1 ? "" : "s"} from ${q.code}`, touched: [q.id] };
+    }
     default: {
       // the look and behaviour: def.ux only, through the UX gate
       const r = applyUxAction(def, a, { lookups: { question: (x) => tryQuestion(ctx, x), block: (x) => tryBlock(ctx, x) }, ids: ctx.ids, now: ctx.now, refs: ctx.uxRefs });
@@ -889,6 +962,8 @@ export function describeAction(a: SurveyAction): string {
     case "create_loop": return `Loop ${a.from}${a.to !== a.from ? `–${a.to}` : ""}`;
     case "create_quota": return `Create quota ${a.name}`;
     case "set_research": return "Record the research design";
+    case "add_punch": return a.expression ? `Punch rule ${a.expression}` : `Punch ${a.target} when ${a.when ?? "otherwise"}`;
+    case "remove_punches": return `Remove the punch rules of ${a.target}`;
     case "create_style": return `Style “${a.label}”`;
     case "update_style": return `Change style ${a.id}`;
     case "remove_style": return `Remove style ${a.id}`;
@@ -898,6 +973,8 @@ export function describeAction(a: SurveyAction): string {
     case "create_behavior": return `Behaviour “${a.label}”`;
     case "update_behavior": return `Change behaviour ${a.id}`;
     case "remove_behavior": return `Remove behaviour ${a.id}`;
+    case "set_theme": return a.label ? `Theme “${a.label}”` : "Change the theme";
+    case "set_custom_html": return a.html === null ? `Remove the custom HTML of ${a.target}` : `Custom HTML on ${a.target}`;
   }
 }
 
@@ -921,6 +998,8 @@ export interface SurveyDiff {
   researchChanged: boolean;
   /** styles, animations and behaviours added, changed, removed */
   ux: UxDiff;
+  /** the theme's changed settings, field by field */
+  theme: string[];
   /** "5 blocks, 28 questions, 2 skip conditions …" — the review line for a proposal */
   summary: string[];
   empty: boolean;
@@ -954,6 +1033,7 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
     push("skip rules", String(p.skipLogic?.length ?? 0), String(q.skipLogic?.length ?? 0));
     push("validation", (p.validation ?? []).map((v) => v.kind).join(", "), (q.validation ?? []).map((v) => v.kind).join(", "));
     push("randomized", p.randomization?.enabled ? "yes" : "no", q.randomization?.enabled ? "yes" : "no");
+    push("punch rules", punchText(before, p), punchText(after, q));
     push("block", blockOf(before, q.id)?.title ?? "", blockOf(after, q.id)?.title ?? "");
     if (!p.displayLogic && q.displayLogic) dAdded++; else if (p.displayLogic && !q.displayLogic) dRemoved++; else if (p.displayLogic && q.displayLogic && cond(before, p.displayLogic) !== cond(after, q.displayLogic)) dChanged++;
     const ds = (q.skipLogic?.length ?? 0) - (p.skipLogic?.length ?? 0);
@@ -978,6 +1058,7 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
   const pages = { before: listPages(before.flow as unknown[]).length, after: listPages(after.flow as unknown[]).length };
   const researchChanged = JSON.stringify(before.research ?? null) !== JSON.stringify(after.research ?? null);
   const ux = diffUx(before, after);
+  const theme = diffTheme(before.branding, after.branding);
   const randomizedAdded = after.questions.filter((q) => q.randomization?.enabled && !bq.get(q.id)?.randomization?.enabled).length;
   const scales = new Map<number, number>();
   for (const q of questionsAdded.map((x) => aq.get(x.id)!)) if (/single_select|matrix/.test(q.type) && q.options?.length && q.options.every((o) => /^\d+$/.test(String(o.code))) && isScale(q)) scales.set(q.options.length, (scales.get(q.options.length) ?? 0) + 1);
@@ -1005,12 +1086,17 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
     dRemoved ? `Remove ${n(dRemoved, "display condition")}` : "",
     sRemoved ? `Remove ${n(sRemoved, "skip condition")}` : "",
     researchChanged ? "Record the research design (objective, hypotheses, constructs)" : "",
+    ...(theme.length ? [`Theme: ${theme.slice(0, 6).join("; ")}${theme.length > 6 ? ` and ${theme.length - 6} more` : ""}`] : []),
     ...ux.added.map((x) => `Add ${x.kind} “${x.label}” on ${x.target}`),
     ...ux.changed.map((x) => `Change ${x.kind} “${x.label}” on ${x.target}`),
     ...ux.removed.map((x) => `Remove ${x.kind} “${x.label}” (${x.target})`),
   ].filter(Boolean);
   const empty = !summary.length;
-  return { blocksAdded, blocksRemoved, blocksRenamed, questionsAdded, questionsRemoved, questionsModified, pages, displayLogic: { added: dAdded, changed: dChanged, removed: dRemoved }, skips: { added: sAdded, removed: sRemoved }, randomizers, embeddedAdded, calculationsAdded, quotasAdded, researchChanged, ux, summary, empty };
+  return { blocksAdded, blocksRemoved, blocksRenamed, questionsAdded, questionsRemoved, questionsModified, pages, displayLogic: { added: dAdded, changed: dChanged, removed: dRemoved }, skips: { added: sAdded, removed: sRemoved }, randomizers, embeddedAdded, calculationsAdded, quotasAdded, researchChanged, ux, theme, summary, empty };
+}
+
+function punchText(def: SurveyDefinition, q: Question): string {
+  return (q.punches ?? []).map((r) => { try { return formatPunchExpression(def, q, r as never); } catch { return r.id; } }).join(" · ");
 }
 
 function isScale(q: Question): boolean {

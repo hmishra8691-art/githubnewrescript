@@ -1,6 +1,7 @@
 import type { SurveyDefinition, UxAnimation, UxBehavior, UxEffect, UxRule, UxStyle, UxTarget } from "@rescript/schema";
 import { UX_ANIMATION_TRIGGERS, UX_EFFECTS, UX_EVENTS, UX_MEDIA, UX_PRESETS, UX_STATES } from "@rescript/schema";
 import { describeUxTarget, resolveUxTarget, uxToken, uxDeclarations, validateUxItem, type UxLookups } from "./ux.js";
+import { applyThemePatch } from "./theme.js";
 
 /**
  * THE UX ACTIONS — how the copilot changes the survey's look and behaviour,
@@ -27,6 +28,8 @@ export const UX_ACTION_OPS = [
   "create_style", "update_style", "remove_style",
   "create_animation", "update_animation", "remove_animation",
   "create_behavior", "update_behavior", "remove_behavior",
+  /* the survey's theme (its branding — the Branding panel's own settings) and a question's decorative HTML */
+  "set_theme", "set_custom_html",
 ] as const;
 /** accepted from the model and turned into the ops above */
 export const UX_ACTION_ALIASES = ["attach_behavior_to_question", "attach_behavior_to_option", "attach_behavior_to_block", "attach_behavior_to_page", "create_responsive_rule", "create_behaviour", "update_behaviour", "remove_behaviour"] as const;
@@ -44,7 +47,9 @@ export type UxAction =
   | { op: "remove_animation"; id: string }
   | ({ op: "create_behavior"; ref?: string; label: string; target: unknown } & BehFields)
   | ({ op: "update_behavior"; id: string; label?: string; target?: unknown } & BehFields)
-  | { op: "remove_behavior"; id: string };
+  | { op: "remove_behavior"; id: string }
+  | { op: "set_theme"; patch: Record<string, unknown>; label?: string }
+  | { op: "set_custom_html"; target: string; html: string | null };
 
 export const isUxOp = (op: string) => (UX_ACTION_OPS as readonly string[]).includes(op);
 
@@ -156,6 +161,20 @@ export function coerceUxAction(op: string, o: Record<string, unknown>): UxAction
       if (!id) return "update_behavior needs the behaviour's id";
       return { op: "update_behavior", id, ...behFields(o), ...(target(o.newTarget) ? { target: target(o.newTarget) } : {}), ...(str(o.newLabel) ? { label: str(o.newLabel) } : {}) };
     }
+    case "set_theme": case "update_theme": case "set_branding": {
+      const patch: Record<string, unknown> = {};
+      for (const k of ["colors", "typography", "layout", "buttons", "background", "appearance", "responsive", "logoUrl", "logoPosition", "headerHtml", "footerHtml"]) if (k in o) patch[k] = o[k];
+      if (o.theme && typeof o.theme === "object") Object.assign(patch, o.theme as object);
+      if (!Object.keys(patch).length) return "set_theme needs theme settings (colors, typography, layout, buttons, background, appearance, responsive, logoUrl, headerHtml, footerHtml)";
+      return { op: "set_theme", patch, ...(label ? { label: label.slice(0, 120) } : {}) };
+    }
+    case "set_custom_html": case "set_question_html": {
+      const target = str(o.target) ?? str(o.question);
+      if (!target) return "set_custom_html needs a target question";
+      if (o.html === null) return { op: "set_custom_html", target, html: null };
+      if (typeof o.html !== "string") return "set_custom_html needs html (or null to remove it)";
+      return { op: "set_custom_html", target, html: o.html.slice(0, 20000) };
+    }
     default: return null;
   }
 }
@@ -232,6 +251,24 @@ const clampAnim = (a: UxAnimation): UxAnimation => ({
 });
 
 export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): UxApplied {
+  if (a.op === "set_theme") {
+    const r = applyThemePatch(def.branding, a.patch);
+    if (!r.changes.length) fail(r.errors.length ? r.errors.join("; ") : "the theme is already like that");
+    def.branding = r.branding;
+    return { description: `Theme${a.label ? ` “${a.label}”` : ""}: ${r.changes.slice(0, 8).join("; ")}${r.changes.length > 8 ? ` and ${r.changes.length - 8} more` : ""}`, warnings: r.errors.map((e) => `Theme: ${e} — left as it was`), touched: [] };
+  }
+  if (a.op === "set_custom_html") {
+    const q = env.lookups.question(a.target) ?? fail(`there is no question “${a.target}”`);
+    if (a.html === null) {
+      if (!q.customHtml) fail(`${q.code} has no custom HTML`);
+      delete (q as { customHtml?: string }).customHtml;
+      return { description: `Remove ${q.code}'s custom HTML`, destructive: `Removes ${q.code}'s custom HTML`, warnings: [], touched: [q.id] };
+    }
+    if (/<\s*(script|iframe|object|embed|style|link|meta)\b|\bon[a-z]+\s*=|javascript:/i.test(a.html)) fail("custom HTML may not contain scripts, frames, styles, event handlers or javascript: links — behaviour goes in a behaviour, styling in a style");
+    const had = !!q.customHtml;
+    q.customHtml = a.html;
+    return { description: `${had ? "Change" : "Add"} ${q.code}'s custom HTML (${a.html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 60) || "markup"})`, ...(had ? { destructive: `Replaces ${q.code}'s custom HTML` } : {}), warnings: [], touched: [q.id] };
+  }
   const ux = ensureUx(def);
   switch (a.op) {
     case "create_style": {

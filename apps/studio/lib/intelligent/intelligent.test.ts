@@ -118,7 +118,8 @@ test("a display proposal carries the parsed condition three ways and validates b
   const p = planProposal(def, parseIntent("show Q5 only when Q3 is Yes and Q1 is at least 18"), "grammar", deps(def));
   assert.deepEqual(p.errors, []);
   assert.equal(p.summary, "Show Q5 only when (Q3 is “Yes” AND Q1 is at least “18”).");
-  assert.equal(p.expression?.canonical, "Q3 = Yes AND Q1 >= 18");
+  // "Yes" is option 1 of Q3: stored and shown as its code, summarised by its label
+  assert.equal(p.expression?.canonical, "Q3 = 1 AND Q1 >= 18");
   assert.equal(p.changes.length, 1);
   assert.equal(p.descriptions[0], "Show Q5 only when (Q3 is “Yes” AND Q1 is at least “18”).");
   assert.equal(p.targetKey, "question:q_end");
@@ -223,7 +224,7 @@ test("surveyContext lists questions in flow order with options and logic, bounde
   assert.match(c, /^Survey: Intelligent \(5 questions\)/);
   assert.match(c, /## Page 1: Screener \[p1\]/);
   assert.match(c, /Q3 \(CAR\) · single select · "Do you own a car\?" · options: 1=Yes, 2=No · ← selected/);
-  assert.match(c, /Q4 \(INCOME\) · numeric · "Household income" · shown when Q3 is “Yes”/);
+  assert.match(c, /Q4 \(INCOME\) · numeric · "Household income" · shown when Q3 = 1/);
   assert.ok(c.indexOf("Q1 (AGE)") < c.indexOf("Q3 (CAR)") && c.indexOf("Q3 (CAR)") < c.indexOf("Q5 (E)"));
   const big = SurveyDefinition.parse({
     meta: { id: "b", code: "B", title: "Big" },
@@ -393,8 +394,8 @@ test("grammar: page breaks, embedded variables, hidden variables, loops, screeni
   assert.deepEqual(parseIntent("why is this respondent being screened out?"), { kind: "screening" });
   // the sentences the brief spells out
   assert.deepEqual(parseIntent("Show Q10 only when Q5 option 3 is selected."), { kind: "display", target: "Q10", action: "show", expression: "Q5 option 3 is selected" });
-  assert.equal(normaliseExpression("Q5 option 3 is selected"), "Q5 = 3");
-  assert.equal(normaliseExpression("Q4 is option 2"), "Q4 = 2");
+  assert.equal(normaliseExpression("Q5 option 3 is selected"), 'Q5 = "option 3"');
+  assert.equal(normaliseExpression("Q4 is option 2"), 'Q4 = "option 2"');
   assert.deepEqual(parseIntent("Make this question mandatory"), { kind: "required", target: "this question", required: true });
   assert.deepEqual(parseIntent("If Q5 is option 2, skip Q6 and Q7 and go directly to Q8"), { kind: "skip", to: "Q6 and Q7 and go directly to Q8", expression: "Q5 is option 2" });
   assert.deepEqual(parseIntent("Show this block only for respondents who selected option 3"), { kind: "display", target: "this block", action: "show", expression: "selected option 3" });
@@ -546,4 +547,32 @@ test("diagnose: the answer names every reason, certain ones first-class, and nev
   assert.match(p.summary, /Q5 can never be shown/);
   assert.ok(p.answer!.some((l) => /Q3 always skips to the end, past Q5/.test(l.text) && l.key === "question:q_car"), "the line links to the question that does it");
   assert.equal(planProposal(def, parseIntent("why is Q99 not showing"), "grammar", deps(def)).errors.length, 1);
+});
+
+test("“option N” is the option with code N, else the Nth option — never a code that does not exist", () => {
+  const def = survey();
+  assert.equal(normaliseExpression("Q5 option 3 is selected"), 'Q5 = "option 3"');
+  assert.equal(normaliseExpression("Q3 is option 2"), 'Q3 = "option 2"');
+  // numeric codes: option 2 is code 2
+  const a = planProposal(def, parseIntent("show Q5 only when Q3 option 2 is selected"), "grammar", deps(def));
+  assert.deepEqual(a.errors, []);
+  assert.equal(a.expression?.canonical, "Q3 = 2");
+  // word codes (A, B): option 2 is the second option, B
+  const b = planProposal(def, parseIntent("show Q5 only when Q2 option 2 is selected"), "grammar", deps(def));
+  assert.deepEqual(b.errors, []);
+  assert.equal(b.expression?.canonical, "Q2 = B");
+  // there is no third option
+  const c = planProposal(def, parseIntent("show Q5 only when Q2 option 3 is selected"), "grammar", deps(def));
+  assert.ok(c.errors.some((e) => /no option/.test(e)), c.errors.join("\n"));
+});
+
+test("the model reads option labels as text — never markdown underscores or entities — beside their codes", () => {
+  const def = survey();
+  const car = def.questions.find((q) => q.id === "q_car")!;
+  car.options[0].label = "__Yes__"; car.options[1].label = "No &amp; never";
+  const ctx = surveyContext(def, {});
+  assert.match(ctx, /1=Yes, 2=No & never/);
+  assert.ok(!ctx.includes("__Yes__"));
+  // "option 2 of Q3 is selected" reads the same way round
+  assert.equal(normaliseExpression("option 2 of Q3 is selected"), 'Q3 = "option 2"');
 });

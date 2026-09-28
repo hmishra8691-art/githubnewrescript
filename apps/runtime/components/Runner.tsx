@@ -68,7 +68,7 @@ import {
 import { QuestionRenderer, UxLayer } from "@rescript/renderer";
 import { Inspector } from "./Inspector";
 import { RunnerBoundary, FatalCard, fatalOf, type FatalDetail } from "./RunnerBoundary";
-import { MediaEmbed, SafeImage, VoiceConsole, QuestionAudio, brandingVars, widthModeClass } from "@rescript/renderer";
+import { MediaEmbed, SafeImage, VoiceConsole, QuestionAudio, brandingVars, widthModeClass, brandingClasses, pageThemeVars, brandingResponsiveCss } from "@rescript/renderer";
 import {
   readResume, writeResume, clearResume, resumeLink,
   cachePending, readPending, clearPending, RESUME_MAX_AGE_DAYS,
@@ -669,6 +669,20 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
   }, [mode, build, sessionBoot?.surveyDbId]);
 
   const toolbarRef = React.useRef<HTMLDivElement | null>(null);
+  /*
+   * THE PAGE WEARS THE THEME. The body reads --rs-bg / --rs-font /
+   * --rs-base-size from the root, and the survey set them only on its
+   * shell — so a survey's background colour, font and size never reached
+   * the page around the cards. They (and a background image) are put on
+   * <html> for as long as this survey is on screen.
+   */
+  const pageVarsJson = JSON.stringify(pageThemeVars(def.branding));
+  React.useEffect(() => {
+    const root = document.documentElement;
+    const vars = JSON.parse(pageVarsJson) as Record<string, string>;
+    for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
+    return () => { for (const k of Object.keys(vars)) root.style.removeProperty(k); };
+  }, [pageVarsJson]);
   React.useEffect(() => {
     const el = toolbarRef.current;
     const root = document.documentElement;
@@ -1711,8 +1725,10 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
   if (hasUx && pageStep) for (const q of shownQuestions) uxValues[q.id] = state.answers[answerKey(q.id, pageStep.loop ?? null)];
   const uxAll: Record<string, unknown> | undefined = hasUx && def.ux!.behaviors.some((bh) => bh.script) ? Object.fromEntries(def.questions.map((q) => [q.id, state.answers[answerKey(q.id, null)]])) : undefined;
   const shell = (
-    <div ref={shellRef} className={`rs-shell rs-${b.layout.cardStyle} ${widthModeClass(b)}`} style={brandingVars(b) as React.CSSProperties} dir={dir} lang={locale} data-language={lang}
-      {...(hasUx ? { "data-rs-ux": def.meta.id, "data-rs-block": uxBlockId, "data-rs-page": pageStep?.pageId } : {})}>
+    <div ref={shellRef} className={`rs-shell rs-${b.layout.cardStyle} ${widthModeClass(b)} ${brandingClasses(b, { pageBackground: true })}`} style={brandingVars(b) as React.CSSProperties} dir={dir} lang={locale} data-language={lang}
+      {...(hasUx ? { "data-rs-ux": def.meta.id, "data-rs-block": uxBlockId, "data-rs-page": pageStep?.pageId } : {})}
+      {...(b.responsive ? { "data-rs-theme": def.meta.id } : {})}>
+      {b.responsive && <style data-rs-theme-css="" dangerouslySetInnerHTML={{ __html: brandingResponsiveCss(b, `.rs-shell[data-rs-theme="${def.meta.id.replace(/["\\]/g, "")}"]`) }} />}
       {hasUx && !ended && (
         <UxLayer def={def} rootRef={shellRef} values={uxValues} allValues={uxAll}
           shown={pageStep ? shownQuestions.map((q) => q.id) : []}

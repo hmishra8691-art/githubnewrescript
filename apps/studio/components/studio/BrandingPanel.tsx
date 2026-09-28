@@ -4,7 +4,10 @@ import { useStudio } from "./store";
 import { THEME_PRESETS } from "@/lib/defaults";
 import { Branding, SurveyDefinition } from "@rescript/schema";
 import { createResponseState, start, setAnswer } from "@rescript/engine";
-import { QuestionRenderer, brandingVars, widthModeClass } from "@rescript/renderer";
+import { QuestionRenderer, brandingVars, widthModeClass, brandingClasses, brandingResponsiveCss } from "@rescript/renderer";
+import { TypographyMore, BackgroundSection, AppearanceSection, ResponsiveSection, ThemeAssistant } from "./BrandingAdvanced";
+import { UxItemsEditor } from "./UxItemsEditor";
+import { themePreviewStore } from "@/lib/themePreview";
 import { AiConversationSection } from "./AiConversationPanel";
 import { MediaUrlInput } from "./MediaUrlInput";
 import { MediaDisplayControls } from "./MediaDisplayControls";
@@ -193,8 +196,12 @@ const PREVIEW_ERROR = { questionId: "pv2", message: "Please enter a value greate
  * fixed preview survey, same live read of `branding`, same `data-testid`s —
  * only where it is mounted did.
  */
-export function ThemeLivePreview({ branding, logoUrl }: { branding: Branding; logoUrl?: string }) {
+export function ThemeLivePreview({ branding: saved, logoUrl }: { branding: Branding; logoUrl?: string }) {
   const s = useStudio();
+  // a theme on approval (the theme assistant's proposal) shows here until it is applied or cancelled
+  const proposed = React.useSyncExternalStore(themePreviewStore.subscribe, themePreviewStore.get, () => null);
+  const branding = proposed ?? saved;
+  const [device, setDevice] = React.useState<"desktop" | "tablet" | "mobile">("desktop");
   const [answers, setAnswers] = React.useState<Record<string, unknown>>({ pv1: "2" });
   const state = React.useMemo(() => {
     const st = createResponseState(PREVIEW_DEF);
@@ -204,12 +211,19 @@ export function ThemeLivePreview({ branding, logoUrl }: { branding: Branding; lo
   }, [answers]);
 
   const vars = brandingVars(branding) as React.CSSProperties;
-  const cls = `rs-shell rs-${branding.layout.cardStyle} ${widthModeClass(branding)}`;
+  const cls = `rs-shell rs-${branding.layout.cardStyle} ${widthModeClass(branding)} ${brandingClasses(branding)}`;
 
   return (
-    <div className="theme-preview" data-testid="theme-live-preview">
-      <div className="theme-preview-frame">
-        <div className={cls} style={{ ...vars, padding: "16px 16px 24px" }}>
+    <div className="theme-preview" data-testid="theme-live-preview" data-device={device} data-proposed={proposed ? "1" : undefined}>
+      <div className="row" style={{ gap: 4, marginBottom: 6 }} role="group" aria-label="Preview device">
+        {(["desktop", "tablet", "mobile"] as const).map((d) => (
+          <button key={d} type="button" className={`btn small${device === d ? " primary" : ""}`} onClick={() => setDevice(d)} data-testid={`theme-preview-${d}`}>{d === "mobile" ? "phone" : d}</button>
+        ))}
+        {proposed && <span className="muted" style={{ fontSize: 11.5, alignSelf: "center" }} data-testid="theme-preview-proposed">showing the proposed theme</span>}
+      </div>
+      {branding.responsive && <style dangerouslySetInnerHTML={{ __html: brandingResponsiveCss(branding, '[data-testid="theme-preview-shell"]') }} />}
+      <div className={`theme-preview-frame${device !== "desktop" ? ` rs-viewport ${device}` : ""}`} style={device === "mobile" ? { maxWidth: 390, margin: "0 auto" } : device === "tablet" ? { maxWidth: 768, margin: "0 auto" } : undefined}>
+        <div className={cls} style={{ ...vars, padding: "16px 16px 24px" }} data-testid="theme-preview-shell">
           {logoUrl && (
             <div className={`rs-header ${branding.logoPosition}`}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -470,6 +484,14 @@ export function BrandingPanel() {
           comment above. It now sits in the right-hand panel (Studio.tsx's
           RightPanel), beside these controls instead of above them. */}
 
+      {/*
+        * THE THEME ASSISTANT — Intelligent mode's theme skill, here. What it
+        * proposes is previewed beside the panel and applied INTO the settings
+        * below, which is where it can then be changed by hand.
+        */}
+      <h3 className="sec">Design with AI</h3>
+      <ThemeAssistant />
+
       <h3 className="sec">Identity</h3>
       <div className="row" style={{ flexWrap: "wrap", alignItems: "flex-start" }}>
         <div className="grow">
@@ -575,6 +597,18 @@ export function BrandingPanel() {
           </select></label>
       </div>
 
+      <TypographyMore b={b} set={set} />
+
+      <h3 className="sec">Background</h3>
+      <BackgroundSection b={b} set={set} />
+
+      <h3 className="sec">Cards, options, radio buttons &amp; inputs</h3>
+      <AppearanceSection b={b} set={set} />
+
+      <h3 className="sec">Tablet &amp; phone</h3>
+      <p className="muted" style={{ fontSize: 12, margin: "0 0 6px" }}>Sizes that change on smaller screens. Empty means the same as on a desktop.</p>
+      <ResponsiveSection b={b} set={set} />
+
       {/*
         * THE AI CONVERSATIONAL SURVEY — text / voice / both; standard,
         * conversational or adaptive; the voice, the interviewer, the
@@ -604,6 +638,9 @@ export function BrandingPanel() {
             onChange={(e) => set((x) => { x.buttons.showBack = e.target.checked; })} /> show back button
         </label>
       </div>
+
+      <h3 className="sec">Styles, animations &amp; scripts (survey-wide)</h3>
+      <UxItemsEditor scope={{ kind: "survey" }} intro="For the whole survey, its buttons, progress bar and navigation — scoped to this survey. Created here or by Intelligent mode; the same settings." />
 
       <h3 className="sec">Header / footer / custom code</h3>
       <label className="f"><span>Header HTML</span>

@@ -13,6 +13,7 @@ import { MaskingBuilder, PunchRules } from "./MaskingBuilder";
 import { QualitySettings } from "./QualitySettings";
 import { OptionGroupsEditor } from "./OptionGroupsEditor";
 import { CollapsibleSection } from "./CollapsibleSection";
+import { UxItemsEditor, uxItemsFor } from "./UxItemsEditor";
 import { InlineRichText, RichTextEditor } from "./RichTextEditor";
 import { AiQuestionSection } from "./AiQuestionSection";
 
@@ -1361,6 +1362,18 @@ export function PropertiesPanel() {
         <input className="input mono" value={String(q.settings.defaultValue ?? "")}
           placeholder='static, or {{Q1}} piped'
           onChange={(e) => patch({ settings: { ...q.settings, defaultValue: e.target.value || undefined } })} /></label>
+      </CollapsibleSection>
+      )}
+
+      {/*
+        * THE SAME STYLES, ANIMATIONS AND SCRIPTS the Intelligent copilot
+        * creates (def.ux) — read and edited here, in place, through the same
+        * gate; nothing here is a second copy.
+        */}
+      {showSec("Styles, animations & scripts") && (
+      <CollapsibleSection id="ux" title="Styles, animations & scripts" active={uxItemsFor(s.def, { kind: "question", questionId: q.id }).length > 0}>
+        <UxItemsEditor scope={{ kind: "question", questionId: q.id }}
+          intro="Scoped to this question (and its options). Created here or by Intelligent mode — the same settings, applied in preview and the live survey." />
       </CollapsibleSection>
       )}
 

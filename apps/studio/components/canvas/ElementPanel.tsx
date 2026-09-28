@@ -1,4 +1,5 @@
 "use client";
+import { UxItemsEditor } from "../studio/UxItemsEditor";
 import React from "react";
 import type { Option, Question, QuestionColumn, QuestionRow, ValidationRule } from "@rescript/schema";
 import { resolveVariant } from "@rescript/schema";
@@ -157,6 +158,10 @@ function OptionProps({ q, code, ann, patch, onSelect }: {
         visibleIf={o.visibleIf}
         onChange={(p) => patch(code, p as Partial<Option>)}
       />
+
+      <h3 className="sec">Styles, animations &amp; scripts</h3>
+      <UxItemsEditor scope={{ kind: "option", questionId: q.id, code: String(o.code) }}
+        intro={`For option ${o.code} (and anything set for all of ${q.code}'s options).`} />
     </>
   );
 }
@@ -453,6 +458,9 @@ function QuestionProps({ q }: { q: Question }) {
           </select>
         </div>
       )}
+
+      <h3 className="sec">Styles, animations &amp; scripts</h3>
+      <UxItemsEditor scope={{ kind: "question", questionId: q.id }} />
 
       <div className="lc-more">
         <button className="btn small" data-testid="open-full-properties"

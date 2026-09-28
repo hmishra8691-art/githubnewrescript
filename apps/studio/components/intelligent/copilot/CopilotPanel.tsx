@@ -94,7 +94,7 @@ function ChangesTab({ copilot, onSelect, onApply, applyNote, readOnly }: { copil
           <label className="cp-confirm"><input type="checkbox" checked={copilot.confirmed} onChange={(e) => copilot.setConfirmed(e.target.checked)} data-testid="cp-confirm" /> I understand — apply these {st.destructive.length} change{st.destructive.length === 1 ? "" : "s"} too (undoable)</label>
         </div>
       )}
-      {!st.diff.ux.empty && <UxChanges st={st} base={p.base} />}
+      {(!st.diff.ux.empty || st.diff.theme.length > 0) && <UxChanges st={st} base={p.base} />}
       {st.warnings.length > 0 && (
         <div className="cp-block warn" data-testid="cp-new-problems">
           <div className="iq-label">The result would have {st.warnings.length} new problem{st.warnings.length === 1 ? "" : "s"}</div>
@@ -172,6 +172,12 @@ function UxChanges({ st, base }: { st: ProposalState; base: SurveyDefinition }) 
         {st.uxNotes.map((n, i) => <li key={i}>{n}</li>)}
         {st.diff.ux.removed.map((x) => <li key={x.id} className="cp-from">Remove {x.kind} “{x.label}” ({x.target})</li>)}
       </ul>
+      {st.diff.theme.length > 0 && (
+        <div data-testid="cp-theme-changes">
+          <div className="iq-label">Theme — saved in Branding, adjustable there by hand</div>
+          <ul className="cp-ux-list">{st.diff.theme.map((l, i) => <li key={i}>{l}</li>)}</ul>
+        </div>
+      )}
       <UxPreview after={st.after} before={base} scope={scope} />
       {code.length > 0 && (
         <details className="cp-ux-code" data-testid="cp-ux-code">

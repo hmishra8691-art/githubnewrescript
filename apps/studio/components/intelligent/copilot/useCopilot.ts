@@ -6,6 +6,7 @@ import { useStudio, uid } from "../../studio/store";
 import type { CopilotReply, CopilotFinding } from "../../../lib/copilot/prompt";
 import { evaluateProposal, rebaseProposal, sameSurvey, changeRecord, memoryFrom, type Proposal, type ProposalState, type ChangeRecord } from "../../../lib/copilot/client";
 import type { HeardTranscript } from "../../../lib/intelligent/voice";
+import { prepareThemeImage, type ThemeImage } from "../../../lib/copilot/themeImage";
 
 /**
  * THE COPILOT'S STATE AND ITS REQUESTS, for IntelligentView.
@@ -69,6 +70,13 @@ export function useCopilot(opts: {
   const setAvailable = (v: boolean) => { copilotKnown = v; setAvailableState(v); };
   const [busy, setBusy] = React.useState(false);
   const fakeRef = React.useRef<unknown[]>([]);
+  /* an image to build the theme from, sent with the next request */
+  const [themeImage, setThemeImage] = React.useState<ThemeImage | null>(null);
+  const [themeImageError, setThemeImageError] = React.useState<string | null>(null);
+  const attachThemeImage = React.useCallback(async (file: File) => {
+    setThemeImageError(null);
+    try { setThemeImage(await prepareThemeImage(file, s.surveyDbId)); } catch (e) { setThemeImageError((e as Error).message); }
+  }, [s.surveyDbId]);
 
   // the browser suites stand in for the model through this hook, as the voice suite does for the microphone
   React.useEffect(() => {
@@ -95,8 +103,9 @@ export function useCopilot(opts: {
       const fake = fakeRef.current.shift();
       const r = await fetch("/api/copilot/turn", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ surveyId: s.surveyDbId, message: text, definition: working, selectedId: opts.selectedId, memory: memoryFrom(copilotTurns.map((t) => ({ user: t.text, reply: t.reply }))), ...(mode ? { mode } : {}), ...(fake ? { fake } : {}) }),
+        body: JSON.stringify({ surveyId: s.surveyDbId, message: text, definition: working, selectedId: opts.selectedId, memory: memoryFrom(copilotTurns.map((t) => ({ user: t.text, reply: t.reply }))), ...(mode ? { mode } : {}), ...(fake ? { fake } : {}), ...(themeImage ? { themeImage } : {}) }),
       });
+      if (themeImage) setThemeImage(null);
       if (r.status === 501) { setAvailable(false); opts.patch(id, { status: "failed", error: "No language model is configured on this Studio." }); return "unavailable"; }
       const d = await r.json().catch(() => null) as Record<string, unknown> | null;
       if (!r.ok || !d || d.ok === false) { opts.patch(id, { status: "failed", error: String(d?.error ?? `The copilot could not answer (${r.status}).`) }); return "handled"; }
@@ -124,7 +133,7 @@ export function useCopilot(opts: {
     } finally {
       setBusy(false);
     }
-  }, [session.proposal, stale, s.def, s.surveyDbId, opts, copilotTurns, setSession]);
+  }, [session.proposal, stale, s.def, s.surveyDbId, opts, copilotTurns, setSession, themeImage]);
 
   /* ------------------------------------------------------------ review */
   const runReview = React.useCallback(async (text = "Review my survey") => {
@@ -162,8 +171,8 @@ export function useCopilot(opts: {
     s.replace(state.after);
     setSession((x) => ({ ...x, proposal: null, confirmed: false, history: [...x.history, rec], tab: "history" }));
     const ux = state.diff.ux;
-    const targets = [...new Set([...ux.added, ...ux.changed, ...ux.removed].map((x) => x.target))];
-    const note = !ux.empty && state.structureUnchanged
+    const targets = [...new Set([...(state.diff.theme.length ? ["the theme"] : []), ...[...ux.added, ...ux.changed, ...ux.removed].map((x) => x.target)])];
+    const note = (!ux.empty || state.diff.theme.length > 0) && state.structureUnchanged
       ? `Done. The look and behaviour of ${targets.slice(0, 3).join(", ")}${targets.length > 3 ? ` and ${targets.length - 3} more` : ""} ${targets.length === 1 ? "has" : "have"} been updated without changing the survey's questions, codes or logic.`
       : undefined;
     opts.patchAll((e) => (e.proposal === "open" || e.proposal === "superseded" ? { proposal: e.proposal === "open" ? "applied" : e.proposal, ...(e.proposal === "open" ? { changeN: n, ...(note ? { appliedNote: note } : {}) } : {}) } : null));
@@ -237,6 +246,7 @@ export function useCopilot(opts: {
     confirmed: session.confirmed, setConfirmed: (v: boolean) => setSession((x) => ({ ...x, confirmed: v })),
     tab: session.tab, setTab: (t: PanelTab) => setSession((x) => ({ ...x, tab: t })),
     ask, runReview, previewFix, apply, cancel, revert, uploadDocs, deleteDoc, refreshDocs,
+    themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),
   };
 }
 export type Copilot = ReturnType<typeof useCopilot>;

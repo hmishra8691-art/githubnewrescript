@@ -256,3 +256,15 @@ test("UX in the outline and the proposal: existing items by id, the proof the st
   assert.equal(sc.chrome, true, "the Next button it animates");
   assert.ok(sc.blockId && sc.pageId, "the block and page, so block-scoped rules match");
 });
+
+test("a theme request is look-only; a theme image is told as colours and a placeholder the Studio fills", async () => {
+  const { describeThemeImage, withThemeImage, THEME_IMAGE_TOKEN } = await import("./themeImageText.ts");
+  for (const t of ["Give the survey a premium dark theme", "Make the survey look like this", "Use this image as the background image", "Change the colour scheme to our palette", "Switch to dark mode"]) {
+    const c = classifyRequest(t, 20, 0); assert.equal(c.ux, true, t); assert.equal(c.uxOnly, true, `look-only: ${t}`);
+  }
+  const text = describeThemeImage({ name: "mood.jpg", dominant: ["#1d1f20", "#dc3214"], palette: { primary: "#dc3214" }, dark: true });
+  assert.match(text, /a dark image; dominant colours #1d1f20, #dc3214; .*primary #dc3214/);
+  assert.ok(text.includes(`background.image "${THEME_IMAGE_TOKEN}"`));
+  const acts = withThemeImage([{ op: "set_theme", background: { image: THEME_IMAGE_TOKEN, overlay: "rgba(0,0,0,.4)" }, colors: { primary: "#dc3214" } }], "https://cdn.example.com/a.jpg");
+  assert.deepEqual(acts, [{ op: "set_theme", background: { image: "https://cdn.example.com/a.jpg", overlay: "rgba(0,0,0,.4)" }, colors: { primary: "#dc3214" } }]);
+});

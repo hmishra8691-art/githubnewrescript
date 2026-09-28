@@ -52,6 +52,8 @@ export * from "./surveyActions.js";
 export * from "./surveyReview.js";
 export * from "./ux.js";
 export * from "./uxActions.js";
+export * from "./optionCodes.js";
+export * from "./theme.js";
 export * from "./droppedFields.js";
 export * from "./tournament.js";
 export * from "./adaptive.js";

@@ -8,6 +8,7 @@ import { stripHtmlText } from "./html.js";
 import { isQuestionValueRef } from "@rescript/schema";
 import { CALC_FUNCTION_NAMES } from "./calc.js";
 import { embeddedCatalog } from "./embedded.js";
+import { canonicalizeCondition, normalizeOptionText } from "./optionCodes.js";
 
 /**
  * The logic expression language: text in, canonical tree out, and back again.
@@ -816,7 +817,16 @@ export function parseLogicExpression(
         ? "Unmatched closing parenthesis"
         : `Unexpected “${t.text}” — is an AND or OR missing?`, t.pos);
     }
-    return { condition, errors, warnings };
+    /*
+     * OPTION VALUES AS CODES. `Q3 = Yes`, `Q3 == "Yes"`, `Q3 = "__Yes__"` and
+     * `Q3 = Option 1` all mean option 1 — and are stored as `Q3 = 1`, because
+     * that is what a choice question's answer holds. A value that names no
+     * option is an error here, not a rule that can never be true.
+     */
+    const canon = canonicalizeCondition(def, condition);
+    if (canon.errors.length) return { errors: canon.errors.map((message) => ({ message })), warnings };
+    for (const c of canon.changes) warnings.push({ message: `Read as the option code — ${c}` });
+    return { condition: canon.condition, errors, warnings };
   } catch (e) {
     const err = e as ExpressionError;
     return { errors: [err.message ? err : { message: String(e) }], warnings };
@@ -872,6 +882,14 @@ export function resolveRowOrOption(q: Question, token: string): Resolved | null 
     const byCode = q.options.find((o) => String(o.code) === String(on));
     if (byCode) return { kind: "option", code: byCode.code };
     if (q.options[on - 1]) return { kind: "option", code: q.options[on - 1].code };
+  }
+  // `Q3.Yes`, `Q3.__Yes__`: an option (or row) by what it says, when exactly one says it
+  const said = normalizeOptionText(token);
+  if (said) {
+    const rows = q.rows.filter((r) => normalizeOptionText(r.label) === said);
+    if (rows.length === 1) return { kind: "row", code: rows[0].code };
+    const opts = q.options.filter((o) => normalizeOptionText(o.label) === said);
+    if (opts.length === 1) return { kind: "option", code: opts[0].code };
   }
   return null;
 }
@@ -1146,7 +1164,8 @@ export function referenceTree(def: SurveyDefinition): ReferenceNode[] {
     // a question without rows offers its options directly
     const optionNodes: ReferenceNode[] = q.rows.length === 0
       ? q.options.map((o) => ({
-          token: `${q.code}.${codeToken(o.code, "C")}`,
+          // O, not C: the second segment of a question without rows is read as an option (resolveRowOrOption)
+          token: `${q.code}.${codeToken(o.code, "O")}`,
           label: stripHtml(o.label) || String(o.code),
           kind: "option" as const,
         }))

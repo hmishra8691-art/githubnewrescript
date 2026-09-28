@@ -1,3 +1,4 @@
+import { resolveOptionValue, describeOptions, type OptionList } from "./optionCodes.js";
 import type { Condition, PunchRule, Question, SurveyDefinition } from "@rescript/schema";
 import { cond } from "@rescript/schema";
 import { parseLogicExpression, formatCondition, type ExpressionError } from "./logicExpression.js";
@@ -190,6 +191,29 @@ export function parsePunchExpression(def: SurveyDefinition, src: string): PunchE
       errors.push({ message: `“${g.split(/\s+/)[0]}” is not an action — use SELECT, DESELECT, CLEAR, SHOW, HIDE, ENABLE or DISABLE.`, position: thenAt + 4 });
       continue;
     }
+    /*
+     * `SET QH = 2`, `SET SEGMENT = "Premium"` — code a response. A choice
+     * target takes the value as an option CODE (a label is read as its code,
+     * as everywhere else); a text or numeric target takes it as its value.
+     */
+    const setM = verb === "set_value" ? /^([A-Za-z_][\w]*)\s*=\s*(.+)$/.exec(gm[2].trim()) : null;
+    if (setM) {
+      const q = findQuestion(def, setM[1]);
+      if (!q) { errors.push({ message: `Unknown question “${setM[1]}” in the THEN part.`, position: thenAt + 4 }); continue; }
+      const rawVal = setM[2].trim().replace(/^(["'])(.*)\1$/, "$2");
+      const value: string | number = /^-?\d+(\.\d+)?$/.test(rawVal) ? Number(rawVal) : rawVal;
+      const view = authoringQuestionView(q, def);
+      if (view.options.length) {
+        const r = resolveOptionValue(view.options as OptionList, value);
+        if (r.kind === "none") { errors.push({ message: `${q.code} has no option “${rawVal}” — SET on a choice question takes an option code (${describeOptions(view.options as OptionList)}).`, position: thenAt + 4 }); continue; }
+        if (byTarget.has(q.id)) { errors.push({ message: `Two actions on ${q.code} in one rule — write them as two rules.`, position: thenAt + 4 }); continue; }
+        byTarget.set(q.id, { action: "select", codes: [r.code] });
+      } else {
+        if (byTarget.has(q.id)) { errors.push({ message: `Two actions on ${q.code} in one rule — write them as two rules.`, position: thenAt + 4 }); continue; }
+        byTarget.set(q.id, { action: "set_value", codes: [value] });
+      }
+      continue;
+    }
     const refs = gm[2].split(",").map((r) => r.trim()).filter(Boolean);
     if (refs.length === 0) { errors.push({ message: `${gm[1].toUpperCase()} needs at least one option, e.g. Q2.B`, position: thenAt + 4 }); continue; }
     for (const ref of refs) {
@@ -215,8 +239,8 @@ export function parsePunchExpression(def: SurveyDefinition, src: string): PunchE
          */
         const view = authoringQuestionView(q, def);
         if (oTok === undefined) { errors.push({ message: `${gm[1].toUpperCase()} needs an option — e.g. ${q.code}.${String(view.options[0]?.code ?? "1")}`, position: thenAt + 4 }); continue; }
-        const opt = view.options.find((o) => String(o.code) === oTok)
-          ?? view.options.find((o) => o.label.replace(/<[^>]*>/g, "").trim().toLowerCase() === oTok.toLowerCase());
+        const hit = resolveOptionValue(view.options as OptionList, oTok);
+        const opt = hit.kind === "code" ? view.options.find((o) => String(o.code) === String(hit.code)) : undefined;
         if (!opt) { errors.push({ message: `${q.code} has no option “${oTok}”.`, position: thenAt + 4 }); continue; }
         entry.codes.push(opt.code);
       }
@@ -247,6 +271,10 @@ export function formatPunchExpression(def: SurveyDefinition, target: Question, r
   const verb = rule.action === "set_value" ? "SET" : rule.action.toUpperCase();
   if (rule.action === "clear") return `IF ${condText} THEN CLEAR ${target.code}`;
   const codes = rule.source.kind === "codes" ? rule.source.codes : [];
+  if (rule.action === "set_value" && codes.length === 1) {
+    const v = codes[0];
+    return `IF ${condText} THEN SET ${target.code} = ${typeof v === "number" || /^[A-Za-z_][\w]*$/.test(String(v)) ? String(v) : JSON.stringify(String(v))}`;
+  }
   const refs = codes.map((c) => `${target.code}.${String(c)}`).join(", ");
   return `IF ${condText} THEN ${verb} ${refs || target.code}`;
 }
@@ -254,7 +282,9 @@ export function formatPunchExpression(def: SurveyDefinition, target: Question, r
 function findQuestion(def: SurveyDefinition, tok: string): Question | undefined {
   const t = tok.trim();
   return def.questions.find((q) => q.code === t) ?? def.questions.find((q) => q.id === t)
-    ?? def.questions.find((q) => q.code.toLowerCase() === t.toLowerCase());
+    ?? def.questions.find((q) => q.code.toLowerCase() === t.toLowerCase())
+    // a variable name reads here as it does in the IF part ("SET SEGMENT = 2")
+    ?? def.questions.find((q) => q.variableName === t) ?? def.questions.find((q) => q.variableName.toLowerCase() === t.toLowerCase());
 }
 
 /* ---------------------------------------------------------- list actions */

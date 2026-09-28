@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { SurveyDefinition, Question } from "@rescript/schema";
-import { normaliseQuestionOrder } from "@rescript/engine";
+import { normaliseQuestionOrder, canonicalizeSurveyConditions } from "@rescript/engine";
 import { codesFrozenBy } from "@/lib/responseSummary";
 
 /**
@@ -236,6 +236,20 @@ export function StudioProvider({
   const toastTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   /* a standalone raiser: `value.toast` cannot be called from inside the object
      literal that defines it */
+  /*
+   * OPTION CODES, ENFORCED HERE — beside the question order, at the one point
+   * every edit passes through. Whatever wrote a condition (the visual
+   * builder, the expression editor, the JSON tab, an import, the copilot), a
+   * value that is an option's LABEL is stored as its CODE, so no screen can
+   * leave a `Q3 = "Yes"` behind that never matches a respondent. Said once,
+   * when it happens.
+   */
+  const withOptionCodes = (d: SurveyDefinition): SurveyDefinition => {
+    const r = canonicalizeSurveyConditions(d);
+    if (!r.changes.length) return d;
+    showToast(`Logic uses option codes — ${r.changes.slice(0, 2).join("; ")}${r.changes.length > 2 ? ` (+${r.changes.length - 2} more)` : ""}.`);
+    return r.def;
+  };
   const showToast = React.useCallback((msg: string, kind: "ok" | "err" = "ok") => {
     setToastMsg({ msg, kind });
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -566,8 +580,9 @@ export function StudioProvider({
       const label = nextLabel.current ?? "edit";
       nextLabel.current = null;
       const prev = latest.current;
-      const draft = structuredClone(prev);
+      let draft = structuredClone(prev);
       mutator(draft);
+      draft = withOptionCodes(draft);
       /*
        * ONE QUESTION ORDER, ENFORCED HERE.
        *
@@ -595,6 +610,7 @@ export function StudioProvider({
       /* an imported or restored definition arrives in whatever order it was
          written in; it joins the survey in flow order like everything else */
       normaliseQuestionOrder(next);
+      next = withOptionCodes(next);
       latest.current = next;
       pushHistory(prev, label);
       setDef(next);
@@ -716,6 +732,22 @@ export function StudioProvider({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
+
+  /*
+   * A SURVEY SAVED BEFORE option codes were enforced may hold conditions
+   * that compare an answer with an option's text. Once this editor may write,
+   * they are repaired once — as an ordinary, undoable edit, so the next save
+   * (and publish) carries logic that actually matches respondents.
+   */
+  const repairedOnLoad = React.useRef(false);
+  React.useEffect(() => {
+    if (readOnly || repairedOnLoad.current) return;
+    repairedOnLoad.current = true;
+    if (!canonicalizeSurveyConditions(latest.current).changes.length) return;
+    value.labelNextEdit("Use option codes in logic");
+    value.update(() => { /* withOptionCodes does the work */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readOnly]);
 
   return (
     <Ctx.Provider value={value}>

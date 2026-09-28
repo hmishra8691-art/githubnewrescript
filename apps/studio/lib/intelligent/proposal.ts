@@ -113,12 +113,16 @@ export interface PlannerDeps {
  * conservative: nothing here decides what a rule MEANS, only how an operator
  * is spelled, and the parser still has the last word.
  */
-const REWRITES: [RegExp, string][] = [
+/** "option 3" → `"option 3"` (code 3, else the third option); any other token is left as written */
+const optionRef = (v: string) => (/^\d+$/.test(v) ? `"option ${v}"` : v);
+type Rewrite = string | ((match: string, ...groups: string[]) => string);
+const REWRITES: [RegExp, Rewrite][] = [
   // "Q5 option 3 is selected" / "Q5 is option 2" / "option 3 of Q5 is selected" — an option by its code
-  [/\b([A-Za-z_][\w.]*)\s+(?:option|answer|choice|code)\s+(\w+)\s+(?:is|was|has\s+been)\s+(?:selected|chosen|picked|ticked|answered)\b/gi, "$1 = $2"],
-  [/\b(?:option|answer|choice|code)\s+(\w+)\s+(?:of|in|at|on|for)\s+([A-Za-z_][\w.]*)\s+(?:is|was|has\s+been)\s+(?:selected|chosen|picked|ticked)\b/gi, "$2 = $1"],
-  [/\b([A-Za-z_][\w.]*)\s+(?:is|was|equals|=)\s+(?:option|answer|choice|code)\s+(\w+)\b/gi, "$1 = $2"],
-  [/\b([A-Za-z_][\w.]*)\s+(?:is\s+not|isn't|!=)\s+(?:option|answer|choice|code)\s+(\w+)\b/gi, "$1 != $2"],
+  // ("option 3" stays "option 3" so the parser can read it as code 3, or as the third option when the codes are words)
+  [/\b([A-Za-z_][\w.]*)\s+(?:option|answer|choice|code)\s+(\w+)\s+(?:is|was|has\s+been)\s+(?:selected|chosen|picked|ticked|answered)\b/gi, (_, q: string, v: string) => `${q} = ${optionRef(v)}`],
+  [/\b(?:option|answer|choice|code)\s+(\w+)\s+(?:of|in|at|on|for)\s+([A-Za-z_][\w.]*)\s+(?:is|was|has\s+been)\s+(?:selected|chosen|picked|ticked)\b/gi, (_, v: string, q: string) => `${q} = ${optionRef(v)}`],
+  [/\b([A-Za-z_][\w.]*)\s+(?:is|was|equals|=)\s+(?:option|answer|choice|code)\s+(\w+)\b/gi, (_, q: string, v: string) => `${q} = ${optionRef(v)}`],
+  [/\b([A-Za-z_][\w.]*)\s+(?:is\s+not|isn't|!=)\s+(?:option|answer|choice|code)\s+(\w+)\b/gi, (_, q: string, v: string) => `${q} != ${optionRef(v)}`],
   [/\bis\s+(?:greater|more|higher|bigger)\s+than\s+or\s+equal\s+to\b/gi, ">="],
   [/\bis\s+(?:less|lower|smaller|fewer)\s+than\s+or\s+equal\s+to\b/gi, "<="],
   [/\b(?:is\s+)?(?:greater|more|higher|bigger)\s+than\b/gi, ">"],
@@ -149,7 +153,7 @@ const OPERAND_AFTER = /((?:^|\s)(?:=|!=|<>|>=|<=|>|<|is not|is|not contains|cont
 
 export function normaliseExpression(text: string): string {
   let out = text.trim().replace(/[.?!]+$/, "");
-  for (const [re, to] of REWRITES) out = out.replace(re, to);
+  for (const [re, to] of REWRITES) out = typeof to === "string" ? out.replace(re, to) : out.replace(re, to as (m: string, ...g: string[]) => string);
   out = out.replace(OPERAND_AFTER, (_, op: string, words: string) => `${op} "${words}"`);
   return out.replace(/\s+/g, " ").trim();
 }

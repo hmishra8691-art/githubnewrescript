@@ -504,6 +504,8 @@ function moveForward(
   let steps = compileFlow(def, state, quotaCounts);
   let guard = 0;
   while (guard++ < 10000) {
+    // derived variables are coded before the flow is resolved: a branch may read them
+    punchDerivedQuestions(def, state, quotaCounts);
     steps = compileFlow(def, state, quotaCounts); // re-resolve (answers/embedded may change)
     if (idx >= steps.length) {
       state.status = "complete";
@@ -764,3 +766,19 @@ registerIterationQuestionsResolver((def, state, questionIds, loop) =>
     state,
   ).map((q) => ({ id: q.id, code: q.code })),
 );
+
+
+/**
+ * CODING DERIVED VARIABLES. A hidden variable — "if Q3 = 1 code SEGMENT as 2"
+ * — is never on a page, so the page-arrival prefill (which only reaches the
+ * questions a respondent is shown) never ran its punch rules and it stayed
+ * empty. Every navigation step now runs the rules of the questions nobody is
+ * asked (hidden variables, calculated questions, anything set hidden), from
+ * the answers so far, before the flow is resolved and before completion.
+ * Loop-scoped copies are the page prefill's to fill.
+ */
+export function punchDerivedQuestions(def: SurveyDefinition, state: ResponseState, quotaCounts: QuotaCounts = {}): string[] {
+  const derived = def.questions.filter((q) => q.punches?.length && (q.type === "hidden" || q.type === "calculated" || q.settings?.hidden));
+  if (!derived.length) return [];
+  return prefillQuestions(derived, { def, state, loop: null, quotaCounts }, (q) => answerKey(q.id, null));
+}

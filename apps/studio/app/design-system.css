@@ -1647,6 +1647,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .cp-ux-preview { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
 .cp-ux-stage { border: 1px dashed var(--c-border-strong); border-radius: 8px; overflow: hidden; background: var(--c-surface-2, #f8fafc); }
 .cp-ux-stage.rs-viewport.mobile { max-width: 390px; margin: 0 auto; width: 100%; }
+.cp-ux-stage.rs-viewport.tablet { max-width: 768px; margin: 0 auto; width: 100%; }
 .cp-ux-stage .rs-shell { position: relative; }
 .cp-ux-caption { margin: 0; font-size: 11px; }
 .cp-ux-code pre { white-space: pre-wrap; word-break: break-word; font-size: 10.5px; background: var(--c-surface-2, #f8fafc); border: 1px solid var(--c-border); border-radius: 6px; padding: 6px 8px; margin: 4px 0 8px; max-height: 240px; overflow: auto; }
@@ -1695,3 +1696,26 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .cp-attach-menu { position: absolute; bottom: 44px; left: 0; z-index: 20; display: flex; flex-direction: column; min-width: 290px; background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 10px; box-shadow: var(--sh-2, 0 8px 24px rgba(0,0,0,.12)); padding: 4px; }
 .cp-attach-menu button { appearance: none; border: 0; background: transparent; font: inherit; text-align: left; padding: 7px 10px; border-radius: 7px; display: flex; flex-direction: column; gap: 1px; cursor: pointer; font-size: 12.5px; color: var(--c-text); }
 .cp-attach-menu button:hover { background: var(--c-surface-2); }
+
+/* the theme image waiting to go with the next copilot request */
+.cp-theme-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--c-text-2, #475569); border: 1px solid var(--c-border); border-radius: 999px; padding: 2px 8px 2px 3px; }
+.cp-theme-chip img { width: 28px; height: 20px; object-fit: cover; border-radius: 999px; }
+.cp-theme-chip i { width: 10px; height: 10px; border-radius: 3px; border: 1px solid rgba(0,0,0,.12); }
+.cp-theme-chip button { border: 0; background: none; cursor: pointer; font-size: 13px; line-height: 1; color: inherit; }
+/* the manual control layer for styles, animations and scripts */
+.ux-items { display: flex; flex-direction: column; gap: 8px; }
+.ux-item { border: 1px solid var(--border, #e2e8f0); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.ux-item-head { display: flex; gap: 6px; align-items: center; }
+.ux-item-head .input { flex: 1; }
+.ux-kind { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted, #64748b); border: 1px solid var(--border, #e2e8f0); border-radius: 4px; padding: 1px 5px; }
+.ux-fields { display: flex; flex-direction: column; gap: 6px; }
+.ux-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.ux-row { display: flex; gap: 6px; align-items: flex-end; flex-wrap: wrap; }
+.ux-rule { border-left: 2px solid var(--border, #e2e8f0); padding-left: 6px; display: flex; flex-direction: column; gap: 4px; }
+.ux-errors { color: var(--danger, #b91c1c); font-size: 11.5px; margin: 0; padding-left: 16px; }
+.ux-warnings { color: #92400e; font-size: 11.5px; margin: 0; padding-left: 16px; }
+.ux-item-foot { display: flex; gap: 6px; justify-content: space-between; }
+.ux-code { white-space: pre-wrap; word-break: break-word; font-size: 10.5px; background: var(--bg-2, #f8fafc); border: 1px solid var(--border, #e2e8f0); border-radius: 6px; padding: 6px; max-height: 200px; overflow: auto; margin: 0; }
+.ux-add { display: flex; gap: 6px; flex-wrap: wrap; }
+.theme-assistant { border: 1px dashed var(--border, #e2e8f0); border-radius: 10px; padding: 8px; }
+.theme-lines { margin: 4px 0 8px; padding-left: 18px; font-size: 12.5px; }

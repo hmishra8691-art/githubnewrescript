@@ -260,6 +260,8 @@ const UX_REPLY = {
   assert.notEqual(await page.$eval(pr, (e) => getComputedStyle(e).borderTopLeftRadius), "16px", "Before: the survey as it is now");
   await page.click('[data-testid="cp-ux-after"]');
   await page.click('[data-testid="cp-ux-mobile"]');
+  assert.equal(await page.getAttribute('[data-testid="cp-ux-preview"]', "data-device"), "tablet");
+  await page.click('[data-testid="cp-ux-mobile"]');
   assert.equal(await page.getAttribute('[data-testid="cp-ux-preview"]', "data-device"), "mobile");
   // the code
   await page.click('[data-testid="cp-ux-code"] summary');

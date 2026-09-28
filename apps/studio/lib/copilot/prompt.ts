@@ -52,24 +52,26 @@ ACTIONS (each an object with "op"; use only these):
 {"op":"update_question","target":"Q12","type":"single","text":"...","required":true,"options":[...],"addOptions":[...],"removeOptions":["label or code"],"rows":[...],"scale":{...},"randomize":true,"variable":"NEWNAME"}
 {"op":"delete_question","target":"Q9"}
 {"op":"move_question","target":"Q7","block":"<block>","after":"<question>"}
-{"op":"set_display_logic","target":"Q15 or a block title","expression":"Q12 = Yes"}     // expression null removes it
-{"op":"add_skip","from":"Q3","when":"Q3 = No","to":"Q10 | <block title> | end | screen_out | terminate"}
+{"op":"set_display_logic","target":"Q15 or a block title","expression":"Q12 = 1"}     // expression null removes it
+{"op":"add_skip","from":"Q3","when":"Q3 = 2","to":"Q10 | <block title> | end | screen_out | terminate"}
 {"op":"clear_skips","target":"Q3"}
 {"op":"set_validation","target":"Q4","rules":[{"kind":"min_value","value":0},{"kind":"max_value","value":120},{"kind":"integer"}]}
 {"op":"page_break","after":"Q6"}   /  {"op":"page_break","after":"Q6","remove":true}
 {"op":"create_embedded","name":"source","source":"url|static|panel|expression","value":"..."}
 {"op":"create_calculation","name":"TRUST_SCORE","expression":"(TRUST_1 + TRUST_2 + TRUST_3) / 3","label":"..."}
 {"op":"create_randomizer","blocks":["Block A","Block B"],"show":1}       // blocks must be next to each other at the top level
-{"op":"create_branch","blocks":["Owners"],"when":"OWN = Yes","title":"Car owners"}   // route whole blocks: only respondents meeting the condition get them
+{"op":"create_branch","blocks":["Owners"],"when":"OWN = 1","title":"Car owners"}   // route whole blocks: only respondents meeting the condition get them
 {"op":"create_loop","from":"SAT","to":"SAT_WHY","over":"BRANDS","loopVar":"brand"}   // ask a run of questions once per selected answer of BRANDS (or "items":["A","B"]); pipe the item with {{loop.label}}
 {"op":"create_quota","name":"Age","cells":[{"label":"18–24","when":"AGE <= 24","limit":200}]}
 {"op":"rename_block","target":"...","title":"..."}  /  {"op":"delete_block","target":"..."}
+{"op":"add_punch","target":"SEGMENT","when":"Q3 = 1 AND (Q5 = 2 OR Q5 = 3)","codes":[2]}   // PUNCHING / coding: when the criteria hold, code the target — a choice target takes option codes, a numeric/text/hidden one {"value":…}; or {"op":"add_punch","expression":"IF Q3 = 1 THEN SET SEGMENT = 2"}; add "mode":"else_if"/"else" for a chain
+{"op":"remove_punches","target":"SEGMENT"}   // or with "id" for one rule
 {"op":"set_research","objective":"...","hypotheses":["..."],"population":"...","methodology":"...","constructs":[{"name":"...","role":"independent","definition":"...","questions":["EXPOSE"]}],"analysis":["..."],"assumptions":["..."],"sources":["document names"]}
-LOOK AND BEHAVIOUR — styling, CSS, animations, transitions, layout, responsive rules, interactions, JavaScript behaviour — are ALSO actions: create_style / update_style / remove_style, create_animation / update_animation / remove_animation, create_behavior / update_behavior / remove_behavior, create_responsive_rule, attach_behavior_to_question|option|block|page. Rescript supports them: never answer that the platform cannot style, animate or script a survey. Their full shapes are in the UX GUIDE, which is included whenever a request is about how the survey looks or behaves.
+LOOK AND BEHAVIOUR — the theme (colours, fonts, background image, cards, options, radios, inputs, spacing, per-device sizes), styling, CSS, custom HTML, animations, transitions, layout, responsive rules, interactions, JavaScript behaviour — are ALSO actions: set_theme, set_custom_html, create_style / update_style / remove_style, create_animation / update_animation / remove_animation, create_behavior / update_behavior / remove_behavior, create_responsive_rule, attach_behavior_to_question|option|block|page. Rescript supports them: never answer that the platform cannot style, animate or script a survey. Their full shapes are in the UX GUIDE, which is included whenever a request is about how the survey looks or behaves.
 
-REFS. Give every new question a "ref" that reads as a variable name (AGE, BUY_6M, TRUST_1). The ref becomes its variable, so conditions, calculations and piping can use it in the same batch: "BUY_6M = No", "{{BRAND}}". Existing questions are named by their CODE or VARIABLE from the outline; never invent a code that is not in the outline or created in this batch.
+REFS. Give every new question a "ref" that reads as a variable name (AGE, BUY_6M, TRUST_1). The ref becomes its variable, so conditions, calculations and piping can use it in the same batch: "BUY_6M = 2", "{{BRAND}}". A new question's options are coded 1, 2, 3… in the order written ("None of these" 99, "Other" the next free code). Existing questions are named by their CODE or VARIABLE from the outline; never invent a code that is not in the outline or created in this batch.
 
-CONDITIONS ("expression", "when"): QCODE or VARIABLE compared with = != > >= < <= between; option values by code or label (Q3 = Yes, BRAND = 2); "Q4 answered", "Q4 unanswered", "Q4 contains Coke" (multi), COUNT(Q4) >= 2; combine with AND, OR, NOT and parentheses. A condition may only read questions asked BEFORE the question it controls.
+CONDITIONS ("expression", "when"): QCODE or VARIABLE compared with = != > >= < <= between. OPTION VALUES ARE OPTION CODES — the outline lists every option as code=label; write Q3 = 1, never Q3 == "Yes" or a placeholder (a label is read as its code, a value that is no code is refused). On a multi-select Q4 = 2 means option 2 is selected; Q4 in [1, 3] means any of them. "Q4 answered", "Q4 unanswered", COUNT(Q4) >= 2; combine with AND, OR, NOT and parentheses. A condition may only read questions asked BEFORE the question it controls.
 
 HOW TO WORK.
 • Generation from an objective/hypothesis: identify the independent, dependent, mediating, moderating and control variables; the population and screening criteria; then propose blocks in a sensible order (screening → behaviour → core constructs → outcome → attitudes → demographics), established measures where they exist (name them), balanced scales, "None"/"Other" where needed, screening skips to screen_out, display logic for follow-ups, randomized option lists where order would bias. Always include a set_research action. Keep it proportionate: aim for a 10–15 minute survey unless asked otherwise.
@@ -181,6 +183,19 @@ THEME VARIABLES to prefer over hard-coded values: var(--rs-primary) var(--rs-acc
 {"op":"update_behavior","id":"…","effects":[…]}   // or "on", "options", "script": what is given replaces
 {"op":"remove_style","id":"…"} · {"op":"remove_animation","id":"…"} · {"op":"remove_behavior","id":"…"}
 
+THE THEME is the survey's Branding — the same settings the Branding panel shows, so the researcher can adjust every value by hand afterwards. Change it with set_theme (only the fields you give change; null resets an optional one):
+{"op":"set_theme","label":"Premium dark","colors":{"primary":"#c9a227","secondary":"#1c1c24","background":"#0b0b0f","surface":"#15151c","text":"#f5f1e6","subtleText":"#a7a293","border":"#2a2a33","accent":"#e0c068","buttonBackground":"#c9a227","buttonText":"#111111","inputBackground":"#1b1b23","progress":"#c9a227"},
+ "typography":{"fontFamily":"Inter, system-ui, sans-serif","headingFont":"'Playfair Display', Georgia, serif","baseSize":"16px","headingWeight":650,"lineHeight":"1.55","questionSize":"1.15em"},
+ "layout":{"cardStyle":"card|flat|line","radius":"14px","spacing":"compact|regular|relaxed","widthMode":"full|contained","contentAlign":"left|center|right","progressBar":"top|bottom|none"},
+ "buttons":{"style":"solid|outline|pill"},
+ "background":{"image":"<https url or the uploaded image url>","size":"cover","position":"center","attachment":"fixed|scroll","overlay":"rgba(0,0,0,.55)","gradient":"linear-gradient(160deg, #0b0b0f, #1c1c24)"},
+ "appearance":{"shadow":"none|soft|medium|strong","optionStyle":"default|cards|pills|minimal","controlStyle":"native|custom","inputStyle":"outlined|filled|underline","cardPadding":"28px","optionGap":"10px","borderWidth":"1px","selectedTint":14,"focusColor":"#e0c068","buttonRadius":"999px","progressHeight":"4px","logoMaxHeight":"48px"},
+ "responsive":{"mobile":{"baseSize":"15px","cardPadding":"16px","optionGap":"8px","hideBackgroundImage":true},"tablet":{"maxWidth":"720px"}},
+ "logoUrl":"https://…","headerHtml":"<p>…</p>","footerHtml":"<p>…</p>"}
+  // a dark theme needs light text and enough contrast on buttons and inputs; over a busy background image add an overlay
+  // THEME IMAGE: when an uploaded image is given below (url and its palette), build the theme from its palette and, if asked, use its url as background.image
+{"op":"set_custom_html","target":"Q5","html":"<p class=\"note\">…</p>"}   // decorative HTML shown above Q5's answers (no scripts, styles or event handlers; null removes it)
+
 HOW TO WORK ON UX.
 • Decompose a compound request into one item per thing asked: "For Block 2 make every question fade up, the options cards, a slight scale when one is selected, one option per row on mobile, don't change the logic" → an animation on block:2.questions (fade-up, appear), a style on block:2.options (card rules, a "selected" rule with transform: scale(1.02), a mobile rule) — and no structural action.
 • Look before you add: the outline lists the survey's existing styles, animations and behaviours by id. Change them (update_*) rather than adding competing ones; to clean up, remove the unused or duplicated ones; to resolve a conflict, change one side.
@@ -223,7 +238,7 @@ export function classifyRequest(message: string, surveyQuestions: number, docume
 export function uxIntent(text: string): { ux: boolean; only: boolean } {
   const t = text.toLowerCase();
   // strong: only ever about the look and behaviour; weak: usually is, but can be a topic ("mobile banking", "credit cards")
-  const strong = /\b(?:css|styl(?:e|es|ing|ish)|look(?:s)? (?:better|nicer|cleaner|modern|premium|different|more)|look and feel|visual(?:ly)?|colou?rs?|font|typography|spacing|padding|margins?|borders?|rounded|shadows?|animat(?:e|ed|es|ion|ions)|fade(?:s|-in| in| up|-up)?|transitions?|hover|glow|pulse|bounce|shake|highlight(?:ed|s)?|smooth(?:ly)?|prettier|beautiful|ui|ux|responsive|javascript|js|scripts?|event handlers?|interactions?|interactive|dynamic ui|one at a time|overlap(?:s|ping)?|countdown|confirmation animation)\b/.test(t);
+  const strong = /\b(?:themes?|branding|dark (?:mode|theme)|light theme|colou?r scheme|palette|background image|custom html|html|look like this|css|styl(?:e|es|ing|ish)|look(?:s)? (?:better|nicer|cleaner|modern|premium|different|more)|look and feel|visual(?:ly)?|colou?rs?|font|typography|spacing|padding|margins?|borders?|rounded|shadows?|animat(?:e|ed|es|ion|ions)|fade(?:s|-in| in| up|-up)?|transitions?|hover|glow|pulse|bounce|shake|highlight(?:ed|s)?|smooth(?:ly)?|prettier|beautiful|ui|ux|responsive|javascript|js|scripts?|event handlers?|interactions?|interactive|dynamic ui|one at a time|overlap(?:s|ping)?|countdown|confirmation animation)\b/.test(t);
   const weak = /\b(?:cards?|tiles?|background|design|feel (?:more )?(?:premium|modern|polished)|mobile|desktop|tablet|layout|stack(?:ed)? (?:vertically|horizontally)|horizontal|vertical|next button|buttons?|progress (?:bar|indicator)|expand(?:s|ing)?)\b/.test(t);
   const ux = strong || weak;
   if (!ux) return { ux: false, only: false };
@@ -247,6 +262,10 @@ export function copilotUserPrompt(input: {
   /** the request is about the look and behaviour: the UX guide goes with it */
   ux?: boolean;
   uxOnly?: boolean;
+  /** an uploaded image to build the theme from (its colours; the address is a placeholder) */
+  themeImage?: string;
+  /** the Branding panel's theme assistant */
+  themeOnly?: boolean;
 }): string {
   const parts: string[] = [];
   parts.push(`Survey language: ${input.surveyLanguage}`);
@@ -258,6 +277,8 @@ export function copilotUserPrompt(input: {
   if (input.selected) parts.push(`Selected in the Studio: ${input.selected}`);
   if (input.ux) parts.push(COPILOT_UX_GUIDE);
   if (input.uxOnly) parts.push("THIS REQUEST IS LOOK-AND-BEHAVIOUR ONLY: propose UX actions only. Any structural action (questions, options, logic, validation, blocks) will be refused.");
+  if (input.themeOnly) parts.push("THIS IS THE THEME: answer with one set_theme action covering everything the request implies (colours with readable contrast, fonts, background, cards, options, controls, inputs, spacing, phone sizes). Its values become the survey's Branding settings, which the researcher then adjusts by hand.");
+  if (input.themeImage) parts.push(input.themeImage);
   parts.push(`Request type (a hint, not a rule): ${input.mode}`);
   parts.push(`RESEARCHER:\n${input.message.trim()}`);
   return parts.join("\n\n");

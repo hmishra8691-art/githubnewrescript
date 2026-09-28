@@ -6,6 +6,7 @@ import { applySurveyActions, diffSurveys, reviewSurvey } from "@rescript/engine"
 import { ResearchIndex } from "@rescript/import/research";
 import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
 import { billingProjectFor, meteredAi, refusalResponse } from "@/lib/metering";
+import { describeThemeImage, withThemeImage } from "@/lib/copilot/themeImageText";
 import { COPILOT_SYSTEM_PROMPT, classifyRequest, coerceCopilotReply, copilotUserPrompt, referencedQuestions, surveyLanguageOf, type RequestMode, type TurnMemory } from "@/lib/copilot/prompt";
 import { researchCards, researchPassages } from "@/lib/copilot/research";
 import { researchStoreFor } from "@/lib/copilot/store";
@@ -46,7 +47,7 @@ const TTL = 15 * 60_000;
 
 export async function POST(req: NextRequest) {
   const authed = await requireUser(req);
-  let body: { surveyId?: unknown; message?: unknown; definition?: unknown; selectedId?: unknown; memory?: TurnMemory; mode?: unknown; fake?: unknown };
+  let body: { surveyId?: unknown; message?: unknown; definition?: unknown; selectedId?: unknown; memory?: TurnMemory; mode?: unknown; fake?: unknown; scope?: unknown; themeImage?: unknown };
   try { body = await req.json(); } catch { return isFailure(authed) ? authed.response : NextResponse.json({ error: "bad json" }, { status: 400 }); }
   const surveyId = typeof body.surveyId === "string" ? body.surveyId : "";
   let user: AuthedUser | null = null;
@@ -66,8 +67,15 @@ export async function POST(req: NextRequest) {
   /* 1–2: the context this request needs, and no more */
   const store = await researchStoreFor(surveyId);
   const docs = await store.list(surveyId);
-  const cls = classifyRequest(message, def.questions.length, docs.length);
+  const classified = classifyRequest(message, def.questions.length, docs.length);
+  // the Branding panel's theme assistant: a look-only request by construction
+  const themeScope = body.scope === "theme";
+  const cls = themeScope ? { ...classified, mode: "ux" as RequestMode, ux: true, uxOnly: true } : classified;
   const mode: RequestMode = body.mode === "review" ? "review" : body.mode === "generate" ? "generate" : cls.mode;
+  /* an image to build the theme from: its colours go to the model, its address stays here */
+  const ti = body.themeImage && typeof body.themeImage === "object" ? body.themeImage as { url?: unknown; name?: unknown; dominant?: unknown; palette?: unknown; dark?: unknown } : null;
+  const themeImageUrl = ti && typeof ti.url === "string" && (/^https:\/\/[^\s"'()<>\\]+$/i.test(ti.url) || /^data:image\/(png|jpe?g|gif|webp);base64,[a-z0-9+/=]+$/i.test(ti.url) || /^\/[^\s"'()<>\\]+$/.test(ti.url)) ? ti.url : null;
+  const themeImageText = ti && themeImageUrl ? describeThemeImage({ name: typeof ti.name === "string" ? ti.name.slice(0, 80) : undefined, dominant: Array.isArray(ti.dominant) ? ti.dominant.filter((c): c is string => typeof c === "string" && /^#[0-9a-f]{3,8}$/i.test(c)).slice(0, 8) : [], palette: ti.palette && typeof ti.palette === "object" ? Object.fromEntries(Object.entries(ti.palette as Record<string, unknown>).filter(([k, v]) => /^[a-z]{2,20}$/i.test(k) && typeof v === "string" && /^#[0-9a-f]{3,8}$/i.test(v)).slice(0, 16)) as Record<string, string> : {}, dark: ti.dark === true }) : undefined;
   const selectedId = typeof body.selectedId === "string" ? body.selectedId : null;
   // a request about the look and behaviour gets the UX guide, the theme and the UX of the questions it names
   const uxTurn = cls.ux || mode === "ux";
@@ -98,6 +106,8 @@ export async function POST(req: NextRequest) {
     deterministicFindings: deterministic?.findings.slice(0, 40).map((f) => `${f.severity}: ${f.message}`),
     selected: selectedId ? def.questions.find((q) => q.id === selectedId)?.code ?? null : null,
     ux: uxTurn, uxOnly: cls.uxOnly,
+    ...(themeImageText ? { themeImage: themeImageText } : {}),
+    ...(themeScope ? { themeOnly: true } : {}),
   });
 
   /* 3: the model — or the cache, for exactly the same request */
@@ -123,7 +133,8 @@ export async function POST(req: NextRequest) {
   }
 
   /* 4: the gate, and the engine's validation on a clone */
-  const reply = coerceCopilotReply(raw);
+  const coerced = coerceCopilotReply(raw);
+  const reply = coerced && themeImageUrl ? { ...coerced, actions: withThemeImage(coerced.actions, themeImageUrl) } : coerced;
   if (!reply) {
     return NextResponse.json({ ok: true, reply: null, message: aiProviderName() === "fake" ? "The FAKE provider cannot reason about surveys; configure a real model to use the copilot." : "The model's answer had nothing I could use. Try rephrasing — nothing was changed.", context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, cached }, usage: { charge }, ...(deterministic ? { review: deterministic } : {}) });
   }

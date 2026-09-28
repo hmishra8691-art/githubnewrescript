@@ -33,7 +33,9 @@ export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: strin
       const to = t.kind === "question" ? code(t.ref ?? "") : t.kind === "end" ? "end" : t.kind === "terminate" ? `screen out (${t.status ?? "terminated"})` : `${t.kind} ${t.ref ?? ""}`;
       bits.push(`skip when ${formatCondition(def, s.when, { width: 400 }).replace(/\s+/g, " ")} → ${to}`);
     }
-    if (q.rows?.length) bits.push(`rows: ${q.rows.slice(0, 20).map((r) => `${r.code}=${r.label}`).join(", ")}`);
+    if (q.rows?.length) bits.push(`rows: ${q.rows.slice(0, 20).map((r) => `${r.code}=${String(r.label).replace(/<[^>]+>/g, "").replace(/(\*\*|__)(.+?)\1/g, "$2").trim()}`).join(", ")}`);
+    if (q.options?.length) bits.push(`option codes: ${q.options.slice(0, 30).map((o) => `${o.code}=${String(o.label).replace(/<[^>]+>/g, "").replace(/(\*\*|__)(.+?)\1/g, "$2").trim()}`).join(", ")}`);
+    if (q.punches?.length) bits.push(`punch rules: ${q.punches.length}`);
     if (q.randomization?.enabled) bits.push("options randomized");
     if (bits.length) lines.push(`${q.code} details: ${bits.join(" · ")}`);
   }

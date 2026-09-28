@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import { Studio } from "@/components/studio/Studio";
+import { SurveyDefinition } from "@rescript/schema";
 import { newSurveyDefinition } from "@/lib/defaults";
 
 /**
@@ -17,14 +18,22 @@ import { newSurveyDefinition } from "@/lib/defaults";
  * the one thing that most needs testing — that edits actually reach the
  * server, and that a refused write is honoured — could not be exercised at
  * all. `?rev=<n>` seeds the revision the editor believes it loaded.
+ *
+ * `window.__rescriptSandboxSeed` (set by a test before the page loads) opens
+ * the editor on that definition instead of a new one — how a suite opens "a
+ * survey saved earlier" without a database.
  */
 export default function SandboxPage() {
-  const [def] = React.useState(() => newSurveyDefinition("sandbox", "SANDBOX", "Editor Sandbox"));
+  const [def, setDef] = React.useState(() => newSurveyDefinition("sandbox", "SANDBOX", "Editor Sandbox"));
   // The URL is only readable in the browser, and the Studio renders values
   // from it (the revision in the header), so mount it after hydration rather
   // than server-render one thing and hydrate another.
   const [params, setParams] = React.useState<URLSearchParams | null>(null);
-  React.useEffect(() => { setParams(new URLSearchParams(window.location.search)); }, []);
+  React.useEffect(() => {
+    const seed = (window as unknown as { __rescriptSandboxSeed?: unknown }).__rescriptSandboxSeed;
+    if (seed) { const r = SurveyDefinition.safeParse(seed); if (r.success) setDef(r.data); }
+    setParams(new URLSearchParams(window.location.search));
+  }, []);
   if (!params) return null;
   const dbid = params.get("dbid") || "sandbox";
   const rev = params.get("rev");

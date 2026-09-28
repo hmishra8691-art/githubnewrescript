@@ -370,6 +370,7 @@ export function IntelligentView() {
    * — so the researcher says which.
    */
   const researchRef = React.useRef<HTMLInputElement>(null);
+  const themeImageRef = React.useRef<HTMLInputElement>(null);
   const [dropChoice, setDropChoice] = React.useState<File[] | null>(null);
   const [attachMenu, setAttachMenu] = React.useState(false);
   const onDropFiles = (list: FileList) => {
@@ -633,6 +634,18 @@ export function IntelligentView() {
             rows={2} data-testid="iq-input" aria-label="Describe a change" disabled={busy || voice !== "idle"}
           />
           <input ref={fileRef} type="file" hidden onChange={(e) => onFiles(e.target.files)} data-testid="iq-file" accept=".qsf,.xml,.docx,.xlsx,.xls,.csv,.tsv,.pdf,.txt,.json,.doc,application/json,text/xml,application/xml,text/plain,text/csv,application/pdf" />
+          <input ref={themeImageRef} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void copilot.attachThemeImage(f); }} data-testid="cp-theme-image-file" />
+          {(copilot.themeImage || copilot.themeImageError) && (
+            <span className="cp-theme-chip" data-testid="cp-theme-image-chip">
+              {copilot.themeImage ? (<>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={copilot.themeImage.url} alt="" />
+                {copilot.themeImage.dominant.slice(0, 5).map((c) => <i key={c} style={{ background: c }} title={c} />)}
+                <span>theme image · sent with your next request</span>
+                <button type="button" onClick={copilot.clearThemeImage} aria-label="Remove the theme image">×</button>
+              </>) : <span className="iq-error">{copilot.themeImageError}</span>}
+            </span>
+          )}
           <input ref={researchRef} type="file" hidden multiple onChange={(e) => { void copilot.uploadDocs([...(e.target.files ?? [])]); setShowInspector(true); e.target.value = ""; }} data-testid="cp-research-file" accept=".pdf,.docx,.txt,.md,.csv,.xlsx" />
           <span className="cp-attach-wrap">
             <button type="button" className="iq-attach" onClick={() => setAttachMenu((v) => !v)} disabled={busy || voice !== "idle"} data-testid="iq-attach" aria-label="Attach files" aria-expanded={attachMenu} title="Attach research documents for the copilot, or import a questionnaire">
@@ -642,6 +655,7 @@ export function IntelligentView() {
               <span className="cp-attach-menu" role="menu" data-testid="cp-attach-menu">
                 <button type="button" role="menuitem" onClick={() => { setAttachMenu(false); researchRef.current?.click(); }} data-testid="iq-attach-research"><b>Research documents</b><span className="iqi-dim">papers, reports, briefs — the copilot reads them</span></button>
                 <button type="button" role="menuitem" onClick={() => { setAttachMenu(false); fileRef.current?.click(); }} data-testid="iq-attach-import"><b>Import a questionnaire</b><span className="iqi-dim">QSF, Decipher, Word, Excel, PDF → a Rescript survey</span></button>
+                <button type="button" role="menuitem" onClick={() => { setAttachMenu(false); themeImageRef.current?.click(); }} data-testid="iq-attach-theme"><b>Theme image</b><span className="iqi-dim">build the survey&apos;s theme from an image, or use it as the background</span></button>
               </span>
             )}
           </span>

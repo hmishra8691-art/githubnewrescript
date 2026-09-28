@@ -1,4 +1,5 @@
 "use client";
+import { UxItemsEditor } from "./UxItemsEditor";
 import React from "react";
 import type { FlowNode, EmbeddedDataType } from "@rescript/schema";
 import {
@@ -389,6 +390,8 @@ export function NodeEditor({ node, onChange }: { node: FlowNode; onChange(n: Flo
           </select>
           <OptionalCondition label="Show page only when" value={node.visibleIf}
             onChange={(c) => onChange({ ...node, visibleIf: c })} />
+          <div className="flabel" style={{ marginTop: 10 }}>Styles, animations &amp; scripts for this page</div>
+          <UxItemsEditor scope={{ kind: "page", pageId: node.id }} />
         </div>
       );
 
@@ -403,6 +406,10 @@ export function NodeEditor({ node, onChange }: { node: FlowNode; onChange(n: Flo
           </label>
           <OptionalCondition label="Show only when" value={node.visibleIf}
             onChange={(c) => onChange({ ...node, visibleIf: c })} />
+          {node.type === "block" && (<>
+            <div className="flabel" style={{ marginTop: 10 }}>Styles, animations &amp; scripts for this block</div>
+            <UxItemsEditor scope={{ kind: "block", blockId: node.id }} />
+          </>)}
         </div>
       );
 

@@ -1,6 +1,6 @@
 import type { SurveyDefinition } from "@rescript/schema";
 import { SurveyDefinition as SurveyDefinitionSchema } from "@rescript/schema";
-import { applySurveyActions, diffSurveys, listBlocks, renumberNewQuestions, isUxOp, withoutUx, type SurveyAction, type ApplyActionsOutcome, type SurveyDiff } from "@rescript/engine";
+import { applySurveyActions, diffSurveys, listBlocks, renumberNewQuestions, isUxOp, withoutPresentation, type SurveyAction, type ApplyActionsOutcome, type SurveyDiff } from "@rescript/engine";
 import type { CopilotReply, TurnMemory } from "./prompt.ts";
 
 /**
@@ -57,7 +57,7 @@ export function evaluateProposal(p: Proposal): ProposalState {
   warnings.push(...whole.warnings);
   const outcome = last ?? whole;
   const parsedBase = SurveyDefinitionSchema.safeParse(p.base);
-  const structureUnchanged = sameSurvey(withoutUx(parsedBase.success ? parsedBase.data : p.base), withoutUx(cur));
+  const structureUnchanged = sameSurvey(withoutPresentation(parsedBase.success ? parsedBase.data : p.base), withoutPresentation(cur));
   return { after: cur, outcome, diff: diffSurveys(p.base, cur), errors, destructive: [...new Set(destructive)], warnings: [...new Set(warnings)], uxOnly, structureUnchanged, uxNotes };
 }
 
@@ -90,7 +90,7 @@ export function changeRecord(n: number, request: string, state: ProposalState, b
   return {
     n, at, request, summary: d.summary, before, after: state.after, label,
     created: [...d.blocksAdded.map((b) => `block “${b.title}”`), ...d.questionsAdded.map((q) => q.code), ...d.embeddedAdded.map((e) => `embedded ${e}`), ...d.calculationsAdded.map((c) => `calculation ${c}`), ...d.quotasAdded.map((q) => `quota “${q}”`), ...d.ux.added.map((x) => `${x.kind} “${x.label}” (${x.target})`)],
-    modified: [...d.questionsModified.map((q) => q.code), ...d.blocksRenamed.map((b) => `block “${b.to}”`), ...d.ux.changed.map((x) => `${x.kind} “${x.label}”`)],
+    modified: [...d.questionsModified.map((q) => q.code), ...d.blocksRenamed.map((b) => `block “${b.to}”`), ...d.ux.changed.map((x) => `${x.kind} “${x.label}”`), ...(d.theme.length ? [`theme (${d.theme.length} setting${d.theme.length === 1 ? "" : "s"})`] : [])],
     removed: [...d.questionsRemoved.map((q) => q.code), ...d.blocksRemoved.map((b) => `block “${b.title}”`), ...d.ux.removed.map((x) => `${x.kind} “${x.label}”`)],
   };
 }
@@ -188,6 +188,7 @@ export function proposalCounts(diff: SurveyDiff, after: SurveyDefinition): { lab
     { label: "animations", value: diff.ux.added.filter((x) => x.kind === "animation").length },
     { label: "behaviours", value: diff.ux.added.filter((x) => x.kind === "behaviour").length },
     { label: "UX changes", value: diff.ux.changed.length + diff.ux.removed.length },
+    { label: "theme settings", value: diff.theme.length },
   ].filter((c) => c.value > 0);
 }
 
@@ -220,6 +221,7 @@ export function uxPreviewScope(after: SurveyDefinition, diff: SurveyDiff): UxPre
     const b = pages.find((x) => x.id === out.blockId);
     if (b) { b.pages[0]?.node.questionIds.forEach(add); if (!out.pageId) out.pageId = b.pages[0]?.node.id; }
   }
+  if (diff.theme.length) out.chrome = true;
   if (!out.questionIds.length) after.questions.filter((q) => q.type !== "html").slice(0, 2).forEach((q) => add(q.id));
   // the block and page the first question lives on, so block- and page-scoped rules match as they will in the survey
   if (!out.blockId || !out.pageId) {

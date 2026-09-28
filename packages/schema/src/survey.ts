@@ -162,6 +162,49 @@ export const CustomScript = z.object({
 });
 export type CustomScript = z.infer<typeof CustomScript>;
 
+export const BrandingBackground = z.object({
+  image: z.string().optional(),
+  size: z.enum(["cover", "contain", "auto"]).default("cover"),
+  position: z.string().default("center"),
+  repeat: z.boolean().default(false),
+  attachment: z.enum(["fixed", "scroll"]).default("fixed"),
+  /** a translucent colour laid over the image (rgba / hex with alpha) */
+  overlay: z.string().optional(),
+  /** a CSS gradient, used on its own or under the image */
+  gradient: z.string().optional(),
+});
+export type BrandingBackground = z.infer<typeof BrandingBackground>;
+
+export const BrandingAppearance = z.object({
+  shadow: z.enum(["none", "soft", "medium", "strong"]).optional(),
+  cardPadding: z.string().optional(),
+  borderWidth: z.string().optional(),
+  /** how answer options are drawn: bordered rows (default), raised cards, pills, or minimal */
+  optionStyle: z.enum(["default", "cards", "pills", "minimal"]).optional(),
+  /** radio buttons and checkboxes: the browser's own, or drawn in the theme's colours */
+  controlStyle: z.enum(["native", "custom"]).optional(),
+  optionGap: z.string().optional(),
+  inputStyle: z.enum(["outlined", "filled", "underline"]).optional(),
+  focusColor: z.string().optional(),
+  /** how strongly a selected option is tinted with the primary colour, 0–40 (%) */
+  selectedTint: z.number().min(0).max(40).optional(),
+  buttonRadius: z.string().optional(),
+  progressHeight: z.string().optional(),
+  logoMaxHeight: z.string().optional(),
+});
+export type BrandingAppearance = z.infer<typeof BrandingAppearance>;
+
+export const DeviceOverrides = z.object({
+  baseSize: z.string().optional(),
+  maxWidth: z.string().optional(),
+  cardPadding: z.string().optional(),
+  optionGap: z.string().optional(),
+  radius: z.string().optional(),
+  questionSize: z.string().optional(),
+  hideBackgroundImage: z.boolean().optional(),
+});
+export type DeviceOverrides = z.infer<typeof DeviceOverrides>;
+
 /** Branding / theming (requirement §19). */
 export const Branding = z.object({
   themeId: z.string().optional(),
@@ -202,6 +245,12 @@ export const Branding = z.object({
       fontFamily: z.string().default("Inter, system-ui, sans-serif"),
       baseSize: z.string().default("16px"),
       headingWeight: z.number().default(650),
+      /* optional refinements (Sept 28, advanced theming) — absent, the renderer's defaults stand */
+      headingFont: z.string().optional(),
+      lineHeight: z.string().optional(),
+      letterSpacing: z.string().optional(),
+      /** the question text's size, relative to the base size (default 1.08em) */
+      questionSize: z.string().optional(),
     })
     .default({}),
   layout: z
@@ -282,6 +331,22 @@ export const Branding = z.object({
       showBack: z.boolean().default(true),
     })
     .default({}),
+  /**
+   * THE PAGE BEHIND THE SURVEY: an image (https or an inline image), how it
+   * sits, a colour overlay to keep text readable over it, or a gradient.
+   * Absent, the page is `colors.background` as before.
+   */
+  background: BrandingBackground.optional(),
+  /**
+   * WHAT THE RENDERER USED TO HARD-CODE — shadows, padding, borders, option
+   * and control style, inputs, focus, the selected tint, button radius,
+   * progress height, logo size. Every field optional; each falls back to the
+   * value the stylesheet always used, so an unset survey looks exactly as it
+   * did.
+   */
+  appearance: BrandingAppearance.optional(),
+  /** per-device overrides of the sizes that matter on small screens */
+  responsive: z.object({ tablet: DeviceOverrides.optional(), mobile: DeviceOverrides.optional() }).optional(),
   headerHtml: z.string().optional(),
   footerHtml: z.string().optional(),
   customCss: z.string().optional(),

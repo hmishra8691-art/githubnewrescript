@@ -172,24 +172,24 @@
   }
 }
 .rs-header { display: flex; align-items: center; padding: 14px 0; }
-.rs-header img { max-height: 44px; }
+.rs-header img { max-height: var(--rs-logo-h, 44px); }
 .rs-header.center { justify-content: center; }
 .rs-header.right { justify-content: flex-end; }
 
-.rs-progress-track { height: 6px; background: var(--rs-border); border-radius: 999px; overflow: hidden; margin: 8px 0 24px; }
+.rs-progress-track { height: var(--rs-progress-h, 6px); background: var(--rs-border); border-radius: 999px; overflow: hidden; margin: 8px 0 24px; }
 .rs-progress-fill { height: 100%; background: var(--rs-progress); border-radius: 999px; transition: width .3s ease; }
 .rs-progress-label { font-size: 12px; color: var(--rs-subtle); text-align: right; margin-top: -18px; margin-bottom: 18px; }
 
-.rs-card { background: var(--rs-surface); border: 1px solid var(--rs-border); border-radius: var(--rs-radius); padding: 24px; margin-bottom: var(--rs-gap); }
+.rs-card { background: var(--rs-surface); border: var(--rs-border-w, 1px) solid var(--rs-border); border-radius: var(--rs-radius); padding: var(--rs-card-pad, 24px); margin-bottom: var(--rs-gap); box-shadow: var(--rs-shadow, none); }
 .rs-flat .rs-card { background: transparent; border: none; padding: 8px 0; }
 .rs-line .rs-card { background: transparent; border: none; border-bottom: 1px solid var(--rs-border); border-radius: 0; padding: 16px 0; }
 
-.rs-qtext { font-weight: var(--rs-heading-weight); font-size: 1.08em; margin: 0 0 4px; color: var(--rs-heading); }
+.rs-qtext { font-weight: var(--rs-heading-weight); font-size: var(--rs-q-size, 1.08em); margin: 0 0 4px; color: var(--rs-heading); font-family: var(--rs-heading-font, inherit); }
 .rs-shell a { color: var(--rs-link); }
 .rs-qinstruction { color: var(--rs-subtle); font-size: 0.9em; margin: 0 0 14px; }
 .rs-required { color: var(--rs-error); margin-left: 4px; }
 
-.rs-options { display: flex; flex-direction: column; gap: 8px; }
+.rs-options { display: flex; flex-direction: column; gap: var(--rs-option-gap, 8px); }
 /* "horizontal": options left to right across the available width, wrapping
    rather than overflowing. What a 0–10 scale built from radio buttons needs. */
 .rs-options.horizontal { flex-direction: row; flex-wrap: wrap; align-items: stretch; }
@@ -200,7 +200,7 @@
   cursor: pointer; transition: border-color .12s, background .12s; background: var(--rs-surface);
 }
 .rs-option:hover { border-color: var(--rs-primary); }
-.rs-option.selected { border-color: var(--rs-primary); background: color-mix(in srgb, var(--rs-primary) 7%, var(--rs-surface)); }
+.rs-option.selected { border-color: var(--rs-primary); background: color-mix(in srgb, var(--rs-primary) var(--rs-selected-tint, 7%), var(--rs-surface)); }
 .rs-option.disabled { opacity: .5; cursor: not-allowed; } .rs-option.disabled:hover { border-color: var(--rs-border); }
 /* Scope the control sizing to the radio/checkbox itself. Written as a bare
    `.rs-option input` it also matched the "Other (please specify)" box nested
@@ -218,7 +218,7 @@
   padding: 9px 12px; width: 100%; max-width: 420px;
 }
 .rs-textarea { max-width: 100%; min-height: 110px; resize: vertical; }
-.rs-input:focus, .rs-select:focus, .rs-textarea:focus, .rs-option:focus-within { outline: 2px solid color-mix(in srgb, var(--rs-primary) 45%, transparent); outline-offset: 1px; }
+.rs-input:focus, .rs-select:focus, .rs-textarea:focus, .rs-option:focus-within { outline: 2px solid color-mix(in srgb, var(--rs-focus, var(--rs-primary)) 45%, transparent); outline-offset: 1px; }
 .rs-input.sm { max-width: 120px; }
 
 .rs-table-wrap { overflow-x: auto; }
@@ -292,7 +292,7 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-nav { display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; }
 .rs-btn {
   font: inherit; font-weight: 600; cursor: pointer; padding: 11px 26px;
-  border-radius: calc(var(--rs-radius) - 2px); border: 1.5px solid var(--rs-button-bg);
+  border-radius: var(--rs-btn-radius, calc(var(--rs-radius) - 2px)); border: 1.5px solid var(--rs-button-bg);
   background: var(--rs-button-bg); color: var(--rs-button-text); transition: filter .12s;
 }
 .rs-btn:hover { filter: brightness(1.08); }
@@ -645,7 +645,7 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 /* One ring, on anything focusable inside a survey. `:focus-visible`
    so a mouse click does not draw it, a keyboard tab does. */
 .rs-shell :is(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
-  outline: 3px solid var(--rs-primary);
+  outline: 3px solid var(--rs-focus, var(--rs-primary));
   outline-offset: 2px;
   border-radius: 3px;
 }
@@ -777,3 +777,42 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-acbc-verdict .rs-btn-mini.on { border-color: var(--rs-primary); background: color-mix(in srgb, var(--rs-primary) 12%, var(--rs-surface)); font-weight: 600; }
 .rs-acbc-actions { display: flex; gap: 10px; margin-top: 14px; }
 .rs-acbc-rule { border: 1.5px solid var(--rs-border); border-radius: 10px; padding: 14px 16px; font-size: 15px; }
+
+
+/* ============================================================================
+   ADVANCED THEMING (Sept 28) — the Branding panel's appearance settings.
+   Every rule here is behind a class or a variable the survey has to set, so
+   a survey that sets none renders exactly as before.
+   ========================================================================== */
+
+/* a themed shell carries its own font, size, line height and — when it has
+   one — its page background (the Studio's preview frames; the runtime's
+   <html> gets the same variables through pageThemeVars) */
+.rs-themed { font-family: var(--rs-font); font-size: var(--rs-base-size); color: var(--rs-text); line-height: var(--rs-line-height, 1.5); letter-spacing: var(--rs-letter-spacing, normal); }
+.rs-themed.rs-has-bg { background-color: var(--rs-bg); background-image: var(--rs-bg-layers); background-size: var(--rs-bg-size, cover); background-position: var(--rs-bg-position, center); background-repeat: var(--rs-bg-repeat, no-repeat); background-attachment: var(--rs-bg-attachment, scroll); }
+
+/* option styles */
+.rs-opt-cards .rs-option { padding: 14px 16px; border-width: 1px; box-shadow: var(--rs-shadow, 0 1px 2px rgba(15, 23, 42, .06), 0 1px 3px rgba(15, 23, 42, .08)); border-radius: var(--rs-radius); }
+.rs-opt-cards .rs-option.selected { box-shadow: 0 0 0 2px var(--rs-primary); }
+.rs-opt-pills .rs-option { border-radius: 999px; padding: 9px 18px; }
+.rs-opt-minimal .rs-option { border-color: transparent; background: transparent; padding: 8px 6px; }
+.rs-opt-minimal .rs-option:hover { border-color: transparent; background: color-mix(in srgb, var(--rs-primary) 5%, transparent); }
+.rs-opt-minimal .rs-option.selected { border-color: transparent; }
+
+/* controls drawn in the theme's colours (keyboard and screen readers keep the real input) */
+.rs-ctl-custom .rs-option > input[type="radio"],
+.rs-ctl-custom .rs-option > input[type="checkbox"],
+.rs-ctl-custom .rs-matrix input[type="radio"],
+.rs-ctl-custom .rs-matrix input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none; width: 18px; height: 18px; margin: 0; flex: none; cursor: pointer;
+  border: 2px solid var(--rs-border); background: var(--rs-surface); display: inline-grid; place-content: center;
+  transition: border-color .12s, background .12s, box-shadow .12s;
+}
+.rs-ctl-custom input[type="radio"] { border-radius: 50%; }
+.rs-ctl-custom input[type="checkbox"] { border-radius: 5px; }
+.rs-ctl-custom input[type="radio"]:checked { border-color: var(--rs-primary); box-shadow: inset 0 0 0 4px var(--rs-surface); background: var(--rs-primary); }
+.rs-ctl-custom input[type="checkbox"]:checked { border-color: var(--rs-primary); background: var(--rs-primary) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path fill='none' stroke='white' stroke-width='2.4' d='M3.5 8.5l3 3 6-7'/></svg>") center / 12px no-repeat; }
+
+/* inputs */
+.rs-input-filled :is(.rs-input, .rs-select, .rs-textarea) { border-color: transparent; background: color-mix(in srgb, var(--rs-text) 6%, var(--rs-input-bg)); }
+.rs-input-underline :is(.rs-input, .rs-select, .rs-textarea) { border-width: 0 0 var(--rs-border-w, 1.5px) 0; border-radius: 0; background: transparent; padding-left: 2px; padding-right: 2px; }

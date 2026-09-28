@@ -2,7 +2,7 @@
 import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
 import { createResponseState, setAnswer } from "@rescript/engine";
-import { QuestionRenderer, UxLayer, brandingVars, widthModeClass } from "@rescript/renderer";
+import { QuestionRenderer, UxLayer, brandingVars, widthModeClass, brandingClasses, brandingResponsiveCss } from "@rescript/renderer";
 import type { UxPreviewScope } from "../../../lib/copilot/client";
 
 /**
@@ -15,7 +15,7 @@ import type { UxPreviewScope } from "../../../lib/copilot/client";
  */
 export function UxPreview({ after, before, scope }: { after: SurveyDefinition; before: SurveyDefinition; scope: UxPreviewScope }) {
   const [side, setSide] = React.useState<"after" | "before">("after");
-  const [device, setDevice] = React.useState<"desktop" | "mobile">("desktop");
+  const [device, setDevice] = React.useState<"desktop" | "tablet" | "mobile">("desktop");
   const [replay, setReplay] = React.useState(0);
   const [values, setValues] = React.useState<Record<string, unknown>>({});
   const def = side === "after" ? after : before;
@@ -34,11 +34,12 @@ export function UxPreview({ after, before, scope }: { after: SurveyDefinition; b
         <span className="iq-spacer" />
         <button type="button" className={`iq-btn${side === "after" ? " on" : ""}`} onClick={() => setSide("after")} data-testid="cp-ux-after">After</button>
         <button type="button" className={`iq-btn${side === "before" ? " on" : ""}`} onClick={() => setSide("before")} data-testid="cp-ux-before">Before</button>
-        <button type="button" className={`iq-btn${device === "mobile" ? " on" : ""}`} onClick={() => setDevice((d) => (d === "mobile" ? "desktop" : "mobile"))} data-testid="cp-ux-mobile">{device === "mobile" ? "Phone" : "Desktop"}</button>
+        <button type="button" className={`iq-btn${device === "mobile" ? " on" : ""}`} onClick={() => setDevice((d) => (d === "desktop" ? "tablet" : d === "tablet" ? "mobile" : "desktop"))} data-testid="cp-ux-mobile" title="Desktop → tablet → phone">{device === "mobile" ? "Phone" : device === "tablet" ? "Tablet" : "Desktop"}</button>
         <button type="button" className="iq-btn" onClick={() => { setValues({}); setReplay((n) => n + 1); }} data-testid="cp-ux-replay" title="Play the animations again and clear the preview's answers">Replay</button>
       </div>
-      <div className={`cp-ux-stage${device === "mobile" ? " rs-viewport mobile" : ""}`}>
-        <div key={`${side}-${replay}`} ref={shellRef} className={`rs-shell rs-${b.layout.cardStyle} ${widthModeClass(b)}`} style={{ ...(brandingVars(b) as React.CSSProperties), padding: "12px 14px 18px" }}
+      <div className={`cp-ux-stage${device !== "desktop" ? ` rs-viewport ${device}` : ""}`}>
+        {b.responsive && <style dangerouslySetInnerHTML={{ __html: brandingResponsiveCss(b, '[data-testid="cp-ux-shell"]') }} />}
+        <div key={`${side}-${replay}`} ref={shellRef} className={`rs-shell rs-${b.layout.cardStyle} ${widthModeClass(b)} ${brandingClasses(b)}`} style={{ ...(brandingVars(b) as React.CSSProperties), padding: "12px 14px 18px" }}
           data-rs-ux={def.meta.id} data-rs-block={scope.blockId} data-rs-page={scope.pageId} data-testid="cp-ux-shell">
           <UxLayer def={def} rootRef={shellRef} values={values} allValues={values} shown={questions.map((q) => q.id)} pageKey={`${side}-${replay}`} blockId={scope.blockId} pageId={scope.pageId} pageIndex={1} />
           {scope.chrome && b.layout.progressBar !== "none" && <div className="rs-progress-track"><div className="rs-progress-fill" style={{ width: `${Object.keys(values).length ? 60 : 35}%` }} /></div>}

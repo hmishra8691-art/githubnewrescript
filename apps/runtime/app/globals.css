@@ -11,6 +11,12 @@
 html, body { margin: 0; padding: 0; }
 body {
   background: var(--rs-bg);
+  /* the survey's background image / overlay / gradient (Branding → Background), when it sets one */
+  background-image: var(--rs-bg-layers, none);
+  background-size: var(--rs-bg-size, cover);
+  background-position: var(--rs-bg-position, center);
+  background-repeat: var(--rs-bg-repeat, no-repeat);
+  background-attachment: var(--rs-bg-attachment, scroll);
   color: var(--rs-text);
   font-family: var(--rs-font);
   font-size: var(--rs-base-size);

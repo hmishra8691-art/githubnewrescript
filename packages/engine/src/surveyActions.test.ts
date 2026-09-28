@@ -26,7 +26,7 @@ const generation: SurveyAction[] = [
   { op: "create_question", ref: "PI", type: "rating", text: "How likely are you to buy a premium skincare product in the next 3 months?", scale: { points: 7, low: "Very unlikely", high: "Very likely" } },
   { op: "add_skip", from: "BUY", when: "BUY = No", to: "screen_out" },
   { op: "add_skip", from: "AGE", when: "AGE < 18 OR AGE > 35", to: "screen_out" },
-  { op: "set_display_logic", target: "EXPOSE", expression: "PLAT answered AND NOT (PLAT = 4)" },
+  { op: "set_display_logic", target: "EXPOSE", expression: "PLAT answered AND NOT (PLAT = \"None of these\")" },
   { op: "create_randomizer", blocks: ["SOC", "INT"] },
   { op: "create_embedded", name: "source", source: "url" },
   { op: "create_calculation", name: "EXPOSE_ANY", expression: "COUNT(PLAT)" },
@@ -66,6 +66,7 @@ test("a whole survey from actions: real blocks, questions, options, scales, logi
   assert.equal(buy.skipLogic[0].when.type, "rule");
   assert.equal(age.skipLogic[0].when.type, "group");
   assert.ok(expose.displayLogic);
+  assert.match(JSON.stringify(expose.displayLogic), /"operator":"selected","value":99/, "the label is stored as its option code, and a multi-select's = reads as selected");
   // structure
   const flow = d.flow as { type: string; children?: { title?: string }[] }[];
   const rand = flow.find((x) => x.type === "randomizer")!;
