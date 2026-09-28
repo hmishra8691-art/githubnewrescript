@@ -113,7 +113,9 @@ export async function POST(req: NextRequest) {
   /* 3: the model — or the cache, for exactly the same request */
   const maxTokens = mode === "generate" ? 8000 : mode === "review" ? 3000 : uxTurn ? 3500 : 2500;
   const key = createHash("sha256").update(`${COPILOT_SYSTEM_PROMPT}\u0000${prompt}\u0000${maxTokens}`).digest("hex");
-  const fake = aiProviderName() === "fake" && body.fake && typeof body.fake === "object" ? body.fake : null;
+  // the browser suites stand in for the model: one reply, or [reply, the reply to the repair request]
+  const fakes = aiProviderName() === "fake" && body.fake && typeof body.fake === "object" ? (Array.isArray(body.fake) ? body.fake : [body.fake]) : [];
+  const fake = fakes[0] ?? null;
   let raw: unknown;
   let cached = false;
   const hit = CACHE.get(key);
@@ -134,12 +136,44 @@ export async function POST(req: NextRequest) {
 
   /* 4: the gate, and the engine's validation on a clone */
   const coerced = coerceCopilotReply(raw);
-  const reply = coerced && themeImageUrl ? { ...coerced, actions: withThemeImage(coerced.actions, themeImageUrl) } : coerced;
+  let reply = coerced && themeImageUrl ? { ...coerced, actions: withThemeImage(coerced.actions, themeImageUrl) } : coerced;
   if (!reply) {
     return NextResponse.json({ ok: true, reply: null, message: aiProviderName() === "fake" ? "The FAKE provider cannot reason about surveys; configure a real model to use the copilot." : "The model's answer had nothing I could use. Try rephrasing — nothing was changed.", context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, cached }, usage: { charge }, ...(deterministic ? { review: deterministic } : {}) });
   }
   // a look-only request cannot change the structure: the engine refuses structural actions and proves the rest left it alone
-  const applied = reply.actions.length ? applySurveyActions(def, reply.actions, { uxOnly: cls.uxOnly }) : null;
+  let applied = reply.actions.length ? applySurveyActions(def, reply.actions, { uxOnly: cls.uxOnly }) : null;
+  /*
+   * ONE REPAIR. The model sometimes proposes something the Studio refuses — a
+   * script reaching for the page, an event that does not exist, an option that
+   * is not there. Rather than offer a proposal whose Apply can do nothing, the
+   * refusals go back to the model once, with its answer, and it corrects
+   * them. The corrected answer is used only if the Studio accepts more of it.
+   */
+  let repair: { refused: string[]; fixed: boolean } | undefined;
+  // the failed actions, each "what it was: why" — the first entries of errors, in order
+  const refused = applied ? applied.errors.slice(0, applied.results.filter((x) => !x.ok).length) : [];
+  if (applied && refused.length && !cached && (aiProviderName() !== "fake" || fakes.length > 1)) {
+    const repairPrompt = `${prompt}\n\nYOUR PREVIOUS ANSWER:\n${JSON.stringify(raw).slice(0, 14_000)}\n\nTHE STUDIO REFUSED ${refused.length} OF ITS ${reply.actions.length} ACTIONS:\n${refused.map((e) => `- ${e}`).join("\n")}\n\nAnswer again in the same JSON shape. Keep the accepted actions as they were; correct each refused action using only the actions, events and rs api described above, or drop it and say plainly in "reply" what the Studio cannot do. Do not mention the refusal to the user unless something could not be done.`;
+    try {
+      const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + repairPrompt, maxTokens, operation: `copilot_${mode}_repair` },
+        () => completeJson(COPILOT_SYSTEM_PROMPT, repairPrompt, maxTokens, { timeoutMs: 90_000 }));
+      if (m.ok) {
+        charge += m.event?.customerCharge ?? 0;
+        const raw2 = fakes[1] ?? m.value;
+        const c2 = coerceCopilotReply(raw2);
+        const r2 = c2 && themeImageUrl ? { ...c2, actions: withThemeImage(c2.actions, themeImageUrl) } : c2;
+        const a2 = r2 && r2.actions.length ? applySurveyActions(def, r2.actions, { uxOnly: cls.uxOnly }) : null;
+        const okCount = (a: typeof applied) => (a ? a.results.filter((x) => x.ok).length - a.results.filter((x) => !x.ok).length : -Infinity);
+        if (r2 && (okCount(a2) > okCount(applied) || (!a2 && !applied.results.some((x) => x.ok)))) {
+          reply = r2; applied = a2;
+          if (!fakes.length) { CACHE.set(key, { at: Date.now(), value: raw2 }); }
+          repair = { refused, fixed: !a2 || a2.results.every((x) => x.ok) };
+        } else repair = { refused, fixed: false };
+      }
+    } catch (e) {
+      console.warn("[rescript:copilot] repair failed", JSON.stringify({ error: (e as Error).message }));
+    }
+  }
   const diff = applied?.valid ? diffSurveys(def, applied.def) : null;
   const passages = passageIds.length || reply.sources.length ? await describePassages(store, surveyId, docs, [...passageIds, ...reply.sources.flatMap((x) => x.passages)]) : {};
   // a citation to a passage that does not exist is not a citation: dropped, and a "document" claim with none left is only a recommendation
@@ -152,7 +186,7 @@ export async function POST(req: NextRequest) {
     validation: applied ? { valid: applied.valid, results: applied.results, errors: applied.errors, destructive: applied.destructive, warnings: applied.warnings, summary: diff?.summary ?? [], diff, uxOnly: applied.uxOnly, structureUnchanged: applied.structureUnchanged } : null,
     ...(deterministic ? { review: deterministic } : {}),
     passages,
-    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, cached, ux: uxTurn, uxOnly: cls.uxOnly },
+    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, cached, ux: uxTurn, uxOnly: cls.uxOnly, ...(repair ? { repair } : {}) },
     usage: { charge },
   });
 }

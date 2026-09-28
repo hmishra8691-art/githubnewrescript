@@ -975,6 +975,7 @@ export function describeAction(a: SurveyAction): string {
     case "remove_behavior": return `Remove behaviour ${a.id}`;
     case "set_theme": return a.label ? `Theme “${a.label}”` : "Change the theme";
     case "set_custom_html": return a.html === null ? `Remove the custom HTML of ${a.target}` : `Custom HTML on ${a.target}`;
+    case "set_default_value": return a.value === null ? `Remove the default value of ${a.target}` : `Default value of ${a.target}: ${Array.isArray(a.value) ? a.value.join(", ") : a.value}`;
   }
 }
 
@@ -1034,6 +1035,10 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
     push("validation", (p.validation ?? []).map((v) => v.kind).join(", "), (q.validation ?? []).map((v) => v.kind).join(", "));
     push("randomized", p.randomization?.enabled ? "yes" : "no", q.randomization?.enabled ? "yes" : "no");
     push("punch rules", punchText(before, p), punchText(after, q));
+    // look-and-behaviour fields of a question: without them a proposal that only sets these would read as "no change"
+    const dv = (x: Question) => { const v = (x.settings as { defaultValue?: unknown } | undefined)?.defaultValue; return v === undefined || v === null ? "" : Array.isArray(v) ? v.join(", ") : String(v); };
+    push("default value", dv(p), dv(q));
+    push("custom HTML", (p.customHtml ?? "").slice(0, 120), (q.customHtml ?? "").slice(0, 120));
     push("block", blockOf(before, q.id)?.title ?? "", blockOf(after, q.id)?.title ?? "");
     if (!p.displayLogic && q.displayLogic) dAdded++; else if (p.displayLogic && !q.displayLogic) dRemoved++; else if (p.displayLogic && q.displayLogic && cond(before, p.displayLogic) !== cond(after, q.displayLogic)) dChanged++;
     const ds = (q.skipLogic?.length ?? 0) - (p.skipLogic?.length ?? 0);

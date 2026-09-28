@@ -608,7 +608,8 @@ export function IntelligentView() {
                     onAnswer={(q) => { setText(`${q} — `); inputRef.current?.focus(); }}
                     counts={open ? proposalCounts(copilot.state!.diff, copilot.state!.after) : null}
                     canApply={!!open && !s.readOnly && !copilot.state!.diff.empty && (!copilot.state!.destructive.length || copilot.confirmed)}
-                    applyTitle={s.readOnly ? "Read-only" : copilot.state?.destructive.length && !copilot.confirmed ? "Some changes remove or rewrite existing content — confirm them in the Changes panel first" : "Apply as one undoable change"} />
+                    refused={open ? copilot.state!.errors : []}
+                    applyTitle={s.readOnly ? "Read-only" : open && copilot.state!.diff.empty ? (copilot.state!.errors.length ? "Nothing to apply — the Studio refused every change (the reasons are listed above)" : "Nothing to apply — the proposal leaves the survey as it is") : copilot.state?.destructive.length && !copilot.confirmed ? "Some changes remove or rewrite existing content — confirm them in the Changes panel first" : "Apply as one undoable change"} />
                 );
               }
               return <ReviewCard key={turn.id} text={turn.text} entry={turn.entry} onSelect={(qid) => selectKey(`question:${qid}` as ObjectKey)} onAnalyze={(sid) => void analyzeScript(turn.id, sid)} />;

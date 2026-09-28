@@ -1,7 +1,10 @@
 import type { SurveyDefinition, UxAnimation, UxBehavior, UxEffect, UxRule, UxStyle, UxTarget } from "@rescript/schema";
-import { UX_ANIMATION_TRIGGERS, UX_EFFECTS, UX_EVENTS, UX_MEDIA, UX_PRESETS, UX_STATES } from "@rescript/schema";
+import { UX_ANIMATION_TRIGGERS, UX_EFFECTS, UX_EVENTS, UX_MEDIA, UX_PRESETS, UX_STATES, effectiveResponseModel } from "@rescript/schema";
 import { describeUxTarget, resolveUxTarget, uxToken, uxDeclarations, validateUxItem, type UxLookups } from "./ux.js";
 import { applyThemePatch } from "./theme.js";
+import { defaultAnswerFor } from "./defaultValue.js";
+import { createResponseState } from "./state.js";
+import { describeOptions, type OptionList } from "./optionCodes.js";
 
 /**
  * THE UX ACTIONS — how the copilot changes the survey's look and behaviour,
@@ -30,6 +33,8 @@ export const UX_ACTION_OPS = [
   "create_behavior", "update_behavior", "remove_behavior",
   /* the survey's theme (its branding — the Branding panel's own settings) and a question's decorative HTML */
   "set_theme", "set_custom_html",
+  /* a question's starting answer (settings.defaultValue — the Properties "Default value" field) */
+  "set_default_value",
 ] as const;
 /** accepted from the model and turned into the ops above */
 export const UX_ACTION_ALIASES = ["attach_behavior_to_question", "attach_behavior_to_option", "attach_behavior_to_block", "attach_behavior_to_page", "create_responsive_rule", "create_behaviour", "update_behaviour", "remove_behaviour"] as const;
@@ -49,7 +54,8 @@ export type UxAction =
   | ({ op: "update_behavior"; id: string; label?: string; target?: unknown } & BehFields)
   | { op: "remove_behavior"; id: string }
   | { op: "set_theme"; patch: Record<string, unknown>; label?: string }
-  | { op: "set_custom_html"; target: string; html: string | null };
+  | { op: "set_custom_html"; target: string; html: string | null }
+  | { op: "set_default_value"; target: string; value: string | number | (string | number)[] | null };
 
 export const isUxOp = (op: string) => (UX_ACTION_OPS as readonly string[]).includes(op);
 
@@ -175,6 +181,15 @@ export function coerceUxAction(op: string, o: Record<string, unknown>): UxAction
       if (typeof o.html !== "string") return "set_custom_html needs html (or null to remove it)";
       return { op: "set_custom_html", target, html: o.html.slice(0, 20000) };
     }
+    case "set_default_value": case "set_default": case "default_value": case "prefill": case "set_prefill": {
+      const target = str(o.target) ?? str(o.question);
+      if (!target) return "set_default_value needs a target question";
+      const v = "value" in o ? o.value : o.default ?? o.defaultValue;
+      if (v === null) return { op: "set_default_value", target, value: null };
+      if (typeof v === "number" || (typeof v === "string" && v.trim())) return { op: "set_default_value", target, value: typeof v === "string" ? v.trim().slice(0, 500) : v };
+      if (Array.isArray(v) && v.length && v.every((x) => typeof x === "number" || typeof x === "string")) return { op: "set_default_value", target, value: v as (string | number)[] };
+      return "set_default_value needs a value (a number, text, an option code or a list of codes — or null to remove it)";
+    }
     default: return null;
   }
 }
@@ -239,7 +254,9 @@ function find<T extends { id: string; label: string }>(list: T[], id: string, en
 }
 function gate(def: SurveyDefinition, kind: "style" | "animation" | "behavior", item: UxStyle | UxAnimation | UxBehavior): string[] {
   const v = validateUxItem(def, kind, item);
-  if (v.errors.length) fail(v.errors.join("; "));
+  // the action is already named by its label; the item's own "“label”: " prefix would say it twice
+  const own = `“${item.label}”: `;
+  if (v.errors.length) fail(v.errors.map((e) => (e.startsWith(own) ? e.slice(own.length) : e)).join("; "));
   return v.warnings;
 }
 const clampAnim = (a: UxAnimation): UxAnimation => ({
@@ -256,6 +273,32 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
     if (!r.changes.length) fail(r.errors.length ? r.errors.join("; ") : "the theme is already like that");
     def.branding = r.branding;
     return { description: `Theme${a.label ? ` “${a.label}”` : ""}: ${r.changes.slice(0, 8).join("; ")}${r.changes.length > 8 ? ` and ${r.changes.length - 8} more` : ""}`, warnings: r.errors.map((e) => `Theme: ${e} — left as it was`), touched: [] };
+  }
+  if (a.op === "set_default_value") {
+    const q = env.lookups.question(a.target) ?? fail(`there is no question “${a.target}”`);
+    const settings = (q.settings ??= {} as typeof q.settings) as { defaultValue?: unknown };
+    if (a.value === null) {
+      if (settings.defaultValue === undefined) fail(`${q.code} has no default value`);
+      const was = settings.defaultValue;
+      delete settings.defaultValue;
+      return { description: `Remove ${q.code}'s default value (${Array.isArray(was) ? was.join(", ") : String(was)})`, destructive: `Removes ${q.code}'s default value`, warnings: [], touched: [q.id] };
+    }
+    const probe = { ...q, settings: { ...q.settings, defaultValue: a.value } } as typeof q;
+    const read = defaultAnswerFor(probe, { def, state: createResponseState(def) });
+    if (read === null) {
+      const model = effectiveResponseModel(q);
+      fail(model === "single_choice" || model === "multiple_choice"
+        ? `${q.code} has no option “${Array.isArray(a.value) ? a.value.join(", ") : a.value}” to start with — its options are ${describeOptions(q.options as OptionList)}`
+        : model === "numeric" ? `${q.code} is numeric: its default must be a number, not “${a.value}”` : `${q.code} (${q.type.replace(/_/g, " ")}) cannot have a default value`);
+    }
+    const had = settings.defaultValue !== undefined;
+    settings.defaultValue = read;
+    const shown = Array.isArray(read) ? read.join(", ") : String(read);
+    const warnings: string[] = [];
+    const bound = (kind: string) => { const r = (q.validation ?? []).find((x) => x.kind === kind) as { value?: unknown } | undefined; const n = Number(r?.value); return r && Number.isFinite(n) ? n : null; };
+    const lo = bound("min_value"), hi = bound("max_value");
+    if (typeof read === "number" && ((lo !== null && read < lo) || (hi !== null && read > hi))) warnings.push(`${q.code}'s default ${read} is outside its validation range — the respondent will be asked to change it`);
+    return { description: `${had ? "Change" : "Set"} ${q.code}'s default value to ${shown} — filled in when the question is first shown, only if it has no answer yet`, ...(had ? { destructive: `Replaces ${q.code}'s default value` } : {}), warnings, touched: [q.id] };
   }
   if (a.op === "set_custom_html") {
     const q = env.lookups.question(a.target) ?? fail(`there is no question “${a.target}”`);

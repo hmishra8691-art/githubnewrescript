@@ -18,7 +18,7 @@ import type { CopilotEntry } from "./useCopilot";
  *
  * Every question code in the copilot's words is a link to the question.
  */
-export function CopilotCard({ entry, def, onSelect, onReviewChanges, onApply, onCancel, onAnswer, counts, canApply, applyTitle }: {
+export function CopilotCard({ entry, def, onSelect, onReviewChanges, onApply, onCancel, onAnswer, counts, canApply, applyTitle, refused = [] }: {
   entry: CopilotEntry;
   def: SurveyDefinition;
   onSelect(questionId: string): void;
@@ -28,6 +28,8 @@ export function CopilotCard({ entry, def, onSelect, onReviewChanges, onApply, on
   onAnswer(text: string): void;
   counts: { label: string; value: number }[] | null;
   canApply: boolean;
+  /** the proposal's actions the Studio refused, each with its reason — shown here, so a disabled Apply is never a mystery */
+  refused?: string[];
   applyTitle: string;
 }) {
   const r = entry.reply;
@@ -106,6 +108,16 @@ export function CopilotCard({ entry, def, onSelect, onReviewChanges, onApply, on
               </div>
             )}
             {r.rejected.length > 0 && <p className="iq-warning" data-testid="cp-rejected"><Icon name="warning" size={12} /> {r.rejected.length} action{r.rejected.length === 1 ? "" : "s"} from the model {r.rejected.length === 1 ? "was" : "were"} not in a shape the Studio accepts and {r.rejected.length === 1 ? "was" : "were"} dropped.</p>}
+            {r.actions.length > 0 && state === "open" && refused.length > 0 && (
+              <div className={`cp-refused${counts?.length ? "" : " all"}`} role="alert" data-testid="cp-card-refused">
+                <span className="iq-label">{counts?.length ? `Not included — the Studio refused ${refused.length === 1 ? "one change" : `${refused.length} changes`}` : "Nothing can be applied — the Studio refused this proposal"}</span>
+                <ul>{refused.map((e, i) => <li key={i}><Linked text={e} def={def} onSelect={onSelect} /></li>)}</ul>
+                {!counts?.length && <p className="iqi-dim" style={{ margin: "4px 0 0" }}>Ask again with this in mind, or edit it by hand in Question Studio → Properties.</p>}
+              </div>
+            )}
+            {entry.context?.repair && state === "open" && (
+              <p className="iqi-dim cp-repaired" data-testid="cp-repaired">{entry.context.repair.fixed ? `The first answer had ${entry.context.repair.refused.length === 1 ? "a change" : `${entry.context.repair.refused.length} changes`} the Studio could not accept; the copilot corrected ${entry.context.repair.refused.length === 1 ? "it" : "them"}.` : "The copilot was asked to correct the changes the Studio refused, and could not correct all of them."}</p>
+            )}
             {r.actions.length > 0 && counts && (
               <div className="cp-counts" data-testid="cp-counts">
                 {counts.map((c) => <span key={c.label} className="cp-count"><b>{c.value}</b> {c.label}</span>)}

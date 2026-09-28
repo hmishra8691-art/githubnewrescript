@@ -13,6 +13,7 @@ import { evaluateExpression } from "./calc.js";
 import { checkQuotas, type QuotaCounts } from "./quotas.js";
 import { applyEmbeddedField, type EmbeddedField } from "./embedded.js";
 import { prefillQuestions, maskingVariablesFor } from "./setExpression.js";
+import { applyDefaultValues } from "./defaultValue.js";
 import { resolveUrlTemplate } from "./redirect.js";
 import { listFillHiddenDestinations } from "./listFill.js";
 import { containerVisibleByRules, visibleByRules } from "./displayRules.js";
@@ -536,6 +537,8 @@ function moveForward(
        */
       prefillQuestions(visible, { def, state, loop: s.loop, quotaCounts },
         (q) => answerKey(q.id, s.loop));
+      // a question's default value is its starting answer — after prefill, so a punch or a preselect wins
+      applyDefaultValues(visible, { def, state, loop: s.loop, quotaCounts }, (q) => answerKey(q.id, s.loop));
       return { steps, stepIndex: idx, done: false, triggeredSkips, quotaFull: [] };
     }
     if (s.kind === "embedded_data") {

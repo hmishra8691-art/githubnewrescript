@@ -268,3 +268,11 @@ test("a theme request is look-only; a theme image is told as colours and a place
   const acts = withThemeImage([{ op: "set_theme", background: { image: THEME_IMAGE_TOKEN, overlay: "rgba(0,0,0,.4)" }, colors: { primary: "#dc3214" } }], "https://cdn.example.com/a.jpg");
   assert.deepEqual(acts, [{ op: "set_theme", background: { image: "https://cdn.example.com/a.jpg", overlay: "rgba(0,0,0,.4)" }, colors: { primary: "#dc3214" } }]);
 });
+
+test("a default value request reaches the UX guide, which offers set_default_value — never a script that fills in answers", () => {
+  for (const t of ["Set Q2's default value to 19", "Prefill the age question with 19", "Give Q3 a default answer of Yes"]) {
+    const c = classifyRequest(t, 20, 0); assert.equal(c.ux, true, t);
+  }
+  assert.match(COPILOT_UX_GUIDE, /\{"op":"set_default_value","target":"Q2","value":19\}/);
+  assert.match(COPILOT_UX_GUIDE, /A script CANNOT fill in or change an answer/);
+});

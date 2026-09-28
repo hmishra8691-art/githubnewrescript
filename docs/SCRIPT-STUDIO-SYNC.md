@@ -87,8 +87,35 @@ people to read; it is never what gets stored.
   - The same functions are used by the runtime, the Branding preview and the copilot's UX preview.
   - A question-scoped UX style is more specific than the theme and wins on that question.
 
+## 5. Default values, and proposals the Studio refuses
+
+- **A question's default value is `settings.defaultValue`**, the Properties →
+  State → "Default / piped value" field. Before this change, nothing used it at runtime.
+  - `engine/src/defaultValue.ts` fills it in when the question is first
+    shown, only if the question has no answer yet. It does this once per question, so a
+    respondent who clears it does not see it come back.
+  - How it is read depends on the question: a number for numeric questions, text for text questions, and option codes for choice questions (labels are resolved to codes). A piped default (`{{Q1}}`) is read from the answers so far.
+  - A default that does not fit the question is ignored.
+- **`set_default_value`** is the copilot action for the same setting. It is look-only, so it is allowed in a look-only request.
+  - It is checked against the question: an unknown option or a non-number on a numeric question is refused.
+  - A value outside the question's validation range gets a warning.
+  - Removing a default is flagged as destructive.
+- **Scripts cannot fill in answers.** `rs.setAnswer`, `x.value = …` and
+  `dispatchEvent` are refused with a message that points to the default value
+  instead. `page_enter`, `select_option` and the other behaviour event names are
+  accepted as aliases in `rs.listen`.
+- **A refused proposal explains itself.** The card lists every refused action
+  with its reason, and when nothing is left, Apply's tooltip says why.
+  `diffSurveys` now counts default-value and custom-HTML changes, so a proposal
+  that only changes those is not mistaken for "nothing to apply".
+- **One repair round.** When the Studio refuses some of the model's actions, the turn route sends the refusals back to the model once.
+  - The corrected answer is used only if the Studio accepts more of it.
+  - The card says that a correction happened.
+  - The repair is a second metered model call.
+
 ## Regression
 
+`scripts/default-value-test.mjs` covers refusals, the repair round and default values.
 `scripts/codes-sync-test.mjs` covers the brief's 20 steps, from builder
 → stored code → runtime through Intelligent mode ⇄ Properties ⇄ Branding
 on desktop, tablet and phone. The engine tests are `optionCodes.test.ts` and

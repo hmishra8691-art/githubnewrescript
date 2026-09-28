@@ -145,6 +145,10 @@ export function withoutPresentation(def: SurveyDefinition): SurveyDefinition {
     const buttons = br.buttons as Record<string, unknown> | undefined;
     if (buttons) delete buttons.style;
   }
-  for (const q of out.questions ?? []) if (q.type !== "custom_component") { delete (q as { customHtml?: string }).customHtml; }
+  for (const q of out.questions ?? []) {
+    if (q.type !== "custom_component") delete (q as { customHtml?: string }).customHtml;
+    // a starting answer is behaviour, not structure: the question, its options, codes and logic are what they were
+    if (q.settings) delete (q.settings as { defaultValue?: unknown }).defaultValue;
+  }
   return out;
 }

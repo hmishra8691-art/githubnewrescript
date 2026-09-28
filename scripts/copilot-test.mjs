@@ -242,6 +242,9 @@ await page.waitForSelector('[data-testid="intelligent-view"]');
   const refused = await texts('[data-testid="cp-refused"] li');
   assert.equal(refused.length, 1);
   assert.match(refused[0], /there is no question “Q9”/);
+  // the card says so too, beside its Apply (which still applies the valid part)
+  assert.match(await (await t.$('[data-testid="cp-card-refused"]')).textContent(), /Not included — the Studio refused one change.*there is no question “Q9”/);
+  assert.equal(await t.$eval('[data-testid="cp-apply"]', (b) => b.disabled), false);
   assert.ok((await texts('[data-testid="cp-summary"] li')).includes("Add 1 question"), "the valid part is still offered");
   await page.click('[data-testid="cp-panel-cancel"]');
   assert.equal(await t.getAttribute("data-proposal"), "cancelled");

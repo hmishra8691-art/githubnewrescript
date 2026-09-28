@@ -127,7 +127,7 @@ function ChangesTab({ copilot, onSelect, onApply, applyNote, readOnly }: { copil
       <div className="iq-actions">
         <button type="button" className="iq-btn" onClick={copilot.cancel} data-testid="cp-panel-cancel">Cancel</button>
         <span className="iq-spacer" />
-        <button type="button" className="iq-btn primary" onClick={onApply} disabled={blocked} data-testid="cp-panel-apply" title={readOnly ? "Read-only" : st.destructive.length && !copilot.confirmed ? "Confirm the destructive changes first" : "Apply as one undoable change"}>Apply changes</button>
+        <button type="button" className="iq-btn primary" onClick={onApply} disabled={blocked} data-testid="cp-panel-apply" title={readOnly ? "Read-only" : st.diff.empty ? (st.errors.length ? "Nothing to apply — the Studio refused every change (see why above)" : "Nothing to apply") : st.destructive.length && !copilot.confirmed ? "Confirm the destructive changes first" : "Apply as one undoable change"}>Apply changes</button>
       </div>
     </div>
   );

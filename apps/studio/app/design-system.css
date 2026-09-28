@@ -1621,6 +1621,10 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .cp-cite { font-size: 10.5px; color: var(--c-text-3); margin-left: 4px; cursor: help; }
 .cp-assumptions { border-left: 3px solid var(--c-warning); padding: 4px 10px; background: var(--c-warning-bg); border-radius: 6px; font-size: 12.5px; }
 .cp-assumptions ul { margin: 2px 0 0; padding-left: 18px; }
+.cp-refused { border-left: 3px solid var(--c-warning); padding: 4px 10px; background: var(--c-warning-bg); border-radius: 6px; font-size: 12.5px; margin-top: 8px; }
+.cp-refused.all { border-left-color: var(--c-error); background: var(--c-error-bg); }
+.cp-refused ul { margin: 2px 0 0; padding-left: 18px; }
+.cp-repaired { font-size: 12px; margin: 6px 0 0; }
 .cp-clarify { display: flex; flex-wrap: wrap; gap: 6px; }
 .cp-q { max-width: 100%; }
 .cp-counts { display: flex; flex-wrap: wrap; gap: 6px; }

@@ -657,6 +657,8 @@ const TARGET_FIRST = new Set(["addClass", "removeClass", "toggleClass", "animate
 const FORBIDDEN_IDENTIFIERS = ["eval", "Function", "fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts", "import", "require", "localStorage", "sessionStorage", "indexedDB", "caches", "document", "window", "parent", "top", "opener", "frames", "globalThis", "self", "navigator", "location", "cookie", "postMessage", "Worker", "SharedWorker", "ServiceWorker", "constructor", "__proto__", "prototype", "Reflect", "Proxy", "setInterval"];
 const LOOP_KEYWORDS = ["while", "for", "do"];
 export const UX_SCRIPT_EVENTS = ["answer", "change", "select", "deselect", "click", "hover", "page", "complete"] as const;
+/** the behaviour-event spellings a script may use for the same thing (the effects form says page_enter, select_option…) */
+export const UX_SCRIPT_EVENT_ALIASES: Record<string, (typeof UX_SCRIPT_EVENTS)[number]> = { page_enter: "page", page_load: "page", load: "page", appear: "page", enter: "page", page_complete: "complete", select_option: "select", deselect_option: "deselect" };
 
 /** code with every string, template and comment blanked (positions kept), and the string literals it had */
 export function lexJs(code: string): { bare: string; strings: { value: string; start: number; end: number }[] } {
@@ -697,14 +699,17 @@ export function validateUxScript(code: string, def: SurveyDefinition): ScriptChe
   for (const w of LOOP_KEYWORDS) if (new RegExp(`(^|[^\\w$.])${w}(?![\\w$])`).test(bare)) errors.push(`“${w}” loops are not allowed in survey scripts — use the api (targets like "Q5.options" address every option at once)`);
   for (const id of FORBIDDEN_IDENTIFIERS) if (new RegExp(`(^|[^\\w$])${id}(?![\\w$])`).test(bare)) errors.push(`${id} is not available to survey scripts — they can only use the rs api`);
   const usedApi = [...bare.matchAll(/\brs\s*\.\s*([A-Za-z_$][\w$]*)/g)].map((m) => ({ name: m[1], at: m.index! + m[0].length }));
-  for (const u of usedApi) if (!(UX_SCRIPT_API as readonly string[]).includes(u.name)) errors.push(`rs.${u.name} is not part of the survey api (${UX_SCRIPT_API.join(", ")})`);
+  // the commonest wrong turn: a script filling in an answer. Scripts change the look; a starting answer is a question setting
+  const FILLS = new Set(["setAnswer", "setValue", "setDefault", "fill", "prefill", "answer"]);
+  if (usedApi.some((u) => FILLS.has(u.name)) || /\.\s*value\s*=(?!=)|\bdispatchEvent\b/.test(bare)) errors.unshift("scripts cannot fill in or change answers — to start a question with an answer, set its default value (the set_default_value action, or Properties → Default value)");
+  for (const u of usedApi) if (!(UX_SCRIPT_API as readonly string[]).includes(u.name) && !FILLS.has(u.name)) errors.push(`rs.${u.name} is not part of the survey api (${UX_SCRIPT_API.join(", ")})`);
   if (!usedApi.length) warnings.push("the script never calls the rs api, so it cannot change anything");
   const firstString = (at: number) => { const s = strings.find((x) => x.start >= at && /^\s*\(\s*$/.test(bare.slice(at, x.start))); return s?.value; };
   const seenListen = new Set<string>();
   for (const u of usedApi) {
     if (u.name === "listen") {
       const ev = firstString(u.at);
-      if (ev != null && !(UX_SCRIPT_EVENTS as readonly string[]).includes(ev)) errors.push(`rs.listen("${ev}") — the events are ${UX_SCRIPT_EVENTS.join(", ")}`);
+      if (ev != null && !(UX_SCRIPT_EVENTS as readonly string[]).includes(ev) && !UX_SCRIPT_EVENT_ALIASES[ev]) errors.push(`rs.listen("${ev}") — the events are ${UX_SCRIPT_EVENTS.join(", ")}${/page|load|enter|show|open/i.test(ev) ? " (“page” fires when the page opens)" : ""}`);
       const evLit = strings.find((x) => x.start >= u.at && /^\s*\(\s*$/.test(bare.slice(u.at, x.start)));
       const next = evLit ? strings[strings.indexOf(evLit) + 1] : undefined;
       const tgt = evLit && next && /^\s*,\s*$/.test(bare.slice(evLit.end, next.start)) ? next : undefined;

@@ -3,7 +3,7 @@ import * as React from "react";
 import type { SurveyDefinition, UxBehavior, UxEffect, UxTarget } from "@rescript/schema";
 import {
   UX_PRESET_FRAMES, checkDeclarations, compileUxCss, evaluateUxTriggers, resolveUxTarget, uxAnimationNeedsRuntime,
-  uxPlayToken, uxSelector, uxToken, uxAnswered, uxSelectedCodes, defaultUxLookups, validateUxScript,
+  uxPlayToken, uxSelector, uxToken, uxAnswered, uxSelectedCodes, defaultUxLookups, validateUxScript, UX_SCRIPT_EVENT_ALIASES,
 } from "@rescript/engine";
 
 /**
@@ -128,10 +128,10 @@ function applyEffect(root: HTMLElement, def: SurveyDefinition, owner: UxTarget, 
 
 const SANDBOX_DOC = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'"></head><body><script>
 (function () {
-  var handlers = [], answers = {}, meta = { questions: {} }, host = window.parent;
+  var handlers = [], answers = {}, meta = { questions: {} }, host = window.parent, ALIASES = ${JSON.stringify(UX_SCRIPT_EVENT_ALIASES)};
   function send(cmd, args) { host.postMessage({ __rsux: 1, cmd: cmd, args: args }, "*"); }
   var rs = {
-    listen: function (ev, target, fn) { if (typeof target === "function") { fn = target; target = "self"; } handlers.push({ ev: ev, target: target, fn: fn }); send("listen", [ev, target]); },
+    listen: function (ev, target, fn) { if (typeof target === "function") { fn = target; target = "self"; } ev = ALIASES[ev] || ev; handlers.push({ ev: ev, target: target, fn: fn }); send("listen", [ev, target]); },
     getAnswer: function (code) { return answers[code]; },
     getQuestion: function (code) { return meta.questions[code] || null; },
     getBlock: function () { return meta.block || null; },

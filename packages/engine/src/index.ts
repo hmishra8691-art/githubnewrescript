@@ -90,3 +90,4 @@ export * from "./questionShape.js";
 export * from "./interview.js";
 export * from "./versionedDictionary.js";
 export * from "./logicProposal.js";
+export * from "./defaultValue.js";
