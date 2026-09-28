@@ -56,6 +56,18 @@ Apply → store.replace (one labelled undoable edit) → AI Change #00N
 | `apps/studio/app/api/copilot/` | `turn`, `documents` (POST / GET / DELETE), `record` (audit `survey.ai_changed`). |
 | `apps/studio/components/intelligent/copilot/` | `useCopilot`, `CopilotCard`, `CopilotPanel` (Changes · Review · Research · History · Inspector), `StructurePane`. |
 
+## Provider configuration
+
+| Variable | What |
+|---|---|
+| `AI_API_URL` | the OpenAI-compatible base, e.g. `https://api.anthropic.com/v1/` or `https://api.openai.com/v1` |
+| `AI_API_KEY` | the key (server only) |
+| `AI_MODEL` | the chat model the copilot reasons with (use one your provider serves — the default `gpt-4o-mini` is OpenAI's) |
+| `AI_WORKSPACE_ID` | sent as `anthropic-workspace-id` on every request. Needed when an Anthropic key is **not scoped to a workspace** — the provider refuses with “must include the anthropic-workspace-id header”. Alternatively, create the key inside a workspace and leave this unset. |
+| `AI_API_HEADERS` | any other headers the provider needs, as JSON (`{"OpenAI-Organization":"org_…"}`); it cannot override the key or the body type |
+| `AI_VISION_MODEL` | OCR of scanned PDF pages (defaults to `AI_MODEL`) |
+| `AI_EMBEDDINGS_MODEL` | optional semantic retrieval (BM25 alone without it) |
+
 ## Decisions
 
 - **Reasoning is separated from execution.** The model's output is data in a

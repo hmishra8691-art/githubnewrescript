@@ -96,9 +96,55 @@ export function aiProviderName(): "fake" | "openai-compatible" | null {
  * should not have to say so twice. The point is that it is now possible to
  * say otherwise.
  */
+/**
+ * EXTRA HEADERS FOR THE AI PROVIDER — for providers that need more than a
+ * bearer key on every request.
+ *
+ *   AI_WORKSPACE_ID   sent as `anthropic-workspace-id`. An Anthropic API key
+ *                     that is not scoped to a workspace is refused with
+ *                     "must include the anthropic-workspace-id header"
+ *                     unless every request names the workspace; this names it.
+ *   AI_API_HEADERS    any other headers, as a JSON object
+ *                     ({"OpenAI-Organization":"org_…"}). Invalid JSON is
+ *                     ignored with a warning, never sent half-parsed.
+ *
+ * Read from the server environment only, like the key; nothing here is ever
+ * returned to a caller or logged. A header that would replace the key
+ * (authorization) or the body's type is not accepted from AI_API_HEADERS.
+ */
+export function aiExtraHeaders(): Record<string, string> {
+  const out: Record<string, string> = {};
+  const raw = (process.env.AI_API_HEADERS ?? "").trim();
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+          const name = k.trim();
+          if (!/^[A-Za-z0-9-]+$/.test(name) || /^(?:authorization|content-type|content-length|host)$/i.test(name)) continue;
+          if (typeof v === "string" || typeof v === "number") out[name.toLowerCase()] = String(v);
+        }
+      } else console.warn("[rescript:ai] AI_API_HEADERS must be a JSON object; ignored");
+    } catch { console.warn("[rescript:ai] AI_API_HEADERS is not valid JSON; ignored"); }
+  }
+  const ws = (process.env.AI_WORKSPACE_ID ?? "").trim();
+  if (ws) out["anthropic-workspace-id"] = ws;
+  return out;
+}
+
+/** The headers of one request to the configured AI provider: the key, and the extra headers above. */
+function providerHeaders(key: string, json = true): Record<string, string> {
+  return { ...(json ? { "content-type": "application/json" } : {}), ...aiExtraHeaders(), ...(key ? { authorization: `Bearer ${key}` } : {}) };
+}
+
 export function sttBase(): string {
   const own = (process.env.AI_STT_API_URL ?? "").trim();
   return (own || (process.env.AI_API_URL ?? "").trim()).replace(/\/+$/, "");
+}
+
+/** the transcription provider is the chat provider (no AI_STT_API_URL of its own): it gets the same extra headers */
+function sameProviderAsChat(base: string): boolean {
+  return base === (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
 }
 
 function sttKey(): string {
@@ -384,7 +430,7 @@ export async function synthesizeSpeech(text: string, opts: SpeechOptions): Promi
   try {
     const r = await fetch(`${base}/audio/speech`, {
       method: "POST", signal: ctrl.signal, cache: "no-store",
-      headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
+      headers: providerHeaders(key),
       body: JSON.stringify({ model: (process.env.AI_TTS_MODEL ?? "").trim() || "tts-1", input: t, voice: opts.voiceId || defaultVoiceFor(opts.gender), speed: Math.max(0.5, Math.min(2, opts.speed ?? 1)), response_format: opts.format ?? "mp3", ...(opts.style ? { instructions: `Speak in ${opts.language}, ${opts.style}.` } : {}) }),
     });
     if (!r.ok) { console.warn("[rescript:ai] tts provider error", JSON.stringify({ status: r.status })); return null; }
@@ -593,7 +639,7 @@ export async function transcribe(
       /* deliberately NO content-type header — fetch sets it with the
          multipart boundary, and setting it by hand produces a body the
          provider cannot parse */
-      headers: { ...(key ? { authorization: `Bearer ${key}` } : {}) },
+      headers: sameProviderAsChat(base) ? providerHeaders(key, false) : { ...(key ? { authorization: `Bearer ${key}` } : {}) },
       body: form,
     });
     if (!r.ok) {
@@ -829,7 +875,7 @@ export async function completeJson(
   try {
     const r = await fetch(`${base}/chat/completions`, {
       method: "POST", signal: ctrl.signal, cache: "no-store",
-      headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
+      headers: providerHeaders(key),
       body: JSON.stringify({
         model, temperature: 0, max_tokens: maxTokens,
         response_format: { type: "json_object" },
@@ -907,7 +953,7 @@ export async function ocrImage(bytes: Uint8Array, mime: string, opts: CompleteJs
   try {
     const r = await fetch(`${base}/chat/completions`, {
       method: "POST", signal: ctrl.signal, cache: "no-store",
-      headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
+      headers: providerHeaders(key),
       body: JSON.stringify({
         model, temperature: 0, max_tokens: 4000,
         messages: [
@@ -942,7 +988,7 @@ export async function embedTexts(texts: string[], opts: CompleteJsonOptions = {}
   try {
     const r = await fetch(`${base}/embeddings`, {
       method: "POST", signal: ctrl.signal, cache: "no-store",
-      headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
+      headers: providerHeaders(key),
       body: JSON.stringify({ model, input: texts.map((t) => t.slice(0, 8000)) }),
     });
     if (!r.ok) return null;
@@ -965,7 +1011,7 @@ async function complete(system: string, user: string, maxTokens = 160): Promise<
       method: "POST",
       signal: ctrl.signal,
       cache: "no-store",
-      headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
+      headers: providerHeaders(key),
       body: JSON.stringify({
         model,
         temperature: 0,
