@@ -173,7 +173,7 @@ export function IntelligentView() {
   const applyCopilot = React.useCallback(() => {
     const r = copilot.apply();
     setApplyNote(r.ok ? null : r.reason ?? null);
-    if (r.ok) s.toast("Applied as one change. Undo from History, or ⌘Z.");
+    if (r.ok) s.toast(r.message ? `${r.message} Undo from History, or ⌘Z.` : "Applied as one change. Undo from History, or ⌘Z.");
     else if (r.reason) s.toast(r.reason, "err");
   }, [copilot, s]);
   const selectQuestion = React.useCallback((id: string) => selectKey(`question:${id}` as ObjectKey), [selectKey]);

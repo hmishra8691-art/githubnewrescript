@@ -10,6 +10,8 @@ import { migrateQuestionType } from "./questionShape.js";
 import { getQuestionByCodeOrVar } from "./state.js";
 import { runQualityCheck } from "./qualityCheck.js";
 import { questionOrder } from "./dependencies.js";
+import { applyUxAction, coerceUxAction, isUxOp, UX_ACTION_OPS, type UxAction } from "./uxActions.js";
+import { diffUx, withoutUx, type UxDiff } from "./ux.js";
 
 /**
  * THE COPILOT'S HANDS — a controlled action layer over the survey.
@@ -65,12 +67,15 @@ export type SurveyAction =
   | { op: "create_branch"; blocks: string[]; when: string; title?: string }
   | { op: "create_loop"; from: string; to: string; over?: string; items?: string[]; loopVar?: string; title?: string }
   | { op: "create_quota"; name: string; cells: { label: string; when: string; limit: number }[]; onFull?: "terminate" | "flag" }
-  | { op: "set_research"; objective?: string; hypotheses?: string[]; population?: string; methodology?: string; constructs?: { name: string; role?: string; definition?: string; questions?: string[] }[]; analysis?: string[]; assumptions?: string[]; sources?: string[] };
+  | { op: "set_research"; objective?: string; hypotheses?: string[]; population?: string; methodology?: string; constructs?: { name: string; role?: string; definition?: string; questions?: string[] }[]; analysis?: string[]; assumptions?: string[]; sources?: string[] }
+  /* the survey's look and behaviour — see uxActions.ts; they write def.ux and nothing else */
+  | UxAction;
 
 export const SURVEY_ACTION_OPS = [
   "create_block", "rename_block", "delete_block", "create_question", "update_question", "delete_question", "move_question",
   "set_display_logic", "add_skip", "clear_skips", "set_validation", "page_break", "create_embedded", "create_calculation",
   "create_randomizer", "create_branch", "create_loop", "create_quota", "set_research",
+  ...UX_ACTION_OPS,
 ] as const;
 
 /** Friendly question types → the Studio variant that makes them. */
@@ -223,8 +228,11 @@ function coerceOne(item: unknown): SurveyAction | string {
       const constructs = Array.isArray(o.constructs) ? o.constructs.map((c) => { const x = (c ?? {}) as Record<string, unknown>; const name = str(x.name); return name ? { name, ...(str(x.role) ? { role: str(x.role) } : {}), ...(str(x.definition) ? { definition: str(x.definition) } : {}), ...(strs(x.questions) ? { questions: strs(x.questions) } : {}) } : null; }).filter((x): x is NonNullable<typeof x> => !!x) : undefined;
       return { op, ...(str(o.objective) ? { objective: str(o.objective) } : {}), ...(strs(o.hypotheses) ? { hypotheses: strs(o.hypotheses) } : {}), ...(str(o.population) ? { population: str(o.population) } : {}), ...(str(o.methodology) ? { methodology: str(o.methodology) } : {}), ...(constructs ? { constructs } : {}), ...(strs(o.analysis) ? { analysis: strs(o.analysis) } : {}), ...(strs(o.assumptions) ? { assumptions: strs(o.assumptions) } : {}), ...(strs(o.sources) ? { sources: strs(o.sources) } : {}) };
     }
-    default:
+    default: {
+      const ux = op ? coerceUxAction(op, o) : null;
+      if (ux !== null) return ux;
       return op ? `unknown action “${op}”` : "an action needs an op";
+    }
   }
 }
 
@@ -255,22 +263,36 @@ export interface ApplyActionsOutcome {
   refs: Record<string, string>;
   /** false when the result did not pass the schema — then `def` is the input, unchanged */
   valid: boolean;
+  /** every applied action was a look-and-behaviour change */
+  uxOnly: boolean;
+  /** questions, options, codes, logic, validation, flow: identical before and after (only `ux` may differ) */
+  structureUnchanged: boolean;
 }
 
-interface Ctx { def: SurveyDefinition; ids: IdMinter; refs: Map<string, string>; blockRefs: Map<string, string>; lastBlock: string | null; now: string }
+interface Ctx { def: SurveyDefinition; ids: IdMinter; refs: Map<string, string>; blockRefs: Map<string, string>; uxRefs: Map<string, string>; lastBlock: string | null; now: string; uxWarnings: string[] }
 
 type PageNode = Extract<FlowNode, { type: "page" }>;
 
-export function applySurveyActions(input: SurveyDefinition, actions: SurveyAction[], opts: { ids?: IdMinter; now?: string } = {}): ApplyActionsOutcome {
+/**
+ * `uxOnly`: the request was about the look and behaviour only ("don't change
+ * the logic, only improve the UI") — every structural action is refused, and
+ * the outcome proves the structure did not change.
+ */
+export function applySurveyActions(input: SurveyDefinition, actions: SurveyAction[], opts: { ids?: IdMinter; now?: string; uxOnly?: boolean } = {}): ApplyActionsOutcome {
   const before = input;
   let def = structuredClone(input) as SurveyDefinition;
-  const ctx: Ctx = { def, ids: opts.ids ?? defaultIds, refs: new Map(), blockRefs: new Map(), lastBlock: null, now: opts.now ?? new Date().toISOString() };
+  const ctx: Ctx = { def, ids: opts.ids ?? defaultIds, refs: new Map(), blockRefs: new Map(), uxRefs: new Map(), lastBlock: null, now: opts.now ?? new Date().toISOString(), uxWarnings: [] };
   const results: ActionResult[] = [];
-  // the research design names the questions that measure each construct, so it is recorded after they exist
-  const order = actions.map((a, index) => ({ a, index })).sort((x, y) => Number(x.a.op === "set_research") - Number(y.a.op === "set_research"));
+  // the research design names the questions that measure each construct, and UX targets name questions: both after the questions exist
+  const rank = (a: SurveyAction) => (a.op === "set_research" ? 2 : isUxOp(a.op) ? 1 : 0);
+  const order = actions.map((a, index) => ({ a, index })).sort((x, y) => rank(x.a) - rank(y.a));
   order.forEach(({ a, index }) => {
     const snapshot = structuredClone(def) as SurveyDefinition;
     ctx.def = def;
+    if (opts.uxOnly && !isUxOp(a.op)) {
+      results.push({ index, op: a.op, ok: false, description: describeAction(a), error: "this request is about the look and behaviour only, so structural changes are refused — ask for them separately if you want them", touched: [] });
+      return;
+    }
     try {
       const r = apply(ctx, a);
       results.push({ index, op: a.op, ok: true, description: r.description, touched: r.touched ?? [], ...(r.destructive ? { destructive: r.destructive } : {}) });
@@ -284,12 +306,16 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
   results.sort((x, y) => x.index - y.index);
   const errors = results.filter((r) => !r.ok).map((r) => `${describeAction(actions[r.index])}: ${r.error}`);
   if (!parsed.success) {
-    return { def: before, results, errors: [...errors, ...parsed.error.issues.slice(0, 5).map((i) => `The result does not pass the survey schema at ${i.path.join(".")}: ${i.message}`)], warnings: [], destructive: [], refs: Object.fromEntries(ctx.refs), valid: false };
+    return { def: before, results, errors: [...errors, ...parsed.error.issues.slice(0, 5).map((i) => `The result does not pass the survey schema at ${i.path.join(".")}: ${i.message}`)], warnings: [], destructive: [], refs: Object.fromEntries(ctx.refs), valid: false, uxOnly: false, structureUnchanged: false };
   }
   const after = parsed.data;
+  const baseline = SurveyDefinitionSchema.safeParse(before);
+  const structureUnchanged = JSON.stringify(withoutUx(baseline.success ? baseline.data : before)) === JSON.stringify(withoutUx(after));
+  const applied = results.filter((r) => r.ok);
+  const uxOnly = applied.length > 0 && applied.every((r) => isUxOp(r.op));
   const beforeIssues = new Set(runQualityCheck(before).areas.flatMap((x) => x.issues).filter((i) => i.level === "error").map((i) => i.message));
   const warnings = runQualityCheck(after).areas.flatMap((x) => x.issues).filter((i) => i.level === "error" && !beforeIssues.has(i.message)).map((i) => `${i.questionCode ? `${i.questionCode}: ` : ""}${i.message}`);
-  return { def: after, results, errors, warnings: [...new Set(warnings)].slice(0, 40), destructive: results.filter((r) => r.ok && r.destructive).map((r) => r.destructive!), refs: Object.fromEntries(ctx.refs), valid: true };
+  return { def: after, results, errors, warnings: [...new Set([...warnings, ...ctx.uxWarnings])].slice(0, 40), destructive: results.filter((r) => r.ok && r.destructive).map((r) => r.destructive!), refs: Object.fromEntries([...ctx.refs, ...ctx.uxRefs]), valid: true, uxOnly, structureUnchanged };
 }
 
 class ActionError extends Error {}
@@ -580,6 +606,12 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       } as never;
       return { description: `Research design: ${[a.objective ? "objective" : "", a.hypotheses?.length ? `${a.hypotheses.length} hypothes${a.hypotheses.length === 1 ? "is" : "es"}` : "", a.constructs?.length ? `${a.constructs.length} constructs` : ""].filter(Boolean).join(", ") || "updated"}`, touched: [] };
     }
+    default: {
+      // the look and behaviour: def.ux only, through the UX gate
+      const r = applyUxAction(def, a, { lookups: { question: (x) => tryQuestion(ctx, x), block: (x) => tryBlock(ctx, x) }, ids: ctx.ids, now: ctx.now, refs: ctx.uxRefs });
+      ctx.uxWarnings.push(...r.warnings);
+      return r;
+    }
   }
 }
 
@@ -857,6 +889,15 @@ export function describeAction(a: SurveyAction): string {
     case "create_loop": return `Loop ${a.from}${a.to !== a.from ? `–${a.to}` : ""}`;
     case "create_quota": return `Create quota ${a.name}`;
     case "set_research": return "Record the research design";
+    case "create_style": return `Style “${a.label}”`;
+    case "update_style": return `Change style ${a.id}`;
+    case "remove_style": return `Remove style ${a.id}`;
+    case "create_animation": return `Animation “${a.label}” (${a.preset})`;
+    case "update_animation": return `Change animation ${a.id}`;
+    case "remove_animation": return `Remove animation ${a.id}`;
+    case "create_behavior": return `Behaviour “${a.label}”`;
+    case "update_behavior": return `Change behaviour ${a.id}`;
+    case "remove_behavior": return `Remove behaviour ${a.id}`;
   }
 }
 
@@ -878,6 +919,8 @@ export interface SurveyDiff {
   calculationsAdded: string[];
   quotasAdded: string[];
   researchChanged: boolean;
+  /** styles, animations and behaviours added, changed, removed */
+  ux: UxDiff;
   /** "5 blocks, 28 questions, 2 skip conditions …" — the review line for a proposal */
   summary: string[];
   empty: boolean;
@@ -934,6 +977,7 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
   const loops = countType(after, "loop") - countType(before, "loop");
   const pages = { before: listPages(before.flow as unknown[]).length, after: listPages(after.flow as unknown[]).length };
   const researchChanged = JSON.stringify(before.research ?? null) !== JSON.stringify(after.research ?? null);
+  const ux = diffUx(before, after);
   const randomizedAdded = after.questions.filter((q) => q.randomization?.enabled && !bq.get(q.id)?.randomization?.enabled).length;
   const scales = new Map<number, number>();
   for (const q of questionsAdded.map((x) => aq.get(x.id)!)) if (/single_select|matrix/.test(q.type) && q.options?.length && q.options.every((o) => /^\d+$/.test(String(o.code))) && isScale(q)) scales.set(q.options.length, (scales.get(q.options.length) ?? 0) + 1);
@@ -961,9 +1005,12 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
     dRemoved ? `Remove ${n(dRemoved, "display condition")}` : "",
     sRemoved ? `Remove ${n(sRemoved, "skip condition")}` : "",
     researchChanged ? "Record the research design (objective, hypotheses, constructs)" : "",
+    ...ux.added.map((x) => `Add ${x.kind} “${x.label}” on ${x.target}`),
+    ...ux.changed.map((x) => `Change ${x.kind} “${x.label}” on ${x.target}`),
+    ...ux.removed.map((x) => `Remove ${x.kind} “${x.label}” (${x.target})`),
   ].filter(Boolean);
   const empty = !summary.length;
-  return { blocksAdded, blocksRemoved, blocksRenamed, questionsAdded, questionsRemoved, questionsModified, pages, displayLogic: { added: dAdded, changed: dChanged, removed: dRemoved }, skips: { added: sAdded, removed: sRemoved }, randomizers, embeddedAdded, calculationsAdded, quotasAdded, researchChanged, summary, empty };
+  return { blocksAdded, blocksRemoved, blocksRenamed, questionsAdded, questionsRemoved, questionsModified, pages, displayLogic: { added: dAdded, changed: dChanged, removed: dRemoved }, skips: { added: sAdded, removed: sRemoved }, randomizers, embeddedAdded, calculationsAdded, quotasAdded, researchChanged, ux, summary, empty };
 }
 
 function isScale(q: Question): boolean {

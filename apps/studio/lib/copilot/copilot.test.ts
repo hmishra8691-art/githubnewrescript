@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { SurveyDefinition } from "@rescript/schema";
 import { applySurveyActions } from "@rescript/engine";
 import { chunkResearchDocument, ResearchIndex } from "@rescript/import/research";
-import { coerceCopilotReply, classifyRequest, copilotUserPrompt, referencedQuestions, surveyLanguageOf, COPILOT_SYSTEM_PROMPT } from "./prompt.ts";
+import { coerceCopilotReply, classifyRequest, copilotUserPrompt, referencedQuestions, surveyLanguageOf, uxIntent, COPILOT_SYSTEM_PROMPT, COPILOT_UX_GUIDE } from "./prompt.ts";
 import { copilotOutline } from "./outline.ts";
 import { coerceDocSummary, summaryInput, researchCards, researchPassages } from "./research.ts";
 
@@ -44,10 +44,10 @@ test("the model's reply is gated: actions through the engine's gate, everything 
 });
 
 test("what a request needs: mode, and research only when it is about the research", () => {
-  assert.deepEqual(classifyRequest("My hypothesis is that younger consumers buy premium skincare because of social media. Create a survey to test it.", 0, 0), { mode: "generate", research: false });
-  assert.deepEqual(classifyRequest("Change Q18 to a matrix question", 30, 3), { mode: "edit", research: false }, "no papers for a type change");
-  assert.deepEqual(classifyRequest("Based on the literature review, add three questions measuring trust", 30, 3), { mode: "edit", research: true });
-  assert.deepEqual(classifyRequest("Review my survey", 30, 0), { mode: "review", research: false });
+  assert.deepEqual(classifyRequest("My hypothesis is that younger consumers buy premium skincare because of social media. Create a survey to test it.", 0, 0), { mode: "generate", research: false, ux: false, uxOnly: false });
+  assert.deepEqual(classifyRequest("Change Q18 to a matrix question", 30, 3), { mode: "edit", research: false, ux: false, uxOnly: false }, "no papers for a type change");
+  assert.deepEqual(classifyRequest("Based on the literature review, add three questions measuring trust", 30, 3), { mode: "edit", research: true, ux: false, uxOnly: false });
+  assert.deepEqual(classifyRequest("Review my survey", 30, 0), { mode: "review", research: false, ux: false, uxOnly: false });
   assert.equal(classifyRequest("Mujhe ek customer satisfaction survey banana hai. Pehle screening karo", 0, 0).mode, "generate", "Hinglish");
   assert.equal(classifyRequest("I've uploaded three papers and a brief — create a survey based on them", 0, 4).research, true);
   assert.equal(classifyRequest("What does Q3 measure?", 12, 0).mode, "question");
@@ -105,7 +105,7 @@ test("research cards and passages: summarised once, cited, and only the relevant
   assert.ok(big.used.includes(many.find((c) => /hypothesis/.test(c.text))!.id), "…keeping the passage that states the hypothesis");
 });
 
-import { evaluateProposal, rebaseProposal, changeRecord, memoryFrom, linkify, structureRows, proposalCounts, sameSurvey } from "./client.ts";
+import { evaluateProposal, rebaseProposal, changeRecord, memoryFrom, linkify, structureRows, proposalCounts, sameSurvey, uxPreviewScope } from "./client.ts";
 
 test("a proposal is a chain: revising it before applying writes the next batch against the PROPOSED survey", () => {
   const base = survey();
@@ -180,10 +180,79 @@ test("a revised proposal numbers the questions it made in order — and replays 
   assert.deepEqual(s3.after.questions.slice(0, 2).map((q) => q.code), ["Q1", "Q2"]);
 });
 
-import { SURVEY_ACTION_OPS } from "@rescript/engine";
+import { SURVEY_ACTION_OPS, UX_ACTION_ALIASES } from "@rescript/engine";
 test("the model is told about every action the engine accepts — and only those", () => {
-  for (const op of SURVEY_ACTION_OPS) assert.ok(COPILOT_SYSTEM_PROMPT.includes(`"op":"${op}"`), `the prompt documents ${op}`);
-  const documented = [...COPILOT_SYSTEM_PROMPT.matchAll(/"op":"([a-z_]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(documented.filter((o) => !(SURVEY_ACTION_OPS as readonly string[]).includes(o)), [], "no action is advertised that the engine would refuse");
+  const both = COPILOT_SYSTEM_PROMPT + COPILOT_UX_GUIDE;
+  for (const op of SURVEY_ACTION_OPS) assert.ok(both.includes(`"op":"${op}"`), `the prompt or the UX guide documents ${op}`);
+  for (const op of ["create_style", "create_animation", "create_behavior", "attach_behavior_to_question", "create_responsive_rule"]) assert.ok(COPILOT_SYSTEM_PROMPT.includes(op), `the system prompt names ${op}, so the model never says the platform cannot style`);
+  const documented = [...both.matchAll(/"op":"([a-z_]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(documented.filter((o) => ![...SURVEY_ACTION_OPS, ...UX_ACTION_ALIASES].includes(o as never)), [], "no action is advertised that the engine would refuse");
   assert.ok(COPILOT_SYSTEM_PROMPT.length < 12_000, `the system prompt stays compact: ${COPILOT_SYSTEM_PROMPT.length}`);
+});
+
+test("UX requests: recognised, look-only when they are, and given the UX guide only then", () => {
+  const only = [
+    "Make Q10 look better.",
+    "Add a hover animation to the Q4 options",
+    "For Q12, make the answer options look like modern cards. When someone selects an option, animate the card slightly. If they select Other, smoothly expand the text field. Don't change any survey logic.",
+    "Make all questions in Block 3 appear one at a time with a fade",
+    "The options in Q7 are overlapping on mobile. Fix it.",
+    "When Q5 is answered, animate the next button",
+    "Clean up the custom CSS",
+    "Add JavaScript so selecting Other shows a confirmation animation",
+    "Make the progress bar animate smoothly when the respondent moves forward",
+  ];
+  for (const t of only) { const c = classifyRequest(t, 20, 0); assert.equal(c.ux, true, t); assert.equal(c.uxOnly, true, `look-only: ${t}`); assert.equal(c.mode, "ux", t); }
+  const mixed = [
+    "Add a question about price and make its options look like cards",
+    "Make Q3 required and highlight it",
+    "Change Q5 into a card sort",
+    "Make the options look like cards and randomize them",
+  ];
+  for (const t of mixed) { const c = classifyRequest(t, 20, 0); assert.equal(c.ux, true, t); assert.equal(c.uxOnly, false, `structure allowed: ${t}`); }
+  assert.equal(uxIntent("Add a question about mobile banking apps").only, false, "a topic word is not a look-only request");
+  assert.equal(uxIntent("Make the options look like cards, but don't change the question wording or the logic").only, true, "negated structure is look-only");
+  assert.equal(classifyRequest("Create a survey about mobile banking", 0, 0).mode, "generate");
+  const gen = classifyRequest("Create a new survey about skincare with an animated, card-style design", 0, 0);
+  assert.equal(gen.mode, "generate"); assert.equal(gen.ux, true); assert.equal(gen.uxOnly, false, "generating a survey is never look-only");
+  const p = copilotUserPrompt({ message: "fade in Q2", outline: "o", surveyLanguage: "en", mode: "ux", ux: true, uxOnly: true });
+  assert.ok(p.includes("UX GUIDE") && p.includes("LOOK-AND-BEHAVIOUR ONLY"));
+  assert.ok(!copilotUserPrompt({ message: "add Q", outline: "o", surveyLanguage: "en", mode: "edit" }).includes("UX GUIDE"), "no guide on a structural turn");
+});
+
+test("UX in the outline and the proposal: existing items by id, the proof the structure is unchanged, the preview scope", () => {
+  const d = survey();
+  const withUx = applySurveyActions(d, [
+    { op: "create_style", label: "FREQ cards", target: "Q2.options", rules: [{ declarations: { "border-radius": "12px" } }, { state: "hover", declarations: { transform: "translateY(-2px)" } }] },
+    { op: "create_animation", label: "Usage fade", target: "block:Usage.questions", preset: "fade-up", trigger: "appear", durationMs: 300, delayMs: 0, easing: "ease-out", staggerMs: 120, iterations: 1 },
+    { op: "create_behavior", label: "Nudge", target: "Q2", on: "answer", effects: [{ do: "animate", target: "next", preset: "pulse" }] },
+  ] as never, { ids }).def;
+  const o = copilotOutline(withUx, { focusIds: [withUx.questions[1].id], ux: true });
+  assert.match(o, /UX configuration \(3 items; change these by id/);
+  assert.match(o, /style uxs_\d+ “FREQ cards” on Q2 options: base \{border-radius:12px\} · hover \{transform:translateY\(-2px\)\}/);
+  assert.match(o, /animation uxa_\d+ “Usage fade” on every question in “Usage”: fade-up on appear, 300ms, stagger 120ms/);
+  assert.match(o, /behaviour uxb_\d+ “Nudge” on Q2: on answer → animate the Next button pulse/);
+  assert.match(o, /Q2 ux: layout: auto, 3 options/);
+  assert.match(o, /Theme: primary/);
+  assert.doesNotMatch(copilotOutline(withUx), /Theme: primary/, "the theme only for a UX turn");
+  // a look-only proposal: refused structure, proven unchanged
+  const st = evaluateProposal({ base: withUx, steps: [{ request: "slower, and reword Q2", uxOnly: true, actions: [{ op: "update_animation", id: "Usage fade", durationMs: 900 }, { op: "update_question", target: "Q2", text: "Changed" }] as never }] });
+  assert.equal(st.uxOnly, true); assert.equal(st.structureUnchanged, true);
+  assert.match(st.errors.join(" "), /look and behaviour only/);
+  assert.deepEqual(st.uxNotes, ["Change animation “Usage fade”: 300ms → 900ms"]);
+  assert.ok(st.diff.summary.some((l) => /Change animation “Usage fade”/.test(l)));
+  const structural = evaluateProposal({ base: withUx, steps: [{ request: "reword", actions: [{ op: "update_question", target: "Q2", text: "Changed" }] as never }] });
+  assert.equal(structural.structureUnchanged, false); assert.equal(structural.uxOnly, false);
+  const rec = changeRecord(1, "slower", st, withUx);
+  assert.deepEqual(rec.modified, ["animation “Usage fade”"]);
+  const scope = uxPreviewScope(withUx, evaluateProposal({ base: d, steps: [{ request: "x", actions: withUx.ux ? [] : [] }] }).diff);
+  assert.ok(scope.questionIds.length > 0);
+  const full = evaluateProposal({ base: d, steps: [{ request: "ux", uxOnly: true, actions: [
+    { op: "create_behavior", label: "Nudge", target: "Q2", on: "answer", effects: [{ do: "animate", target: "next", preset: "pulse" }] },
+    { op: "create_animation", label: "Usage fade", target: "block:Usage.questions", preset: "fade-up" },
+  ] as never }] });
+  const sc = uxPreviewScope(full.after, full.diff);
+  assert.deepEqual(sc.questionIds, [full.after.questions[1].id], "the question the behaviour listens to");
+  assert.equal(sc.chrome, true, "the Next button it animates");
+  assert.ok(sc.blockId && sc.pageId, "the block and page, so block-scoped rules match");
 });

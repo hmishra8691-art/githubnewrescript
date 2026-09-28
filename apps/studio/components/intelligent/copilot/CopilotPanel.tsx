@@ -1,9 +1,10 @@
 "use client";
 import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
-import type { SurveyAction } from "@rescript/engine";
+import { compileAnimation, compileStyle, describeUxTarget, reviewUx, type SurveyAction } from "@rescript/engine";
 import { Icon } from "../../ui/Icon";
-import { structureRows, changeLabel, type OutlineRow } from "../../../lib/copilot/client";
+import { structureRows, changeLabel, uxPreviewScope, type OutlineRow, type ProposalState } from "../../../lib/copilot/client";
+import { UxPreview } from "./UxPreview";
 import { Linked } from "./CopilotCard";
 import type { Copilot, PanelTab } from "./useCopilot";
 
@@ -37,6 +38,7 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
     { id: "review", label: "Review", badge: copilot.review ? copilot.review.rules.counts.critical + copilot.review.ai.filter((f) => f.severity === "critical").length || undefined : undefined },
     { id: "research", label: "Research", badge: copilot.docs.length || undefined },
     { id: "history", label: "History", badge: copilot.history.filter((h) => !h.reverted).length || undefined },
+    { id: "ux", label: "UX", badge: def.ux ? (def.ux.styles.length + def.ux.animations.length + def.ux.behaviors.length) || undefined : undefined },
     { id: "inspector", label: "Inspector" },
   ];
   return (
@@ -53,6 +55,7 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
         {copilot.tab === "review" && <ReviewTab copilot={copilot} def={def} onSelect={onSelect} />}
         {copilot.tab === "research" && <ResearchTab copilot={copilot} />}
         {copilot.tab === "history" && <HistoryTab copilot={copilot} readOnly={readOnly} />}
+        {copilot.tab === "ux" && <UxTab copilot={copilot} def={def} onSelect={onSelect} />}
         {copilot.tab === "inspector" && inspector}
       </div>
     </aside>
@@ -91,6 +94,7 @@ function ChangesTab({ copilot, onSelect, onApply, applyNote, readOnly }: { copil
           <label className="cp-confirm"><input type="checkbox" checked={copilot.confirmed} onChange={(e) => copilot.setConfirmed(e.target.checked)} data-testid="cp-confirm" /> I understand — apply these {st.destructive.length} change{st.destructive.length === 1 ? "" : "s"} too (undoable)</label>
         </div>
       )}
+      {!st.diff.ux.empty && <UxChanges st={st} base={p.base} />}
       {st.warnings.length > 0 && (
         <div className="cp-block warn" data-testid="cp-new-problems">
           <div className="iq-label">The result would have {st.warnings.length} new problem{st.warnings.length === 1 ? "" : "s"}</div>
@@ -137,6 +141,97 @@ function Outline({ rows, title, onSelect, def }: { rows: OutlineRow[]; title?: s
       {rows.map((r) => r.kind === "block"
         ? <div key={r.id} className={`cp-o-block${r.mark ? ` m-${r.mark}` : ""}`} data-mark={r.mark ?? ""}>{r.label}</div>
         : <button key={r.id} type="button" className={`cp-o-q${r.mark ? ` m-${r.mark}` : ""}`} data-mark={r.mark ?? ""} onClick={() => def.questions.some((q) => q.id === r.id) && onSelect(r.id)} data-testid="cp-o-q">{r.label}{r.mark ? <span className="cp-mark">{r.mark}</span> : null}</button>)}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ the look and behaviour */
+
+/**
+ * WHAT A PROPOSAL DOES TO THE LOOK AND BEHAVIOUR: each item in words, a
+ * proof that the structure is untouched (for a look-only request the engine
+ * refused anything else), the preview on the real components, and the
+ * generated code — scoped CSS and sandboxed scripts — for whoever wants it.
+ */
+function UxChanges({ st, base }: { st: ProposalState; base: SurveyDefinition }) {
+  const scope = React.useMemo(() => uxPreviewScope(st.after, st.diff), [st.after, st.diff]);
+  const ids = new Set([...st.diff.ux.added, ...st.diff.ux.changed].map((x) => x.id));
+  const ux = st.after.ux ?? { styles: [], animations: [], behaviors: [] };
+  const code = [
+    ...ux.styles.filter((x) => ids.has(x.id)).map((x) => ({ id: x.id, label: x.label, lang: "css", text: prettyCss(compileStyle(st.after, x).css) })),
+    ...ux.animations.filter((x) => ids.has(x.id)).map((x) => ({ id: x.id, label: x.label, lang: "css", text: prettyCss(compileAnimation(st.after, x)) })),
+    ...ux.behaviors.filter((x) => ids.has(x.id) && x.script).map((x) => ({ id: x.id, label: x.label, lang: "js · sandboxed", text: x.script! })),
+  ];
+  return (
+    <div className="cp-block cp-ux" data-testid="cp-ux">
+      <div className="iq-label">Look and behaviour</div>
+      {st.structureUnchanged
+        ? <p className="cp-ux-safe" data-testid="cp-ux-structure-ok"><Icon name="check" size={12} /> {st.uxOnly ? "UX only — " : ""}the survey's questions, options, codes, logic and validation are unchanged.</p>
+        : <p className="iqi-dim" data-testid="cp-ux-with-structure">This proposal also changes the survey's structure (listed above).</p>}
+      <ul className="cp-ux-list" data-testid="cp-ux-items">
+        {st.uxNotes.map((n, i) => <li key={i}>{n}</li>)}
+        {st.diff.ux.removed.map((x) => <li key={x.id} className="cp-from">Remove {x.kind} “{x.label}” ({x.target})</li>)}
+      </ul>
+      <UxPreview after={st.after} before={base} scope={scope} />
+      {code.length > 0 && (
+        <details className="cp-ux-code" data-testid="cp-ux-code">
+          <summary className="iq-label">Generated code ({code.length})</summary>
+          {code.map((c) => (
+            <div key={c.id}>
+              <div className="iqi-dim">{c.label} <span className="mono">· {c.lang}</span></div>
+              <pre className="mono">{c.text}</pre>
+            </div>
+          ))}
+        </details>
+      )}
+    </div>
+  );
+}
+function prettyCss(css: string): string {
+  return css.replace(/\{/g, " {\n  ").replace(/;/g, ";\n  ").replace(/\}/g, "\n}\n").replace(/\n\s*\n/g, "\n").trim();
+}
+
+/**
+ * THE SURVEY'S UX as it is: every style, animation and behaviour with what it
+ * targets, the UX review (dead targets, conflicts, overrides of the theme,
+ * phone traps), and removal — previewed and applied like any change.
+ */
+function UxTab({ copilot, def, onSelect }: { copilot: Copilot; def: SurveyDefinition; onSelect(id: string): void }) {
+  const ux = def.ux ?? { styles: [], animations: [], behaviors: [] };
+  const findings = React.useMemo(() => reviewUx(def), [def]);
+  const rows = [
+    ...ux.styles.map((x) => ({ id: x.id, kind: "style", op: "remove_style", label: x.label, target: describeUxTarget(def, x.target), detail: `${x.rules.length} rule${x.rules.length === 1 ? "" : "s"}${x.css ? " + CSS" : ""}` })),
+    ...ux.animations.map((x) => ({ id: x.id, kind: "animation", op: "remove_animation", label: x.label, target: describeUxTarget(def, x.target), detail: `${x.preset} on ${x.trigger.replace("_", " ")}, ${x.durationMs}ms` })),
+    ...ux.behaviors.map((x) => ({ id: x.id, kind: "behaviour", op: "remove_behavior", label: x.label, target: describeUxTarget(def, x.target), detail: x.script ? "sandboxed script" : `on ${String(x.on).replace("_", " ")} → ${x.effects.map((e) => e.do.replace("_", " ")).join(", ")}` })),
+  ];
+  if (!rows.length && !findings.length) return <p className="cp-empty" data-testid="cp-no-ux">This survey has no custom styles, animations or behaviours. Ask for them in plain words — “make the Q4 options look like cards”, “fade in each question in Block 2 one at a time”, “when someone picks Other, expand the text box smoothly”, “on mobile stack Q7's options” — and the copilot previews them on the real questions before anything changes.</p>;
+  return (
+    <div className="cp-ux-tab" data-testid="cp-ux-tab">
+      {findings.length > 0 && (
+        <section data-testid="cp-ux-findings">
+          <div className="iq-label">UX review · {findings.length}</div>
+          <ul className="cp-review-list">
+            {findings.map((f, i) => (
+              <li key={i} data-severity={f.level} data-testid="cp-ux-finding">
+                <span className={`cp-sev v-${f.level}`}>{f.level}</span> <Linked text={f.message} def={def} onSelect={onSelect} />
+                {f.fix && <div className="cp-finding-foot"><button type="button" className="iq-btn" onClick={() => copilot.previewFix([f.fix as SurveyAction], `UX fix: ${f.message.slice(0, 60)}`)} data-testid="cp-ux-preview-fix">Preview fix</button></div>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      <div className="iq-label">In this survey · {rows.length}</div>
+      <table className="iqi-table cp-ux-items">
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.id} data-testid="cp-ux-row" data-kind={r.kind}>
+              <td><b>{r.label}</b><div className="iqi-dim">{r.kind} · <span className="mono">{r.id}</span></div></td>
+              <td><Linked text={r.target} def={def} onSelect={onSelect} /><div className="iqi-dim">{r.detail}</div></td>
+              <td><button type="button" className="iq-btn" onClick={() => copilot.previewFix([{ op: r.op, id: r.id } as SurveyAction], `Remove ${r.kind} “${r.label}”`)} data-testid="cp-ux-remove">Remove…</button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

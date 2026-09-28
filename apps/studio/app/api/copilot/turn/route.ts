@@ -69,7 +69,9 @@ export async function POST(req: NextRequest) {
   const cls = classifyRequest(message, def.questions.length, docs.length);
   const mode: RequestMode = body.mode === "review" ? "review" : body.mode === "generate" ? "generate" : cls.mode;
   const selectedId = typeof body.selectedId === "string" ? body.selectedId : null;
-  const outline = copilotOutline(def, { selectedId, focusIds: referencedQuestions(def, message) });
+  // a request about the look and behaviour gets the UX guide, the theme and the UX of the questions it names
+  const uxTurn = cls.ux || mode === "ux";
+  const outline = copilotOutline(def, { selectedId, focusIds: referencedQuestions(def, message), ux: uxTurn });
   let research = "";
   let passageIds: string[] = [];
   let charge = 0;
@@ -95,10 +97,11 @@ export async function POST(req: NextRequest) {
     memory: sanitizeMemory(body.memory), research: research || undefined,
     deterministicFindings: deterministic?.findings.slice(0, 40).map((f) => `${f.severity}: ${f.message}`),
     selected: selectedId ? def.questions.find((q) => q.id === selectedId)?.code ?? null : null,
+    ux: uxTurn, uxOnly: cls.uxOnly,
   });
 
   /* 3: the model — or the cache, for exactly the same request */
-  const maxTokens = mode === "generate" ? 8000 : mode === "review" ? 3000 : 2500;
+  const maxTokens = mode === "generate" ? 8000 : mode === "review" ? 3000 : uxTurn ? 3500 : 2500;
   const key = createHash("sha256").update(`${COPILOT_SYSTEM_PROMPT}\u0000${prompt}\u0000${maxTokens}`).digest("hex");
   const fake = aiProviderName() === "fake" && body.fake && typeof body.fake === "object" ? body.fake : null;
   let raw: unknown;
@@ -124,7 +127,8 @@ export async function POST(req: NextRequest) {
   if (!reply) {
     return NextResponse.json({ ok: true, reply: null, message: aiProviderName() === "fake" ? "The FAKE provider cannot reason about surveys; configure a real model to use the copilot." : "The model's answer had nothing I could use. Try rephrasing — nothing was changed.", context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, cached }, usage: { charge }, ...(deterministic ? { review: deterministic } : {}) });
   }
-  const applied = reply.actions.length ? applySurveyActions(def, reply.actions) : null;
+  // a look-only request cannot change the structure: the engine refuses structural actions and proves the rest left it alone
+  const applied = reply.actions.length ? applySurveyActions(def, reply.actions, { uxOnly: cls.uxOnly }) : null;
   const diff = applied?.valid ? diffSurveys(def, applied.def) : null;
   const passages = passageIds.length || reply.sources.length ? await describePassages(store, surveyId, docs, [...passageIds, ...reply.sources.flatMap((x) => x.passages)]) : {};
   // a citation to a passage that does not exist is not a citation: dropped, and a "document" claim with none left is only a recommendation
@@ -134,10 +138,10 @@ export async function POST(req: NextRequest) {
   }
   return NextResponse.json({
     ok: true, reply,
-    validation: applied ? { valid: applied.valid, results: applied.results, errors: applied.errors, destructive: applied.destructive, warnings: applied.warnings, summary: diff?.summary ?? [], diff } : null,
+    validation: applied ? { valid: applied.valid, results: applied.results, errors: applied.errors, destructive: applied.destructive, warnings: applied.warnings, summary: diff?.summary ?? [], diff, uxOnly: applied.uxOnly, structureUnchanged: applied.structureUnchanged } : null,
     ...(deterministic ? { review: deterministic } : {}),
     passages,
-    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, cached },
+    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, cached, ux: uxTurn, uxOnly: cls.uxOnly },
     usage: { charge },
   });
 }

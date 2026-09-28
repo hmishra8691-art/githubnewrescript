@@ -5,6 +5,7 @@ export * from "./mediaDisplay.js";
 export * from "./question.js";
 export * from "./flow.js";
 export * from "./survey.js";
+export * from "./ux.js";
 export * from "./quality.js";
 export * from "./listFill.js";
 export * from "./registry.js";

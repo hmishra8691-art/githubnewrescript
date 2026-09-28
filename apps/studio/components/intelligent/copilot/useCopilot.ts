@@ -28,17 +28,19 @@ export interface CopilotEntry {
   error?: string;
   message?: string;
   usage?: { charge: number };
-  context?: { mode: string; researchUsed: boolean; passages: string[]; promptChars: number; outlineChars?: number; cached: boolean };
+  context?: { mode: string; researchUsed: boolean; passages: string[]; promptChars: number; outlineChars?: number; cached: boolean; ux?: boolean; uxOnly?: boolean };
   passages?: Record<string, Passage>;
   /** this turn's place in the open proposal */
   proposal?: "open" | "superseded" | "applied" | "cancelled";
   changeN?: number;
   /** what the engine's checks found, for a review turn */
   review?: SurveyReview;
+  /** said once the change is applied: what changed, and — for a look-only change — that the structure did not */
+  appliedNote?: string;
 }
 export interface ResearchDocView { id: string; ref: string; name: string; format: string; kind?: string; pages: number; ocrPages: number; chars: number; summary: import("../../../lib/copilot/research").DocSummary | null; warnings: string[]; createdAt: string }
 export interface ReviewState { rules: SurveyReview; ai: CopilotFinding[]; at: string; running: boolean }
-export type PanelTab = "changes" | "review" | "research" | "history" | "inspector";
+export type PanelTab = "changes" | "review" | "research" | "history" | "ux" | "inspector";
 
 interface Session {
   proposal: Proposal | null;
@@ -108,7 +110,8 @@ export function useCopilot(opts: {
         opts.patchAll((e) => (e.proposal === "open" ? { proposal: "superseded" } : null));
         setSession((x) => {
           const base = x.proposal ? (stale ? rebaseProposal(x.proposal, s.def) : x.proposal) : { base: s.def, steps: [] };
-          return { ...x, proposal: { base: base.base, steps: [...base.steps, { request: text, actions: reply.actions }] }, confirmed: false, tab: "changes" };
+          const uxOnly = !!(d.context as { uxOnly?: boolean } | undefined)?.uxOnly;
+          return { ...x, proposal: { base: base.base, steps: [...base.steps, { request: text, actions: reply.actions, ...(uxOnly ? { uxOnly } : {}) }] }, confirmed: false, tab: "changes" };
         });
         patch.proposal = "open";
       }
@@ -142,7 +145,7 @@ export function useCopilot(opts: {
   }, [s.def, stale, setSession, opts]);
 
   /* ------------------------------------------------------------ apply / cancel / undo */
-  const apply = React.useCallback((): { ok: boolean; reason?: string } => {
+  const apply = React.useCallback((): { ok: boolean; reason?: string; message?: string } => {
     if (!session.proposal || !state) return { ok: false, reason: "There is nothing to apply." };
     if (s.readOnly) return { ok: false, reason: "This project is read-only right now." };
     if (stale) {
@@ -158,9 +161,14 @@ export function useCopilot(opts: {
     s.labelNextEdit(rec.label);
     s.replace(state.after);
     setSession((x) => ({ ...x, proposal: null, confirmed: false, history: [...x.history, rec], tab: "history" }));
-    opts.patchAll((e) => (e.proposal === "open" || e.proposal === "superseded" ? { proposal: e.proposal === "open" ? "applied" : e.proposal, ...(e.proposal === "open" ? { changeN: n } : {}) } : null));
+    const ux = state.diff.ux;
+    const targets = [...new Set([...ux.added, ...ux.changed, ...ux.removed].map((x) => x.target))];
+    const note = !ux.empty && state.structureUnchanged
+      ? `Done. The look and behaviour of ${targets.slice(0, 3).join(", ")}${targets.length > 3 ? ` and ${targets.length - 3} more` : ""} ${targets.length === 1 ? "has" : "have"} been updated without changing the survey's questions, codes or logic.`
+      : undefined;
+    opts.patchAll((e) => (e.proposal === "open" || e.proposal === "superseded" ? { proposal: e.proposal === "open" ? "applied" : e.proposal, ...(e.proposal === "open" ? { changeN: n, ...(note ? { appliedNote: note } : {}) } : {}) } : null));
     void fetch("/api/copilot/record", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: s.surveyDbId, n, request: request.slice(0, 500), summary: rec.summary.slice(0, 6).join("; "), created: rec.created, modified: rec.modified, removed: rec.removed }) }).catch(() => {});
-    return { ok: true };
+    return { ok: true, ...(note ? { message: note } : {}) };
   }, [session, state, stale, s, setSession, opts]);
 
   const cancel = React.useCallback(() => {

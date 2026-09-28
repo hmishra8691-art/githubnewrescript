@@ -65,6 +65,7 @@ ACTIONS (each an object with "op"; use only these):
 {"op":"create_quota","name":"Age","cells":[{"label":"18–24","when":"AGE <= 24","limit":200}]}
 {"op":"rename_block","target":"...","title":"..."}  /  {"op":"delete_block","target":"..."}
 {"op":"set_research","objective":"...","hypotheses":["..."],"population":"...","methodology":"...","constructs":[{"name":"...","role":"independent","definition":"...","questions":["EXPOSE"]}],"analysis":["..."],"assumptions":["..."],"sources":["document names"]}
+LOOK AND BEHAVIOUR — styling, CSS, animations, transitions, layout, responsive rules, interactions, JavaScript behaviour — are ALSO actions: create_style / update_style / remove_style, create_animation / update_animation / remove_animation, create_behavior / update_behavior / remove_behavior, create_responsive_rule, attach_behavior_to_question|option|block|page. Rescript supports them: never answer that the platform cannot style, animate or script a survey. Their full shapes are in the UX GUIDE, which is included whenever a request is about how the survey looks or behaves.
 
 REFS. Give every new question a "ref" that reads as a variable name (AGE, BUY_6M, TRUST_1). The ref becomes its variable, so conditions, calculations and piping can use it in the same batch: "BUY_6M = No", "{{BRAND}}". Existing questions are named by their CODE or VARIABLE from the outline; never invent a code that is not in the outline or created in this batch.
 
@@ -138,9 +139,59 @@ export function coerceCopilotReply(raw: unknown): CopilotReply | null {
   };
 }
 
+/**
+ * THE UX GUIDE — sent with a request about the look and behaviour, not with
+ * every turn (the context is the minimum). The engine's UX layer is the
+ * other half: every target, rule, preset and script below is validated by
+ * it, and a look-only request cannot change the survey's structure.
+ */
+export const COPILOT_UX_GUIDE = `UX GUIDE — the survey's look and behaviour (its "ux" configuration). Change it through these actions only — never through question text, custom HTML or a type change. They cannot touch questions, options, codes, logic, validation or variables: when the request is about how the survey looks or behaves, change NOTHING else (the Studio refuses structural actions in a look-only request).
+
+TARGETS — a string, or {"kind","question","block","page","option","button","part","selector"}:
+ "Q5" the question card · "Q5.options" its options · "Q5.option:3" or "Q5.option:Other" one option · "Q5.rows" / "Q5.row:2" · "Q5.title" "Q5.instruction" "Q5.input" "Q5.other" (the Other text box) "Q5.media" "Q5.error"
+ "block:<title or n>" the survey while it shows that block · "block:<title>.questions" / "block:<title>.options" everything in it · "page:<n>" · "questions" / "options" (every one)
+ "next" "back" "submit" "buttons" · "progress" / "progress.fill" · "nav" · "survey" · {"kind":"component","question":"Q9","selector":".gauge"} (inside a custom component)
+STATES: hover, focus, selected (an option/row is chosen), answered (the question has an answer), disabled. BREAKPOINTS ("media"): mobile (≤640px), tablet, desktop, reduced_motion.
+THEME VARIABLES to prefer over hard-coded values: var(--rs-primary) var(--rs-accent) var(--rs-text) var(--rs-subtle) var(--rs-surface) var(--rs-border) var(--rs-radius) var(--rs-font) var(--rs-button-bg) var(--rs-button-text) var(--rs-progress).
+
+{"op":"create_style","ref":"S1","label":"Q12 option cards","target":"Q12.options","rules":[
+  {"declarations":{"border-radius":"14px","padding":"14px 16px","box-shadow":"0 1px 3px rgba(0,0,0,.12)","transition":"transform .15s, box-shadow .15s"}},
+  {"state":"hover","declarations":{"transform":"translateY(-2px)"}},
+  {"state":"selected","declarations":{"border-color":"var(--rs-primary)","box-shadow":"0 0 0 2px var(--rs-primary)"}},
+  {"selector":"input[type=radio]","declarations":{"position":"absolute","opacity":"0"}},
+  {"media":"mobile","declarations":{"width":"100%"}}]}
+  // or "css": "& { … } .rs-qtext { … } @media (max-width: 640px) { & { … } }" — selectors relative to the target, & is the target; no html/body/:root, no @import
+{"op":"update_style","id":"<id from the outline>","state":"hover","declarations":{"transform":"scale(1.03)"}}   // changes the matching rule; "rules":[…] replaces them all; "css":null removes the CSS
+{"op":"create_responsive_rule","target":"Q7.options","media":"mobile","declarations":{"width":"100%","display":"block"}}
+{"op":"create_animation","label":"…","target":"block:Brand.questions","preset":"fade-up","trigger":"appear","duration":400,"delay":0,"stagger":150,"easing":"ease-out","iterations":1}
+  // presets: fade-in fade-up fade-down slide-left slide-right scale-in pop pulse shake bounce wiggle highlight glow expand
+  // triggers: appear (when it appears) · page_enter (on "survey"/"page:n"/"block:b": the page content, between pages) · hover · focus · select (an option chosen) · answer (the question answered)
+  // "stagger": one at a time, this many ms apart
+{"op":"update_animation","id":"…","duration":800}   // "make it slower": change the existing animation; never add a second one on the same target
+{"op":"create_behavior","label":"…","target":"Q8","on":"answer","options":["3","Other"],"effects":[{"do":"animate","target":"next","preset":"pulse"}]}
+  // on: answer · change · select_option (with "options") · deselect_option · page_complete · block_complete · appear · page_enter · click · hover
+  // effects: animate {preset} · show_message {text: plain text} · hide_message · add_class / remove_class / toggle_class {className} · set_style {style} · show · hide · scroll_into_view · focus — each with an optional "target" (default: the behaviour's own)
+  // select_option, page_complete, block_complete and hover HOLD while true and are undone when they stop being true; a style rule with "whenClass":"chosen" applies while add_class "chosen" is on
+  // attach_behavior_to_question / _option / _block / _page = create_behavior on that kind of target
+{"op":"create_behavior","label":"…","target":"Q5","script":"rs.listen('select', 'self', (e) => { if (e.option === '99') rs.showMessage('self', 'Tell us more below.'); });"}
+  // JavaScript ONLY when the researcher asks for code or nothing above can do it. It runs in a sandbox with only this api:
+  // rs.listen(event, target, fn) — events answer change select deselect click hover page complete; fn gets {question, value, option}
+  // rs.getAnswer("Q3") rs.getQuestion("Q3") rs.getBlock() rs.getPage() rs.addClass(t, name) rs.removeClass(t, name) rs.toggleClass(t, name) rs.animate(t, preset, {duration}) rs.setStyle(t, {prop: value}) rs.clearStyle(t) rs.show(t) rs.hide(t) rs.showMessage(t, text) rs.hideMessage(t) rs.scrollTo(t) rs.focus(t) rs.after(ms, fn) rs.log(…)
+  // t is a target string above or "self". No loops (while/for/do), no document/window/fetch/storage: refused.
+{"op":"update_behavior","id":"…","effects":[…]}   // or "on", "options", "script": what is given replaces
+{"op":"remove_style","id":"…"} · {"op":"remove_animation","id":"…"} · {"op":"remove_behavior","id":"…"}
+
+HOW TO WORK ON UX.
+• Decompose a compound request into one item per thing asked: "For Block 2 make every question fade up, the options cards, a slight scale when one is selected, one option per row on mobile, don't change the logic" → an animation on block:2.questions (fade-up, appear), a style on block:2.options (card rules, a "selected" rule with transform: scale(1.02), a mobile rule) — and no structural action.
+• Look before you add: the outline lists the survey's existing styles, animations and behaviours by id. Change them (update_*) rather than adding competing ones; to clean up, remove the unused or duplicated ones; to resolve a conflict, change one side.
+• Diagnose from what is there: the outline's "Qn ux:" lines give a question's layout (orientation, columns, options) and every style, animation and behaviour touching it. "Options overlap on mobile" → a mobile rule; "the animation doesn't run when Q5 changes" → its trigger is probably appear (plays once) where select or answer was meant.
+• Keep it accessible: readable contrast, visible focus, never hide a radio or checkbox with display:none (use opacity 0 and position absolute so the keyboard still reaches it). Motion is switched off automatically for respondents who ask their system to reduce it.
+• A UX hide is visual only — the question is still asked and validated; that needs display logic, and only if asked.
+• In "reply", explain in plain words what will change and what will not, e.g. "I'll add a scoped card style to Q12's options (only Q12 is affected), a short pop when one is selected, and a smooth expand for the Other box. The question, its codes and its logic stay exactly as they are."`;
+
 /* ------------------------------------------------------------ what a request needs */
 
-export type RequestMode = "generate" | "edit" | "review" | "question";
+export type RequestMode = "generate" | "edit" | "review" | "question" | "ux";
 
 /**
  * What kind of request this is, and whether it needs the research documents
@@ -149,15 +200,37 @@ export type RequestMode = "generate" | "edit" | "review" | "question";
  * "based on the literature, add three trust questions" sends the passages
  * about trust.
  */
-export function classifyRequest(message: string, surveyQuestions: number, documents: number): { mode: RequestMode; research: boolean } {
+export function classifyRequest(message: string, surveyQuestions: number, documents: number): { mode: RequestMode; research: boolean; ux: boolean; uxOnly: boolean } {
   const t = message.toLowerCase();
   // "review my survey", "check the logic", "audit this questionnaire" — not "the literature review says…"
   const review = /^(?:please\s+|can you\s+|could you\s+)?(?:review|audit|check|critique|evaluate|assess|proofread)\b(?!.*\b(?:add|create|build)\b)|\b(?:review|audit|check|critique|evaluate|assess)\s+(?:my|the|this|our)\s+(?:survey|questionnaire|questions|logic|flow|wording|routing)\b|\bwhat(?:'s| is) wrong\b|\bany (?:problems|issues)\b|survey (?:ka )?review|review (?:karo|kar do)/.test(t);
   const generate = /\b(?:create|build|design|generate|draft|make|write|prepare|develop|banana|bana do|banao)\b.{0,60}\b(?:survey|questionnaire|study|screener)\b|\b(?:survey|questionnaire|screener)\b.{0,30}\b(?:banana|banao|bana do|banani|chahiye|tayyar)\b|\bhypothes[ie]s\b|\bresearch (?:objective|question|design)\b|\btest (?:this|it|the hypothesis)\b/.test(t) && (surveyQuestions < 3 || /\b(?:new|another|from scratch|whole|complete|full)\b/.test(t) || /\bhypothes/.test(t));
   const edit = /\b(?:add|remove|delete|change|make|move|rename|randomi[sz]e|shuffle|show|hide|skip|require|mandatory|optional|split|merge|shorten|shorter|reduce|replace|convert|turn|set|insert|put|page break|scale|option|karo|kar do|hatao|jodo)\b/.test(t);
   const research = documents > 0 && (/\b(?:literature|research|paper|papers|study|studies|brief|document|documents|report|reports|findings|evidence|source|sources|uploaded|reading|according to|based on|as per|citation|scale from|validated scale|existing measure)\b/.test(t) || (generate && surveyQuestions < 3));
-  const mode: RequestMode = review ? "review" : generate ? "generate" : edit ? "edit" : "question";
-  return { mode, research };
+  const u = uxIntent(t);
+  const mode: RequestMode = review ? "review" : generate ? "generate" : u.ux ? "ux" : edit ? "edit" : "question";
+  return { mode, research, ux: u.ux, uxOnly: u.ux && u.only && !generate };
+}
+
+/**
+ * IS THIS ABOUT HOW THE SURVEY LOOKS OR BEHAVES — and ONLY that? "Make Q10
+ * look better", "add a hover animation to the Q4 options", "fix the mobile
+ * layout", "when Q5 is answered animate the Next button" are; "add a question
+ * about price and make it look nice" is both, so structure stays allowed. A
+ * request that says "don't change the logic" / "only the UI" is look-only
+ * whatever else it names.
+ */
+export function uxIntent(text: string): { ux: boolean; only: boolean } {
+  const t = text.toLowerCase();
+  // strong: only ever about the look and behaviour; weak: usually is, but can be a topic ("mobile banking", "credit cards")
+  const strong = /\b(?:css|styl(?:e|es|ing|ish)|look(?:s)? (?:better|nicer|cleaner|modern|premium|different|more)|look and feel|visual(?:ly)?|colou?rs?|font|typography|spacing|padding|margins?|borders?|rounded|shadows?|animat(?:e|ed|es|ion|ions)|fade(?:s|-in| in| up|-up)?|transitions?|hover|glow|pulse|bounce|shake|highlight(?:ed|s)?|smooth(?:ly)?|prettier|beautiful|ui|ux|responsive|javascript|js|scripts?|event handlers?|interactions?|interactive|dynamic ui|one at a time|overlap(?:s|ping)?|countdown|confirmation animation)\b/.test(t);
+  const weak = /\b(?:cards?|tiles?|background|design|feel (?:more )?(?:premium|modern|polished)|mobile|desktop|tablet|layout|stack(?:ed)? (?:vertically|horizontally)|horizontal|vertical|next button|buttons?|progress (?:bar|indicator)|expand(?:s|ing)?)\b/.test(t);
+  const ux = strong || weak;
+  if (!ux) return { ux: false, only: false };
+  const negated = /\b(?:don'?t|do not|without|never|no)\s+(?:change|changing|touch|touching|modify|modifying|alter|altering|break|breaking)\b[^.]{0,50}\b(?:logic|structure|questions?|wording|survey|codes?|options?|anything else|data)\b|\bonly\s+(?:the\s+|improve\s+the\s+|change\s+the\s+)?(?:ui|ux|look|looks|design|styling|style|visuals?|appearance|css)\b|\b(?:ux|ui|visual|styling|design|css)[- ]only\b|\bux changes? only\b/.test(t);
+  const stripped = t.replace(/\b(?:don'?t|do not|without|never|no)\s+(?:change|changing|touch|touching|modify|modifying|alter|altering|break|breaking)\b[^.]{0,60}/g, " ");
+  const structural = /\b(?:add|create|insert|new)\s+(?:a |an |another |two |three |some )?(?:new )?(?:questions?|blocks?|page breaks?|options? (?:called|named|for|“|")|choices? (?:called|named))\b|\b(?:delete|remove)\s+(?:the\s+)?(?:questions?|blocks?|options? \d|page)\b|\b(?:reword|rephrase|rewrite|wording|question text|translate)\b|\b(?:display|skip|branch(?:ing)?)\s+(?:logic|rules?|conditions?)\b|\bskip\b|\bvalidation\b|\b(?:required|mandatory|optional)\b|\brandomi[sz]e\b|\bquotas?\b|\bchange (?:the )?type\b|\bconvert\b.{0,30}\b(?:matrix|grid|dropdown|single|multi|ranking|slider)\b|\b(?:recode|variable name)\b|\b(?:change|turn|make)\s+\S+\s+(?:in)?to\s+(?:a|an)\s+(?:card sort|matrix|grid|dropdown|ranking|slider|nps|star|single|multi|open|text|numeric)\b/.test(stripped);
+  return { ux: true, only: negated || (strong && !structural) };
 }
 
 export interface TurnMemory { memory?: string; history: { role: "user" | "copilot"; text: string }[] }
@@ -171,6 +244,9 @@ export function copilotUserPrompt(input: {
   research?: string;
   deterministicFindings?: string[];
   selected?: string | null;
+  /** the request is about the look and behaviour: the UX guide goes with it */
+  ux?: boolean;
+  uxOnly?: boolean;
 }): string {
   const parts: string[] = [];
   parts.push(`Survey language: ${input.surveyLanguage}`);
@@ -180,6 +256,8 @@ export function copilotUserPrompt(input: {
   if (input.research) parts.push(`RESEARCH MATERIAL (only the passages this request needs; cite by id):\n${input.research}`);
   if (input.deterministicFindings?.length) parts.push(`THE ENGINE'S OWN CHECKS ALREADY FOUND (do not repeat these; add what only a reader of meaning would find — research alignment, hypothesis coverage, wording, bias, sequencing, analysis limits):\n${input.deterministicFindings.map((f) => `- ${f}`).join("\n")}`);
   if (input.selected) parts.push(`Selected in the Studio: ${input.selected}`);
+  if (input.ux) parts.push(COPILOT_UX_GUIDE);
+  if (input.uxOnly) parts.push("THIS REQUEST IS LOOK-AND-BEHAVIOUR ONLY: propose UX actions only. Any structural action (questions, options, logic, validation, blocks) will be refused.");
   parts.push(`Request type (a hint, not a rule): ${input.mode}`);
   parts.push(`RESEARCHER:\n${input.message.trim()}`);
   return parts.join("\n\n");

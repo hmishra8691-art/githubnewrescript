@@ -1,5 +1,5 @@
 import type { SurveyDefinition } from "@rescript/schema";
-import { listBlocks, formatCondition } from "@rescript/engine";
+import { listBlocks, formatCondition, describeUxTarget, uxContextFor } from "@rescript/engine";
 import { surveyContext } from "../intelligent/context.ts";
 
 /**
@@ -13,7 +13,7 @@ import { surveyContext } from "../intelligent/context.ts";
  * questions in full and the rest by code, plus the named ones in full, so
  * the prompt stays bounded however large the survey is.
  */
-export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: string | null; focusIds?: string[] } = {}): string {
+export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: string | null; focusIds?: string[]; ux?: boolean } = {}): string {
   const n = def.questions.length;
   const base = surveyContext(def, { selectedId: opts.selectedId ?? null, focusIds: opts.focusIds ?? [], limit: n > 150 ? 60 : 150, textWidth: n > 150 ? 70 : 110 });
   const lines = [base];
@@ -36,6 +36,29 @@ export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: strin
     if (q.rows?.length) bits.push(`rows: ${q.rows.slice(0, 20).map((r) => `${r.code}=${r.label}`).join(", ")}`);
     if (q.randomization?.enabled) bits.push("options randomized");
     if (bits.length) lines.push(`${q.code} details: ${bits.join(" · ")}`);
+  }
+  /*
+   * THE LOOK AND BEHAVIOUR as it is, so the copilot modifies what exists
+   * rather than adding a second, competing style. Every turn gets the list
+   * (it is short, and absent on most surveys); a UX request also gets the
+   * theme and, for the questions it names, their layout and everything that
+   * styles them.
+   */
+  const ux = def.ux;
+  const items = ux ? ux.styles.length + ux.animations.length + ux.behaviors.length : 0;
+  if (opts.ux) {
+    const b = def.branding;
+    lines.push(`Theme: primary ${b.colors?.primary ?? "default"}, font ${b.typography?.fontFamily ?? "default"}, cards ${b.layout?.cardStyle ?? "card"}, buttons ${b.buttons?.style ?? "solid"}${b.customCss ? `, Branding custom CSS ${b.customCss.length} chars` : ""}${b.customJs ? ", Branding custom JS (hand-written)" : ""}`);
+  }
+  if (ux && items) {
+    lines.push(`UX configuration (${items} item${items === 1 ? "" : "s"}; change these by id rather than adding competing ones):`);
+    for (const st of ux.styles.slice(0, 40)) lines.push(`  style ${st.id} “${st.label}” on ${describeUxTarget(def, st.target)}: ${st.rules.map((r) => `${[r.state, r.media, r.whenClass ? `when ${r.whenClass}` : "", r.selector].filter(Boolean).join(" ") || "base"} {${Object.entries(r.declarations).map(([k, v]) => `${k}:${v}`).join("; ").slice(0, 160)}}`).join(" · ").slice(0, 400)}${st.css ? ` + scoped CSS (${st.css.length} chars)` : ""}`);
+    for (const a of ux.animations.slice(0, 40)) lines.push(`  animation ${a.id} “${a.label}” on ${describeUxTarget(def, a.target)}: ${a.preset} on ${a.trigger}, ${a.durationMs}ms${a.delayMs ? ` +${a.delayMs}ms` : ""}${a.staggerMs ? `, stagger ${a.staggerMs}ms` : ""}${a.iterations !== 1 ? `, ×${a.iterations}` : ""}${a.media ? `, ${a.media}` : ""}`);
+    for (const bh of ux.behaviors.slice(0, 40)) lines.push(`  behaviour ${bh.id} “${bh.label}” on ${describeUxTarget(def, bh.target)}: ${bh.script ? `script: ${bh.script.replace(/\s+/g, " ").slice(0, opts.ux ? 600 : 120)}` : `on ${bh.on}${bh.options?.length ? ` (${bh.options.join(", ")})` : ""} → ${bh.effects.map((e) => `${e.do}${e.target ? ` ${describeUxTarget(def, e.target)}` : ""}${e.preset ? ` ${e.preset}` : ""}${e.className ? ` “${e.className}”` : ""}`).join(", ")}`}`);
+  }
+  if (opts.ux) for (const id of focus) {
+    const q = def.questions.find((x) => x.id === id);
+    if (q) lines.push(`${q.code} ux: ${uxContextFor(def, id).join(" · ")}`);
   }
   const r = def.research;
   if (r) {

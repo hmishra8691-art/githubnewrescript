@@ -1,5 +1,6 @@
 import type { SurveyDefinition } from "@rescript/schema";
-import { applySurveyActions, diffSurveys, listBlocks, renumberNewQuestions, type SurveyAction, type ApplyActionsOutcome, type SurveyDiff } from "@rescript/engine";
+import { SurveyDefinition as SurveyDefinitionSchema } from "@rescript/schema";
+import { applySurveyActions, diffSurveys, listBlocks, renumberNewQuestions, isUxOp, withoutUx, type SurveyAction, type ApplyActionsOutcome, type SurveyDiff } from "@rescript/engine";
 import type { CopilotReply, TurnMemory } from "./prompt.ts";
 
 /**
@@ -16,7 +17,8 @@ import type { CopilotReply, TurnMemory } from "./prompt.ts";
  * anything that no longer resolves is reported rather than guessed.
  */
 
-export interface ProposalStep { request: string; actions: SurveyAction[] }
+/** `uxOnly`: the request was about the look and behaviour only — replays refuse structure exactly as the first run did */
+export interface ProposalStep { request: string; actions: SurveyAction[]; uxOnly?: boolean }
 export interface Proposal { base: SurveyDefinition; steps: ProposalStep[] }
 export interface ProposalState {
   after: SurveyDefinition;
@@ -26,14 +28,22 @@ export interface ProposalState {
   errors: string[];
   destructive: string[];
   warnings: string[];
+  /** every step asked for look-and-behaviour only */
+  uxOnly: boolean;
+  /** only `ux` differs between the base and the result */
+  structureUnchanged: boolean;
+  /** what each applied UX action does, in words */
+  uxNotes: string[];
 }
 
 export function evaluateProposal(p: Proposal): ProposalState {
   let cur = p.base;
   const errors: string[] = [], destructive: string[] = [], warnings: string[] = [];
   let last: ApplyActionsOutcome | null = null;
+  const uxNotes: string[] = [];
   for (const step of p.steps) {
-    const r = applySurveyActions(cur, step.actions);
+    const r = applySurveyActions(cur, step.actions, { uxOnly: step.uxOnly });
+    uxNotes.push(...r.results.filter((x) => x.ok && isUxOp(x.op)).map((x) => x.description));
     last = r;
     errors.push(...r.errors);
     destructive.push(...r.destructive);
@@ -42,10 +52,13 @@ export function evaluateProposal(p: Proposal): ProposalState {
     if (r.valid) cur = renumberNewQuestions(p.base, r.def);
   }
   // warnings are about the END state: what the whole proposal newly breaks
-  const whole = applySurveyActions(p.base, p.steps.flatMap((s) => s.actions));
+  const uxOnly = p.steps.length > 0 && p.steps.every((s) => s.uxOnly);
+  const whole = applySurveyActions(p.base, p.steps.flatMap((s) => s.actions), { uxOnly });
   warnings.push(...whole.warnings);
   const outcome = last ?? whole;
-  return { after: cur, outcome, diff: diffSurveys(p.base, cur), errors, destructive: [...new Set(destructive)], warnings };
+  const parsedBase = SurveyDefinitionSchema.safeParse(p.base);
+  const structureUnchanged = sameSurvey(withoutUx(parsedBase.success ? parsedBase.data : p.base), withoutUx(cur));
+  return { after: cur, outcome, diff: diffSurveys(p.base, cur), errors, destructive: [...new Set(destructive)], warnings: [...new Set(warnings)], uxOnly, structureUnchanged, uxNotes };
 }
 
 /** the same chain on a different starting survey (the survey changed underneath the proposal) */
@@ -76,9 +89,9 @@ export function changeRecord(n: number, request: string, state: ProposalState, b
   const label = `AI change #${String(n).padStart(3, "0")}: ${d.summary[0] ?? request.slice(0, 60)}`;
   return {
     n, at, request, summary: d.summary, before, after: state.after, label,
-    created: [...d.blocksAdded.map((b) => `block “${b.title}”`), ...d.questionsAdded.map((q) => q.code), ...d.embeddedAdded.map((e) => `embedded ${e}`), ...d.calculationsAdded.map((c) => `calculation ${c}`), ...d.quotasAdded.map((q) => `quota “${q}”`)],
-    modified: [...d.questionsModified.map((q) => q.code), ...d.blocksRenamed.map((b) => `block “${b.to}”`)],
-    removed: [...d.questionsRemoved.map((q) => q.code), ...d.blocksRemoved.map((b) => `block “${b.title}”`)],
+    created: [...d.blocksAdded.map((b) => `block “${b.title}”`), ...d.questionsAdded.map((q) => q.code), ...d.embeddedAdded.map((e) => `embedded ${e}`), ...d.calculationsAdded.map((c) => `calculation ${c}`), ...d.quotasAdded.map((q) => `quota “${q}”`), ...d.ux.added.map((x) => `${x.kind} “${x.label}” (${x.target})`)],
+    modified: [...d.questionsModified.map((q) => q.code), ...d.blocksRenamed.map((b) => `block “${b.to}”`), ...d.ux.changed.map((x) => `${x.kind} “${x.label}”`)],
+    removed: [...d.questionsRemoved.map((q) => q.code), ...d.blocksRemoved.map((b) => `block “${b.title}”`), ...d.ux.removed.map((x) => `${x.kind} “${x.label}”`)],
   };
 }
 export const changeLabel = (n: number) => `AI Change #${String(n).padStart(3, "0")}`;
@@ -171,5 +184,47 @@ export function proposalCounts(diff: SurveyDiff, after: SurveyDefinition): { lab
     { label: "quotas", value: diff.quotasAdded.length },
     { label: "questions changed", value: diff.questionsModified.length },
     { label: "questions removed", value: diff.questionsRemoved.length },
+    { label: "styles", value: diff.ux.added.filter((x) => x.kind === "style").length },
+    { label: "animations", value: diff.ux.added.filter((x) => x.kind === "animation").length },
+    { label: "behaviours", value: diff.ux.added.filter((x) => x.kind === "behaviour").length },
+    { label: "UX changes", value: diff.ux.changed.length + diff.ux.removed.length },
   ].filter((c) => c.value > 0);
+}
+
+/* ------------------------------------------------------------ the UX preview */
+
+export interface UxPreviewScope { questionIds: string[]; blockId?: string; pageId?: string; chrome: boolean }
+/**
+ * What the UX preview renders for a proposal: the questions its styles,
+ * animations and behaviours touch (at most three), the block or page they
+ * are scoped to — so a "Block 3" style shows on Block 3's questions — and the
+ * survey chrome (buttons, progress) when an item targets it.
+ */
+export function uxPreviewScope(after: SurveyDefinition, diff: SurveyDiff): UxPreviewScope {
+  const ids = new Set([...diff.ux.added, ...diff.ux.changed].map((x) => x.id));
+  const ux = after.ux ?? { styles: [], animations: [], behaviors: [] };
+  const targets = [...ux.styles, ...ux.animations, ...ux.behaviors].filter((x) => ids.has(x.id)).flatMap((x) => [x.target, ...("effects" in x ? x.effects.map((e) => e.target).filter((t): t is NonNullable<typeof t> => !!t) : [])]);
+  const out: UxPreviewScope = { questionIds: [], chrome: false };
+  const add = (id: string) => { if (!out.questionIds.includes(id) && out.questionIds.length < 3) out.questionIds.push(id); };
+  const pages = listBlocks(after.flow as unknown[]);
+  for (const t of targets) {
+    if (t.questionId) add(t.questionId);
+    if (t.blockId && !out.blockId) out.blockId = t.blockId;
+    if (t.pageId && !out.pageId) out.pageId = t.pageId;
+    if (["survey", "button", "progress", "navigation", "page", "block"].includes(t.kind)) out.chrome = true;
+  }
+  if (out.pageId && !out.questionIds.length) {
+    for (const b of pages) for (const p of b.pages) if (p.node.id === out.pageId) { p.node.questionIds.forEach(add); if (!out.blockId) out.blockId = b.id; }
+  }
+  if (out.blockId && !out.questionIds.length) {
+    const b = pages.find((x) => x.id === out.blockId);
+    if (b) { b.pages[0]?.node.questionIds.forEach(add); if (!out.pageId) out.pageId = b.pages[0]?.node.id; }
+  }
+  if (!out.questionIds.length) after.questions.filter((q) => q.type !== "html").slice(0, 2).forEach((q) => add(q.id));
+  // the block and page the first question lives on, so block- and page-scoped rules match as they will in the survey
+  if (!out.blockId || !out.pageId) {
+    const first = out.questionIds[0];
+    for (const b of pages) for (const p of b.pages) if (first && p.node.questionIds.includes(first)) { out.blockId ??= b.id; out.pageId ??= p.node.id; }
+  }
+  return out;
 }

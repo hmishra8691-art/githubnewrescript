@@ -16,6 +16,8 @@
  */
 export { QuestionRenderer, ctxOf, optionsClass, gridColumnsStyle, useOptionFilter, OTHER, EXCLUSIVE } from "./QuestionRenderer";
 export type { QRProps } from "./QuestionRenderer";
+export { UxLayer, uxElements } from "./UxLayer";
+export type { UxLayerProps } from "./UxLayer";
 /*
  * Re-exported from the engine, where the table now lives: the lint needs the
  * same facts and the engine is the layer both the renderer and the Studio sit

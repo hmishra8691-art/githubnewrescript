@@ -5,6 +5,7 @@ import { buildLogicFlow, unreachableLogicNodes } from "./logicGraph.js";
 import { listBlocks } from "./blocks.js";
 import { questionOrder } from "./dependencies.js";
 import type { SurveyAction } from "./surveyActions.js";
+import { reviewUx } from "./ux.js";
 
 /**
  * "REVIEW MY SURVEY" — the part of a survey review that is a matter of fact.
@@ -34,7 +35,7 @@ import type { SurveyAction } from "./surveyActions.js";
 export type ReviewSeverity = "critical" | "warning" | "suggestion";
 export interface ReviewFinding {
   severity: ReviewSeverity;
-  category: "logic" | "reachability" | "structure" | "wording" | "options" | "scales" | "duplicates" | "length" | "screening" | "sequencing" | "hypothesis" | "analysis";
+  category: "logic" | "reachability" | "structure" | "wording" | "options" | "scales" | "duplicates" | "length" | "screening" | "sequencing" | "hypothesis" | "analysis" | "ux";
   message: string;
   questionIds: string[];
   suggestion?: string;
@@ -153,6 +154,9 @@ export function reviewSurvey(def: SurveyDefinition): SurveyReview {
   if (!screens && (asked.length >= 8 || def.research?.population)) add({ severity: "suggestion", category: "screening", message: `Nothing screens respondents out${def.research?.population ? `, but the target population is “${def.research.population}”` : ""}.`, questionIds: [], suggestion: "Add screening questions that end the survey for people outside the population." });
   const blocks = listBlocks(def.flow as unknown[]);
   if (blocks.length >= 3 && /demograph|about you|profile/i.test(blocks[0].title ?? "") && !/screen/i.test(blocks[0].title ?? "")) add({ severity: "suggestion", category: "sequencing", message: `Demographics come first (“${blocks[0].title}”).`, questionIds: [], suggestion: "Ask demographics at the end, unless they screen — early personal questions cost completes." });
+
+  /* ---------------------------------------------------------- the look and behaviour */
+  for (const f of reviewUx(def)) add({ severity: f.level, category: "ux", message: f.message, questionIds: [], ...(f.fix ? { fix: [f.fix as SurveyAction] } : {}) });
 
   const order: Record<ReviewSeverity, number> = { critical: 0, warning: 1, suggestion: 2 };
   findings.sort((a, b) => order[a.severity] - order[b.severity]);

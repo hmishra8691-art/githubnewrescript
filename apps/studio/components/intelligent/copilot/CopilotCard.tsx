@@ -53,6 +53,8 @@ export function CopilotCard({ entry, def, onSelect, onReviewChanges, onApply, on
         {entry.status === "thinking" && <div className="iq-thinking"><span className="iq-dot" /><span className="iq-dot" /><span className="iq-dot" /></div>}
         {entry.error && <p className="iq-error" role="alert" data-testid="cp-error"><Icon name="warning" size={12} /> {entry.error}</p>}
         {entry.message && <p className="iq-warning" data-testid="cp-empty"><Icon name="info" size={12} /> {entry.message}</p>}
+        {entry.appliedNote && <p className="cp-applied-note" data-testid="cp-applied-note"><Icon name="check" size={12} /> {entry.appliedNote}</p>}
+        {entry.context?.uxOnly && state === "open" && <p className="iqi-dim cp-ux-only-note" data-testid="cp-ux-only-turn">Look and behaviour only — the Studio refuses any change to questions, options, codes or logic in this request.</p>}
         {r && (
           <>
             <p className="cp-reply" data-testid="cp-reply"><Linked text={r.reply} def={def} onSelect={onSelect} /></p>

@@ -20,6 +20,7 @@ import {
   inspect,
   applyPunches,
   answerKey,
+  listBlocks,
   questionDependencies,
   pendingListFills,
   serverResolvedQuestions,
@@ -64,7 +65,7 @@ import {
   type QuotaCounts,
   type InspectorSnapshot,
 } from "@rescript/engine";
-import { QuestionRenderer } from "@rescript/renderer";
+import { QuestionRenderer, UxLayer } from "@rescript/renderer";
 import { Inspector } from "./Inspector";
 import { RunnerBoundary, FatalCard, fatalOf, type FatalDetail } from "./RunnerBoundary";
 import { MediaEmbed, SafeImage, VoiceConsole, QuestionAudio, brandingVars, widthModeClass } from "@rescript/renderer";
@@ -585,6 +586,8 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
   const skippedProbesRef = React.useRef<Set<string>>(new Set());
   /** the quality engine's event collector — derived behavioural metadata only */
   const telemetryRef = React.useRef<TelemetryCollector | null>(null);
+  /** the survey shell — the UX layer's root (scoped styles, animations, behaviours) */
+  const shellRef = React.useRef<HTMLDivElement | null>(null);
   const notePage = (allSteps: RuntimeStep[], index: number, via: "start" | "next" | "back" | "reload" | "jump") => {
     const st = allSteps[index];
     if (st?.kind === "page") telemetryRef.current?.enterPage(st.pageId, index, st.questionIds, via);
@@ -1524,12 +1527,13 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
       </div>
       <div className="rs-nav">
         {b.buttons.showBack ? (
-          <button type="button" data-testid="rs-back" className={`rs-btn secondary ${b.buttons.style}`} onClick={handleProbeBack}>
+          <button type="button" data-testid="rs-back" data-rs-button="back" className={`rs-btn secondary ${b.buttons.style}`} onClick={handleProbeBack}>
             {b.buttons.backLabel}
           </button>
         ) : <span />}
         <button
           type="button" data-testid="rs-next" className={`rs-btn ${b.buttons.style}`}
+          data-rs-button={pageIndexAmongPages >= totalPages ? "submit" : "next"}
           disabled={advancing} aria-busy={advancing || undefined}
           onClick={handleProbeNext}
         >
@@ -1674,13 +1678,14 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
       </div>
       <div className="rs-nav">
         {b.buttons.showBack && (state.stepIndex > 0 || (conversational && convoIndex > 0)) ? (
-          <button type="button" data-testid="rs-back" className={`rs-btn secondary ${b.buttons.style}`} onClick={conversational ? convoBack : handleBack}>
+          <button type="button" data-testid="rs-back" data-rs-button="back" className={`rs-btn secondary ${b.buttons.style}`} onClick={conversational ? convoBack : handleBack}>
             {b.buttons.backLabel}
           </button>
         ) : <span />}
         <button
           type="button"
           data-testid="rs-next"
+          data-rs-button={pageIndexAmongPages >= totalPages && (!conversational || convoIndex >= questions.length - 1) ? "submit" : "next"}
           className={`rs-btn ${b.buttons.style}`}
           /* the ref above is what actually prevents the second submit; this
              is so the respondent can see why the button stopped responding */
@@ -1694,8 +1699,27 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
     </>
   );
 
+  /*
+   * THE SURVEY'S UX (schema `ux`): the shell names the survey, the block and
+   * the page it is showing, so the compiled styles can only reach this survey
+   * and a style for "Block 3" or "page 2" applies exactly there. A survey
+   * with no UX configuration renders no layer at all.
+   */
+  const hasUx = !!def.ux && (def.ux.styles.length + def.ux.animations.length + def.ux.behaviors.length) > 0;
+  const uxBlockId = hasUx && pageStep ? (listBlocks(def.flow as unknown[]).find((bl) => bl.pages.some((pg) => pg.node.id === pageStep.pageId))?.id ?? pageStep.pageId) : undefined;
+  const uxValues: Record<string, unknown> = {};
+  if (hasUx && pageStep) for (const q of shownQuestions) uxValues[q.id] = state.answers[answerKey(q.id, pageStep.loop ?? null)];
+  const uxAll: Record<string, unknown> | undefined = hasUx && def.ux!.behaviors.some((bh) => bh.script) ? Object.fromEntries(def.questions.map((q) => [q.id, state.answers[answerKey(q.id, null)]])) : undefined;
   const shell = (
-    <div className={`rs-shell rs-${b.layout.cardStyle} ${widthModeClass(b)}`} style={brandingVars(b) as React.CSSProperties} dir={dir} lang={locale} data-language={lang}>
+    <div ref={shellRef} className={`rs-shell rs-${b.layout.cardStyle} ${widthModeClass(b)}`} style={brandingVars(b) as React.CSSProperties} dir={dir} lang={locale} data-language={lang}
+      {...(hasUx ? { "data-rs-ux": def.meta.id, "data-rs-block": uxBlockId, "data-rs-page": pageStep?.pageId } : {})}>
+      {hasUx && !ended && (
+        <UxLayer def={def} rootRef={shellRef} values={uxValues} allValues={uxAll}
+          shown={pageStep ? shownQuestions.map((q) => q.id) : []}
+          pageKey={`${state.stepIndex}|${pageStep ? answerKey(pageStep.pageId, pageStep.loop ?? null) : "end"}|${conversational ? convoIndex : ""}`}
+          blockId={uxBlockId} pageId={pageStep?.pageId} pageIndex={pageIndexAmongPages}
+          onLog={mode === "live" ? undefined : (line) => setLogs((l) => [...l, line])} />
+      )}
       {showLanguageSelector && !ended && (
         <div className="rs-language" data-testid="rs-language-bar">
           <label>

@@ -1,3 +1,4 @@
+import { UxConfig } from "./ux.js";
 import { z } from "zod";
 import { AiConversation } from "./aiConversation.js";
 import { Localization } from "./localization.js";
@@ -633,6 +634,12 @@ export const SurveyDefinition = z.object({
    * Absent on every survey that never had one.
    */
   research: ResearchDesign.optional(),
+  /**
+   * THE SURVEY'S UX — scoped styles, animations and behaviours (see ux.ts).
+   * Part of the definition so preview, test, publish, export and duplicate
+   * all carry it; absent, the runtime renders exactly as before.
+   */
+  ux: UxConfig.optional(),
 });
 export type SurveyDefinition = z.infer<typeof SurveyDefinition>;
 

@@ -41,6 +41,8 @@ Apply → store.replace (one labelled undoable edit) → AI Change #00N
       → the ordinary save path (validates again) → /api/copilot/record (audit)
 ```
 
+The look and behaviour (scoped CSS, animations, responsive rules, behaviours, sandboxed JavaScript) goes through the same action layer; see [INTELLIGENT-UX.md](INTELLIGENT-UX.md).
+
 ## The pieces
 
 | Where | What |

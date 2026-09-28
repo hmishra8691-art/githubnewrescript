@@ -50,6 +50,8 @@ export * from "./diagnose.js";
 export * from "./questionCreate.js";
 export * from "./surveyActions.js";
 export * from "./surveyReview.js";
+export * from "./ux.js";
+export * from "./uxActions.js";
 export * from "./droppedFields.js";
 export * from "./tournament.js";
 export * from "./adaptive.js";

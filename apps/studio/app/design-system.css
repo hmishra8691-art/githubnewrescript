@@ -1641,6 +1641,18 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .cp-block.err { border-color: var(--c-border-strong); }
 .cp-block.warn { border-color: var(--c-warning); background: var(--c-warning-bg); }
 .cp-confirm { display: flex; gap: 6px; align-items: flex-start; font-weight: 600; cursor: pointer; }
+/* the copilot's look-and-behaviour changes: a proof the structure is untouched, the preview on the real components, the code */
+.cp-ux-safe, .cp-applied-note { margin: 0; color: var(--c-success-fg); background: var(--c-success-bg); border: 1px solid var(--c-success-bd); border-radius: 6px; padding: 5px 8px; display: flex; gap: 6px; align-items: flex-start; }
+.cp-ux-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }
+.cp-ux-preview { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.cp-ux-stage { border: 1px dashed var(--c-border-strong); border-radius: 8px; overflow: hidden; background: var(--c-surface-2, #f8fafc); }
+.cp-ux-stage.rs-viewport.mobile { max-width: 390px; margin: 0 auto; width: 100%; }
+.cp-ux-stage .rs-shell { position: relative; }
+.cp-ux-caption { margin: 0; font-size: 11px; }
+.cp-ux-code pre { white-space: pre-wrap; word-break: break-word; font-size: 10.5px; background: var(--c-surface-2, #f8fafc); border: 1px solid var(--c-border); border-radius: 6px; padding: 6px 8px; margin: 4px 0 8px; max-height: 240px; overflow: auto; }
+.cp-ux-tab { display: flex; flex-direction: column; gap: 8px; }
+.cp-ux-items td { vertical-align: top; }
+.cp-ux-only-note { margin: 4px 0 0; font-size: 11.5px; }
 .cp-structure-head { display: flex; align-items: center; gap: 6px; }
 .cp-structure { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
 .cp-structure.two { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
