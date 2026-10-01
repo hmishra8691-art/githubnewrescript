@@ -1062,6 +1062,42 @@ export function pipelineToSetExpr(q: Question): SetExpr | null {
 
 /* ============================================== applying punches at runtime */
 
+/** the codes a derived question's "always" select rules own — the only ones that may be taken back */
+function withdrawStalePunches(
+  q: Question,
+  ctx: EvalContext,
+  answerKeyFor: (q: Question) => string,
+  selectedNow: (string | number)[],
+): { key: string; value: unknown } | null {
+  const derived = q.type === "hidden" || q.type === "calculated" || !!q.settings?.hidden;
+  if (!derived) return null;
+  /* a programmed starting value is the programmer's, not a punch's */
+  const dv = (q.settings as { defaultValue?: unknown } | undefined)?.defaultValue;
+  if (dv !== undefined && dv !== null && dv !== "") return null;
+  const owned = new Set<string>();
+  for (const r of q.punches ?? []) {
+    if (r.recompute !== "always" || r.action !== "select" || r.source.kind !== "codes") continue;
+    if (r.targetRow !== undefined || r.targetColumn !== undefined) continue;
+    for (const c of r.source.codes) owned.add(String(c));
+  }
+  if (!owned.size) return null;
+  const keep = new Set(selectedNow.map(String));
+  const stale = (c: unknown) => owned.has(String(c)) && !keep.has(String(c));
+  const k = answerKeyFor(q);
+  const cur = ctx.state.answers[k];
+  if (Array.isArray(cur)) {
+    const next = cur.filter((c) => !stale(c));
+    if (next.length === cur.length) return null;
+    ctx.state.answers[k] = next as AnswerValue;
+    return { key: k, value: next };
+  }
+  if (cur !== undefined && cur !== null && typeof cur !== "object" && stale(cur)) {
+    delete ctx.state.answers[k];
+    return { key: k, value: undefined };
+  }
+  return null;
+}
+
 /**
  * Fill in a question's punched options, if it has any.
  *
@@ -1080,7 +1116,17 @@ export function applyPunches(
   const result = resolvePunches(q, ctx);
   const nothingFlat =
     result.select.length === 0 && result.deselect.length === 0 && !result.clear && !result.setValue;
-  if (nothingFlat && result.cells.length === 0) return null;
+
+  /*
+   * A DERIVED question (hidden, calculated, set hidden) is nobody's answer
+   * but its punches'. When an "always" rule stops holding, the code it put
+   * there is taken back — otherwise a respondent who typed 9 (High) and then
+   * 5 kept Q9 = "High band" for good, while everything that reads Q9 was told
+   * the opposite of the answers on the page. A respondent's own answer is
+   * never touched: this is only for questions nobody is asked.
+   */
+  const takenBack = withdrawStalePunches(q, ctx, answerKeyFor, result.select);
+  if (nothingFlat && result.cells.length === 0) return takenBack;
 
   const key = answerKeyFor(q);
   const original: unknown = ctx.state.answers[key];

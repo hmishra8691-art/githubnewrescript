@@ -2,8 +2,8 @@
 import { CountInput } from "./CountInput";
 import React from "react";
 import type { Question, ValidationRule, SkipRule, ListOperation, ListSource } from "@rescript/schema";
-import { validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion, shapeHasAxis, staleFields, migrateQuestionType, escapeHtml, sanitizeHtml, PIPE_TOKEN_RE, parsePipeBody, describePipeToken } from "@rescript/engine";
-import { resolveVariant, effectiveCapabilities, allowedValidationKinds, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript/schema";
+import { gridAxes, validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion, shapeHasAxis, staleFields, migrateQuestionType, escapeHtml, sanitizeHtml, PIPE_TOKEN_RE, parsePipeBody, describePipeToken } from "@rescript/engine";
+import { isEmptyConditionTree, resolveVariant, effectiveCapabilities, allowedValidationKinds, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript/schema";
 import { useStudio, selectedQuestion, uid } from "./store";
 import { useCanvas } from "../canvas/CanvasContext";
 import { ElementPanel } from "../canvas/ElementPanel";
@@ -361,6 +361,22 @@ function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question
               * small". A rich, growing message belongs on a line no other
               * control constrains the height of.
               */}
+            {/*
+              * (before the message, so the condition editor below stays the
+              * card's last block)
+              *
+              * CONDITIONAL VALIDATION — the rule is checked only while `when`
+              * holds ("Q5 must be ≥ 18 only when Q4 = adult"). The engine has
+              * always honoured `when`; it had no control here, so it could be
+              * set only by the Copilot or an import, and never seen again.
+              */}
+            <div style={{ marginTop: 6 }} data-testid="validation-when">
+              <OptionalCondition label="Check this rule only when" value={v.when}
+                hint="Otherwise the rule is checked for every respondent."
+                onChange={(when) => patch({
+                  validation: q.validation.map((x, j) => (j === i ? { ...x, when } : x)),
+                })} />
+            </div>
             <ValidationMessageField
               value={v.message}
               format={v.messageFormat}
@@ -398,6 +414,8 @@ function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question
                 * kinds above instead of this one.
                 */
               <div style={{ marginTop: 6 }} data-testid="validation-condition-editor">
+                {/* the engine fails the answer when this holds — say so, it is the opposite of a "Show when" */}
+                <div className="flabel">The answer is INVALID when</div>
                 <ConditionEditor
                   value={v.check ?? newConditionGroup()}
                   onChange={(check) => patch({
@@ -438,6 +456,105 @@ function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question
   );
 }
 
+/**
+ * CARRY FORWARD, with only the choices that mean something for the source.
+ *
+ * The list offered "selected / NOT selected / displayed / answered rows / all"
+ * whatever the source was, so a single-select showed "answered rows" (which
+ * reads the same as "selected" there) and a grid showed "selected options"
+ * (a grid has rows, not options) — five near-duplicates nobody could tell
+ * apart (Oweas 1, 2, 3, 6). Each choice now names what it carries for THIS
+ * source and says so underneath. A grid source can also narrow to the rows
+ * where chosen columns were picked (29-09 #6), and every source can take a
+ * per-item condition (`where`), which existed in the engine with no control.
+ */
+function CarryForwardEditor({ q, patch }: { q: Question; patch(p: Partial<Question>): void }) {
+  const s = useStudio();
+  const cf = q.carryForward!;
+  const src = s.def.questions.find((x) => x.id === cf.sourceQuestionId);
+  const axes = gridAxes(src);
+  const grid = !!src && axes.isGrid && src.rows.length > 0;
+  const item = grid ? "rows" : "options";
+  const multi = !!src && (src.type === "multi_select" || src.type === "multi_dropdown" || src.type === "image_select" || src.type === "ranking");
+  type F = NonNullable<typeof cf.filter>;
+  const choices: { value: F; label: string; hint: string }[] = grid
+    ? [
+        { value: "answered_rows", label: "answered rows", hint: `The rows of ${src!.code} the respondent gave an answer for.` },
+        { value: "not_selected", label: "unanswered rows", hint: `The rows of ${src!.code} that were shown and left unanswered.` },
+        { value: "displayed", label: "displayed rows", hint: `Every row ${src!.code} actually showed this respondent (after its own masking and logic).` },
+        { value: "all", label: "all rows", hint: `Every row ${src!.code} defines, shown or not.` },
+      ]
+    : [
+        { value: "selected", label: multi ? "selected options" : "the selected option", hint: `What the respondent picked in ${src?.code ?? "the source"}.` },
+        { value: "not_selected", label: "NOT selected options", hint: `What ${src?.code ?? "the source"} showed and the respondent did not pick.` },
+        { value: "displayed", label: "displayed options", hint: `Every option ${src?.code ?? "the source"} actually showed this respondent.` },
+        { value: "all", label: "all options", hint: `Every option ${src?.code ?? "the source"} defines, shown or not.` },
+      ];
+  /* a stored value the source does not offer stays selectable — and visible — rather than silently changing */
+  const current = (cf.filter ?? "selected") as F;
+  const effective: F = grid && current === "selected" ? "answered_rows" : !grid && current === "answered_rows" ? "selected" : current;
+  const hint = choices.find((c) => c.value === effective)?.hint;
+  const set = (p: Partial<typeof cf>) => patch({ carryForward: { ...cf, ...p } });
+  const colChoices = grid ? axes.columns : [];
+  const cols = (cf.columns ?? []).map(String);
+
+  return (
+    <div className="card" style={{ padding: 10 }} data-testid="carry-forward-editor">
+      <div className="row" style={{ flexWrap: "wrap" }}>
+        <select className="select" value={cf.sourceQuestionId} data-testid="cf-source"
+          onChange={(e) => set({ sourceQuestionId: e.target.value, columns: undefined })}>
+          {s.def.questions.filter((x) => x.id !== q.id).map((x) => (
+            <option key={x.id} value={x.id}>{x.code}</option>
+          ))}
+        </select>
+        <select className="select" value={effective} data-testid="cf-filter"
+          onChange={(e) => set({ filter: e.target.value as F })}>
+          {choices.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+        </select>
+        <select className="select" value={cf.into}
+          onChange={(e) => set({ into: e.target.value as any })}>
+          <option value="options">→ into options</option>
+          <option value="rows">→ into rows</option>
+          <option value="columns">→ into columns</option>
+        </select>
+        <label className="row" style={{ gap: 4, fontSize: 13 }} title={`Also keep ${q.code}'s own ${cf.into}, after the carried ones`}>
+          <input type="checkbox" checked={cf.keepOwn}
+            onChange={(e) => set({ keepOwn: e.target.checked })} />
+          keep own
+        </label>
+        <button className="btn small danger" onClick={() => patch({ carryForward: undefined })}>remove</button>
+      </div>
+      {hint && <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }} data-testid="cf-hint">{hint}</div>}
+      {grid && colChoices.length > 0 && (
+        <div style={{ marginTop: 8 }} data-testid="cf-columns">
+          <span className="flabel">Only rows where this {axes.columnLabel.replace(/ \(.*\)$/, "")} was chosen (any of)</span>
+          <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+            {colChoices.map((c) => (
+              <label key={c.ref} className="row" style={{ gap: 4, fontSize: 13 }}>
+                <input type="checkbox" data-testid={`cf-col-${c.ref}`} checked={cols.includes(String(c.ref))}
+                  onChange={(e) => {
+                    const next = e.target.checked ? [...cols, String(c.ref)] : cols.filter((x) => x !== String(c.ref));
+                    const typed = next.map((x) => axes.columnMeaning === "option_code"
+                      ? (src!.options.find((o) => String(o.code) === x)?.code ?? x)
+                      : x);
+                    set({ columns: typed.length ? typed : undefined });
+                  }} />
+                {c.label || c.ref}
+              </label>
+            ))}
+          </div>
+          <div className="muted" style={{ fontSize: 12.5 }}>None ticked: every row the setting above carries.</div>
+        </div>
+      )}
+      <div style={{ marginTop: 8 }}>
+        <OptionalCondition perOption label="Only carry items where" value={cf.where}
+          hint="A condition on each carried item — @option.code, @option.label — or on other answers."
+          onChange={(where) => set({ where })} />
+      </div>
+    </div>
+  );
+}
+
 function SkipLogicEditor({ q, patch }: { q: Question; patch(p: Partial<Question>): void }) {
   const s = useStudio();
   const pages: { id: string; title?: string }[] = [];
@@ -466,6 +583,13 @@ function SkipLogicEditor({ q, patch }: { q: Question; patch(p: Partial<Question>
           </div>
           <div className="logic-if">IF</div>
           <ConditionEditor value={rule.when} onChange={(when) => setRule(i, { ...rule, when })} />
+          {isEmptyConditionTree(rule.when) && (
+            /* an empty condition holds, so an unfinished rule skips EVERY
+             * respondent — "+ skip rule" starts here with "end" as the target */
+            <div className="chip warn" data-testid={`skip-always-${i}`} style={{ marginTop: 6 }}>
+              No condition yet — this rule skips every respondent. Add a condition, or remove the rule.
+            </div>
+          )}
           <div className="row skip-target" style={{ marginTop: 8 }}>
             <span className="flabel logic-then-word" style={{ marginBottom: 0 }}>THEN GO TO</span>
             <select className="select" value={rule.target.kind}
@@ -919,7 +1043,7 @@ export function PropertiesPanel() {
 
       {/* Logic reads as IF → THEN: the conditions, then what happens. */}
       {showSec("Display logic") && (
-      <CollapsibleSection id="display-logic" title="Display logic" active={!!q.displayLogic}>
+      <CollapsibleSection id="display-logic" title="Display logic" active={!isEmptyConditionTree(q.displayLogic)}>
       <div className="logic-rule">
         <div className="logic-if">IF</div>
         <OptionalCondition label="these conditions hold"
@@ -1065,38 +1189,7 @@ export function PropertiesPanel() {
 
       {hasCap("carry_forward") && showSec("Carry-forward") && (
       <CollapsibleSection id="carry-forward" title="Carry-forward (dynamic options)" active={!!q.carryForward}>
-      {q.carryForward ? (
-        <div className="card" style={{ padding: 10 }}>
-          <div className="row" style={{ flexWrap: "wrap" }}>
-            <select className="select" value={q.carryForward.sourceQuestionId}
-              onChange={(e) => patch({ carryForward: { ...q.carryForward!, sourceQuestionId: e.target.value } })}>
-              {s.def.questions.filter((x) => x.id !== q.id).map((x) => (
-                <option key={x.id} value={x.id}>{x.code}</option>
-              ))}
-            </select>
-            <select className="select" value={q.carryForward.filter}
-              onChange={(e) => patch({ carryForward: { ...q.carryForward!, filter: e.target.value as any } })}>
-              <option value="selected">selected options</option>
-              <option value="not_selected">NOT selected</option>
-              <option value="displayed">displayed options</option>
-              <option value="answered_rows">answered rows</option>
-              <option value="all">all options</option>
-            </select>
-            <select className="select" value={q.carryForward.into}
-              onChange={(e) => patch({ carryForward: { ...q.carryForward!, into: e.target.value as any } })}>
-              <option value="options">→ into options</option>
-              <option value="rows">→ into rows</option>
-              <option value="columns">→ into columns</option>
-            </select>
-            <label className="row" style={{ gap: 4, fontSize: 13 }}>
-              <input type="checkbox" checked={q.carryForward.keepOwn}
-                onChange={(e) => patch({ carryForward: { ...q.carryForward!, keepOwn: e.target.checked } })} />
-              keep own
-            </label>
-            <button className="btn small danger" onClick={() => patch({ carryForward: undefined })}>remove</button>
-          </div>
-        </div>
-      ) : (
+      {q.carryForward ? <CarryForwardEditor q={q} patch={patch} /> : (
         <button className="btn small" disabled={s.def.questions.length < 2}
           onClick={() => patch({
             carryForward: {
@@ -1270,6 +1363,14 @@ export function PropertiesPanel() {
             </select>
             <button className="btn small danger" onClick={() =>
               patch({ listLogic: q.listLogic!.filter((_, j) => j !== ri) })}>×</button>
+          </div>
+          {/* the engine has always gated a list rule on `when`; it had no control here */}
+          <div style={{ marginTop: 6 }}>
+            <OptionalCondition label="Apply this rule only when" value={rule.when}
+              hint="Otherwise it applies to every respondent."
+              onChange={(when) => patch({
+                listLogic: q.listLogic!.map((x, j) => (j === ri ? { ...x, when } : x)),
+              })} />
           </div>
         </div>
       ))}

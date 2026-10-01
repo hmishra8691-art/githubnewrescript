@@ -159,6 +159,8 @@ export const CustomScript = z.object({
   code: z.string(),
   enabled: z.boolean().default(true),
   notes: z.string().optional(),
+  /** Run only when this condition holds (any nesting) — the "script guard". */
+  when: Condition.optional(),
 });
 export type CustomScript = z.infer<typeof CustomScript>;
 

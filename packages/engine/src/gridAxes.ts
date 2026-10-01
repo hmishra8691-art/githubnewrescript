@@ -123,6 +123,21 @@ export function gridAxes(q: Question | undefined | null): GridAxes {
       rowLabel: "row", columnLabel: "column (scale point)",
     };
   }
+  /*
+   * A CONSTANT SUM stores one number per option — `{ code: amount }` — so each
+   * option is addressable the way a grid row is (`rowCode` = the option's
+   * code, which is exactly the key the evaluator drills into). Without this
+   * the builder had no way to name "Option 1" at all, and "Option 1 > 6" could
+   * only be written as a rule on the whole map, which never matched.
+   */
+  if (effectiveResponseModel(q) === "allocation") {
+    return {
+      model: "per_row", isGrid: true,
+      rows: fromOptions(q.options),
+      columns: [], columnMeaning: "none",
+      rowLabel: "option", columnLabel: "column",
+    };
+  }
   return { model, isGrid: false, rows: [], columns: [], columnMeaning: "none", rowLabel: "row", columnLabel: "column" };
 }
 
@@ -140,6 +155,8 @@ export function valueChoicesFor(
   ref: { rowCode?: string | null; columnId?: string | null } = {},
 ): AxisItem[] {
   if (!q) return [];
+  // a constant sum's options are what is ADDRESSED; the value is an amount, not a choice
+  if (effectiveResponseModel(q) === "allocation") return [];
   const axes = gridAxes(q);
   if (axes.model === "cells") {
     const col = q.columns?.find((c) => String(c.id) === String(ref.columnId));

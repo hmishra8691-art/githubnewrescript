@@ -100,11 +100,19 @@ export function ExpressionEditor({ value, onChange, perOption }: {
   const commit = React.useCallback((next: string) => {
     const parsed = parseLogicExpression(s.def, next, { perOption });
     if (parsed.errors.length > 0) return false;
+    const tree = parsed.condition ?? { type: "group", op: "and", children: [] };
+    /*
+     * Nothing typed, nothing written. Re-parsing the printed text is the same
+     * logic, but not always the same TREE (a multi-child NOT prints as
+     * `NOT (a OR b)`), so committing it rewrote the stored shape — and added
+     * an undo step — every time the box merely lost focus.
+     */
+    if (JSON.stringify(tree) === JSON.stringify(value)) { setDirty(false); return true; }
     s.labelNextEdit?.("edit expression");
-    onChange(parsed.condition ?? { type: "group", op: "and", children: [] });
+    onChange(tree);
     setDirty(false);
     return true;
-  }, [s, onChange, perOption]);
+  }, [s, onChange, perOption, value]);
 
   const apply = () => { if (commit(text)) setText(formatCondition(s.def, parseLogicExpression(s.def, text, { perOption }).condition, { pretty: true })); };
 
@@ -221,7 +229,7 @@ export function ExpressionEditor({ value, onChange, perOption }: {
         value={text}
         placeholder={"Q1.brandA AND (Q2.R1.C2 OR Q3 > 25)\n\nDrag a reference in from the list below, or click one."}
         onChange={(e) => { setText(e.target.value); setDirty(true); commit(e.target.value); }}
-        onBlur={() => { if (result.errors.length === 0) commit(text); }}
+        onBlur={() => { if (dirty && result.errors.length === 0) commit(text); }}
         onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
         onDrop={(e) => {
           const token = e.dataTransfer.getData("text/plain");

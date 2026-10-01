@@ -1,5 +1,7 @@
 import type { Condition, FlowNode, Question, SurveyDefinition, ValidationRule } from "@rescript/schema";
-import { SurveyDefinition as SurveyDefinitionSchema, variantRegistry } from "@rescript/schema";
+import { SurveyDefinition as SurveyDefinitionSchema, variantRegistry, Condition as ConditionSchema } from "@rescript/schema";
+import { forEachRule, isConditionNode } from "./conditionWalk.js";
+import { canonicalizeCondition } from "./optionCodes.js";
 import { createQuestionFromVariant } from "./questionCreate.js";
 import { defaultIds, removeQuestion, type IdMinter } from "./questionOps.js";
 import { listBlocks, listPages } from "./blocks.js";
@@ -9,7 +11,7 @@ import { parseLogicExpression, formatCondition } from "./logicExpression.js";
 import { migrateQuestionType } from "./questionShape.js";
 import { getQuestionByCodeOrVar } from "./state.js";
 import { runQualityCheck } from "./qualityCheck.js";
-import { questionOrder } from "./dependencies.js";
+import { questionOrder, conditionRefs } from "./dependencies.js";
 import { applyUxAction, coerceUxAction, isUxOp, UX_ACTION_OPS, type UxAction } from "./uxActions.js";
 import { parsePunchExpression, formatPunchExpression } from "./autoPunch.js";
 import { authoringQuestionView } from "./carryforward.js";
@@ -50,7 +52,23 @@ import { withoutPresentation, diffTheme } from "./theme.js";
 
 export type OptionSpec = string | { label: string; code?: string | number; exclusive?: boolean; other?: boolean; anchor?: boolean };
 export interface ScaleSpec { points: number; start?: number; low?: string; high?: string; mid?: string; labels?: string[] }
-export interface ValidationSpec { kind: string; value?: number | string }
+export interface ValidationSpec {
+  kind: string;
+  value?: number | string;
+  /** the rule applies only while this holds (any nesting) */
+  when?: CondInput;
+  /** kind "condition": what a valid answer must satisfy (stored negated: the engine's `check` is the invalid case) */
+  check?: CondInput;
+  message?: string;
+}
+
+/**
+ * A condition from the model: expression text (`Q3 = 1 AND (Q5 > 2 OR NOT Q7.O4)`)
+ * or the structured tree itself. Both go through the same gate — the schema,
+ * then option-code canonicalisation — so neither can store what the other
+ * would refuse.
+ */
+export type CondInput = string | Condition;
 
 export type SurveyAction =
   | { op: "create_block"; ref?: string; title: string; after?: string }
@@ -60,20 +78,20 @@ export type SurveyAction =
   | { op: "update_question"; target: string; text?: string; type?: string; code?: string; variable?: string; required?: boolean; instruction?: string; options?: OptionSpec[]; addOptions?: OptionSpec[]; removeOptions?: (string | number)[]; rows?: string[]; scale?: ScaleSpec; randomize?: boolean }
   | { op: "delete_question"; target: string }
   | { op: "move_question"; target: string; block?: string; after?: string }
-  | { op: "set_display_logic"; target: string; expression: string | null }
-  | { op: "add_skip"; from: string; when: string; to: string }
+  | { op: "set_display_logic"; target: string; expression: CondInput | null }
+  | { op: "add_skip"; from: string; when: CondInput; to: string }
   | { op: "clear_skips"; target: string }
   | { op: "set_validation"; target: string; rules: ValidationSpec[] }
   | { op: "page_break"; after: string; remove?: boolean }
   | { op: "create_embedded"; name: string; source?: "url" | "static" | "panel" | "expression"; value?: string }
   | { op: "create_calculation"; name: string; expression: string; label?: string; dataType?: "numeric" | "text" | "boolean" }
   | { op: "create_randomizer"; blocks: string[]; show?: number; title?: string }
-  | { op: "create_branch"; blocks: string[]; when: string; title?: string }
+  | { op: "create_branch"; blocks: string[]; when: CondInput; title?: string; arms?: { blocks: string[]; when: CondInput; label?: string }[]; otherwise?: string[] }
   | { op: "create_loop"; from: string; to: string; over?: string; items?: string[]; loopVar?: string; title?: string }
-  | { op: "create_quota"; name: string; cells: { label: string; when: string; limit: number }[]; onFull?: "terminate" | "flag" }
+  | { op: "create_quota"; name: string; cells: { label: string; when: CondInput; limit: number }[]; onFull?: "terminate" | "flag" }
   | { op: "set_research"; objective?: string; hypotheses?: string[]; population?: string; methodology?: string; constructs?: { name: string; role?: string; definition?: string; questions?: string[] }[]; analysis?: string[]; assumptions?: string[]; sources?: string[] }
   /* criteria-based coding (punching): IF <when> THEN code <target> — on the target question's punch rules */
-  | { op: "add_punch"; target: string; when?: string; action?: "select" | "deselect" | "set_value" | "clear"; codes?: (string | number)[]; value?: string | number; expression?: string; label?: string; mode?: "if" | "else_if" | "else"; recompute?: "once" | "always" }
+  | { op: "add_punch"; target: string; when?: CondInput; action?: "select" | "deselect" | "set_value" | "clear"; codes?: (string | number)[]; value?: string | number; expression?: string; label?: string; mode?: "if" | "else_if" | "else"; recompute?: "once" | "always" }
   | { op: "remove_punches"; target: string; id?: string }
   /* the survey's look and behaviour — see uxActions.ts; they write def.ux and nothing else */
   | UxAction;
@@ -113,11 +131,14 @@ export function variantForActionType(type: string): string | null {
   return variantRegistry.get(type.trim()) ? type.trim() : null;
 }
 
-const VALIDATION_KINDS = new Set(["required", "min_value", "max_value", "min_length", "max_length", "min_selections", "max_selections", "sum_equals", "sum_max", "sum_min", "pattern", "email", "phone", "url", "zip", "date_min", "date_max", "integer"]);
+const VALIDATION_KINDS = new Set(["required", "min_value", "max_value", "min_length", "max_length", "min_selections", "max_selections", "sum_equals", "sum_max", "sum_min", "pattern", "email", "phone", "url", "zip", "date_min", "date_max", "integer", "condition"]);
 
 /* ------------------------------------------------------------ the gate */
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+/** expression text, or a structured condition tree (cloned — nothing of the model's object is kept by reference) */
+const condIn = (v: unknown): CondInput | undefined =>
+  typeof v === "string" ? str(v) : isConditionNode(v) ? (JSON.parse(JSON.stringify(v)) as Condition) : undefined;
 const strOrNum = (v: unknown): string | number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : str(v));
 const bool = (v: unknown): boolean | undefined => (typeof v === "boolean" ? v : undefined);
 const strs = (v: unknown, max = 200): string[] | undefined => (Array.isArray(v) ? v.map(str).filter((x): x is string => !!x).slice(0, max) : undefined);
@@ -143,10 +164,13 @@ const validations = (v: unknown): ValidationSpec[] | undefined => {
   return v.map((r) => {
     if (!r || typeof r !== "object") return null;
     const o = r as Record<string, unknown>;
-    const kind = str(o.kind);
+    const kind = str(o.kind) ?? (o.check !== undefined || o.condition !== undefined ? "condition" : undefined);
     if (!kind || !VALIDATION_KINDS.has(kind)) return null;
     const value = strOrNum(o.value);
-    return { kind, ...(value !== undefined ? { value } : {}) };
+    const when = condIn(o.when);
+    const check = condIn(o.check ?? o.condition);
+    if (kind === "condition" && !check) return null;
+    return { kind, ...(value !== undefined ? { value } : {}), ...(when ? { when } : {}), ...(check ? { check } : {}), ...(str(o.message) ? { message: str(o.message)!.slice(0, 300) } : {}) };
   }).filter((x): x is ValidationSpec => !!x);
 };
 
@@ -207,8 +231,8 @@ function coerceOne(item: unknown): SurveyAction | string {
     }
     case "delete_question": { const target = str(o.target); return target ? { op, target } : "delete_question needs a target"; }
     case "move_question": { const target = str(o.target); if (!target || (!str(o.block) && !str(o.after))) return "move_question needs a target and a block or after"; return { op, target, ...(str(o.block) ? { block: str(o.block) } : {}), ...(str(o.after) ? { after: str(o.after) } : {}) }; }
-    case "set_display_logic": { const target = str(o.target); if (!target) return "set_display_logic needs a target"; const e = o.expression === null ? null : str(o.expression); if (e === undefined) return "set_display_logic needs an expression (or null to remove it)"; return { op, target, expression: e }; }
-    case "add_skip": { const from = str(o.from), when = str(o.when), to = str(o.to); return from && when && to ? { op, from, when, to } : "add_skip needs from, when and to"; }
+    case "set_display_logic": { const target = str(o.target); if (!target) return "set_display_logic needs a target"; const raw = o.expression !== undefined ? o.expression : o.condition !== undefined ? o.condition : o.when; const e = raw === null ? null : condIn(raw); if (e === undefined) return "set_display_logic needs an expression or a condition (or null to remove it)"; return { op, target, expression: e }; }
+    case "add_skip": { const from = str(o.from), when = condIn(o.when ?? o.condition), to = str(o.to); return from && when && to ? { op, from, when, to } : "add_skip needs from, when and to"; }
     case "clear_skips": { const target = str(o.target); return target ? { op, target } : "clear_skips needs a target"; }
     case "set_validation": { const target = str(o.target); const rules = validations(o.rules); return target && rules ? { op, target, rules } : "set_validation needs a target and rules"; }
     case "add_punch": case "punch": case "code_response": {
@@ -218,9 +242,10 @@ function coerceOne(item: unknown): SurveyAction | string {
       const action = ["select", "deselect", "set_value", "clear"].includes(String(o.action)) ? (o.action as "select" | "deselect" | "set_value" | "clear") : undefined;
       const codes = Array.isArray(o.codes) ? o.codes.map((c) => strOrNum(c)).filter((c): c is string | number => c !== undefined).slice(0, 50) : o.code !== undefined && strOrNum(o.code) !== undefined ? [strOrNum(o.code)!] : undefined;
       const value = strOrNum(o.value);
-      if (!expression && !str(o.when) && o.mode !== "else") return "add_punch needs when (the criteria) — e.g. “Q3 = 1”";
+      const pWhen = condIn(o.when ?? o.condition);
+      if (!expression && !pWhen && o.mode !== "else") return "add_punch needs when (the criteria) — e.g. “Q3 = 1”";
       if (!expression && !codes?.length && value === undefined && action !== "clear") return "add_punch needs codes or a value to code the response as";
-      return { op: "add_punch", ...(target ? { target } : { target: "" }), ...(str(o.when) ? { when: str(o.when) } : {}), ...(action ? { action } : {}), ...(codes?.length ? { codes } : {}), ...(value !== undefined ? { value } : {}), ...(expression ? { expression } : {}), ...(str(o.label) ? { label: str(o.label)!.slice(0, 120) } : {}), ...(["if", "else_if", "else"].includes(String(o.mode)) ? { mode: o.mode as "if" } : {}), ...(o.recompute === "once" || o.recompute === "always" ? { recompute: o.recompute } : {}) };
+      return { op: "add_punch", ...(target ? { target } : { target: "" }), ...(pWhen ? { when: pWhen } : {}), ...(action ? { action } : {}), ...(codes?.length ? { codes } : {}), ...(value !== undefined ? { value } : {}), ...(expression ? { expression } : {}), ...(str(o.label) ? { label: str(o.label)!.slice(0, 120) } : {}), ...(["if", "else_if", "else"].includes(String(o.mode)) ? { mode: o.mode as "if" } : {}), ...(o.recompute === "once" || o.recompute === "always" ? { recompute: o.recompute } : {}) };
     }
     case "remove_punches": case "clear_punches": { const target = str(o.target); return target ? { op: "remove_punches", target, ...(str(o.id) ? { id: str(o.id) } : {}) } : "remove_punches needs a target"; }
     case "page_break": { const after = str(o.after); return after ? { op, after, ...(bool(o.remove) ? { remove: true } : {}) } : "page_break needs after"; }
@@ -231,7 +256,15 @@ function coerceOne(item: unknown): SurveyAction | string {
     }
     case "create_calculation": { const name = str(o.name), expression = str(o.expression); return name && expression ? { op, name, expression, ...(str(o.label) ? { label: str(o.label) } : {}), ...(["numeric", "text", "boolean"].includes(String(o.dataType)) ? { dataType: o.dataType as "numeric" } : {}) } : "create_calculation needs name and expression"; }
     case "create_randomizer": { const blocks = strs(o.blocks); if (!blocks || blocks.length < 2) return "create_randomizer needs two or more blocks"; const show = Number(o.show); return { op, blocks, ...(Number.isInteger(show) && show > 0 ? { show } : {}), ...(str(o.title) ? { title: str(o.title) } : {}) }; }
-    case "create_branch": { const blocks = strs(o.blocks), when = str(o.when); return blocks?.length && when ? { op, blocks, when, ...(str(o.title) ? { title: str(o.title) } : {}) } : "create_branch needs blocks and when"; }
+    case "create_branch": {
+      /* one arm (blocks + when), or several (arms) — first match wins — and an optional otherwise */
+      const arms = Array.isArray(o.arms) ? o.arms.map((x) => { const r = (x ?? {}) as Record<string, unknown>; const blocks = strs(r.blocks), when = condIn(r.when ?? r.condition); return blocks?.length && when ? { blocks, when, ...(str(r.label) ? { label: str(r.label) } : {}) } : null; }).filter((x): x is { blocks: string[]; when: CondInput; label?: string } => !!x) : [];
+      const blocks = strs(o.blocks), when = condIn(o.when ?? o.condition);
+      const otherwise = strs(o.otherwise);
+      if (!arms.length && !(blocks?.length && when)) return "create_branch needs blocks and when (or arms: [{ blocks, when }])";
+      const first = arms[0] ?? { blocks: blocks!, when: when! };
+      return { op, blocks: first.blocks, when: first.when, ...(str(o.title) ? { title: str(o.title) } : {}), ...(arms.length > 1 ? { arms: arms.slice(1) } : {}), ...(otherwise?.length ? { otherwise } : {}) };
+    }
     case "create_loop": {
       const from = str(o.from), to = str(o.to) ?? str(o.from);
       if (!from || !to) return "create_loop needs from (and to)";
@@ -240,7 +273,7 @@ function coerceOne(item: unknown): SurveyAction | string {
       return { op, from, to, ...(str(o.over) ? { over: str(o.over) } : {}), ...(items?.length ? { items } : {}), ...(str(o.loopVar) && /^[A-Za-z_][A-Za-z0-9_]*$/.test(str(o.loopVar)!) ? { loopVar: str(o.loopVar) } : {}), ...(str(o.title) ? { title: str(o.title) } : {}) };
     }
     case "create_quota": {
-      const name = str(o.name); const cells = Array.isArray(o.cells) ? o.cells.map((c) => { const x = (c ?? {}) as Record<string, unknown>; const label = str(x.label), when = str(x.when), limit = Number(x.limit); return label && when && Number.isFinite(limit) && limit > 0 ? { label, when, limit } : null; }).filter((x): x is { label: string; when: string; limit: number } => !!x) : [];
+      const name = str(o.name); const cells = Array.isArray(o.cells) ? o.cells.map((c) => { const x = (c ?? {}) as Record<string, unknown>; const label = str(x.label), when = condIn(x.when ?? x.condition), limit = Number(x.limit); return label && when && Number.isFinite(limit) && limit > 0 ? { label, when, limit } : null; }).filter((x): x is { label: string; when: CondInput; limit: number } => !!x) : [];
       return name && cells.length ? { op, name, cells, ...(o.onFull === "flag" ? { onFull: "flag" as const } : {}) } : "create_quota needs a name and cells with label, when and limit";
     }
     case "set_research": {
@@ -396,6 +429,16 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       }
       if (a.ref) ctx.refs.set(a.ref.toLowerCase(), q.id);
       ctx.refs.set(q.code.toLowerCase(), q.id);
+      /*
+       * A rule with a condition ("only when", or a kind:"condition" check) is
+       * built only now, when the question — and its batch ref — exists, so
+       * the condition can name it. `shapeQuestion` kept just kind and value,
+       * which dropped the gate silently: a conditional rule became an
+       * unconditional one, and a condition rule became one that checks nothing.
+       */
+      if (a.validation?.some((r) => r.when || r.check)) {
+        q.validation = validationFromSpecs(ctx, a.validation, (i) => `${q.id}_v${i + 1}`);
+      }
       const block = listBlocks(def.flow as unknown[]).find((b) => b.pages.some((p) => p.node.questionIds.includes(q.id)));
       if (block) ctx.lastBlock = block.id;
       return { description: `Created ${q.code} (${typeLabel(q)})${block?.title ? ` in “${block.title}”` : ""}: ${plain(q.text, 70)}`, touched: [q.id] };
@@ -520,7 +563,7 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
     case "set_validation": {
       const q = resolveQuestion(ctx, a.target);
       const had = q.validation?.length ?? 0;
-      q.validation = a.rules.map((r) => ({ id: ctx.ids("val"), kind: r.kind, ...(r.value !== undefined ? { value: r.value } : {}) })) as ValidationRule[];
+      q.validation = validationFromSpecs(ctx, a.rules, () => ctx.ids("val"));
       return { description: `${q.code} validation: ${a.rules.map((r) => `${r.kind.replace(/_/g, " ")}${r.value !== undefined ? ` ${r.value}` : ""}`).join(", ") || "none"}`, destructive: had ? `Replaces the ${had} validation rule${had === 1 ? "" : "s"} of ${q.code}` : undefined, touched: [q.id] };
     }
     case "page_break": {
@@ -559,22 +602,34 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       return { description: `Randomized the order of ${titles.map((t) => `“${t}”`).join(", ")}${a.show ? ` (each respondent sees ${a.show})` : ""}`, touched: ids };
     }
     case "create_branch": {
-      const ids = a.blocks.map((b) => resolveTop(ctx, b));
+      /*
+       * One or more ARMS — first match wins — and an optional OTHERWISE, each a
+       * run of top-level blocks. All of them must sit next to each other in the
+       * flow, because they become one branch node in that place.
+       */
       const flow = def.flow as FlowNode[];
-      const idx = ids.map((id) => flow.findIndex((n) => n.id === id));
+      const armSpecs = [{ blocks: a.blocks, when: a.when, label: a.title }, ...(a.arms ?? [])];
+      const allIds = [...armSpecs.flatMap((arm) => arm.blocks), ...(a.otherwise ?? [])].map((b) => resolveTop(ctx, b));
+      if (new Set(allIds).size !== allIds.length) fail("a block can only be in one arm of a branch");
+      const idx = allIds.map((id) => flow.findIndex((n) => n.id === id));
       if (idx.some((i) => i < 0)) fail("only blocks at the top level of the survey flow can go into a branch");
       const sorted = [...idx].sort((x, y) => x - y);
       if (sorted.some((v, k) => k > 0 && v !== sorted[k - 1] + 1)) fail("the blocks of a branch must sit next to each other in the flow");
-      const when = parseCondition(def, withRefs(ctx, a.when));
-      // the condition may only read questions asked before the branch
+      // the conditions may only read questions asked before the branch
       const order = questionOrder(def);
       const firstInside = Math.min(...sorted.flatMap((i) => listPages([flow[i]]).flatMap((p) => p.node.questionIds)).map((q) => order.indexOf(q)).filter((x) => x >= 0));
-      const reads = new Set<string>(); collectRefs(when, reads, def);
-      if ([...reads].some((q) => order.indexOf(q) >= firstInside)) fail("a branch condition can only read questions asked before the branch");
-      const nodes = sorted.map((i) => flow[i]);
-      const node = { type: "branch", id: ctx.ids("branch"), ...(a.title ? { title: a.title } : {}), branches: [{ id: ctx.ids("arm"), label: a.title, when, children: nodes }] } as unknown as FlowNode;
-      flow.splice(sorted[0], nodes.length, node);
-      return { description: `${nodes.map((n) => `“${(n as { title?: string }).title ?? n.id}”`).join(", ")} only when ${formatCondition(def, when)}`, touched: ids };
+      const byId = new Map(sorted.map((i) => [flow[i].id, flow[i]]));
+      const branches = armSpecs.map((arm) => {
+        const when = parseCondition(def, withRefs(ctx, arm.when));
+        const reads = new Set<string>(); collectRefs(when, reads, def);
+        if ([...reads].some((q) => order.indexOf(q) >= firstInside)) fail("a branch condition can only read questions asked before the branch");
+        return { id: ctx.ids("arm"), ...(arm.label ? { label: arm.label } : {}), when, children: arm.blocks.map((b) => byId.get(resolveTop(ctx, b))!) };
+      });
+      const otherwise = (a.otherwise ?? []).map((b) => byId.get(resolveTop(ctx, b))!);
+      const node = { type: "branch", id: ctx.ids("branch"), ...(a.title ? { title: a.title } : {}), branches, ...(otherwise.length ? { otherwise } : {}) } as unknown as FlowNode;
+      flow.splice(sorted[0], sorted.length, node);
+      const text = branches.map((b) => `${b.children.map((n) => `“${(n as { title?: string }).title ?? n.id}”`).join(", ")} when ${formatCondition(def, b.when)}`).join("; else ");
+      return { description: `Branch: ${text}${otherwise.length ? `; otherwise ${otherwise.map((n) => `“${(n as { title?: string }).title ?? n.id}”`).join(", ")}` : ""}`, touched: allIds };
     }
     case "create_loop": {
       const from = resolveQuestion(ctx, a.from), to = resolveQuestion(ctx, a.to);
@@ -796,7 +851,8 @@ function pipeRefs(ctx: Ctx, text: string): string {
   });
 }
 
-function withRefs(ctx: Ctx, text: string): string {
+function withRefs<T extends CondInput>(ctx: Ctx, text: T): T {
+  if (typeof text !== "string") return text;
   if (!ctx.refs.size) return text;
   return text.split(/("[^"]*"|'[^']*')/).map((part, i) => i % 2 ? part : part.replace(/\b[A-Za-z_][A-Za-z0-9_]*\b/g, (w) => {
     const id = ctx.refs.get(w.toLowerCase());
@@ -804,21 +860,50 @@ function withRefs(ctx: Ctx, text: string): string {
     const q = ctx.def.questions.find((x) => x.id === id);
     if (!q || q.variableName.toLowerCase() === w.toLowerCase() || String(q.code).toLowerCase() === w.toLowerCase()) return w;
     return String(q.code);
-  })).join("");
+  })).join("") as T;
 }
 
-function parseCondition(def: SurveyDefinition, text: string, selfId?: string): Condition {
-  const r = parseLogicExpression(def, text);
-  if (r.errors.length || !r.condition) fail(`the condition “${text}” does not parse: ${r.errors[0]?.message ?? "empty"}`);
+function parseCondition(def: SurveyDefinition, input: CondInput, selfId?: string): Condition {
+  const r = typeof input === "string" ? parseLogicExpression(def, input) : structuredCondition(def, input);
+  const shown = typeof input === "string" ? input : "(structured)";
+  if (r.errors.length || !r.condition) fail(`the condition “${shown}” does not parse: ${r.errors[0]?.message ?? "empty"}`);
   if (selfId) {
     const refs = new Set<string>(); collectRefs(r.condition!, refs, def);
     if (refs.has(selfId)) fail(`a question's display logic cannot read the question itself`);
   }
   return r.condition!;
 }
+/**
+ * Every question a condition reads — the dependency graph's own answer, so a
+ * right-hand question (`Q5 > Q6`), a calc expression, a COUNT's `where`, a
+ * named expression and a calculated variable all count. This used to see
+ * only left-hand question sources, so a quota check could be placed before a
+ * question its cells read, and a display rule could read its own question
+ * through a named expression without being refused.
+ */
+/**
+ * A condition the model sent as a tree: checked against the schema (shape,
+ * operators, any nesting), then through the same option-code canonicaliser
+ * the parser uses — so `{ value: "Yes" }` on a choice question is stored as
+ * its code, and a value naming no option is refused with the codes listed.
+ */
+function structuredCondition(def: SurveyDefinition, c: Condition): { condition?: Condition; errors: { message: string }[] } {
+  const parsed = ConditionSchema.safeParse(c);
+  if (!parsed.success) return { errors: [{ message: parsed.error.issues.slice(0, 2).map((i) => `${i.path.join(".") || "condition"}: ${i.message}`).join("; ") }] };
+  const tree = parsed.data as Condition;
+  const missing: string[] = [];
+  forEachRule(tree, (r) => {
+    if ((r.source.kind === "question" || r.source.kind === "variable") && !getQuestionByCodeOrVar(def, r.source.ref)
+      && !(def.calculations ?? []).some((x) => x.targetVariable === r.source.ref)) missing.push(r.source.ref);
+  });
+  if (missing.length) return { errors: [{ message: `${[...new Set(missing)].join(", ")} ${missing.length === 1 ? "is" : "are"} not in the survey` }] };
+  const canon = canonicalizeCondition(def, tree);
+  if (canon.errors.length) return { errors: canon.errors.map((message) => ({ message })) };
+  return { condition: canon.condition, errors: [] };
+}
+
 function collectRefs(c: Condition, into: Set<string>, def: SurveyDefinition): void {
-  if (c.type === "group") { for (const k of c.children) collectRefs(k, into, def); return; }
-  if (c.source.kind === "question") { const q = getQuestionByCodeOrVar(def, c.source.ref); if (q) into.add(q.id); }
+  conditionRefs(def, c, into);
 }
 
 /* ------------------------------------------------------------ building */
@@ -833,6 +918,25 @@ function namingFor(def: SurveyDefinition, code?: string, variable?: string): { c
   const c = code && !taken.has(code.toUpperCase()) ? code : auto;
   const v = variable && /^[A-Za-z_][A-Za-z0-9_]*$/.test(variable) && !taken.has(variable.toUpperCase()) ? variable : /^[A-Za-z_][A-Za-z0-9_]*$/.test(c) && !taken.has(c.toUpperCase()) ? c : auto;
   return { code: c, variableName: v };
+}
+
+/** Validation rules from the action's specs — the gate and the check through the same condition gate as everything else. */
+function validationFromSpecs(ctx: Ctx, specs: ValidationSpec[], idFor: (i: number) => string): ValidationRule[] {
+  const def = ctx.def;
+  return specs.map((r, i) => ({
+    id: idFor(i), kind: r.kind,
+    ...(r.value !== undefined ? { value: r.value } : {}),
+    ...(r.when ? { when: parseCondition(def, withRefs(ctx, r.when)) } : {}),
+    /*
+     * The stored `check` is the INVALID condition (the engine fails the answer
+     * when it holds — validate.ts). The action takes what the answer must
+     * SATISFY, which is how anyone states a rule ("Q5 must be at least Q4"),
+     * so it is negated here, once, rather than asking the model to write
+     * every rule backwards.
+     */
+    ...(r.check ? { check: { type: "group", op: "not", children: [parseCondition(def, withRefs(ctx, r.check))] } } : {}),
+    ...(r.message ? { message: r.message } : {}),
+  })) as ValidationRule[];
 }
 
 function shapeQuestion(def: SurveyDefinition, q: Question, a: Extract<SurveyAction, { op: "create_question" }>): void {
@@ -941,6 +1045,9 @@ function containsQuestion(n: FlowNode, qid: string): boolean {
 
 /* ------------------------------------------------------------ words */
 
+/** a condition input, in a few words, before it has been parsed */
+const condWords = (c: CondInput): string => (typeof c === "string" ? c : "a structured condition");
+
 export function describeAction(a: SurveyAction): string {
   switch (a.op) {
     case "create_block": return `Create block “${a.title}”`;
@@ -950,19 +1057,19 @@ export function describeAction(a: SurveyAction): string {
     case "update_question": return `Change ${a.target}`;
     case "delete_question": return `Delete ${a.target}`;
     case "move_question": return `Move ${a.target}`;
-    case "set_display_logic": return a.expression === null ? `Remove the display logic of ${a.target}` : `Show ${a.target} only when ${a.expression}`;
-    case "add_skip": return `After ${a.from}, when ${a.when}, go to ${a.to}`;
+    case "set_display_logic": return a.expression === null ? `Remove the display logic of ${a.target}` : `Show ${a.target} only when ${condWords(a.expression)}`;
+    case "add_skip": return `After ${a.from}, when ${condWords(a.when)}, go to ${a.to}`;
     case "clear_skips": return `Remove the skip rules of ${a.target}`;
     case "set_validation": return `Set the validation of ${a.target}`;
     case "page_break": return a.remove ? `Remove the page break after ${a.after}` : `Page break after ${a.after}`;
     case "create_embedded": return `Create embedded variable ${a.name}`;
     case "create_calculation": return `Create calculation ${a.name}`;
     case "create_randomizer": return `Randomize ${a.blocks.join(", ")}`;
-    case "create_branch": return `Show ${a.blocks.join(", ")} only when ${a.when}`;
+    case "create_branch": return `Show ${a.blocks.join(", ")} only when ${condWords(a.when)}${a.arms?.length ? ` (+${a.arms.length} more arm${a.arms.length === 1 ? "" : "s"})` : ""}`;
     case "create_loop": return `Loop ${a.from}${a.to !== a.from ? `–${a.to}` : ""}`;
     case "create_quota": return `Create quota ${a.name}`;
     case "set_research": return "Record the research design";
-    case "add_punch": return a.expression ? `Punch rule ${a.expression}` : `Punch ${a.target} when ${a.when ?? "otherwise"}`;
+    case "add_punch": return a.expression ? `Punch rule ${a.expression}` : `Punch ${a.target} when ${a.when ? condWords(a.when) : "otherwise"}`;
     case "remove_punches": return `Remove the punch rules of ${a.target}`;
     case "create_style": return `Style “${a.label}”`;
     case "update_style": return `Change style ${a.id}`;

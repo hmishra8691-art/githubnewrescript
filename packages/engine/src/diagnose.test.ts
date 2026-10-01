@@ -51,8 +51,18 @@ test("display logic: sometimes; on a later answer or itself: never", () => {
   assert.match(diagnoseQuestion(def, "q3")!.summary, /Q1 is a single choice and cannot be both 1 and 2/);
   def.questions[2].displayLogic = { type: "group", op: "or", children: [rule("q1", "eq", 1), rule("q4", "answered")] } as never;
   assert.equal(diagnoseQuestion(def, "q3")!.verdict, "sometimes", "one possible side of an OR is enough");
+  /*
+   * Empty groups are no constraint — that is what the evaluator does — so the
+   * diagnosis says so too. NOT of an empty group used to be called a
+   * "constant false" while every respondent saw the question.
+   */
   def.questions[2].displayLogic = { type: "group", op: "not", children: [{ type: "group", op: "and", children: [] }] } as never;
-  assert.match(diagnoseQuestion(def, "q3")!.summary, /constant false/);
+  assert.equal(diagnoseQuestion(def, "q3")!.verdict, "always", "NOT of nothing constrains nothing");
+  def.questions[2].displayLogic = { type: "group", op: "or", children: [] } as never;
+  assert.equal(diagnoseQuestion(def, "q3")!.verdict, "always", "an empty OR is not “never”");
+  // nested ANDs are one AND: the single-choice contradiction is found at any depth
+  def.questions[2].displayLogic = { type: "group", op: "and", children: [rule("q1", "eq", 1), { type: "group", op: "and", children: [rule("q2", "answered"), rule("q1", "eq", 2)] }] } as never;
+  assert.match(diagnoseQuestion(def, "q3")!.summary, /Q1 is a single choice and cannot be both 1 and 2/);
 });
 
 test("not placed, hidden types and settings", () => {

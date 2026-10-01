@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type {
-  ComparisonOperator, ConditionRule, CountOf, CountScope, CountSpec, Question,
+  ComparisonOperator, Condition, ConditionRule, CountOf, CountScope, CountSpec, Question,
 } from "@rescript/schema";
 import { lintCount, authoringQuestionView, stripHtmlText, gridAxes } from "@rescript/engine";
 import { useStudio } from "./store";
@@ -85,10 +85,16 @@ function labelForResponse(q: Question | undefined, code: string | number): strin
 }
 
 export function CountEditor({
-  rule, onChange,
+  rule, onChange, renderWhere,
 }: {
   rule: ConditionRule;
   onChange(r: ConditionRule): void;
+  /**
+   * The builder for the per-item condition (`where`) — passed in by the
+   * condition builder so this file does not import it back. A COUNT's `where`
+   * had no editor at all: it could be stored, evaluated and lost, never seen.
+   */
+  renderWhere?: (value: Condition | undefined, onChange: (c: Condition | undefined) => void) => React.ReactNode;
 }) {
   const s = useStudio();
   const spec = rule.source.count;
@@ -237,6 +243,16 @@ export function CountEditor({
           </div>
           <p className="muted" style={{ fontSize: 12, margin: "6px 0 0" }}>
             A row counts when it holds any of these — which is what “rated Good or Very Good” means.
+          </p>
+        </div>
+      )}
+
+      {/* ------------------------------------- the condition each counted item meets */}
+      {renderWhere && (spec.of === "matching" || spec.where) && (
+        <div className="count-where" data-testid="count-where">
+          {renderWhere(spec.where, (where) => setSpec({ where, ...(where && spec.of !== "matching" ? { of: "matching" as CountOf } : {}) }))}
+          <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>
+            Checked once per {spec.scope === "rows" ? "row" : spec.scope === "columns" ? "column" : "option"}, with that item as “this option” — e.g. this option&apos;s value is above 3.
           </p>
         </div>
       )}

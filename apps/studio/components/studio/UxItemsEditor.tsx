@@ -4,6 +4,7 @@ import type { SurveyDefinition, UxAnimation, UxBehavior, UxRule, UxStyle, UxTarg
 import { UX_ANIMATION_TRIGGERS, UX_EVENTS, UX_MEDIA, UX_PRESETS, UX_STATES } from "@rescript/schema";
 import { compileAnimation, compileStyle, describeUxTarget, uxDeclarations, validateUxItem } from "@rescript/engine";
 import { useStudio, uid } from "./store";
+import { OptionalCondition } from "./ConditionBuilder";
 
 /**
  * THE MANUAL CONTROL LAYER for the survey's styles, animations, behaviours
@@ -239,6 +240,7 @@ function BehaviorFields({ b, readOnly, onChange, onBlur }: { b: UxBehavior; read
         <label className="f"><span>Script — runs sandboxed; it can only use the rs api (rs.listen, rs.addClass, rs.animate, rs.setStyle, rs.showMessage…)</span>
           <textarea className="ta code" style={{ minHeight: 110 }} value={b.script} disabled={readOnly} spellCheck={false}
             onChange={(e) => onChange({ ...b, script: e.target.value })} onBlur={onBlur} data-testid="ux-script" /></label>
+        <BehaviorGuard b={b} readOnly={readOnly} onChange={onChange} />
       </div>
     );
   }
@@ -254,6 +256,23 @@ function BehaviorFields({ b, readOnly, onChange, onBlur }: { b: UxBehavior; read
           onChange={(e) => { setEffects(e.target.value); try { const v = JSON.parse(e.target.value); if (!Array.isArray(v)) throw new Error("a list of effects"); setErr(undefined); onChange({ ...b, effects: v }); } catch (x) { setErr(`Effects must be a JSON list: ${(x as Error).message}`); } }}
           onBlur={onBlur} data-testid="ux-beh-effects" /></label>
       {err && <div className="ux-errors">{err}</div>}
+      <BehaviorGuard b={b} readOnly={readOnly} onChange={onChange} />
+    </div>
+  );
+}
+
+/**
+ * "Only when" — the behaviour (or script) runs only while this condition
+ * holds on the respondent's answers so far. The engine and the runtime honour
+ * `when`; this is where it is seen and set (the Copilot could already write it).
+ */
+function BehaviorGuard({ b, readOnly, onChange }: { b: UxBehavior; readOnly: boolean; onChange(n: UxBehavior, now?: boolean): void }) {
+  if (readOnly) return b.when ? <div className="muted" style={{ fontSize: 12.5 }} data-testid="ux-beh-when-ro">Only when a condition holds.</div> : null;
+  return (
+    <div data-testid="ux-beh-when">
+      <OptionalCondition label="Only when" value={b.when ?? undefined}
+        hint="Otherwise it runs for every respondent."
+        onChange={(when) => onChange({ ...b, when }, true)} />
     </div>
   );
 }

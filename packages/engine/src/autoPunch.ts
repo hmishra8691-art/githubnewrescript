@@ -91,36 +91,57 @@ export function isOptionLevelPunch(rule: PunchRule): boolean {
 
 export interface SimplePunch {
   sourceQuestionId: string;
+  /** the option tested, for "is selected" / "is not selected" */
   sourceCode: string | number;
-  /** "selected" | "not_selected" */
-  test: "selected" | "not_selected";
+  /**
+   * "selected" | "not_selected" on a choice question; a VALUE comparison on a
+   * numeric (or text) question — "Q32 is between 2 and 3 → punch Medium".
+   */
+  test: "selected" | "not_selected" | SimpleValueTest;
+  /** the number (or text) a value test compares with; `value2` is the top of a between */
+  value?: string | number;
+  value2?: string | number;
   action: PunchActionKind;
   targetCodes: (string | number)[];
 }
 
-/** Build the PunchRule that lives on the TARGET question. */
-export function optionRule(s: SimplePunch, id = newId()): PunchRule {
-  const when: Condition = cond.rule(
-    s.sourceQuestionId,
-    s.test === "selected" ? "selected" : "notSelected",
-    s.sourceCode,
-  );
+export type SimpleValueTest = "eq" | "ne" | "gt" | "gte" | "lt" | "lte" | "between";
+export const SIMPLE_VALUE_TESTS: SimpleValueTest[] = ["eq", "ne", "gt", "gte", "lt", "lte", "between"];
+const isValueTest = (t: string): t is SimpleValueTest => (SIMPLE_VALUE_TESTS as string[]).includes(t);
+
+/**
+ * The simple form as a PunchRule.
+ *
+ * `base` is the rule being edited. Everything the simple form has no field
+ * for — its place in an IF / ELSE IF / ELSE chain, `recompute`,
+ * `ignoreUnmatched`, a label, a priority — is carried over from it. This used
+ * to build a brand-new rule on every Simple-mode edit, so touching the option
+ * of an ELSE IF turned it back into an independent IF (and the chain then
+ * punched two options at once).
+ */
+export function optionRule(s: SimplePunch, id = newId(), base?: PunchRule): PunchRule {
+  const when: Condition = isValueTest(s.test)
+    ? cond.rule(s.sourceQuestionId, s.test, s.value, s.test === "between" ? s.value2 : undefined)
+    : cond.rule(s.sourceQuestionId, s.test === "selected" ? "selected" : "notSelected", s.sourceCode);
   return {
+    ...(base ?? {}),
     id,
     source: { kind: "codes", codes: s.targetCodes },
     action: s.action,
-    mapping: [],
-    ignoreUnmatched: true,
+    mapping: base?.mapping ?? [],
+    ignoreUnmatched: base?.ignoreUnmatched ?? true,
     // a conditional punch follows the condition: revisit → recompute
-    recompute: "always",
+    recompute: base?.recompute ?? "always",
     when,
   };
 }
 
 /**
  * Read a rule back into the simple form, when it IS that simple: a literal
- * code set, one condition on one option. Anything richer is edited as an
- * expression instead — never flattened into a shape that loses information.
+ * code set, one condition on one option — or one value comparison on one
+ * numeric / text question. Anything richer (an AND / OR, a grid cell, a
+ * count) is edited in the builder or as an expression instead — never
+ * flattened into a shape that loses information.
  */
 export function simpleView(rule: PunchRule): SimplePunch | null {
   if (rule.source.kind !== "codes" || rule.mapping.length) return null;
@@ -133,15 +154,31 @@ export function simpleView(rule: PunchRule): SimplePunch | null {
   if (rule.targetRow !== undefined || rule.targetColumn !== undefined || rule.priority !== undefined) return null;
   const w = rule.when;
   if (!w || w.type !== "rule") return null;
-  if (w.source.kind !== "question" || (w.operator !== "selected" && w.operator !== "notSelected")) return null;
-  if (w.value === undefined || w.value === null || typeof w.value === "object") return null;
-  return {
-    sourceQuestionId: w.source.ref,
-    sourceCode: w.value as string | number,
-    test: w.operator === "selected" ? "selected" : "not_selected",
-    action: rule.action,
-    targetCodes: rule.source.codes,
-  };
+  if (w.source.kind !== "question" || w.source.count || w.source.rowCode || w.source.columnId
+    || w.source.rowPosition != null || w.source.optionPosition != null) return null;
+  const scalar = (v: unknown) => v !== undefined && v !== null && typeof v !== "object";
+  if (w.operator === "selected" || w.operator === "notSelected") {
+    if (!scalar(w.value)) return null;
+    return {
+      sourceQuestionId: w.source.ref,
+      sourceCode: w.value as string | number,
+      test: w.operator === "selected" ? "selected" : "not_selected",
+      action: rule.action,
+      targetCodes: rule.source.codes,
+    };
+  }
+  if (isValueTest(w.operator) && scalar(w.value) && (w.operator !== "between" || scalar(w.value2))) {
+    return {
+      sourceQuestionId: w.source.ref,
+      sourceCode: "",
+      test: w.operator,
+      value: w.value as string | number,
+      ...(w.operator === "between" ? { value2: w.value2 as string | number } : {}),
+      action: rule.action,
+      targetCodes: rule.source.codes,
+    };
+  }
+  return null;
 }
 
 /* --------------------------------------------------------- the expression form */
@@ -166,16 +203,40 @@ export function parsePunchExpression(def: SurveyDefinition, src: string): PunchE
   const text = (src ?? "").trim();
   if (!text) return { rules: [], errors: [], warnings: [] };
 
-  const m = /^\s*IF\b([\s\S]*?)\bTHEN\b([\s\S]*)$/i.exec(text);
-  if (!m) {
-    return { rules: [], errors: [{ message: "Write the rule as IF <condition> THEN <action> — e.g. IF Q1.A IS SELECTED THEN SELECT Q2.B", position: 0 }], warnings: [] };
-  }
-  const condText = m[1].trim();
-  const actionText = m[2].trim();
-  const thenAt = text.toUpperCase().indexOf("THEN");
+  /*
+   * IF / ELSE IF / ELSE, as the rule's place in a chain:
+   *   IF <condition> THEN <action>
+   *   ELSE IF <condition> THEN <action>
+   *   ELSE <action>            (or ELSE THEN <action>) — no condition of its own
+   */
+  let mode: "if" | "else_if" | "else" = "if";
+  let body = text;
+  const elseIf = /^\s*ELSE\s+IF\b/i.exec(body);
+  const elseOnly = !elseIf && /^\s*ELSE\b/i.exec(body);
+  if (elseIf) { mode = "else_if"; body = body.slice(elseIf[0].length - 2); }
+  else if (elseOnly) { mode = "else"; body = body.slice(elseOnly[0].length).replace(/^\s*THEN\b/i, ""); }
 
-  const parsed = parseLogicExpression(def, condText);
-  if (!parsed.condition) {
+  let condText = "";
+  let actionText = body.trim();
+  let thenAt = text.length - body.length;
+  if (mode !== "else") {
+    /*
+     * The THEN that ends the condition is the first one OUTSIDE quotes and
+     * brackets. A plain regex took the first THEN anywhere, so a condition
+     * like `Q5 contains "then"` split in the middle of its own text.
+     */
+    const ifm = /^\s*IF\b/i.exec(body);
+    const at = ifm ? topLevelThen(body, ifm[0].length) : -1;
+    if (!ifm || at < 0) {
+      return { rules: [], errors: [{ message: "Write the rule as IF <condition> THEN <action> — e.g. IF Q1.A IS SELECTED THEN SELECT Q2.B", position: 0 }], warnings: [] };
+    }
+    condText = body.slice(ifm[0].length, at).trim();
+    actionText = body.slice(at + 4).trim();
+    thenAt = text.length - body.length + at;
+  }
+
+  const parsed = mode === "else" ? { condition: undefined, errors: [], warnings: [] } as ReturnType<typeof parseLogicExpression> : parseLogicExpression(def, condText);
+  if (mode !== "else" && !parsed.condition) {
     return { rules: [], errors: parsed.errors.length ? parsed.errors : [{ message: "The IF part needs a condition.", position: 2 }], warnings: parsed.warnings };
   }
 
@@ -259,24 +320,71 @@ export function parsePunchExpression(def: SurveyDefinition, src: string): PunchE
       mapping: [],
       ignoreUnmatched: true,
       recompute: "always" as const,
-      when: parsed.condition,
+      ...(parsed.condition ? { when: parsed.condition } : {}),
+      ...(mode !== "if" ? { mode } : {}),
     },
   }));
   return { rules, errors: [], warnings: parsed.warnings };
 }
 
+/**
+ * An edited expression applied to the rule it was typed over.
+ *
+ * The IF … THEN text carries the condition, the action, the codes and the
+ * chain position (IF / ELSE IF / ELSE) — and nothing else. Everything else on
+ * the rule (its id, label, `recompute`, `ignoreUnmatched`, a priority, notes)
+ * belongs to the rule, not to the text, and is kept. Replacing the rule with
+ * the parse result reset all of it: a "punch once" rule became "always" the
+ * first time its text was touched.
+ */
+export function applyParsedPunch(base: PunchRule, parsed: PunchRule): PunchRule {
+  const next: PunchRule = {
+    ...base,
+    id: base.id,
+    source: parsed.source,
+    action: parsed.action,
+    mapping: parsed.mapping ?? [],
+  };
+  if (parsed.when) next.when = parsed.when; else delete (next as { when?: unknown }).when;
+  if (parsed.mode && parsed.mode !== "if") next.mode = parsed.mode; else delete (next as { mode?: unknown }).mode;
+  return next;
+}
+
+/** index of the first THEN outside quotes and brackets at or after `from`, or -1 */
+function topLevelThen(text: string, from: number): number {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = from; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) { if (ch === quote) quote = null; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (ch === "(" || ch === "[") depth++;
+    else if (ch === ")" || ch === "]") depth = Math.max(0, depth - 1);
+    else if (depth === 0 && /^THEN\b/i.test(text.slice(i)) && (i === 0 || /\s/.test(text[i - 1]))) return i;
+  }
+  return -1;
+}
+
 /** The expression form of a rule stored on `target`. Identity with the parser for what it prints. */
 export function formatPunchExpression(def: SurveyDefinition, target: Question, rule: PunchRule): string {
-  const condText = rule.when ? formatCondition(def, rule.when) : "TRUE";
+  const mode = rule.mode ?? "if";
+  /*
+   * The rule's place in its chain is part of what it says. An ELSE IF printed
+   * as "IF …" (the 30-09 report's screenshot) reads as an independent rule,
+   * and applying that text back made it one.
+   */
+  const head = mode === "else"
+    ? "ELSE"
+    : `${mode === "else_if" ? "ELSE IF" : "IF"} ${rule.when && formatCondition(def, rule.when) ? formatCondition(def, rule.when) : "TRUE"} THEN`;
   const verb = rule.action === "set_value" ? "SET" : rule.action.toUpperCase();
-  if (rule.action === "clear") return `IF ${condText} THEN CLEAR ${target.code}`;
+  if (rule.action === "clear") return `${head} CLEAR ${target.code}`;
   const codes = rule.source.kind === "codes" ? rule.source.codes : [];
   if (rule.action === "set_value" && codes.length === 1) {
     const v = codes[0];
-    return `IF ${condText} THEN SET ${target.code} = ${typeof v === "number" || /^[A-Za-z_][\w]*$/.test(String(v)) ? String(v) : JSON.stringify(String(v))}`;
+    return `${head} SET ${target.code} = ${typeof v === "number" || /^[A-Za-z_][\w]*$/.test(String(v)) ? String(v) : JSON.stringify(String(v))}`;
   }
   const refs = codes.map((c) => `${target.code}.${String(c)}`).join(", ");
-  return `IF ${condText} THEN ${verb} ${refs || target.code}`;
+  return `${head} ${verb} ${refs || target.code}`;
 }
 
 function findQuestion(def: SurveyDefinition, tok: string): Question | undefined {

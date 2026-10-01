@@ -33,7 +33,7 @@
  */
 import type { Condition, ConditionRule, PunchRule, Question, SurveyDefinition } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
-import { evaluateCondition, resolveSourceValue } from "./evaluate.js";
+import { evaluateCondition, resolveSourceValue, isVacuousCondition } from "./evaluate.js";
 import { conditionSummary } from "./logicSummary.js";
 import { findNamedExpression } from "./namedExpressions.js";
 import { evaluateSetExpr, resolvePunches, LIST_ACTIONS } from "./setExpression.js";
@@ -93,7 +93,14 @@ export function traceCondition(
   const text = conditionSummary(ctx.def, condition);
 
   if (condition.type === "group") {
-    const { op, children } = condition;
+    const { op } = condition;
+    /*
+     * Empty groups are skipped by the evaluator, so they are left out of the
+     * explanation too. Traced as they were, an empty child of an OR showed ✓,
+     * stopped the trace there, and the rule that actually decided the answer
+     * was listed as "Not evaluated".
+     */
+    const children = condition.children.filter((k) => !isVacuousCondition(k));
     const nodes: TraceNode[] = [];
     let decided = false;
 

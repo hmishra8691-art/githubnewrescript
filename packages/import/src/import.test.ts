@@ -336,3 +336,21 @@ test("custom code is preserved as DISABLED scripts; the project carries its revi
   assert.ok(a.result!.mapping.some((e) => e.kind === "option"), "…but the report has the full map");
   assert.ok(rec.map.some((e) => e.kind === "question" && e.source === "QID1"));
 });
+
+/* ------------------------------------------------------------ constants (nested-logic audit, 2026-10-01) */
+
+test("a Qualtrics block that is not in the Survey Flow stays unreachable — FALSE is a real constant, not NOT(empty)", async () => {
+  const { createResponseState, compileFlow, evaluateCondition, constantValueOf } = await import("@rescript/engine");
+  const fx = qsfFixture() as { SurveyElements: { Element: string; Payload: { Flow?: { ID?: string }[] } }[] };
+  const fl = fx.SurveyElements.find((e) => e.Element === "FL")!;
+  fl.Payload.Flow = fl.Payload.Flow!.filter((f) => f.ID !== "BL_end");
+  const c = (await readSource(enc(JSON.stringify(fx)), "s.qsf")).canonical!;
+  const def = mapCanonical(c, { surveyId: "s1", uid }).def!;
+  const branch = walk(def.flow as FlowNode[]).find((x) => x.type === "branch" && (x as { branches: { children: FlowNode[] }[] }).branches.some((b) => walk(b.children).some((k) => k.id === "BL_end"))) as unknown as { branches: { when: never }[] };
+  assert.ok(branch, "the unused block is kept, behind a branch");
+  assert.equal(constantValueOf(branch.branches[0].when), false);
+  const state = createResponseState(def, { seed: 1 });
+  assert.equal(evaluateCondition(branch.branches[0].when, { def, state, loop: null }), false, "before: NOT(empty AND) — vacuous, so TRUE");
+  const pages = compileFlow(def, state).filter((s) => s.kind === "page") as { questionIds: string[] }[];
+  assert.ok(!pages.some((p) => p.questionIds.includes("QID8")), "nobody is routed into it");
+});

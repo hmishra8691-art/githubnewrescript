@@ -589,6 +589,15 @@ test("custom rule: IF calc.SYSTEM_DURATION_RATIO < 0.3 AND calc.SYSTEM_ATTENTION
   assert.ok(!has(slow, "custom.cr1"));
 });
 
+test("a custom rule whose condition is still EMPTY flags nobody (it used to flag every respondent)", () => {
+  const cfg: any = {
+    enabled: true, strictness: "relaxed",
+    customRules: [{ id: "cr0", name: "Unfinished", enabled: true, severity: "high", riskPoints: 40, qualityPenalty: 10, when: { type: "group", op: "and", children: [{ type: "group", op: "or", children: [] }] } }],
+  };
+  const a = assess({ def: def(cfg), response: response({ answers: { ...GOOD_ANSWERS } }), peers: peers(12) });
+  assert.ok(!has(a, "custom.cr0"), ruleIds(a).join());
+});
+
 test("explainability: every flag carries rule, observed, severity, points, explanation, time and questions; reasons are ordered by weight", () => {
   const a = assess({ def: def(), response: response({ secs: HUMAN_SECS.map((s) => s / 20), tel: telemetry(HUMAN_SECS.map((s) => s / 20), { latencyMs: 150 }), answers: { ...GOOD_ANSWERS, att: "a", oe: "asdfgh jkl qwerty" } }), peers: peers(12) });
   assert.ok(a.flags.length >= 3);

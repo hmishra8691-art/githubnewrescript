@@ -7,6 +7,7 @@ import { createResponseState, start, setAnswer } from "@rescript/engine";
 import { QuestionRenderer, brandingVars, widthModeClass, brandingClasses, brandingResponsiveCss } from "@rescript/renderer";
 import { TypographyMore, BackgroundSection, AppearanceSection, ResponsiveSection, ThemeAssistant } from "./BrandingAdvanced";
 import { UxItemsEditor } from "./UxItemsEditor";
+import { OptionalCondition } from "./ConditionBuilder";
 import { themePreviewStore } from "@/lib/themePreview";
 import { AiConversationSection } from "./AiConversationPanel";
 import { MediaUrlInput } from "./MediaUrlInput";
@@ -700,6 +701,11 @@ export function ScriptsPanel() {
           <textarea className="ta code" value={sc.code}
             placeholder={`// e.g. total of three questions\nconst total = expr('Q1 + Q2 + Q3');\nsetCalc('TOTAL', total);\nif (total > 100) flag('over_100');`}
             onChange={(e) => s.update((d) => { d.scripts[i].code = e.target.value; })} />
+          <div style={{ marginTop: 6 }} data-testid="script-when">
+            <OptionalCondition label="Run only when" value={sc.when}
+              hint="Otherwise the script runs for every respondent at its event."
+              onChange={(when) => s.update((d) => { d.scripts[i].when = when; })} />
+          </div>
         </div>
       ))}
       <button className="btn" onClick={() =>

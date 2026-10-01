@@ -12,6 +12,7 @@ import { getQuestionByCodeOrVar } from "./state.js";
 import { pipeTokensIn } from "./pipingTokens.js";
 import { referencedNames } from "./embedded.js";
 import { isQuestionValueRef } from "@rescript/schema";
+import { findNamedExpression } from "./namedExpressions.js";
 
 /**
  * Dependency tracking (reqs §27, §31–32).
@@ -152,9 +153,25 @@ export function conditionRefs(
   def: SurveyDefinition,
   c: Condition | undefined | null,
   into: Set<string> = new Set(),
+  /** named expressions already being followed — a cycle stops here instead of recursing for ever */
+  following: Set<string> = new Set(),
 ): Set<string> {
   if (!c) return into;
   if (c.type === "rule") {
+    /*
+     * A NAMED EXPRESSION reads whatever its own condition reads. Without this
+     * a rule like `IS_HIGH_VALUE` depended on nothing, so a punch gated on it
+     * was never recomputed when the respondent changed the question the
+     * expression looks at — on the same page, until they moved on.
+     */
+    if (c.source.kind === "rule") {
+      const named = findNamedExpression(def, c.source.ref);
+      if (named && !following.has(named.id)) {
+        following.add(named.id);
+        conditionRefs(def, named.when, into, following);
+      }
+      return into;
+    }
     /*
      * The RIGHT-HAND SIDE counts too. A rule comparing one question against
      * another (`{ $question: "q_start" }`) is read by two questions, and a
@@ -174,7 +191,7 @@ export function conditionRefs(
      * and for custom_expression validation — one parser, three callers.
      */
     if (c.source.kind === "expr") exprStringRefs(def, c.source.ref, into);
-    if (c.source.count?.where) conditionRefs(def, c.source.count.where, into);
+    if (c.source.count?.where) conditionRefs(def, c.source.count.where, into, following);
     if (c.source.kind === "question" || c.source.kind === "variable") {
       const q = getQuestionByCodeOrVar(def, c.source.ref);
       if (q) into.add(q.id);
@@ -188,7 +205,7 @@ export function conditionRefs(
     }
     return into;
   }
-  for (const child of c.children) conditionRefs(def, child, into);
+  for (const child of c.children) conditionRefs(def, child, into, following);
   return into;
 }
 

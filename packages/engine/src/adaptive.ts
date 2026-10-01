@@ -1,6 +1,6 @@
 import type { Condition, Option, Question } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
-import { evaluateCondition } from "./evaluate.js";
+import { evaluateCondition, isVacuousCondition } from "./evaluate.js";
 
 /**
  * Two tiny decision functions the 2026-09 variant batch needs on BOTH sides of
@@ -33,7 +33,7 @@ export function pickAdaptive(
   const alts = q.settings?.adaptive as AdaptiveAlternative[] | undefined;
   if (!Array.isArray(alts)) return undefined;
   for (const alt of alts) {
-    if (!alt?.when) continue;
+    if (!alt?.when || isVacuousCondition(alt.when)) continue; // an empty "when" is unset, as if absent
     if (evaluateCondition(alt.when, ctx)) return alt;
   }
   return undefined;

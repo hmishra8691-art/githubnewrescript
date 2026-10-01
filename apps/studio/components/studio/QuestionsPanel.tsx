@@ -92,7 +92,7 @@ import {
   usedNames,
   addQuestion, duplicateQuestion, removeQuestion, moveQuestionBy, cloneQuestion,
 } from "@rescript/engine"; // also registers builtin question types
-import { isEmptyOptionLogic } from "@rescript/schema";
+import { optionLogicHasEffect, isEmptyConditionTree } from "@rescript/schema";
 import { useStudio, uid } from "./store";
 import {
   type PageRef, type BlockRef, listPages, listBlocks, wrapBlock, unwrapIfSingle, newBlockNode,
@@ -411,7 +411,7 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
         </div>
       )}
       {visible.map(({ o, i }) => {
-        const hasLogic = !isEmptyOptionLogic(o.logic) || !!o.visibleIf;
+        const hasLogic = optionLogicHasEffect(o.logic) || !isEmptyConditionTree(o.visibleIf);
         return (
         <React.Fragment key={i}>
         <div className={`opt-row ${logicOpen === String(o.code) ? "logic-open" : ""}`}>
@@ -872,11 +872,11 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
               {/* a field that appears only when an earlier answer says so — the
                   runtime already honours row.visibleIf live; this is where it
                   gets set (the Conditional Form variant is built on it) */}
-              <button className={`btn small ${r.visibleIf ? "has-logic" : ""}`}
+              <button className={`btn small ${!isEmptyConditionTree(r.visibleIf) ? "has-logic" : ""}`}
                 data-testid={`field-showwhen-${i}`}
                 title="Show this field only when a condition holds"
                 onClick={() => setCondOpen(condOpen === i ? null : i)}>
-                {r.visibleIf ? "⑂ shown when…" : "⑂ show when"}
+                {!isEmptyConditionTree(r.visibleIf) ? "⑂ shown when…" : "⑂ show when"}
               </button>
               <label className="row" style={{ gap: 4, fontSize: 13 }}>
                 {isNum ? "min value" : "min length"}
@@ -2296,7 +2296,7 @@ export function QuestionsPanel() {
           <span className={`grow qcard-text${stripHtmlText(q.text) ? "" : " muted"}`}>
             {stripHtmlText(q.text) || "untitled"}
           </span>
-          {q.displayLogic && <span className="chip warn" title="has display logic">DL</span>}
+          {!isEmptyConditionTree(q.displayLogic) && <span className="chip warn" title="has display logic">DL</span>}
           {q.skipLogic.length > 0 && <span className="chip warn" title="has skip logic">SL</span>}
           {q.carryForward && <span className="chip" title="carry-forward">CF</span>}
           <button className="btn small" title="Move up" onClick={(e) => { e.stopPropagation(); move(q.id, -1); }}>↑</button>

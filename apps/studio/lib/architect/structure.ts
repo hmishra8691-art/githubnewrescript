@@ -1,5 +1,5 @@
 import type { FlowNode, Question, SurveyDefinition } from "@rescript/schema";
-import { resolveVariant, variantRegistry, variantForLegacyType } from "@rescript/schema";
+import { resolveVariant, variantRegistry, variantForLegacyType, isEmptyConditionTree } from "@rescript/schema";
 import {
   objectKey, stripHtmlText, conditionSummary, listBlocks, formatSetExpression, ruleLabel, summarizeFlowNode,
   type ObjectKey, type DependencyIndex,
@@ -133,7 +133,7 @@ export function objectTags(q: Question): ObjectTag[] {
 /** the logic on a question, as chips — each with the panel section or object that holds it */
 export function logicChips(def: SurveyDefinition, q: Question, index?: DependencyIndex): LogicChip[] {
   const chips: LogicChip[] = [];
-  if (q.displayLogic) chips.push({ kind: "display", label: "DL", detail: `Shown when ${conditionSummary(def, q.displayLogic)}`, section: "display-logic" });
+  if (!isEmptyConditionTree(q.displayLogic)) chips.push({ kind: "display", label: "DL", detail: `Shown when ${conditionSummary(def, q.displayLogic)}`, section: "display-logic" });
   const rules = (def.displayRules ?? []).filter((r) => r.target.kind === "question" && r.target.ref === q.id);
   for (const r of rules) chips.push({ kind: "rule", label: r.action === "hide" ? "HIDE" : "SHOW", detail: `Rule${r.label ? ` “${r.label}”` : ""}: ${r.action} when ${conditionSummary(def, r.when)}`, key: objectKey("displayRule", r.id) });
   if (q.skipLogic?.length) {
@@ -197,7 +197,7 @@ export function buildStructure(def: SurveyDefinition, opts: { index?: Dependency
       return [b];
     }
     if (n.type === "section") {
-      return [{ kind: "group", key: objectKey("flowNode", n.id), id: n.id, label: n.title ?? "Group", condition: n.visibleIf ? conditionSummary(def, n.visibleIf) : undefined, entries: walk(n.children) }];
+      return [{ kind: "group", key: objectKey("flowNode", n.id), id: n.id, label: n.title ?? "Group", condition: !isEmptyConditionTree(n.visibleIf) ? conditionSummary(def, n.visibleIf!) : undefined, entries: walk(n.children) }];
     }
     return element(n);
   });

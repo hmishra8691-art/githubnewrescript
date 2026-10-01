@@ -18,10 +18,9 @@ import {
   blockingErrors,
   warnings,
   inspect,
-  applyPunches,
+  recomputePunchesAfterChange,
   answerKey,
   listBlocks,
-  questionDependencies,
   pendingListFills,
   serverResolvedQuestions,
   dueProbes,
@@ -1586,11 +1585,7 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
           onChange={(q, v) => {
             setAnswer(def, state, q.id, v, pageStep.loop);
             telemetryRef.current?.answerChanged(q.id);
-            for (const other of questions) {
-              if (other.id === q.id || !other.punches?.length) continue;
-              if (!questionDependencies(def, other).has(q.id)) continue;
-              applyPunches(other, ctx, (qq) => answerKey(qq.id, pageStep.loop ?? null));
-            }
+            recomputePunchesAfterChange(def, state, q.id, questions, ctx, pageStep.loop ?? null);
             const r = runScripts(def, state, "on_change", { scopeRef: q.id, loop: pageStep.loop });
             if (r.logs.length) setLogs((l) => [...l, ...r.logs]);
             force();
@@ -1655,13 +1650,11 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
                * Q2.B" with Q1 and Q2 side by side must react as the respondent
                * clicks, not on the next page arrival. Only questions whose punch
                * rules read the question just answered are recomputed, with the
-               * same applyPunches the flow interpreter uses on arrival.
+               * same applyPunches the flow interpreter uses on arrival — and so
+               * is everything downstream: a hidden variable punched from this
+               * answer, and a page question punched from that variable.
                */
-              for (const other of questions) {
-                if (other.id === q.id || !other.punches?.length) continue;
-                if (!questionDependencies(def, other).has(q.id)) continue;
-                applyPunches(other, ctx, (qq) => answerKey(qq.id, pageStep.loop ?? null));
-              }
+              recomputePunchesAfterChange(def, state, q.id, questions, ctx, pageStep.loop ?? null);
               /*
                * …and on the same page, an answer this one just took off the
                * screen. "If Q1 = A hide Q2's option B" with Q1 and Q2 side by
@@ -1730,7 +1723,7 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
       {...(b.responsive ? { "data-rs-theme": def.meta.id } : {})}>
       {b.responsive && <style data-rs-theme-css="" dangerouslySetInnerHTML={{ __html: brandingResponsiveCss(b, `.rs-shell[data-rs-theme="${def.meta.id.replace(/["\\]/g, "")}"]`) }} />}
       {hasUx && !ended && (
-        <UxLayer def={def} rootRef={shellRef} values={uxValues} allValues={uxAll}
+        <UxLayer def={def} rootRef={shellRef} values={uxValues} allValues={uxAll} state={state}
           shown={pageStep ? shownQuestions.map((q) => q.id) : []}
           pageKey={`${state.stepIndex}|${pageStep ? answerKey(pageStep.pageId, pageStep.loop ?? null) : "end"}|${conversational ? convoIndex : ""}`}
           blockId={uxBlockId} pageId={pageStep?.pageId} pageIndex={pageIndexAmongPages}

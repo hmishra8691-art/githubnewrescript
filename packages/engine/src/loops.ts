@@ -3,7 +3,7 @@ import type {
   LoopSource, SetExpr, SurveyDefinition,
 } from "@rescript/schema";
 import { codesFrom, effectiveQuestion } from "./carryforward.js";
-import { evaluateCondition, type EvalContext } from "./evaluate.js";
+import { evaluateCondition, isVacuousCondition, type EvalContext } from "./evaluate.js";
 import { listFillLoopItems, listFillVariableNames } from "./listFill.js";
 import type { QuotaCounts } from "./quotas.js";
 import { hashString, mulberry32, seededShuffle, subSeed } from "./random.js";
@@ -371,7 +371,11 @@ function candidates(
            * needs no rule to define it.
            */
           const unknown = selectedCodes.filter((c) => !optionIndex.has(c));
-          const ruled = node.invalidIf
+          /* invalidIf / skipIf / breakIf are TRIGGERS: an empty one (the
+           * builder's starting state) is unset, as if absent — it used to
+           * hold, which marked every item invalid, skipped every item, or
+           * stopped the loop after its first iteration */
+          const ruled = !isVacuousCondition(node.invalidIf)
             ? src.options
                 .map((o) => String(o.code))
                 .filter((c) => evaluateCondition(node.invalidIf, {
@@ -600,8 +604,8 @@ export function resolveLoopItems(
    * occupies a position or consumes a `max` slot — which is what "skip"
    * means, as distinct from an iteration that runs and shows nothing.
    */
-  if (node.skipIf) {
-    const rule: Condition = node.skipIf;
+  if (!isVacuousCondition(node.skipIf)) {
+    const rule: Condition = node.skipIf!;
     items = items.filter((it) =>
       !evaluateCondition(rule, { def, state, quotaCounts, loop: contextFor(node, it, 0, 0, parent) }));
   }
@@ -644,8 +648,8 @@ export function resolveLoopItems(
    * re-evaluation semantics as display logic, rather than a second rule about
    * when loops are allowed to change their minds.
    */
-  if (node.breakIf) {
-    const rule: Condition = node.breakIf;
+  if (!isVacuousCondition(node.breakIf)) {
+    const rule: Condition = node.breakIf!;
     const stopAt = items.findIndex((it, i) =>
       evaluateCondition(rule, {
         def, state, quotaCounts,

@@ -217,6 +217,9 @@ export function EmbeddedDataEditor({ node, onChange }: {
                   onChange={(e) => setField(i, { defaultValue: e.target.value || undefined })} />
               </label>
               <TypePreview dataType={dataType} raw={f.source === "static" ? f.value : f.defaultValue} />
+              <OptionalCondition label="Set only when" value={f.when}
+                hint="Otherwise this field is left as it was."
+                onChange={(c) => setField(i, { when: c })} />
             </div>
           </div>
         );
@@ -440,6 +443,9 @@ export function NodeEditor({ node, onChange }: { node: FlowNode; onChange(n: Flo
             Anything can go inside: blocks, groups, even another randomizer. Drag it onto
             this card, or use <em>+ Add element</em> inside it.
           </p>
+          <OptionalCondition label="Run this randomizer only when" value={node.visibleIf}
+            hint="Otherwise skipped as a whole. “Show N” picks only from the elements a respondent is eligible for."
+            onChange={(c) => onChange({ ...node, visibleIf: c })} />
         </div>
       );
 
@@ -494,6 +500,7 @@ export function NodeEditor({ node, onChange }: { node: FlowNode; onChange(n: Flo
 
     case "quota_check":
       return (
+        <div>
         <div className="row" style={{ flexWrap: "wrap" }}>
           <select className="select" multiple size={Math.max(2, Math.min(4, s.def.quotas.length))}
             value={node.quotaIds}
@@ -512,6 +519,10 @@ export function NodeEditor({ node, onChange }: { node: FlowNode; onChange(n: Flo
             <input className="input grow mono" placeholder="https://…" value={node.onFull.url ?? ""}
               onChange={(e) => onChange({ ...node, onFull: { ...node.onFull, url: e.target.value } })} />
           )}
+        </div>
+          <OptionalCondition label="Check only when" value={node.when}
+            hint="Otherwise respondents pass this point without the full-quota check (they still count toward the quota on completion)."
+            onChange={(c) => onChange({ ...node, when: c })} />
         </div>
       );
 

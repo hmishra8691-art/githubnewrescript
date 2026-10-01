@@ -1,5 +1,8 @@
 # Where nested logic cannot be applied (audit, 2026-09-28)
 
+> **Status (2026-10-01):** most items are fixed. See `NESTED-LOGIC-IMPLEMENTATION-2026-10-01.md`
+> for what changed and what remains.
+
 Scope: `packages/schema`, `packages/engine`, `packages/renderer`, `packages/import`,
 `packages/exporters`, `apps/studio`, `apps/runtime`, `apps/interviews`, at `main` 7caaf68.
 

@@ -32,7 +32,7 @@ import {
  */
 
 export type Intent =
-  | { kind: "display"; target: string; action: "show" | "hide"; expression: string }
+  | { kind: "display"; target: string; action: "show" | "hide"; expression: string; combine?: "or" }
   | { kind: "skip"; from?: string; to: string; expression: string }
   | { kind: "required"; target: string; required: boolean }
   | { kind: "add_question"; type?: string; text: string; options?: string[]; after?: string; required?: boolean }
@@ -117,6 +117,16 @@ export interface PlannerDeps {
 const optionRef = (v: string) => (/^\d+$/.test(v) ? `"option ${v}"` : v);
 type Rewrite = string | ((match: string, ...groups: string[]) => string);
 const REWRITES: [RegExp, Rewrite][] = [
+  /*
+   * The connectives people write instead of AND / OR / NOT. "neither A nor B"
+   * is NOT (A OR B); "either A or B" and "both A and B" are just A OR B and
+   * A AND B; "A but not B" and "A except (when) B" exclude B.
+   */
+  [/\bneither\s+(.+?)\s+nor\s+(.+?)(?=\s+(?:and|or|then)\b|$)/gi, "NOT ($1 OR $2)"],
+  [/\beither\s+/gi, ""],
+  [/\bboth\s+(?=\S+.*\band\b)/gi, ""],
+  [/,?\s+but\s+not\s+/gi, " AND NOT "],
+  [/,?\s+except\s+(?:when|if|where)?\s*(.+)$/gi, " AND NOT ($1)"],
   // "Q5 option 3 is selected" / "Q5 is option 2" / "option 3 of Q5 is selected" — an option by its code
   // ("option 3" stays "option 3" so the parser can read it as code 3, or as the third option when the codes are words)
   [/\b([A-Za-z_][\w.]*)\s+(?:option|answer|choice|code)\s+(\w+)\s+(?:is|was|has\s+been)\s+(?:selected|chosen|picked|ticked|answered)\b/gi, (_, q: string, v: string) => `${q} = ${optionRef(v)}`],
@@ -323,7 +333,19 @@ export function planProposal(def: SurveyDefinition, intent: Intent, source: Prop
       const changes: ProposalChange[] = t.kind === "question"
         ? [{ kind: "set_display_logic", questionId: t.id, condition: shown }]
         : [{ kind: "add_display_rule", rule: { id: deps.uid("dr"), target: { kind: t.kind, ref: t.id }, action: intent.action, when: ex.condition } }];
-      if (t.kind === "question" && t.question.displayLogic) warnings.push(`${t.label} already has display logic (${conditionSummary(def, t.question.displayLogic)}); this replaces it.`);
+      /*
+       * "ALSO show Q5 when …" ADDS a way in rather than replacing the rule
+       * that is there: the new condition is OR'd with the existing one. Without
+       * "also" a new rule replaces the old one, and says so.
+       */
+      if (t.kind === "question" && t.question.displayLogic && intent.combine === "or" && intent.action === "show") {
+        const merged: Condition = { type: "group", op: "or", children: [t.question.displayLogic, ex.condition] };
+        return finish(base({
+          summary: `Also show ${t.label} when ${ex.summary} — in addition to ${conditionSummary(def, t.question.displayLogic)}.`,
+          changes: [{ kind: "set_display_logic", questionId: t.id, condition: merged }], expression: ex, targetKey: withKey(t), warnings,
+        }));
+      }
+      if (t.kind === "question" && t.question.displayLogic) warnings.push(`${t.label} already has display logic (${conditionSummary(def, t.question.displayLogic)}); this replaces it. Say “also show …” to add to it instead.`);
       return finish(base({
         summary: `${intent.action === "show" ? "Show" : "Hide"} ${t.label} ${intent.action === "show" ? "only " : ""}when ${ex.summary}.`,
         changes, expression: ex, targetKey: withKey(t), warnings,

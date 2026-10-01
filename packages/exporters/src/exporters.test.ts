@@ -387,3 +387,28 @@ test("§38: the JSON export carries the loop with its references, self-contained
   // and it round-trips through the schema unchanged
   assert.deepEqual(SurveyDefinition.parse(json).flow, def.flow);
 });
+
+test("the variable dictionary says when each question is asked — page condition AND display logic, nested", async () => {
+  const def = SurveyDefinition.parse({
+    meta: { id: "s", code: "S", title: "asked" },
+    questions: [
+      { id: "q1", code: "Q1", variableName: "Q1", type: "single_select", text: "A?", options: [{ code: 1, label: "Yes" }, { code: 2, label: "No" }] },
+      { id: "q2", code: "Q2", variableName: "Q2", type: "numeric", text: "B?",
+        displayLogic: { type: "group", op: "or", children: [
+          { type: "rule", source: { kind: "question", ref: "q1" }, operator: "eq", value: 1 },
+          { type: "group", op: "not", children: [{ type: "rule", source: { kind: "question", ref: "q1" }, operator: "answered" }] },
+        ] } },
+    ],
+    flow: [{ type: "page", id: "p1", questionIds: ["q1", "q2"] }, { type: "end", id: "e", status: "complete" }],
+  });
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load((await exportVariableDictionaryXlsx(def)) as any);
+  const sheet = wb.getWorksheet("Variables")!;
+  const header = (sheet.getRow(1).values as unknown[]).map(String);
+  const col = header.indexOf("Asked when");
+  assert.ok(col > 0, header.join("|"));
+  const cells: string[] = [];
+  sheet.eachRow((r, i) => { if (i > 1) cells.push(String(r.getCell(col).value ?? "")); });
+  assert.ok(cells.some((c) => c === "always"), cells.join(" / "));
+  assert.ok(cells.some((c) => /Q1/.test(c) && /OR/i.test(c)), cells.join(" / "));
+});

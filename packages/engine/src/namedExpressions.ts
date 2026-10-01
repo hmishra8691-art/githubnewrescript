@@ -32,7 +32,8 @@
  * finds the same cycles by reading the definition, so a programmer is told
  * before a respondent is.
  */
-import type { Condition, ConditionRule, NamedExpression, SurveyDefinition } from "@rescript/schema";
+import type { Condition, NamedExpression, SurveyDefinition } from "@rescript/schema";
+import { forEachConditionRoot, forEachRule } from "./conditionWalk.js";
 
 /** Every named expression by id, and by name — a reference may use either. */
 export function namedExpressionIndex(def: SurveyDefinition): Map<string, NamedExpression> {
@@ -75,14 +76,15 @@ export function namedExpressionCycles(def: SurveyDefinition): string[][] {
   const byId = new Map((def.namedExpressions ?? []).map((e) => [e.id, e]));
   const index = namedExpressionIndex(def);
 
-  /** Which expressions does this tree reference, directly? */
+  /** Which expressions does this tree reference, directly? (COUNT wheres included) */
   const refsOf = (c: Condition | undefined): string[] => {
-    if (!c) return [];
-    if (c.type === "group") return c.children.flatMap(refsOf);
-    const src = (c as ConditionRule).source;
-    if (src?.kind !== "rule") return [];
-    const target = index.get(src.ref);
-    return target ? [target.id] : [];
+    const out: string[] = [];
+    forEachRule(c, (r) => {
+      if (r.source?.kind !== "rule") return;
+      const target = index.get(r.source.ref);
+      if (target) out.push(target.id);
+    });
+    return out;
   };
 
   const cycles: string[][] = [];
@@ -139,12 +141,11 @@ export function lintNamedExpressions(def: SurveyDefinition): string[] {
   /* references that point at nothing */
   const index = namedExpressionIndex(def);
   const checkRefs = (c: Condition | undefined, where: string): void => {
-    if (!c) return;
-    if (c.type === "group") { for (const ch of c.children) checkRefs(ch, where); return; }
-    const src = (c as ConditionRule).source;
-    if (src?.kind === "rule" && !index.get(src.ref)) {
-      out.push(`${where} references the named expression “${src.ref}”, which does not exist.`);
-    }
+    forEachRule(c, (r) => {
+      if (r.source?.kind === "rule" && !index.get(r.source.ref)) {
+        out.push(`${where} references the named expression “${r.source.ref}”, which does not exist.`);
+      }
+    });
   };
   for (const e of list) checkRefs(e.when, `“${e.name}”`);
 
@@ -179,47 +180,17 @@ export function namedExpressionUsage(
     out.set(target.id, list);
   };
 
-  const scan = (c: Condition | undefined, where: string, id?: string): void => {
-    if (!c) return;
-    if (c.type === "group") { for (const ch of c.children) scan(ch, where, id); return; }
-    const src = (c as ConditionRule).source;
-    if (src?.kind === "rule") note(src.ref, where, id);
-  };
-
-  for (const q of def.questions) {
-    scan(q.displayLogic, `${q.code} display logic`, q.id);
-    for (const s of q.skipLogic ?? []) scan(s.when, `${q.code} skip logic`, s.id);
-    for (const v of q.validation ?? []) scan(v.when, `${q.code} validation`, q.id);
-    for (const p of q.punches ?? []) scan(p.when, `${q.code} auto punch`, p.id);
-    if (q.mask) scan(q.mask.when, `${q.code} mask`, q.id);
-    for (const o of q.options ?? []) {
-      scan(o.visibleIf, `${q.code} option ${o.code}`, q.id);
-      scan(o.logic?.when, `${q.code} option ${o.code}`, q.id);
-    }
-    for (const g of q.optionGroups ?? []) scan(g.visibleIf, `${q.code} group ${g.name}`, g.id);
-  }
-  for (const r of def.displayRules ?? []) scan(r.when, `display rule ${r.label ?? r.id}`, r.id);
-  for (const c of def.calculations ?? []) scan(c.when, `calculation ${c.targetVariable}`, c.id);
-  for (const quota of def.quotas ?? []) {
-    for (const cell of quota.cells) scan(cell.when, `quota ${quota.name} / ${cell.label}`, cell.id);
-  }
-  const walkFlow = (nodes: unknown[]): void => {
-    for (const raw of nodes ?? []) {
-      const n = raw as {
-        type?: string; id?: string; title?: string; visibleIf?: Condition;
-        eligibleIf?: Condition; invalidIf?: Condition;
-        children?: unknown[]; branches?: { when?: Condition; children: unknown[] }[]; otherwise?: unknown[];
-      };
-      if (!n || typeof n !== "object") continue;
-      scan(n.visibleIf, `${n.type} ${n.title ?? n.id}`, n.id);
-      scan(n.eligibleIf, `loop ${n.title ?? n.id}`, n.id);
-      scan(n.invalidIf, `loop ${n.title ?? n.id}`, n.id);
-      if (n.branches) for (const b of n.branches) { scan(b.when, `branch ${n.title ?? n.id}`, n.id); walkFlow(b.children); }
-      if (n.children) walkFlow(n.children);
-      if (n.otherwise) walkFlow(n.otherwise);
-    }
-  };
-  walkFlow((def.flow ?? []) as unknown[]);
+  /*
+   * EVERY place, found structurally — display and skip logic, validation,
+   * punches, masks, option / row / column / group logic, list logic, flow
+   * nodes, branches, loops, display rules, calculations, quota cells, list
+   * fills, other named expressions, and the conditions inside COUNTs. The
+   * hand-written list this replaced covered about half of them, so "used by
+   * 0" could be said of an expression that four rules still needed.
+   */
+  forEachConditionRoot(def, (c, loc) => {
+    forEachRule(c, (r) => { if (r.source?.kind === "rule") note(r.source.ref, loc.where, loc.questionId); });
+  });
 
   return out;
 }

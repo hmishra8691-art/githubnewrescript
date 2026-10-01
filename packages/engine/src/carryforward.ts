@@ -15,7 +15,7 @@ import type {
 } from "@rescript/schema";
 import { LIST_OPS_WITH_SOURCES } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
-import { evaluateCondition, withOption, withLegacyOptionLoop } from "./evaluate.js";
+import { evaluateCondition, conditionFires, isVacuousCondition, withOption, withLegacyOptionLoop } from "./evaluate.js";
 import { getQuestion, lookupAnswer, loopKeySuffix } from "./state.js";
 import { resolvePiping, registerDisplayedOptionsResolver, registerEffectiveRowsResolver } from "./piping.js";
 import { evaluateSetExpr, LIST_ACTIONS } from "./setExpression.js";
@@ -34,6 +34,7 @@ import { hasDisplayRulesFor, ruleVerdict, visibleByRules } from "./displayRules.
 import { hasOptionGroups, groupsFor, orderWithGroups } from "./optionGroups.js";
 import { activePunchRules } from "./punchChain.js";
 import { orderPunchRules } from "@rescript/schema";
+import { gridAxes } from "./gridAxes.js";
 
 /**
  * THE OPTION PIPELINE.
@@ -124,12 +125,23 @@ export function codesFrom(
         ? Object.keys(answer)
         : [answer as string | number];
 
-  /** options the source question actually showed — needs its own pipeline run */
+  /*
+   * A GRID's items are its ROWS: its answer is keyed by row and its options
+   * are the scale. Reading the options here meant "displayed" / "all" /
+   * "not selected" of a grid produced scale points, while "selected"
+   * produced row codes — two different lists under one setting, so "carry
+   * forward the displayed rows of Q5" (29-09 #5) could not be written at all.
+   */
+  const byRows = rowsAreItems(src);
+  const ownItems = (): (string | number)[] => (byRows ? src.rows : src.options).map((o) => o.code);
+
+  /** options (rows, for a grid) the source question actually showed — needs its own pipeline run */
   const displayed = (): (string | number)[] => {
-    if (resolving.has(src.id)) return src.options.map((o) => o.code);
+    if (resolving.has(src.id)) return ownItems();
     resolving.add(src.id);
     try {
-      return effectiveQuestion(src, ctx).options.map((o) => o.code);
+      const view = effectiveQuestion(src, ctx);
+      return (byRows ? view.rows : view.options).map((o) => o.code);
     } finally {
       resolving.delete(src.id);
     }
@@ -152,8 +164,34 @@ export function codesFrom(
     }
     case "all":
     default:
-      return src.options.map((o) => o.code);
+      return ownItems();
   }
+}
+
+/** A grid whose answer is keyed by row: its rows are the items a list draws from. */
+function rowsAreItems(q: Question): boolean {
+  return q.rows.length > 0 && gridAxes(q).isGrid;
+}
+
+/**
+ * Does one row's stored answer hold any of these columns?
+ *
+ * The three grid answer shapes: a single-response grid stores the chosen
+ * scale code (`{ r1: 2 }`), a multi-response grid an array (`{ r1: [1, 3] }`),
+ * a column grid an object per row (`{ r1: { used: true, price: 4 } }`). A
+ * column "holds" in the last when it carries any answer at all.
+ */
+export function rowHoldsColumn(cell: unknown, columns: readonly (string | number)[]): boolean {
+  if (cell == null || cell === "") return false;
+  const want = columns.map(String);
+  if (Array.isArray(cell)) return cell.some((v) => want.includes(String(v)));
+  if (typeof cell === "object") {
+    return want.some((k) => {
+      const v = (cell as Record<string, unknown>)[k];
+      return v != null && v !== "" && v !== false && !(Array.isArray(v) && v.length === 0);
+    });
+  }
+  return want.includes(String(cell));
 }
 
 /** Has the source question been answered at all (for back references)? */
@@ -170,7 +208,16 @@ function isAnswered(questionId: string, ctx: EvalContext): boolean {
 function carriedOptions(cf: CarryForward, ctx: EvalContext): Option[] {
   const src = getQuestion(ctx.def, cf.sourceQuestionId);
   if (!src) return [];
-  const codes = codesFrom(cf.sourceQuestionId, cf.filter, ctx);
+  let codes = codesFrom(cf.sourceQuestionId, cf.filter, ctx);
+  /*
+   * "the rows where a given COLUMN of an earlier grid was chosen" (29-09 #6):
+   * Q5 asked Aware / Used for every brand; Q6 lists only the brands Used.
+   */
+  if (cf.columns?.length && rowsAreItems(src)) {
+    const answer = lookupAnswer(ctx.state.answers, src.id, ctx.loop);
+    const cells = answer && typeof answer === "object" && !Array.isArray(answer) ? answer as Record<string, unknown> : {};
+    codes = codes.filter((c) => rowHoldsColumn(cells[String(c)], cf.columns!));
+  }
   const pool: Option[] = codes.map((code) => optionFromSource(src, code, ctx.def));
   if (!cf.where) return pool;
   return pool.filter((o) => evaluateCondition(cf.where, withLegacyOptionLoop(ctx, o)));
@@ -189,7 +236,11 @@ function carriedOptions(cf: CarryForward, ctx: EvalContext): Option[] {
  * respondent-facing renderer.
  */
 function optionFromSource(src: Question, code: string | number, def: SurveyDefinition): Option {
-  const opt = src.options.find((o) => String(o.code) === String(code));
+  /* a grid's carried item is a ROW — its code can equal a scale point's
+   * ("1".."5" both ways), which lent a brand the label "Strongly agree" */
+  const opt = rowsAreItems(src) && src.rows.some((r) => String(r.code) === String(code))
+    ? undefined
+    : src.options.find((o) => String(o.code) === String(code));
   if (opt) {
     return { ...opt, sourceQuestionId: opt.sourceQuestionId ?? src.id, sourceCode: opt.sourceCode ?? opt.code };
   }
@@ -474,7 +525,7 @@ function eligibilityVerdict(
   const l = item.logic;
 
   // an explicit exclusion always wins — including over "Always Show"
-  if (l?.excludeWhen && evaluateCondition(l.excludeWhen, octx)) {
+  if (conditionFires(l?.excludeWhen, octx)) {
     return { keep: false, reason: "Exclude When condition is true" };
   }
   if (isAlwaysShow(item)) return { keep: true, reason: "Always Show" };
@@ -486,7 +537,7 @@ function eligibilityVerdict(
     if (l.visibility === "show_when" && !evaluateCondition(l.when, octx)) {
       return { keep: false, reason: "Show When condition is false" };
     }
-    if (l.visibility === "hide_when" && l.when && evaluateCondition(l.when, octx)) {
+    if (l.visibility === "hide_when" && conditionFires(l.when, octx)) {
       return { keep: false, reason: "Hide When condition is true" };
     }
     if (l.eligibleWhen && !evaluateCondition(l.eligibleWhen, octx)) {
@@ -790,17 +841,17 @@ function applyPrioritization<T extends ItemWithLogic>(
   rec: Recorder | null,
   pos: PosFn,
 ): T[] {
-  const hasAny = items.some((i) => i.logic?.prioritizeWhen || i.logic?.deprioritizeWhen);
+  const hasAny = items.some((i) => !isVacuousCondition(i.logic?.prioritizeWhen) || !isVacuousCondition(i.logic?.deprioritizeWhen));
   if (!hasAny) return items;
   const top: T[] = [];
   const mid: T[] = [];
   const bottom: T[] = [];
   items.forEach((i, idx) => {
     const octx = optionCtx(ctx, i, idx, pos);
-    if (i.logic?.prioritizeWhen && evaluateCondition(i.logic.prioritizeWhen, octx)) {
+    if (conditionFires(i.logic?.prioritizeWhen, octx)) {
       top.push(i);
       if (rec?.byCode[String(i.code)]) rec.byCode[String(i.code)].moved = "top";
-    } else if (i.logic?.deprioritizeWhen && evaluateCondition(i.logic.deprioritizeWhen, octx)) {
+    } else if (conditionFires(i.logic?.deprioritizeWhen, octx)) {
       bottom.push(i);
       if (rec?.byCode[String(i.code)]) rec.byCode[String(i.code)].moved = "bottom";
     } else {

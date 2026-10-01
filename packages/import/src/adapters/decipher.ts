@@ -352,7 +352,11 @@ export function readPython(src: string, location: string, questions: Map<string,
       else if (next.v === "in") { eat(); op = "in"; }
       else { eat(); op = CMP[next.v]; }
       const v = value();
-      if (r.kind === "count") return { t: "cmp", ref: r.ref, op: op === "gte" ? "countGte" : op === "lte" ? "countLte" : op === "eq" ? "countEq" : op === "gt" ? "countGte" : "countLte", value: op === "gt" ? Number(v) + 1 : op === "lt" ? Number(v) - 1 : (v as number) };
+      if (r.kind === "count") {
+        /* `count != N` is NOT (count = N) — it used to become "count ≤ N", which also matches N itself */
+        if (op === "ne") return { t: "group", op: "not", children: [{ t: "cmp", ref: r.ref, op: "countEq", value: v as number }] };
+        return { t: "cmp", ref: r.ref, op: op === "gte" ? "countGte" : op === "lte" ? "countLte" : op === "eq" ? "countEq" : op === "gt" ? "countGte" : "countLte", value: op === "gt" ? Number(v) + 1 : op === "lt" ? Number(v) - 1 : (v as number) };
+      }
       if (r.kind === "val" || r.kind === "sel" || r.kind === "any") return { t: "cmp", ref: r.ref, op, value: v };
       throw new Error(`cannot compare ${t.v}`);
     }

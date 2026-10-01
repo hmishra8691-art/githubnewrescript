@@ -489,3 +489,16 @@ export const cond = {
     return { type: "group", op: "not", children };
   },
 };
+
+/**
+ * True when a condition constrains nothing: absent, or a group whose every
+ * child is itself empty (`{and: []}` is the builder's starting state, and what
+ * is left when the last condition in it is deleted). The engine's
+ * `isVacuousCondition` is the same test; it lives here too so schema-level
+ * helpers (`isEmptyOptionLogic`) can ask it without depending on the engine.
+ */
+export function isEmptyConditionTree(c: Condition | undefined | null): boolean {
+  if (!c) return true;
+  if (c.type !== "group") return false;
+  return (c.children ?? []).every((k) => isEmptyConditionTree(k));
+}

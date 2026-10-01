@@ -4,6 +4,7 @@ import type { SurveyDefinition, UxBehavior, UxEffect, UxTarget } from "@rescript
 import {
   UX_PRESET_FRAMES, checkDeclarations, compileUxCss, evaluateUxTriggers, resolveUxTarget, uxAnimationNeedsRuntime,
   uxPlayToken, uxSelector, uxToken, uxAnswered, uxSelectedCodes, defaultUxLookups, validateUxScript, UX_SCRIPT_EVENT_ALIASES,
+  uxGuardHolds, createResponseState, type ResponseState,
 } from "@rescript/engine";
 
 /**
@@ -39,6 +40,8 @@ export interface UxLayerProps {
   values: Record<string, unknown>;
   /** every answer so far, by question id (scripts' getAnswer) */
   allValues?: Record<string, unknown>;
+  /** the response so far — what a behaviour's `when` is read against (embedded data and calculations included) */
+  state?: ResponseState | null;
   /** the questions on the page, in order */
   shown: string[];
   /** changes whenever the page (or loop iteration) changes */
@@ -176,6 +179,10 @@ export function UxLayer(p: UxLayerProps) {
   const animations = def.ux?.animations ?? [];
 
   const byCode = React.useMemo(() => new Map(def.questions.map((q) => [q.id, String(q.code)])), [def.questions]);
+  /* without a response state (the Studio's UX preview), the answers on hand are the whole response */
+  const stateFromValues = (): ResponseState => ({ ...createResponseState(def, { seed: 1, sessionId: "ux" }), answers: { ...(p.allValues ?? {}), ...p.values } as ResponseState["answers"] });
+  const stateRef = React.useRef<() => ResponseState>(stateFromValues);
+  stateRef.current = () => p.state ?? stateFromValues();
   const answersByCode = React.useCallback(() => {
     const out: Record<string, unknown> = {};
     const all = { ...(p.allValues ?? {}), ...p.values };
@@ -215,7 +222,7 @@ export function UxLayer(p: UxLayerProps) {
       }
     }
     if (behaviors.length) {
-      const r = evaluateUxTriggers({ def, prev: prevValues.current, now: p.values, shown: p.shown, blockId: p.blockId, active: new Set(active.current.keys()), fired: fired.current });
+      const r = evaluateUxTriggers({ def, prev: prevValues.current, now: p.values, shown: p.shown, blockId: p.blockId, active: new Set(active.current.keys()), fired: fired.current, state: p.state ?? stateFromValues() });
       for (const b of r.release) { for (const u of active.current.get(b.id) ?? []) u.run(); active.current.delete(b.id); }
       for (const b of r.hold) { active.current.set(b.id, b.effects.flatMap((e) => applyEffect(root, def, b.target, e, b.id))); if (b.once) fired.current.add(b.id); }
       for (const b of r.fire) { for (const e of b.effects) applyEffect(root, def, b.target, e, b.id); if (b.once) fired.current.add(b.id); }
@@ -225,6 +232,8 @@ export function UxLayer(p: UxLayerProps) {
     for (const s of scripts.current) {
       s.frame.contentWindow?.postMessage({ __rsux: 1, type: "answers", answers: answersByCode() }, "*");
       if (!prev) continue;
+      // a script behaviour hears events only while its `when` holds
+      if (!uxGuardHolds(def, s.behavior, p.state ?? stateFromValues(), p.values)) continue;
       for (const qid of p.shown) {
         if (JSON.stringify(prev[qid] ?? null) === JSON.stringify(p.values[qid] ?? null)) continue;
         const code = byCode.get(qid)!;
@@ -251,8 +260,8 @@ export function UxLayer(p: UxLayerProps) {
       if (s.root && !root.matches(s.root)) return null;
       return s.inner ? node.closest(s.inner) : root;
     };
-    const onClick = (ev: Event) => { for (const b of pointer.filter((x) => x.on === "click")) { if (b.once && fired.current.has(b.id)) continue; if (within(b, ev.target)) { for (const e of b.effects) applyEffect(root, def, b.target, e, b.id); if (b.once) fired.current.add(b.id); } } };
-    const onOver = (ev: Event) => { for (const b of pointer.filter((x) => x.on === "hover")) if (within(b, ev.target) && !active.current.has(b.id)) active.current.set(b.id, b.effects.flatMap((e) => applyEffect(root, def, b.target, e, b.id))); };
+    const onClick = (ev: Event) => { for (const b of pointer.filter((x) => x.on === "click")) { if (b.once && fired.current.has(b.id)) continue; if (!uxGuardHolds(defRef.current, b, stateRef.current())) continue; if (within(b, ev.target)) { for (const e of b.effects) applyEffect(root, def, b.target, e, b.id); if (b.once) fired.current.add(b.id); } } };
+    const onOver = (ev: Event) => { for (const b of pointer.filter((x) => x.on === "hover")) if (within(b, ev.target) && !active.current.has(b.id) && uxGuardHolds(defRef.current, b, stateRef.current())) active.current.set(b.id, b.effects.flatMap((e) => applyEffect(root, def, b.target, e, b.id))); };
     const onOut = (ev: MouseEvent) => { for (const b of pointer.filter((x) => x.on === "hover")) { if (!active.current.has(b.id)) continue; const from = within(b, ev.target), to = within(b, ev.relatedTarget); if (from && from !== to) { for (const u of active.current.get(b.id)!) u.run(); active.current.delete(b.id); } } };
     root.addEventListener("click", onClick);
     root.addEventListener("mouseover", onOver);

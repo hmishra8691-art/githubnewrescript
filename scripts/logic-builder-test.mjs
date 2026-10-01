@@ -288,14 +288,18 @@ assert.deepEqual(logic.children[0].children.map((c) => c.op), ["or", "or"],
   "changing NOT did not touch either nested group");
 console.log("✔ §10/§13: NOT applies to its own group only");
 
-// ungroup the outer one: the two brackets come back to the top level
+// ungroup the outer NOT: the two brackets come back to the top level, each
+// KEEPING the negation. NOT[A, B] is "none of A, B" = NOT A AND NOT B; the
+// ungroup used to drop the NOT and leave A AND B — the opposite logic
+// (nested-logic audit 2026-09-28 §3.4, fixed 2026-10-01).
 await page.click('[data-testid="lb-ungroup"] >> nth=0');
 await page.waitForTimeout(350);
 def = await readDef();
 logic = displayLogicOf(def);
 assert.equal(logic.children.length, 2, "the bracket dissolved, its children stayed");
-assert.deepEqual(logic.children.map((c) => c.op), ["or", "or"]);
-console.log("✔ ungrouping keeps the conditions and removes only the bracket");
+assert.deepEqual(logic.children.map((c) => c.op), ["not", "not"], "each child carries the NOT it was under");
+assert.deepEqual(logic.children.map((c) => c.children[0].op), ["or", "or"], "and the brackets inside are untouched");
+console.log("✔ ungrouping a NOT keeps the conditions AND their negation");
 
 /* ------------------------------------------------------- §17: persistence */
 

@@ -1,6 +1,6 @@
 import type { SurveyDefinition, DisplayRule, FlowNode } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
-import { evaluateCondition } from "./evaluate.js";
+import { evaluateCondition, isVacuousCondition } from "./evaluate.js";
 import { flowNodeIndex } from "./flowTree.js";
 
 /**
@@ -268,6 +268,15 @@ export function unresolvableDisplayRules(def: SurveyDefinition): DeadDisplayRule
 
   for (const rule of def.displayRules ?? []) {
     const { kind, ref, subRef } = rule.target;
+    /*
+     * A HIDE rule with no condition hides its target from everyone — an
+     * empty condition holds. That can be meant, but it is also where
+     * "+ display rule" leaves a rule whose action was switched to hide
+     * before a condition was added, so it is said out loud.
+     */
+    if (rule.action === "hide" && isVacuousCondition(rule.when)) {
+      out.push({ rule, reason: "has no condition, so it hides its target from EVERY respondent — add a condition, or remove the rule", level: "warning" });
+    }
     if (!ref) {
       out.push({ rule, reason: "names no target", level: "error" });
       continue;

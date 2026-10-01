@@ -15,10 +15,13 @@ import {
   TWO_VALUE_OPERATORS,
   VALUELESS_OPERATORS,
   isOptionValueRef,
+  isQuestionValueRef,
   effectiveResponseModel,
   isMultiValuedQuestion,
   resolveVariant,
 } from "@rescript/schema";
+import { conditionDepth, forEachConditionRoot, stripVacuous } from "./conditionWalk.js";
+import { MAX_CONDITION_DEPTH } from "./evaluate.js";
 import { LOOP_BUILTIN_REFS, getQuestionByCodeOrVar } from "./state.js";
 import { PIPE_TOKEN_RE, parsePipeBody } from "./pipingTokens.js";
 import { registerBareNameResolver } from "./piping.js";
@@ -139,7 +142,10 @@ function optionCodes(q: Question): Set<string> {
 
 interface Ctx {
   def: SurveyDefinition;
+  /** the question the logic belongs to — a stand-in when it belongs to the flow, a quota or a rule */
   q: Question;
+  /** false for logic that is not on a question: there is no "comes after" to check */
+  ordered?: boolean;
   order: Record<string, number>;
   /** the option-level context is available (so `{ $option }` values are legal) */
   perOption: boolean;
@@ -227,6 +233,14 @@ function lintCondition(
   depth = 0,
 ): void {
   if (!c) return;
+  if (depth === 0) {
+    const d = conditionDepth(c);
+    if (d > MAX_CONDITION_DEPTH) {
+      ctx.push({ level: "error", path, message: `This logic nests ${d} levels deep; the engine stops evaluating past ${MAX_CONDITION_DEPTH}. Flatten it, or move part into a named expression.` });
+    } else if (d > 8) {
+      ctx.push({ level: "warning", path, message: `This logic nests ${d} levels deep — hard to read and to check. Consider moving a part into a named expression.` });
+    }
+  }
   if (c.type === "group") {
     if (!c.children || c.children.length === 0) {
       /*
@@ -238,7 +252,7 @@ function lintCondition(
        * would make the whole bracket pass, so it stays an issue.
        */
       if (depth > 0) {
-        ctx.push({ level: "warning", path, message: "Empty condition group — it always passes." });
+        ctx.push({ level: "warning", path, message: "Empty condition group — it is ignored, so it constrains nothing. Add a condition to it or remove it." });
       }
       return;
     }
@@ -247,6 +261,32 @@ function lintCondition(
   }
 
   const { source, operator } = c;
+
+  /*
+   * A COUNT compares a NUMBER — how many items qualify — so it takes the
+   * numeric operators whatever the counted question is, and its value is
+   * never an option code. It was linted as an answer of the counted question:
+   * `COUNT(Q1) >= 2` on a multi-select was an error ("gte cannot be used"),
+   * and a threshold of 2 was "no option coded 2".
+   */
+  if (source.count) {
+    const src = source.ref ? getQuestionByCodeOrVar(ctx.def, source.ref) : undefined;
+    if (!src) {
+      ctx.push({ level: "error", path, message: `COUNT reads “${source.ref}”, which does not exist in this survey.` });
+    } else if (ctx.ordered !== false && (ctx.order[src.id] ?? 0) > (ctx.order[ctx.q.id] ?? 0)) {
+      ctx.push({ level: "warning", path, message: `${src.code} comes after ${ctx.q.code} in the flow — the count will be 0 unless the respondent goes back.` });
+    }
+    const NUMERIC: string[] = ["eq", "ne", "gt", "gte", "lt", "lte", "between", "notBetween", "in", "notIn"];
+    if (!NUMERIC.includes(operator)) {
+      ctx.push({ level: "error", path, message: `A COUNT is a number, so “${operator}” cannot compare it — use =, ≠, >, ≥, <, ≤ or between.` });
+    }
+    if (c.value === undefined || c.value === "" || (typeof c.value !== "number" && !isQuestionValueRef(c.value) && !Array.isArray(c.value) && !Number.isFinite(Number(c.value)))) {
+      ctx.push({ level: "warning", path, message: "A COUNT needs a number to compare with." });
+    }
+    /* the condition each counted item must meet is logic too — linted with the item in scope */
+    if (source.count.where) lintCondition(source.count.where, `${path}.count.where`, { ...ctx, perOption: true }, depth + 1);
+    return;
+  }
 
   if (source.kind === "option" && !ctx.perOption) {
     ctx.push({
@@ -284,7 +324,7 @@ function lintCondition(
     if (src) {
       const here = ctx.order[ctx.q.id] ?? 0;
       const there = ctx.order[src.id] ?? 0;
-      if (there > here) {
+      if (ctx.ordered !== false && there > here) {
         ctx.push({
           level: "warning",
           path,
@@ -320,7 +360,7 @@ function lintCondition(
           }
         }
       }
-      if (source.rowCode && !(src.rows ?? []).some((r) => String(r.code) === String(source.rowCode))) {
+      if (source.rowCode && !gridAxes(src).rows.some((r) => r.ref === String(source.rowCode)) && !(src.rows ?? []).some((r) => String(r.code) === String(source.rowCode))) {
         ctx.push({
           level: "warning",
           path,
@@ -349,19 +389,21 @@ function lintCondition(
         }
       }
       /*
-       * A grid reference that names NEITHER axis compares against the whole
-       * `{ row: value }` object, so every code operator is false for every
-       * respondent — a rule that can never fire, and nothing said so.
+       * A grid reference that names NEITHER axis reads every cell: a value
+       * comparison is true when ANY cell satisfies it (and its negation when
+       * none does). That is a legitimate rule — "any row rated 5" — but it is
+       * rarely what was meant when a programmer simply forgot to pick a row,
+       * so it is pointed out rather than left silent.
        */
-      if (!source.rowCode && !source.columnId && !source.count) {
+      if (!source.rowCode && !source.columnId && !source.count && source.rowPosition == null && source.optionPosition == null) {
         const axes = gridAxes(src);
-        const codeBasedOp = ["selected", "notSelected", "eq", "ne", "in", "notIn", "contains", "notContains"].includes(operator)
+        const valueOp = ["selected", "notSelected", "eq", "ne", "in", "notIn", "contains", "notContains", "gt", "gte", "lt", "lte", "between", "notBetween"].includes(operator)
           || LIST_VALUE_OPERATORS.includes(operator);
-        if (axes.isGrid && codeBasedOp) {
+        if (axes.isGrid && valueOp) {
           ctx.push({
             level: "warning",
             path,
-            message: `${src.code} is a grid, so “${operator}” needs a ${axes.rowLabel} or a ${axes.columnLabel} to compare — without one it reads the whole grid and can never match. Pick a row (that row's answer), a column (any row with that answer), or both (one cell).`,
+            message: `${src.code} is a grid and this names no ${axes.rowLabel} or ${axes.columnLabel}, so “${operator}” reads EVERY cell — it holds when any cell matches${["ne", "notIn", "notContains", "notSelected", "notBetween"].includes(operator) ? " (for a negation: when no cell does)" : ""}. Pick a ${axes.rowLabel} (that ${axes.rowLabel}'s answer), a ${axes.columnLabel}, or both (one cell) if you meant one.`,
           });
         }
       }
@@ -378,10 +420,12 @@ function lintCondition(
 
 function lintOptionLogic(l: OptionLogic | undefined, path: string, ctx: Ctx): void {
   if (!l) return;
-  if (l.visibility === "show_when" && !l.when) {
+  /* an EMPTY condition is as unset as a missing one — the builder starts
+   * there, and deleting the last condition leaves it there */
+  if (l.visibility === "show_when" && stripVacuous(l.when) === null) {
     ctx.push({ level: "error", path: `${path}.when`, message: "“Show when” has no condition." });
   }
-  if (l.visibility === "hide_when" && !l.when) {
+  if (l.visibility === "hide_when" && stripVacuous(l.when) === null) {
     ctx.push({ level: "error", path: `${path}.when`, message: "“Hide when” has no condition." });
   }
   if (l.visibility === "always_show" && l.excludeWhen) {
@@ -932,7 +976,21 @@ function lintQuestionLogicUnsafe(def: SurveyDefinition, q: Question, order: Reco
       issues.push({ level: "warning", questionId: q.id, questionCode: q.code, path: "probe", message: m });
     }
   }
-  (q.skipLogic ?? []).forEach((r, i) => lintCondition(r.when, `skipLogic[${i}].when`, ctx));
+  (q.skipLogic ?? []).forEach((r, i) => {
+    lintCondition(r.when, `skipLogic[${i}].when`, ctx);
+    /*
+     * A skip rule with no condition fires for EVERY respondent — that is what
+     * an empty condition means everywhere ("no constraint"), and an
+     * unconditional jump is a legitimate thing to want. But it is also the
+     * state "+ skip rule" starts in, with "end" as the target, so a rule added
+     * and not finished sent the whole sample to the end. Say so, loudly.
+     */
+    if (stripVacuous(r.when) === null) {
+      const t = r.target as { kind?: string; ref?: string };
+      const where = t.kind === "end" ? "the end" : t.kind === "terminate" ? "a terminate" : t.kind === "url" ? "an external URL" : t.ref ? (ctx.def.questions.find((x) => x.id === t.ref)?.code ?? t.ref) : "its target";
+      issues.push({ level: "warning", questionId: q.id, questionCode: q.code, path: `skipLogic[${i}].when`, message: `Skip rule ${i + 1} has no condition, so it sends EVERY respondent to ${where}. Add a condition, or remove the rule if it was not meant to apply to everyone.` });
+    }
+  });
   (q.validation ?? []).forEach((v, i) => lintCondition(v.when, `validation[${i}].when`, ctx));
   (q.randomization?.rules ?? []).forEach((r, i) =>
     lintCondition(r.when, `randomization.rules[${i}].when`, ctx),
@@ -1025,10 +1083,36 @@ function lintQuestionLogicUnsafe(def: SurveyDefinition, q: Question, order: Reco
 }
 
 /** Lint the whole survey, including circular dependencies (req §31). */
+/**
+ * THE LOGIC THAT IS NOT ON A QUESTION.
+ *
+ * Page / block / section visibility, branches, loop conditions, redirects,
+ * display rules, calculations, quota cells, named expressions, list fills,
+ * language routing, quality and AI rules are all conditions, and none of them
+ * was linted — a branch naming a deleted question, or comparing a single
+ * choice with a label, went to fieldwork unflagged. Every root not inside a
+ * question is linted here with the same `lintCondition`; "comes after" is not
+ * checked, because a flow node has no single position to compare with.
+ */
+function lintSurveyLevelConditions(def: SurveyDefinition, order: Record<string, number>): LogicIssue[] {
+  const issues: LogicIssue[] = [];
+  const stand: Question = { id: "", code: "", variableName: "", type: "text", text: "", options: [], rows: [], columns: [], validation: [], required: false, settings: {}, skipLogic: [], listLogic: [] } as unknown as Question;
+  forEachConditionRoot(def, (c, loc) => {
+    if (loc.questionId) return; // a question's own logic is linted with the question
+    const perOption = /\.(where|eligibleWhen)$/.test(loc.path);
+    lintCondition(c, loc.path, {
+      def, q: stand, order, perOption, ordered: false,
+      push: (i) => issues.push({ ...i, message: `${loc.where}: ${i.message}` }),
+    });
+  });
+  return issues;
+}
+
 export function lintSurveyLogic(def: SurveyDefinition): LogicIssue[] {
   const issues: LogicIssue[] = [];
   const order = orderIndex(def); // once, not once per question — see lintQuestionLogic
   for (const q of def.questions ?? []) issues.push(...lintQuestionLogic(def, q, order));
+  issues.push(...lintSurveyLevelConditions(def, order));
   issues.push(...lintLoops(def));
   issues.push(...lintStructure(def));
   try {

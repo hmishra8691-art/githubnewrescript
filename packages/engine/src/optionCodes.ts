@@ -1,4 +1,5 @@
 import type { Condition, ConditionRule, Question, SurveyDefinition } from "@rescript/schema";
+import { mapConditionRoots } from "./conditionWalk.js";
 import { isOptionValueRef, isQuestionValueRef, effectiveResponseModel } from "@rescript/schema";
 
 /** what a question's answer is made of — the same reading as lintLogic's `sourceKindForQuestion`, without importing the linter */
@@ -121,10 +122,24 @@ export interface CanonicalCondition { condition: Condition; errors: string[]; ch
 /** the condition with every option value as its code; what changed, and what cannot be resolved */
 export function canonicalizeCondition(def: SurveyDefinition, condition: Condition): CanonicalCondition {
   const errors: string[] = [], changes: string[] = [];
-  const walk = (c: Condition): Condition => {
-    if (c.type === "group") return { ...c, children: c.children.map(walk) };
+  const walk = (c: Condition, counted?: { q: Question; options: OptionList }): Condition => {
+    if (c.type === "group") return { ...c, children: c.children.map((k) => walk(k, counted)) };
+    /*
+     * A COUNT's `where` is a condition of its own, read once per counted item
+     * with that item as `@option` — so its option values are codes too, of the
+     * counted question's options.
+     */
+    if (c.source?.count?.where) {
+      const r0 = c as ConditionRule;
+      const cq = def.questions.find((x) => x.id === r0.source.ref) ?? undefined;
+      const inner = cq && (r0.source.count!.scope ?? "options") === "options" && cq.options?.length
+        ? { q: cq, options: cq.options as OptionList } : undefined;
+      c = { ...r0, source: { ...r0.source, count: { ...r0.source.count!, where: walk(r0.source.count!.where!, inner) } } } as ConditionRule;
+    }
     if (!CODE_OPERATORS.has(c.operator)) return c;
-    const d = domainOf(def, c);
+    const d = c.source?.kind === "option" && (c.source.ref ?? "code") === "code" && counted
+      ? { q: counted.q, options: counted.options, list: false }
+      : domainOf(def, c);
     if (!d) return c;
     const fix = (v: unknown): unknown => {
       if (v === null || v === undefined || v === "" || typeof v === "boolean" || isOptionValueRef(v) || isQuestionValueRef(v)) return v;
@@ -165,25 +180,14 @@ const isGroup = (x: unknown): x is Extract<Condition, { type: "group" }> => !!x 
  * never guessed.
  */
 export function canonicalizeSurveyConditions(input: SurveyDefinition): { def: SurveyDefinition; changes: string[]; unresolved: string[] } {
-  const def = structuredClone(input) as SurveyDefinition;
   const changes: string[] = [], unresolved: string[] = [];
-  const visit = (node: unknown, parent?: Record<string, unknown> | unknown[], key?: string | number): void => {
-    if (!node || typeof node !== "object") return;
-    if (isRule(node) || isGroup(node)) {
-      const r = canonicalizeCondition(def, node as Condition);
-      if (JSON.stringify(r.condition) !== JSON.stringify(node) && parent !== undefined && key !== undefined) {
-        (parent as Record<string, unknown>)[key as string] = r.condition;
-        changes.push(...r.changes);
-      }
-      unresolved.push(...r.errors);
-      return;
-    }
-    if (Array.isArray(node)) { node.forEach((x, i) => visit(x, node, i)); return; }
-    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
-      if (k === "ux" || k === "branding" || k === "meta") continue;
-      visit(v, node as Record<string, unknown>, k);
-    }
-  };
-  visit(def);
-  return { def, changes: [...new Set(changes)], unresolved: [...new Set(unresolved)] };
+  // every condition, wherever it sits (UX behaviour guards and COUNT wheres included) — see conditionWalk
+  const def = mapConditionRoots(input, (c) => {
+    const r = canonicalizeCondition(input, c);
+    unresolved.push(...r.errors);
+    if (JSON.stringify(r.condition) === JSON.stringify(c)) return c;
+    changes.push(...r.changes);
+    return r.condition;
+  });
+  return { def: def === input ? structuredClone(input) : def, changes: [...new Set(changes)], unresolved: [...new Set(unresolved)] };
 }

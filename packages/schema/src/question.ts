@@ -512,6 +512,13 @@ export const CarryForward = z.object({
   keepOwn: z.boolean().default(false),
   /** Optional extra filter condition evaluated per option code. */
   where: Condition.optional(),
+  /**
+   * GRID sources only: keep just the rows where ANY of these columns was
+   * chosen — "the brands marked Used in Q5". Scale codes for a single /
+   * multi-response grid, column ids for a column grid. Applied after
+   * `filter`, before `where`. Empty or absent = no column filter.
+   */
+  columns: z.array(z.union([z.string(), z.number()])).optional(),
 });
 export type CarryForward = z.infer<typeof CarryForward>;
 

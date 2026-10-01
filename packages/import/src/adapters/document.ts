@@ -338,19 +338,37 @@ const OPS: [RegExp, COp][] = [
  *   Yes / No / code 3 (about the question itself)
  */
 export function resolveCondition(textIn: string, self: CanonicalQuestion, byCode: Map<string, CanonicalQuestion>, location: string, issues: Issue[]): CExpr | null {
-  const text = textIn.trim().replace(/[.;]+$/, "");
+  /* "…, BUT NOT …" is AND NOT — the spec's own way of writing an exclusion */
+  let text = textIn.trim().replace(/[.;]+$/, "").replace(/,?\s+BUT\s+NOT\s+/gi, " AND NOT ");
   const ambiguous = (reason: string): null => {
     issues.push({ location, type: "ambiguous", severity: "high", message: `Logic cannot be determined with certainty: ${reason}`, suggestion: "Say which question and answer define it, then add the rule in Studio — or ask Intelligent mode.", autoAttempted: true, refs: [self.sourceId] });
     self.confidence = "ambiguous";
     return null;
   };
-  // top-level AND / OR between whole conditions (each side must name a question)
-  const split = /\s+(AND|OR)\s+(?=(?:Q\w+|NOT\b|\(|(?:selected|answered|chose)\b))/i.exec(text);
-  if (split) {
-    const left = resolveCondition(text.slice(0, split.index), self, byCode, location, issues);
-    const right = resolveCondition(text.slice(split.index + split[0].length), self, byCode, location, issues);
-    if (!left || !right) return null;
-    return { t: "group", op: split[1].toLowerCase() as "and" | "or", children: [left, right] };
+  /* brackets around the whole condition are only brackets */
+  while (wrappedInParens(text)) text = text.slice(1, -1).trim();
+  /*
+   * AND / OR BETWEEN WHOLE CONDITIONS, WITH THE PRECEDENCE AND BRACKETS THE
+   * DOCUMENT WROTE. This used to split at the FIRST connective and recurse
+   * right — so `A AND B OR C` became `A AND (B OR C)` instead of `(A AND B)
+   * OR C`, and `(A OR B) AND C` split inside the brackets and was reported as
+   * ambiguous. Now OR is split first (it binds loosest), at the top level
+   * only, then AND; a side must still start like a condition, so a value list
+   * (`Q5 = 1 OR 2`) is not mistaken for two conditions.
+   */
+  for (const op of ["or", "and"] as const) {
+    const parts = splitTopLevel(text, op);
+    if (parts.length > 1) {
+      const kids = parts.map((p) => resolveCondition(p, self, byCode, location, issues));
+      if (kids.some((k) => !k)) return null;
+      return { t: "group", op, children: kids as CExpr[] };
+    }
+  }
+  /* NOT ( … ) and NOT <condition> */
+  const notM = /^NOT\s+(\(.*\))$/i.exec(text) ?? (/^NOT\s+(Q\w+.*)$/i.exec(text));
+  if (notM) {
+    const inner = resolveCondition(notM[1], self, byCode, location, issues);
+    return inner ? { t: "group", op: "not", children: [inner] } : null;
   }
   const optionOf = (q: CanonicalQuestion, v: string): CanonicalOption | null => {
     const w = v.replace(/^["“'‘(]+|["”'’)]+$/g, "").replace(/^(?:code|option|answer|choice)\s+/i, "").trim();
@@ -386,9 +404,11 @@ export function resolveCondition(textIn: string, self: CanonicalQuestion, byCode
     const t = q(m[1]); if (!t) return ambiguous(`${m[1]} is not a question in the document.`);
     return cmpOn(t, m[2], m[3]);
   }
-  if ((m = /^(?:NOT\s+)?(?:selected|chose|picked|ticked|coded|answered|said|mentioned)\s+(.+?)\s+(?:in|at|to|for|on)\s+(Q\w+)$/i.exec(text))) {
+  if ((m = /^(?:NOT\s+)?(?:selected|chose|picked|ticked|coded|code|answered|said|mentioned)\s+(.+?)\s+(?:in|at|to|for|on)\s+(Q\w+)$/i.exec(text))) {
     const t = q(m[2]); if (!t) return ambiguous(`${m[2]} is not a question in the document.`);
-    return cmpOn(t, /^NOT\s/i.test(text) ? "not" : "=", m[1]);
+    // "CODE Q2.1 IN Q2" names the option as Q2.1 — the question prefix is not part of the code
+    const val = m[1].replace(new RegExp(`^${m[2]}\\.`, "i"), "");
+    return cmpOn(t, /^NOT\s/i.test(text) ? "not" : "=", val);
   }
   if ((m = /^(Q\w+)\s+(?:is\s+)?(?:code[sd]?|option|answer)\s+(.+)$/i.exec(text))) {
     const t = q(m[1]); if (!t) return ambiguous(`${m[1]} is not a question in the document.`);
@@ -399,6 +419,41 @@ export function resolveCondition(textIn: string, self: CanonicalQuestion, byCode
   const mentions = text.match(/\bQ\d+\w*\b/gi);
   if (!mentions) return ambiguous(`the document says “${text}”, but no question or answer in it defines that.`);
   return ambiguous(`“${text}” could not be read as a condition on ${mentions.join(", ")}.`);
+}
+
+/** is the whole string one bracketed group — `(A OR B)`, not `(A) AND (B)`? */
+function wrappedInParens(t: string): boolean {
+  if (!t.startsWith("(") || !t.endsWith(")")) return false;
+  let depth = 0;
+  for (let i = 0; i < t.length; i++) {
+    if (t[i] === "(") depth++;
+    else if (t[i] === ")") { depth--; if (depth === 0 && i < t.length - 1) return false; }
+  }
+  return depth === 0;
+}
+
+/**
+ * Split at a connective that is outside brackets and quotes and is followed by
+ * something that starts a condition (a question, NOT, a bracket, a verb), so
+ * `Q5 = 1 OR 2` stays one comparison with a list of values.
+ */
+function splitTopLevel(t: string, op: "and" | "or"): string[] {
+  const parts: string[] = [];
+  let depth = 0, quote: string | null = null, last = 0;
+  const re = new RegExp(`^\\s+${op}\\s+(?=(?:Q\\w+|NOT\\b|\\(|(?:selected|answered|chose|code|coded)\\b))`, "i");
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (quote) { if (ch === quote || (quote === "“" && ch === "”")) quote = null; continue; }
+    if (ch === '"' || ch === "“") { quote = ch; continue; }
+    if (ch === "(") depth++;
+    else if (ch === ")") depth = Math.max(0, depth - 1);
+    else if (depth === 0 && /\s/.test(ch)) {
+      const m = re.exec(t.slice(i));
+      if (m) { parts.push(t.slice(last, i).trim()); i += m[0].length - 1; last = i + 1; }
+    }
+  }
+  parts.push(t.slice(last).trim());
+  return parts.filter(Boolean);
 }
 
 export type { CRef };

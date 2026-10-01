@@ -41,7 +41,7 @@ import type {
   SurveyDefinition,
 } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
-import { evaluateCondition, withOption } from "./evaluate.js";
+import { evaluateCondition, isVacuousCondition, withOption } from "./evaluate.js";
 import { getQuestionByCodeOrVar, lookupAnswer } from "./state.js";
 import { effectiveQuestion, carrySourceOptions, carrySourceRows } from "./carryforward.js";
 import { checkScalarRules } from "./validate.js";
@@ -219,7 +219,16 @@ export function evaluateCount(source: ConditionSource, ctx: EvalContext): number
    * AND was not misevaluating, it was being told two different things.
    */
   const answer = lookupAnswer(ctx.state.answers, q.id, ctx.loop ?? null);
-  const items = pool(q, spec, answer, ctx);
+  /*
+   * `where` narrows WHICH items are counted, whatever is being counted:
+   * `COUNT(Q2, where (@option.code in [1, 2]))` is "how many of 1 and 2 are
+   * selected". It used to be read only by `matching`, so on any other count
+   * it was stored, shown in the editor — and ignored.
+   */
+  const all = pool(q, spec, answer, ctx);
+  const items = spec.where && spec.of !== "matching" && !isVacuousCondition(spec.where)
+    ? all.filter((i) => matches(spec.where!, q, i, spec, ctx))
+    : all;
 
   switch (spec.of) {
     case "selected":

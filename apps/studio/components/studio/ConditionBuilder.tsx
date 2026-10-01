@@ -13,7 +13,7 @@ import {
   gridAxes, authoringValueChoicesFor, describeReference,
   type LogicPath,
   editableCondition, canonicalCondition, pathKey, appendTo, replaceAt, removeAt,
-  duplicateAt, setOperatorAt, groupSelection, ungroupAt, validateLogicTree,
+  duplicateAt, setOperatorAt, groupSelection, ungroupAt, canUngroup, validateLogicTree,
   OPERATOR_LABEL, OPERATOR_HINT, setGroupConnector, listFillVariableNames,
   stripHtmlText,
 } from "@rescript/engine";
@@ -562,7 +562,8 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
       </div>
       {/* the count's own controls, on their own line: what to count, over
           what, narrowed to what, and a plain reading of the result */}
-      {counting && <CountEditor rule={rule} onChange={onChange} />}
+      {counting && <CountEditor rule={rule} onChange={onChange}
+        renderWhere={(value, set) => <OptionalCondition label="each counted item must meet" value={value} onChange={set} perOption />} />}
       {/* a function call's own controls, on their own line: which function,
           one row per argument, add/remove — see ExprEditor's own doc comment */}
       {rule.source.kind === "expr" && <ExprEditor rule={rule} onChange={onChange} />}
@@ -762,7 +763,10 @@ function GroupRow({ ctx, path, group }: {
             dropped a lone × onto a second line in the 380px panel */}
         <span className="lb-group-actions">
           <button className="btn small" data-testid="lb-ungroup"
-            title="Remove this group, keep the conditions in it"
+            disabled={!canUngroup(ctx.root, path)}
+            title={canUngroup(ctx.root, path)
+              ? group.op === "not" ? "Remove this group — each condition in it keeps its NOT" : "Remove this group, keep the conditions in it"
+              : "A NOT group can only be ungrouped inside an AND — anywhere else its conditions would stop being negated"}
             onClick={() => ctx.commit(ungroupAt(ctx.root, path), "ungroup")}>
             ungroup
           </button>
@@ -930,6 +934,29 @@ function VisualConditionEditor({ value, onChange, perOption }: {
         </div>
       )}
       {notice && <div className="lb-notice" data-testid="lb-notice">{notice}</div>}
+
+      {/*
+        * THE TOP LEVEL'S OWN OPERATOR, shown. A stored `NOT (…)` — what typing
+        * `NOT Q1.A` produces — used to render as if it were `Q1.A`: the top
+        * level has no group header, and the only trace of the NOT was the
+        * word between two rows, of which a single condition has none. It is
+        * now a control at the head of the list, so a negation is always
+        * visible and can be set or removed where it applies.
+        */}
+      {(root.children.length > 0 || root.op === "not") && (
+        <div className="lb-root-head" data-testid="lb-root-head">
+          <span className="muted" style={{ fontSize: 12.5 }}>Match</span>
+          <select className="select small lb-root-op" data-testid="lb-root-op"
+            aria-label="How the top-level conditions combine"
+            value={root.op}
+            onChange={(e) => commit(setOperatorAt(root, [], e.target.value as ConditionGroup["op"]), "change top-level operator")}>
+            <option value="and">ALL of these (AND)</option>
+            <option value="or">ANY of these (OR)</option>
+            <option value="not">NONE of these (NOT)</option>
+          </select>
+          {root.op === "not" && <span className="chip warn" data-testid="lb-root-not">negated</span>}
+        </div>
+      )}
 
       <ConditionList ctx={ctx} path={[]} group={root} />
 

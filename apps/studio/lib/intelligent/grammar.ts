@@ -37,7 +37,15 @@ const WHEN = String.raw`\s+(?:only\s+)?(?:when|if|where|unless|(?:to|for)\s+(?:r
 
 const strip = (s: string) => s.replace(/^[“"]|[”"]$/g, "").trim();
 
+/**
+ * "unless B" is NOT B. On its own ("show Q5 unless Q3 = No") the whole
+ * condition is negated; after a positive condition ("show Q5 when Q1 = Yes
+ * unless Q3 = No") it is an exception to it: (A) AND NOT (B). The second form
+ * used to hand "A unless B" to the parser, which failed on the word.
+ */
 function unlessFlip(sentence: string, expression: string): string {
+  const parts = expression.split(/\s+unless\s+/i);
+  if (parts.length === 2 && parts[0].trim() && parts[1].trim()) return `(${parts[0].trim()}) AND NOT (${parts[1].trim()})`;
   return /\bunless\s/i.test(sentence) && !/\b(?:when|if|where)\s/i.test(sentence) ? `NOT (${expression})` : expression;
 }
 
@@ -156,6 +164,10 @@ export function parseIntent(input: string): Intent {
   }
 
   /* ------------------------------------------------------- display logic */
+  /* "also show Q5 when …": an additional way in, OR'd with the logic Q5 already has */
+  if ((m = new RegExp(String.raw`^also\s+(?:show|display|ask|present|include|enable)\s+${OBJ}${WHEN}`, "i").exec(text))) {
+    return { kind: "display", target: strip(m[1]), action: "show", expression: unlessFlip(text, m[2]), combine: "or" };
+  }
   if ((m = new RegExp(String.raw`^(?:only\s+)?(?:show|display|ask|present|include|enable)\s+${OBJ}${WHEN}`, "i").exec(text))) {
     return { kind: "display", target: strip(m[1]), action: "show", expression: unlessFlip(text, m[2]) };
   }

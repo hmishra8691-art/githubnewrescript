@@ -205,10 +205,14 @@ test("what is not an option value is left alone: a grid read without a row, and 
   // one row of it is: "Good" is 2
   const row = canonicalizeCondition(d, { type: "rule", source: { kind: "question", ref: "qg", rowCode: "r1" }, operator: "eq", value: "Good" } as never);
   assert.equal((row.condition as { value: unknown }).value, 2);
-  // a rule-shaped object inside the look of the survey (ux / branding / meta) is not survey logic
+  // a rule-shaped object inside the look of the survey (branding / meta) is not survey logic…
   const lookalike = { type: "rule", source: { kind: "question", ref: "qs" }, operator: "eq", value: "Yes" };
-  const withLook = { ...structuredClone(d), meta: { ...d.meta, note: lookalike }, ux: { styles: [], animations: [], behaviors: [{ when: lookalike }] }, branding: { ...(d.branding ?? {}), note: lookalike } } as unknown as SurveyDefinition;
+  const withLook = { ...structuredClone(d), meta: { ...d.meta, note: lookalike }, branding: { ...(d.branding ?? {}), note: lookalike } } as unknown as SurveyDefinition;
   const rep = canonicalizeSurveyConditions(withLook);
   assert.deepEqual(rep.changes, []);
   assert.deepEqual(rep.def, withLook);
+  // …but a UX behaviour's `when` IS: it decides when the behaviour fires, against answers, so it holds codes
+  const withGuard = { ...structuredClone(d), ux: { styles: [], animations: [], behaviors: [{ id: "b", label: "b", target: { kind: "question", questionId: "qs" }, effects: [], when: lookalike }] } } as unknown as SurveyDefinition;
+  const g = canonicalizeSurveyConditions(withGuard);
+  assert.equal((g.def.ux!.behaviors[0].when as { value: unknown }).value, 1);
 });

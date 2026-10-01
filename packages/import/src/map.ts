@@ -1,5 +1,5 @@
 import { SurveyDefinition, type Condition, type FlowNode, type Question, type ImportMapEntry, type Quota } from "@rescript/schema";
-import { runQualityCheck, listBlocks } from "@rescript/engine";
+import { runQualityCheck, listBlocks, constantCondition } from "@rescript/engine";
 import type {
   CanonicalSurvey, CanonicalQuestion, CanonicalOption, CExpr, CFlow, CSkipTarget, Issue, CanonicalKind, CanonicalEmbeddedField,
 } from "./canonical.js";
@@ -242,7 +242,12 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
     if (!e) return null;
     if (exprHasRaw(e)) return null; // the adapter already reported the unreadable part; half a condition is not the condition
     const walk = (x: CExpr): Condition | null => {
-      if (x.t === "const") return x.value ? { type: "group", op: "and", children: [] } as Condition : { type: "group", op: "not", children: [{ type: "group", op: "and", children: [] }] } as Condition;
+      /* A constant is written as a real rule (`1 = 1` / `0 = 1`), not as an
+       * empty group: empty groups are VACUOUS (skipped by the evaluator), so
+       * NOT(empty) read as true — an "always false" branch (Qualtrics blocks
+       * not in the flow) showed to everyone — and an "always" skip or
+       * terminate would read as "not configured yet". */
+      if (x.t === "const") return constantCondition(x.value);
       if (x.t === "group") { const kids = x.children.map(walk); if (kids.some((k) => !k)) return null; return { type: "group", op: x.op, children: kids as Condition[] } as Condition; }
       if (x.t === "raw") return null;
       const r = x.ref;

@@ -1,5 +1,5 @@
 import type { Condition, ConditionRule, Question, SurveyDefinition } from "@rescript/schema";
-import { isOptionValueRef, isQuestionValueRef } from "@rescript/schema";
+import { isOptionValueRef, isQuestionValueRef, effectiveResponseModel } from "@rescript/schema";
 import type { LoopContext, ResponseState } from "./state.js";
 import { interviewText, isInterviewAnswer } from "./interview.js";
 import { findLoopScope, getQuestionByCodeOrVar, lookupAnswer, loopValue } from "./state.js";
@@ -64,6 +64,41 @@ export interface EvalTrace {
   operator: string;
   right: unknown;
 }
+
+/* ------------------------------------------------------------ cell sets
+ *
+ * A GRID READ WITHOUT ONE CELL IS A SET OF CELLS.
+ *
+ * "Q2 row Item 1, any column, > 23" on a numeric matrix reads that row's
+ * `{ c1: 30, c2: 4 }`; "Q2 column Amount" with no row reads that column down
+ * every row; "Q8 > 6" on a constant sum reads `{ 1: 10, 2: 5, … }`. Each of
+ * those is several values, and every one of them used to reach the
+ * comparison as a single thing — an object, or an array — so `> 23` was
+ * `Number({…}) > 23`, false for every respondent, and the builder offered the
+ * rule anyway (the 30-09 report: "Row > 25 does not work unless I select a
+ * column").
+ *
+ * The rule now reads the way it is written and the way the builder words it
+ * ("any col"): a value comparison holds when ANY cell satisfies it, and its
+ * negation (≠, not in, not contains, not between) holds when NO cell does —
+ * the same existential reading `selected` / `contains` always had on lists.
+ * Only reads that really are several cells are marked, so a multi-select's
+ * own answer array and every scalar answer behave exactly as before.
+ */
+const CELL_SETS = new WeakSet<object>();
+const GRID_RECORDS = new WeakSet<object>();
+const cellSet = (cells: unknown[]): unknown[] => { CELL_SETS.add(cells); return cells; };
+const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+/** every non-empty leaf of a grid answer: rows → cells, a multi-select cell → its codes */
+function flattenCells(v: unknown, out: unknown[] = []): unknown[] {
+  if (v === null || v === undefined || v === "") return out;
+  if (Array.isArray(v)) { for (const x of v) flattenCells(x, out); return out; }
+  if (isRecord(v)) { for (const x of Object.values(v)) flattenCells(x, out); return out; }
+  out.push(v);
+  return out;
+}
+/** response models whose answer is a map of cells (grids, constant sum, field lists) */
+const GRID_MODELS = new Set(["per_row", "cells", "allocation", "fields"]);
 
 /** The code at a FIRST / LAST / 0-based-index position, or undefined past either end. */
 function codeAtPosition(
@@ -220,10 +255,15 @@ export function resolveSourceValue(rule: ConditionRule, ctx: EvalContext): unkno
         if (rowCode != null) {
           const row = (val as Record<string, unknown>)[String(rowCode)];
           if (row !== undefined) {
-            val =
-              columnId != null && row && typeof row === "object" && !Array.isArray(row)
-                ? ((row as Record<string, unknown>)[columnId] as any) ?? null
-                : (row as any);
+            if (columnId != null && isRecord(row)) {
+              val = ((row as Record<string, unknown>)[columnId] as any) ?? null;
+            } else if (columnId == null && isRecord(row)) {
+              /* a row of a multi-column grid with no column named: that row's cells */
+              const cells = flattenCells(row);
+              val = (cells.length ? cellSet(cells) : null) as any;
+            } else {
+              val = row as any;
+            }
           } else {
             val = null;
           }
@@ -266,9 +306,11 @@ export function resolveSourceValue(rule: ConditionRule, ctx: EvalContext): unkno
               if (looseEq(row, columnId)) cells.push(row);
             }
           }
-          val = (cells.length > 0 ? cells : null) as any;
+          val = (cells.length > 0 ? cellSet(cells) : null) as any;
         }
       }
+      /* the whole map of a grid-like answer, read without a cell: marked so a value comparison reads its cells */
+      if (isRecord(val) && q && GRID_MODELS.has(effectiveResponseModel(q))) GRID_RECORDS.add(val);
       /*
        * AN INTERVIEW'S COMPARABLE VALUE IS ITS TRANSCRIPT.
        *
@@ -437,52 +479,26 @@ export function resolveComparisonValue(v: unknown, ctx: EvalContext): unknown {
   }
 }
 
-export function evaluateRule(rule: ConditionRule, ctx: EvalContext): boolean {
-  /*
-   * A NAMED EXPRESSION IS A CONDITION, NOT A VALUE (§34, §35).
-   *
-   * It is resolved here rather than in `resolveSourceValue` because what it
-   * produces is a yes/no answer, not something to compare — `IF IS_HIGH_VALUE`
-   * has no operator and needs none. An operator, if one is written, still
-   * applies: `IS_HIGH_VALUE = false` is a legitimate way to spell NOT.
-   */
-  if (rule.source.kind === "rule") {
-    const target = findNamedExpression(ctx.def, rule.source.ref);
-    /*
-     * A reference to an expression that has been deleted is FALSE, and false
-     * is the safe direction: a display rule that shows a question stops
-     * showing it, rather than showing it to everybody. `lintNamedExpressions`
-     * reports the dangling reference so it does not stay quietly false.
-     */
-    if (!target) return false;
-    if (resolving.includes(target.id)) {
-      /*
-       * Already inside this expression — a cycle. Returning false breaks it
-       * at the point of re-entry rather than recursing; the linter names the
-       * whole chain before deployment.
-       */
-      return false;
-    }
-    resolving.push(target.id);
-    let held: boolean;
-    try {
-      held = evaluateCondition(target.when, ctx);
-    } finally {
-      resolving.pop();
-    }
-    if (rule.operator === "eq" || rule.operator === "ne") {
-      const want = rule.value !== false && rule.value !== "false" && rule.value !== 0;
-      return rule.operator === "eq" ? held === want : held !== want;
-    }
-    return held;
-  }
+/**
+ * Value comparisons that read a set of cells existentially (see CELL_SETS):
+ * the operator to apply to each cell, and whether the rule is its negation.
+ */
+const EXISTENTIAL: Partial<Record<ConditionRule["operator"], { op: ConditionRule["operator"]; negated: boolean }>> = {
+  eq: { op: "eq", negated: false }, ne: { op: "eq", negated: true },
+  gt: { op: "gt", negated: false }, gte: { op: "gte", negated: false },
+  lt: { op: "lt", negated: false }, lte: { op: "lte", negated: false },
+  between: { op: "between", negated: false }, notBetween: { op: "between", negated: true },
+  in: { op: "in", negated: false }, notIn: { op: "in", negated: true },
+  contains: { op: "contains", negated: false }, notContains: { op: "contains", negated: true },
+  startsWith: { op: "startsWith", negated: false }, endsWith: { op: "endsWith", negated: false },
+  matches: { op: "matches", negated: false },
+  dateBefore: { op: "dateBefore", negated: false }, dateAfter: { op: "dateAfter", negated: false },
+  dateEquals: { op: "dateEquals", negated: false }, dateBetween: { op: "dateBetween", negated: false },
+};
 
-  const left = resolveSourceValue(rule, ctx);
-  const { operator } = rule;
-  const right = resolveComparisonValue(rule.value, ctx);
-  const right2 = resolveComparisonValue(rule.value2, ctx);
+/** One operator against one resolved left-hand value — the whole comparison vocabulary, in one place. */
+function applyOperator(operator: ConditionRule["operator"], left: unknown, right: unknown, right2: unknown): boolean {
   let result: boolean;
-
   switch (operator) {
     case "answered":
       result = !isEmpty(left);
@@ -665,6 +681,68 @@ export function evaluateRule(rule: ConditionRule, ctx: EvalContext): boolean {
       result = false;
   }
 
+  return result;
+}
+
+export function evaluateRule(rule: ConditionRule, ctx: EvalContext): boolean {
+  /*
+   * A NAMED EXPRESSION IS A CONDITION, NOT A VALUE (§34, §35).
+   *
+   * It is resolved here rather than in `resolveSourceValue` because what it
+   * produces is a yes/no answer, not something to compare — `IF IS_HIGH_VALUE`
+   * has no operator and needs none. An operator, if one is written, still
+   * applies: `IS_HIGH_VALUE = false` is a legitimate way to spell NOT.
+   */
+  if (rule.source.kind === "rule") {
+    const target = findNamedExpression(ctx.def, rule.source.ref);
+    /*
+     * A reference to an expression that has been deleted is FALSE, and false
+     * is the safe direction: a display rule that shows a question stops
+     * showing it, rather than showing it to everybody. `lintNamedExpressions`
+     * reports the dangling reference so it does not stay quietly false.
+     */
+    if (!target) return false;
+    if (resolving.includes(target.id)) {
+      /*
+       * Already inside this expression — a cycle. Returning false breaks it
+       * at the point of re-entry rather than recursing; the linter names the
+       * whole chain before deployment.
+       */
+      return false;
+    }
+    resolving.push(target.id);
+    let held: boolean;
+    try {
+      held = evaluateCondition(target.when, ctx);
+    } finally {
+      resolving.pop();
+    }
+    if (rule.operator === "eq" || rule.operator === "ne") {
+      const want = rule.value !== false && rule.value !== "false" && rule.value !== 0;
+      return rule.operator === "eq" ? held === want : held !== want;
+    }
+    return held;
+  }
+
+  const left = resolveSourceValue(rule, ctx);
+  const { operator } = rule;
+  const right = resolveComparisonValue(rule.value, ctx);
+  const right2 = resolveComparisonValue(rule.value2, ctx);
+  let result: boolean;
+  const ex = EXISTENTIAL[operator];
+  const cells = ex
+    ? Array.isArray(left) && CELL_SETS.has(left) ? left
+      : isRecord(left) && GRID_RECORDS.has(left) ? flattenCells(left)
+      : null
+    : null;
+  if (ex && cells) {
+    // several cells: any of them for a comparison, none of them for its negation
+    const any = cells.some((cell) => applyOperator(ex.op, cell, right, right2));
+    result = ex.negated ? !any : any;
+  } else {
+    result = applyOperator(operator, left, right, right2);
+  }
+
   ctx.trace?.push({
     rule: `${rule.source.ref}${rule.source.rowCode ? `[${rule.source.rowCode}]` : ""}${rule.source.columnId ? `.${rule.source.columnId}` : ""}`,
     result,
@@ -762,18 +840,52 @@ export function isVacuousCondition(c: Condition | undefined | null): boolean {
   return kids.length === 0 || kids.every((k) => isVacuousCondition(k));
 }
 
+/**
+ * For a TRIGGER — a condition whose holding makes something happen that
+ * would not happen without it (hide when, exclude when, move to top/bottom
+ * when, stop probing when). An absent trigger never fires; an EMPTY one
+ * (`{and: []}`, the builder's starting state, or what is left when every
+ * condition in it was deleted) is the same thing — "not configured" — and
+ * must not fire either.
+ *
+ * `evaluateCondition` reads an empty tree as TRUE, which is right for a GATE
+ * (show when / eligible when: no constraint). Used for a trigger it meant an
+ * unfinished "Hide when" removed the option for everyone, while the very
+ * same rule with `when` simply missing hid nothing.
+ */
+export function conditionFires(
+  condition: Condition | undefined | null,
+  ctx: EvalContext,
+): boolean {
+  return !isVacuousCondition(condition) && evaluateCondition(condition, ctx);
+}
+
 /** Evaluate any condition tree — arbitrary AND/OR/NOT nesting (req. §6). */
 export function evaluateCondition(
   condition: Condition | undefined | null,
   ctx: EvalContext,
 ): boolean {
+  return evaluateAt(condition, ctx, 0);
+}
+
+/**
+ * How deep a stored tree may nest before the evaluator stops descending. Far
+ * beyond anything a person writes (the builder and the linter warn long
+ * before it); it exists so a malformed definition cannot exhaust the stack
+ * and take the respondent's page down. Past it the subtree is false — the
+ * fail-closed direction every unresolvable rule already takes.
+ */
+export const MAX_CONDITION_DEPTH = 200;
+
+function evaluateAt(condition: Condition | undefined | null, ctx: EvalContext, depth: number): boolean {
   if (!condition) return true;
+  if (depth > MAX_CONDITION_DEPTH) return false;
   if (condition.type === "rule") return evaluateRule(condition, ctx);
   const { op } = condition;
   const children = (condition.children ?? []).filter((c) => !isVacuousCondition(c));
   if (!children.length) return true;
-  if (op === "and") return children.every((c) => evaluateCondition(c, ctx));
-  if (op === "or") return children.some((c) => evaluateCondition(c, ctx));
+  if (op === "and") return children.every((c) => evaluateAt(c, ctx, depth + 1));
+  if (op === "or") return children.some((c) => evaluateAt(c, ctx, depth + 1));
   /*
    * "not" means NONE of these are true.
    *
@@ -784,5 +896,5 @@ export function evaluateCondition(
    * promises; with a single child the two readings are identical, so only a
    * multi-child NOR group behaves differently from before.
    */
-  return !children.some((c) => evaluateCondition(c, ctx));
+  return !children.some((c) => evaluateAt(c, ctx, depth + 1));
 }

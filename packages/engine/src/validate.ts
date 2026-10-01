@@ -1,7 +1,7 @@
 import { uiText } from "./localization.js";
 import type { Question, ValidationRule, SurveyDefinition } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
-import { evaluateCondition } from "./evaluate.js";
+import { evaluateCondition, conditionFires } from "./evaluate.js";
 import { effectiveQuestion } from "./carryforward.js";
 import { answerKey, lookupAnswer } from "./state.js";
 import { selectedOtherCodes, otherTextFor, checkOtherText } from "./otherSpecify.js";
@@ -360,7 +360,8 @@ export function checkScalarRules(
          * rowCode/columnId), COUNT-based, and loop-scoped checks all work
          * here for free — nothing new to evaluate.
          */
-        if (rule.check && evaluateCondition(rule.check, ctx)) fail(ruleError(rule, "Invalid answer."));
+        // a trigger: an EMPTY check (the builder emptied) is unset, not "always invalid"
+        if (conditionFires(rule.check, ctx)) fail(ruleError(rule, "Invalid answer."));
         break;
       }
       default:

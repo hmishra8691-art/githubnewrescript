@@ -240,6 +240,9 @@ textarea.xe-input:focus { border-color: var(--accent); }
 }
 .lb-group.op-or { border-left-color: var(--amber); background: rgba(164,92,7,.04); }
 .lb-group.op-not { border-left-color: var(--red); background: rgba(208,43,43,.04); }
+.lb-root-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0 0 6px; }
+.lb-root-head .lb-root-op { width: auto; }
+.count-where { margin-top: 6px; padding: 6px 8px; border-left: 2px solid var(--border, #e5e7eb); }
 .lb-group-head {
   display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
   padding: 6px 9px; border-bottom: 1px solid var(--border);

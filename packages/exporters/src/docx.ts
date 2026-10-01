@@ -3,7 +3,7 @@ import {
   Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle, PageBreak,
   LevelFormat, convertInchesToTwip,
 } from "docx";
-import type { SurveyDefinition, Question, Option, ValidationRule } from "@rescript/schema";
+import type { Condition, SurveyDefinition, Question, Option, ValidationRule } from "@rescript/schema";
 import {
   conditionSummary, optionLogicSummary, listOperationSummary,
   formatSetExpression, setExpressionSummary,
@@ -168,7 +168,20 @@ function optionRows(q: Question, fields: ExportFields, def: SurveyDefinition): T
   return new Table({ columnWidths: widths, width: { size: widths.reduce((a, b) => a + b, 0), type: WidthType.DXA }, rows });
 }
 
-function validationText(r: ValidationRule): string {
+/**
+ * A validation rule as the spec reads it — INCLUDING its logic. A
+ * condition-kind rule printed only the word "condition", and a gated rule
+ * (`when`) printed as if it always applied; a reviewer could not check either.
+ */
+function validationText(r: ValidationRule, def?: SurveyDefinition): string {
+  const check = (r as { check?: Condition }).check;
+  const gate = (r as { when?: Condition }).when;
+  /* the stored `check` is the INVALID case — the engine fails the answer when it holds */
+  const own = r.kind === "condition" && def && check ? `Invalid when: ${conditionSummary(def, check)}` : validationTextBase(r);
+  return def && gate ? `${own} — only when ${conditionSummary(def, gate)}` : own;
+}
+
+function validationTextBase(r: ValidationRule): string {
   const v = r.value;
   const base =
     r.kind === "required" ? "Required"
@@ -248,7 +261,7 @@ function questionBlock(q: Question, def: SurveyDefinition, fields: ExportFields)
       if (c.responseType) bits.push(`(${c.responseType})`);
       if (fields.required && c.required) bits.push("· required");
       if (fields.validation && c.validation?.length) {
-        bits.push(`· ${c.validation.map((v: ValidationRule) => validationText(v)).join("; ")}`);
+        bits.push(`· ${c.validation.map((v: ValidationRule) => validationText(v, def)).join("; ")}`);
       }
       out.push(body(bits.join(" ")));
     }
@@ -256,7 +269,7 @@ function questionBlock(q: Question, def: SurveyDefinition, fields: ExportFields)
 
   if (fields.validation && q.validation?.length) {
     out.push(label("Validation"));
-    for (const r of q.validation) out.push(body(validationText(r)));
+    for (const r of q.validation) out.push(body(validationText(r, def)));
   }
 
   if (fields.displayLogic && q.displayLogic) {
@@ -422,8 +435,18 @@ function elementSection(e: any, def: SurveyDefinition, fields: ExportFields): (P
   }
   if (e.type === "embedded_data") {
     for (const f of e.node.fields ?? []) {
-      out.push(body(`  ${f.name} ← ${f.source}${f.value ? ` (${f.value})` : ""}`));
+      out.push(body(`  ${f.name} ← ${f.source}${f.value ? ` (${f.value})` : ""}${f.when && fields.branchLogic ? ` — only when ${conditionSummary(def, f.when)}` : ""}`));
     }
+  }
+  /* the conditions a flow element carries — they decide who goes through it */
+  if (fields.branchLogic) {
+    const conds: [string, Condition | undefined][] = e.type === "loop"
+      ? [["Iterate only items where", e.node.eligibleIf], ["Skip an iteration when", e.node.skipIf], ["Stop the loop when", e.node.breakIf], ["Treat an item as invalid when", e.node.invalidIf]]
+      : e.type === "randomizer" ? [["Only when", e.node.visibleIf]]
+      : e.type === "quota_check" ? [["Checked only when", e.node.when]]
+      : e.type === "redirect" ? [["Only when", e.node.when]]
+      : [];
+    for (const [label, c] of conds) if (c) out.push(body(`  ${label} ${conditionSummary(def, c)}`));
   }
   /*
    * THE REDIRECT URL. "End of survey — screened" says a respondent leaves;

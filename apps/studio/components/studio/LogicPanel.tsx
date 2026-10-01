@@ -409,7 +409,7 @@ function DeadRuleNotice() {
   if (!dead.length) return null;
   return (
     <div className="card" style={{ padding: 10, borderColor: "var(--amber)" }} data-testid="dr-dead">
-      <div className="flabel">THESE RULES CANNOT FIRE</div>
+      <div className="flabel">{dead.every((d) => /no condition/.test(d.reason)) ? "CHECK THESE RULES" : "THESE RULES CANNOT FIRE"}</div>
       {dead.map((d, i) => (
         <div key={`${d.rule.id}-${i}`} style={{ fontSize: 12.5 }}>
           <strong>{d.rule.label?.trim() || d.rule.id}</strong> {d.reason}

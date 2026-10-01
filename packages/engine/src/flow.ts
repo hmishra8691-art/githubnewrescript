@@ -1,4 +1,4 @@
-import type { FlowNode, SurveyDefinition, Question, SkipRule } from "@rescript/schema";
+import type { Condition, FlowNode, SurveyDefinition, Question, SkipRule } from "@rescript/schema";
 import { isServerResolvedExpression } from "./aiFunctions.js";
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition } from "./evaluate.js";
@@ -12,7 +12,8 @@ import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
 import { checkQuotas, type QuotaCounts } from "./quotas.js";
 import { applyEmbeddedField, type EmbeddedField } from "./embedded.js";
-import { prefillQuestions, maskingVariablesFor } from "./setExpression.js";
+import { prefillQuestions, maskingVariablesFor, applyPunches } from "./setExpression.js";
+import { questionDependencies } from "./dependencies.js";
 import { applyDefaultValues } from "./defaultValue.js";
 import { resolveUrlTemplate } from "./redirect.js";
 import { listFillHiddenDestinations } from "./listFill.js";
@@ -140,7 +141,23 @@ export function compileFlow(
            * is stable for the respondent. Outside a loop the suffix is empty
            * and the seed is exactly what it was.
            */
+          if (node.visibleIf && !evaluateCondition(node.visibleIf, ctxFor(loop))) break;
           const seed = subSeed(state.seed, `flow:${node.id}${loopKeySuffix(loop)}`);
+          /*
+           * "SHOW N OF M" PICKS FROM THE CHILDREN THAT CAN BE SHOWN. The slots
+           * were drawn from every child and only then did each child's own
+           * visibility apply — so a respondent for whom one concept was hidden
+           * by its condition saw N − 1 concepts, not N. A child whose own
+           * condition (or a display rule naming it) hides it now never takes
+           * a slot. A survey with no conditional children draws exactly as
+           * before.
+           */
+          const eligible = node.children.filter((c) => {
+            const v = (c as { visibleIf?: Condition }).visibleIf;
+            if (v && !evaluateCondition(v, ctxFor(loop))) return false;
+            if ((c.type === "page" || c.type === "block" || c.type === "section") && !containerVisibleByRules(def, c, ctxFor(loop))) return false;
+            return true;
+          });
           /*
            * EVEN PRESENTATION.
            *
@@ -165,11 +182,11 @@ export function compileFlow(
            * and belongs with the same machinery. This is the honest middle:
            * markedly more even than a shuffle, with no shared state.)
            */
-          let children = seededShuffle(node.children, seed);
+          let children = seededShuffle(eligible, seed);
           if (node.show != null && node.show < children.length) {
             if (node.evenPresentation) {
-              const offset = Math.abs(subSeed(state.seed, `even:${node.id}${loopKeySuffix(loop)}`)) % node.children.length;
-              const inOrder = node.children;
+              const offset = Math.abs(subSeed(state.seed, `even:${node.id}${loopKeySuffix(loop)}`)) % eligible.length;
+              const inOrder = eligible;
               children = Array.from({ length: node.show }, (_, i) => inOrder[(offset + i) % inOrder.length]);
               // the WINDOW is rotated for balance; the order within it is
               // still rolled, so position effects are not baked in
@@ -219,6 +236,8 @@ export function compileFlow(
           steps.push({ kind: "embedded_data", nodeId: node.id, fields: node.fields });
           break;
         case "quota_check":
+          // a check with a condition only applies to the respondents it names
+          if (node.when && !evaluateCondition(node.when, ctxFor(loop))) break;
           steps.push({ kind: "quota_check", nodeId: node.id, quotaIds: node.quotaIds, onFull: node.onFull });
           break;
         case "redirect":
@@ -543,7 +562,11 @@ function moveForward(
     }
     if (s.kind === "embedded_data") {
       // one typed capture per field: source → default → declared type
-      for (const f of s.fields) applyEmbeddedField(def, state, f);
+      for (const f of s.fields) {
+        // a field with a `when` is captured only while it holds — "store SOURCE = panel only for panel respondents"
+        if (f.when && !evaluateCondition(f.when, { def, state, loop: null, quotaCounts })) continue;
+        applyEmbeddedField(def, state, f);
+      }
       idx++; continue;
     }
     if (s.kind === "quota_check") {
@@ -784,4 +807,61 @@ export function punchDerivedQuestions(def: SurveyDefinition, state: ResponseStat
   const derived = def.questions.filter((q) => q.punches?.length && (q.type === "hidden" || q.type === "calculated" || q.settings?.hidden));
   if (!derived.length) return [];
   return prefillQuestions(derived, { def, state, loop: null, quotaCounts }, (q) => answerKey(q.id, null));
+}
+
+
+const isDerivedQuestion = (q: Question) => q.type === "hidden" || q.type === "calculated" || !!q.settings?.hidden;
+
+/**
+ * A SAME-PAGE ANSWER CHANGE, AND EVERYTHING DOWNSTREAM OF IT.
+ *
+ * "Q32 is 2–3 → SEGMENT (hidden) = Medium" and "SEGMENT = Medium → punch
+ * Q33.Medium", with Q32 and Q33 on one page: the respondent types 2 and
+ * Medium must be ticked. The page handler recomputed only the punches of
+ * questions ON THE PAGE that read the answered question DIRECTLY — the hidden
+ * SEGMENT is not on the page and Q33 does not read Q32, so nothing happened
+ * until the next page arrival (the 30-09 report: the option shows, by display
+ * logic, but is never punched).
+ *
+ * Now a change propagates: every punched question — the page's, and every
+ * derived (hidden / calculated) question in the survey — whose dependencies
+ * include something that just changed is recomputed, and anything whose
+ * answer that changes becomes a change in turn, until nothing moves. The
+ * number of passes is bounded by the number of punched questions, so a cycle
+ * the linter would have reported cannot spin.
+ *
+ * Returns the questions whose answer it changed.
+ */
+export function recomputePunchesAfterChange(
+  def: SurveyDefinition,
+  state: ResponseState,
+  changedId: string,
+  pageQuestions: Question[],
+  ctx: EvalContext,
+  pageLoop: LoopContext | null = null,
+): string[] {
+  const onPage = new Set(pageQuestions.map((q) => q.id));
+  const candidates = [
+    ...pageQuestions.filter((q) => q.punches?.length),
+    ...def.questions.filter((q) => q.punches?.length && isDerivedQuestion(q) && !onPage.has(q.id)),
+  ];
+  if (!candidates.length) return [];
+  const deps = new Map(candidates.map((q) => [q.id, questionDependencies(def, q)]));
+  const touched: string[] = [];
+  let changed = new Set([changedId]);
+  for (let pass = 0; pass <= candidates.length && changed.size; pass++) {
+    const next = new Set<string>();
+    for (const q of candidates) {
+      if (q.id === changedId) continue; // never re-punch the answer the respondent is giving
+      const d = deps.get(q.id)!;
+      if (![...changed].some((id) => d.has(id))) continue;
+      const loop = onPage.has(q.id) ? pageLoop : null;
+      const key = answerKey(q.id, loop);
+      const before = JSON.stringify(state.answers[key] ?? null);
+      applyPunches(q, onPage.has(q.id) ? ctx : { ...ctx, loop: null }, (qq) => answerKey(qq.id, loop));
+      if (JSON.stringify(state.answers[key] ?? null) !== before) { next.add(q.id); touched.push(q.id); }
+    }
+    changed = next;
+  }
+  return [...new Set(touched)];
 }

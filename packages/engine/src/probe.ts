@@ -1,7 +1,7 @@
 import type { SurveyDefinition, Question, ProbeConfig } from "@rescript/schema";
 import { interviewText } from "./interview.js";
 import type { ResponseState } from "./state.js";
-import { evaluateCondition, type EvalContext } from "./evaluate.js";
+import { evaluateCondition, conditionFires, type EvalContext } from "./evaluate.js";
 import { resolvePiping } from "./piping.js";
 
 /**
@@ -100,7 +100,7 @@ export function nextProbe(q: Question, ctx: EvalContext, probe: ProbeConfig | nu
   const asked = probeTranscript(ctx.state, q.id);
   if (asked.length >= p.maxProbes) return null;
   if (p.when && !evaluateCondition(p.when, ctx)) return null;
-  if (p.stopWhen && evaluateCondition(p.stopWhen, ctx)) return null;
+  if (conditionFires(p.stopWhen, ctx)) return null; // an empty "stop when" is unset, not "always stop"
   return asked.length + 1;
 }
 

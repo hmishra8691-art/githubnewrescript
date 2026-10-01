@@ -74,6 +74,14 @@ const ID_LIST_KEYS = new Set(["questionIds", "sourceQuestionIds", "excludeQuesti
 const REQUIRED_CHILD = new Set([
   "when", "visibleIf", "stopWhen", "where", "check", "condition",
   "expr", "source", "sources", "left", "right", "of", "target", "logic",
+  /*
+   * A COUNT is the whole meaning of its rule (`COUNT(Q1, matching where …) >= 2`)
+   * and a right-hand question reference is half of it (`Q5 > Q2`). Losing
+   * either used to delete just that piece — the count's spec went and the
+   * rule became a plain comparison of Q1 against 2; the right-hand side went
+   * and the rule compared against nothing. Both now take the rule with them.
+   */
+  "count", "value", "value2",
 ]);
 
 /** Keys that are cleared rather than cascaded, with the consequence named. */
@@ -228,6 +236,8 @@ function walkFields(node: any, ctx: Ctx, path: string, protect: boolean): boolea
    */
   if (typeof node.ref === "string" && node.kind !== "embedded" && node.kind !== "calc"
     && ctx.names.has(node.ref)) return true;
+  /* the right-hand side of a cross-question comparison: `{ $question: "Q2" }` */
+  if (typeof node.$question === "string" && ctx.names.has(node.$question)) return true;
 
   for (const key of Object.keys(node)) {
     const child = node[key];
@@ -265,6 +275,22 @@ function walkFields(node: any, ctx: Ctx, path: string, protect: boolean): boolea
         ctx.out.push({
           where: `${ctx.owner} — ${WORDS[key] ?? ctx.field ?? key}`, path: `${path}.${key}`, kind: "removed",
           effect: `${before - child.length} removed`,
+        });
+      }
+      /*
+       * PART OF A CONDITION WENT, AND THE REST STAYS. Taking one rule out of
+       * an AND makes the logic broader; out of an OR, narrower; out of a NOT,
+       * it changes what is excluded. That is the right thing to keep — the
+       * other rules still mean what they say — but it is a change to the
+       * survey's logic, and it was reported as nothing at all ("nothing
+       * refers to Q2"). Now it is named, with the operator, so the person
+       * deleting can check what the logic does now.
+       */
+      if (child.length !== before && child.length > 0 && CONDITION_PARTS.has(key)) {
+        const op = typeof node.op === "string" ? String(node.op).toUpperCase() : "";
+        ctx.out.push({
+          where: `${ctx.owner} — ${ctx.field ?? "logic"}`, path: `${path}.${key}`, kind: "removed",
+          effect: `${before - child.length} condition${before - child.length === 1 ? "" : "s"} taken out of ${op ? `an ${op} group` : "the logic"}; the rest is kept — check it still means what you intend`,
         });
       }
       /*

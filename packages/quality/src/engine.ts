@@ -1,6 +1,6 @@
 import type { QualityConfig, QualityClass, Severity, Strictness, SurveyDefinition } from "@rescript/schema";
 import { QualityConfig as QualityConfigSchema } from "@rescript/schema";
-import { evaluateCondition } from "@rescript/engine";
+import { conditionFires } from "@rescript/engine";
 import type {
   Benchmarks, FlagDraft, HistoryRecord, PeerRecord, QualityAssessment, QualityInput, ResponseRecord, ResponseTelemetry,
   RuleContext, SystemVars,
@@ -237,7 +237,8 @@ function customRules(ctx: RuleContext, sys: SystemVars): { drafts: FlagDraft[]; 
   for (const rule of ctx.config.customRules) {
     if (!rule.enabled) continue;
     let fired = false;
-    try { fired = evaluateCondition(rule.when, ectx); } catch { fired = false; }
+    // conditionFires: a rule whose condition is still empty flags nobody (it used to flag every respondent)
+    try { fired = conditionFires(rule.when, ectx); } catch { fired = false; }
     if (!fired) continue;
     drafts.push({
       ruleId: `custom.${rule.id}`,

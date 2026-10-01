@@ -2,6 +2,7 @@ import type { SurveyDefinition, CustomScript } from "@rescript/schema";
 import type { ResponseState, LoopContext } from "./state.js";
 import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
+import { evaluateCondition } from "./evaluate.js";
 import { resolvePiping } from "./piping.js";
 import { answerKey, findLoopScope, getQuestionByCodeOrVar, lookupAnswer, loopDepth, loopValue } from "./state.js";
 import { loopContexts, loopNodes } from "./loops.js";
@@ -325,6 +326,8 @@ export function runScripts(
   for (const script of def.scripts) {
     if (!script.enabled || script.event !== event) continue;
     if (script.scope === "survey" ? opts?.only === "scoped" : script.ref !== opts?.scopeRef) continue;
+    // the script's guard: an ordinary condition, any nesting, against the answers as they are now
+    if (script.when && !evaluateCondition(script.when, { def, state, loop: opts?.loop ?? null })) continue;
     const own: ScriptRunResult = { logs: [], errors: [] };
     const ctx = createScriptCtx(def, state, opts?.loop ?? null, own);
     const r = runScript(script.code, ctx, own);

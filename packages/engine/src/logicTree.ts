@@ -324,19 +324,44 @@ export function groupSelection(
  * removing a bracket does.
  */
 export function ungroupAt(root: ConditionGroup, path: LogicPath): ConditionGroup {
-  if (path.length === 0) return root; // the root list is not a bracket
-  const node = getAt(root, path);
-  if (!node || !isGroup(node)) return root;
+  if (!canUngroup(root, path)) return root;
+  const node = getAt(root, path) as ConditionGroup;
   const pPath = parentPath(path);
-  const parent = getAt(root, pPath);
-  if (!parent || !isGroup(parent)) return root;
+  const parent = getAt(root, pPath) as ConditionGroup;
   const at = indexIn(path);
+  /*
+   * A NOT group is not a bracket — it negates. "None of (A, B)" inside an AND
+   * is exactly "not A AND not B", so its children move up EACH WITH ITS OWN
+   * NOT. Splicing them in bare (what this did) turned "not A" into "A": the
+   * one ungroup that silently inverted the logic instead of just reshaping it.
+   */
+  const moved = node.op === "not"
+    ? node.children.map((ch): Condition => ({ type: "group", op: "not", children: [ch] }))
+    : node.children;
   const children = [
     ...parent.children.slice(0, at),
-    ...node.children,
+    ...moved,
     ...parent.children.slice(at + 1),
   ];
   return replaceAt(root, pPath, { ...parent, children });
+}
+
+/**
+ * Can this group be dissolved without the result meaning something else for a
+ * reason the programmer cannot see? Removing brackets around an OR inside an
+ * AND visibly changes the logic, and is allowed — that is what ungrouping is.
+ * A NOT group can only be dissolved into an AND (as one NOT per child); inside
+ * an OR or another NOT there is no equivalent flat form, so the action is not
+ * offered rather than quietly flipping what the logic excludes.
+ */
+export function canUngroup(root: ConditionGroup, path: LogicPath): boolean {
+  if (path.length === 0) return false; // the root list is not a bracket
+  const node = getAt(root, path);
+  if (!node || !isGroup(node)) return false;
+  const parent = getAt(root, parentPath(path));
+  if (!parent || !isGroup(parent)) return false;
+  if (node.op === "not") return parent.op === "and";
+  return true;
 }
 
 /* ---------------------------------------------------------- describing */

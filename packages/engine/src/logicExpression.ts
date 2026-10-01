@@ -9,6 +9,8 @@ import { isQuestionValueRef } from "@rescript/schema";
 import { CALC_FUNCTION_NAMES } from "./calc.js";
 import { embeddedCatalog } from "./embedded.js";
 import { canonicalizeCondition, normalizeOptionText } from "./optionCodes.js";
+import { stripVacuous } from "./conditionWalk.js";
+import { gridAxes } from "./gridAxes.js";
 
 /**
  * The logic expression language: text in, canonical tree out, and back again.
@@ -63,7 +65,20 @@ interface Tok { kind: TokKind; text: string; pos: number }
  * "=". The arithmetic four are here so an expression like `Q5 + Q6 > 100` can
  * tokenize at all — before this they were "Unexpected character".
  */
-const PUNCT = [">=", "<=", "!=", "==", "(", ")", "[", "]", ",", "=", ">", "<", "+", "-", "*", "/", "%"];
+const PUNCT = ["&&", "||", "<>", ">=", "<=", "!=", "==", "(", ")", "[", "]", ",", "=", ">", "<", "+", "-", "*", "/", "%", "!"];
+
+/*
+ * The programmer's spellings of the three connectives and of "not equal":
+ * `A && B`, `A || B`, `!A`, `Q1 <> 2`. They used to be "Unexpected character";
+ * they are read as the words AND / OR / NOT and as `!=`, so everything after
+ * the tokenizer sees one vocabulary.
+ */
+const PUNCT_ALIASES: Record<string, Tok> = {
+  "&&": { kind: "ident", text: "and", pos: 0 },
+  "||": { kind: "ident", text: "or", pos: 0 },
+  "!": { kind: "ident", text: "not", pos: 0 },
+  "<>": { kind: "punct", text: "!=", pos: 0 },
+};
 
 function tokenize(src: string): { tokens: Tok[]; error?: ExpressionError } {
   const tokens: Tok[] = [];
@@ -84,7 +99,8 @@ function tokenize(src: string): { tokens: Tok[]; error?: ExpressionError } {
 
     const punct = PUNCT.find((p) => src.startsWith(p, i));
     if (punct) {
-      tokens.push({ kind: "punct", text: punct, pos: i });
+      const alias = PUNCT_ALIASES[punct];
+      tokens.push(alias ? { ...alias, pos: i } : { kind: "punct", text: punct, pos: i });
       i += punct.length;
       continue;
     }
@@ -306,6 +322,14 @@ export function parseLogicExpression(
   if (tokens.length === 0) return { errors: [], warnings };
 
   let at = 0;
+  /** inside a COUNT's `where ( … )`, where the counted item is `@option` */
+  let countWhereDepth = 0;
+  /**
+   * How deep brackets may nest. Far past anything a person writes; it exists so
+   * pasted or generated text cannot recurse the parser into a stack overflow.
+   */
+  const MAX_DEPTH = 64;
+  let depth = 0;
   /** Groups that came from brackets the programmer typed, not from precedence. */
   const bracketed = new WeakSet<object>();
   const peek = (k = 0): Tok | undefined => tokens[at + k];
@@ -392,6 +416,25 @@ export function parseLogicExpression(
         const v = readOperand();
         if (word === "group") spec.group = String(v);
         else spec[word === "only" ? "only" : "responseIn"] = Array.isArray(v) ? v : [v];
+      } else if (word === "where") {
+        /*
+         * `COUNT(Q1, matching, where (@option.value > 3))` — the condition each
+         * counted item must meet, with that item in scope as `@option`. The
+         * brackets are required, so the condition's own commas and ANDs can
+         * never be mistaken for the next COUNT argument.
+         */
+        at += 1;
+        const open = peek();
+        if (!open || open.kind !== "punct" || open.text !== "(") fail("COUNT … where needs its condition in brackets — where (@option.value > 3)", t!.pos);
+        at += 1;
+        countWhereDepth += 1;
+        let inner: Condition;
+        try { inner = parseOr(); } finally { countWhereDepth -= 1; }
+        const close = peek();
+        if (!close || close.kind !== "punct" || close.text !== ")") fail("COUNT … where ( … has no closing bracket", open!.pos);
+        at += 1;
+        /* a narrowing of whatever is counted — `of` stays as written (selected by default) */
+        spec.where = inner;
       } else {
         fail(`COUNT does not understand “${t!.text}”`, t!.pos);
       }
@@ -529,7 +572,7 @@ export function parseLogicExpression(
       return { source: { kind: "quota", ref: segments.slice(1).join(".") }, segments };
     }
     if (ns === "@option" || ns === "option") {
-      if (!opts.perOption) {
+      if (!opts.perOption && countWhereDepth === 0) {
         fail("“@option” can only be used in option-level logic", tok!.pos);
       }
       return { source: { kind: "option", ref: segments[1] ?? "code" }, segments };
@@ -544,10 +587,33 @@ export function parseLogicExpression(
     }
     const source: DraftSource = { kind: "question", ref: q!.id };
 
-    if (segments.length > 1) {
+    /*
+     * `Q2.$first`, `Q2.$last`, `Q2.$3` — the row (or, on a list without rows,
+     * the option) at a POSITION of the question's effective list: "the first
+     * carried-forward row". The model has always had `rowPosition` /
+     * `optionPosition`; the text could not say them, so the expression editor
+     * silently dropped them on every round trip.
+     */
+    const position = (seg: string | undefined): "first" | "last" | number | null => {
+      const m = /^\$(first|last|\d+)$/i.exec(seg ?? "");
+      if (!m) return null;
+      return /^\d+$/.test(m[1]) ? Number(m[1]) - 1 : (m[1].toLowerCase() as "first" | "last");
+    };
+    const pos2 = position(segments[1]);
+    if (segments.length > 1 && pos2 !== null) {
+      if ((q!.rows?.length ?? 0) > 0) source.rowPosition = pos2;
+      else source.optionPosition = pos2;
+    } else if (segments.length > 1) {
       const second = resolveRowOrOption(q!, segments[1]);
       if (!second) fail(`${head} has no “${segments[1]}”`, tok!.pos);
-      if (second.kind === "row") source.rowCode = String(second.code);
+      /*
+       * A CONSTANT SUM stores one number per option (`{ "1": 4, "2": 6 }`), so
+       * `Q8.1` names that option's AMOUNT — a cell, addressed the way a grid
+       * row is — not "option 1 is selected". Read as the latter, `Q8.1 < 6`
+       * kept only `Q8 < 6`: the option was dropped and the rule compared the
+       * whole allocation (Prince 44).
+       */
+      if (second.kind === "row" || isAllocation(q!)) source.rowCode = String(second.code);
       else source.optionCode = String(second.code);
     }
     if (segments.length > 2) {
@@ -613,12 +679,36 @@ export function parseLogicExpression(
      * behaviour that changes is the one that was previously always wrong.
      */
     if (t!.kind === "ident") {
+      /* `COUNT(Q6)` on the right: how many codes Q6 holds */
+      if (COUNT_FUNCTIONS.has(t!.text.toLowerCase()) && peek()?.kind === "punct" && peek()!.text === "(") {
+        at += 1;
+        const inner = peek();
+        const cq = inner?.kind === "ident" ? getQuestionByCodeOrVar(def, inner.text) : undefined;
+        if (!cq) fail("COUNT( on the right-hand side needs a question", inner?.pos ?? t!.pos);
+        at += 1;
+        const close = peek();
+        if (!close || close.kind !== "punct" || close.text !== ")") fail("COUNT( … has no closing bracket", t!.pos);
+        at += 1;
+        return { $question: cq!.code, read: "count" };
+      }
       const segments = t!.text.split(".").filter(Boolean);
       const q = getQuestionByCodeOrVar(def, segments[0]);
       if (q && !RESERVED_OPERAND_WORDS.has(t!.text.toLowerCase())) {
-        return segments.length > 1
-          ? { $question: segments[0], rowCode: segments[1], columnId: segments[2] }
-          : { $question: segments[0] };
+        if (segments.length === 1) return { $question: segments[0] };
+        /*
+         * The right-hand row and column are RESOLVED, exactly as on the left:
+         * `Q6.R1` is the row coded 1 (or the first row), not a row literally
+         * named "R1" — which is what was stored, and which never matched.
+         */
+        const row = resolveRowOrOption(q, segments[1]);
+        if (!row || (row.kind !== "row" && !isAllocation(q))) fail(`${segments[0]} has no row “${segments[1]}”`, t!.pos);
+        const ref: Record<string, unknown> = { $question: segments[0], rowCode: String(row!.code) };
+        if (segments.length > 2) {
+          const col = resolveColumnOrOption(q, segments[2]);
+          if (!col) fail(`${segments.slice(0, 2).join(".")} has no “${segments[2]}”`, t!.pos);
+          ref.columnId = String(col!.code);
+        }
+        return ref;
       }
     }
     return t!.text;
@@ -688,7 +778,10 @@ export function parseLogicExpression(
 
     if (t!.kind === "punct" && t!.text === "(") {
       at += 1;
-      const inner = parseOr();
+      depth += 1;
+      if (depth > MAX_DEPTH) fail(`Brackets nest more than ${MAX_DEPTH} deep`, t!.pos);
+      let inner: Condition;
+      try { inner = parseOr(); } finally { depth -= 1; }
       const close = peek();
       if (!close || close.kind !== "punct" || close.text !== ")") {
         fail("Missing closing parenthesis", t!.pos);
@@ -766,15 +859,25 @@ export function parseLogicExpression(
   const parseNot = (): Condition => {
     if (isWord(peek(), "not")) {
       at += 1;
-      const inner = parseNot();
-      return { type: "group", op: "not", children: [inner] };
+      depth += 1;
+      if (depth > MAX_DEPTH) fail(`NOT nests more than ${MAX_DEPTH} deep`);
+      try {
+        const inner = parseNot();
+        return { type: "group", op: "not", children: [inner] };
+      } finally { depth -= 1; }
     }
     return parsePrimary();
   };
 
   const parseAnd = (): Condition => {
     const parts = [parseNot()];
-    while (isWord(peek(), "and")) {
+    /*
+     * `A BUT NOT B` is how a spec writes `A AND NOT B` ("Q2.1 BUT NOT Q2.2",
+     * 29-09 #3) — the document importer already read it; the expression box
+     * stopped at BUT. Only BUT NOT: a bare BUT would invite guessing.
+     */
+    while (isWord(peek(), "and") || (isWord(peek(), "but") && isWord(peek(1), "not"))) {
+      if (isWord(peek(), "but")) { at += 1; parts.push(parseNot()); continue; }
       at += 1;
       if (!peek()) fail("Expression ends with AND — expected another condition");
       parts.push(parseNot());
@@ -865,6 +968,11 @@ const positional = (token: string, prefix: string): number | null => {
 };
 
 /** The second segment: a row when the question has rows, else an option. */
+/** a constant sum / allocation: one amount per option, keyed by option code */
+function isAllocation(q: Question): boolean {
+  return gridAxes(q).rowLabel === "option";
+}
+
 export function resolveRowOrOption(q: Question, token: string): Resolved | null {
   const byRow = q.rows.find((r) => String(r.code) === token);
   if (byRow) return { kind: "row", code: byRow.code };
@@ -939,16 +1047,19 @@ function countText(def: SurveyDefinition, source: ConditionRule["source"]): stri
   const spec = source.count!;
   const q = getQuestionByCodeOrVar(def, source.ref);
   const args: string[] = [q?.code ?? source.ref];
+  // `matching` is what a `where` implies; it is printed only when there is no where to imply it
   if (spec.of !== "selected") args.push(spec.of);
   if (spec.scope !== "options") args.push(spec.scope);
-  if (spec.only?.length) args.push(`only [${spec.only.map(operandText).join(", ")}]`);
+  if (spec.only?.length) args.push(`only [${spec.only.map((x) => operandText(x)).join(", ")}]`);
   if (spec.group) args.push(`group ${operandText(spec.group)}`);
-  if (spec.responseIn?.length) args.push(`answering [${spec.responseIn.map(operandText).join(", ")}]`);
+  if (spec.responseIn?.length) args.push(`answering [${spec.responseIn.map((x) => operandText(x)).join(", ")}]`);
+  /* the condition each counted item meets — always bracketed, so it re-parses as one argument */
+  if (spec.where && stripVacuous(spec.where)) args.push(`where (${formatCondition(def, spec.where)})`);
   return `COUNT(${args.join(", ")})`;
 }
 
-function operandText(v: unknown): string {
-  if (Array.isArray(v)) return `[${v.map(operandText).join(", ")}]`;
+function operandText(v: unknown, def?: SurveyDefinition): string {
+  if (Array.isArray(v)) return `[${v.map((x) => operandText(x, def)).join(", ")}]`;
   if (typeof v === "number") return String(v);
   /*
    * A question reference on the right prints as the question's name, exactly
@@ -957,7 +1068,10 @@ function operandText(v: unknown): string {
    * promotes that same bare word straight back to a reference.
    */
   if (isQuestionValueRef(v)) {
-    return [v.$question, v.rowCode, v.columnId].filter(Boolean).join(".");
+    if (v.read === "count") return `COUNT(${v.$question})`;
+    const rq = def ? getQuestionByCodeOrVar(def, v.$question) : undefined;
+    const rowPrefix = rq && isAllocation(rq) ? "O" : "R";
+    return [v.$question, v.rowCode != null ? codeToken(v.rowCode, rowPrefix) : null, v.columnId != null ? codeToken(v.columnId, "C") : null].filter(Boolean).join(".");
   }
   const s = String(v ?? "");
   if (s === "") return '""';
@@ -996,9 +1110,15 @@ function referenceText(def: SurveyDefinition, rule: ConditionRule): string {
 
   const q = getQuestionByCodeOrVar(def, source.ref);
   let out = q?.code ?? source.ref;
+  const posText = (p: "first" | "last" | number) => (typeof p === "number" ? `$${p + 1}` : `$${p}`);
   if (source.rowCode != null) {
     const row = q?.rows.find((r) => String(r.code) === String(source.rowCode));
-    out += `.${codeToken(row?.code ?? source.rowCode, "R")}`;
+    /* a constant sum's cell is an OPTION's amount: `Q8.O1`, which re-parses to the same cell */
+    out += `.${codeToken(row?.code ?? source.rowCode, q && !row && isAllocation(q) ? "O" : "R")}`;
+  } else if (source.rowPosition != null) {
+    out += `.${posText(source.rowPosition)}`;
+  } else if (source.optionPosition != null && source.columnId == null) {
+    out += `.${posText(source.optionPosition)}`;
   }
   if (source.columnId != null) {
     const col = q?.columns.find((c) => c.id === source.columnId);
@@ -1055,13 +1175,13 @@ function ruleText(def: SurveyDefinition, rule: ConditionRule): string {
 
   if (NO_OPERAND.includes(operator)) return `${ref} ${OPERATOR_SPELLING(operator)}`;
   if (TWO_OPERANDS.includes(operator)) {
-    return `${ref} ${OPERATOR_SPELLING(operator)} ${operandText(value)} and ${operandText(value2)}`;
+    return `${ref} ${OPERATOR_SPELLING(operator)} ${operandText(value, def)} and ${operandText(value2, def)}`;
   }
   if (LIST_OPERAND.includes(operator)) {
     const list = Array.isArray(value) ? value : [value];
-    return `${ref} ${OPERATOR_SPELLING(operator)} ${operandText(list)}`;
+    return `${ref} ${OPERATOR_SPELLING(operator)} ${operandText(list, def)}`;
   }
-  return `${ref} ${OPERATOR_SPELLING(operator)} ${operandText(value)}`;
+  return `${ref} ${OPERATOR_SPELLING(operator)} ${operandText(value, def)}`;
 }
 
 export interface FormatOptions {
@@ -1082,7 +1202,15 @@ export function formatCondition(
   c: Condition | undefined | null,
   opts: FormatOptions = {},
 ): string {
-  if (!c) return "";
+  /*
+   * An empty group is no constraint (the evaluator skips it), so it is not
+   * printed either. It used to be rendered as nothing and then JOINED — `Q2 =
+   * 1 AND `, `NOT `, `NOT (A OR )` — text that does not parse, shown in the
+   * expression editor and every summary built on this.
+   */
+  const pruned = stripVacuous(c);
+  if (!pruned) return "";
+  c = pruned;
   const width = opts.width ?? 46;
 
   const render = (node: Condition, depth: number, top: boolean): string => {

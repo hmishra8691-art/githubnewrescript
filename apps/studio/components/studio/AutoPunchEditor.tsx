@@ -2,7 +2,8 @@
 import React from "react";
 import type { PunchRule, Question } from "@rescript/schema";
 import {
-  optionRule, simpleView, parsePunchExpression, formatPunchExpression, allPunchRules,
+  optionRule, simpleView, parsePunchExpression, formatPunchExpression, allPunchRules, applyParsedPunch,
+  SIMPLE_VALUE_TESTS, isVacuousCondition,
   formatCondition, PUNCH_ACTION_LABELS, LIST_ACTIONS, isOptionLevelPunch,
   type SimplePunch, type PunchActionKind,
   stripHtmlText,
@@ -33,8 +34,27 @@ import { lintPunchChain } from "@rescript/engine";
 const strip = (s: string) => stripHtmlText(s);
 const short = (q: Question) => `${q.code} · ${strip(q.text).slice(0, 36) || q.variableName}`;
 
-/** Questions whose answer is a set of option codes — sources and targets. */
+/** Questions whose answer is a set of option codes — the targets (and choice sources). */
 const choiceQuestions = (qs: Question[]) => qs.filter((q) => q.options.length > 0);
+
+/**
+ * Questions whose answer is one number or one piece of text — sources for a
+ * VALUE test ("Q32 is between 2 and 3 → punch Medium"). The engine has always
+ * evaluated these; the "If question" list only offered choice questions, so a
+ * numeric open end could not be picked as a source at all (Prince 66).
+ */
+const VALUE_TYPES = new Set(["numeric", "open_text", "long_text", "slider", "nps", "date", "time", "hidden", "calculated", "embedded_data"]);
+const valueQuestions = (qs: Question[]) =>
+  qs.filter((q) => q.options.length === 0 && q.rows.length === 0 && VALUE_TYPES.has(String(q.type)));
+
+const VALUE_TEST_LABELS: Record<string, string> = {
+  eq: "=", ne: "≠", gt: ">", gte: "≥", lt: "<", lte: "≤", between: "between",
+};
+
+/** a typed value: a number when it reads as one, otherwise the text */
+const numberOrText = (v: string): string | number => (v.trim() !== "" && Number.isFinite(Number(v)) ? Number(v) : v);
+/** the option code as the question stores it (a number stays a number) */
+const codeOf = (q: Question, v: string): string | number => q.options.find((o) => String(o.code) === v)?.code ?? v;
 
 const ACTIONS: PunchActionKind[] = ["select", "deselect", "show", "hide", "enable", "disable", "clear"];
 
@@ -50,8 +70,17 @@ function SimpleRow({ target, rule, onChange, onMove, onRemove }: {
 }) {
   const s = useStudio();
   const qs = choiceQuestions(s.def.questions);
+  const vqs = valueQuestions(s.def.questions);
+  const sources = [...qs, ...vqs];
   const simple = simpleView(rule);
-  const [mode, setMode] = React.useState<"simple" | "expression">(simple ? "simple" : "expression");
+  /*
+   * Three views of one rule. "builder" is the visual AND / OR / NOT editor for
+   * the condition: a nested condition (Q2.1 AND Q2.2, Q2.1 BUT NOT Q2.2) could
+   * only be typed before — the builder sat collapsed under the expression box
+   * and was not offered at all for a rule with no condition yet. Its tab, and
+   * "+ add condition" in Simple mode, open it.
+   */
+  const [mode, setMode] = React.useState<"simple" | "expression" | "builder">(simple ? "simple" : "expression");
   const [text, setText] = React.useState(() => formatPunchExpression(s.def, target, rule));
   const [err, setErr] = React.useState<string | null>(null);
 
@@ -75,13 +104,27 @@ function SimpleRow({ target, rule, onChange, onMove, onRemove }: {
   const set = (patch: Partial<SimplePunch>) => {
     if (!simple) return;
     const next = { ...simple, ...patch };
-    // switching source question: pick its first option
+    // switching source question: pick its first option — or, for a numeric /
+    // text source, start a value test
     if (patch.sourceQuestionId && patch.sourceQuestionId !== simple.sourceQuestionId) {
-      const src = qs.find((q) => q.id === patch.sourceQuestionId);
-      next.sourceCode = src?.options[0]?.code ?? "";
+      const src = sources.find((q) => q.id === patch.sourceQuestionId);
+      if (src && src.options.length === 0) {
+        if (next.test === "selected" || next.test === "not_selected") next.test = "eq";
+        next.sourceCode = "";
+        if (next.value === undefined) next.value = "";
+      } else {
+        next.sourceCode = src?.options[0]?.code ?? "";
+        next.test = next.test === "not_selected" ? "not_selected" : "selected";
+        delete next.value; delete next.value2;
+      }
     }
+    if (next.test !== "between") delete next.value2;
+    /* a between needs both ends to stay a simple rule — start the top at the bottom */
+    else if (next.value2 === undefined || next.value2 === null) next.value2 = next.value ?? "";
+    if (next.test !== "selected" && next.test !== "not_selected" && (next.value === undefined || next.value === null)) next.value = "";
     s.labelNextEdit?.("edit auto punch rule");
-    onChange(optionRule(next, rule.id));
+    /* `rule` is the base: its chain position, recompute and label survive */
+    onChange(optionRule(next, rule.id, rule));
   };
 
   const applyExpression = () => {
@@ -91,11 +134,15 @@ function SimpleRow({ target, rule, onChange, onMove, onRemove }: {
     setErr(null);
     s.labelNextEdit?.("edit auto punch rule");
     const { targetQuestionId, rule: parsed } = r.rules[0];
-    const next = { ...parsed, id: rule.id };
+    const next = applyParsedPunch(rule, parsed);
+    /* blur after no edit is not an edit — rewriting the rule would add an
+       undo step and normalise a rule nobody touched */
+    if (targetQuestionId === target.id && JSON.stringify(next) === JSON.stringify(rule)) return;
     if (targetQuestionId === target.id) onChange(next); else onMove(targetQuestionId, next);
   };
 
-  const source = simple ? qs.find((q) => q.id === simple.sourceQuestionId) : undefined;
+  const source = simple ? sources.find((q) => q.id === simple.sourceQuestionId) : undefined;
+  const valueTest = !!simple && simple.test !== "selected" && simple.test !== "not_selected";
   const conditionText = rule.when ? formatCondition(s.def, rule.when) : "always";
 
   return (
@@ -153,6 +200,9 @@ function SimpleRow({ target, rule, onChange, onMove, onRemove }: {
           <button className={`btn small ${mode === "simple" ? "primary" : ""}`} data-testid="ap-mode-simple"
             disabled={!simple} title={simple ? "" : "This rule's condition is more than one option — edit it as an expression"}
             onClick={() => setMode("simple")}>Simple</button>
+          <button className={`btn small ${mode === "builder" ? "primary" : ""}`} data-testid="ap-mode-builder"
+            title="Build the condition with AND / OR / NOT groups"
+            onClick={() => setMode("builder")}>Builder</button>
           <button className={`btn small ${mode === "expression" ? "primary" : ""}`} data-testid="ap-mode-expression"
             onClick={() => setMode("expression")}>Expression</button>
           <button className="btn small danger" data-testid="ap-remove" onClick={onRemove} title="Remove this rule">×</button>
@@ -187,19 +237,45 @@ function SimpleRow({ target, rule, onChange, onMove, onRemove }: {
           <label className="f"><span>If question</span>
             <select className="select" data-testid="ap-source-q" value={simple.sourceQuestionId}
               onChange={(e) => set({ sourceQuestionId: e.target.value })}>
-              {qs.map((q) => <option key={q.id} value={q.id}>{short(q)}</option>)}
+              {qs.length > 0 && <optgroup label="Choice questions">
+                {qs.map((q) => <option key={q.id} value={q.id}>{short(q)}</option>)}
+              </optgroup>}
+              {vqs.length > 0 && <optgroup label="Numeric / text questions">
+                {vqs.map((q) => <option key={q.id} value={q.id}>{short(q)}</option>)}
+              </optgroup>}
             </select></label>
-          <label className="f"><span>Option</span>
-            <select className="select" data-testid="ap-source-opt" value={String(simple.sourceCode)}
-              onChange={(e) => set({ sourceCode: e.target.value })}>
-              {(source?.options ?? []).map((o) => <option key={String(o.code)} value={String(o.code)}>{o.code}: {strip(o.label).slice(0, 30)}</option>)}
-            </select></label>
-          <label className="f"><span>Condition</span>
-            <select className="select" data-testid="ap-test" value={simple.test}
-              onChange={(e) => set({ test: e.target.value as SimplePunch["test"] })}>
-              <option value="selected">is selected</option>
-              <option value="not_selected">is not selected</option>
-            </select></label>
+          {valueTest ? (
+            <>
+              <label className="f"><span>Value</span>
+                <span className="row" style={{ gap: 4 }}>
+                  <select className="select" data-testid="ap-value-test" value={simple.test}
+                    onChange={(e) => set({ test: e.target.value as SimplePunch["test"] })}>
+                    {SIMPLE_VALUE_TESTS.map((t) => <option key={t} value={t}>{VALUE_TEST_LABELS[t]}</option>)}
+                  </select>
+                  <input className="input" style={{ width: 80 }} data-testid="ap-value" value={String(simple.value ?? "")}
+                    onChange={(e) => set({ value: numberOrText(e.target.value) })} />
+                  {simple.test === "between" && <>
+                    <span className="muted">and</span>
+                    <input className="input" style={{ width: 80 }} data-testid="ap-value2" value={String(simple.value2 ?? "")}
+                      onChange={(e) => set({ value2: numberOrText(e.target.value) })} />
+                  </>}
+                </span></label>
+            </>
+          ) : (
+            <>
+              <label className="f"><span>Option</span>
+                <select className="select" data-testid="ap-source-opt" value={String(simple.sourceCode)}
+                  onChange={(e) => set({ sourceCode: e.target.value })}>
+                  {(source?.options ?? []).map((o) => <option key={String(o.code)} value={String(o.code)}>{o.code}: {strip(o.label).slice(0, 30)}</option>)}
+                </select></label>
+              <label className="f"><span>Condition</span>
+                <select className="select" data-testid="ap-test" value={simple.test}
+                  onChange={(e) => set({ test: e.target.value as SimplePunch["test"] })}>
+                  <option value="selected">is selected</option>
+                  <option value="not_selected">is not selected</option>
+                </select></label>
+            </>
+          )}
           <label className="f"><span>Then</span>
             <select className="select" data-testid="ap-action" value={simple.action}
               onChange={(e) => set({ action: e.target.value as PunchActionKind, targetCodes: e.target.value === "clear" ? [] : simple.targetCodes })}>
@@ -211,7 +287,7 @@ function SimpleRow({ target, rule, onChange, onMove, onRemove }: {
                 const t = qs.find((q) => q.id === e.target.value);
                 if (!t) return;
                 s.labelNextEdit?.("move auto punch rule");
-                onMove(t.id, optionRule({ ...simple, targetCodes: simple.action === "clear" ? [] : [t.options[0]?.code ?? ""] }, rule.id));
+                onMove(t.id, optionRule({ ...simple, targetCodes: simple.action === "clear" ? [] : [t.options[0]?.code ?? ""] }, rule.id, rule));
               }}>
               {qs.map((q) => <option key={q.id} value={q.id}>{short(q)}</option>)}
             </select></label>
@@ -234,15 +310,46 @@ function SimpleRow({ target, rule, onChange, onMove, onRemove }: {
                 if (nxt) set({ targetCodes: [...simple.targetCodes, nxt.code] });
               }}>+ another option</button>
           )}
+          <button className="btn small ghost" style={{ alignSelf: "end" }} data-testid="ap-add-condition"
+            title="Combine with more conditions — AND / OR / NOT, on the same or other questions"
+            onClick={() => setMode("builder")}>+ add condition</button>
+        </div>
+      ) : mode === "builder" ? (
+        <div data-testid="ap-builder">
+          <div className="flabel" style={{ marginBottom: 4 }}>{rule.mode === "else_if" ? "ELSE IF" : "IF"}</div>
+          <ConditionEditor value={rule.when ?? { type: "group", op: "and", children: [] }}
+            onChange={(when) => {
+              s.labelNextEdit?.("edit auto punch rule");
+              const next = { ...rule };
+              /* an empty builder is "always" — stored as no condition, the way an
+                 IF … THEN with no condition has always been stored */
+              if (isVacuousCondition(when)) delete (next as { when?: unknown }).when; else next.when = when;
+              onChange(next);
+            }} />
+          <div className="ap-grid" style={{ marginTop: 8 }}>
+            <label className="f"><span>Then</span>
+              <select className="select" data-testid="ap-builder-action" value={rule.action}
+                onChange={(e) => onChange({ ...rule, action: e.target.value as never, ...(e.target.value === "clear" ? { source: { kind: "codes", codes: [] } } : {}) })}>
+                {ACTIONS.map((a) => <option key={a} value={a}>{PUNCH_ACTION_LABELS[a]}</option>)}
+              </select></label>
+            {rule.action !== "clear" && (
+              <label className="f"><span>Options in {target.code}</span>
+                <select className="select" data-testid="ap-builder-target" multiple
+                  value={(rule.source.kind === "codes" ? rule.source.codes : []).map(String)}
+                  onChange={(e) => onChange({
+                    ...rule,
+                    source: { kind: "codes", codes: Array.from(e.target.selectedOptions).map((o) => codeOf(target, o.value)) },
+                  })}>
+                  {target.options.map((o) => (
+                    <option key={String(o.code)} value={String(o.code)}>{o.code}: {strip(o.label).slice(0, 30)}</option>
+                  ))}
+                </select></label>
+            )}
+          </div>
+          {!rule.when && <div className="muted" style={{ fontSize: 12.5 }} data-testid="ap-builder-always">No condition — this rule runs for every respondent who reaches {target.code}.</div>}
         </div>
       ) : (
         <div>
-          {!simple && rule.when && (
-            <details style={{ marginBottom: 6 }}>
-              <summary className="muted" style={{ fontSize: 12.5, cursor: "pointer" }}>Condition, in the visual builder</summary>
-              <ConditionEditor value={rule.when} onChange={(when) => { s.labelNextEdit?.("edit auto punch rule"); onChange({ ...rule, when }); }} />
-            </details>
-          )}
           <textarea className="ta mono xe-input" data-testid="ap-expression" rows={2} value={text}
             onChange={(e) => { setText(e.target.value); setErr(null); }}
             onBlur={applyExpression}

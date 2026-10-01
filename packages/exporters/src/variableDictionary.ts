@@ -1,6 +1,6 @@
 import ExcelJS from "exceljs";
-import type { SurveyDefinition } from "@rescript/schema";
-import { buildVariableDictionary, loopNodes, loopVariablePrefix, maxLoopIterations, possibleLoopItems, directQuestionIdsInLoop, stripHtmlText } from "@rescript/engine";
+import type { Condition, SurveyDefinition } from "@rescript/schema";
+import { conditionSummary, listPages, buildVariableDictionary, loopNodes, loopVariablePrefix, maxLoopIterations, possibleLoopItems, directQuestionIdsInLoop, stripHtmlText } from "@rescript/engine";
 
 const stripHtml = (html: string): string =>
   stripHtmlText(html).replace(/\s+/g, " ");
@@ -72,7 +72,23 @@ export async function exportVariableDictionaryXlsx(
     { header: "Iteration", key: "iteration", width: 9 },
     { header: "Reference", key: "referenceColumn", width: 16 },
     { header: "Notes", key: "notes", width: 32 },
+    /*
+     * WHO WAS ASKED. A column is only interpretable with its base: an empty
+     * cell means "not asked" for a respondent the logic routed past and
+     * "skipped" for one it did not. The question's own display logic and the
+     * visibility of the page holding it, in words, nested as written.
+     */
+    { header: "Asked when", key: "askedWhen", width: 48 },
   ];
+  const pagesById = new Map(listPages(def.flow as unknown[]).map((p) => [p.node.id, p.node]));
+  const askedWhen = (code: string | undefined): string => {
+    if (!code) return "";
+    const q = def.questions.find((x) => x.code === code);
+    if (!q) return "";
+    const page = [...pagesById.values()].find((p) => p.questionIds.includes(q.id)) as { visibleIf?: Condition } | undefined;
+    const parts = [page?.visibleIf, q.displayLogic].map((c) => (c ? conditionSummary(def, c) : "")).filter(Boolean);
+    return parts.join(" AND ") || "always";
+  };
   for (const v of dict) {
     vars.addRow({
       name: v.name,
@@ -99,6 +115,7 @@ export async function exportVariableDictionaryXlsx(
       iteration: v.iteration ?? "",
       referenceColumn: v.referenceColumn ?? "",
       notes: v.notes ?? "",
+      askedWhen: askedWhen(v.questionCode),
     });
   }
   styleHeaderRow(vars);

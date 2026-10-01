@@ -1,4 +1,5 @@
-import type { SurveyDefinition, UxAnimation, UxBehavior, UxEffect, UxRule, UxStyle, UxTarget } from "@rescript/schema";
+import type { Condition, SurveyDefinition, UxAnimation, UxBehavior, UxEffect, UxRule, UxStyle, UxTarget } from "@rescript/schema";
+import { parseLogicExpression } from "./logicExpression.js";
 import { UX_ANIMATION_TRIGGERS, UX_EFFECTS, UX_EVENTS, UX_MEDIA, UX_PRESETS, UX_STATES, effectiveResponseModel } from "@rescript/schema";
 import { describeUxTarget, resolveUxTarget, uxToken, uxDeclarations, validateUxItem, type UxLookups } from "./ux.js";
 import { applyThemePatch } from "./theme.js";
@@ -42,7 +43,7 @@ export const UX_ACTION_ALIASES = ["attach_behavior_to_question", "attach_behavio
 export interface RawRule { state?: string; media?: string; whenClass?: string; selector?: string; declarations: Record<string, string> }
 export interface RawEffect { do: string; target?: unknown; className?: string; preset?: string; durationMs?: number; style?: Record<string, string>; text?: string }
 type AnimFields = { preset?: string; trigger?: string; durationMs?: number; delayMs?: number; easing?: string; staggerMs?: number; iterations?: number | "infinite"; media?: string };
-type BehFields = { on?: string; options?: string[]; effects?: RawEffect[]; script?: string; once?: boolean };
+type BehFields = { on?: string; options?: string[]; effects?: RawEffect[]; script?: string; once?: boolean; when?: string | null };
 export type UxAction =
   | { op: "create_style"; ref?: string; label: string; target: unknown; rules: RawRule[]; css?: string }
   | { op: "update_style"; id: string; label?: string; target?: unknown; rules?: RawRule[]; addRules?: RawRule[]; css?: string | null }
@@ -111,6 +112,8 @@ const behFields = (o: Record<string, unknown>): BehFields => ({
   ...(Array.isArray(o.effects) ? { effects: o.effects.map(effect).filter((x): x is RawEffect => !!x).slice(0, 20) } : {}),
   ...(str(o.script) ?? str(o.js) ? { script: str(o.script) ?? str(o.js) } : {}),
   ...(typeof o.once === "boolean" ? { once: o.once } : {}),
+  /* a guard — "only when Q3 = 2 AND Q1 >= 18" — as expression text; null removes it */
+  ...(o.when === null || o.condition === null ? { when: null } : str(o.when) ?? str(o.condition) ? { when: str(o.when) ?? str(o.condition) } : {}),
 });
 const itemId = (o: Record<string, unknown>) => str(o.id) ?? str(o.target_id) ?? str(o.ref) ?? str(o.label) ?? str(o.name);
 
@@ -214,6 +217,13 @@ const oneOf = <T extends string>(list: readonly T[], v: string | undefined, what
   const hit = list.find((x) => x === n || x === n.replace(/_/g, "-") || x.replace(/-/g, "_") === n);
   return hit ?? fail(`“${v}” is not a ${what} (${list.join(", ")})`);
 };
+
+/** a behaviour's `when`, written as text, through the one expression parser (codes, nesting and all) */
+function parseGuard(def: SurveyDefinition, text: string): Condition {
+  const r = parseLogicExpression(def, text);
+  if (r.errors.length || !r.condition) fail(`the behaviour's condition “${text}” does not parse: ${r.errors[0]?.message ?? "empty"}`);
+  return r.condition!;
+}
 
 function resolveTarget(def: SurveyDefinition, raw: unknown, env: UxEnv): UxTarget {
   const t = resolveUxTarget(def, raw, env.lookups);
@@ -368,7 +378,7 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
     }
     case "create_behavior": {
       const t = resolveTarget(def, a.target, env);
-      const b: UxBehavior = { id: env.ids("uxb"), label: a.label, target: t, ...(a.on ? { on: oneOf(UX_EVENTS, a.on === "select" ? "select_option" : a.on === "deselect" ? "deselect_option" : a.on === "complete" ? "page_complete" : a.on, "event")! } : {}), ...(a.options?.length ? { options: optionCodes(def, t, a.options) } : {}), effects: a.effects ? buildEffects(def, a.effects, env) : [], ...(a.script ? { script: a.script } : {}), ...(a.once ? { once: true } : {}), createdAt: env.now };
+      const b: UxBehavior = { id: env.ids("uxb"), label: a.label, target: t, ...(a.on ? { on: oneOf(UX_EVENTS, a.on === "select" ? "select_option" : a.on === "deselect" ? "deselect_option" : a.on === "complete" ? "page_complete" : a.on, "event")! } : {}), ...(a.options?.length ? { options: optionCodes(def, t, a.options) } : {}), effects: a.effects ? buildEffects(def, a.effects, env) : [], ...(a.script ? { script: a.script } : {}), ...(a.once ? { once: true } : {}), ...(a.when ? { when: parseGuard(def, a.when) } : {}), createdAt: env.now };
       const warnings = gate(def, "behavior", b);
       ux.behaviors.push(b);
       if (a.ref) env.refs.set(a.ref.toLowerCase(), b.id);
@@ -384,6 +394,8 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
       if (a.effects) next.effects = buildEffects(def, a.effects, env);
       if (a.script !== undefined) { next.script = a.script; if (a.script) { delete next.on; next.effects = []; } }
       if (a.once !== undefined) next.once = a.once;
+      if (a.when === null) delete next.when;
+      else if (a.when) next.when = parseGuard(def, a.when);
       const warnings = gate(def, "behavior", next);
       ux.behaviors[ux.behaviors.indexOf(b)] = next;
       return { description: `Change behaviour “${next.label}”`, warnings, touched: [] };

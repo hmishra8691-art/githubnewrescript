@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
+import { isEmptyConditionTree } from "@rescript/schema";
 import { listBlocks, typeLabel, type SurveyDiff } from "@rescript/engine";
 import { plainText } from "../../../lib/copilot/client";
 
@@ -35,7 +36,7 @@ export function StructurePane({ def, diff, selectedId, onSelect }: { def: Survey
                     <button key={id} type="button" className={`cp-sp-q${selectedId === id ? " sel" : ""}${mark ? ` m-${mark}` : ""}`} onClick={() => onSelect(id)} data-testid="cp-sp-q" data-code={x.code} data-mark={mark ?? ""} title={`${x.code} · ${typeLabel(x)}${x.required ? " · required" : ""}`}>
                       <span className="mono cp-sp-code">{x.code}</span>
                       <span className="cp-sp-text">{plainText(x.text ?? "") || "(no text)"}</span>
-                      {(x.displayLogic || x.skipLogic?.length) ? <span className="cp-sp-logic" title="has logic">⤳</span> : null}
+                      {(!isEmptyConditionTree(x.displayLogic) || x.skipLogic?.length) ? <span className="cp-sp-logic" title="has logic">⤳</span> : null}
                     </button>
                   );
                 })}

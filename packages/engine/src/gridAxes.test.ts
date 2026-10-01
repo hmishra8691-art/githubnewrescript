@@ -125,18 +125,22 @@ test("the lint knows which axis it is validating — the supported matrix refere
   assert.ok(lintQuestionLogic(comp, comp.questions[0]).some((i) => /has no column “col_nope”/.test(i.message)));
 });
 
-test("a grid rule that names neither axis is flagged — it reads the whole grid and can never match", () => {
+test("a grid rule that names neither axis is flagged — it reads EVERY cell, true when any cell matches", () => {
   const d = def({
     ...matrix,
     displayLogic: { type: "rule", source: { kind: "question", ref: "Q1" }, operator: "eq", value: "Yes" },
   } as unknown as Question);
   const issues = lintQuestionLogic(d, d.questions[0]);
-  assert.ok(issues.some((i) => /is a grid, so “eq” needs a row or a column/.test(i.message)), issues.map((i) => i.message).join(" | "));
+  assert.ok(issues.some((i) => /is a grid and this names no row or column.*so “eq” reads EVERY cell/.test(i.message)), issues.map((i) => i.message).join(" | "));
 
-  // and it really cannot match: the evidence behind the warning
+  // what it means: any row answered Yes — and its negation, no row did
   const st = createResponseState(d, { seed: 1, sessionId: "t" });
   st.answers.m1 = { A: "Yes", B: "No" } as never;
-  assert.equal(evaluateCondition(d.questions[0].displayLogic, { def: d, state: st }), false);
+  assert.equal(evaluateCondition(d.questions[0].displayLogic, { def: d, state: st }), true, "some row is Yes");
+  assert.equal(evaluateCondition({ type: "rule", source: { kind: "question", ref: "Q1" }, operator: "ne", value: "Yes" } as never, { def: d, state: st }), false, "≠ Yes: no row may be Yes");
+  st.answers.m1 = { A: "No", B: "No" } as never;
+  assert.equal(evaluateCondition(d.questions[0].displayLogic, { def: d, state: st }), false, "no row is Yes");
+  st.answers.m1 = { A: "Yes", B: "No" } as never;
   // …while the same rule WITH an axis matches
   assert.equal(evaluateCondition(
     { type: "rule", source: { kind: "question", ref: "Q1", rowCode: "A" }, operator: "eq", value: "Yes" } as never,

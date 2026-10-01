@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { Condition } from "./conditions.js";
 
 /**
  * THE SURVEY'S UX CONFIGURATION — styles, animations and behaviours that
@@ -125,6 +126,14 @@ export const UxBehavior = z.object({
   /** or a script, run sandboxed against the `rs` api only */
   script: z.string().max(8000).optional(),
   once: z.boolean().optional(),
+  /**
+   * …and only while this holds. A behaviour used to be one event and a list of
+   * options — "when Q3 option 2 is selected" — with no way to say "when Q3 is
+   * 2 AND Q1 is at least 18". This is the ordinary survey Condition, nested as
+   * deep as any other, evaluated against the answers at the moment the event
+   * fires.
+   */
+  when: Condition.optional(),
   createdAt: z.string().optional(),
 });
 export type UxBehavior = z.infer<typeof UxBehavior>;

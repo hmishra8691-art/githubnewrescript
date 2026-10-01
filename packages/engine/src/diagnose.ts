@@ -1,5 +1,6 @@
 import type { Condition, ConditionRule, FlowNode, Question, SurveyDefinition } from "@rescript/schema";
 import { orderIndex } from "./dependencies.js";
+import { stripVacuous } from "./conditionWalk.js";
 import { getQuestionByCodeOrVar } from "./state.js";
 import { formatCondition } from "./logicExpression.js";
 import { buildLogicFlow, unreachableLogicNodes } from "./logicGraph.js";
@@ -184,31 +185,49 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const lower = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
-/** an empty AND (no conditions) is true — the importer's and the editor's "always" */
+/**
+ * ALWAYS TRUE, READ THE WAY THE EVALUATOR READS IT: an absent condition, and
+ * any tree made only of empty groups (an empty AND, an empty OR, NOT of
+ * nothing — `isVacuousCondition`). Only a top-level empty AND used to count,
+ * so a skip whose `when` was an empty OR — which fires for everybody — was
+ * reported as conditional, and the diagnosis disagreed with the survey.
+ */
 function alwaysTrue(c: Condition | undefined): boolean {
-  if (!c) return true;
-  return c.type === "group" && c.op === "and" && c.children.length === 0;
+  return stripVacuous(c) === null;
 }
 
 /**
  * A reason the condition can never be true, or null when it might be.
  * Deliberately conservative: it names only what is certain from the survey —
  * a positive test on an answer that does not exist yet when the condition is
- * read, on a question that is not in the survey, a constant false, or an AND
- * that asks one single-choice question for two different answers.
+ * read, on a question that is not in the survey, or an AND (at any depth of
+ * nested ANDs) that asks one single-choice question for two different answers.
+ *
+ * It reads the tree with its empty groups taken out, exactly as the evaluator
+ * does: an empty OR is no constraint (not "never"), and NOT of an empty group
+ * is no constraint either (not "constant false"). Both used to be reported
+ * as "can never be shown" for questions every respondent saw.
  */
-function neverTrue(def: SurveyDefinition, c: Condition, at: number, order: Record<string, number>): string | null {
+function neverTrue(def: SurveyDefinition, raw: Condition, at: number, order: Record<string, number>): string | null {
+  const c = stripVacuous(raw);
+  if (!c) return null;
   if (c.type === "group") {
-    if (c.op === "not") return c.children.length === 1 && alwaysTrue(c.children[0]) ? "it is a constant false (NOT of an empty condition)" : null;
+    if (c.op === "not") return null;
     if (c.op === "or") {
-      if (!c.children.length) return "it is an empty OR";
       const rs = c.children.map((k) => neverTrue(def, k, at, order));
       return rs.every(Boolean) ? rs.join("; and ") : null;
     }
     for (const k of c.children) { const r = neverTrue(def, k, at, order); if (r) return r; }
+    /* every rule this AND requires, through nested ANDs */
+    const required: ConditionRule[] = [];
+    const collect = (g: Condition) => {
+      if (g.type === "rule") { required.push(g); return; }
+      if (g.op === "and") g.children.forEach(collect);
+    };
+    collect(c);
     const eqs = new Map<string, Set<string>>();
-    for (const k of c.children) {
-      if (k.type !== "rule" || k.source.kind !== "question" || (k.operator !== "eq" && k.operator !== "selected")) continue;
+    for (const k of required) {
+      if (k.source.kind !== "question" || (k.operator !== "eq" && k.operator !== "selected") || k.source.count) continue;
       const q = getQuestionByCodeOrVar(def, k.source.ref);
       if (!q || !isSingle(q) || k.source.rowCode) continue;
       const set = eqs.get(q.id) ?? new Set<string>(); set.add(String(k.value)); eqs.set(q.id, set);

@@ -1,6 +1,8 @@
 import type { Question, SurveyDefinition, UxAnimation, UxBehavior, UxConfig, UxEffect, UxRule, UxStyle, UxTarget } from "@rescript/schema";
 import { UX_BUTTONS, UX_EFFECTS, UX_EVENTS, UX_PARTS, UX_PRESETS, UX_STATES, UX_TARGET_KINDS, UX_MEDIA, UX_ANIMATION_TRIGGERS } from "@rescript/schema";
 import { listBlocks, listPages } from "./blocks.js";
+import { evaluateCondition } from "./evaluate.js";
+import { createResponseState, type ResponseState } from "./state.js";
 
 /**
  * THE UX LAYER — the engine half of the survey's styles, animations and
@@ -917,6 +919,8 @@ export interface UxTriggerInput {
   active: ReadonlySet<string>;
   /** `once` behaviours that have already run */
   fired: ReadonlySet<string>;
+  /** the response so far, for a behaviour's `when` (absent: only the page's answers are known) */
+  state?: ResponseState | null;
 }
 export interface UxTriggerOutcome { fire: UxBehavior[]; hold: UxBehavior[]; release: UxBehavior[] }
 
@@ -927,6 +931,19 @@ export interface UxTriggerOutcome { fire: UxBehavior[]; hold: UxBehavior[]; rele
  * block's part of it — is complete) HOLD while true and are RELEASED — their effects reverted — when
  * they stop being true. click and hover are the DOM's, not this function's.
  */
+/**
+ * A behaviour's `when`: the ordinary survey condition, any nesting, read
+ * against the answers as they are at the moment the event fires — the page's
+ * live values over everything answered before. A behaviour with no `when`
+ * always may fire, which is every behaviour that existed before the field did.
+ */
+export function uxGuardHolds(def: SurveyDefinition, b: UxBehavior, state?: ResponseState | null, now?: Record<string, unknown>): boolean {
+  if (!b.when) return true;
+  const base = state ?? createResponseState(def, { seed: 1, sessionId: "ux" });
+  const merged: ResponseState = now ? { ...base, answers: { ...base.answers, ...(now as ResponseState["answers"]) } } : base;
+  try { return evaluateCondition(b.when, { def, state: merged }); } catch { return false; }
+}
+
 export function evaluateUxTriggers(i: UxTriggerInput): UxTriggerOutcome {
   const out: UxTriggerOutcome = { fire: [], hold: [], release: [] };
   const opened = i.prev === null;
@@ -940,15 +957,18 @@ export function evaluateUxTriggers(i: UxTriggerInput): UxTriggerOutcome {
     const changed = !!qid && !opened && JSON.stringify(i.prev?.[qid] ?? null) !== JSON.stringify(i.now[qid] ?? null);
     const codes = b.options?.length ? b.options : b.target.kind === "option" && b.target.code ? [b.target.code] : null;
     const hits = (v: unknown) => { const s = uxSelectedCodes(v); return codes ? codes.some((c) => s.has(c)) : s.size > 0; };
-    const hold = (cond: boolean) => { if (cond && !i.active.has(b.id)) out.hold.push(b); else if (!cond && i.active.has(b.id)) out.release.push(b); };
+    // the guard: a held effect is held only while it ALSO holds; a one-shot fires only if it holds then
+    const guard = uxGuardHolds(i.def, b, i.state, i.now);
+    const hold = (cond: boolean) => { const on = cond && guard; if (on && !i.active.has(b.id)) out.hold.push(b); else if (!on && i.active.has(b.id)) out.release.push(b); };
+    const fire = () => { if (guard) out.fire.push(b); };
     switch (b.on) {
-      case "answer": if (changed && uxAnswered(i.now[qid!])) out.fire.push(b); break;
-      case "change": if (changed) out.fire.push(b); break;
+      case "answer": if (changed && uxAnswered(i.now[qid!])) fire(); break;
+      case "change": if (changed) fire(); break;
       case "select_option": hold(onPage && !!qid && hits(i.now[qid])); break;
-      case "deselect_option": if (changed && hits(i.prev?.[qid!]) && !hits(i.now[qid!])) out.fire.push(b); break;
+      case "deselect_option": if (changed && hits(i.prev?.[qid!]) && !hits(i.now[qid!])) fire(); break;
       case "page_complete": hold(complete); break;
       case "block_complete": hold(complete && !!i.blockId && (b.target.blockId ?? "") === i.blockId); break;
-      case "appear": case "page_enter": if (opened && onPage) out.fire.push(b); break;
+      case "appear": case "page_enter": if (opened && onPage) fire(); break;
       default: break;
     }
   }

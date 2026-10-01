@@ -1,5 +1,6 @@
 import type { Condition, ConditionRule, SurveyDefinition } from "@rescript/schema";
-import { isScalarAnswerQuestion } from "@rescript/schema";
+import { isScalarAnswerQuestion, effectiveResponseModel } from "@rescript/schema";
+import { getQuestionByCodeOrVar } from "./state.js";
 import type { ResponseState } from "./state.js";
 import { evaluateCondition } from "./evaluate.js";
 import { flattenVariables } from "./flatten.js";
@@ -83,24 +84,63 @@ function scalarValue(v: unknown): v is string | number | boolean {
   return typeof v === "string" || typeof v === "number" || typeof v === "boolean";
 }
 
+/**
+ * The value as the stored answer spells it. JSON containment is TYPE-exact —
+ * `{"q1": "1"}` does not contain `{"q1": 1}` — while the engine compares
+ * loosely, so a filter written `Q1 = "1"` against an answer stored as the
+ * number 1 matched in the survey and returned nothing in the filter, and
+ * because the clause was marked exact the engine never got to disagree.
+ * A choice answer is the option's code in the code's own type; a numeric
+ * answer is a number; text is text. Anything that cannot be put in the
+ * stored form produces no clause.
+ */
+function storedForm(def: SurveyDefinition, questionId: string, v: string | number | boolean): string | number | boolean | null {
+  const q = def.questions.find((x) => x.id === questionId);
+  if (!q) return null;
+  if (q.options?.length) {
+    const hit = q.options.find((o) => String(o.code) === String(v));
+    return hit ? hit.code : null;
+  }
+  if (typeof v === "boolean") return null;
+  const model = effectiveResponseModel(q);
+  if (model === "numeric") { const n = Number(v); return Number.isFinite(n) && String(v).trim() !== "" ? n : null; }
+  if (model === "text") return String(v);
+  return null;
+}
+
 function ruleClauses(def: SurveyDefinition, rule: ConditionRule): { clauses: PrefilterClause[]; exact: boolean } {
   const column = COLUMN_FOR[rule.source.kind ?? "question"] ?? null;
   if (!column || !rule.source.ref) return { clauses: [], exact: false };
-  // a cell of a grid is not addressable by question id alone
-  if (rule.source.rowCode || rule.source.columnId) return { clauses: [], exact: false };
-  const key = rule.source.ref;
+  /*
+   * Not addressable by one key: a grid cell or row, a position, and above all
+   * a COUNT — `COUNT(Q2) = 1` reads how many of Q2's options are selected,
+   * not whether Q2's answer equals 1, and compiling it as the latter returned
+   * the wrong rows with the engine pass switched off.
+   */
+  if (rule.source.rowCode || rule.source.columnId || rule.source.count
+    || rule.source.rowPosition != null || rule.source.optionPosition != null) return { clauses: [], exact: false };
   const isQuestion = (rule.source.kind ?? "question") === "question";
+  // answers are keyed by question ID; a rule may name the question by code or variable
+  const key = isQuestion ? getQuestionByCodeOrVar(def, rule.source.ref)?.id : rule.source.ref;
+  if (!key) return { clauses: [], exact: false };
   const scalar = !isQuestion || scalarAnswer(def, key);
 
   switch (rule.operator) {
-    case "eq":
-      if (scalar && scalarValue(rule.value)) return { clauses: [{ kind: "jsonEq", column, key, value: rule.value }], exact: true };
-      return { clauses: [], exact: false };
-    case "selected":
+    case "eq": {
+      if (!scalar || !scalarValue(rule.value)) return { clauses: [], exact: false };
+      const value = isQuestion ? storedForm(def, key, rule.value) : rule.value;
+      if (value === null) return { clauses: [], exact: false };
+      return { clauses: [{ kind: "jsonEq", column, key, value }], exact: true };
+    }
+    case "selected": {
       // a scalar question: "selected X" is equality; a multi-select stores an
       // array, and `@>` on a nested array is not expressible per key here
-      if (scalar && scalarValue(rule.value)) return { clauses: [{ kind: "jsonEq", column, key, value: rule.value }], exact: true };
+      if (scalar && scalarValue(rule.value)) {
+        const value = isQuestion ? storedForm(def, key, rule.value) : rule.value;
+        if (value !== null) return { clauses: [{ kind: "jsonEq", column, key, value }], exact: true };
+      }
       return { clauses: [{ kind: "hasKey", column, key }], exact: false };
+    }
     case "answered":
     case "isNotEmpty":
       // narrows correctly (an unanswered question has no key) but an answered

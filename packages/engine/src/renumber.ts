@@ -1,5 +1,8 @@
-import type { Condition, Question, SurveyDefinition } from "@rescript/schema";
+import type { Condition, ConditionRule, Question, SurveyDefinition } from "@rescript/schema";
+import { isQuestionValueRef } from "@rescript/schema";
 import { getQuestionByCodeOrVar } from "./state.js";
+import { mapRules, mapConditionRoots } from "./conditionWalk.js";
+import { gridAxes } from "./gridAxes.js";
 import { PIPE_TOKEN_RE, parsePipeBody, serializePipeToken } from "./pipingTokens.js";
 
 /**
@@ -84,17 +87,69 @@ const mapOne = (v: unknown, ctx: Ctx): unknown => {
   return typeof v === "number" ? Number(ctx.mapping[k]) : ctx.mapping[k];
 };
 
+/**
+ * One condition tree, with every reference to the renumbered codes moved.
+ *
+ * Walks groups of any depth AND every COUNT `where` (mapRules), and knows the
+ * four places a code can sit in a rule:
+ *
+ *   · the VALUE of a rule on the question (`Q7 = 3`, `Q7 in [1, 4]`) — options;
+ *   · the ROW it addresses (`Q7.R2 > 3`) — rows, and the row named on the
+ *     RIGHT-HAND side of a cross-question comparison (`Q5 > Q7.R2`);
+ *   · the SCALE POINT a Likert grid's `columnId` holds ("any row rated 5") —
+ *     options, because a per-row grid's columns ARE its option codes;
+ *   · a COUNT's subset (`only [1, 3]`, `answering [4, 5]`) and the `@option`
+ *     comparisons inside its `where`, which name the counted question's own
+ *     items.
+ *
+ * A count's threshold (`COUNT(Q7) >= 2`) is a NUMBER, not a code, and is
+ * never rewritten — remapping it was how a "2 or more" became a "20 or more".
+ */
 function rewriteCondition(c: Condition | undefined, ctx: Ctx): Condition | undefined {
   if (!c) return c;
-  if (c.type === "group") {
-    return { ...c, children: c.children.map((ch) => rewriteCondition(ch, ctx)!) };
-  }
-  const src = c.source.kind === "question" || c.source.kind === "variable"
-    ? getQuestionByCodeOrVar(ctx.def, c.source.ref)
-    : undefined;
-  if (src?.id !== ctx.targetId) return c;
+  return mapRules(c, (rule, at) => rewriteRule(rule, ctx, at.inCountWhere ? at.countOwner : undefined));
+}
 
+const isTargetRef = (ref: string | undefined, ctx: Ctx): boolean =>
+  !!ref && getQuestionByCodeOrVar(ctx.def, ref)?.id === ctx.targetId;
+
+function rewriteRule(c: ConditionRule, ctx: Ctx, countOwner?: ConditionRule): ConditionRule {
   let out = c;
+  /* the right-hand side: a row of the renumbered question named in a cross-question comparison */
+  if (ctx.scope === "rows") {
+    const fixRef = (v: unknown): unknown => {
+      if (!isQuestionValueRef(v) || !isTargetRef(v.$question, ctx) || v.rowCode == null || !(String(v.rowCode) in ctx.mapping)) return v;
+      ctx.count++;
+      return { ...v, rowCode: ctx.mapping[String(v.rowCode)] };
+    };
+    const value = Array.isArray(out.value) ? out.value.map(fixRef) : fixRef(out.value);
+    if (value !== out.value) out = { ...out, value };
+  }
+
+  /* `@option` inside a COUNT's where: the counted question's own items */
+  if (countOwner && isTargetRef(countOwner.source.ref, ctx) && out.source.kind === "option" && (out.source.ref ?? "code") === "code") {
+    const counted = countOwner.source.count!.scope === "rows" ? "rows" : "options";
+    if (counted === ctx.scope) out = rewriteValues(out, ctx);
+    return out;
+  }
+
+  const src = out.source.kind === "question" || out.source.kind === "variable"
+    ? getQuestionByCodeOrVar(ctx.def, out.source.ref)
+    : undefined;
+  if (src?.id !== ctx.targetId) return out;
+
+  const spec = out.source.count;
+  if (spec) {
+    /* a count: its subset lists name items; its threshold is a number and stays */
+    const next = { ...spec };
+    let moved = false;
+    const remap = (xs: (string | number)[] | undefined) => xs?.map((x) => { const y = mapOne(x, ctx) as string | number; if (y !== x) moved = true; return y; });
+    if ((spec.scope === "rows") === (ctx.scope === "rows") && spec.scope !== "columns") next.only = remap(spec.only);
+    // a per-row grid's answers are its option codes: `answering [4, 5]` moves with the options
+    if (ctx.scope === "options" && spec.responseIn) next.responseIn = remap(spec.responseIn);
+    return moved ? { ...out, source: { ...out.source, count: next } } : out;
+  }
+
   if (ctx.scope === "rows") {
     if (out.source.rowCode != null && String(out.source.rowCode) in ctx.mapping) {
       ctx.count++;
@@ -102,13 +157,30 @@ function rewriteCondition(c: Condition | undefined, ctx: Ctx): Condition | undef
     }
     return out;
   }
-  // options: the comparison value carries the code(s)
+  /* options: a Likert grid's columnId IS an option code ("any row rated 5") */
+  if (out.source.columnId != null && gridAxes(src).columnMeaning === "option_code" && String(out.source.columnId) in ctx.mapping) {
+    ctx.count++;
+    out = { ...out, source: { ...out.source, columnId: ctx.mapping[String(out.source.columnId)] } };
+  }
+  /* a constant sum addresses its options as rows */
+  if (out.source.rowCode != null && src.type === "allocation" && String(out.source.rowCode) in ctx.mapping) {
+    ctx.count++;
+    out = { ...out, source: { ...out.source, rowCode: ctx.mapping[String(out.source.rowCode)] } };
+    return out;
+  }
+  if (src.type === "allocation") return out;
+  return rewriteValues(out, ctx);
+}
+
+/** the comparison value(s) of a rule, as codes of the renumbered dimension */
+function rewriteValues(out: ConditionRule, ctx: Ctx): ConditionRule {
   if (Array.isArray(out.value)) {
-    out = { ...out, value: out.value.map((v) => mapOne(v, ctx)) };
+    out = { ...out, value: out.value.map((v) => (typeof v === "object" && v !== null ? v : mapOne(v, ctx))) };
   } else if (out.value !== undefined && out.value !== null && typeof out.value !== "object") {
     out = { ...out, value: mapOne(out.value, ctx) };
   }
-  if (out.value2 !== undefined && out.value2 !== null && typeof out.value2 !== "object") {
+  // ranking operators keep a RANK in value2, which is a number, not a code
+  if (out.value2 !== undefined && out.value2 !== null && typeof out.value2 !== "object" && !String(out.operator).startsWith("rank")) {
     out = { ...out, value2: mapOne(out.value2, ctx) };
   }
   return out;
@@ -209,7 +281,8 @@ function rewriteMask<T>(mask: T | undefined, ctx: Ctx, isTargetDimension: boolea
 }
 
 function rewriteQuestion(q: Question, ctx: Ctx): Question {
-  const cond = (c: Condition | undefined) => rewriteCondition(c, ctx);
+  /* conditions are rewritten by the one structural pass in renumberQuestionCodes — every field, none twice */
+  const cond = (c: Condition | undefined) => c;
   const out: Question = {
     ...q,
     displayLogic: cond(q.displayLogic),
@@ -238,6 +311,10 @@ function rewriteQuestion(q: Question, ctx: Ctx): Question {
   }
   if (q.carryForward?.where) {
     out.carryForward = { ...q.carryForward, where: cond(q.carryForward.where) };
+  }
+  /* "rows where these SCALE points were chosen" names the source grid's option codes */
+  if (q.carryForward?.columns?.length && q.carryForward.sourceQuestionId === ctx.targetId && ctx.scope === "options") {
+    out.carryForward = { ...(out.carryForward ?? q.carryForward), columns: q.carryForward.columns.map((c) => mapOne(c, ctx) as string | number) };
   }
   out.listLogic = (q.listLogic ?? []).map((r) => (r.when ? { ...r, when: cond(r.when) } : r));
   out.optionPipeline = (q.optionPipeline ?? []).map((op) => ({
@@ -379,11 +456,9 @@ function rewriteFlow(nodes: any[], ctx: Ctx): any[] {
     if (n.branches) {
       out.branches = n.branches.map((b: any) => ({
         ...b,
-        when: rewriteCondition(b.when, ctx),
         children: rewriteFlow(b.children, ctx),
       }));
     }
-    if (n.when) out.when = rewriteCondition(n.when, ctx);
     return out;
   });
 }
@@ -411,7 +486,6 @@ export function renumberQuestionCodes(
     questions: def.questions.map((q) => rewriteQuestion(q, ctx)),
     displayRules: (def.displayRules ?? []).map((r) => ({
       ...r,
-      when: rewriteCondition(r.when, ctx)!,
       target:
         scope === "rows" && r.target.ref === questionId && r.target.subRef &&
         String(r.target.subRef) in mapping
@@ -421,17 +495,19 @@ export function renumberQuestionCodes(
             ? { ...r.target, subRef: mapping[String(r.target.subRef)] }
             : r.target,
     })),
-    calculations: (def.calculations ?? []).map((c) =>
-      c.when ? { ...c, when: rewriteCondition(c.when, ctx) } : c,
-    ),
-    quotas: (def.quotas ?? []).map((qt) => ({
-      ...qt,
-      cells: qt.cells.map((cell) => ({ ...cell, when: rewriteCondition(cell.when, ctx)! })),
-    })),
     flow: rewriteFlow(def.flow as any[], ctx) as SurveyDefinition["flow"],
   };
 
-  return { def: next, mapping, referencesUpdated: ctx.count, needsReview: reviewable(def, questionId) };
+  /*
+   * EVERY CONDITION, WHEREVER IT SITS. This used to be a list of fields, and
+   * the list missed punch `when`s, mask `when`s, validation checks, flow-node
+   * visibility, loop conditions, named expressions, list fills and option
+   * groups — all of which kept pointing at whichever option now held the old
+   * code. The structural walk finds them all, including ones added later.
+   */
+  const rewritten = mapConditionRoots(next, (c) => rewriteCondition(c, ctx)!);
+
+  return { def: rewritten, mapping, referencesUpdated: ctx.count, needsReview: reviewable(def, questionId) };
 }
 
 /**

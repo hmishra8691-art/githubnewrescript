@@ -138,3 +138,20 @@ test("the basic preset is still a client-facing questionnaire, not a spec", asyn
   assert.ok(!text.includes("CALCULATED VARIABLES"), "no appendix");
   assert.match(text, /Aware\?/, "but every question is there");
 });
+
+test("nested logic in the spec: a condition rule says when the answer is INVALID, a gated rule says when it applies, flow elements print their conditions", async () => {
+  const d = def();
+  const q2 = d.questions.find((q) => q.id === "q2")!;
+  q2.validation = [
+    { id: "v1", kind: "condition", check: { type: "group", op: "and", children: [
+      { type: "rule", source: { kind: "question", ref: "q2" }, operator: "selected", value: 3 },
+      { type: "group", op: "not", children: [{ type: "rule", source: { kind: "question", ref: "q1" }, operator: "selected", value: 3 }] },
+    ] }, when: { type: "rule", source: { kind: "question", ref: "q1" }, operator: "selected", value: 1 } },
+  ] as never;
+  d.flow.splice(1, 0, { type: "randomizer", id: "rz", visibleIf: { type: "rule", source: { kind: "question", ref: "q1" }, operator: "selected", value: 2 }, children: [] } as never);
+  const text = docxText(await exportSurveyDocx(d, EXPORT_PRESETS.full));
+  assert.match(text, /Invalid when: .*Gamma/, "the check, as the condition that FAILS the answer");
+  assert.match(text, /only when .*Alpha/, "the gate");
+  assert.doesNotMatch(text, /Must satisfy/);
+  assert.match(text, /Only when .*Beta/, "the randomizer's own condition");
+});

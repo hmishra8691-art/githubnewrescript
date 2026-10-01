@@ -1,5 +1,5 @@
 import type { Question, SurveyDefinition } from "@rescript/schema";
-import { resolveVariant, variantRegistry, variantForLegacyType } from "@rescript/schema";
+import { resolveVariant, variantRegistry, variantForLegacyType, isEmptyConditionTree } from "@rescript/schema";
 import {
   listBlocks, conditionSummary, stripHtmlText, objectKey, questionsInFlowOrder,
   type ObjectKey, type ObjectStatusMap, type DependencyIndex, type StatusLevel,
@@ -158,7 +158,7 @@ export function buildGridRows(def: SurveyDefinition): GridRow[] {
       unplaced: !place,
       options: opts.text,
       optionCount: opts.count,
-      display: q.displayLogic ? conditionSummary(def, q.displayLogic) : "",
+      display: !isEmptyConditionTree(q.displayLogic) ? conditionSummary(def, q.displayLogic!) : "",
       skip: skipText(def, q),
       validation: validationText(q),
       status: "ok",

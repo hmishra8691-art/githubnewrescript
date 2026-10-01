@@ -1,4 +1,5 @@
 import type { FlowNode, SurveyDefinition } from "@rescript/schema";
+import { isEmptyConditionTree } from "@rescript/schema";
 import {
   objectKey, stripHtmlText, conditionSummary,
   type ObjectKey, type ObjectStatusMap, type DependencyIndex, type StatusLevel,
@@ -103,7 +104,7 @@ export function buildSurveyMap(def: SurveyDefinition, d: Deco = {}): MapNode {
     return {
       key, kind: "question", id: q.id, label: q.code, code: q.code,
       detail: stripHtmlText(q.text ?? "").trim() || q.variableName,
-      children: [], conditional: !!q.displayLogic, selectable: true, ...deco(key, d), ...(tags.length ? { tags } : {}),
+      children: [], conditional: !isEmptyConditionTree(q.displayLogic), selectable: true, ...deco(key, d), ...(tags.length ? { tags } : {}),
     };
   };
 
@@ -113,8 +114,8 @@ export function buildSurveyMap(def: SurveyDefinition, d: Deco = {}): MapNode {
     const label = asBlock ? `Block ${++blockNo}${n.title ? ` · ${n.title}` : ""}` : (pageNo ? `Page ${pageNo.n} of ${pageNo.of}${n.title ? ` · ${n.title}` : ""}` : (n.title ?? "Page"));
     return rollUp({
       key, kind: asBlock ? "block" : "page", id: n.id, label,
-      detail: n.visibleIf ? `shown when ${conditionSummary(def, n.visibleIf)}` : undefined,
-      children: kids, conditional: !!n.visibleIf, selectable: true, ...(d.index || d.status ? deco(key, d) : NONE),
+      detail: !isEmptyConditionTree(n.visibleIf) ? `shown when ${conditionSummary(def, n.visibleIf!)}` : undefined,
+      children: kids, conditional: !isEmptyConditionTree(n.visibleIf), selectable: true, ...(d.index || d.status ? deco(key, d) : NONE),
     });
   };
 
@@ -137,16 +138,16 @@ export function buildSurveyMap(def: SurveyDefinition, d: Deco = {}): MapNode {
         const children = pages.length === 1 && pages[0].kind === "page" ? pages[0].children : pages;
         return rollUp({
           key, kind: "block", id: n.id, label: `Block ${no}${n.title ? ` · ${n.title}` : ""}`,
-          detail: n.visibleIf ? `shown when ${conditionSummary(def, n.visibleIf)}` : undefined,
-          children, conditional: !!n.visibleIf, selectable: true, ...deco(key, d),
+          detail: !isEmptyConditionTree(n.visibleIf) ? `shown when ${conditionSummary(def, n.visibleIf!)}` : undefined,
+          children, conditional: !isEmptyConditionTree(n.visibleIf), selectable: true, ...deco(key, d),
         });
       }
       case "section": {
         const key = objectKey("flowNode", n.id);
         return rollUp({
           key, kind: "group", id: n.id, label: n.title ?? "Group",
-          detail: n.visibleIf ? `shown when ${conditionSummary(def, n.visibleIf)}` : undefined,
-          children: walk(n.children), conditional: !!n.visibleIf, selectable: true, ...deco(key, d),
+          detail: !isEmptyConditionTree(n.visibleIf) ? `shown when ${conditionSummary(def, n.visibleIf!)}` : undefined,
+          children: walk(n.children), conditional: !isEmptyConditionTree(n.visibleIf), selectable: true, ...deco(key, d),
         });
       }
       case "randomizer": {
@@ -196,7 +197,7 @@ export function buildSurveyMap(def: SurveyDefinition, d: Deco = {}): MapNode {
       }
       case "redirect": {
         const key = objectKey("flowNode", n.id);
-        return { key, kind: "redirect", id: n.id, label: n.title ?? "Redirect", detail: n.url, children: [], conditional: !!n.when, selectable: true, ...deco(key, d) };
+        return { key, kind: "redirect", id: n.id, label: n.title ?? "Redirect", detail: n.url, children: [], conditional: !isEmptyConditionTree(n.when), selectable: true, ...deco(key, d) };
       }
       case "end": {
         const key = objectKey("flowNode", n.id);
@@ -226,7 +227,7 @@ export function buildSurveyMap(def: SurveyDefinition, d: Deco = {}): MapNode {
   const calcs: MapNode = rollUp({
     key: "section:calculations", kind: "calculations", id: "calculations", label: "Calculations", children: def.calculations.map((c) => {
       const key = objectKey("calculation", c.id);
-      return { key, kind: "calculation" as MapKind, id: c.id, label: c.targetVariable, code: c.targetVariable, detail: c.expression, children: [], conditional: !!c.when, selectable: true, ...deco(key, d) };
+      return { key, kind: "calculation" as MapKind, id: c.id, label: c.targetVariable, code: c.targetVariable, detail: c.expression, children: [], conditional: !isEmptyConditionTree(c.when), selectable: true, ...deco(key, d) };
     }), conditional: false, selectable: false, ...NONE,
   });
   const quotas: MapNode = rollUp({

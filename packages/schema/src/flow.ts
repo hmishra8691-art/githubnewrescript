@@ -283,6 +283,8 @@ export type FlowNode =
       show?: number;
       evenPresentation?: boolean;
       children: FlowNode[];
+      /** Only run this randomizer (and show any of its children) when this holds. */
+      visibleIf?: Condition;
     }
   | {
       type: "branch";
@@ -385,6 +387,8 @@ export type FlowNode =
         dataType?: EmbeddedDataType;
         /** Used when the URL / panel / expression produced nothing. */
         defaultValue?: string;
+        /** Capture this field only when this holds; otherwise it is left as it is. */
+        when?: Condition;
       }[];
     }
   | {
@@ -392,6 +396,8 @@ export type FlowNode =
       id: string;
       quotaIds: string[];
       onFull: { kind: "terminate" | "redirect" | "continue" | "flag"; url?: string };
+      /** Only check the quotas here when this holds — e.g. only for the main sample. */
+      when?: Condition;
     }
   | {
       type: "redirect";
@@ -451,6 +457,7 @@ export const FlowNode: z.ZodType<FlowNode> = z.lazy(() =>
       show: z.number().optional(),
       evenPresentation: z.boolean().optional(),
       children: z.array(FlowNode),
+      visibleIf: Condition.optional(),
     }),
     z.object({
       type: z.literal("branch"),
@@ -496,6 +503,7 @@ export const FlowNode: z.ZodType<FlowNode> = z.lazy(() =>
           value: z.string().optional(),
           dataType: EmbeddedDataType.optional(),
           defaultValue: z.string().optional(),
+          when: Condition.optional(),
         }),
       ),
     }),
@@ -507,6 +515,7 @@ export const FlowNode: z.ZodType<FlowNode> = z.lazy(() =>
         kind: z.enum(["terminate", "redirect", "continue", "flag"]),
         url: z.string().optional(),
       }),
+      when: Condition.optional(),
     }),
     z.object({
       type: z.literal("redirect"),

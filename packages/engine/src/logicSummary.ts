@@ -8,10 +8,12 @@ import type {
   QuestionRow,
   SurveyDefinition,
 } from "@rescript/schema";
-import { VALUELESS_OPERATORS, TWO_VALUE_OPERATORS, isOptionValueRef } from "@rescript/schema";
+import { VALUELESS_OPERATORS, TWO_VALUE_OPERATORS, isOptionValueRef, isQuestionValueRef } from "@rescript/schema";
+import { findNamedExpression } from "./namedExpressions.js";
 import { getQuestionByCodeOrVar } from "./state.js";
 import { LIST_OP_LABELS } from "@rescript/schema";
 import { stripHtmlText } from "./html.js";
+import { constantValueOf } from "./conditionWalk.js";
 
 /**
  * Readable logic summaries (req §14).
@@ -74,6 +76,11 @@ function labelForCode(q: Question | undefined, code: unknown): string {
 
 function valueText(def: SurveyDefinition, src: Question | undefined, value: unknown): string {
   if (isOptionValueRef(value)) return "this option";
+  if (isQuestionValueRef(value)) {
+    const q = getQuestionByCodeOrVar(def, value.$question);
+    const name = `${q?.code ?? value.$question}${value.rowCode ? ` row ${value.rowCode}` : ""}${value.columnId ? ` — ${value.columnId}` : ""}`;
+    return value.read === "count" ? `how many ${name} holds` : `${name}'s answer`;
+  }
   if (Array.isArray(value)) return value.map((v) => labelForCode(src, v)).join(", ");
   if (value === undefined || value === null || value === "") return "…";
   return labelForCode(src, value);
@@ -82,6 +89,8 @@ function valueText(def: SurveyDefinition, src: Question | undefined, value: unkn
 /** One condition tree, in plain English. */
 export function conditionSummary(def: SurveyDefinition, c: Condition | undefined | null): string {
   if (!c) return "";
+  const k = constantValueOf(c);
+  if (k !== null) return k ? "always" : "never";
   if (c.type === "group") {
     const parts = c.children.map((ch) => conditionSummary(def, ch)).filter(Boolean);
     if (parts.length === 0) return "";
@@ -126,7 +135,14 @@ export function conditionSummary(def: SurveyDefinition, c: Condition | undefined
         return stripHtml(o?.label ?? String(r));
       }).join(" or ")}`
       : "";
-    subject = `count of ${of} ${scopeText}${resp}`;
+    const where = spec.where ? conditionSummary(def, spec.where) : "";
+    subject = `count of ${of === "matching" && where ? "" : `${of} `}${scopeText}${resp}${where ? ` where ${where}` : ""}`;
+  } else if (source.kind === "rule") {
+    /* a named expression reads as its name — the id means nothing to a reader */
+    const named = findNamedExpression(def, source.ref);
+    const name = named?.name?.trim() || source.ref;
+    const held = !(operator === "eq" && c.value === false) && !(operator === "ne" && c.value !== false);
+    return `${name} is ${held ? "true" : "false"}`;
   } else if (source.kind === "option") {
     subject = `this option's ${source.ref || "code"}`;
   } else if (source.kind === "calculation") {
@@ -140,11 +156,17 @@ export function conditionSummary(def: SurveyDefinition, c: Condition | undefined
   } else {
     const q = getQuestionByCodeOrVar(def, source.ref);
     subject = q?.code ?? source.ref ?? "?";
-    if (source.rowCode) subject += ` row ${source.rowCode}`;
+    const posWords = (p: "first" | "last" | number) => (p === "first" ? "first" : p === "last" ? "last" : `#${p + 1}`);
+    if (source.rowCode) {
+      const row = q?.rows.find((x) => String(x.code) === String(source.rowCode)) ?? (q?.type === "allocation" ? q.options.find((x) => String(x.code) === String(source.rowCode)) : undefined);
+      subject += ` ${q?.type === "allocation" ? "option" : "row"} ${row ? `“${stripHtml(row.label) || source.rowCode}”` : source.rowCode}`;
+    } else if (source.rowPosition != null) subject += ` ${posWords(source.rowPosition)} row`;
+    else if (source.optionPosition != null) subject += ` ${posWords(source.optionPosition)} option`;
     if (source.columnId) {
       const col = q?.columns.find((x) => x.id === source.columnId);
-      subject += ` — ${stripHtml(col?.label ?? source.columnId)}`;
-    }
+      const scale = col ? undefined : q?.options.find((x) => String(x.code) === String(source.columnId));
+      subject += ` — ${stripHtml(col?.label ?? scale?.label ?? source.columnId)}`;
+    } else if (source.rowCode && q && (q.columns?.length ?? 0) > 1) subject += " (any column)";
   }
 
   /*

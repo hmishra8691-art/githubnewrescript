@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { Condition } from "./conditions.js";
+import { Condition, isEmptyConditionTree } from "./conditions.js";
 
 /**
  * Option-level logic and the reusable list-processing model.
@@ -91,6 +91,31 @@ export function isEmptyOptionLogic(l: OptionLogic | undefined): boolean {
     !l.randomizeWhen &&
     !l.carryForward &&
     !l.carryBack
+  );
+}
+
+/**
+ * Whether option logic actually DOES anything — the test behind the "logic"
+ * marker on an option row. `isEmptyOptionLogic` answers a different question
+ * (is there anything worth keeping in storage?) and has to keep a "Hide when"
+ * whose condition is still being built, or the editor would throw the mode
+ * away the moment it was picked. Used for the marker it showed "logic" on an
+ * option whose only configuration was an empty condition, or a condition
+ * left behind by a mode that no longer reads it.
+ */
+export function optionLogicHasEffect(l: OptionLogic | undefined): boolean {
+  if (!l) return false;
+  const v = l.visibility ?? "default";
+  if (v === "always_show" || v === "always_hide") return true;
+  if ((v === "show_when" || v === "hide_when") && !isEmptyConditionTree(l.when)) return true;
+  return (
+    !isEmptyConditionTree(l.eligibleWhen) ||
+    !isEmptyConditionTree(l.excludeWhen) ||
+    !isEmptyConditionTree(l.prioritizeWhen) ||
+    !isEmptyConditionTree(l.deprioritizeWhen) ||
+    !isEmptyConditionTree(l.randomizeWhen) ||
+    !!l.carryForward ||
+    !!l.carryBack
   );
 }
 
