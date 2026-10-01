@@ -177,6 +177,12 @@ export interface CanonicalQuota {
   when: CExpr;
   onFull: "terminate" | "continue" | "redirect";
   redirectUrl?: string;
+  /**
+   * A source-platform quota GROUP this quota belongs to (Qualtrics QG). The
+   * mapper turns a group into ONE Rescript quota whose cells are its members
+   * — the multi-cell quota Rescript already has — instead of dropping it.
+   */
+  group?: { id: string; name: string };
 }
 
 export interface Issue {

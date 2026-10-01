@@ -78,6 +78,8 @@ export const UxStyle = z.object({
   rules: z.array(UxRule).default([]),
   /** scoped CSS text: selectors are relative to the target, `&` is the target itself */
   css: z.string().max(20000).optional(),
+  /** applies only while this holds on the answers so far — "highlight Q8 for heavy users" (any nesting) */
+  when: Condition.optional(),
   createdAt: z.string().optional(),
 });
 export type UxStyle = z.infer<typeof UxStyle>;
@@ -95,6 +97,8 @@ export const UxAnimation = z.object({
   staggerMs: z.number().int().min(0).max(3000).default(0),
   iterations: z.union([z.number().int().min(1).max(20), z.literal("infinite")]).default(1),
   media: z.enum(UX_MEDIA).optional(),
+  /** plays only while this holds on the answers so far (any nesting) */
+  when: Condition.optional(),
   createdAt: z.string().optional(),
 });
 export type UxAnimation = z.infer<typeof UxAnimation>;

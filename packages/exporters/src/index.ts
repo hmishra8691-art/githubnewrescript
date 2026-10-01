@@ -17,3 +17,4 @@ export * from "./sas.js";
 export * from "./stata.js";
 export * from "./zip.js";
 export * from "./statisticalExport.js";
+export * from "./spssBases.js";

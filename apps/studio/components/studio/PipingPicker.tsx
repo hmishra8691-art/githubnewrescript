@@ -11,6 +11,7 @@ import {
   type PipeProperty,
   type PipeToken,
   stripHtmlText,
+  embeddedCatalog,
 } from "@rescript/engine";
 import { useLoopScope } from "./loopScope";
 import { useStudio } from "./store";
@@ -67,6 +68,26 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
   const [property, setProperty] = React.useState<PipeProperty>("label");
   const [format, setFormat] = React.useState<PipeFormat>("comma");
   const [expr, setExpr] = React.useState("");
+  /* the token text, when the programmer has typed over it; any dropdown change hands control back */
+  const [manual, setManual] = React.useState<string | null>(null);
+  /* a URL carried in (a URL parameter, a calculation, an answer) can be shown as the picture it names — Prince 36 */
+  const [asImage, setAsImage] = React.useState(false);
+  React.useEffect(() => { setManual(null); }, [kind, ref, rowCode, property, format, expr, asImage]);
+  const embeddedFields = React.useMemo(() => embeddedCatalog(s.def), [s.def]);
+  /*
+   * Changing the source changes what `ref` names: a question code means
+   * nothing to "Calculated value". The first item of the new source is
+   * picked, so every dropdown shows a real, selected value.
+   */
+  const changeKind = (k: PipeToken["kind"]) => {
+    setKind(k);
+    setRowCode("");
+    if (k === "question") setRef(questions.find((x) => x.id !== currentQuestionId)?.code ?? questions[0]?.code ?? "");
+    else if (k === "calc") setRef(s.def.calculations[0]?.targetVariable ?? "");
+    else if (k === "embedded") setRef(embeddedFields[0]?.name ?? "");
+    else if (k === "loop") setRef("label");
+    else setRef("");
+  };
 
   const q = questions.find((x) => x.code === ref || x.id === ref);
   const props = propertiesForQuestion(q);
@@ -97,7 +118,8 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
   const [loopTarget, setLoopTarget] = React.useState<string>("");   // "" = innermost, else an outer loopVar
   const scopedLoop = loopTarget ? loopScope.find((l) => l.loopVar === loopTarget) : loopScope[0];
 
-  const token: Omit<PipeToken, "raw" | "text"> =
+  const imageable = kind === "embedded" || kind === "calc" || kind === "expr" || (kind === "question" && (property === "value" || property === "label"));
+  const token0: Omit<PipeToken, "raw" | "text"> =
     kind === "expr"
       ? { kind: "expr", ref: expr, property: "value" }
       : kind === "question"
@@ -106,7 +128,9 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
           ? { kind, ref, property: "value", format, scope: loopTarget || undefined }
           : { kind, ref, property: "value", format };
 
-  const text = serializePipeToken(token);
+  const token: Omit<PipeToken, "raw" | "text"> = asImage && imageable && kind !== "expr" ? { ...token0, format: "image" } : token0;
+  const built = serializePipeToken(token);
+  const text = manual ?? built;
   const multiValued =
     kind === "question" &&
     ["labels", "rank", "displayed", "remaining", "value"].includes(property);
@@ -117,7 +141,16 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
     questions.findIndex((x) => x.id === q.id) > questions.findIndex((x) => x.id === currentQuestionId);
 
   return (
-    <div className="pipe-picker" role="dialog" aria-label="Insert piped text">
+    /*
+     * The picker opens inside the rich-text toolbar, whose mousedown handler
+     * calls preventDefault() to keep the text selection. Inherited here, that
+     * stopped every select and input in the dialog from opening or taking
+     * focus — the "fields cannot be changed" of the 29-09 review (#7). The
+     * dialog's own mousedowns stop at the dialog; the caret is kept by
+     * InsertPipingButton instead.
+     */
+    <div className="pipe-picker" role="dialog" aria-label="Insert piped text" data-testid="pipe-picker"
+      onMouseDown={(e) => e.stopPropagation()}>
       <div className="row" style={{ marginBottom: 8 }}>
         <strong style={{ fontSize: 14 }}>Insert piped text</strong>
         <span className="grow" />
@@ -125,7 +158,7 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
       </div>
 
       <label className="f"><span>Insert from</span>
-        <select className="select" value={kind} onChange={(e) => setKind(e.target.value as any)}>
+        <select className="select" data-testid="pipe-kind" value={kind} onChange={(e) => changeKind(e.target.value as PipeToken["kind"])}>
           <option value="question">Previous question</option>
           <option value="calc">Calculated value</option>
           <option value="embedded">Embedded data / URL parameter</option>
@@ -184,7 +217,7 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
 
       {kind === "calc" && (
         <label className="f"><span>Calculation</span>
-          <select className="select" value={ref} onChange={(e) => setRef(e.target.value)}>
+          <select className="select" data-testid="pipe-calc" value={ref} onChange={(e) => setRef(e.target.value)}>
             <option value="">— pick —</option>
             {s.def.calculations.map((c) => (
               <option key={c.id} value={c.targetVariable}>{c.targetVariable}</option>
@@ -194,9 +227,10 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
       )}
       {kind === "embedded" && (
         <label className="f"><span>Field</span>
-          <select className="select" value={ref} onChange={(e) => setRef(e.target.value)}>
+          {/* every field the survey defines — survey-level AND the flow's Embedded data elements (they were missing) */}
+          <select className="select" data-testid="pipe-embedded" value={ref} onChange={(e) => setRef(e.target.value)}>
             <option value="">— pick —</option>
-            {s.def.embeddedData.map((e2) => <option key={e2.name} value={e2.name}>{e2.name}</option>)}
+            {embeddedFields.map((e2) => <option key={e2.name} value={e2.name}>{e2.name}{e2.source ? ` — ${e2.source}` : ""}</option>)}
           </select>
         </label>
       )}
@@ -243,8 +277,15 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
         <label className="f"><span>Format</span>
           <select className="select" data-testid="pipe-format" value={format}
             onChange={(e) => setFormat(e.target.value as PipeFormat)}>
-            {PIPE_FORMATS.map((f) => <option key={f.value} value={f.value}>{f.label} — {f.example}</option>)}
+            {PIPE_FORMATS.filter((f) => f.value !== "image").map((f) => <option key={f.value} value={f.value}>{f.label} — {f.example}</option>)}
           </select>
+        </label>
+      )}
+
+      {imageable && kind !== "expr" && (
+        <label className="row" style={{ gap: 6, fontSize: 13, marginBottom: 6 }}>
+          <input type="checkbox" data-testid="pipe-as-image" checked={asImage} onChange={(e) => setAsImage(e.target.checked)} />
+          Show as image — the value is an image URL
         </label>
       )}
 
@@ -254,10 +295,13 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
         </div>
       )}
 
-      <div className="pipe-preview mono">{text}</div>
+      {/* the token itself, editable: the dropdowns write it, and it can still be adjusted by hand */}
+      <input className="input mono pipe-preview" data-testid="pipe-token" value={text} spellCheck={false}
+        onChange={(e) => setManual(e.target.value)} />
       <div className="row" style={{ marginTop: 8 }}>
         <button className="btn primary small" data-testid="pipe-insert"
-          onClick={() => { onInsert(text); onClose(); }}>
+          disabled={!/^\{\{.+\}\}$/.test(text.trim())}
+          onClick={() => { onInsert(text.trim()); onClose(); }}>
           Insert
         </button>
         <button className="btn small" onClick={onClose}>cancel</button>
@@ -271,17 +315,38 @@ export function InsertPipingButton({ onInsert, currentQuestionId, label = "＋ P
   onInsert(token: string): void; currentQuestionId?: string; label?: string; className?: string;
 }) {
   const [open, setOpen] = React.useState(false);
+  /*
+   * The caret, kept while the dialog has focus. Its selects take the focus
+   * (they must, to be usable), which empties the text selection; the token
+   * is inserted where the caret WAS, not at the start of the field.
+   */
+  const caret = React.useRef<Range | null>(null);
+  const keepCaret = () => {
+    const sel = typeof window !== "undefined" ? window.getSelection() : null;
+    caret.current = sel && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+  };
+  const insertAtCaret = (token: string) => {
+    const sel = window.getSelection();
+    const r = caret.current;
+    if (sel && r && document.contains(r.startContainer)) {
+      const host = (r.startContainer.nodeType === 1 ? r.startContainer as HTMLElement : r.startContainer.parentElement)?.closest("[contenteditable=true]") as HTMLElement | null;
+      host?.focus();
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+    onInsert(token);
+  };
   return (
     <span className="pipe-anchor">
       <button type="button" className={className} title="Insert piped text from an earlier answer"
         data-testid="insert-piping"
-        onMouseDown={(e) => e.preventDefault()}
+        onMouseDown={(e) => { e.preventDefault(); keepCaret(); }}
         onClick={() => setOpen((v) => !v)}>
         {label}
       </button>
       {open && (
         <PipingPicker currentQuestionId={currentQuestionId}
-          onInsert={onInsert} onClose={() => setOpen(false)} />
+          onInsert={insertAtCaret} onClose={() => setOpen(false)} />
       )}
     </span>
   );

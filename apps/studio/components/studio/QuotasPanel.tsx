@@ -148,8 +148,8 @@ export function QuotasPanel({ focusQuotaId }: { focusQuotaId?: string } = {}) {
               onChange={(e) => s.update((d) => { d.quotas[qi].mode = e.target.value as any; })}>
               <option value="hard">hard</option><option value="soft">soft</option>
             </select>
-            <label className="row" style={{ gap: 4 }}>target total
-              <CountInput value={qt.targetTotal}
+            <label className="row" style={{ gap: 4, whiteSpace: "nowrap", flex: "0 0 auto" }}>target total
+              <CountInput value={qt.targetTotal} width={110} data-testid={`quota-target-total-${qi}`}
                 onChange={(v) => s.update((d) => { d.quotas[qi].targetTotal = v; })} />
             </label>
             <select className="select" value={qt.onFull.kind}

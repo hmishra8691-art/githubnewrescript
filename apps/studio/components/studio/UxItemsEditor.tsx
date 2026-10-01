@@ -164,6 +164,11 @@ function UxItemCard({ kind, item, def, onSave, onRemove, readOnly, isNew }: {
       <div className="muted" style={{ fontSize: 11 }}>on {describeUxTarget(def, cur.target)}</div>
       {kind === "style" && <StyleFields style={cur as UxStyle} readOnly={readOnly} onChange={(n, now) => (now ? commit(n, true) : setCur(n))} onBlur={() => commit(cur)} />}
       {kind === "animation" && <AnimationFields a={cur as UxAnimation} readOnly={readOnly} onChange={(n) => commit(n, true)} />}
+      {(kind === "style" || kind === "animation") && (
+        /* a style or animation can be conditional too — it applies only while the condition holds */
+        <BehaviorGuard b={cur as unknown as UxBehavior} readOnly={readOnly}
+          onChange={(n) => commit(n as never, true)} />
+      )}
       {kind === "behavior" && <BehaviorFields b={cur as UxBehavior} readOnly={readOnly} onChange={(n, now) => (now ? commit(n, true) : setCur(n))} onBlur={() => commit(cur)} />}
       {errors.length > 0 && <ul className="ux-errors" role="alert" data-testid="ux-item-errors">{errors.map((e, i) => <li key={i}>{e}</li>)}</ul>}
       {warnings.length > 0 && <ul className="ux-warnings" data-testid="ux-item-warnings">{warnings.map((e, i) => <li key={i}>{e}</li>)}</ul>}
@@ -267,6 +272,7 @@ function BehaviorFields({ b, readOnly, onChange, onBlur }: { b: UxBehavior; read
  * `when`; this is where it is seen and set (the Copilot could already write it).
  */
 function BehaviorGuard({ b, readOnly, onChange }: { b: UxBehavior; readOnly: boolean; onChange(n: UxBehavior, now?: boolean): void }) {
+  /* (styles and animations use it too: anything with a `when`) */
   if (readOnly) return b.when ? <div className="muted" style={{ fontSize: 12.5 }} data-testid="ux-beh-when-ro">Only when a condition holds.</div> : null;
   return (
     <div data-testid="ux-beh-when">

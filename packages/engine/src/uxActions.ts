@@ -42,11 +42,11 @@ export const UX_ACTION_ALIASES = ["attach_behavior_to_question", "attach_behavio
 
 export interface RawRule { state?: string; media?: string; whenClass?: string; selector?: string; declarations: Record<string, string> }
 export interface RawEffect { do: string; target?: unknown; className?: string; preset?: string; durationMs?: number; style?: Record<string, string>; text?: string }
-type AnimFields = { preset?: string; trigger?: string; durationMs?: number; delayMs?: number; easing?: string; staggerMs?: number; iterations?: number | "infinite"; media?: string };
+type AnimFields = { preset?: string; trigger?: string; durationMs?: number; delayMs?: number; easing?: string; staggerMs?: number; iterations?: number | "infinite"; media?: string; when?: string | null };
 type BehFields = { on?: string; options?: string[]; effects?: RawEffect[]; script?: string; once?: boolean; when?: string | null };
 export type UxAction =
-  | { op: "create_style"; ref?: string; label: string; target: unknown; rules: RawRule[]; css?: string }
-  | { op: "update_style"; id: string; label?: string; target?: unknown; rules?: RawRule[]; addRules?: RawRule[]; css?: string | null }
+  | { op: "create_style"; ref?: string; label: string; target: unknown; rules: RawRule[]; css?: string; when?: string }
+  | { op: "update_style"; id: string; label?: string; target?: unknown; rules?: RawRule[]; addRules?: RawRule[]; css?: string | null; when?: string | null }
   | { op: "remove_style"; id: string }
   | ({ op: "create_animation"; ref?: string; label: string; target: unknown; preset: string } & AnimFields)
   | ({ op: "update_animation"; id: string; label?: string; target?: unknown } & AnimFields)
@@ -105,7 +105,11 @@ const animFields = (o: Record<string, unknown>): AnimFields => ({
   ...(ms(o.staggerMs ?? o.stagger) != null ? { staggerMs: ms(o.staggerMs ?? o.stagger) } : {}),
   ...(o.iterations === "infinite" ? { iterations: "infinite" as const } : num(o.iterations) ? { iterations: num(o.iterations) } : {}),
   ...(str(o.media) ?? str(o.breakpoint) ? { media: str(o.media) ?? str(o.breakpoint) } : {}),
+  ...guardField(o),
 });
+/* a guard — "only when Q3 = 2 AND Q1 >= 18" — as expression text; null removes it */
+const guardField = (o: Record<string, unknown>): { when?: string | null } =>
+  o.when === null || o.condition === null ? { when: null } : str(o.when) ?? str(o.condition) ? { when: str(o.when) ?? str(o.condition) } : {};
 const behFields = (o: Record<string, unknown>): BehFields => ({
   ...(str(o.on) ?? str(o.event) ?? str(o.trigger) ? { on: str(o.on) ?? str(o.event) ?? str(o.trigger) } : {}),
   ...(Array.isArray(o.options) ? { options: o.options.map((x) => (typeof x === "number" ? String(x) : str(x))).filter((x): x is string => !!x).slice(0, 50) } : typeof o.option === "string" || typeof o.option === "number" ? { options: [String(o.option)] } : {}),
@@ -125,7 +129,8 @@ export function coerceUxAction(op: string, o: Record<string, unknown>): UxAction
       const t = target(o.target), r = rules(o), css = str(o.css) && typeof o.css === "string" ? o.css : undefined;
       if (!t) return "create_style needs a target";
       if (!r && !css) return "create_style needs rules (declarations) or css";
-      return { op, label: (label ?? "Style").slice(0, 160), target: t, rules: r ?? [], ...(str(o.ref) ? { ref: str(o.ref) } : {}), ...(css ? { css: css.slice(0, 20000) } : {}) };
+      const g = guardField(o);
+      return { op, label: (label ?? "Style").slice(0, 160), target: t, rules: r ?? [], ...(str(o.ref) ? { ref: str(o.ref) } : {}), ...(css ? { css: css.slice(0, 20000) } : {}), ...(g.when ? { when: g.when } : {}) };
     }
     case "create_responsive_rule": {
       const t = target(o.target), r = rules(o);
@@ -138,7 +143,7 @@ export function coerceUxAction(op: string, o: Record<string, unknown>): UxAction
       if (!id) return "update_style needs the style's id";
       const r = Array.isArray(o.rules) ? (o.rules.map(rule).filter((x): x is RawRule => !!x)) : undefined;
       const add = Array.isArray(o.addRules) ? o.addRules.map(rule).filter((x): x is RawRule => !!x) : record(o.declarations) ? [rule({ ...o, rules: undefined })!].filter(Boolean) : undefined;
-      return { op, id, ...(str(o.newLabel) ?? (str(o.id) && label && label !== id ? label : undefined) ? { label: str(o.newLabel) ?? label } : {}), ...(target(o.newTarget) ? { target: target(o.newTarget) } : {}), ...(r ? { rules: r } : {}), ...(add?.length ? { addRules: add } : {}), ...(o.css === null ? { css: null } : typeof o.css === "string" ? { css: o.css.slice(0, 20000) } : {}) };
+      return { op, id, ...(str(o.newLabel) ?? (str(o.id) && label && label !== id ? label : undefined) ? { label: str(o.newLabel) ?? label } : {}), ...(target(o.newTarget) ? { target: target(o.newTarget) } : {}), ...(r ? { rules: r } : {}), ...(add?.length ? { addRules: add } : {}), ...(o.css === null ? { css: null } : typeof o.css === "string" ? { css: o.css.slice(0, 20000) } : {}), ...guardField(o) };
     }
     case "remove_style": case "remove_animation": case "remove_behavior": case "remove_behaviour": {
       const id = itemId(o);
@@ -326,7 +331,7 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
   switch (a.op) {
     case "create_style": {
       const t = resolveTarget(def, a.target, env);
-      const s: UxStyle = { id: env.ids("uxs"), label: a.label, target: t, rules: buildRules(a.rules), ...(a.css ? { css: a.css } : {}), createdAt: env.now };
+      const s: UxStyle = { id: env.ids("uxs"), label: a.label, target: t, rules: buildRules(a.rules), ...(a.css ? { css: a.css } : {}), ...(a.when ? { when: parseGuard(def, a.when) } : {}), createdAt: env.now };
       const warnings = gate(def, "style", s);
       ux.styles.push(s);
       if (a.ref) env.refs.set(a.ref.toLowerCase(), s.id);
@@ -344,6 +349,7 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
         if (same) Object.assign(same.declarations, add.declarations); else next.rules.push(add);
       }
       if (a.css === null) delete next.css; else if (typeof a.css === "string") next.css = a.css;
+      if (a.when === null) delete next.when; else if (a.when) next.when = parseGuard(def, a.when);
       const warnings = gate(def, "style", next);
       ux.styles[ux.styles.indexOf(s)] = next;
       return { description: `Change style “${next.label}” on ${describeUxTarget(def, next.target)}`, warnings, touched: [] };
@@ -356,7 +362,7 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
     }
     case "create_animation": {
       const t = resolveTarget(def, a.target, env);
-      const an = clampAnim({ id: env.ids("uxa"), label: a.label, target: t, preset: oneOf(UX_PRESETS, a.preset, "preset")!, trigger: oneOf(UX_ANIMATION_TRIGGERS, a.trigger === "load" || a.trigger === "enter" ? "appear" : a.trigger === "selected" ? "select" : a.trigger, "trigger", "appear")!, durationMs: a.durationMs ?? 400, delayMs: a.delayMs ?? 0, easing: a.easing ?? "ease-out", staggerMs: a.staggerMs ?? 0, iterations: a.iterations ?? 1, ...(a.media ? { media: oneOf(UX_MEDIA, a.media, "breakpoint")! } : {}), createdAt: env.now } as UxAnimation);
+      const an = clampAnim({ id: env.ids("uxa"), label: a.label, target: t, preset: oneOf(UX_PRESETS, a.preset, "preset")!, trigger: oneOf(UX_ANIMATION_TRIGGERS, a.trigger === "load" || a.trigger === "enter" ? "appear" : a.trigger === "selected" ? "select" : a.trigger, "trigger", "appear")!, durationMs: a.durationMs ?? 400, delayMs: a.delayMs ?? 0, easing: a.easing ?? "ease-out", staggerMs: a.staggerMs ?? 0, iterations: a.iterations ?? 1, ...(a.media ? { media: oneOf(UX_MEDIA, a.media, "breakpoint")! } : {}), ...(a.when ? { when: parseGuard(def, a.when) } : {}), createdAt: env.now } as UxAnimation);
       const warnings = gate(def, "animation", an);
       ux.animations.push(an);
       if (a.ref) env.refs.set(a.ref.toLowerCase(), an.id);
@@ -365,6 +371,7 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
     case "update_animation": {
       const an = find(ux.animations, a.id, env, "animation");
       const next = clampAnim({ ...structuredClone(an), ...(a.label ? { label: a.label } : {}), ...(a.target ? { target: resolveTarget(def, a.target, env) } : {}), ...(a.preset ? { preset: oneOf(UX_PRESETS, a.preset, "preset")! } : {}), ...(a.trigger ? { trigger: oneOf(UX_ANIMATION_TRIGGERS, a.trigger, "trigger")! } : {}), ...(a.durationMs != null ? { durationMs: a.durationMs } : {}), ...(a.delayMs != null ? { delayMs: a.delayMs } : {}), ...(a.easing ? { easing: a.easing } : {}), ...(a.staggerMs != null ? { staggerMs: a.staggerMs } : {}), ...(a.iterations != null ? { iterations: a.iterations } : {}), ...(a.media ? { media: oneOf(UX_MEDIA, a.media, "breakpoint")! } : {}) } as UxAnimation);
+      if (a.when === null) delete next.when; else if (a.when) next.when = parseGuard(def, a.when);
       const warnings = gate(def, "animation", next);
       ux.animations[ux.animations.indexOf(an)] = next;
       const changes = [an.preset !== next.preset ? `${an.preset} → ${next.preset}` : "", an.durationMs !== next.durationMs ? `${an.durationMs}ms → ${next.durationMs}ms` : "", an.trigger !== next.trigger ? `on ${next.trigger}` : "", an.staggerMs !== next.staggerMs ? `stagger ${next.staggerMs}ms` : ""].filter(Boolean);

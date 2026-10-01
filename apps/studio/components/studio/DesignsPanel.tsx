@@ -84,7 +84,8 @@ function ConfigField({ field, value, onChange, config }: {
      * always expressible.
      */
     case "prohibitions": {
-      const pairs: { a: { attribute: string; level: string }; b: { attribute: string; level: string }; note?: string }[] =
+      type Lv = { attribute: string; level: string };
+      const pairs: { a: Lv; b: Lv; also?: Lv[]; alsoOp?: "and" | "or"; when?: unknown; note?: string }[] =
         Array.isArray(value) ? (value as never) : [];
       const attrs: { name: string; levels: string[] }[] = Array.isArray(config?.attributes)
         ? (config!.attributes as never) : [];
@@ -128,6 +129,43 @@ function ConfigField({ field, value, onChange, config }: {
                 {levelsOf(p.b.attribute).map((l) => <option key={l} value={l}>{l}</option>)}
               </select>
               <button className="btn small danger" onClick={() => onChange(pairs.filter((_, j) => j !== i))}>×</button>
+              {/*
+                * A COMBINATION, not only a pair: "never Value at $999 AND
+                * (2 years OR 3 years)". The extra levels are ANDed with the
+                * pair; with "any of" one of them is enough.
+                */}
+              {(p.also ?? []).length > 0 && (
+                <span className="row" style={{ gap: 6, flexBasis: "100%", flexWrap: "wrap", marginLeft: 40 }} data-testid="prohibition-also">
+                  <span className="muted" style={{ fontSize: 12.5 }}>and</span>
+                  {(p.also ?? []).length > 1 && (
+                    <select className="select" style={{ width: 110 }} value={p.alsoOp ?? "and"} data-testid="prohibition-also-op"
+                      onChange={(e) => set(i, { alsoOp: e.target.value as "and" | "or" })}>
+                      <option value="and">all of</option>
+                      <option value="or">any of</option>
+                    </select>
+                  )}
+                  {(p.also ?? []).map((x, k) => (
+                    <span key={k} className="row" style={{ gap: 4 }}>
+                      <select className="select" style={{ width: 130 }} value={x.attribute}
+                        onChange={(e) => set(i, { also: p.also!.map((y, m) => (m === k ? { attribute: e.target.value, level: levelsOf(e.target.value)[0] ?? "" } : y)) })}>
+                        {usable.map((a) => <option key={a.name} value={a.name}>{a.name}</option>)}
+                      </select>
+                      <select className="select" style={{ width: 120 }} value={x.level}
+                        onChange={(e) => set(i, { also: p.also!.map((y, m) => (m === k ? { ...y, level: e.target.value } : y)) })}>
+                        {levelsOf(x.attribute).map((l) => <option key={l} value={l}>{l}</option>)}
+                      </select>
+                      <button className="btn small" title="Remove this level" onClick={() => set(i, { also: p.also!.filter((_, m) => m !== k) })}>×</button>
+                    </span>
+                  ))}
+                </span>
+              )}
+              {!p.when && (
+                <button className="btn small ghost" data-testid="prohibition-add-level" title="Add a third level to the combination"
+                  onClick={() => set(i, { also: [...(p.also ?? []), { attribute: usable[usable.length - 1].name, level: usable[usable.length - 1].levels[0] }] })}>
+                  + level
+                </button>
+              )}
+              {!!p.when && <span className="muted" style={{ fontSize: 12.5 }}>(a combination rule — written in the design file)</span>}
             </div>
           ))}
           <button className="btn small" data-testid="add-prohibition"

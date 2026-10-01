@@ -59,7 +59,8 @@ export type PipeFormat =
   | "lines" // one per line
   | "upper"
   | "lower"
-  | "title";
+  | "title"
+  | "image"; // the value is a URL — shown as the picture it points to
 
 export interface PipeToken {
   kind: PipeKind;
@@ -115,6 +116,7 @@ export const PIPE_FORMATS: { value: PipeFormat; label: string; example: string }
   { value: "upper", label: "UPPERCASE", example: "APPLE" },
   { value: "lower", label: "lowercase", example: "apple" },
   { value: "title", label: "Title Case", example: "Apple" },
+  { value: "image", label: "Show as image", example: "a URL becomes the picture it points to" },
 ];
 
 const FORMAT_NAMES = new Set(PIPE_FORMATS.map((f) => f.value));

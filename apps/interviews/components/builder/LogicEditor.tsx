@@ -16,9 +16,11 @@ import type { Condition, ConditionRule, SkipRule } from "@rescript/schema";
  * The Studio's `ConditionBuilder` offers thirty-eight operators over nine
  * kinds of source. An interview has one kind of source that makes sense — an
  * earlier question — and a handful of comparisons an interviewer actually
- * reaches for. So this offers: rules over earlier questions, `and`/`or`
- * between them, and one level of grouping. The output is unrestricted; the
- * input is what the job needs.
+ * reaches for. So this offers: rules over earlier questions, all / any /
+ * none of them, and groups inside groups (to MAX_GROUP_DEPTH). It used to
+ * stop at one level and showed a NOT group as "all of these" — the opposite
+ * of what it does — so a rule imported or written elsewhere could not be read
+ * here, let alone edited.
  *
  * ## Only EARLIER questions are offered
  *
@@ -146,31 +148,37 @@ function RuleRow({ rule, earlier, onChange, onRemove }: {
   );
 }
 
-function GroupEditor({ group, earlier, onChange, depth }: {
+/** how deep "+ group" goes — the same point past which the Studio's lint calls logic hard to read */
+const MAX_GROUP_DEPTH = 8;
+
+function GroupEditor({ group, earlier, onChange, depth, onRemove }: {
   group: Extract<Condition, { type: "group" }>;
   earlier: EarlierQuestion[];
   onChange: (g: Extract<Condition, { type: "group" }>) => void;
   depth: number;
+  onRemove?: () => void;
 }) {
   const set = (i: number, c: Condition) => onChange({ ...group, children: group.children.map((k, j) => (j === i ? c : k)) });
   const remove = (i: number) => onChange({ ...group, children: group.children.filter((_, j) => j !== i) });
 
   return (
     <div style={{ borderLeft: depth ? "2px solid var(--line)" : undefined, paddingLeft: depth ? 10 : 0 }}>
-      {group.children.length > 1 && (
+      {(group.children.length > 1 || group.op === "not") && (
         <div className="row" style={{ gap: 6, alignItems: "center", marginBottom: 6 }}>
           <span className="tiny muted">Match</span>
-          <select value={group.op === "or" ? "or" : "and"} data-testid="logic-op"
-            onChange={(e) => onChange({ ...group, op: e.target.value as "and" | "or" })}>
+          <select value={group.op} data-testid="logic-op"
+            onChange={(e) => onChange({ ...group, op: e.target.value as "and" | "or" | "not" })}>
             <option value="and">all of these</option>
             <option value="or">any of these</option>
+            <option value="not">none of these</option>
           </select>
+          {onRemove && <button type="button" className="btn small secondary" data-testid="logic-remove-group" onClick={onRemove} aria-label="Remove this group">× group</button>}
         </div>
       )}
       {group.children.map((child, i) => (
         <div key={i} style={{ marginBottom: 6 }}>
           {isGroup(child)
-            ? <GroupEditor group={child} earlier={earlier} depth={depth + 1} onChange={(g) => set(i, g)} />
+            ? <GroupEditor group={child} earlier={earlier} depth={depth + 1} onChange={(g) => set(i, g)} onRemove={() => remove(i)} />
             : <RuleRow rule={child} earlier={earlier} onChange={(r) => set(i, r)} onRemove={() => remove(i)} />}
         </div>
       ))}
@@ -179,7 +187,7 @@ function GroupEditor({ group, earlier, onChange, depth }: {
           onClick={() => onChange({ ...group, children: [...group.children, emptyRule(earlier)] })}>
           + condition
         </button>
-        {depth === 0 && (
+        {depth < MAX_GROUP_DEPTH && (
           <button type="button" className="btn small secondary" data-testid="logic-add-group"
             onClick={() => onChange({ ...group, children: [...group.children, { type: "group", op: "or", children: [emptyRule(earlier)] }] })}>
             + group
@@ -235,6 +243,12 @@ export function SkipRulesEditor({ value, self, later, onChange }: {
           <p className="tiny muted" style={{ margin: "0 0 4px" }}>When the answer to {self.code}…</p>
           <GroupEditor group={normalise(rule.when)} earlier={sources} depth={0}
             onChange={(g) => onChange(value.map((r, j) => (j === i ? { ...r, when: denormalise(g) ?? { type: "group", op: "and", children: [] } } : r)))} />
+          {!denormalise(normalise(rule.when)) && (
+            /* an empty condition holds: this rule sends EVERY candidate on, as in the survey builder */
+            <p className="tiny" data-testid="skip-always" style={{ margin: "4px 0 0", color: "var(--warn, #b45309)" }}>
+              No condition — this rule applies to every candidate.
+            </p>
+          )}
           <div className="row" style={{ gap: 8, alignItems: "center", marginTop: 6 }}>
             <span className="tiny muted">go to</span>
             <select value={rule.target.kind === "end" ? "__end" : rule.target.ref ?? ""} data-testid="skip-target"

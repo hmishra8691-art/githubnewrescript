@@ -458,13 +458,24 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
     for (const cq of c.quotas) {
       const when = cond(cq.when, `Quota ${cq.name}`);
       if (!when) { reportUnconverted(cq.when, `Quota ${cq.name}`, `Quota “${cq.name}”`); continue; }
-      const id = unique(safeIdent(cq.sourceId), new Set(existing?.quotas.map((q) => q.id) ?? []));
+      /* a member of a source quota GROUP is a cell of the group's one quota */
+      if (cq.group) {
+        const gq = quotas.find((q) => (q as { __group?: string }).__group === cq.group!.id);
+        if (gq) {
+          const cid = unique(`${gq.id}_${safeIdent(cq.sourceId)}`, new Set(gq.cells.map((x) => x.id)));
+          gq.cells.push({ id: cid, label: cq.name, when, limit: cq.limit, limitType: "count" } as never);
+          mapping.push({ kind: "quota", source: cq.sourceId, rescript: gq.id });
+          continue;
+        }
+      }
+      const id = unique(safeIdent(cq.group ? cq.group.id : cq.sourceId), new Set([...(existing?.quotas.map((q) => q.id) ?? []), ...quotas.map((q) => q.id)]));
       mapping.push({ kind: "quota", source: cq.sourceId, rescript: id });
-      quotas.push({ id, name: cq.name, mode: "hard", cells: [{ id: `${id}_cell`, label: cq.name, when, limit: cq.limit, limitType: "count" }], onFull: { kind: cq.onFull === "continue" ? "flag" : cq.onFull }, countStatus: ["complete"] } as unknown as Quota);
+      quotas.push({ id, name: cq.group ? cq.group.name : cq.name, mode: "hard", cells: [{ id: `${id}_cell`, label: cq.name, when, limit: cq.limit, limitType: "count" }], onFull: { kind: cq.onFull === "continue" ? "flag" : cq.onFull }, countStatus: ["complete"], ...(cq.group ? { __group: cq.group.id } : {}) } as unknown as Quota);
     }
+    for (const q of quotas) delete (q as { __group?: string }).__group;
     if (quotas.length) {
       // a quota is checked once the answers it reads are known: after the last block that asks them
-      const reads = (q: Quota) => { const s = new Set<string>(); const w = (x: Condition) => { const g = x as { type: string; children?: Condition[]; source?: { kind: string; ref: string } }; if (g.children) g.children.forEach(w); else if (g.source?.kind === "question") s.add(g.source.ref); }; w(q.cells[0].when); return s; };
+      const reads = (q: Quota) => { const s = new Set<string>(); const w = (x: Condition) => { const g = x as { type: string; children?: Condition[]; source?: { kind: string; ref: string } }; if (g.children) g.children.forEach(w); else if (g.source?.kind === "question") s.add(g.source.ref); }; for (const cell of q.cells) w(cell.when); return s; };
       const topIndex = (qid: string) => flow.findIndex((n) => JSON.stringify(n).includes(`"${qid}"`));
       const endAt = flow.findIndex((n) => n.type === "end");
       const groups = new Map<number, string[]>();

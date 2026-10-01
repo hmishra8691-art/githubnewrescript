@@ -96,3 +96,12 @@ audio.rs-embed, audio.rs-audio { display: block; width: 100%; max-width: 480px; 
 }
 .rs-media-note-small { font-size: 0.78em; margin-top: 4px; }
 .rs-media-note[role="img"] { display: inline-flex; align-items: center; gap: 6px; }
+
+/* several media under a question (Prince 11, 14, 16): side by side, wrapping
+   to the next line on a narrow screen rather than shrinking to stamps; or stacked */
+.rs-qmedia-horizontal { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+.rs-qmedia-horizontal > .rs-qmedia-item { flex: 1 1 200px; min-width: 0; max-width: 100%; }
+.rs-qmedia-vertical { display: flex; flex-direction: column; gap: 12px; }
+.rs-qmedia-item > .rs-embed, .rs-qmedia-item img.rs-embed { max-width: 100%; }
+@media (max-width: 480px) { .rs-qmedia-horizontal > .rs-qmedia-item { flex-basis: 100%; } }
+img.rs-piped-image { display: block; max-width: 100%; height: auto; margin: 6px 0; border-radius: calc(var(--rs-radius, 12px) - 4px); }

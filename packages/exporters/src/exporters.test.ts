@@ -412,3 +412,29 @@ test("the variable dictionary says when each question is asked — page conditio
   assert.ok(cells.some((c) => c === "always"), cells.join(" / "));
   assert.ok(cells.some((c) => /Q1/.test(c) && /OR/i.test(c)), cells.join(" / "));
 });
+
+test("SPSS bases syntax: nested display logic becomes ASKED_<var>; a rule SPSS cannot spell is named, not approximated", async () => {
+  const { spssBasesSyntax, responsesToSavBundle } = await import("./index.js");
+  const rule = (ref: string, operator: string, value?: unknown, extra: Record<string, unknown> = {}) => ({ type: "rule", source: { kind: "question", ref, ...extra }, operator, ...(value !== undefined ? { value } : {}) });
+  const def = SurveyDefinition.parse({
+    meta: { id: "s", code: "BASES", title: "bases" },
+    questions: [
+      { id: "q1", code: "Q1", variableName: "Q1", type: "single_select", text: "a", options: [{ code: 1, label: "Y" }, { code: 2, label: "N" }] },
+      { id: "q2", code: "Q2", variableName: "Q2", type: "multi_select", text: "b", options: [{ code: 1, label: "A" }, { code: 2, label: "B" }, { code: 3, label: "C" }] },
+      { id: "q3", code: "Q3", variableName: "Q3", type: "numeric", text: "c",
+        displayLogic: { type: "group", op: "and", children: [rule("q1", "eq", 1), { type: "group", op: "or", children: [rule("q2", "selected", 2), { type: "group", op: "not", children: [rule("q2", "selected", 3)] }] }] } },
+      { id: "q4", code: "Q4", variableName: "Q4", type: "open_text", text: "d", displayLogic: rule("q2", "gt", 1, { count: { of: "selected", scope: "options" } }) },
+      { id: "q5", code: "Q5", variableName: "Q5", type: "open_text", text: "e" },
+    ],
+    flow: [{ type: "page", id: "p", questionIds: ["q1", "q2", "q3", "q4"] }, { type: "page", id: "p2", questionIds: ["q5"], visibleIf: rule("q3", "between", 2, { }) }],
+  });
+  (def.flow[1] as { visibleIf: { value2?: number } }).visibleIf.value2 = 5;
+  const sps = spssBasesSyntax(def);
+  assert.match(sps, /IF \(\(Q1 = 1 AND \(Q2_2 = 1 OR NOT \(Q2_3 = 1\)\)\)\) ASKED_Q3 = 1\./);
+  assert.match(sps, /ASKED_Q4 not written — it is a COUNT/);
+  assert.doesNotMatch(sps, /COMPUTE ASKED_Q4/);
+  assert.match(sps, /IF \(RANGE\(Q3, 2, 5\)\) ASKED_Q5 = 1\./, "the page's condition is part of the base");
+  assert.doesNotMatch(sps, /ASKED_Q1|ASKED_Q2 /, "unconditional questions get no flag");
+  const zip = responsesToSavBundle(def, []);
+  assert.ok(zip.includes(Buffer.from("COMPUTE ASKED_Q3 = 0.")), "the syntax ships in the SPSS bundle (a stored zip)");
+});

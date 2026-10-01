@@ -1,4 +1,4 @@
-import type { Question, SurveyDefinition, UxAnimation, UxBehavior, UxConfig, UxEffect, UxRule, UxStyle, UxTarget } from "@rescript/schema";
+import type { Condition, Question, SurveyDefinition, UxAnimation, UxBehavior, UxConfig, UxEffect, UxRule, UxStyle, UxTarget } from "@rescript/schema";
 import { UX_BUTTONS, UX_EFFECTS, UX_EVENTS, UX_PARTS, UX_PRESETS, UX_STATES, UX_TARGET_KINDS, UX_MEDIA, UX_ANIMATION_TRIGGERS } from "@rescript/schema";
 import { listBlocks, listPages } from "./blocks.js";
 import { evaluateCondition } from "./evaluate.js";
@@ -636,8 +636,14 @@ export function compileAnimation(def: Pick<SurveyDefinition, "meta">, a: UxAnima
   return `@media (prefers-reduced-motion: no-preference){${withMedia(a.media, sel, body)}}`;
 }
 
-/** the whole configuration as one stylesheet; items that do not validate are left out, never half-applied */
-export function compileUxCss(def: SurveyDefinition): string {
+/**
+ * the whole configuration as one stylesheet; items that do not validate are left out, never half-applied.
+ *
+ * `live`: the respondent's answers so far. A style or animation with a `when`
+ * is included only while it holds; without `live` (the Studio's authoring
+ * view) every item is included, so a conditional style can be seen and edited.
+ */
+export function compileUxCss(def: SurveyDefinition, live?: { state?: ResponseState | null; now?: Record<string, unknown> }): string {
   const ux = def.ux;
   if (!ux || (!ux.styles.length && !ux.animations.length && !ux.behaviors.length)) return "";
   const presets = new Set<(typeof UX_PRESETS)[number]>();
@@ -646,8 +652,9 @@ export function compileUxCss(def: SurveyDefinition): string {
   let css = [...presets].map(keyframesCss).join("");
   // what behaviours insert, styled once
   css += `${uxScope(def)} [data-rs-ux-hidden]{display:none!important}${uxScope(def)} .rs-ux-message{margin-top:10px;padding:10px 12px;border-radius:8px;background:rgba(59,130,246,.08);border-left:3px solid rgba(59,130,246,.6);font-size:.95em}`;
-  for (const s of ux.styles) css += compileStyle(def, s).css;
-  for (const a of ux.animations) css += compileAnimation(def, a);
+  const on = (x: { when?: Condition | null }) => !live || uxGuardHolds(def, x, live.state, live.now);
+  for (const s of ux.styles) if (on(s)) css += compileStyle(def, s).css;
+  for (const a of ux.animations) if (on(a)) css += compileAnimation(def, a);
   return css;
 }
 
@@ -937,7 +944,7 @@ export interface UxTriggerOutcome { fire: UxBehavior[]; hold: UxBehavior[]; rele
  * live values over everything answered before. A behaviour with no `when`
  * always may fire, which is every behaviour that existed before the field did.
  */
-export function uxGuardHolds(def: SurveyDefinition, b: UxBehavior, state?: ResponseState | null, now?: Record<string, unknown>): boolean {
+export function uxGuardHolds(def: SurveyDefinition, b: { when?: Condition | null }, state?: ResponseState | null, now?: Record<string, unknown>): boolean {
   if (!b.when) return true;
   const base = state ?? createResponseState(def, { seed: 1, sessionId: "ux" });
   const merged: ResponseState = now ? { ...base, answers: { ...base.answers, ...(now as ResponseState["answers"]) } } : base;

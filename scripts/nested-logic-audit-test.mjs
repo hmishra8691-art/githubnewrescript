@@ -42,7 +42,8 @@ const FIXTURE = {
     { id: "q3", code: "Q3", variableName: "Q3", type: "numeric", text: "How many?" },
     { id: "q5", code: "Q5", variableName: "Q5", type: "allocation", text: "Split 10 points", options: opts(3, "Brand") },
     { id: "q6", code: "Q6", variableName: "Q6", type: "matrix_single", text: "Status",
-      rows: [{ code: 1, label: "Alpha" }, { code: 2, label: "Beta" }, { code: 3, label: "Gamma" }],
+      /* Gamma shows only to region 1, so Q6's DISPLAYED rows can differ from all of them */
+      rows: [{ code: 1, label: "Alpha" }, { code: 2, label: "Beta" }, { code: 3, label: "Gamma", visibleIf: { type: "rule", source: { kind: "question", ref: "q1" }, operator: "eq", value: 1 } }],
       options: [{ code: 1, label: "Aware" }, { code: 2, label: "Used" }, { code: 3, label: "Never heard" }] },
     { id: "q8", code: "Q8", variableName: "Q8", type: "hidden", text: "Band", options: [{ code: 1, label: "Low" }, { code: 2, label: "Medium" }, { code: 3, label: "High" }] },
     { id: "q10", code: "Q10", variableName: "Q10", type: "single_select", text: "Follow-up", options: opts(3), displayLogic: EMPTY },

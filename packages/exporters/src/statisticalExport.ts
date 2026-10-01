@@ -8,6 +8,7 @@ import type { ResponseStateLike } from "./csv.js";
 import { buildZip } from "./zip.js";
 import { variableDictionaryToCSV } from "./csv.js";
 import { dictionaryFor, defForRow, type VersionedSource } from "./versionedSource.js";
+import { spssBasesSyntax } from "./spssBases.js";
 
 /**
  * ONE MATRIX, EVERY FORMAT (§44).
@@ -364,6 +365,7 @@ export function responsesToSavBundle(
   return buildZip([
     { name: `${code}.sav`, data: responsesToSav(def, states, opts) },
     { name: `${code}_dictionary.csv`, data: variableDictionaryToCSV(def) },
+    { name: `${code}_bases.sps`, data: spssBasesSyntax(def) },
     {
       name: "README.txt",
       data: [
@@ -373,6 +375,8 @@ export function responsesToSavBundle(
         "                          declared missing values as metadata",
         `${code}_dictionary.csv   the same dictionary as a table, for reading and`,
         "                          for reconciling the delivery against the questionnaire",
+        `${code}_bases.sps        syntax that adds ASKED_<variable> = who was asked each`,
+        "                          conditional question — FILTER BY it for true bases",
         "",
         `Exported ${new Date().toISOString()}`,
       ].join("\n"),

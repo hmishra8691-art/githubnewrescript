@@ -76,7 +76,12 @@ export function CountInput({
     <input
       {...rest}
       className={rest.className ?? "input"}
-      style={{ width, ...(rest.style ?? {}) }}
+      /*
+       * Never narrower than `width`, and wider for a long number. In a flex row
+       * beside growing selects the box was shrunk to a sliver — the quota
+       * "target total" showed no digit at all (29-09 #4, Prince 52).
+       */
+      style={{ width: `max(${width}px, ${String(draft ?? value ?? "").length + 4}ch)`, minWidth: width, flex: "0 0 auto", ...(rest.style ?? {}) }}
       type="number"
       inputMode="numeric"
       min={min}

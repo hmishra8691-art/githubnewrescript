@@ -165,7 +165,6 @@ export function UxLayer(p: UxLayerProps) {
   const { def } = p;
   /* the definition object may be rebuilt on every render; what matters is whether its UX changed */
   const uxSig = `${def.meta.id}|${JSON.stringify(def.ux ?? null)}`;
-  const css = React.useMemo(() => compileUxCss(def), [uxSig]); // eslint-disable-line react-hooks/exhaustive-deps
   const defRef = React.useRef(def);
   defRef.current = def;
   const prevValues = React.useRef<Record<string, unknown> | null>(null);
@@ -183,6 +182,18 @@ export function UxLayer(p: UxLayerProps) {
   const stateFromValues = (): ResponseState => ({ ...createResponseState(def, { seed: 1, sessionId: "ux" }), answers: { ...(p.allValues ?? {}), ...p.values } as ResponseState["answers"] });
   const stateRef = React.useRef<() => ResponseState>(stateFromValues);
   stateRef.current = () => p.state ?? stateFromValues();
+  /*
+   * CONDITIONAL STYLES AND ANIMATIONS: one that has a `when` is in the
+   * stylesheet only while it holds. Which ones hold is part of the memo key,
+   * so the sheet is rebuilt exactly when an answer flips one of them.
+   */
+  const guarded = [...(def.ux?.styles ?? []), ...(def.ux?.animations ?? [])].filter((x) => x.when);
+  const liveState = guarded.length ? (p.state ?? stateFromValues()) : null;
+  const guardSig = guarded.map((x) => (uxGuardHolds(def, x, liveState, p.values) ? "1" : "0")).join("");
+  const css = React.useMemo(
+    () => compileUxCss(def, guarded.length ? { state: liveState, now: p.values } : undefined),
+    [uxSig, guardSig], // eslint-disable-line react-hooks/exhaustive-deps
+  );
   const answersByCode = React.useCallback(() => {
     const out: Record<string, unknown> = {};
     const all = { ...(p.allValues ?? {}), ...p.values };

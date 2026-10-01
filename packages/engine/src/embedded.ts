@@ -181,31 +181,91 @@ export function embeddedCatalog(
  * are skipped so `"IF THEN"` inside a label survives.
  */
 export function normalizeExpression(src: string): string {
-  let out = src;
-  for (let pass = 0; pass < 12; pass++) {
-    const rewritten = rewriteInnermostIf(out);
-    if (rewritten === out) break;
-    out = rewritten;
+  return rewriteIfs(src, 0);
+}
+
+/*
+ * A real (small) parse, not a search for "the last IF". The old rewrite took
+ * the last IF and its first ELSE, so `IF a THEN IF b THEN 1 ELSE 2 ELSE 3`
+ * became `if(b, 1, 2 ELSE 3)` — an IF inside a THEN was mangled. Now:
+ * bracketed parts are rewritten first, then the first top-level IF takes the
+ * THEN after it, and the ELSE that MATCHES it (an IF met on the way opens a
+ * nested IF, which takes the next ELSE — the usual dangling-else rule).
+ * Everything after a matched ELSE is the else branch, nested IFs and all.
+ */
+function rewriteIfs(src: string, depth: number): string {
+  if (depth > 64 || !/\b(if|then|else)\b/i.test(src)) return src;
+  const s = mapParenGroups(src, (inner) => rewriteIfs(inner, depth + 1));
+  const kw = keywordPositions(s).filter((k) => parenDepthAt(s, k.start) === 0);
+  const at = kw.findIndex((k) => k.word === "if");
+  if (at < 0) return s;
+  const p = kw[at];
+  const thenAt = kw.findIndex((k, i) => i > at && k.word === "then");
+  if (thenAt < 0) return s;
+  const then = kw[thenAt];
+  let nested = 0;
+  let els: KeywordPos | null = null;
+  for (const k of kw.slice(thenAt + 1)) {
+    if (k.word === "if") nested++;
+    else if (k.word === "else") { if (nested === 0) { els = k; break; } nested--; }
+  }
+  const cond = s.slice(p.end, then.start).trim();
+  const yes = s.slice(then.end, els ? els.start : s.length).trim();
+  const no = els ? s.slice(els.end).trim() : "";
+  if (!cond || !yes) return s;
+  return `${s.slice(0, p.start)}if(${rewriteIfs(cond, depth + 1)}, ${rewriteIfs(yes, depth + 1)}, ${no ? rewriteIfs(no, depth + 1) : '""'})`;
+}
+
+/** Rewrite the inside of every top-level (…) group, outside string literals. */
+function mapParenGroups(src: string, fn: (inner: string) => string): string {
+  let out = "";
+  let quote: string | null = null;
+  let i = 0;
+  while (i < src.length) {
+    const ch = src[i];
+    if (quote) { out += ch; if (ch === quote && src[i - 1] !== "\\") quote = null; i++; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; out += ch; i++; continue; }
+    if (ch === "(") {
+      const close = matchingParen(src, i);
+      if (close < 0) { out += src.slice(i); break; }
+      out += `(${fn(src.slice(i + 1, close))})`;
+      i = close + 1;
+      continue;
+    }
+    out += ch; i++;
   }
   return out;
 }
 
-function rewriteInnermostIf(src: string): string {
-  const positions = keywordPositions(src);
-  // innermost = the LAST "IF" that still has a THEN after it
-  for (let i = positions.length - 1; i >= 0; i--) {
-    const p = positions[i];
-    if (p.word !== "if") continue;
-    const then = positions.find((x) => x.word === "then" && x.start > p.end);
-    if (!then) continue;
-    const els = positions.find((x) => x.word === "else" && x.start > then.end);
-    const cond = src.slice(p.end, then.start).trim();
-    const yes = src.slice(then.end, els ? els.start : src.length).trim();
-    const no = els ? src.slice(els.end).trim() : '""';
-    if (!cond || !yes) continue;
-    return `${src.slice(0, p.start)}if(${cond}, ${yes}, ${no || '""'})`;
+function matchingParen(src: string, open: number): number {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = open; i < src.length; i++) {
+    const ch = src[i];
+    if (quote) { if (ch === quote && src[i - 1] !== "\\") quote = null; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (ch === "(") depth++;
+    else if (ch === ")") { depth--; if (depth === 0) return i; }
   }
-  return src;
+  return -1;
+}
+
+function followedByThen(src: string, open: number): boolean {
+  const close = matchingParen(src, open);
+  return close >= 0 && /^\s*then\b/i.test(src.slice(close + 1));
+}
+
+function parenDepthAt(src: string, pos: number): number {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = 0; i < pos; i++) {
+    const ch = src[i];
+    if (quote) { if (ch === quote && src[i - 1] !== "\\") quote = null; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (ch === "(") depth++;
+    else if (ch === ")") depth = Math.max(0, depth - 1);
+  }
+  return depth;
 }
 
 interface KeywordPos { word: "if" | "then" | "else"; start: number; end: number }
@@ -225,7 +285,9 @@ function keywordPositions(src: string): KeywordPos[] {
     const rest = src.slice(i);
     const m = rest.match(/^(if|then|else)\b/i);
     // a bare word only — `iffy` and `if(` (already a call) are not keywords
-    if (m && !(m[1].toLowerCase() === "if" && /^if\s*\(/i.test(rest))) {
+    /* `if(` is the calc function — unless its bracket is followed by THEN: `IF (a AND b) THEN …` */
+    const callLike = !!m && m[1].toLowerCase() === "if" && /^if\s*\(/i.test(rest) && !followedByThen(src, i + rest.indexOf("("));
+    if (m && !callLike) {
       out.push({ word: m[1].toLowerCase() as KeywordPos["word"], start: i, end: i + m[1].length });
       i += m[1].length - 1;
       continue;

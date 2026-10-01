@@ -54,6 +54,9 @@ export function MediaUrlInput({ value, onChange, placeholder, compact, testId, l
 
   const verdict = !value?.trim()
     ? null
+    /* a piped URL ({{ImageURL}}, from a URL parameter or an answer) is chosen per respondent — not an error */
+    : /\{\{[^}]+\}\}/.test(value)
+      ? { tone: "ok", text: "Piped — each respondent sees the media their value points to" }
     : media.kind === "unsupported"
       ? { tone: "bad", text: media.reason ?? "Not supported" }
       : media.kind === "embed"

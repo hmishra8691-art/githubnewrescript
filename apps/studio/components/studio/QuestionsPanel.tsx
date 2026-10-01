@@ -26,6 +26,7 @@ import { OptionLogicEditor } from "./OptionLogicEditor";
 import { OptionPreview } from "./OptionPreview";
 import { usePreviewBlock } from "./PreviewBlock";
 import { MediaUrlInput } from "./MediaUrlInput";
+import { MediaListEditor } from "./MediaListEditor";
 import { MediaDisplayControls, type DisplayKind } from "./MediaDisplayControls";
 
 /** image / video / audio — what the sizing controls should offer for a URL */
@@ -1085,9 +1086,8 @@ export function QuestionEditor({ q }: { q: Question }) {
       </div>
       {!MEDIA_OWNING.has(variantDef?.renderer ?? `base:${q.type}`) && (
         <>
-          <MediaUrlInput label="Media — shown under the question text (image, video, YouTube or Google Drive URL)"
-            testId="question-media" questionId={q.id} value={q.settings.mediaUrl}
-            onChange={(v) => patchSettings({ mediaUrl: v })} />
+          <MediaListEditor q={q} patchSettings={patchSettings}
+            label="Media — shown under the question text (image, video, YouTube or Google Drive URL)" />
           {q.settings.mediaUrl && resolveMediaUrl(q.settings.mediaUrl).kind !== "embed" && (
             <details className="qs-details" data-testid="question-media-display" open={!!q.settings.mediaDisplay}>
               <summary>Size, fit &amp; playback</summary>

@@ -13,7 +13,7 @@ import type {
   Randomization,
   SurveyDefinition,
 } from "@rescript/schema";
-import { LIST_OPS_WITH_SOURCES } from "@rescript/schema";
+import { LIST_OPS_WITH_SOURCES, optionLogicHasEffect } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition, conditionFires, isVacuousCondition, withOption, withLegacyOptionLoop } from "./evaluate.js";
 import { getQuestion, lookupAnswer, loopKeySuffix } from "./state.js";
@@ -896,6 +896,35 @@ interface ActiveRandomization {
   groups?: (string | number)[][];
 }
 
+/** The axes a question's randomization shuffles: `scopes` when set, else `scope`. */
+export function randomizedAxes(r: Randomization | undefined): ("options" | "rows" | "columns")[] {
+  if (!r?.enabled) return [];
+  return r.scopes?.length ? [...new Set(r.scopes)] : [r.scope ?? "options"];
+}
+/** the axis `pick` and `groups` belong to */
+function primaryAxis(r: Randomization): "options" | "rows" | "columns" {
+  const axes = randomizedAxes(r);
+  return axes.includes(r.scope ?? "options") ? (r.scope ?? "options") : axes[0];
+}
+function randomizesAxis(r: Randomization | undefined, axis: "options" | "rows" | "columns"): boolean {
+  return randomizedAxes(r).includes(axis);
+}
+/**
+ * The config one axis is shuffled with. The primary axis gets everything; a
+ * secondary axis ("…and columns too") is reordered only — "show only 3" and
+ * code groups name the primary axis's items, so they mean nothing for it.
+ */
+export function axisRandomization(
+  r: Randomization | undefined,
+  axis: "options" | "rows" | "columns",
+  ctx: EvalContext,
+): ActiveRandomization | null {
+  if (!r || !randomizesAxis(r, axis)) return null;
+  const cfg = activeRandomization(r, ctx);
+  if (!cfg) return null;
+  return axis === primaryAxis(r) ? cfg : { method: cfg.method };
+}
+
 /** Resolve the randomization config for this respondent: the first
  *  conditional rule that matches overrides the base settings (req §7–8). */
 export function activeRandomization(
@@ -1376,8 +1405,8 @@ function runOptions(
     const beforeGroups = options;
     options = groupOrder(q, "options", options, ctx, seed);
     record(rec, "randomization", "Option groups", beforeGroups, options, new Map());
-  } else if (q.randomization?.enabled && q.randomization.scope === "options") {
-    const cfg = activeRandomization(q.randomization, ctx);
+  } else if (randomizesAxis(q.randomization, "options")) {
+    const cfg = axisRandomization(q.randomization, "options", ctx);
     if (cfg) {
       const beforeRand = options;
       const pinned = pinnedCodes(options, ctx, pos);
@@ -1463,8 +1492,8 @@ function runRows(q: Question, ctx: EvalContext, rec: Recorder | null): QuestionR
     const beforeGroups = rows;
     rows = groupOrder(q, "rows", rows, ctx, subSeed(ctx.state.seed, `randrows:${q.id}${seedKey}`));
     record(rec, "randomization", "Row groups", beforeGroups, rows, new Map());
-  } else if (q.randomization?.enabled && q.randomization.scope === "rows") {
-    const cfg = activeRandomization(q.randomization, ctx);
+  } else if (randomizesAxis(q.randomization, "rows")) {
+    const cfg = axisRandomization(q.randomization, "rows", ctx);
     if (cfg) {
       const beforeRand = rows;
       const pinned = pinnedCodes(rows, ctx, pos);
@@ -1519,9 +1548,22 @@ function runRows(q: Question, ctx: EvalContext, rec: Recorder | null): QuestionR
 export function resolveQuestionMedia(
   q: Question,
   ctx: EvalContext,
-): { imageUrl?: string; mediaUrl?: string } {
+): { imageUrl?: string; mediaUrl?: string; mediaItems?: NonNullable<Question["settings"]["mediaItems"]> } {
   const pipe = (u?: string) => (u && u.includes("{{") ? resolvePiping(u, ctx) : u);
-  return { imageUrl: pipe(q.settings.imageUrl), mediaUrl: pipe(q.settings.mediaUrl) };
+  const items = q.settings.mediaItems;
+  const piped = items?.some((m) => m.url.includes("{{")) ? items.map((m) => ({ ...m, url: pipe(m.url) ?? "" })) : items;
+  return { imageUrl: pipe(q.settings.imageUrl), mediaUrl: pipe(q.settings.mediaUrl), ...(items ? { mediaItems: piped } : {}) };
+}
+
+/**
+ * The media shown under a question, in order: `mediaItems` when it has any,
+ * otherwise the single `mediaUrl`. One answer for the renderer, the preview
+ * and the exports, so the builder and the respondent never disagree.
+ */
+export function questionMediaList(q: Pick<Question, "settings">): { url: string; alt?: string; title?: string }[] {
+  const items = (q.settings.mediaItems ?? []).filter((m) => m.url?.trim());
+  if (items.length) return items;
+  return q.settings.mediaUrl?.trim() ? [{ url: q.settings.mediaUrl }] : [];
 }
 
 /**
@@ -1584,8 +1626,8 @@ function runColumns(q: Question, ctx: EvalContext): QuestionColumn[] {
       ctx,
       subSeed(ctx.state.seed, `randcols:${q.id}${seedKey}`),
     ) as never;
-  } else if (q.randomization?.enabled && q.randomization.scope === "columns") {
-    const cfg = activeRandomization(q.randomization, ctx);
+  } else if (randomizesAxis(q.randomization, "columns")) {
+    const cfg = axisRandomization(q.randomization, "columns", ctx);
     if (cfg) {
       columns = randomizeItems(
         columns.map((c) => ({ ...c, code: c.id })) as any,
@@ -1655,3 +1697,32 @@ registerEffectiveRowsResolver((q, ctx) => {
   const view = effectiveQuestion(q, ctx);
   return { rows: view.rows, options: view.options };
 });
+
+/**
+ * CAN A RESPONDENT'S LIST OF THIS QUESTION DIFFER FROM ITS DEFINED LIST?
+ *
+ * "Displayed" and "All" read the same codes unless something in the question
+ * can take an item off the screen or bring one in: carry-forward, masking,
+ * list logic or operations, option/row logic, display rules, punched
+ * show/hide, conditional option groups, "show only N". When nothing can, the
+ * two choices are one choice under two names — which is exactly what the
+ * September review asked to stop offering (Oweas 1–3, 6). `axis` picks the
+ * list: a grid's items are its rows.
+ */
+export function displayedListCanVary(def: SurveyDefinition, q: Question, axis: "options" | "rows" = "options"): boolean {
+  const items: { logic?: unknown; visibleIf?: unknown }[] = axis === "rows" ? q.rows : q.options;
+  if (q.carryForward && (q.carryForward.into ?? "options") === axis) return true;
+  if (axis === "options" && (q.mask || (q.listLogic ?? []).length || (q.optionPipeline ?? []).length)) return true;
+  if (axis === "rows" && q.rowMask) return true;
+  if (items.some((i) => !isVacuousCondition(i.visibleIf as never) || (i.logic && !isEmptyOptionLogicEffect(i.logic)))) return true;
+  if ((def.displayRules ?? []).some((r) => r.target.ref === q.id && r.target.kind === (axis === "rows" ? "row" : "option"))) return true;
+  if ((q.punches ?? []).some((r) => LIST_ACTIONS.has(r.action))) return true;
+  const r = q.randomization;
+  if (r?.enabled && r.pick != null && randomizedAxes(r).includes(axis)) return true;
+  if ((q.optionGroups ?? []).some((g) => (g as { visibleIf?: unknown }).visibleIf)) return true;
+  return false;
+}
+
+function isEmptyOptionLogicEffect(l: unknown): boolean {
+  return !optionLogicHasEffect(l as never);
+}

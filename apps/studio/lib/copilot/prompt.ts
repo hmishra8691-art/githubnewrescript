@@ -173,7 +173,7 @@ THEME VARIABLES to prefer over hard-coded values: var(--rs-primary) var(--rs-acc
   // "stagger": one at a time, this many ms apart
 {"op":"update_animation","id":"…","duration":800}   // "make it slower": change the existing animation; never add a second one on the same target
 {"op":"create_behavior","label":"…","target":"Q8","on":"answer","options":["3","Other"],"effects":[{"do":"animate","target":"next","preset":"pulse"}]}
-  // any behaviour may add "when":"Q3 = 2 AND Q1 >= 18" — it then runs only while that holds ("when": null removes it)
+  // any behaviour, style or animation may add "when":"Q3 = 2 AND Q1 >= 18" — it then applies only while that holds ("when": null removes it)
   // on: answer · change · select_option (with "options") · deselect_option · page_complete · block_complete · appear · page_enter · click · hover
   // effects: animate {preset} · show_message {text: plain text} · hide_message · add_class / remove_class / toggle_class {className} · set_style {style} · show · hide · scroll_into_view · focus — each with an optional "target" (default: the behaviour's own)
   // select_option, page_complete, block_complete and hover HOLD while true and are undone when they stop being true; a style rule with "whenClass":"chosen" applies while add_class "chosen" is on

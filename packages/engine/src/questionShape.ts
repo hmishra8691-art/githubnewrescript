@@ -113,7 +113,7 @@ type SettingGroup = keyof typeof SETTING_GROUPS;
  */
 const UNIVERSAL_SETTINGS: readonly string[] = [
   "readOnly", "hidden", "defaultValue",
-  "imageUrl", "mediaUrl", "requireComplete",
+  "imageUrl", "mediaUrl", "mediaDisplay", "mediaItems", "mediaLayout", "requireComplete",
   "timeLimitSeconds", "onTimeout", "chatDelayMs",
   "accessibility", "adaptive",
 ];
@@ -608,7 +608,11 @@ export function migrateQuestionType(
     const scope = (q.randomization.scope ?? "options") as QuestionAxis;
     const dest = moved.get(scope);
     if (dest) {
-      q.randomization = { ...q.randomization, scope: dest };
+      /* the other axes of a multi-axis shuffle travel the same way, or drop when the new shape has none */
+      const others = (q.randomization.scopes ?? [])
+        .map((a) => moved.get(a as QuestionAxis) ?? a)
+        .filter((a) => toSpec.axes.includes(a as QuestionAxis)) as typeof q.randomization.scopes;
+      q.randomization = { ...q.randomization, scope: dest, ...(q.randomization.scopes ? { scopes: others?.length ? others : undefined } : {}) };
       add("transformed", "randomization.scope", `Randomization now shuffles the ${label(dest)}`);
     } else if (!toSpec.axes.includes(scope)) {
       delete (q as any).randomization;

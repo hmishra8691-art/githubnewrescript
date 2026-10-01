@@ -100,6 +100,10 @@ rely on that. Now:
 - **Grid carry-forward "displayed" / "all" / "NOT selected"** carry rows, not scale points.
 - **COUNT `where`** narrows any COUNT, not only `matching`.
 
+- **Content / HTML blocks with media** now show it. Before, it was configured but never drawn.
+- **Masking and carry-forward pickers** hide "Displayed" when it equals "All". A stored
+  "Displayed" stays selectable.
+
 ## Tests
 
 - `packages/engine/src/nestedLogicAudit.test.ts`: 32 tests covering the brief's S1–S20 and each
@@ -111,26 +115,40 @@ rely on that. Now:
     column;
   - studio: `lib/intelligent/nestedGrammar.test.ts`.
 - Browser: `scripts/nested-logic-audit-test.mjs`, 17 checks across Studio and runtime.
+- Second pass:
+  - engine `remainingItems.test.ts`;
+  - import: Decipher named conditions, QSF quota groups and skip expressions;
+  - designs: combination prohibitions;
+  - exporters: SPSS bases syntax;
+  - browser `scripts/remaining-items-test.mjs`, 13 checks.
 - Each fix was mutation-checked: the code was reverted and the tests confirmed to fail.
+
+## Second pass: the remaining items (2026-10-01)
+
+| Item | Fix | Where |
+|---|---|---|
+| 29-09 #1 Randomize rows and columns together | Randomization takes several axes. `scopes` sits beside `scope`; the primary axis keeps "show only N" and groups, and each other axis is shuffled with its own seed. The single select became a checkbox per axis. | schema `Randomization.scopes`, `carryforward.ts` `axisRandomization`, `RandomizeAxes.tsx` |
+| 29-09 #2 "Options" next to "Columns" on a grid | Where a grid's columns are its answer scale, that axis appears once, labelled "columns" (randomization), and its masking section is called "Column masking". | `RandomizeAxes.tsx`, `PropertiesPanel.tsx` |
+| 29-09 #4 / Prince 52 Quota target-total box too small | `CountInput` is never squeezed below its width, and grows with the number typed. | `CountInput.tsx`, `QuotasPanel.tsx` |
+| 29-09 #7 Piping dialog fields could not be changed | The dialog sat inside the rich-text toolbar, whose mousedown handler blocked its selects and inputs. The dialog now stops that handler, keeps the caret, and inserts the token there. Changing "Insert from" picks a valid first item. Embedded fields defined in the flow are listed. The token itself can be edited. | `PipingPicker.tsx` |
+| Oweas 1–3, 6 Redundant carry-forward and masking choices | "Displayed" is offered only when the source can change its own list (`displayedListCanVary`); otherwise it is the same as "All". Each choice has a one-line explanation. | `carryforward.ts`, `MaskingBuilder.tsx`, `PropertiesPanel.tsx` |
+| Prince 11, 14, 16 Several images / videos with a layout | `settings.mediaItems` holds several items, each replaceable, nameable, with alt text and movable; images can be uploaded several at a time. `mediaLayout` can be side by side (wrapping on a small screen) or stacked. `mediaUrl` stays equal to the first item. Content / HTML blocks now draw their media in Preview, Test and Live. | schema, `questionMediaList`, `QuestionMedia` (renderer), `MediaListEditor.tsx`, `media.css` |
+| Prince 36 A URL parameter piped as an image | `{{ImageURL\|image}}` draws the picture, accepting only http(s), site-relative and `data:image` URLs. The picker has a "Show as image" option. A piped media URL is reported as "piped" instead of unsupported. | `piping.ts`, `pipingTokens.ts`, `PipingPicker.tsx`, `MediaUrlInput.tsx` |
+| Missing editors | Older option / row "visible if" is shown, editable and convertible. List Fill "eligible when" has an editor, as does a row validation's "check only when". | `OptionLogicEditor.tsx`, `ListFillPanel.tsx`, `ElementPanel.tsx` |
+| Nesting caps | The analytics filter nests 8 levels instead of 3. The interview builder nests groups and offers "none of"; before, a NOT group was shown as "all of these". An interview skip with no condition is flagged. | `FilterBuilder.tsx`, interviews `LogicEditor.tsx` |
+| Import | A Qualtrics quota group becomes one quota with a cell per member. A skip carrying a BooleanExpression is read in full. Decipher named `<condition>`s are expanded, nested. | `qsf.ts`, `decipher.ts`, `map.ts` |
+| Embedded IF…THEN…ELSE | Parsed properly, so an IF inside THEN and `IF (…) THEN` both work. | `embedded.ts` |
+| Calculations | Calculations read named expressions as 1 or 0 (`TARGET * 10`, `if(rule.X, …)`). | `calcContext.ts` |
+| SPSS | The SPSS bundle includes `<code>_bases.sps`. It holds one `ASKED_<var>` flag per conditional question (page condition AND display logic, nested), and names any rule that SPSS cannot spell exactly. | `exporters/spssBases.ts` |
+| UX | Styles and animations take `when`, in the Studio and in Copilot actions. The runtime stylesheet includes them only while the condition holds. | schema `ux.ts`, `ux.ts` `compileUxCss`, `UxLayer.tsx`, `uxActions.ts` |
+| Conjoint | A prohibition can be a combination: the pair AND all / any of further levels, or a full AND / OR / NOT tree. | `designs/conjoint.ts`, `DesignsPanel.tsx` |
 
 ## Remaining
 
-- **Spreadsheet items that are not logic:**
-  - randomise rows and columns together (29-09 #1);
-  - the "Options" logic button in grid column config (#2);
-  - the quota target-total box width (#4, Prince 52);
-  - the piping dialog fields (#7);
-  - multiple images / media layout (Prince 11, 14, 16);
-  - a URL-parameter image URL (Prince 36).
-- **From the 09-28 audit:**
-  - the analytics filter (3 levels), the interview builder (1 level) and the Response
-    Manager's AND-only frame;
-  - calc-language limits and nested IF…THEN in embedded expressions;
-  - QSF single-comparison skips and quota groups;
-  - Decipher named `<condition>`s;
-  - the mapper dropping a whole condition for one unreadable leaf;
-  - SPSS FILTER / DO IF syntax (the datamap has "Asked when");
-  - editors for `ListFillOption.eligibleWhen` and for legacy `Option.visibleIf` / grid row
-    `visibleIf`;
-  - UX styles and animations, conjoint prohibitions and distribution filters still take no
-    condition.
+- **Response Manager:** status, source and environment remain filters around the condition and
+  cannot be OR'd with it. They are the scope of the lookup and are applied in SQL.
+- **Distribution:** respondent lists cannot yet be filtered by a condition on their embedded
+  data. This needs the respondents API and a database to verify, so it was not changed blind.
+- **Import mapper:** a condition with one unreadable leaf is still dropped as a whole and
+  reported. Keeping a half-converted condition would silently broaden or narrow it.
+- **Qualtrics quota groups:** cross-quota options (place in one / place in all) are not carried.

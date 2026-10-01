@@ -354,3 +354,59 @@ test("a Qualtrics block that is not in the Survey Flow stays unreachable — FAL
   const pages = compileFlow(def, state).filter((s) => s.kind === "page") as { questionIds: string[] }[];
   assert.ok(!pages.some((p) => p.questionIds.includes("QID8")), "nobody is routed into it");
 });
+
+test("Decipher: a named <condition> is expanded where it is used, with its own AND / OR kept", async () => {
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<survey alt="Named" name="Survey" state="testing" xmlns:builder="http://decipherinc.com/builder">
+<radio label="q1"><title>Own a car?</title><row label="r1" value="1">Yes</row><row label="r2" value="2">No</row></radio>
+<radio label="q2"><title>Region?</title><row label="r1" value="1">North</row><row label="r2" value="2">South</row></radio>
+<condition label="northowner" cond="q1.r1 and q2.r1"/>
+<condition label="either" cond="condition.northowner or q2.r2"/>
+<suspend/>
+<text label="q3" cond="condition.either"><title>Why?</title></text>
+</survey>`;
+  const c = (await readSource(enc(xml), "named.xml")).canonical!;
+  const def = mapCanonical(c, { surveyId: "s1", uid }).def!;
+  const q3 = def.questions.find((q) => q.variableName === "q3" || q.code === "q3" || q.id.includes("q3"))!;
+  assert.ok(q3.displayLogic, "the condition was converted, not dropped");
+  const { createResponseState, evaluateCondition } = await import("@rescript/engine");
+  const at = (q1: number, q2: number) => {
+    const st = createResponseState(def, { seed: 1 });
+    st.answers[def.questions.find((q) => q.variableName === "q1")!.id] = q1;
+    st.answers[def.questions.find((q) => q.variableName === "q2")!.id] = q2;
+    return evaluateCondition(q3.displayLogic, { def, state: st, loop: null });
+  };
+  assert.equal(at(1, 1), true, "north owner");
+  assert.equal(at(2, 2), true, "south");
+  assert.equal(at(2, 1), false, "north, no car");
+});
+
+test("QSF: a quota group becomes one quota with a cell per member; a skip with a full BooleanExpression keeps its AND", async () => {
+  const fx = qsfFixture() as { SurveyElements: { Element: string; PrimaryAttribute?: string; Payload: Record<string, unknown> }[] };
+  /* a second quota, so the group has two members */
+  const first = fx.SurveyElements.find((e) => e.Element === "QO")!;
+  fx.SurveyElements.push({ ...first, PrimaryAttribute: "QO_2", Payload: { ...first.Payload, ID: "QO_2", Name: "South region" } });
+  const qos = fx.SurveyElements.filter((e) => e.Element === "QO");
+  const ids = qos.map((e) => String(e.Payload.ID ?? e.PrimaryAttribute));
+  assert.ok(ids.length >= 1, "the fixture carries quotas");
+  fx.SurveyElements.push({ Element: "QG", PrimaryAttribute: "QG_1", Payload: { ID: "QG_1", Name: "Grouped", Quotas: ids } });
+  const r = await readSource(enc(JSON.stringify(fx)), "g.qsf");
+  const m = mapCanonical(r.canonical!, { surveyId: "s1", uid });
+  const grouped = m.def!.quotas.filter((q) => q.name === "Grouped");
+  assert.equal(grouped.length, 1, m.def!.quotas.map((q) => q.name).join(","));
+  assert.equal(grouped[0].cells.length, ids.length);
+  assert.ok(ids.length >= 2);
+  assert.ok(!m.def!.quotas.some((q) => q.name === "North region" || q.name === "South region"), "the members are cells, not quotas of their own");
+  assert.ok(m.issues.some((i) => /imported as one quota/.test(i.message)));
+  assert.ok(!m.issues.some((i) => /were not reproduced/.test(i.message)));
+
+  /* a skip whose condition is a BooleanExpression: QID3 choice 1 AND QID3 choice 2 → end */
+  const sel = (qid: string, c: string, conj?: string) => ({ LogicType: "Question", QuestionID: qid, ChoiceLocator: `q://${qid}/SelectableChoice/${c}`, Operator: "Selected", LeftOperand: `q://${qid}/SelectableChoice/${c}`, Type: "Expression", ...(conj ? { Conjuction: conj } : {}) });
+  const fx2 = qsfFixture() as { SurveyElements: { Element: string; PrimaryAttribute?: string; Payload: Record<string, unknown> }[] };
+  const q3 = fx2.SurveyElements.find((e) => e.Element === "SQ" && e.PrimaryAttribute === "QID3")!;
+  q3.Payload.SkipLogic = [{ SkipLogicID: 1, SkipToDestination: "ENDOFSURVEY", Logic: { 0: { 0: sel("QID3", "1"), 1: sel("QID3", "2", "And"), Type: "If" }, Type: "BooleanExpression" } }];
+  const d2 = mapCanonical((await readSource(enc(JSON.stringify(fx2)), "s.qsf")).canonical!, { surveyId: "s1", uid }).def!;
+  const skip = d2.questions.find((q) => q.id === "QID3")!.skipLogic[0];
+  assert.ok(skip, "the skip was imported");
+  assert.equal((skip.when as { type: string; op?: string }).op, "and", JSON.stringify(skip.when));
+});

@@ -114,11 +114,29 @@ export function resolvePiping(text: string, ctx: EvalContext): string {
   return text.replace(PIPE_TOKEN_RE, (_m, raw: string) => {
     try {
       const token = parsePipeBody(raw);
+      if (token?.format === "image") return pipedImage(renderToken({ ...token, format: undefined }, ctx));
       return token ? renderToken(token, ctx) : "";
     } catch {
       return "";
     }
   });
+}
+
+/**
+ * `{{ImageURL|image}}` — a piped URL shown as the picture it names (Prince 36).
+ *
+ * A URL parameter carried into Embedded Data is a string, and piped into text
+ * it reads as text: "/api/media/…/Picture16.jpg". The `image` format renders
+ * it as an <img> instead. The value arrives HTML-escaped (renderToken), which
+ * is exactly right inside an attribute; only URLs that can only ever be a
+ * picture are used — http(s), a site-relative path, an inline data:image —
+ * anything else (javascript:, a bare word) stays plain text.
+ */
+function pipedImage(escapedUrl: string): string {
+  const u = escapedUrl.trim();
+  if (!u) return "";
+  if (!/^(https?:\/\/|\/(?!\/)|data:image\/)/i.test(u)) return u;
+  return `<img class="rs-piped-image" src="${u.replace(/"/g, "&quot;")}" alt="">`;
 }
 
 /**

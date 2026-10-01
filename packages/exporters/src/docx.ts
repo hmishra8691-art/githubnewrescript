@@ -294,7 +294,7 @@ function questionBlock(q: Question, def: SurveyDefinition, fields: ExportFields)
     const r = q.randomization;
     out.push(label("Randomization"));
     out.push(body(
-      `${r.method} of ${r.scope}${r.pick != null ? `, showing ${r.pick}` : ""}` +
+      `${r.method} of ${(r.scopes?.length ? [...new Set(r.scopes)] : [r.scope]).join(" and ")}${r.pick != null ? `, showing ${r.pick}` : ""}` +
       `${r.groups?.length ? `, within ${r.groups.length} group(s)` : ""}` +
       `${r.rules?.length ? `, ${r.rules.length} conditional rule(s)` : ""}`,
     ));

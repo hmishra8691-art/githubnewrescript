@@ -156,7 +156,8 @@ await page.selectOption('.pipe-picker [data-testid="pipe-question"]', { index: 0
 const propOptions = await page.$$eval('.pipe-picker [data-testid="pipe-property"] option', (els) =>
   els.map((e) => e.value));
 assert.ok(propOptions.includes("label"), `properties offered: ${propOptions}`);
-const preview = await page.$eval(".pipe-preview", (e) => e.textContent);
+// the token is an editable field now (29-09 #7) — its value is the preview
+const preview = await page.$eval(".pipe-preview", (e) => ("value" in e ? e.value : e.textContent));
 assert.match(preview, /^\{\{Q\d/);
 await page.click('.pipe-picker [data-testid="pipe-insert"]');
 await page.waitForTimeout(400);

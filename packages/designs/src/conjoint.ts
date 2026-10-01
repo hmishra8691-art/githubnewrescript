@@ -36,8 +36,47 @@ export interface ConjointProhibition {
   a: { attribute: string; level: string };
   /** the other side */
   b: { attribute: string; level: string };
+  /**
+   * A forbidden COMBINATION, beyond a pair — nested AND / OR / NOT over
+   * levels: "Value brand AND (Price $999 OR Warranty 3 years)". When present it
+   * is the prohibition (and `a` / `b` are ignored); a concept that matches it
+   * is never shown.
+   */
+  when?: ConjointLevelCondition;
+  /**
+   * The editor's form of a combination: the pair a + b, AND these levels
+   * (`alsoOp: "and"`, all of them) or AND any one of them (`"or"`):
+   * "never Value with $999 and (3 years or 2 years)". Read only when `when`
+   * is absent; `effectiveProhibition` turns it into the tree.
+   */
+  also?: { attribute: string; level: string }[];
+  alsoOp?: "and" | "or";
   /** why, for whoever reads the design file later */
   note?: string;
+}
+
+/** a prohibition as one level condition — `when`, else the pair (and its `also` levels) */
+export function effectiveProhibition(p: ConjointProhibition): ConjointLevelCondition {
+  if (p.when) return p.when;
+  const extra = (p.also ?? []).filter((x) => x?.attribute && x.level != null);
+  if (!extra.length) return { op: "and", children: [p.a, p.b] };
+  const tail: ConjointLevelCondition[] = p.alsoOp === "or" ? [{ op: "or", children: extra }] : extra;
+  return { op: "and", children: [p.a, p.b, ...tail] };
+}
+
+/** a level test, or an and / or / not group of them, nested to any depth */
+export type ConjointLevelCondition =
+  | { attribute: string; level: string }
+  | { op: "and" | "or" | "not"; children: ConjointLevelCondition[] };
+
+/** does a concept match a level condition? (an empty and/or/not group never forbids anything) */
+export function conceptMatches(profile: Record<string, string>, c: ConjointLevelCondition, depth = 0): boolean {
+  if (depth > 64) return false;
+  if ("attribute" in c) return profile[c.attribute] === c.level;
+  if (!c.children.length) return false;
+  if (c.op === "and") return c.children.every((k) => conceptMatches(profile, k, depth + 1));
+  if (c.op === "or") return c.children.some((k) => conceptMatches(profile, k, depth + 1));
+  return !c.children.some((k) => conceptMatches(profile, k, depth + 1));
 }
 
 export interface ConjointConfig {
@@ -96,6 +135,7 @@ function normalize(config: ConjointConfig): NormalizedConjoint {
 /** Whether a finished concept breaks any prohibition. */
 function violates(profile: Record<string, string>, prohibitions: ConjointProhibition[]): boolean {
   for (const p of prohibitions) {
+    if (p.when || p.also?.length) { if (conceptMatches(profile, effectiveProhibition(p))) return true; continue; }
     if (profile[p.a.attribute] === p.a.level && profile[p.b.attribute] === p.b.level) return true;
     // a prohibition is symmetric: saying "not X with Y" is saying "not Y with X"
     if (profile[p.b.attribute] === p.b.level && profile[p.a.attribute] === p.a.level) return true;
@@ -218,6 +258,18 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
     /* --- prohibitions: real levels, and enough concepts left to field --- */
     const levelsOf = new Map(c.attributes.map((a) => [a.name, new Set(a.levels)]));
     for (const p of c.prohibitions) {
+      /* a combination prohibition: every level it names must be real */
+      if (p.when || p.also?.length) {
+        const leaves: { attribute: string; level: string }[] = [];
+        const walk = (x: ConjointLevelCondition, d = 0) => { if (d > 64) return; if ("attribute" in x) leaves.push(x); else x.children.forEach((k) => walk(k, d + 1)); };
+        walk(effectiveProhibition(p));
+        for (const side of leaves) {
+          const known = levelsOf.get(side.attribute);
+          if (!known) errors.push(`Prohibition names attribute "${side.attribute}", which is not in this design.`);
+          else if (!known.has(side.level)) errors.push(`Prohibition names level "${side.level}" of "${side.attribute}", which is not one of its levels.`);
+        }
+        continue;
+      }
       for (const side of [p.a, p.b]) {
         const known = levelsOf.get(side.attribute);
         if (!known) {

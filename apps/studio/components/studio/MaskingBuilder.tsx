@@ -7,7 +7,7 @@ import { SET_OPERATOR_LABEL, SET_SELECTION_LABEL } from "@rescript/schema";
 import {
   parseSetExpression, formatSetExpression, setExpressionSummary,
   setExprToChain, appendSet, replaceSetAt, removeSetAt, setChainOperator,
-  bracketSetPair, validateSetExpr, pipelineToSetExpr, isOptionLevelPunch,
+  bracketSetPair, validateSetExpr, pipelineToSetExpr, isOptionLevelPunch, displayedListCanVary,
   type SetExprError,
   stripHtmlText,
 } from "@rescript/engine";
@@ -49,6 +49,36 @@ const OPERATOR_HINT: Record<SetOperator, string> = {
 /* ------------------------------------------------------- one set, one row */
 
 /** A single operand: a question and which slice of it. */
+/**
+ * WHICH SLICE OF THE SOURCE — only the slices that can differ for it.
+ *
+ * "All options" and "Displayed" name the same codes unless the source can
+ * change its own list (masking, carry-forward, option logic, display rules,
+ * "show only N" …); when it cannot, "Displayed" is not offered (Oweas #3). A
+ * stored choice is always kept selectable. Each choice says what it reads.
+ */
+const SELECTION_HINT: Record<SetSelection, string> = {
+  selected: "What the respondent picked",
+  unselected: "What the respondent was shown and did not pick",
+  all: "Every option the question defines, shown or not",
+  displayed: "What the respondent was actually shown, after that question's own masking and logic",
+};
+function SelectionPicker({ node, onChange }: { node: Extract<SetExpr, { kind: "ref" }>; onChange(n: SetExpr): void }) {
+  const st = useStudio();
+  const src = st.def.questions.find((q) => q.id === node.questionId);
+  const canVary = !src || displayedListCanVary(st.def, src);
+  const offered = SELECTIONS.filter((x) => x !== "displayed" || canVary || node.selection === "displayed");
+  return (
+    <select className="select mb-sel" data-testid="mask-selection"
+      value={node.selection} title={SELECTION_HINT[node.selection]}
+      onChange={(e) => onChange({ ...node, selection: e.target.value as SetSelection })}>
+      {offered.map((x) => (
+        <option key={x} value={x} title={SELECTION_HINT[x]}>{SET_SELECTION_LABEL[x]}</option>
+      ))}
+    </select>
+  );
+}
+
 function SetRow({ node, sources, listFills, onChange, onRemove, onBracket, canBracket }: {
   node: SetExpr;
   sources: { id: string; code: string; label: string }[];
@@ -185,13 +215,7 @@ function SetRow({ node, sources, listFills, onChange, onRemove, onBracket, canBr
           <option key={s.id} value={s.id}>{s.code} — {s.label}</option>
         ))}
       </select>
-      <select className="select mb-sel" data-testid="mask-selection"
-        value={node.selection}
-        onChange={(e) => onChange({ ...node, selection: e.target.value as SetSelection })}>
-        {SELECTIONS.map((s) => (
-          <option key={s} value={s}>{SET_SELECTION_LABEL[s]}</option>
-        ))}
-      </select>
+      <SelectionPicker node={node} onChange={onChange} />
       {canBracket && (
         <button className="btn small" data-testid="mask-bracket-pair"
           title="Bracket this set with the next one, so they are evaluated together"

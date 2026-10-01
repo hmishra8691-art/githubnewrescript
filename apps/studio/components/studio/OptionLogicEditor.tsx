@@ -71,6 +71,21 @@ function SourceRuleEditor({ title, rule, direction, onChange }: {
   );
 }
 
+/**
+ * The older `visibleIf` gate, folded into option logic with the same meaning:
+ * with no visibility rule (or "Show when") it becomes / joins the Show-when
+ * condition; with any other mode it is an extra "Eligible when" gate — which
+ * is exactly where `eligibilityVerdict` evaluates it.
+ */
+export function absorbLegacyVisibleIf(l: OptionLogic, visibleIf: Condition): OptionLogic {
+  const and = (a: Condition | undefined, b: Condition): Condition =>
+    a && !(a.type === "group" && a.children.length === 0) ? { type: "group", op: "and", children: [a, b] } : b;
+  const v = l.visibility ?? "default";
+  if (v === "default") return { ...l, visibility: "show_when", when: visibleIf };
+  if (v === "show_when") return { ...l, when: and(l.when, visibleIf) };
+  return { ...l, eligibleWhen: and(l.eligibleWhen, visibleIf) };
+}
+
 export function OptionLogicEditor({ title, logic, visibleIf, onChange }: {
   title: string;
   logic: OptionLogic | undefined;
@@ -136,10 +151,22 @@ export function OptionLogicEditor({ title, logic, visibleIf, onChange }: {
       )}
 
       {visibleIf && (
-        <div className="chip warn" style={{ margin: "6px 0" }}>
-          This option also has a legacy “visible if” condition —
-          <button className="btn small" style={{ marginLeft: 6 }}
-            onClick={() => onChange({ visibleIf: undefined })}>remove it</button>
+        /*
+         * The older "visible if" field. It still runs (an extra gate on top of
+         * everything above), so it is SHOWN and editable here — it used to be a
+         * chip saying it existed, with only a way to delete it unseen. "Convert"
+         * moves it into the visibility rules without changing what it does.
+         */
+        <div className="card" style={{ margin: "6px 0", padding: 8, borderColor: "var(--amber)" }} data-testid="legacy-visibleif">
+          <div className="row" style={{ marginBottom: 4, flexWrap: "wrap" }}>
+            <span className="flabel" style={{ margin: 0 }}>ALSO SHOWN ONLY WHEN (older “visible if”)</span>
+            <span className="grow" />
+            <button className="btn small" data-testid="legacy-visibleif-convert"
+              title="Move this condition into the visibility rules above — same behaviour, one place"
+              onClick={() => onChange({ logic: absorbLegacyVisibleIf(l, visibleIf), visibleIf: undefined })}>convert</button>
+            <button className="btn small danger" onClick={() => onChange({ visibleIf: undefined })}>remove it</button>
+          </div>
+          <ConditionEditor perOption value={visibleIf} onChange={(c) => onChange({ visibleIf: c })} />
         </div>
       )}
 

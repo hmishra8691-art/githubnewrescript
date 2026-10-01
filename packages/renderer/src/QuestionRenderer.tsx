@@ -4,7 +4,7 @@ import type { Question, Option, SurveyDefinition, QuestionColumn } from "@rescri
 import { resolveVariant } from "@rescript/schema";
 import {
   effectiveQuestion,
-  resolveQuestionMedia,
+  resolveQuestionMedia, questionMediaList,
   designRowsFor,
   shuffleAlternatives,
   resolvePiping,
@@ -27,7 +27,7 @@ import {
 import { variantRenderers } from "./variants/registry";
 import { MediaEmbed, SafeImage } from "./Media";
 import { SpeechInputButton } from "./SpeechInput";
-import { anchor, cellAnchor } from "./authoring";
+import { anchor, cellAnchor, type AuthoringAnchor } from "./authoring";
 // side-effect: every family registers its renderers
 import "./variants";
 
@@ -2261,6 +2261,41 @@ function CustomComponent(p: QRProps) {
 }
 
 /**
+ * THE MEDIA UNDER A QUESTION — one image or video, or several.
+ *
+ * `questionMediaList` decides what is shown (several `mediaItems`, else the
+ * single `mediaUrl`), so the builder, the Studio preview, Test Survey and the
+ * live survey draw the same list. Several items sit side by side
+ * (`mediaLayout: "horizontal"`, wrapping on a narrow screen) or stacked.
+ *
+ * The stimulus is described by what the programmer wrote, and only silently
+ * when they said it is decorative: an item's own alt, else the question's
+ * alt text, else the question text.
+ */
+function QuestionMedia({ q, anchor: a, decorative, altText }: {
+  q: Question; anchor: AuthoringAnchor; decorative: boolean; altText?: string;
+}) {
+  const list = questionMediaList(q);
+  if (!list.length) return null;
+  const fallbackAlt = decorative ? "" : (altText ?? stripHtmlText(q.text));
+  const layout = list.length > 1 ? (q.settings.mediaLayout ?? "vertical") : "single";
+  return (
+    <div className={`rs-qmedia rs-qmedia-${layout}`} data-testid="rs-qmedia" data-count={list.length} {...a}>
+      {list.map((m, i) => (
+        <div key={`${i}:${m.url}`} className="rs-qmedia-item" data-testid="rs-qmedia-item">
+          <MediaEmbed
+            url={m.url}
+            display={q.settings.mediaDisplay}
+            title={m.title ?? stripHtmlText(q.text)}
+            alt={m.alt ?? fallbackAlt}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
  * Renderers that display `settings.mediaUrl` themselves as their stimulus
  * (the media family tracks playback on it); every other question shows the
  * media under its text through one MediaEmbed.
@@ -2278,7 +2313,7 @@ const MEDIA_OWNING_RENDERERS = new Set(["videorating", "videotimeline", "watchti
  */
 function withPipedMedia(p: QRProps, ctx: EvalContext): QRProps {
   const media = resolveQuestionMedia(p.q, ctx);
-  if (media.imageUrl === p.q.settings.imageUrl && media.mediaUrl === p.q.settings.mediaUrl) return p;
+  if (media.imageUrl === p.q.settings.imageUrl && media.mediaUrl === p.q.settings.mediaUrl && media.mediaItems === p.q.settings.mediaItems) return p;
   return { ...p, q: { ...p.q, settings: { ...p.q.settings, ...media } } };
 }
 
@@ -2432,6 +2467,8 @@ export function QuestionRenderer(props: QRProps) {
       {...anchor("question", p.q.id)}
     >
           <div {...anchor("text")} dangerouslySetInnerHTML={{ __html: resolvePiping(p.q.customHtml ?? p.q.text, ctx) }} />
+          {/* a content block's media was configured in the builder and never drawn (Prince 11 §4) */}
+          <QuestionMedia q={p.q} anchor={anchor("media")} decorative={!!a11y?.decorative} altText={a11y?.altText} />
         </div>
       );
     default: body = <TextInput {...p} />;
@@ -2468,22 +2505,8 @@ export function QuestionRenderer(props: QRProps) {
         {p.q.required && <span className="rs-required">*</span>}
       </p>
       {instruction && <p className="rs-qinstruction" {...anchor("instruction")} dangerouslySetInnerHTML={{ __html: instruction }} />}
-      {p.q.settings.mediaUrl && !MEDIA_OWNING_RENDERERS.has(variantDef?.renderer ?? `base:${p.q.type}`) && (
-        <div className="rs-qmedia" data-testid="rs-qmedia" {...anchor("media")}>
-          {/*
-            * The stimulus is described by what the programmer wrote, and only
-            * silently when they said it is decorative. Falling back to the
-            * question text is better than the empty alt this used to emit:
-            * a respondent on a screen reader was told there was an image and
-            * nothing about it.
-            */}
-          <MediaEmbed
-            url={p.q.settings.mediaUrl}
-            display={p.q.settings.mediaDisplay}
-            title={stripHtmlText(p.q.text)}
-            alt={a11y?.decorative ? "" : (a11y?.altText ?? stripHtmlText(p.q.text))}
-          />
-        </div>
+      {!MEDIA_OWNING_RENDERERS.has(variantDef?.renderer ?? `base:${p.q.type}`) && (
+        <QuestionMedia q={p.q} anchor={anchor("media")} decorative={!!a11y?.decorative} altText={a11y?.altText} />
       )}
       {p.q.customHtml && p.q.type !== "custom_component" && (
         <div dangerouslySetInnerHTML={{ __html: safe(resolvePiping(p.q.customHtml, ctx)) }} />

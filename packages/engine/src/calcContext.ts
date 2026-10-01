@@ -37,6 +37,8 @@ import { flattenVariables } from "./flatten.js";
 import type { LoopContext, ResponseState } from "./state.js";
 import { answerLookupKeys, findLoopScope, getQuestionByCodeOrVar, loopValue } from "./state.js";
 import type { SurveyDefinition } from "@rescript/schema";
+import { findNamedExpression } from "./namedExpressions.js";
+import { evaluateCondition } from "./evaluate.js";
 
 const LOOP_ALIASES: Record<string, string> = {
   CURRENT_ITEM: "label", CURRENT_ITEM_LABEL: "label", CURRENT_ITEM_CODE: "code",
@@ -77,15 +79,28 @@ export function calcOptionsFor(def: SurveyDefinition, state: ResponseState, loop
         const v = loopScopedName(def, state, loop, n);
         if (v !== undefined) return v;
       }
-      return n in flat ? flat[n]
-        : n in state.calculated ? state.calculated[n]
-          : n in embedded ? (embedded as Record<string, unknown>)[n]
-            : undefined;
+      if (n in flat) return flat[n];
+      if (n in state.calculated) return state.calculated[n];
+      if (n in embedded) return (embedded as Record<string, unknown>)[n];
+      /*
+       * A NAMED EXPRESSION, as 1 (holds) or 0 — `IS_HIGH_VALUE * 10`,
+       * `if(rule.ELIGIBLE, 1, 0)`. Calculations could not read one, so a
+       * condition already defined once had to be re-typed in calc syntax,
+       * and could not be nested logic at all. Resolved through the
+       * evaluator's own `rule` source, which carries its cycle guard.
+       */
+      const name = n.startsWith("rule.") ? n.slice(5) : n;
+      const named = findNamedExpression(def, name);
+      if (named) {
+        return evaluateCondition({ type: "rule", source: { kind: "rule", ref: named.id }, operator: "eq", value: true } as never, { def, state, loop: loop ?? null }) ? 1 : 0;
+      }
+      return undefined;
     },
     names: () => [
       ...Object.keys(flat),
       ...Object.keys(state.calculated),
       ...Object.keys(embedded),
+      ...(def.namedExpressions ?? []).map((x) => x.name),
     ],
   };
 }

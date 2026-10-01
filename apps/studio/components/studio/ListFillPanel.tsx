@@ -2,7 +2,7 @@
 import React from "react";
 import { useStudio, uid } from "./store";
 import { CountInput } from "./CountInput";
-import { ConditionEditor, conditionToText } from "./ConditionBuilder";
+import { ConditionEditor, OptionalCondition, conditionToText } from "./ConditionBuilder";
 import type { ListFill, ListFillMethod } from "@rescript/schema";
 import {
   decideListFill, simulateListFill, listFillStatus, listFillVariableNames, explainRejection,
@@ -61,6 +61,7 @@ export function ListFillPanel() {
   const [note, setNote] = React.useState<{ text: string; ok: boolean } | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [open, setOpen] = React.useState<string | null>(null);
+  const [condOpen, setCondOpen] = React.useState<string | null>(null);
   const [simDraws, setSimDraws] = React.useState(100);
   const [sim, setSim] = React.useState<null | { listFillId: string; kind: "one"; trace: ListFillTrace } | { listFillId: string; kind: "many"; counts: Record<string, number>; empty: number; draws: number }>(null);
   const [simAnswers, setSimAnswers] = React.useState<Record<string, string[]>>({});
@@ -222,7 +223,8 @@ export function ListFillPanel() {
                   const opt = oi >= 0 ? lf.options[oi] : null;
                   const pct = row.fill ?? 0;
                   return (
-                    <tr key={row.code} data-code={row.code} data-status={row.status}>
+                    <React.Fragment key={row.code}>
+                    <tr data-code={row.code} data-status={row.status}>
                       <td className="mono">
                         {row.code}
                         <span className="muted" style={{ marginLeft: 6 }}>{row.label !== row.code ? stripHtmlText(row.label) : ""}</span>
@@ -245,10 +247,25 @@ export function ListFillPanel() {
                             <input type="checkbox" checked={opt?.eligible !== false}
                               data-testid={`lf-eligible-${lf.id}-${row.code}`}
                               onChange={(e) => setLf(i, (x) => { x.options[oi].eligible = e.target.checked; })} />
+                            {/* the condition half of eligibility: was stored and honoured, never editable */}
+                            <button type="button" className={`btn small ghost ${opt?.eligibleWhen ? "has-logic" : ""}`}
+                              data-testid={`lf-eligible-when-${lf.id}-${row.code}`}
+                              title="Eligible only when a condition holds"
+                              onClick={() => setCondOpen(condOpen === `${lf.id}:${row.code}` ? null : `${lf.id}:${row.code}`)}>⑂</button>
                           </label>
                         )}
                       </td>
                     </tr>
+                    {oi >= 0 && condOpen === `${lf.id}:${row.code}` && (
+                      <tr data-testid={`lf-eligible-when-row-${lf.id}-${row.code}`}>
+                        <td colSpan={11}>
+                          <OptionalCondition label={`${row.code} is eligible only when`} value={opt?.eligibleWhen}
+                            hint="Otherwise the checkbox alone decides."
+                            onChange={(c) => setLf(i, (x) => { x.options[oi].eligibleWhen = c; })} />
+                        </td>
+                      </tr>
+                    )}
+                    </React.Fragment>
                   );
                 })}
                 {!status.rows.length && (

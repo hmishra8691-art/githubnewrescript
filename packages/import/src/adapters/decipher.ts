@@ -57,9 +57,26 @@ export function readDecipher(text: string, fileName: string, fp: string): Canoni
   const collectQ = (n: XmlNode) => { for (const c of n.children) { if (QTAGS.has(c.name) && c.attrs.label) { const q = readQuestion(c, defines, issues); questions.set(q.sourceId, q); dims.set(q.sourceId, { rows: q.rows.length > 0, cols: q.kind.startsWith("matrix") }); } else if (c.name === "block" || c.name === "loop") collectQ(c); } };
   collectQ(root);
 
+  /*
+   * NAMED CONDITIONS — `<condition label="adult" cond="q1.ival >= 18"/>`, used
+   * as `condition.adult` anywhere a cond is. They were reported as "expanded
+   * wherever used" and then not expanded, so every condition naming one was
+   * unreadable and dropped. Each use is replaced by its definition, bracketed
+   * so its own AND / OR keep their meaning, and a definition that uses
+   * another is expanded too (cycles stop after a few levels).
+   */
+  const namedConds = new Map<string, string>();
+  for (const cn of findDeep(root, "condition")) if (cn.attrs.label && cn.attrs.cond) namedConds.set(cn.attrs.label, cn.attrs.cond);
+  const expandNamed = (src: string): string => {
+    let out = src;
+    for (let pass = 0; pass < 6 && /\bcondition\.\w+/.test(out); pass++) {
+      out = out.replace(/\bcondition\.(\w+)/g, (m, label: string) => (namedConds.has(label) ? `(${namedConds.get(label)})` : m));
+    }
+    return out;
+  };
   const cond = (src: string | undefined, location: string): CExpr | undefined => {
     if (!src || src.trim() === "1" || src.trim() === "True") return undefined;
-    return readPython(src, location, questions, issues);
+    return readPython(expandNamed(src), location, questions, issues);
   };
 
   /* second pass: the flow */

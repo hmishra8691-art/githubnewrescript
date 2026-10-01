@@ -457,6 +457,13 @@ export type GroupOrdering = z.infer<typeof GroupOrdering>;
 export const Randomization = z.object({
   enabled: z.boolean().default(false),
   scope: z.enum(["options", "rows", "columns"]).default("options"),
+  /**
+   * Several axes at once — "randomize rows AND columns" of a grid (29-09 #1).
+   * Absent = `scope` alone, as every survey before this field. When present,
+   * each listed axis is shuffled with its own seed; `scope` stays the PRIMARY
+   * axis, the only one `pick` ("show only N") and `groups` apply to.
+   */
+  scopes: z.array(z.enum(["options", "rows", "columns"])).optional(),
   method: z.enum(["shuffle", "rotate", "reverse_half", "none"]).default("shuffle"),
   /** Randomize only within these code groups (blocks stay in place). */
   groups: z.array(z.array(z.union([z.string(), z.number()]))).optional(),
@@ -1105,6 +1112,23 @@ export const Question = z.object({
       mediaUrl: z.string().optional(),
       /** how `mediaUrl` / `imageUrl` is sized, fitted, aligned and played — see MediaDisplay */
       mediaDisplay: MediaDisplay.optional(),
+      /**
+       * SEVERAL images / videos under the question text (Prince 11, 14, 16).
+       * When present and non-empty it IS the media list, in order; `mediaUrl`
+       * is kept equal to the first item so every reader of the single URL
+       * (media-owning renderers, exports, older runtimes) still sees one.
+       * Each `url` may be piped (`{{ImageURL}}`).
+       */
+      mediaItems: z.array(z.object({
+        id: z.string(),
+        url: z.string(),
+        /** what a screen reader says; "" = decorative */
+        alt: z.string().optional(),
+        /** a caption / name shown in the builder */
+        title: z.string().optional(),
+      })).optional(),
+      /** how several media items sit: side by side (wrapping on narrow screens) or stacked */
+      mediaLayout: z.enum(["horizontal", "vertical"]).optional(),
       /** Respondent must reach the end of the media before answering. */
       requireComplete: z.boolean().optional(),
       /** Timeline reactions: the option set is offered at each tap. */

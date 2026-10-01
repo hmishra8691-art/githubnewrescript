@@ -175,7 +175,25 @@ export function readQsf(text: string, fileName: string, fp: string): CanonicalSu
     });
     if (p.LogicType && p.LogicType !== "Simple") issues.push({ location: `Quota ${p.Name ?? id}`, type: "converted", severity: "medium", message: `Quota “${p.Name ?? id}” is a ${p.LogicType} quota; it was imported as one cell with its condition.`, suggestion: "Check its cells in the Quotas tab.", autoAttempted: true });
   }
-  if (byType("QG").length) issues.push({ location: "Quota groups", type: "unsupported", severity: "medium", message: `${byType("QG").length} Qualtrics quota group${byType("QG").length === 1 ? "" : "s"} (cross-quota rules) were not reproduced; the quotas inside them were.`, autoAttempted: false });
+  /*
+   * QUOTA GROUPS. A Qualtrics group bundles quotas that are read together
+   * ("Gender": Male, Female). Rescript's own shape for that is one quota with
+   * a cell per member, so a group becomes exactly that. Membership is read
+   * from the group (its quota list) or from the quota (its group id),
+   * whichever the export carries.
+   */
+  for (const el of byType("QG")) {
+    const g: Json = el.Payload ?? {};
+    const gid = str(g.ID ?? el.PrimaryAttribute);
+    const gname = str(g.Name ?? el.SecondaryAttribute) || gid;
+    const listed = [...arr<Json>(g.Quotas), ...arr<Json>(g.QuotaIDs), ...arr<Json>(g.Members)].map((x) => str(typeof x === "object" && x ? (x.ID ?? x.QuotaID) : x));
+    const members = quotas.filter((q) => listed.includes(q.sourceId)
+      || byType("QO").some((qo) => str(qo.Payload?.ID ?? qo.PrimaryAttribute) === q.sourceId && [qo.Payload?.QuotaGroupID, qo.Payload?.QuotaGroup, qo.Payload?.GroupID].map(str).includes(gid)));
+    for (const m of members) m.group = { id: gid, name: gname };
+    issues.push(members.length
+      ? { location: `Quota group ${gname}`, type: "converted", severity: "low", message: `Quota group “${gname}” was imported as one quota with ${members.length} cell${members.length === 1 ? "" : "s"}.`, suggestion: "Check its cells and its full action in the Quotas tab — Qualtrics' cross-quota options (place in one / all) are not carried.", autoAttempted: true }
+      : { location: `Quota group ${gname}`, type: "unsupported", severity: "medium", message: `Quota group “${gname}” lists no quota this import recognised; its quotas were imported one by one.`, autoAttempted: false });
+  }
 
   /* ------------------------------------------------------------ survey-level JS / header */
   const custom: CanonicalCustom[] = [];
@@ -453,7 +471,10 @@ function readSkip(qid: string, s: Json, issues: Issue[]): CanonicalSkip | null {
     : null;
   if (!to) { issues.push({ location: `${qid} · skip logic`, type: "reference", severity: "medium", message: `A skip to “${dest}” could not be read.`, autoAttempted: false, refs: [qid] }); return null; }
   let when: CExpr;
-  if (m && op) {
+  /* a skip that carries a whole BooleanExpression (newer exports) is read in full, AND / OR and all */
+  if (s.Logic && typeof s.Logic === "object") {
+    when = readLogic(s.Logic, `${qid} · skip logic`, issues);
+  } else if (m && op) {
     const ref: CRef = { kind: "question", id: m[1] };
     if (m[2] === "SelectableChoice" && m[3]) ref.choice = m[3];
     when = { t: "cmp", ref, op: m[2] === "ChoiceTextEntryValue" ? (op === "selected" ? "answered" : op) : op, ...(s.RightOperand !== undefined ? { value: s.RightOperand } : {}) };

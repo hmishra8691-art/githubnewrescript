@@ -2,12 +2,13 @@
 import { CountInput } from "./CountInput";
 import React from "react";
 import type { Question, ValidationRule, SkipRule, ListOperation, ListSource } from "@rescript/schema";
-import { gridAxes, validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion, shapeHasAxis, staleFields, migrateQuestionType, escapeHtml, sanitizeHtml, PIPE_TOKEN_RE, parsePipeBody, describePipeToken } from "@rescript/engine";
+import { gridAxes, displayedListCanVary, validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion, shapeHasAxis, staleFields, migrateQuestionType, escapeHtml, sanitizeHtml, PIPE_TOKEN_RE, parsePipeBody, describePipeToken } from "@rescript/engine";
 import { isEmptyConditionTree, resolveVariant, effectiveCapabilities, allowedValidationKinds, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript/schema";
 import { useStudio, selectedQuestion, uid } from "./store";
 import { useCanvas } from "../canvas/CanvasContext";
 import { ElementPanel } from "../canvas/ElementPanel";
 import { OptionalCondition, ConditionEditor, newConditionGroup } from "./ConditionBuilder";
+import { RandomizeAxes } from "./RandomizeAxes";
 import { LoopScopeProvider, loopsAroundQuestion } from "./loopScope";
 import { MaskingBuilder, PunchRules } from "./MaskingBuilder";
 import { QualitySettings } from "./QualitySettings";
@@ -492,6 +493,11 @@ function CarryForwardEditor({ q, patch }: { q: Question; patch(p: Partial<Questi
       ];
   /* a stored value the source does not offer stays selectable — and visible — rather than silently changing */
   const current = (cf.filter ?? "selected") as F;
+  /* "displayed" IS "all" unless the source can change its own list — then it is not offered (Oweas #6) */
+  if (src && !displayedListCanVary(s.def, src, grid ? "rows" : "options") && current !== "displayed") {
+    const at = choices.findIndex((c) => c.value === "displayed");
+    if (at >= 0) choices.splice(at, 1);
+  }
   const effective: F = grid && current === "selected" ? "answered_rows" : !grid && current === "answered_rows" ? "selected" : current;
   const hint = choices.find((c) => c.value === effective)?.hint;
   const set = (p: Partial<typeof cf>) => patch({ carryForward: { ...cf, ...p } });
@@ -1230,10 +1236,7 @@ export function PropertiesPanel() {
         </label>
         {q.randomization?.enabled && (
           <>
-            <select className="select" value={q.randomization.scope}
-              onChange={(e) => patch({ randomization: { ...q.randomization!, scope: e.target.value as any } })}>
-              <option value="options">options</option><option value="rows">rows</option><option value="columns">columns</option>
-            </select>
+            <RandomizeAxes q={q} patch={patch} />
             <select className="select" value={q.randomization.method}
               onChange={(e) => patch({ randomization: { ...q.randomization!, method: e.target.value as any } })}>
               <option value="shuffle">shuffle</option><option value="rotate">rotate</option>
@@ -1320,8 +1323,10 @@ export function PropertiesPanel() {
       </CollapsibleSection>
       )}
 
+      {/* on a grid whose columns ARE its options (the answer scale) this is the
+          column masking — one section, named for what the respondent sees (29-09 #2) */}
       {hasCap("list_logic") && showSec("Masking") && (
-      <CollapsibleSection id="masking" title="Masking (dynamic option sets)" active={!!q.mask}>
+      <CollapsibleSection id="masking" title={gridAxes(q).columnMeaning === "option_code" ? "Column masking (dynamic column sets)" : "Masking (dynamic option sets)"} active={!!q.mask}>
       <MaskingBuilder q={q} patch={patch} field="mask" />
       </CollapsibleSection>
       )}

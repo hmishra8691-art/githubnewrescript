@@ -7,6 +7,7 @@ import { drawsOptionImages } from "@rescript/renderer";
 import { useStudio } from "../studio/store";
 import { OptionLogicEditor } from "../studio/OptionLogicEditor";
 import { OptionalCondition } from "../studio/ConditionBuilder";
+import { RandomizeAxes } from "../studio/RandomizeAxes";
 import { InlineRichText } from "../studio/RichTextEditor";
 import { Icon } from "../ui/Icon";
 import { selectionLabel, type SelectedEntity } from "./selection";
@@ -229,7 +230,8 @@ function RowValidation({ rules, onChange }: {
   return (
     <div data-testid="row-validation">
       {rules.map((r, i) => (
-        <div className="row" key={i} style={{ marginBottom: 6 }}>
+        <div key={i} style={{ marginBottom: 6 }}>
+        <div className="row">
           <select className="select small" value={r.kind}
             onChange={(e) => onChange(rules.map((x, j) => (j === i ? { ...x, kind: e.target.value as ValidationRule["kind"] } : x)))}>
             {ROW_RULES.map((k) => <option key={k} value={k}>{k.replace(/_/g, " ")}</option>)}
@@ -237,6 +239,10 @@ function RowValidation({ rules, onChange }: {
           <input className="input small grow" placeholder="value" value={String(r.value ?? "")}
             onChange={(e) => onChange(rules.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))} />
           <button className="btn small danger" onClick={() => onChange(rules.filter((_, j) => j !== i))}>×</button>
+        </div>
+        {/* the row rule's own gate — honoured by the validator, editable nowhere until now */}
+        <OptionalCondition label="Check only when" value={r.when}
+          onChange={(when) => onChange(rules.map((x, j) => (j === i ? { ...x, when } : x)))} />
         </div>
       ))}
       <button className="btn small" data-testid="add-row-rule"
@@ -447,10 +453,7 @@ function QuestionProps({ q }: { q: Question }) {
       </label>
       {q.randomization?.enabled && (
         <div className="row" style={{ gap: 8 }}>
-          <select className="select small" value={q.randomization.scope}
-            onChange={(e) => patch({ randomization: { ...q.randomization!, scope: e.target.value as never } })}>
-            <option value="options">options</option><option value="rows">rows</option><option value="columns">columns</option>
-          </select>
+          <RandomizeAxes q={q} patch={patch} />
           <select className="select small" value={q.randomization.method}
             onChange={(e) => patch({ randomization: { ...q.randomization!, method: e.target.value as never } })}>
             <option value="shuffle">shuffle</option><option value="rotate">rotate</option>

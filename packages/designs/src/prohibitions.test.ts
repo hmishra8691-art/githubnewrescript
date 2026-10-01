@@ -151,3 +151,29 @@ test("a design with no prohibitions is byte-identical to before the feature", ()
   assert.equal("prohibitions" in (without.summary as object), false,
     "a design with no prohibitions should not gain a prohibitions summary");
 });
+
+test("a COMBINATION prohibition — nested AND / OR over levels — never appears", () => {
+  const config = {
+    ...base,
+    prohibitions: [
+      /* never Value at $999 with a 2- or 3-year warranty */
+      { a: { attribute: "Brand", level: "Value" }, b: { attribute: "Price", level: "$999" },
+        also: [{ attribute: "Warranty", level: "2 years" }, { attribute: "Warranty", level: "3 years" }], alsoOp: "or" as const },
+      /* never Premium at $399 unless the warranty is 1 year — as a full tree */
+      { a: { attribute: "Brand", level: "Premium" }, b: { attribute: "Price", level: "$399" },
+        when: { op: "and" as const, children: [{ attribute: "Brand", level: "Premium" }, { attribute: "Price", level: "$399" }, { op: "not" as const, children: [{ attribute: "Warranty", level: "1 year" }] }] } },
+    ],
+  };
+  assert.deepEqual(conjointPlugin.validateConfig!(config), []);
+  const all: Record<string, string>[] = [];
+  for (let seed = 1; seed <= 30; seed++) all.push(...concepts(conjointPlugin.generate(config, seed).rows));
+  for (const c of all) {
+    assert.ok(!(c.Brand === "Value" && c.Price === "$999" && c.Warranty !== "1 year"), JSON.stringify(c));
+    assert.ok(!(c.Brand === "Premium" && c.Price === "$399" && c.Warranty !== "1 year"), JSON.stringify(c));
+  }
+  /* the pair alone is NOT forbidden — only the combination is */
+  assert.ok(all.some((c) => c.Brand === "Value" && c.Price === "$999" && c.Warranty === "1 year"), "Value at $999 with 1 year still appears");
+  /* a level that does not exist inside a combination is refused */
+  const bad = { ...base, prohibitions: [{ a: { attribute: "Brand", level: "Value" }, b: { attribute: "Price", level: "$999" }, also: [{ attribute: "Warranty", level: "5 years" }] }] };
+  assert.ok(conjointPlugin.validateConfig!(bad).some((e) => /5 years/.test(e)));
+});
