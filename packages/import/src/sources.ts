@@ -15,6 +15,23 @@ import { extractPdfText } from "./pdf.js";
  */
 export interface ReadResult { detection: Detection; canonical: CanonicalSurvey | null; issues: Issue[] }
 
+/** An Excel workbook or a delimited text file as plain sheets of strings — the one reader every table-shaped import (questionnaire tables, quota sheets) starts from. */
+export async function readSheets(bytes: Uint8Array, fileName: string): Promise<{ name: string; rows: string[][] }[]> {
+  if (detectFormat(bytes, fileName).format === "xlsx") {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(Buffer.from(bytes) as never);
+    return wb.worksheets.map((ws) => {
+      const rows: string[][] = [];
+      ws.eachRow({ includeEmpty: true }, (row) => { const r: string[] = []; row.eachCell({ includeEmpty: true }, (cell, col) => { r[col - 1] = cellText(cell); }); rows.push(Array.from(r, (x) => x ?? "")); });
+      return { name: ws.name, rows };
+    });
+  }
+  const t = new TextDecoder("utf-8").decode(bytes).replace(/^\ufeff/, "");
+  const first = t.split(/\r?\n/).find((l) => l.trim()) ?? "";
+  const delim = ["\t", ";", ","].sort((a, b) => splitDelimited(first, b).length - splitDelimited(first, a).length)[0];
+  return [{ name: fileName, rows: splitCsvRows(t).map((l) => splitDelimited(l, delim)) }];
+}
+
 export async function readSource(bytes: Uint8Array, fileName: string): Promise<ReadResult> {
   const detection = detectFormat(bytes, fileName);
   const fp = fingerprint(bytes);
@@ -39,23 +56,8 @@ export async function readSource(bytes: Uint8Array, fileName: string): Promise<R
         c.issues.push({ location: fileName, type: "inferred", severity: "info", message: `Read ${pdf.pages.length} PDF page${pdf.pages.length === 1 ? "" : "s"} of text. PDF layout (columns, tables) is flattened to lines, so check grids and multi-column option lists.`, autoAttempted: true });
         return { detection, canonical: c, issues: [] };
       }
-      case "xlsx": {
-        const wb = new ExcelJS.Workbook();
-        await wb.xlsx.load(Buffer.from(bytes) as never);
-        const sheets = wb.worksheets.map((ws) => {
-          const rows: string[][] = [];
-          ws.eachRow({ includeEmpty: true }, (row) => { const r: string[] = []; row.eachCell({ includeEmpty: true }, (cell, col) => { r[col - 1] = cellText(cell); }); rows.push(Array.from(r, (x) => x ?? "")); });
-          return { name: ws.name, rows };
-        });
-        return { detection, canonical: readTable(sheets, meta), issues: [] };
-      }
-      case "csv": {
-        const t = text();
-        const first = t.split(/\r?\n/).find((l) => l.trim()) ?? "";
-        const delim = ["\t", ";", ","].sort((a, b) => splitDelimited(first, b).length - splitDelimited(first, a).length)[0];
-        const rows = splitCsvRows(t).map((l) => splitDelimited(l, delim));
-        return { detection, canonical: readTable([{ name: fileName, rows }], meta), issues: [] };
-      }
+      case "xlsx": return { detection, canonical: readTable(await readSheets(bytes, fileName), meta), issues: [] };
+      case "csv": return { detection, canonical: readTable(await readSheets(bytes, fileName), meta), issues: [] };
       case "text": {
         const blocks: DocBlock[] = text().split(/\r?\n/).map((t) => ({ kind: "para" as const, text: t })).filter((b) => b.text.trim());
         return { detection, canonical: readDocument(blocks, meta), issues: [] };

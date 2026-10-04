@@ -103,7 +103,7 @@ await page.waitForSelector('[data-testid="intelligent-view"]');
   for (const id of ["cp-structure-pane", "cp-panel", "cp-generate", "cp-review", "cp-undo-last", "iq-attach", "iq-mic", "cp-welcome-generate", "cp-welcome-research"]) assert.ok(await page.$(`[data-testid="${id}"]`), id);
   assert.ok(await page.$eval('[data-testid="cp-undo-last"]', (b) => b.disabled), "nothing to undo yet");
   await page.click('[data-testid="iq-attach"]');
-  assert.deepEqual(await texts('[data-testid="cp-attach-menu"] b'), ["Research documents", "Import a questionnaire", "Theme image"]);
+  assert.deepEqual(await texts('[data-testid="cp-attach-menu"] b'), ["Research documents", "Import a questionnaire", "Quota sheet", "Theme image"]);
   await page.click('[data-testid="iq-attach"]');
   ok("the workspace: structure on the left, conversation, the panel (Changes · Review · Research · History · Inspector); Generate, Review, Undo, attach, microphone");
 }

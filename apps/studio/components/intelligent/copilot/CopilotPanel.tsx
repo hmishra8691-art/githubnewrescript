@@ -7,6 +7,7 @@ import { structureRows, changeLabel, uxPreviewScope, type OutlineRow, type Propo
 import { UxPreview } from "./UxPreview";
 import { AnalysisTab } from "./AnalysisTab";
 import { LanguagesTab } from "./LanguagesTab";
+import { QuotasTab, type QuotaImportNote } from "./QuotasTab";
 import { Linked } from "./CopilotCard";
 import type { Copilot, PanelTab } from "./useCopilot";
 
@@ -26,9 +27,10 @@ import type { Copilot, PanelTab } from "./useCopilot";
  *              removed, and Undo for the whole operation
  *   Analysis   the analysis framework (AnalysisTab)
  *   Languages  each language version's state and next step (LanguagesTab)
+ *   Quotas     the feasibility review, the live counts' advice, the sheet import (QuotasTab)
  *   Inspector  the object in focus (the existing inspector)
  */
-export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, applyNote, readOnly }: {
+export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, applyNote, readOnly, onImportQuotaSheet, quotaImport }: {
   copilot: Copilot;
   def: SurveyDefinition;
   onSelect(questionId: string): void;
@@ -36,6 +38,8 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
   onApply(): void;
   applyNote: string | null;
   readOnly: boolean;
+  onImportQuotaSheet?: () => void;
+  quotaImport?: QuotaImportNote | null;
 }) {
   const tabs: { id: PanelTab; label: string; badge?: number }[] = [
     { id: "changes", label: "Changes", badge: copilot.state ? copilot.state.diff.summary.length : undefined },
@@ -44,6 +48,7 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
     { id: "history", label: "History", badge: copilot.history.filter((h) => !h.reverted).length || undefined },
     { id: "analysis", label: "Analysis", badge: def.research?.analysisPlan ? (def.research.analysisPlan.crosstabs.length + def.research.analysisPlan.tests.length) || undefined : undefined },
     { id: "languages", label: "Languages", badge: def.localization?.languages?.length || undefined },
+    { id: "quotas", label: "Quotas", badge: def.quotas.length || undefined },
     { id: "ux", label: "UX", badge: def.ux ? (def.ux.styles.length + def.ux.animations.length + def.ux.behaviors.length) || undefined : undefined },
     { id: "inspector", label: "Inspector" },
   ];
@@ -63,6 +68,7 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
         {copilot.tab === "history" && <HistoryTab copilot={copilot} readOnly={readOnly} />}
         {copilot.tab === "analysis" && <AnalysisTab copilot={copilot} def={def} onSelect={onSelect} />}
         {copilot.tab === "languages" && <LanguagesTab copilot={copilot} def={def} onSelect={onSelect} />}
+        {copilot.tab === "quotas" && <QuotasTab copilot={copilot} def={def} onSelect={onSelect} onImportSheet={() => onImportQuotaSheet?.()} lastImport={quotaImport ?? null} readOnly={readOnly} />}
         {copilot.tab === "ux" && <UxTab copilot={copilot} def={def} onSelect={onSelect} />}
         {copilot.tab === "inspector" && inspector}
       </div>

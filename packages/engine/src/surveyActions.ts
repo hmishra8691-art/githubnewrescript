@@ -17,6 +17,7 @@ import { applyAnalysisAction, coerceAnalysisAction, describeAnalysisAction, isAn
 import { describeAnalysisImpact } from "./analysisFramework.js";
 import { applyLocalizationAction, coerceLocalizationAction, describeLocalizationAction, isLocalizationOp, localizationRank, outdateTranslations, LOCALIZATION_ACTION_OPS, type LocalizationAction } from "./localizationActions.js";
 import { languageName } from "./localization.js";
+import { applyQuotaAction, coerceQuotaAction, describeQuotaAction, isQuotaOp, quotaDiff, containsQuestion, endIndex, QUOTA_ACTION_OPS, type QuotaAction } from "./quotaActions.js";
 import { parsePunchExpression, formatPunchExpression } from "./autoPunch.js";
 import { authoringQuestionView } from "./carryforward.js";
 import { resolveOptionValue, describeOptions, type OptionList } from "./optionCodes.js";
@@ -92,7 +93,6 @@ export type SurveyAction =
   | { op: "create_randomizer"; blocks: string[]; show?: number; title?: string }
   | { op: "create_branch"; blocks: string[]; when: CondInput; title?: string; arms?: { blocks: string[]; when: CondInput; label?: string }[]; otherwise?: string[] }
   | { op: "create_loop"; from: string; to: string; over?: string; items?: string[]; loopVar?: string; title?: string }
-  | { op: "create_quota"; name: string; cells: { label: string; when: CondInput; limit: number }[]; onFull?: "terminate" | "flag" }
   | { op: "set_research"; objective?: string; hypotheses?: string[]; population?: string; methodology?: string; constructs?: { name: string; role?: string; definition?: string; questions?: string[] }[]; analysis?: string[]; assumptions?: string[]; sources?: string[] }
   /* criteria-based coding (punching): IF <when> THEN code <target> — on the target question's punch rules */
   | { op: "add_punch"; target: string; when?: CondInput; action?: "select" | "deselect" | "set_value" | "clear"; codes?: (string | number)[]; value?: string | number; expression?: string; label?: string; mode?: "if" | "else_if" | "else"; recompute?: "once" | "always" }
@@ -102,15 +102,16 @@ export type SurveyAction =
   /* the analysis framework — see analysisActions.ts; they write question.analysis and research.analysisPlan and nothing else */
   | AnalysisAction
   /* languages, translations, glossary and language routing — see localizationActions.ts; they write def.localization and nothing else */
-  | LocalizationAction;
+  | LocalizationAction
+  | QuotaAction;
 
 export const SURVEY_ACTION_OPS = [
   "create_block", "rename_block", "delete_block", "create_question", "update_question", "delete_question", "move_question",
   "set_display_logic", "add_skip", "clear_skips", "set_validation", "page_break", "create_embedded", "create_calculation",
-  "create_randomizer", "create_branch", "create_loop", "create_quota", "set_research", "add_punch", "remove_punches",
+  "create_randomizer", "create_branch", "create_loop", "set_research", "add_punch", "remove_punches",
   ...UX_ACTION_OPS,
   ...ANALYSIS_ACTION_OPS,
-  ...LOCALIZATION_ACTION_OPS,
+  ...LOCALIZATION_ACTION_OPS, ...QUOTA_ACTION_OPS,
 ] as const;
 
 /** Friendly question types → the Studio variant that makes them. */
@@ -282,10 +283,6 @@ function coerceOne(item: unknown): SurveyAction | string {
       if (!str(o.over) && !items?.length) return "create_loop needs over (a question) or items";
       return { op, from, to, ...(str(o.over) ? { over: str(o.over) } : {}), ...(items?.length ? { items } : {}), ...(str(o.loopVar) && /^[A-Za-z_][A-Za-z0-9_]*$/.test(str(o.loopVar)!) ? { loopVar: str(o.loopVar) } : {}), ...(str(o.title) ? { title: str(o.title) } : {}) };
     }
-    case "create_quota": {
-      const name = str(o.name); const cells = Array.isArray(o.cells) ? o.cells.map((c) => { const x = (c ?? {}) as Record<string, unknown>; const label = str(x.label), when = condIn(x.when ?? x.condition), limit = Number(x.limit); return label && when && Number.isFinite(limit) && limit > 0 ? { label, when, limit } : null; }).filter((x): x is { label: string; when: CondInput; limit: number } => !!x) : [];
-      return name && cells.length ? { op, name, cells, ...(o.onFull === "flag" ? { onFull: "flag" as const } : {}) } : "create_quota needs a name and cells with label, when and limit";
-    }
     case "set_research": {
       const constructs = Array.isArray(o.constructs) ? o.constructs.map((c) => { const x = (c ?? {}) as Record<string, unknown>; const name = str(x.name); return name ? { name, ...(str(x.role) ? { role: str(x.role) } : {}), ...(str(x.definition) ? { definition: str(x.definition) } : {}), ...(strs(x.questions) ? { questions: strs(x.questions) } : {}) } : null; }).filter((x): x is NonNullable<typeof x> => !!x) : undefined;
       return { op, ...(str(o.objective) ? { objective: str(o.objective) } : {}), ...(strs(o.hypotheses) ? { hypotheses: strs(o.hypotheses) } : {}), ...(str(o.population) ? { population: str(o.population) } : {}), ...(str(o.methodology) ? { methodology: str(o.methodology) } : {}), ...(constructs ? { constructs } : {}), ...(strs(o.analysis) ? { analysis: strs(o.analysis) } : {}), ...(strs(o.assumptions) ? { assumptions: strs(o.assumptions) } : {}), ...(strs(o.sources) ? { sources: strs(o.sources) } : {}) };
@@ -297,6 +294,8 @@ function coerceOne(item: unknown): SurveyAction | string {
       if (an !== null) return an;
       const lc = op ? coerceLocalizationAction(op, o) : null;
       if (lc !== null) return lc;
+      const qa = op ? coerceQuotaAction(op, o) : null;
+      if (qa !== null) return qa;
       return op ? `unknown action “${op}”` : "an action needs an op";
     }
   }
@@ -352,7 +351,7 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
   // the research design names the questions that measure each construct, and UX targets name questions: both after the questions exist
   // …and the analysis framework names questions and constructs: after both
   // …and translations name the question texts as they will be: last of all
-  const rank = (a: SurveyAction) => (isLocalizationOp(a.op) ? 4 + localizationRank(a.op) / 10 : isAnalysisOp(a.op) ? 3 : a.op === "set_research" ? 2 : isUxOp(a.op) ? 1 : 0);
+  const rank = (a: SurveyAction) => (isLocalizationOp(a.op) ? 4 + localizationRank(a.op) / 10 : isAnalysisOp(a.op) ? 3 : a.op === "set_research" ? 2 : isUxOp(a.op) ? 1 : isQuotaOp(a.op) ? 0.5 : 0);
   const order = actions.map((a, index) => ({ a, index })).sort((x, y) => rank(x.a) - rank(y.a));
   order.forEach(({ a, index }) => {
     const snapshot = structuredClone(def) as SurveyDefinition;
@@ -675,20 +674,6 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       if (!node.title && holder?.title && !listBlocks(def.flow as unknown[]).some((b) => b.id === holder.id)) node.title = holder.title;
       return { description: `Loop over ${a.over ? `the answers to ${resolveQuestion(ctx, a.over).code}` : `${a.items!.length} items`}: ${from.code}${to.id !== from.id ? `–${to.code}` : ""} asked once per item`, touched: [from.id, to.id] };
     }
-    case "create_quota": {
-      const cells = a.cells.map((c) => ({ id: ctx.ids("cell"), label: c.label, when: parseCondition(def, withRefs(ctx, c.when)), limit: c.limit, limitType: "count" }));
-      const quota = { id: ctx.ids("quota"), name: a.name, mode: "hard", cells, onFull: { kind: a.onFull ?? "terminate" }, countStatus: ["complete"] };
-      def.quotas = [...(def.quotas ?? []), quota as never];
-      // the check goes after the block that asks the last question the cells read
-      const order = questionOrder(def);
-      const read = new Set<string>();
-      for (const c of cells) collectRefs(c.when, read, def);
-      const last = [...read].sort((x, y) => order.indexOf(y) - order.indexOf(x))[0];
-      const flow = def.flow as FlowNode[];
-      const top = last ? flow.findIndex((n) => containsQuestion(n, last)) : -1;
-      flow.splice(top >= 0 ? top + 1 : endIndex(flow), 0, { type: "quota_check", id: ctx.ids("quota_check"), quotaIds: [quota.id], onFull: { kind: quota.onFull.kind } } as never);
-      return { description: `Quota “${a.name}”: ${cells.map((c) => `${c.label} ≤ ${c.limit}`).join(", ")}`, touched: [] };
-    }
     case "set_research": {
       const map = (xs: string[] | undefined) => (xs ?? []).map((r) => tryQuestion(ctx, r)?.id).filter((x): x is string => !!x);
       const prev = def.research;
@@ -762,6 +747,12 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
     default: {
       // the analysis framework: question.analysis and research.analysisPlan only, every variable resolved
       if (isAnalysisOp(a.op)) return applyAnalysisAction(def, a as AnalysisAction, { question: (x) => tryQuestion(ctx, x), ids: ctx.ids, now: ctx.now });
+      // the quotas: def.quotas and the quota_check nodes; every condition through the gate, the check placed after what it reads
+      if (isQuotaOp(a.op)) {
+        const r = applyQuotaAction(def, a as QuotaAction, { question: (x) => tryQuestion(ctx, x), condition: (c) => parseCondition(def, withRefs(ctx, c)), ids: ctx.ids });
+        ctx.uxWarnings.push(...r.warnings);
+        return r;
+      }
       // the languages: def.localization only; every target resolved, every translation checked against its source
       if (isLocalizationOp(a.op)) {
         const r = applyLocalizationAction(def, a as LocalizationAction, { question: (x) => tryQuestion(ctx, x), condition: (c) => parseCondition(def, withRefs(ctx, c)), ids: ctx.ids, now: ctx.now });
@@ -1057,23 +1048,11 @@ function topIndexOf(flow: FlowNode[], id: string): number {
   const i = flow.findIndex((n) => n.id === id || !!findFlow([n], id));
   return i >= 0 ? i : endIndex(flow) - 1;
 }
-/** before the survey's trailing End node(s) */
-function endIndex(flow: FlowNode[]): number {
-  let i = flow.length;
-  while (i > 0 && flow[i - 1].type === "end") i--;
-  return i;
-}
 /** after the embedded-data setup at the top of the flow */
 function leadingSetupEnd(flow: FlowNode[]): number {
   let i = 0;
   while (i < flow.length && flow[i].type === "embedded_data") i++;
   return i;
-}
-function containsQuestion(n: FlowNode, qid: string): boolean {
-  if (n.type === "page") return n.questionIds.includes(qid);
-  const k = n as { children?: FlowNode[]; branches?: { children: FlowNode[] }[]; otherwise?: FlowNode[] };
-  for (const list of [k.children, ...(k.branches ?? []).map((b) => b.children), k.otherwise]) if (list?.some((c) => containsQuestion(c, qid))) return true;
-  return false;
 }
 
 /* ------------------------------------------------------------ words */
@@ -1100,7 +1079,6 @@ export function describeAction(a: SurveyAction): string {
     case "create_randomizer": return `Randomize ${a.blocks.join(", ")}`;
     case "create_branch": return `Show ${a.blocks.join(", ")} only when ${condWords(a.when)}${a.arms?.length ? ` (+${a.arms.length} more arm${a.arms.length === 1 ? "" : "s"})` : ""}`;
     case "create_loop": return `Loop ${a.from}${a.to !== a.from ? `–${a.to}` : ""}`;
-    case "create_quota": return `Create quota ${a.name}`;
     case "set_research": return "Record the research design";
     case "add_punch": return a.expression ? `Punch rule ${a.expression}` : `Punch ${a.target} when ${a.when ? condWords(a.when) : "otherwise"}`;
     case "remove_punches": return `Remove the punch rules of ${a.target}`;
@@ -1116,7 +1094,7 @@ export function describeAction(a: SurveyAction): string {
     case "set_theme": return a.label ? `Theme “${a.label}”` : "Change the theme";
     case "set_custom_html": return a.html === null ? `Remove the custom HTML of ${a.target}` : `Custom HTML on ${a.target}`;
     case "set_default_value": return a.value === null ? `Remove the default value of ${a.target}` : `Default value of ${a.target}: ${Array.isArray(a.value) ? a.value.join(", ") : a.value}`;
-    default: return isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
+    default: return isQuotaOp(a.op) ? describeQuotaAction(a as QuotaAction) : isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
   }
 }
 
@@ -1228,7 +1206,7 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
     pages.after - pages.before - blocksAdded.length > 0 ? `Add ${n(pages.after - pages.before - blocksAdded.length, "page break")}` : "",
     embeddedAdded.length ? `Add embedded ${embeddedAdded.join(", ")}` : "",
     calculationsAdded.length ? `Add calculation${calculationsAdded.length === 1 ? "" : "s"} ${calculationsAdded.join(", ")}` : "",
-    quotasAdded.length ? `Add quota${quotasAdded.length === 1 ? "" : "s"} ${quotasAdded.map((x) => `“${x}”`).join(", ")}` : "",
+    ...quotaDiff(before, after),
     ...questionsModified.slice(0, 30).map((m) => `Change ${m.code}: ${m.changes.map((c) => c.field === "type" ? `${c.from} → ${c.to}` : c.field === "text" ? "wording" : c.field).join(", ")}`),
     dChanged ? `Change ${n(dChanged, "display condition")}` : "",
     blocksRenamed.length ? `Rename ${blocksRenamed.map((b) => `“${b.from}” → “${b.to}”`).join(", ")}` : "",

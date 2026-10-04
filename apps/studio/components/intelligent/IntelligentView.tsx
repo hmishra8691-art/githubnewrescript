@@ -5,6 +5,7 @@ import { variantRegistry } from "@rescript/schema";
 import {
   buildDependencyIndex, objectStatus, applyLogicProposal, proposalTargets, formatCondition, nextQuestionNaming,
   type ObjectKey,
+  type SurveyAction,
 } from "@rescript/engine";
 import { useStudio, uid } from "../studio/store";
 import { useSelection } from "../studio/SelectionContext";
@@ -19,6 +20,7 @@ import { coerceIntent } from "../../lib/intelligent/ai";
 import { languageName, pickRecordingMime, type HeardTranscript } from "../../lib/intelligent/voice";
 import { importRequest, importReviewAnswer, codeFromTitle } from "../../lib/import/chat";
 import { ImportCard, ReviewCard, type ImportJob, type ReviewEntry, type ReviewScript } from "./ImportCard";
+import type { QuotaImportNote } from "./copilot/QuotasTab";
 import { useCopilot, type CopilotEntry } from "./copilot/useCopilot";
 import { CopilotCard } from "./copilot/CopilotCard";
 import { CopilotPanel } from "./copilot/CopilotPanel";
@@ -371,6 +373,30 @@ export function IntelligentView() {
    */
   const researchRef = React.useRef<HTMLInputElement>(null);
   const themeImageRef = React.useRef<HTMLInputElement>(null);
+  /*
+   * A QUOTA SHEET (research-intelligence Phase 4): the client's Excel / CSV
+   * of sample targets, read against this survey by /api/import/quotas into
+   * create_quota actions — a proposal in Changes like any other, with what
+   * the sheet could not say matched reported in the Quotas tab.
+   */
+  const quotaSheetRef = React.useRef<HTMLInputElement>(null);
+  const [quotaImport, setQuotaImport] = React.useState<QuotaImportNote | null>(null);
+  const importQuotaSheet = React.useCallback(async (file: File) => {
+    const form = new FormData();
+    form.append("file", file); form.append("surveyId", s.surveyDbId); form.append("definition", JSON.stringify(s.def));
+    try {
+      const r = await fetch("/api/import/quotas", { method: "POST", body: form });
+      const d = await r.json().catch(() => null) as { error?: string; actions?: SurveyAction[]; rejected?: { reason: string }[]; issues?: string[]; matched?: Record<string, string>; sheet?: { quotas: QuotaImportNote["quotas"] } } | null;
+      if (!r.ok || !d) { s.toast(d?.error ?? `The quota sheet could not be read (${r.status}).`, "err"); return; }
+      const actions = d.actions ?? [];
+      setQuotaImport({ fileName: file.name, issues: [...(d.issues ?? []), ...(d.rejected ?? []).map((x) => x.reason)], matched: d.matched ?? {}, quotas: d.sheet?.quotas ?? [], actions: actions.length, at: new Date().toISOString() });
+      if (actions.length) copilot.previewFix(actions, `Import quotas from ${file.name}`);
+      else s.toast(`No quota could be made from ${file.name} — see the Quotas tab for why.`, "err");
+      copilot.setTab(actions.length ? "changes" : "quotas");
+      setShowInspector(true);
+    } catch (e) { s.toast(`The quota sheet could not be read: ${(e as Error).message}`, "err"); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.surveyDbId, s.def, copilot]);
   const [dropChoice, setDropChoice] = React.useState<File[] | null>(null);
   const [attachMenu, setAttachMenu] = React.useState(false);
   const onDropFiles = (list: FileList) => {
@@ -625,6 +651,7 @@ export function IntelligentView() {
             <span>{dropChoice.length === 1 ? `“${dropChoice[0].name}”` : `${dropChoice.length} files`} — use as:</span>
             <button type="button" className="iq-btn primary" onClick={() => { void copilot.uploadDocs(dropChoice); setShowInspector(true); setDropChoice(null); }} data-testid="cp-drop-research">Research for the copilot</button>
             <button type="button" className="iq-btn" onClick={() => { void startImport(dropChoice[0]); setDropChoice(null); }} disabled={dropChoice.length > 1} data-testid="cp-drop-import">A questionnaire to import</button>
+            {dropChoice.length === 1 && /\.(?:xlsx|xls|csv|tsv)$/i.test(dropChoice[0].name) && <button type="button" className="iq-btn" onClick={() => { void importQuotaSheet(dropChoice[0]); setDropChoice(null); }} data-testid="cp-drop-quotas">A quota sheet</button>}
             <button type="button" className="iq-btn" onClick={() => setDropChoice(null)}>Cancel</button>
           </div>
         )}
@@ -647,6 +674,7 @@ export function IntelligentView() {
               </>) : <span className="iq-error">{copilot.themeImageError}</span>}
             </span>
           )}
+          <input ref={quotaSheetRef} type="file" hidden accept=".xlsx,.csv,.tsv,text/csv" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void importQuotaSheet(f); }} data-testid="cp-quota-sheet-file" />
           <input ref={researchRef} type="file" hidden multiple onChange={(e) => { void copilot.uploadDocs([...(e.target.files ?? [])]); setShowInspector(true); e.target.value = ""; }} data-testid="cp-research-file" accept=".pdf,.docx,.txt,.md,.csv,.xlsx" />
           <span className="cp-attach-wrap">
             <button type="button" className="iq-attach" onClick={() => setAttachMenu((v) => !v)} disabled={busy || voice !== "idle"} data-testid="iq-attach" aria-label="Attach files" aria-expanded={attachMenu} title="Attach research documents for the copilot, or import a questionnaire">
@@ -656,6 +684,7 @@ export function IntelligentView() {
               <span className="cp-attach-menu" role="menu" data-testid="cp-attach-menu">
                 <button type="button" role="menuitem" onClick={() => { setAttachMenu(false); researchRef.current?.click(); }} data-testid="iq-attach-research"><b>Research documents</b><span className="iqi-dim">papers, reports, briefs — the copilot reads them</span></button>
                 <button type="button" role="menuitem" onClick={() => { setAttachMenu(false); fileRef.current?.click(); }} data-testid="iq-attach-import"><b>Import a questionnaire</b><span className="iqi-dim">QSF, Decipher, Word, Excel, PDF → a Rescript survey</span></button>
+                <button type="button" role="menuitem" onClick={() => { setAttachMenu(false); quotaSheetRef.current?.click(); }} data-testid="iq-attach-quotas"><b>Quota sheet</b><span className="iqi-dim">Excel / CSV of sample targets → quotas, as a proposal</span></button>
                 <button type="button" role="menuitem" onClick={() => { setAttachMenu(false); themeImageRef.current?.click(); }} data-testid="iq-attach-theme"><b>Theme image</b><span className="iqi-dim">build the survey&apos;s theme from an image, or use it as the background</span></button>
               </span>
             )}
@@ -680,6 +709,7 @@ export function IntelligentView() {
           <div className="iq-divider" onPointerDown={onDividerDown} onPointerMove={onDividerMove} onPointerUp={onDividerUp} role="separator" aria-orientation="vertical" />
           <div className="cp-panel-wrap" data-testid="iq-inspector">
             <CopilotPanel copilot={copilot} def={s.def} onSelect={selectQuestion} onApply={applyCopilot} applyNote={applyNote} readOnly={s.readOnly}
+              onImportQuotaSheet={() => quotaSheetRef.current?.click()} quotaImport={quotaImport}
               inspector={<div className="ar-inspector-body"><Inspector primary={primary} index={index} status={status} onSelect={selectKey} /></div>} />
           </div>
         </>

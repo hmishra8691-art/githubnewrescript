@@ -64,7 +64,7 @@ ACTIONS (each an object with "op"; use only these):
 {"op":"create_branch","blocks":["Owners"],"when":"OWN = 1","title":"Car owners"}   // route whole blocks: only respondents meeting the condition get them
 {"op":"create_branch","title":"By usage","arms":[{"blocks":["Heavy"],"when":"FREQ = 1","label":"Heavy"},{"blocks":["Light"],"when":"FREQ in [2, 3]","label":"Light"}],"otherwise":["Lapsed"]}   // IF / ELSE IF / ELSE across blocks: first matching arm wins
 {"op":"create_loop","from":"SAT","to":"SAT_WHY","over":"BRANDS","loopVar":"brand"}   // ask a run of questions once per selected answer of BRANDS (or "items":["A","B"]); pipe the item with {{loop.label}}
-{"op":"create_quota","name":"Age","cells":[{"label":"18–24","when":"AGE <= 24","limit":200}]}
+{"op":"create_quota","name":"Gender × Age","total":500,"dimensions":[{"question":"GENDER"},{"question":"AGE","bands":[{"label":"18–34","min":18,"max":34},{"label":"35+","min":35}]}]}   // or explicit "cells":[{"label":"18–24","when":"AGE <= 24","limit":200}]; QUOTA GUIDE for update/delete/check/advice
 {"op":"rename_block","target":"...","title":"..."}  /  {"op":"delete_block","target":"..."}
 {"op":"add_punch","target":"SEGMENT","when":"Q3 = 1 AND (Q5 = 2 OR Q5 = 3)","codes":[2]}   // PUNCHING / coding: when the criteria hold, code the target — a choice target takes option codes, a numeric/text/hidden one {"value":…}; or {"op":"add_punch","expression":"IF Q3 = 1 THEN SET SEGMENT = 2"}; add "mode":"else_if"/"else" for a chain
 {"op":"remove_punches","target":"SEGMENT"}   // or with "id" for one rule
@@ -263,6 +263,32 @@ ACTIONS:
 {"op":"remove_language","code":"de"}   // destructive: the researcher confirms
 Questions ("which languages are missing text?", "what is outdated in German?") are answered from the outline — no actions.`;
 
+/**
+ * THE QUOTA GUIDE — sent with a request about quotas, sample targets, cells
+ * or fieldwork fill. The model turns "500 completes, 50/50 gender, three
+ * age bands" into one create_quota; the engine builds the cells on the real
+ * option codes, adds the limits up to the total, places the check after the
+ * last question the cells read, and reviews what the sheet leaves out.
+ */
+export const COPILOT_QUOTA_GUIDE = `QUOTA GUIDE.
+A QUOTA counts completes into CELLS, each a condition on earlier answers with a LIMIT (a count, or a percent of the quota's total). A HARD quota stops a respondent whose cell is full (terminate, or redirect to a url); a SOFT quota only flags. A quota is enforced by a QUOTA CHECK in the flow, placed right after the last question its cells read — the engine places it; "check": false leaves it out. Cells may be INTERLOCKED (one cell per crossing, Male × 18–34) or FLAT (gender cells and age cells side by side in one quota — a respondent counts in both).
+Build from DIMENSIONS when the researcher gives a split: each dimension is a question; its bands are option codes/labels (default: every option, equal shares) or numeric ranges (min/max) with optional "share" percents; the total is split across the crossing and the limits add up exactly. Build explicit CELLS when the researcher gives each cell: "when" is a condition in the survey's logic language (OPTION VALUES ARE CODES: GENDER = 1), "limit" a count or "percent" of the total.
+The outline lists every quota with its id, cells, limits and where its check sits, and the review's findings about them (uncovered groups, overlapping cells, limits that do not add up, a check before its question, a quota nothing checks). Name a quota by its name; a cell by its label.
+ACTIONS:
+{"op":"create_quota","name":"Gender × Age","total":500,"dimensions":[{"question":"GENDER","bands":[{"codes":["Male"],"share":50},{"codes":["Female"],"share":50}]},{"question":"AGE","bands":[{"label":"18–34","min":18,"max":34,"share":40},{"label":"35–54","min":35,"max":54,"share":35},{"label":"55+","min":55}]}],"mode":"hard","onFull":"terminate"}
+{"op":"create_quota","name":"Region","total":400,"cells":[{"label":"North","when":"REGION in [1, 2]","percent":40},{"label":"South","when":"REGION = 3","percent":60}],"onFull":{"kind":"redirect","url":"https://panel.example/full"}}
+{"op":"update_quota","quota":"Gender × Age","total":600}   // rescales every count cell in proportion; also "newName", "mode":"soft", "onFull", "cells":[{"cell":"Men × 55+","limit":80}], "targetTotal"
+{"op":"add_quota_cells","quota":"Region","cells":[{"label":"Other","when":"REGION = 4","limit":20}]}   // the check moves if the new cells read a later question
+{"op":"remove_quota_cells","quota":"Region","cells":["Other"]}   // destructive: confirmed
+{"op":"delete_quota","quota":"Region"}   // destructive: the check and List Fill references go too
+{"op":"set_quota_check","quotas":["Gender × Age","Region"],"after":"Screening","onFull":"terminate","when":"SAMPLE = 1"}   // without "after": right after the last question the quotas read
+Fieldwork questions ("which cells are behind?", "is the men's quota full?") are answered from the outline's counts and advice when present — no actions unless an adjustment is asked for; propose one update_quota per adjustment, never a silent rewrite of limits.`;
+
+/** a request about quotas, sample targets or fieldwork fill — the guide goes with it */
+export function quotaIntent(text: string): boolean {
+  return /\b(?:quotas?|quota ?cells?|cells? (?:is|are) full|interlock\w*|sample (?:plan|targets?|split|frame)|targets? (?:per|by|for) (?:cell|group|gender|age|region|segment)|(?:\d+|n) completes|completes? (?:per|by|for)|50\s*\/\s*50|nat(?:ionally)? rep\w*|screen(?:ed)? out when (?:the )?(?:cell|group) is full|over[- ]?quota|fill(?:ing)? rate|under[- ]?pace)\b/i.test(text);
+}
+
 /** a request about languages, translation or localization — the guide goes with it */
 export function translationIntent(text: string): boolean {
   return /\b(?:translat\w*|localis\w*|localiz\w*|languages?|multilingual|bilingual|glossary|do[- ]not[- ]translate|spanish|french|german|hindi|japanese|arabic|chinese|portuguese|italian|dutch|korean|russian|turkish|welsh|tamil|telugu|bengali|marathi|gujarati|urdu|polish|swedish|in (?:german|spanish|french|hindi)|routing|rout(?:e|ing)\b.*\b(?:language|to (?:en|es|fr|de|hi|pt|it|nl|ja|zh|ar|ko|ru|tr|pl|sv)\b)|respondents? (?:get|see) (?:the )?(?:english|spanish|french|german)|language (?:selector|switch)|rtl)\b/i.test(text);
@@ -335,6 +361,7 @@ export function copilotUserPrompt(input: {
   analysis?: boolean;
   /** the request is about languages: the translation guide goes with it */
   translation?: boolean;
+  quota?: boolean;
 }): string {
   const parts: string[] = [];
   parts.push(`Survey language: ${input.surveyLanguage}`);
@@ -347,6 +374,7 @@ export function copilotUserPrompt(input: {
   if (input.ux) parts.push(COPILOT_UX_GUIDE);
   if (input.analysis) parts.push(COPILOT_ANALYSIS_GUIDE);
   if (input.translation) parts.push(COPILOT_TRANSLATION_GUIDE);
+  if (input.quota) parts.push(COPILOT_QUOTA_GUIDE);
   if (input.uxOnly) parts.push("THIS REQUEST IS LOOK-AND-BEHAVIOUR ONLY: propose UX actions only. Any structural action (questions, options, logic, validation, blocks, punch rules, variables) will be refused. If the researcher also needs such a change, say in one sentence that they can ask for it as its own request in this same chat (for example “Code SEGMENT as 1 when Q3 = 1”) — there is no other mode or session to switch to.");
   if (input.themeOnly) parts.push("THIS IS THE THEME: answer with one set_theme action covering everything the request implies (colours with readable contrast, fonts, background, cards, options, controls, inputs, spacing, phone sizes). Its values become the survey's Branding settings, which the researcher then adjusts by hand.");
   if (input.themeImage) parts.push(input.themeImage);

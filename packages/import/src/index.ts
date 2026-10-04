@@ -11,6 +11,7 @@ export * from "./detect.js";
 export * from "./sources.js";
 export * from "./map.js";
 export * from "./report.js";
+export * from "./quotaSheet.js";
 export { parseXml } from "./xml.js";
 export { extractPdfText } from "./pdf.js";
 export { readZip } from "./zip.js";

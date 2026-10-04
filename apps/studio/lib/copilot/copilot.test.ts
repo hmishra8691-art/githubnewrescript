@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { SurveyDefinition } from "@rescript/schema";
 import { applySurveyActions } from "@rescript/engine";
 import { chunkResearchDocument, ResearchIndex } from "@rescript/import/research";
-import { coerceCopilotReply, classifyRequest, copilotUserPrompt, referencedQuestions, surveyLanguageOf, uxIntent, analysisIntent, translationIntent, COPILOT_SYSTEM_PROMPT, COPILOT_UX_GUIDE, COPILOT_ANALYSIS_GUIDE, COPILOT_TRANSLATION_GUIDE } from "./prompt.ts";
+import { coerceCopilotReply, classifyRequest, copilotUserPrompt, referencedQuestions, surveyLanguageOf, uxIntent, analysisIntent, translationIntent, quotaIntent, COPILOT_SYSTEM_PROMPT, COPILOT_UX_GUIDE, COPILOT_ANALYSIS_GUIDE, COPILOT_TRANSLATION_GUIDE, COPILOT_QUOTA_GUIDE } from "./prompt.ts";
 import { copilotOutline } from "./outline.ts";
 import { coerceDocSummary, summaryInput, researchCards, researchPassages } from "./research.ts";
 
@@ -182,7 +182,7 @@ test("a revised proposal numbers the questions it made in order — and replays 
 
 import { SURVEY_ACTION_OPS, UX_ACTION_ALIASES } from "@rescript/engine";
 test("the model is told about every action the engine accepts — and only those", () => {
-  const both = COPILOT_SYSTEM_PROMPT + COPILOT_UX_GUIDE + COPILOT_ANALYSIS_GUIDE + COPILOT_TRANSLATION_GUIDE;
+  const both = COPILOT_SYSTEM_PROMPT + COPILOT_UX_GUIDE + COPILOT_ANALYSIS_GUIDE + COPILOT_TRANSLATION_GUIDE + COPILOT_QUOTA_GUIDE;
   for (const op of SURVEY_ACTION_OPS) assert.ok(both.includes(`"op":"${op}"`), `the prompt, the UX guide or the analysis guide documents ${op}`);
   for (const op of ["create_style", "create_animation", "create_behavior", "attach_behavior_to_question", "create_responsive_rule"]) assert.ok(COPILOT_SYSTEM_PROMPT.includes(op), `the system prompt names ${op}, so the model never says the platform cannot style`);
   const documented = [...both.matchAll(/"op":"([a-z_]+)"/g)].map((m) => m[1]);
@@ -362,4 +362,40 @@ test("translation turns: the intent, the guide, a block named in the request, an
   const r = coerceCopilotReply({ kind: "proposal", reply: "ok", actions: [{ op: "set_translations", language: "de", entries: [{ target: "FREQ", text: "Wie oft?" }] }, { op: "set_translations", language: "de" }] })!;
   assert.equal(r.actions.length, 1); assert.equal(r.rejected.length, 1);
   assert.match(r.rejected[0].reason, /entries/);
+});
+
+test("quota turns: the intent, the guide, the outline's quotas with their cells, checks, review and live counts — and the gate", () => {
+  for (const m of ["set up quotas: 500 completes, 50/50 gender", "we need 300 completes nat rep by age", "which cells are full?", "interlock gender and age", "the sample plan is attached", "cap London at 200 — quota"]) assert.ok(quotaIntent(m), m);
+  for (const m of ["make Q7 a 5-point scale", "translate Q5 into German", "plan the analysis", "add a question about income"]) assert.ok(!quotaIntent(m), m);
+  const def = survey();
+  const out = applySurveyActions(def, [{ op: "create_quota", name: "Usage", total: 300, dimensions: [{ question: "FREQ" }] }], { ids }).def;
+  const q = out.quotas[0];
+  assert.deepEqual(q.cells.map((c) => [c.label, c.limit]), [["Weekly", 100], ["Monthly", 100], ["Rarely", 100]]);
+  /* the base context names the quotas on every turn; the full block only on a quota turn */
+  assert.match(copilotOutline(out, {}), /Quotas: Usage \[quota_\d+\] \(3 cells\)/);
+  assert.ok(!copilotOutline(out, {}).includes("name cells by label"));
+  const o = copilotOutline(out, { quota: true });
+  assert.match(o, /Quotas \(name cells by label; limits are counts unless %\):/);
+  assert.match(o, new RegExp(`  Usage \\[id ${q.id}\\] — hard, when full: terminate, total 300, checked after “Usage”`));
+  assert.match(o, /    Weekly: ≤ 100 when Q2 = 1/);
+  assert.ok(!o.includes("Quota review"), "a clean quota: no review line");
+  const gappy = applySurveyActions(def, [{ op: "create_quota", name: "Usage", total: 300, dimensions: [{ question: "FREQ", bands: [{ codes: [1] }, { codes: [2] }] }] }], { ids }).def;
+  assert.match(copilotOutline(gappy, { quota: true }), /Quota review: \[warning\] 1 of 3 answer combinations falls outside every cell of “Usage” \(Rarely\)/);
+  /* the live counts: the men… the cells so far, and the fieldwork advice */
+  const counts = { [q.id]: { [q.cells[0].id]: 100, [q.cells[1].id]: 40, [q.cells[2].id]: 2 } };
+  const oc = copilotOutline(out, { quota: true, quotaCounts: counts });
+  assert.match(oc, /    Weekly: ≤ 100 \(100 so far\) when/);
+  assert.match(oc, /Fieldwork \(from the live counts\): Usage: Weekly \(100\/100\) is full while 2 cells still need 158/);
+  assert.match(oc, /Rarely has 2 of the ~47 expected at this point/);
+  assert.match(copilotOutline(empty(), { quota: true }), /Quotas: none yet \(create_quota\)/);
+  /* the prompt */
+  const p = copilotUserPrompt({ message: "500 completes 50/50", outline: "o", surveyLanguage: "en", mode: "edit", quota: true });
+  assert.ok(p.includes("QUOTA GUIDE") && p.includes("create_quota") && p.includes("set_quota_check"));
+  assert.ok(!copilotUserPrompt({ message: "x", outline: "o", surveyLanguage: "en", mode: "edit" }).includes("QUOTA GUIDE"));
+  for (const w of ["dimensions", "bands", "share", "INTERLOCKED", "update_quota", "add_quota_cells", "remove_quota_cells", "delete_quota", "set_quota_check", "percent"]) assert.ok(COPILOT_QUOTA_GUIDE.includes(w), w);
+  for (const op of ["create_quota", "update_quota", "add_quota_cells", "remove_quota_cells", "delete_quota", "set_quota_check"]) assert.ok((SURVEY_ACTION_OPS as readonly string[]).includes(op), op);
+  /* the gate */
+  const r = coerceCopilotReply({ kind: "proposal", reply: "ok", actions: [{ op: "create_quota", name: "G", total: 100, dimensions: ["FREQ"] }, { op: "create_quota", name: "H", dimensions: ["FREQ"] }, { op: "update_quota", quota: "G" }] })!;
+  assert.equal(r.actions.length, 1); assert.equal(r.rejected.length, 2);
+  assert.match(r.rejected[0].reason, /needs the total/); assert.match(r.rejected[1].reason, /changes nothing/);
 });

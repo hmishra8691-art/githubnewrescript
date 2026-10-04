@@ -41,7 +41,7 @@ export interface CopilotEntry {
 }
 export interface ResearchDocView { id: string; ref: string; name: string; format: string; kind?: string; pages: number; ocrPages: number; chars: number; summary: import("../../../lib/copilot/research").DocSummary | null; warnings: string[]; createdAt: string }
 export interface ReviewState { rules: SurveyReview; ai: CopilotFinding[]; at: string; running: boolean }
-export type PanelTab = "changes" | "review" | "research" | "history" | "analysis" | "languages" | "ux" | "inspector";
+export type PanelTab = "changes" | "review" | "research" | "history" | "analysis" | "languages" | "quotas" | "ux" | "inspector";
 
 interface Session {
   proposal: Proposal | null;
@@ -93,6 +93,31 @@ export function useCopilot(opts: {
 
   /* ------------------------------------------------------------ ask */
   /** "empty": the model's answer had nothing usable — the caller may fall back to the grammar */
+  /*
+   * THE QUOTA COUNTS — the live `quota_counts` of this survey, read through
+   * the same route the Quota dashboard uses, kept here so the copilot's
+   * fieldwork advice (the Quotas tab, and the model on a quota turn) reads
+   * the real numbers. The sandbox has none.
+   */
+  const [quotaCounts, setQuotaCounts] = React.useState<Record<string, Record<string, number>> | null>(null);
+  const [quotaCountsAt, setQuotaCountsAt] = React.useState<string | null>(null);
+  const refreshQuotaCounts = React.useCallback(async () => {
+    if (s.surveyDbId === "sandbox") return;
+    try {
+      const r = await fetch(`/api/surveys/${s.surveyDbId}/quotas?environment=LIVE`, { cache: "no-store" });
+      if (!r.ok) return;
+      const d = await r.json() as { counts?: Record<string, Record<string, number>>; fetchedAt?: string };
+      if (d.counts) { setQuotaCounts(d.counts); setQuotaCountsAt(d.fetchedAt ?? new Date().toISOString()); }
+    } catch { /* offline: the advice says there are no counts */ }
+  }, [s.surveyDbId]);
+  React.useEffect(() => { if (s.def.quotas.length) void refreshQuotaCounts(); }, [refreshQuotaCounts, s.def.quotas.length]);
+  /* a test seam: the browser suites hand the counts in, since the sandbox has no database */
+  React.useEffect(() => {
+    const w = window as unknown as { __rescriptQuotaCounts?: (c: Record<string, Record<string, number>>) => void };
+    w.__rescriptQuotaCounts = (c) => { setQuotaCounts(c); setQuotaCountsAt(new Date().toISOString()); };
+    return () => { delete w.__rescriptQuotaCounts; };
+  }, []);
+
   const ask = React.useCallback(async (text: string, heard?: HeardTranscript, mode?: "review" | "generate"): Promise<"handled" | "unavailable" | "empty"> => {
     const id = uid("copilot");
     opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "thinking" });
@@ -103,7 +128,7 @@ export function useCopilot(opts: {
       const fake = fakeRef.current.shift();
       const r = await fetch("/api/copilot/turn", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ surveyId: s.surveyDbId, message: text, definition: working, selectedId: opts.selectedId, memory: memoryFrom(copilotTurns.map((t) => ({ user: t.text, reply: t.reply }))), ...(mode ? { mode } : {}), ...(fake ? { fake } : {}), ...(themeImage ? { themeImage } : {}) }),
+        body: JSON.stringify({ surveyId: s.surveyDbId, message: text, definition: working, selectedId: opts.selectedId, memory: memoryFrom(copilotTurns.map((t) => ({ user: t.text, reply: t.reply }))), ...(mode ? { mode } : {}), ...(fake ? { fake } : {}), ...(themeImage ? { themeImage } : {}), ...(quotaCounts ? { quotaCounts } : {}) }),
       });
       if (themeImage) setThemeImage(null);
       if (r.status === 501) { setAvailable(false); opts.patch(id, { status: "failed", error: "No language model is configured on this Studio." }); return "unavailable"; }
@@ -133,7 +158,7 @@ export function useCopilot(opts: {
     } finally {
       setBusy(false);
     }
-  }, [session.proposal, stale, s.def, s.surveyDbId, opts, copilotTurns, setSession, themeImage]);
+  }, [session.proposal, stale, s.def, s.surveyDbId, opts, copilotTurns, setSession, themeImage, quotaCounts]);
 
   /* ------------------------------------------------------------ review */
   const runReview = React.useCallback(async (text = "Review my survey") => {
@@ -249,6 +274,7 @@ export function useCopilot(opts: {
     tab: session.tab, setTab: (t: PanelTab) => setSession((x) => ({ ...x, tab: t })),
     ask, runReview, previewFix, apply, cancel, revert, uploadDocs, deleteDoc, refreshDocs,
     themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),
+    quotaCounts, quotaCountsAt, refreshQuotaCounts,
   };
 }
 export type Copilot = ReturnType<typeof useCopilot>;

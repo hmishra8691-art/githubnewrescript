@@ -8,6 +8,7 @@ import type { SurveyAction } from "./surveyActions.js";
 import { reviewUx } from "./ux.js";
 import { reviewAnalysisPlan } from "./analysisFramework.js";
 import { lintLocalization } from "./localization.js";
+import { reviewQuotas } from "./quotaActions.js";
 
 /**
  * "REVIEW MY SURVEY" — the part of a survey review that is a matter of fact.
@@ -37,7 +38,7 @@ import { lintLocalization } from "./localization.js";
 export type ReviewSeverity = "critical" | "warning" | "suggestion";
 export interface ReviewFinding {
   severity: ReviewSeverity;
-  category: "logic" | "reachability" | "structure" | "wording" | "options" | "scales" | "duplicates" | "length" | "screening" | "sequencing" | "hypothesis" | "analysis" | "ux" | "localization";
+  category: "logic" | "reachability" | "structure" | "wording" | "options" | "scales" | "duplicates" | "length" | "screening" | "sequencing" | "hypothesis" | "analysis" | "ux" | "localization" | "quota";
   message: string;
   questionIds: string[];
   suggestion?: string;
@@ -106,6 +107,9 @@ export function reviewSurvey(def: SurveyDefinition): SurveyReview {
   for (const i of reviewAnalysisPlan(def)) add({ severity: i.level, category: /hypothes/i.test(i.message) ? "hypothesis" : "analysis", message: i.message, questionIds: i.questionIds, ...(i.suggestion ? { suggestion: i.suggestion } : {}) });
 
   /* the languages: a version respondents can be routed to must be complete and intact */
+  /* ------------------------------------------------------------ quotas: can they fill, and do they stop anyone */
+  for (const f of reviewQuotas(def)) add({ severity: f.severity, category: "quota", message: f.message, questionIds: f.questionIds ?? [], ...(f.suggestion ? { suggestion: f.suggestion } : {}), ...(f.action ? { fix: [f.action as SurveyAction] } : {}) });
+
   for (const rep of lintLocalization(def)) {
     if (rep.language === (def.localization?.sourceLanguage ?? "en")) continue;
     const by = (kind: string) => rep.issues.filter((i) => i.kind === kind);

@@ -17,6 +17,7 @@ export * from "./legacyMedia.js";
 export * from "./analysisFramework.js";
 export * from "./analysisActions.js";
 export * from "./localizationActions.js";
+export * from "./quotaActions.js";
 export * from "./optionsPaste.js";
 export * from "./dependencies.js";
 export * from "./dependencyIndex.js";

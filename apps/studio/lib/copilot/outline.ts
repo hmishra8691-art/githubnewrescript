@@ -1,5 +1,6 @@
 import type { SurveyDefinition } from "@rescript/schema";
-import { listBlocks, formatCondition, describeUxTarget, uxContextFor, inferQuestionAnalysis, effectiveLocalization, lintLanguage, translatableElements, languageName } from "@rescript/engine";
+import { listBlocks, formatCondition, describeUxTarget, uxContextFor, inferQuestionAnalysis, effectiveLocalization, lintLanguage, translatableElements, languageName, reviewQuotas, quotaAdvice } from "@rescript/engine";
+import type { FlowNode } from "@rescript/schema";
 import { hypothesisLabel } from "@rescript/schema";
 import { surveyContext } from "../intelligent/context.ts";
 
@@ -14,7 +15,7 @@ import { surveyContext } from "../intelligent/context.ts";
  * questions in full and the rest by code, plus the named ones in full, so
  * the prompt stays bounded however large the survey is.
  */
-export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: string | null; focusIds?: string[]; ux?: boolean; analysis?: boolean; translation?: boolean } = {}): string {
+export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: string | null; focusIds?: string[]; ux?: boolean; analysis?: boolean; translation?: boolean; quota?: boolean; quotaCounts?: Record<string, Record<string, number>> | null } = {}): string {
   const n = def.questions.length;
   const base = surveyContext(def, { selectedId: opts.selectedId ?? null, focusIds: opts.focusIds ?? [], limit: n > 150 ? 60 : 150, textWidth: n > 150 ? 70 : 110 });
   const lines = [base];
@@ -87,6 +88,32 @@ export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: strin
       if (plan.segments.length) lines.push(`  segments: ${plan.segments.map((sg) => `${sg.name} (${sg.by.join(",")})`).join("; ")}`);
     } else lines.push("Analysis plan: none saved yet (propose_analysis_plan writes the engine's framework; set_analysis_plan writes yours).");
   }
+  /*
+   * THE QUOTAS, on a quota turn (the base context names them on every turn):
+   * every cell with its limit and condition, where the check sits, the review's
+   * findings about them, and — when the Studio sent the live counts — what
+   * the counts say, so "which cells are behind?" is answered from numbers.
+   */
+  if (def.quotas.length) {
+    const flow = def.flow as FlowNode[];
+    const checkOf = (id: string) => { const i = flow.findIndex((n) => n.type === "quota_check" && (n as { quotaIds: string[] }).quotaIds.includes(id)); if (i < 0) return "not checked anywhere"; const before = flow.slice(0, i).reverse().find((n) => n.type === "block" || n.type === "page") as { title?: string; id: string } | undefined; return before ? `checked after “${before.title ?? before.id}”` : "checked at the start"; };
+    // (the base context already names the quotas on every turn)
+    if (opts.quota) {
+      lines.push(`Quotas (name cells by label; limits are counts unless %):`);
+      for (const q of def.quotas) {
+        lines.push(`  ${q.name} [id ${q.id}] — ${q.mode}, when full: ${q.onFull.kind}${q.onFull.url ? ` → ${q.onFull.url}` : ""}${q.targetTotal ? `, total ${q.targetTotal}` : ""}, ${checkOf(q.id)}`);
+        for (const c of q.cells.slice(0, 60)) { const n = opts.quotaCounts?.[q.id]?.[c.id]; lines.push(`    ${c.label}: ≤ ${c.limit}${c.limitType === "percent" ? "%" : ""}${n !== undefined ? ` (${n} so far)` : ""} when ${formatCondition(def, c.when)}`); }
+        if (q.cells.length > 60) lines.push(`    … and ${q.cells.length - 60} more cells`);
+      }
+      const findings = reviewQuotas(def);
+      if (findings.length) lines.push(`Quota review: ${findings.slice(0, 12).map((f) => `[${f.severity}] ${f.message}`).join(" ")}`);
+      if (opts.quotaCounts) {
+        const advice = quotaAdvice(def, opts.quotaCounts).flatMap((a) => a.lines.filter((l) => l.kind !== "no_data" && l.kind !== "on_track").map((l) => `${a.name}: ${l.message}`));
+        if (advice.length) lines.push(`Fieldwork (from the live counts): ${advice.slice(0, 12).join(" ")}`);
+      }
+    }
+  } else if (opts.quota) lines.push("Quotas: none yet (create_quota).");
+
   /*
    * THE LANGUAGES, on a translation turn: which versions exist and how far
    * along each is, the glossary (what never translates, what is preferred),
