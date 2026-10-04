@@ -14,6 +14,8 @@ export * from "./autoPunch.js";
 export * from "./media.js";
 export * from "./mediaDisplay.js";
 export * from "./legacyMedia.js";
+export * from "./analysisFramework.js";
+export * from "./analysisActions.js";
 export * from "./optionsPaste.js";
 export * from "./dependencies.js";
 export * from "./dependencyIndex.js";

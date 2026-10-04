@@ -69,6 +69,7 @@ ACTIONS (each an object with "op"; use only these):
 {"op":"add_punch","target":"SEGMENT","when":"Q3 = 1 AND (Q5 = 2 OR Q5 = 3)","codes":[2]}   // PUNCHING / coding: when the criteria hold, code the target — a choice target takes option codes, a numeric/text/hidden one {"value":…}; or {"op":"add_punch","expression":"IF Q3 = 1 THEN SET SEGMENT = 2"}; add "mode":"else_if"/"else" for a chain
 {"op":"remove_punches","target":"SEGMENT"}   // or with "id" for one rule
 {"op":"set_research","objective":"...","hypotheses":["..."],"population":"...","methodology":"...","constructs":[{"name":"...","role":"independent","definition":"...","questions":["EXPOSE"]}],"analysis":["..."],"assumptions":["..."],"sources":["document names"]}
+THE ANALYSIS FRAMEWORK is planned BEFORE fieldwork, as actions too (full shapes in the ANALYSIS GUIDE, included when a request is about analysis, hypotheses, variables, crosstabs or tests): set_question_analysis (a question's role — dependent|independent|mediator|moderator|control|segmentation|screening|descriptive — its measurement, how it is reported, what it is tabulated against, the hypotheses H1, H2… it serves), propose_analysis_plan (the engine's own plan), set_analysis_plan / add_crosstab / add_analysis_test / add_derived_variable (and remove_…). When you GENERATE a survey from a hypothesis, tag the outcome and predictor questions with set_question_analysis and add {"op":"propose_analysis_plan"} so the design arrives with its analysis.
 LOOK AND BEHAVIOUR — the theme (colours, fonts, background image, cards, options, radios, inputs, spacing, per-device sizes), styling, CSS, custom HTML, animations, transitions, layout, responsive rules, interactions, JavaScript behaviour — are ALSO actions: set_theme, set_custom_html, set_default_value (a question's starting answer), create_style / update_style / remove_style, create_animation / update_animation / remove_animation, create_behavior / update_behavior / remove_behavior, create_responsive_rule, attach_behavior_to_question|option|block|page. Rescript supports them: never answer that the platform cannot style, animate or script a survey. Their full shapes are in the UX GUIDE, which is included whenever a request is about how the survey looks or behaves.
 
 REFS. Give every new question a "ref" that reads as a variable name (AGE, BUY_6M, TRUST_1). The ref becomes its variable, so conditions, calculations and piping can use it in the same batch: "BUY_6M = 2", "{{BRAND}}". A new question's options are coded 1, 2, 3… in the order written ("None of these" 99, "Other" the next free code). Existing questions are named by their CODE or VARIABLE from the outline; never invent a code that is not in the outline or created in this batch.
@@ -214,6 +215,34 @@ HOW TO WORK ON UX.
 export type RequestMode = "generate" | "edit" | "review" | "question" | "ux";
 
 /**
+ * THE ANALYSIS GUIDE — sent with a request about the analysis framework:
+ * the action shapes, the vocabulary the platform actually runs, and how to
+ * reason from measurement level to method. The engine checks every variable
+ * and refuses a method it cannot run, so the model's job is the reasoning:
+ * which outcome, which predictors, which test for which pair, which
+ * hypothesis each table serves.
+ */
+export const COPILOT_ANALYSIS_GUIDE = `ANALYSIS GUIDE.
+Roles: dependent (an outcome), independent (explains an outcome), mediator (carries an effect), moderator (changes an effect), control, segmentation (results are cut by it: demographics, markets, user groups), screening, descriptive.
+Measurement (inferred from the type; override only when the engine's reading is wrong): nominal, ordinal (an ordered scale), interval, ratio, multi (multi-select), text, rank, allocation, choice (MaxDiff / conjoint), date.
+Methods the platform runs: frequencies, mean, median, top_box, nps, crosstab, chi_square, t_test (2 groups), anova (3+ groups), mann_whitney, kruskal_wallis, correlation, regression, logistic_regression (2-category outcome), factor, reliability (multi-item scales), cluster, conjoint_utilities, maxdiff_scores, turf, driver_analysis, text_themes, ranking_scores, allocation_shares, pricing, brand_funnel. Nothing else exists — do not invent a method.
+Which test: groups × scale → t_test / anova; groups × categories → chi_square; scale × scale → correlation, and ONE regression per outcome on all its predictors (name a moderator with "moderator", a mediator with "mediator"); a two-category outcome → logistic_regression; a multi-item construct → reliability and a mean_score derived variable; an ordinal outcome → a top_box derived variable; MaxDiff → maxdiff_scores; conjoint → conjoint_utilities; nps → nps.
+Hypotheses are H1, H2… by their position in the research design (set_research's "hypotheses"). Every crosstab and test that serves one carries it in "hypotheses". Priority: 1 answers a hypothesis or the objective, 2 profiles, 3 explores. Plan the tables that matter — each outcome by the segmentation banner, each categorical independent against each outcome — not every pair.
+ACTIONS:
+{"op":"set_question_analysis","target":"Q6","role":"dependent","measurement":"ordinal","primary":["frequencies","top_box","mean"],"crosstabBy":["AGE","GENDER","COUNTRY"],"relatedTo":["TRUST_1","PRICE_PERC"],"modeling":["regression"],"hypotheses":["H1","H2"],"construct":"Purchase intention","notes":"..."}   // any subset; null clears a field
+{"op":"propose_analysis_plan","merge":true}   // the engine's framework from the roles and types; without merge it REPLACES the plan (confirmed by the researcher)
+{"op":"set_analysis_plan","merge":true,"crosstabs":[{"rows":["PURCHASE_INT"],"columns":["AGE","GENDER","COUNTRY"],"measure":"pct_col","priority":1,"hypotheses":["H1"],"reason":"intent by profile"}],"tests":[{"method":"regression","outcome":"PURCHASE_INT","variables":["TRUST_1","TRUST_2","AD_EXPOSE"],"moderator":"PRICE_PERC","hypotheses":["H1","H2"],"reason":"what drives intent"},{"method":"anova","outcome":"PURCHASE_INT","groupBy":"COUNTRY","hypotheses":[]}],"derived":[{"name":"TRUST_SCORE","kind":"mean_score","from":["TRUST_1","TRUST_2"]}],"segments":[{"name":"Market","by":["COUNTRY"]}]}
+{"op":"add_crosstab","rows":["Q6"],"columns":["S2","S3"],"priority":1,"hypotheses":["H1"],"reason":"..."}  /  {"op":"remove_crosstab","id":"xt_3"}   // ids are in the outline
+{"op":"add_analysis_test","method":"chi_square","outcome":"AWARE","variables":["AD_EXPOSE"],"hypotheses":["H3"]}  /  {"op":"remove_analysis_test","id":"t_2"}
+{"op":"add_derived_variable","name":"TRUST_SCORE","kind":"mean_score|sum_score|top_box|bottom_box|recode|count|flag|index","from":["TRUST_1","TRUST_2"],"expression":"optional calc expression"}  /  {"op":"remove_derived_variable","name":"TRUST_SCORE"}
+"Show me the most important crosstabs" is a question: answer from the outline's plan (priority 1, hypothesis-linked first) — no actions. "Which method should I use for X" is a question: weigh rating, ranking, MaxDiff, conjoint, TURF, pricing methods, driver analysis and name the trade-offs (length, discrimination, price trade-offs, sample) — propose a change only if asked.`;
+
+/** a request about the analysis framework — the guide goes with it */
+export function analysisIntent(text: string): boolean {
+  return /\b(?:analy[sz]\w*|crosstabs?|cross[- ]tabs?|banner|hypothes\w*|dependent|independent|moderat\w*|mediat\w*|regression|correlat\w*|chi[- ]?square|t[- ]tests?|anova|significan\w*|drivers?|top[- ]?2?[- ]?box|derived variables?|segment(?:ation)? variables?|variable roles?|measurement levels?|statistical|which (?:test|method)|methodolog\w*|maxdiff or|conjoint or)\b/i.test(text);
+}
+
+/**
  * What kind of request this is, and whether it needs the research documents
  * — decided cheaply, BEFORE the model is called, only to choose the context
  * (the model decides the answer). "Change Q18 to a matrix" sends no papers;
@@ -271,6 +300,8 @@ export function copilotUserPrompt(input: {
   themeImage?: string;
   /** the Branding panel's theme assistant */
   themeOnly?: boolean;
+  /** the request is about the analysis framework: the guide goes with it */
+  analysis?: boolean;
 }): string {
   const parts: string[] = [];
   parts.push(`Survey language: ${input.surveyLanguage}`);
@@ -281,6 +312,7 @@ export function copilotUserPrompt(input: {
   if (input.deterministicFindings?.length) parts.push(`THE ENGINE'S OWN CHECKS ALREADY FOUND (do not repeat these; add what only a reader of meaning would find — research alignment, hypothesis coverage, wording, bias, sequencing, analysis limits):\n${input.deterministicFindings.map((f) => `- ${f}`).join("\n")}`);
   if (input.selected) parts.push(`Selected in the Studio: ${input.selected}`);
   if (input.ux) parts.push(COPILOT_UX_GUIDE);
+  if (input.analysis) parts.push(COPILOT_ANALYSIS_GUIDE);
   if (input.uxOnly) parts.push("THIS REQUEST IS LOOK-AND-BEHAVIOUR ONLY: propose UX actions only. Any structural action (questions, options, logic, validation, blocks, punch rules, variables) will be refused. If the researcher also needs such a change, say in one sentence that they can ask for it as its own request in this same chat (for example “Code SEGMENT as 1 when Q3 = 1”) — there is no other mode or session to switch to.");
   if (input.themeOnly) parts.push("THIS IS THE THEME: answer with one set_theme action covering everything the request implies (colours with readable contrast, fonts, background, cards, options, controls, inputs, spacing, phone sizes). Its values become the survey's Branding settings, which the researcher then adjusts by hand.");
   if (input.themeImage) parts.push(input.themeImage);

@@ -1,4 +1,4 @@
-import type { Condition, FlowNode, Question, SurveyDefinition, ValidationRule } from "@rescript/schema";
+import type { AnalysisPlan, Condition, FlowNode, Question, SurveyDefinition, ValidationRule } from "@rescript/schema";
 import { SurveyDefinition as SurveyDefinitionSchema, variantRegistry, Condition as ConditionSchema } from "@rescript/schema";
 import { forEachRule, isConditionNode } from "./conditionWalk.js";
 import { canonicalizeCondition } from "./optionCodes.js";
@@ -13,6 +13,8 @@ import { getQuestionByCodeOrVar } from "./state.js";
 import { runQualityCheck } from "./qualityCheck.js";
 import { questionOrder, conditionRefs } from "./dependencies.js";
 import { applyUxAction, coerceUxAction, isUxOp, UX_ACTION_OPS, type UxAction } from "./uxActions.js";
+import { applyAnalysisAction, coerceAnalysisAction, describeAnalysisAction, isAnalysisOp, ANALYSIS_ACTION_OPS, type AnalysisAction } from "./analysisActions.js";
+import { describeAnalysisImpact } from "./analysisFramework.js";
 import { parsePunchExpression, formatPunchExpression } from "./autoPunch.js";
 import { authoringQuestionView } from "./carryforward.js";
 import { resolveOptionValue, describeOptions, type OptionList } from "./optionCodes.js";
@@ -94,13 +96,16 @@ export type SurveyAction =
   | { op: "add_punch"; target: string; when?: CondInput; action?: "select" | "deselect" | "set_value" | "clear"; codes?: (string | number)[]; value?: string | number; expression?: string; label?: string; mode?: "if" | "else_if" | "else"; recompute?: "once" | "always" }
   | { op: "remove_punches"; target: string; id?: string }
   /* the survey's look and behaviour — see uxActions.ts; they write def.ux and nothing else */
-  | UxAction;
+  | UxAction
+  /* the analysis framework — see analysisActions.ts; they write question.analysis and research.analysisPlan and nothing else */
+  | AnalysisAction;
 
 export const SURVEY_ACTION_OPS = [
   "create_block", "rename_block", "delete_block", "create_question", "update_question", "delete_question", "move_question",
   "set_display_logic", "add_skip", "clear_skips", "set_validation", "page_break", "create_embedded", "create_calculation",
   "create_randomizer", "create_branch", "create_loop", "create_quota", "set_research", "add_punch", "remove_punches",
   ...UX_ACTION_OPS,
+  ...ANALYSIS_ACTION_OPS,
 ] as const;
 
 /** Friendly question types → the Studio variant that makes them. */
@@ -283,6 +288,8 @@ function coerceOne(item: unknown): SurveyAction | string {
     default: {
       const ux = op ? coerceUxAction(op, o) : null;
       if (ux !== null) return ux;
+      const an = op ? coerceAnalysisAction(op, o) : null;
+      if (an !== null) return an;
       return op ? `unknown action “${op}”` : "an action needs an op";
     }
   }
@@ -336,7 +343,8 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
   const ctx: Ctx = { def, ids: opts.ids ?? defaultIds, refs: new Map(), blockRefs: new Map(), uxRefs: new Map(), lastBlock: null, now: opts.now ?? new Date().toISOString(), uxWarnings: [] };
   const results: ActionResult[] = [];
   // the research design names the questions that measure each construct, and UX targets name questions: both after the questions exist
-  const rank = (a: SurveyAction) => (a.op === "set_research" ? 2 : isUxOp(a.op) ? 1 : 0);
+  // …and the analysis framework names questions and constructs: after both
+  const rank = (a: SurveyAction) => (isAnalysisOp(a.op) ? 3 : a.op === "set_research" ? 2 : isUxOp(a.op) ? 1 : 0);
   const order = actions.map((a, index) => ({ a, index })).sort((x, y) => rank(x.a) - rank(y.a));
   order.forEach(({ a, index }) => {
     const snapshot = structuredClone(def) as SurveyDefinition;
@@ -512,11 +520,12 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
     }
     case "delete_question": {
       const q = resolveQuestion(ctx, a.target);
+      const analysisImpact = describeAnalysisImpact(def, q.id);
       const placedBefore = placedIds(def);
       const refs = removeQuestion(def, q.id);
       // removing a question also removes logic that named it — a branch arm among them, and with it whatever it held
       const stranded = def.questions.filter((x) => placedBefore.has(x.id) && !placedIds(def).has(x.id)).map((x) => x.code);
-      return { description: `Deleted ${q.code}: ${plain(q.text, 60)}`, destructive: `Deletes ${q.code}${refs.length ? ` and ${refs.length} reference${refs.length === 1 ? "" : "s"} to it` : ""}${stranded.length ? ` — which leaves ${stranded.join(", ")} on no page` : ""}`, touched: [q.id] };
+      return { description: `Deleted ${q.code}: ${plain(q.text, 60)}`, destructive: `Deletes ${q.code}${refs.length ? ` and ${refs.length} reference${refs.length === 1 ? "" : "s"} to it` : ""}${stranded.length ? ` — which leaves ${stranded.join(", ")} on no page` : ""}${analysisImpact.length ? ` — in the analysis, ${analysisImpact.join("; ")}` : ""}`, touched: [q.id] };
     }
     case "move_question": {
       const q = resolveQuestion(ctx, a.target);
@@ -735,8 +744,10 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       return { description: `Remove ${n} punch rule${n === 1 ? "" : "s"} from ${q.code}`, destructive: `Removes ${n} punch rule${n === 1 ? "" : "s"} from ${q.code}`, touched: [q.id] };
     }
     default: {
+      // the analysis framework: question.analysis and research.analysisPlan only, every variable resolved
+      if (isAnalysisOp(a.op)) return applyAnalysisAction(def, a as AnalysisAction, { question: (x) => tryQuestion(ctx, x), ids: ctx.ids, now: ctx.now });
       // the look and behaviour: def.ux only, through the UX gate
-      const r = applyUxAction(def, a, { lookups: { question: (x) => tryQuestion(ctx, x), block: (x) => tryBlock(ctx, x) }, ids: ctx.ids, now: ctx.now, refs: ctx.uxRefs });
+      const r = applyUxAction(def, a as UxAction, { lookups: { question: (x) => tryQuestion(ctx, x), block: (x) => tryBlock(ctx, x) }, ids: ctx.ids, now: ctx.now, refs: ctx.uxRefs });
       ctx.uxWarnings.push(...r.warnings);
       return r;
     }
@@ -1083,6 +1094,7 @@ export function describeAction(a: SurveyAction): string {
     case "set_theme": return a.label ? `Theme “${a.label}”` : "Change the theme";
     case "set_custom_html": return a.html === null ? `Remove the custom HTML of ${a.target}` : `Custom HTML on ${a.target}`;
     case "set_default_value": return a.value === null ? `Remove the default value of ${a.target}` : `Default value of ${a.target}: ${Array.isArray(a.value) ? a.value.join(", ") : a.value}`;
+    default: return describeAnalysisAction(a as AnalysisAction);
   }
 }
 
@@ -1147,6 +1159,8 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
     push("default value", dv(p), dv(q));
     push("custom HTML", (p.customHtml ?? "").slice(0, 120), (q.customHtml ?? "").slice(0, 120));
     push("block", blockOf(before, q.id)?.title ?? "", blockOf(after, q.id)?.title ?? "");
+    // what the question is FOR (the analysis framework): a proposal that only tags questions must read as a change
+    push("analysis", analysisText(p), analysisText(q));
     if (!p.displayLogic && q.displayLogic) dAdded++; else if (p.displayLogic && !q.displayLogic) dRemoved++; else if (p.displayLogic && q.displayLogic && cond(before, p.displayLogic) !== cond(after, q.displayLogic)) dChanged++;
     const ds = (q.skipLogic?.length ?? 0) - (p.skipLogic?.length ?? 0);
     if (ds > 0) sAdded += ds; else sRemoved -= ds;
@@ -1168,7 +1182,9 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
   const branches = countType(after, "branch") - countType(before, "branch");
   const loops = countType(after, "loop") - countType(before, "loop");
   const pages = { before: listPages(before.flow as unknown[]).length, after: listPages(after.flow as unknown[]).length };
-  const researchChanged = JSON.stringify(before.research ?? null) !== JSON.stringify(after.research ?? null);
+  const designOf = (d: SurveyDefinition) => { const r = d.research; return r ? JSON.stringify({ ...r, analysisPlan: undefined }) : null; };
+  const researchChanged = designOf(before) !== designOf(after);
+  const planLines = analysisPlanDiff(before.research?.analysisPlan, after.research?.analysisPlan);
   const ux = diffUx(before, after);
   const theme = diffTheme(before.branding, after.branding);
   const randomizedAdded = after.questions.filter((q) => q.randomization?.enabled && !bq.get(q.id)?.randomization?.enabled).length;
@@ -1198,6 +1214,7 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
     dRemoved ? `Remove ${n(dRemoved, "display condition")}` : "",
     sRemoved ? `Remove ${n(sRemoved, "skip condition")}` : "",
     researchChanged ? "Record the research design (objective, hypotheses, constructs)" : "",
+    ...planLines,
     ...(theme.length ? [`Theme: ${theme.slice(0, 6).join("; ")}${theme.length > 6 ? ` and ${theme.length - 6} more` : ""}`] : []),
     ...ux.added.map((x) => `Add ${x.kind} “${x.label}” on ${x.target}`),
     ...ux.changed.map((x) => `Change ${x.kind} “${x.label}” on ${x.target}`),
@@ -1227,6 +1244,38 @@ function isScale(q: Question): boolean {
  * highest Q-number; a variable that was only the old code follows it, as do
  * piped references to it. Question ids never change, so logic is untouched.
  */
+/** a question's analysis metadata as one comparable line */
+function analysisText(q: Question): string {
+  const a = q.analysis;
+  if (!a) return "";
+  return [a.role, a.measurement, a.construct, a.primary?.join("+"), a.crosstabBy?.join("+"), a.relatedTo?.join("+"), a.modeling?.join("+"), a.hypotheses?.join("+"), a.notes?.slice(0, 60)].map((x) => x ?? "").join("|");
+}
+
+/** the analysis plan's changes, as summary lines */
+function analysisPlanDiff(before: AnalysisPlan | undefined, after: AnalysisPlan | undefined): string[] {
+  if (!before && !after) return [];
+  const n = (k: number, w: string, pl = `${w}s`) => `${k} ${k === 1 ? w : pl}`;
+  if (!before && after) return [`Plan the analysis: ${n(after.crosstabs.length, "crosstab")}, ${n(after.tests.length, "test")}${after.derived.length ? `, ${n(after.derived.length, "derived variable")}` : ""}${after.segments.length ? `, ${n(after.segments.length, "segment")}` : ""}`];
+  if (before && !after) return ["Remove the analysis plan"];
+  const b = before!, a = after!;
+  const out: string[] = [];
+  const xtKey = (x: { rows: string[]; columns: string[] }) => `${x.rows.join("+")} by ${x.columns.join("+")}`;
+  const tKey = (t: { method: string; outcome?: string; variables: string[]; groupBy?: string }) => `${t.method.replace(/_/g, " ")}${t.outcome ? ` on ${t.outcome}` : ""}${t.variables.length ? ` with ${t.variables.join(", ")}` : ""}${t.groupBy ? ` across ${t.groupBy}` : ""}`;
+  const bx = new Set(b.crosstabs.map(xtKey)), ax = new Set(a.crosstabs.map(xtKey));
+  const addedX = [...ax].filter((k) => !bx.has(k)), removedX = [...bx].filter((k) => !ax.has(k));
+  if (addedX.length) out.push(addedX.length <= 3 ? `Plan crosstab${addedX.length === 1 ? "" : "s"}: ${addedX.join("; ")}` : `Plan ${n(addedX.length, "crosstab")}`);
+  for (const k of removedX) out.push(`Remove the planned crosstab ${k}`);
+  const bt = new Set(b.tests.map(tKey)), at = new Set(a.tests.map(tKey));
+  const addedT = [...at].filter((k) => !bt.has(k)), removedT = [...bt].filter((k) => !at.has(k));
+  if (addedT.length) out.push(addedT.length <= 3 ? `Plan ${addedT.join("; ")}` : `Plan ${n(addedT.length, "test")}`);
+  for (const k of removedT) out.push(`Remove the planned ${k}`);
+  const bd = new Set(b.derived.map((d) => d.name)), ad = new Set(a.derived.map((d) => d.name));
+  const addedD = [...ad].filter((k) => !bd.has(k)), removedD = [...bd].filter((k) => !ad.has(k));
+  if (addedD.length) out.push(`Plan derived variable${addedD.length === 1 ? "" : "s"} ${addedD.join(", ")}`);
+  if (removedD.length) out.push(`Remove the planned derived variable${removedD.length === 1 ? "" : "s"} ${removedD.join(", ")}`);
+  return out;
+}
+
 export function renumberNewQuestions(base: SurveyDefinition, after: SurveyDefinition): SurveyDefinition {
   const old = new Set(base.questions.map((q) => q.id));
   const fresh = questionOrder(after).map((id) => after.questions.find((q) => q.id === id)!).filter((q) => q && !old.has(q.id) && /^Q\d+$/.test(String(q.code)));

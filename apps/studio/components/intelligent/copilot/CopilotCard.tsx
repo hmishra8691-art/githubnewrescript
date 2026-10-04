@@ -107,7 +107,12 @@ export function CopilotCard({ entry, def, onSelect, onReviewChanges, onApply, on
                 {r.questions.map((q, i) => <button key={i} type="button" className="iq-example cp-q" onClick={() => onAnswer(q)}><span className="iq-example-text">{q}</span><span className="iq-example-about">answer this</span></button>)}
               </div>
             )}
-            {r.rejected.length > 0 && <p className="iq-warning" data-testid="cp-rejected"><Icon name="warning" size={12} /> {r.rejected.length} action{r.rejected.length === 1 ? "" : "s"} from the model {r.rejected.length === 1 ? "was" : "were"} not in a shape the Studio accepts and {r.rejected.length === 1 ? "was" : "were"} dropped.</p>}
+            {r.rejected.length > 0 && (
+              <div className="iq-warning" data-testid="cp-rejected"><Icon name="warning" size={12} /> {r.rejected.length} action{r.rejected.length === 1 ? "" : "s"} from the model {r.rejected.length === 1 ? "was" : "were"} not in a shape the Studio accepts and {r.rejected.length === 1 ? "was" : "were"} dropped.
+                {/* the reason, when the gate gave one — "wizardry is not an analysis method the platform runs" is actionable; a count is not */}
+                {r.rejected.some((x) => x.reason) && <ul style={{ margin: "4px 0 0 16px" }}>{r.rejected.filter((x) => x.reason).slice(0, 5).map((x, i) => <li key={i} data-testid="cp-rejected-reason">{x.reason}</li>)}</ul>}
+              </div>
+            )}
             {r.actions.length > 0 && state === "open" && refused.length > 0 && (
               <div className={`cp-refused${counts?.length ? "" : " all"}`} role="alert" data-testid="cp-card-refused">
                 <span className="iq-label">{counts?.length ? `Not included — the Studio refused ${refused.length === 1 ? "one change" : `${refused.length} changes`}` : "Nothing can be applied — the Studio refused this proposal"}</span>

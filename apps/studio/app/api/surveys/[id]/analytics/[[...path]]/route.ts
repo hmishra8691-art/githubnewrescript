@@ -5,7 +5,8 @@ import type { AuditEvent, Capability } from "@rescript/access";
 import { buildPptx, buildXlsx, isEmbeddableImage } from "@rescript/analytics/export";
 import {
   DEFAULT_THEME, BUILT_IN_REPORT_TEMPLATES, applyTemplate, describeTemplate,
-  type AnalysisDefinition, type AnalysisResult, type ChartSpec, type ReportDefinition, type ReportTemplate, type ReportTheme, BUILT_IN_DASHBOARD_TEMPLATES, applyDashboardTemplate, dashboardAsTemplate, describeDashboardTemplate, templateKind } from "@rescript/analytics";
+  type AnalysisDefinition, type AnalysisResult, type ChartSpec, type DatasetSpec, type ReportDefinition, type ReportTemplate, type ReportTheme, BUILT_IN_DASHBOARD_TEMPLATES, applyDashboardTemplate, dashboardAsTemplate, describeDashboardTemplate, templateKind, plannedAnalyses } from "@rescript/analytics";
+import type { SurveyDefinition } from "@rescript/schema";
 import { supabaseService } from "@/lib/authServer";
 import { audit, isFailure, requireProject, type ProjectContext } from "@/lib/guard";
 import { compute, hashPassword, loadDefinition, loadTheme, newToken, variablesPayload } from "@/lib/analytics";
@@ -572,6 +573,37 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     let pos = 0;
     for (const id of ids) { if (!ok.has(id)) continue; const { error } = await db.from("analytics_analyses").update({ position: pos++, updated_by: ctx.user.userId }).eq("id", id).eq("survey_id", surveyId); if (error) return bad(error.message, 500); }
     return json({ ok: true, ordered: pos });
+  }
+  /*
+   * THE PLANNED ANALYSES, CREATED. The analysis framework was written in the
+   * definition before fieldwork (research.analysisPlan); this turns it into
+   * saved analyses through the same bridge the engine's plan is checked with
+   * (`plannedAnalyses`). An item already created from the same planned id is
+   * not created twice — `options.planned` carries the plan item's id — so the
+   * button can be pressed again after the plan grows.
+   */
+  if (head === "analyses" && itemId === "from-plan" && !action) {
+    const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;
+    const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
+    const env = body.environment === "TEST" || body.environment === "ALL" ? body.environment : "LIVE";
+    const dataset: DatasetSpec = { environment: env as DatasetSpec["environment"], dataset: body.dataset === "clean" ? "clean" : "all" };
+    const items = plannedAnalyses(loaded.def as SurveyDefinition, dataset, { primaries: body.primaries === true });
+    if (!items.length) return bad("Nothing is planned yet — plan the analysis in Intelligent mode (Analysis tab) first.");
+    const { data: existing } = await db.from("analytics_analyses").select("id, definition").eq("survey_id", surveyId).is("deleted_at", null);
+    const have = new Set((existing ?? []).map((r) => String((r.definition as AnalysisDefinition)?.options?.planned ?? "")).filter(Boolean));
+    const created: Record<string, unknown>[] = []; let skipped = 0;
+    for (const it of items) {
+      const planned = String(it.definition.options?.planned ?? "");
+      if (planned && have.has(planned)) { skipped++; continue; }
+      const name = it.definition.name.slice(0, 160);
+      const row = { survey_id: surveyId, name, kind: it.definition.kind, definition: { ...it.definition, name, surveyVersion: loaded.version ?? undefined }, version: 1, folder: "Planned", tags: it.hypotheses, created_by: ctx.user.userId, updated_by: ctx.user.userId };
+      const { data, error } = await db.from("analytics_analyses").insert(row).select("*").single();
+      if (error) return bad(error.message, 500);
+      await db.from("analytics_analysis_versions").insert({ analysis_id: data.id, survey_id: surveyId, version: 1, definition: row.definition, summary: `Created from the analysis plan${it.reason ? `: ${it.reason}` : ""}`, created_by: ctx.user.userId });
+      log(ctx, "analytics.analysis_created", data.id, { name, kind: data.kind, fromPlan: planned });
+      created.push(data);
+    }
+    return json({ created, skipped, planned: items.length }, 201);
   }
   if (head === "analyses" && itemId && action === "duplicate") {
     const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;

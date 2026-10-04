@@ -1690,6 +1690,7 @@ p.qs-help { margin: -2px 0 10px; }
 .ax-chip:hover { border-color: var(--accent); }
 .ax-chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .ax-error { color: var(--red); font-size: 13px; }
+.ax-notice { color: var(--accent); font-size: 13px; cursor: pointer; }
 .ax-ok { color: var(--green); font-size: 13px; }
 .ax-warnings { background: #fff7ed; border: 1px solid #fed7aa; color: var(--amber); border-radius: 8px; padding: 6px 10px; font-size: 13px; margin: 6px 0; }
 .ax-summary { font-family: var(--mono); font-size: 13px; color: var(--accent2); background: var(--tint); border-radius: 8px; padding: 4px 8px; margin-top: 6px; }
@@ -2531,3 +2532,9 @@ p.qs-help { margin: -2px 0 10px; }
 .imgc-label { font-size: 14px; color: #0f172a; }
 .imgc-piped { box-sizing: border-box; min-height: 60px; border: 2px dashed var(--accent); border-radius: 8px; display: flex; align-items: center; justify-content: center; font: 12px ui-monospace, monospace; color: var(--accent); background: var(--panel2); }
 @media (max-width: 760px) { .imgc-body { grid-template-columns: 1fr; } }
+
+/* ---------- Intelligent → Analysis (the framework planned before fieldwork) ---------- */
+.cp-analysis { display: grid; gap: 14px; }
+.cp-analysis section { display: grid; gap: 6px; }
+.cp-analysis .iqi-table td { vertical-align: top; }
+.cp-analysis .cp-block { margin: 0; }

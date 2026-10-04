@@ -14,6 +14,7 @@ import { MaskingBuilder, PunchRules } from "./MaskingBuilder";
 import { QualitySettings } from "./QualitySettings";
 import { OptionGroupsEditor } from "./OptionGroupsEditor";
 import { CollapsibleSection } from "./CollapsibleSection";
+import { QuestionAnalysisSection } from "./QuestionAnalysisSection";
 import { UxItemsEditor, uxItemsFor } from "./UxItemsEditor";
 import { InlineRichText, RichTextEditor } from "./RichTextEditor";
 import { AiQuestionSection } from "./AiQuestionSection";
@@ -1468,6 +1469,16 @@ export function PropertiesPanel() {
         <input className="input mono" value={String(q.settings.defaultValue ?? "")}
           placeholder='static, or {{Q1}} piped'
           onChange={(e) => patch({ settings: { ...q.settings, defaultValue: e.target.value || undefined } })} /></label>
+      </CollapsibleSection>
+      )}
+
+      {/*
+        * WHAT THE QUESTION IS FOR — the analysis framework, question by
+        * question (the plan is in Intelligent → Analysis). Inferred until set.
+        */}
+      {showSec("Analysis") && (
+      <CollapsibleSection id="analysis" title="Analysis" active={!!q.analysis}>
+        <QuestionAnalysisSection q={q} patch={patch} />
       </CollapsibleSection>
       )}
 

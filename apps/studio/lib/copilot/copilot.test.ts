@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { SurveyDefinition } from "@rescript/schema";
 import { applySurveyActions } from "@rescript/engine";
 import { chunkResearchDocument, ResearchIndex } from "@rescript/import/research";
-import { coerceCopilotReply, classifyRequest, copilotUserPrompt, referencedQuestions, surveyLanguageOf, uxIntent, COPILOT_SYSTEM_PROMPT, COPILOT_UX_GUIDE } from "./prompt.ts";
+import { coerceCopilotReply, classifyRequest, copilotUserPrompt, referencedQuestions, surveyLanguageOf, uxIntent, analysisIntent, COPILOT_SYSTEM_PROMPT, COPILOT_UX_GUIDE, COPILOT_ANALYSIS_GUIDE } from "./prompt.ts";
 import { copilotOutline } from "./outline.ts";
 import { coerceDocSummary, summaryInput, researchCards, researchPassages } from "./research.ts";
 
@@ -59,7 +59,7 @@ test("the outline: blocks with their questions, the named questions' logic in fu
   assert.match(o, /Block contents: “Screening”: Q1; “Usage”: Q2/);
   assert.match(o, /Q1 details: skip when Q1 = 2 → screen out \(screened\)|Q1 details: skip when .*Q1.*→ screen out \(screened\)/);
   assert.match(o, /Q2 details: display logic: /);
-  assert.match(o, /Research design: objective: Understand premium skincare buying · hypotheses: Social exposure drives purchase · constructs: Purchase \(dependent: Q2\); Exposure \(independent, not measured\)/);
+  assert.match(o, /Research design: objective: Understand premium skincare buying · hypotheses: H1 Social exposure drives purchase · constructs: Purchase \(dependent: Q2\); Exposure \(independent, not measured\)/);
   assert.deepEqual(referencedQuestions(def, "make freq required"), [def.questions[1].id], "variables are matched case-insensitively");
   assert.equal(surveyLanguageOf(def), "en");
   // bounded: a large survey is listed by code beyond the first 60, but a named question is always in full
@@ -182,8 +182,8 @@ test("a revised proposal numbers the questions it made in order — and replays 
 
 import { SURVEY_ACTION_OPS, UX_ACTION_ALIASES } from "@rescript/engine";
 test("the model is told about every action the engine accepts — and only those", () => {
-  const both = COPILOT_SYSTEM_PROMPT + COPILOT_UX_GUIDE;
-  for (const op of SURVEY_ACTION_OPS) assert.ok(both.includes(`"op":"${op}"`), `the prompt or the UX guide documents ${op}`);
+  const both = COPILOT_SYSTEM_PROMPT + COPILOT_UX_GUIDE + COPILOT_ANALYSIS_GUIDE;
+  for (const op of SURVEY_ACTION_OPS) assert.ok(both.includes(`"op":"${op}"`), `the prompt, the UX guide or the analysis guide documents ${op}`);
   for (const op of ["create_style", "create_animation", "create_behavior", "attach_behavior_to_question", "create_responsive_rule"]) assert.ok(COPILOT_SYSTEM_PROMPT.includes(op), `the system prompt names ${op}, so the model never says the platform cannot style`);
   const documented = [...both.matchAll(/"op":"([a-z_]+)"/g)].map((m) => m[1]);
   assert.deepEqual(documented.filter((o) => ![...SURVEY_ACTION_OPS, ...UX_ACTION_ALIASES].includes(o as never)), [], "no action is advertised that the engine would refuse");
@@ -296,4 +296,28 @@ test("punching and variables are structure: a request that mixes them with the l
   const p = copilotUserPrompt({ message: "rounded cards", outline: "o", surveyLanguage: "en", mode: "ux", ux: true, uxOnly: true });
   assert.match(p, /ask for it as its own request in this same chat/);
   assert.match(p, /there is no other mode or session to switch to/);
+});
+
+/* ------------------------------------------------------------ the analysis framework (Phase 2) */
+
+test("analysis turns: the intent is recognised, the guide and the plan go with it, and the actions are in the vocabulary", () => {
+  for (const m of ["plan the analysis", "add a crosstab of purchase intent by country", "which test should I use for H2?", "is Q6 the dependent variable?", "show me the most important crosstabs", "run a regression on intent", "should I use MaxDiff or conjoint?"]) assert.ok(analysisIntent(m), m);
+  for (const m of ["make Q7 a 5-point scale", "randomize the brands in Q12", "translate this section into German", "add an image to each option"]) assert.ok(!analysisIntent(m), m);
+  const def = survey();
+  const out = applySurveyActions(def, [{ op: "set_question_analysis", target: "FREQ", role: "dependent", hypotheses: ["H1"] }, { op: "propose_analysis_plan" }]).def;
+  const o = copilotOutline(out, { analysis: true });
+  assert.match(o, /hypotheses: H1 Social exposure drives purchase/, "hypotheses carry their labels");
+  assert.match(o, /Variable roles \(set or inferred\): .*Q2=dependent\/nominal\[H1\]/);
+  assert.match(o, /Analysis plan \(engine; name items by id\):/);
+  const plain = copilotOutline(out, {});
+  assert.ok(!plain.includes("Analysis plan ("), "a wording edit does not carry the plan");
+  const p = copilotUserPrompt({ message: "plan the analysis", outline: "o", surveyLanguage: "en", mode: "edit", analysis: true });
+  assert.ok(p.includes("ANALYSIS GUIDE") && p.includes("set_question_analysis") && p.includes("propose_analysis_plan"));
+  assert.ok(!copilotUserPrompt({ message: "x", outline: "o", surveyLanguage: "en", mode: "edit" }).includes("ANALYSIS GUIDE"));
+  for (const w of ["set_question_analysis", "propose_analysis_plan", "add_crosstab", "add_analysis_test", "add_derived_variable", "logistic_regression", "H1, H2"]) assert.ok(COPILOT_ANALYSIS_GUIDE.includes(w), w);
+  assert.ok(COPILOT_SYSTEM_PROMPT.includes("THE ANALYSIS FRAMEWORK is planned BEFORE fieldwork"));
+  for (const op of ["set_question_analysis", "propose_analysis_plan", "set_analysis_plan", "add_crosstab", "remove_crosstab", "add_analysis_test", "remove_analysis_test", "add_derived_variable", "remove_derived_variable"]) assert.ok((SURVEY_ACTION_OPS as readonly string[]).includes(op), op);
+  /* the reply gate passes analysis actions through the engine's gate */
+  const r = coerceCopilotReply({ kind: "proposal", reply: "ok", actions: [{ op: "add_crosstab", rows: ["FREQ"], columns: ["BUY"] }, { op: "add_analysis_test", method: "wizardry" }] })!;
+  assert.equal(r.actions.length, 1); assert.equal(r.rejected.length, 1);
 });

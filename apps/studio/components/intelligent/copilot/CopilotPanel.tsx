@@ -5,6 +5,7 @@ import { compileAnimation, compileStyle, describeUxTarget, reviewUx, type Survey
 import { Icon } from "../../ui/Icon";
 import { structureRows, changeLabel, uxPreviewScope, type OutlineRow, type ProposalState } from "../../../lib/copilot/client";
 import { UxPreview } from "./UxPreview";
+import { AnalysisTab } from "./AnalysisTab";
 import { Linked } from "./CopilotCard";
 import type { Copilot, PanelTab } from "./useCopilot";
 
@@ -38,6 +39,7 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
     { id: "review", label: "Review", badge: copilot.review ? copilot.review.rules.counts.critical + copilot.review.ai.filter((f) => f.severity === "critical").length || undefined : undefined },
     { id: "research", label: "Research", badge: copilot.docs.length || undefined },
     { id: "history", label: "History", badge: copilot.history.filter((h) => !h.reverted).length || undefined },
+    { id: "analysis", label: "Analysis", badge: def.research?.analysisPlan ? (def.research.analysisPlan.crosstabs.length + def.research.analysisPlan.tests.length) || undefined : undefined },
     { id: "ux", label: "UX", badge: def.ux ? (def.ux.styles.length + def.ux.animations.length + def.ux.behaviors.length) || undefined : undefined },
     { id: "inspector", label: "Inspector" },
   ];
@@ -55,6 +57,7 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
         {copilot.tab === "review" && <ReviewTab copilot={copilot} def={def} onSelect={onSelect} />}
         {copilot.tab === "research" && <ResearchTab copilot={copilot} />}
         {copilot.tab === "history" && <HistoryTab copilot={copilot} readOnly={readOnly} />}
+        {copilot.tab === "analysis" && <AnalysisTab copilot={copilot} def={def} onSelect={onSelect} />}
         {copilot.tab === "ux" && <UxTab copilot={copilot} def={def} onSelect={onSelect} />}
         {copilot.tab === "inspector" && inspector}
       </div>

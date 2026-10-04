@@ -1,5 +1,6 @@
 import type { SurveyDefinition } from "@rescript/schema";
-import { listBlocks, formatCondition, describeUxTarget, uxContextFor } from "@rescript/engine";
+import { listBlocks, formatCondition, describeUxTarget, uxContextFor, inferQuestionAnalysis } from "@rescript/engine";
+import { hypothesisLabel } from "@rescript/schema";
 import { surveyContext } from "../intelligent/context.ts";
 
 /**
@@ -13,7 +14,7 @@ import { surveyContext } from "../intelligent/context.ts";
  * questions in full and the rest by code, plus the named ones in full, so
  * the prompt stays bounded however large the survey is.
  */
-export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: string | null; focusIds?: string[]; ux?: boolean } = {}): string {
+export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: string | null; focusIds?: string[]; ux?: boolean; analysis?: boolean } = {}): string {
   const n = def.questions.length;
   const base = surveyContext(def, { selectedId: opts.selectedId ?? null, focusIds: opts.focusIds ?? [], limit: n > 150 ? 60 : 150, textWidth: n > 150 ? 70 : 110 });
   const lines = [base];
@@ -65,7 +66,26 @@ export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: strin
   const r = def.research;
   if (r) {
     const role = (id: string) => code(id);
-    lines.push(`Research design: ${[r.objective ? `objective: ${r.objective}` : "", r.hypotheses.length ? `hypotheses: ${r.hypotheses.join(" | ")}` : "", r.population ? `population: ${r.population}` : "", r.constructs.length ? `constructs: ${r.constructs.map((c) => `${c.name} (${c.role}${c.questionIds.length ? `: ${c.questionIds.map(role).join(" ")}` : ", not measured"})`).join("; ")}` : ""].filter(Boolean).join(" · ")}`);
+    lines.push(`Research design: ${[r.objective ? `objective: ${r.objective}` : "", r.hypotheses.length ? `hypotheses: ${r.hypotheses.map((h, i) => `${hypothesisLabel(i)} ${h}`).join(" | ")}` : "", r.population ? `population: ${r.population}` : "", r.constructs.length ? `constructs: ${r.constructs.map((c) => `${c.name} (${c.role}${c.questionIds.length ? `: ${c.questionIds.map(role).join(" ")}` : ", not measured"})`).join("; ")}` : ""].filter(Boolean).join(" · ")}`);
+  }
+  /*
+   * THE ANALYSIS FRAMEWORK, as the model must address it: the saved plan with
+   * its ids (so "remove the age crosstab" is remove_crosstab by id), and the
+   * roles that are set or inferred (so a request about "the outcome" resolves).
+   * Only on analysis turns and generation — a wording edit does not need it.
+   */
+  if (opts.analysis) {
+    const plan = r?.analysisPlan;
+    const asked = def.questions.filter((q) => !["html", "custom_component"].includes(q.type));
+    const roles = asked.map((q) => ({ q, a: inferQuestionAnalysis(def, q) })).filter(({ a }) => a.role !== "descriptive" || !!a.construct);
+    if (roles.length) lines.push(`Variable roles (set or inferred): ${roles.slice(0, 60).map(({ q, a }) => `${q.code}=${a.role}/${a.measurement}${a.hypotheses.length ? `[${a.hypotheses.join(",")}]` : ""}`).join(" ")}`);
+    if (plan) {
+      lines.push(`Analysis plan (${plan.source ?? "saved"}; name items by id):`);
+      for (const x of plan.crosstabs.slice(0, 40)) lines.push(`  crosstab ${x.id} P${x.priority}: ${x.rows.join("+")} by ${x.columns.join("+")}${x.hypotheses.length ? ` [${x.hypotheses.join(",")}]` : ""}${x.reason ? ` — ${x.reason}` : ""}`);
+      for (const t of plan.tests.slice(0, 40)) lines.push(`  test ${t.id} P${t.priority}: ${t.method}${t.outcome ? ` outcome ${t.outcome}` : ""}${t.variables.length ? ` vars ${t.variables.join(",")}` : ""}${t.groupBy ? ` by ${t.groupBy}` : ""}${t.moderator ? ` moderator ${t.moderator}` : ""}${t.mediator ? ` mediator ${t.mediator}` : ""}${t.hypotheses.length ? ` [${t.hypotheses.join(",")}]` : ""}`);
+      for (const d of plan.derived.slice(0, 20)) lines.push(`  derived ${d.name}: ${d.kind} of ${d.from.join(",")}`);
+      if (plan.segments.length) lines.push(`  segments: ${plan.segments.map((sg) => `${sg.name} (${sg.by.join(",")})`).join("; ")}`);
+    } else lines.push("Analysis plan: none saved yet (propose_analysis_plan writes the engine's framework; set_analysis_plan writes yours).");
   }
   return lines.join("\n");
 }

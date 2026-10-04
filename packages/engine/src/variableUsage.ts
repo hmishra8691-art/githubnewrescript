@@ -3,6 +3,7 @@ import { pipeTokensIn } from "./pipingTokens.js";
 import { referencedNames } from "./embedded.js";
 import { buildDerivedVariables } from "./variables.js";
 import { CALC_FUNCTION_NAMES } from "./calc.js";
+import { renameAnalysisReferences } from "./analysisFramework.js";
 
 /**
  * WHAT USES THIS VARIABLE, AND WHAT A RENAME WOULD DO TO IT (§44, phase 2).
@@ -368,6 +369,19 @@ export function variableUsages(def: SurveyDefinition, name: string, scope: Usage
 
   /* ------------------------------------------------ analyses, if supplied */
 
+  /* ------------------------------------------- the analysis framework (planned before fieldwork) */
+
+  def.questions.forEach((q, qi) => {
+    for (const key of ["crosstabBy", "relatedTo"] as const) {
+      if (q.analysis?.[key]?.includes(name)) add({ kind: "analysis", where: `${q.code} — analysis (${key === "crosstabBy" ? "tabulated against" : "related to"})`, path: `questions[${qi}].analysis.${key}`, rewrite: "auto" });
+    }
+  });
+  const plan = def.research?.analysisPlan;
+  (plan?.crosstabs ?? []).forEach((x, i) => { if ([...x.rows, ...x.columns].includes(name)) add({ kind: "analysis", where: `Analysis plan — crosstab ${x.reason ? `“${x.reason}”` : x.id}`, path: `research.analysisPlan.crosstabs[${i}]`, rewrite: "auto" }); });
+  (plan?.tests ?? []).forEach((t, i) => { if ([t.outcome, t.groupBy, t.moderator, t.mediator, ...t.variables].includes(name)) add({ kind: "analysis", where: `Analysis plan — ${t.method.replace(/_/g, " ")}${t.reason ? ` “${t.reason}”` : ""}`, path: `research.analysisPlan.tests[${i}]`, rewrite: "auto" }); });
+  (plan?.derived ?? []).forEach((d, i) => { if (d.from.includes(name)) add({ kind: "analysis", where: `Analysis plan — derived variable ${d.name}`, path: `research.analysisPlan.derived[${i}]`, rewrite: "auto" }); });
+  (plan?.segments ?? []).forEach((sg, i) => { if (sg.by.includes(name)) add({ kind: "analysis", where: `Analysis plan — segment “${sg.name}”`, path: `research.analysisPlan.segments[${i}]`, rewrite: "auto" }); });
+
   for (const a of scope.analyses ?? []) {
     if (JSON.stringify(a.definition ?? null).includes(`"${name}"`)) {
       add({
@@ -642,6 +656,7 @@ export function applyRename(
    * those are.
    */
   walk(next, "survey");
+  renameAnalysisReferences(next, oldName, newName);
   return next;
 }
 

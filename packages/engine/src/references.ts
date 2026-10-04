@@ -56,6 +56,7 @@
 
 import type { SurveyDefinition } from "@rescript/schema";
 import { pipeTokensIn } from "./pipingTokens.js";
+import { pruneAnalysisReferences } from "./analysisFramework.js";
 
 /** Field names that hold a question id, wherever they appear. */
 const ID_KEYS = new Set([
@@ -246,10 +247,11 @@ function walkFields(node: any, ctx: Ctx, path: string, protect: boolean): boolea
       const before = child.length;
       node[key] = child.filter((x: unknown) => x !== ctx.id);
       if (node[key].length !== before) {
-        ctx.out.push({
-          where: ctx.owner, path: `${path}.${key}`, kind: "unplaced",
-          effect: "the question comes off the page that held it",
-        });
+        /* a research construct lists the questions that measure it — losing one is an analysis fact, not a page fact */
+        const construct = key === "questionIds" && typeof node.role === "string" && typeof node.name === "string";
+        ctx.out.push(construct
+          ? { where: `Research design — construct “${node.name}”`, path: `${path}.${key}`, kind: "cleared", effect: node[key].length ? "measured by one question fewer" : "no longer measured by any question" }
+          : { where: ctx.owner, path: `${path}.${key}`, kind: "unplaced", effect: "the question comes off the page that held it" });
       }
       continue;
     }
@@ -349,6 +351,8 @@ function run(def: SurveyDefinition, id: string, known?: Set<string>): QuestionRe
   const pipes = pipesNaming(def, names);
   walk(def as any, ctx, "survey", true);
   out.push(...pipes);
+  /* the analysis framework names questions by variable in plain string lists the walk cannot read */
+  out.push(...pruneAnalysisReferences(def, names));
   /* the same field reported twice (once per nesting level) reads as noise */
   const seen = new Set<string>();
   return out.filter((r) => {

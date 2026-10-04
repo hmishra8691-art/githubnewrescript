@@ -5,6 +5,7 @@ import { OptionMask, PunchRule } from "./setExpression.js";
 import { AttentionCheck } from "./quality.js";
 import { AiQuestionOverride, SpokenScript } from "./aiConversation.js";
 import { MediaDisplay } from "./mediaDisplay.js";
+import { QuestionAnalysis } from "./analysisPlan.js";
 
 /**
  * Question model.
@@ -1327,6 +1328,13 @@ export const Question = z.object({
 
   customJs: z.string().optional(),
   customCss: z.string().optional(),
+  /**
+   * What this question is FOR in the analysis — its role in the design, how
+   * it is measured, what it is tabulated against, which hypothesis it serves.
+   * Planned before fieldwork; see analysisPlan.ts. Absent = the engine infers
+   * a default from the type and the research design.
+   */
+  analysis: QuestionAnalysis.optional(),
   customHtml: z.string().optional(),
 
   notes: z.string().optional(),

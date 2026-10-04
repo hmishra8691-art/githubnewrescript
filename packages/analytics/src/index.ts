@@ -12,3 +12,4 @@ export * from "./dashboardTemplates.js";
 export * from "./themes.js";
 export * from "./fieldwork.js";
 export * from "./versionedMetadata.js";
+export * from "./planBridge.js";

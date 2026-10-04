@@ -12,3 +12,4 @@ export * from "./registry.js";
 export * from "./variants.js";
 export * from "./aiConversation.js";
 export * from "./localization.js";
+export * from "./analysisPlan.js";

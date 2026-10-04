@@ -2,6 +2,7 @@ import { UxConfig } from "./ux.js";
 import { z } from "zod";
 import { AiConversation } from "./aiConversation.js";
 import { Localization } from "./localization.js";
+import { AnalysisPlan } from "./analysisPlan.js";
 import { Condition } from "./conditions.js";
 import { Question } from "./question.js";
 import { FlowNode, LogicFlow, EmbeddedDataType } from "./flow.js";
@@ -97,6 +98,11 @@ export const ResearchDesign = z.object({
   assumptions: z.array(z.string()).default([]),
   /** the research documents it drew on, by name */
   sources: z.array(z.string()).default([]),
+  /**
+   * The analysis framework, planned before fieldwork: the crosstabs, tests,
+   * derived variables and segments the study will run — see analysisPlan.ts.
+   */
+  analysisPlan: AnalysisPlan.optional(),
   updatedAt: z.string().optional(),
 });
 export type ResearchDesign = z.infer<typeof ResearchDesign>;

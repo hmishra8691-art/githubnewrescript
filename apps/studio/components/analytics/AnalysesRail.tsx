@@ -9,13 +9,15 @@ import { type Row, timeAgo } from "./api";
  * duplicate, rename, move up / down, delete. The rail never computes; it
  * lists definitions and tells the workspace which one to open.
  */
-export function AnalysesRail({ analyses, currentId, dirty, canEdit, onNew, onOpen, onDuplicate, onRename, onMove, onDelete }: {
+export function AnalysesRail({ analyses, currentId, dirty, canEdit, onNew, onFromPlan, onOpen, onDuplicate, onRename, onMove, onDelete }: {
   analyses: Row[];
   currentId: string | null;
   /** the open analysis has unsaved changes */
   dirty?: boolean;
   canEdit: boolean;
   onNew: () => void;
+  /** create the analyses the research design planned before fieldwork (research.analysisPlan) */
+  onFromPlan?: () => void;
   onOpen: (a: Row) => void;
   onDuplicate: (a: Row) => void;
   onRename: (a: Row, name: string) => void;
@@ -34,6 +36,7 @@ export function AnalysesRail({ analyses, currentId, dirty, canEdit, onNew, onOpe
         <span className="ax-rail-title">Analyses <span className="ax-rail-count">{analyses.length}</span></span>
         {canEdit && <button type="button" className="btn small primary" onClick={onNew} data-testid="ax-rail-new" title="Start a new analysis">+ New</button>}
       </div>
+      {canEdit && onFromPlan && <button type="button" className="btn small" style={{ margin: "0 8px 6px", alignSelf: "stretch" }} onClick={onFromPlan} data-testid="ax-rail-from-plan" title="Create the crosstabs and tests the research design planned before fieldwork (Intelligent → Analysis)">Create the planned analyses</button>}
       {analyses.length > 6 && <input className="input small" placeholder="Search analyses…" value={q} onChange={(e) => setQ(e.target.value)} data-testid="ax-rail-search" />}
       <div className="ax-rail-list">
         {currentId === null && <div className="ax-rail-item on draft" data-testid="ax-rail-draft"><span className="ax-rail-name">Untitled analysis{dirty ? <span className="ax-dirty" title="Unsaved changes" /> : null}</span><span className="ax-rail-meta">not saved yet</span></div>}

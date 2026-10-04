@@ -6,6 +6,7 @@ import { listBlocks } from "./blocks.js";
 import { questionOrder } from "./dependencies.js";
 import type { SurveyAction } from "./surveyActions.js";
 import { reviewUx } from "./ux.js";
+import { reviewAnalysisPlan } from "./analysisFramework.js";
 
 /**
  * "REVIEW MY SURVEY" — the part of a survey review that is a matter of fact.
@@ -99,6 +100,9 @@ export function reviewSurvey(def: SurveyDefinition): SurveyReview {
       }
     }
   }
+
+  /* the analysis framework against the survey: dead references, tests on the wrong level, untested hypotheses */
+  for (const i of reviewAnalysisPlan(def)) add({ severity: i.level, category: /hypothes/i.test(i.message) ? "hypothesis" : "analysis", message: i.message, questionIds: i.questionIds, ...(i.suggestion ? { suggestion: i.suggestion } : {}) });
 
   /* ---------------------------------------------------------- warnings */
   for (const q of asked) {

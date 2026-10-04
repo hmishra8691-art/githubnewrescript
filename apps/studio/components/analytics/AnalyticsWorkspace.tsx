@@ -43,6 +43,7 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
   const [reports, setReports] = React.useState<Row[]>([]);
   const [shares, setShares] = React.useState<Row[]>([]);
   const [error, setError] = React.useState<string | null>(null);
+  const [notice, setNotice] = React.useState<string | null>(null);
   const [builder, setBuilder] = React.useState<{ key: number; initial?: { analysis?: Row; definition?: AnalysisDefinition; kind?: AnalysisDefinition["kind"] } }>({ key: 0 });
   const [pendingAdd, setPendingAdd] = React.useState<{ analysis: Row; spec: ChartSpec } | null>(null);
   const [dirty, setDirty] = React.useState(false);
@@ -62,6 +63,14 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
   const currentAnalysisId = (builder.initial?.analysis?.id as string | undefined) ?? null;
 
   /* the rail's verbs — every one is a request to the API, then a refresh, so the list is always the server's */
+  const railFromPlan = async () => {
+    try {
+      const r = await api.create("analyses/from-plan", { environment: env, dataset: quality }) as unknown as { created: Row[]; skipped: number; planned: number };
+      await refresh();
+      setNotice(r.created.length ? `${r.created.length} planned analys${r.created.length === 1 ? "is" : "es"} created${r.skipped ? ` (${r.skipped} already existed)` : ""}.` : `All ${r.planned} planned analyses already exist.`);
+      if (r.created[0]) openBuilder({ analysis: r.created[0] });
+    } catch (e) { setError((e as Error).message); }
+  };
   const railDuplicate = async (a: Row) => { try { const r = await api.create(`analyses/${a.id}/duplicate`, {}); await refresh(); openBuilder({ analysis: r.item }); } catch (e) { setError((e as Error).message); } };
   const railRename = async (a: Row, name: string) => { try { await api.update("analyses", a.id, { name }); await refresh(); if (a.id === currentAnalysisId) setBuilder((b) => ({ ...b, initial: { ...b.initial, analysis: { ...a, name } } })); } catch (e) { setError((e as Error).message); } };
   const railMove = async (a: Row, dir: -1 | 1) => {
@@ -88,12 +97,13 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
       </div>
       <div className="ax-ws-tabs">{TABS.map((t) => <button key={t.key} className={`ax-wstab ${tab === t.key ? "on" : ""}`} onClick={() => { if (t.key === tab) return; if (tab === "analysis" && !guard()) return; setTab(t.key); }} data-testid={`ax-tab-${t.key}`}>{t.label}{t.key === "analysis" && dirty ? <span className="ax-dirty" title="Unsaved changes" /> : null}</button>)}</div>
       {error && <div className="ax-error" style={{ margin: "6px 0" }}>{error}</div>}
+      {notice && <div className="ax-notice" style={{ margin: "6px 0" }} data-testid="ax-notice" onClick={() => setNotice(null)}>{notice}</div>}
       {tab === "home" && <Kpis env={env} counts={counts} vars={vars.length} analyses={analyses.length} charts={charts.length} reports={reports} shares={shares.length} />}
       <div className="ax-ws-body">
         {tab === "home" && <Home home={home} analyses={analyses} onOpen={(a) => openBuilder({ analysis: a })} onNew={(kind) => openBuilder(kind ? { kind } : undefined)} onTab={setTab} canEdit={p.canEdit} api={api} refresh={refresh} />}
         {tab === "analysis" && (
           <div className="ax-analysis-layout" data-testid="ax-analysis-layout">
-            <AnalysesRail analyses={analyses} currentId={currentAnalysisId} dirty={dirty} canEdit={p.canEdit} onNew={() => openBuilder()} onOpen={(a) => { if (a.id !== currentAnalysisId) openBuilder({ analysis: a }); }} onDuplicate={railDuplicate} onRename={railRename} onMove={railMove} onDelete={railDelete} />
+            <AnalysesRail analyses={analyses} currentId={currentAnalysisId} dirty={dirty} canEdit={p.canEdit} onNew={() => openBuilder()} onFromPlan={railFromPlan} onOpen={(a) => { if (a.id !== currentAnalysisId) openBuilder({ analysis: a }); }} onDuplicate={railDuplicate} onRename={railRename} onMove={railMove} onDelete={railDelete} />
             <div className="ax-analysis-main">
               <AnalysisBuilder key={builder.key} api={api} variables={vars} counts={counts} segments={segments} themes={themes} dataset={dataset} initial={builder.initial} canEdit={p.canEdit} canExport={p.canExport} onDirty={setDirty}
                 onSaved={(a) => { void refresh(); setBuilder((b) => ({ ...b, initial: { ...(b.initial ?? {}), analysis: a } })); }} onChartSaved={() => void refresh()} onAddToReport={(a, spec) => { setPendingAdd({ analysis: a, spec }); setTab("reports"); }} />

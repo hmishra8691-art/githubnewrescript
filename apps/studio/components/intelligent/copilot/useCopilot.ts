@@ -41,7 +41,7 @@ export interface CopilotEntry {
 }
 export interface ResearchDocView { id: string; ref: string; name: string; format: string; kind?: string; pages: number; ocrPages: number; chars: number; summary: import("../../../lib/copilot/research").DocSummary | null; warnings: string[]; createdAt: string }
 export interface ReviewState { rules: SurveyReview; ai: CopilotFinding[]; at: string; running: boolean }
-export type PanelTab = "changes" | "review" | "research" | "history" | "ux" | "inspector";
+export type PanelTab = "changes" | "review" | "research" | "history" | "analysis" | "ux" | "inspector";
 
 interface Session {
   proposal: Proposal | null;
