@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { SurveyDefinition } from "@rescript/schema";
 import { applySurveyActions } from "@rescript/engine";
 import { chunkResearchDocument, ResearchIndex } from "@rescript/import/research";
-import { coerceCopilotReply, classifyRequest, copilotUserPrompt, referencedQuestions, surveyLanguageOf, uxIntent, analysisIntent, COPILOT_SYSTEM_PROMPT, COPILOT_UX_GUIDE, COPILOT_ANALYSIS_GUIDE } from "./prompt.ts";
+import { coerceCopilotReply, classifyRequest, copilotUserPrompt, referencedQuestions, surveyLanguageOf, uxIntent, analysisIntent, translationIntent, COPILOT_SYSTEM_PROMPT, COPILOT_UX_GUIDE, COPILOT_ANALYSIS_GUIDE, COPILOT_TRANSLATION_GUIDE } from "./prompt.ts";
 import { copilotOutline } from "./outline.ts";
 import { coerceDocSummary, summaryInput, researchCards, researchPassages } from "./research.ts";
 
@@ -182,12 +182,13 @@ test("a revised proposal numbers the questions it made in order — and replays 
 
 import { SURVEY_ACTION_OPS, UX_ACTION_ALIASES } from "@rescript/engine";
 test("the model is told about every action the engine accepts — and only those", () => {
-  const both = COPILOT_SYSTEM_PROMPT + COPILOT_UX_GUIDE + COPILOT_ANALYSIS_GUIDE;
+  const both = COPILOT_SYSTEM_PROMPT + COPILOT_UX_GUIDE + COPILOT_ANALYSIS_GUIDE + COPILOT_TRANSLATION_GUIDE;
   for (const op of SURVEY_ACTION_OPS) assert.ok(both.includes(`"op":"${op}"`), `the prompt, the UX guide or the analysis guide documents ${op}`);
   for (const op of ["create_style", "create_animation", "create_behavior", "attach_behavior_to_question", "create_responsive_rule"]) assert.ok(COPILOT_SYSTEM_PROMPT.includes(op), `the system prompt names ${op}, so the model never says the platform cannot style`);
   const documented = [...both.matchAll(/"op":"([a-z_]+)"/g)].map((m) => m[1]);
   assert.deepEqual(documented.filter((o) => ![...SURVEY_ACTION_OPS, ...UX_ACTION_ALIASES].includes(o as never)), [], "no action is advertised that the engine would refuse");
-  assert.ok(COPILOT_SYSTEM_PROMPT.length < 12_000, `the system prompt stays compact: ${COPILOT_SYSTEM_PROMPT.length}`);
+  // the detail of each domain lives in its guide (UX, analysis, translation), sent only with requests about it; the system prompt only names the actions
+  assert.ok(COPILOT_SYSTEM_PROMPT.length < 12_500, `the system prompt stays compact: ${COPILOT_SYSTEM_PROMPT.length}`);
 });
 
 test("UX requests: recognised, look-only when they are, and given the UX guide only then", () => {
@@ -320,4 +321,45 @@ test("analysis turns: the intent is recognised, the guide and the plan go with i
   /* the reply gate passes analysis actions through the engine's gate */
   const r = coerceCopilotReply({ kind: "proposal", reply: "ok", actions: [{ op: "add_crosstab", rows: ["FREQ"], columns: ["BUY"] }, { op: "add_analysis_test", method: "wizardry" }] })!;
   assert.equal(r.actions.length, 1); assert.equal(r.rejected.length, 1);
+});
+
+test("translation turns: the intent, the guide, a block named in the request, and the outline's languages with the existing translations", () => {
+  for (const m of ["translate the Usage block into German", "add Spanish and French", "which languages are ready?", "route Mexican respondents to es", "add 'Gold' to the glossary as do-not-translate", "approve the German translations", "localize this for India"]) assert.ok(translationIntent(m), m);
+  for (const m of ["make Q7 a 5-point scale", "plan the analysis", "add a crosstab of FREQ by BUY", "randomize the options"]) assert.ok(!translationIntent(m), m);
+  const def = survey();
+  /* a block's title in the request focuses all of its questions */
+  assert.deepEqual(referencedQuestions(def, "translate the Usage block into German").map((id) => def.questions.find((q) => q.id === id)!.code), ["Q2"]);
+  assert.deepEqual(referencedQuestions(def, "translate Q1 into German").map((id) => def.questions.find((q) => q.id === id)!.code), ["Q1"]);
+  /* the outline: no languages yet → says so; with a language, its state, the glossary, the routing and the named questions' elements */
+  const none = copilotOutline(def, { translation: true });
+  assert.match(none, /Source language: en.*Language versions: none yet \(add_language\)/);
+  assert.match(none, /Language routing: order /);
+  const out = applySurveyActions(def, [
+    { op: "add_language", code: "de" },
+    { op: "set_glossary", entries: [{ source: "Skincare", doNotTranslate: true }, { source: "Monthly", targets: { de: "Monatlich" } }] },
+    { op: "set_translations", language: "de", entries: [{ target: "FREQ", text: "Wie oft kaufen Sie?" }, { target: "FREQ.option:2", text: "Monatlich" }] },
+    { op: "set_language_routing", countryMap: { DE: "de" }, fallback: "en" },
+  ], { ids });
+  assert.deepEqual(out.errors, []);
+  const o = copilotOutline(out.def, { translation: true, focusIds: referencedQuestions(out.def, "translate the Usage block") });
+  assert.match(o, /Language versions: de\/de-DE Deutsch \(draft; \d+% translated, \d+ missing, 0 approved\)/);
+  assert.match(o, /Glossary: Skincare \(never translate\); Monthly → de: Monatlich/);
+  assert.match(o, /Language routing: .*countries DE → de.*fallback en/);
+  assert.match(o, /Translatable elements of the named questions/);
+  assert.match(o, /  Q2 → "How often do you buy\?" \| de \[ai\] "Wie oft kaufen Sie\?"/, "the existing translation and its status");
+  assert.match(o, /  Q2\.option:2 → "Monthly" \| de \[ai\] "Monatlich"/);
+  assert.match(o, /  Q2\.option:1 → "Weekly" \| de —/, "a missing one");
+  assert.ok(!o.includes('Q1 → "Bought'), "the unnamed question is not listed");
+  assert.ok(!copilotOutline(out.def, {}).includes("Language versions:"), "a wording edit does not carry the languages");
+  /* the prompt */
+  const p = copilotUserPrompt({ message: "translate the Usage block into German", outline: "o", surveyLanguage: "en", mode: "edit", translation: true });
+  assert.ok(p.includes("TRANSLATION GUIDE") && p.includes("set_translations") && p.includes("approve_translations"));
+  assert.ok(!copilotUserPrompt({ message: "x", outline: "o", surveyLanguage: "en", mode: "edit" }).includes("TRANSLATION GUIDE"));
+  for (const w of ["add_language", "set_translations", "approve_translations", "confirm_translations", "set_language_routing", "set_glossary", "overwriteApproved", "Q5.option:2", "countryMap"]) assert.ok(COPILOT_TRANSLATION_GUIDE.includes(w), w);
+  assert.ok(COPILOT_SYSTEM_PROMPT.includes("LANGUAGES are actions too"));
+  for (const op of ["add_language", "remove_language", "set_language_status", "set_translations", "approve_translations", "confirm_translations", "set_language_routing", "set_glossary"]) assert.ok((SURVEY_ACTION_OPS as readonly string[]).includes(op), op);
+  /* the reply gate: a translation that drops the piping is refused by reason, the good one passes */
+  const r = coerceCopilotReply({ kind: "proposal", reply: "ok", actions: [{ op: "set_translations", language: "de", entries: [{ target: "FREQ", text: "Wie oft?" }] }, { op: "set_translations", language: "de" }] })!;
+  assert.equal(r.actions.length, 1); assert.equal(r.rejected.length, 1);
+  assert.match(r.rejected[0].reason, /entries/);
 });

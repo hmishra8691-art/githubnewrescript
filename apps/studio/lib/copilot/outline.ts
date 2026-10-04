@@ -1,5 +1,5 @@
 import type { SurveyDefinition } from "@rescript/schema";
-import { listBlocks, formatCondition, describeUxTarget, uxContextFor, inferQuestionAnalysis } from "@rescript/engine";
+import { listBlocks, formatCondition, describeUxTarget, uxContextFor, inferQuestionAnalysis, effectiveLocalization, lintLanguage, translatableElements, languageName } from "@rescript/engine";
 import { hypothesisLabel } from "@rescript/schema";
 import { surveyContext } from "../intelligent/context.ts";
 
@@ -14,7 +14,7 @@ import { surveyContext } from "../intelligent/context.ts";
  * questions in full and the rest by code, plus the named ones in full, so
  * the prompt stays bounded however large the survey is.
  */
-export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: string | null; focusIds?: string[]; ux?: boolean; analysis?: boolean } = {}): string {
+export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: string | null; focusIds?: string[]; ux?: boolean; analysis?: boolean; translation?: boolean } = {}): string {
   const n = def.questions.length;
   const base = surveyContext(def, { selectedId: opts.selectedId ?? null, focusIds: opts.focusIds ?? [], limit: n > 150 ? 60 : 150, textWidth: n > 150 ? 70 : 110 });
   const lines = [base];
@@ -87,5 +87,64 @@ export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: strin
       if (plan.segments.length) lines.push(`  segments: ${plan.segments.map((sg) => `${sg.name} (${sg.by.join(",")})`).join("; ")}`);
     } else lines.push("Analysis plan: none saved yet (propose_analysis_plan writes the engine's framework; set_analysis_plan writes yours).");
   }
+  /*
+   * THE LANGUAGES, on a translation turn: which versions exist and how far
+   * along each is, the glossary (what never translates, what is preferred),
+   * the routing — and for every question the request names, its elements
+   * with the existing translation and status in each language, so the model
+   * translates what is missing or outdated and leaves the approved alone.
+   */
+  if (opts.translation) {
+    const loc = effectiveLocalization(def);
+    const targets = loc.languages;
+    lines.push(`Source language: ${loc.sourceLanguage}${loc.sourceLocale ? ` (${loc.sourceLocale})` : ""}. Language versions: ${targets.length ? targets.map((l) => { const r = lintLanguage(def, l.code); const stale = r.issues.filter((i) => i.kind === "stale_source").length; return `${l.code}${l.locale ? `/${l.locale}` : ""} ${languageName(l.code, l)} (${l.status}${l.enabled ? "" : ", not offered"}; ${r.completion}% translated, ${r.missing} missing${stale ? `, ${stale} outdated` : ""}, ${r.approved} approved${l.notes ? `; notes: ${l.notes}` : ""})`; }).join("; ") : "none yet (add_language)"}`);
+    if (loc.glossary.length) lines.push(`Glossary: ${loc.glossary.slice(0, 60).map((g) => `${g.source}${g.doNotTranslate ? " (never translate)" : Object.keys(g.targets).length ? ` → ${Object.entries(g.targets).map(([l, t]) => `${l}: ${t}`).join(", ")}` : ""}`).join("; ")}`);
+    const r = loc.routing;
+    lines.push(`Language routing: order ${r.order.join(" → ")}; URL ?${r.urlParam}=; embedded field ${r.embeddedField}${Object.keys(r.countryMap).length ? `; countries ${Object.entries(r.countryMap).map(([c, l]) => `${c} → ${l}`).join(", ")}` : ""}${r.rules.length ? `; ${r.rules.length} rule${r.rules.length === 1 ? "" : "s"}` : ""}; switcher ${r.allowSwitch ? "on" : "off"}${r.fallback ? `; fallback ${r.fallback}` : ""}`);
+    if (targets.length) {
+      const els = translatableElements(def);
+      const focusSet = new Set(opts.focusIds ?? []);
+      const shown = els.filter((e) => (e.questionId ? focusSet.has(e.questionId) : focusSet.size === 0 || e.kind === "end_message" || e.kind === "survey_title"));
+      const budget = shown.slice(0, 400);
+      if (budget.length) {
+        lines.push(`Translatable elements${focusSet.size ? " of the named questions" : ""} (target → source | existing translations):`);
+        for (const e of budget) {
+          const t = targetFor(e);
+          const existing = targets.map((l) => { const x = loc.translations[l.code]?.[e.key]; return x && x.status !== "not_translated" && x.text.trim() ? `${l.code} [${x.status}] "${x.text.replace(/\s+/g, " ").slice(0, 160)}"` : `${l.code} —`; }).join(" · ");
+          lines.push(`  ${t} → "${e.source.replace(/\s+/g, " ").slice(0, 240)}" | ${existing}`);
+        }
+        if (shown.length > budget.length) lines.push(`  … and ${shown.length - budget.length} more elements (name the questions to see them)`);
+      }
+    }
+  }
   return lines.join("\n");
+}
+
+/** an element's key as the model addresses it: Q5, Q5.option:2, Q5.row:r1, meta:title, end:<id>, ui:required… */
+function targetFor(e: { key: string; questionCode?: string; code?: string; kind: string }): string {
+  const q = e.questionCode;
+  switch (e.kind) {
+    case "question_text": return q!;
+    case "question_instruction": return `${q}.instruction`;
+    case "question_description": return `${q}.description`;
+    case "question_placeholder": return `${q}.placeholder`;
+    case "option": return `${q}.option:${e.code}`;
+    case "option_alt": return `${q}.alt:${e.code}`;
+    case "row": return `${q}.row:${e.code}`;
+    case "row_placeholder": return e.key;
+    case "column": return `${q}.column:${e.code}`;
+    case "column_option": return `${q}.column:${(e.code ?? "").split(":")[0]}.option:${(e.code ?? "").split(":")[1]}`;
+    case "column_placeholder": return e.key;
+    case "scale_label": return `${q}.scale:${/left/i.test(e.key) ? "low" : "high"}`;
+    case "validation_message": return `${q}.validation:${Number(e.key.split(":").pop()) + 1}`;
+    case "probe_prompt": return `${q}.probe`;
+    case "survey_title": return "meta:title";
+    case "survey_description": return "meta:description";
+    case "end_message": return `end:${e.key.split(":")[1]}`;
+    case "page_title": return `block:${e.key.split(":")[1]}`;
+    case "quota_message": return e.key;
+    case "button": return `button:${e.key.split(":").pop()}`;
+    case "ui": return e.key;
+    default: return e.key;
+  }
 }

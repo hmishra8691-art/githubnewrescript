@@ -2537,4 +2537,8 @@ p.qs-help { margin: -2px 0 10px; }
 .cp-analysis { display: grid; gap: 14px; }
 .cp-analysis section { display: grid; gap: 6px; }
 .cp-analysis .iqi-table td { vertical-align: top; }
+/* the Languages tab: a completion bar per language, the outdated count in the warning colour */
+.cp-lang-bar { height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.cp-lang-bar span { display: block; height: 100%; background: var(--accent); transition: width .2s; }
+.cp-outdated { color: var(--amber); }
 .cp-analysis .cp-block { margin: 0; }

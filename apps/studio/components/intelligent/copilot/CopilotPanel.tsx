@@ -6,6 +6,7 @@ import { Icon } from "../../ui/Icon";
 import { structureRows, changeLabel, uxPreviewScope, type OutlineRow, type ProposalState } from "../../../lib/copilot/client";
 import { UxPreview } from "./UxPreview";
 import { AnalysisTab } from "./AnalysisTab";
+import { LanguagesTab } from "./LanguagesTab";
 import { Linked } from "./CopilotCard";
 import type { Copilot, PanelTab } from "./useCopilot";
 
@@ -23,6 +24,8 @@ import type { Copilot, PanelTab } from "./useCopilot";
  *   Research   the uploaded documents and their research cards
  *   History    AI Change #001 … with what each created, modified and
  *              removed, and Undo for the whole operation
+ *   Analysis   the analysis framework (AnalysisTab)
+ *   Languages  each language version's state and next step (LanguagesTab)
  *   Inspector  the object in focus (the existing inspector)
  */
 export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, applyNote, readOnly }: {
@@ -40,6 +43,7 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
     { id: "research", label: "Research", badge: copilot.docs.length || undefined },
     { id: "history", label: "History", badge: copilot.history.filter((h) => !h.reverted).length || undefined },
     { id: "analysis", label: "Analysis", badge: def.research?.analysisPlan ? (def.research.analysisPlan.crosstabs.length + def.research.analysisPlan.tests.length) || undefined : undefined },
+    { id: "languages", label: "Languages", badge: def.localization?.languages?.length || undefined },
     { id: "ux", label: "UX", badge: def.ux ? (def.ux.styles.length + def.ux.animations.length + def.ux.behaviors.length) || undefined : undefined },
     { id: "inspector", label: "Inspector" },
   ];
@@ -58,6 +62,7 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
         {copilot.tab === "research" && <ResearchTab copilot={copilot} />}
         {copilot.tab === "history" && <HistoryTab copilot={copilot} readOnly={readOnly} />}
         {copilot.tab === "analysis" && <AnalysisTab copilot={copilot} def={def} onSelect={onSelect} />}
+        {copilot.tab === "languages" && <LanguagesTab copilot={copilot} def={def} onSelect={onSelect} />}
         {copilot.tab === "ux" && <UxTab copilot={copilot} def={def} onSelect={onSelect} />}
         {copilot.tab === "inspector" && inspector}
       </div>
@@ -66,6 +71,12 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
 }
 
 /* ------------------------------------------------------------ changes */
+
+/** the languages named by the engine's "N translations are now outdated (de, es)" warning — or null */
+function outdatedLanguages(warnings: string[]): string | null {
+  for (const w of warnings) { const m = /now outdated \(([^)]+)\)/.exec(w); if (m) return m[1]; }
+  return null;
+}
 
 function ChangesTab({ copilot, onSelect, onApply, applyNote, readOnly }: { copilot: Copilot; def: SurveyDefinition; onSelect(id: string): void; onApply(): void; applyNote: string | null; readOnly: boolean }) {
   const st = copilot.state;
@@ -102,6 +113,12 @@ function ChangesTab({ copilot, onSelect, onApply, applyNote, readOnly }: { copil
         <div className="cp-block warn" data-testid="cp-new-problems">
           <div className="iq-label">The result would have {st.warnings.length} new problem{st.warnings.length === 1 ? "" : "s"}</div>
           <ul>{st.warnings.map((e, i) => <li key={i}><Linked text={e} def={st.after} onSelect={onSelect} /></li>)}</ul>
+          {outdatedLanguages(st.warnings) && (
+            <p className="iqi-dim" data-testid="cp-outdated-note">
+              The translations stay until re-translated or confirmed; in the meantime those respondents see the outdated text.{" "}
+              <button type="button" className="iq-btn" data-testid="cp-retranslate" disabled={copilot.busy || readOnly} onClick={() => void copilot.ask(`Re-translate the outdated translations in ${outdatedLanguages(st.warnings)} — the source text changed in this proposal.`)}>Re-translate them in this proposal</button>
+            </p>
+          )}
         </div>
       )}
       <div className="cp-structure-head">

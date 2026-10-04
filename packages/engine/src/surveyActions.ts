@@ -15,6 +15,8 @@ import { questionOrder, conditionRefs } from "./dependencies.js";
 import { applyUxAction, coerceUxAction, isUxOp, UX_ACTION_OPS, type UxAction } from "./uxActions.js";
 import { applyAnalysisAction, coerceAnalysisAction, describeAnalysisAction, isAnalysisOp, ANALYSIS_ACTION_OPS, type AnalysisAction } from "./analysisActions.js";
 import { describeAnalysisImpact } from "./analysisFramework.js";
+import { applyLocalizationAction, coerceLocalizationAction, describeLocalizationAction, isLocalizationOp, localizationRank, outdateTranslations, LOCALIZATION_ACTION_OPS, type LocalizationAction } from "./localizationActions.js";
+import { languageName } from "./localization.js";
 import { parsePunchExpression, formatPunchExpression } from "./autoPunch.js";
 import { authoringQuestionView } from "./carryforward.js";
 import { resolveOptionValue, describeOptions, type OptionList } from "./optionCodes.js";
@@ -98,7 +100,9 @@ export type SurveyAction =
   /* the survey's look and behaviour — see uxActions.ts; they write def.ux and nothing else */
   | UxAction
   /* the analysis framework — see analysisActions.ts; they write question.analysis and research.analysisPlan and nothing else */
-  | AnalysisAction;
+  | AnalysisAction
+  /* languages, translations, glossary and language routing — see localizationActions.ts; they write def.localization and nothing else */
+  | LocalizationAction;
 
 export const SURVEY_ACTION_OPS = [
   "create_block", "rename_block", "delete_block", "create_question", "update_question", "delete_question", "move_question",
@@ -106,6 +110,7 @@ export const SURVEY_ACTION_OPS = [
   "create_randomizer", "create_branch", "create_loop", "create_quota", "set_research", "add_punch", "remove_punches",
   ...UX_ACTION_OPS,
   ...ANALYSIS_ACTION_OPS,
+  ...LOCALIZATION_ACTION_OPS,
 ] as const;
 
 /** Friendly question types → the Studio variant that makes them. */
@@ -290,6 +295,8 @@ function coerceOne(item: unknown): SurveyAction | string {
       if (ux !== null) return ux;
       const an = op ? coerceAnalysisAction(op, o) : null;
       if (an !== null) return an;
+      const lc = op ? coerceLocalizationAction(op, o) : null;
+      if (lc !== null) return lc;
       return op ? `unknown action “${op}”` : "an action needs an op";
     }
   }
@@ -344,7 +351,8 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
   const results: ActionResult[] = [];
   // the research design names the questions that measure each construct, and UX targets name questions: both after the questions exist
   // …and the analysis framework names questions and constructs: after both
-  const rank = (a: SurveyAction) => (isAnalysisOp(a.op) ? 3 : a.op === "set_research" ? 2 : isUxOp(a.op) ? 1 : 0);
+  // …and translations name the question texts as they will be: last of all
+  const rank = (a: SurveyAction) => (isLocalizationOp(a.op) ? 4 + localizationRank(a.op) / 10 : isAnalysisOp(a.op) ? 3 : a.op === "set_research" ? 2 : isUxOp(a.op) ? 1 : 0);
   const order = actions.map((a, index) => ({ a, index })).sort((x, y) => rank(x.a) - rank(y.a));
   order.forEach(({ a, index }) => {
     const snapshot = structuredClone(def) as SurveyDefinition;
@@ -362,6 +370,14 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
     }
     def = ctx.def;
   });
+  /*
+   * TRANSLATIONS WHOSE SOURCE THIS BATCH CHANGED are marked outdated now, not
+   * discovered later in the Localization panel — and reported, so the
+   * researcher is asked whether to re-translate rather than finding German
+   * respondents reading last week's question.
+   */
+  const stale = outdateTranslations(def);
+  if (stale.outdated) ctx.uxWarnings.push(`${stale.outdated} translation${stale.outdated === 1 ? " is" : "s are"} now outdated (${stale.languages.join(", ")}) — the source text changed; ask to re-translate them, or confirm them in Localization.`);
   const parsed = SurveyDefinitionSchema.safeParse(def);
   results.sort((x, y) => x.index - y.index);
   const errors = results.filter((r) => !r.ok).map((r) => `${describeAction(actions[r.index])}: ${r.error}`);
@@ -746,6 +762,12 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
     default: {
       // the analysis framework: question.analysis and research.analysisPlan only, every variable resolved
       if (isAnalysisOp(a.op)) return applyAnalysisAction(def, a as AnalysisAction, { question: (x) => tryQuestion(ctx, x), ids: ctx.ids, now: ctx.now });
+      // the languages: def.localization only; every target resolved, every translation checked against its source
+      if (isLocalizationOp(a.op)) {
+        const r = applyLocalizationAction(def, a as LocalizationAction, { question: (x) => tryQuestion(ctx, x), condition: (c) => parseCondition(def, withRefs(ctx, c)), ids: ctx.ids, now: ctx.now });
+        ctx.uxWarnings.push(...r.warnings);
+        return r;
+      }
       // the look and behaviour: def.ux only, through the UX gate
       const r = applyUxAction(def, a as UxAction, { lookups: { question: (x) => tryQuestion(ctx, x), block: (x) => tryBlock(ctx, x) }, ids: ctx.ids, now: ctx.now, refs: ctx.uxRefs });
       ctx.uxWarnings.push(...r.warnings);
@@ -1094,7 +1116,7 @@ export function describeAction(a: SurveyAction): string {
     case "set_theme": return a.label ? `Theme “${a.label}”` : "Change the theme";
     case "set_custom_html": return a.html === null ? `Remove the custom HTML of ${a.target}` : `Custom HTML on ${a.target}`;
     case "set_default_value": return a.value === null ? `Remove the default value of ${a.target}` : `Default value of ${a.target}: ${Array.isArray(a.value) ? a.value.join(", ") : a.value}`;
-    default: return describeAnalysisAction(a as AnalysisAction);
+    default: return isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
   }
 }
 
@@ -1185,6 +1207,7 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
   const designOf = (d: SurveyDefinition) => { const r = d.research; return r ? JSON.stringify({ ...r, analysisPlan: undefined }) : null; };
   const researchChanged = designOf(before) !== designOf(after);
   const planLines = analysisPlanDiff(before.research?.analysisPlan, after.research?.analysisPlan);
+  const langLines = localizationDiff(before, after);
   const ux = diffUx(before, after);
   const theme = diffTheme(before.branding, after.branding);
   const randomizedAdded = after.questions.filter((q) => q.randomization?.enabled && !bq.get(q.id)?.randomization?.enabled).length;
@@ -1215,6 +1238,7 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
     sRemoved ? `Remove ${n(sRemoved, "skip condition")}` : "",
     researchChanged ? "Record the research design (objective, hypotheses, constructs)" : "",
     ...planLines,
+    ...langLines,
     ...(theme.length ? [`Theme: ${theme.slice(0, 6).join("; ")}${theme.length > 6 ? ` and ${theme.length - 6} more` : ""}`] : []),
     ...ux.added.map((x) => `Add ${x.kind} “${x.label}” on ${x.target}`),
     ...ux.changed.map((x) => `Change ${x.kind} “${x.label}” on ${x.target}`),
@@ -1273,6 +1297,36 @@ function analysisPlanDiff(before: AnalysisPlan | undefined, after: AnalysisPlan 
   const addedD = [...ad].filter((k) => !bd.has(k)), removedD = [...bd].filter((k) => !ad.has(k));
   if (addedD.length) out.push(`Plan derived variable${addedD.length === 1 ? "" : "s"} ${addedD.join(", ")}`);
   if (removedD.length) out.push(`Remove the planned derived variable${removedD.length === 1 ? "" : "s"} ${removedD.join(", ")}`);
+  return out;
+}
+
+/** the languages, translations, glossary and routing: what changed, as summary lines */
+function localizationDiff(before: SurveyDefinition, after: SurveyDefinition): string[] {
+  const b = before.localization, a = after.localization;
+  if (!b && !a) return [];
+  const out: string[] = [];
+  const bl = new Set((b?.languages ?? []).map((l) => l.code)), al = new Set((a?.languages ?? []).map((l) => l.code));
+  for (const l of al) if (!bl.has(l)) out.push(`Add ${languageName(l, a!.languages.find((x) => x.code === l))} as a language`);
+  for (const l of bl) if (!al.has(l)) out.push(`Remove the ${languageName(l, b!.languages.find((x) => x.code === l))} version`);
+  for (const l of al) {
+    const bc = (b?.languages ?? []).find((x) => x.code === l), ac = a!.languages.find((x) => x.code === l)!;
+    if (bc && (bc.status !== ac.status || bc.enabled !== ac.enabled)) out.push(`${languageName(l, ac)}: ${bc.status !== ac.status ? ac.status : ""}${bc.enabled !== ac.enabled ? `${bc.status !== ac.status ? ", " : ""}${ac.enabled ? "offered" : "not offered"}` : ""}`);
+    const bt = b?.translations?.[l] ?? {}, at = a?.translations?.[l] ?? {};
+    let written = 0, approved = 0, confirmed = 0;
+    for (const [k, t] of Object.entries(at)) {
+      const p = bt[k];
+      if (!p || p.text !== t.text) { if (t.text.trim() && t.status !== "not_translated") written++; continue; }
+      // a confirmation re-stamps the source hash without changing the text — whether the stale state was stored ("outdated") or only detected (the hash no longer matched)
+      if (p.sourceHash !== t.sourceHash && (p.status === "outdated" || t.status === "edited")) { confirmed++; continue; }
+      if (p.status !== t.status && (t.status === "approved" || t.status === "reviewed")) approved++;
+    }
+    if (written) out.push(`Translate ${written} element${written === 1 ? "" : "s"} into ${languageName(l, ac)}`);
+    if (approved) out.push(`Approve ${approved} ${languageName(l, ac)} translation${approved === 1 ? "" : "s"}`);
+    if (confirmed) out.push(`Confirm ${confirmed} outdated ${languageName(l, ac)} translation${confirmed === 1 ? "" : "s"}`);
+  }
+  if (JSON.stringify(b?.routing ?? null) !== JSON.stringify(a?.routing ?? null)) out.push("Change the language routing");
+  const bg = (b?.glossary ?? []).length, ag = (a?.glossary ?? []).length;
+  if (JSON.stringify(b?.glossary ?? []) !== JSON.stringify(a?.glossary ?? [])) out.push(ag > bg ? `Add ${ag - bg} glossary term${ag - bg === 1 ? "" : "s"}` : ag < bg ? `Remove ${bg - ag} glossary term${bg - ag === 1 ? "" : "s"}` : "Change the glossary");
   return out;
 }
 

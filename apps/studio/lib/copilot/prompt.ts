@@ -1,5 +1,5 @@
 import type { SurveyDefinition } from "@rescript/schema";
-import { coerceSurveyActions, type SurveyAction } from "@rescript/engine";
+import { coerceSurveyActions, listBlocks, type SurveyAction } from "@rescript/engine";
 
 /**
  * THE COPILOT'S CONTRACT WITH THE MODEL.
@@ -69,8 +69,9 @@ ACTIONS (each an object with "op"; use only these):
 {"op":"add_punch","target":"SEGMENT","when":"Q3 = 1 AND (Q5 = 2 OR Q5 = 3)","codes":[2]}   // PUNCHING / coding: when the criteria hold, code the target — a choice target takes option codes, a numeric/text/hidden one {"value":…}; or {"op":"add_punch","expression":"IF Q3 = 1 THEN SET SEGMENT = 2"}; add "mode":"else_if"/"else" for a chain
 {"op":"remove_punches","target":"SEGMENT"}   // or with "id" for one rule
 {"op":"set_research","objective":"...","hypotheses":["..."],"population":"...","methodology":"...","constructs":[{"name":"...","role":"independent","definition":"...","questions":["EXPOSE"]}],"analysis":["..."],"assumptions":["..."],"sources":["document names"]}
-THE ANALYSIS FRAMEWORK is planned BEFORE fieldwork, as actions too (full shapes in the ANALYSIS GUIDE, included when a request is about analysis, hypotheses, variables, crosstabs or tests): set_question_analysis (a question's role — dependent|independent|mediator|moderator|control|segmentation|screening|descriptive — its measurement, how it is reported, what it is tabulated against, the hypotheses H1, H2… it serves), propose_analysis_plan (the engine's own plan), set_analysis_plan / add_crosstab / add_analysis_test / add_derived_variable (and remove_…). When you GENERATE a survey from a hypothesis, tag the outcome and predictor questions with set_question_analysis and add {"op":"propose_analysis_plan"} so the design arrives with its analysis.
-LOOK AND BEHAVIOUR — the theme (colours, fonts, background image, cards, options, radios, inputs, spacing, per-device sizes), styling, CSS, custom HTML, animations, transitions, layout, responsive rules, interactions, JavaScript behaviour — are ALSO actions: set_theme, set_custom_html, set_default_value (a question's starting answer), create_style / update_style / remove_style, create_animation / update_animation / remove_animation, create_behavior / update_behavior / remove_behavior, create_responsive_rule, attach_behavior_to_question|option|block|page. Rescript supports them: never answer that the platform cannot style, animate or script a survey. Their full shapes are in the UX GUIDE, which is included whenever a request is about how the survey looks or behaves.
+LANGUAGES are actions too (shapes in the TRANSLATION GUIDE, sent with requests about languages): add_language, set_translations (YOU write each translation, keeping every {{pipe}}, HTML tag and do-not-translate term exactly), approve_translations, confirm_translations, set_language_routing, set_glossary. Codes and logic never change.
+THE ANALYSIS FRAMEWORK is planned BEFORE fieldwork, as actions too (shapes in the ANALYSIS GUIDE, sent with requests about analysis, hypotheses, variables, crosstabs or tests): set_question_analysis (role dependent|independent|mediator|moderator|control|segmentation|screening|descriptive, measurement, reporting, crosstab banner, hypotheses H1, H2…), propose_analysis_plan (the engine's plan), set_analysis_plan / add_crosstab / add_analysis_test / add_derived_variable (and remove_…). When you GENERATE from a hypothesis, tag the outcome and predictors with set_question_analysis and add {"op":"propose_analysis_plan"}.
+LOOK AND BEHAVIOUR — the theme (colours, fonts, background image, cards, options, radios, inputs, spacing, per-device sizes), styling, CSS, custom HTML, animations, transitions, layout, responsive rules, interactions, JavaScript behaviour — are ALSO actions: set_theme, set_custom_html, set_default_value (a question's starting answer), create_style / update_style / remove_style, create_animation / update_animation / remove_animation, create_behavior / update_behavior / remove_behavior, create_responsive_rule, attach_behavior_to_question|option|block|page. Rescript supports them — never say the platform cannot style, animate or script a survey. Full shapes in the UX GUIDE, sent with requests about how the survey looks or behaves.
 
 REFS. Give every new question a "ref" that reads as a variable name (AGE, BUY_6M, TRUST_1). The ref becomes its variable, so conditions, calculations and piping can use it in the same batch: "BUY_6M = 2", "{{BRAND}}". A new question's options are coded 1, 2, 3… in the order written ("None of these" 99, "Other" the next free code). Existing questions are named by their CODE or VARIABLE from the outline; never invent a code that is not in the outline or created in this batch.
 
@@ -237,6 +238,36 @@ ACTIONS:
 {"op":"add_derived_variable","name":"TRUST_SCORE","kind":"mean_score|sum_score|top_box|bottom_box|recode|count|flag|index","from":["TRUST_1","TRUST_2"],"expression":"optional calc expression"}  /  {"op":"remove_derived_variable","name":"TRUST_SCORE"}
 "Show me the most important crosstabs" is a question: answer from the outline's plan (priority 1, hypothesis-linked first) — no actions. "Which method should I use for X" is a question: weigh rating, ranking, MaxDiff, conjoint, TURF, pricing methods, driver analysis and name the trade-offs (length, discrimination, price trade-offs, sample) — propose a change only if asked.`;
 
+/**
+ * THE TRANSLATION GUIDE — sent with a request about languages. The model IS
+ * the translator here (it reads research terminology and context the way a
+ * word-for-word engine does not), and the engine is the checker: every
+ * target is resolved against the survey, every translation must keep its
+ * pipes, placeholders, HTML and do-not-translate terms, approved wordings
+ * are kept unless the researcher says to overwrite them, and nothing but
+ * `localization` changes.
+ */
+export const COPILOT_TRANSLATION_GUIDE = `TRANSLATION GUIDE.
+The survey has ONE source language (given above). A language version is translations of each ELEMENT: question text, instruction, each option (by code), each row and column, scale labels, validation messages, the end messages, the interface strings (ui:required …). Only the wording changes: codes, variables, logic, piping, randomization, quotas and analysis are the same in every language.
+Targets (in set_translations entries): "Q5" (its text), "Q5.instruction", "Q5.option:2" or "Q5.option:<label>", "Q5.row:r1" / "Q5.row:<label>", "Q5.column:<label>", "Q5.scale:low|high", "Q5.validation:1", "meta:title", "meta:description", "block:<title>", "end:complete", "ui:required", "ui:review_errors", "button:next|back|submit".
+Rules you must keep, or the engine refuses the entry: every {{pipe}} and {placeholder} token exactly as in the source (same count, same spelling); the same HTML tags, balanced; never an empty text; glossary terms marked do-not-translate (brand names) exactly as written; the glossary's preferred wording for a term. Translate for a questionnaire: natural, the register the language's notes ask for (formal "Sie" / "usted" unless told otherwise), the same meaning and the same scale anchors in order, options kept distinct from each other, units and date/number conventions as the locale writes them. Do not "localize" the research meaning — a 5-point agreement scale stays a 5-point agreement scale.
+Scope: "translate this section / block" means every element of every question in it; "translate the survey" means every element the outline shows; "translate Q5" means its text, instruction, options and rows. The outline lists the languages the survey has, their completion, and — on a translation turn — each named question's elements with any existing translation and status (approved ones are kept unless the researcher asks to overwrite: add "overwriteApproved": true only then). Translate the OUTDATED ones when asked to re-translate; confirm_translations when the researcher says the old wording still fits.
+ACTIONS:
+{"op":"add_language","code":"de","locale":"de-DE","country":"DE","notes":"formal register"}
+{"op":"set_translations","language":"de","entries":[{"target":"Q5","text":"Wie wahrscheinlich ist es, dass Sie {{BRAND}} kaufen?"},{"target":"Q5.option:1","text":"Sehr unwahrscheinlich"},{"target":"Q5.instruction","text":"Bitte eine Antwort auswählen"}],"status":"ai"}
+{"op":"approve_translations","language":"de","targets":["Q5","Q5.option:1"]}   // without targets: every translated element; "status":"reviewed" for review only
+{"op":"confirm_translations","language":"de","targets":["Q5"]}   // outdated → still fits the new source
+{"op":"set_language_status","code":"de","status":"ready|live|draft|in_review","enabled":true}   // ready/live are refused while blocking issues remain
+{"op":"set_language_routing","countryMap":{"US":"en","MX":"es","DE":"de"},"urlParam":"lang","fallback":"en","allowSwitch":true,"rules":[{"when":"COUNTRY = 3","language":"de","label":"German residents"}],"order":["url","embedded","country","rules","browser","respondent"]}
+{"op":"set_glossary","entries":[{"source":"Brand A","doNotTranslate":true},{"source":"purchase intention","targets":{"de":"Kaufabsicht","es":"intención de compra"}}],"remove":["old term"]}
+{"op":"remove_language","code":"de"}   // destructive: the researcher confirms
+Questions ("which languages are missing text?", "what is outdated in German?") are answered from the outline — no actions.`;
+
+/** a request about languages, translation or localization — the guide goes with it */
+export function translationIntent(text: string): boolean {
+  return /\b(?:translat\w*|localis\w*|localiz\w*|languages?|multilingual|bilingual|glossary|do[- ]not[- ]translate|spanish|french|german|hindi|japanese|arabic|chinese|portuguese|italian|dutch|korean|russian|turkish|welsh|tamil|telugu|bengali|marathi|gujarati|urdu|polish|swedish|in (?:german|spanish|french|hindi)|routing|rout(?:e|ing)\b.*\b(?:language|to (?:en|es|fr|de|hi|pt|it|nl|ja|zh|ar|ko|ru|tr|pl|sv)\b)|respondents? (?:get|see) (?:the )?(?:english|spanish|french|german)|language (?:selector|switch)|rtl)\b/i.test(text);
+}
+
 /** a request about the analysis framework — the guide goes with it */
 export function analysisIntent(text: string): boolean {
   return /\b(?:analy[sz]\w*|crosstabs?|cross[- ]tabs?|banner|hypothes\w*|dependent|independent|moderat\w*|mediat\w*|regression|correlat\w*|chi[- ]?square|t[- ]tests?|anova|significan\w*|drivers?|top[- ]?2?[- ]?box|derived variables?|segment(?:ation)? variables?|variable roles?|measurement levels?|statistical|which (?:test|method)|methodolog\w*|maxdiff or|conjoint or)\b/i.test(text);
@@ -302,6 +333,8 @@ export function copilotUserPrompt(input: {
   themeOnly?: boolean;
   /** the request is about the analysis framework: the guide goes with it */
   analysis?: boolean;
+  /** the request is about languages: the translation guide goes with it */
+  translation?: boolean;
 }): string {
   const parts: string[] = [];
   parts.push(`Survey language: ${input.surveyLanguage}`);
@@ -313,6 +346,7 @@ export function copilotUserPrompt(input: {
   if (input.selected) parts.push(`Selected in the Studio: ${input.selected}`);
   if (input.ux) parts.push(COPILOT_UX_GUIDE);
   if (input.analysis) parts.push(COPILOT_ANALYSIS_GUIDE);
+  if (input.translation) parts.push(COPILOT_TRANSLATION_GUIDE);
   if (input.uxOnly) parts.push("THIS REQUEST IS LOOK-AND-BEHAVIOUR ONLY: propose UX actions only. Any structural action (questions, options, logic, validation, blocks, punch rules, variables) will be refused. If the researcher also needs such a change, say in one sentence that they can ask for it as its own request in this same chat (for example “Code SEGMENT as 1 when Q3 = 1”) — there is no other mode or session to switch to.");
   if (input.themeOnly) parts.push("THIS IS THE THEME: answer with one set_theme action covering everything the request implies (colours with readable contrast, fonts, background, cards, options, controls, inputs, spacing, phone sizes). Its values become the survey's Branding settings, which the researcher then adjusts by hand.");
   if (input.themeImage) parts.push(input.themeImage);
@@ -329,5 +363,12 @@ export function surveyLanguageOf(def: SurveyDefinition): string {
 /** question codes and variables a message names — the outline shows these in full */
 export function referencedQuestions(def: SurveyDefinition, message: string): string[] {
   const words = new Set((message.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? []).map((w) => w.toLowerCase()));
-  return def.questions.filter((q) => words.has(String(q.code).toLowerCase()) || words.has(q.variableName.toLowerCase())).map((q) => q.id);
+  const ids = def.questions.filter((q) => words.has(String(q.code).toLowerCase()) || words.has(q.variableName.toLowerCase())).map((q) => q.id);
+  // a named block or section ("translate the Brand section into German") focuses every question in it
+  const t = message.toLowerCase();
+  for (const b of listBlocks(def.flow as unknown[])) {
+    const title = (b.title ?? "").trim().toLowerCase();
+    if (title.length >= 3 && new RegExp(`(?<![\\p{L}\\p{N}])${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, "u").test(t)) for (const p of b.pages) for (const id of p.node.questionIds) if (!ids.includes(id)) ids.push(id);
+  }
+  return ids;
 }

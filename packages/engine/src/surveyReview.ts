@@ -7,6 +7,7 @@ import { questionOrder } from "./dependencies.js";
 import type { SurveyAction } from "./surveyActions.js";
 import { reviewUx } from "./ux.js";
 import { reviewAnalysisPlan } from "./analysisFramework.js";
+import { lintLocalization } from "./localization.js";
 
 /**
  * "REVIEW MY SURVEY" — the part of a survey review that is a matter of fact.
@@ -36,7 +37,7 @@ import { reviewAnalysisPlan } from "./analysisFramework.js";
 export type ReviewSeverity = "critical" | "warning" | "suggestion";
 export interface ReviewFinding {
   severity: ReviewSeverity;
-  category: "logic" | "reachability" | "structure" | "wording" | "options" | "scales" | "duplicates" | "length" | "screening" | "sequencing" | "hypothesis" | "analysis" | "ux";
+  category: "logic" | "reachability" | "structure" | "wording" | "options" | "scales" | "duplicates" | "length" | "screening" | "sequencing" | "hypothesis" | "analysis" | "ux" | "localization";
   message: string;
   questionIds: string[];
   suggestion?: string;
@@ -103,6 +104,22 @@ export function reviewSurvey(def: SurveyDefinition): SurveyReview {
 
   /* the analysis framework against the survey: dead references, tests on the wrong level, untested hypotheses */
   for (const i of reviewAnalysisPlan(def)) add({ severity: i.level, category: /hypothes/i.test(i.message) ? "hypothesis" : "analysis", message: i.message, questionIds: i.questionIds, ...(i.suggestion ? { suggestion: i.suggestion } : {}) });
+
+  /* the languages: a version respondents can be routed to must be complete and intact */
+  for (const rep of lintLocalization(def)) {
+    if (rep.language === (def.localization?.sourceLanguage ?? "en")) continue;
+    const by = (kind: string) => rep.issues.filter((i) => i.kind === kind);
+    const ids = (xs: { questionId?: string }[]) => [...new Set(xs.map((x) => x.questionId).filter((x): x is string => !!x))];
+    const missing = by("missing"), stale = by("stale_source"), pipes = by("placeholder_mismatch"), dup = by("duplicate"), same = by("untranslated"), incons = by("inconsistent"), html = by("html_mismatch");
+    const live = (def.localization?.languages ?? []).find((l) => l.code === rep.language)?.status === "live";
+    if (missing.length) add({ severity: live ? "critical" : "warning", category: "localization", message: `${rep.name}: ${missing.length} element${missing.length === 1 ? " has" : "s have"} no translation (${rep.completion}% complete)${live ? " — and the language is live" : ""}.`, questionIds: ids(missing), suggestion: `Ask “translate the missing ${rep.name} text”, or translate in Localization.` });
+    if (stale.length) add({ severity: "warning", category: "localization", message: `${rep.name}: ${stale.length} translation${stale.length === 1 ? " is" : "s are"} outdated — the source text changed after they were made.`, questionIds: ids(stale), suggestion: `Ask “re-translate the outdated ${rep.name} text”, or confirm them in Localization.` });
+    if (pipes.length) add({ severity: "critical", category: "localization", message: `${rep.name}: ${pipes.length} translation${pipes.length === 1 ? "" : "s"} lost or changed a piping token — respondents would see a gap or a wrong value.`, questionIds: ids(pipes) });
+    if (dup.length) add({ severity: "critical", category: "localization", message: `${rep.name}: ${dup.map((d) => d.message).join(" ")}`, questionIds: ids(dup) });
+    if (html.filter((i) => i.blocking).length) add({ severity: "critical", category: "localization", message: `${rep.name}: ${html.filter((i) => i.blocking).length} translation${html.filter((i) => i.blocking).length === 1 ? " has" : "s have"} unbalanced HTML.`, questionIds: ids(html) });
+    if (same.length) add({ severity: "suggestion", category: "localization", message: `${rep.name}: ${same.length} translation${same.length === 1 ? " is" : "s are"} identical to the source — still in the original language?`, questionIds: ids(same) });
+    if (incons.length) add({ severity: "suggestion", category: "localization", message: `${rep.name}: ${incons.map((i) => i.message).slice(0, 3).join(" ")}${incons.length > 3 ? ` (+${incons.length - 3} more)` : ""}`, questionIds: ids(incons), suggestion: "Add the term to the glossary so every occurrence uses one wording." });
+  }
 
   /* ---------------------------------------------------------- warnings */
   for (const q of asked) {
