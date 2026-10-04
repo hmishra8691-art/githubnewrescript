@@ -216,3 +216,25 @@ export { formatBytes } from "./mediaFormat.ts";
 
 export const FAMILY_LABEL: Record<AssetSummary["family"], string> = { image: "Image", video: "Video", audio: "Audio", document: "Document" };
 export const FAMILY_ICON: Record<AssetSummary["family"], string> = { image: "🖼", video: "🎬", audio: "🎧", document: "📄" };
+
+/**
+ * SAVE A GOOGLE DRIVE FILE INTO THE ASSET LIBRARY (1-10-26 review).
+ *
+ * A Drive link plays in Drive's own viewer and has to be pasted again every
+ * time it is used. The server copies the file (it must be shared "Anyone
+ * with the link") into this survey's library, where it is an ordinary asset:
+ * chosen from the library, reused anywhere, served without Drive's frame.
+ */
+export async function importDriveAsset(surveyDbId: string, url: string, opts: { altText?: string; displayName?: string } = {}): Promise<UploadOutcome | UploadFailure> {
+  try {
+    const r = await fetch(`/api/surveys/${surveyDbId}/media/import`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url, altText: opts.altText, displayName: opts.displayName }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.asset) return { ok: false, error: j.error ?? `The file could not be saved (${r.status}).` };
+    return { ok: true, asset: j.asset as AssetSummary, duplicate: !!j.duplicate };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message || "The file could not be saved." };
+  }
+}

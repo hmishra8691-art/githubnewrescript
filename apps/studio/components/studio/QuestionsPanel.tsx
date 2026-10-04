@@ -85,6 +85,8 @@ import {
   stripHtmlText, referencesTo, referencesToMany, pruneReferencesToMany,
   PIPE_TOKEN_RE,
   resolveMediaUrl,
+  questionMediaList,
+  legacyQuestionMediaHtml,
   effectiveScale,
   PHONE_FORMATS,
   POSTAL_FORMATS,
@@ -432,7 +434,11 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
           {showImage && (
             <div className="opt-meta" style={{ width: 200, maxWidth: 200 }}>
               <MediaUrlInput compact placeholder="image URL" testId={`option-image-${i}`} questionId={questionId} accept={["image"]}
-                value={o.imageUrl} onChange={(v) => set(i, { imageUrl: v })} />
+                value={o.imageUrl} onChange={(v) => set(i, { imageUrl: v })}
+                customize={{
+                  display: o.imageDisplay, alt: o.imageAlt, label: o.label,
+                  onApply: (imageUrl, imageDisplay, imageAlt) => set(i, { imageUrl, imageDisplay, imageAlt }),
+                }} />
             </div>
           )}
           {metaFields.map((mf) => {
@@ -1068,7 +1074,7 @@ export function QuestionEditor({ q }: { q: Question }) {
       </div>
 
       <label className="f"><span>Question text — rich text, HTML and piping ({"{{Q1}}"}) supported</span></label>
-      <RichTextEditor value={q.text} autoFocusId={`qtext_${q.id}`} questionId={q.id}
+      <RichTextEditor value={q.text} autoFocusId={`qtext_${q.id}`} questionId={q.id} mediaPlacement
         onChange={(html) => patch({ text: html })}
         placeholder="e.g. Earlier you selected {{Q1}}. Why did you choose {{Q1.first}}?" />
       <div className="row" style={{ alignItems: "flex-start" }}>
@@ -1084,10 +1090,30 @@ export function QuestionEditor({ q }: { q: Question }) {
             <option value="0">optional</option><option value="1">required</option>
           </select></label>
       </div>
-      {!MEDIA_OWNING.has(variantDef?.renderer ?? `base:${q.type}`) && (
-        <>
+      {/*
+        * ONE PLACE FOR MEDIA (1-10-26 review). The separate "Media shown under
+        * the question text" field is retired: pictures, video, audio and
+        * players go in through the question text's Insert media, with their
+        * own size, alignment and position. A question that already has media
+        * here keeps it — drawn exactly as before — and this card offers to
+        * move it into the text; the old editor stays until it is moved.
+        */}
+      {!MEDIA_OWNING.has(variantDef?.renderer ?? `base:${q.type}`) && questionMediaList(q).length > 0 && (
+        <div className="card" data-testid="legacy-media" style={{ padding: 10, margin: "8px 0", borderStyle: "dashed" }}>
+          <div className="row" style={{ alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+            <span style={{ fontSize: 13 }}>
+              This question has media under its text from the older media field. Media now goes in through
+              <b> Insert media</b> (🖼) in the question text, where each item has its own size, alignment and position.
+            </span>
+            <button type="button" className="btn small primary" data-testid="legacy-media-move"
+              onClick={() => {
+                const html = legacyQuestionMediaHtml(q);
+                /* one edit, so one undo puts it back */
+                patch({ text: `${q.text ?? ""}${html}`, settings: { ...q.settings, mediaUrl: undefined, mediaItems: undefined, mediaLayout: undefined, mediaDisplay: undefined } });
+              }}>Move into the question text</button>
+          </div>
           <MediaListEditor q={q} patchSettings={patchSettings}
-            label="Media — shown under the question text (image, video, YouTube or Google Drive URL)" />
+            label="Media — shown under the question text (older field)" />
           {q.settings.mediaUrl && resolveMediaUrl(q.settings.mediaUrl).kind !== "embed" && (
             <details className="qs-details" data-testid="question-media-display" open={!!q.settings.mediaDisplay}>
               <summary>Size, fit &amp; playback</summary>
@@ -1097,7 +1123,7 @@ export function QuestionEditor({ q }: { q: Question }) {
                 onChange={(mediaDisplay) => patchSettings({ mediaDisplay })} />
             </details>
           )}
-        </>
+        </div>
       )}
       {(q.options.length > 0 || q.type === "open_text" || q.type === "long_text" || q.type === "numeric") && (
         <AttentionCheckEditor q={q} patch={patch} />

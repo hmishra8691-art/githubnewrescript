@@ -20,6 +20,7 @@ import { getQuestion, lookupAnswer, loopKeySuffix } from "./state.js";
 import { resolvePiping, registerDisplayedOptionsResolver, registerEffectiveRowsResolver } from "./piping.js";
 import { evaluateSetExpr, LIST_ACTIONS } from "./setExpression.js";
 import { sanitizeHtml, stripHtmlText } from "./html.js";
+import { unescapeHtml } from "./mediaDisplay.js";
 
 /**
  * A LABEL IS RENDERED AS HTML EVERYWHERE — every variant hands option, row
@@ -1426,7 +1427,8 @@ function runOptions(
   options = options.map((o) => {
     let next = o;
     if (o.label.includes("{{")) next = { ...next, label: resolvePiping(o.label, ctx) };
-    if (o.imageUrl?.includes("{{")) next = { ...next, imageUrl: resolvePiping(o.imageUrl, ctx) };
+    /* a URL, not HTML: the piped value comes back escaped for HTML, and `&amp;` in a src is a broken query string */
+    if (o.imageUrl?.includes("{{")) next = { ...next, imageUrl: unescapeHtml(resolvePiping(o.imageUrl, ctx)) };
     if (next.label.includes("<")) next = { ...next, label: safeLabel(next.label) };
     return next;
   });
@@ -1549,7 +1551,8 @@ export function resolveQuestionMedia(
   q: Question,
   ctx: EvalContext,
 ): { imageUrl?: string; mediaUrl?: string; mediaItems?: NonNullable<Question["settings"]["mediaItems"]> } {
-  const pipe = (u?: string) => (u && u.includes("{{") ? resolvePiping(u, ctx) : u);
+  /* unescaped: these are URLs handed to `src`, which React escapes itself */
+  const pipe = (u?: string) => (u && u.includes("{{") ? unescapeHtml(resolvePiping(u, ctx)) : u);
   const items = q.settings.mediaItems;
   const piped = items?.some((m) => m.url.includes("{{")) ? items.map((m) => ({ ...m, url: pipe(m.url) ?? "" })) : items;
   return { imageUrl: pipe(q.settings.imageUrl), mediaUrl: pipe(q.settings.mediaUrl), ...(items ? { mediaItems: piped } : {}) };

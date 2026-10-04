@@ -105,3 +105,5 @@ audio.rs-embed, audio.rs-audio { display: block; width: 100%; max-width: 480px; 
 .rs-qmedia-item > .rs-embed, .rs-qmedia-item img.rs-embed { max-width: 100%; }
 @media (max-width: 480px) { .rs-qmedia-horizontal > .rs-qmedia-item { flex-basis: 100%; } }
 img.rs-piped-image { display: block; max-width: 100%; height: auto; margin: 6px 0; border-radius: calc(var(--rs-radius, 12px) - 4px); }
+/* a YouTube / Vimeo / Drive player placed in question text (Insert media → embed) */
+.rs-embed-inline { max-width: 100%; margin: 6px 0; }

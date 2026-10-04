@@ -30,6 +30,10 @@ export const MediaDisplay = z.object({
   keepRatio: z.boolean().optional(),
   /** scale down on narrow screens (max-width: 100%) — default on */
   responsive: z.boolean().optional(),
+  /** space inside the picture's box, around it (CSS padding) */
+  padding: Length,
+  /** space above and below the picture (vertical margin) */
+  spacing: Length,
   /* ---- video / audio */
   autoplay: z.boolean().optional(),
   controls: z.boolean().optional(),

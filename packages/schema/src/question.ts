@@ -226,6 +226,12 @@ export const Option = z.object({
    * picture says something the label does not.
    */
   imageAlt: z.string().optional(),
+  /**
+   * How this option's picture is sized, aligned and spaced (1-10-26 review):
+   * set in the image pop-up that opens after Choose / Upload. Absent = the
+   * variant's own stylesheet decides, exactly as before this existed.
+   */
+  imageDisplay: MediaDisplay.optional(),
   flags: OptionFlags,
   /** Show this option only when the condition holds. */
   visibleIf: Condition.optional(),

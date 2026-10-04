@@ -2505,3 +2505,29 @@ p.qs-help { margin: -2px 0 10px; }
 .ax-export-tile:disabled { opacity: .5; cursor: not-allowed; }
 .ax-export-k { font-weight: 650; font-size: 14.5px; color: var(--c-text); }
 .ax-export-d { font-size: 12.5px; color: var(--c-text-3); line-height: 1.4; }
+
+/* ---------- Insert media (1-10-26): several items, position, live preview ---------- */
+.mins-items { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; align-items: center; }
+.mins-item { display: inline-flex; align-items: center; gap: 0; border: 1px solid var(--border); border-radius: 8px; padding: 1px; }
+.mins-item.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.mins-preview { display: flex; flex-direction: column; gap: 6px; }
+.mins-preview-media { width: 100%; }
+.mins-preview-media video, .mins-preview-media audio { max-width: 100%; }
+.mins-preview-media .rs-embed-frame iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; background: #0b1120; border-radius: 6px; }
+.mins-preview-text { font-weight: 600; color: var(--subtle); background: var(--panel2); border-radius: 6px; padding: 4px 8px; font-size: 13px; }
+/* a player in the editor is a labelled box until the respondent's page makes it a player */
+.rte-surface [data-rs-media="embed"] {
+  display: block; box-sizing: border-box; min-height: 64px; padding: 18px 12px; border: 2px dashed var(--accent); border-radius: 8px;
+  background: var(--panel2); color: var(--accent); font-weight: 600; font-size: 13px; text-align: center; cursor: pointer; max-width: 100%;
+}
+/* a piped picture has no URL until a respondent arrives — show where it goes */
+.rte-surface img[src*="{{"], .rte-surface img[src*="%7B%7B"] {
+  min-width: 120px; min-height: 48px; outline: 2px dashed var(--accent); outline-offset: -2px; background: var(--panel2);
+}
+/* ---------- the option image pop-up (1-10-26) ---------- */
+.imgc-body { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 16px; margin-top: 8px; }
+.imgc-frame { border: 1px solid var(--border); border-radius: 10px; padding: 10px; background: #fff; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+.imgc-frame img { max-width: 100%; }
+.imgc-label { font-size: 14px; color: #0f172a; }
+.imgc-piped { box-sizing: border-box; min-height: 60px; border: 2px dashed var(--accent); border-radius: 8px; display: flex; align-items: center; justify-content: center; font: 12px ui-monospace, monospace; color: var(--accent); background: var(--panel2); }
+@media (max-width: 760px) { .imgc-body { grid-template-columns: 1fr; } }

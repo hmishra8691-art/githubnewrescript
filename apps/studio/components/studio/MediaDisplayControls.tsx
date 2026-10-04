@@ -17,7 +17,7 @@ import { mediaDisplayCss, resolveMediaUrl } from "@rescript/engine";
  * `kind` decides which controls make sense: an image has no autoplay, an
  * audio clip has no fit.
  */
-export type DisplayKind = "image" | "video" | "audio";
+export type DisplayKind = "image" | "video" | "audio" | "embed";
 
 const FITS: { value: NonNullable<MediaDisplay["fit"]>; label: string; hint: string }[] = [
   { value: "contain", label: "Contain", hint: "whole picture visible, letterboxed if the box has another shape" },
@@ -42,13 +42,16 @@ export function MediaDisplayControls({ value, onChange, kind, compact }: {
     }
     onChange(Object.keys(next).length ? next : undefined);
   };
-  const len = (k: "width" | "height" | "maxWidth" | "maxHeight", label: string, placeholder: string) => (
+  const len = (k: "width" | "height" | "maxWidth" | "maxHeight" | "padding" | "spacing", label: string, placeholder: string) => (
     <label className="f" key={k}><span>{label}</span>
       <input className="input mono" style={{ width: compact ? 84 : 100 }} data-testid={`mdisp-${k}`} placeholder={placeholder}
         value={d[k] === undefined ? "" : String(d[k])}
         onChange={(e) => patch({ [k]: e.target.value.trim() || undefined } as Partial<MediaDisplay>)} /></label>
   );
-  const isAv = kind !== "image";
+  const isAv = kind === "video" || kind === "audio";
+  /* "Scale" is the width as a share of the space available — a shortcut for a
+     percentage width that a programmer can drag rather than type */
+  const pct = typeof d.width === "string" && /^\d+(\.\d+)?%$/.test(d.width.trim()) ? Number(d.width.trim().slice(0, -1)) : null;
   return (
     <div className="mdisp" data-testid="media-display-controls">
       <div className="mdisp-row">
@@ -58,7 +61,17 @@ export function MediaDisplayControls({ value, onChange, kind, compact }: {
         {len("maxHeight", "Max height", "none")}
       </div>
       <div className="mdisp-row">
-        {kind !== "audio" && (
+        <label className="f"><span>Scale <span className="muted">(% of the width available)</span></span>
+          <span className="row" style={{ gap: 6, alignItems: "center" }}>
+            <input type="range" min={5} max={100} step={5} data-testid="mdisp-scale" value={pct ?? 100}
+              onChange={(e) => patch({ width: Number(e.target.value) >= 100 && pct == null ? d.width : `${e.target.value}%`, height: undefined })} />
+            <span className="muted mono" style={{ fontSize: 12, minWidth: 34 }}>{pct != null ? `${pct}%` : "auto"}</span>
+          </span></label>
+        {len("padding", "Padding", "0")}
+        {len("spacing", "Spacing above / below", "0")}
+      </div>
+      <div className="mdisp-row">
+        {kind !== "audio" && kind !== "embed" && (
           <label className="f"><span>Fit</span>
             <select className="select" data-testid="mdisp-fit" value={d.fit ?? ""} title={FITS.find((f) => f.value === d.fit)?.hint}
               onChange={(e) => patch({ fit: (e.target.value || undefined) as MediaDisplay["fit"] })}>
@@ -74,7 +87,7 @@ export function MediaDisplayControls({ value, onChange, kind, compact }: {
             ))}
           </div></label>
         <label className="f qs-check-field"><span>Keep proportions</span>
-          <span className="qs-check-inline"><input type="checkbox" checked={d.keepRatio !== false} onChange={(e) => patch({ keepRatio: e.target.checked ? undefined : false })} /><span className="muted">{d.keepRatio !== false ? "on" : "off"}</span></span></label>
+          <span className="qs-check-inline"><input type="checkbox" data-testid="mdisp-keepRatio" checked={d.keepRatio !== false} onChange={(e) => patch({ keepRatio: e.target.checked ? undefined : false })} /><span className="muted">{d.keepRatio !== false ? "on" : "off"}</span></span></label>
         <label className="f qs-check-field"><span>Shrink on small screens</span>
           <span className="qs-check-inline"><input type="checkbox" data-testid="mdisp-responsive" checked={d.responsive !== false} onChange={(e) => patch({ responsive: e.target.checked ? undefined : false })} /><span className="muted">{d.responsive !== false ? "on" : "off"}</span></span></label>
       </div>

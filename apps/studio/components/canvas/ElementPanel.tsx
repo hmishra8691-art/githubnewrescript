@@ -9,6 +9,7 @@ import { OptionLogicEditor } from "../studio/OptionLogicEditor";
 import { OptionalCondition } from "../studio/ConditionBuilder";
 import { RandomizeAxes } from "../studio/RandomizeAxes";
 import { InlineRichText } from "../studio/RichTextEditor";
+import { MediaUrlInput } from "../studio/MediaUrlInput";
 import { Icon } from "../ui/Icon";
 import { selectionLabel, type SelectedEntity } from "./selection";
 import type { AuthoringAnnotations } from "./authoringView";
@@ -134,9 +135,13 @@ function OptionProps({ q, code, ann, patch, onSelect }: {
         * a question that has no picture in it anywhere.
         */}
       {drawsOptionImages(resolveVariant(q.variant)?.renderer, q.type) && (
-        <label className="f"><span>Image</span>
-          <input className="input" placeholder="https://…" value={o.imageUrl ?? ""}
-            onChange={(e) => patch(code, { imageUrl: e.target.value || undefined })} /></label>
+        /* the same field as the Questions panel's: Choose / Upload open the image pop-up first */
+        <MediaUrlInput label="Image" placeholder="https://… — or choose / upload" testId="lc-option-image" questionId={q.id} accept={["image"]}
+          value={o.imageUrl} onChange={(v) => patch(code, { imageUrl: v })}
+          customize={{
+            display: o.imageDisplay, alt: o.imageAlt, label: o.label,
+            onApply: (imageUrl, imageDisplay, imageAlt) => patch(code, { imageUrl, imageDisplay, imageAlt }),
+          }} />
       )}
 
       <h3 className="sec">Behaviour</h3>

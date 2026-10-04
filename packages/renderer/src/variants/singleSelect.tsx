@@ -57,7 +57,7 @@ export function IconSelect(p: QRProps) {
             <div className={`rs-iconopt-icon ${!o.imageUrl && [...(icon || "")].length > 2 ? "text" : ""}`}>
               {o.imageUrl
                 // eslint-disable-next-line @next/next/no-img-element
-                ? <SafeImage src={o.imageUrl} alt="" />
+                ? <SafeImage src={o.imageUrl} display={o.imageDisplay} alt="" />
                 : <span aria-hidden>{icon || "◻"}</span>}
             </div>
             <div className="rs-iconopt-label" dangerouslySetInnerHTML={{ __html: o.label }} />
@@ -92,7 +92,7 @@ export function ListSelect(p: QRProps) {
             <span className={`rs-listrow-mark ${multi ? "box" : "dot"}`} aria-hidden>{sel ? (multi ? "✓" : "●") : ""}</span>
             {o.imageUrl && (
               // eslint-disable-next-line @next/next/no-img-element
-              <SafeImage className="rs-listrow-img" src={o.imageUrl} alt="" />
+              <SafeImage className="rs-listrow-img" src={o.imageUrl} display={o.imageDisplay} alt="" />
             )}
             <div className="rs-listrow-body">
               <div className="rs-listrow-title">
@@ -148,7 +148,7 @@ export function RichCards(p: QRProps) {
             {badge && o.imageUrl && <span className="rs-badge rs-richcard-badge">{badge}</span>}
             {o.imageUrl && (
               // eslint-disable-next-line @next/next/no-img-element
-              <SafeImage className="rs-richcard-img" src={o.imageUrl} alt="" />
+              <SafeImage className="rs-richcard-img" src={o.imageUrl} display={o.imageDisplay} alt="" />
             )}
             <div className="rs-richcard-body">
               <div className="rs-richcard-title">
@@ -215,7 +215,7 @@ export function PairwiseChoice(p: QRProps) {
         onClick={() => pick(o)} onKeyDown={activate(() => pick(o))}>
         {o.imageUrl && (
           // eslint-disable-next-line @next/next/no-img-element
-          <SafeImage src={o.imageUrl} alt="" />
+          <SafeImage src={o.imageUrl} display={o.imageDisplay} alt="" />
         )}
         <div className="rs-pair-title" dangerouslySetInnerHTML={{ __html: o.label }} />
         {desc && <div className="rs-pair-desc" dangerouslySetInnerHTML={{ __html: desc }} />}
@@ -250,7 +250,7 @@ export function MultiCarousel(p: QRProps) {
         <div className={`rs-cardopt rs-carousel-card ${sel ? "selected" : ""}`} data-code={String(o.code)} {...anchor("option", String(o.code))} onClick={() => pick(o)}>
           {o.imageUrl && (
             // eslint-disable-next-line @next/next/no-img-element
-            <SafeImage src={o.imageUrl} alt="" />
+            <SafeImage src={o.imageUrl} display={o.imageDisplay} alt="" />
           )}
           <div className="rs-cardopt-title" dangerouslySetInnerHTML={{ __html: o.label }} />
           {desc && <div className="rs-cardopt-desc" dangerouslySetInnerHTML={{ __html: desc }} />}
@@ -331,7 +331,7 @@ export function PairwiseSet(p: QRProps) {
               onClick={() => pick(rc, o.code)} onKeyDown={activate(() => pick(rc, o.code))}>
               {o.imageUrl && (
                 // eslint-disable-next-line @next/next/no-img-element
-                <SafeImage src={o.imageUrl} alt="" />
+                <SafeImage src={o.imageUrl} display={o.imageDisplay} alt="" />
               )}
               <div dangerouslySetInnerHTML={{ __html: o.label }} />
               {metaText(o, "description") && (

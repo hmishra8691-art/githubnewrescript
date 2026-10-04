@@ -2,7 +2,7 @@
 import React from "react";
 import { sanitizeHtml, stripHtmlText } from "@rescript/engine";
 import { InsertPipingButton, tokensToChips, chipsToTokens } from "./PipingPicker";
-import { MediaInsertDialog, mediaValueFromElement, type MediaInsertValue } from "./MediaInsertDialog";
+import { MediaInsertDialog, mediaValueFromElement, type MediaApply, type MediaInsertValue } from "./MediaInsertDialog";
 import { useStudio } from "./store";
 
 /**
@@ -133,7 +133,7 @@ export function RteToolbar({ exec, onLink, onMedia, insertPipe, questionId, mode
 }
 
 /** The editing behaviours both surfaces share: sync, commit, exec, link, media. */
-function useRichSurface(value: string, onChange: (html: string) => void, mode: "visual" | "html") {
+function useRichSurface(value: string, onChange: (html: string) => void, mode: "visual" | "html", placement = false) {
   const s = useStudio();
   const surface = React.useRef<HTMLDivElement>(null);
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -188,31 +188,70 @@ function useRichSurface(value: string, onChange: (html: string) => void, mode: "
   /** a click on a picture or player inside the surface reopens the dialog on it */
   const onSurfaceClick = (e: React.MouseEvent) => {
     const t = e.target as HTMLElement;
-    const el = t.closest?.("img, video, audio") as HTMLElement | null;
+    const el = t.closest?.('img, video, audio, [data-rs-media="embed"]') as HTMLElement | null;
     if (!el || !surface.current?.contains(el)) return;
     e.preventDefault();
     setMedia({ initial: mediaValueFromElement(el), target: el });
   };
   const openMedia = () => setMedia({ initial: null, target: null });
-  const applyMedia = (html: string) => {
-    if (media?.target && surface.current?.contains(media.target)) {
-      media.target.outerHTML = html;
-      if (surface.current) commit(surface.current.innerHTML, true);
-    } else {
-      insertHtml(`${html}&nbsp;`);
+  /*
+   * WHERE THE MEDIA GOES. In place of the clicked element (edit), out of the
+   * text (its source was cleared), at the start or end of the question text
+   * ("Above / Below question" — what used to take the HTML tab), or at the
+   * cursor (an option label, or the programmer's choice).
+   */
+  const applyMedia = (html: string, _value: MediaInsertValue, apply?: MediaApply) => {
+    const root = surface.current;
+    const target = media?.target && root?.contains(media.target) ? media.target : null;
+    const position = apply?.position ?? (target ? "keep" : "cursor");
+    if (target && root) {
+      if (apply?.remove || position === "above" || position === "below") removeMediaElement(target, root);
+      else target.outerHTML = html;
+      if (!apply?.remove && (position === "above" || position === "below")) placeMedia(root, html, position);
+      commit(root.innerHTML, true);
+      return;
     }
+    if (root && (position === "above" || position === "below")) {
+      placeMedia(root, html, position);
+      commit(root.innerHTML, true);
+      return;
+    }
+    insertHtml(`${html}&nbsp;`);
   };
   const mediaDialog = (
-    <MediaInsertDialog open={!!media} initial={media?.initial ?? null} onClose={() => setMedia(null)} onInsert={applyMedia} />
+    media && <MediaInsertDialog open initial={media.initial} onClose={() => setMedia(null)} onInsert={applyMedia} placement={placement} />
   );
 
   return { surface, commit, exec, insertHtml, onStyle, addLink, onSurfaceClick, openMedia, mediaDialog, codeFor, mediaOpen: !!media };
 }
 
+/** media placed above or below the question text sits on its own line */
+function placeMedia(root: HTMLElement, html: string, position: "above" | "below") {
+  if (!html) return;
+  root.insertAdjacentHTML(position === "above" ? "afterbegin" : "beforeend", `<div>${html}</div>`);
+}
+
+/** take one picture or player out, and the line it stood on if that is now empty */
+function removeMediaElement(el: HTMLElement, root: HTMLElement) {
+  const parent = el.parentElement;
+  /* the &nbsp; the cursor insert put after it goes with it */
+  const next = el.nextSibling;
+  if (next && next.nodeType === Node.TEXT_NODE && /^\u00a0$/.test(next.textContent ?? "")) next.remove();
+  el.remove();
+  if (parent && parent !== root && /^(DIV|P|SPAN)$/.test(parent.tagName)
+    && !(parent.textContent ?? "").replace(/\u00a0/g, " ").trim()
+    && !parent.querySelector('img, video, audio, [data-rs-media]')) parent.remove();
+}
+
 /* ================================================================ block editor */
 
-export function RichTextEditor({ value, onChange, placeholder, autoFocusId, questionId }: {
+export function RichTextEditor({ value, onChange, placeholder, autoFocusId, questionId, mediaPlacement }: {
   value: string;
+  /**
+   * The QUESTION TEXT editor: Insert media offers Above / Below question,
+   * several items and players (1-10-26 review). Off for every other editor.
+   */
+  mediaPlacement?: boolean;
   onChange(html: string): void;
   placeholder?: string;
   /** id used for programmatic focus (new-question flow) */
@@ -222,7 +261,7 @@ export function RichTextEditor({ value, onChange, placeholder, autoFocusId, ques
 }) {
   const [mode, setMode] = React.useState<"visual" | "html">("visual");
   const [htmlDraft, setHtmlDraft] = React.useState(value);
-  const r = useRichSurface(value, onChange, mode);
+  const r = useRichSurface(value, onChange, mode, !!mediaPlacement);
   const { surface, commit, exec, codeFor } = r;
 
   /** Insert a piping token at the caret, as a chip. */
@@ -249,7 +288,10 @@ export function RichTextEditor({ value, onChange, placeholder, autoFocusId, ques
 
   return (
     <div className="rte">
-      <RteToolbar exec={exec} onLink={r.addLink} onMedia={r.openMedia} insertPipe={insertPipe} questionId={questionId} mode={mode} setMode={switchMode} onStyle={r.onStyle} />
+      <RteToolbar exec={exec} onLink={r.addLink}
+        /* the dialog edits the visual surface — from the HTML tab, come back to it first */
+        onMedia={() => { if (mode === "html") switchMode("visual"); r.openMedia(); }}
+        insertPipe={insertPipe} questionId={questionId} mode={mode} setMode={switchMode} onStyle={r.onStyle} />
 
       <div
         ref={surface}

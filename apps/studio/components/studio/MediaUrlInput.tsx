@@ -2,7 +2,9 @@
 import React from "react";
 import { resolveMediaUrl } from "@rescript/engine";
 import { ASSET_ACCEPT, uploadAsset, type AssetSummary, type UploadProgress } from "@/lib/assets";
+import type { MediaDisplay } from "@rescript/schema";
 import { AssetPicker } from "./AssetPicker";
+import { ImageCustomizeDialog } from "./ImageCustomizeDialog";
 import { useStudio } from "./store";
 
 /**
@@ -16,7 +18,7 @@ import { useStudio } from "./store";
  * into that library. Upload and Choose are the same library — a file
  * uploaded here appears in the Assets tab and in every other Choose.
  */
-export function MediaUrlInput({ value, onChange, placeholder, compact, testId, label, questionId, accept }: {
+export function MediaUrlInput({ value, onChange, placeholder, compact, testId, label, questionId, accept, customize }: {
   value: string | undefined;
   onChange(next: string | undefined, asset?: AssetSummary): void;
   placeholder?: string;
@@ -31,6 +33,19 @@ export function MediaUrlInput({ value, onChange, placeholder, compact, testId, l
   questionId?: string;
   /** what this slot takes, for the picker's filter and the file dialog */
   accept?: AssetSummary["family"][];
+  /**
+   * An answer option's picture (1-10-26 review): Choose and Upload open the
+   * image pop-up FIRST, and the picture reaches the option only on Apply,
+   * with its size, alignment and spacing. A "Customize" button reopens it.
+   * Typing or pasting a URL still sets it directly.
+   */
+  customize?: {
+    display: MediaDisplay | undefined;
+    alt: string | undefined;
+    /** the option label, for the preview frame */
+    label?: string;
+    onApply(url: string, display: MediaDisplay | undefined, alt: string | undefined): void;
+  };
 }) {
   const media = React.useMemo(() => resolveMediaUrl(value), [value]);
   const studio = useStudioOptional();
@@ -38,6 +53,12 @@ export function MediaUrlInput({ value, onChange, placeholder, compact, testId, l
   const [progress, setProgress] = React.useState<UploadProgress | null>(null);
   const [uploadError, setUploadError] = React.useState<string | null>(null);
   const [picking, setPicking] = React.useState(false);
+  /* a picked or uploaded picture waiting for the pop-up's Apply */
+  const [pending, setPending] = React.useState<{ url: string; alt?: string; fresh: boolean } | null>(null);
+  const take = (url: string, asset?: AssetSummary) => {
+    if (customize) setPending({ url, alt: asset?.altText ?? undefined, fresh: url !== value });
+    else onChange(url, asset);
+  };
   const canUpload = !!studio && studio.surveyDbId !== "sandbox";
   const tid = testId ?? "media-url";
   void questionId;
@@ -49,7 +70,7 @@ export function MediaUrlInput({ value, onChange, placeholder, compact, testId, l
     setProgress(null);
     if (fileRef.current) fileRef.current.value = "";
     if (!out.ok) { setUploadError(out.error); return; }
-    onChange(out.asset.url, out.asset);
+    take(out.asset.url, out.asset);
   };
 
   const verdict = !value?.trim()
@@ -99,6 +120,16 @@ export function MediaUrlInput({ value, onChange, placeholder, compact, testId, l
             onClick={() => fileRef.current?.click()} title="Upload a file into the asset library and use it here">
             {progress ? progress.label : "Upload"}
           </button>
+          {customize && value?.trim() && (
+            <button type="button" className="btn ghost small" data-testid={`${tid}-customize`} onClick={() => setPending({ url: value, fresh: false })}
+              title="Size, alignment, spacing and alt text for this picture">Customize</button>
+          )}
+        </span>
+      )}
+      {!canUpload && customize && value?.trim() && (
+        <span className={compact ? "media-url-actions" : ""}>
+          <button type="button" className="btn ghost small" data-testid={`${tid}-customize`} onClick={() => setPending({ url: value, fresh: false })}
+            title="Size, alignment, spacing and alt text for this picture">Customize</button>
         </span>
       )}
     </div>
@@ -124,7 +155,15 @@ export function MediaUrlInput({ value, onChange, placeholder, compact, testId, l
       )}
       {canUpload && (
         <AssetPicker open={picking} onClose={() => setPicking(false)} accept={accept}
-          onPick={(a) => onChange(a.url, a)} />
+          onPick={(a) => take(a.url, a)} />
+      )}
+      {customize && pending && (
+        /* mounted per pick, so it opens on exactly this picture's values — no reset effect racing the first paint */
+        <ImageCustomizeDialog key={pending.url} open url={pending.url} label={customize.label}
+          /* a newly picked picture starts from the option's current settings, with the asset's alt text if it has one */
+          display={customize.display} alt={pending.fresh ? (pending.alt ?? customize.alt) : customize.alt}
+          onCancel={() => setPending(null)}
+          onApply={(display, alt) => { const url = pending.url; setPending(null); customize.onApply(url, display, alt); }} />
       )}
     </div>
   );

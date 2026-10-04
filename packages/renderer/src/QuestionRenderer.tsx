@@ -18,6 +18,7 @@ import {
   type LoopContext,
   stripHtmlText,
   sanitizeHtml,
+  expandMediaEmbeds,
   selectedOtherCodes,
   uiText,
   effectiveScale,
@@ -1160,7 +1161,7 @@ export function ImageSelect(p: QRProps & { multi?: boolean; ranking?: boolean })
           <div key={String(o.code)} className={`rs-imgopt ${sel ? "selected" : ""}`} onClick={() => click(o)} {...anchor("option", o.code)}>
             {o.imageUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <SafeImage src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
+              <SafeImage src={o.imageUrl} display={o.imageDisplay} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
             ) : (
               <div style={{ height: 110, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--rs-border)" }}>🖼</div>
             )}
@@ -1657,7 +1658,7 @@ export function ChoiceCards(p: QRProps & { multi: boolean }) {
             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(o); } }}>
             {o.imageUrl && (
               // eslint-disable-next-line @next/next/no-img-element
-              <SafeImage src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
+              <SafeImage src={o.imageUrl} display={o.imageDisplay} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
             )}
             <div className="rs-cardopt-title" dangerouslySetInnerHTML={{ __html: o.label }} />
             {desc && <div className="rs-cardopt-desc" dangerouslySetInnerHTML={{ __html: desc }} />}
@@ -2087,7 +2088,7 @@ export function CarouselSelect(p: QRProps) {
           onClick={() => p.onChange(selected ? null : o.code)}>
           {o.imageUrl && (
             // eslint-disable-next-line @next/next/no-img-element
-            <SafeImage src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
+            <SafeImage src={o.imageUrl} display={o.imageDisplay} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
           )}
           <div className="rs-cardopt-title" dangerouslySetInnerHTML={{ __html: o.label }} />
           {desc && <div className="rs-cardopt-desc" dangerouslySetInnerHTML={{ __html: desc }} />}
@@ -2178,7 +2179,7 @@ export function CompareImages(p: QRProps) {
             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); p.onChange(sel ? null : o.code); } }}>
             {o.imageUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <SafeImage src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} style={{ height: 220 }}/>
+              <SafeImage src={o.imageUrl} display={o.imageDisplay} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} style={{ height: 220 }}/>
             ) : (
               <div className="rs-compare-noimg">🖼</div>
             )}
@@ -2367,7 +2368,8 @@ export function QuestionRenderer(props: QRProps) {
    * otherwise. Piped values are already escaped by resolvePiping; a text
    * with no markup is returned untouched.
    */
-  const safe = (html: string) => (html.includes("<") ? sanitizeHtml(html) : html);
+  /* sanitised, then players placed and pictures that piped to nothing dropped (`expandMediaEmbeds`) */
+  const safe = (html: string) => (html.includes("<") ? expandMediaEmbeds(sanitizeHtml(html)) : html);
   const text = safe(resolvePiping(p.q.text, ctx));
   const instruction = p.q.instruction ? safe(resolvePiping(p.q.instruction, ctx)) : null;
 
