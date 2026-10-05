@@ -2,7 +2,7 @@
 import React from "react";
 import type { AnalysisRun } from "@rescript/analytics";
 import type { SurveyDefinition } from "@rescript/schema";
-import { reviewSurvey, type SurveyAction, type SurveyReview } from "@rescript/engine";
+import { reviewSurvey, type SurveyAction, type SurveyReview, type Interpretation } from "@rescript/engine";
 import { useStudio, uid } from "../../studio/store";
 import type { CopilotReply, CopilotFinding } from "../../../lib/copilot/prompt";
 import { evaluateProposal, rebaseProposal, sameSurvey, changeRecord, memoryFrom, type Proposal, type ProposalState, type ChangeRecord } from "../../../lib/copilot/client";
@@ -39,6 +39,24 @@ export interface CopilotEntry {
   review?: SurveyReview;
   /** said once the change is applied: what changed, and — for a look-only change — that the structure did not */
   appliedNote?: string;
+  /**
+   * Answered by the Studio's own engine — no model call. What it resolved
+   * (the condition with its option label, the range, the target), the
+   * answer's sections with navigable references, the precise refusal and the
+   * suggested fix: everything the card shows instead of a model's reply.
+   */
+  engine?: EngineTurn;
+}
+export interface EngineTurn {
+  kind: Interpretation["kind"];
+  category: string | null;
+  understood: string;
+  detected: { what: string; value: string }[];
+  sections?: { title: string; items: { label: string; key?: string; detail?: string }[] }[];
+  choices?: { label: string; text: string }[];
+  refusal?: string;
+  suggestion?: { text: string; actions?: SurveyAction[] };
+  warnings?: string[];
 }
 export interface ResearchDocView { id: string; ref: string; name: string; format: string; kind?: string; pages: number; ocrPages: number; chars: number; summary: import("../../../lib/copilot/research").DocSummary | null; warnings: string[]; createdAt: string }
 export interface ReviewState { rules: SurveyReview; ai: CopilotFinding[]; at: string; running: boolean }
@@ -85,7 +103,9 @@ export function useCopilot(opts: {
   React.useEffect(() => {
     const w = window as unknown as { __rescriptCopilotFake?: (reply: unknown) => void };
     w.__rescriptCopilotFake = (reply) => { fakeRef.current.push(reply); };
-    return () => { delete w.__rescriptCopilotFake; };
+    // a sentence the engine answered never reached the model: the suite drops the reply it had queued for it
+    (w as { __rescriptCopilotFakeReset?: () => void }).__rescriptCopilotFakeReset = () => { fakeRef.current = []; };
+    return () => { delete w.__rescriptCopilotFake; delete (w as { __rescriptCopilotFakeReset?: () => void }).__rescriptCopilotFakeReset; };
   }, []);
 
   /* the open proposal, evaluated against the survey as it is now */
@@ -219,6 +239,41 @@ export function useCopilot(opts: {
     }
   }, [session.proposal, stale, s.def, s.surveyDbId, opts, copilotTurns, setSession, themeImage, quotaCounts, runForTurn]);
 
+  /*
+   * THE ENGINE'S OWN ANSWER. A sentence the engine interpreted
+   * deterministically — an edit as actions, a question about the survey as
+   * an answer, an ambiguity as a choice, an impossibility as a precise
+   * refusal — becomes a turn here without a network call. Actions join the
+   * open proposal exactly as a model's would: the same Changes panel, the
+   * same Apply, the same history and undo. Nothing is charged.
+   */
+  const local = React.useCallback((text: string, it: Exclude<Interpretation, { kind: "model" }>, heard?: HeardTranscript): void => {
+    const id = uid("copilot");
+    const actions = it.kind === "actions" ? it.actions : [];
+    const reply: CopilotReply = {
+      kind: it.kind === "actions" ? "proposal" : it.kind === "clarify" ? "clarify" : "answer",
+      reply: it.kind === "answer" ? it.answer : it.kind === "clarify" ? it.question : it.kind === "refused" ? it.reason : it.understood,
+      plan: [], actions, rejected: [], findings: [], assumptions: [], questions: [], sources: [],
+    };
+    const engine: EngineTurn = {
+      kind: it.kind, category: it.category, understood: it.understood, detected: it.detected,
+      ...(it.kind === "answer" ? { sections: it.sections } : {}),
+      ...(it.kind === "clarify" ? { choices: it.choices } : {}),
+      ...(it.kind === "refused" ? { refusal: it.reason, ...(it.suggestion ? { suggestion: it.suggestion } : {}) } : {}),
+      ...(it.kind === "actions" && it.warnings?.length ? { warnings: it.warnings } : {}),
+    };
+    if (actions.length) {
+      opts.patchAll((e) => (e.proposal === "open" ? { proposal: "superseded" } : null));
+      setSession((x) => {
+        const base = x.proposal ? (stale ? rebaseProposal(x.proposal, s.def) : x.proposal) : { base: s.def, steps: [] };
+        return { ...x, proposal: { base: base.base, steps: [...base.steps, { request: text, actions }] }, confirmed: false, tab: "changes" };
+      });
+    }
+    opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "ready", reply, engine, ...(actions.length ? { proposal: "open" as const } : {}) });
+  }, [opts, setSession, stale, s.def]);
+  /** the survey a new request is read against: the open proposal's result, so a revision builds on what is proposed */
+  const working: SurveyDefinition = React.useMemo(() => (session.proposal ? (stale ? evaluateProposal(rebaseProposal(session.proposal, s.def)).after : state?.after ?? s.def) : s.def), [session.proposal, stale, state, s.def]);
+
   /* ------------------------------------------------------------ review */
   const runReview = React.useCallback(async (text = "Review my survey") => {
     // the engine's own checks at once, for free; the model's reading follows
@@ -331,7 +386,7 @@ export function useCopilot(opts: {
     docs: session.docs ?? [], durable: session.durable, uploading, docError,
     confirmed: session.confirmed, setConfirmed: (v: boolean) => setSession((x) => ({ ...x, confirmed: v })),
     tab: session.tab, setTab: (t: PanelTab) => setSession((x) => ({ ...x, tab: t })),
-    ask, runReview, previewFix, apply, cancel, revert, uploadDocs, deleteDoc, refreshDocs,
+    ask, local, working, runReview, previewFix, apply, cancel, revert, uploadDocs, deleteDoc, refreshDocs,
     themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),
     quotaCounts, quotaCountsAt, refreshQuotaCounts,
     analysisRun, runDue, running, runError, refreshAnalysisRun, runPlanNow,

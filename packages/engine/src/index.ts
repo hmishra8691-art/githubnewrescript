@@ -101,3 +101,6 @@ export * from "./versionedDictionary.js";
 export * from "./logicProposal.js";
 export * from "./defaultValue.js";
 export * from "./conditionWalk.js";
+export * from "./naturalCondition.js";
+export * from "./nlTargets.js";
+export * from "./nlIntent.js";

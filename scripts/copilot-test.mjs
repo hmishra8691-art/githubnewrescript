@@ -54,7 +54,10 @@ const say = async (text, reply) => {
   await page.fill('[data-testid="iq-input"]', text);
   await page.keyboard.press("Enter");
   await page.waitForFunction((k) => { const t = document.querySelectorAll('[data-testid="cp-turn"]'); return t.length > k && t[t.length - 1].getAttribute("data-status") !== "thinking"; }, n, { timeout: 30000 });
-  return (await turns()).at(-1);
+  const last = (await turns()).at(-1);
+  // the engine reads every sentence first (Phase 3): when it answered, the model was never asked, so the queued reply is dropped
+  if (await last.$('[data-testid="cp-engine"]')) await page.evaluate(() => window.__rescriptCopilotFakeReset?.());
+  return last;
 };
 const panel = async (tab) => { await page.click(`[data-testid="cp-tab-${tab}"]`); await page.waitForTimeout(150); };
 const texts = (sel) => page.$$eval(sel, (els) => els.map((e) => e.textContent.replace(/\s+/g, " ").trim()));
@@ -143,6 +146,9 @@ await page.waitForSelector('[data-testid="intelligent-view"]');
     actions: [{ op: "delete_block", target: "Trust" }, { op: "update_question", target: "Q3", required: false }],
   });
   assert.equal(await t.getAttribute("data-proposal"), "open");
+  // the engine reads this one itself (Phase 3): the block goes; Q3 (platforms) is already optional, which is said — not a reason to refuse the rest
+  assert.ok(await t.$('[data-testid="cp-engine"]'), "read by the internal engine");
+  assert.match(await (await t.$('[data-testid="cp-reply"]')).textContent(), /^Delete block “Trust” and every question in it\. Left as it is: Q3 is already optional — nothing to change\.$/);
   const all = await turns();
   assert.equal(await all[0].getAttribute("data-proposal"), "superseded", "the first proposal is revised, not stacked");
   assert.match(await page.textContent('[data-testid="cp-steps"]'), /2 requests/);
@@ -316,21 +322,27 @@ await page.waitForSelector('[data-testid="intelligent-view"]');
   ok("research: a PDF is extracted, summarised once into a card, and kept; a scanned page goes to OCR; a research request retrieves passages and the copilot's claims are marked document / recommendation with page citations; a plain edit sends no documents");
 }
 
-/* ------------------------------------------------------------ grammar fallback and exact read-only answers */
+/* ------------------------------------------------------------ the engine first; the grammar when the model has nothing usable; exact read-only answers */
 {
+  /* a deterministic edit is the engine's: no model call, a proposal in the same Changes panel */
+  const e = await say("make Q2 optional");
+  assert.ok(await e.$('[data-testid="cp-engine"]'), "“make Q2 optional” is read by the engine, not the model");
+  assert.equal(await e.getAttribute("data-proposal"), "open");
+  await page.click('[data-testid="cp-panel-cancel"]');
+  /* a phrasing the engine hands on, the (fake) model answers with nothing usable, the grammar reads it */
   const before = (await page.$$('[data-testid="iq-turn"]')).length;
-  await page.fill('[data-testid="iq-input"]', "make Q2 optional");
+  await page.fill('[data-testid="iq-input"]', "call Q2 PLATFORMS");
   await page.keyboard.press("Enter");
   await page.waitForFunction((n) => document.querySelectorAll('[data-testid="iq-turn"]').length > n, before, { timeout: 20000 });
   const last = (await page.$$('[data-testid="iq-turn"]')).at(-1);
-  assert.equal(await last.getAttribute("data-kind"), "required", "the model answered nothing usable — the grammar's reading is offered");
-  assert.ok(!(await texts('[data-testid="cp-turn"]')).some((x) => x.startsWith("make Q2 optional")), "…and the empty copilot turn is not left behind");
+  assert.equal(await last.getAttribute("data-kind"), "rename", "the model answered nothing usable — the grammar's reading is offered");
+  assert.ok(!(await texts('[data-testid="cp-turn"]')).some((x) => x.startsWith("call Q2 PLATFORMS")), "…and the empty copilot turn is not left behind");
   const n2 = (await page.$$('[data-testid="iq-turn"]')).length;
   await page.fill('[data-testid="iq-input"]', "Why is Q4 not showing?");
   await page.keyboard.press("Enter");
   await page.waitForFunction((n) => document.querySelectorAll('[data-testid="iq-turn"]').length > n, n2);
   assert.equal(await (await page.$$('[data-testid="iq-turn"]')).at(-1).getAttribute("data-kind"), "diagnose", "an exact read-only question is answered by the engine, not the model");
-  ok("the grammar remains: it answers when the model has nothing usable, and exact read-only questions (why is Q4 not showing?) are answered by the engine directly");
+  ok("the engine reads a deterministic edit itself; the grammar answers when the model has nothing usable; exact read-only questions (why is Q4 not showing?) are answered without a model");
 }
 
 /* ------------------------------------------------------------ voice, in another language */

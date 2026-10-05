@@ -3,7 +3,7 @@ import { cond } from "@rescript/schema";
 import {
   parseLogicExpression, formatCondition, conditionSummary, questionLogicSummary,
   getQuestionByCodeOrVar, listPages, listBlocks, questionOrder, conditionRefs,
-  validateProposal, describeChange, objectKey, neighbours, parseSetExpression, formatSetExpression, maskSummary, ruleLabel, diagnoseQuestion,
+  normaliseConditionText, validateProposal, describeChange, objectKey, neighbours, parseSetExpression, formatSetExpression, maskSummary, ruleLabel, diagnoseQuestion,
   type ProposalChange, type ExpressionError, type DependencyIndex, type ObjectKey,
 } from "@rescript/engine";
 
@@ -107,66 +107,13 @@ export interface PlannerDeps {
 /* ------------------------------------------------------------ expressions */
 
 /**
- * The expression parser speaks `Q3 = Yes AND Q4 > 2`; people write "Q3 is
- * yes and Q4 is greater than 2". These rewrites bridge the everyday
- * spellings to the ones the parser already knows. They are textual and
- * conservative: nothing here decides what a rule MEANS, only how an operator
- * is spelled, and the parser still has the last word.
+ * Everyday operators into the parser's — "is at least", "was selected",
+ * "is over 25", "neither … nor" — and multi-word operands quoted. The
+ * engine owns this now (`normaliseConditionText`), so the grammar, the
+ * engine's own interpreter and anything else that reads a condition in
+ * words read it the same way; this name stays for the grammar's callers.
  */
-/** "option 3" → `"option 3"` (code 3, else the third option); any other token is left as written */
-const optionRef = (v: string) => (/^\d+$/.test(v) ? `"option ${v}"` : v);
-type Rewrite = string | ((match: string, ...groups: string[]) => string);
-const REWRITES: [RegExp, Rewrite][] = [
-  /*
-   * The connectives people write instead of AND / OR / NOT. "neither A nor B"
-   * is NOT (A OR B); "either A or B" and "both A and B" are just A OR B and
-   * A AND B; "A but not B" and "A except (when) B" exclude B.
-   */
-  [/\bneither\s+(.+?)\s+nor\s+(.+?)(?=\s+(?:and|or|then)\b|$)/gi, "NOT ($1 OR $2)"],
-  [/\beither\s+/gi, ""],
-  [/\bboth\s+(?=\S+.*\band\b)/gi, ""],
-  [/,?\s+but\s+not\s+/gi, " AND NOT "],
-  [/,?\s+except\s+(?:when|if|where)?\s*(.+)$/gi, " AND NOT ($1)"],
-  // "Q5 option 3 is selected" / "Q5 is option 2" / "option 3 of Q5 is selected" — an option by its code
-  // ("option 3" stays "option 3" so the parser can read it as code 3, or as the third option when the codes are words)
-  [/\b([A-Za-z_][\w.]*)\s+(?:option|answer|choice|code)\s+(\w+)\s+(?:is|was|has\s+been)\s+(?:selected|chosen|picked|ticked|answered)\b/gi, (_, q: string, v: string) => `${q} = ${optionRef(v)}`],
-  [/\b(?:option|answer|choice|code)\s+(\w+)\s+(?:of|in|at|on|for)\s+([A-Za-z_][\w.]*)\s+(?:is|was|has\s+been)\s+(?:selected|chosen|picked|ticked)\b/gi, (_, v: string, q: string) => `${q} = ${optionRef(v)}`],
-  [/\b([A-Za-z_][\w.]*)\s+(?:is|was|equals|=)\s+(?:option|answer|choice|code)\s+(\w+)\b/gi, (_, q: string, v: string) => `${q} = ${optionRef(v)}`],
-  [/\b([A-Za-z_][\w.]*)\s+(?:is\s+not|isn't|!=)\s+(?:option|answer|choice|code)\s+(\w+)\b/gi, (_, q: string, v: string) => `${q} != ${optionRef(v)}`],
-  [/\bis\s+(?:greater|more|higher|bigger)\s+than\s+or\s+equal\s+to\b/gi, ">="],
-  [/\bis\s+(?:less|lower|smaller|fewer)\s+than\s+or\s+equal\s+to\b/gi, "<="],
-  [/\b(?:is\s+)?(?:greater|more|higher|bigger)\s+than\b/gi, ">"],
-  [/\b(?:is\s+)?(?:less|lower|smaller|fewer)\s+than\b/gi, "<"],
-  [/\b(?:is\s+)?at\s+least\b/gi, ">="],
-  [/\b(?:is\s+)?at\s+most\b/gi, "<="],
-  [/\b(?:is\s+)?(?:equal\s+to|equals)\b/gi, "="],
-  [/\b(?:does\s+not|doesn't|didn't|did\s+not)\s+(?:equal|contain|include)\b/gi, "is not"],
-  [/\b(?:is\s+not|isn't|was\s+not|wasn't)\s+(?:selected|chosen|picked|ticked)\b/gi, "not selected"],
-  [/\b(?:is|was|has\s+been)\s+(?:selected|chosen|picked|ticked)\b/gi, "selected"],
-  [/\b(?:includes?|selected)\s+(?:the\s+)?(?:option|answer|choice)\b/gi, "contains"],
-  [/\b(?:is|was|has\s+been)\s+answered\b/gi, "answered"],
-  [/\b(?:is|was)\s+(?:blank|empty|unanswered|skipped|not\s+answered)\b/gi, "unanswered"],
-  [/\b(?:isn't|is\s+not|was\s+not|wasn't)\b/gi, "is not"],
-  [/\b(?:was|are|were|has|have)\b/gi, "is"],
-  [/\bthe\s+(?:answer|response|value)\s+(?:to|of|for)\s+/gi, ""],
-  [/\b(?:respondent|they|the\s+user|the\s+person)\s+(?:answered|said|chose|selected|picked)\s+/gi, ""],
-  [/\bin\s+([A-Za-z_][\w.]*)\s+(?:is|=)\s+/gi, "$1 = "],
-  [/\bmore\s+than\s+or\s+=\b/gi, ">="],
-];
-
-/**
- * A multi-word operand gets quotes: `Q4 = United States` is what people
- * write, `Q4 = "United States"` is what the parser reads. Only bare words
- * (no quotes, no digits-only tokens) up to the next AND/OR/parenthesis.
- */
-const OPERAND_AFTER = /((?:^|\s)(?:=|!=|<>|>=|<=|>|<|is not|is|not contains|contains|not selected|selected|matches|starts with|ends with))\s+((?!and\b|or\b|not\b|then\b)[A-Za-z][\w'’\-\/]*(?:\s+(?!and\b|or\b|not\b|then\b)[A-Za-z0-9][\w'’\-\/]*)+)(?=\s+(?:and|or|then)\b|\s*\)|$)/gi;
-
-export function normaliseExpression(text: string): string {
-  let out = text.trim().replace(/[.?!]+$/, "");
-  for (const [re, to] of REWRITES) out = typeof to === "string" ? out.replace(re, to) : out.replace(re, to as (m: string, ...g: string[]) => string);
-  out = out.replace(OPERAND_AFTER, (_, op: string, words: string) => `${op} "${words}"`);
-  return out.replace(/\s+/g, " ").trim();
-}
+export const normaliseExpression = (text: string): string => normaliseConditionText(text);
 
 export function planExpression(def: SurveyDefinition, text: string): ProposalExpression {
   const norm = normaliseExpression(text);

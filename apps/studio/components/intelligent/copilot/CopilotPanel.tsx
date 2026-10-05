@@ -168,9 +168,10 @@ function Outline({ rows, title, onSelect, def }: { rows: OutlineRow[]; title?: s
     <div className="cp-outline" data-testid={title ? `cp-outline-${title.toLowerCase()}` : "cp-outline"}>
       {title && <div className="iq-label">{title}</div>}
       {rows.length === 0 && <p className="iqi-dim">(empty)</p>}
-      {rows.map((r) => r.kind === "block"
-        ? <div key={r.id} className={`cp-o-block${r.mark ? ` m-${r.mark}` : ""}`} data-mark={r.mark ?? ""}>{r.label}</div>
-        : <button key={r.id} type="button" className={`cp-o-q${r.mark ? ` m-${r.mark}` : ""}`} data-mark={r.mark ?? ""} onClick={() => def.questions.some((q) => q.id === r.id) && onSelect(r.id)} data-testid="cp-o-q">{r.label}{r.mark ? <span className="cp-mark">{r.mark}</span> : null}</button>)}
+      {/* keyed by place as well as id: a question placed in two branches (the master demo's Q43 / Q44) is two rows */}
+      {rows.map((r, i) => r.kind === "block"
+        ? <div key={`b${i}:${r.id}`} className={`cp-o-block${r.mark ? ` m-${r.mark}` : ""}`} data-mark={r.mark ?? ""}>{r.label}</div>
+        : <button key={`q${i}:${r.id}`} type="button" className={`cp-o-q${r.mark ? ` m-${r.mark}` : ""}`} data-mark={r.mark ?? ""} onClick={() => def.questions.some((q) => q.id === r.id) && onSelect(r.id)} data-testid="cp-o-q">{r.label}{r.mark ? <span className="cp-mark">{r.mark}</span> : null}</button>)}
     </div>
   );
 }

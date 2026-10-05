@@ -395,3 +395,73 @@ test("diff: a question that changes block without changing rank is a move, named
   const diff = diffSurveys(base, SurveyDefinition.parse(after));
   assert.deepEqual(diff.questionsMoved.map((m) => [m.code, m.from, m.to]), [["Q2", "Screening · after Q1", "Social media exposure · after Q1"]]);
 });
+
+test("the diff sees what option-level actions write — a mask, a recode, a flag, an option's condition, custom code — so such a proposal is never 'nothing to apply'", () => {
+  const base = applySurveyActions(empty(), generation, { ids }).def;
+  const cases: [SurveyAction, RegExp][] = [
+    [{ op: "set_mask", target: "PI", expression: "PLAT.Selected" } as never, /mask/],
+    [{ op: "update_option", target: "PLAT", option: "TikTok", code: 7 } as never, /option codes/],
+    [{ op: "update_option", target: "PLAT", option: "TikTok", other: true } as never, /option flags/],
+    [{ op: "update_option", target: "PLAT", option: "TikTok", visibleIf: "AGE > 20" } as never, /option display conditions/],
+    [{ op: "update_option", target: "PLAT", option: "TikTok", value: "TT" } as never, /option values/],
+    [{ op: "set_custom_code", target: "PLAT", js: "console.log(1)", css: ".x{}" } as never, /custom JavaScript, custom CSS/],
+  ];
+  for (const [a, field] of cases) {
+    const r = applySurveyActions(base, [a], { ids });
+    assert.deepEqual(r.errors, [], `${a.op}: ${r.errors.join("\n")}`);
+    const d = diffSurveys(base, r.def);
+    assert.equal(d.empty, false, `${a.op} reads as a change`);
+    assert.ok(d.summary.some((l) => field.test(l)), `${a.op}: ${d.summary.join(" | ")}`);
+  }
+  // a relabel is "options", not also "option codes"
+  const relabel = diffSurveys(base, applySurveyActions(base, [{ op: "update_option", target: "PLAT", option: "TikTok", label: "Tik Tok" } as never], { ids }).def);
+  assert.ok(!relabel.summary.some((l) => /option codes/.test(l)), relabel.summary.join(" | "));
+});
+
+test("the diff sees a validation rule's value, not only its kind — a changed range is never 'nothing to apply'", () => {
+  const base = applySurveyActions(empty(), generation, { ids }).def;
+  const r = applySurveyActions(base, [{ op: "set_validation", target: "AGE", rules: [{ kind: "min_value", value: 21 }, { kind: "max_value", value: 99 }, { kind: "integer" }] }], { ids });
+  assert.deepEqual(r.errors, []);
+  const d = diffSurveys(base, r.def);
+  assert.equal(d.empty, false);
+  assert.ok(d.summary.includes("Change Q1: validation"), d.summary.join(" | "));
+  assert.deepEqual(d.questionsModified[0].changes, [{ field: "validation", from: "min_value 18, max_value 99, integer", to: "min_value 21, max_value 99, integer" }]);
+  // the same rules again (new ids) is still no change
+  const same = applySurveyActions(r.def, [{ op: "set_validation", target: "AGE", rules: [{ kind: "min_value", value: 21 }, { kind: "max_value", value: 99 }, { kind: "integer" }] }], { ids });
+  assert.equal(diffSurveys(r.def, same.def).empty, true);
+});
+
+test("the diff reads a page break as a page break — a bare page split into a block is not a new block with every question moved, and joining it back is 'Remove 1 page break'", () => {
+  const def = SurveyDefinition.parse({
+    meta: { id: "s", code: "S", title: "Pages" }, deployment: { clientSlug: "c", studySlug: "s" },
+    questions: ["A", "B", "C", "D"].map((v, i) => ({ id: `q${i}`, code: `Q${i + 1}`, variableName: v, type: "numeric", text: `${v}?` })),
+    flow: [{ type: "page", id: "p0", title: "Intro", questionIds: ["q0"] }, { type: "page", id: "p1", title: "About you", questionIds: ["q1", "q2", "q3"] }, { type: "end", id: "e", status: "complete" }],
+  });
+  const split = applySurveyActions(def, [{ op: "page_break", after: "Q2" }], { ids });
+  assert.deepEqual(split.errors, []);
+  const d = diffSurveys(def, split.def);
+  assert.deepEqual(d.summary, ["Add 1 page break"]);
+  assert.deepEqual([d.blocksAdded, d.blocksRemoved, d.questionsMoved], [[], [], []]);
+  const joined = applySurveyActions(split.def, [{ op: "page_break", after: "Q2", remove: true }], { ids });
+  assert.deepEqual(joined.errors, []);
+  const j = diffSurveys(split.def, joined.def);
+  assert.deepEqual(j.summary, ["Remove 1 page break"]);
+  assert.deepEqual([j.blocksAdded, j.blocksRemoved, j.questionsMoved], [[], [], []]);
+});
+
+test("the diff: deleting a block of several pages is not also 'removing page breaks'; joining two pages is", () => {
+  const base = applySurveyActions(empty(), generation, { ids }).def;
+  const soc = listBlocks(base.flow as unknown[]).find((b) => b.title === "Social media exposure")!;
+  assert.ok(soc.pages.length >= 2, "the block has two pages (EXPOSE starts a new one)");
+  const del = applySurveyActions(base, [{ op: "delete_block", target: "Social media exposure" }], { ids });
+  assert.deepEqual(del.errors, []);
+  const d = diffSurveys(base, del.def);
+  assert.ok(!d.summary.some((l) => /page break/.test(l)), d.summary.join(" | "));
+  const join = applySurveyActions(base, [{ op: "page_break", after: "PLAT", remove: true }], { ids });
+  assert.deepEqual(join.errors, [], join.errors.join("\n"));
+  assert.ok(diffSurveys(base, join.def).summary.includes("Remove 1 page break"), diffSurveys(base, join.def).summary.join(" | "));
+  // both at once: the deleted block's own pages are not counted with the one break removed
+  const both = applySurveyActions(base, [{ op: "delete_block", target: "Purchase intention" }, { op: "page_break", after: "PLAT", remove: true }], { ids });
+  assert.deepEqual(both.errors, [], both.errors.join("\n"));
+  assert.ok(diffSurveys(base, both.def).summary.includes("Remove 1 page break"), diffSurveys(base, both.def).summary.join(" | "));
+});

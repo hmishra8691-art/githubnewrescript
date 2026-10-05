@@ -89,12 +89,15 @@ test("grammar: find and explain", () => {
 /* ---------------------------------------------------------------- planner */
 
 test("normaliseExpression bridges everyday operators to the parser's", () => {
-  assert.equal(normaliseExpression("Q1 is at least 18 and Q3 was selected"), "Q1 >= 18 and Q3 selected");
-  assert.equal(normaliseExpression("Q1 is greater than 2 or Q2 isn't Business."), "Q1 > 2 or Q2 is not Business");
+  assert.equal(normaliseExpression("Q1 is at least 18 and Q3 was selected"), "Q1 >= 18 AND Q3 selected", "the engine spells the connectives as the parser prints them");
+  assert.equal(normaliseExpression("Q1 is greater than 2 or Q2 isn't Business."), "Q1 > 2 OR Q2 != Business");
   assert.equal(normaliseExpression("the answer to Q3 equals Yes"), "Q3 = Yes");
   assert.equal(normaliseExpression("Q2 = A"), "Q2 = A", "already-canonical text is untouched");
-  assert.equal(normaliseExpression("Q4 = United States and Q3 >= 18"), 'Q4 = "United States" and Q3 >= 18', "a multi-word operand is quoted");
-  assert.equal(normaliseExpression("Q2 is not Small business or Q1 > 2"), 'Q2 is not "Small business" or Q1 > 2');
+  assert.equal(normaliseExpression("Q4 = United States and Q3 >= 18"), 'Q4 = "United States" AND Q3 >= 18', "a multi-word operand is quoted");
+  assert.equal(normaliseExpression("Q2 is not Small business or Q1 > 2"), 'Q2 != "Small business" OR Q1 > 2');
+  // the comparator words the grammar used to miss — "over 25" was stored as the literal "over 25", a rule never true
+  assert.equal(normaliseExpression("Q7 is Male and Q9 is over 25"), "Q7 = Male AND Q9 > 25");
+  assert.equal(normaliseExpression("Q9 is under 18"), "Q9 < 18");
   assert.equal(normaliseExpression('Q4 = "United States"'), 'Q4 = "United States"', "already quoted stays as it is");
 });
 

@@ -1,4 +1,4 @@
-import type { AnalysisPlan, Condition, FlowNode, Question, SurveyDefinition, ValidationRule } from "@rescript/schema";
+import type { AnalysisPlan, Condition, FlowNode, OptionMask, Question, SurveyDefinition, ValidationRule } from "@rescript/schema";
 import { SurveyDefinition as SurveyDefinitionSchema, variantRegistry, Condition as ConditionSchema } from "@rescript/schema";
 import { forEachRule, isConditionNode } from "./conditionWalk.js";
 import { canonicalizeCondition } from "./optionCodes.js";
@@ -26,7 +26,7 @@ import { applyOptionAction, coerceOptionAction, describeOptionAction, isOptionOp
 import { validateActionOutcome, type ActionIssue } from "./actionValidation.js";
 import { impactOfAction, type ImpactReport } from "./impact.js";
 import { applyRename } from "./variableUsage.js";
-import { parseSetExpression } from "./setExpression.js";
+import { parseSetExpression, formatSetExpression } from "./setExpression.js";
 import { withoutPresentation, diffTheme } from "./theme.js";
 
 /**
@@ -1217,6 +1217,16 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
   const bIds = new Map(blocksB.map((b) => [b.id, b]));
   const aIds = new Map(blocksA.map((b) => [b.id, b]));
   const blockOf = (def: SurveyDefinition, qid: string) => listBlocks(def.flow as unknown[]).find((b) => b.pages.some((p) => p.node.questionIds.includes(qid)));
+  /*
+   * A BLOCK'S IDENTITY ACROSS THE TWO SIDES. A bare page is listed as a block
+   * of its own (its id is the page's); a page break wraps it in a real block
+   * with a new id, and removing the break unwraps it again. Matched by id, that
+   * read as "Add 1 block" and every question on the page "moved". A wrapped
+   * block that holds a page which is a bare page on the other side is that
+   * page's block — the same block, split or joined.
+   */
+  const keyOf = (b: { id: string; wrapped: boolean; pages: { node: { id: string } }[] } | undefined, other: Map<string, { wrapped: boolean }>) =>
+    !b ? undefined : other.has(b.id) || !b.wrapped ? b.id : (b.pages.find((p) => other.get(p.node.id)?.wrapped === false)?.node.id ?? b.id);
   const cond = (def: SurveyDefinition, c: Condition | undefined) => (c ? formatCondition(def, c, { width: 400 }).replace(/\s+/g, " ") : "");
   const questionsAdded = after.questions.filter((q) => !bq.has(q.id)).map((q) => ({ id: q.id, code: q.code, type: typeLabel(q), text: plain(q.text, 90), block: blockOf(after, q.id)?.title }));
   const questionsRemoved = before.questions.filter((q) => !aq.has(q.id)).map((q) => ({ id: q.id, code: q.code, text: plain(q.text, 90) }));
@@ -1233,7 +1243,7 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
   const keptB = orderB.filter((id) => aq.has(id)), keptA = orderA.filter((id) => bq.has(id));
   // the questions that moved are those outside the longest run both orders share — a swap names one question, not two
   const stayed = longestCommonSubsequence(keptB, keptA);
-  const questionsMoved = kept.filter((q) => !stayed.has(q.id) || blockOf(before, q.id)?.id !== blockOf(after, q.id)?.id).map((q) => ({ id: q.id, code: q.code, from: placeOf(before, orderB, q.id), to: placeOf(after, orderA, q.id) }));
+  const questionsMoved = kept.filter((q) => !stayed.has(q.id) || keyOf(blockOf(before, q.id), aIds) !== keyOf(blockOf(after, q.id), bIds)).map((q) => ({ id: q.id, code: q.code, from: placeOf(before, orderB, q.id), to: placeOf(after, orderA, q.id) }));
   const questionsModified: QuestionChange[] = [];
   let dAdded = 0, dChanged = 0, dRemoved = 0, sAdded = 0, sRemoved = 0;
   for (const q of after.questions) {
@@ -1247,10 +1257,33 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
     push("variable", p.variableName, q.variableName);
     push("required", p.required ? "required" : "optional", q.required ? "required" : "optional");
     push("options", (p.options ?? []).map((o) => o.label).join(" | "), (q.options ?? []).map((o) => o.label).join(" | "));
+    /*
+     * WHAT AN OPTION-LEVEL ACTION WRITES must read as a change too: a recode,
+     * a flag (exclusive, other-specify, anchored), an option's own display
+     * condition or export value, a mask. Only the labels were compared, so
+     * "mask the brands selected in Q5 from Q10" or "recode B as 7" produced
+     * a proposal the review called empty — and Apply refused it as nothing.
+     */
+    const optCodes = (x: Question) => (x.options ?? []).map((o) => `${o.code}=${o.label}`).join(" | ");
+    if ((p.options ?? []).map((o) => o.label).join("|") === (q.options ?? []).map((o) => o.label).join("|")) push("option codes", optCodes(p), optCodes(q));
+    const optFlags = (x: Question) => (x.options ?? []).filter((o) => o.flags?.length).map((o) => `${o.label}: ${o.flags!.join(", ")}`).join(" | ");
+    push("option flags", optFlags(p), optFlags(q));
+    const optVis = (d: SurveyDefinition, x: Question) => (x.options ?? []).filter((o) => o.visibleIf).map((o) => `${o.label}: ${cond(d, o.visibleIf)}`).join(" | ");
+    push("option display conditions", optVis(before, p), optVis(after, q));
+    const optVal = (x: Question) => (x.options ?? []).filter((o) => o.value !== undefined).map((o) => `${o.label}=${o.value}`).join(" | ");
+    push("option values", optVal(p), optVal(q));
+    for (const [key, field] of [["mask", "mask"], ["rowMask", "row mask"], ["columnMask", "column mask"]] as const) {
+      const m = (d: SurveyDefinition, x: Question) => { const v = (x as Record<string, unknown>)[key] as OptionMask | undefined; return v ? `${v.action}: ${formatSetExpression(d, v.expr)}` : ""; };
+      push(field, m(before, p), m(after, q));
+    }
+    push("custom JavaScript", (p.customJs ?? "").slice(0, 120), (q.customJs ?? "").slice(0, 120));
+    push("custom CSS", (p.customCss ?? "").slice(0, 120), (q.customCss ?? "").slice(0, 120));
     push("rows", (p.rows ?? []).map((o) => o.label).join(" | "), (q.rows ?? []).map((o) => o.label).join(" | "));
     push("display logic", cond(before, p.displayLogic), cond(after, q.displayLogic));
     push("skip rules", String(p.skipLogic?.length ?? 0), String(q.skipLogic?.length ?? 0));
-    push("validation", (p.validation ?? []).map((v) => v.kind).join(", "), (q.validation ?? []).map((v) => v.kind).join(", "));
+    // a rule's value is part of it: "between 18 and 99" → "between 21 and 99" keeps the kinds and must still read as a change
+    const vText = (x: Question) => (x.validation ?? []).map((v) => `${v.kind}${v.value !== undefined && v.value !== null ? ` ${typeof v.value === "object" ? JSON.stringify(v.value) : v.value}` : ""}`).join(", ");
+    push("validation", vText(p), vText(q));
     push("randomized", p.randomization?.enabled ? "yes" : "no", q.randomization?.enabled ? "yes" : "no");
     push("punch rules", punchText(before, p), punchText(after, q));
     // look-and-behaviour fields of a question: without them a proposal that only sets these would read as "no change"
@@ -1266,9 +1299,12 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
     if (ch.length) questionsModified.push({ id: q.id, code: q.code, changes: ch });
   }
   for (const q of before.questions) if (!aq.has(q.id)) { if (q.displayLogic) dRemoved++; sRemoved += q.skipLogic?.length ?? 0; }
-  const blocksAdded = blocksA.filter((b) => !bIds.has(b.id) && !(b.pages.length === 1 && bIds.has(b.pages[0].node.id))).map((b) => ({ id: b.id, title: b.title ?? b.id, questions: b.pages.reduce((n, p) => n + p.node.questionIds.length, 0) }));
-  const blocksRemoved = blocksB.filter((b) => !aIds.has(b.id) && !blocksA.some((x) => x.pages.some((p) => p.node.id === b.id))).map((b) => ({ id: b.id, title: b.title ?? b.id }));
-  const blocksRenamed = blocksA.filter((b) => bIds.has(b.id) && (bIds.get(b.id)!.title ?? "") !== (b.title ?? "")).map((b) => ({ id: b.id, from: bIds.get(b.id)!.title ?? "", to: b.title ?? "" }));
+  const keysB = new Map(blocksB.map((b) => [keyOf(b, aIds)!, b]));
+  const keysA = new Map(blocksA.map((b) => [keyOf(b, bIds)!, b]));
+  const blocksAdded = blocksA.filter((b) => !keysB.has(keyOf(b, bIds)!) && !(b.pages.length === 1 && bIds.has(b.pages[0].node.id))).map((b) => ({ id: b.id, title: b.title ?? b.id, questions: b.pages.reduce((n, p) => n + p.node.questionIds.length, 0) }));
+  const removedB = blocksB.filter((b) => !keysA.has(keyOf(b, aIds)!) && !blocksA.some((x) => x.pages.some((p) => p.node.id === b.id)));
+  const blocksRemoved = removedB.map((b) => ({ id: b.id, title: b.title ?? b.id }));
+  const blocksRenamed = blocksA.flatMap((b) => { const was = keysB.get(keyOf(b, bIds)!); return was && (was.title ?? "") !== (b.title ?? "") ? [{ id: b.id, from: was.title ?? "", to: b.title ?? "" }] : []; });
   const countType = (def: SurveyDefinition, t: string) => { let n = 0; const walk = (ns: FlowNode[]) => { for (const x of ns) { if (x.type === t) n++; const k = x as { children?: FlowNode[]; branches?: { children: FlowNode[] }[]; otherwise?: FlowNode[] }; if (k.children) walk(k.children); if (k.branches) for (const b of k.branches) walk(b.children); if (k.otherwise) walk(k.otherwise); } }; walk(def.flow as FlowNode[]); return n; };
   const embeddedNames = (def: SurveyDefinition) => { const out: string[] = []; const walk = (ns: FlowNode[]) => { for (const x of ns) { if (x.type === "embedded_data") out.push(...x.fields.map((f) => f.name)); const k = x as { children?: FlowNode[] }; if (k.children) walk(k.children); } }; walk(def.flow as FlowNode[]); return out; };
   const eb = new Set(embeddedNames(before));
@@ -1303,6 +1339,8 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
     randomizedAdded ? `Randomize the options of ${n(randomizedAdded, "question")}` : "",
     // a new block brings its own page; only the breaks beyond that are news
     pages.after - pages.before - blocksAdded.length > 0 ? `Add ${n(pages.after - pages.before - blocksAdded.length, "page break")}` : "",
+    // pages joined — beyond the pages of the blocks that were deleted outright
+    pages.before - pages.after - removedB.reduce((k, b) => k + b.pages.length, 0) > 0 ? `Remove ${n(pages.before - pages.after - removedB.reduce((k, b) => k + b.pages.length, 0), "page break")}` : "",
     embeddedAdded.length ? `Add embedded ${embeddedAdded.join(", ")}` : "",
     calculationsAdded.length ? `Add calculation${calculationsAdded.length === 1 ? "" : "s"} ${calculationsAdded.join(", ")}` : "",
     ...quotaDiff(before, after),

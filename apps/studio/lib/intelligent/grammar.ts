@@ -3,10 +3,11 @@ import type { Intent, ValidationSpec } from "./proposal.ts";
 /**
  * THE DETERMINISTIC GRAMMAR — a sentence into an intent, with no network.
  *
- * This is what the Intelligent mode runs when no language model is
- * configured, and what it runs FIRST even when one is: a sentence these
- * patterns recognise never leaves the machine, costs nothing, and means the
- * same thing every time. The model is for the sentences these do not catch.
+ * The engine's own interpreter (`interpretRequest`) reads every sentence
+ * first; this grammar answers what the engine defers to it (explain,
+ * diagnose, screening, loops, hidden variables) and, with no model
+ * configured, the shapes it knows. Either way a sentence these patterns
+ * recognise never leaves the machine and means the same thing every time.
  *
  * It recognises the shapes a survey programmer actually types —
  *

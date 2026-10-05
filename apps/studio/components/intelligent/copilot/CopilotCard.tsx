@@ -5,7 +5,8 @@ import { Icon } from "../../ui/Icon";
 import { linkify } from "../../../lib/copilot/client";
 import { formatCharge } from "../../../lib/import/chat";
 import { languageName } from "../../../lib/intelligent/voice";
-import type { CopilotEntry } from "./useCopilot";
+import type { CopilotEntry, EngineTurn } from "./useCopilot";
+import type { SurveyAction } from "@rescript/engine";
 
 /**
  * ONE COPILOT TURN in the conversation: what the researcher said (and, when
@@ -18,7 +19,7 @@ import type { CopilotEntry } from "./useCopilot";
  *
  * Every question code in the copilot's words is a link to the question.
  */
-export function CopilotCard({ entry, def, onSelect, onReviewChanges, onApply, onCancel, onAnswer, counts, canApply, applyTitle, refused = [] }: {
+export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges, onApply, onCancel, onAnswer, onAsk, onPreviewFix, counts, canApply, applyTitle, refused = [] }: {
   entry: CopilotEntry;
   def: SurveyDefinition;
   onSelect(questionId: string): void;
@@ -26,6 +27,12 @@ export function CopilotCard({ entry, def, onSelect, onReviewChanges, onApply, on
   onApply(): void;
   onCancel(): void;
   onAnswer(text: string): void;
+  /** an engine reference (a dependency-index key) to navigate to */
+  onSelectKey?(key: string): void;
+  /** send a sentence as a new request — an engine choice or suggested wording */
+  onAsk?(text: string): void;
+  /** preview the engine's suggested fix as a proposal */
+  onPreviewFix?(actions: SurveyAction[], label: string): void;
   counts: { label: string; value: number }[] | null;
   canApply: boolean;
   /** the proposal's actions the Studio refused, each with its reason — shown here, so a disabled Apply is never a mystery */
@@ -48,6 +55,7 @@ export function CopilotCard({ entry, def, onSelect, onReviewChanges, onApply, on
         <div className="iq-card-head">
           <span className="iq-kicker"><Icon name="sparkle" size={11} /> {entry.status === "thinking" ? "THINKING" : entry.status === "failed" ? "COULD NOT ANSWER" : state === "applied" ? `APPLIED${entry.changeN ? ` · AI CHANGE #${String(entry.changeN).padStart(3, "0")}` : ""}` : state === "superseded" ? "REVISED BELOW" : state === "cancelled" ? "CANCELLED" : r?.kind === "proposal" ? "PROPOSED" : r?.kind === "review" ? "REVIEW" : r?.kind === "clarify" ? "QUESTION" : "COPILOT"}</span>
           {entry.context?.researchUsed && <span className="iq-source" title={`${entry.context.passages.length} passage(s) from your research documents were used`} data-testid="cp-research-used">research · {entry.context.passages.length}</span>}
+          {entry.engine && <span className="iq-source cp-engine-badge" data-testid="cp-engine" data-category={entry.engine.category ?? ""} title="Interpreted and checked by the Studio's own survey engine — no language model was called, nothing was charged">internal engine · no model call</span>}
           {entry.context?.cached && <span className="iq-source" title="The same request was answered moments ago; no new model call was made">cached</span>}
           <span className="iq-spacer" />
           {entry.usage && entry.usage.charge > 0 && <span className="iqi-dim" data-testid="cp-charge">{formatCharge(entry.usage.charge)}</span>}
@@ -60,6 +68,7 @@ export function CopilotCard({ entry, def, onSelect, onReviewChanges, onApply, on
         {r && (
           <>
             <p className="cp-reply" data-testid="cp-reply"><Linked text={r.reply} def={def} onSelect={onSelect} /></p>
+            {entry.engine && <EngineDetail engine={entry.engine} def={def} onSelect={onSelect} onSelectKey={onSelectKey} onAsk={onAsk} onPreviewFix={onPreviewFix} open={state === "open"} />}
             {u && (
               <details className="cp-understanding" open={r.kind === "proposal" && !!u.variables.length} data-testid="cp-understanding">
                 <summary className="iq-label">Research understanding</summary>
@@ -140,6 +149,50 @@ export function CopilotCard({ entry, def, onSelect, onReviewChanges, onApply, on
         )}
       </div>
     </article>
+  );
+}
+
+/**
+ * WHAT THE ENGINE RESOLVED, said before anything is applied: the condition
+ * with its option label, the range, the target — so "If Q7 is No, skip Q8
+ * through Q12" visibly became "Q7 = 2 (No) · Q8–Q12 → Q13". An answer's
+ * sections link every object they name; a refusal says why and offers the
+ * fix the engine checked.
+ */
+function EngineDetail({ engine, def, onSelect, onSelectKey, onAsk, onPreviewFix, open }: { engine: EngineTurn; def: SurveyDefinition; onSelect(id: string): void; onSelectKey?(key: string): void; onAsk?(text: string): void; onPreviewFix?(actions: SurveyAction[], label: string): void; open: boolean }) {
+  const nav = (key?: string) => (key ? () => (key.startsWith("question:") ? onSelect(key.slice(9)) : onSelectKey?.(key)) : undefined);
+  return (
+    <div className="cp-engine" data-testid="cp-engine-detail" data-kind={engine.kind}>
+      {engine.detected.length > 0 && (
+        <dl className="cp-detected" data-testid="cp-detected">
+          {engine.detected.slice(0, 8).map((d, i) => <div key={i} className="cp-detected-row"><dt>{d.what}</dt><dd><Linked text={d.value} def={def} onSelect={onSelect} /></dd></div>)}
+        </dl>
+      )}
+      {engine.kind === "actions" && open && <p className="iqi-dim cp-engine-note">Checked by the internal logic engine before it is shown — review the changes, then apply.</p>}
+      {engine.warnings?.map((w, i) => <p key={i} className="iq-warning" data-testid="cp-engine-warning"><Icon name="warning" size={12} /> <Linked text={w} def={def} onSelect={onSelect} /></p>)}
+      {engine.sections?.map((sec) => (
+        <section key={sec.title} className="cp-engine-section" data-testid="cp-engine-section" data-title={sec.title}>
+          <div className="iq-label">{sec.title} · {sec.items.length}</div>
+          <ul>{sec.items.slice(0, 40).map((it, i) => {
+            const go = nav(it.key);
+            return <li key={i} data-key={it.key ?? ""}>{go ? <button type="button" className="cp-ref" onClick={go} data-testid="cp-engine-ref">{it.label}</button> : <span>{it.label}</span>}{it.detail ? <span className="iqi-dim"> — <Linked text={it.detail} def={def} onSelect={onSelect} /></span> : null}</li>;
+          })}{sec.items.length > 40 && <li className="iqi-dim">and {sec.items.length - 40} more</li>}</ul>
+        </section>
+      ))}
+      {engine.choices && engine.choices.length > 0 && (
+        <div className="cp-clarify" data-testid="cp-engine-choices">
+          {engine.choices.map((c, i) => <button key={i} type="button" className="iq-example cp-q" onClick={() => onAsk?.(c.text)} data-testid="cp-engine-choice"><span className="iq-example-text">{c.label}</span><span className="iq-example-about">{c.text}</span></button>)}
+        </div>
+      )}
+      {engine.kind === "refused" && engine.suggestion && (
+        <div className="cp-suggestion" data-testid="cp-engine-suggestion">
+          <span className="iq-label">Suggested</span> <span><Linked text={engine.suggestion.text} def={def} onSelect={onSelect} /></span>
+          {engine.suggestion.actions?.length
+            ? <button type="button" className="iq-btn primary" onClick={() => onPreviewFix?.(engine.suggestion!.actions!, engine.suggestion!.text)} data-testid="cp-engine-fix">Preview the suggested fix</button>
+            : <button type="button" className="iq-btn" onClick={() => onAsk?.(engine.suggestion!.text)} data-testid="cp-engine-retry">Ask this instead</button>}
+        </div>
+      )}
+    </div>
   );
 }
 

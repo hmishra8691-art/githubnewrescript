@@ -4,6 +4,7 @@ import type { Condition, SurveyDefinition } from "@rescript/schema";
 import { variantRegistry } from "@rescript/schema";
 import {
   buildDependencyIndex, objectStatus, applyLogicProposal, proposalTargets, formatCondition, nextQuestionNaming,
+  interpretRequest, DEFER_TO_GRAMMAR,
   type ObjectKey,
   type SurveyAction,
 } from "@rescript/engine";
@@ -40,9 +41,11 @@ import { proposalCounts } from "../../lib/copilot/client";
  *   └──────────────────────────────────────────────┴─────────────────┘
  *
  * This is an assistant over the same engine the other four modes use, not
- * a fifth way to store logic. A sentence becomes an INTENT (the
- * deterministic grammar first; the language model, when configured, for
- * what the grammar does not catch), the intent becomes a PROPOSAL against
+ * a fifth way to store logic. A sentence is read by the ENGINE first
+ * (`interpretRequest`: actions, an answer from the survey's graph, a choice,
+ * or a precise refusal — no model call); what it hands on goes to the
+ * copilot, or — for explain, diagnose and screening, and with no model — to
+ * the grammar, whose INTENT becomes a PROPOSAL against
  * the real survey (lib/intelligent/proposal.ts — the condition is parsed by
  * the expression editor's parser, the changes are validated by the engine),
  * and the proposal is SHOWN. Nothing is written until Apply, and Apply is
@@ -67,9 +70,11 @@ import { proposalCounts } from "../../lib/copilot/client";
  * controlled action layer. Its proposal is shown whole (the Changes panel:
  * what is created, modified, removed, before/after) and applied as ONE
  * undoable edit, recorded in the AI change history. Research documents
- * attach to the project and are read a few relevant passages at a time. The
- * deterministic grammar stays: for exact read-only questions ("what depends
- * on Q3?", "why is Q20 not showing?"), and as the whole of the mode when no
+ * attach to the project and are read a few relevant passages at a time.
+ * The model is asked only for what the engine cannot do deterministically
+ * (generation from a brief, rewording, translation text, research synthesis,
+ * narrative findings, phrasing the engine does not parse). The grammar stays
+ * for explain, diagnose and screening, and for the shapes it knows when no
  * model is configured or the model's answer is unusable.
  *
  *   ┌──────────┬──────────────────────────────┬────────────────────────┐
@@ -173,11 +178,15 @@ export function IntelligentView() {
   });
   const [applyNote, setApplyNote] = React.useState<string | null>(null);
   const applyCopilot = React.useCallback(() => {
+    // what the change is about — the first question it adds, else the first it modifies — becomes the selection once applied, as a grammar Apply always did
+    const st = copilot.state;
+    const focus = st ? (st.diff.questionsAdded[0]?.id ?? st.diff.questionsModified[0]?.id ?? null) : null;
     const r = copilot.apply();
     setApplyNote(r.ok ? null : r.reason ?? null);
+    if (r.ok && focus) selectKey(`question:${focus}` as ObjectKey);
     if (r.ok) s.toast(r.message ? `${r.message} Undo from History, or ⌘Z.` : "Applied as one change. Undo from History, or ⌘Z.");
     else if (r.reason) s.toast(r.reason, "err");
-  }, [copilot, s]);
+  }, [copilot, s, selectKey]);
   const selectQuestion = React.useCallback((id: string) => selectKey(`question:${id}` as ObjectKey), [selectKey]);
 
   /* ---------------------------------------------------------------- ask */
@@ -190,14 +199,35 @@ export function IntelligentView() {
     setBusy(true);
     setText("");
     /*
-     * WHO ANSWERS. An exact read-only question the grammar understands —
-     * "what depends on Q3?", "why is Q20 not showing?" — is answered from the
-     * survey itself: exact, instant, free. Everything else goes to the
-     * copilot when a model is configured; the grammar planner below is what
-     * runs when none is, or when the model's answer had nothing usable.
+     * WHO ANSWERS — THE ENGINE FIRST. The Studio's own engine reads the
+     * sentence against the survey: an edit it can resolve ("if Q7 is No, skip
+     * Q8 through Q12", "randomize these options but keep None last", "mask
+     * the brands selected in Q5 from Q10") becomes actions, checked by the
+     * logic engine and shown for review; a question about the survey ("what
+     * will break if I delete Q15?", "which questions are untranslated?") is
+     * answered from its graph; an ambiguity becomes a choice; an impossible
+     * request a precise refusal with the fix. None of that calls a model.
+     * The language model is asked only for what the engine hands on —
+     * generation from a brief, rewording, translation text, research
+     * synthesis, narrative findings, phrasing it does not parse — and the
+     * engine's "defer to the grammar" goes to the grammar's read-only
+     * answers (explain, diagnose, screening) without a model either.
      */
+    const ids = (sel?.keys ?? []).filter((k) => k.startsWith("question:")).map((k) => k.slice(9));
+    const interp = interpretRequest(copilot.working, t, { selectedId, ...(ids.length > 1 ? { selectedIds: ids } : {}) });
+    if (interp.kind !== "model") {
+      copilot.local(t, interp, heard);
+      if (interp.kind === "actions") {
+        setShowInspector(true);
+        // the proposal's target is the selection — the inspector shows how it is wired NOW, and "this question" means it next
+        const target = interp.targets.find((id) => s.def.questions.some((q) => q.id === id));
+        if (target) selectKey(`question:${target}` as ObjectKey);
+      }
+      setBusy(false); inputRef.current?.focus(); return;
+    }
+    const deferred = interp.reason === DEFER_TO_GRAMMAR;
     const pre = parseIntent(t);
-    const readOnlyExact = ["find", "explain", "diagnose", "screening"].includes(pre.kind) && !planProposal(s.def, pre, "grammar", deps).errors.length;
+    const readOnlyExact = deferred || (["find", "explain", "diagnose", "screening"].includes(pre.kind) && !planProposal(s.def, pre, "grammar", deps).errors.length);
     if (!readOnlyExact && copilot.available !== false) {
       // an unusable model answer ("empty") falls through to the grammar; anything else is the copilot's
       const outcome = await copilot.ask(t, heard);
@@ -210,7 +240,8 @@ export function IntelligentView() {
     // the grammar did not understand, or understood but could not find the object: ask the model, if there is one
     // the grammar did not understand, could not find the object, or read a condition the parser rejects: the model may know better (§17)
     const askModel = intent.kind === "unknown" || plan.errors.some((e) => /could not find/.test(e)) || (plan.expression?.errors.length ?? 0) > 0;
-    if (askModel && aiAvailable !== false) {
+    // the older single-intent model route is asked only when there is no copilot: one sentence, one model call at most
+    if (askModel && aiAvailable !== false && copilot.available === false) {
       try {
         const r = await fetch("/api/ai/logic", {
           method: "POST", headers: { "content-type": "application/json" },
@@ -245,7 +276,7 @@ export function IntelligentView() {
     setBusy(false);
     inputRef.current?.focus();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [busy, primary, s.def, s.surveyDbId, deps, aiAvailable, selectKey, copilot]);
+  }, [busy, primary, s.def, s.surveyDbId, deps, aiAvailable, selectKey, copilot, sel, selectedId]);
 
   /* -------------------------------------------------------------- apply */
   const apply = React.useCallback((turn: Turn) => {
@@ -582,8 +613,8 @@ export function IntelligentView() {
           <button type="button" className="iq-btn" onClick={() => { setText("My hypothesis is that … Target respondents: … Create a survey that tests it."); inputRef.current?.focus(); }} data-testid="cp-generate" title="Describe an objective or hypothesis; the copilot proposes the whole survey"><Icon name="plus" size={13} /> Generate survey</button>
           <button type="button" className="iq-btn" onClick={() => { setShowInspector(true); void copilot.runReview(); }} disabled={busy} data-testid="cp-review" title="Check logic, reachability, wording, scales, duplicates, length — and, with a model, research alignment"><Icon name="check" size={13} /> Review</button>
           <button type="button" className="iq-btn" onClick={() => { const last = [...copilot.history].reverse().find((h) => !h.reverted); if (last) { const r = copilot.revert(last.n); if (!r.ok && r.reason) { setShowInspector(true); copilot.setTab("history"); s.toast(r.reason, "err"); } } }} disabled={!copilot.history.some((h) => !h.reverted)} data-testid="cp-undo-last" title="Undo the last AI change, as one operation">Undo AI change</button>
-          <span className="iq-provider" data-testid="iq-provider" data-ai={aiAvailable === null && copilot.available === null ? "unknown" : copilot.available || aiAvailable ? "on" : "off"} data-copilot={copilot.available === null ? "unknown" : copilot.available ? "on" : "off"} title={copilot.available === false ? "No language model is configured on this Studio; the built-in grammar handles the common shapes." : "The copilot reasons with the configured model and programs through the engine; exact read-only questions are answered by the engine directly."}>
-            {copilot.available === false ? "grammar only" : copilot.available ? "copilot" : aiAvailable ? "grammar + model" : "grammar"}
+          <span className="iq-provider" data-testid="iq-provider" data-ai={aiAvailable === null && copilot.available === null ? "unknown" : copilot.available || aiAvailable ? "on" : "off"} data-copilot={copilot.available === null ? "unknown" : copilot.available ? "on" : "off"} title={copilot.available === false ? "The Studio's engine reads every request first — edits, logic, options, dependencies, impact — with no model call. No language model is configured, so what the engine hands on (rewording, generation, translation text) is not available." : "The Studio's engine reads every request first and does everything it can deterministically, with no model call; the copilot (the configured model) is asked only for what it hands on."}>
+            {copilot.available === false ? "engine only" : copilot.available ? "engine + copilot" : aiAvailable ? "engine + model" : "engine"}
           </span>
           <button type="button" className={`iq-btn${showInspector ? " on" : ""}`} onClick={() => setShowInspector((v) => !v)} aria-pressed={showInspector} data-testid="iq-toggle-inspector" title="Inspector">
             <Icon name="info" size={13} /> Panel
@@ -632,6 +663,8 @@ export function IntelligentView() {
                   <CopilotCard key={turn.id} entry={turn} def={copilot.state && turn.proposal === "open" ? copilot.state.after : s.def} onSelect={selectQuestion}
                     onReviewChanges={() => { setShowInspector(true); copilot.setTab("changes"); }} onApply={applyCopilot} onCancel={copilot.cancel}
                     onAnswer={(q) => { setText(`${q} — `); inputRef.current?.focus(); }}
+                    onSelectKey={(k) => selectKey(k as ObjectKey)} onAsk={(q) => void ask(q)}
+                    onPreviewFix={(actions, label) => { copilot.previewFix(actions, label); setShowInspector(true); }}
                     counts={open ? proposalCounts(copilot.state!.diff, copilot.state!.after) : null}
                     canApply={!!open && !s.readOnly && !copilot.state!.diff.empty && (!copilot.state!.destructive.length || copilot.confirmed)}
                     refused={open ? copilot.state!.errors : []}
