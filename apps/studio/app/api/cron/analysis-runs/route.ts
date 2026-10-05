@@ -37,8 +37,9 @@ function authorised(req: Request): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-export async function GET(req: Request) { return run(req); }
-export async function POST(req: Request) { return run(req); }
+// the bearer token is checked in each handler's FIRST statement (the auth-guard audit's rule for a scheduler route), and again in run()
+export async function GET(req: Request) { if (!authorised(req)) return NextResponse.json({ error: "not authorised" }, { status: 401 }); return run(req); }
+export async function POST(req: Request) { if (!authorised(req)) return NextResponse.json({ error: "not authorised" }, { status: 401 }); return run(req); }
 
 async function run(req: Request): Promise<NextResponse> {
   if (!authorised(req)) return NextResponse.json({ error: "not authorised" }, { status: 401 });

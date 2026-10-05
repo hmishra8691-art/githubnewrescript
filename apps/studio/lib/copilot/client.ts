@@ -112,7 +112,15 @@ export const sameSurvey = (a: SurveyDefinition, b: SurveyDefinition) => a === b 
 /* ------------------------------------------------------------ history */
 
 export interface ChangeRecord {
-  n: number;
+  /**
+   * The AI change number — the SERVER's (the operation history assigns it
+   * when the change is applied: the survey's max + 1). Null until it has
+   * answered, or when it could not be reached; never the page's own count,
+   * which restarted at #001 on every reload.
+   */
+  n: number | null;
+  /** the operation-history entry this change is (lib/copilot/history.ts) */
+  key?: string;
   at: string;
   request: string;
   summary: string[];
@@ -127,17 +135,20 @@ export interface ChangeRecord {
   /** the proposed changes the researcher left out of this apply, in words ("Removed option 3 “None” from Q5") — absent when nothing was */
   excluded?: string[];
 }
-export function changeRecord(n: number, request: string, state: ProposalState, before: SurveyDefinition, at = new Date().toISOString(), excluded: string[] = []): ChangeRecord {
-  const d = state.diff;
-  const label = `AI change #${String(n).padStart(3, "0")}: ${d.summary[0] ?? request.slice(0, 60)}`;
+export function changeRecord(n: number | null, request: string, state: ProposalState, before: SurveyDefinition, at = new Date().toISOString(), excluded: string[] = []): ChangeRecord {
+  return changeRecordOf(n, request, state.diff, before, state.after, at, excluded);
+}
+/** the same record from any two surveys and their diff — the grammar's Apply has no proposal state */
+export function changeRecordOf(n: number | null, request: string, d: SurveyDiff, before: SurveyDefinition, after: SurveyDefinition, at = new Date().toISOString(), excluded: string[] = []): ChangeRecord {
+  const label = `AI change${n ? ` #${String(n).padStart(3, "0")}` : ""}: ${d.summary[0] ?? request.slice(0, 60)}`;
   return {
-    n, at, request, summary: d.summary, before, after: state.after, label, ...(excluded.length ? { excluded } : {}),
+    n, at, request, summary: d.summary, before, after, label, ...(excluded.length ? { excluded } : {}),
     created: [...d.blocksAdded.map((b) => `block “${b.title}”`), ...d.questionsAdded.map((q) => q.code), ...d.embeddedAdded.map((e) => `embedded ${e}`), ...d.calculationsAdded.map((c) => `calculation ${c}`), ...d.quotasAdded.map((q) => `quota “${q}”`), ...d.ux.added.map((x) => `${x.kind} “${x.label}” (${x.target})`)],
     modified: [...d.questionsModified.map((q) => q.code), ...d.blocksRenamed.map((b) => `block “${b.to}”`), ...d.ux.changed.map((x) => `${x.kind} “${x.label}”`), ...(d.theme.length ? [`theme (${d.theme.length} setting${d.theme.length === 1 ? "" : "s"})`] : [])],
     removed: [...d.questionsRemoved.map((q) => q.code), ...d.blocksRemoved.map((b) => `block “${b.title}”`), ...d.ux.removed.map((x) => `${x.kind} “${x.label}”`)],
   };
 }
-export const changeLabel = (n: number) => `AI Change #${String(n).padStart(3, "0")}`;
+export const changeLabel = (n: number | null | undefined) => (n ? `AI Change #${String(n).padStart(3, "0")}` : "AI Change (not numbered)");
 
 /* ------------------------------------------------------------ memory */
 

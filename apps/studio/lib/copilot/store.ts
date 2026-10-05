@@ -2,6 +2,7 @@ import "server-only";
 import type { ResearchChunk } from "@rescript/import/research";
 import { supabaseAdmin } from "@/lib/admin";
 import type { DocSummary } from "./research";
+import { dbConfigured, memoryOf, storeWithFallback } from "./durable";
 
 /**
  * THE RESEARCH STORE (migration 0045): documents and their passages, per
@@ -29,13 +30,8 @@ export interface StoredDoc {
 export interface StoredChunk extends ResearchChunk { embedding?: number[] }
 
 interface MemorySlot { docs: StoredDoc[]; chunks: Map<string, StoredChunk[]> }
-declare global {
-  // eslint-disable-next-line no-var
-  var __rescriptCopilotStore: Map<string, MemorySlot> | undefined;
-}
-const memory = (): Map<string, MemorySlot> => (globalThis.__rescriptCopilotStore ??= new Map<string, MemorySlot>());
-const dbConfigured = () => !!process.env.SUPABASE_URL && !!process.env.SUPABASE_SERVICE_ROLE_KEY;
-const missing = (m: string) => /relation .* does not exist|does not exist|schema cache/i.test(m);
+/* the server's memory for a survey's documents — the fallback pattern (and its table probe) is shared, in ./durable */
+const memory = (): Map<string, MemorySlot> => memoryOf<MemorySlot>("research");
 
 export function newRef(taken: Set<string>): string {
   for (;;) { const r = `d${Math.random().toString(36).slice(2, 6)}`; if (!taken.has(r)) return r; }
@@ -111,10 +107,11 @@ class SupabaseStore implements ResearchStore {
  * loud rather than failing the upload.
  */
 export async function researchStoreFor(surveyId: string): Promise<ResearchStore> {
-  if (surveyId === "sandbox" || !dbConfigured()) return new MemoryStore();
-  const s = new SupabaseStore();
-  try { await s.list(surveyId); return s; } catch (e) {
-    if (missing((e as Error).message)) { console.warn("[rescript:copilot] research tables missing (apply migration 0045); keeping documents in memory"); return new MemoryStore(); }
-    throw e;
-  }
+  return storeWithFallback<ResearchStore>({
+    memoryOnly: surveyId === "sandbox" || !dbConfigured(),
+    durable: () => new SupabaseStore(),
+    probe: (s) => s.list(surveyId),
+    memory: () => new MemoryStore(),
+    what: "the research tables (apply migration 0045)",
+  });
 }

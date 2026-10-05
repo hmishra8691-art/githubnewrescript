@@ -120,6 +120,8 @@ export interface StudioState {
   /** What undo would take back, for the button's tooltip. */
   undoLabel: string | null;
   redoLabel: string | null;
+  /** how many edits undo can take back — a caller (and a browser suite) can tell an edit was NOT made */
+  undoDepth: number;
   /** Name the edit the next `update` performs, so undo can describe it. */
   labelNextEdit(label: string): void;
   /** switch the centre panel — lets one panel point at another */
@@ -161,6 +163,17 @@ export interface StudioState {
   noteConflict(serverRevision: number | null, message?: string): void;
   /** flush any pending autosave now; resolves when the draft is stored */
   flushDraft(): Promise<boolean>;
+  /**
+   * The definition the store holds RIGHT NOW — after `replace` normalised
+   * question order and option codes — for code that must record exactly
+   * what was written (the Intelligent history's "after"; comparing against
+   * the proposal's own result instead gave a false "the survey has changed"
+   * on revert, the audit's R21). Read through a ref: valid straight after
+   * `replace`, before React has re-rendered.
+   */
+  currentDef(): SurveyDefinition;
+  /** the save state right now, for code that runs after `await flushDraft()` (the rendered `saveState` is a render behind) */
+  currentSaveState(): SaveState;
   /** the revision right now — for code that runs after an await */
   currentRevision(): number | null;
   /**
@@ -214,9 +227,22 @@ export function StudioProvider({
 }) {
   const [def, setDef] = React.useState<SurveyDefinition>(initial);
   const [dirty, setDirty] = React.useState(!!draftSavedAt);
-  const [saveState, setSaveState] = React.useState<SaveState>(
+  const [saveState, setSaveStateRaw] = React.useState<SaveState>(
     draftSavedAt ? { kind: "clean", savedAt: draftSavedAt } : { kind: "clean", savedAt: null },
   );
+  /*
+   * The save state in a ref as well, written with it: an awaited
+   * flushDraft() reads the outcome before the next render. Every write goes
+   * through here, so the ref IS the latest state — an updater is applied to
+   * it at once rather than at render time (where it would run after, and
+   * overwrite, a refusal that a flush set in the same tick).
+   */
+  const saveStateRef = React.useRef(saveState);
+  const setSaveState = React.useCallback((next: SaveState | ((prev: SaveState) => SaveState)) => {
+    const v = typeof next === "function" ? next(saveStateRef.current) : next;
+    saveStateRef.current = v;
+    setSaveStateRaw(v);
+  }, []);
   const [selectedQuestionId, setSelected] = React.useState<string | null>(null);
   const [currentVersionId, setVersionId] = React.useState<string | null>(versionId);
   const [toastMsg, setToastMsg] = React.useState<{ msg: string; kind: "ok" | "err" } | null>(null);
@@ -311,9 +337,38 @@ export function StudioProvider({
   const autosaveTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlight = React.useRef<Promise<boolean> | null>(null);
   const sandbox = surveyDbId === "sandbox";
+  /*
+   * TEST SEAM — `window.__rescriptSaveFault(kind)`, honoured ONLY in the
+   * sandbox (surveyDbId "sandbox"), which has no row and so never writes:
+   * the next flushDraft / autosave resolves FALSE with the save state set to
+   * `kind` ("conflict", "lock_lost" or "error") and the message a real
+   * refusal of that kind carries — how a browser suite checks that the
+   * editor says "not saved" when a save is refused (the Intelligent
+   * history's save_failed, the copilot card's "Try saving again"). One-shot:
+   * the save after it succeeds again. Ignored on a real survey.
+   */
+  const saveFault = React.useRef<"conflict" | "lock_lost" | "error" | null>(null);
+  const faultShown = React.useRef(false);
+  React.useEffect(() => {
+    if (!sandbox) return;
+    const w = window as unknown as { __rescriptSaveFault?: (kind: string) => void };
+    w.__rescriptSaveFault = (kind) => { saveFault.current = kind === "conflict" || kind === "lock_lost" || kind === "error" ? kind : null; };
+    return () => { delete w.__rescriptSaveFault; };
+  }, [sandbox]);
 
   const persistDraft = React.useCallback(async (): Promise<boolean> => {
-    if (sandbox) return true; // the /sandbox fixture has no database row
+    if (sandbox) {
+      // the /sandbox fixture has no database row — except for the fault a suite asked for (see the seam above)
+      const fault = saveFault.current;
+      saveFault.current = null;
+      if (fault === "conflict") setSaveState({ kind: "conflict", message: "this survey changed elsewhere; your save was refused", serverRevision: null });
+      else if (fault === "lock_lost") setSaveState({ kind: "lock_lost", message: "This session is not currently holding the edit lock for the project.", recoverable: true, heldByName: null });
+      else if (fault === "error") setSaveState({ kind: "error", message: "save failed (500)" });
+      if (fault) { faultShown.current = true; return false; }
+      // the save after a simulated refusal clears it, as the real one would
+      if (faultShown.current) { faultShown.current = false; setSaveState({ kind: "dirty" }); }
+      return true;
+    }
     // never overlap two writes to the same row
     if (inFlight.current) await inFlight.current.catch(() => false);
     // A conflict means this editor is behind. Writing again would overwrite
@@ -451,7 +506,7 @@ export function StudioProvider({
     })();
     inFlight.current = run;
     return run;
-  }, [sandbox, surveyDbId, versionId]);
+  }, [sandbox, surveyDbId, versionId, setSaveState]);
 
   /** Debounced autosave, rescheduled on every edit. */
   const scheduleDraftSave = React.useCallback(() => {
@@ -621,6 +676,7 @@ export function StudioProvider({
     canRedo: future.length > 0,
     undoLabel: past.length ? past[past.length - 1].label : null,
     redoLabel: future.length ? future[future.length - 1].label : null,
+    undoDepth: past.length,
     /** true when something was undone — a caller reverting a failed save needs to know */
     undo() {
       const stack = pastRef.current;
@@ -697,6 +753,8 @@ export function StudioProvider({
       }
     },
     flushDraft,
+    currentDef: () => latest.current,
+    currentSaveState: () => saveStateRef.current,
     currentRevision: () => revisionRef.current,
     hasConflict: () => blocked.current,
     noteConflict(serverRevision, message) {

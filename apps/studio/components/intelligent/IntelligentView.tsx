@@ -4,7 +4,7 @@ import type { Condition, SurveyDefinition } from "@rescript/schema";
 import { variantRegistry } from "@rescript/schema";
 import {
   buildDependencyIndex, objectStatus, applyLogicProposal, proposalTargets, formatCondition, nextQuestionNaming,
-  interpretRequest, DEFER_TO_GRAMMAR,
+  interpretRequest, DEFER_TO_GRAMMAR, diffSurveys,
   type ObjectKey,
   type SurveyAction,
 } from "@rescript/engine";
@@ -23,10 +23,11 @@ import { importRequest, importReviewAnswer, codeFromTitle } from "../../lib/impo
 import { ImportCard, ReviewCard, type ImportJob, type ReviewEntry, type ReviewScript } from "./ImportCard";
 import type { QuotaImportNote } from "./copilot/QuotasTab";
 import { useCopilot, type CopilotEntry } from "./copilot/useCopilot";
-import { CopilotCard } from "./copilot/CopilotCard";
+import { CopilotCard, SaveFailed } from "./copilot/CopilotCard";
 import { CopilotPanel } from "./copilot/CopilotPanel";
 import { StructurePane } from "./copilot/StructurePane";
-import { proposalCounts } from "../../lib/copilot/client";
+import { proposalCounts, changeRecordOf } from "../../lib/copilot/client";
+import { appliedKicker, changeNumber, type SaveView } from "../../lib/copilot/history";
 
 /**
  * INTELLIGENT — describe the change; review it; apply it.
@@ -50,7 +51,9 @@ import { proposalCounts } from "../../lib/copilot/client";
  * the expression editor's parser, the changes are validated by the engine),
  * and the proposal is SHOWN. Nothing is written until Apply, and Apply is
  * one labelled, undoable `store.update` that calls `applyLogicProposal` —
- * the same path a click in the Logic panel takes.
+ * the same path a click in the Logic panel takes — run on a CLONE first, so
+ * a proposal the engine refuses at Apply (it went stale) writes nothing,
+ * takes no undo step and leaves the editor clean (the audit's R20).
  *
  * Read-only questions ("what depends on Q3?") are answered from the
  * dependency index and never produce an Apply button at all.
@@ -93,6 +96,8 @@ interface Turn {
   reviewing?: boolean;
   /** when the sentence was spoken: what was heard, and how it was read (§18–§20) */
   heard?: HeardTranscript;
+  /** its entry in the operation history (the AI change number and the save live there) */
+  opKey?: string;
 }
 
 interface ImportTurn { id: string; kind: "import"; job: ImportJob }
@@ -177,14 +182,13 @@ export function IntelligentView() {
     patchAll: (fn) => setTurns((ts) => ts.map((x) => { if (!("kind" in x) || x.kind !== "copilot") return x; const p = fn(x); return p ? { ...x, ...p } : x; })),
   });
   const [applyNote, setApplyNote] = React.useState<string | null>(null);
-  const applyCopilot = React.useCallback(() => {
+  const applyCopilot = React.useCallback(async () => {
     // what the change is about — the first question it adds, else the first it modifies — becomes the selection once applied, as a grammar Apply always did
     const st = copilot.state;
     const focus = st ? (st.diff.questionsAdded[0]?.id ?? st.diff.questionsModified[0]?.id ?? null) : null;
-    const r = copilot.apply();
+    const r = await copilot.apply(() => { if (focus) selectKey(`question:${focus}` as ObjectKey); });
     setApplyNote(r.ok ? null : r.reason ?? null);
-    if (r.ok && focus) selectKey(`question:${focus}` as ObjectKey);
-    if (r.ok) s.toast(r.message ? `${r.message} Undo from History, or ⌘Z.` : "Applied as one change. Undo from History, or ⌘Z.");
+    if (r.ok) toastApplied(s, r.n ?? null, r.save, r.message);
     else if (r.reason) s.toast(r.reason, "err");
   }, [copilot, s, selectKey]);
   const selectQuestion = React.useCallback((id: string) => selectKey(`question:${id}` as ObjectKey), [selectKey]);
@@ -284,11 +288,19 @@ export function IntelligentView() {
     if (heard && heard.language !== "en" && heard.language !== "und" && !heard.english && intent.kind === "unknown") {
       plan = { ...plan, errors: [`I heard this in ${languageName(heard.language)}, but no language model is configured on this Studio to read it into English. Say it in English, or type it.`] };
     }
+    /* the grammar's reading is in the history too: proposed, answered, or failed with why */
+    const opKey = copilot.recordOp({
+      prompt: t, source: source === "ai" ? "model" : "grammar", intent: { kind: intent.kind, ...(source === "ai" ? { reader: "model" } : {}) },
+      status: plan.errors.length ? "failed" : plan.readOnly ? "answered" : "proposed",
+      proposed: plan.readOnly ? [] : plan.descriptions.map((description) => ({ description })), targets: proposalTargets(plan.changes), warnings: plan.warnings,
+      statusDetail: (plan.errors.join(" ") || plan.summary || "").slice(0, 2000) || null,
+      ...(source === "ai" ? { apiCalls: [{ route: "/api/ai/logic", charge: 0 }] } : {}),
+    });
     setTurns((ts) => {
       // the model had nothing usable and the grammar has an answer: show the answer, not the empty turn
       const lastEntry = ts[ts.length - 1];
       const drop = lastEntry && "kind" in lastEntry && lastEntry.kind === "copilot" && lastEntry.status === "empty" && lastEntry.text === t && !plan.errors.length ? lastEntry.id : null;
-      return [...ts.filter((x) => x.id !== drop), { id: uid("turn"), text: t, proposal: plan, state: plan.readOnly ? "applied" : "open", ...(heard ? { heard } : {}) }];
+      return [...ts.filter((x) => x.id !== drop), { id: uid("turn"), text: t, proposal: plan, state: plan.readOnly ? "applied" : "open", opKey, ...(heard ? { heard } : {}) }];
     });
     if (plan.targetKey) selectKey(plan.targetKey);
     setBusy(false);
@@ -297,27 +309,70 @@ export function IntelligentView() {
   }, [busy, primary, s.def, s.surveyDbId, deps, aiAvailable, selectKey, copilot, sel, selectedId]);
 
   /* -------------------------------------------------------------- apply */
-  const apply = React.useCallback((turn: Turn) => {
+  /*
+   * THE GRAMMAR'S APPLY — on a clone first. `applyLogicProposal` checks the
+   * whole proposal and then applies it change by change; run on the store's
+   * draft, a refusal still left an undo step and an editor marked unsaved,
+   * and a refusal mid-batch (a rename) left half of it written (the audit's
+   * R20). Run on a copy, a refused proposal touches nothing: the error is
+   * shown, the history records it as failed, the undo label is unchanged.
+   * Only a proposal that applied cleanly is written — one labelled `replace`
+   * — and recorded like the copilot's: applied, numbered, saved or not.
+   */
+  const apply = React.useCallback(async (turn: Turn) => {
     const p = turn.proposal;
     if (p.errors.length || p.readOnly || s.readOnly) { if (s.readOnly) s.toast("This project is read-only right now.", "err"); return; }
-    let outcome: string[] = [];
-    s.labelNextEdit(`Applied proposal: ${p.summary}`);
-    s.update((d) => {
-      const r = applyLogicProposal(d, p.changes);
-      outcome = r.errors;
-    });
-    if (outcome.length) {
-      s.toast(outcome[0], "err");
-      setTurns((ts) => ts.map((x) => x.id === turn.id && isProposalTurn(x) ? { ...x, proposal: { ...x.proposal, errors: outcome } } : x));
+    const before = s.currentDef();
+    const trial = applyLogicProposal(structuredClone(before), p.changes);
+    if (trial.errors.length) {
+      s.toast(trial.errors[0], "err");
+      setTurns((ts) => ts.map((x) => x.id === turn.id && isProposalTurn(x) ? { ...x, proposal: { ...x.proposal, errors: trial.errors } } : x));
+      if (turn.opKey) void copilot.updateOp(turn.opKey, { status: "failed", statusDetail: `Not applied — the engine refused it: ${trial.errors.join(" ")}`.slice(0, 2000), failed: p.descriptions.map((description) => ({ description, reason: trial.errors[0] })) });
       return;
     }
+    const label = `Applied proposal: ${p.summary}`;
+    s.labelNextEdit(label);
+    s.replace(trial.def);
+    const after = s.currentDef();
+    if (after === before) return;
     setTurns((ts) => ts.map((x) => x.id === turn.id ? { ...x, state: "applied" } : x));
     const targets = proposalTargets(p.changes);
     if (targets[0]) selectKey(`question:${targets[0]}` as ObjectKey);
-    s.toast("Applied. Undo with ⌘Z.");
-  }, [s, selectKey]);
+    const opKey = turn.opKey ?? copilot.recordOp({ prompt: turn.text, source: p.source === "ai" ? "model" : "grammar", status: "proposed", intent: { kind: p.intent.kind }, proposed: p.descriptions.map((description) => ({ description })), targets });
+    if (!turn.opKey) setTurns((ts) => ts.map((x) => x.id === turn.id ? { ...x, opKey } : x));
+    const record = { ...changeRecordOf(null, turn.text, diffSurveys(before, after), before, after), label, key: opKey };
+    const done = await copilot.commitApplied(opKey, { record, applied: p.descriptions, excluded: [], failed: [], warnings: p.warnings, engineOps: [...new Set(p.changes.map((c) => c.kind))], targets }, undefined, false);
+    toastApplied(s, done.n, done.save);
+  }, [s, selectKey, copilot]);
 
-  const cancel = (turn: Turn) => setTurns((ts) => ts.map((x) => x.id === turn.id ? { ...x, state: "cancelled" } : x));
+  const cancel = (turn: Turn) => {
+    if (turn.opKey) void copilot.updateOp(turn.opKey, { status: "cancelled", statusDetail: "cancelled before it was applied" });
+    setTurns((ts) => ts.map((x) => x.id === turn.id ? { ...x, state: "cancelled" } : x));
+  };
+  /* "Try saving again" on an applied card whose save was refused */
+  const retrySave = React.useCallback(async (opKey: string) => {
+    const save = await copilot.retrySave(opKey);
+    const op = copilot.op(opKey);
+    toastApplied(s, op?.changeN ?? null, save, undefined, true);
+  }, [copilot, s]);
+  /*
+   * TEST SEAM — `window.__rescriptGrammarTurn(sentence)`, sandbox only: the
+   * grammar's reading of a sentence as a TurnCard, without the engine and the
+   * model in front of it (most sentences the grammar knows, the engine now
+   * reads first). How a browser suite reaches the grammar's Apply — and a
+   * proposal that has gone stale by the time it is applied — directly.
+   */
+  React.useEffect(() => {
+    if (s.surveyDbId !== "sandbox") return;
+    const w = window as unknown as { __rescriptGrammarTurn?: (t: string) => void };
+    w.__rescriptGrammarTurn = (t) => {
+      const intent = parseIntent(t);
+      const plan = planProposal(s.def, intent, "grammar", deps);
+      const opKey = copilot.recordOp({ prompt: t, source: "grammar", intent: { kind: intent.kind }, status: plan.errors.length ? "failed" : plan.readOnly ? "answered" : "proposed", proposed: plan.readOnly ? [] : plan.descriptions.map((description) => ({ description })), targets: proposalTargets(plan.changes), statusDetail: (plan.errors.join(" ") || plan.summary || "").slice(0, 2000) || null });
+      setTurns((ts) => [...ts, { id: uid("turn"), text: t, proposal: plan, state: plan.readOnly ? "applied" : "open", opKey }]);
+    };
+    return () => { delete w.__rescriptGrammarTurn; };
+  }, [s.surveyDbId, s.def, deps, copilot]);
   const review = (turn: Turn) => setTurns((ts) => ts.map((x) => x.id === turn.id && isProposalTurn(x) ? { ...x, reviewing: !x.reviewing } : x));
 
   /* ------------------------------------------------------------- import */
@@ -614,7 +669,7 @@ export function IntelligentView() {
   }, [primary, s.def]);
 
   return (
-    <div className="iq cp-workspace" data-testid="intelligent-view" style={{ gridTemplateColumns: `${showStructure ? "240px " : ""}${showInspector ? `minmax(0, 1fr) 6px ${prefs.inspector}px` : "minmax(0, 1fr)"}` }}>
+    <div className="iq cp-workspace" data-testid="intelligent-view" data-undo-depth={s.undoDepth} data-undo-label={s.undoLabel ?? ""} data-save={s.saveState.kind} style={{ gridTemplateColumns: `${showStructure ? "240px " : ""}${showInspector ? `minmax(0, 1fr) 6px ${prefs.inspector}px` : "minmax(0, 1fr)"}` }}>
       {showStructure && <StructurePane def={copilot.state ? copilot.state.after : s.def} diff={copilot.state?.diff ?? null} selectedId={selectedId} onSelect={pickQuestion} />}
       <section
         className={`iq-main${dropping ? " iq-dropping" : ""}`}
@@ -630,7 +685,7 @@ export function IntelligentView() {
           <span className="iq-spacer" />
           <button type="button" className="iq-btn" onClick={() => { setText("My hypothesis is that … Target respondents: … Create a survey that tests it."); inputRef.current?.focus(); }} data-testid="cp-generate" title="Describe an objective or hypothesis; the copilot proposes the whole survey"><Icon name="plus" size={13} /> Generate survey</button>
           <button type="button" className="iq-btn" onClick={() => { setShowInspector(true); void copilot.runReview(); }} disabled={busy} data-testid="cp-review" title="Check logic, reachability, wording, scales, duplicates, length — and, with a model, research alignment"><Icon name="check" size={13} /> Review</button>
-          <button type="button" className="iq-btn" onClick={() => { const last = [...copilot.history].reverse().find((h) => !h.reverted); if (last) { const r = copilot.revert(last.n); if (!r.ok && r.reason) { setShowInspector(true); copilot.setTab("history"); s.toast(r.reason, "err"); } } }} disabled={!copilot.history.some((h) => !h.reverted)} data-testid="cp-undo-last" title="Undo the last AI change, as one operation">Undo AI change</button>
+          <button type="button" className="iq-btn" onClick={() => { const last = [...copilot.history].reverse().find((h) => !h.reverted && h.key); if (last?.key) void copilot.restore(last.key).then((r) => { if (!r.ok && r.reason) { setShowInspector(true); copilot.setTab("history"); s.toast(r.reason, "err"); } }); }} disabled={!copilot.history.some((h) => !h.reverted && h.key)} data-testid="cp-undo-last" title="Undo the last AI change, as one operation">Undo AI change</button>
           <span className="iq-provider" data-testid="iq-provider" data-ai={aiAvailable === null && copilot.available === null ? "unknown" : copilot.available || aiAvailable ? "on" : "off"} data-copilot={copilot.available === null ? "unknown" : copilot.available ? "on" : "off"} title={copilot.available === false ? "The Studio's engine reads every request first — edits, logic, options, dependencies, impact — with no model call. No language model is configured, so what the engine hands on (rewording, generation, translation text) is not available." : "The Studio's engine reads every request first and does everything it can deterministically, with no model call; the copilot (the configured model) is asked only for what it hands on."}>
             {copilot.available === false ? "engine only" : copilot.available ? "engine + copilot" : aiAvailable ? "engine + model" : "engine"}
           </span>
@@ -679,7 +734,8 @@ export function IntelligentView() {
                 const open = turn.proposal === "open" && copilot.state;
                 return (
                   <CopilotCard key={turn.id} entry={turn} def={copilot.state && turn.proposal === "open" ? copilot.state.after : s.def} onSelect={pickQuestion}
-                    onReviewChanges={() => { setShowInspector(true); copilot.setTab("changes"); }} onApply={applyCopilot} onCancel={copilot.cancel}
+                    onReviewChanges={() => { setShowInspector(true); copilot.setTab("changes"); }} onApply={() => void applyCopilot()} onCancel={copilot.cancel}
+                    op={turn.opKey ? copilot.op(turn.opKey) : undefined} onRetrySave={() => turn.opKey && void retrySave(turn.opKey)}
                     onAnswer={(q) => { setText(`${q} — `); inputRef.current?.focus(); }}
                     onSelectKey={(k) => selectKey(k as ObjectKey)} onAsk={(q) => void ask(q)}
                     onPreviewFix={(actions, label) => { copilot.previewFix(actions, label); setShowInspector(true); }}
@@ -692,7 +748,8 @@ export function IntelligentView() {
               }
               return <ReviewCard key={turn.id} text={turn.text} entry={turn.entry} onSelect={(qid) => selectKey(`question:${qid}` as ObjectKey)} onAnalyze={(sid) => void analyzeScript(turn.id, sid)} />;
             }
-            return <TurnCard key={turn.id} turn={turn} def={s.def} onApply={() => apply(turn)} onCancel={() => cancel(turn)} onReview={() => review(turn)} onSelect={selectKey} readOnly={s.readOnly} />;
+            return <TurnCard key={turn.id} turn={turn} def={s.def} onApply={() => void apply(turn)} onCancel={() => cancel(turn)} onReview={() => review(turn)} onSelect={selectKey} readOnly={s.readOnly}
+              save={turn.opKey ? copilot.op(turn.opKey)?.save : undefined} changeN={turn.opKey ? copilot.op(turn.opKey)?.changeN ?? null : null} onRetrySave={() => turn.opKey && void retrySave(turn.opKey)} />;
           })}
           {busy && <div className="iq-thinking" data-testid="iq-thinking"><span className="iq-dot" /><span className="iq-dot" /><span className="iq-dot" /></div>}
         </div>
@@ -775,14 +832,16 @@ export function IntelligentView() {
 
 /* ------------------------------------------------------------- the card */
 
-function TurnCard({ turn, def, onApply, onCancel, onReview, onSelect, readOnly }: {
+function TurnCard({ turn, def, onApply, onCancel, onReview, onSelect, readOnly, save, changeN, onRetrySave }: {
   turn: Turn; def: SurveyDefinition;
   onApply(): void; onCancel(): void; onReview(): void; onSelect(key: ObjectKey): void; readOnly: boolean;
+  /** an applied proposal's save, and its AI change number — the kicker says only what is true */
+  save?: SaveView; changeN?: number | null; onRetrySave?(): void;
 }) {
   const p = turn.proposal;
   const blocked = p.errors.length > 0;
   return (
-    <article className={`iq-turn ${turn.state}`} data-testid="iq-turn" data-state={turn.state} data-kind={p.intent.kind} data-source={p.source}>
+    <article className={`iq-turn ${turn.state}`} data-testid="iq-turn" data-state={turn.state} data-kind={p.intent.kind} data-source={p.source} data-save={turn.state === "applied" && !p.readOnly ? save?.state ?? "" : ""}>
       <div className="iq-said" data-testid="iq-said"><Icon name="user" size={13} /> <span>{turn.text}</span></div>
       {turn.heard && (
         // what the microphone heard, and — when it was not English — how it was read, so the reading can be checked before Apply (§20)
@@ -811,10 +870,11 @@ function TurnCard({ turn, def, onApply, onCancel, onReview, onSelect, readOnly }
       ) : (
         <div className={`iq-card proposal${blocked ? " blocked" : ""}`} data-testid="iq-proposal">
           <div className="iq-card-head">
-            <span className="iq-kicker">{turn.state === "applied" ? "APPLIED" : turn.state === "cancelled" ? "CANCELLED" : blocked ? "PROPOSED CHANGE — NEEDS ATTENTION" : "PROPOSED CHANGE"}</span>
+            <span className="iq-kicker">{turn.state === "applied" ? appliedKicker(save, changeN) : turn.state === "cancelled" ? "CANCELLED" : blocked ? "PROPOSED CHANGE — NEEDS ATTENTION" : "PROPOSED CHANGE"}</span>
             {p.source === "ai" && <span className="iq-source" title="Read by the language model, checked by the expression parser">model</span>}
           </div>
           {p.summary && <p className="iq-summary" data-testid="iq-summary">{p.summary}</p>}
+          {turn.state === "applied" && save?.state === "failed" && <SaveFailed save={save} onRetry={onRetrySave} />}
           {p.expression && (
             <div className="iq-expression" data-testid="iq-expression">
               <div className="iq-expression-row"><span className="iq-label">Condition</span><code className="mono">{p.expression.canonical || p.expression.text}</code></div>
@@ -878,4 +938,14 @@ function MicIcon({ size = 15 }: { size?: number }) {
       <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" />
     </svg>
   );
+}
+
+/** the toast after an Apply (or a retried save): what is true, with the number the server gave it */
+function toastApplied(s: { surveyDbId: string; toast(msg: string, kind?: "ok" | "err"): void }, n: number | null, save: SaveView | undefined, message?: string, retry = false) {
+  const as = n ? `AI change ${changeNumber(n)}` : "one change (the history could not number it)";
+  const lead = message ? `${message} ` : "";
+  if (!save || save.state === "saving") s.toast(`${lead}Applied as ${as}. Undo from History, or ⌘Z.`);
+  else if (save.state === "saved") s.toast(retry ? `Saved ${as}.` : `${lead}Applied and saved as ${as}. Undo from History, or ⌘Z.`);
+  else if (save.state === "sandbox") s.toast(`${lead}Applied as ${as} — the sandbox saves nothing. Undo from History, or ⌘Z.`);
+  else s.toast(`${retry ? "Still not saved" : `Applied as ${as}, but NOT saved`} — ${save.message}. Try saving again from the card.`, "err");
 }

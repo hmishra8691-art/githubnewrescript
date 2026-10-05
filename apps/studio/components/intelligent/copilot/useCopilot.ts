@@ -2,10 +2,15 @@
 import React from "react";
 import type { AnalysisRun } from "@rescript/analytics";
 import type { SurveyDefinition } from "@rescript/schema";
-import { reviewSurvey, type SurveyAction, type SurveyReview, type Interpretation } from "@rescript/engine";
+import { reviewSurvey, describeAction, type SurveyAction, type SurveyReview, type Interpretation } from "@rescript/engine";
 import { useStudio, uid } from "../../studio/store";
 import type { CopilotReply, CopilotFinding } from "../../../lib/copilot/prompt";
-import { evaluateProposal, rebaseProposal, sameSurvey, changeRecord, memoryFrom, type Proposal, type ProposalState, type ChangeRecord } from "../../../lib/copilot/client";
+import { evaluateProposal, rebaseProposal, sameSurvey, changeRecord, changeLabel, memoryFrom, type Proposal, type ProposalState, type ChangeRecord } from "../../../lib/copilot/client";
+import {
+  OpsRecorder, saveFailure, observeUndo, reapplyActions, sameSurveyCanonical,
+  type NewOp, type OpUpdate, type SaveView, type Send,
+} from "../../../lib/copilot/history";
+import type { OpApiCall, OpFailed, OpIntent, OpProposed, OpSource } from "../../../lib/copilot/operations";
 import { excludedLabels, validExclusions } from "../../../lib/copilot/review";
 import type { HeardTranscript } from "../../../lib/intelligent/voice";
 import { prepareThemeImage, type ThemeImage } from "../../../lib/copilot/themeImage";
@@ -18,6 +23,19 @@ import { prepareThemeImage, type ThemeImage } from "../../../lib/copilot/themeIm
  * request while it is open revises it. Apply is one labelled, undoable
  * `store.replace`; every applied change is an entry in the AI change
  * history, with its before and after, and can be undone as one operation.
+ *
+ * THE OPERATION HISTORY (Phase 5 — the audit's R11, R12, R21). Every turn
+ * is recorded on the server as it happens (/api/copilot/operations): the
+ * engine's readings, the model's turns with their calls and charge, the
+ * review's fixes, the grammar's proposals (IntelligentView records those
+ * through `recordOp` / `commitApplied`). A proposal is ONE record from its
+ * first request to its Apply or Cancel — a revision folds into it — so the
+ * history has one entry per change. Apply says only what is true, in order:
+ * the store has it (APPLIED), the server numbered it (AI CHANGE #00n — the
+ * survey's, not the page's), the save returned (SAVED, or NOT SAVED and
+ * why, with a retry; the sandbox saves nothing and says so). The store's
+ * own ⌘Z / ⌘⇧Z are watched: undoing an AI change marks it reverted, redoing
+ * it marks it applied again.
  */
 
 export interface Passage { doc: string; page: number; heading?: string; excerpt: string }
@@ -36,6 +54,8 @@ export interface CopilotEntry {
   /** this turn's place in the open proposal */
   proposal?: "open" | "superseded" | "applied" | "cancelled";
   changeN?: number;
+  /** the operation-history entry this turn is recorded in (its number, its save state, its record errors) */
+  opKey?: string;
   /** what the engine's checks found, for a review turn */
   review?: SurveyReview;
   /** said once the change is applied: what changed, and — for a look-only change — that the structure did not */
@@ -67,6 +87,8 @@ export type StoredRunBrief = Pick<AnalysisRun, "computedAt" | "n" | "findings" |
 
 interface Session {
   proposal: Proposal | null;
+  /** the history entry the open proposal is recorded in — revisions fold into it; Apply and Cancel close it */
+  openOp: string | null;
   history: ChangeRecord[];
   review: ReviewState | null;
   docs: ResearchDocView[] | null;
@@ -84,6 +106,43 @@ interface Session {
 const sessions = new Map<string, Session>();
 let copilotKnown: boolean | null = null;
 
+/* ------------------------------------------------------------ the operation history's recorder, per survey */
+
+const recorders = new Map<string, OpsRecorder>();
+/** each history entry's actions as proposed, for Reapply — kept on the page beside the record (which keeps them too, when small) */
+const actionsByOp = new Map<string, SurveyAction[]>();
+const SCOPE_KEY = "rescript.sandboxHistory";
+let pageScope: string | null = null;
+/**
+ * The sandbox's history key: one per browser tab, kept in sessionStorage so
+ * it survives a reload of that tab (the history is still there) while a new
+ * tab — or a new browser — starts empty. Without storage, one per page.
+ */
+function sandboxScope(): string {
+  const fresh = () => `t${Math.random().toString(36).slice(2, 12)}${Date.now().toString(36)}`;
+  try {
+    let k = window.sessionStorage.getItem(SCOPE_KEY);
+    if (!k) { k = fresh(); window.sessionStorage.setItem(SCOPE_KEY, k); }
+    return k;
+  } catch { return (pageScope ??= fresh()); }
+}
+function recorderFor(surveyId: string): OpsRecorder {
+  const known = recorders.get(surveyId);
+  if (known) return known;
+  const scope = surveyId === "sandbox" ? sandboxScope() : null;
+  const send: Send = async (method, body, query) => {
+    const r = method === "GET"
+      ? await fetch(`/api/copilot/operations?${new URLSearchParams({ surveyId, ...(scope ? { scope } : {}), ...(query ?? {}) })}`, { cache: "no-store" })
+      : await fetch("/api/copilot/operations", { method, headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId, ...(scope ? { scope } : {}), ...body }) });
+    return { status: r.status, data: await r.json().catch(() => null) as Record<string, unknown> | null };
+  };
+  const rec = new OpsRecorder(send);
+  recorders.set(surveyId, rec);
+  return rec;
+}
+const proposedOf = (actions: SurveyAction[]): OpProposed[] => actions.map((a) => ({ description: describeAction(a), action: a as unknown as Record<string, unknown> }));
+const union = (a: string[], b: string[]) => [...new Set([...a, ...b])];
+
 export function useCopilot(opts: {
   entries: unknown[];
   push(e: CopilotEntry): void;
@@ -93,8 +152,126 @@ export function useCopilot(opts: {
 }) {
   const s = useStudio();
   const key = s.surveyDbId;
-  const [session, setSessionState] = React.useState<Session>(() => sessions.get(key) ?? { proposal: null, history: [], review: null, docs: null, durable: true, confirmed: false, tab: "inspector", excluded: [] });
+  const [session, setSessionState] = React.useState<Session>(() => sessions.get(key) ?? { proposal: null, openOp: null, history: [], review: null, docs: null, durable: true, confirmed: false, tab: "inspector", excluded: [] });
   const setSession = React.useCallback((fn: (x: Session) => Session) => setSessionState((cur) => { const next = fn(cur); sessions.set(key, next); return next; }), [key]);
+
+  /* ------------------------------------------------------------ the operation history */
+  const recorder = React.useMemo(() => recorderFor(key), [key]);
+  const [, bumpOps] = React.useReducer((x: number) => x + 1, 0);
+  React.useEffect(() => recorder.subscribe(bumpOps), [recorder]);
+  /* the survey's history as the server has it — earlier sessions, a reload, other editors — read once per page */
+  React.useEffect(() => { if (!recorder.loaded) void recorder.refresh(); }, [recorder]);
+  const sandbox = s.surveyDbId === "sandbox";
+
+  /** record a turn that proposes nothing (an answer, a refusal, a question back, a failure) */
+  const recordOp = React.useCallback((op: NewOp): string => recorder.create(op).key, [recorder]);
+  const updateOp = React.useCallback((k: string, u: OpUpdate) => recorder.update(k, u), [recorder]);
+  /**
+   * Record actions proposed by a turn: into the open proposal's entry when
+   * there is one (a revision is part of the same change — its words, its
+   * targets, its model calls join it), else a new entry. Returns its key.
+   */
+  const recordProposal = React.useCallback((text: string, actions: SurveyAction[], meta: { source: OpSource; intent?: OpIntent; detected?: { what: string; value: string }[]; targets?: string[]; apiCalls?: OpApiCall[]; warnings?: string[] }, openKey: string | null): string => {
+    const open = openKey ? recorder.get(openKey) : undefined;
+    if (open && open.status === "proposed") {
+      void recorder.update(open.key, {
+        prompt: `${open.prompt} → ${text}`.slice(0, 4000), proposed: [...open.proposed, ...proposedOf(actions)],
+        detected: [...open.detected, ...(meta.detected ?? [])], targets: union(open.targets, meta.targets ?? []),
+        apiCalls: [...open.apiCalls, ...(meta.apiCalls ?? [])], warnings: union(open.warnings, meta.warnings ?? []),
+      });
+      actionsByOp.set(open.key, [...(actionsByOp.get(open.key) ?? []), ...actions]);
+      return open.key;
+    }
+    const e = recorder.create({ prompt: text, source: meta.source, status: "proposed", intent: meta.intent, detected: meta.detected, targets: meta.targets, apiCalls: meta.apiCalls, warnings: meta.warnings, proposed: proposedOf(actions) });
+    actionsByOp.set(e.key, [...actions]);
+    return e.key;
+  }, [recorder]);
+
+  /**
+   * The save after an Apply, said as it is: the sandbox stores nothing (the
+   * record stays "applied", with that said); a real save that returned true
+   * is "saved" with its revision; one that returned false is "save_failed"
+   * with the store's reason — a conflict, the lock lost, signed out, an
+   * error. Never "saved" before `flushDraft()` said so.
+   */
+  const settleSave = React.useCallback(async (k: string, ok: boolean): Promise<SaveView> => {
+    const reverted = recorder.get(k)?.status === "reverted";
+    let save: SaveView;
+    if (ok && sandbox) {
+      save = { state: "sandbox" };
+      if (!reverted) void recorder.update(k, { statusDetail: "Sandbox — nothing is saved here; the change lives in this page only." });
+    } else if (ok) {
+      const revision = s.currentRevision();
+      save = { state: "saved", revision };
+      if (!reverted) void recorder.update(k, { status: "saved", savedRevision: revision, statusDetail: null });
+    } else {
+      const f = saveFailure(s.currentSaveState(), s.readOnly);
+      save = { state: "failed", ...f };
+      if (!reverted) void recorder.update(k, { status: "save_failed", statusDetail: `Not saved: ${f.message}` });
+    }
+    recorder.note(k, { save });
+    return save;
+  }, [recorder, sandbox, s]);
+
+  /** the audit row of an AI change (or of its revert), with the server's number — a failure is said on the entry, not swallowed */
+  const auditChange = React.useCallback(async (k: string, rec: ChangeRecord, reverted = false) => {
+    const body = reverted
+      ? { surveyId: s.surveyDbId, n: rec.n ?? undefined, summary: rec.summary.slice(0, 3).join("; "), reverted: true }
+      : { surveyId: s.surveyDbId, n: rec.n ?? undefined, request: rec.request.slice(0, 500), summary: rec.summary.slice(0, 6).join("; "), created: rec.created, modified: rec.modified, removed: rec.removed, ...(rec.excluded?.length ? { excluded: rec.excluded } : {}) };
+    try {
+      const r = await fetch("/api/copilot/record", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      if (r.ok) { recorder.note(k, { auditError: undefined }); return; }
+      const d = await r.json().catch(() => null) as { error?: string } | null;
+      recorder.note(k, { auditError: `not in the audit log: ${d?.error ?? `HTTP ${r.status}`}` });
+    } catch (e) { recorder.note(k, { auditError: `not in the audit log: ${(e as Error).message || "the network request failed"}` }); }
+  }, [recorder, s.surveyDbId]);
+
+  /**
+   * AN APPLIED CHANGE, RECORDED — after the store took it (the caller has
+   * already called `replace` and read `currentDef()`): the save starts at
+   * once; the record moves to `applied` with what was applied, left out and
+   * refused, the engine operations, the targets and the surveys before and
+   * after; the server's answer is the AI change number; the change joins
+   * the page's history (Restore, ⌘Z watching); the audit row carries the
+   * number; the save's outcome settles the record. `show` is told each step,
+   * so the card says APPLIED · SAVING…, then the number, then the save.
+   */
+  const commitApplied = React.useCallback(async (k: string, x: { record: ChangeRecord; applied: string[]; excluded: string[]; failed: OpFailed[]; warnings: string[]; engineOps: string[]; targets: string[] }, show?: (n: number | null) => void, openHistory = true): Promise<{ n: number | null; save: SaveView }> => {
+    const flushing = s.flushDraft();
+    recorder.note(k, { save: { state: "saving" } });
+    const op = await recorder.update(k, { status: "applied", applied: x.applied, excluded: x.excluded, failed: x.failed, warnings: x.warnings, engineOps: x.engineOps, targets: x.targets, before: x.record.before, after: x.record.after });
+    const n = op?.changeN ?? null;
+    const record: ChangeRecord = { ...x.record, n, key: k };
+    setSession((h) => ({ ...h, history: [...h.history, record], ...(openHistory ? { tab: "history" as const } : {}) }));
+    show?.(n);
+    void auditChange(k, record);
+    const ok = await flushing.catch(() => false);
+    const save = await settleSave(k, ok);
+    void recorder.settled(k).then(() => recorder.refresh());
+    return { n, save };
+  }, [recorder, s, setSession, auditChange, settleSave]);
+
+  /** "Try saving again" — the store's flush, and the record moved to what it returned */
+  const retrySave = React.useCallback(async (k: string): Promise<SaveView> => {
+    recorder.note(k, { save: { state: "saving" } });
+    const ok = await s.flushDraft().catch(() => false);
+    return settleSave(k, ok);
+  }, [recorder, s, settleSave]);
+
+  /*
+   * THE STORE'S ⌘Z AND ⌘⇧Z, WATCHED (the audit's R21). An undo that takes
+   * the survey back to an AI change's `before` reverts that change in the
+   * history; a redo back to its `after` applies it again. The surveys are
+   * the store's own (read after `replace`), so identity usually answers.
+   */
+  React.useEffect(() => {
+    const changes = session.history.filter((h) => h.key).map((h) => ({ key: h.key!, before: h.before, after: h.after, reverted: h.reverted }));
+    if (!changes.length) return;
+    const hit = observeUndo(changes, s.def, sameSurvey);
+    if (!hit) return;
+    setSession((x) => ({ ...x, history: x.history.map((h) => (h.key === hit.key ? { ...h, reverted: hit.to === "reverted" } : h)) }));
+    void recorder.update(hit.key, hit.to === "reverted" ? { status: "reverted", statusDetail: "undone with ⌘Z" } : { status: "applied", statusDetail: "redone with ⌘⇧Z" });
+  }, [s.def, session.history, recorder, setSession]);
   const [available, setAvailableState] = React.useState<boolean | null>(copilotKnown);
   const setAvailable = (v: boolean) => { copilotKnown = v; setAvailableState(v); };
   const [busy, setBusy] = React.useState(false);
@@ -227,21 +404,37 @@ export function useCopilot(opts: {
         body: JSON.stringify({ surveyId: s.surveyDbId, message: text, definition: working, selectedId: opts.selectedId, memory: memoryFrom(copilotTurns.map((t) => ({ user: t.text, reply: t.reply }))), ...(mode ? { mode } : {}), ...(fake ? { fake } : {}), ...(themeImage ? { themeImage } : {}), ...(quotaCounts ? { quotaCounts } : {}), ...(runForTurn ? { analysisRun: runForTurn } : {}) }),
       });
       if (themeImage) setThemeImage(null);
-      if (r.status === 501) { setAvailable(false); opts.patch(id, { status: "failed", error: "No language model is configured on this Studio." }); return "unavailable"; }
+      /* every model turn is in the history with the call it made and what it cost — a failed one too */
+      const call = (d: Record<string, unknown> | null, error?: string): OpApiCall => {
+        const ctx = (d?.context ?? {}) as { mode?: string; cached?: boolean; promptChars?: number };
+        return { route: "/api/copilot/turn", mode: ctx.mode ?? mode ?? "", charge: Number((d?.usage as { charge?: number } | undefined)?.charge) || 0, ...(typeof ctx.cached === "boolean" ? { cached: ctx.cached } : {}), ...(typeof ctx.promptChars === "number" ? { promptChars: ctx.promptChars } : {}), ...(error ? { error } : {}) };
+      };
+      const failedTurn = (d: Record<string, unknown> | null, error: string) => opts.patch(id, { opKey: recordOp({ prompt: text, source: "model", status: "failed", intent: { mode: mode ?? "" }, statusDetail: error, apiCalls: [call(d, error)] }) });
+      if (r.status === 501) { setAvailable(false); const error = "No language model is configured on this Studio."; opts.patch(id, { status: "failed", error }); failedTurn(null, error); return "unavailable"; }
       const d = await r.json().catch(() => null) as Record<string, unknown> | null;
-      if (!r.ok || !d || d.ok === false) { opts.patch(id, { status: "failed", error: String(d?.error ?? `The copilot could not answer (${r.status}).`) }); return "handled"; }
+      if (!r.ok || !d || d.ok === false) { const error = String(d?.error ?? `The copilot could not answer (${r.status}).`); opts.patch(id, { status: "failed", error }); failedTurn(d, error); return "handled"; }
       setAvailable(true);
       const reply = d.reply as CopilotReply | null;
       const review = d.review as SurveyReview | undefined;
-      if (!reply) { opts.patch(id, { status: "empty", message: String(d.message ?? "No answer."), usage: d.usage as { charge: number }, ...(review ? { review } : {}) }); if (review) setSession((x) => ({ ...x, review: { rules: review, ai: [], at: new Date().toISOString(), running: false }, tab: "review" })); return review ? "handled" : "empty"; }
+      if (!reply) {
+        const message = String(d.message ?? "No answer.");
+        // nothing usable came back: recorded as failed with the model's call — the grammar may still answer the sentence (its own entry)
+        opts.patch(id, { status: "empty", message, usage: d.usage as { charge: number }, ...(review ? { review } : {}), opKey: recordOp({ prompt: text, source: "model", status: review ? "answered" : "failed", intent: { mode: String((d.context as { mode?: string } | undefined)?.mode ?? mode ?? ""), kind: "empty" }, statusDetail: message, apiCalls: [call(d)] }) });
+        if (review) setSession((x) => ({ ...x, review: { rules: review, ai: [], at: new Date().toISOString(), running: false }, tab: "review" }));
+        return review ? "handled" : "empty";
+      }
       const patch: Partial<CopilotEntry> = { status: "ready", reply, usage: d.usage as { charge: number }, context: d.context as CopilotEntry["context"], passages: (d.passages ?? {}) as Record<string, Passage>, ...(review ? { review } : {}) };
+      const intent: OpIntent = { mode: String((d.context as { mode?: string } | undefined)?.mode ?? mode ?? ""), kind: reply.kind };
+      const failed = reply.rejected.map((x) => ({ description: "an action the model wrote", reason: x.reason ?? "not in a shape the Studio accepts" }));
+      if (reply.actions.length) patch.opKey = recordProposal(text, reply.actions, { source: "model", intent, apiCalls: [call(d)], warnings: failed.map((f) => `Dropped: ${f.reason}`) }, session.openOp);
+      else patch.opKey = recordOp({ prompt: text, source: "model", status: reply.kind === "clarify" ? "clarify" : "answered", intent, apiCalls: [call(d)], failed, statusDetail: reply.reply.slice(0, 2000) });
       if (reply.actions.length) {
         // a proposal — or a revision of the open one
         opts.patchAll((e) => (e.proposal === "open" ? { proposal: "superseded" } : null));
         setSession((x) => {
           const base = x.proposal ? (stale ? rebaseProposal(x.proposal, s.def) : x.proposal) : { base: s.def, steps: [] };
           const uxOnly = !!(d.context as { uxOnly?: boolean } | undefined)?.uxOnly;
-          return { ...x, proposal: { base: base.base, steps: [...base.steps, { request: text, actions: reply.actions, ...(uxOnly ? { uxOnly } : {}) }] }, confirmed: false, excluded: [], tab: "changes" };
+          return { ...x, proposal: { base: base.base, steps: [...base.steps, { request: text, actions: reply.actions, ...(uxOnly ? { uxOnly } : {}) }] }, openOp: patch.opKey ?? x.openOp, confirmed: false, excluded: [], tab: "changes" };
         });
         patch.proposal = "open";
       }
@@ -249,12 +442,13 @@ export function useCopilot(opts: {
       opts.patch(id, patch);
       return "handled";
     } catch (e) {
-      opts.patch(id, { status: "failed", error: (e as Error).message });
+      const error = (e as Error).message;
+      opts.patch(id, { status: "failed", error, opKey: recordOp({ prompt: text, source: "model", status: "failed", intent: { mode: mode ?? "" }, statusDetail: error, apiCalls: [{ route: "/api/copilot/turn", mode: mode ?? "", charge: 0, error }] }) });
       return "handled";
     } finally {
       setBusy(false);
     }
-  }, [session.proposal, stale, s.def, s.surveyDbId, opts, copilotTurns, setSession, themeImage, quotaCounts, runForTurn]);
+  }, [session.proposal, session.openOp, stale, s.def, s.surveyDbId, opts, copilotTurns, setSession, themeImage, quotaCounts, runForTurn, recordOp, recordProposal]);
 
   /*
    * THE ENGINE'S OWN ANSWER. A sentence the engine interpreted
@@ -279,15 +473,20 @@ export function useCopilot(opts: {
       ...(it.kind === "refused" ? { refusal: it.reason, ...(it.suggestion ? { suggestion: it.suggestion } : {}) } : {}),
       ...(it.kind === "actions" && it.warnings?.length ? { warnings: it.warnings } : {}),
     };
+    /* recorded: an engine reading costs nothing, and the history says so (no model calls) */
+    const intent: OpIntent = { category: it.category ?? null, kind: it.kind };
+    const opKey = actions.length
+      ? recordProposal(text, actions, { source: "engine", intent, detected: it.detected, targets: it.kind === "actions" ? it.targets : [], warnings: it.kind === "actions" ? it.warnings : undefined }, session.openOp)
+      : recordOp({ prompt: text, source: "engine", status: it.kind === "answer" ? "answered" : it.kind === "clarify" ? "clarify" : "refused", intent, detected: it.detected, statusDetail: (it.kind === "answer" ? it.answer : it.kind === "clarify" ? it.question : it.kind === "refused" ? it.reason : it.understood).slice(0, 2000), ...(it.kind === "refused" && it.suggestion?.actions?.length ? { proposed: proposedOf(it.suggestion.actions) } : {}) });
     if (actions.length) {
       opts.patchAll((e) => (e.proposal === "open" ? { proposal: "superseded" } : null));
       setSession((x) => {
         const base = x.proposal ? (stale ? rebaseProposal(x.proposal, s.def) : x.proposal) : { base: s.def, steps: [] };
-        return { ...x, proposal: { base: base.base, steps: [...base.steps, { request: text, actions }] }, confirmed: false, excluded: [], tab: "changes" };
+        return { ...x, proposal: { base: base.base, steps: [...base.steps, { request: text, actions }] }, openOp: opKey, confirmed: false, excluded: [], tab: "changes" };
       });
     }
-    opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "ready", reply, engine, ...(actions.length ? { proposal: "open" as const } : {}) });
-  }, [opts, setSession, stale, s.def]);
+    opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "ready", reply, engine, opKey, ...(actions.length ? { proposal: "open" as const } : {}) });
+  }, [opts, setSession, stale, s.def, session.openOp, recordOp, recordProposal]);
   /** the survey a new request is read against: the open proposal's result, so a revision builds on what is proposed */
   const working: SurveyDefinition = React.useMemo(() => (session.proposal ? (stale ? evaluateProposal(rebaseProposal(session.proposal, s.def)).after : full?.after ?? s.def) : s.def), [session.proposal, stale, full, s.def]);
 
@@ -300,17 +499,26 @@ export function useCopilot(opts: {
     setSession((x) => (x.review ? { ...x, review: { ...x.review, running: false } } : x));
   }, [s.def, available, ask, setSession]);
 
-  /** a mechanical fix from the review, previewed like any proposal — no model call */
-  const previewFix = React.useCallback((actions: SurveyAction[], label: string) => {
+  /** a mechanical fix from the review (or a Reapply from History), previewed like any proposal — no model call; recorded as a "fix" */
+  const previewFix = React.useCallback((actions: SurveyAction[], label: string, meta?: { intent?: OpIntent }) => {
+    const opKey = recordProposal(label, actions, { source: "fix", intent: meta?.intent ?? { kind: "fix" } }, session.openOp);
     opts.patchAll((e) => (e.proposal === "open" ? { proposal: "superseded" } : null));
     setSession((x) => {
       const base = x.proposal ? (stale ? rebaseProposal(x.proposal, s.def) : x.proposal) : { base: s.def, steps: [] };
-      return { ...x, proposal: { base: base.base, steps: [...base.steps, { request: label, actions }] }, confirmed: false, excluded: [], tab: "changes" };
+      return { ...x, proposal: { base: base.base, steps: [...base.steps, { request: label, actions }] }, openOp: opKey, confirmed: false, excluded: [], tab: "changes" };
     });
-  }, [s.def, stale, setSession, opts]);
+  }, [s.def, stale, setSession, opts, recordProposal, session.openOp]);
 
   /* ------------------------------------------------------------ apply / cancel / undo */
-  const apply = React.useCallback((): { ok: boolean; reason?: string; message?: string } => {
+  /**
+   * APPLY — and say only what is true. The checks first (read-only, a
+   * survey changed underneath, nothing left, an unconfirmed removal); then
+   * one labelled `replace`. Only once the store HOLDS the change does the
+   * card say APPLIED; the server's number and the save's outcome follow
+   * (`commitApplied`), and the returned promise resolves with both — the
+   * caller's toast says "saved" only when the save said so.
+   */
+  const apply = React.useCallback(async (show?: (n: number | null) => void): Promise<{ ok: boolean; reason?: string; message?: string; n?: number | null; save?: SaveView }> => {
     if (!session.proposal || !state) return { ok: false, reason: "There is nothing to apply." };
     if (s.readOnly) return { ok: false, reason: "This project is read-only right now." };
     if (stale) {
@@ -320,14 +528,20 @@ export function useCopilot(opts: {
     }
     if (state.diff.empty) return { ok: false, reason: excluded.length ? "Every change is excluded — tick at least one to apply." : "The proposal changes nothing that could be applied." };
     if (state.destructive.length && !session.confirmed) return { ok: false, reason: "Confirm the changes that remove or rewrite existing content first." };
-    const n = session.history.length + 1;
-    const request = session.proposal.steps.map((x) => x.request).join(" → ");
+    const proposal = session.proposal;
+    const request = proposal.steps.map((x) => x.request).join(" → ");
     // what was left out is part of the record: "applied 7 of 9 — excluded: Removed option 99 from Q5"
-    const left = excluded.length && full ? excludedLabels(session.proposal, full, excluded) : [];
-    const rec = changeRecord(n, request, state, session.proposal.base, undefined, left);
-    s.labelNextEdit(rec.label);
+    const left = excluded.length && full ? excludedLabels(proposal, full, excluded) : [];
+    /* the number is the server's and comes after the write; the undo label names the change without it */
+    const draft = changeRecord(null, request, state, proposal.base, undefined, left);
+    const before = s.currentDef();
+    s.labelNextEdit(draft.label);
     s.replace(state.after);
-    setSession((x) => ({ ...x, proposal: null, confirmed: false, excluded: [], history: [...x.history, rec], tab: "history" }));
+    const after = s.currentDef();
+    if (after === before) return { ok: false, reason: "Nothing was applied — the editor did not take the change (it may have just become read-only)." };
+    // the entry the proposal was recorded in (a proposal made before this page recorded anything gets one now)
+    const k = session.openOp ?? recordProposal(request, proposal.steps.flatMap((x) => x.actions), { source: "engine" }, null);
+    setSession((x) => ({ ...x, proposal: null, openOp: null, confirmed: false, excluded: [] }));
     const ux = state.diff.ux;
     // a question's default value and custom HTML are look-and-behaviour too
     const qBehaviour = state.diff.questionsModified.flatMap((m) => m.changes.filter((c) => c.field === "default value" || c.field === "custom HTML").map((c) => `${m.code} (${c.field})`));
@@ -335,31 +549,79 @@ export function useCopilot(opts: {
     const note = (!ux.empty || state.diff.theme.length > 0 || qBehaviour.length > 0) && state.structureUnchanged
       ? `Done. The look and behaviour of ${targets.slice(0, 3).join(", ")}${targets.length > 3 ? ` and ${targets.length - 3} more` : ""} ${targets.length === 1 ? "has" : "have"} been updated without changing the survey's questions, codes or logic.`
       : undefined;
-    opts.patchAll((e) => (e.proposal === "open" || e.proposal === "superseded" ? { proposal: e.proposal === "open" ? "applied" : e.proposal, ...(e.proposal === "open" ? { changeN: n, ...(note ? { appliedNote: note } : {}) } : {}) } : null));
-    void fetch("/api/copilot/record", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: s.surveyDbId, n, request: request.slice(0, 500), summary: rec.summary.slice(0, 6).join("; "), created: rec.created, modified: rec.modified, removed: rec.removed, ...(left.length ? { excluded: left } : {}) }) }).catch(() => {});
-    return { ok: true, ...(note ? { message: note } : {}) };
-  }, [session, state, full, excluded, stale, s, setSession, opts]);
+    opts.patchAll((e) => (e.proposal === "open" || e.proposal === "superseded" ? { proposal: e.proposal === "open" ? "applied" : e.proposal, ...(e.proposal === "open" ? { opKey: k, ...(note ? { appliedNote: note } : {}) } : {}) } : null));
+    const ok = state.results.filter((r) => r.ok);
+    const done = await commitApplied(k, {
+      record: { ...draft, before, after },
+      applied: ok.map((r) => r.description),
+      excluded: left,
+      failed: state.results.filter((r) => !r.ok).map((r) => ({ description: r.description, reason: r.error ?? "" })),
+      warnings: state.warnings,
+      engineOps: [...new Set(ok.map((r) => r.op))],
+      targets: [...new Set(ok.flatMap((r) => r.touched))],
+    }, (n) => { opts.patchAll((e) => (e.opKey === k && e.proposal === "applied" ? { changeN: n ?? undefined } : null)); show?.(n); });
+    return { ok: true, ...(note ? { message: note } : {}), n: done.n, save: done.save };
+  }, [session, state, full, excluded, stale, s, setSession, opts, recordProposal, commitApplied]);
 
   const cancel = React.useCallback(() => {
-    setSession((x) => ({ ...x, proposal: null, confirmed: false, excluded: [] }));
+    if (session.openOp) void recorder.update(session.openOp, { status: "cancelled", statusDetail: "cancelled before it was applied" });
+    setSession((x) => ({ ...x, proposal: null, openOp: null, confirmed: false, excluded: [] }));
     opts.patchAll((e) => (e.proposal === "open" || e.proposal === "superseded" ? { proposal: "cancelled" } : null));
-  }, [setSession, opts]);
+  }, [setSession, opts, recorder, session.openOp]);
 
-  /** undo one AI change: the store's own undo when it is still the last edit; otherwise restore its "before", said out loud */
-  const revert = React.useCallback((n: number, force = false): { ok: boolean; reason?: string } => {
-    const rec = session.history.find((h) => h.n === n);
-    if (!rec || rec.reverted) return { ok: false, reason: "Nothing to undo." };
+  /**
+   * RESTORE one AI change — the store's own undo when it is still the last
+   * edit; otherwise its "before", said out loud first (it also undoes what
+   * came after). A change read back from the server (an earlier session)
+   * brings its surveys with it; one whose "before" was not kept cannot be
+   * restored, and says so.
+   */
+  const restore = React.useCallback(async (k: string, force = false): Promise<{ ok: boolean; reason?: string }> => {
     if (s.readOnly) return { ok: false, reason: "This project is read-only right now." };
-    if (s.undoLabel === rec.label && sameSurvey(s.def, rec.after)) s.undo();
+    const op = recorder.get(k);
+    let rec = session.history.find((h) => h.key === k);
+    if (rec?.reverted || op?.status === "reverted") return { ok: false, reason: "Nothing to undo." };
+    let canonical = false;
+    if (!rec) {
+      const fullOp = await recorder.fetchOne(k);
+      if (!fullOp?.before || !fullOp.after) return { ok: false, reason: "The survey as it was before this change was not kept, so it cannot be restored from here." };
+      // jsonb keeps keys sorted: compared canonically, or every restored change would read "changed since"
+      canonical = true;
+      rec = { n: fullOp.changeN, key: k, at: fullOp.createdAt, request: fullOp.prompt, summary: fullOp.applied, created: [], modified: [], removed: [], before: fullOp.before, after: fullOp.after, label: "" };
+    }
+    const same = canonical ? sameSurveyCanonical : sameSurvey;
+    const tag = changeLabel(rec.n).replace("AI Change", "AI change");
+    if (rec.label && s.undoLabel === rec.label && same(s.def, rec.after)) s.undo();
     else {
-      if (!force && !sameSurvey(s.def, rec.after)) return { ok: false, reason: `The survey has changed since AI change #${String(n).padStart(3, "0")}. Reverting it restores the survey to before that change, which also undoes the edits made after it.` };
-      s.labelNextEdit(`Revert AI change #${String(n).padStart(3, "0")}`);
+      if (!force && !same(s.def, rec.after)) return { ok: false, reason: `The survey has changed since ${tag}. Reverting it restores the survey to before that change, which also undoes the edits made after it.` };
+      s.labelNextEdit(`Revert ${tag}`);
       s.replace(rec.before);
     }
-    setSession((x) => ({ ...x, history: x.history.map((h) => (h.n === n ? { ...h, reverted: true } : h)) }));
-    void fetch("/api/copilot/record", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: s.surveyDbId, n, summary: rec.summary.slice(0, 3).join("; "), reverted: true }) }).catch(() => {});
+    const restored = { ...rec, reverted: true };
+    setSession((x) => ({ ...x, history: x.history.some((h) => h.key === k) ? x.history.map((h) => (h.key === k ? restored : h)) : [...x.history, restored] }));
+    void recorder.update(k, { status: "reverted", statusDetail: force ? "restored from History, with the edits made after it" : "restored from History" });
+    void auditChange(k, rec, true);
     return { ok: true };
-  }, [session.history, s, setSession]);
+  }, [session.history, s, setSession, recorder, auditChange]);
+
+  /** REAPPLY: the entry's actions, re-proposed against the survey as it is NOW — through the review again, never written blind */
+  const reapply = React.useCallback((k: string): boolean => {
+    const op = recorder.get(k);
+    if (!op) return false;
+    const actions = reapplyActions(op, actionsByOp.get(k));
+    if (!actions.length) return false;
+    previewFix(actions, `Reapply ${op.changeN ? changeLabel(op.changeN).replace("AI Change", "AI change") : "an earlier change"}: ${op.prompt}`.slice(0, 500), { intent: { kind: "reapply", of: op.changeN ?? op.serverId ?? k } });
+    return true;
+  }, [recorder, previewFix]);
+
+  /** COMPARE: the surveys before and after an entry — the page's own when it made the change, else the record's */
+  const compare = React.useCallback(async (k: string): Promise<{ before: SurveyDefinition; after: SurveyDefinition } | { error: string }> => {
+    const rec = session.history.find((h) => h.key === k);
+    if (rec) return { before: rec.before, after: rec.after };
+    const full = await recorder.fetchOne(k);
+    if (full?.before && full.after) return { before: full.before, after: full.after };
+    return { error: full ? "The surveys before and after this change were not kept (only an applied change keeps them, up to 2 MB each)." : "This entry could not be read from the history." };
+  }, [session.history, recorder]);
 
   /* ------------------------------------------------------------ research documents */
   const [uploading, setUploading] = React.useState(false);
@@ -412,10 +674,14 @@ export function useCopilot(opts: {
       const reincluded = (x.excluded ?? []).some((i) => !next.includes(i));
       return { ...x, excluded: next, confirmed: reincluded ? false : x.confirmed };
     }), history: session.history, review: session.review,
+    /* the operation history: every entry (newest first), where it is kept, and what can be done with one */
+    sandbox, ops: recorder.list(), opsDurable: recorder.durable, opsLoaded: recorder.loaded, opsError: recorder.loadError, op: (k: string) => recorder.get(k),
+    refreshOps: () => recorder.refresh(), recordOp, updateOp, commitApplied, retrySave, restore, reapply, compare,
+    actionsOf: (k: string) => actionsByOp.get(k) ?? null,
     docs: session.docs ?? [], durable: session.durable, uploading, docError,
     confirmed: session.confirmed, setConfirmed: (v: boolean) => setSession((x) => ({ ...x, confirmed: v })),
     tab: session.tab, setTab: (t: PanelTab) => setSession((x) => ({ ...x, tab: t })),
-    ask, local, working, runReview, previewFix, apply, cancel, revert, uploadDocs, deleteDoc, refreshDocs,
+    ask, local, working, runReview, previewFix, apply, cancel, uploadDocs, deleteDoc, refreshDocs,
     themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),
     quotaCounts, quotaCountsAt, refreshQuotaCounts,
     analysisRun, runDue, running, runError, refreshAnalysisRun, runPlanNow,

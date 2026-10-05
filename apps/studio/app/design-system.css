@@ -1715,6 +1715,21 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .cp-change.reverted { opacity: .55; }
 .cp-change-head { display: flex; align-items: center; gap: 8px; }
 .cp-change-req { margin: 0; }
+/* the operation history (Phase 5): status and source chips, the entry's actions, its details, Compare — all wrapping, nothing sideways */
+.cp-change-head { flex-wrap: wrap; min-width: 0; }
+.cp-op-status, .cp-op-source { font-family: var(--mono); font-size: 9.5px; letter-spacing: .05em; text-transform: uppercase; border-radius: 4px; padding: 0 5px; border: 1px solid var(--c-border); color: var(--c-text-3); white-space: nowrap; }
+.cp-op-source { border-style: dashed; }
+.cp-op-status.s-applied, .cp-op-status.s-saved { color: var(--c-success-fg); border-color: var(--c-success-fg); background: var(--c-success-bg, #ecfdf5); }
+.cp-op-status.s-save_failed, .cp-op-status.s-failed, .cp-op-status.s-refused { color: var(--c-error-fg); border-color: var(--c-error); background: var(--c-error-bg); }
+.cp-op-status.s-proposed, .cp-op-status.s-clarify { color: var(--c-warning-fg); border-color: var(--c-warning); background: var(--c-warning-bg); }
+.cp-op-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.cp-op-detail { display: grid; grid-template-columns: minmax(70px, max-content) minmax(0, 1fr); gap: 3px 10px; margin: 4px 0 0; font-size: 12px; }
+.cp-op-detail dt { color: var(--c-text-3); font-size: 11px; }
+.cp-op-detail dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.cp-op-detail ul { margin: 0; padding-left: 16px; }
+.cp-op-detail .iq-chip { margin: 0 4px 2px 0; }
+.cp-compare { border-top: 1px dashed var(--c-border); margin-top: 4px; padding-top: 6px; min-width: 0; overflow-wrap: anywhere; }
+.cp-compare .cp-rows { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .cp-drop-choice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 14px 6px; padding: 8px 10px; border: 1px dashed var(--c-primary-600); border-radius: 10px; font-size: 12.5px; }
 .cp-attach-wrap { position: relative; flex: none; align-self: flex-end; display: inline-flex; }
 .cp-attach-menu { position: absolute; bottom: 44px; left: 0; z-index: 20; display: flex; flex-direction: column; min-width: 290px; background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 10px; box-shadow: var(--sh-2, 0 8px 24px rgba(0,0,0,.12)); padding: 4px; }

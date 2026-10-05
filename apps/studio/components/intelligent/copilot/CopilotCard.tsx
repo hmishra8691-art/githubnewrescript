@@ -7,6 +7,7 @@ import { formatCharge } from "../../../lib/import/chat";
 import { languageName } from "../../../lib/intelligent/voice";
 import type { CopilotEntry, EngineTurn } from "./useCopilot";
 import type { SurveyAction } from "@rescript/engine";
+import { appliedKicker, type ClientOp, type SaveView } from "../../../lib/copilot/history";
 
 /**
  * ONE COPILOT TURN in the conversation: what the researcher said (and, when
@@ -19,7 +20,7 @@ import type { SurveyAction } from "@rescript/engine";
  *
  * Every question code in the copilot's words is a link to the question.
  */
-export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges, onApply, onCancel, onAnswer, onAsk, onPreviewFix, counts, canApply, applyTitle, applyLabel = "Apply changes", refused = [] }: {
+export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges, onApply, onCancel, onAnswer, onAsk, onPreviewFix, counts, canApply, applyTitle, applyLabel = "Apply changes", refused = [], op, onRetrySave }: {
   entry: CopilotEntry;
   def: SurveyDefinition;
   onSelect(questionId: string): void;
@@ -40,12 +41,19 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
   applyTitle: string;
   /** "Apply the ticked changes" when some were unticked in the review — this button applies the same selection */
   applyLabel?: string;
+  /** the turn's operation-history entry: an applied card's number and save state come from it */
+  op?: ClientOp;
+  /** "Try saving again" for an applied change whose save was refused */
+  onRetrySave?(): void;
 }) {
   const r = entry.reply;
   const u = r?.understanding;
   const state = entry.proposal;
+  /* an applied card says what is true: APPLIED once the editor has it, then the number, then SAVED / NOT SAVED / SANDBOX */
+  const save = state === "applied" ? op?.save : undefined;
+  const n = entry.changeN ?? (state === "applied" ? op?.changeN : null) ?? null;
   return (
-    <article className={`iq-turn cp-turn ${state === "applied" ? "applied" : state === "cancelled" || state === "superseded" ? "cancelled" : "open"}`} data-testid="cp-turn" data-status={entry.status} data-kind={r?.kind ?? ""} data-proposal={state ?? ""} data-mode={entry.context?.mode ?? ""}>
+    <article className={`iq-turn cp-turn ${state === "applied" ? "applied" : state === "cancelled" || state === "superseded" ? "cancelled" : "open"}`} data-testid="cp-turn" data-status={entry.status} data-kind={r?.kind ?? ""} data-proposal={state ?? ""} data-mode={entry.context?.mode ?? ""} data-save={save?.state ?? ""} data-n={n ?? ""}>
       <div className="iq-said"><Icon name="user" size={13} /> <span>{entry.text}</span></div>
       {entry.heard && (
         <div className="iq-heard" data-testid="iq-heard" data-language={entry.heard.language}>
@@ -55,7 +63,7 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
       )}
       <div className={`iq-card cp-card${entry.status === "failed" ? " blocked" : ""}${r?.kind === "proposal" ? " proposal" : " answer"}`}>
         <div className="iq-card-head">
-          <span className="iq-kicker"><Icon name="sparkle" size={11} /> {entry.status === "thinking" ? "THINKING" : entry.status === "failed" ? "COULD NOT ANSWER" : state === "applied" ? `APPLIED${entry.changeN ? ` · AI CHANGE #${String(entry.changeN).padStart(3, "0")}` : ""}` : state === "superseded" ? "REVISED BELOW" : state === "cancelled" ? "CANCELLED" : r?.kind === "proposal" ? "PROPOSED" : r?.kind === "review" ? "REVIEW" : r?.kind === "clarify" ? "QUESTION" : "COPILOT"}</span>
+          <span className="iq-kicker"><Icon name="sparkle" size={11} /> {entry.status === "thinking" ? "THINKING" : entry.status === "failed" ? "COULD NOT ANSWER" : state === "applied" ? appliedKicker(save, n) : state === "superseded" ? "REVISED BELOW" : state === "cancelled" ? "CANCELLED" : r?.kind === "proposal" ? "PROPOSED" : r?.kind === "review" ? "REVIEW" : r?.kind === "clarify" ? "QUESTION" : "COPILOT"}</span>
           {entry.context?.researchUsed && <span className="iq-source" title={`${entry.context.passages.length} passage(s) from your research documents were used`} data-testid="cp-research-used">research · {entry.context.passages.length}</span>}
           {entry.engine && <span className="iq-source cp-engine-badge" data-testid="cp-engine" data-category={entry.engine.category ?? ""} title="Interpreted and checked by the Studio's own survey engine — no language model was called, nothing was charged">internal engine · no model call</span>}
           {entry.context?.cached && <span className="iq-source" title="The same request was answered moments ago; no new model call was made">cached</span>}
@@ -66,6 +74,8 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
         {entry.error && <p className="iq-error" role="alert" data-testid="cp-error"><Icon name="warning" size={12} /> {entry.error}</p>}
         {entry.message && <p className="iq-warning" data-testid="cp-empty"><Icon name="info" size={12} /> {entry.message}</p>}
         {entry.appliedNote && <p className="cp-applied-note" data-testid="cp-applied-note"><Icon name="check" size={12} /> {entry.appliedNote}</p>}
+        {save?.state === "failed" && <SaveFailed save={save} onRetry={onRetrySave} />}
+        {state === "applied" && op?.recordError && <p className="iqi-dim" data-testid="cp-record-error"><Icon name="info" size={11} /> History: {op.recordError}</p>}
         {entry.context?.uxOnly && state === "open" && <p className="iqi-dim cp-ux-only-note" data-testid="cp-ux-only-turn">Look and behaviour only — the Studio refuses any change to questions, options, codes or logic in this request.</p>}
         {r && (
           <>
@@ -202,4 +212,19 @@ function EngineDetail({ engine, def, onSelect, onSelectKey, onAsk, onPreviewFix,
 export function Linked({ text, def, onSelect }: { text: string; def: SurveyDefinition; onSelect(questionId: string): void }) {
   const segs = React.useMemo(() => linkify(text, def), [text, def]);
   return <>{segs.map((x, i) => ("questionId" in x ? <button key={i} type="button" className="cp-ref" onClick={() => onSelect(x.questionId)} data-testid="cp-ref" data-question={x.questionId}>{x.text}</button> : <React.Fragment key={i}>{x.text}</React.Fragment>))}</>;
+}
+
+/**
+ * A REFUSED SAVE, on an applied card (the copilot's and the grammar's): the
+ * change is in the editor, not on the server — said with the store's
+ * reason, and a retry that runs the same flush (and moves the record to
+ * saved when it works).
+ */
+export function SaveFailed({ save, onRetry }: { save: Extract<SaveView, { state: "failed" }>; onRetry?(): void }) {
+  return (
+    <p className="iq-error" role="alert" data-testid="cp-save-failed" data-kind={save.kind}>
+      <Icon name="warning" size={12} /> Applied in this editor but NOT saved — {save.message}.{" "}
+      {onRetry && <button type="button" className="iq-btn" onClick={onRetry} data-testid="cp-retry-save">Try saving again</button>}
+    </p>
+  );
 }

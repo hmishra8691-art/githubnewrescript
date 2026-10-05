@@ -112,6 +112,41 @@ JSON mode (`response_format: json_object`) is sent only to providers that accept
   embeddings — is an `AI_REQUEST` through `meteredAi`; a refusing wallet
   stops the work and says why. The cost of each turn is shown on its card.
 
+## The operation history (Intelligent Mode upgrade, Phase 5)
+
+Every Intelligent operation is a record (`/api/copilot/operations`, table
+`intelligent_operations`, migration 0047): the prompt, the source (engine,
+model, grammar, fix), the intent, what was detected and targeted, what was
+proposed / applied / left out / refused, the warnings, the engine operations,
+the model calls with their charge, the survey before and after (applied
+changes only, ≤ 2 MB each) and the status, which moves only along
+proposed → applied | cancelled | failed, applied → saved | save_failed |
+reverted, saved → reverted, save_failed → saved | reverted, reverted →
+applied. The AI change number is the server's (`change_n`, the survey's
+max + 1, assigned on the first move to applied, retried once on a unique-index
+race) — the History tab, the card and the audit row all show it. A proposal
+is one record from its first request to Apply / Cancel (revisions fold in).
+
+Apply says only what is true: APPLIED once the store holds the change, then
+the number, then SAVED / NOT SAVED — <reason> (with "Try saving again") /
+SANDBOX (NOT SAVED). The store's ⌘Z / ⌘⇧Z mark the change reverted / applied
+again. A grammar proposal is applied to a clone first, so one the engine
+refuses at Apply takes no undo step and leaves the survey untouched.
+
+Without the table (not yet migrated) or in the sandbox, records are kept in
+the server's memory and the History tab says so; the sandbox's history is per
+browser tab (a key in sessionStorage), so it survives a reload of that tab.
+
+Browser test seams (sandbox only):
+
+- `window.__rescriptSaveFault(kind)` — `kind` is `conflict`, `lock_lost` or
+  `error`: the next `flushDraft` / autosave resolves false with that save
+  state and the message a real refusal carries. One-shot. Ignored on a real
+  survey (`components/studio/store.tsx`).
+- `window.__rescriptGrammarTurn(sentence)` — the grammar's reading of a
+  sentence as a TurnCard, with the engine and the model skipped
+  (`components/intelligent/IntelligentView.tsx`).
+
 ## Tests
 
 - engine `surveyActions.test.ts` (9), `surveyReview.test.ts` (5) — mutation
@@ -134,9 +169,10 @@ JSON mode (`response_format: json_object`) is sent only to providers that accept
   the grammar and the engine's review.
 - OCR reads JPEG/JPEG 2000 page scans (the common case); CCITT or raw bitmap
   scans are reported, not read.
-- The AI change history lives in the page session (the changes themselves are
-  in the survey's versions and the audit log); it is not yet reloaded from
-  the audit log in a later session.
+- ~~The AI change history lives in the page session.~~ Since Phase 5 of the
+  Intelligent Mode upgrade every operation is recorded in
+  `intelligent_operations` (migration 0047) — see "The operation history"
+  above.
 - Deleting a question keeps the engine's existing reference pruning — which
   removes a branch arm that read the question, with its contents; the copilot
   says so before applying, but does not yet offer to keep those questions.

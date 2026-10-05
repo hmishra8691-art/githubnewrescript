@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
-import { compileAnimation, compileStyle, describeUxTarget, reviewUx, type DependencyIndex, type ObjectKey, type SurveyAction } from "@rescript/engine";
+import { changeItems, compileAnimation, compileStyle, describeUxTarget, diffSurveys, reviewUx, type DependencyIndex, type ObjectKey, type SurveyAction } from "@rescript/engine";
 import { Icon } from "../../ui/Icon";
 import { structureRows, changeLabel, uxPreviewScope, type OutlineRow, type ProposalState } from "../../../lib/copilot/client";
 import { UxPreview } from "./UxPreview";
@@ -12,7 +12,9 @@ import { FindingsTab } from "./FindingsTab";
 import { Linked } from "./CopilotCard";
 import { ChangeReview } from "./ChangeReview";
 import { ContextPanel } from "./ContextPanel";
-import { applyCount, presentIds, reviewTree } from "../../../lib/copilot/review";
+import { applyCount, presentIds, reviewTree, optionTitle } from "../../../lib/copilot/review";
+import { apiCallWords, canReapply, canRestore, isChange, sourceWord, statusWord, type ClientOp } from "../../../lib/copilot/history";
+import { formatCharge } from "../../../lib/import/chat";
 import type { Copilot, PanelTab } from "./useCopilot";
 
 /**
@@ -28,8 +30,10 @@ import type { Copilot, PanelTab } from "./useCopilot";
  *              engine's checks and the model's reading — each linked to its
  *              questions, mechanical fixes offered as a preview
  *   Research   the uploaded documents and their research cards
- *   History    AI Change #001 … with what each created, modified and
- *              removed, and Undo for the whole operation
+ *   History    every Intelligent operation of this survey, newest first,
+ *              read back from the server (it survives a reload): the prompt,
+ *              its status and source, the AI change number; expanded, how it
+ *              was read and what it did; Compare, Restore, Reapply
  *   Analysis   the analysis framework (AnalysisTab)
  *   Languages  each language version's state and next step (LanguagesTab)
  *   Quotas     the feasibility review, the live counts' advice, the sheet import (QuotasTab)
@@ -73,7 +77,7 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
     { id: "changes", label: "Changes", badge: copilot.state ? copilot.state.diff.summary.length : undefined },
     { id: "review", label: "Review", badge: copilot.review ? copilot.review.rules.counts.critical + copilot.review.ai.filter((f) => f.severity === "critical").length || undefined : undefined },
     { id: "research", label: "Research", badge: copilot.docs.length || undefined },
-    { id: "history", label: "History", badge: copilot.history.filter((h) => !h.reverted).length || undefined },
+    { id: "history", label: "History", badge: copilot.ops.filter((o) => o.status === "applied" || o.status === "saved" || o.status === "save_failed").length || undefined },
     { id: "analysis", label: "Analysis", badge: def.research?.analysisPlan ? (def.research.analysisPlan.crosstabs.length + def.research.analysisPlan.tests.length) || undefined : undefined },
     { id: "findings", label: "Findings", badge: copilot.analysisRun ? copilot.analysisRun.findings.filter((f) => f.significant).length || undefined : undefined },
     { id: "languages", label: "Languages", badge: def.localization?.languages?.length || undefined },
@@ -94,7 +98,7 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
         {copilot.tab === "changes" && <ChangesTab copilot={copilot} def={def} onSelect={onSelect} onSelectKey={onSelectKey} onSelectOption={(questionId, code) => setOption({ questionId, code })} onApply={onApply} applyNote={applyNote} readOnly={readOnly} />}
         {copilot.tab === "review" && <ReviewTab copilot={copilot} def={def} onSelect={onSelect} />}
         {copilot.tab === "research" && <ResearchTab copilot={copilot} />}
-        {copilot.tab === "history" && <HistoryTab copilot={copilot} readOnly={readOnly} />}
+        {copilot.tab === "history" && <HistoryTab copilot={copilot} def={def} readOnly={readOnly} onSelect={onSelect} />}
         {copilot.tab === "analysis" && <AnalysisTab copilot={copilot} def={def} onSelect={onSelect} />}
         {copilot.tab === "findings" && <FindingsTab copilot={copilot} def={def} />}
         {copilot.tab === "languages" && <LanguagesTab copilot={copilot} def={def} onSelect={onSelect} />}
@@ -387,32 +391,164 @@ function ResearchTab({ copilot }: { copilot: Copilot }) {
 
 /* ------------------------------------------------------------ history */
 
-function HistoryTab({ copilot, readOnly }: { copilot: Copilot; readOnly: boolean }) {
-  const [warn, setWarn] = React.useState<{ n: number; reason: string } | null>(null);
-  if (!copilot.history.length) return <p className="cp-empty" data-testid="cp-no-history">Every change you apply from the copilot is listed here — what it created, modified and removed — and can be undone as one operation.</p>;
+/**
+ * THE OPERATION HISTORY (Phase 5): every Intelligent operation on this
+ * survey — read back from the server on opening (and after each change),
+ * merged with what this page is still sending — newest first. An entry is a
+ * line: the AI change number when it was applied, its status, where it was
+ * read (the engine, the model, the grammar, a fix), the time and the
+ * prompt; an applied one says what it created, modified, removed and left
+ * out. Details opens how it was read and what it did; Compare shows the
+ * survey before against after (read-only — the review's rows without the
+ * ticks); Restore takes it back (said first when later edits go with it);
+ * Reapply proposes its actions again against the survey as it is now —
+ * through the review, never written blind.
+ */
+function HistoryTab({ copilot, def, readOnly, onSelect }: { copilot: Copilot; def: SurveyDefinition; readOnly: boolean; onSelect(id: string): void }) {
+  const [warn, setWarn] = React.useState<{ key: string; reason: string } | null>(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  React.useEffect(() => { void copilot.refreshOps(); }, []);
+  const ops = copilot.ops;
+  const records = React.useMemo(() => new Map(copilot.history.filter((h) => h.key).map((h) => [h.key!, h])), [copilot.history]);
+  const restore = async (o: ClientOp, force = false) => {
+    const r = await copilot.restore(o.key, force);
+    setWarn(!r.ok && r.reason && !force ? { key: o.key, reason: r.reason } : null);
+  };
+  /* said whenever the records are in this server's memory rather than the table */
+  const durability = copilot.opsDurable === false && (
+    <p className="iq-warning" data-testid="cp-history-not-durable"><Icon name="info" size={12} /> {copilot.sandbox
+      ? "The sandbox has no database: this history is kept in this server's memory, for this browser tab — a reload keeps it, a server restart does not."
+      : "This history is kept on this server only until the table is set up (migration 0047) — a server restart loses it."}</p>
+  );
+  if (!ops.length) return (
+    <div className="cp-history" data-testid="cp-history-empty">
+      {durability}
+      {copilot.opsError && <p className="iq-error" data-testid="cp-history-error"><Icon name="warning" size={12} /> The history could not be read: {copilot.opsError}</p>}
+      <p className="cp-empty" data-testid="cp-no-history">Every Intelligent operation is listed here — what you asked, how it was read, what was proposed and applied — and every applied change can be compared, restored or reapplied.</p>
+    </div>
+  );
   return (
-    <div className="cp-history" data-testid="cp-history">
-      {[...copilot.history].reverse().map((h) => (
-        <div key={h.n} className={`cp-change${h.reverted ? " reverted" : ""}`} data-testid="cp-change" data-n={h.n}>
-          <div className="cp-change-head">
-            <b>{changeLabel(h.n)}</b>
-            <span className="iqi-dim">{new Date(h.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-            <span className="iq-spacer" />
-            {h.reverted ? <span className="iqi-dim">undone</span> : <button type="button" className="iq-btn" disabled={readOnly} onClick={() => { const r = copilot.revert(h.n); if (!r.ok && r.reason) setWarn({ n: h.n, reason: r.reason }); else setWarn(null); }} data-testid="cp-undo-change">Undo</button>}
-          </div>
-          <p className="iqi-dim cp-change-req">“{h.request.slice(0, 160)}”</p>
-          {h.created.length > 0 && <div><span className="iq-label">Created</span> {h.created.join(", ")}</div>}
-          {h.modified.length > 0 && <div><span className="iq-label">Modified</span> {h.modified.join(", ")}</div>}
-          {h.removed.length > 0 && <div><span className="iq-label">Removed</span> {h.removed.join(", ")}</div>}
-          {h.excluded && h.excluded.length > 0 && <div data-testid="cp-change-excluded"><span className="iq-label">Excluded</span> {h.excluded.length === 1 ? "1 proposed change was" : `${h.excluded.length} proposed changes were`} left out: {h.excluded.join("; ")}</div>}
-          {warn?.n === h.n && (
-            <div className="cp-block warn" data-testid="cp-revert-warning">
-              <p>{warn.reason}</p>
-              <button type="button" className="iq-btn" onClick={() => { copilot.revert(h.n, true); setWarn(null); }} data-testid="cp-revert-anyway">Restore to before {changeLabel(h.n)}</button>
-            </div>
-          )}
-        </div>
+    <div className="cp-history" data-testid="cp-history" data-durable={copilot.opsDurable === false ? "false" : "true"}>
+      {durability}
+      {copilot.opsError && <p className="iq-error" data-testid="cp-history-error"><Icon name="warning" size={12} /> The history could not be read: {copilot.opsError}</p>}
+      {ops.map((o) => (
+        <OpEntry key={o.key} o={o} all={ops} rec={records.get(o.key)} copilot={copilot} def={def} readOnly={readOnly} onSelect={onSelect}
+          onRestore={(force) => void restore(o, force)} warn={warn?.key === o.key ? warn.reason : null} />
       ))}
+    </div>
+  );
+}
+function OpEntry({ o, all, rec, copilot, def, readOnly, onSelect, onRestore, warn }: {
+  o: ClientOp; all: ClientOp[]; rec?: import("../../../lib/copilot/client").ChangeRecord; copilot: Copilot; def: SurveyDefinition; readOnly: boolean;
+  onSelect(id: string): void; onRestore(force?: boolean): void; warn: string | null;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [cmp, setCmp] = React.useState<null | "loading" | { before: SurveyDefinition; after: SurveyDefinition } | { error: string }>(null);
+  const change = isChange(o);
+  const restore = canRestore(o, all);
+  const reapply = canReapply(o, copilot.actionsOf(o.key));
+  const excluded = rec?.excluded ?? (o.excluded.length ? o.excluded : undefined);
+  const compare = async () => {
+    if (cmp) { setCmp(null); return; }
+    setCmp("loading");
+    setCmp(await copilot.compare(o.key));
+  };
+  const qOf = (id: string) => def.questions.find((q) => q.id === id || String(q.code) === id);
+  const time = o.createdAt ? new Date(o.createdAt) : null;
+  return (
+    <div className={`cp-change cp-op${o.status === "reverted" ? " reverted" : ""}`} data-testid={change ? "cp-change" : "cp-op"} data-op="true" data-status={o.status} data-source={o.source} data-n={o.changeN ?? ""} data-key={o.key}>
+      <div className="cp-change-head">
+        {change && <b data-testid="cp-op-n">{changeLabel(o.changeN)}</b>}
+        <span className={`cp-op-status s-${o.status}`} data-testid="cp-op-status">{statusWord(o.status)}</span>
+        <span className="cp-op-source" data-testid="cp-op-source">{sourceWord(o.source)}</span>
+        {time && <span className="iqi-dim" title={time.toLocaleString()}>{time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>}
+        <span className="iq-spacer" />
+        {o.status === "reverted" && <span className="iqi-dim">undone</span>}
+        {restore.offered && <button type="button" className="iq-btn" disabled={readOnly} onClick={() => onRestore()} data-testid="cp-undo-change" title={restore.latest ? "Take this change back, as one operation" : "Restore the survey to before this change — later changes go with it (you are asked first)"}>Restore{restore.latest ? "" : "…"}</button>}
+      </div>
+      <p className="iqi-dim cp-change-req" data-testid="cp-op-prompt">“{o.prompt.slice(0, 160)}{o.prompt.length > 160 ? "…" : ""}”</p>
+      {rec && rec.created.length > 0 && <div><span className="iq-label">Created</span> {rec.created.join(", ")}</div>}
+      {rec && rec.modified.length > 0 && <div><span className="iq-label">Modified</span> {rec.modified.join(", ")}</div>}
+      {rec && rec.removed.length > 0 && <div><span className="iq-label">Removed</span> {rec.removed.join(", ")}</div>}
+      {!rec && change && o.applied.length > 0 && <div><span className="iq-label">Applied</span> {o.applied.slice(0, 4).join("; ")}{o.applied.length > 4 ? ` and ${o.applied.length - 4} more` : ""}</div>}
+      {excluded && excluded.length > 0 && <div data-testid="cp-change-excluded"><span className="iq-label">Excluded</span> {excluded.length === 1 ? "1 proposed change was" : `${excluded.length} proposed changes were`} left out: {excluded.join("; ")}</div>}
+      {o.status === "save_failed" && <p className="iq-error" data-testid="cp-op-not-saved"><Icon name="warning" size={12} /> {o.statusDetail ?? "Not saved."}</p>}
+      {o.recordError && <p className="iqi-dim" data-testid="cp-op-record-error"><Icon name="info" size={11} /> {o.recordError}</p>}
+      {o.auditError && <p className="iqi-dim" data-testid="cp-op-audit-error"><Icon name="info" size={11} /> {o.auditError}</p>}
+      <div className="cp-op-actions">
+        <button type="button" className={`iq-btn${open ? " on" : ""}`} aria-expanded={open} onClick={() => setOpen((v) => !v)} data-testid="cp-op-expand">{open ? "▾" : "▸"} Details</button>
+        {change && o.hasBefore && <button type="button" className={`iq-btn${cmp ? " on" : ""}`} onClick={() => void compare()} data-testid="cp-op-compare">Compare</button>}
+        {reapply && <button type="button" className="iq-btn" disabled={readOnly || copilot.busy} onClick={() => copilot.reapply(o.key)} data-testid="cp-op-reapply" title="Propose these actions again, against the survey as it is now — they go through the review before anything is written">Reapply</button>}
+      </div>
+      {open && (
+        <dl className="cp-op-detail" data-testid="cp-op-detail">
+          {Object.keys(o.intent).length > 0 && <><dt>Read as</dt><dd data-testid="cp-op-intent">{Object.entries(o.intent).filter(([, v]) => v !== null && v !== "").map(([k, v]) => `${k}: ${v}`).join(" · ")}</dd></>}
+          {o.detected.length > 0 && <><dt>Detected</dt><dd data-testid="cp-op-detected"><ul>{o.detected.map((d, i) => <li key={i}>{d.what}: <Linked text={d.value} def={def} onSelect={onSelect} /></li>)}</ul></dd></>}
+          {o.targets.length > 0 && <><dt>Targets</dt><dd data-testid="cp-op-targets">{o.targets.map((t) => { const q = qOf(t); return q ? <button key={t} type="button" className="iq-chip" onClick={() => onSelect(q.id)} data-testid="cp-op-target" data-question={q.id}>{q.code}</button> : <span key={t} className="mono cp-op-target-gone">{t} </span>; })}</dd></>}
+          <OpList title="Proposed" items={o.proposed.map((p) => p.description)} testid="cp-op-proposed" def={def} onSelect={onSelect} />
+          <OpList title="Applied" items={o.applied} testid="cp-op-applied" def={def} onSelect={onSelect} />
+          <OpList title="Left out" items={o.excluded} testid="cp-op-excluded" def={def} onSelect={onSelect} />
+          <OpList title="Refused" items={o.failed.map((f) => (f.reason ? `${f.description} — ${f.reason}` : f.description))} testid="cp-op-failed" def={def} onSelect={onSelect} />
+          <OpList title="Warnings" items={o.warnings} testid="cp-op-warnings" def={def} onSelect={onSelect} />
+          {o.engineOps.length > 0 && <><dt>Engine operations</dt><dd className="mono" data-testid="cp-op-engine-ops">{o.engineOps.join(", ")}</dd></>}
+          <dt>Model calls</dt>
+          <dd data-testid="cp-op-api-calls">{o.apiCalls.length ? <ul>{o.apiCalls.map((c, i) => <li key={i} data-testid="cp-op-api-call">{apiCallWords(c, formatCharge)}</li>)}</ul> : "none — read by the Studio's own engine, nothing charged"}</dd>
+          {o.statusDetail && <><dt>Status</dt><dd data-testid="cp-op-status-detail">{o.statusDetail}</dd></>}
+        </dl>
+      )}
+      {cmp && <OpCompare cmp={cmp} def={def} onSelect={onSelect} />}
+      {warn && (
+        <div className="cp-block warn" data-testid="cp-revert-warning">
+          <p>{warn}</p>
+          <button type="button" className="iq-btn" onClick={() => onRestore(true)} data-testid="cp-revert-anyway">Restore to before {changeLabel(o.changeN)}</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OpList({ title, items, testid, def, onSelect }: { title: string; items: string[]; testid: string; def: SurveyDefinition; onSelect(id: string): void }) {
+  if (!items.length) return null;
+  return <><dt>{title}</dt><dd data-testid={testid}><ul>{items.map((x, i) => <li key={i}><Linked text={x} def={def} onSelect={onSelect} /></li>)}</ul></dd></>;
+}
+
+/**
+ * COMPARE: the survey before the change against after it, as the review
+ * reads a proposal — the summary, then one row per change (category, the
+ * object, the field, old → new) — read-only: there is nothing to tick in
+ * what already happened.
+ */
+function OpCompare({ cmp, def, onSelect }: { cmp: "loading" | { before: SurveyDefinition; after: SurveyDefinition } | { error: string }; def: SurveyDefinition; onSelect(id: string): void }) {
+  const result = cmp !== "loading" && "before" in cmp ? cmp : null;
+  const view = React.useMemo(() => {
+    if (!result) return null;
+    try { return { summary: diffSurveys(result.before, result.after).summary, items: changeItems(result.before, result.after).items }; } catch (e) { return { error: (e as Error).message }; }
+  }, [result]);
+  if (cmp === "loading") return <div className="cp-compare" data-testid="cp-compare" data-state="loading"><span className="iqi-dim">Reading the surveys before and after…</span></div>;
+  if ("error" in cmp) return <div className="cp-compare" data-testid="cp-compare" data-state="error"><p className="iq-warning"><Icon name="info" size={12} /> {cmp.error}</p></div>;
+  if (!view || "error" in view) return <div className="cp-compare" data-testid="cp-compare" data-state="error"><p className="iq-warning">The two surveys could not be compared{view && "error" in view ? `: ${view.error}` : ""}.</p></div>;
+  return (
+    <div className="cp-compare" data-testid="cp-compare" data-state="ready" data-items={view.items.length}>
+      <div className="iq-label">Before → after</div>
+      {view.summary.length === 0 && <p className="iqi-dim">The two surveys are the same.</p>}
+      <ul className="cp-summary" data-testid="cp-compare-summary">{view.summary.map((l, i) => <li key={i}><Linked text={l} def={def} onSelect={onSelect} /></li>)}</ul>
+      <ul className="cp-rows">
+        {view.items.slice(0, 80).map((it) => (
+          <li key={it.id} className="cp-row" data-testid="cp-compare-row" data-category={it.category} data-code={it.question?.code ?? ""}>
+            <div className="cp-row-body">
+              <div className="cp-row-head">
+                <span className={`cp-cat k-${it.kind}`}>{it.category}</span>
+                {it.question && <b className="mono">{it.question.code}</b>}
+                {it.option && <span className="cp-row-opt">{optionTitle(it.option, "Option")}</span>}
+                <span className="cp-row-field">{it.field}</span>
+              </div>
+              {it.from ? <div className="cp-val from"><span className="cp-val-k">old</span><span className="cp-val-t all">{it.from}</span></div> : null}
+              {it.to ? <div className="cp-val to"><span className="cp-val-k">new</span><span className="cp-val-t all">{it.to}</span></div> : null}
+            </div>
+          </li>
+        ))}
+        {view.items.length > 80 && <li className="iqi-dim">and {view.items.length - 80} more</li>}
+      </ul>
     </div>
   );
 }

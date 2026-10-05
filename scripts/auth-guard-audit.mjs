@@ -65,6 +65,10 @@ const PUBLIC = {
     + "and names no project — audio now uploads straight to storage through media/{ticket,parts,confirm}, "
     + "which is guarded. Kept only so a stale tab gets a sentence instead of a 404, and guarding it would "
     + "mean a signed-out stale tab gets 401 instead of the explanation",
+  "cron/analysis-runs/route.ts":
+    "the hourly analysis-plan job: the same bearer-token credential as the media job, checked against CRON_SECRET by "
+    + "`timingSafeEqual` in each handler's first statement, refusing everything when the variable is unset. It runs "
+    + "every planned survey's milestones, so there is no single project to gate on — and a scheduler has no session",
   "cron/billing-reservations/route.ts":
     "the same bearer-token credential as the media job, checked the same way in the handler's first statement. "
     + "It releases reservations whose TTL has passed and touches nothing a caller could name, so there is no "
@@ -213,6 +217,9 @@ const LOCK_EXEMPT = {
     "declares a supplier in public.sample_sources — a row in a table, not a change to the questionnaire",
   "surveys/[id]/sample-sources/route.ts DELETE":
     "removes a declared supplier; the responses that cite it keep their provenance either way",
+  "surveys/[id]/brand-scrape/route.ts POST":
+    "reads a public web page and returns colour strings and at most one image URL for the client's palette generator; "
+    + "it writes nothing — no survey, no table — so taking the edit lock from a colleague would buy nothing",
   "surveys/[id]/themes/route.ts POST":
     "saves a workspace theme in public.themes, shared across projects — a theme is COPIED into a "
     + "definition when applied, never referenced, so saving one changes no survey",

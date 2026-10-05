@@ -10,7 +10,12 @@ export const dynamic = "force-dynamic";
  * reverted), so the Activity tab says what the AI changed, at whose request.
  * Body: { surveyId, n, request, summary, created, modified, removed,
  * excluded?, reverted? } — `excluded`: the proposed changes the researcher
- * left out of a selective apply, so the record says what was NOT done too. Records only; changes nothing. The caller must hold the
+ * left out of a selective apply, so the record says what was NOT done too.
+ * `n` is the AI change number the operation history assigned
+ * (/api/copilot/operations, Phase 5) — the survey's own sequence, so two
+ * sessions' rows no longer both say #001; a client whose record could not be
+ * numbered sends none. A failure here is shown on the History entry ("not in
+ * the audit log: …"), not swallowed. Records only; changes nothing. The caller must hold the
  * editing lock: only whoever made the edit can say they made it.
  */
 export async function POST(req: NextRequest) {

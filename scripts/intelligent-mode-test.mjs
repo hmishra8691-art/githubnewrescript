@@ -214,7 +214,9 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
   turn = await lastEntry();
   assert.equal(await turn.$('[data-testid="cp-apply"]'), null);
   assert.equal(await turn.$('[data-testid="cp-cancel"]'), null);
-  assert.match(await textOf(turn, ".iq-kicker"), /^APPLIED · AI CHANGE #001$/);
+  // Phase 5: the kicker says the save's truth too (the sandbox saves nothing), once the save has settled
+  await page.waitForFunction((el) => el.getAttribute("data-save") === "sandbox", turn);
+  assert.match(await textOf(turn, ".iq-kicker"), /^APPLIED · SANDBOX \(NOT SAVED\) · AI CHANGE #001$/);
   ok("an applied card has no more buttons — it says APPLIED, with its place in the change history");
 
   // one undo step

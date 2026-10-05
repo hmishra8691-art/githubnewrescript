@@ -170,7 +170,9 @@ await page.waitForSelector('[data-testid="intelligent-view"]');
   await page.waitForFunction(() => document.querySelector('[data-testid="cp-panel"]')?.getAttribute("data-tab") === "history");
   const t = (await turns()).at(-1);
   assert.equal(await t.getAttribute("data-proposal"), "applied");
-  assert.match(await (await t.$(".iq-kicker")).textContent(), /APPLIED · AI CHANGE #001/);
+  // Phase 5: the kicker says the save's truth too (the sandbox saves nothing), once the save has settled
+  await page.waitForFunction((el) => el.getAttribute("data-save") === "sandbox", t);
+  assert.match(await (await t.$(".iq-kicker")).textContent(), /APPLIED · SANDBOX \(NOT SAVED\) · AI CHANGE #001$/);
   const hist = await texts('[data-testid="cp-change"]');
   assert.match(hist[0], /AI Change #001/);
   assert.match(hist[0], /Created block “Screening”, block “Social media exposure”, block “Purchase intention”, Q1, Q2, Q3, Q4, Q5/);
