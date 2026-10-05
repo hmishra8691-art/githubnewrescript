@@ -118,6 +118,12 @@ export const AnalysisPlan = z.object({
   /** who last wrote it — the engine's proposal, the copilot, or the researcher by hand */
   source: z.enum(["engine", "copilot", "researcher"]).optional(),
   updatedAt: z.string().optional(),
+  /**
+   * Run the plan by itself at the milestones of fieldwork (the first readable
+   * base, halfway to target, the target, the end of the field window) and
+   * keep the findings — on unless the researcher turns it off.
+   */
+  autoRun: z.boolean().optional(),
 });
 export type AnalysisPlan = z.infer<typeof AnalysisPlan>;
 

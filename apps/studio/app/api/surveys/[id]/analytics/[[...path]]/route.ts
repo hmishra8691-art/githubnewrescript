@@ -9,7 +9,7 @@ import {
 import type { SurveyDefinition } from "@rescript/schema";
 import { supabaseService } from "@/lib/authServer";
 import { audit, isFailure, requireProject, type ProjectContext } from "@/lib/guard";
-import { compute, hashPassword, loadDefinition, loadTheme, newToken, variablesPayload } from "@/lib/analytics";
+import { compute, hashPassword, loadDefinition, loadTheme, newToken, variablesPayload, runPlanFor, latestRun, listRuns, dueMilestone } from "@/lib/analytics";
 
 /**
  * The environment a report is built from.
@@ -88,6 +88,19 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
     const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
     const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
     return json(await variablesPayload(db, surveyId, loaded));
+  }
+  /* the analysis runs (research-intelligence Phase 5): the latest, the list, and what milestone is due */
+  if (head === "plan" && itemId === "latest") {
+    const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
+    const env = req.nextUrl.searchParams.get("environment");
+    const run = await latestRun(db, surveyId, env === "TEST" || env === "ALL" || env === "LIVE" ? env : undefined);
+    const loaded = await loadDefinition(db, surveyId);
+    const due = "error" in loaded ? null : await dueMilestone(db, surveyId, loaded.def as SurveyDefinition);
+    return json({ run, due });
+  }
+  if (head === "plan" && itemId === "runs") {
+    const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
+    return json({ runs: await listRuns(db, surveyId) });
   }
   if (head === "home") {
     const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
@@ -254,6 +267,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
   const db = supabaseService();
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
 
+  /* run the whole plan now and keep the findings */
+  if (head === "plan" && itemId === "run") {
+    const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;
+    const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
+    const env = body.environment === "TEST" || body.environment === "ALL" ? body.environment : "LIVE";
+    const r = await runPlanFor(db, surveyId, loaded, { environment: env as DatasetSpec["environment"], dataset: body.dataset === "clean" ? "clean" : "all", trigger: typeof body.trigger === "string" && body.trigger.trim() ? body.trigger.trim().slice(0, 40) : "manual", primaries: body.primaries === true, userId: ctx.user.userId });
+    if (r.error && !r.stored) return bad(r.error, r.run.items.length ? 500 : 400);
+    log(ctx, "analytics.plan_run", r.stored?.id ?? null, { trigger: r.run.trigger, n: r.run.n, analyses: r.run.items.length, findings: r.run.findings.length });
+    return json({ run: r.stored, results: Object.fromEntries(r.run.items.map((it) => [it.definition.options?.planned ?? it.definition.name, it.result])) }, 201);
+  }
   if (head === "run") {
     const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
     const def = body.definition as AnalysisDefinition | undefined;

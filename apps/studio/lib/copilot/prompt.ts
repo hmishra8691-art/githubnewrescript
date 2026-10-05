@@ -284,6 +284,21 @@ ACTIONS:
 {"op":"set_quota_check","quotas":["Gender × Age","Region"],"after":"Screening","onFull":"terminate","when":"SAMPLE = 1"}   // without "after": right after the last question the quotas read
 Fieldwork questions ("which cells are behind?", "is the men's quota full?") are answered from the outline's counts and advice when present — no actions unless an adjustment is asked for; propose one update_quota per adjustment, never a silent rewrite of limits.`;
 
+/**
+ * THE FINDINGS GUIDE — sent with a request about what the data showed. The
+ * numbers come from an analysis run the Studio made (the plan executed on
+ * the responses: findings with their tests, p-values and effect sizes, the
+ * hypothesis verdicts); the model reads them, never invents them, and says
+ * so when nothing has run.
+ */
+export const COPILOT_FINDINGS_GUIDE = `FINDINGS GUIDE.
+The outline carries the latest ANALYSIS RUN when there is one: the plan executed on the completes so far — each hypothesis's VERDICT (SUPPORTED / NOT SUPPORTED / MIXED / INCONCLUSIVE / UNTESTED, with the reason), then the FINDINGS strongest first, each with its test, p-value, effect size and base. Answer from these and only these: quote the test and the p-value, name the effect size and its strength word, give the base; a verdict is the run's, not yours. Never report a number that is not in the run; if the run is small (base under 30) or old, say so; if there is no run, say that nothing has been run yet and that the researcher can run the plan from the Findings tab (or wait for the fieldwork milestone). A question the plan does not answer ("does income matter?") is answered with "not tested" and, if useful, an analysis action that would test it (add_analysis_test / add_crosstab — the ANALYSIS GUIDE's shapes). Keep the research meaning: a significant difference is not a cause; a null result with a small base is not evidence of no effect. Reply as "kind":"answer" unless the researcher asks for a change to the plan.`;
+
+/** a request about what the data showed — results, findings, whether a hypothesis held */
+export function findingsIntent(text: string): boolean {
+  return /\b(?:findings?|results?|what (?:did|does|do) (?:we|the data|the survey|it) (?:find|show|say|tell)|what have we (?:found|learned)|insights?|key takeaways?|significan\w*|p[- ]?values?|effect sizes?|(?:did|does|is|was|has|have) (?:H\d+|the hypothes\w+|our hypothes\w+)|hypothes\w+ (?:held|hold|supported|confirmed|rejected)|supported|drivers? of|what drives|correlat\w* with|differ(?:s|ence)? (?:by|between|across)|headline|summari[sz]e (?:the )?(?:results|findings|data|analysis)|nps (?:is|score|was)|top[- ]?2?[- ]?box (?:is|score|was)|how (?:did|does) .{0,30} (?:score|perform|compare))\b/i.test(text);
+}
+
 /** a request about quotas, sample targets or fieldwork fill — the guide goes with it */
 export function quotaIntent(text: string): boolean {
   return /\b(?:quotas?|quota ?cells?|cells? (?:is|are) full|interlock\w*|sample (?:plan|targets?|split|frame)|targets? (?:per|by|for) (?:cell|group|gender|age|region|segment)|(?:\d+|n) completes|completes? (?:per|by|for)|50\s*\/\s*50|nat(?:ionally)? rep\w*|screen(?:ed)? out when (?:the )?(?:cell|group) is full|over[- ]?quota|fill(?:ing)? rate|under[- ]?pace)\b/i.test(text);
@@ -362,6 +377,7 @@ export function copilotUserPrompt(input: {
   /** the request is about languages: the translation guide goes with it */
   translation?: boolean;
   quota?: boolean;
+  findings?: boolean;
 }): string {
   const parts: string[] = [];
   parts.push(`Survey language: ${input.surveyLanguage}`);
@@ -375,6 +391,7 @@ export function copilotUserPrompt(input: {
   if (input.analysis) parts.push(COPILOT_ANALYSIS_GUIDE);
   if (input.translation) parts.push(COPILOT_TRANSLATION_GUIDE);
   if (input.quota) parts.push(COPILOT_QUOTA_GUIDE);
+  if (input.findings) parts.push(COPILOT_FINDINGS_GUIDE);
   if (input.uxOnly) parts.push("THIS REQUEST IS LOOK-AND-BEHAVIOUR ONLY: propose UX actions only. Any structural action (questions, options, logic, validation, blocks, punch rules, variables) will be refused. If the researcher also needs such a change, say in one sentence that they can ask for it as its own request in this same chat (for example “Code SEGMENT as 1 when Q3 = 1”) — there is no other mode or session to switch to.");
   if (input.themeOnly) parts.push("THIS IS THE THEME: answer with one set_theme action covering everything the request implies (colours with readable contrast, fonts, background, cards, options, controls, inputs, spacing, phone sizes). Its values become the survey's Branding settings, which the researcher then adjusts by hand.");
   if (input.themeImage) parts.push(input.themeImage);

@@ -3,8 +3,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Condition, SurveyDefinition } from "@rescript/schema";
 import {
   buildDataset, runAnalysis, variableMetadata, recommendCharts, DEFAULT_THEME,
-  unionVariableMetadata, definitionResolver,
-  type AnalysisDefinition, type AnalysisResult, type AnalyticsRow, type Dataset, type DatasetSpec, type ReportTheme, type SegmentDef, type VariableMeta,
+  unionVariableMetadata, definitionResolver, plannedAnalyses, runPlan, compactRun, nextMilestone,
+  type AnalysisDefinition, type AnalysisResult, type AnalyticsRow, type Dataset, type DatasetSpec, type ReportTheme, type SegmentDef, type VariableMeta, type AnalysisRun, type PlannedAnalysis,
 } from "@rescript/analytics";
 import type { VersionedDefinition } from "@rescript/engine";
 import { getCachedVersionDefinition } from "@rescript/quality/server";
@@ -336,4 +336,77 @@ export async function hashPassword(pw: string, salt?: string): Promise<string> {
 export async function verifyPassword(pw: string, stored: string): Promise<boolean> {
   const [salt] = stored.split("$");
   return (await hashPassword(pw, salt)) === stored;
+}
+
+
+/* ------------------------------------------------------------ analysis runs (research-intelligence Phase 5) */
+
+/** a stored run: the compact form plus its row id */
+export type StoredRun = ReturnType<typeof compactRun> & { id: string; surveyVersion?: string | null };
+
+function rowToRun(r: Record<string, unknown>): StoredRun {
+  return {
+    id: String(r.id), computedAt: String(r.computed_at), trigger: String(r.trigger), environment: r.environment as DatasetSpec["environment"], n: Number(r.n ?? 0),
+    items: (r.items as StoredRun["items"]) ?? [], findings: (r.findings as StoredRun["findings"]) ?? [], verdicts: (r.verdicts as StoredRun["verdicts"]) ?? [], warnings: (r.warnings as string[]) ?? [],
+    surveyVersion: (r.survey_version as string | null) ?? null,
+  };
+}
+
+/** The most recent run of this survey's plan, or null. */
+export async function latestRun(db: SupabaseClient, surveyId: string, environment?: DatasetSpec["environment"]): Promise<StoredRun | null> {
+  let q = db.from("analytics_runs").select("*").eq("survey_id", surveyId).order("computed_at", { ascending: false }).limit(1);
+  if (environment) q = q.eq("environment", environment);
+  const { data, error } = await q;
+  if (error || !data?.length) return null;
+  return rowToRun(data[0] as Record<string, unknown>);
+}
+
+export async function listRuns(db: SupabaseClient, surveyId: string, limit = 20): Promise<StoredRun[]> {
+  const { data } = await db.from("analytics_runs").select("id, survey_id, trigger, environment, n, computed_at, verdicts, warnings, survey_version").eq("survey_id", surveyId).order("computed_at", { ascending: false }).limit(limit);
+  return (data ?? []).map((r) => rowToRun({ ...(r as Record<string, unknown>), items: [], findings: [] }));
+}
+
+/**
+ * RUN THE PLAN on the survey's responses and keep the findings. The planned
+ * analyses (plus any saved analyses in the "Planned" folder, so a
+ * researcher's refinement runs too) all share one dataset spec, so the
+ * dataset is built once; the full results are returned to the caller and
+ * only the compact run is stored.
+ */
+export async function runPlanFor(db: SupabaseClient, surveyId: string, ctx: LoadedContext, opts: { environment?: DatasetSpec["environment"]; dataset?: "all" | "clean"; trigger?: string; primaries?: boolean; userId?: string | null } = {}): Promise<{ run: AnalysisRun; stored: StoredRun | null; error?: string }> {
+  const spec: DatasetSpec = { environment: opts.environment ?? "LIVE", dataset: opts.dataset ?? "all" };
+  const planned = plannedAnalyses(ctx.def as SurveyDefinition, spec, { primaries: opts.primaries ?? false });
+  // saved refinements of the plan: an analysis the researcher edited keeps its planned id, so the saved one replaces the engine's
+  const { data: saved } = await db.from("analytics_analyses").select("id, definition, tags").eq("survey_id", surveyId).eq("folder", "Planned").is("deleted_at", null);
+  const items: PlannedAnalysis[] = planned.map((p) => {
+    const mine = (saved ?? []).find((r) => String((r.definition as AnalysisDefinition)?.options?.planned ?? "") === String(p.definition.options?.planned ?? "—"));
+    return mine ? { ...p, definition: { ...(mine.definition as AnalysisDefinition), id: String(mine.id), dataset: spec } } : p;
+  });
+  if (!items.length) return { run: { computedAt: new Date().toISOString(), trigger: opts.trigger ?? "manual", environment: spec.environment, n: 0, items: [], findings: [], verdicts: [], warnings: [] }, stored: null, error: "Nothing is planned yet — plan the analysis in Intelligent mode (Analysis tab) first." };
+  const ds = await buildFor(db, surveyId, ctx, { ...items[0].definition, dataset: spec });
+  const run = runPlan(ctx.def as SurveyDefinition, ds, { items, trigger: opts.trigger ?? "manual" });
+  const compact = compactRun(run);
+  const { data, error } = await db.from("analytics_runs").insert({
+    survey_id: surveyId, trigger: run.trigger, environment: run.environment, n: run.n, dataset: spec, computed_at: run.computedAt,
+    findings: compact.findings, verdicts: compact.verdicts, items: compact.items, warnings: compact.warnings, survey_version: ctx.version ?? null, created_by: opts.userId ?? null,
+  }).select("*").single();
+  if (error) return { run, stored: null, error: error.message };
+  return { run, stored: rowToRun(data as Record<string, unknown>) };
+}
+
+/**
+ * WHEN THE PLAN RUNS BY ITSELF: the fieldwork milestone this survey has
+ * reached and not yet run for — or null. The target is the project's
+ * supplier total; the field window is the project's own.
+ */
+export async function dueMilestone(db: SupabaseClient, surveyId: string, def: SurveyDefinition, now = new Date()): Promise<string | null> {
+  if (!def.research?.analysisPlan || def.research.analysisPlan.autoRun === false) return null;
+  const [{ count }, proj, targets, runs] = await Promise.all([
+    db.from("responses").select("id", { count: "exact", head: true }).eq("survey_id", surveyId).is("deleted_at", null).eq("status", "complete").eq("is_test", false),
+    db.from("surveys").select("fieldwork_to").eq("id", surveyId).maybeSingle(),
+    db.from("sample_sources").select("target_completes").eq("survey_id", surveyId),
+    db.from("analytics_runs").select("trigger").eq("survey_id", surveyId).eq("environment", "LIVE"),
+  ]);
+  const target = (targets.data ?? []).reduce((t, r) => t + (Number((r as { target_completes?: unknown }).target_completes) || 0), 0) || null;
+  return nextMilestone((runs.data ?? []).map((r) => String((r as { trigger: string }).trigger)), { completes: count ?? 0, target, fieldEnd: (proj.data?.fieldwork_to as string | null) ?? null, now: now.toISOString() });
 }

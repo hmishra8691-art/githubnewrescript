@@ -7,7 +7,9 @@ import { ResearchIndex } from "@rescript/import/research";
 import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
 import { billingProjectFor, meteredAi, refusalResponse } from "@/lib/metering";
 import { describeThemeImage, withThemeImage } from "@/lib/copilot/themeImageText";
-import { COPILOT_SYSTEM_PROMPT, classifyRequest, coerceCopilotReply, copilotUserPrompt, analysisIntent, translationIntent, quotaIntent, referencedQuestions, surveyLanguageOf, type RequestMode, type TurnMemory } from "@/lib/copilot/prompt";
+import type { AnalysisRun } from "@rescript/analytics";
+type RunBrief = Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger">;
+import { COPILOT_SYSTEM_PROMPT, classifyRequest, coerceCopilotReply, copilotUserPrompt, analysisIntent, translationIntent, quotaIntent, findingsIntent, referencedQuestions, surveyLanguageOf, type RequestMode, type TurnMemory } from "@/lib/copilot/prompt";
 import { researchCards, researchPassages } from "@/lib/copilot/research";
 import { researchStoreFor } from "@/lib/copilot/store";
 import { copilotOutline } from "@/lib/copilot/outline";
@@ -47,7 +49,7 @@ const TTL = 15 * 60_000;
 
 export async function POST(req: NextRequest) {
   const authed = await requireUser(req);
-  let body: { surveyId?: unknown; message?: unknown; definition?: unknown; selectedId?: unknown; memory?: TurnMemory; mode?: unknown; fake?: unknown; scope?: unknown; themeImage?: unknown; quotaCounts?: unknown };
+  let body: { surveyId?: unknown; message?: unknown; definition?: unknown; selectedId?: unknown; memory?: TurnMemory; mode?: unknown; fake?: unknown; scope?: unknown; themeImage?: unknown; quotaCounts?: unknown; analysisRun?: unknown };
   try { body = await req.json(); } catch { return isFailure(authed) ? authed.response : NextResponse.json({ error: "bad json" }, { status: 400 }); }
   const surveyId = typeof body.surveyId === "string" ? body.surveyId : "";
   let user: AuthedUser | null = null;
@@ -86,7 +88,10 @@ export async function POST(req: NextRequest) {
   // quotas: the guide, every cell with its condition and where the check sits, the review, and the live counts the Studio sent
   const quotaTurn = quotaIntent(message);
   const quotaCounts = body.quotaCounts && typeof body.quotaCounts === "object" ? body.quotaCounts as Record<string, Record<string, number>> : null;
-  const outline = copilotOutline(def, { selectedId, focusIds: referencedQuestions(def, message), ux: uxTurn, analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, quotaCounts });
+  // findings: what the data showed — the latest analysis run the Studio sent, answered from its numbers
+  const findingsTurn = findingsIntent(message);
+  const analysisRun = body.analysisRun && typeof body.analysisRun === "object" && Array.isArray((body.analysisRun as { findings?: unknown }).findings) ? body.analysisRun as RunBrief : null;
+  const outline = copilotOutline(def, { selectedId, focusIds: referencedQuestions(def, message), ux: uxTurn, analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, quotaCounts, findings: findingsTurn, analysisRun });
   let research = "";
   let passageIds: string[] = [];
   let charge = 0;
@@ -113,7 +118,7 @@ export async function POST(req: NextRequest) {
     deterministicFindings: deterministic?.findings.slice(0, 40).map((f) => `${f.severity}: ${f.message}`),
     selected: selectedId ? def.questions.find((q) => q.id === selectedId)?.code ?? null : null,
     ux: uxTurn, uxOnly: cls.uxOnly,
-    analysis: analysisTurn, translation: translationTurn, quota: quotaTurn,
+    analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, findings: findingsTurn,
     ...(themeImageText ? { themeImage: themeImageText } : {}),
     ...(themeScope ? { themeOnly: true } : {}),
   });
@@ -194,7 +199,7 @@ export async function POST(req: NextRequest) {
     validation: applied ? { valid: applied.valid, results: applied.results, errors: applied.errors, destructive: applied.destructive, warnings: applied.warnings, summary: diff?.summary ?? [], diff, uxOnly: applied.uxOnly, structureUnchanged: applied.structureUnchanged } : null,
     ...(deterministic ? { review: deterministic } : {}),
     passages,
-    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, cached, ux: uxTurn, uxOnly: cls.uxOnly, analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, ...(repair ? { repair } : {}) },
+    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, cached, ux: uxTurn, uxOnly: cls.uxOnly, analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, findings: findingsTurn, hasRun: !!analysisRun, ...(repair ? { repair } : {}) },
     usage: { charge },
   });
 }

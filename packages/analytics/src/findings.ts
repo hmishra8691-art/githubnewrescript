@@ -1,0 +1,344 @@
+import type { SurveyDefinition } from "@rescript/schema";
+import { hypothesisLabel } from "@rescript/schema";
+import type { AnalysisDefinition, AnalysisResult, ChartType, DatasetSpec } from "./types.js";
+import type { Dataset } from "./dataset.js";
+import type { TestResult } from "./stats/tests.js";
+import { runAnalysis } from "./analyses/index.js";
+import { MIN_BASE } from "./analyses/common.js";
+import { recommendCharts } from "./recommend.js";
+import { plannedAnalyses, type PlannedAnalysis } from "./planBridge.js";
+
+/*
+ * FINDINGS (research-intelligence Phase 5): what the data SAID, read from the
+ * results structurally — the tests' p-values and effect sizes, the model's
+ * coefficients, the correlation, the NPS — never from the insight sentences,
+ * and never invented. Each finding carries its evidence (test, statistic,
+ * p, effect, n) so every headline traces to a table; the hypotheses are
+ * judged from the findings of the analyses planned for them; a run is the
+ * whole plan executed once on one dataset, with the findings ranked and the
+ * verdicts given, ready for the copilot to narrate and the Studio to show.
+ *
+ * Everything here is pure: a Dataset in, a run out. The Studio stores runs
+ * and decides when to make them (a milestone of fieldwork, or on request).
+ */
+
+export type FindingKind = "difference" | "no_difference" | "driver" | "no_driver" | "correlation" | "no_correlation" | "mediation" | "nps" | "topbox" | "reliability" | "low_base" | "inconclusive";
+export type Strength = "strong" | "moderate" | "weak" | "none";
+
+export interface FindingEvidence { test?: string; statistic?: number | null; df?: number | [number, number]; p?: number | null; effect?: { name: string; value: number }; n: number; direction?: "positive" | "negative" }
+export interface Finding {
+  id: string;
+  kind: FindingKind;
+  strength: Strength;
+  /** significant at the analysis' alpha */
+  significant: boolean;
+  headline: string;
+  detail?: string;
+  evidence: FindingEvidence;
+  variables: string[];
+  hypotheses: string[];
+  analysis: { name: string; kind: string; hash: string; planned?: string; id?: string };
+  chart?: ChartType;
+}
+
+export type Verdict = "supported" | "not_supported" | "mixed" | "inconclusive" | "untested";
+export interface HypothesisVerdict { label: string; text: string; verdict: Verdict; reason: string; findings: Finding[]; analyses: number }
+
+export interface RunItem {
+  definition: AnalysisDefinition;
+  result: AnalysisResult;
+  findings: Finding[];
+  /** the chart the result is best shown as */
+  chart?: ChartType;
+  source?: PlannedAnalysis["source"];
+  priority?: number;
+  hypotheses: string[];
+}
+export interface AnalysisRun {
+  computedAt: string;
+  trigger: string;
+  environment: DatasetSpec["environment"];
+  /** complete responses in the dataset */
+  n: number;
+  items: RunItem[];
+  /** every finding, strongest first */
+  findings: Finding[];
+  verdicts: HypothesisVerdict[];
+  warnings: string[];
+}
+
+/* ------------------------------------------------------------ strength */
+
+/** effect sizes on their usual scales (Cohen, Cramér, Cohen's conventions for r and η²) */
+export function strengthOf(effect: { name: string; value: number } | undefined, p: number | null | undefined, alpha = 0.05): Strength {
+  if (p == null || !(p < alpha)) return "none";
+  if (!effect || !Number.isFinite(effect.value)) return "weak";
+  const v = Math.abs(effect.value);
+  const n = effect.name.toLowerCase();
+  const cut = (small: number, medium: number, large: number) => (v >= large ? "strong" : v >= medium ? "moderate" : v >= small ? "weak" : "weak");
+  if (/cram|phi|^r$|rank-biserial|standardized|beta|β/.test(n)) return cut(0.1, 0.3, 0.5);
+  if (/cohen's d|^d$|hedges/.test(n)) return cut(0.2, 0.5, 0.8);
+  if (/η|eta|epsilon|ε|omega|r²|r2/.test(n)) return cut(0.01, 0.06, 0.14);
+  if (/cohen's h|^h$/.test(n)) return cut(0.2, 0.5, 0.8);
+  if (/odds/.test(n)) { const lo = v < 1 ? 1 / v : v; return lo >= 4.3 ? "strong" : lo >= 2.5 ? "moderate" : "weak"; }
+  if (/kendall|w$/.test(n)) return cut(0.1, 0.3, 0.5);
+  return "weak";
+}
+const RANK: Record<Strength, number> = { strong: 3, moderate: 2, weak: 1, none: 0 };
+const WORD: Record<Strength, string> = { strong: "a strong", moderate: "a moderate", weak: "a small", none: "no" };
+
+const parseP = (s: unknown): number | null => {
+  if (typeof s === "number") return s;
+  if (typeof s !== "string") return null;
+  const t = s.trim();
+  if (t === "< .001") return 0.0005;
+  const n = Number(t.replace(/^\./, "0."));
+  return Number.isFinite(n) ? n : null;
+};
+const fmtP = (p: number | null | undefined) => (p == null ? "" : p < 0.001 ? "p < .001" : `p = ${p.toFixed(3).replace(/^0/, "")}`);
+const fmt = (x: number | null | undefined, d = 2) => (x == null || !Number.isFinite(x) ? "—" : x.toFixed(d));
+
+/* ------------------------------------------------------------ findings */
+
+const TEST_WORDS: Record<string, string> = {
+  chi_square: "chi-square", fisher_exact: "Fisher's exact test", t_independent: "t-test", t_welch: "Welch's t-test", t_paired: "paired t-test", t_one_sample: "one-sample t-test",
+  anova_one_way: "ANOVA", anova_two_way: "two-way ANOVA", mann_whitney: "Mann–Whitney", kruskal_wallis: "Kruskal–Wallis", wilcoxon: "Wilcoxon", wilcoxon_signed_rank: "Wilcoxon", friedman: "Friedman",
+  proportion_one_sample: "proportion test", proportion_two_sample: "proportion test",
+};
+
+/** The findings one result supports — structurally, from its tests and tables. */
+export function findingsFor(def: AnalysisDefinition, result: AnalysisResult, extra: { hypotheses?: string[]; id?: string; /** a variable's label, as the tables print it */ label?: (variable: string) => string } = {}): Finding[] {
+  const L = (v: string) => extra.label?.(v) ?? v;
+  const out: Finding[] = [];
+  const alpha = typeof def.options?.alpha === "number" ? def.options.alpha : 0.05;
+  const hypotheses = extra.hypotheses ?? ((def.options?.hypotheses as string[] | undefined) ?? []);
+  const analysis = { name: def.name, kind: def.kind, hash: result.definitionHash, ...(def.options?.planned ? { planned: String(def.options.planned) } : {}), ...(extra.id ? { id: extra.id } : {}) };
+  const n = result.base.n;
+  const chart = result.recommendedCharts[0];
+  const vars = result.variablesUsed.length ? result.variablesUsed : def.variables;
+  let k = 0;
+  const push = (f: Omit<Finding, "id" | "analysis" | "hypotheses" | "chart">) => out.push({ id: `${result.definitionHash}:${k++}`, analysis, hypotheses, ...(chart ? { chart } : {}), ...f });
+  const low = n < MIN_BASE;
+  if (n === 0) { push({ kind: "inconclusive", strength: "none", significant: false, headline: `${def.name}: no respondents in the data yet.`, evidence: { n }, variables: vars }); return out; }
+
+  const outcome = vars[0] ?? def.variables[0] ?? "";
+  const by = def.kind === "crosstab" ? (def.columns ?? vars.slice(1)) : vars.slice(1);
+
+  /* tests: a difference (or none) per test result */
+  const testFindings = (tests: TestResult[], labelFor: (t: TestResult, i: number) => string, varsFor: (i: number) => string[] = () => vars) => {
+    tests.forEach((t, i) => {
+      if (t.p == null) return;
+      const effectSize = t.effectSize && t.effectSize.value != null && Number.isFinite(t.effectSize.value) ? { name: t.effectSize.name, value: t.effectSize.value } : undefined;
+      const strength = strengthOf(effectSize, t.p, alpha);
+      const sig = t.p < alpha;
+      const what = labelFor(t, i);
+      const word = TEST_WORDS[t.test] ?? t.test.replace(/_/g, " ");
+      push({
+        kind: sig ? "difference" : "no_difference", strength, significant: sig,
+        headline: sig ? `${what}: ${WORD[strength]} difference (${word}, ${fmtP(t.p)}${effectSize ? `, ${effectSize.name} = ${fmt(effectSize.value)}` : ""}).` : `${what}: no significant difference (${word}, ${fmtP(t.p)}${low ? "; the base is small" : ""}).`,
+        ...(t.note ? { detail: t.note } : {}),
+        evidence: { test: t.test, statistic: t.statistic, ...(t.df !== undefined ? { df: t.df } : {}), p: t.p, ...(effectSize ? { effect: effectSize } : {}), n },
+        variables: varsFor(i),
+      });
+    });
+  };
+
+  switch (def.kind) {
+    case "crosstab": {
+      const gap = result.insights.find((s) => /^Largest gap/.test(s));
+      testFindings(result.tests, (t, i) => `${L(outcome)} by ${L(by[i] ?? by[0] ?? "the banner")}`, (i) => (by[i] ? [outcome, by[i]] : vars));
+      if (gap && out.length) out[out.length - 1].detail = gap;
+      break;
+    }
+    case "test": {
+      testFindings(result.tests, () => by.length ? `${L(outcome)} across ${by.map(L).join(" and ")}` : L(outcome));
+      break;
+    }
+    case "correlation": {
+      const t = result.tables.find((x) => x.id === "corr" || x.id === "corr_pairs");
+      for (const row of t?.rows ?? []) {
+        const r = typeof row.r === "number" ? row.r : null; const p = parseP(row.p);
+        if (r == null || p == null) continue;
+        const pair = (row.pair as string) ?? `${row.a} × ${row.b}`;
+        const strength = strengthOf({ name: "r", value: r }, p, alpha);
+        const sig = p < alpha;
+        push({ kind: sig ? "correlation" : "no_correlation", strength, significant: sig, headline: sig ? `${pair}: ${WORD[strength]} ${r > 0 ? "positive" : "negative"} correlation (r = ${fmt(r)}, ${fmtP(p)}).` : `${pair}: no significant correlation (r = ${fmt(r)}, ${fmtP(p)}).`, evidence: { test: "correlation", statistic: r, p, effect: { name: "r", value: r }, n: typeof row.n === "number" ? row.n : n, direction: r > 0 ? "positive" : "negative" }, variables: vars });
+      }
+      break;
+    }
+    case "regression": {
+      const coef = result.tables.find((x) => x.id === "coef");
+      const logistic = def.options?.model === "logistic";
+      // a coefficient's term is the predictor's label (or "label = category" for a dummy): find the variable behind it
+      const preds = vars.slice(1);
+      const predictorOf = (term: string): string => {
+        const direct = preds.find((v) => L(v) === term || term.startsWith(`${L(v)} = `));
+        if (direct) return direct;
+        const parts = term.split(/\s*[×*:]\s*/);
+        if (parts.length > 1) return parts.map((part) => preds.find((v) => L(v) === part) ?? part).join(" × ");
+        return term;
+      };
+      for (const row of coef?.rows ?? []) {
+        const term = String(row.term ?? "");
+        if (!term || /^\(?intercept\)?$/i.test(term) || /^const/i.test(term)) continue;
+        const p = parseP(row.p); const est = typeof row.estimate === "number" ? row.estimate : null;
+        if (p == null || est == null) continue;
+        const std = typeof row.std === "number" ? row.std : null, or = typeof row.or === "number" ? row.or : null;
+        const effect = logistic ? (or != null ? { name: "odds ratio", value: or } : undefined) : (std != null ? { name: "standardized β", value: std } : undefined);
+        const strength = strengthOf(effect, p, alpha);
+        const sig = p < alpha;
+        const interaction = /×|\*|:/.test(term);
+        push({
+          kind: sig ? "driver" : "no_driver", strength, significant: sig,
+          headline: sig
+            ? `${term} ${interaction ? "changes the effect on" : est > 0 ? "raises" : "lowers"} ${L(outcome)}: ${WORD[strength]} ${interaction ? "interaction" : "effect"} (${logistic ? `OR = ${fmt(or)}` : `β = ${fmt(std)}`}, ${fmtP(p)}).`
+            : `${term} does not predict ${L(outcome)} (${logistic ? `OR = ${fmt(or)}` : `β = ${fmt(std)}`}, ${fmtP(p)}).`,
+          evidence: { test: logistic ? "logistic_regression" : "regression", statistic: est, p, ...(effect ? { effect } : {}), n, direction: est > 0 ? "positive" : "negative" },
+          variables: [outcome, predictorOf(term)],
+        });
+      }
+      const med = result.tables.find((x) => x.id === "mediation");
+      if (med) {
+        const ind = med.rows.find((r) => /indirect/i.test(String(r.path ?? "")));
+        const p = parseP(ind?.p);
+        if (ind && p != null) push({ kind: "mediation", strength: p < alpha ? "moderate" : "none", significant: p < alpha, headline: p < alpha ? `${med.title.replace(/^Mediation: /, "")}: the indirect path is significant (${fmtP(p)}) — part of the effect runs through the mediator.` : `${med.title.replace(/^Mediation: /, "")}: no significant indirect path (${fmtP(p)}).`, evidence: { test: "mediation", statistic: typeof ind.estimate === "number" ? ind.estimate : null, p, n }, variables: vars });
+      }
+      break;
+    }
+    case "nps": {
+      const kpi = result.chart.kpis?.find((x) => x.label === "NPS");
+      const npsValue = typeof kpi?.value === "number" ? kpi.value : null;
+      if (kpi && npsValue != null) push({ kind: "nps", strength: "none", significant: false, headline: `NPS for ${L(outcome)} is ${npsValue}${kpi.target != null ? ` (target ${kpi.target})` : ""} on ${n} responses.`, evidence: { statistic: npsValue, n }, variables: vars });
+      break;
+    }
+    case "topbox": {
+      const first = result.insights[0];
+      if (first) push({ kind: "topbox", strength: "none", significant: false, headline: first, evidence: { n }, variables: vars });
+      break;
+    }
+    case "reliability": {
+      const a = result.tables.find((x) => x.id === "alpha")?.rows.find((r) => /α/.test(String(r.stat ?? "")) && !/standard/i.test(String(r.stat ?? "")));
+      const alphaVal = typeof a?.value === "number" ? a.value : null;
+      if (alphaVal != null) push({ kind: "reliability", strength: alphaVal >= 0.8 ? "strong" : alphaVal >= 0.7 ? "moderate" : alphaVal >= 0.6 ? "weak" : "none", significant: alphaVal >= 0.7, headline: `${def.name}: Cronbach's α = ${fmt(alphaVal)} — ${alphaVal >= 0.8 ? "a reliable scale" : alphaVal >= 0.7 ? "acceptable reliability" : "the items do not hang together well"}.`, evidence: { statistic: alphaVal, effect: { name: "alpha", value: alphaVal }, n }, variables: vars });
+      break;
+    }
+    default: {
+      if (result.tests.length) testFindings(result.tests, () => def.name);
+      break;
+    }
+  }
+  if (low && out.length) out.forEach((f) => { f.detail = `${f.detail ? `${f.detail} ` : ""}Base ${n} < ${MIN_BASE}: read with caution.`; });
+  if (low && !out.length) push({ kind: "low_base", strength: "none", significant: false, headline: `${def.name}: only ${n} respondents so far — too few to conclude.`, evidence: { n }, variables: vars });
+  return out;
+}
+
+/** strongest first; a significant finding before a null one; a bigger base before a smaller */
+export function rankFindings(fs: Finding[]): Finding[] {
+  return [...fs].sort((a, b) => Number(b.significant) - Number(a.significant) || RANK[b.strength] - RANK[a.strength] || (a.evidence.p ?? 1) - (b.evidence.p ?? 1) || b.evidence.n - a.evidence.n);
+}
+
+/* ------------------------------------------------------------ verdicts */
+
+const TESTED: FindingKind[] = ["difference", "no_difference", "driver", "no_driver", "correlation", "no_correlation", "mediation"];
+
+/** does the hypothesis name this variable — by variable name, code, the question's words or its option labels? */
+function mentions(def: SurveyDefinition, text: string, variable: string): boolean {
+  const q = def.questions.find((x) => x.variableName === variable || String(x.code) === variable);
+  const words = new Set(text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []);
+  const candidates = [variable, ...(q ? [String(q.code), q.variableName, ...(q.text.match(/[\p{L}\p{N}]{4,}/gu) ?? []), ...(q.options ?? []).flatMap((o) => o.label.match(/[\p{L}\p{N}]{4,}/gu) ?? [])] : [])].map((w) => w.toLowerCase());
+  return candidates.some((c) => words.has(c) || (c.length >= 5 && [...words].some((w) => w.startsWith(c.slice(0, 5)) || c.startsWith(w.slice(0, 5)))));
+}
+
+/** Each hypothesis judged from the findings of the analyses planned for it. */
+export function hypothesisVerdicts(def: SurveyDefinition, items: RunItem[]): HypothesisVerdict[] {
+  return (def.research?.hypotheses ?? []).map((text, i) => {
+    const label = hypothesisLabel(i);
+    const mine = items.filter((it) => it.hypotheses.includes(label));
+    /*
+     * A crosstab tagged with a hypothesis may have several banner variables;
+     * its finding about a banner counts for the hypothesis only when the
+     * hypothesis names that variable, a planned test pairs the same two
+     * variables, or the banner is the crosstab's only one — otherwise it is
+     * context (shown), not evidence (judged).
+     */
+    const about = (it: RunItem, f: Finding) => {
+      if (it.definition.kind !== "crosstab" || f.variables.length < 2) return true;
+      const [outcome, banner] = f.variables;
+      if ((it.definition.columns ?? []).length <= 1) return true;
+      if (mentions(def, text, banner)) return true;
+      return mine.some((o) => o !== it && o.definition.kind !== "crosstab" && o.definition.variables.includes(outcome) && o.definition.variables.includes(banner));
+    };
+    const fs = rankFindings(mine.flatMap((it) => it.findings.filter((f) => about(it, f))));
+    const tested = fs.filter((f) => TESTED.includes(f.kind));
+    const sig = tested.filter((f) => f.significant), ns = tested.filter((f) => !f.significant);
+    const lowBase = mine.length > 0 && mine.every((it) => it.result.base.n < MIN_BASE);
+    let verdict: Verdict; let reason: string;
+    if (!mine.length) { verdict = "untested"; reason = "No analysis in the plan serves this hypothesis."; }
+    else if (lowBase) { verdict = "inconclusive"; reason = `Only ${Math.max(...mine.map((it) => it.result.base.n))} respondents so far — below the ${MIN_BASE} needed to read a test.`; }
+    else if (!tested.length) { verdict = "inconclusive"; reason = `${mine.length === 1 ? "The analysis" : `The ${mine.length} analyses`} planned for it describe${mine.length === 1 ? "s" : ""} the data but test${mine.length === 1 ? "s" : ""} nothing — add a test or a crosstab with significance.`; }
+    else if (sig.length && !ns.length) { verdict = "supported"; reason = `${sig.length === 1 ? "The planned test" : `All ${sig.length} planned tests`} ${sig.length === 1 ? "is" : "are"} significant: ${sig[0].headline}`; }
+    else if (sig.length && ns.length) { verdict = "mixed"; reason = `${sig.length} of ${tested.length} planned tests ${sig.length === 1 ? "is" : "are"} significant — ${sig[0].headline} — but ${ns[0].headline}`; }
+    else { verdict = "not_supported"; reason = `${ns.length === 1 ? "The planned test is" : `None of the ${ns.length} planned tests are`} significant: ${ns[0].headline}`; }
+    return { label, text, verdict, reason, findings: fs, analyses: mine.length };
+  });
+}
+
+/* ------------------------------------------------------------ the run */
+
+/** The whole plan, run once on a dataset. `items` lets the caller run saved definitions instead of (or as well as) the plan's. */
+export function runPlan(def: SurveyDefinition, dataset: Dataset, opts: { trigger?: string; items?: PlannedAnalysis[]; primaries?: boolean; now?: string } = {}): AnalysisRun {
+  const planned = opts.items ?? plannedAnalyses(def, dataset.spec, { primaries: opts.primaries ?? false });
+  const items: RunItem[] = planned.map((p) => {
+    const result = runAnalysis(p.definition, dataset);
+    const findings = findingsFor(p.definition, result, { hypotheses: p.hypotheses, ...(p.definition.id ? { id: p.definition.id } : {}), label: (v) => dataset.byName.get(v)?.label ?? v });
+    const chart = recommendCharts(result, 1)[0]?.type ?? result.recommendedCharts[0];
+    return { definition: p.definition, result, findings, ...(chart ? { chart } : {}), source: p.source, priority: p.priority, hypotheses: p.hypotheses };
+  });
+  const findings = rankFindings(items.flatMap((it) => it.findings));
+  const verdicts = hypothesisVerdicts(def, items);
+  const warnings = [...new Set(items.flatMap((it) => it.result.warnings))];
+  return { computedAt: opts.now ?? new Date().toISOString(), trigger: opts.trigger ?? "manual", environment: dataset.spec.environment, n: dataset.cases.length, items, findings, verdicts, warnings };
+}
+
+/** the run without its results — what is stored and sent around */
+export function compactRun(run: AnalysisRun): Omit<AnalysisRun, "items"> & { items: Omit<RunItem, "result">[] } {
+  return { ...run, items: run.items.map(({ result: _r, ...rest }) => { void _r; return rest; }) };
+}
+
+/* ------------------------------------------------------------ for the copilot */
+
+const VERDICT_WORDS: Record<Verdict, string> = { supported: "SUPPORTED", not_supported: "NOT SUPPORTED", mixed: "MIXED", inconclusive: "INCONCLUSIVE", untested: "UNTESTED" };
+
+/** The run in a few lines the model (and a person) can read: verdicts, then the findings strongest first. */
+export function briefText(run: Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger">, opts: { maxFindings?: number } = {}): string {
+  const max = opts.maxFindings ?? 15;
+  const lines: string[] = [];
+  lines.push(`Analysis run (${run.trigger}) on ${run.n} ${run.environment.toLowerCase()} completes, ${run.computedAt.slice(0, 16).replace("T", " ")}:`);
+  for (const v of run.verdicts) lines.push(`  ${v.label} ${VERDICT_WORDS[v.verdict]} — ${v.text}. ${v.reason}`);
+  const shown = run.findings.filter((f) => f.kind !== "inconclusive").slice(0, max);
+  if (shown.length) { lines.push(`  Findings (strongest first):`); for (const f of shown) lines.push(`    [${f.significant ? f.strength : "ns"}] ${f.headline}${f.hypotheses.length ? ` (${f.hypotheses.join(", ")})` : ""}${f.detail ? ` ${f.detail}` : ""}`); }
+  if (run.findings.length > shown.length) lines.push(`    … and ${run.findings.length - shown.length} more`);
+  if (run.warnings.length) lines.push(`  Caveats: ${run.warnings.slice(0, 4).join(" ")}`);
+  return lines.join("\n");
+}
+
+/* ------------------------------------------------------------ when to run */
+
+export type Milestone = "first_results" | "halfway" | "target_reached" | "field_end";
+
+/**
+ * The fieldwork milestones at which the plan runs by itself — once each:
+ * the first readable base, half the target, the target, the end of the
+ * field window. `done` are the triggers of the runs already made.
+ */
+export function nextMilestone(done: string[], state: { completes: number; target?: number | null; fieldEnd?: string | null; now?: string }): Milestone | null {
+  const has = (m: Milestone) => done.includes(m);
+  const now = state.now ? new Date(state.now).getTime() : Date.now();
+  if (!has("first_results") && state.completes >= MIN_BASE) return "first_results";
+  if (state.target && state.target > 0) {
+    if (!has("halfway") && state.completes >= state.target / 2 && state.completes >= MIN_BASE) return "halfway";
+    if (!has("target_reached") && state.completes >= state.target) return "target_reached";
+  }
+  if (state.fieldEnd && !has("field_end") && new Date(state.fieldEnd).getTime() <= now && state.completes >= MIN_BASE) return "field_end";
+  return null;
+}

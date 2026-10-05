@@ -1,6 +1,7 @@
 import type { SurveyDefinition } from "@rescript/schema";
 import { listBlocks, formatCondition, describeUxTarget, uxContextFor, inferQuestionAnalysis, effectiveLocalization, lintLanguage, translatableElements, languageName, reviewQuotas, quotaAdvice } from "@rescript/engine";
 import type { FlowNode } from "@rescript/schema";
+import { briefText, type AnalysisRun } from "@rescript/analytics";
 import { hypothesisLabel } from "@rescript/schema";
 import { surveyContext } from "../intelligent/context.ts";
 
@@ -15,7 +16,7 @@ import { surveyContext } from "../intelligent/context.ts";
  * questions in full and the rest by code, plus the named ones in full, so
  * the prompt stays bounded however large the survey is.
  */
-export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: string | null; focusIds?: string[]; ux?: boolean; analysis?: boolean; translation?: boolean; quota?: boolean; quotaCounts?: Record<string, Record<string, number>> | null } = {}): string {
+export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: string | null; focusIds?: string[]; ux?: boolean; analysis?: boolean; translation?: boolean; quota?: boolean; quotaCounts?: Record<string, Record<string, number>> | null; findings?: boolean; analysisRun?: Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger"> | null } = {}): string {
   const n = def.questions.length;
   const base = surveyContext(def, { selectedId: opts.selectedId ?? null, focusIds: opts.focusIds ?? [], limit: n > 150 ? 60 : 150, textWidth: n > 150 ? 70 : 110 });
   const lines = [base];
@@ -113,6 +114,16 @@ export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: strin
       }
     }
   } else if (opts.quota) lines.push("Quotas: none yet (create_quota).");
+
+  /*
+   * THE FINDINGS, on a findings or analysis turn: the latest analysis run —
+   * verdicts and findings with their evidence — so what the data showed is
+   * answered from numbers the Studio computed, never from the model's guess.
+   */
+  if (opts.findings || (opts.analysis && opts.analysisRun)) {
+    if (opts.analysisRun) lines.push(briefText(opts.analysisRun, { maxFindings: opts.findings ? 25 : 10 }));
+    else lines.push(`Analysis run: none yet — ${def.research?.analysisPlan ? "the plan has not been run on the responses (the researcher runs it from the Findings tab, or it runs at the fieldwork milestones)" : "there is no analysis plan yet (propose_analysis_plan)"}; there are no results to report.`);
+  }
 
   /*
    * THE LANGUAGES, on a translation turn: which versions exist and how far

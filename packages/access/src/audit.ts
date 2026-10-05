@@ -126,6 +126,7 @@ export const AUDIT_EVENTS = [
 
   /* analytics & reporting (§30) */
   "analytics.analysis_created",
+  "analytics.plan_run",
   "analytics.analysis_modified",
   "analytics.analysis_deleted",
   "analytics.chart_created",
@@ -254,6 +255,7 @@ export function describeEvent(r: AuditRow): string {
     }
     case "quota.deleted": return `${who} deleted quota “${str(d.quotaName) || str(d.quotaId)}”${d.cells != null ? ` (${str(d.cells)} cells; response data kept)` : ""}`;
     case "analytics.analysis_created": return `${who} created analysis “${str(d.name)}”${d.kind ? ` (${str(d.kind)})` : ""}`;
+    case "analytics.plan_run": return `${who} ran the analysis plan (${str(d.trigger)}): ${str(d.analyses)} analyses on ${str(d.n)} completes, ${str(d.findings)} findings`;
     case "analytics.analysis_modified": return `${who} modified analysis “${str(d.name)}”${d.version ? ` → v${str(d.version)}` : ""}`;
     case "analytics.analysis_deleted": return `${who} deleted analysis “${str(d.name)}”`;
     case "analytics.chart_created": return `${who} saved chart “${str(d.name)}”`;

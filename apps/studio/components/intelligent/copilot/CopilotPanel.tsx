@@ -8,6 +8,7 @@ import { UxPreview } from "./UxPreview";
 import { AnalysisTab } from "./AnalysisTab";
 import { LanguagesTab } from "./LanguagesTab";
 import { QuotasTab, type QuotaImportNote } from "./QuotasTab";
+import { FindingsTab } from "./FindingsTab";
 import { Linked } from "./CopilotCard";
 import type { Copilot, PanelTab } from "./useCopilot";
 
@@ -28,6 +29,7 @@ import type { Copilot, PanelTab } from "./useCopilot";
  *   Analysis   the analysis framework (AnalysisTab)
  *   Languages  each language version's state and next step (LanguagesTab)
  *   Quotas     the feasibility review, the live counts' advice, the sheet import (QuotasTab)
+ *   Findings   what the data said: the latest analysis run's verdicts and findings (FindingsTab)
  *   Inspector  the object in focus (the existing inspector)
  */
 export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, applyNote, readOnly, onImportQuotaSheet, quotaImport }: {
@@ -47,6 +49,7 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
     { id: "research", label: "Research", badge: copilot.docs.length || undefined },
     { id: "history", label: "History", badge: copilot.history.filter((h) => !h.reverted).length || undefined },
     { id: "analysis", label: "Analysis", badge: def.research?.analysisPlan ? (def.research.analysisPlan.crosstabs.length + def.research.analysisPlan.tests.length) || undefined : undefined },
+    { id: "findings", label: "Findings", badge: copilot.analysisRun ? copilot.analysisRun.findings.filter((f) => f.significant).length || undefined : undefined },
     { id: "languages", label: "Languages", badge: def.localization?.languages?.length || undefined },
     { id: "quotas", label: "Quotas", badge: def.quotas.length || undefined },
     { id: "ux", label: "UX", badge: def.ux ? (def.ux.styles.length + def.ux.animations.length + def.ux.behaviors.length) || undefined : undefined },
@@ -67,6 +70,7 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
         {copilot.tab === "research" && <ResearchTab copilot={copilot} />}
         {copilot.tab === "history" && <HistoryTab copilot={copilot} readOnly={readOnly} />}
         {copilot.tab === "analysis" && <AnalysisTab copilot={copilot} def={def} onSelect={onSelect} />}
+        {copilot.tab === "findings" && <FindingsTab copilot={copilot} def={def} />}
         {copilot.tab === "languages" && <LanguagesTab copilot={copilot} def={def} onSelect={onSelect} />}
         {copilot.tab === "quotas" && <QuotasTab copilot={copilot} def={def} onSelect={onSelect} onImportSheet={() => onImportQuotaSheet?.()} lastImport={quotaImport ?? null} readOnly={readOnly} />}
         {copilot.tab === "ux" && <UxTab copilot={copilot} def={def} onSelect={onSelect} />}

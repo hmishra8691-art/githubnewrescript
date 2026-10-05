@@ -1,5 +1,6 @@
 "use client";
 import React from "react";
+import type { AnalysisRun } from "@rescript/analytics";
 import type { SurveyDefinition } from "@rescript/schema";
 import { reviewSurvey, type SurveyAction, type SurveyReview } from "@rescript/engine";
 import { useStudio, uid } from "../../studio/store";
@@ -41,7 +42,9 @@ export interface CopilotEntry {
 }
 export interface ResearchDocView { id: string; ref: string; name: string; format: string; kind?: string; pages: number; ocrPages: number; chars: number; summary: import("../../../lib/copilot/research").DocSummary | null; warnings: string[]; createdAt: string }
 export interface ReviewState { rules: SurveyReview; ai: CopilotFinding[]; at: string; running: boolean }
-export type PanelTab = "changes" | "review" | "research" | "history" | "analysis" | "languages" | "quotas" | "ux" | "inspector";
+export type PanelTab = "changes" | "review" | "research" | "history" | "analysis" | "findings" | "languages" | "quotas" | "ux" | "inspector";
+/** the stored analysis run, as the analytics route returns it (results are not stored — only findings, verdicts and each item's chart) */
+export type StoredRunBrief = Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger"> & { id?: string; items?: { definition: { name: string; kind: string; options?: Record<string, unknown> }; chart?: string; hypotheses: string[] }[] };
 
 interface Session {
   proposal: Proposal | null;
@@ -118,6 +121,47 @@ export function useCopilot(opts: {
     return () => { delete w.__rescriptQuotaCounts; };
   }, []);
 
+  /*
+   * THE ANALYSIS RUN — the plan executed on the responses (findings with
+   * their evidence, the hypothesis verdicts), read from the analytics
+   * route's latest run so the Findings tab and the model's answers about
+   * "what did we find?" rest on numbers the Studio computed. The sandbox has
+   * none; the browser suites hand one in through the seam.
+   */
+  const [analysisRun, setAnalysisRun] = React.useState<StoredRunBrief | null>(null);
+  const [runDue, setRunDue] = React.useState<string | null>(null);
+  const [running, setRunning] = React.useState(false);
+  const [runError, setRunError] = React.useState<string | null>(null);
+  const refreshAnalysisRun = React.useCallback(async () => {
+    if (s.surveyDbId === "sandbox") return;
+    try {
+      const r = await fetch(`/api/surveys/${s.surveyDbId}/analytics/plan/latest`, { cache: "no-store" });
+      if (!r.ok) return;
+      const d = await r.json() as { run?: StoredRunBrief | null; due?: string | null };
+      setAnalysisRun(d.run ?? null); setRunDue(d.due ?? null);
+    } catch { /* offline: the tab says there is no run */ }
+  }, [s.surveyDbId]);
+  React.useEffect(() => { if (s.def.research?.analysisPlan) void refreshAnalysisRun(); }, [refreshAnalysisRun, !!s.def.research?.analysisPlan]); // eslint-disable-line react-hooks/exhaustive-deps
+  const runPlanNow = React.useCallback(async (trigger = "manual"): Promise<boolean> => {
+    if (s.surveyDbId === "sandbox") { setRunError("The sandbox has no responses to analyse — open a saved survey with completes."); return false; }
+    setRunning(true); setRunError(null);
+    try {
+      const r = await fetch(`/api/surveys/${s.surveyDbId}/analytics/plan/run`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ environment: "LIVE", trigger }) });
+      const d = await r.json().catch(() => null) as { run?: StoredRunBrief; error?: string } | null;
+      if (!r.ok || !d?.run) { setRunError(d?.error ?? `The plan could not be run (${r.status}).`); return false; }
+      setAnalysisRun(d.run); setRunDue(null);
+      return true;
+    } catch (e) { setRunError((e as Error).message); return false; }
+    finally { setRunning(false); }
+  }, [s.surveyDbId]);
+  React.useEffect(() => {
+    const w = window as unknown as { __rescriptAnalysisRun?: (r: StoredRunBrief | null) => void };
+    w.__rescriptAnalysisRun = (r) => { setAnalysisRun(r); };
+    return () => { delete w.__rescriptAnalysisRun; };
+  }, []);
+  /** what travels with a turn: the verdicts and the strongest findings, never the results */
+  const runForTurn = React.useMemo(() => (analysisRun ? { computedAt: analysisRun.computedAt, n: analysisRun.n, trigger: analysisRun.trigger, environment: analysisRun.environment, verdicts: analysisRun.verdicts, warnings: analysisRun.warnings.slice(0, 6), findings: analysisRun.findings.slice(0, 40) } : null), [analysisRun]);
+
   const ask = React.useCallback(async (text: string, heard?: HeardTranscript, mode?: "review" | "generate"): Promise<"handled" | "unavailable" | "empty"> => {
     const id = uid("copilot");
     opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "thinking" });
@@ -128,7 +172,7 @@ export function useCopilot(opts: {
       const fake = fakeRef.current.shift();
       const r = await fetch("/api/copilot/turn", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ surveyId: s.surveyDbId, message: text, definition: working, selectedId: opts.selectedId, memory: memoryFrom(copilotTurns.map((t) => ({ user: t.text, reply: t.reply }))), ...(mode ? { mode } : {}), ...(fake ? { fake } : {}), ...(themeImage ? { themeImage } : {}), ...(quotaCounts ? { quotaCounts } : {}) }),
+        body: JSON.stringify({ surveyId: s.surveyDbId, message: text, definition: working, selectedId: opts.selectedId, memory: memoryFrom(copilotTurns.map((t) => ({ user: t.text, reply: t.reply }))), ...(mode ? { mode } : {}), ...(fake ? { fake } : {}), ...(themeImage ? { themeImage } : {}), ...(quotaCounts ? { quotaCounts } : {}), ...(runForTurn ? { analysisRun: runForTurn } : {}) }),
       });
       if (themeImage) setThemeImage(null);
       if (r.status === 501) { setAvailable(false); opts.patch(id, { status: "failed", error: "No language model is configured on this Studio." }); return "unavailable"; }
@@ -158,7 +202,7 @@ export function useCopilot(opts: {
     } finally {
       setBusy(false);
     }
-  }, [session.proposal, stale, s.def, s.surveyDbId, opts, copilotTurns, setSession, themeImage, quotaCounts]);
+  }, [session.proposal, stale, s.def, s.surveyDbId, opts, copilotTurns, setSession, themeImage, quotaCounts, runForTurn]);
 
   /* ------------------------------------------------------------ review */
   const runReview = React.useCallback(async (text = "Review my survey") => {
@@ -275,6 +319,7 @@ export function useCopilot(opts: {
     ask, runReview, previewFix, apply, cancel, revert, uploadDocs, deleteDoc, refreshDocs,
     themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),
     quotaCounts, quotaCountsAt, refreshQuotaCounts,
+    analysisRun, runDue, running, runError, refreshAnalysisRun, runPlanNow,
   };
 }
 export type Copilot = ReturnType<typeof useCopilot>;

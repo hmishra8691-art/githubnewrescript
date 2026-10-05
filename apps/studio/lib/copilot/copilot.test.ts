@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { SurveyDefinition } from "@rescript/schema";
 import { applySurveyActions } from "@rescript/engine";
 import { chunkResearchDocument, ResearchIndex } from "@rescript/import/research";
-import { coerceCopilotReply, classifyRequest, copilotUserPrompt, referencedQuestions, surveyLanguageOf, uxIntent, analysisIntent, translationIntent, quotaIntent, COPILOT_SYSTEM_PROMPT, COPILOT_UX_GUIDE, COPILOT_ANALYSIS_GUIDE, COPILOT_TRANSLATION_GUIDE, COPILOT_QUOTA_GUIDE } from "./prompt.ts";
+import { coerceCopilotReply, classifyRequest, copilotUserPrompt, referencedQuestions, surveyLanguageOf, uxIntent, analysisIntent, translationIntent, quotaIntent, findingsIntent, COPILOT_SYSTEM_PROMPT, COPILOT_UX_GUIDE, COPILOT_ANALYSIS_GUIDE, COPILOT_TRANSLATION_GUIDE, COPILOT_QUOTA_GUIDE, COPILOT_FINDINGS_GUIDE } from "./prompt.ts";
 import { copilotOutline } from "./outline.ts";
 import { coerceDocSummary, summaryInput, researchCards, researchPassages } from "./research.ts";
 
@@ -398,4 +398,33 @@ test("quota turns: the intent, the guide, the outline's quotas with their cells,
   const r = coerceCopilotReply({ kind: "proposal", reply: "ok", actions: [{ op: "create_quota", name: "G", total: 100, dimensions: ["FREQ"] }, { op: "create_quota", name: "H", dimensions: ["FREQ"] }, { op: "update_quota", quota: "G" }] })!;
   assert.equal(r.actions.length, 1); assert.equal(r.rejected.length, 2);
   assert.match(r.rejected[0].reason, /needs the total/); assert.match(r.rejected[1].reason, /changes nothing/);
+});
+
+test("findings turns: the intent, the run's brief in the outline (verdicts, then findings with their evidence), nothing invented when there is no run, the guide", () => {
+  for (const m of ["what did we find?", "did H1 hold?", "is the gender difference significant?", "what drives satisfaction?", "summarise the results", "what does the data say about region?", "how did Brand A perform?"]) assert.ok(findingsIntent(m), m);
+  for (const m of ["make Q7 a 5-point scale", "translate Q5 into German", "add a crosstab of FREQ by BUY", "set up quotas: 500 completes"]) assert.ok(!findingsIntent(m), m);
+  const def = survey();
+  const run = {
+    computedAt: "2026-10-05T09:00:00Z", n: 312, trigger: "halfway", environment: "LIVE" as const, warnings: ["Two analyses are based on fewer than 30 respondents."],
+    verdicts: [{ label: "H1", text: "Social exposure drives purchase", verdict: "supported" as const, reason: "The planned test is significant: FREQ by BUY: a moderate difference (chi-square, p = .003, Cramér's V = 0.21).", findings: [], analyses: 1 }],
+    findings: [
+      { id: "a:0", kind: "difference" as const, strength: "moderate" as const, significant: true, headline: "FREQ by BUY: a moderate difference (chi-square, p = .003, Cramér's V = 0.21).", evidence: { test: "chi_square", statistic: 11.7, p: 0.003, effect: { name: "Cramér's V", value: 0.21 }, n: 312 }, variables: ["FREQ", "BUY"], hypotheses: ["H1"], analysis: { name: "FREQ by BUY", kind: "crosstab", hash: "a" } },
+      { id: "b:0", kind: "no_correlation" as const, strength: "none" as const, significant: false, headline: "Age × FREQ: no significant correlation (r = 0.04, p = .480).", evidence: { test: "correlation", statistic: 0.04, p: 0.48, effect: { name: "r", value: 0.04 }, n: 312 }, variables: ["AGE", "FREQ"], hypotheses: [], analysis: { name: "Age × FREQ", kind: "correlation", hash: "b" } },
+    ],
+  };
+  const o = copilotOutline(def, { findings: true, analysisRun: run });
+  assert.match(o, /Analysis run \(halfway\) on 312 live completes, 2026-10-05 09:00:/);
+  assert.match(o, /  H1 SUPPORTED — Social exposure drives purchase\. The planned test is significant/);
+  assert.match(o, /  Findings \(strongest first\):\n    \[moderate\] FREQ by BUY: a moderate difference \(chi-square, p = \.003, Cramér's V = 0\.21\)\. \(H1\)\n    \[ns\] Age × FREQ: no significant correlation/);
+  assert.match(o, /  Caveats: Two analyses are based on fewer than 30/);
+  assert.ok(!copilotOutline(def, {}).includes("Analysis run"), "a wording edit carries no run");
+  assert.match(copilotOutline(def, { findings: true, analysisRun: null }), /Analysis run: none yet — there is no analysis plan yet \(propose_analysis_plan\); there are no results to report\./);
+  const planned = applySurveyActions(def, [{ op: "propose_analysis_plan" }], { ids }).def;
+  assert.match(copilotOutline(planned, { findings: true, analysisRun: null }), /the plan has not been run on the responses/);
+  assert.ok(copilotOutline(planned, { analysis: true, analysisRun: run }).includes("Analysis run (halfway)"), "an analysis turn with a run carries it too");
+  assert.ok(!copilotOutline(planned, { analysis: true, analysisRun: null }).includes("Analysis run"), "but without one says nothing");
+  const p = copilotUserPrompt({ message: "what did we find?", outline: "o", surveyLanguage: "en", mode: "edit", findings: true });
+  assert.ok(p.includes("FINDINGS GUIDE") && p.includes("never invents") === false && p.includes("Never report a number that is not in the run"));
+  assert.ok(!copilotUserPrompt({ message: "x", outline: "o", surveyLanguage: "en", mode: "edit" }).includes("FINDINGS GUIDE"));
+  for (const w of ["VERDICT", "SUPPORTED", "p-value", "effect size", "not tested", "add_analysis_test", "\"kind\":\"answer\""]) assert.ok(COPILOT_FINDINGS_GUIDE.includes(w), w);
 });
