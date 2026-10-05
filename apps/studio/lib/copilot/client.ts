@@ -1,6 +1,6 @@
 import type { SurveyDefinition } from "@rescript/schema";
 import { SurveyDefinition as SurveyDefinitionSchema } from "@rescript/schema";
-import { applySurveyActions, diffSurveys, listBlocks, renumberNewQuestions, isUxOp, withoutPresentation, type SurveyAction, type ApplyActionsOutcome, type SurveyDiff } from "@rescript/engine";
+import { applySurveyActions, diffSurveys, listBlocks, renumberNewQuestions, isUxOp, withoutPresentation, type SurveyAction, type ApplyActionsOutcome, type ActionResult, type SurveyDiff } from "@rescript/engine";
 import type { CopilotReply, TurnMemory } from "./prompt.ts";
 
 /**
@@ -20,6 +20,19 @@ import type { CopilotReply, TurnMemory } from "./prompt.ts";
 /** `uxOnly`: the request was about the look and behaviour only — replays refuse structure exactly as the first run did */
 export interface ProposalStep { request: string; actions: SurveyAction[]; uxOnly?: boolean }
 export interface Proposal { base: SurveyDefinition; steps: ProposalStep[] }
+/**
+ * Where a FLAT action index sits: step `step`, action `action` of that step.
+ * The review excludes actions by flat index — one number per action across
+ * the whole chain — because that is what `changeItems` hands back in
+ * `actionIndexes` when it is given results indexed the same way.
+ */
+export interface ActionRef { flat: number; step: number; action: number; op: string }
+/** every action of the chain, numbered in order across the steps */
+export function actionMap(p: Proposal): ActionRef[] {
+  const out: ActionRef[] = [];
+  p.steps.forEach((s, step) => s.actions.forEach((a, action) => out.push({ flat: out.length, step, action, op: a.op })));
+  return out;
+}
 export interface ProposalState {
   after: SurveyDefinition;
   outcome: ApplyActionsOutcome;
@@ -34,15 +47,43 @@ export interface ProposalState {
   structureUnchanged: boolean;
   /** what each applied UX action does, in words */
   uxNotes: string[];
+  /**
+   * Every evaluated action's result, its `index` rewritten to the action's
+   * FLAT index in the chain (see `actionMap`). These come from the step-by-
+   * step run that produced `after`, not from a separate whole-chain run: ids
+   * are minted afresh on every apply, so only these results' `touched` ids
+   * are the ids `after` actually holds — which is what `changeItems` matches
+   * on to say which action made which change.
+   */
+  results: ActionResult[];
+  /** the flat indexes left out of this evaluation (the review's unticked changes) */
+  excluded: number[];
 }
 
-export function evaluateProposal(p: Proposal): ProposalState {
+/**
+ * The proposal applied to its base, step by step. `excluded` leaves actions
+ * out by flat index — the after-state, the diff, the destructive list and the
+ * end-state warnings are all of the INCLUDED actions only, and an included
+ * action that needed an excluded one (a skip to a question no longer
+ * created) is refused with the engine's reason, never guessed around.
+ */
+export function evaluateProposal(p: Proposal, opts: { excluded?: Iterable<number> } = {}): ProposalState {
+  const excluded = new Set(opts.excluded ?? []);
   let cur = p.base;
   const errors: string[] = [], destructive: string[] = [], warnings: string[] = [];
   let last: ApplyActionsOutcome | null = null;
   const uxNotes: string[] = [];
+  const results: ActionResult[] = [];
+  const included: SurveyAction[] = [];
+  let flat = 0;
   for (const step of p.steps) {
-    const r = applySurveyActions(cur, step.actions, { uxOnly: step.uxOnly });
+    // the step's included actions, and the flat index each one had in the whole chain
+    const flats: number[] = [], actions: SurveyAction[] = [];
+    for (const a of step.actions) { if (!excluded.has(flat)) { flats.push(flat); actions.push(a); } flat++; }
+    if (!actions.length) continue;
+    included.push(...actions);
+    const r = applySurveyActions(cur, actions, { uxOnly: step.uxOnly });
+    results.push(...r.results.map((x) => ({ ...x, index: flats[x.index] ?? x.index })));
     uxNotes.push(...r.results.filter((x) => x.ok && isUxOp(x.op)).map((x) => x.description));
     last = r;
     errors.push(...r.errors);
@@ -53,12 +94,12 @@ export function evaluateProposal(p: Proposal): ProposalState {
   }
   // warnings are about the END state: what the whole proposal newly breaks
   const uxOnly = p.steps.length > 0 && p.steps.every((s) => s.uxOnly);
-  const whole = applySurveyActions(p.base, p.steps.flatMap((s) => s.actions), { uxOnly });
+  const whole = applySurveyActions(p.base, included, { uxOnly });
   warnings.push(...whole.warnings);
   const outcome = last ?? whole;
   const parsedBase = SurveyDefinitionSchema.safeParse(p.base);
   const structureUnchanged = sameSurvey(withoutPresentation(parsedBase.success ? parsedBase.data : p.base), withoutPresentation(cur));
-  return { after: cur, outcome, diff: diffSurveys(p.base, cur), errors, destructive: [...new Set(destructive)], warnings: [...new Set(warnings)], uxOnly, structureUnchanged, uxNotes };
+  return { after: cur, outcome, diff: diffSurveys(p.base, cur), errors, destructive: [...new Set(destructive)], warnings: [...new Set(warnings)], uxOnly, structureUnchanged, uxNotes, results, excluded: [...excluded].sort((a, b) => a - b) };
 }
 
 /** the same chain on a different starting survey (the survey changed underneath the proposal) */
@@ -83,12 +124,14 @@ export interface ChangeRecord {
   /** the store's undo label, so "Undo" knows whether this is still the last edit */
   label: string;
   reverted?: boolean;
+  /** the proposed changes the researcher left out of this apply, in words ("Removed option 3 “None” from Q5") — absent when nothing was */
+  excluded?: string[];
 }
-export function changeRecord(n: number, request: string, state: ProposalState, before: SurveyDefinition, at = new Date().toISOString()): ChangeRecord {
+export function changeRecord(n: number, request: string, state: ProposalState, before: SurveyDefinition, at = new Date().toISOString(), excluded: string[] = []): ChangeRecord {
   const d = state.diff;
   const label = `AI change #${String(n).padStart(3, "0")}: ${d.summary[0] ?? request.slice(0, 60)}`;
   return {
-    n, at, request, summary: d.summary, before, after: state.after, label,
+    n, at, request, summary: d.summary, before, after: state.after, label, ...(excluded.length ? { excluded } : {}),
     created: [...d.blocksAdded.map((b) => `block “${b.title}”`), ...d.questionsAdded.map((q) => q.code), ...d.embeddedAdded.map((e) => `embedded ${e}`), ...d.calculationsAdded.map((c) => `calculation ${c}`), ...d.quotasAdded.map((q) => `quota “${q}”`), ...d.ux.added.map((x) => `${x.kind} “${x.label}” (${x.target})`)],
     modified: [...d.questionsModified.map((q) => q.code), ...d.blocksRenamed.map((b) => `block “${b.to}”`), ...d.ux.changed.map((x) => `${x.kind} “${x.label}”`), ...(d.theme.length ? [`theme (${d.theme.length} setting${d.theme.length === 1 ? "" : "s"})`] : [])],
     removed: [...d.questionsRemoved.map((q) => q.code), ...d.blocksRemoved.map((b) => `block “${b.title}”`), ...d.ux.removed.map((x) => `${x.kind} “${x.label}”`)],

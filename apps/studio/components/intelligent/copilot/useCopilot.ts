@@ -6,6 +6,7 @@ import { reviewSurvey, type SurveyAction, type SurveyReview, type Interpretation
 import { useStudio, uid } from "../../studio/store";
 import type { CopilotReply, CopilotFinding } from "../../../lib/copilot/prompt";
 import { evaluateProposal, rebaseProposal, sameSurvey, changeRecord, memoryFrom, type Proposal, type ProposalState, type ChangeRecord } from "../../../lib/copilot/client";
+import { excludedLabels, validExclusions } from "../../../lib/copilot/review";
 import type { HeardTranscript } from "../../../lib/intelligent/voice";
 import { prepareThemeImage, type ThemeImage } from "../../../lib/copilot/themeImage";
 
@@ -72,6 +73,13 @@ interface Session {
   durable: boolean;
   confirmed: boolean;
   tab: PanelTab;
+  /**
+   * The proposal's actions the researcher unticked in the review, by FLAT
+   * index (step by step, action by action). Kept with the proposal and reset
+   * with it: a new step, a cancel or an apply starts again with everything
+   * ticked — an index means nothing against a different chain.
+   */
+  excluded: number[];
 }
 const sessions = new Map<string, Session>();
 let copilotKnown: boolean | null = null;
@@ -85,7 +93,7 @@ export function useCopilot(opts: {
 }) {
   const s = useStudio();
   const key = s.surveyDbId;
-  const [session, setSessionState] = React.useState<Session>(() => sessions.get(key) ?? { proposal: null, history: [], review: null, docs: null, durable: true, confirmed: false, tab: "inspector" });
+  const [session, setSessionState] = React.useState<Session>(() => sessions.get(key) ?? { proposal: null, history: [], review: null, docs: null, durable: true, confirmed: false, tab: "inspector", excluded: [] });
   const setSession = React.useCallback((fn: (x: Session) => Session) => setSessionState((cur) => { const next = fn(cur); sessions.set(key, next); return next; }), [key]);
   const [available, setAvailableState] = React.useState<boolean | null>(copilotKnown);
   const setAvailable = (v: boolean) => { copilotKnown = v; setAvailableState(v); };
@@ -108,8 +116,17 @@ export function useCopilot(opts: {
     return () => { delete w.__rescriptCopilotFake; delete (w as { __rescriptCopilotFakeReset?: () => void }).__rescriptCopilotFakeReset; };
   }, []);
 
-  /* the open proposal, evaluated against the survey as it is now */
-  const state: ProposalState | null = React.useMemo(() => (session.proposal ? evaluateProposal(session.proposal) : null), [session.proposal]);
+  /*
+   * The open proposal, evaluated against the survey as it is now — twice
+   * when something is unticked: `full` is every action (what the review
+   * lists, so an unticked row stays visible to be ticked again; what a
+   * revision is written against), `state` is the included actions only
+   * (what Apply writes, what the destructive confirmation and the warnings
+   * are about). With nothing unticked they are the same object.
+   */
+  const excluded = React.useMemo(() => (session.proposal ? validExclusions(session.proposal, session.excluded ?? []) : []), [session.proposal, session.excluded]);
+  const full: ProposalState | null = React.useMemo(() => (session.proposal ? evaluateProposal(session.proposal) : null), [session.proposal]);
+  const state: ProposalState | null = React.useMemo(() => (session.proposal && excluded.length ? evaluateProposal(session.proposal, { excluded }) : full), [session.proposal, excluded, full]);
   const stale = !!session.proposal && !sameSurvey(session.proposal.base, s.def);
 
   const copilotTurns = (opts.entries as CopilotEntry[]).filter((e) => (e as { kind?: string }).kind === "copilot");
@@ -224,7 +241,7 @@ export function useCopilot(opts: {
         setSession((x) => {
           const base = x.proposal ? (stale ? rebaseProposal(x.proposal, s.def) : x.proposal) : { base: s.def, steps: [] };
           const uxOnly = !!(d.context as { uxOnly?: boolean } | undefined)?.uxOnly;
-          return { ...x, proposal: { base: base.base, steps: [...base.steps, { request: text, actions: reply.actions, ...(uxOnly ? { uxOnly } : {}) }] }, confirmed: false, tab: "changes" };
+          return { ...x, proposal: { base: base.base, steps: [...base.steps, { request: text, actions: reply.actions, ...(uxOnly ? { uxOnly } : {}) }] }, confirmed: false, excluded: [], tab: "changes" };
         });
         patch.proposal = "open";
       }
@@ -266,13 +283,13 @@ export function useCopilot(opts: {
       opts.patchAll((e) => (e.proposal === "open" ? { proposal: "superseded" } : null));
       setSession((x) => {
         const base = x.proposal ? (stale ? rebaseProposal(x.proposal, s.def) : x.proposal) : { base: s.def, steps: [] };
-        return { ...x, proposal: { base: base.base, steps: [...base.steps, { request: text, actions }] }, confirmed: false, tab: "changes" };
+        return { ...x, proposal: { base: base.base, steps: [...base.steps, { request: text, actions }] }, confirmed: false, excluded: [], tab: "changes" };
       });
     }
     opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "ready", reply, engine, ...(actions.length ? { proposal: "open" as const } : {}) });
   }, [opts, setSession, stale, s.def]);
   /** the survey a new request is read against: the open proposal's result, so a revision builds on what is proposed */
-  const working: SurveyDefinition = React.useMemo(() => (session.proposal ? (stale ? evaluateProposal(rebaseProposal(session.proposal, s.def)).after : state?.after ?? s.def) : s.def), [session.proposal, stale, state, s.def]);
+  const working: SurveyDefinition = React.useMemo(() => (session.proposal ? (stale ? evaluateProposal(rebaseProposal(session.proposal, s.def)).after : full?.after ?? s.def) : s.def), [session.proposal, stale, full, s.def]);
 
   /* ------------------------------------------------------------ review */
   const runReview = React.useCallback(async (text = "Review my survey") => {
@@ -288,7 +305,7 @@ export function useCopilot(opts: {
     opts.patchAll((e) => (e.proposal === "open" ? { proposal: "superseded" } : null));
     setSession((x) => {
       const base = x.proposal ? (stale ? rebaseProposal(x.proposal, s.def) : x.proposal) : { base: s.def, steps: [] };
-      return { ...x, proposal: { base: base.base, steps: [...base.steps, { request: label, actions }] }, confirmed: false, tab: "changes" };
+      return { ...x, proposal: { base: base.base, steps: [...base.steps, { request: label, actions }] }, confirmed: false, excluded: [], tab: "changes" };
     });
   }, [s.def, stale, setSession, opts]);
 
@@ -301,14 +318,16 @@ export function useCopilot(opts: {
       setSession((x) => ({ ...x, proposal: x.proposal ? rebaseProposal(x.proposal, s.def) : null, confirmed: false }));
       return { ok: false, reason: "The survey changed since this was proposed. The proposal was replayed onto the current survey — review it again, then apply." };
     }
-    if (state.diff.empty) return { ok: false, reason: "The proposal changes nothing that could be applied." };
+    if (state.diff.empty) return { ok: false, reason: excluded.length ? "Every change is excluded — tick at least one to apply." : "The proposal changes nothing that could be applied." };
     if (state.destructive.length && !session.confirmed) return { ok: false, reason: "Confirm the changes that remove or rewrite existing content first." };
     const n = session.history.length + 1;
     const request = session.proposal.steps.map((x) => x.request).join(" → ");
-    const rec = changeRecord(n, request, state, session.proposal.base);
+    // what was left out is part of the record: "applied 7 of 9 — excluded: Removed option 99 from Q5"
+    const left = excluded.length && full ? excludedLabels(session.proposal, full, excluded) : [];
+    const rec = changeRecord(n, request, state, session.proposal.base, undefined, left);
     s.labelNextEdit(rec.label);
     s.replace(state.after);
-    setSession((x) => ({ ...x, proposal: null, confirmed: false, history: [...x.history, rec], tab: "history" }));
+    setSession((x) => ({ ...x, proposal: null, confirmed: false, excluded: [], history: [...x.history, rec], tab: "history" }));
     const ux = state.diff.ux;
     // a question's default value and custom HTML are look-and-behaviour too
     const qBehaviour = state.diff.questionsModified.flatMap((m) => m.changes.filter((c) => c.field === "default value" || c.field === "custom HTML").map((c) => `${m.code} (${c.field})`));
@@ -317,12 +336,12 @@ export function useCopilot(opts: {
       ? `Done. The look and behaviour of ${targets.slice(0, 3).join(", ")}${targets.length > 3 ? ` and ${targets.length - 3} more` : ""} ${targets.length === 1 ? "has" : "have"} been updated without changing the survey's questions, codes or logic.`
       : undefined;
     opts.patchAll((e) => (e.proposal === "open" || e.proposal === "superseded" ? { proposal: e.proposal === "open" ? "applied" : e.proposal, ...(e.proposal === "open" ? { changeN: n, ...(note ? { appliedNote: note } : {}) } : {}) } : null));
-    void fetch("/api/copilot/record", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: s.surveyDbId, n, request: request.slice(0, 500), summary: rec.summary.slice(0, 6).join("; "), created: rec.created, modified: rec.modified, removed: rec.removed }) }).catch(() => {});
+    void fetch("/api/copilot/record", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: s.surveyDbId, n, request: request.slice(0, 500), summary: rec.summary.slice(0, 6).join("; "), created: rec.created, modified: rec.modified, removed: rec.removed, ...(left.length ? { excluded: left } : {}) }) }).catch(() => {});
     return { ok: true, ...(note ? { message: note } : {}) };
-  }, [session, state, stale, s, setSession, opts]);
+  }, [session, state, full, excluded, stale, s, setSession, opts]);
 
   const cancel = React.useCallback(() => {
-    setSession((x) => ({ ...x, proposal: null, confirmed: false }));
+    setSession((x) => ({ ...x, proposal: null, confirmed: false, excluded: [] }));
     opts.patchAll((e) => (e.proposal === "open" || e.proposal === "superseded" ? { proposal: "cancelled" } : null));
   }, [setSession, opts]);
 
@@ -382,7 +401,17 @@ export function useCopilot(opts: {
   }, [s.surveyDbId, refreshDocs]);
 
   return {
-    available, busy, state, stale, proposal: session.proposal, history: session.history, review: session.review,
+    available, busy, state, full, stale, proposal: session.proposal,
+    /*
+     * selective apply: the unticked actions, by flat index; setting them re-evaluates `state`. Ticking one
+     * back can bring back a removal nobody confirmed, so that asks for the confirmation again; unticking
+     * only takes changes away, so a confirmation given stands.
+     */
+    excluded, setExcluded: (xs: number[]) => setSession((x) => {
+      const next = x.proposal ? validExclusions(x.proposal, xs) : [];
+      const reincluded = (x.excluded ?? []).some((i) => !next.includes(i));
+      return { ...x, excluded: next, confirmed: reincluded ? false : x.confirmed };
+    }), history: session.history, review: session.review,
     docs: session.docs ?? [], durable: session.durable, uploading, docError,
     confirmed: session.confirmed, setConfirmed: (v: boolean) => setSession((x) => ({ ...x, confirmed: v })),
     tab: session.tab, setTab: (t: PanelTab) => setSession((x) => ({ ...x, tab: t })),

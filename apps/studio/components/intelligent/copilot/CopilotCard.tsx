@@ -19,7 +19,7 @@ import type { SurveyAction } from "@rescript/engine";
  *
  * Every question code in the copilot's words is a link to the question.
  */
-export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges, onApply, onCancel, onAnswer, onAsk, onPreviewFix, counts, canApply, applyTitle, refused = [] }: {
+export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges, onApply, onCancel, onAnswer, onAsk, onPreviewFix, counts, canApply, applyTitle, applyLabel = "Apply changes", refused = [] }: {
   entry: CopilotEntry;
   def: SurveyDefinition;
   onSelect(questionId: string): void;
@@ -38,6 +38,8 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
   /** the proposal's actions the Studio refused, each with its reason — shown here, so a disabled Apply is never a mystery */
   refused?: string[];
   applyTitle: string;
+  /** "Apply the ticked changes" when some were unticked in the review — this button applies the same selection */
+  applyLabel?: string;
 }) {
   const r = entry.reply;
   const u = r?.understanding;
@@ -142,7 +144,7 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
                 <button type="button" className="iq-btn" onClick={onReviewChanges} data-testid="cp-review-changes">Review changes</button>
                 <span className="iq-spacer" />
                 <button type="button" className="iq-btn" onClick={onCancel} data-testid="cp-cancel">Cancel</button>
-                <button type="button" className="iq-btn primary" onClick={onApply} disabled={!canApply} title={applyTitle} data-testid="cp-apply">Apply changes</button>
+                <button type="button" className="iq-btn primary" onClick={onApply} disabled={!canApply} title={applyTitle} data-testid="cp-apply">{applyLabel}</button>
               </div>
             )}
           </>

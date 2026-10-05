@@ -763,8 +763,8 @@ test("the long brief at its edges, and compound sentences: each clause reads the
   assert.equal(brief25.split(/\s+/).length, 25);
   assert.equal(as(say(def, brief25), "model").category, null, "25 words is not a brief");
   assert.equal(as(say(def, `${brief25} today`), "model").category, "research_design", "26 words with research words is a brief");
-  const edit = as(say(def, "Hide Q15 when Q3 = 2 because we want to understand whether respondents who identify as women answer the closing comments question in this study differently from the rest"), "refused");
-  assert.equal(edit.category, "logic", "a long sentence that starts with an edit verb is read as the edit");
+  const edit = as(say(def, "Hide Q15 when Q3 = 2 because we want to understand whether respondents who identify as women answer the closing comments question in this study differently from the rest"), "model");
+  assert.equal(edit.category, "logic", "a long sentence that starts with an edit verb is read as the edit — its condition the engine cannot read goes to the model as a logic request, not as a brief");
   assert.equal(as(say(def, "Create a survey for this research: we want to understand how younger respondents choose between brands of soft drinks and what makes them switch from one brand to another"), "model").category, "survey_creation");
   assert.deepEqual(as(say(def, "rename AGE to RESP_AGE and make RESP_AGE required"), "actions").actions, [{ op: "update_question", target: "Q1", variable: "RESP_AGE" }, { op: "update_question", target: "Q1", required: true }], "the second clause reads the survey the first one leaves");
   assert.match(as(say(def, "What depends on Q7 and make Q8 required"), "model").reason, /^a question and an edit in one sentence/);
@@ -836,4 +836,21 @@ test("a clause for the model after one the engine refuses still hands the whole 
   /* a unique title is used as the title (it survives a replay) */
   const one = as(say(def, "delete the Wrap up block"), "actions");
   assert.equal((one.actions[0] as { target: string }).target, "Wrap up");
+});
+
+test("a condition the engine cannot read goes to the model with what was detected; a near-miss name is still a refusal with the fix; “is A or B” is one question with two answers", () => {
+  const def = survey();
+  const unread = say(def, "Show Q15 when Q3 is Female and Other is not chosen");
+  assert.equal(unread.kind, "model", JSON.stringify(unread));
+  if (unread.kind === "model") assert.ok(unread.detected.some((d) => d.what === "condition text") && unread.detected.some((d) => d.value === "Q3"));
+  const typo = say(def, "Show Q15 when Q33 = 1");
+  assert.equal(typo.kind, "refused", JSON.stringify(typo));
+  if (typo.kind === "refused") assert.ok(typo.suggestion, "a did-you-mean is offered");
+  const either = as(say(def, "Show Q15 when Q3 is Male or Non-binary"), "actions");
+  const after = applySurveyActions(def, either.actions);
+  assert.deepEqual(after.errors, []);
+  assert.match(JSON.stringify(after.def.questions.find((q) => q.id === "q15")!.displayLogic), /"operator":"in".*\[1,3\]/);
+  /* an OR whose right side is a question stays two conditions */
+  const two = as(say(def, "Show Q15 when Q3 is Male or Q7 is Yes"), "actions");
+  assert.match(JSON.stringify(applySurveyActions(def, two.actions).def.questions.find((q) => q.id === "q15")!.displayLogic), /"op":"or"/);
 });

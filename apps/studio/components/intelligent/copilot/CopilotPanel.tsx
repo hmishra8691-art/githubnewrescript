@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
-import { compileAnimation, compileStyle, describeUxTarget, reviewUx, type SurveyAction } from "@rescript/engine";
+import { compileAnimation, compileStyle, describeUxTarget, reviewUx, type DependencyIndex, type ObjectKey, type SurveyAction } from "@rescript/engine";
 import { Icon } from "../../ui/Icon";
 import { structureRows, changeLabel, uxPreviewScope, type OutlineRow, type ProposalState } from "../../../lib/copilot/client";
 import { UxPreview } from "./UxPreview";
@@ -10,6 +10,9 @@ import { LanguagesTab } from "./LanguagesTab";
 import { QuotasTab, type QuotaImportNote } from "./QuotasTab";
 import { FindingsTab } from "./FindingsTab";
 import { Linked } from "./CopilotCard";
+import { ChangeReview } from "./ChangeReview";
+import { ContextPanel } from "./ContextPanel";
+import { applyCount, presentIds, reviewTree } from "../../../lib/copilot/review";
 import type { Copilot, PanelTab } from "./useCopilot";
 
 /**
@@ -18,8 +21,9 @@ import type { Copilot, PanelTab } from "./useCopilot";
  *
  *   Changes    exactly what the open proposal will do — the change list, the
  *              destructive part behind a confirmation, what was refused and
- *              why, what the result newly breaks, the structure before and
- *              after, and field-by-field changes to existing questions
+ *              why, what the result newly breaks, the review of every change
+ *              question by question (ChangeReview: tick or untick each one;
+ *              Apply writes the ticked ones), and the structure before and after
  *   Review     findings grouped Critical / Warning / Suggestion — the
  *              engine's checks and the model's reading — each linked to its
  *              questions, mechanical fixes offered as a preview
@@ -30,19 +34,41 @@ import type { Copilot, PanelTab } from "./useCopilot";
  *   Languages  each language version's state and next step (LanguagesTab)
  *   Quotas     the feasibility review, the live counts' advice, the sheet import (QuotasTab)
  *   Findings   what the data said: the latest analysis run's verdicts and findings (FindingsTab)
- *   Inspector  the object in focus (the existing inspector)
+ *   Inspector  the object in focus: what can be done to it and what depends
+ *              on it (ContextPanel), then the existing inspector
+ *
+ * The strip WRAPS onto a second line rather than scrolling sideways — ten
+ * tabs do not fit a 360 px panel, and a tab you cannot see is a tab you do
+ * not know exists.
  */
-export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, applyNote, readOnly, onImportQuotaSheet, quotaImport }: {
+export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, applyNote, readOnly, onImportQuotaSheet, quotaImport, primary, index, onSelectKey, onAsk, onTemplate }: {
   copilot: Copilot;
   def: SurveyDefinition;
   onSelect(questionId: string): void;
   inspector: React.ReactNode;
+  /** the selection (a dependency-index key) and the index of the survey as it is — for the Inspector tab's actions and dependency map */
+  primary: ObjectKey | null;
+  index: DependencyIndex;
+  /** navigate to any object: a calculation, a skip rule, a quota, a block */
+  onSelectKey(key: string): void;
+  /** send a sentence as if typed — a ready context action */
+  onAsk(sentence: string): void;
+  /** put a sentence in the input box to finish — a context-action template */
+  onTemplate(sentence: string): void;
   onApply(): void;
   applyNote: string | null;
   readOnly: boolean;
   onImportQuotaSheet?: () => void;
   quotaImport?: QuotaImportNote | null;
 }) {
+  /*
+   * THE OPTION SELECTED IN THIS PANEL — an option row of the review, or a
+   * chip in the Inspector's option list. The survey's selection is a
+   * question; the option narrows the Inspector's actions to it. It belongs
+   * to its question: selecting another question drops it.
+   */
+  const [option, setOption] = React.useState<{ questionId: string; code: string | number } | null>(null);
+  React.useEffect(() => { if (option && primary !== `question:${option.questionId}`) setOption(null); }, [primary, option]);
   const tabs: { id: PanelTab; label: string; badge?: number }[] = [
     { id: "changes", label: "Changes", badge: copilot.state ? copilot.state.diff.summary.length : undefined },
     { id: "review", label: "Review", badge: copilot.review ? copilot.review.rules.counts.critical + copilot.review.ai.filter((f) => f.severity === "critical").length || undefined : undefined },
@@ -65,7 +91,7 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
         ))}
       </div>
       <div className="cp-panel-body">
-        {copilot.tab === "changes" && <ChangesTab copilot={copilot} def={def} onSelect={onSelect} onApply={onApply} applyNote={applyNote} readOnly={readOnly} />}
+        {copilot.tab === "changes" && <ChangesTab copilot={copilot} def={def} onSelect={onSelect} onSelectKey={onSelectKey} onSelectOption={(questionId, code) => setOption({ questionId, code })} onApply={onApply} applyNote={applyNote} readOnly={readOnly} />}
         {copilot.tab === "review" && <ReviewTab copilot={copilot} def={def} onSelect={onSelect} />}
         {copilot.tab === "research" && <ResearchTab copilot={copilot} />}
         {copilot.tab === "history" && <HistoryTab copilot={copilot} readOnly={readOnly} />}
@@ -74,7 +100,12 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
         {copilot.tab === "languages" && <LanguagesTab copilot={copilot} def={def} onSelect={onSelect} />}
         {copilot.tab === "quotas" && <QuotasTab copilot={copilot} def={def} onSelect={onSelect} onImportSheet={() => onImportQuotaSheet?.()} lastImport={quotaImport ?? null} readOnly={readOnly} />}
         {copilot.tab === "ux" && <UxTab copilot={copilot} def={def} onSelect={onSelect} />}
-        {copilot.tab === "inspector" && inspector}
+        {copilot.tab === "inspector" && (
+          <>
+            <ContextPanel def={copilot.working} current={def} index={index} primary={primary} option={option} onOption={setOption} onAsk={onAsk} onTemplate={onTemplate} onSelect={onSelect} onSelectKey={onSelectKey} busy={copilot.busy} />
+            {inspector}
+          </>
+        )}
       </div>
     </aside>
   );
@@ -88,14 +119,20 @@ function outdatedLanguages(warnings: string[]): string | null {
   return null;
 }
 
-function ChangesTab({ copilot, onSelect, onApply, applyNote, readOnly }: { copilot: Copilot; def: SurveyDefinition; onSelect(id: string): void; onApply(): void; applyNote: string | null; readOnly: boolean }) {
+function ChangesTab({ copilot, onSelect, onSelectKey, onSelectOption, onApply, applyNote, readOnly }: { copilot: Copilot; def: SurveyDefinition; onSelect(id: string): void; onSelectKey(key: string): void; onSelectOption(questionId: string, code: string | number): void; onApply(): void; applyNote: string | null; readOnly: boolean }) {
   const st = copilot.state;
   const p = copilot.proposal;
   const [view, setView] = React.useState<"after" | "both">("after");
+  /* "Apply 7 of 9 changes": counted over the review's rows, the whole proposal's — what is ticked of what was proposed */
+  const tree = React.useMemo(() => (p && copilot.full ? reviewTree(p, copilot.full) : null), [p, copilot.full]);
+  const present = React.useMemo(() => (p && st ? presentIds(p, st) : null), [p, st]);
+  const count = React.useMemo(() => (tree ? applyCount(tree, copilot.excluded, present) : null), [tree, copilot.excluded, present]);
   if (!p || !st) return <p className="cp-empty" data-testid="cp-no-proposal">No change is proposed. Ask the copilot for one — “create a survey to test my hypothesis”, “add a question measuring brand trust”, “randomize the brands” — and it appears here, exactly, before anything is written.</p>;
   const beforeRows = structureRows(p.base, st.diff, "before");
   const afterRows = structureRows(st.after, st.diff, "after");
   const blocked = (st.destructive.length > 0 && !copilot.confirmed) || st.diff.empty || readOnly;
+  const allOut = !!count && count.total > 0 && count.included === 0;
+  const partial = !!count && copilot.excluded.length > 0 && count.included < count.total;
   return (
     <div className="cp-changes" data-testid="cp-changes">
       <div className="iq-label">The copilot wants to make these changes</div>
@@ -131,6 +168,7 @@ function ChangesTab({ copilot, onSelect, onApply, applyNote, readOnly }: { copil
           )}
         </div>
       )}
+      <ChangeReview copilot={copilot} tree={tree} present={present} onSelect={onSelect} onSelectKey={onSelectKey} onSelectOption={onSelectOption} />
       <div className="cp-structure-head">
         <span className="iq-label">Structure</span>
         <span className="iq-spacer" />
@@ -141,23 +179,12 @@ function ChangesTab({ copilot, onSelect, onApply, applyNote, readOnly }: { copil
         {view === "both" && <Outline rows={beforeRows} title="Before" onSelect={onSelect} def={p.base} />}
         <Outline rows={afterRows} title={view === "both" ? "After" : undefined} onSelect={onSelect} def={st.after} />
       </div>
-      {st.diff.questionsModified.length > 0 && (
-        <div className="cp-block" data-testid="cp-modified">
-          <div className="iq-label">Changes to existing questions</div>
-          <table className="iqi-table">
-            <tbody>
-              {st.diff.questionsModified.flatMap((m) => m.changes.map((c, i) => (
-                <tr key={`${m.id}${i}`}><td>{i === 0 ? <button type="button" className="cp-ref" onClick={() => onSelect(m.id)}>{m.code}</button> : null}</td><td className="iqi-dim">{c.field}</td><td><span className="cp-from">{c.from || "—"}</span> → <span className="cp-to">{c.to || "—"}</span></td></tr>
-              )))}
-            </tbody>
-          </table>
-        </div>
-      )}
       {applyNote && <p className="iq-warning" data-testid="cp-apply-note"><Icon name="info" size={12} /> {applyNote}</p>}
+      {allOut && <p className="iq-warning" data-testid="cp-all-excluded"><Icon name="info" size={12} /> Every change is excluded — tick at least one to apply, or cancel the proposal.</p>}
       <div className="iq-actions">
         <button type="button" className="iq-btn" onClick={copilot.cancel} data-testid="cp-panel-cancel">Cancel</button>
         <span className="iq-spacer" />
-        <button type="button" className="iq-btn primary" onClick={onApply} disabled={blocked} data-testid="cp-panel-apply" title={readOnly ? "Read-only" : st.diff.empty ? (st.errors.length ? "Nothing to apply — the Studio refused every change (see why above)" : "Nothing to apply") : st.destructive.length && !copilot.confirmed ? "Confirm the destructive changes first" : "Apply as one undoable change"}>Apply changes</button>
+        <button type="button" className="iq-btn primary" onClick={onApply} disabled={blocked} data-testid="cp-panel-apply" title={readOnly ? "Read-only" : allOut ? "Every change is excluded — tick at least one to apply" : st.diff.empty ? (st.errors.length ? "Nothing to apply — the Studio refused every change (see why above)" : "Nothing to apply") : st.destructive.length && !copilot.confirmed ? "Confirm the destructive changes first" : partial ? "Apply the ticked changes as one undoable change; the unticked ones are left out" : "Apply as one undoable change"} data-included={count?.included ?? ""} data-total={count?.total ?? ""}>{partial ? `Apply ${count!.included} of ${count!.total} changes` : "Apply changes"}</button>
       </div>
     </div>
   );
@@ -377,6 +404,7 @@ function HistoryTab({ copilot, readOnly }: { copilot: Copilot; readOnly: boolean
           {h.created.length > 0 && <div><span className="iq-label">Created</span> {h.created.join(", ")}</div>}
           {h.modified.length > 0 && <div><span className="iq-label">Modified</span> {h.modified.join(", ")}</div>}
           {h.removed.length > 0 && <div><span className="iq-label">Removed</span> {h.removed.join(", ")}</div>}
+          {h.excluded && h.excluded.length > 0 && <div data-testid="cp-change-excluded"><span className="iq-label">Excluded</span> {h.excluded.length === 1 ? "1 proposed change was" : `${h.excluded.length} proposed changes were`} left out: {h.excluded.join("; ")}</div>}
           {warn?.n === h.n && (
             <div className="cp-block warn" data-testid="cp-revert-warning">
               <p>{warn.reason}</p>

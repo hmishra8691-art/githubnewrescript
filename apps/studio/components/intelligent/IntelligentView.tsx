@@ -188,6 +188,24 @@ export function IntelligentView() {
     else if (r.reason) s.toast(r.reason, "err");
   }, [copilot, s, selectKey]);
   const selectQuestion = React.useCallback((id: string) => selectKey(`question:${id}` as ObjectKey), [selectKey]);
+  /*
+   * THE RESEARCHER picked a question — in the survey pane or a link in the
+   * conversation. With no proposal open, the panel turns to the Inspector,
+   * where that question's actions and dependencies are (the audit's R15:
+   * the tab never followed the selection, so the dependency view went
+   * unseen). An open proposal keeps the Changes tab: the review is what is
+   * being read. Selections the Studio makes itself (after Apply, an engine
+   * proposal's target) go through `selectQuestion` and move no tab.
+   */
+  const pickQuestion = React.useCallback((id: string) => {
+    selectQuestion(id);
+    if (!copilot.proposal) copilot.setTab("inspector");
+  }, [selectQuestion, copilot]);
+  /* a context-action template goes in the input box, the caret at its end, for the researcher to finish */
+  const writeTemplate = React.useCallback((sentence: string) => {
+    setText(sentence);
+    window.requestAnimationFrame(() => { const el = inputRef.current; if (el) { el.focus(); el.setSelectionRange(sentence.length, sentence.length); } });
+  }, []);
 
   /* ---------------------------------------------------------------- ask */
   const ask = React.useCallback(async (sentence: string, heard?: HeardTranscript) => {
@@ -597,7 +615,7 @@ export function IntelligentView() {
 
   return (
     <div className="iq cp-workspace" data-testid="intelligent-view" style={{ gridTemplateColumns: `${showStructure ? "240px " : ""}${showInspector ? `minmax(0, 1fr) 6px ${prefs.inspector}px` : "minmax(0, 1fr)"}` }}>
-      {showStructure && <StructurePane def={copilot.state ? copilot.state.after : s.def} diff={copilot.state?.diff ?? null} selectedId={selectedId} onSelect={selectQuestion} />}
+      {showStructure && <StructurePane def={copilot.state ? copilot.state.after : s.def} diff={copilot.state?.diff ?? null} selectedId={selectedId} onSelect={pickQuestion} />}
       <section
         className={`iq-main${dropping ? " iq-dropping" : ""}`}
         onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDropping(true); } }}
@@ -660,7 +678,7 @@ export function IntelligentView() {
               if (turn.kind === "copilot") {
                 const open = turn.proposal === "open" && copilot.state;
                 return (
-                  <CopilotCard key={turn.id} entry={turn} def={copilot.state && turn.proposal === "open" ? copilot.state.after : s.def} onSelect={selectQuestion}
+                  <CopilotCard key={turn.id} entry={turn} def={copilot.state && turn.proposal === "open" ? copilot.state.after : s.def} onSelect={pickQuestion}
                     onReviewChanges={() => { setShowInspector(true); copilot.setTab("changes"); }} onApply={applyCopilot} onCancel={copilot.cancel}
                     onAnswer={(q) => { setText(`${q} — `); inputRef.current?.focus(); }}
                     onSelectKey={(k) => selectKey(k as ObjectKey)} onAsk={(q) => void ask(q)}
@@ -668,6 +686,7 @@ export function IntelligentView() {
                     counts={open ? proposalCounts(copilot.state!.diff, copilot.state!.after) : null}
                     canApply={!!open && !s.readOnly && !copilot.state!.diff.empty && (!copilot.state!.destructive.length || copilot.confirmed)}
                     refused={open ? copilot.state!.errors : []}
+                    applyLabel={open && copilot.excluded.length ? "Apply the ticked changes" : undefined}
                     applyTitle={s.readOnly ? "Read-only" : open && copilot.state!.diff.empty ? (copilot.state!.errors.length ? "Nothing to apply — the Studio refused every change (the reasons are listed above)" : "Nothing to apply — the proposal leaves the survey as it is") : copilot.state?.destructive.length && !copilot.confirmed ? "Some changes remove or rewrite existing content — confirm them in the Changes panel first" : "Apply as one undoable change"} />
                 );
               }
@@ -743,6 +762,7 @@ export function IntelligentView() {
           <div className="cp-panel-wrap" data-testid="iq-inspector">
             <CopilotPanel copilot={copilot} def={s.def} onSelect={selectQuestion} onApply={applyCopilot} applyNote={applyNote} readOnly={s.readOnly}
               onImportQuotaSheet={() => quotaSheetRef.current?.click()} quotaImport={quotaImport}
+              primary={primary} index={index} onSelectKey={(k) => selectKey(k as ObjectKey)} onAsk={(t) => void ask(t)} onTemplate={writeTemplate}
               inspector={<div className="ar-inspector-body"><Inspector primary={primary} index={index} status={status} onSelect={selectKey} /></div>} />
           </div>
         </>

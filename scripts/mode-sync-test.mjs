@@ -61,9 +61,10 @@ await page.waitForSelector('[data-testid="split-view"]');
   // a display-logic change made in Intelligent lands in the same survey the Studio pane and the panel show
   await page.fill('[data-testid="split-secondary"] [data-testid="iq-input"]', "Show Q6 only when Q4 = United States");
   await page.keyboard.press("Enter");
-  await page.waitForSelector('[data-testid="split-secondary"] [data-testid="iq-apply"]');
-  await page.click('[data-testid="split-secondary"] [data-testid="iq-apply"]');
-  await page.waitForFunction(() => document.querySelector('[data-testid="iq-turn"]:last-of-type')?.dataset.state === "applied");
+  // the engine reads the sentence (Phase 3): its proposal is applied from the copilot card, as the model's would be
+  await page.waitForSelector('[data-testid="split-secondary"] [data-testid="cp-engine"]');
+  await page.click('[data-testid="split-secondary"] [data-testid="cp-apply"]');
+  await page.waitForFunction(() => { const ts = document.querySelectorAll('[data-testid="split-secondary"] [data-testid="cp-turn"]'); return ts[ts.length - 1]?.getAttribute("data-proposal") === "applied"; });
   await page.waitForTimeout(200);
   const d = await readDef();
   assert.ok(d.questions.find((x) => x.code === "Q6").displayLogic, "the rule is on Q6");

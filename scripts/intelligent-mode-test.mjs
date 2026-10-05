@@ -100,15 +100,21 @@ const engineTurn = async (t, kind) => {
 const replyOf = (t) => textOf(t, '[data-testid="cp-reply"]');
 /** "what: value" for each row the engine detected */
 const detectedOf = (t) => t.$$eval('[data-testid="cp-detected"] .cp-detected-row', (rs) => rs.map((r) => `${r.querySelector("dt").textContent}: ${r.querySelector("dd").textContent}`.replace(/\s+/g, " ").trim()));
-/** the Changes panel: the summary lines, and the field-level rows as "Q6 | display logic | — → Q4 = 1 AND Q3 >= 18" */
+/**
+ * the Changes panel: the summary lines, and the review's change rows (Phase 4: one row per change, from the
+ * engine's change tree) as "Q6 | display logic | — → Q4 = 1 AND Q3 >= 18" — question code, field, old → new
+ */
 const changesPanel = async () => {
   await page.click('[data-testid="cp-tab-changes"]');
   await page.waitForSelector('[data-testid="cp-changes"]');
   const summary = await pageTexts('[data-testid="cp-summary"] li');
-  const rows = await page.$$eval('[data-testid="cp-modified"] tr', (trs) => {
-    let code = "";
-    return trs.map((tr) => { const td = [...tr.querySelectorAll("td")].map((x) => x.textContent.replace(/\s+/g, " ").trim()); if (td[0]) code = td[0]; return `${code} | ${td[1]} | ${td[2]}`; });
-  });
+  // a long proposal folds its question cards: open them all, so every row is read
+  for (const t of await page.$$('[data-testid="cp-qcard"][data-open="false"] [data-testid="cp-qcard-toggle"]')) await t.click();
+  const rows = await page.$$eval('[data-testid="cp-modified"] [data-testid="cp-row"]', (rs) => rs.map((r) => {
+    const val = (k) => r.querySelector(`[data-testid="cp-row-${k}"] [data-testid="cp-val"]`)?.textContent.replace(/\s+/g, " ").trim() || "—";
+    const field = r.querySelector('[data-testid="cp-row-field"]').textContent.replace(/\s+/g, " ").trim();
+    return `${r.dataset.code || "survey"} | ${field} | ${val("from")} → ${val("to")}`;
+  }));
   return { summary, rows };
 };
 /** apply the open proposal — from the Changes panel, or from the card itself — confirming what it rewrites when it says so */
@@ -279,7 +285,8 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
   assert.deepEqual(await detectedOf(turn), ["condition: Q3 < 18", "skip from: Q3", "target: out of the survey (screened)"]);
   const ch = await changesPanel();
   assert.deepEqual(ch.summary, ["Add 1 skip condition", "Change Q3: skip rules"]);
-  assert.deepEqual(ch.rows, [`Q3 | skip rules | ${skipsBefore} → ${skipsBefore + 1}`]);
+  // the review shows the rule itself, not a count of rules (Phase 4)
+  assert.deepEqual(ch.rows, [`Q3 | skip rule ${skipsBefore + 1} | — → when Q3 < 18 → out (screened)`]);
   ok("a termination is a skip rule to terminate/screened, on the question that triggers it");
   await applyProposal(turn, "card");
   const after = await readDef();
@@ -371,7 +378,8 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
   assert.equal(await turn.$eval('[data-testid="cp-engine"]', (e) => e.dataset.category), "validation");
   assert.equal(await replyOf(turn), "Q3: minimum value 18, maximum value 99; its other rules stay (whole number).");
   assert.deepEqual(await detectedOf(turn), ["question: Q3", "rule: minimum value 18", "rule: maximum value 99"]);
-  assert.deepEqual((await changesPanel()).rows, ["Q3 | validation | integer → integer, min_value 18, max_value 99"]);
+  // one row per rule kind added — the integer rule Q3 already had is not a change, so it is not a row (Phase 4)
+  assert.deepEqual((await changesPanel()).rows, ["Q3 | validation min value | — → min value 18", "Q3 | validation max value | — → max value 99"]);
   ok("a validation sentence becomes a proposal in the engine's rule kinds, merged with the rules Q3 already has");
   await applyProposal(turn);
   const after = await readDef();
@@ -417,7 +425,7 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
   assert.equal(await mask.$eval('[data-testid="cp-engine"]', (e) => e.dataset.category), "masking");
   assert.equal(await replyOf(mask), "At Q13, show only the options selected at Q11 (mask Q11.Selected).");
   assert.deepEqual(await detectedOf(mask), ["mask source: Q11.Selected", "masked question: Q13", "action: display"]);
-  assert.deepEqual((await changesPanel()).rows, ["Q13 | mask | — → display: Q11.Selected"]);
+  assert.deepEqual((await changesPanel()).rows, ["Q13 | mask | — → show only what Q11 selected"]);
   ok("a masking sentence becomes a set expression the mask parser accepted");
   await applyProposal(mask);
   const masked = q(await readDef(), "Q13");
@@ -427,7 +435,7 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
   await page.waitForSelector('[data-testid="intelligent-view"]');
   const clear = await say("remove the mask from Q13");
   await engineTurn(clear, "actions");
-  assert.deepEqual((await changesPanel()).rows, ["Q13 | mask | display: Q11.Selected → —"]);
+  assert.deepEqual((await changesPanel()).rows, ["Q13 | mask | show only what Q11 selected → —"]);
   await applyProposal(clear);
   assert.equal(q(await readDef(), "Q13").mask, undefined);
   ok("and “remove the mask” takes it off again");

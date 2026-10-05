@@ -9,7 +9,8 @@ export const dynamic = "force-dynamic";
  * the ordinary save path — and the editor records it here once applied (or
  * reverted), so the Activity tab says what the AI changed, at whose request.
  * Body: { surveyId, n, request, summary, created, modified, removed,
- * reverted? }. Records only; changes nothing. The caller must hold the
+ * excluded?, reverted? } — `excluded`: the proposed changes the researcher
+ * left out of a selective apply, so the record says what was NOT done too. Records only; changes nothing. The caller must hold the
  * editing lock: only whoever made the edit can say they made it.
  */
 export async function POST(req: NextRequest) {
@@ -28,7 +29,7 @@ export async function POST(req: NextRequest) {
   const strs = (k: string) => (Array.isArray(body[k]) ? (body[k] as unknown[]).map(String).slice(0, 60) : undefined);
   await audit({
     action: "survey.ai_changed", userId: gate.user.userId, sessionId: gate.user.sessionId, surveyId, customerId: gate.survey.customer_id ?? gate.user.customerId,
-    detail: { n: num("n"), request: s("request", 500), summary: s("summary", 500), created: strs("created"), modified: strs("modified"), removed: strs("removed"), reverted: body.reverted === true },
+    detail: { n: num("n"), request: s("request", 500), summary: s("summary", 500), created: strs("created"), modified: strs("modified"), removed: strs("removed"), excluded: strs("excluded"), reverted: body.reverted === true },
   });
   return NextResponse.json({ ok: true, recorded: true });
 }

@@ -1644,12 +1644,20 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .cp-count b { color: var(--c-text); }
 .cp-panel-wrap { display: flex; min-height: 0; min-width: 0; }
 .cp-panel { flex: 1 1 auto; }
-.cp-tabs { display: flex; gap: 2px; padding: 6px 6px 0; border-bottom: 1px solid var(--c-border); flex: none; overflow-x: auto; }
+/* the ten tabs WRAP onto a second line in a narrow panel — a strip that scrolls sideways hides the tabs it does not show */
+.cp-tabs { display: flex; flex-wrap: wrap; gap: 2px; padding: 6px 6px 0; border-bottom: 1px solid var(--c-border); flex: none; }
 .cp-tab { appearance: none; border: 0; background: transparent; font: inherit; font-size: 12px; padding: 6px 9px; border-radius: 6px 6px 0 0; color: var(--c-text-3); cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
 .cp-tab:hover { color: var(--c-text); background: var(--c-surface-2); }
 .cp-tab.on { color: var(--c-text); font-weight: 600; box-shadow: inset 0 -2px 0 var(--c-primary-600); }
 .cp-badge { font-size: 10px; min-width: 16px; padding: 0 5px; border-radius: 999px; background: var(--c-surface-2); color: var(--c-text-2); text-align: center; }
-.cp-panel-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 10px 12px 16px; display: flex; flex-direction: column; gap: 10px; font-size: 12.5px; }
+.cp-panel-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 10px 12px 16px; display: flex; flex-direction: column; gap: 10px; font-size: 12.5px; overflow-wrap: anywhere; }
+/* nothing in the panel may be wider than the panel: tables lay out to its width, code wraps, buttons may break their label */
+.cp-panel-body > * { min-width: 0; max-width: 100%; }
+.cp-panel-body table { table-layout: fixed; width: 100%; max-width: 100%; }
+.cp-panel-body td, .cp-panel-body th { overflow-wrap: anywhere; word-break: break-word; }
+.cp-panel-body pre { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; max-width: 100%; }
+.cp-panel-body .iq-btn { white-space: normal; max-width: 100%; text-align: left; }
+.cp-panel-body > .ar-inspector-body { flex: none; min-height: auto; overflow: visible; padding: 0 0 24px; }
 .cp-summary { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
 .cp-block { border: 1px solid var(--c-border); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
 .cp-block ul { margin: 0; padding-left: 18px; }
@@ -1718,6 +1726,100 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .cp-theme-chip img { width: 28px; height: 20px; object-fit: cover; border-radius: 999px; }
 .cp-theme-chip i { width: 10px; height: 10px; border-radius: 3px; border: 1px solid rgba(0,0,0,.12); }
 .cp-theme-chip button { border: 0; background: none; cursor: pointer; font-size: 13px; line-height: 1; color: inherit; }
+/* ---- the change review (Intelligent Mode, Phase 4): one card per question, one row per change, never sideways */
+.cp-review-tree { gap: 8px; }
+.cp-review-tree-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.cp-impact { border: 1px solid var(--c-border); border-radius: 8px; background: var(--c-bg); }
+.cp-impact-head { appearance: none; border: 0; background: transparent; font: inherit; font-size: 12.5px; width: 100%; text-align: left; padding: 6px 8px; display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: baseline; cursor: pointer; color: var(--c-text); }
+.cp-impact-head:disabled { cursor: default; color: var(--c-text-3); }
+.cp-impact-list { margin: 0; padding: 2px 8px 8px 10px; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+.cp-caret { font-size: 10px; color: var(--c-text-3); width: 10px; flex: none; }
+.cp-sevchip { font-family: var(--mono); font-size: 9.5px; letter-spacing: .05em; text-transform: uppercase; border-radius: 4px; padding: 0 5px; border: 1px solid var(--c-border); color: var(--c-text-3); white-space: nowrap; }
+.cp-sevchip.v-breaks { color: var(--c-error-fg); border-color: var(--c-error); background: var(--c-error-bg); }
+.cp-sevchip.v-changes { color: var(--c-warning-fg); border-color: var(--c-warning); background: var(--c-warning-bg); }
+.cp-level { display: flex; flex-direction: column; gap: 4px; }
+.cp-qcard { border: 1px solid var(--c-border); border-radius: 8px; background: var(--c-surface); min-width: 0; }
+/* dimmed by colour, not opacity: an opacity would make the card a stacking context and fade (and trap) an option preview inside it */
+.cp-qcard.excluded .cp-qcard-head { color: var(--c-text-3); }
+.cp-qcard.excluded .cp-qcard-toggle { color: var(--c-text-3); }
+.cp-qcard-head { display: flex; align-items: center; gap: 6px; padding: 5px 6px 5px 8px; min-width: 0; }
+.cp-qcard-toggle { appearance: none; border: 0; background: transparent; font: inherit; font-size: 12.5px; display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; padding: 2px 0; cursor: pointer; text-align: left; color: var(--c-text); }
+/* the header is ONE line: code · type · text, the text cut with an ellipsis (the full header is the title) */
+.cp-qcard-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; }
+.cp-qcard-count { flex: none; font-family: var(--mono); font-size: 10.5px; color: var(--c-text-3); background: var(--c-surface-2); border-radius: 999px; padding: 0 6px; }
+.cp-qcard-go { flex: none; }
+.cp-check { flex: none; margin: 2px 0 0; cursor: pointer; }
+.cp-check:disabled { cursor: not-allowed; }
+.cp-rows { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; }
+.cp-qcard .cp-rows { border-top: 1px solid var(--c-border); }
+.cp-row { position: relative; display: flex; gap: 6px; align-items: flex-start; padding: 6px 8px; min-width: 0; }
+.cp-row + .cp-row { border-top: 1px dashed var(--c-border); }
+.cp-row:focus { outline: 2px solid var(--c-primary-100); outline-offset: -2px; }
+.cp-row.s-excluded .cp-row-body { color: var(--c-text-3); }
+.cp-row.s-excluded .cp-val-t { color: var(--c-text-3) !important; }
+.cp-row.s-excluded .cp-row-danger { color: var(--c-text-3); }
+.cp-row-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.cp-row-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 6px; min-width: 0; }
+.cp-cat { font-family: var(--mono); font-size: 9.5px; letter-spacing: .05em; text-transform: uppercase; border-radius: 4px; padding: 0 5px; background: var(--c-surface-2); color: var(--c-text-2); white-space: nowrap; }
+.cp-cat.k-added { background: var(--c-success-bg, #ecfdf5); color: var(--c-success-fg); }
+.cp-cat.k-removed { background: var(--c-error-bg); color: var(--c-error-fg); }
+.cp-row-opt { appearance: none; border: 0; background: transparent; font: inherit; font-weight: 600; padding: 0; color: var(--c-text); cursor: pointer; text-align: left; min-width: 0; }
+.cp-row-opt:hover { color: var(--c-primary-600); text-decoration: underline; }
+.cp-row-field { color: var(--c-text-3); font-size: 12px; }
+.cp-status { margin-left: auto; font-family: var(--mono); font-size: 9.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--c-text-4); white-space: nowrap; }
+.cp-status.s-excluded { color: var(--c-text-3); }
+.cp-status.s-partial { color: var(--c-warning-fg); }
+.cp-status.s-refused { color: var(--c-error-fg); }
+/* old above new, each wrapping anywhere and clamped to three lines until "more" */
+.cp-val { display: grid; grid-template-columns: 26px minmax(0, 1fr); column-gap: 6px; align-items: baseline; }
+.cp-val-k { font-family: var(--mono); font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--c-text-4); }
+.cp-val-t { min-width: 0; overflow-wrap: anywhere; word-break: break-word; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+.cp-val-t.all { display: block; -webkit-line-clamp: unset; overflow: visible; }
+.cp-val.from .cp-val-t { text-decoration: line-through; color: var(--c-error-fg); opacity: .8; }
+.cp-val.to .cp-val-t { color: var(--c-success-fg); }
+.cp-more { grid-column: 2; justify-self: start; appearance: none; border: 0; background: transparent; font: inherit; font-size: 11px; color: var(--c-primary-600); padding: 0; cursor: pointer; }
+.cp-row-detail, .cp-row-also { margin: 0; font-size: 11.5px; }
+.cp-row-danger, .cp-row-refused { margin: 0; font-size: 11.5px; color: var(--c-error-fg); }
+.cp-affected summary, .cp-tech summary { cursor: pointer; font-size: 11.5px; color: var(--c-text-2); }
+.cp-affected ul { margin: 2px 0 0; padding-left: 14px; font-size: 11.5px; display: flex; flex-direction: column; gap: 2px; }
+.cp-tech pre { margin: 4px 0 0; font-size: 10.5px; background: var(--c-surface-2, #f8fafc); border: 1px solid var(--c-border); border-radius: 6px; padding: 6px 8px; max-height: 220px; overflow-y: auto; overflow-x: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* the option preview: shown while the row (or chip) is hovered or holds focus — the width of its container, so never wider than the panel */
+.cp-pop { display: none; position: absolute; left: 0; right: 0; top: 100%; z-index: 30; margin-top: 2px; background: var(--c-surface); border: 1px solid var(--c-border-strong); border-radius: 8px; box-shadow: var(--sh-2, 0 8px 24px rgba(0,0,0,.12)); padding: 8px 10px; font-size: 12px; min-width: 0; }
+/* hover, the row itself focused, or keyboard focus inside it — not a mouse click on its tick */
+.has-pop:hover > .cp-pop, .has-pop:focus > .cp-pop, .has-pop:has(:focus-visible) > .cp-pop { display: block; }
+.cp-peek-head { font-weight: 600; margin-bottom: 4px; }
+.cp-peek-dl { display: grid; grid-template-columns: minmax(64px, max-content) minmax(0, 1fr); gap: 2px 8px; margin: 0; }
+.cp-peek-dl dt { font-family: var(--mono); font-size: 9.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--c-text-4); padding-top: 2px; }
+.cp-peek-dl dd { margin: 0; min-width: 0; }
+.cp-peek-dl ul { margin: 0; padding-left: 14px; }
+/* ---- the Inspector tab's top: what can be done to the selection, its options, and the dependency map */
+.cp-context { display: flex; flex-direction: column; gap: 10px; }
+.cp-ctx-what { margin: 0; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; }
+.cp-ctx-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.cp-ctx-wait { margin: 2px 0; }
+.cp-ctx-group { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 6px; align-items: start; padding: 3px 0; }
+.cp-ctx-gname { font-family: var(--mono); font-size: 10px; letter-spacing: .05em; text-transform: uppercase; color: var(--c-text-3); padding-top: 4px; }
+.cp-ctx-btns { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.cp-ctx-btn { appearance: none; border: 1px solid var(--c-border); border-radius: 6px; background: var(--c-surface); font: inherit; font-size: 11.5px; padding: 2px 7px; color: var(--c-text); cursor: pointer; text-align: left; max-width: 100%; }
+.cp-ctx-btn.ready:hover { border-color: var(--c-primary-600); color: var(--c-primary-600); }
+.cp-ctx-btn.template { border-style: dashed; color: var(--c-text-2); }
+.cp-ctx-btn.danger { color: var(--c-error-fg); }
+.cp-ctx-btn:disabled { opacity: .45; cursor: not-allowed; }
+.cp-optlist { position: relative; display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.cp-optchip { appearance: none; border: 1px solid var(--c-border); border-radius: 999px; background: var(--c-surface-2); font: inherit; font-size: 11.5px; padding: 1px 8px; color: var(--c-text); cursor: pointer; text-align: left; max-width: 100%; }
+.cp-optchip.on { border-color: var(--c-primary-600); background: var(--c-primary-100); }
+.cp-optchip .mono { color: var(--c-text-3); font-size: 10.5px; }
+.cp-depmap { display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--c-border); padding-top: 8px; }
+.cp-dep-root { align-self: flex-start; font-weight: 600; border: 1px solid var(--c-primary-600); color: var(--c-primary-600); border-radius: 6px; padding: 1px 8px; }
+.cp-dep-summary { margin: 0; font-size: 12px; }
+.cp-dep-sec { border-left: 2px solid var(--c-primary-100); margin-left: 8px; padding: 2px 0 2px 10px; display: flex; flex-direction: column; gap: 3px; }
+.cp-dep-sec.reads { border-left-color: var(--c-border-strong); }
+.cp-dep-arrow { font-size: 11.5px; font-weight: 600; color: var(--c-text-2); }
+.cp-dep-items { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.cp-dep-chip { font-size: 11px; padding: 1px 8px; max-width: 100%; text-align: left; }
+.cp-dep-detail { color: var(--c-text-3); font-family: var(--font, inherit); }
+.cp-dep-reads-head { margin-top: 4px; }
+
 /* the manual control layer for styles, animations and scripts */
 .ux-items { display: flex; flex-direction: column; gap: 8px; }
 .ux-item { border: 1px solid var(--border, #e2e8f0); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }

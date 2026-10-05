@@ -104,3 +104,4 @@ export * from "./conditionWalk.js";
 export * from "./naturalCondition.js";
 export * from "./nlTargets.js";
 export * from "./nlIntent.js";
+export * from "./contextActions.js";

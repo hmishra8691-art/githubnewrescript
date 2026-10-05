@@ -1,3 +1,4 @@
+import { getQuestionByCodeOrVar } from "./state.js";
 import type { Condition, SurveyDefinition } from "@rescript/schema";
 import { formatCondition, parseLogicExpression } from "./logicExpression.js";
 
@@ -193,9 +194,32 @@ export function conditionFromText(def: SurveyDefinition, text: string, opts: { s
     const raw = read(text.trim().replace(/[.?!]+$/, ""));
     if (!raw.errors.length && raw.condition) { r = raw; used = text.trim().replace(/[.?!]+$/, ""); }
   }
+  /*
+   * "Q3 is Yes or Maybe" is ONE question compared with two answers — the
+   * parser read "Maybe" as a second condition with no question and refused
+   * it. When the plain reading fails, an OR whose right side is a bare
+   * value (no operator, not a question) joins the left side's values:
+   * `Q3 = Yes OR Maybe` → `Q3 in [Yes, Maybe]`, and only if that parses.
+   */
+  if (r.errors.length || !r.condition) {
+    const joined = joinOrValues(def, used);
+    if (joined !== used) { const j = read(joined); if (!j.errors.length && j.condition) { r = j; used = joined; } }
+  }
   if (r.errors.length || !r.condition) {
     const errors = r.errors.length ? r.errors.map((e) => ({ message: e.message, ...(e.suggestion ? { suggestion: e.suggestion } : {}) })) : [{ message: "the condition is empty" }];
     return { expression: used, canonical: "", errors, warnings: r.warnings.map((w) => w.message) };
   }
   return { expression: used, condition: r.condition, canonical: formatCondition(def, r.condition), errors: [], warnings: r.warnings.map((w) => w.message) };
+}
+
+const VALUE = String.raw`(?:"[^"]*"|“[^”]*”|[A-Za-z0-9][\w'’\-]*)`;
+/** `X = A OR B [OR C]` with B, C bare values (not questions, no operator of their own) → `X in [A, B, C]` */
+function joinOrValues(def: SurveyDefinition, text: string): string {
+  const re = new RegExp(String.raw`\b([A-Za-z_][\w.]*)\s*(?:=|==)\s*(${VALUE})((?:\s+OR\s+${VALUE}(?!\s*(?:=|==|!=|<>|>|<|\bis\b|\bin\b|\bselected\b|\bcontains\b|\banswered\b)))+)`, "gi");
+  return text.replace(re, (all, left: string, first: string, rest: string) => {
+    const more = rest.split(/\s+OR\s+/i).map((x) => x.trim()).filter(Boolean);
+    // a right side that names a question is a condition of its own, not a value
+    if (more.some((v) => getQuestionByCodeOrVar(def, v.replace(/^["“]|["”]$/g, "")))) return all;
+    return `${left} in [${[first, ...more].join(", ")}]`;
+  });
 }

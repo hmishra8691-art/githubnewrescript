@@ -2,6 +2,7 @@ import type { Condition, ConditionRule, Option, Question, SurveyDefinition, Vali
 import { hypothesisLabel, LANGUAGE_LIBRARY, variantRegistry } from "@rescript/schema";
 import { applySurveyActions, describeAction, diffSurveys, variantForActionType, type OptionSpec, type SurveyAction, type ValidationSpec } from "./surveyActions.js";
 import { conditionFromText } from "./naturalCondition.js";
+import { closestName } from "./logicExpression.js";
 import { contentWords, countWord, firstQuestionAfter, placedOrder, resolveOptionRef, resolveQuestionRange, resolveQuestionRef, stemWord, type QuestionCandidate, type TargetContext } from "./nlTargets.js";
 import { formatCondition } from "./logicExpression.js";
 import { conditionSummary } from "./logicSummary.js";
@@ -313,8 +314,26 @@ function readCondition(r: Run, text: string, unlessAlone = false): { ok: true; e
   if (!c.condition) return { ok: false, error: c.errors[0]?.message ?? "the condition is empty", suggestion: c.errors.find((e) => e.suggestion)?.suggestion };
   return { ok: true, expression: c.expression, condition: c.condition };
 }
+/*
+ * A CONDITION THE ENGINE CANNOT READ is a phrasing question, not a verdict.
+ * With a confident did-you-mean (a near-miss name — "Q99" for Q9) it is
+ * almost certainly a typo: refused, with the corrected sentence as the fix.
+ * Otherwise ("Other is not chosen" — an option named without its question)
+ * the engine does not know what was meant, so it does not refuse what it did
+ * not understand: the sentence goes to the language model with what the
+ * engine did detect, exactly as an unrecognised sentence would — and, with
+ * no model, to the grammar, which says what it could not read.
+ */
 function badCondition(r: Run, category: IntentCategory, understood: string, condText: string, e: { error: string; suggestion?: string }): Interpretation {
-  return refused(category, understood, `I could not read the condition “${condText}”: ${e.error.replace(/\.$/, "")}.`, [det("condition text", condText)], e.suggestion ? suggest(r, substitute(r.text, condText, e.suggestion)) : undefined);
+  /* a question code that is not there ("Q33 does not exist") is an object that is missing, not a phrasing: refused, with the nearest code as the fix */
+  const missing = /^[“"]?([A-Za-z_][\w.]*)[”"]? does not exist/.exec(e.error);
+  if (!e.suggestion && missing && CODE_SHAPE.test(missing[1])) {
+    const near = closestName(missing[1], r.def.questions.map(code));
+    if (near) e = { ...e, suggestion: substitute(condText, missing[1], near) };
+    else return refused(category, understood, `I could not read the condition “${condText}”: there is no ${missing[1]} in this survey.`, [det("condition text", condText)]);
+  }
+  if (!e.suggestion) return { kind: "model", category, reason: `the condition “${condText}” is not in a form the engine reads (${e.error.replace(/\.$/, "")}) — the language model interprets it`, detected: [det("condition text", condText), ...namedObjects(r)] };
+  return refused(category, understood, `I could not read the condition “${condText}”: ${e.error.replace(/\.$/, "")}.`, [det("condition text", condText)], suggest(r, substitute(r.text, condText, e.suggestion)));
 }
 
 /* ------------------------------------------------------------ what a sentence names */
@@ -519,26 +538,8 @@ const dependents: Recogniser = (r) => {
   const ref = m[1].replace(/^(?:the\s+)?(?:question|variable)\s+(?=\S)/i, (x) => (/question/i.test(x) && /^\d/.test(m[1].slice(x.length)) ? x : ""));
   const o = objectFor(r, ref);
   if ("fail" in o) return o.fail;
-  const ix = index(r);
-  const direct = ix.usedBy(o.key).filter((e) => e.from !== o.key);
-  const groups = new Map<string, AnswerItem[]>();
-  const seen = new Set<string>();
-  for (const e of direct) {
-    const s = SECTION_OF[e.kind] ?? "Flow (branches, loops, blocks)";
-    if (seen.has(`${s}|${e.from}`)) continue;
-    seen.add(`${s}|${e.from}`);
-    const d = edgeDetail(r.def, e);
-    (groups.get(s) ?? groups.set(s, []).get(s)!).push({ label: e.label, key: e.from, ...(d ? { detail: d } : {}) });
-  }
-  const sections = sectioned(groups);
-  const directKeys = new Set(direct.map((e) => e.from));
-  const indirect = ix.affects(o.key).filter((k) => k !== o.key && !directKeys.has(k));
-  if (indirect.length) sections.push({ title: "Indirectly affected", items: indirect.map((k) => ({ label: nodeWords(ix, k), key: k, detail: "reads something that reads it" })) });
-  const n = directKeys.size;
-  const answer = n
-    ? `${plural(n, "object")} depend${n === 1 ? "s" : ""} on ${o.label}: ${countWords(sections.filter((s) => s.title !== "Indirectly affected"))}${indirect.length ? `; ${indirect.length} more ${indirect.length === 1 ? "is" : "are"} affected indirectly` : ""}.`
-    : `Nothing depends on ${o.label}.`;
-  return { kind: "answer", category: "dependency_analysis", understood: `List everything that reads ${o.label}, directly and indirectly.`, answer, sections, detected: [det("object", o.label)] };
+  const rep = dependencyReport(r.def, o.key, { index: index(r), label: o.label });
+  return { kind: "answer", category: "dependency_analysis", understood: `List everything that reads ${o.label}, directly and indirectly.`, answer: rep.usedBySummary, sections: rep.usedBy, detected: [det("object", o.label)] };
 };
 
 const dependencies: Recogniser = (r) => {
@@ -547,31 +548,71 @@ const dependencies: Recogniser = (r) => {
   if (!m) return null;
   const o = objectFor(r, m[1]);
   if ("fail" in o) return o.fail;
-  const ix = index(r);
-  // a question's own skip rules are part of it: what they read, it reads
-  const own = parseObjectKey(o.key).kind === "question" ? ix.dependsOn(o.key).filter((e) => parseObjectKey(e.to).kind === "skipRule" && e.to.startsWith(`skipRule:${parseObjectKey(o.key).id}/`)).map((e) => e.to) : [];
-  const edges = [...ix.dependsOn(o.key).filter((e) => !own.includes(e.to)), ...own.flatMap((k) => ix.dependsOn(k))].filter((e) => e.to !== o.key);
+  const rep = dependencyReport(r.def, o.key, { index: index(r), label: o.label });
+  return { kind: "answer", category: "dependency_analysis", understood: `List everything ${o.label} reads, directly and indirectly.`, answer: rep.readsSummary, sections: rep.reads, detected: [det("object", o.label)] };
+};
+
+/**
+ * WHAT AN OBJECT IS WIRED TO, BOTH WAYS — the one reading the sentence
+ * answers ("what depends on Q7?", "what does Q9 read?") and the Studio's
+ * dependency view both show: what reads it, grouped by how (display logic,
+ * skips, masks, piping, calculations, quotas, list logic, flow, the analysis
+ * plan, constructs, translations), then what is reached only through those;
+ * and what it reads, grouped the same way, then what that reads in turn.
+ * Every item carries the dependency-index key, so a list can navigate.
+ */
+export interface DependencyReport {
+  label: string;
+  usedBy: AnswerSection[];
+  reads: AnswerSection[];
+  usedByCount: number;
+  readsCount: number;
+  usedBySummary: string;
+  readsSummary: string;
+}
+export function dependencyReport(def: SurveyDefinition, key: ObjectKey, opts: { index?: DependencyIndex; label?: string } = {}): DependencyReport {
+  const ix = opts.index ?? buildDependencyIndex(def);
+  const label = opts.label ?? ix.nodes.get(key)?.code ?? key;
+  /* what reads it */
+  const direct = ix.usedBy(key).filter((e) => e.from !== key);
   const groups = new Map<string, AnswerItem[]>();
   const seen = new Set<string>();
+  for (const e of direct) {
+    const s = SECTION_OF[e.kind] ?? "Flow (branches, loops, blocks)";
+    if (seen.has(`${s}|${e.from}`)) continue;
+    seen.add(`${s}|${e.from}`);
+    const d = edgeDetail(def, e);
+    (groups.get(s) ?? groups.set(s, []).get(s)!).push({ label: e.label, key: e.from, ...(d ? { detail: d } : {}) });
+  }
+  const usedBy = sectioned(groups);
+  const directKeys = new Set(direct.map((e) => e.from));
+  const indirect = ix.affects(key).filter((k) => k !== key && !directKeys.has(k));
+  if (indirect.length) usedBy.push({ title: "Indirectly affected", items: indirect.map((k) => ({ label: nodeWords(ix, k), key: k, detail: "reads something that reads it" })) });
+  const n = directKeys.size;
+  const usedBySummary = n
+    ? `${plural(n, "object")} depend${n === 1 ? "s" : ""} on ${label}: ${countWords(usedBy.filter((s) => s.title !== "Indirectly affected"))}${indirect.length ? `; ${indirect.length} more ${indirect.length === 1 ? "is" : "are"} affected indirectly` : ""}.`
+    : `Nothing depends on ${label}.`;
+  /* what it reads — a question's own skip rules are part of it: what they read, it reads */
+  const own = parseObjectKey(key).kind === "question" ? ix.dependsOn(key).filter((e) => parseObjectKey(e.to).kind === "skipRule" && e.to.startsWith(`skipRule:${parseObjectKey(key).id}/`)).map((e) => e.to) : [];
+  const edges = [...ix.dependsOn(key).filter((e) => !own.includes(e.to)), ...own.flatMap((k) => ix.dependsOn(k))].filter((e) => e.to !== key);
+  const rg = new Map<string, AnswerItem[]>();
+  const rseen = new Set<string>();
   for (const e of edges) {
     const s = SECTION_OF[e.kind] ?? "Flow (branches, loops, blocks)";
-    if (seen.has(`${s}|${e.to}`)) continue;
-    seen.add(`${s}|${e.to}`);
+    if (rseen.has(`${s}|${e.to}`)) continue;
+    rseen.add(`${s}|${e.to}`);
     const node = ix.nodes.get(e.to);
-    const d = edgeDetail(r.def, e);
-    (groups.get(s) ?? groups.set(s, []).get(s)!).push({ label: `${node?.code ?? e.to} — ${e.label.split(" — ").slice(1).join(" — ") || e.kind}`, key: e.to, ...(d ? { detail: d } : {}) });
+    const d = edgeDetail(def, e);
+    (rg.get(s) ?? rg.set(s, []).get(s)!).push({ label: `${node?.code ?? e.to} — ${e.label.split(" — ").slice(1).join(" — ") || e.kind}`, key: e.to, ...(d ? { detail: d } : {}) });
   }
-  const sections = sectioned(groups);
-  const directKeys = new Set(edges.map((e) => e.to));
-  const further = ix.reach(o.key).filter((k) => k !== o.key && !directKeys.has(k) && !own.includes(k));
-  if (further.length) sections.push({ title: "Indirectly", items: further.map((k) => ({ label: nodeWords(ix, k), key: k, detail: "read by something it reads" })) });
-  const n = directKeys.size;
-  return {
-    kind: "answer", category: "dependency_analysis", understood: `List everything ${o.label} reads, directly and indirectly.`,
-    answer: n ? `${o.label} depends on ${plural(n, "object")}: ${[...directKeys].map((k) => ix.nodes.get(k)?.code ?? k).join(", ")}${further.length ? `; ${further.length} more indirectly` : ""}.` : `${o.label} depends on nothing.`,
-    sections, detected: [det("object", o.label)],
-  };
-};
+  const reads = sectioned(rg);
+  const readKeys = new Set(edges.map((e) => e.to));
+  const further = ix.reach(key).filter((k) => k !== key && !readKeys.has(k) && !own.includes(k));
+  if (further.length) reads.push({ title: "Indirectly", items: further.map((k) => ({ label: nodeWords(ix, k), key: k, detail: "read by something it reads" })) });
+  const m = readKeys.size;
+  const readsSummary = m ? `${label} depends on ${plural(m, "object")}: ${[...readKeys].map((k) => ix.nodes.get(k)?.code ?? k).join(", ")}${further.length ? `; ${further.length} more indirectly` : ""}.` : `${label} depends on nothing.`;
+  return { label, usedBy, reads, usedByCount: n, readsCount: m, usedBySummary, readsSummary };
+}
 
 /* ---------------------------------------------------------- queries: impact */
 

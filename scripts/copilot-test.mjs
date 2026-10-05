@@ -207,9 +207,10 @@ await page.waitForSelector('[data-testid="intelligent-view"]');
   assert.equal(await t.getAttribute("data-mode"), "edit");
   const d = await texts('[data-testid="cp-destructive"] li');
   assert.deepEqual(d, ["replaces the 7 options of Q5"]);
-  const mod = await texts('[data-testid="cp-modified"] tr');
-  assert.ok(mod.some((r) => /Q5options/.test(r.replace(/\s/g, "")) || /options/.test(r)), mod.join("\n"));
-  assert.ok(mod.some((r) => /display logic/.test(r)));
+  // the review (Phase 4): one row per change, under its question — Q5's options, Q4's display logic
+  const mod = await page.$$eval('[data-testid="cp-modified"] [data-testid="cp-row"]', (rs) => rs.map((r) => `${r.dataset.code} | ${r.dataset.category} | ${r.textContent.replace(/\s+/g, " ").trim()}`));
+  assert.ok(mod.some((r) => /^Q5 \| Option/.test(r)), mod.join("\n"));
+  assert.ok(mod.some((r) => /^Q4 \| Display logic \|.*display logic/.test(r)), mod.join("\n"));
   await page.click('[data-testid="cp-before-after"]');
   const before = await page.$$eval('[data-testid="cp-outline-before"] [data-testid="cp-o-q"]', (qs) => qs.map((q) => q.dataset.mark));
   const after = await page.$$eval('[data-testid="cp-outline-after"] [data-testid="cp-o-q"]', (qs) => qs.map((q) => q.dataset.mark));
