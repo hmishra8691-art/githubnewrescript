@@ -216,3 +216,35 @@ test("what is not an option value is left alone: a grid read without a row, and 
   const g = canonicalizeSurveyConditions(withGuard);
   assert.equal((g.def.ux!.behaviors[0].when as { value: unknown }).value, 1);
 });
+
+test("a structured condition keyed by code or variable name is canonicalised too, not only one keyed by id", () => {
+  const d = survey();
+  const byCode = canonicalizeCondition(d, { type: "rule", source: { kind: "question", ref: "Q2" }, operator: "eq", value: "Yes" } as never);
+  assert.deepEqual(byCode.errors, []);
+  assert.equal((byCode.condition as { value: unknown }).value, 1);
+  assert.deepEqual(byCode.changes, ["Q2: “Yes” is option 1"]);
+  const byVariable = canonicalizeCondition(d, { type: "rule", source: { kind: "variable", ref: "Q3V" }, operator: "eq", value: "Maybe" } as never);
+  assert.equal((byVariable.condition as { value: unknown }).value, 3);
+  const multi = canonicalizeCondition(d, { type: "rule", source: { kind: "question", ref: "BRANDS" }, operator: "eq", value: "Pepsi" } as never);
+  assert.deepEqual([(multi.condition as { operator: string }).operator, (multi.condition as { value: unknown }).value], ["selected", 2], "a multi-select keyed by variable: = reads as selected, by code");
+  // a value naming no option is an error whichever way the question is named
+  assert.match(canonicalizeCondition(d, { type: "rule", source: { kind: "question", ref: "Q2" }, operator: "eq", value: "Nope" } as never).errors[0], /Q2 has no option “Nope”/);
+  // a numeric or text question has no codes: left exactly as written
+  const num = { type: "rule", source: { kind: "question", ref: "Q1" }, operator: "eq", value: "abc" } as never;
+  assert.deepEqual(canonicalizeCondition(d, num), { condition: num, errors: [], changes: [] });
+  // a calculated variable is not a question: left alone
+  const calc = { type: "rule", source: { kind: "variable", ref: "NOT_A_QUESTION" }, operator: "eq", value: "x" } as never;
+  assert.deepEqual(canonicalizeCondition(d, calc).condition, calc);
+});
+
+/* ------------------------------------------------------------ mutation-checked edges (Phase 2) */
+
+test("a number is not an option code: a numeric question with a “Don't know” option, and a COUNT, compare numbers", () => {
+  const d = survey();
+  const age = byVar(d, "AGE");
+  age.options = [{ code: 99, label: "Don't know", flags: [] }] as never;
+  const ageRule = { type: "rule", source: { kind: "question", ref: age.id }, operator: "eq", value: 30 } as const;
+  assert.deepEqual(canonicalizeCondition(d, ageRule as never), { condition: ageRule, errors: [], changes: [] });
+  const count = { type: "rule", source: { kind: "question", ref: byVar(d, "BRANDS").id, count: { of: "selected", scope: "options" } }, operator: "eq", value: 5 } as const;
+  assert.deepEqual(canonicalizeCondition(d, count as never), { condition: count, errors: [], changes: [] }, "5 brands, not brand 5 — and not rewritten to `selected`");
+});

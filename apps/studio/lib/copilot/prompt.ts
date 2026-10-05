@@ -55,7 +55,7 @@ ACTIONS (each an object with "op"; use only these):
 {"op":"set_display_logic","target":"Q15 or a block title","expression":"Q12 = 1"}     // expression null removes it
 {"op":"add_skip","from":"Q3","when":"Q3 = 2","to":"Q10 | <block title> | end | screen_out | terminate"}
 {"op":"clear_skips","target":"Q3"}
-{"op":"set_validation","target":"Q4","rules":[{"kind":"min_value","value":0},{"kind":"max_value","value":120},{"kind":"integer"}]}
+{"op":"set_validation","target":"Q4","rules":[{"kind":"min_value","value":0},{"kind":"max_value","value":120},{"kind":"integer"}]}   // kinds: required, min/max_value, min/max_length, min/max/exact_selections, pattern, email, phone, url, zip, date_min/max, integer, condition
 {"op":"set_validation","target":"Q7","rules":[{"kind":"min_value","value":18,"when":"Q6 = 1"},{"kind":"condition","check":"Q7 <= Q5","message":"Cannot exceed the household size"}]}   // "when": the rule applies only while it holds; kind "condition": "check" is what a VALID answer must satisfy
 {"op":"page_break","after":"Q6"}   /  {"op":"page_break","after":"Q6","remove":true}
 {"op":"create_embedded","name":"source","source":"url|static|panel|expression","value":"..."}
@@ -68,6 +68,12 @@ ACTIONS (each an object with "op"; use only these):
 {"op":"rename_block","target":"...","title":"..."}  /  {"op":"delete_block","target":"..."}
 {"op":"add_punch","target":"SEGMENT","when":"Q3 = 1 AND (Q5 = 2 OR Q5 = 3)","codes":[2]}   // PUNCHING / coding: when the criteria hold, code the target — a choice target takes option codes, a numeric/text/hidden one {"value":…}; or {"op":"add_punch","expression":"IF Q3 = 1 THEN SET SEGMENT = 2"}; add "mode":"else_if"/"else" for a chain
 {"op":"remove_punches","target":"SEGMENT"}   // or with "id" for one rule
+{"op":"update_option","target":"Q7","option":"<code | label | 'option 3'>","label":"USA","code":5,"exclusive":true,"other":false,"anchor":"bottom|top|none","visibleIf":"Q3 = 1","position":2}   // ONE option; a code change rewrites the logic that compares it
+{"op":"reorder_options","target":"Q7","order":["Canada","USA"]}  /  {"op":"reorder_options","target":"Q7","sort":"alphabetical|alphabetical_desc|numeric|reverse"}   // anchored options stay in place
+{"op":"set_option_randomization","target":"Q7","enabled":true,"keepLast":["None of these"],"keepFirst":[],"pick":5}   // "randomize but keep None last"
+{"op":"set_mask","target":"Q10","expression":"Q5.Selected","action":"display|remove|preselect|disable"}  /  {"op":"clear_mask","target":"Q10"}   // show at Q10 only what was chosen at Q5; SET expressions: Q5.Selected, Q5.Unselected, A UNION B, A INTERSECTION B, A DIFFERENCE B
+{"op":"duplicate_question","target":"Q7","after":"Q9"}  /  {"op":"set_survey_settings","title":"...","description":"..."}  /  {"op":"set_custom_code","target":"Q7","js":"...","css":"..."}
+{"op":"update_embedded","name":"source","newName":"SRC","value":"..."}  /  {"op":"remove_embedded","name":"source"}  /  {"op":"add_hypothesis","text":"..."}  /  {"op":"remove_hypothesis","hypothesis":"H2"}
 {"op":"set_research","objective":"...","hypotheses":["..."],"population":"...","methodology":"...","constructs":[{"name":"...","role":"independent","definition":"...","questions":["EXPOSE"]}],"analysis":["..."],"assumptions":["..."],"sources":["document names"]}
 LANGUAGES are actions too (shapes in the TRANSLATION GUIDE, sent with requests about languages): add_language, set_translations (YOU write each translation, keeping every {{pipe}}, HTML tag and do-not-translate term exactly), approve_translations, confirm_translations, set_language_routing, set_glossary. Codes and logic never change.
 THE ANALYSIS FRAMEWORK is planned BEFORE fieldwork, as actions too (shapes in the ANALYSIS GUIDE, sent with requests about analysis, hypotheses, variables, crosstabs or tests): set_question_analysis (role dependent|independent|mediator|moderator|control|segmentation|screening|descriptive, measurement, reporting, crosstab banner, hypotheses H1, H2…), propose_analysis_plan (the engine's plan), set_analysis_plan / add_crosstab / add_analysis_test / add_derived_variable (and remove_…). When you GENERATE from a hypothesis, tag the outcome and predictors with set_question_analysis and add {"op":"propose_analysis_plan"}.

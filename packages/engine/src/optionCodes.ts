@@ -1,14 +1,23 @@
 import type { Condition, ConditionRule, Question, SurveyDefinition } from "@rescript/schema";
 import { mapConditionRoots } from "./conditionWalk.js";
 import { isOptionValueRef, isQuestionValueRef, effectiveResponseModel } from "@rescript/schema";
+import { getQuestionByCodeOrVar } from "./state.js";
 
-/** what a question's answer is made of — the same reading as lintLogic's `sourceKindForQuestion`, without importing the linter */
-function answerKind(q: Question): "choice" | "list" | "ranking" | "other" {
+/**
+ * What a question's answer is made of — the same reading as lintLogic's
+ * `sourceKindForQuestion`, without importing the linter. `numeric` is here
+ * for the expression parser, which has to know that `Q8 = "abc"` compares a
+ * number with text before anything is stored; this module itself only asks
+ * whether the answer is a CODE.
+ */
+export function answerKind(q: Question): "choice" | "list" | "ranking" | "numeric" | "other" {
   switch (effectiveResponseModel(q)) {
     case "single_choice": return "choice";
     case "multiple_choice": return "list";
     case "rank_order": return "ranking";
-    case "per_row": return q.type === "matrix_multi" ? "list" : q.type === "matrix_numeric" || q.type === "matrix_text" ? "other" : "choice";
+    case "numeric": case "allocation": return "numeric";
+    case "fields": return q.type === "numeric_list" ? "numeric" : "other";
+    case "per_row": return q.type === "matrix_multi" ? "list" : q.type === "matrix_numeric" ? "numeric" : q.type === "matrix_text" ? "other" : "choice";
     default: return "other";
   }
 }
@@ -90,7 +99,8 @@ export function resolveOptionValue(options: OptionList, v: unknown): OptionValue
   return { kind: "none" };
 }
 
-const CODE_OPERATORS = new Set([
+/** the operators whose value is an option CODE (or a list of them) — what canonicalisation rewrites, and what the parser leaves to it */
+export const CODE_OPERATORS = new Set<string>([
   "eq", "ne", "in", "notIn", "contains", "notContains", "selected", "notSelected",
   "containsAny", "containsAll", "containsNone",
   "rankedFirst", "rankedLast", "rankedTopN", "rankEquals", "rankGreaterThan", "rankLessThan", "notRanked",
@@ -101,14 +111,22 @@ const LIST_REWRITE: Record<string, ConditionRule["operator"]> = { eq: "selected"
 export const describeOptions = (options: OptionList, max = 8) =>
   options.slice(0, max).map((o) => `${o.code} = ${normalizeOptionText(o.label) ? String(o.label).replace(/<[^>]*>/g, "").trim() : "(no label)"}`).join(", ") + (options.length > max ? ", …" : "");
 
-/** the options a rule's value is compared with, and what kind of answer it reads */
+/**
+ * The options a rule's value is compared with, and what kind of answer it
+ * reads. The source is resolved by id, code OR variable name — the three
+ * spellings `ConditionSource.ref` accepts everywhere else — so a structured
+ * condition keyed by code (`{ source: { ref: "Q3" }, value: "Yes" }`, which is
+ * how a model writes one) is canonicalised exactly as the parser's
+ * id-keyed tree is. Resolved by id only, it was left as written: label stored,
+ * never matching.
+ */
 function domainOf(def: SurveyDefinition, rule: ConditionRule): { q: Question; options: OptionList; list: boolean } | null {
   const src = rule.source as { kind: string; ref?: string; rowCode?: string; columnId?: string; count?: unknown };
-  if (src.kind !== "question" || !src.ref || src.count) return null;
-  const q = def.questions.find((x) => x.id === src.ref);
+  if ((src.kind !== "question" && src.kind !== "variable") || !src.ref || src.count) return null;
+  const q = getQuestionByCodeOrVar(def, src.ref);
   if (!q) return null;
   const kind = answerKind(q);
-  if (kind === "other") return null;
+  if (kind === "other" || kind === "numeric") return null;
   const column = src.columnId ? q.columns?.find((c) => c.id === src.columnId) : undefined;
   const options = (column?.options?.length ? column.options : q.options) as OptionList;
   if (!options?.length) return null;

@@ -4,6 +4,7 @@ import { getQuestionByCodeOrVar } from "./state.js";
 import { pipeTokensIn } from "./pipingTokens.js";
 import { referencedNames } from "./embedded.js";
 import { setExprSources } from "./setExpression.js";
+import { languageName } from "./localization.js";
 
 /**
  * THE DEPENDENCY INDEX — every "reads from" relationship in a survey, typed.
@@ -35,6 +36,20 @@ import { setExprSources } from "./setExpression.js";
  * runtime — `buildLogicFlow` draws routing, `compileFlow` decides it. This is
  * the static "who mentions whom", for inspectors, badges, focus mode and the
  * Flow canvas's dependency overlay.
+ *
+ * ## Beyond the questionnaire: analysis, constructs, translations
+ *
+ * Three more things read a question without ever running during an
+ * interview, and a programmer deleting or retyping Q7 needs them in the same
+ * list as the display rules: the ANALYSIS PLAN (a crosstab of SAT by GENDER
+ * stops being a table when GENDER goes), the research CONSTRUCTS (a
+ * construct measured by one question is unmeasured without it) and the
+ * TRANSLATIONS (German has three strings keyed to Q7's options; recode them
+ * and the keys dangle). They are nodes and edges like everything else — one
+ * node per plan item, per construct and per LANGUAGE — so `usedBy`, `affects`
+ * and the impact report see them without a second walk. They never make a
+ * question read anything (direction is always reader → question), so the
+ * runtime graph the index is checked against is unchanged.
  */
 
 export type ObjectKind =
@@ -46,7 +61,10 @@ export type ObjectKind =
   | "flowNode"
   | "namedExpression"
   | "listFill"
-  | "embedded";
+  | "embedded"
+  | "analysis"          // one plan item: a crosstab, a test, a derived variable, a segment
+  | "construct"         // a research construct, by name
+  | "translation";      // one language version
 
 /** `kind:id` — stable across renames because it is built on ids, not names. */
 export type ObjectKey = `${ObjectKind}:${string}`;
@@ -71,7 +89,10 @@ export type EdgeKind =
   | "listFillGate"
   | "namedExpression"  // a condition using a named expression by id
   | "target"           // the object a rule / list fill acts on reads the rule
-  | "placement";       // a question placed under a conditional container reads that container
+  | "placement"        // a question placed under a conditional container reads that container
+  | "analysis"         // a plan item, or a question's analysis metadata, reads a question
+  | "construct"        // a construct is measured by a question
+  | "translation";     // a language holds translations keyed to a question (or a quota)
 
 export interface DependencyEdge {
   /** the reader — the object whose behaviour changes when `to` changes */
@@ -374,6 +395,14 @@ class Builder {
     for (const [t, f] of [[q.text, "text"], [q.instruction, "instruction"], [q.description, "description"], [q.customHtml, "customHtml"]] as const) {
       this.piping(t, `${base}.${f}`, emit(f === "text" ? "question text" : f));
     }
+
+    // what the question is FOR: the variables it is tabulated against / related to are read by its analysis
+    for (const [key, what] of [["crosstabBy", "tabulated against"], ["relatedTo", "related to"]] as const) {
+      (q.analysis?.[key] ?? []).forEach((name, i) => {
+        const k = this.questionKey(name);
+        if (k) this.edge(me, k, "analysis", `${base}.analysis.${key}[${i}]`, label(`analysis (${what})`));
+      });
+    }
   }
 
   displayRules(): void {
@@ -436,6 +465,97 @@ class Builder {
       });
       if (lf.repeatBlockId) this.edge(objectKey("flowNode", lf.repeatBlockId), me, "target", `${p}.repeatBlockId`, `${code} — repeats this`);
     });
+  }
+
+  /**
+   * THE ANALYSIS PLAN: one node per planned item, reading the questions it
+   * names — by variable, code or id, as the plan is allowed to write them.
+   * A crosstab or test with an unresolvable name gets no edge for it (the
+   * plan review reports those); the node still exists so the plan can be
+   * inspected. Derived variables and segments have no id of their own, so
+   * their names, prefixed, stand in.
+   */
+  analysisPlan(): void {
+    const plan = this.def.research?.analysisPlan;
+    if (!plan) return;
+    const link = (me: ObjectKey, label: string, names: (string | undefined)[], path: (i: number) => string) => {
+      names.forEach((name, i) => {
+        if (!name) return;
+        const k = this.questionKey(name);
+        if (k) this.edge(me, k, "analysis", path(i), `${label} — analysis plan`);
+      });
+    };
+    plan.crosstabs.forEach((x, i) => {
+      const words = `crosstab ${x.rows.join(" + ")} by ${x.columns.join(" + ")}`;
+      const me = this.node("analysis", x.id, `crosstab ${x.id}`, x.reason ?? `${x.rows.join(" + ")} by ${x.columns.join(" + ")}`);
+      const p = `research.analysisPlan.crosstabs[${i}]`;
+      link(me, words, x.rows, (j) => `${p}.rows[${j}]`);
+      link(me, words, x.columns, (j) => `${p}.columns[${j}]`);
+    });
+    plan.tests.forEach((t, i) => {
+      const method = t.method.replace(/_/g, " ").replace(/^t test$/, "t-test");
+      const words = `${method}${t.outcome ? ` on ${t.outcome}` : ""}${t.groupBy ? ` across ${t.groupBy}` : ""}`;
+      // the label says WHAT is tested; the code already says how
+      const me = this.node("analysis", t.id, `${method} ${t.id}`, t.reason ?? ([t.outcome, t.groupBy ? `across ${t.groupBy}` : "", t.variables.join(", ")].filter(Boolean).join(" ") || method));
+      const p = `research.analysisPlan.tests[${i}]`;
+      for (const f of ["outcome", "groupBy", "moderator", "mediator"] as const) link(me, words, [t[f]], () => `${p}.${f}`);
+      link(me, words, t.variables, (j) => `${p}.variables[${j}]`);
+    });
+    plan.derived.forEach((d, i) => {
+      const me = this.node("analysis", `derived:${d.name}`, `derived ${d.name}`, d.reason ?? `${d.name} (${d.kind.replace(/_/g, " ")})`);
+      link(me, `derived variable ${d.name}`, d.from, (j) => `research.analysisPlan.derived[${i}].from[${j}]`);
+    });
+    plan.segments.forEach((s, i) => {
+      const me = this.node("analysis", `segment:${s.name}`, `segment ${s.name}`, s.reason ?? s.name);
+      link(me, `segment “${s.name}”`, s.by, (j) => `research.analysisPlan.segments[${i}].by[${j}]`);
+    });
+  }
+
+  /** The research constructs, each measured by the questions it lists. */
+  constructs(): void {
+    (this.def.research?.constructs ?? []).forEach((c, i) => {
+      const me = this.node("construct", c.name, c.name, `${c.name} (${c.role})`);
+      c.questionIds.forEach((qid, j) => {
+        const k = this.questionKey(qid);
+        if (k) this.edge(me, k, "construct", `research.constructs[${i}].questionIds[${j}]`, `${c.name} (${c.role}) — construct`);
+      });
+    });
+  }
+
+  /**
+   * THE LANGUAGES: one node per language that holds translations, reading
+   * every question (and quota) whose element keys it has entries for. One
+   * edge per (language, object) rather than per key — a "used by" list wants
+   * "German — translation (3 elements)", not three rows — at the path prefix
+   * the keys share. Entries with no text are not translations yet and do not
+   * count; the source language never holds any.
+   */
+  translations(): void {
+    const loc = this.def.localization;
+    if (!loc?.translations) return;
+    const byId = new Map(this.def.questions.map((q) => [q.id, q]));
+    for (const [lang, table] of Object.entries(loc.translations)) {
+      if (lang === loc.sourceLanguage) continue;
+      const counts = new Map<string, number>();
+      for (const [key, entry] of Object.entries(table ?? {})) {
+        if (!entry || entry.status === "not_translated" || !entry.text?.trim()) continue;
+        const m = /^(q|quota):([^:]+):/.exec(key);
+        if (!m) continue;
+        if (m[1] === "q" && !byId.has(m[2])) continue;
+        if (m[1] === "quota" && !this.quotaIds.has(m[2])) continue;
+        const owner = `${m[1]}:${m[2]}`;
+        counts.set(owner, (counts.get(owner) ?? 0) + 1);
+      }
+      if (!counts.size) continue;
+      const cfg = loc.languages.find((l) => l.code === lang);
+      const name = languageName(lang, cfg);
+      const me = this.node("translation", lang, lang, name);
+      for (const [owner, n] of counts) {
+        const [kind, id] = owner.split(":");
+        const to = kind === "q" ? objectKey("question", id) : objectKey("quota", id);
+        this.edge(me, to, "translation", `localization.translations.${lang}.${owner}`, `${name} — translation (${n} element${n === 1 ? "" : "s"})`);
+      }
+    }
   }
 
   /**
@@ -554,6 +674,9 @@ export function buildDependencyIndex(def: SurveyDefinition): DependencyIndex {
   b.quotas();
   b.listFills();
   b.flow();
+  b.analysisPlan();
+  b.constructs();
+  b.translations();
 
   // referenced-but-undeclared targets (a dangling flow id) still get a node so the edge is inspectable
   for (const e of b.edges) {

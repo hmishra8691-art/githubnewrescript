@@ -188,7 +188,8 @@ test("the model is told about every action the engine accepts — and only those
   const documented = [...both.matchAll(/"op":"([a-z_]+)"/g)].map((m) => m[1]);
   assert.deepEqual(documented.filter((o) => ![...SURVEY_ACTION_OPS, ...UX_ACTION_ALIASES].includes(o as never)), [], "no action is advertised that the engine would refuse");
   // the detail of each domain lives in its guide (UX, analysis, translation), sent only with requests about it; the system prompt only names the actions
-  assert.ok(COPILOT_SYSTEM_PROMPT.length < 12_500, `the system prompt stays compact: ${COPILOT_SYSTEM_PROMPT.length}`);
+  // 13_800: the Phase 2 option-level, mask, duplicate, settings, embedded and hypothesis actions are one compact line each
+  assert.ok(COPILOT_SYSTEM_PROMPT.length < 13_800, `the system prompt stays compact: ${COPILOT_SYSTEM_PROMPT.length}`);
 });
 
 test("UX requests: recognised, look-only when they are, and given the UX guide only then", () => {

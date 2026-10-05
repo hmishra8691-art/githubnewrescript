@@ -271,3 +271,127 @@ test("branches and loops: blocks shown only on a condition; questions repeated p
   assert.match(bad.results[0].error ?? "", /must be asked before the loop/);
   assert.match(bad.results[1].error ?? "", /only read questions asked before the branch/);
 });
+
+/* ------------------------------------------------------------ Phase 2: validated before accepted, impact carried, renames follow */
+
+test("validated before it is accepted: a forward reference, a wrong operator (with the corrected action offered), a removed option still compared against — refused with the object named; the rest still apply", () => {
+  const base = applySurveyActions(empty(), generation, { ids }).def;
+  const r = applySurveyActions(base, [
+    { op: "set_display_logic", target: "Q1", expression: "Q5 >= 5" },          // Q5 is asked after Q1
+    { op: "set_display_logic", target: "Q4", expression: "BUY > 1" },           // yes/no compared as a number
+    { op: "update_question", target: "Q2", removeOptions: ["No"] },             // the screen-out skip reads BUY = No
+    { op: "update_question", target: "Q3", required: true },                    // fine
+  ], { ids });
+  assert.equal(r.results.filter((x) => x.ok).length, 1, r.results.map((x) => `${x.ok} ${x.error ?? x.description}`).join("\n"));
+  assert.match(r.results[0].error!, /Q5 is asked after Q1/);
+  assert.equal(r.results[0].issues?.[0].code, "forward_reference");
+  assert.match(r.results[1].error!, /single-select|Yes\/No|one option/i);
+  assert.equal(r.results[1].suggestion?.op, "set_display_logic", "the corrected action travels with the refusal");
+  const fixed = applySurveyActions(base, [r.results[1].suggestion!], { ids });
+  assert.deepEqual(fixed.errors, [], fixed.errors.join("\n"));
+  assert.match(r.results[2].error!, /No.*Q2.*skip|skip.*Q2/s);
+  assert.ok(r.results[2].issues?.some((i) => i.code === "stale_option"), JSON.stringify(r.results[2].issues));
+  assert.equal(byCode(r.def, "Q3").required, true);
+  assert.deepEqual(byCode(r.def, "Q2").options.map((o) => o.label), ["Yes", "No"], "the refused removal left the options alone");
+});
+
+test("renames follow their references: a variable rename rewrites the calculation and the pipe; a code rename rewrites a condition and a pipe written by code", () => {
+  const base = applySurveyActions(empty(), [...generation,
+    { op: "create_question", ref: "WHY", type: "long_text", text: "You use {{PLAT}} — why {{Q3}}?" },
+    { op: "set_display_logic", target: "WHY", expression: "Q3 = Instagram" },
+  ], { ids }).def;
+  const r = applySurveyActions(base, [{ op: "update_question", target: "PLAT", variable: "PLATFORMS", code: "P1" }], { ids });
+  assert.deepEqual(r.errors, [], r.errors.join("\n"));
+  const d = r.def;
+  const plat = d.questions.find((q) => q.variableName === "PLATFORMS")!;
+  assert.equal(plat.code, "P1");
+  assert.equal(d.calculations.find((c) => c.targetVariable === "EXPOSE_ANY")!.expression, "COUNT(PLATFORMS)");
+  const why = d.questions.find((q) => q.variableName === "WHY")!;
+  assert.equal(why.text, "You use {{PLATFORMS}} — why {{PLATFORMS}}?", "the batch wrote {{Q3}} as {{PLAT}} at creation; both follow the rename");
+  assert.equal(JSON.stringify(why.displayLogic).includes(plat.id) || JSON.stringify(why.displayLogic).includes("P1") || JSON.stringify(why.displayLogic).includes("PLATFORMS"), true, JSON.stringify(why.displayLogic));
+  assert.ok(!r.warnings.some((w) => /no longer|dangling|resolves to nothing/i.test(w)), r.warnings.join("\n"));
+});
+
+test("option-level actions go through the same gate; exact selections become the two rules the engine checks; a deletion carries its impact; a move is diffed", () => {
+  const base = applySurveyActions(empty(), generation, { ids }).def;
+  const gate = coerceSurveyActions([
+    { op: "update_option", target: "Q3", option: "None of these", label: "None of the above", anchor: "bottom" },
+    { op: "reorder_options", target: "Q3", sort: "reverse" },
+    { op: "set_validation", target: "Q3", rules: [{ kind: "exact_selections", value: 2 }] },
+    { op: "duplicate_question", target: "Q5" },
+    { op: "nonsense_op" },
+  ]);
+  assert.equal(gate.actions.length, 4);
+  assert.deepEqual(gate.rejected.map((x) => x.reason), ["unknown action “nonsense_op”"]);
+  const sv = gate.actions[2] as Extract<SurveyAction, { op: "set_validation" }>;
+  assert.deepEqual(sv.rules.map((x) => [x.kind, x.value]), [["min_selections", 2], ["max_selections", 2]]);
+  const r = applySurveyActions(base, gate.actions, { ids });
+  assert.deepEqual(r.errors, [], r.errors.join("\n"));
+  const q3 = byCode(r.def, "Q3");
+  assert.deepEqual(q3.options.map((o) => o.label), ["YouTube", "TikTok", "Instagram", "None of the above"], "reversed, the anchored option still last");
+  assert.ok(r.def.questions.some((q) => q.id !== byCode(base, "Q5").id && q.text === byCode(base, "Q5").text), "the duplicate exists");
+  const del = applySurveyActions(base, [{ op: "delete_question", target: "PLAT" }], { ids });
+  assert.ok(del.results[0].impact && del.results[0].impact.count >= 2, JSON.stringify(del.results[0].impact?.summary));
+  assert.match(del.results[0].impact!.summary, /^Impact: \d+ dependent objects/);
+  const moved = applySurveyActions(base, [{ op: "move_question", target: "Q1", after: "Q2" }], { ids });
+  assert.deepEqual(moved.errors, [], moved.errors.join("\n"));
+  const diff = diffSurveys(base, moved.def);
+  assert.deepEqual(diff.questionsMoved.map((m) => m.code), ["Q1"], JSON.stringify(diff.questionsMoved));
+  assert.ok(diff.summary.some((l) => /^Move Q1/.test(l)), diff.summary.join("\n"));
+});
+
+/* ------------------------------------------------------------ mutation-checked edges (Phase 2) */
+
+test("a warning is not a refusal: the action applies, its issues ride on its result and its message reaches the outcome's warnings", () => {
+  const base = applySurveyActions(empty(), generation, { ids }).def;
+  const r = applySurveyActions(base, [{ op: "set_display_logic", target: "Q5", expression: "Q1 > 65 AND Q1 < 18" }], { ids });
+  assert.equal(r.results[0].ok, true, r.results[0].error);
+  assert.deepEqual(r.results[0].issues?.map((i) => [i.level, i.code]), [["warning", "contradiction"]]);
+  assert.ok(r.warnings.includes(r.results[0].issues![0].message), r.warnings.join("\n"));
+  assert.ok(byCode(r.def, "Q5").displayLogic, "applied");
+});
+
+test("impact is attached when something depends on the change, and left off when nothing does", () => {
+  const base = applySurveyActions(empty(), [{ op: "create_question", type: "text", text: "a?" }, { op: "create_question", type: "text", text: "b {{Q1}}" }], { ids }).def;
+  const lone = applySurveyActions(base, [{ op: "update_question", target: "Q2", text: "b, again?" }], { ids });
+  assert.equal(lone.results[0].ok, true);
+  assert.equal("impact" in lone.results[0], false, JSON.stringify(lone.results[0]));
+  const read = applySurveyActions(base, [{ op: "update_question", target: "Q1", text: "a, again?" }], { ids });
+  assert.equal(read.results[0].impact?.count, 1, "Q2 pipes Q1");
+});
+
+test("renaming a code: a variable that was only the code follows it, and so does every reference; a separate variable stays while code-written references follow", () => {
+  const base = applySurveyActions(empty(), [
+    { op: "create_question", type: "text", text: "a?" },
+    { op: "create_question", type: "text", text: "b {{Q1}}" },
+    { op: "create_question", ref: "AGE", type: "numeric", text: "Age?" },
+  ], { ids }).def;
+  assert.deepEqual(base.questions.map((q) => [q.code, q.variableName]), [["Q1", "Q1"], ["Q2", "Q2"], ["Q3", "AGE"]]);
+  const r = applySurveyActions(base, [{ op: "update_question", target: "Q1", code: "INTRO" }], { ids });
+  assert.deepEqual(r.errors, [], r.errors.join("\n"));
+  assert.deepEqual([r.def.questions[0].code, r.def.questions[0].variableName], ["INTRO", "INTRO"]);
+  assert.equal(r.def.questions[1].text, "b {{INTRO}}");
+  const coded = structuredClone(base);
+  coded.questions[1].text = "You are {{Q3}}";
+  const r2 = applySurveyActions(coded, [{ op: "update_question", target: "Q3", code: "A1" }], { ids });
+  assert.deepEqual(r2.errors, [], r2.errors.join("\n"));
+  assert.deepEqual([r2.def.questions[2].code, r2.def.questions[2].variableName], ["A1", "AGE"]);
+  assert.equal(r2.def.questions[1].text, "You are {{A1}}", "a pipe written by code follows the code");
+});
+
+test("the gate: exact selections without a number becomes no rule at all", () => {
+  const c = coerceSurveyActions([{ op: "set_validation", target: "Q3", rules: [{ kind: "exact_selections" }, { kind: "required" }] }]);
+  assert.deepEqual((c.actions[0] as Extract<SurveyAction, { op: "set_validation" }>).rules, [{ kind: "required" }]);
+});
+
+test("diff: a question that changes block without changing rank is a move, named by block and the question before it", () => {
+  const base = applySurveyActions(empty(), generation, { ids }).def;
+  const after = structuredClone(base);
+  const buy = byCode(after, "Q2");
+  const from = listPages(after.flow as unknown[]).find((p) => p.node.questionIds.includes(buy.id))!.node as { questionIds: string[] };
+  from.questionIds = from.questionIds.filter((x) => x !== buy.id);
+  const soc = listBlocks(after.flow as unknown[]).find((b) => b.title === "Social media exposure")!;
+  (soc.pages[0].node as { questionIds: string[] }).questionIds.unshift(buy.id);
+  const diff = diffSurveys(base, SurveyDefinition.parse(after));
+  assert.deepEqual(diff.questionsMoved.map((m) => [m.code, m.from, m.to]), [["Q2", "Screening · after Q1", "Social media exposure · after Q1"]]);
+});

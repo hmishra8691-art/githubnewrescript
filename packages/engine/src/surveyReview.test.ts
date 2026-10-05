@@ -30,8 +30,10 @@ test("review: what is broken is critical, what degrades the data is a warning, w
     { op: "create_question", ref: "PLAT2", type: "multi", text: "Which social platforms do you use?", options: ["Instagram", "TikTok"] },
     { op: "create_question", ref: "INT", type: "rating", text: "How likely are you to buy?", scale: { points: 5 } },
     { op: "create_question", ref: "WHY", type: "long_text", text: "Why?", required: true },
-    { op: "set_display_logic", target: "EXP", expression: "INT answered" },
   ]);
+  // a forward reference is refused by the action layer now (actionValidation); the review must still catch one that got in by hand
+  const exp = def.questions.find((q) => q.code === "Q2")!, int = def.questions.find((q) => q.code === "Q6")!;
+  exp.displayLogic = { type: "rule", source: { kind: "question", ref: int.id }, operator: "answered" } as never;
   const r = reviewSurvey(def);
   const has = (sev: string, re: RegExp) => r.findings.some((f) => f.severity === sev && re.test(f.message));
   // critical

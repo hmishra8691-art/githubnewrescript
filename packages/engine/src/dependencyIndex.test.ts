@@ -226,3 +226,94 @@ test("an edge is recorded once even when the same reference appears twice at one
   const sigs = ix.edges.map((e) => `${e.from}→${e.to}|${e.kind}|${e.path}`);
   assert.equal(new Set(sigs).size, sigs.length, "duplicate edges");
 });
+
+/* ------------------------------------------------------------ analysis, constructs, translations */
+
+const planned = () => {
+  const def = survey();
+  def.research = {
+    hypotheses: ["Spend differs by age"],
+    constructs: [{ name: "Spending", role: "dependent", questionIds: ["q_spend", "q_check"] }, { name: "Age", role: "independent", questionIds: ["q_age"] }],
+    analysis: [], assumptions: [], sources: [],
+    analysisPlan: {
+      crosstabs: [{ id: "xt_1", rows: ["SPEND"], columns: ["AGE"], priority: 1, hypotheses: ["H1"], reason: "Q5 by Q1" }],
+      tests: [{ id: "t_1", method: "t_test", outcome: "SPEND", variables: [], groupBy: "Q1", priority: 1, hypotheses: ["H1"] }],
+      derived: [{ name: "SPEND_T2B", kind: "top_box", from: ["SPEND"] }],
+      segments: [{ name: "By age", by: ["AGE"] }],
+    },
+  } as never;
+  def.questions[4] = { ...def.questions[4], analysis: { role: "dependent", crosstabBy: ["AGE"], relatedTo: [], primary: [], modeling: [], hypotheses: [] } } as never;
+  def.localization = {
+    sourceLanguage: "en", languages: [{ code: "de", status: "draft", enabled: true, format: {} }], audio: [], audioPriority: ["human", "ai", "url"], glossary: [], routing: { order: ["url"], urlParam: "lang", embeddedField: "language", countryMap: {}, rules: [], allowSwitch: true }, mode: "hybrid", cache: true,
+    translations: {
+      de: {
+        "q:q_spend:text": { text: "Ausgaben?", status: "edited", version: 1, history: [] },
+        "q:q_brands:opt:A": { text: "Apfel", status: "approved", version: 1, history: [] },
+        "q:q_brands:opt:B": { text: "Bosch", status: "ai", version: 1, history: [] },
+        "q:q_brands:opt:C": { text: "", status: "not_translated", version: 1, history: [] },
+        "quota:qt1:message": { text: "Danke", status: "edited", version: 1, history: [] },
+        "ui:required": { text: "Pflichtfrage", status: "edited", version: 1, history: [] },
+      },
+    },
+  } as never;
+  return def;
+};
+
+test("analysis plan items are nodes that read the questions they name, by variable or code", () => {
+  const ix = buildDependencyIndex(planned());
+  const xt = objectKey("analysis", "xt_1"), t = objectKey("analysis", "t_1");
+  assert.equal(ix.nodes.get(xt)?.code, "crosstab xt_1");
+  assert.equal(ix.nodes.get(xt)?.label, "Q5 by Q1");
+  const e = edge(ix.edges, xt, Q("q_spend"), "analysis");
+  assert.ok(e, "the crosstab reads SPEND");
+  assert.equal(e.path, "research.analysisPlan.crosstabs[0].rows[0]");
+  assert.equal(e.label, "crosstab SPEND by AGE — analysis plan");
+  assert.ok(edge(ix.edges, xt, Q("q_age"), "analysis"), "and AGE across the top");
+  assert.equal(ix.nodes.get(t)?.code, "t-test t_1");
+  assert.ok(edge(ix.edges, t, Q("q_age"), "analysis"), "groupBy written as a code resolves too");
+  assert.ok(edge(ix.edges, objectKey("analysis", "derived:SPEND_T2B"), Q("q_spend"), "analysis"));
+  assert.ok(edge(ix.edges, objectKey("analysis", "segment:By age"), Q("q_age"), "analysis"));
+  // a question's own analysis metadata reads what it is tabulated against
+  const meta = edge(ix.edges, Q("q_spend"), Q("q_age"), "analysis");
+  assert.ok(meta, "Q5.analysis.crosstabBy names AGE");
+  assert.equal(meta.path, "questions[4].analysis.crosstabBy[0]");
+  // so "what uses Q1?" now includes the plan
+  const users = neighbours(ix, Q("q_age"), "usedBy").map((n) => n.key);
+  assert.ok(users.includes(xt) && users.includes(t) && users.includes(Q("q_spend")), users.join(", "));
+});
+
+test("a construct is a node measured by its questions", () => {
+  const ix = buildDependencyIndex(planned());
+  const c = objectKey("construct", "Spending");
+  assert.equal(ix.nodes.get(c)?.label, "Spending (dependent)");
+  const e = edge(ix.edges, c, Q("q_check"), "construct");
+  assert.ok(e);
+  assert.equal(e.path, "research.constructs[0].questionIds[1]");
+  assert.equal(e.label, "Spending (dependent) — construct");
+  assert.ok(ix.affects(Q("q_spend")).includes(c), "changing Q5 affects the construct it measures");
+});
+
+test("a language is one node per language, reading each translated question once with the element count", () => {
+  const ix = buildDependencyIndex(planned());
+  const de = objectKey("translation", "de");
+  assert.equal(ix.nodes.get(de)?.code, "de");
+  assert.equal(ix.nodes.get(de)?.label, "Deutsch");
+  const brands = ix.edges.filter((e) => e.from === de && e.to === Q("q_brands"));
+  assert.equal(brands.length, 1, "one edge for the question, not one per option");
+  assert.equal(brands[0].label, "Deutsch — translation (2 elements)", "the empty not_translated entry is not counted");
+  assert.equal(brands[0].path, "localization.translations.de.q:q_brands");
+  assert.ok(edge(ix.edges, de, Q("q_spend"), "translation"));
+  assert.ok(edge(ix.edges, de, objectKey("quota", "qt1"), "translation"), "a quota's full message is translated too");
+  assert.ok(!ix.edges.some((e) => e.from === de && e.to.startsWith("question:") && e.to !== Q("q_brands") && e.to !== Q("q_spend")), "ui:* keys read nothing");
+  assert.ok(!ix.nodes.has(objectKey("translation", "en")), "the source language holds no translations");
+});
+
+test("the new kinds never make a question read anything the runtime does not know about", () => {
+  const def = planned();
+  const ix = buildDependencyIndex(def);
+  // every edge INTO a question from the new kinds starts at a non-question node, except analysis metadata
+  for (const e of ix.edges.filter((x) => x.kind === "construct" || x.kind === "translation")) assert.ok(!e.from.startsWith("question:"), e.from);
+  // a plain survey without a plan, constructs or languages has none of the new nodes
+  const plain = buildDependencyIndex(survey());
+  assert.ok(![...plain.nodes.values()].some((n) => n.kind === "analysis" || n.kind === "construct" || n.kind === "translation"));
+});

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { SurveyDefinition, type Condition, type ConditionGroup } from "@rescript/schema";
 import {
-  parseLogicExpression, formatCondition, referenceTree, OPERATOR_SPELLING,
+  parseLogicExpression, formatCondition, referenceTree, OPERATOR_SPELLING, closestName,
 } from "./logicExpression.js";
 import { evaluateCondition } from "./evaluate.js";
 import { createResponseState } from "./state.js";
@@ -489,4 +489,133 @@ test("§22: what is stored is the tree, so a reload reproduces both views", () =
   assert.deepEqual(reloaded, stored);
   assert.equal(fmt(reloaded), fmt(stored));
   assert.equal(fmt(reloaded), "(Q1.brandA OR Q1.brandB) AND Q2.R1.C2");
+});
+
+/* ============================================ Intelligent mode, phase 2: the parser's gates */
+
+test("NOR is an operator: A NOR B is NOT (A OR B), at OR's precedence — stored as that tree, printed as NOT (…), and evaluated as neither", () => {
+  const c = tree("Q1.brandA NOR Q1.brandB") as ConditionGroup;
+  assert.equal(c.op, "not");
+  assert.equal(c.children.length, 1);
+  const or = c.children[0] as ConditionGroup;
+  assert.equal(or.op, "or");
+  assert.deepEqual(or.children.map((k) => (k as any).value), ["brandA", "brandB"]);
+  // the printer keeps writing the stored shape, and the text re-parses to the same tree
+  assert.equal(fmt(c), "NOT (Q1.brandA OR Q1.brandB)");
+  assert.deepEqual(tree(fmt(c)), c);
+  assert.deepEqual(tree("Q1.brandA nor Q1.brandB"), c, "case does not matter");
+  // neither selected: true; either selected: false
+  assert.equal(run("Q1.brandA NOR Q1.brandB", { q_brand: ["brandC"] }), true);
+  assert.equal(run("Q1.brandA NOR Q1.brandB", { q_brand: ["brandA"] }), false);
+  assert.equal(run("Q1.brandA NOR Q1.brandB", { q_brand: ["brandB", "brandC"] }), false);
+  // AND binds tighter, as with OR; a chain is "none of these"
+  const mixed = tree("Q3 > 25 AND Q1.brandA NOR Q1.brandB") as ConditionGroup;
+  assert.equal(mixed.op, "not");
+  assert.deepEqual((mixed.children[0] as ConditionGroup).children.map((k) => k.type === "group" ? k.op : "rule"), ["and", "rule"]);
+  const chain = tree("Q1.brandA NOR Q1.brandB NOR Q1.brandC") as ConditionGroup;
+  assert.equal((chain.children[0] as ConditionGroup).children.length, 3);
+  assert.equal(run("Q1.brandA NOR Q1.brandB NOR Q1.brandC", { q_brand: [] }), true);
+  assert.equal(run("Q1.brandA NOR Q1.brandB NOR Q1.brandC", { q_brand: ["brandC"] }), false);
+  // the usual guards
+  assert.match(parse("NOR Q1.brandA").errors[0].message, /cannot start with NOR/);
+  assert.match(parse("Q1.brandA NOR").errors[0].message, /ends with NOR/);
+});
+
+test("a bare right-hand word that names nothing is refused — with the nearest real name and a corrected expression", () => {
+  // a mistyped calculation on the right of a numeric comparison
+  const r = parse("Q3 > SCOER");
+  assert.equal(r.condition, undefined);
+  assert.equal(r.errors[0].message, "“SCOER” is not a question, variable or option of Q3 in this survey — did you mean SCORE?");
+  assert.equal(r.errors[0].suggestion, "Q3 > SCORE");
+  assert.equal(r.errors[0].position, 5);
+  // a code that is not a question but is one edit from one — it used to be stored as the literal text "Q22", a comparison that was false forever
+  const q22 = parse("Q3 > Q22");
+  assert.equal(q22.condition, undefined);
+  assert.equal(q22.errors[0].message, "“Q22” is not a question, variable or option of Q3 in this survey — did you mean Q2?");
+  assert.equal(q22.errors[0].suggestion, "Q3 > Q2");
+  // a short word is only matched one edit away: "Q99" is two from every code here, so nothing is guessed — and against a
+  // numeric question the default keeps the old literal reading (strict refuses it; the action layer checks the stored rule)
+  assert.equal((tree("Q3 > Q99") as any).value, "Q99");
+  assert.match(parseLogicExpression(def(), "Q3 > Q99", { strict: true }).errors[0].message, /Q3 is numeric — compare it with a number, not “Q99”/);
+  // a near-miss of an option's label on a choice question — the label, quoted when it needs to be
+  const brand = parse("Q1 = brandD");
+  assert.equal(brand.errors[0].message, "“brandD” is not a question, variable or option of Q1 in this survey — did you mean Brand A?");
+  assert.equal(brand.errors[0].suggestion, 'Q1 = "Brand A"');
+  // what still works: a real question on the right, a reserved word, an option by label (canonicalised), a quoted literal
+  assert.deepEqual((tree("Q3 > SCORE") as any).value, "SCORE", "a calculation's name stays what it was");
+  assert.deepEqual((tree("Q3 = Q3") as any).value, { $question: "Q3" });
+  assert.equal((tree("Q2.R1 = Good") as any).value, 3, "an option label is read as its code");
+  assert.equal((tree("Q3 > TRUE") as any).value, "TRUE");
+  assert.equal((tree('Q3 = "Q99"') as any).value, "Q99", "quotes mean literally this text");
+  // a word that is none of a choice question's options, on an operator that takes a code: canonicalisation's message, with the options
+  assert.match(parse("Q1 contains zzz").errors[0].message, /Q1 has no option “zzz” — conditions compare option CODES/);
+  // …and on an operator that does not take one, said here
+  assert.match(parse("Q1 starts with zzz").errors[0].message, /^“zzz” is not a question, variable or option of Q1 in this survey \(its options are brandA = Brand A/);
+  // a composite cell is not a typed source: its bare word stays a literal
+  assert.equal((tree("Q4.R1.spend = abc") as any).value, "abc");
+});
+
+test("strict: a non-number compared with a numeric question or a COUNT is refused; off, it stays the literal it always was", () => {
+  const strict = (s: string) => parseLogicExpression(def(), s, { strict: true });
+  assert.equal(strict('Q3 = "abc"').errors[0].message, "Q3 is numeric — compare it with a number, not “abc”");
+  assert.equal(strict("Q3 > abc").errors[0].message, "Q3 is numeric — compare it with a number, not “abc”");
+  assert.equal(strict("Q3 between 18 and old").errors[0].message, "Q3 is numeric — compare it with a number, not “old”");
+  assert.equal(strict("COUNT(Q1) >= many").errors[0].message, "the count is numeric — compare it with a number, not “many”");
+  assert.equal(strict("Q3 in [18, twenty]").errors[0].message, "Q3 is numeric — compare it with a number, not “twenty”");
+  // numbers in any spelling pass, and a reference does
+  assert.deepEqual(strict('Q3 = "18"').errors, []);
+  assert.deepEqual(strict("Q3 > SCORE").errors, []);
+  assert.deepEqual(strict("Q3 > Q3").errors, []);
+  // the default keeps the old reading (the action layer checks the stored rule afterwards)
+  assert.equal((tree('Q3 = "abc"') as any).value, "abc");
+  assert.equal((tree("Q3 > abc") as any).value, "abc");
+});
+
+test("a bare ISO date is one literal: WHEN before 2020-01-01 parses, prints quoted, and re-parses to the same tree", () => {
+  const d = SurveyDefinition.parse({
+    meta: { id: "dt", code: "DT", title: "Dates", version: "1.0" },
+    questions: [{ id: "q_when", code: "Q1", variableName: "WHEN", type: "date", text: "When?" }, { id: "q_n", code: "Q2", variableName: "N", type: "numeric", text: "N" }],
+  });
+  const r = parseLogicExpression(d, "Q1 before 2020-01-01");
+  assert.deepEqual(r.errors, []);
+  assert.deepEqual(r.condition, { type: "rule", source: { kind: "question", ref: "q_when" }, operator: "dateBefore", value: "2020-01-01" });
+  const printed = formatCondition(d, r.condition);
+  assert.equal(printed, 'Q1 before "2020-01-01"');
+  assert.deepEqual(parseLogicExpression(d, printed).condition, r.condition);
+  const stamp = parseLogicExpression(d, "Q1 after 2020-01-01T10:30:00Z");
+  assert.deepEqual(stamp.errors, []);
+  assert.equal((stamp.condition as any).value, "2020-01-01T10:30:00Z");
+  const range = parseLogicExpression(d, "Q1 between dates 2020-01-01 and 2020-12-31");
+  assert.deepEqual(range.errors, []);
+  assert.deepEqual([(range.condition as any).value, (range.condition as any).value2], ["2020-01-01", "2020-12-31"]);
+  // a plain number is still a number, and a date followed by a word is not a date
+  assert.equal((parseLogicExpression(d, "Q2 > 2020").condition as any).value, 2020);
+  assert.match(parseLogicExpression(d, "Q1 before 2020-01-01x").errors[0].message, /Unexpected/);
+});
+
+/* ------------------------------------------------------------ mutation-checked edges (Phase 2) */
+
+test("closestName: two edits for a long word, one for a word of four letters or fewer — never three", () => {
+  assert.equal(closestName("abcdef", ["abcdxy"]), "abcdxy", "two edits from a six-letter word");
+  assert.equal(closestName("abcdef", ["abcxyz"]), null, "three is too many");
+  assert.equal(closestName("abcd", ["abce"]), "abce", "one edit from a four-letter word");
+  assert.equal(closestName("abcd", ["abxy"]), null, "two is too many at four letters");
+  assert.equal(closestName("abcde", ["abcxy"]), "abcxy", "two edits from five letters");
+});
+
+test("strict: a word that cannot be a name, and a blank string, are not numbers either", () => {
+  const strict = (s: string) => parseLogicExpression(def(), s, { strict: true });
+  assert.equal(strict("Q3 = 1a").errors[0]?.message, "Q3 is numeric — compare it with a number, not “1a”");
+  assert.equal(strict('Q3 = " "').errors[0]?.message, "Q3 is numeric — compare it with a number, not “ ”");
+  assert.equal((tree("Q3 = 1a") as any).value, "1a", "off, the old literal reading");
+});
+
+test("a bare ISO date is a string literal inside a function too; date-shaped digits followed by more are not a date", () => {
+  const d = SurveyDefinition.parse({
+    meta: { id: "dt", code: "DT", title: "Dates", version: "1.0" },
+    questions: [{ id: "q_when", code: "Q1", variableName: "WHEN", type: "date", text: "When?" }, { id: "q_n", code: "Q2", variableName: "N", type: "numeric", text: "N" }],
+  });
+  assert.equal((parseLogicExpression(d, "MAX(Q2, 2020-01-01) > 5").condition as any).source.ref, 'MAX ( N , "2020-01-01" )');
+  assert.equal((parseLogicExpression(d, "Q2 + 2020-01-01-3 > 5").condition as any).source.ref, "N + 2020 - 01 - 01 - 3", "arithmetic, not a date");
+  assert.deepEqual(parseLogicExpression(d, "Q1 before 2020-01-01x").errors, [{ message: "Unexpected “-” — is an AND or OR missing?", position: 14 }]);
 });

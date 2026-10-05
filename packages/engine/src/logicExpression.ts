@@ -8,7 +8,7 @@ import { stripHtmlText } from "./html.js";
 import { isQuestionValueRef } from "@rescript/schema";
 import { CALC_FUNCTION_NAMES } from "./calc.js";
 import { embeddedCatalog } from "./embedded.js";
-import { canonicalizeCondition, normalizeOptionText } from "./optionCodes.js";
+import { CODE_OPERATORS, answerKind, canonicalizeCondition, describeOptions, normalizeOptionText, resolveOptionValue, type OptionList } from "./optionCodes.js";
 import { stripVacuous } from "./conditionWalk.js";
 import { gridAxes } from "./gridAxes.js";
 
@@ -105,6 +105,18 @@ function tokenize(src: string): { tokens: Tok[]; error?: ExpressionError } {
       continue;
     }
 
+    /*
+     * A bare ISO date — `2020-01-01`, `2020-01-01T10:30` — is one literal. Read
+     * as a number it was `2020` followed by `-01` and `-01`, and the parser
+     * refused the second token; the date operators (`before 2020-01-01`) could
+     * only be written with the date in quotes.
+     */
+    const date = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z?)?(?![A-Za-z0-9_.-])/.exec(src.slice(i));
+    if (date) {
+      tokens.push({ kind: "string", text: date[0], pos: i });
+      i += date[0].length;
+      continue;
+    }
     // a number, or an identifier — dots belong to references so they are part
     // of the identifier, and a leading digit is a number unless a dot follows
     const num = /^-?\d+(\.\d+)?(?![A-Za-z0-9_.])/.exec(src.slice(i));
@@ -204,6 +216,8 @@ export interface ExpressionError {
   message: string;
   /** character offset in the source, when known */
   position?: number;
+  /** the corrected expression text, when the error has a "did you mean" */
+  suggestion?: string;
 }
 
 export interface ParseResult {
@@ -302,7 +316,45 @@ const RESERVED_OPERAND_WORDS = new Set([
 const ARITHMETIC = new Set(["+", "-", "*", "/", "%"]);
 
 /** Words that end an arithmetic run — they belong to the condition, not to it. */
-const CALC_STOP_WORDS = new Set(["and", "or", "not", "then", "else"]);
+const CALC_STOP_WORDS = new Set(["and", "or", "nor", "not", "then", "else"]);
+
+/** A bare right-hand word that could be a question code or variable name — the shape a typo of one has. */
+const CODE_LIKE = /^[A-Za-z_][A-Za-z0-9_.]*$/;
+
+/** text that reads as a number — what a numeric question is compared with */
+const numericText = (s: string): boolean => s.trim() !== "" && Number.isFinite(Number(s.trim()));
+
+/** Levenshtein distance, for "did you mean" — small inputs, so the plain table is fine. */
+export function editDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length || !b.length) return Math.max(a.length, b.length);
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+/**
+ * The closest of `candidates` to `word` (case-insensitive) within two edits —
+ * one edit for a word of four letters or fewer, where two edits reach half
+ * the dictionary (`abc` is two from `TAB`) — or null. Ties go to the first
+ * listed.
+ */
+export function closestName(word: string, candidates: string[]): string | null {
+  const w = word.toLowerCase();
+  const limit = w.length <= 4 ? 1 : 2;
+  let best: { name: string; d: number } | null = null;
+  for (const c of candidates) {
+    const d = editDistance(w, c.toLowerCase());
+    if (d <= limit && (!best || d < best.d)) best = { name: c, d };
+  }
+  return best?.name ?? null;
+}
 
 /* ================================================================ parsing */
 
@@ -313,7 +365,14 @@ const CALC_STOP_WORDS = new Set(["and", "or", "not", "then", "else"]);
 export function parseLogicExpression(
   def: SurveyDefinition,
   src: string,
-  opts: { perOption?: boolean } = {},
+  /**
+   * `strict`: a non-number compared with a numeric question (or a COUNT) is
+   * an error — `Q8 = "abc"`, `Q8 > abc`. Off by default, because a quoted
+   * string has always meant "literally this text" and the expression editor's
+   * callers rely on that; the copilot's action layer, whose conditions come
+   * from a model, turns it on.
+   */
+  opts: { perOption?: boolean; strict?: boolean } = {},
 ): ParseResult {
   const errors: ExpressionError[] = [];
   const warnings: ExpressionError[] = [];
@@ -338,10 +397,21 @@ export function parseLogicExpression(
 
   // the explicit annotation is what lets TypeScript treat a call to this as
   // unreachable-after, so the code below needs no redundant null checks
-  const fail: (message: string, pos?: number) => never = (message, pos) => {
-    const e: ExpressionError = { message, position: pos ?? peek()?.pos };
+  const fail: (message: string, pos?: number, suggestion?: string) => never = (message, pos, suggestion) => {
+    const e: ExpressionError = { message, position: pos ?? peek()?.pos, ...(suggestion ? { suggestion } : {}) };
     throw e;
   };
+
+  /** every name a bare word could legitimately be, besides a question: a calculation, an embedded field, a named expression, a loop variable */
+  const namedVariable = (head: string): boolean =>
+    (def.calculations ?? []).some((c) => c.targetVariable === head)
+    || embeddedCatalog(def).some((e) => e.name === head)
+    || !!findNamedExpression(def, head)
+    || loopVarsIn(def.flow).includes(head);
+
+  /** the options a left-hand question's value is compared against: its own, a grid's scale, a composite's column options */
+  const optionsOf = (q: Question): OptionList =>
+    (q.options?.length ? q.options : q.columns?.flatMap((c) => c.options ?? []) ?? []) as OptionList;
 
   /* ----------------------------------------------------------- functions */
 
@@ -648,14 +718,77 @@ export function parseLogicExpression(
     return null;
   };
 
-  const readOperand = (): unknown => {
+  /**
+   * WHAT THE RIGHT-HAND SIDE IS COMPARED WITH — the left-hand question (or a
+   * COUNT, which is a number) and the operator, so a literal can be checked
+   * against what it will be compared to before it is stored.
+   */
+  interface Lhs { question?: Question; numeric: boolean; operator?: ComparisonOperator }
+  const lhsFor = (source: DraftSource, question: Question | undefined, operator?: ComparisonOperator): Lhs => ({
+    question,
+    numeric: !!source.count || (question ? answerKind(question) === "numeric" : false),
+    operator,
+  });
+
+  /**
+   * A BARE WORD ON THE RIGHT THAT NAMES NOTHING.
+   *
+   * `Q9 > Q99` used to parse as `Q9 > "Q99"` — a comparison with the four
+   * characters, false forever, stored without a word of complaint — and
+   * `Q8 = "abc"` on a numeric question the same. A word shaped like a code
+   * that resolves to no question, variable, calculation, embedded field or
+   * option of the left-hand question is refused, with the nearest real name
+   * when there is one; under `strict`, a non-number against a numeric
+   * question is refused as such. Only a TYPED left side is checked at all — a
+   * choice, list, ranking, numeric question or a COUNT: `CITY = Paris` on a
+   * text question stays the literal it has always been, and a word that
+   * canonicalisation will turn into an option code (`Q4 = Male`) passes
+   * through to it unchanged.
+   */
+  const checkBareWord = (t: Tok, lhs: Lhs | undefined): void => {
+    if (!lhs || (!lhs.question && !lhs.numeric)) return;
+    const word = t.text;
+    const q = lhs.question;
+    const kind = q ? answerKind(q) : "numeric";
+    if (kind === "other") return;
+    const lhsName = q ? String(q.code) : "the count";
+    const reject = (message: string, suggestion?: string): never => fail(message, t.pos, suggestion);
+    const replaceWith = (name: string): string => `${src.slice(0, t.pos)}${IDENT_SAFE.test(name) ? name : `"${name}"`}${src.slice(t.pos + word.length)}`;
+    if (!CODE_LIKE.test(word)) {
+      if (opts.strict && lhs.numeric && !numericText(word)) reject(`${lhsName} is numeric — compare it with a number, not “${word}”`);
+      return;
+    }
+    const head = word.split(".")[0];
+    if (namedVariable(head)) return;
+    const options = q ? optionsOf(q) : [];
+    if (q && (resolveOptionValue(options, word).kind === "code" || resolveRowOrOption(q, word))) return;
+    // the nearest real name: another question's code or variable, a calculation, an embedded field — then an option's label
+    // (not the left-hand question's own names: `Q1 = Q1` is never what was meant)
+    const names = [...def.questions.filter((x) => x !== q).flatMap((x) => [String(x.code), x.variableName]), ...(def.calculations ?? []).map((c) => c.targetVariable), ...embeddedCatalog(def).map((e) => e.name)];
+    const near = closestName(word, names) ?? (q ? closestName(word, options.map((o) => String(o.label).replace(/<[^>]*>/g, "").trim()).filter(Boolean)) : null);
+    if (near) reject(`“${word}” is not a question, variable or option of ${lhsName} in this survey — did you mean ${near}?`, replaceWith(near));
+    if (lhs.numeric) {
+      if (opts.strict) reject(`${lhsName} is numeric — compare it with a number, not “${word}”`);
+      return;
+    }
+    /*
+     * A choice question compared with a word that is none of its options: on
+     * an operator that takes an option code, canonicalisation says so and
+     * lists the options (the message the Studio has always shown); on any
+     * other operator nothing downstream would, so it is said here.
+     */
+    if (lhs.operator && CODE_OPERATORS.has(lhs.operator)) return;
+    reject(`“${word}” is not a question, variable or option of ${lhsName} in this survey${options.length ? ` (its options are ${describeOptions(options)})` : ""}`);
+  };
+
+  const readOperand = (lhs?: Lhs): unknown => {
     const t = peek();
     if (!t) fail("Expected a value");
     if (t!.kind === "punct" && t!.text === "[") {
       at += 1;
       const list: unknown[] = [];
       while (peek() && !(peek()!.kind === "punct" && peek()!.text === "]")) {
-        list.push(readOperand());
+        list.push(readOperand(lhs));
         if (peek()?.kind === "punct" && peek()!.text === ",") at += 1;
       }
       if (!peek()) fail("Missing closing bracket ]");
@@ -664,6 +797,11 @@ export function parseLogicExpression(
     }
     at += 1;
     if (t!.kind === "number") return Number(t!.text);
+    if (t!.kind === "string") {
+      // strict: a quoted non-number against a numeric question (or a COUNT) is refused before it is stored
+      if (opts.strict && lhs?.numeric && t!.text !== "" && !numericText(t!.text)) fail(`${lhs.question ? String(lhs.question.code) : "The count"} is numeric — compare it with a number, not “${t!.text}”`, t!.pos);
+      return t!.text;
+    }
     /*
      * A BARE WORD THAT NAMES A QUESTION IS A REFERENCE, NOT A LITERAL.
      *
@@ -710,6 +848,7 @@ export function parseLogicExpression(
         }
         return ref;
       }
+      if (!RESERVED_OPERAND_WORDS.has(t!.text.toLowerCase())) checkBareWord(t!, lhs);
     }
     return t!.text;
   };
@@ -763,17 +902,19 @@ export function parseLogicExpression(
       if (NO_OPERAND.includes(operator!)) {
         return { type: "rule", source: strip(source), operator: operator! };
       }
+      // a COUNT is a number, so its operand is checked as one; a calc expression's value is whatever the function returns
+      const lhs = isCount ? lhsFor(source, undefined, operator!) : undefined;
       if (TWO_OPERANDS.includes(operator!)) {
-        const value = readOperand();
+        const value = readOperand(lhs);
         if (isWord(peek(), "and")) at += 1;
         else if (peek()?.kind === "punct" && peek()!.text === ",") at += 1;
-        return { type: "rule", source: strip(source), operator: operator!, value, value2: readOperand() };
+        return { type: "rule", source: strip(source), operator: operator!, value, value2: readOperand(lhs) };
       }
       if (LIST_OPERAND.includes(operator!)) {
-        const value = readOperand();
+        const value = readOperand(lhs);
         return { type: "rule", source: strip(source), operator: operator!, value: Array.isArray(value) ? value : [value] };
       }
-      return { type: "rule", source: strip(source), operator: operator!, value: readOperand() };
+      return { type: "rule", source: strip(source), operator: operator!, value: readOperand(lhs) };
     }
 
     if (t!.kind === "punct" && t!.text === "(") {
@@ -799,7 +940,7 @@ export function parseLogicExpression(
       return group;
     }
     if (t!.kind === "punct") fail(`Unexpected “${t!.text}”`, t!.pos);
-    if (isWord(t, "and") || isWord(t, "or")) {
+    if (isWord(t, "and") || isWord(t, "or") || isWord(t, "nor")) {
       fail(`An expression cannot start with ${t!.text.toUpperCase()}`, t!.pos);
     }
 
@@ -831,29 +972,37 @@ export function parseLogicExpression(
       }
       if (operator === "selected" || operator === "notSelected") {
         const p = peek();
-        const endsHere = !p || (p.kind === "punct" && [")", ",", "]"].includes(p.text)) || isWord(p, "and") || isWord(p, "or") || isWord(p, "then");
+        const endsHere = !p || (p.kind === "punct" && [")", ",", "]"].includes(p.text)) || isWord(p, "and") || isWord(p, "or") || isWord(p, "nor") || isWord(p, "then");
         if (endsHere) return { type: "rule", source: strip(source), operator, value: source.optionCode };
       }
     }
     if (NO_OPERAND.includes(operator)) {
       return { type: "rule", source: strip(source), operator };
     }
+    /*
+     * The operand is read knowing what it is compared with. A cell of a grid
+     * (`Q2.R1`) or an option amount (`Q8.O1`) is one answer of the question,
+     * so the question's own kind is the right one; a `Q1.brandA`-style
+     * reference has already been handled above.
+     */
+    const lhs = lhsFor(source, source.kind === "question" && !source.optionCode ? question : undefined, operator);
     if (LIST_OPERAND.includes(operator)) {
-      const value = readOperand();
+      const value = readOperand(lhs);
       return { type: "rule", source: strip(source), operator, value: Array.isArray(value) ? value : [value] };
     }
     if (TWO_OPERANDS.includes(operator)) {
-      const value = readOperand();
+      /* ranking operators compare a code (value) and a rank (value2): only the code is checked against the options */
+      const value = readOperand(lhs);
       if (isWord(peek(), "and")) at += 1;
       else if (peek()?.kind === "punct" && peek()!.text === ",") at += 1;
-      const value2 = readOperand();
+      const value2 = readOperand(operator.startsWith("rank") ? undefined : lhs);
       return { type: "rule", source: strip(source), operator, value, value2 };
     }
     if (!peek() || (peek()!.kind === "punct" && [")", ",", "]"].includes(peek()!.text))
-      || isWord(peek(), "and") || isWord(peek(), "or")) {
+      || isWord(peek(), "and") || isWord(peek(), "or") || isWord(peek(), "nor")) {
       fail(`${OPERATOR_SPELLING(operator)} needs a value`, tokens[opStart]?.pos);
     }
-    return { type: "rule", source: strip(source), operator, value: readOperand() };
+    return { type: "rule", source: strip(source), operator, value: readOperand(lhs) };
   };
 
   const parseNot = (): Condition => {
@@ -885,11 +1034,21 @@ export function parseLogicExpression(
     return parts.length === 1 ? parts[0] : { type: "group", op: "and", children: parts };
   };
 
+  /*
+   * `A NOR B` — "neither": NOT (A OR B), at OR's own precedence. It is stored
+   * as exactly that tree, so the evaluator, the printer (which writes it back
+   * as `NOT (A OR B)`) and the visual builder all see a shape they already
+   * know. A chain — `A NOR B NOR C`, or an OR and a NOR mixed — is "none of
+   * these": the whole disjunction negated once.
+   */
   const parseOr = (): Condition => {
     const parts = [parseAnd()];
-    while (isWord(peek(), "or")) {
+    let negated = false;
+    while (isWord(peek(), "or") || isWord(peek(), "nor")) {
+      const word = peek()!.text.toUpperCase();
+      if (word === "NOR") negated = true;
       at += 1;
-      if (!peek()) fail("Expression ends with OR — expected another condition");
+      if (!peek()) fail(`Expression ends with ${word} — expected another condition`);
       parts.push(parseAnd());
     }
     if (parts.length === 1) return parts[0];
@@ -909,7 +1068,8 @@ export function parseLogicExpression(
         message: "AND and OR are mixed without parentheses — AND binds tighter. Add brackets to be explicit.",
       });
     }
-    return { type: "group", op: "or", children: parts };
+    const or: Condition = { type: "group", op: "or", children: parts };
+    return negated ? { type: "group", op: "not", children: [or] } : or;
   };
 
   try {

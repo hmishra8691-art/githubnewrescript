@@ -22,6 +22,11 @@ import { parsePunchExpression, formatPunchExpression } from "./autoPunch.js";
 import { authoringQuestionView } from "./carryforward.js";
 import { resolveOptionValue, describeOptions, type OptionList } from "./optionCodes.js";
 import { diffUx, type UxDiff } from "./ux.js";
+import { applyOptionAction, coerceOptionAction, describeOptionAction, isOptionOp, OPTION_ACTION_OPS, type OptionAction } from "./optionActions.js";
+import { validateActionOutcome, type ActionIssue } from "./actionValidation.js";
+import { impactOfAction, type ImpactReport } from "./impact.js";
+import { applyRename } from "./variableUsage.js";
+import { parseSetExpression } from "./setExpression.js";
 import { withoutPresentation, diffTheme } from "./theme.js";
 
 /**
@@ -103,7 +108,9 @@ export type SurveyAction =
   | AnalysisAction
   /* languages, translations, glossary and language routing — see localizationActions.ts; they write def.localization and nothing else */
   | LocalizationAction
-  | QuotaAction;
+  | QuotaAction
+  /* options one at a time, masks, duplication, survey settings, embedded fields, hypotheses, custom code — see optionActions.ts */
+  | OptionAction;
 
 export const SURVEY_ACTION_OPS = [
   "create_block", "rename_block", "delete_block", "create_question", "update_question", "delete_question", "move_question",
@@ -112,6 +119,7 @@ export const SURVEY_ACTION_OPS = [
   ...UX_ACTION_OPS,
   ...ANALYSIS_ACTION_OPS,
   ...LOCALIZATION_ACTION_OPS, ...QUOTA_ACTION_OPS,
+  ...OPTION_ACTION_OPS,
 ] as const;
 
 /** Friendly question types → the Studio variant that makes them. */
@@ -142,7 +150,9 @@ export function variantForActionType(type: string): string | null {
   return variantRegistry.get(type.trim()) ? type.trim() : null;
 }
 
-const VALIDATION_KINDS = new Set(["required", "min_value", "max_value", "min_length", "max_length", "min_selections", "max_selections", "sum_equals", "sum_max", "sum_min", "pattern", "email", "phone", "url", "zip", "date_min", "date_max", "integer", "condition"]);
+/** "exactly N selections" is said as one rule and stored as the two the engine checks */
+const EXACT_SELECTIONS = "exact_selections";
+const VALIDATION_KINDS = new Set([EXACT_SELECTIONS, "required", "min_value", "max_value", "min_length", "max_length", "min_selections", "max_selections", "sum_equals", "sum_max", "sum_min", "pattern", "email", "phone", "url", "zip", "date_min", "date_max", "integer", "condition"]);
 
 /* ------------------------------------------------------------ the gate */
 
@@ -172,17 +182,19 @@ const scale = (v: unknown): ScaleSpec | undefined => {
 };
 const validations = (v: unknown): ValidationSpec[] | undefined => {
   if (!Array.isArray(v)) return undefined;
-  return v.map((r) => {
-    if (!r || typeof r !== "object") return null;
+  return v.flatMap((r) => {
+    if (!r || typeof r !== "object") return [];
     const o = r as Record<string, unknown>;
     const kind = str(o.kind) ?? (o.check !== undefined || o.condition !== undefined ? "condition" : undefined);
-    if (!kind || !VALIDATION_KINDS.has(kind)) return null;
+    if (!kind || !VALIDATION_KINDS.has(kind)) return [];
     const value = strOrNum(o.value);
     const when = condIn(o.when);
     const check = condIn(o.check ?? o.condition);
-    if (kind === "condition" && !check) return null;
-    return { kind, ...(value !== undefined ? { value } : {}), ...(when ? { when } : {}), ...(check ? { check } : {}), ...(str(o.message) ? { message: str(o.message)!.slice(0, 300) } : {}) };
-  }).filter((x): x is ValidationSpec => !!x);
+    if (kind === "condition" && !check) return [];
+    const rest = { ...(when ? { when } : {}), ...(check ? { check } : {}), ...(str(o.message) ? { message: str(o.message)!.slice(0, 300) } : {}) };
+    if (kind === EXACT_SELECTIONS) return value === undefined ? [] : [{ kind: "min_selections", value, ...rest }, { kind: "max_selections", value, ...rest }];
+    return [{ kind, ...(value !== undefined ? { value } : {}), ...rest }];
+  });
 };
 
 export interface CoercedActions { actions: SurveyAction[]; rejected: { index: number; reason: string }[] }
@@ -296,6 +308,8 @@ function coerceOne(item: unknown): SurveyAction | string {
       if (lc !== null) return lc;
       const qa = op ? coerceQuotaAction(op, o) : null;
       if (qa !== null) return qa;
+      const oa = op ? coerceOptionAction(op, o) : null;
+      if (oa !== null) return oa;
       return op ? `unknown action “${op}”` : "an action needs an op";
     }
   }
@@ -314,6 +328,12 @@ export interface ActionResult {
   destructive?: string;
   /** the question / block ids it touched */
   touched: string[];
+  /** what the pre-apply validation found: errors refused the action (then `ok` is false), warnings travel with it */
+  issues?: ActionIssue[];
+  /** a corrected action the Studio can offer as "Apply suggested fix" when the validation refused this one */
+  suggestion?: SurveyAction;
+  /** what else this action touches — dependents by kind, for the review (only for actions that remove, recode, retype, move or rename) */
+  impact?: ImpactReport;
 }
 export interface ApplyActionsOutcome {
   /** the survey after every action that could be applied (the input is never mutated) */
@@ -362,7 +382,24 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
     }
     try {
       const r = apply(ctx, a);
-      results.push({ index, op: a.op, ok: true, description: r.description, touched: r.touched ?? [], ...(r.destructive ? { destructive: r.destructive } : {}) });
+      /*
+       * VALIDATED BEFORE IT IS ACCEPTED, not linted afterwards: a forward
+       * reference, an operator the source cannot answer, a comparison with an
+       * option that no longer exists, a cycle, a validation rule that does not
+       * fit the type — each is refused here with the object named and, where
+       * one is obvious, the corrected action to offer instead. The quality
+       * check below still reports what a batch newly broke; it is no longer
+       * the only line of defence.
+       */
+      const issues = validateActionOutcome(snapshot, ctx.def, a, r.touched ?? []);
+      const blocking = issues.filter((i) => i.level === "error");
+      if (blocking.length) {
+        def = snapshot; ctx.def = def;
+        results.push({ index, op: a.op, ok: false, description: describeAction(a), error: blocking.map((i) => i.message).join(" "), touched: [], issues, ...(blocking.find((i) => i.suggestion)?.suggestion ? { suggestion: blocking.find((i) => i.suggestion)!.suggestion } : {}) });
+        return;
+      }
+      const impact = IMPACT_OPS.has(a.op) ? impactOfAction(snapshot, ctx.def, a, r.touched ?? []) : undefined;
+      results.push({ index, op: a.op, ok: true, description: r.description, touched: r.touched ?? [], ...(r.destructive ? { destructive: r.destructive } : {}), ...(issues.length ? { issues } : {}), ...(impact && impact.count ? { impact } : {}) });
     } catch (e) {
       def = snapshot; ctx.def = def;
       results.push({ index, op: a.op, ok: false, description: describeAction(a), error: (e as Error).message, touched: [] });
@@ -390,11 +427,14 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
   const uxOnly = applied.length > 0 && applied.every((r) => isUxOp(r.op));
   const beforeIssues = new Set(runQualityCheck(before).areas.flatMap((x) => x.issues).filter((i) => i.level === "error").map((i) => i.message));
   const warnings = runQualityCheck(after).areas.flatMap((x) => x.issues).filter((i) => i.level === "error" && !beforeIssues.has(i.message)).map((i) => `${i.questionCode ? `${i.questionCode}: ` : ""}${i.message}`);
-  return { def: after, results, errors, warnings: [...new Set([...warnings, ...ctx.uxWarnings])].slice(0, 40), destructive: results.filter((r) => r.ok && r.destructive).map((r) => r.destructive!), refs: Object.fromEntries([...ctx.refs, ...ctx.uxRefs]), valid: true, uxOnly, structureUnchanged };
+  const validationWarnings = results.flatMap((r) => (r.issues ?? []).filter((i) => i.level === "warning").map((i) => i.message));
+  return { def: after, results, errors, warnings: [...new Set([...warnings, ...validationWarnings, ...ctx.uxWarnings])].slice(0, 40), destructive: results.filter((r) => r.ok && r.destructive).map((r) => r.destructive!), refs: Object.fromEntries([...ctx.refs, ...ctx.uxRefs]), valid: true, uxOnly, structureUnchanged };
 }
 
 class ActionError extends Error {}
 const fail = (m: string): never => { throw new ActionError(m); };
+/** the actions whose dependents are worth listing before applying */
+const IMPACT_OPS = new Set(["delete_question", "delete_block", "update_question", "update_option", "move_question", "set_display_logic", "update_embedded", "remove_embedded"]);
 
 function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: string; touched?: string[] } {
   const def = ctx.def;
@@ -487,15 +527,30 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       if (a.text !== undefined && a.text !== q.text) { q.text = pipeRefs(ctx, a.text); what.push("text"); }
       if (a.instruction !== undefined) { q.instruction = a.instruction || undefined; what.push("instruction"); }
       if (a.required !== undefined && a.required !== q.required) { q.required = a.required; what.push(a.required ? "required" : "optional"); }
+      /*
+       * A RENAME FOLLOWS ITS REFERENCES. The code and the variable are how
+       * conditions, calculations, pipes, quota cells and the analysis plan
+       * name a question; changing one and leaving the references pointing at
+       * the old name was a delayed break that the quality check reported as a
+       * warning after the fact. `applyRename` is the Studio's own rename —
+       * the same walk the Variables panel runs — so what is rewritten here is
+       * exactly what the preview says will change.
+       */
+      const renames: { from: string; to: string; alsoCode: boolean }[] = [];
       if (a.code && a.code !== q.code) {
         if (def.questions.some((x) => x.id !== q.id && String(x.code).toLowerCase() === a.code!.toLowerCase())) fail(`code ${a.code} is already used`);
-        what.push(`code ${q.code} → ${a.code}`); q.code = a.code;
+        what.push(`code ${q.code} → ${a.code}`);
+        // the variable that was only the code follows it, as the Studio's rename does
+        if (q.variableName === String(q.code) && !a.variable) renames.push({ from: String(q.code), to: a.code, alsoCode: true });
+        else { rewriteCodeRefs(def, q, String(q.code), a.code); q = def.questions.find((x) => x.id === q.id)!; }
       }
       if (a.variable && a.variable !== q.variableName) {
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(a.variable)) fail(`${a.variable} is not a valid variable name`);
         if (def.questions.some((x) => x.id !== q.id && x.variableName.toLowerCase() === a.variable!.toLowerCase())) fail(`variable ${a.variable} is already used`);
-        lossy.push(`renames variable ${q.variableName} to ${a.variable} (exports and logic that name it by variable change)`);
-        what.push(`variable ${q.variableName} → ${a.variable}`); q.variableName = a.variable;
+        if ((def.calculations ?? []).some((c) => c.targetVariable.toLowerCase() === a.variable!.toLowerCase())) fail(`${a.variable} is already a calculation`);
+        lossy.push(`renames variable ${q.variableName} to ${a.variable} (export columns change; logic, calculations and piping that name it are rewritten)`);
+        what.push(`variable ${q.variableName} → ${a.variable}`);
+        renames.push({ from: q.variableName, to: a.variable, alsoCode: false });
       }
       if (a.options || a.scale) {
         const had = q.options?.length ?? 0;
@@ -531,6 +586,12 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
         what.push(a.randomize ? "randomized" : "not randomized");
       }
       if (!what.length) fail(`nothing to change on ${q.code}`);
+      for (const r of renames) {
+        // applyRename works on a copy; the copy's contents become this definition's, so every reference the batch holds stays valid
+        const renamed = applyRename(def, r.from, r.to, { alsoCode: r.alsoCode });
+        Object.assign(def, renamed);
+        q = def.questions.find((x) => x.id === q.id)!;
+      }
       return { description: `Changed ${q.code}: ${what.join(", ")}`, touched: [q.id], ...(lossy.length ? { destructive: lossy.join("; ") } : {}) };
     }
     case "delete_question": {
@@ -745,6 +806,12 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       return { description: `Remove ${n} punch rule${n === 1 ? "" : "s"} from ${q.code}`, destructive: `Removes ${n} punch rule${n === 1 ? "" : "s"} from ${q.code}`, touched: [q.id] };
     }
     default: {
+      // options one at a time, masks, duplicates, survey settings, embedded fields, hypotheses, custom code: every target through the same resolvers and gates
+      if (isOptionOp(a.op)) {
+        const r = applyOptionAction(def, a as OptionAction, { question: (x) => tryQuestion(ctx, x), condition: (c) => parseCondition(def, withRefs(ctx, c)), setExpression: (t) => { const p = parseSetExpression(def, withRefs(ctx, t)); if (p.errors.length || !p.expr) fail(`the set expression “${t}” does not parse: ${p.errors[0]?.message ?? "empty"}`); return p.expr!; }, ids: ctx.ids, now: ctx.now });
+        ctx.uxWarnings.push(...r.warnings);
+        return r;
+      }
       // the analysis framework: question.analysis and research.analysisPlan only, every variable resolved
       if (isAnalysisOp(a.op)) return applyAnalysisAction(def, a as AnalysisAction, { question: (x) => tryQuestion(ctx, x), ids: ctx.ids, now: ctx.now });
       // the quotas: def.quotas and the quota_check nodes; every condition through the gate, the check placed after what it reads
@@ -888,7 +955,8 @@ function withRefs<T extends CondInput>(ctx: Ctx, text: T): T {
 }
 
 function parseCondition(def: SurveyDefinition, input: CondInput, selfId?: string): Condition {
-  const r = typeof input === "string" ? parseLogicExpression(def, input) : structuredCondition(def, input);
+  // strict: a numeric question compared with a word is refused here, not stored as a rule that is never true
+  const r = typeof input === "string" ? parseLogicExpression(def, input, { strict: true }) : structuredCondition(def, input);
   const shown = typeof input === "string" ? input : "(structured)";
   if (r.errors.length || !r.condition) fail(`the condition “${shown}” does not parse: ${r.errors[0]?.message ?? "empty"}`);
   if (selfId) {
@@ -928,6 +996,21 @@ function structuredCondition(def: SurveyDefinition, c: Condition): { condition?:
 
 function collectRefs(c: Condition, into: Set<string>, def: SurveyDefinition): void {
   conditionRefs(def, c, into);
+}
+
+/**
+ * A question code that changes while its variable stays: the pipes and the
+ * conditions written against the CODE ({{Q7}}, `Q7 = 2`) follow it. The
+ * variable-keyed references are untouched — they still resolve.
+ */
+function rewriteCodeRefs(def: SurveyDefinition, q: Question, from: string, to: string): void {
+  if (q.variableName === from) return; // applyRename handles a variable that is also the code
+  const renamed = applyRename(def, from, to, { alsoCode: false });
+  // applyRename also moves the variable when it equals `from`; here it does not, so only the walked references changed
+  const self = renamed.questions.find((x) => x.id === q.id)!;
+  self.variableName = q.variableName;
+  self.code = to;
+  Object.assign(def, renamed);
 }
 
 /* ------------------------------------------------------------ building */
@@ -1094,7 +1177,7 @@ export function describeAction(a: SurveyAction): string {
     case "set_theme": return a.label ? `Theme “${a.label}”` : "Change the theme";
     case "set_custom_html": return a.html === null ? `Remove the custom HTML of ${a.target}` : `Custom HTML on ${a.target}`;
     case "set_default_value": return a.value === null ? `Remove the default value of ${a.target}` : `Default value of ${a.target}: ${Array.isArray(a.value) ? a.value.join(", ") : a.value}`;
-    default: return isQuotaOp(a.op) ? describeQuotaAction(a as QuotaAction) : isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
+    default: return isOptionOp(a.op) ? describeOptionAction(a as OptionAction) : isQuotaOp(a.op) ? describeQuotaAction(a as QuotaAction) : isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
   }
 }
 
@@ -1108,6 +1191,8 @@ export interface SurveyDiff {
   questionsAdded: { id: string; code: string; type: string; text: string; block?: string }[];
   questionsRemoved: { id: string; code: string; text: string }[];
   questionsModified: QuestionChange[];
+  /** questions that changed place in the flow (block or position), with the question now before them */
+  questionsMoved: { id: string; code: string; from: string; to: string }[];
   pages: { before: number; after: number };
   displayLogic: { added: number; changed: number; removed: number };
   skips: { added: number; removed: number };
@@ -1135,6 +1220,20 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
   const cond = (def: SurveyDefinition, c: Condition | undefined) => (c ? formatCondition(def, c, { width: 400 }).replace(/\s+/g, " ") : "");
   const questionsAdded = after.questions.filter((q) => !bq.has(q.id)).map((q) => ({ id: q.id, code: q.code, type: typeLabel(q), text: plain(q.text, 90), block: blockOf(after, q.id)?.title }));
   const questionsRemoved = before.questions.filter((q) => !aq.has(q.id)).map((q) => ({ id: q.id, code: q.code, text: plain(q.text, 90) }));
+  /*
+   * MOVES ARE CHANGES. A question moved after another inside its block left
+   * no trace here (only block changes were compared), so the review said
+   * "nothing changed" about a reorder. Each kept question's predecessor in
+   * flow order is compared instead — the pair (block, question before) names
+   * a place.
+   */
+  const placeOf = (def: SurveyDefinition, order: string[], qid: string) => { const i = order.indexOf(qid); const prev = i > 0 ? def.questions.find((q) => q.id === order[i - 1]) : undefined; const b = blockOf(def, qid); return `${b?.title ?? "(no block)"}${i < 0 ? " · unplaced" : prev ? ` · after ${prev.code}` : " · first"}`; };
+  const orderB = questionOrder(before), orderA = questionOrder(after);
+  const kept = after.questions.filter((q) => bq.has(q.id));
+  const keptB = orderB.filter((id) => aq.has(id)), keptA = orderA.filter((id) => bq.has(id));
+  // the questions that moved are those outside the longest run both orders share — a swap names one question, not two
+  const stayed = longestCommonSubsequence(keptB, keptA);
+  const questionsMoved = kept.filter((q) => !stayed.has(q.id) || blockOf(before, q.id)?.id !== blockOf(after, q.id)?.id).map((q) => ({ id: q.id, code: q.code, from: placeOf(before, orderB, q.id), to: placeOf(after, orderA, q.id) }));
   const questionsModified: QuestionChange[] = [];
   let dAdded = 0, dChanged = 0, dRemoved = 0, sAdded = 0, sRemoved = 0;
   for (const q of after.questions) {
@@ -1210,6 +1309,7 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
     ...questionsModified.slice(0, 30).map((m) => `Change ${m.code}: ${m.changes.map((c) => c.field === "type" ? `${c.from} → ${c.to}` : c.field === "text" ? "wording" : c.field).join(", ")}`),
     dChanged ? `Change ${n(dChanged, "display condition")}` : "",
     blocksRenamed.length ? `Rename ${blocksRenamed.map((b) => `“${b.from}” → “${b.to}”`).join(", ")}` : "",
+    ...questionsMoved.slice(0, 10).map((m) => `Move ${m.code} (${m.to})`),
     questionsRemoved.length ? `Delete ${n(questionsRemoved.length, "question")}: ${questionsRemoved.map((q) => q.code).join(", ")}` : "",
     blocksRemoved.length ? `Delete ${n(blocksRemoved.length, "block")}: ${blocksRemoved.map((b) => `“${b.title}”`).join(", ")}` : "",
     dRemoved ? `Remove ${n(dRemoved, "display condition")}` : "",
@@ -1223,7 +1323,17 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
     ...ux.removed.map((x) => `Remove ${x.kind} “${x.label}” (${x.target})`),
   ].filter(Boolean);
   const empty = !summary.length;
-  return { blocksAdded, blocksRemoved, blocksRenamed, questionsAdded, questionsRemoved, questionsModified, pages, displayLogic: { added: dAdded, changed: dChanged, removed: dRemoved }, skips: { added: sAdded, removed: sRemoved }, randomizers, embeddedAdded, calculationsAdded, quotasAdded, researchChanged, ux, theme, summary, empty };
+  return { blocksAdded, blocksRemoved, blocksRenamed, questionsAdded, questionsRemoved, questionsModified, questionsMoved, pages, displayLogic: { added: dAdded, changed: dChanged, removed: dRemoved }, skips: { added: sAdded, removed: sRemoved }, randomizers, embeddedAdded, calculationsAdded, quotasAdded, researchChanged, ux, theme, summary, empty };
+}
+
+function longestCommonSubsequence(a: string[], b: string[]): Set<string> {
+  const m = a.length, n = b.length;
+  if (!m || !n) return new Set();
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0));
+  for (let i = m - 1; i >= 0; i--) for (let j = n - 1; j >= 0; j--) dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const out = new Set<string>();
+  for (let i = 0, j = 0; i < m && j < n;) { if (a[i] === b[j]) { out.add(a[i]); i++; j++; } else if (dp[i + 1][j] >= dp[i][j + 1]) i++; else j++; }
+  return out;
 }
 
 function punchText(def: SurveyDefinition, q: Question): string {
