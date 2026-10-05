@@ -9,7 +9,7 @@ import {
 import type { SurveyDefinition } from "@rescript/schema";
 import { supabaseService } from "@/lib/authServer";
 import { audit, isFailure, requireProject, type ProjectContext } from "@/lib/guard";
-import { compute, hashPassword, loadDefinition, loadTheme, newToken, variablesPayload, runPlanFor, latestRun, listRuns, dueMilestone } from "@/lib/analytics";
+import { compute, hashPassword, loadDefinition, loadTheme, newToken, variablesPayload, runPlanFor, latestRun, listRuns, runById, dueMilestone, ensurePlannedAnalyses, draftFindingsReport } from "@/lib/analytics";
 
 /**
  * The environment a report is built from.
@@ -276,6 +276,17 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     if (r.error && !r.stored) return bad(r.error, r.run.items.length ? 500 : 400);
     log(ctx, "analytics.plan_run", r.stored?.id ?? null, { trigger: r.run.trigger, n: r.run.n, analyses: r.run.items.length, findings: r.run.findings.length });
     return json({ run: r.stored, results: Object.fromEntries(r.run.items.map((it) => [it.definition.options?.planned ?? it.definition.name, it.result])) }, 201);
+  }
+  /* draft the findings report from a run (the latest, or one by id) */
+  if (head === "plan" && itemId === "report") {
+    const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;
+    const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
+    const run = typeof body.runId === "string" && isUuid(body.runId) ? await runById(db, surveyId, body.runId) : await latestRun(db, surveyId);
+    if (!run) return bad("No analysis run to report on yet — run the plan first (Findings tab), or wait for the fieldwork milestone.");
+    const r = await draftFindingsReport(db, surveyId, loaded, run, { userId: ctx.user.userId, ...(typeof body.title === "string" && body.title.trim() ? { title: body.title.trim().slice(0, 160) } : {}) });
+    if (!r.report) return bad(r.error ?? "The report could not be saved.", 500);
+    log(ctx, "analytics.report_created", String(r.report.id), { name: r.report.name, fromRun: run.id, blocks: r.definition.blocks.length });
+    return json({ report: r.report }, 201);
   }
   if (head === "run") {
     const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
@@ -612,21 +623,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     const dataset: DatasetSpec = { environment: env as DatasetSpec["environment"], dataset: body.dataset === "clean" ? "clean" : "all" };
     const items = plannedAnalyses(loaded.def as SurveyDefinition, dataset, { primaries: body.primaries === true });
     if (!items.length) return bad("Nothing is planned yet — plan the analysis in Intelligent mode (Analysis tab) first.");
-    const { data: existing } = await db.from("analytics_analyses").select("id, definition").eq("survey_id", surveyId).is("deleted_at", null);
-    const have = new Set((existing ?? []).map((r) => String((r.definition as AnalysisDefinition)?.options?.planned ?? "")).filter(Boolean));
-    const created: Record<string, unknown>[] = []; let skipped = 0;
-    for (const it of items) {
-      const planned = String(it.definition.options?.planned ?? "");
-      if (planned && have.has(planned)) { skipped++; continue; }
-      const name = it.definition.name.slice(0, 160);
-      const row = { survey_id: surveyId, name, kind: it.definition.kind, definition: { ...it.definition, name, surveyVersion: loaded.version ?? undefined }, version: 1, folder: "Planned", tags: it.hypotheses, created_by: ctx.user.userId, updated_by: ctx.user.userId };
-      const { data, error } = await db.from("analytics_analyses").insert(row).select("*").single();
-      if (error) return bad(error.message, 500);
-      await db.from("analytics_analysis_versions").insert({ analysis_id: data.id, survey_id: surveyId, version: 1, definition: row.definition, summary: `Created from the analysis plan${it.reason ? `: ${it.reason}` : ""}`, created_by: ctx.user.userId });
-      log(ctx, "analytics.analysis_created", data.id, { name, kind: data.kind, fromPlan: planned });
-      created.push(data);
-    }
-    return json({ created, skipped, planned: items.length }, 201);
+    const ensured = await ensurePlannedAnalyses(db, surveyId, loaded, items, ctx.user.userId);
+    if (ensured.error) return bad(ensured.error, 500);
+    for (const data of ensured.created) log(ctx, "analytics.analysis_created", String(data.id), { name: data.name, kind: data.kind, fromPlan: String((data.definition as AnalysisDefinition)?.options?.planned ?? "") });
+    return json({ created: ensured.created, skipped: ensured.skipped, planned: items.length }, 201);
   }
   if (head === "analyses" && itemId && action === "duplicate") {
     const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;

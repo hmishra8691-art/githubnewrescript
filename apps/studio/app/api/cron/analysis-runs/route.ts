@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import type { SurveyDefinition } from "@rescript/schema";
 import { supabaseService } from "@/lib/authServer";
-import { loadDefinition, dueMilestone, runPlanFor } from "@/lib/analytics";
+import { loadDefinition, dueMilestone, runPlanFor, draftFindingsReport } from "@/lib/analytics";
 
 /**
  * THE PLAN RUNS BY ITSELF (research-intelligence Phase 5).
@@ -13,8 +13,10 @@ import { loadDefinition, dueMilestone, runPlanFor } from "@/lib/analytics";
  * readable base (30 completes), halfway to the suppliers' target, the
  * target, the end of the field window — and the plan is run once for each
  * milestone reached, the findings and the hypothesis verdicts kept in
- * `analytics_runs`. Nothing is recomputed that was already run; a survey
- * with nothing due costs one count query.
+ * `analytics_runs`. When the target is reached or the field closes, the
+ * findings report is drafted from that run as well (analysisPlan.autoReport,
+ * on unless turned off). Nothing is recomputed that was already run; a
+ * survey with nothing due costs one count query.
  *
  * Authorised by CRON_SECRET like the other jobs; bounded in time so a slow
  * survey never blocks the rest — the next hour picks up what was left.
@@ -46,7 +48,7 @@ async function run(req: Request): Promise<NextResponse> {
   const { data: withPlan, error } = await db.from("surveys").select("id").not("draft_definition->research->>analysisPlan", "is", null).in("status", ["testing", "live", "closed"]).order("updated_at", { ascending: false }).limit(MAX_SURVEYS);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   const surveyIds = (withPlan ?? []).map((r) => String((r as { id: string }).id));
-  const ran: { surveyId: string; trigger: string; n: number; findings: number }[] = [];
+  const ran: { surveyId: string; trigger: string; n: number; findings: number; report?: string }[] = [];
   const skipped: { surveyId: string; reason: string }[] = [];
   let checked = 0;
   for (const surveyId of surveyIds) {
@@ -60,7 +62,12 @@ async function run(req: Request): Promise<NextResponse> {
     if (!due) continue;
     const r = await runPlanFor(db, surveyId, loaded, { environment: "LIVE", trigger: due });
     if (r.error && !r.stored) { skipped.push({ surveyId, reason: r.error }); continue; }
-    ran.push({ surveyId, trigger: due, n: r.run.n, findings: r.run.findings.length });
+    let report: string | undefined;
+    if ((due === "target_reached" || due === "field_end") && def.research.analysisPlan.autoReport !== false && r.stored) {
+      const d = await draftFindingsReport(db, surveyId, loaded, r.stored);
+      if (d.report) report = String(d.report.id);
+    }
+    ran.push({ surveyId, trigger: due, n: r.run.n, findings: r.run.findings.length, ...(report ? { report } : {}) });
   }
   return NextResponse.json({ ok: true, checked, ran, skipped, elapsedMs: Date.now() - startedAt });
 }

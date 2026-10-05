@@ -3,8 +3,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Condition, SurveyDefinition } from "@rescript/schema";
 import {
   buildDataset, runAnalysis, variableMetadata, recommendCharts, DEFAULT_THEME,
-  unionVariableMetadata, definitionResolver, plannedAnalyses, runPlan, compactRun, nextMilestone,
-  type AnalysisDefinition, type AnalysisResult, type AnalyticsRow, type Dataset, type DatasetSpec, type ReportTheme, type SegmentDef, type VariableMeta, type AnalysisRun, type PlannedAnalysis,
+  unionVariableMetadata, definitionResolver, plannedAnalyses, runPlan, compactRun, nextMilestone, reportFromRun,
+  type AnalysisDefinition, type AnalysisResult, type AnalyticsRow, type Dataset, type DatasetSpec, type ReportTheme, type SegmentDef, type VariableMeta, type AnalysisRun, type PlannedAnalysis, type ReportDefinition,
 } from "@rescript/analytics";
 import type { VersionedDefinition } from "@rescript/engine";
 import { getCachedVersionDefinition } from "@rescript/quality/server";
@@ -361,6 +361,11 @@ export async function latestRun(db: SupabaseClient, surveyId: string, environmen
   return rowToRun(data[0] as Record<string, unknown>);
 }
 
+export async function runById(db: SupabaseClient, surveyId: string, id: string): Promise<StoredRun | null> {
+  const { data } = await db.from("analytics_runs").select("*").eq("id", id).eq("survey_id", surveyId).maybeSingle();
+  return data ? rowToRun(data as Record<string, unknown>) : null;
+}
+
 export async function listRuns(db: SupabaseClient, surveyId: string, limit = 20): Promise<StoredRun[]> {
   const { data } = await db.from("analytics_runs").select("id, survey_id, trigger, environment, n, computed_at, verdicts, warnings, survey_version").eq("survey_id", surveyId).order("computed_at", { ascending: false }).limit(limit);
   return (data ?? []).map((r) => rowToRun({ ...(r as Record<string, unknown>), items: [], findings: [] }));
@@ -409,4 +414,57 @@ export async function dueMilestone(db: SupabaseClient, surveyId: string, def: Su
   ]);
   const target = (targets.data ?? []).reduce((t, r) => t + (Number((r as { target_completes?: unknown }).target_completes) || 0), 0) || null;
   return nextMilestone((runs.data ?? []).map((r) => String((r as { trigger: string }).trigger)), { completes: count ?? 0, target, fieldEnd: (proj.data?.fieldwork_to as string | null) ?? null, now: now.toISOString() });
+}
+
+
+/* ------------------------------------------------------------ the plan's saved analyses */
+
+/**
+ * The saved analyses behind the plan — one per planned item, in the
+ * "Planned" folder, tagged with their hypotheses, never created twice
+ * (the planned id in `options.planned` is the identity). Used by
+ * "Create the planned analyses" and by the findings report, whose charts
+ * must point at saved analyses to be drawn.
+ */
+export async function ensurePlannedAnalyses(db: SupabaseClient, surveyId: string, ctx: LoadedContext, items: PlannedAnalysis[], userId: string | null): Promise<{ created: Record<string, unknown>[]; skipped: number; byPlanned: Map<string, string>; error?: string }> {
+  const { data: existing } = await db.from("analytics_analyses").select("id, definition").eq("survey_id", surveyId).is("deleted_at", null);
+  const byPlanned = new Map<string, string>();
+  for (const r of existing ?? []) { const p = String((r.definition as AnalysisDefinition)?.options?.planned ?? ""); if (p && !byPlanned.has(p)) byPlanned.set(p, String(r.id)); }
+  const created: Record<string, unknown>[] = []; let skipped = 0;
+  for (const it of items) {
+    const planned = String(it.definition.options?.planned ?? "");
+    if (planned && byPlanned.has(planned)) { skipped++; continue; }
+    const name = it.definition.name.slice(0, 160);
+    const row = { survey_id: surveyId, name, kind: it.definition.kind, definition: { ...it.definition, name, surveyVersion: ctx.version ?? undefined }, version: 1, folder: "Planned", tags: it.hypotheses, created_by: userId, updated_by: userId };
+    const { data, error } = await db.from("analytics_analyses").insert(row).select("*").single();
+    if (error) return { created, skipped, byPlanned, error: error.message };
+    await db.from("analytics_analysis_versions").insert({ analysis_id: data.id, survey_id: surveyId, version: 1, definition: row.definition, summary: `Created from the analysis plan${it.reason ? `: ${it.reason}` : ""}`, created_by: userId });
+    if (planned) byPlanned.set(planned, String(data.id));
+    created.push(data);
+  }
+  return { created, skipped, byPlanned };
+}
+
+/* ------------------------------------------------------------ the findings report (research-intelligence Phase 6) */
+
+/**
+ * DRAFT THE REPORT from a run: the planned analyses are saved (so every
+ * chart points at a result the researcher can open), the project's fieldwork
+ * dates and client go on the cover and the methodology, and the report is
+ * stored in `analytics_reports` as a live draft to edit, publish and export.
+ */
+export async function draftFindingsReport(db: SupabaseClient, surveyId: string, ctx: LoadedContext, run: StoredRun, opts: { userId?: string | null; title?: string } = {}): Promise<{ report: Record<string, unknown> | null; definition: ReportDefinition; error?: string }> {
+  const spec: DatasetSpec = { environment: run.environment, dataset: "all" };
+  const items = plannedAnalyses(ctx.def as SurveyDefinition, spec, { primaries: false });
+  const ensured = await ensurePlannedAnalyses(db, surveyId, ctx, items, opts.userId ?? null);
+  const proj = await db.from("surveys").select("fieldwork_from, fieldwork_to, client_name").eq("id", surveyId).maybeSingle();
+  const definition = reportFromRun(ctx.def as SurveyDefinition, run as never, {
+    analysisIdFor: (planned) => (planned ? ensured.byPlanned.get(planned) : undefined),
+    ...(opts.title ? { title: opts.title } : {}),
+    ...(proj.data?.client_name ? { client: String(proj.data.client_name) } : {}),
+    ...(proj.data?.fieldwork_from || proj.data?.fieldwork_to ? { fieldwork: { ...(proj.data?.fieldwork_from ? { from: String(proj.data.fieldwork_from).slice(0, 10) } : {}), ...(proj.data?.fieldwork_to ? { to: String(proj.data.fieldwork_to).slice(0, 10) } : {}) } } : {}),
+  });
+  const { data, error } = await db.from("analytics_reports").insert({ survey_id: surveyId, kind: "report", name: definition.title.slice(0, 160), definition, theme_id: null, mode: "live", created_by: opts.userId ?? null, updated_by: opts.userId ?? null }).select("*").single();
+  if (error) return { report: null, definition, error: error.message };
+  return { report: data as Record<string, unknown>, definition };
 }

@@ -14,3 +14,4 @@ export * from "./fieldwork.js";
 export * from "./versionedMetadata.js";
 export * from "./planBridge.js";
 export * from "./findings.js";
+export * from "./findingsReport.js";

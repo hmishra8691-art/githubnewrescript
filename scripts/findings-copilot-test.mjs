@@ -10,6 +10,10 @@
  *     action lands in Changes
  *   - the turn route recognises a findings question and carries the run's
  *     brief (verdicts, findings) with it — and says "none yet" without one
+ *   - the report section: drafted from the run (disabled in the sandbox,
+ *     which has no run of its own), the executive summary in words through
+ *     the copilot; the report built here by the real package from the same
+ *     run has a cover, the verdicts, a section per hypothesis and exports
  *   - the analytics plan routes refuse without a session
  *
  *   node scripts/findings-copilot-test.mjs      (studio on 3000)
@@ -19,6 +23,8 @@ import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/i
 import { openTab, switchMode } from "./lib/nav.mjs";
 import { def as synthDef, synthDataset } from "/home/claude/rescript/packages/analytics/dist/analyses/fixture.js";
 import { runPlan, compactRun } from "/home/claude/rescript/packages/analytics/dist/findings.js";
+import { reportFromRun } from "/home/claude/rescript/packages/analytics/dist/findingsReport.js";
+import { buildPptx } from "/home/claude/rescript/packages/analytics/dist/export/pptx.js";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
 let passed = 0;
@@ -128,6 +134,32 @@ ok("Findings: each hypothesis with its verdict and reason; the findings stronges
 }
 ok("an untested hypothesis: “Plan a test” asks the copilot, whose crosstab and chi-square land in Changes and apply to the plan");
 
+/* ------------------------------------------------ the report */
+await page.click('[data-testid="cp-tab-findings"]');
+await page.waitForSelector('[data-testid="fd-report"]');
+{
+  assert.ok(await page.$('[data-testid="fd-draft-report"][disabled]'), "the sandbox has no run of its own to report on");
+  assert.match(await page.textContent('[data-testid="fd-report"]'), /drafted by itself when the target is reached or the field closes/);
+  /* the executive summary in words goes to the copilot with the run in the outline */
+  await page.evaluate((r) => window.__rescriptCopilotFake(r), { kind: "answer", reply: "**What we set out to learn.** … **What the data showed.** H1 is supported (Welch's t-test, p < .001). …" });
+  const n = (await page.$$('[data-testid="cp-turn"]')).length;
+  await page.click('[data-testid="fd-ask-summary"]');
+  await page.waitForFunction((k) => { const t = document.querySelectorAll('[data-testid="cp-turn"]'); return t.length > k && t[t.length - 1].getAttribute("data-status") !== "thinking"; }, n, { timeout: 30000 });
+  const last = await page.$$eval('[data-testid="cp-turn"]', (es) => es[es.length - 1].textContent);
+  assert.match(last, /What the data showed/);
+  /* the report the Studio drafts from this run, built here by the same package: its shape and its export */
+  const FULL = runPlan(FIXTURE, synthDataset(400), { trigger: "target_reached", now: "2026-10-05T09:00:00Z" });
+  const ids = new Map(FULL.items.map((it, i) => [String(it.definition.options?.planned ?? it.definition.name), `A${i}`]));
+  const report = reportFromRun(FIXTURE, FULL, { analysisIdFor: (planned, name) => ids.get(planned ?? name), client: "Acme" });
+  assert.equal(report.title, "What drives satisfaction and recommendation — findings");
+  assert.deepEqual(report.blocks.filter((b) => b.type === "section").map((b) => b.subtitle), ["Supported", "Not supported", "Mixed", "Planned analyses outside the hypotheses"]);
+  assert.ok(report.blocks.filter((b) => b.type === "chart").every((b) => b.analysisId && b.chart.type), "every chart points at a saved analysis and carries its type");
+  const results = Object.fromEntries(FULL.items.map((it) => [ids.get(String(it.definition.options?.planned ?? it.definition.name)), it.result]));
+  const buf = await buildPptx({ report: { title: report.title, subtitle: report.subtitle, blocks: report.blocks }, results, meta: { survey: FIXTURE.meta.title, responses: FULL.n } });
+  assert.ok(buf.length > 20000 && buf.subarray(0, 2).toString("latin1") === "PK", "the report exports as a PowerPoint deck");
+}
+ok("the report: drafted from the run (not in the sandbox), the executive summary in words through the copilot; the drafted report has the verdicts, a section per hypothesis, saved analyses behind every chart, and exports");
+
 /* ------------------------------------------------ the turn route: a findings question carries the run */
 {
   const call = async (message, run) => {
@@ -158,6 +190,8 @@ ok("the turn route recognises a findings question and sends the run's verdicts a
   assert.ok([401, 500].includes(r2.status), String(r2.status));
   const r3 = await fetch(`${STUDIO}/api/cron/analysis-runs`);
   assert.equal(r3.status, 401, "the cron needs its secret");
+  const r4 = await fetch(`${STUDIO}/api/surveys/00000000-0000-0000-0000-000000000000/analytics/plan/report`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  assert.ok([401, 500].includes(r4.status), String(r4.status));
 }
 ok("the plan routes and the cron refuse without a session or the secret");
 

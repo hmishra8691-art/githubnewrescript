@@ -401,7 +401,7 @@ test("quota turns: the intent, the guide, the outline's quotas with their cells,
 });
 
 test("findings turns: the intent, the run's brief in the outline (verdicts, then findings with their evidence), nothing invented when there is no run, the guide", () => {
-  for (const m of ["what did we find?", "did H1 hold?", "is the gender difference significant?", "what drives satisfaction?", "summarise the results", "what does the data say about region?", "how did Brand A perform?"]) assert.ok(findingsIntent(m), m);
+  for (const m of ["what did we find?", "did H1 hold?", "is the gender difference significant?", "what drives satisfaction?", "summarise the results", "what does the data say about region?", "how did Brand A perform?", "write the client report", "draft me an executive summary", "prepare the debrief deck"]) assert.ok(findingsIntent(m), m);
   for (const m of ["make Q7 a 5-point scale", "translate Q5 into German", "add a crosstab of FREQ by BUY", "set up quotas: 500 completes"]) assert.ok(!findingsIntent(m), m);
   const def = survey();
   const run = {
@@ -426,5 +426,5 @@ test("findings turns: the intent, the run's brief in the outline (verdicts, then
   const p = copilotUserPrompt({ message: "what did we find?", outline: "o", surveyLanguage: "en", mode: "edit", findings: true });
   assert.ok(p.includes("FINDINGS GUIDE") && p.includes("never invents") === false && p.includes("Never report a number that is not in the run"));
   assert.ok(!copilotUserPrompt({ message: "x", outline: "o", surveyLanguage: "en", mode: "edit" }).includes("FINDINGS GUIDE"));
-  for (const w of ["VERDICT", "SUPPORTED", "p-value", "effect size", "not tested", "add_analysis_test", "\"kind\":\"answer\""]) assert.ok(COPILOT_FINDINGS_GUIDE.includes(w), w);
+  for (const w of ["VERDICT", "SUPPORTED", "p-value", "effect size", "not tested", "add_analysis_test", "\"kind\":\"answer\"", "Asked to WRITE", "Draft the report"]) assert.ok(COPILOT_FINDINGS_GUIDE.includes(w), w);
 });

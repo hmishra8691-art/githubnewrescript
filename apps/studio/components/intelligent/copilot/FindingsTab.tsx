@@ -102,10 +102,17 @@ export function FindingsTab({ copilot, def }: { copilot: Copilot; def: SurveyDef
       )}
 
       {plan && (
-        <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
-          {run && !s.readOnly && <button type="button" className="iq-btn" data-testid="fd-ask" disabled={copilot.busy} onClick={() => ask("What did we find? Summarise the findings and say whether each hypothesis held, with the tests and p-values.")}>Ask the copilot to narrate</button>}
-          {!sandbox && <a className="iq-btn" href={analyticsHref} data-testid="fd-open-analytics">Open in Analytics</a>}
-        </div>
+        <section data-testid="fd-report">
+          <div className="iq-label">The report</div>
+          <p className="iqi-dim">A draft written from the run — cover, executive summary in the run's own sentences, the hypotheses with their verdicts, a section per hypothesis with its analyses drawn and captioned, the other findings, methodology and caveats — into Analytics → Reports, to edit, publish and export as PowerPoint or Excel. It is drafted by itself when the target is reached or the field closes{plan.autoReport === false ? " (turned off for this survey)" : ""}.</p>
+          {copilot.lastReport && <p className="iq-warning" data-testid="fd-report-done"><Icon name="info" size={12} /> Drafted “{copilot.lastReport.name}” — <a href={`/analytics?survey=${encodeURIComponent(s.surveyDbId)}&tab=reports`} data-testid="fd-open-report">open it in Reports</a>.</p>}
+          <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
+            <button type="button" className="iq-btn primary" data-testid="fd-draft-report" disabled={!run || copilot.drafting || sandbox || s.readOnly} onClick={() => void copilot.draftReport()} title={sandbox ? "The sandbox has no run to report on" : !run ? "Run the plan first" : "Draft the findings report from the latest run"}>{copilot.drafting ? "Drafting…" : "Draft the report"}</button>
+            {run && !s.readOnly && <button type="button" className="iq-btn" data-testid="fd-ask" disabled={copilot.busy} onClick={() => ask("What did we find? Summarise the findings and say whether each hypothesis held, with the tests and p-values.")}>Ask the copilot to narrate</button>}
+            {run && !s.readOnly && <button type="button" className="iq-btn" data-testid="fd-ask-summary" disabled={copilot.busy} onClick={() => ask("Write the executive summary for the client report: three short paragraphs — what we set out to learn, what the data showed (with the tests and bases), and what it means — from the run's findings only.")}>Draft the executive summary in words</button>}
+            {!sandbox && <a className="iq-btn" href={analyticsHref} data-testid="fd-open-analytics">Open in Analytics</a>}
+          </div>
+        </section>
       )}
     </div>
   );

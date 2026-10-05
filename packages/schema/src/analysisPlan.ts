@@ -124,6 +124,8 @@ export const AnalysisPlan = z.object({
    * keep the findings — on unless the researcher turns it off.
    */
   autoRun: z.boolean().optional(),
+  /** draft the findings report by itself when the target is reached or the field closes — on unless turned off */
+  autoReport: z.boolean().optional(),
 });
 export type AnalysisPlan = z.infer<typeof AnalysisPlan>;
 

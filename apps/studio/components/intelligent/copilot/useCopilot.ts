@@ -154,6 +154,21 @@ export function useCopilot(opts: {
     } catch (e) { setRunError((e as Error).message); return false; }
     finally { setRunning(false); }
   }, [s.surveyDbId]);
+  /* the findings report, drafted from the latest run into Analytics → Reports */
+  const [lastReport, setLastReport] = React.useState<{ id: string; name: string } | null>(null);
+  const [drafting, setDrafting] = React.useState(false);
+  const draftReport = React.useCallback(async (): Promise<{ id: string; name: string } | null> => {
+    if (s.surveyDbId === "sandbox") { setRunError("The sandbox has no responses, so there is no run to report on."); return null; }
+    setDrafting(true); setRunError(null);
+    try {
+      const r = await fetch(`/api/surveys/${s.surveyDbId}/analytics/plan/report`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...(analysisRun?.id ? { runId: analysisRun.id } : {}) }) });
+      const d = await r.json().catch(() => null) as { report?: { id: string; name: string }; error?: string } | null;
+      if (!r.ok || !d?.report) { setRunError(d?.error ?? `The report could not be drafted (${r.status}).`); return null; }
+      setLastReport({ id: d.report.id, name: d.report.name });
+      return d.report;
+    } catch (e) { setRunError((e as Error).message); return null; }
+    finally { setDrafting(false); }
+  }, [s.surveyDbId, analysisRun?.id]);
   React.useEffect(() => {
     const w = window as unknown as { __rescriptAnalysisRun?: (r: StoredRunBrief | null) => void };
     w.__rescriptAnalysisRun = (r) => { setAnalysisRun(r); };
@@ -320,6 +335,7 @@ export function useCopilot(opts: {
     themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),
     quotaCounts, quotaCountsAt, refreshQuotaCounts,
     analysisRun, runDue, running, runError, refreshAnalysisRun, runPlanNow,
+    lastReport, drafting, draftReport,
   };
 }
 export type Copilot = ReturnType<typeof useCopilot>;
