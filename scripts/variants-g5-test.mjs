@@ -219,11 +219,12 @@ await h.page.click('[data-testid="annot-tool-highlight"]');
 await h.page.waitForTimeout(250);
 
 await openCard(CARD.video_rating);
-await h.page.fill('[data-testid="media-url"]', CLIP);
+/* the clip is the first entry of the video list (October 2026 review: "+ Add Video", title, description); `mediaUrl` stays equal to it */
+await h.page.fill('[data-testid="video-url-0"]', CLIP);
 await h.page.click('[data-testid="media-require-complete"]');
 await h.page.waitForTimeout(250);
 def = await h.readDef();
-assert.equal(qOf(def, "video_rating").settings.mediaUrl, CLIP, "the media URL field writes settings.mediaUrl");
+assert.equal(qOf(def, "video_rating").settings.mediaUrl, CLIP, "the video URL field writes settings.mediaUrl");
 assert.equal(qOf(def, "video_rating").settings.requireComplete, false, "and the gate can be turned off");
 await openCard(CARD.video_rating);
 await h.page.click('[data-testid="media-require-complete"]');
@@ -476,7 +477,7 @@ await pv.close();
 pv = await preview([id("file")], (d) => { qOf(d, "file").settings.maxSizeMb = 1; });
 await pv.setInputFiles(at("file", '[data-testid="upload-input"]'), BIG);
 await pv.waitForSelector(at("file", '[data-testid="upload-error"]'));
-assert.match(await pv.textContent(at("file", '[data-testid="upload-error"]')), /limit is 1 MB/);
+assert.match(await pv.textContent(at("file", '[data-testid="upload-error"]')), /File size exceeds the 1 MB limit\./, "the October 2026 review wording");
 assert.equal(await h.answerOf(pv, id("file")), undefined, "an oversize file is refused before it uploads");
 await pv.close();
 console.log("✔ file upload: several files as an array, oversize refused with a message");
@@ -550,6 +551,7 @@ console.log("✔ min/max selections apply to annotation marks");
 pv = await h.preview([id("annotation"), id("video_rating")], (d) => {
   delete qOf(d, "annotation").settings.imageUrl;
   delete qOf(d, "video_rating").settings.mediaUrl;
+  delete qOf(d, "video_rating").settings.videos; // the clip list (October 2026) — no clip at all
 });
 assert.match(await pv.textContent(`[data-qid="${id("annotation")}"]`), /No stimulus image configured/,
   "an annotation with no image says so instead of drawing nothing");

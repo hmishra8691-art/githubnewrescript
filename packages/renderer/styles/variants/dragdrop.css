@@ -144,3 +144,34 @@
   .rs-ca-item-body { flex-wrap: wrap; justify-content: space-between; }
   .rs-ca-holds { order: 3; flex-basis: 100%; }
 }
+
+/* Image Categorization: picture chips dragged into buckets (October 2026 review) */
+.rs-dd-pool-head {
+  flex-basis: 100%;
+  font-size: 0.78em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--rs-subtle);
+}
+.rs-dd-imgchip {
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  width: 112px;
+  border-radius: 12px;
+}
+.rs-dd-img {
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 8px;
+  pointer-events: none;
+  user-select: none;
+}
+.rs-dd-images .rs-dd-bucket-body { min-height: 120px; }
+.rs-dd-chip-label { overflow-wrap: anywhere; }
+.rs-dd-bucket-icon { width: 28px; height: 28px; object-fit: cover; border-radius: 6px; }
+.rs-dd-bucket-desc { font-size: 0.82em; color: var(--rs-subtle); margin: -2px 0 6px; }
+.rs-dd-bucket.full { opacity: 0.92; }
+.rs-dd-bucket.full .rs-dd-count { font-weight: 700; }

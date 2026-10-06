@@ -103,3 +103,62 @@
   .rs-sw4-arrow { width: 58px; font-size: .7em; padding: 5px 3px; }
   .rs-sw4-mid .rs-swipex-card { padding: 16px 10px; }
 }
+
+/* ---- October 2026 review: rich cards and card-shaped frames, for all three decks */
+/* a frame has a size and proportions; the deck centres it */
+.rs-cardframe { width: 100%; max-width: 300px; min-height: 0; padding: 0; justify-content: flex-start; gap: 0; }
+.rs-cardframe.size-small { max-width: 220px; }
+.rs-cardframe.size-medium { max-width: 300px; }
+.rs-cardframe.size-large { max-width: 400px; }
+.rs-cardframe.aspect-1-1 { aspect-ratio: 1 / 1; }
+.rs-cardframe.aspect-4-5 { aspect-ratio: 4 / 5; }
+.rs-cardframe.aspect-3-4 { aspect-ratio: 3 / 4; }
+.rs-cardframe.aspect-4-3 { aspect-ratio: 4 / 3; }
+.rs-cardframe.aspect-16-9 { aspect-ratio: 16 / 9; }
+.rs-sw4-mid .rs-swipex-card.rs-cardframe { max-width: min(100%, 300px); min-height: 0; padding: 0; }
+.rs-sw4-mid .rs-swipex-card.rs-cardframe.size-small { max-width: min(100%, 220px); }
+.rs-sw4-mid .rs-swipex-card.rs-cardframe.size-large { max-width: min(100%, 400px); }
+.rs-swipe-card.rs-cardframe { padding: 0; height: auto; }
+
+.rs-cardface { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; text-align: center; }
+.rs-cardface.align-left { text-align: left; }
+.rs-cardface.plain { justify-content: center; padding: 18px 16px; }
+.rs-cardface-img { flex: 1 1 55%; min-height: 0; overflow: hidden; background: color-mix(in srgb, var(--rs-border) 40%, var(--rs-surface)); }
+.rs-cardface-img img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+.rs-cardface-body { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; }
+.rs-cardface.rich .rs-cardface-body { border-top: 1px solid var(--rs-border); }
+.rs-cardface-title { font-size: 1.1em; font-weight: 650; overflow-wrap: anywhere; }
+.rs-cardface.plain .rs-cardface-title { font-size: 1.15em; }
+.rs-cardface-sub { font-size: 0.92em; color: var(--rs-subtle); }
+.rs-cardface-desc { font-size: 0.86em; }
+.rs-cardface-price { font-weight: 700; font-size: 1.05em; color: var(--rs-primary); margin-top: 2px; }
+.rs-cardface-fields { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 12px; margin: 2px 0 0; font-size: 0.82em; }
+.rs-cardface.align-left .rs-cardface-fields { justify-content: flex-start; }
+.rs-cardface-field { display: flex; gap: 4px; }
+.rs-cardface-field dt { color: var(--rs-subtle); }
+.rs-cardface-field dt::after { content: ":"; }
+.rs-cardface-field dd { margin: 0; font-weight: 600; }
+.rs-cardface-fimg img { max-height: 48px; border-radius: 6px; }
+/* image behind the whole card, text over it */
+.rs-cardface.full { position: relative; color: #fff; }
+.rs-cardface.full .rs-cardface-img { position: absolute; inset: 0; }
+.rs-cardface.full .rs-cardface-body {
+  position: relative; margin-top: auto; border-top: none;
+  background: linear-gradient(transparent, rgb(0 0 0 / .72));
+}
+.rs-cardface.full .rs-cardface-sub, .rs-cardface.full .rs-cardface-field dt { color: rgb(255 255 255 / .82); }
+.rs-cardface.full .rs-cardface-price { color: #fff; }
+.rs-swipex-card .rs-swipex-ends { padding: 0 12px 10px; }
+.rs-swipex-scale.categories .rs-swipex-step { max-width: none; flex: 0 1 auto; padding: 9px 14px; }
+.rs-swipex-rank { display: flex; gap: 8px; justify-content: center; }
+.rs-swipex-step.primary { border-color: var(--rs-primary); color: var(--rs-primary); }
+.rs-swipex-ranked { list-style: none; padding: 0; margin: 0; flex-direction: column; align-items: flex-start; }
+/* the Tinder deck: a framed card sizes the stack instead of filling a fixed 300px box */
+.rs-swipe-stack.framed { height: auto; display: flex; justify-content: center; }
+.rs-swipe-stack.framed .rs-swipe-card { position: relative; inset: auto; }
+.rs-swipe-stack.framed .rs-swipe-card.behind { display: none; }
+.rs-swipe-card .rs-cardface.plain { padding: 0; }
+.rs-swipe-card .rs-cardface img { max-height: none; margin: 0; border-radius: 0; }
+.rs-swipe-card:not(.rs-cardframe) .rs-cardface.rich .rs-cardface-img img { max-height: 170px; border-radius: 10px; }
+.rs-swipe-card:not(.rs-cardframe) .rs-cardface.rich .rs-cardface-img { flex: 0 0 auto; background: none; }
+.rs-swipe-card:not(.rs-cardframe) .rs-cardface.rich .rs-cardface-body { border-top: none; }

@@ -94,3 +94,83 @@ registerVariantSettings("monthyear", ({ q, patchSettings }) => {
     </>
   );
 });
+
+/*
+ * DATE PICKER and TIME PICKER (October 2026 review): "the Date Picker and
+ * Time Picker should allow the survey programmer to control both the default
+ * value and the display format — Date Picker: Default Date + Date Format;
+ * Time Picker: Default Time + Time Format". The answer is stored as
+ * YYYY-MM-DD / 24-hour HH:MM whatever is shown, so logic, bounds and exports
+ * never read a display format. Unset keeps the browser's own field, which is
+ * what every question authored before shows.
+ */
+const DATE_FORMAT_OPTIONS: { value: string; example: string }[] = [
+  { value: "MM/DD/YYYY", example: "09/23/2026" }, { value: "DD/MM/YYYY", example: "23/09/2026" },
+  { value: "YYYY/MM/DD", example: "2026/09/23" }, { value: "MM-DD-YYYY", example: "09-23-2026" },
+  { value: "DD-MM-YYYY", example: "23-09-2026" }, { value: "YYYY-MM-DD", example: "2026-09-23" },
+  { value: "DD MMM YYYY", example: "23 Sep 2026" }, { value: "MMM DD, YYYY", example: "Sep 23, 2026" },
+];
+
+registerVariantSettings("base:date", ({ q, patchSettings }) => (
+  <>
+    <h3 className="sec">Date</h3>
+    <div className="row" style={{ flexWrap: "wrap", gap: 12 }} data-testid="date-settings">
+      <label className="f" style={{ width: 190 }}><span>Default date</span>
+        <select className="select" data-testid="default-date-mode"
+          value={q.settings.defaultDateMode ?? "none"}
+          onChange={(e) => patchSettings({ defaultDateMode: e.target.value === "none" ? undefined : (e.target.value as "current" | "custom") })}>
+          <option value="none">none — left blank</option>
+          <option value="current">current date (the respondent's today)</option>
+          <option value="custom">a specific date</option>
+        </select></label>
+      {q.settings.defaultDateMode === "custom" && (
+        <label className="f" style={{ width: 170 }}><span>Specific date</span>
+          <input className="input" type="date" data-testid="default-date"
+            value={q.settings.defaultDate ?? ""}
+            onChange={(e) => patchSettings({ defaultDate: e.target.value || undefined })} /></label>
+      )}
+      <label className="f" style={{ width: 230 }}><span>Date format</span>
+        <select className="select" data-testid="date-format"
+          value={q.settings.dateFormat ?? ""}
+          onChange={(e) => patchSettings({ dateFormat: (e.target.value || undefined) as never })}>
+          <option value="">browser default (native picker)</option>
+          {DATE_FORMAT_OPTIONS.map((f) => <option key={f.value} value={f.value}>{f.value} → {f.example}</option>)}
+        </select></label>
+    </div>
+  </>
+));
+
+registerVariantSettings("base:time", ({ q, patchSettings }) => (
+  <>
+    <h3 className="sec">Time</h3>
+    <div className="row" style={{ flexWrap: "wrap", gap: 12, alignItems: "flex-end" }} data-testid="time-settings">
+      <label className="f" style={{ width: 200 }}><span>Default time</span>
+        <select className="select" data-testid="default-time-mode"
+          value={q.settings.defaultTimeMode ?? "none"}
+          onChange={(e) => patchSettings({ defaultTimeMode: e.target.value === "none" ? undefined : (e.target.value as "current" | "custom") })}>
+          <option value="none">none — left blank</option>
+          <option value="current">current time (the respondent's clock)</option>
+          <option value="custom">a specific time</option>
+        </select></label>
+      {q.settings.defaultTimeMode === "custom" && (
+        <label className="f" style={{ width: 140 }}><span>Specific time</span>
+          <input className="input" type="time" step={q.settings.showSeconds ? 1 : undefined} data-testid="default-time"
+            value={q.settings.defaultTime ?? ""}
+            onChange={(e) => patchSettings({ defaultTime: e.target.value || undefined })} /></label>
+      )}
+      <label className="f" style={{ width: 210 }}><span>Time format</span>
+        <select className="select" data-testid="time-format"
+          value={q.settings.timeFormat ?? ""}
+          onChange={(e) => patchSettings({ timeFormat: (e.target.value || undefined) as never })}>
+          <option value="">browser default (native picker)</option>
+          <option value="12">12-hour → 09:30 AM</option>
+          <option value="24">24-hour → 09:30</option>
+        </select></label>
+      <label className="row" style={{ gap: 6, fontSize: 13, paddingBottom: 8 }}>
+        <input type="checkbox" data-testid="show-seconds" checked={!!q.settings.showSeconds}
+          onChange={(e) => patchSettings({ showSeconds: e.target.checked || undefined })} />
+        show seconds
+      </label>
+    </div>
+  </>
+));

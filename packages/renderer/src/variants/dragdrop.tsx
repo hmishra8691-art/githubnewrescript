@@ -4,6 +4,7 @@ import type { QRProps } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { useOptions, useRows, activate, colsClass, usePointerDrag, dropTargetAt } from "./shared";
 import { anchor } from "../authoring";
+import { dropInto, bucketCapacity } from "@rescript/engine";
 
 /**
  * Drag & Drop family — three ways to answer with a pointer, each storing
@@ -76,18 +77,35 @@ const plain = (s: string) => s.replace(/<[^>]*>/g, "");
  * free-form categorisation, deliberately not the drag MATRIX (which is a grid
  * with column headers). Big labelled boxes read as containers you can put
  * something in; a table cell does not.
+ *
+ * ONE SORTER FOR BOTH BUCKET QUESTIONS (October 2026 review). Image
+ * Categorization drew a row of bucket buttons under each image; the review
+ * asked for the interaction the question is named for — "the respondent
+ * should be dragging images into predefined categories/buckets" — which is
+ * this one, with pictures for chips. The bucket rules (one or several per
+ * bucket, refuse or replace when full, capacity) are the engine's `dropInto`,
+ * the same definition validation applies; a refused drop says why.
  */
-export function DragBuckets(p: QRProps) {
+export function BucketSort(p: QRProps & { images?: boolean }) {
   const rows = useRows(p);
   const options = useOptions(p);
   const vals = (p.value ?? {}) as Record<string, unknown>;
   const [held, setHeld] = React.useState<string | null>(null);
+  const [refusal, setRefusal] = React.useState<string | null>(null);
+  const images = !!p.images;
+  const showLabels = images ? p.q.settings.showItemLabels !== false : true;
 
   const assign = (rc: string, bucket: string | number | null) => {
-    const next = { ...vals };
-    if (bucket == null) delete next[rc];
-    else next[rc] = bucket;
-    p.onChange(next);
+    setRefusal(null);
+    if (bucket == null) {
+      const next = { ...vals };
+      delete next[rc];
+      p.onChange(next);
+      return;
+    }
+    const r = dropInto({ settings: p.q.settings, options }, vals, rc, bucket);
+    if (!r.ok) { setRefusal(r.reason); return; }
+    p.onChange(r.next);
   };
 
   const { drag, dragProps } = useTapOrDrag<string>(
@@ -111,63 +129,86 @@ export function DragBuckets(p: QRProps) {
   if (rows.length === 0 || options.length === 0) {
     return (
       <div className="rs-empty-hint" data-testid="dragbuckets-empty">
-        This question needs <strong>rows</strong> (the items to sort) and{" "}
-        <strong>options</strong> (the buckets to sort them into).
+        This question needs <strong>{images ? "images" : "items"}</strong> to sort and{" "}
+        <strong>buckets</strong> to sort them into.
       </div>
     );
   }
 
-  const chip = (rc: string, label: string, inBucket: boolean) => (
-    <button
-      key={rc}
-      type="button"
-      className={`rs-dd-chip ${held === rc ? "held" : ""} ${inBucket ? "placed" : ""}`}
-      data-row={rc} {...anchor("row", rc)}
-      aria-pressed={held === rc}
-      {...dragProps(rc)}
-      // the pool and the buckets have their own click handlers; a tap on a
-      // chip is the chip's business, not its container's
-      onClick={(e) => e.stopPropagation()}
-      onKeyDown={activate(() => setHeld((h) => (h === rc ? null : rc)))}
-    >
-      <span className="rs-dd-grip" aria-hidden>⠿</span>
-      <span dangerouslySetInnerHTML={{ __html: label }} />
-    </button>
-  );
+  const imageOf = (r: (typeof rows)[number]) => (typeof r.meta?.image === "string" ? r.meta.image : undefined);
+  const chip = (r: (typeof rows)[number], inBucket: boolean) => {
+    const rc = String(r.code);
+    const img = images ? imageOf(r) : undefined;
+    return (
+      <button
+        key={rc}
+        type="button"
+        className={`rs-dd-chip ${images ? "rs-dd-imgchip" : ""} ${held === rc ? "held" : ""} ${inBucket ? "placed" : ""}`}
+        data-row={rc} {...anchor("row", rc)}
+        aria-pressed={held === rc}
+        aria-label={plain(r.label) || rc}
+        {...dragProps(rc)}
+        // the pool and the buckets have their own click handlers; a tap on a
+        // chip is the chip's business, not its container's
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={activate(() => setHeld((h) => (h === rc ? null : rc)))}
+      >
+        {!images && <span className="rs-dd-grip" aria-hidden>⠿</span>}
+        {img && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img className="rs-dd-img" src={img} alt={plain(r.label)} draggable={false} />
+        )}
+        {(showLabels || !img) && <span className="rs-dd-chip-label" dangerouslySetInnerHTML={{ __html: r.label }} />}
+      </button>
+    );
+  };
 
   return (
-    <div className="rs-dd">
+    <div className={`rs-dd ${images ? "rs-dd-images" : ""}`} data-testid={images ? "categorize" : "dragbuckets"}>
       <div className="rs-dd-status" data-testid="dragbuckets-progress">
         {sorted} / {rows.length} sorted
         {heldRow && <span className="rs-dd-hint"> — now pick a bucket for “{plain(heldRow.label)}”</span>}
       </div>
 
-      <div className="rs-dd-pool" data-drop="pool" role="group" aria-label="Unsorted items"
+      <div className="rs-dd-pool" data-drop="pool" role="group" aria-label={images ? "Images to categorize" : "Unsorted items"}
+        data-testid="dragbuckets-pool"
         onClick={() => { if (held) { assign(held, null); setHeld(null); } }}>
+        {images && <div className="rs-dd-pool-head">Images to categorize</div>}
         {pool.length === 0
-          ? <span className="rs-dd-empty">All items sorted — drop one here to take it back.</span>
-          : pool.map((r) => chip(String(r.code), r.label, false))}
+          ? <span className="rs-dd-empty">All {images ? "images" : "items"} sorted — drop one here to take it back.</span>
+          : pool.map((r) => chip(r, false))}
       </div>
 
-      <div className={`rs-dd-buckets ${colsClass(p, 3)}`}>
+      {refusal && <div className="rs-error-msg" role="alert" data-testid="bucket-refusal">{refusal}</div>}
+
+      <div className={`rs-dd-buckets ${colsClass(p, images ? 1 : 3)}`}>
         {options.map((o) => {
           const code = String(o.code);
           const mine = rows.filter((r) => String(vals[String(r.code)]) === code);
+          const cap = bucketCapacity(p.q.settings, o);
+          const desc = typeof o.meta?.description === "string" ? o.meta.description : "";
           return (
-            <div key={code} className={`rs-dd-bucket ${held ? "armed" : ""}`}
+            <div key={code} className={`rs-dd-bucket ${held ? "armed" : ""} ${mine.length >= cap ? "full" : ""}`}
               data-drop={`bucket-${code}`} data-code={code} {...anchor("option", code)}
               role="button" tabIndex={0}
               aria-label={`Bucket ${plain(o.label)}`}
               onClick={() => { if (held) { assign(held, o.code); setHeld(null); } }}
               onKeyDown={activate(() => { if (held) { assign(held, o.code); setHeld(null); } })}>
               <div className="rs-dd-bucket-head">
+                {o.imageUrl && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img className="rs-dd-bucket-icon" src={o.imageUrl} alt="" />
+                )}
                 <span dangerouslySetInnerHTML={{ __html: o.label }} />
-                <span className="rs-dd-count">{mine.length}</span>
+                <span className="rs-dd-count" data-testid={`bucket-count-${code}`}>
+                  {mine.length}{Number.isFinite(cap) ? ` / ${cap}` : ""}
+                </span>
               </div>
+              {desc && <div className="rs-dd-bucket-desc">{desc}</div>}
               <div className="rs-dd-bucket-body">
                 {mine.length === 0
-                  ? <span className="rs-dd-empty">drop items here</span>
-                  : mine.map((r) => chip(String(r.code), r.label, true))}
+                  ? <span className="rs-dd-empty">{images ? "Drag images here" : "drop items here"}</span>
+                  : mine.map((r) => chip(r, true))}
               </div>
             </div>
           );
@@ -176,6 +217,14 @@ export function DragBuckets(p: QRProps) {
       <DragGhost drag={drag}>{drag ? plain(rows.find((r) => String(r.code) === drag.payload)?.label ?? "") : null}</DragGhost>
     </div>
   );
+}
+
+export function DragBuckets(p: QRProps) {
+  return <BucketSort {...p} />;
+}
+/** Image Categorization / Buckets — the same sorter with pictures for chips. */
+export function ImageCategorize(p: QRProps) {
+  return <BucketSort {...p} images />;
 }
 
 /* --------------------------------------------------------- Drag onto Scale */
@@ -492,5 +541,6 @@ export function ChipAllocation(p: QRProps) {
 }
 
 registerVariantRenderer("dragbuckets", DragBuckets);
+registerVariantRenderer("categorize", ImageCategorize);
 registerVariantRenderer("dragscale", DragScale);
 registerVariantRenderer("chipallocation", ChipAllocation);

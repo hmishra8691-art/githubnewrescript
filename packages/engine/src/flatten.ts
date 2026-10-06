@@ -115,6 +115,10 @@ export function flattenVariables(def: SurveyDefinition, state: ResponseState, op
     }
     placed.add(legacyOtherKey(q.id, null));
 
+    // a rating's optional comment: `<id>__comment` → VAR_COMMENT (Video Rating, "Allow Additional Comment")
+    const comment = state.answers[`${q.id}__comment`];
+    if (typeof comment === "string" && comment.trim()) out[`${q.variableName}_COMMENT`] = comment;
+
     // voice: `<id>__voice` → VAR_VOICE_TRANSCRIPT / _CONFIDENCE / _REPEATS / _CLARIFICATIONS (aiConversation.ts)
     const voice = state.answers[`${q.id}__voice`] as { transcript?: string; confidence?: number; repeats?: number; clarifications?: number } | undefined;
     if (voice && typeof voice === "object") {

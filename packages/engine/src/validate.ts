@@ -1,5 +1,6 @@
 import { uiText } from "./localization.js";
 import type { Question, ValidationRule, SurveyDefinition } from "@rescript/schema";
+import { resolveVariant } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition, conditionFires } from "./evaluate.js";
 import { effectiveQuestion } from "./carryforward.js";
@@ -7,7 +8,7 @@ import { answerKey, lookupAnswer } from "./state.js";
 import { selectedOtherCodes, otherTextFor, checkOtherText } from "./otherSpecify.js";
 import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
-import { validateFieldValue } from "./fields.js";
+import { validateFieldValue, rangeEndKey } from "./fields.js";
 import { createScriptCtx, runScript, type ScriptRunResult } from "./scripts.js";
 import { resolvePiping } from "./piping.js";
 import { geoAnswered, geoProblems } from "./geo.js";
@@ -17,7 +18,10 @@ import { videoCompleted, interviewAnswered, interviewProblems, requiresAudioAnsw
 import { isEmptyAnswer } from "./answers.js";
 import { escapeHtml, sanitizeHtml } from "./html.js";
 import { validationBounds } from "./scale.js";
-import { checkPhone, checkPostal, checkUrl } from "./formats.js";
+import { checkPhone, checkPostal, checkUrl, phoneCountryFor } from "./formats.js";
+import { uploadAccept, uploadTypeAllowed } from "./uploadTypes.js";
+import { bucketProblems, hasBucketRules } from "./bucketRules.js";
+import { unfinishedClips } from "./videos.js";
 
 /**
  * Whether a failed check stops the respondent.
@@ -284,7 +288,7 @@ export function checkScalarRules(
        */
       case "phone": {
         if (isEmpty(value)) break;
-        const problem = checkPhone(String(value), ctx.question?.settings.phoneCountry);
+        const problem = checkPhone(String(value), phoneCountryFor(ctx.question?.settings.phoneCountry, String(value)));
         if (problem) fail(ruleError(rule, problem));
         break;
       }
@@ -535,6 +539,26 @@ export function validateQuestion(
       push(uiText(ctx.ui, "min_value", { min: bounds.min }));
     if (bounds.max != null && Number(value) > bounds.max)
       push(uiText(ctx.ui, "max_value", { max: bounds.max }));
+    /*
+     * FORMAT AND SIGN (October 2026 review: "decimal/whole-number settings,
+     * positive/negative number options"). Whole numbers are the `integer`
+     * rule, checked with the other rules; what is checked here is what the
+     * rule could not say. Counted on the number as typed, so "2.50" with two
+     * places allowed passes and "2.505" does not.
+     */
+    if (q.type === "numeric") {
+      const places = q.settings.decimalPlaces;
+      if (places != null) {
+        const frac = /\.(\d+)$/.exec(String(value).trim())?.[1] ?? "";
+        if (frac.length > places)
+          push(places === 0 ? uiText(ctx.ui, "whole_number") : uiText(ctx.ui, "decimal_places", { n: places }));
+      }
+      const n = Number(value);
+      if (q.settings.numberSign === "positive" && Number.isFinite(n) && n < 0)
+        push(uiText(ctx.ui, "number_positive"));
+      if (q.settings.numberSign === "negative" && Number.isFinite(n) && n > 0)
+        push(uiText(ctx.ui, "number_negative"));
+    }
   }
   /*
    * DATE BOUNDS FROM SETTINGS.
@@ -586,13 +610,18 @@ export function validateQuestion(
     }
   }
 
-  // a from–to pair (numeric range, dual slider): the order has to hold
-  if (q.settings.rangePair && value && typeof value === "object" && !Array.isArray(value)) {
+  // a from–to pair (numeric range, dual slider, date range): the order has to hold,
+  // compared as the fields' type — dates as dates, times as times (see `rangeEndKey`)
+  const isRange = q.settings.rangePair || resolveVariant(q.variant)?.id === "datetime.date_range";
+  if (isRange && value && typeof value === "object" && !Array.isArray(value)) {
     const v = value as Record<string, unknown>;
-    const codes = (q.rows ?? []).map((r) => String(r.code));
+    const rows = q.rows ?? [];
+    const codes = rows.map((r) => String(r.code));
     const lo = v[codes[0] ?? "from"], hi = v[codes[1] ?? "to"];
-    if (!isEmpty(lo) && !isEmpty(hi) && Number(lo) > Number(hi)) {
-      push(uiText(ctx.ui, "range_order"));
+    if (!isEmpty(lo) && !isEmpty(hi)) {
+      const t = rows[0]?.fieldType ?? (q.type === "numeric_list" ? "number" : undefined);
+      const a = rangeEndKey(t, lo), b = rangeEndKey(rows[1]?.fieldType ?? t, hi);
+      if (a != null && b != null && typeof a === typeof b && a > b) push(uiText(ctx.ui, "range_order"));
     }
   }
 
@@ -712,14 +741,27 @@ export function validateQuestion(
     for (const m of interviewProblems(q, value)) push(m);
   }
 
-  // uploads: count and size
+  /*
+   * UPLOADS: type, then count, then size (October 2026 review: "The validation
+   * should check: File Type → File Count → File Size → Required Response").
+   * The type rule is `uploadAccept` — the same one the respondent's picker
+   * refuses with — so a file of the wrong kind cannot arrive by any route.
+   */
   if (q.type === "upload" && !isEmpty(value)) {
-    const files = (Array.isArray(value) ? value : [value]) as { size?: number }[];
+    const files = (Array.isArray(value) ? value : [value]) as { size?: number; name?: string; type?: string }[];
+    const acc = uploadAccept(q);
+    if (acc && files.some((f) => !uploadTypeAllowed(acc, f ?? {})))
+      push(uiText(ctx.ui, "upload_type", { wanted: acc.wanted }));
     const max = q.settings.maxFiles ?? 1;
-    if (files.length > max) push(`Please attach at most ${max} file${max === 1 ? "" : "s"}.`);
+    if (files.length > max) push(max === 1 ? uiText(ctx.ui, "upload_max_file") : uiText(ctx.ui, "upload_max_files", { n: max }));
+    const min = q.settings.minFiles;
+    if (min != null && min > 1 && files.length < min) push(uiText(ctx.ui, "upload_min_files", { n: min }));
     const cap = q.settings.maxSizeMb;
     if (cap != null && files.some((f) => (f?.size ?? 0) > cap * 1024 * 1024))
-      push(`Each file must be under ${cap} MB.`);
+      push(uiText(ctx.ui, "upload_size", { mb: cap }));
+    const total = q.settings.maxTotalMb;
+    if (total != null && files.reduce((a, f) => a + (f?.size ?? 0), 0) > total * 1024 * 1024)
+      push(uiText(ctx.ui, "upload_total", { mb: total }));
   }
 
   // media timeline / annotation: the count rules are the min/max selections
@@ -870,13 +912,21 @@ export function validateQuestion(
       }
       if (!isEmpty(v)) {
         const ft = row.fieldType ?? (q.type === "numeric_list" ? "number" : "text");
-        const typeErr = validateFieldValue(ft, v, q.settings);
+        /* a phone field may name its own country (`row.meta.phoneCountry`), over the question's */
+        const rowCountry = typeof row.meta?.phoneCountry === "string" ? row.meta.phoneCountry : undefined;
+        const typeErr = validateFieldValue(ft, v, rowCountry ? { ...q.settings, phoneCountry: rowCountry } : q.settings);
         if (typeErr) push(`${label}: ${typeErr}`, { rowCode: rc });
       }
       checkScalarRules(row.validation ?? [], v, ctx, (m, sev) =>
         push(prefixed(label, m), { rowCode: rc, severity: sev }),
       );
     }
+  }
+
+  // bucket sorts (Drag into Buckets, Image Categorization): capacity, minimum, empty buckets
+  if (hasBucketRules(resolveVariant(q.variant)?.renderer)) {
+    /* the buckets as the respondent saw them — masked ones are not judged */
+    for (const m of bucketProblems({ ...q, options: effectiveQuestion(q, ctx).options }, value, ctx.ui)) push(m);
   }
 
   // matrix: required means every visible row answered
@@ -1008,8 +1058,10 @@ export function validateQuestion(
     q.settings.requireComplete &&
     (q.rows ?? []).some((r) => String(r.code) === "completed")
   ) {
-    const v = (value ?? {}) as Record<string, unknown>;
-    if (Number(v.completed) !== 1) push("Please watch the video to the end.");
+    /* every clip (October 2026 review: Watch-Time Tracking may hold several), named when there are several */
+    const left = unfinishedClips(q, value);
+    const several = (q.rows ?? []).some((r) => /^completed_\d+$/.test(String(r.code)));
+    for (const i of left) push(several ? uiText(ctx.ui, "watch_clip_n", { n: i + 1 }) : uiText(ctx.ui, "watch_clip"));
   }
 
   return errors;

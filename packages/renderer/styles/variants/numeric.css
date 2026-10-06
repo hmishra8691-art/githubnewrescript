@@ -17,7 +17,33 @@
 .rs-numrange-lbl {
   font-size: 0.82em;
   color: var(--rs-subtle);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
+/* the cue saying what each end takes — date, time, duration, number */
+.rs-numrange-cue {
+  font-size: 0.86em;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--rs-border, rgba(0, 0, 0, 0.14));
+  color: var(--rs-text);
+  white-space: nowrap;
+}
+.rs-numrange-field[data-kind="date"] .rs-input { max-width: 170px; }
+/* time: hour : minute AM/PM, and duration: hours h minutes min — one line each */
+.rs-timesel,
+.rs-duration {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: nowrap;
+}
+.rs-timesel .rs-select,
+.rs-duration .rs-select { width: auto; min-width: 58px; }
+.rs-duration .rs-input { max-width: 70px; }
+.rs-duration-unit { font-size: 0.85em; color: var(--rs-subtle); }
 .rs-numrange-field .rs-input {
   max-width: 130px;
   width: 100%;

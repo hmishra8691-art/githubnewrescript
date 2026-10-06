@@ -9,11 +9,37 @@ const h = await openHarness();
 const made = {};
 
 /* ------------------------------------------------ create every variant */
-const SINGLE = ["icon_select", "list_select", "heart_rating", "product_choice", "statement_choice", "pairwise_choice"];
+const SINGLE = ["icon_select", "list_select", "heart_rating", "product_choice", "statement_choice"];
 const MULTI = ["icon_multi_select", "list_multi_select", "multi_item_carousel", "product_multi_select"];
 for (const k of SINGLE) made[k] = await h.createFromPicker("single_select", `single_select.${k}`);
 for (const k of MULTI) made[k] = await h.createFromPicker("multi_select", `multi_select.${k}`);
-console.log("✔ all 10 select-family variants are stable in the picker and create with their variant id");
+/*
+ * The single-comparison Pairwise Choice is no longer offered: the October 2026
+ * review asked for one Pairwise Choice ("Option A / Option B, with + Field to
+ * add the next pair"), which is `single_select.pairwise_set`. A survey that
+ * already holds the older single comparison still renders and answers as it
+ * did — added here straight into the definition, the way such a survey arrives.
+ */
+{
+  const { page } = h;
+  await h.goTab("Questions");
+  await page.click('[data-testid="add-question-top"]');
+  await page.click('[data-testid="picker-family-single_select"]');
+  await page.waitForSelector('[data-testid="picker-variant-single_select.pairwise_set"]');
+  assert.equal(await page.$('[data-testid="picker-variant-single_select.pairwise_choice"]'), null, "the single comparison is not a second Pairwise Choice in the picker");
+  await page.click('.modal .btn:has-text("close")').catch(() => {});
+  await page.click('[data-testid="close-question"]').catch(() => {});
+  const def = await h.readDef();
+  const legacy = {
+    id: "q_pair_legacy", code: "QPAIR", variableName: "QPAIR", type: "single_select", variant: "single_select.pairwise_choice",
+    text: "Which do you prefer?", options: [{ code: 1, label: "Option A" }, { code: 2, label: "Option B" }],
+  };
+  def.questions.push(legacy);
+  def.flow[0].questionIds.push(legacy.id);
+  await h.loadDef(def);
+  made.pairwise_choice = (await h.readDef()).questions.find((q) => q.id === legacy.id);
+}
+console.log("✔ all 9 select-family variants are stable in the picker and create with their variant id; the older single pairwise still loads");
 
 assert.equal(made.icon_select.type, "single_select");
 assert.equal(made.heart_rating.type, "numeric");

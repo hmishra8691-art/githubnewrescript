@@ -39,3 +39,5 @@ export { registerVoiceProvider, ttsProvider, sttProvider, browserTts, browserStt
 export type { TtsProvider, SttProvider, VoiceInfo, SpeakOptions, SttResult, SttSession } from "./voice/providers";
 export { QuestionAudio } from "./QuestionAudio";
 export { brandingVars, widthModeClass, brandingClasses, pageThemeVars, brandingResponsiveCss, backgroundLayers, safeCssValue, safeImageUrl, SHADOWS } from "./branding";
+
+export { MediaGateContext, useMediaHold, useMediaGateState, type MediaGate } from "./mediaGate";

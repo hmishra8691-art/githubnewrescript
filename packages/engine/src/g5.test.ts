@@ -168,11 +168,11 @@ test("an upload's size cap and file count are engine rules, not renderer manners
   const one = survey({ type: "upload", variant: "upload.file", settings: { maxFiles: 1, maxSizeMb: 2 } });
   const file = (size: number) => ({ url: "data:,x", name: "a.pdf", size, type: "application/pdf" });
   assert.deepEqual(messages(one.def, one.q, file(1024), one.ctx), []);
-  assert.ok(messages(one.def, one.q, file(5 * 1024 * 1024), one.ctx).some((m) => /under 2 MB/.test(m)));
+  assert.ok(messages(one.def, one.q, file(5 * 1024 * 1024), one.ctx).some((m) => /exceeds the 2 MB limit/.test(m)), "the review's wording: File size exceeds the 2 MB limit.");
 
   const two = survey({ type: "upload", variant: "upload.file", settings: { maxFiles: 2 } });
   assert.deepEqual(messages(two.def, two.q, [file(10), file(20)], two.ctx), []);
-  assert.ok(messages(two.def, two.q, [file(10), file(20), file(30)], two.ctx).some((m) => /at most 2 files/.test(m)));
+  assert.ok(messages(two.def, two.q, [file(10), file(20), file(30)], two.ctx).some((m) => /maximum of 2 files/.test(m)), "the review's wording: You can upload a maximum of 2 files.");
 
   // two files means two sets of export columns
   const names = questionVariables(two.q).map((v) => v.name);

@@ -152,7 +152,22 @@ export interface QuestionVariantDef {
    *
    * Absent means what it always meant: every type, and fields may be added.
    */
-  fields?: { types?: string[]; fixed?: boolean };
+  fields?: {
+    types?: string[];
+    fixed?: boolean;
+    /**
+     * Every field has the same type — choosing one sets them all. "The From
+     * and To fields should always use the same field type … It should not
+     * be possible to configure From → Date, To → Time" (October 2026 review).
+     */
+    sameType?: boolean;
+    /**
+     * Sections this form offers to add in one step. "address" adds Street,
+     * City, State / Region and ZIP / Postal Code — the Contact Form's "the
+     * user should also be able to add an Address section/field".
+     */
+    sections?: "address"[];
+  };
   /**
    * WHAT THIS VARIANT'S OPTION LIST IS CALLED IN THE EDITOR.
    *
@@ -192,6 +207,93 @@ export interface QuestionVariantDef {
    * types within the same matrix".
    */
   columnTypes?: string[];
+  /**
+   * HOW THE BUILDER IS LAID OUT FOR THIS VARIANT, where the generic layout is
+   * wrong for it.
+   *
+   * The question editor draws its sections in one fixed order — Options,
+   * then Rows, then any variant-specific block — and every variant that
+   * declares `options` or `rows` gets the generic editor for them. The
+   * October 2026 review found that wrong for the questions whose items are
+   * not "options" at all: a bucket sort reads "Question → Rows/Items →
+   * Buckets → Bucket rules → Layout → Validation", a pairwise question is
+   * "Option A vs Option B, + Field for another pair" with no free option list,
+   * a swipe deck is a list of CARDS with an image and a price on each, and a
+   * watch-time question has fixed tracking fields nobody may edit.
+   *
+   *   hide       generic sections not drawn, because the variant's own block
+   *              edits the same data in the shape the question has (or, for
+   *              `fields`, because the data is system-controlled)
+   *   rowsFirst  the rows (the things being sorted) above the options (the
+   *              places they are sorted into)
+   *   layoutLast the Layout control as its own block after the variant's
+   *              settings, instead of beside the option list
+   *   rowsLabel  what the rows are called in this question ("Items", "Images")
+   *
+   * Absent means the editor every variant has always had.
+   */
+  builder?: {
+    hide?: ("options" | "rows" | "fields" | "bounds")[];
+    rowsFirst?: boolean;
+    layoutLast?: boolean;
+    rowsLabel?: string;
+    rowsHint?: string;
+    /** each row carries a picture (`row.meta.image`) — the images of an Image Categorization */
+    rowsImages?: boolean;
+    /** the rows' add button ("+ Add card"); default "+ option" */
+    rowsAddLabel?: string;
+    /**
+     * The option list's heading and hint follow a setting — Swipe to Rate /
+     * Rank / Categorize calls its options "Scale points" or "Categories", and
+     * has none to edit when the swipe records a rank (they are 1…N, kept in
+     * step with the cards).
+     */
+    optionsBySetting?: { key: string; label: Record<string, string>; hint?: Record<string, string>; hide?: string[] };
+  };
+  /**
+   * WHICH NUMBER CONTROLS A NUMERIC SUBTYPE OFFERS.
+   *
+   * Numeric Open End, Currency, Percentage and Quantity are one base type and
+   * the presets share one capability list (a preset may not unlock what its
+   * parent lacks, so `currency_symbol` sits on the parent). The editor drew
+   * every number control for all four, and the review asked for the opposite:
+   * "Remove Currency / Currency Type, Type a Symbol, and Symbol Side from
+   * Numeric Open End, Percentage, Quantity. Keep these settings only for the
+   * Currency subtype", with Min/Max, decimal/whole-number and sign options on
+   * Open End, a fixed % on Percentage, and a Unit on Quantity.
+   *
+   *   symbol    "choose" — the currency list, a typed symbol and its side;
+   *             "fixed"  — `fixedSymbol` is drawn and only its side may be
+   *                        chosen; absent — no symbol controls
+   *   unit      the unit word beside the number ("kg", "pieces")
+   *   stepper   the − / + stepper toggle and its step
+   *   format    whole number / decimal, and the maximum decimal places
+   *   sign      any / zero or more / zero or less
+   *
+   * A question that already carries a setting this policy does not offer
+   * keeps a control for it, so nothing authored before the policy becomes
+   * uneditable.
+   */
+  numberInput?: {
+    symbol?: "choose" | "fixed";
+    fixedSymbol?: string;
+    unit?: boolean;
+    stepper?: boolean;
+    format?: boolean;
+    sign?: boolean;
+  };
+  /**
+   * THIS VARIANT IS NO LONGER OFFERED; ANOTHER ONE IS, IN ITS PLACE.
+   *
+   * Unlike `supersededBy`, nothing is redirected: a question that stores this
+   * id keeps its own response model, renderer and editor, because the
+   * replacement stores its answers differently and rewriting the id would
+   * change what every collected answer means. The picker and the type
+   * switcher offer the named variant instead, and the editor offers the
+   * conversion — through the ordinary type change, which shows what it does
+   * to the answer shape before it happens.
+   */
+  pickerReplacedBy?: string;
   /** applied on creation / conversion (merged into the question) */
   defaults?: {
     settings?: Record<string, unknown>;
@@ -251,7 +353,7 @@ export const variantRegistry = new Registry<QuestionVariantDef>("id");
 
 /** Variants a programmer may choose today: stable, and not retired. */
 export function isSelectableVariant(v: QuestionVariantDef): boolean {
-  return v.status === "stable" && !v.supersededBy;
+  return v.status === "stable" && !v.supersededBy && !v.pickerReplacedBy;
 }
 
 /**
@@ -383,6 +485,19 @@ function planned(f: Fam, names: [string, string][]): QuestionVariantDef[] {
 }
 
 /* ------------------------------------------------------------------ catalog */
+
+/**
+ * A swipe deck's rows are its CARDS (October 2026 review). The rows section
+ * keeps what it always edited — code, title, order, anchoring, show-when
+ * logic — under the name the author uses; the picture, subtitle,
+ * information, price and fields are edited under "Card content"
+ * (Studio `variantConfig/swipe.tsx`).
+ */
+const SWIPE_CARDS = {
+  rowsLabel: "Cards",
+  rowsAddLabel: "+ Add card",
+  rowsHint: "Each card's code, title, order, anchoring and show-when logic. Its picture, subtitle, information, price and fields are under Card content below.",
+} as const;
 
 const F = {
   single: { family: "single_select", familyLabel: "Single Select" },
@@ -569,10 +684,22 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: CAP_SINGLE, validations: VAL_SINGLE,
     defaults: { instruction: "Which statement comes closest to your view?" },
   }),
-  stable(F.single, "pairwise_choice", "Pairwise Choice", "A vs B forced choice between exactly two options.", {
+  /*
+   * THE OLDER, SINGLE-COMPARISON PAIRWISE. The October 2026 review asked for
+   * one Pairwise Choice: "Combine Pairwise Choice and Pairwise Comparison Set
+   * into a single Pairwise Choice question type … with exactly two options
+   * per comparison and a + Field button to add additional pairs". This one
+   * stores ONE code, so it cannot grow a second pair without changing what
+   * its stored answers mean; the set below stores one code per pair. So the
+   * set takes the name and the picker, and this keeps working — editor,
+   * renderer, answers — for every question already authored with it, with
+   * the conversion offered in its editor.
+   */
+  stable(F.single, "pairwise_choice", "Pairwise Choice (single comparison)", "One A vs B forced choice — the older form; Pairwise Choice now holds any number of pairs.", {
     baseType: "single_select", renderer: "pairwise", responseModel: "single_choice",
     capabilities: ["options", "images", "randomization", "carry_forward"], validations: VAL_SINGLE,
     defaults: { options: [{ code: 1, label: "Option A" }, { code: 2, label: "Option B" }] },
+    pickerReplacedBy: "single_select.pairwise_set",
   }),
   /*
    * PAIRWISE, THE WAY THE REVIEW ASKED FOR IT.
@@ -593,17 +720,26 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
    *
    * Each pair names its two choices in `row.meta.left` / `row.meta.right`.
    */
-  stable(F.single, "pairwise_set", "Pairwise Comparison Set", "Several A-vs-B comparisons; each pair holds exactly two choices.", {
+  /*
+   * PAIRWISE CHOICE — one or more A-vs-B comparisons. The review's builder:
+   * "For the initial comparison, show only Option A, Option B. Remove the
+   * existing + Option button … add a + Field option after Option A and
+   * Option B. When + Field is selected, add another complete pair: Option C,
+   * Option D." The pair editor (`variantConfig/pairwise.tsx`) is the whole
+   * builder, so the generic Options and Rows editors are not drawn: each
+   * pair's two options are written as the pair is, and there is no free
+   * option list to fill with a third.
+   */
+  stable(F.single, "pairwise_set", "Pairwise Choice", "A vs B forced choice — exactly two options per comparison; + Field adds another pair.", {
     baseType: "matrix_single", renderer: "pairwiseset", responseModel: "per_row",
     capabilities: ["options", "rows", "images", "randomization"], validations: ["required"],
+    builder: { hide: ["options", "rows"] },
     defaults: {
       options: [
-        { code: 1, label: "Choice 1" }, { code: 2, label: "Choice 2" },
-        { code: 3, label: "Choice 3" }, { code: 4, label: "Choice 4" },
+        { code: 1, label: "Option A" }, { code: 2, label: "Option B" },
       ],
       rows: [
         { code: "p1", label: "Pair 1", meta: { left: "1", right: "2" } },
-        { code: "p2", label: "Pair 2", meta: { left: "3", right: "4" } },
       ],
       instruction: "For each pair, choose the one you prefer.",
     },
@@ -743,6 +879,8 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
         { code: "last", label: "Last Name", fieldType: "text", required: true, flags: [], validation: [] },
       ],
     },
+    /* "only two fields … Short Text and fixed … Both fields should be editable so the user can change the field label" */
+    fields: { types: ["text"], fixed: true },
     presetOf: "list.text_list",
   }),
   stable(F.text, "address", "Address", "Street / city / state / ZIP field set.", {
@@ -756,6 +894,8 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
         { code: "zip", label: "ZIP / Postal Code", fieldType: "zip", required: true, flags: [], validation: [] },
       ],
     },
+    /* "Allowed field types should be: Short Text, ZIP / Postal Code" — and more address fields may be added */
+    fields: { types: ["text", "zip"] },
     presetOf: "list.text_list",
   }),
   stable(F.text, "company", "Company Name", "Single company field.", {
@@ -781,13 +921,15 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
    * or hours and was the other half of "the five numeric subtypes look the
    * same": there was no way to say what the number was OF.
    */
-  stable(F.numeric, "open", "Numeric Open End", "Any number, with an optional unit or currency symbol.", {
+  stable(F.numeric, "open", "Numeric Open End", "Any number — set the range, whole or decimal, and whether negatives are allowed.", {
     baseType: "numeric", responseModel: "numeric",
     capabilities: ["numeric_bounds", "currency_symbol"], validations: VAL_NUM,
+    numberInput: { format: true, sign: true },
   }),
   stable(F.numeric, "integer", "Integer", "Whole numbers only.", {
     baseType: "numeric", responseModel: "numeric",
     capabilities: ["numeric_bounds"], validations: VAL_NUM,
+    numberInput: { format: true, sign: true },
     defaults: { validation: [{ kind: "integer" }] },
     presetOf: "numeric.open",
   }),
@@ -802,12 +944,14 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   stable(F.numeric, "currency", "Currency", "Monetary amount with a currency symbol.", {
     baseType: "numeric", responseModel: "numeric",
     capabilities: ["numeric_bounds", "currency_symbol"], validations: VAL_NUM,
+    numberInput: { symbol: "choose", format: true },
     defaults: { settings: { minValue: 0, placeholder: "0.00", currencyCode: "USD", symbolSide: "left" } },
     presetOf: "numeric.open",
   }),
   stable(F.numeric, "percentage", "Percentage", "0–100 value, shown with a per cent sign.", {
     baseType: "numeric", responseModel: "numeric",
     capabilities: ["numeric_bounds", "currency_symbol"], validations: VAL_NUM,
+    numberInput: { symbol: "fixed", fixedSymbol: "%", format: true },
     defaults: { settings: { minValue: 0, maxValue: 100, currencySymbol: "%", symbolSide: "right" } },
     presetOf: "numeric.open",
   }),
@@ -819,6 +963,7 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   stable(F.numeric, "quantity", "Quantity", "Non-negative whole number with − / + steppers.", {
     baseType: "numeric", responseModel: "numeric",
     capabilities: ["numeric_bounds", "currency_symbol"], validations: VAL_NUM,
+    numberInput: { unit: true, stepper: true, format: true },
     defaults: { settings: { minValue: 0, stepper: true, step: 1, unitLabel: "items" }, validation: [{ kind: "integer" }] },
     presetOf: "numeric.open",
   }),
@@ -853,7 +998,7 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       settings: { rangePair: true },
     },
     /* a from–to pair is two fields of a range-shaped kind, and exactly two */
-    fields: { types: ["number", "decimal", "integer", "date", "time", "hours"], fixed: true },
+    fields: { types: ["number", "decimal", "integer", "date", "time", "hours"], fixed: true, sameType: true },
   }),
 
   /* ----------------------------------------------------------------- LIST */
@@ -864,6 +1009,8 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   stable(F.list, "numeric_list", "Numeric List", "Labeled numeric fields.", {
     baseType: "numeric_list", responseModel: "fields",
     capabilities: ["fields", "layout_columns"], validations: ["required"],
+    /* "only numeric field types should be available: Number, Decimal, Integer" */
+    fields: { types: ["number", "decimal", "integer"] },
   }),
   stable(F.list, "mixed", "Multi-Field List / Custom Form", "Rows mixing text, email, currency, date… any field type per row.", {
     baseType: "text_list", responseModel: "fields",
@@ -891,9 +1038,12 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       settings: { minRepeats: 1, maxRepeats: 10 },
     },
   }),
-  stable(F.list, "editable_table", "Editable Table", "Spreadsheet-style entry grid.", {
+  stable(F.list, "editable_table", "Editable Table", "Spreadsheet-style entry grid — set each column's title, type and validation.", {
     baseType: "custom_table", renderer: "spreadsheet", responseModel: "cells",
-    capabilities: ["rows", "columns"], validations: ["required"],
+    /* `randomization`: "Randomize rows (if applicable)" — the right panel's row randomization */
+    capabilities: ["rows", "columns", "randomization"], validations: ["required"],
+    /* the cell types the table draws; a number column takes whole-number and currency options in the Columns editor */
+    columnTypes: ["text", "longtext", "numeric", "date", "time", "dropdown", "checkbox"],
     defaults: {
       rows: [1, 2, 3].map((n) => ({ code: String(n), label: `Row ${n}` })),
       columns: [
@@ -1454,15 +1604,33 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
     supersededBy: "comparison.side_by_side",
   }),
-  stable(F.image, "categorization", "Image Categorization / Buckets", "Assign each item to a bucket (stored like matrix rows).", {
+  /*
+   * IMAGE → BUCKET, built as one (October 2026 review): "Remove: Rows,
+   * Columns, Search Box. Add: Images, Buckets / Categories, Bucket Rules,
+   * Image/Display Settings". The images are the rows (each with its picture
+   * in `meta.image` and a label), the buckets are the options (each with a
+   * description, an image and a capacity), and the respondent drags one into
+   * the other — the same sorter and the same rules as Drag into Buckets.
+   * The answer is still `{ imageCode: bucketCode }`.
+   */
+  stable(F.image, "categorization", "Image Categorization / Buckets", "Drag each image into the bucket it belongs to.", {
     baseType: "matrix_single", renderer: "categorize", responseModel: "per_row",
     capabilities: ["rows", "options", "randomization", "carry_forward", "images"],
     validations: ["required"],
+    optionsLabel: "Buckets / Categories",
+    optionsHint: "The drop zones — each with an optional description, image and capacity.",
+    builder: {
+      rowsFirst: true, rowsImages: true, rowsLabel: "Images",
+      rowsHint: "The pictures respondents sort — upload, replace or remove each, label it, and reorder.",
+    },
     defaults: {
       options: [
         { code: "keep", label: "Keep" }, { code: "unsure", label: "Unsure" }, { code: "drop", label: "Drop" },
       ],
-      instruction: "Assign each item to a category.",
+      rows: [
+        { code: "1", label: "Image 1" }, { code: "2", label: "Image 2" }, { code: "3", label: "Image 3" },
+      ],
+      instruction: "Drag each image into the bucket it belongs to.",
     },
   }),
   stable(F.image, "annotation", "Image Annotation / Markup", "Draw or comment on an image.", {
@@ -1477,11 +1645,22 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   }),
 
   /* ------------------------------------------------------------ VIDEO/AUDIO */
-  stable(F.media, "video_rating", "Video Rating", "Rate after watching a clip.", {
+  /*
+   * A dedicated builder (October 2026 review): "Video Rating should not use
+   * generic Rows, Columns, or Options sections … The builder should
+   * dynamically show only the settings relevant to the selected rating
+   * method." Its own block (variantConfig/media.tsx) holds the clip, the
+   * rating type and range, the labels, the response settings and playback;
+   * the generic Min / Max (which sat beside "Lowest star / Highest star",
+   * the same two numbers twice) is not drawn.
+   */
+  stable(F.media, "video_rating", "Video Rating", "Watch a clip, then rate it — stars, numbers, faces, a slider or a labelled scale.", {
     baseType: "numeric", renderer: "videorating", responseModel: "numeric",
     capabilities: ["numeric_bounds"], validations: VAL_NUM,
+    builder: { hide: ["bounds"] },
+    scale: { min: 0, max: 10 },
     defaults: {
-      settings: { minValue: 1, maxValue: 5, requireComplete: true },
+      settings: { minValue: 1, maxValue: 5, requireComplete: true, ratingType: "stars" },
       instruction: "Watch the clip, then rate it.",
     },
   }),
@@ -1490,7 +1669,8 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: ["options", "min_max_selections"],
     validations: ["required", "min_selections", "max_selections"],
     defaults: {
-      settings: { timelineMode: "options" },
+      /* "the first video should auto-play by default" (October 2026 review) */
+      settings: { timelineMode: "options", autoPlayVideo: true },
       options: [
         { code: "like", label: "👍 Like" },
         { code: "dislike", label: "👎 Dislike" },
@@ -1499,9 +1679,16 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       instruction: "While the clip plays, tap a reaction whenever you feel it.",
     },
   }),
+  /*
+   * The tracking fields are the system's (engine `watchTimeRows`) — "Remove
+   * the 'Each Row Its Own Type / Validation / Variable' section completely,
+   * including the '+ Field' option" (October 2026 review). The builder holds
+   * the clips and the playback settings; the fields follow the clip list.
+   */
   stable(F.media, "watch_time", "Video Watch-Time Tracking", "Capture how long respondents watch.", {
     baseType: "numeric_list", renderer: "watchtime", responseModel: "fields",
     capabilities: ["fields"], validations: ["required"],
+    builder: { hide: ["fields"] },
     defaults: {
       settings: { requireComplete: false },
       rows: [
@@ -1604,10 +1791,17 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     validations: ["required"],
     supersededBy: "ranking.drag",
   }),
+  /*
+   * "Question → Rows/Items → Buckets Editor → Bucket Rules → Layout →
+   * Validation" (October 2026 review) — the builder policy draws it in that
+   * order; the rules block is `variantConfig/buckets.tsx`.
+   */
   stable(F.dragdrop, "buckets", "Drag into Buckets / Categorization", "Sort items into named buckets — drag a chip, or tap the chip then the bucket.", {
     baseType: "matrix_single", renderer: "dragbuckets", responseModel: "per_row",
     capabilities: ["rows", "options", "randomization", "carry_forward", "layout_columns"],
     validations: ["required"],
+    optionsLabel: "Buckets / Categories",
+    builder: { rowsFirst: true, rowsLabel: "Rows / Items", layoutLast: true },
     defaults: {
       settings: { columnsLayout: 3 },
       options: [
@@ -1665,6 +1859,8 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     baseType: "matrix_single", renderer: "swipe", responseModel: "per_row",
     capabilities: ["rows", "options", "randomization", "carry_forward"],
     validations: ["required"],
+    /* the rows are CARDS; their image, subtitle, price and fields are edited under Card content (variantConfig/swipe.tsx) */
+    builder: SWIPE_CARDS,
     optionsLabel: "Swipe answers (left, then right)",
     optionsHint: "Exactly two — the first is the left swipe, the second the right.",
     optionCount: { min: 2, max: 2, reason: "a swipe card has two edges: left and right" },
@@ -1708,10 +1904,22 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
    * scale is also tappable. So the option list is named for what it is, and
    * the instruction says both ways of answering.
    */
-  stable(F.swipe, "rate", "Swipe-to-Rate / Rank / Categorize", "Card deck with a scale under the card: swipe to the extremes, or tap any point on the scale.", {
+  stable(F.swipe, "rate", "Swipe-to-Rate / Rank / Categorize", "Card deck whose swipe records a rating, a rank or a category — rich cards with an image, title and price.", {
     baseType: "matrix_single", renderer: "swiperate", responseModel: "per_row",
     capabilities: ["rows", "options", "randomization", "carry_forward"],
     validations: ["required"],
+    builder: {
+      ...SWIPE_CARDS,
+      optionsBySetting: {
+        key: "swipeResponse",
+        label: { rate: "Scale points", categorize: "Categories" },
+        hint: {
+          rate: "The scale under the card. A swipe left picks the first, a swipe right the last; any point can be tapped.",
+          categorize: "Where a card can be filed. Swipe left files it in the first, right in the last; every category is a button.",
+        },
+        hide: ["rank"],
+      },
+    },
     optionsLabel: "Scale points",
     optionsHint: "The scale under the card. A swipe left picks the first, a swipe right the last; any point can be tapped.",
     optionCount: { min: 2, reason: "a scale needs at least two points" },
@@ -1735,6 +1943,7 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     baseType: "matrix_single", renderer: "swipe4", responseModel: "per_row",
     capabilities: ["rows", "options", "randomization", "carry_forward"],
     validations: ["required"],
+    builder: SWIPE_CARDS,
     optionsLabel: "Directions (left, right, up, down)",
     optionsHint: "Exactly four — one per direction, in the order left, right, up, down.",
     optionCount: { min: 4, max: 4, reason: "the card is swiped in four directions" },
@@ -2084,7 +2293,7 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
         { code: "to", label: "To", fieldType: "date", required: true, flags: [], validation: [] },
       ],
     },
-    fields: { types: ["date", "time"], fixed: true },
+    fields: { types: ["date", "time"], fixed: true, sameType: true },
     presetOf: "list.text_list",
   }),
   stable(F.datetime, "calendar", "Calendar / Appointment Selection", "Pick slots on a calendar.", {
@@ -2140,9 +2349,12 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       rows: [
         { code: "name", label: "Full Name", fieldType: "text", required: true, flags: [], validation: [] },
         { code: "email", label: "Email Address", fieldType: "email", required: true, flags: [], validation: [] },
-        { code: "phone", label: "Phone Number", fieldType: "phone", required: false, flags: [], validation: [] },
+        /* a new Contact Form's phone field offers the country-code list ("pick"); a configured country hides it */
+        { code: "phone", label: "Phone Number", fieldType: "phone", required: false, flags: [], validation: [], meta: { phoneCountry: "pick" } },
       ],
     },
+    /* "Short Text, Long Text, Email, Phone, Address fields" — ZIP is the address section's postal code */
+    fields: { types: ["text", "longtext", "email", "phone", "zip"], sections: ["address"] },
     presetOf: "list.text_list",
   }),
   stable(F.form, "repeating", "Repeating / Nested Form", "Respondent-driven repetition.", {
@@ -2173,6 +2385,14 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       ],
       instruction: "Add a Show-when condition on any field in its ⑂ logic — it appears only when the condition holds.",
     },
+    /*
+     * "only field types that are relevant to conditional form creation" —
+     * the review gave no list, so this is the set a follow-up field is made
+     * of: text, a longer explanation, contact details, a number and a date.
+     * Currency, clock times, durations, URLs and postal codes are left to
+     * the Open Text List, which offers every type.
+     */
+    fields: { types: ["text", "longtext", "email", "phone", "number", "integer", "date"] },
     presetOf: "list.text_list",
   }),
 

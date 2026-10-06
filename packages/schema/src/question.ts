@@ -1225,6 +1225,119 @@ export const Question = z.object({
        * custom_table can opt in.
        */
       rowSum: z.boolean().optional(),
+
+      /* ---- October 2026 review: subtype-specific builder settings ---- */
+
+      /**
+       * NUMBER FORMAT AND SIGN (Numeric Open End, Currency, Percentage,
+       * Quantity). Whole-number-only is the existing `integer` validation rule,
+       * so the Integer preset and this control are the same fact; what the rule
+       * could not say is "decimals, but at most two of them" and "no negative
+       * numbers". `numberSign` "positive" means zero or more, "negative" zero
+       * or less — the review's "positive/negative number options".
+       */
+      decimalPlaces: z.number().int().min(0).max(10).optional(),
+      numberSign: z.enum(["any", "positive", "negative"]).optional(),
+
+      /**
+       * DATE PICKER: what the field starts with, and how a date is written.
+       * `defaultDateMode` "current" fills the respondent's own today when the
+       * question is first shown (not when it was authored); "custom" fills
+       * `defaultDate` (YYYY-MM-DD). The answer is stored as YYYY-MM-DD
+       * whatever `dateFormat` shows, so logic, exports and date bounds never
+       * have to parse a display format.
+       */
+      defaultDateMode: z.enum(["none", "current", "custom"]).optional(),
+      defaultDate: z.string().optional(),
+      dateFormat: z.enum(["MM/DD/YYYY", "DD/MM/YYYY", "YYYY/MM/DD", "MM-DD-YYYY", "DD-MM-YYYY", "YYYY-MM-DD", "DD MMM YYYY", "MMM DD, YYYY"]).optional(),
+      /**
+       * TIME PICKER: the same three defaults, and 12- or 24-hour display with
+       * or without seconds. Stored as HH:MM (or HH:MM:SS) in 24-hour form.
+       */
+      defaultTimeMode: z.enum(["none", "current", "custom"]).optional(),
+      defaultTime: z.string().optional(),
+      timeFormat: z.enum(["12", "24"]).optional(),
+      showSeconds: z.boolean().optional(),
+
+      /**
+       * FILE UPLOAD: which kinds of file, how many, how big. `acceptTypes`
+       * holds kind keys from the engine's upload catalogue ("pdf", "word",
+       * "excel", "image" …) and custom extensions (".dwg"); the older free-text
+       * `accept` keeps working for questions authored with it. Everything here
+       * is enforced by the respondent's view AND by validation, so a file the
+       * picker would refuse cannot arrive through a resumed or posted answer.
+       */
+      acceptTypes: z.array(z.string()).optional(),
+      minFiles: z.number().int().min(0).optional(),
+      maxTotalMb: z.number().min(0).optional(),
+
+      /**
+       * BUCKET RULES (Drag into Buckets, Image Categorization). `bucketMode`
+       * "one" lets a bucket hold a single item; `bucketFull` says what a drop
+       * onto an occupied bucket does — refuse it, or send the item already
+       * there back to the pool. `bucketMax` caps every bucket (an option's
+       * `meta.capacity` caps that one), `bucketMin` asks for at least N in
+       * each, and `allowEmptyBuckets` false asks for at least one. Whether
+       * every item must be placed is the question's ordinary Required.
+       */
+      bucketMode: z.enum(["multiple", "one"]).optional(),
+      bucketFull: z.enum(["prevent", "replace"]).optional(),
+      bucketMax: z.number().int().min(1).optional(),
+      bucketMin: z.number().int().min(0).optional(),
+      allowEmptyBuckets: z.boolean().optional(),
+      /** Image Categorization: print each image's label under it. */
+      showItemLabels: z.boolean().optional(),
+
+      /**
+       * VIDEO QUESTIONS (Video Rating, Video Hotspot / Annotation, Watch-Time
+       * Tracking). `videos` is the clip list — title, description and URL per
+       * clip — with `mediaUrl` still read as the first clip for questions
+       * authored before. Playback reuses the interview settings
+       * (`autoPlayVideo`, `allowReplay`, `showProgress`, `allowSeek`) and the
+       * existing `requireComplete` gate; `playerControls`, `allowFullscreen`
+       * and `allowVolume` are the rest of what the review listed.
+       */
+      videos: z.array(z.object({
+        url: z.string(),
+        title: z.string().optional(),
+        description: z.string().optional(),
+        /** Video Hotspot: the reactions offered on THIS clip (option codes); absent = all of them */
+        reactions: z.array(z.union([z.string(), z.number()])).optional(),
+      })).optional(),
+      playerControls: z.boolean().optional(),
+      allowFullscreen: z.boolean().optional(),
+      allowVolume: z.boolean().optional(),
+      /** Video Rating: how the rating is drawn, and an optional comment box. */
+      ratingType: z.enum(["stars", "numeric", "emoji", "slider", "likert"]).optional(),
+      allowComment: z.boolean().optional(),
+      commentPrompt: z.string().optional(),
+
+      /**
+       * SWIPE CARDS. A card is a row; its picture, subtitle, description,
+       * price and extra fields live in `row.meta`. These say how a card is
+       * drawn: where the image sits, the card's proportions and size, which
+       * parts are shown, and — for Swipe to Rate / Rank / Categorize — what
+       * the swipe records.
+       */
+      cardImagePosition: z.enum(["top", "full"]).optional(),
+      cardAspect: z.enum(["1:1", "4:5", "3:4", "4:3", "16:9"]).optional(),
+      cardSize: z.enum(["small", "medium", "large"]).optional(),
+      cardAlign: z.enum(["left", "center"]).optional(),
+      cardHidden: z.array(z.enum(["image", "subtitle", "description", "price", "fields"])).optional(),
+      swipeButtons: z.boolean().optional(),
+      swipeResponse: z.enum(["rate", "rank", "categorize"]).optional(),
+
+      /**
+       * EDITABLE TABLE: may the respondent add or remove rows? Every row is
+       * still an authored row with its own variables — "+ Add row" reveals
+       * the next one and "remove" clears and hides one — so a respondent can
+       * never create data no column in the export has a name for. Absent
+       * keeps what the table always did: every authored row, always shown.
+       */
+      allowAddRows: z.boolean().optional(),
+      allowDeleteRows: z.boolean().optional(),
+      /** with `allowAddRows`: how many rows show before any is added (default 1) */
+      initialRows: z.number().int().min(1).optional(),
       /**
        * What assistive technology is told about this question.
        *

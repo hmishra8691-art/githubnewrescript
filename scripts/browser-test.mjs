@@ -219,13 +219,20 @@ pins = await page.$$(".rs-hotspot-pin");
 assert.equal(pins.length, 1);
 console.log("✔ hotspot places, caps and removes coordinate points");
 
-// categorization: assign both items to buckets
-const cards = await page.$$(".rs-catcard");
-assert.equal(cards.length, 2);
-await page.click(".rs-catcard:has-text('Item One') .rs-bucket:has-text('Keep')");
-await page.click(".rs-catcard:has-text('Item Two') .rs-bucket:has-text('Drop')");
-const catStatus = await page.$$eval(".rs-hotspot-status", (els) => els.map((e) => e.textContent).join(" "));
-assert.ok(/2 \/ 2 assigned/.test(catStatus), `cat status: ${catStatus}`);
+// categorization: assign both items to buckets. Since the October 2026
+// review an Image Categorization is a pool of image chips dragged (or picked
+// up with Enter and placed with a click) into bucket boxes — the per-card
+// bucket buttons it used to draw are gone.
+await page.waitForSelector('[data-testid="categorize"]');
+const catChips = await page.$$('[data-testid="categorize"] [data-row]');
+assert.equal(catChips.length, 2);
+for (const [row, bucket] of [["i1", "keep"], ["i2", "drop"]]) {
+  await page.focus(`[data-testid="categorize"] [data-row="${row}"]`);
+  await page.keyboard.press("Enter");
+  await page.click(`[data-testid="categorize"] [data-drop="bucket-${bucket}"]`);
+}
+const catStatus = await page.textContent('[data-testid="categorize"] [data-testid="dragbuckets-progress"]');
+assert.ok(/2 \/ 2 sorted/.test(catStatus ?? ""), `cat status: ${catStatus}`);
 console.log("✔ categorization assigns items to buckets (per-row values)");
 await page.screenshot({ path: "/tmp/bt-image-family.png" });
 

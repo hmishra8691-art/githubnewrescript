@@ -70,15 +70,49 @@ export function starterSheetColumns(q: Question): QuestionColumn[] {
 
 registerVariantSettings("dynamiclist", RepeatBounds);
 
-registerVariantSettings("spreadsheet", ({ q, patch }) =>
-  q.columns.length === 0 ? (
-    <div className="chip warn" data-testid="spreadsheet-no-columns">
-      No columns configured — respondents see three starter columns (Item, Detail, Amount).
-      <button className="btn small" data-testid="spreadsheet-seed-columns"
-        style={{ marginLeft: 8 }}
-        onClick={() => patch({ columns: starterSheetColumns(q) })}>
-        create them for editing
-      </button>
+/*
+ * EDITABLE TABLE — the columns are edited in the Columns editor above (title,
+ * type, min / max, whole numbers, currency, required, + column); this block
+ * holds what is about the table as a whole (October 2026 review: "Table
+ * Settings — Allow adding rows, Allow deleting rows, Allow editing rows,
+ * Randomize rows (if applicable)").
+ */
+registerVariantSettings("spreadsheet", ({ q, patch, patchSettings }) => (
+  <>
+    {q.columns.length === 0 && (
+      <div className="chip warn" data-testid="spreadsheet-no-columns">
+        No columns configured — respondents see three starter columns (Item, Detail, Amount).
+        <button className="btn small" data-testid="spreadsheet-seed-columns"
+          style={{ marginLeft: 8 }}
+          onClick={() => patch({ columns: starterSheetColumns(q) })}>
+          create them for editing
+        </button>
+      </div>
+    )}
+    <h3 className="sec">Table settings</h3>
+    <div className="row" style={{ gap: 14, flexWrap: "wrap", alignItems: "center" }} data-testid="sheet-settings">
+      <label className="row" style={{ gap: 6, fontSize: 13 }}>
+        <input type="checkbox" data-testid="sheet-allow-add" checked={!!q.settings.allowAddRows}
+          onChange={(e) => patchSettings({ allowAddRows: e.target.checked || undefined })} />
+        respondents may add rows
+      </label>
+      {q.settings.allowAddRows && (
+        <label className="row" style={{ gap: 6, fontSize: 13 }}>
+          rows shown at start
+          <CountInput min={1} width={70} allowEmpty={false} data-testid="sheet-initial-rows"
+            value={q.settings.initialRows ?? 1}
+            onChange={(v) => patchSettings({ initialRows: v ?? 1 })} />
+          <span className="muted">of {q.rows.length} — each row is a set of variables, so add rows here for as many as a respondent may need</span>
+        </label>
+      )}
+      <label className="row" style={{ gap: 6, fontSize: 13 }}>
+        <input type="checkbox" data-testid="sheet-allow-delete" checked={!!q.settings.allowDeleteRows}
+          onChange={(e) => patchSettings({ allowDeleteRows: e.target.checked || undefined })} />
+        respondents may remove rows
+      </label>
+      <span className="muted" style={{ fontSize: 12.5 }}>
+        Cells are editable unless a column is set read-only; row order is randomized in Properties → Randomization.
+      </span>
     </div>
-  ) : null,
-);
+  </>
+));

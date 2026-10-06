@@ -93,6 +93,8 @@ export const IMAGE_RENDERERS: ReadonlySet<string> = new Set([
   "attrcompare",
   "swipe",
   "dragrank",
+  /* a bucket's own picture or icon, in its header (October 2026 review: "Optional Image/Icon") */
+  "categorize",
   "base:image_select",
   "base:image_ranking",
 ]);
@@ -141,6 +143,15 @@ export const CELL_COLUMN_RENDERERS: ReadonlySet<string> = new Set([
   "summatrix",
   "base:composite",
   "base:custom_table",
+  /*
+   * The Editable Table draws `q.columns` through its own renderer key, so it
+   * was missing here — and with it the whole Columns editor: a new table is
+   * created with Item / Detail / Amount, and their titles could not be
+   * changed nor a column added. The October 2026 review asked for exactly
+   * that ("their titles should be editable … + Add Column … each added
+   * column should have its own field type and validation").
+   */
+  "spreadsheet",
 ]);
 
 /**
@@ -153,19 +164,25 @@ export const CELL_COLUMN_RENDERERS: ReadonlySet<string> = new Set([
  * methods. A grid draws its options as column headers and a ranking draws
  * them as draggable items; neither has a list to filter, so neither renderer
  * has ever read `settings.optionSearch`. Only flat option lists can.
+ *
+ * …AND ONLY WHERE THE RENDERER ACTUALLY DRAWS ONE. The set used to list
+ * eleven keys, but only three renderers call `useOptionFilter`: the plain
+ * radio list, the plain checkbox list and Button Select. Card, Icon, List,
+ * Statement and Image Select (single and multi), the native Dropdown, the
+ * Multi-Select Dropdown (its search is built in) and the adaptive list never
+ * read `settings.optionSearch`, so the editor offered a control that changed
+ * nothing — and the October review asked for it to go from exactly those
+ * subtypes: "the Search Box is useful for Single Select and Multi Select
+ * questions when there are a large number of options. However, it is not
+ * necessary for the above specialized question types", and for Dropdown and
+ * Searchable Dropdown "having an additional Search Box configuration …
+ * creates duplicate functionality". `apps/studio/lib/builderSections.test.ts`
+ * holds this list to the renderer source, so it cannot drift again.
  */
 export const OPTION_SEARCH_RENDERERS: ReadonlySet<string> = new Set([
   "buttons",
-  "cards",
-  "icons",
-  "listrows",
-  "statements",
-  "adaptive",
   "base:single_select",
   "base:multi_select",
-  "base:dropdown",
-  "base:multi_dropdown",
-  "base:image_select",
 ]);
 
 /** The dispatch key for a question: its variant's renderer, or `base:<type>`. */

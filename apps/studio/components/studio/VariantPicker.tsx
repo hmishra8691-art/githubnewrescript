@@ -1,4 +1,5 @@
 "use client";
+import { pairsFromOptions } from "@/lib/builder/pairwise";
 import React from "react";
 import type { Question, QuestionVariantDef } from "@rescript/schema";
 import {
@@ -26,7 +27,12 @@ export function applyVariantDefaults(q: Question, v: QuestionVariantDef): void {
   if (!d) return;
   if (d.settings) q.settings = { ...d.settings, ...q.settings, ...pickDefined(d.settings, q.settings) } as any;
   if (d.options && q.options.length === 0) q.options = d.options.map((o) => ({ flags: [], ...o })) as any;
-  if (d.rows && q.rows.length === 0) q.rows = d.rows.map((r) => ({ flags: [], validation: [], required: false, ...r })) as any;
+  if (d.rows && q.rows.length === 0) {
+    /* a question converted into Pairwise Choice keeps its options, paired in order, rather than default pairs naming codes it may not have */
+    q.rows = v.renderer === "pairwiseset" && q.options.length >= 2
+      ? pairsFromOptions(q.options)
+      : d.rows.map((r) => ({ flags: [], validation: [], required: false, ...r })) as any;
+  }
   if (d.validation && q.validation.length === 0) q.validation = d.validation as any;
   if (d.instruction && !q.instruction) q.instruction = d.instruction;
   // recipe presets: a starter text and a follow-up probe already switched on
@@ -336,6 +342,10 @@ export function VariantSwitcher({ q }: { q: Question }) {
             if (to) switchTo(to);
           }}>
           {!current && <option value="">({q.type})</option>}
+          {/* a variant no longer offered (`pickerReplacedBy`) still names itself, so the dropdown never shows a type the question is not */}
+          {current && !typesWithPresets.some(({ type, presets }) => type.id === current.id || presets.some((p) => p.id === current.id)) && (
+            <option value={current.id} data-testid="variant-current-legacy">{current.name}</option>
+          )}
           {typesWithPresets.map(({ type, presets }) => (
             presets.length === 0
               ? <option key={type.id} value={type.id}>{type.name}</option>

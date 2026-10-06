@@ -1,5 +1,5 @@
 import type { FieldType } from "@rescript/schema";
-import { checkPhone, checkPostal, checkUrl, affixFor } from "./formats.js";
+import { checkPhone, phoneCountryFor, checkPostal, checkUrl, affixFor } from "./formats.js";
 
 /**
  * Field-type primitives for form-style list questions (req §4–5).
@@ -98,7 +98,8 @@ export function validateFieldValue(
     case "email":
       return EMAIL_RE.test(s) ? null : "Please enter a valid email address.";
     case "phone":
-      return checkPhone(s, settings?.phoneCountry);
+      /* the configured country; with the code list ("pick"), the one the respondent's "+code" names */
+      return checkPhone(s, phoneCountryFor(settings?.phoneCountry, s));
     case "url":
       return checkUrl(s);
     case "zip":
@@ -138,4 +139,31 @@ export function parseHours(input: string): number | null {
   if (!/^\d+(\.\d+)?$/.test(s)) return null;
   const n = Number(s);
   return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+
+/**
+ * A comparable key for one end of a from–to pair, by the field's type —
+ * `null` when the value cannot be read as that type.
+ *
+ * The order check compared `Number(from) > Number(to)`, which is `NaN` for a
+ * date or a clock time, so a range from 31 December back to 1 January passed
+ * — the Numeric Range offered Date and Time as field types and checked
+ * neither, and Date Range was never checked at all. Dates compare as
+ * YYYY-MM-DD and times as minutes since midnight; numbers and durations as
+ * numbers.
+ */
+export function rangeEndKey(t: FieldType | undefined, v: unknown): number | string | null {
+  if (v == null || v === "") return null;
+  if (t === "date") {
+    const s = String(v).trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+  }
+  if (t === "time") {
+    const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(String(v).trim());
+    return m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3] ?? 0) : null;
+  }
+  if (t === "hours") return parseHours(String(v).trim());
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }

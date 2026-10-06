@@ -230,7 +230,7 @@ const OPTION_WINDOW = 40;
 const SCALAR_TEXT_TYPES = ["open_text", "long_text"];
 
 function OptionRows({ options, onChange, showFlags = true, flagChoices, showImage = false, metaFields = [],
-  enableLogic = false, questionId, onAfterDelete, countLimit }: {
+  enableLogic = false, questionId, onAfterDelete, countLimit, addLabel = "+ option" }: {
   options: Option[]; onChange(opts: Option[]): void; showFlags?: boolean;
   flagChoices?: string[]; showImage?: boolean; metaFields?: MetaField[];
   /** per-option logic + piping controls (reqs §1–4, §21) */
@@ -246,6 +246,8 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
    * same for four. Absent = no limit, which is every ordinary list.
    */
   countLimit?: { min?: number; max?: number; reason?: string };
+  /** the add button's words — a swipe deck adds a card ("+ Add card"), not an option */
+  addLabel?: string;
 }) {
   /** at the ceiling: "+ option" and the paste box must not push past it */
   const atMax = countLimit?.max != null && options.length >= countLimit.max;
@@ -556,7 +558,7 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
         <button className="btn small" data-testid="add-option" disabled={atMax}
           title={atMax ? `This question takes at most ${countLimit!.max}${countLimit!.reason ? ` — ${countLimit!.reason}` : ""}` : undefined}
           onClick={() => { if (!atMax) insertAfter(options.length - 1); }}>
-          + option <span className="muted" style={{ fontSize: 11.5 }}>(or press Enter)</span>
+          {addLabel} <span className="muted" style={{ fontSize: 11.5 }}>(or press Enter)</span>
         </button>
         {/*
           * "+ Column" and "Paste Options" side by side read as two ways to do
@@ -712,6 +714,32 @@ function ColumnEditor({ q, onChange, allowedTypes }: {
               </>
             )}
             {/*
+              * A NUMBER COLUMN'S KIND (October 2026 review): "Column: Quantity
+              * Type: Integer … Column: Price Type: Currency". Whole numbers are
+              * the `integer` rule the cell validator already runs; a currency
+              * column draws its symbol beside every cell.
+              */}
+            {c.responseType === "numeric" && (
+              <>
+                <label className="row" style={{ gap: 4, fontSize: 13 }}>
+                  <input type="checkbox" data-testid="column-integer"
+                    checked={c.validation.some((v) => v.kind === "integer")}
+                    onChange={(e) => set(i, {
+                      validation: e.target.checked
+                        ? [...c.validation.filter((v) => v.kind !== "integer"), { kind: "integer" as const }]
+                        : c.validation.filter((v) => v.kind !== "integer"),
+                    })} /> whole numbers
+                </label>
+                <select className="select" style={{ width: 150 }} data-testid="column-currency"
+                  title="Show a currency symbol in every cell of this column"
+                  value={String(c.meta?.currencyCode ?? "")}
+                  onChange={(e) => set(i, { meta: { ...(c.meta ?? {}), currencyCode: e.target.value || undefined } })}>
+                  <option value="">no currency</option>
+                  {CURRENCIES.map((cur) => <option key={cur.code} value={cur.code}>{cur.symbol} {cur.code}</option>)}
+                </select>
+              </>
+            )}
+            {/*
               * HOW MANY OF A MULTI COLUMN'S OPTIONS MAY BE PICKED.
               * "When the user selects Multi Select or Multi Dropdown as a
               * column type, add Minimum Selection and Maximum Selection …
@@ -808,6 +836,41 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
   const [condOpen, setCondOpen] = React.useState<number | null>(null);
   const setRow = (i: number, p: Partial<Question["rows"][number]>) =>
     patch({ rows: rows.map((r, j) => (j === i ? { ...r, ...p } : r)) });
+  /*
+   * ONE TYPE FOR BOTH ENDS (`fields.sameType`). "If the user selects Date for
+   * From, the To field should automatically change to Date" — a range whose
+   * ends are a date and a time is not a range.
+   */
+  const setType = (i: number, fieldType: Question["rows"][number]["fieldType"]) =>
+    fieldSpec?.sameType
+      ? patch({ rows: rows.map((r) => ({ ...r, fieldType })) })
+      : setRow(i, {
+        fieldType,
+        /* a field made a phone field now offers the respondent the country-code list until a country is set */
+        ...(fieldType === "phone" && rows[i].meta?.phoneCountry == null ? { meta: { ...(rows[i].meta ?? {}), phoneCountry: "pick" } } : {}),
+      });
+  /*
+   * Min / max mean a length for text and a value for numbers. For a date, a
+   * time, an email, a phone number, a web address or a postal code they mean
+   * nothing the respondent would recognise — the format is the rule — so the
+   * inputs are not drawn ("only the validation/settings relevant to that type
+   * should appear").
+   */
+  const BOUNDED = ["text", "longtext", "number", "decimal", "integer", "currency", "hours"];
+  /* the Contact Form's "+ Address section": the four address fields in one step, with codes nothing else uses */
+  const addAddressSection = () => {
+    const used = new Set(rows.map((r) => String(r.code)));
+    const code = (base: string) => { let c = base, n = 2; while (used.has(c)) c = `${base}${n++}`; used.add(c); return c; };
+    const mk = (base: string, label: string, fieldType: "text" | "zip", required: boolean) =>
+      ({ id: uid("row"), code: code(base), label, fieldType, required, flags: [], validation: [] }) as any;
+    patch({
+      rows: [...rows,
+        mk("street", "Street Address", "text", true),
+        mk("city", "City", "text", true),
+        mk("state", "State / Region", "text", false),
+        mk("zip", "ZIP / Postal Code", "zip", true)],
+    });
+  };
   const move = (i: number, dir: -1 | 1) => {
     const j = i + dir;
     if (j < 0 || j >= rows.length) return;
@@ -851,14 +914,20 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
                 onChange={(e) => setRow(i, { code: e.target.value })} />
               <InlineRichText className="grow" placeholder="Field label, e.g. Email Address" testId="field-label"
                 value={r.label} onChange={(label) => setRow(i, { label })} />
+              {fieldTypes.length === 1 && fieldTypes[0].value === ft ? (
+                /* one type and it is this one: a fixed fact, not a choice (Name: "Short Text – Fixed") */
+                <span className="chip" style={{ width: 150, textAlign: "center" }} data-testid={`field-type-fixed-${i}`}
+                  title="This question type always uses this field type">{fieldTypes[0].label} — fixed</span>
+              ) : (
               <select className="select" style={{ width: 150 }} value={ft} data-testid={`field-type-${i}`}
-                onChange={(e) => setRow(i, { fieldType: e.target.value as any })}>
+                onChange={(e) => setType(i, e.target.value as any)}>
                 {/* an already-set type stays listed even if this variant would
                     not offer it, so a question authored earlier is never
                     silently re-typed by opening its editor */}
                 {(fieldTypes.some((t) => t.value === ft) ? fieldTypes : [...fieldTypes, { value: ft as never, label: ft }])
                   .map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
               </select>
+              )}
               <label className="row" style={{ gap: 4, fontSize: 13 }}>
                 <input type="checkbox" checked={r.required ?? false} data-testid={`field-required-${i}`}
                   onChange={(e) => setRow(i, { required: e.target.checked })} /> required
@@ -885,18 +954,38 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
                 onClick={() => setCondOpen(condOpen === i ? null : i)}>
                 {!isEmptyConditionTree(r.visibleIf) ? "⑂ shown when…" : "⑂ show when"}
               </button>
+              {BOUNDED.includes(ft) && (<>
               <label className="row" style={{ gap: 4, fontSize: 13 }}>
                 {isNum ? "min value" : "min length"}
-                <input className="input" style={{ width: 76 }} type="number"
+                <input className="input" style={{ width: 76 }} type="number" data-testid={`field-min-${i}`}
                   value={String(getBound(r, boundMin))}
                   onChange={(e) => setBound(i, boundMin, e.target.value)} />
               </label>
               <label className="row" style={{ gap: 4, fontSize: 13 }}>
                 {isNum ? "max value" : "max length"}
-                <input className="input" style={{ width: 76 }} type="number"
+                <input className="input" style={{ width: 76 }} type="number" data-testid={`field-max-${i}`}
                   value={String(getBound(r, boundMax))}
                   onChange={(e) => setBound(i, boundMax, e.target.value)} />
               </label>
+              </>)}
+              {ft === "phone" && (
+                /*
+                 * PHONE COUNTRY, PER FIELD. Set here, the number is validated
+                 * against that country and the respondent sees no country
+                 * picker; left on "respondent chooses", they pick their dialing
+                 * code from a list and the number is checked against it.
+                 */
+                <label className="row" style={{ gap: 4, fontSize: 13 }}>
+                  phone country
+                  <select className="select" style={{ width: 230 }} data-testid={`field-phone-country-${i}`}
+                    value={String(r.meta?.phoneCountry ?? "")}
+                    onChange={(e) => setRow(i, { meta: { ...(r.meta ?? {}), phoneCountry: e.target.value || undefined } })}>
+                    <option value="">any country (plain box, loose check)</option>
+                    <option value="pick">respondent chooses from the country-code list</option>
+                    {PHONE_FORMATS.map((f) => <option key={f.code} value={f.code}>{f.name} (+{f.dial}) — validated</option>)}
+                  </select>
+                </label>
+              )}
             </div>
             {condOpen === i && (
               <div style={{ marginTop: 8 }} data-testid={`field-showwhen-editor-${i}`}>
@@ -922,6 +1011,12 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
           })}>
           + field
         </button>
+        )}
+        {fieldSpec?.sections?.includes("address") && (
+          <button className="btn small" data-testid="add-address-section" onClick={addAddressSection}
+            title="Adds Street Address, City, State / Region and ZIP / Postal Code">
+            + Address section
+          </button>
         )}
         {rows.length === 0 && (
           <label className="row" style={{ gap: 6, fontSize: 13 }}>
@@ -976,7 +1071,37 @@ export function QuestionEditor({ q }: { q: Question }) {
    * impossible configuration can no longer be authored. The sum target and
    * its unit still show — that IS the constraint for an allocation.
    */
-  const showBounds = feats.numericBounds && has("numeric_bounds");
+  const builder = variantDef?.builder ?? {};
+  /* the option list's heading follows a setting (`builder.optionsBySetting` — Swipe to Rate / Rank / Categorize) */
+  const bySetting = builder.optionsBySetting;
+  const settingValue = bySetting ? String((q.settings as Record<string, unknown>)[bySetting.key] ?? Object.keys(bySetting.label)[0] ?? "") : "";
+  const optionsHiddenBySetting = !!bySetting?.hide?.includes(settingValue);
+  const optionsLabelBySetting = bySetting?.label[settingValue];
+  const optionsHintBySetting = bySetting?.hint?.[settingValue];
+  const showBounds = feats.numericBounds && has("numeric_bounds") && !builder.hide?.includes("bounds");
+  /*
+   * Which number controls this question gets — see the NUMBER CONTROLS block
+   * below. `numberInput` on the variant decides; no variant at all keeps the
+   * full legacy set on a numeric question; a value already stored keeps its
+   * control even where the policy no longer offers it, so nothing becomes
+   * uneditable.
+   */
+  const numberControls = (() => {
+    if (q.type !== "numeric") return { any: false } as { any: boolean; format?: boolean; sign?: boolean; unit?: boolean; stepper?: boolean; symbol?: "choose" | "fixed" };
+    const ni = variantDef?.numberInput;
+    if (!variantDef) return { any: true, unit: true, stepper: true, symbol: "choose" as const };
+    if (!ni) return { any: false };
+    const st = q.settings;
+    const c = {
+      format: !!ni.format,
+      sign: !!ni.sign || (st.numberSign != null && st.numberSign !== "any"),
+      unit: !!ni.unit || !!st.unitLabel,
+      stepper: !!ni.stepper || !!st.stepper,
+      symbol: ni.symbol ?? ((st.currencyCode || st.currencySymbol) ? "choose" as const : undefined),
+    };
+    return { any: c.format || c.sign || c.unit || c.stepper || !!c.symbol, ...c };
+  })();
+  const wholeOnly = q.validation.some((r) => r.kind === "integer") || q.settings.decimalPlaces === 0;
   /*
    * "Instead of using generic labels such as Minimum and Maximum, use labels
    * that clearly relate to the star-rating functionality: Minimum Stars,
@@ -1051,6 +1176,103 @@ export function QuestionEditor({ q }: { q: Question }) {
     });
   };
 
+  /*
+   * THE LAYOUT CONTROL — beside the option list normally, or its own block
+   * after the variant's settings (`builder.layoutLast`), where the review
+   * wanted it for a bucket sort: "Question → Rows/Items → Buckets → Bucket
+   * rules → Layout → Validation".
+   */
+  const layoutControl = (
+
+            /*
+             * THE MOST-REPORTED BUG IN THE SEPTEMBER REVIEW, and it was this
+             * control rather than any renderer. Picking "1 column" wrote
+             * `undefined`, which every renderer reads as "the author has not
+             * chosen" and answers with its own default — 2 for cards, 3 for
+             * rich cards, 4 for icons, as-many-as-fit for image grids. So 2,
+             * 3 and 4 worked and 1 did nothing, on eleven variants.
+             *
+             * "Not chosen" is now a value the control can show ("auto"), so 1
+             * can be stored as 1 and mean it. Questions authored before this
+             * still hold `undefined` and still render exactly as they did —
+             * the fix changes what the editor can say, not what any existing
+             * survey looks like.
+             */
+            <label className="f" style={{ marginBottom: 0, width: 175 }}><span>Layout</span>
+              <select className="select" data-testid="layout-columns"
+                value={q.settings.optionOrientation === "horizontal" ? "horizontal" : String(q.settings.columnsLayout ?? "")}
+                onChange={(e) => {
+                  /*
+                   * ONE CONTROL, NOT TWO. The review asked for a
+                   * Horizontal / Vertical choice on Radio and Button Select;
+                   * that is the same question as "how many columns", so it
+                   * lives in the same list. Choosing one clears the other,
+                   * because "horizontal" and "3 columns" together is a
+                   * contradiction the renderer would have to guess at — and a
+                   * setting that is guessed at is the next report.
+                   */
+                  const v = e.target.value;
+                  if (v === "horizontal") patchSettings({ optionOrientation: "horizontal", columnsLayout: undefined });
+                  else patchSettings({ optionOrientation: undefined, columnsLayout: v === "" ? undefined : Number(v) });
+                }}>
+                <option value="">auto (fit width)</option>
+                <option value={1}>1 column</option>
+                <option value={2}>2 columns</option>
+                <option value={3}>3 columns</option>
+                <option value={4}>4 columns</option>
+                {/* offered only where a row is a thing this renderer can draw */}
+                {honoursOrientation(variantDef?.renderer, q.type) && <option value="horizontal">horizontal row</option>}
+              </select></label>
+  );
+  /* the rows editor — drawn above the options when the variant sorts rows INTO them (see `builder.rowsFirst`) */
+  const rowsSection = (
+    feats.rows && !builder.hide?.includes("rows") && q.type !== "numeric_list" && q.type !== "text_list" && q.type !== "repeating_group" && (
+        <>
+          <h3 className="sec" data-testid="rows-heading">{builder.rowsLabel ?? "Rows"}</h3>
+          {builder.rowsHint && <p className="muted" style={{ fontSize: 12.5, marginTop: -6 }} data-testid="rows-hint">{builder.rowsHint}</p>}
+          <OptionRows enableLogic questionId={q.id}
+            addLabel={builder.rowsAddLabel}
+            flagChoices={allowedRowFlagsFor(q.type)}
+            onAfterDelete={() => resequence("rows")}
+            /* a row's picture lives in `meta.image` (Image Categorization) — edited with the same upload / choose control an option's image uses */
+            showImage={!!builder.rowsImages}
+            options={q.rows.map((r) => ({
+              code: r.code, label: r.label, flags: r.flags ?? [],
+              logic: r.logic, visibleIf: r.visibleIf,
+              ...(builder.rowsImages && typeof r.meta?.image === "string" ? { imageUrl: r.meta.image } : {}),
+            }))}
+            onChange={(rows) =>
+              patch({
+                rows: rows.map((r, i) => {
+                  // match by position, not by code: a code edit would otherwise
+                  // lose the row's validation and field settings
+                  const prev = q.rows[i];
+                  return {
+                    ...prev,
+                    validation: prev?.validation ?? [],
+                    required: prev?.required ?? false,
+                    code: r.code, label: r.label,
+                    // flags used to be hard-reset to [] here, silently wiping
+                    // any anchoring the row carried
+                    flags: r.flags ?? [],
+                    logic: r.logic, visibleIf: r.visibleIf,
+                    ...(builder.rowsImages ? { meta: { ...(prev?.meta ?? {}), image: r.imageUrl || undefined } } : {}),
+                  };
+                }),
+              })} />
+          <p className="muted" style={{ fontSize: 12.5, marginTop: -2 }}>
+            Row flags anchor a statement to the top or bottom of the grid — anchored rows
+            are never moved by row randomization (Properties → Randomization → scope “rows”).
+          </p>
+          {q.carryForward?.into === "rows" && (
+            <p className="muted" style={{ fontSize: 13 }}>
+              Rows are carried forward from {s.def.questions.find((x) => x.id === q.carryForward?.sourceQuestionId)?.code ?? "?"} —
+              static rows above are {q.carryForward.keepOwn ? "appended" : "ignored"}.
+            </p>
+          )}
+        </>
+      )
+  );
   return (
     <div>
       {/* Two views of ONE question, inside the editor the programmer already
@@ -1129,7 +1351,8 @@ export function QuestionEditor({ q }: { q: Question }) {
         <AttentionCheckEditor q={q} patch={patch} />
       )}
 
-      {feats.options && has("options") && (
+      {builder.rowsFirst && rowsSection}
+      {feats.options && has("options") && !builder.hide?.includes("options") && !optionsHiddenBySetting && (
         <>
           {/*
             * WHAT THIS LIST IS, IN THIS QUESTION.
@@ -1142,10 +1365,10 @@ export function QuestionEditor({ q }: { q: Question }) {
             * existing Column field" in two separate reviews. The variant says
             * which; anything that does not say keeps the plain heading.
             */}
-          <h3 className="sec">{variantDef?.optionsLabel ?? "Options"}</h3>
-          {variantDef?.optionsHint && (
+          <h3 className="sec" data-testid="options-heading">{optionsLabelBySetting ?? variantDef?.optionsLabel ?? "Options"}</h3>
+          {(optionsHintBySetting ?? variantDef?.optionsHint) && (
             <p className="muted" style={{ fontSize: 12.5, marginTop: -6 }} data-testid="options-hint">
-              {variantDef.optionsHint}
+              {optionsHintBySetting ?? variantDef?.optionsHint}
             </p>
           )}
           {/*
@@ -1186,46 +1409,7 @@ export function QuestionEditor({ q }: { q: Question }) {
             showImage={has("images") && drawsOptionImages(variantDef?.renderer, q.type)}
             metaFields={optionMetaFields(variantDef)} />
           <div className="row" style={{ marginTop: 10, flexWrap: "wrap" }}>
-            {showLayout && (
-            /*
-             * THE MOST-REPORTED BUG IN THE SEPTEMBER REVIEW, and it was this
-             * control rather than any renderer. Picking "1 column" wrote
-             * `undefined`, which every renderer reads as "the author has not
-             * chosen" and answers with its own default — 2 for cards, 3 for
-             * rich cards, 4 for icons, as-many-as-fit for image grids. So 2,
-             * 3 and 4 worked and 1 did nothing, on eleven variants.
-             *
-             * "Not chosen" is now a value the control can show ("auto"), so 1
-             * can be stored as 1 and mean it. Questions authored before this
-             * still hold `undefined` and still render exactly as they did —
-             * the fix changes what the editor can say, not what any existing
-             * survey looks like.
-             */
-            <label className="f" style={{ marginBottom: 0, width: 175 }}><span>Layout</span>
-              <select className="select" data-testid="layout-columns"
-                value={q.settings.optionOrientation === "horizontal" ? "horizontal" : String(q.settings.columnsLayout ?? "")}
-                onChange={(e) => {
-                  /*
-                   * ONE CONTROL, NOT TWO. The review asked for a
-                   * Horizontal / Vertical choice on Radio and Button Select;
-                   * that is the same question as "how many columns", so it
-                   * lives in the same list. Choosing one clears the other,
-                   * because "horizontal" and "3 columns" together is a
-                   * contradiction the renderer would have to guess at — and a
-                   * setting that is guessed at is the next report.
-                   */
-                  const v = e.target.value;
-                  if (v === "horizontal") patchSettings({ optionOrientation: "horizontal", columnsLayout: undefined });
-                  else patchSettings({ optionOrientation: undefined, columnsLayout: v === "" ? undefined : Number(v) });
-                }}>
-                <option value="">auto (fit width)</option>
-                <option value={1}>1 column</option>
-                <option value={2}>2 columns</option>
-                <option value={3}>3 columns</option>
-                <option value={4}>4 columns</option>
-                {/* offered only where a row is a thing this renderer can draw */}
-                {honoursOrientation(variantDef?.renderer, q.type) && <option value="horizontal">horizontal row</option>}
-              </select></label>)}
+            {showLayout && !builder.layoutLast && layoutControl}
             {/*
               * The search box stopped being a surprise. It used to appear on
               * its own past twenty-five options, which the review reported as
@@ -1299,46 +1483,7 @@ export function QuestionEditor({ q }: { q: Question }) {
         </>
       )}
 
-      {feats.rows && q.type !== "numeric_list" && q.type !== "text_list" && q.type !== "repeating_group" && (
-        <>
-          <h3 className="sec">Rows</h3>
-          <OptionRows enableLogic questionId={q.id}
-            flagChoices={allowedRowFlagsFor(q.type)}
-            onAfterDelete={() => resequence("rows")}
-            options={q.rows.map((r) => ({
-              code: r.code, label: r.label, flags: r.flags ?? [],
-              logic: r.logic, visibleIf: r.visibleIf,
-            }))}
-            onChange={(rows) =>
-              patch({
-                rows: rows.map((r, i) => {
-                  // match by position, not by code: a code edit would otherwise
-                  // lose the row's validation and field settings
-                  const prev = q.rows[i];
-                  return {
-                    ...prev,
-                    validation: prev?.validation ?? [],
-                    required: prev?.required ?? false,
-                    code: r.code, label: r.label,
-                    // flags used to be hard-reset to [] here, silently wiping
-                    // any anchoring the row carried
-                    flags: r.flags ?? [],
-                    logic: r.logic, visibleIf: r.visibleIf,
-                  };
-                }),
-              })} />
-          <p className="muted" style={{ fontSize: 12.5, marginTop: -2 }}>
-            Row flags anchor a statement to the top or bottom of the grid — anchored rows
-            are never moved by row randomization (Properties → Randomization → scope “rows”).
-          </p>
-          {q.carryForward?.into === "rows" && (
-            <p className="muted" style={{ fontSize: 13 }}>
-              Rows are carried forward from {s.def.questions.find((x) => x.id === q.carryForward?.sourceQuestionId)?.code ?? "?"} —
-              static rows above are {q.carryForward.keepOwn ? "appended" : "ignored"}.
-            </p>
-          )}
-        </>
-      )}
+      {!builder.rowsFirst && rowsSection}
 
       {/*
         * CELL COLUMNS, AND ONLY WHERE THERE ARE CELLS.
@@ -1363,7 +1508,7 @@ export function QuestionEditor({ q }: { q: Question }) {
         </>
       )}
 
-      {(q.type === "numeric_list" || q.type === "text_list" || q.type === "repeating_group") && (
+      {(q.type === "numeric_list" || q.type === "text_list" || q.type === "repeating_group") && !builder.hide?.includes("fields") && (
         <FieldRowsEditor q={q} patch={patch} patchSettings={patchSettings} />
       )}
 
@@ -1466,6 +1611,7 @@ export function QuestionEditor({ q }: { q: Question }) {
                 value={q.settings.phoneCountry ?? ""}
                 onChange={(e) => patchSettings({ phoneCountry: e.target.value || undefined })}>
                 <option value="">any country (loose check)</option>
+                <option value="pick">respondent chooses from the country-code list</option>
                 {PHONE_FORMATS.map((f) => <option key={f.code} value={f.code}>{f.name} (+{f.dial})</option>)}
               </select></label>
           )}
@@ -1482,52 +1628,112 @@ export function QuestionEditor({ q }: { q: Question }) {
       )}
 
       {/*
-        * QUANTITY: the stepper and the unit word beside it. Offered for any
-        * numeric question, because "7 nights" and "3 items" are the same
-        * need as "₹ 1,000" — a number the respondent should be able to see
-        * the meaning of.
+        * NUMBER CONTROLS, PER SUBTYPE (October 2026 review).
+        *
+        * The stepper, the unit and the currency row were drawn for every
+        * numeric question — so a Heart Rating offered a unit label, a Video
+        * Rating offered − / + steppers, and Numeric Open End, Percentage and
+        * Quantity all offered a currency list. The review: "Keep these
+        * settings only for the Currency subtype … show subtype-specific
+        * settings". The variant's `numberInput` says which controls exist;
+        * a question with no variant keeps the full set it always had, and a
+        * question that already carries a setting keeps the control for it.
         */}
-      {feats.numericBounds && q.type === "numeric" && (
-        <div className="row">
-          <label className="row" style={{ gap: 8, fontSize: 13.5, alignSelf: "flex-end", paddingBottom: 7 }}>
-            <input type="checkbox" data-testid="stepper"
-              checked={!!q.settings.stepper}
-              onChange={(e) => patchSettings({ stepper: e.target.checked || undefined })} />
-            <span>− / + steppers <span className="muted">a counting input rather than a plain box</span></span>
-          </label>
-          <label className="f" style={{ width: 150 }}><span>Unit label</span>
-            <input className="input" data-testid="unit-label" placeholder="items, nights, kg…"
-              value={q.settings.unitLabel ?? ""}
-              onChange={(e) => patchSettings({ unitLabel: e.target.value || undefined })} /></label>
-          {q.settings.stepper && (
+      {numberControls.any && (
+        <div className="row" data-testid="number-controls" style={{ flexWrap: "wrap" }}>
+          {numberControls.format && (
+            <label className="f" style={{ width: 190 }}><span>Number format</span>
+              <select className="select" data-testid="number-format"
+                value={wholeOnly ? "whole" : "decimal"}
+                onChange={(e) => {
+                  const whole = e.target.value === "whole";
+                  patch({
+                    validation: whole
+                      ? (wholeOnly ? q.validation : [...q.validation, { kind: "integer" } as never])
+                      : q.validation.filter((r) => r.kind !== "integer"),
+                    settings: { ...q.settings, decimalPlaces: whole ? undefined : q.settings.decimalPlaces },
+                  });
+                }}>
+                <option value="decimal">decimals allowed</option>
+                <option value="whole">whole numbers only</option>
+              </select></label>
+          )}
+          {numberControls.format && !wholeOnly && (
+            <label className="f" style={{ width: 150 }}><span>Max decimal places</span>
+              <input className="input" type="number" min={1} max={10} data-testid="decimal-places"
+                placeholder="any"
+                value={q.settings.decimalPlaces ?? ""}
+                onChange={(e) => patchSettings({ decimalPlaces: e.target.value === "" ? undefined : Math.max(1, Math.min(10, Math.round(Number(e.target.value)))) })} /></label>
+          )}
+          {numberControls.sign && (
+            <label className="f" style={{ width: 200 }}><span>Allowed numbers</span>
+              <select className="select" data-testid="number-sign"
+                value={q.settings.numberSign ?? "any"}
+                onChange={(e) => patchSettings({ numberSign: e.target.value === "any" ? undefined : (e.target.value as "positive" | "negative") })}>
+                <option value="any">positive and negative</option>
+                <option value="positive">zero or positive only</option>
+                <option value="negative">zero or negative only</option>
+              </select></label>
+          )}
+          {numberControls.stepper && (
+            <label className="row" style={{ gap: 8, fontSize: 13.5, alignSelf: "flex-end", paddingBottom: 7 }}>
+              <input type="checkbox" data-testid="stepper"
+                checked={!!q.settings.stepper}
+                onChange={(e) => patchSettings({ stepper: e.target.checked || undefined })} />
+              <span>− / + steppers <span className="muted">a counting input rather than a plain box</span></span>
+            </label>
+          )}
+          {numberControls.unit && (
+            <label className="f" style={{ width: 170 }}><span>Unit</span>
+              <input className="input" data-testid="unit-label" placeholder="kg, litres, pieces, boxes…"
+                list="unit-suggestions"
+                value={q.settings.unitLabel ?? ""}
+                onChange={(e) => patchSettings({ unitLabel: e.target.value || undefined })} />
+              <datalist id="unit-suggestions">
+                {["items", "pieces", "boxes", "kg", "g", "litres", "ml", "metres", "km", "hours", "nights", "people"].map((u) => <option key={u} value={u} />)}
+              </datalist></label>
+          )}
+          {numberControls.stepper && q.settings.stepper && (
             <label className="f" style={{ width: 100 }}><span>Step</span>
               <input className="input" type="number" min={1} data-testid="stepper-step"
                 value={q.settings.step ?? ""}
                 onChange={(e) => patchSettings({ step: e.target.value === "" ? undefined : Number(e.target.value) })} /></label>
           )}
-        </div>
-      )}
-
-      {has("currency_symbol") && (
-        <div className="row">
-          <label className="f" style={{ minWidth: 200 }}><span>Currency</span>
-            <select className="select" data-testid="currency-code"
-              value={q.settings.currencyCode ?? ""}
-              onChange={(e) => patchSettings({ currencyCode: e.target.value || undefined })}>
-              <option value="">none</option>
-              {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.symbol} {c.code} — {c.name}</option>)}
-            </select></label>
-          <label className="f" style={{ width: 150 }}><span>Or type a symbol</span>
-            <input className="input" data-testid="currency-symbol" placeholder="%, kg, pts…"
-              value={q.settings.currencySymbol ?? ""}
-              onChange={(e) => patchSettings({ currencySymbol: e.target.value || undefined })} /></label>
-          <label className="f" style={{ width: 130 }}><span>Symbol side</span>
-            <select className="select" data-testid="symbol-side"
-              value={q.settings.symbolSide ?? "left"}
-              onChange={(e) => patchSettings({ symbolSide: e.target.value === "right" ? "right" : undefined })}>
-              <option value="left">left (₹ 1,000)</option>
-              <option value="right">right (1,000 ₹)</option>
-            </select></label>
+          {numberControls.symbol === "fixed" && (
+            <>
+              <label className="f" style={{ width: 90 }}><span>Symbol</span>
+                <span className="chip" data-testid="fixed-symbol" style={{ alignSelf: "flex-start", marginTop: 6 }}>{variantDef?.numberInput?.fixedSymbol}</span></label>
+              <label className="f" style={{ width: 150 }}><span>Symbol side</span>
+                <select className="select" data-testid="symbol-side"
+                  value={q.settings.symbolSide ?? "right"}
+                  onChange={(e) => patchSettings({ symbolSide: e.target.value as "left" | "right" })}>
+                  <option value="right">right (50 {variantDef?.numberInput?.fixedSymbol})</option>
+                  <option value="left">left ({variantDef?.numberInput?.fixedSymbol} 50)</option>
+                </select></label>
+            </>
+          )}
+          {numberControls.symbol === "choose" && (
+            <>
+              <label className="f" style={{ minWidth: 200 }}><span>Currency</span>
+                <select className="select" data-testid="currency-code"
+                  value={q.settings.currencyCode ?? ""}
+                  onChange={(e) => patchSettings({ currencyCode: e.target.value || undefined })}>
+                  <option value="">none</option>
+                  {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.symbol} {c.code} — {c.name}</option>)}
+                </select></label>
+              <label className="f" style={{ width: 150 }}><span>Or type a symbol</span>
+                <input className="input" data-testid="currency-symbol" placeholder="€, ₹, pts…"
+                  value={q.settings.currencySymbol ?? ""}
+                  onChange={(e) => patchSettings({ currencySymbol: e.target.value || undefined })} /></label>
+              <label className="f" style={{ width: 130 }}><span>Symbol side</span>
+                <select className="select" data-testid="symbol-side"
+                  value={q.settings.symbolSide ?? "left"}
+                  onChange={(e) => patchSettings({ symbolSide: e.target.value === "right" ? "right" : undefined })}>
+                  <option value="left">left (₹ 1,000)</option>
+                  <option value="right">right (1,000 ₹)</option>
+                </select></label>
+            </>
+          )}
         </div>
       )}
 
@@ -1697,6 +1903,12 @@ export function QuestionEditor({ q }: { q: Question }) {
       )}
 
       <VariantSettings q={q} v={variantDef} patch={patch} patchSettings={patchSettings} />
+      {showLayout && builder.layoutLast && (
+        <div data-testid="layout-block">
+          <h3 className="sec">Layout</h3>
+          <div className="row">{layoutControl}</div>
+        </div>
+      )}
 
       {q.type === "html" && (
         <label className="f"><span>HTML content</span>

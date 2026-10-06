@@ -5,6 +5,7 @@ import type { QRProps } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { useOptions, useRows } from "./shared";
 import { anchor } from "../authoring";
+import { CardFace, cardFrameClass } from "../CardFace";
 
 /**
  * Swipe / Gesture family — card decks that store an ordinary single-select
@@ -131,51 +132,92 @@ function NoCards({ testid }: { testid: string }) {
 
 /* --------------------------------------------------------- Swipe to rate */
 /**
- * A deck where the verdict is a scale rather than a yes/no: the options are
- * laid out as buttons under the card, and the two extremes double as the
- * swipe directions — the fast gesture for "definitely" and "definitely not",
- * a tap for everything in between.
+ * A deck whose swipe records a RATING, a RANK or a CATEGORY — the review's
+ * "Response Type: Rate / Rank / Categorize" (October 2026). The answer is an
+ * ordinary single-select matrix in all three (`{ cardCode: code }`):
+ *
+ *   rate        the options are scale points under the card; the two
+ *               extremes double as the swipe directions
+ *   categorize  the options are categories, shown as chips under the card;
+ *               swipe left / right files it in the first / last
+ *   rank        the order cards are swiped right is their rank — swipe right
+ *               "this one next", swipe left "not yet" (the card goes to the
+ *               back); the stored code is the rank number, 1 for the first
+ *
+ * The card itself is `CardFace`: image, title, subtitle, description, price
+ * and extra fields.
  */
 export function SwipeRate(p: QRProps) {
-  const options = useOptions(p).slice(0, 5);
-  const { rows, current, judged, judge, undo } = useDeck(p);
+  const mode = p.q.settings.swipeResponse ?? "rate";
+  const all = useOptions(p);
+  const options = mode === "rate" ? all.slice(0, 5) : all;
+  const { rows, vals, judged, judge, undo } = useDeck(p);
+  /* rank: "not yet" sends a card to the back — the deck's own order, this page's state */
+  const [later, setLater] = React.useState<string[]>([]);
+  const remaining = rows.filter((r) => vals[String(r.code)] === undefined)
+    .sort((a, b) => later.indexOf(String(a.code)) - later.indexOf(String(b.code)));
+  const current = remaining[0];
   const low = options[0];
   const high = options[options.length - 1];
+  const nextRank = judged.length + 1;
 
   const { off, dragging, swipeProps } = useSwipe((dx) => {
     if (!current) return;
-    if (dx > THRESHOLD && high) judge(String(current.code), high.code);
-    else if (dx < -THRESHOLD && low) judge(String(current.code), low.code);
+    const rc = String(current.code);
+    if (mode === "rank") {
+      if (dx > THRESHOLD) judge(rc, nextRank);
+      else if (dx < -THRESHOLD) setLater((l) => [...l.filter((x) => x !== rc), rc]);
+      return;
+    }
+    if (dx > THRESHOLD && high) judge(rc, high.code);
+    else if (dx < -THRESHOLD && low) judge(rc, low.code);
   });
 
   if (rows.length === 0) return <NoCards testid="swiperate" />;
-  if (options.length === 0) {
-    return <div className="rs-empty-hint" data-testid="swiperate-empty">Add options — they are the points on the scale.</div>;
+  if (mode !== "rank" && options.length === 0) {
+    return <div className="rs-empty-hint" data-testid="swiperate-empty">
+      {mode === "categorize" ? "Add categories — each is a place a card can be filed." : "Add options — they are the points on the scale."}
+    </div>;
   }
 
-  const verdict = off.x > 40 ? high : off.x < -40 ? low : null;
-  const scale = (rowCode: string | null) => (
-    <div className="rs-swipex-scale" role="group" aria-label="Rating">
-      {options.map((o) => (
-        <button key={String(o.code)} type="button" className="rs-swipex-step"
-          data-code={String(o.code)} {...anchor("option", String(o.code))}
-          disabled={rowCode == null}
-          aria-label={plain(o.label)}
-          onClick={() => rowCode && judge(rowCode, o.code)}>
-          <span dangerouslySetInnerHTML={{ __html: o.label }} />
-        </button>
-      ))}
-    </div>
-  );
+  const verdict = mode === "rank"
+    ? (off.x > 40 ? `#${nextRank}` : off.x < -40 ? "Not yet" : null)
+    : (off.x > 40 ? plain(high?.label ?? "") : off.x < -40 ? plain(low?.label ?? "") : null);
+
+  const footer = (rowCode: string | null) => {
+    if (mode === "rank") {
+      return (
+        <div className="rs-swipex-rank" role="group" aria-label="Rank">
+          <button type="button" className="rs-swipex-step" data-testid="swiperate-later" disabled={rowCode == null || remaining.length < 2}
+            onClick={() => rowCode && setLater((l) => [...l.filter((x) => x !== rowCode), rowCode])}>← Not yet</button>
+          <button type="button" className="rs-swipex-step primary" data-testid="swiperate-rank" disabled={rowCode == null}
+            onClick={() => rowCode && judge(rowCode, nextRank)}>Rank #{nextRank} →</button>
+        </div>
+      );
+    }
+    return (
+      <div className={`rs-swipex-scale ${mode === "categorize" ? "categories" : ""}`} role="group" aria-label={mode === "categorize" ? "Category" : "Rating"}>
+        {options.map((o) => (
+          <button key={String(o.code)} type="button" className="rs-swipex-step"
+            data-code={String(o.code)} {...anchor("option", String(o.code))}
+            disabled={rowCode == null}
+            aria-label={plain(o.label)}
+            onClick={() => rowCode && judge(rowCode, o.code)}>
+            <span dangerouslySetInnerHTML={{ __html: o.label }} />
+          </button>
+        ))}
+      </div>
+    );
+  };
 
   return (
     <DeckShell testid="swiperate" total={rows.length} count={judged.length + 1}
       canUndo={judged.length > 0} onUndo={undo}
       label={current ? plain(current.label) : null}
-      footer={current ? scale(String(current.code)) : <DeckSummary p={p} testid="swiperate" />}>
+      footer={current ? footer(String(current.code)) : (mode === "rank" ? <RankSummary p={p} /> : <DeckSummary p={p} testid="swiperate" />)}>
       {current ? (
-        <div className="rs-swipex-stack">
-          <div className="rs-swipex-card"
+        <div className="rs-swipex-stack" data-mode={mode}>
+          <div className={`rs-swipex-card ${cardFrameClass(p.q.settings, "3:4")}`}
             data-row={String(current.code)} {...anchor("row", String(current.code))}
             {...swipeProps}
             style={{
@@ -183,18 +225,46 @@ export function SwipeRate(p: QRProps) {
               transform: `translateX(${off.x}px) rotate(${Math.max(-12, Math.min(12, off.x / 12))}deg)`,
               transition: dragging ? "none" : "transform .18s ease",
             }}>
-            <div className="rs-swipex-label" dangerouslySetInnerHTML={{ __html: current.label }} />
+            <CardFace row={current} settings={p.q.settings} />
             <div className="rs-swipex-ends" aria-hidden>
-              <span>← {plain(low.label)}</span>
-              <span>{plain(high.label)} →</span>
+              <span>← {mode === "rank" ? "Not yet" : plain(low?.label ?? "")}</span>
+              <span>{mode === "rank" ? `Rank #${nextRank}` : plain(high?.label ?? "")} →</span>
             </div>
             {verdict && (
-              <div className={`rs-swipex-verdict ${off.x > 0 ? "right" : "left"}`}>{plain(verdict.label)}</div>
+              <div className={`rs-swipex-verdict ${off.x > 0 ? "right" : "left"}`}>{verdict}</div>
             )}
           </div>
         </div>
       ) : null}
     </DeckShell>
+  );
+}
+
+/** Rank mode's summary: the cards in the order they were ranked; a chip re-opens that card (and everything after it). */
+function RankSummary({ p }: { p: QRProps }) {
+  const rows = useRows(p);
+  const vals = (p.value ?? {}) as Record<string, unknown>;
+  const ranked = rows.filter((r) => vals[String(r.code)] != null).sort((a, b) => Number(vals[String(a.code)]) - Number(vals[String(b.code)]));
+  return (
+    <ol className="rs-swipex-summary rs-swipex-ranked" data-testid="swiperate-ranking">
+      {ranked.map((r) => {
+        const rc = String(r.code);
+        const n = Number(vals[rc]);
+        return (
+          <li key={rc}>
+            <button type="button" className="rs-swipex-chip" data-row={rc} {...anchor("row", rc)}
+              title="Rank this card and the ones after it again"
+              onClick={() => {
+                const next = { ...vals };
+                for (const x of ranked) if (Number(vals[String(x.code)]) >= n) delete next[String(x.code)];
+                p.onChange(next);
+              }}>
+              <strong>#{n}</strong> <span dangerouslySetInnerHTML={{ __html: r.label }} />
+            </button>
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
@@ -269,7 +339,16 @@ export function Swipe4(p: QRProps) {
           <div className="rs-sw4-up">{arrow("up")}</div>
           <div className="rs-sw4-left">{arrow("left")}</div>
           <div className="rs-sw4-mid">
-            <div className="rs-swipex-card"
+            {/*
+              * A CARD, NOT A STRIP (October 2026 review): "the swipe area is
+              * currently displayed as a long, flat rectangle … The swipe area
+              * should use a proper card-shaped container, preferably a
+              * portrait or near-square aspect ratio" — 4:5 unless the
+              * programmer picks another, centered between the four arrows,
+              * and the same size on a phone as on a desktop.
+              */}
+            <div className={`rs-swipex-card ${cardFrameClass(p.q.settings, "4:5")}`}
+              data-testid="swipe4-card"
               data-row={String(current.code)} {...anchor("row", String(current.code))}
               {...swipeProps}
               style={{
@@ -277,7 +356,7 @@ export function Swipe4(p: QRProps) {
                 transform: `translate(${off.x}px, ${off.y}px) rotate(${Math.max(-10, Math.min(10, off.x / 14))}deg)`,
                 transition: dragging ? "none" : "transform .18s ease",
               }}>
-              <div className="rs-swipex-label" dangerouslySetInnerHTML={{ __html: current.label }} />
+              <CardFace row={current} settings={p.q.settings} />
               {activeDir && map[activeDir] && (
                 <div className={`rs-swipex-verdict ${activeDir}`}>{plain(map[activeDir]!.label)}</div>
               )}

@@ -23,12 +23,21 @@ import {
   uiText,
   effectiveScale,
   affixFor,
+  DIAL_CODES,
+  PHONE_PICK,
+  formatDateAs,
+  parseDateAs,
+  datePlaceholder,
+  initialDateValue,
+  initialTimeValue,
   type ValidationError,
 } from "@rescript/engine";
 import { variantRenderers } from "./variants/registry";
 import { MediaEmbed, SafeImage } from "./Media";
 import { SpeechInputButton } from "./SpeechInput";
 import { anchor, cellAnchor, type AuthoringAnchor } from "./authoring";
+import { TimeSelects } from "./TimeSelects";
+import { CardFace, cardFrameClass } from "./CardFace";
 // side-effect: every family registers its renderers
 import "./variants";
 
@@ -73,6 +82,13 @@ export interface QRProps {
   onOtherChange?(text: string, code?: string | number): void;
   /** the respondent's language's interface strings (engine `uiStringsFor`); absent = English */
   ui?: Record<string, string>;
+  /**
+   * A value stored BESIDE the answer, at `<answer key>__<suffix>` — the same
+   * convention as `__voice` and `__probe_n`. Video Rating's optional comment
+   * is `__comment`, so the rating stays a number and every report that reads
+   * it as one keeps working. Absent outside a Runner (nothing to store into).
+   */
+  onExtraChange?(suffix: string, value: unknown): void;
 }
 
 /**
@@ -601,13 +617,19 @@ export function MultiDropdown(p: QRProps) {
  * from somewhere else (a calculation, a reset, another respondent action).
  */
 export function NumberField({
-  value, onChange, className = "rs-input sm", min, max, step, placeholder, readOnly, ariaLabel, disabled,
+  value, onChange, className = "rs-input sm", min, max, step, placeholder, readOnly, ariaLabel, disabled, decimals,
 }: {
   value: unknown;
   onChange(v: number | null): void;
   className?: string;
   min?: number; max?: number; step?: number | string;
   placeholder?: string; readOnly?: boolean; disabled?: boolean; ariaLabel?: string;
+  /**
+   * The most decimal places the question accepts — 0 for whole numbers.
+   * Refused at the keystroke, like the minus sign below, so the rule the
+   * validator holds is the rule the respondent meets while typing.
+   */
+  decimals?: number;
 }) {
   const external = value == null || value === "" ? "" : String(value);
   const [raw, setRaw] = React.useState(external);
@@ -632,7 +654,7 @@ export function NumberField({
     <input
       className={className}
       type="text"
-      inputMode="decimal"
+      inputMode={decimals === 0 ? "numeric" : "decimal"}
       aria-label={ariaLabel}
       value={raw}
       placeholder={placeholder}
@@ -657,8 +679,13 @@ export function NumberField({
          * Refusing the keystroke is the same rule said earlier.
          */
         if (t.startsWith("-") && min != null && min >= 0) return;
+        if (decimals != null) {
+          const frac = /\.(\d*)/.exec(t)?.[1];
+          if (frac != null && (decimals === 0 || frac.length > decimals)) return;
+        }
         commit(t);
       }}
+      data-decimals={decimals}
       data-min={min}
       data-max={max}
       data-step={step}
@@ -678,8 +705,24 @@ export function NumericInput(p: QRProps) {
    * cent sign. One affix mechanism serves both, and `symbolSide` answers the
    * other half of the request: "₹ 1,000" or "1,000 ₹".
    */
-  const affix = affixFor(p.q.settings);
+  /*
+   * A FIXED SYMBOL is the variant's, not the question's: a Percentage shows
+   * "%" whatever its settings hold (only its side may be chosen), so a
+   * percentage question saved before the symbol was seeded is still one.
+   */
+  const policy = resolveVariant(p.q.variant)?.numberInput;
+  const affix = policy?.symbol === "fixed" && policy.fixedSymbol
+    ? { text: policy.fixedSymbol, side: p.q.settings.symbolSide ?? "right" }
+    : affixFor(p.q.settings);
   const unit = p.q.settings.unitLabel?.trim();
+  /*
+   * FORMAT AND SIGN, said at the keystroke (October 2026 review). Whole
+   * numbers are the `integer` rule or zero decimal places; "zero or more"
+   * raises the floor the minus-sign refusal already reads.
+   */
+  const whole = p.q.validation.some((r) => r.kind === "integer") || p.q.settings.decimalPlaces === 0;
+  const decimals = whole ? 0 : p.q.settings.decimalPlaces;
+  const floor = p.q.settings.numberSign === "positive" ? Math.max(p.q.settings.minValue ?? 0, 0) : p.q.settings.minValue;
   /*
    * A STEPPER, for a question that counts things. The review asked for a
    * "dedicated quantity-style input design" with optional − / + buttons,
@@ -690,7 +733,7 @@ export function NumericInput(p: QRProps) {
    */
   if (p.q.settings.stepper) {
     const step = p.q.settings.step ?? 1;
-    const lo = p.q.settings.minValue;
+    const lo = floor;
     const hi = p.q.settings.maxValue;
     const cur = p.value == null || p.value === "" ? null : Number(p.value);
     const nudge = (dir: -1 | 1) => {
@@ -709,9 +752,10 @@ export function NumericInput(p: QRProps) {
         <NumberField
           className="rs-input rs-stepper-in"
           value={p.value}
-          min={lo}
+          min={floor}
           max={hi}
           step={step}
+          decimals={decimals}
           placeholder={p.q.settings.placeholder}
           readOnly={p.q.settings.readOnly}
           onChange={p.onChange}
@@ -726,9 +770,10 @@ export function NumericInput(p: QRProps) {
   const field = (
     <NumberField
       value={p.value}
-      min={p.q.settings.minValue}
+      min={floor}
       max={p.q.settings.maxValue}
-      step={p.q.settings.step ?? "any"}
+      step={p.q.settings.step ?? (whole ? 1 : "any")}
+      decimals={decimals}
       placeholder={p.q.settings.placeholder}
       readOnly={p.q.settings.readOnly}
       onChange={p.onChange}
@@ -745,8 +790,77 @@ export function NumericInput(p: QRProps) {
   );
 }
 
+/**
+ * A PHONE NUMBER WITH ITS COUNTRY (October 2026 review). With a country
+ * configured in the builder the respondent sees that country's code as a
+ * fixed prefix and types the number — "the country-code dropdown should be
+ * hidden because the country has already been configured". Without one they
+ * pick their dialing code from a list, and the answer is stored as
+ * "+<code> <number>", which the validator reads to apply that country's
+ * format.
+ */
+export function PhoneInput({ value, onChange, country, readOnly, placeholder, ariaLabel, testid }: {
+  value: unknown; onChange(v: string | null): void; country?: string;
+  readOnly?: boolean; placeholder?: string; ariaLabel?: string; testid?: string;
+}) {
+  const text = value == null ? "" : String(value);
+  /* no setting: the plain box every question authored before had, checked loosely */
+  if (!country) {
+    return (
+      <input className="rs-input" type="tel" inputMode="tel" aria-label={ariaLabel} readOnly={readOnly}
+        data-testid={testid ?? "phone-input"} placeholder={placeholder} value={text}
+        onChange={(e) => onChange(e.target.value === "" ? null : e.target.value)} />
+    );
+  }
+  const fixed = country !== PHONE_PICK ? DIAL_CODES.find((c) => c.code === country) : undefined;
+  if (country !== PHONE_PICK) {
+    return (
+      <span className="rs-phone" data-testid={testid ?? "phone-input"} data-country={country}>
+        {fixed && <span className="rs-prefix rs-phone-fixed" data-testid="phone-fixed-code">{fixed.flag} +{fixed.dial}</span>}
+        <input className="rs-input" type="tel" inputMode="tel" aria-label={ariaLabel} readOnly={readOnly}
+          placeholder={placeholder} value={text}
+          onChange={(e) => onChange(e.target.value === "" ? null : e.target.value)} />
+      </span>
+    );
+  }
+  /* "+91 98765…" → the code and the rest; the longest dialing code that fits wins */
+  const parsed = (() => {
+    const m = /^\+(\d+)\s*(.*)$/.exec(text.trim());
+    if (!m) return { code: "", number: text };
+    const hit = [...DIAL_CODES].sort((a, b) => b.dial.length - a.dial.length).find((c) => m[1].startsWith(c.dial));
+    return hit ? { code: hit.code, number: (m[1].slice(hit.dial.length) + (m[2] ? ` ${m[2]}` : "")).trim() } : { code: "", number: text };
+  })();
+  const [pick, setPick] = React.useState(parsed.code);
+  React.useEffect(() => { if (parsed.code) setPick(parsed.code); }, [parsed.code]);
+  const emit = (code: string, num: string) => {
+    const dial = DIAL_CODES.find((c) => c.code === code)?.dial;
+    const n = num.trim();
+    onChange(n === "" ? null : dial ? `+${dial} ${n}` : n);
+  };
+  return (
+    <span className="rs-phone" data-testid={testid ?? "phone-input"}>
+      <select className="rs-select rs-phone-code" aria-label="Country code" disabled={readOnly}
+        data-testid="phone-country-code" value={pick}
+        onChange={(e) => { setPick(e.target.value); emit(e.target.value, parsed.number); }}>
+        <option value="">Code</option>
+        {DIAL_CODES.map((c) => <option key={c.code} value={c.code}>{c.flag} +{c.dial} {c.name}</option>)}
+      </select>
+      <input className="rs-input" type="tel" inputMode="tel" aria-label={ariaLabel} readOnly={readOnly}
+        placeholder={placeholder ?? "Phone number"} value={parsed.number}
+        onChange={(e) => emit(pick, e.target.value)} />
+    </span>
+  );
+}
+
 export function TextInput(p: QRProps) {
   const text = p.value == null ? "" : String(p.value);
+  /* a question validated as a phone number with a country (or the code list) takes one the way a phone field does */
+  if (p.q.validation.some((r) => r.kind === "phone") && p.q.settings.phoneCountry) {
+    return (
+      <PhoneInput value={p.value} onChange={p.onChange} country={p.q.settings.phoneCountry}
+        readOnly={p.q.settings.readOnly} placeholder={p.q.settings.placeholder} />
+    );
+  }
   return (
     <div className="rs-textfield">
       <input
@@ -792,16 +906,97 @@ export function LongText(p: QRProps) {
   );
 }
 
+/**
+ * A DEFAULT VALUE, set once when the question is first shown with no answer
+ * (Date Picker "Current Date / Custom Date", Time Picker "Current Time /
+ * Custom Time" — October 2026 review). Read at that moment, so "current" is
+ * the respondent's own day and clock. An answer already there — typed,
+ * resumed, piped — is never replaced.
+ */
+function useInitialAnswer(p: QRProps, initial: () => string | null) {
+  const done = React.useRef(false);
+  React.useEffect(() => {
+    if (done.current) return;
+    done.current = true;
+    if (p.value != null && p.value !== "") return;
+    const v = initial();
+    if (v) p.onChange(v);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+}
+
+/**
+ * DATE PICKER. With a Date Format chosen, the date is shown and typed in that
+ * format ("23/09/2026", "Sep 23, 2026") and a calendar button opens the
+ * browser's picker; the answer is stored as YYYY-MM-DD either way. With no
+ * format the native field stays exactly as it was.
+ */
 export function DateInput(p: QRProps) {
+  useInitialAnswer(p, () => initialDateValue(p.q.settings));
+  const fmt = p.q.settings.dateFormat;
+  const stored = p.value == null ? "" : String(p.value);
+  const [text, setText] = React.useState(() => formatDateAs(stored, fmt));
+  const [bad, setBad] = React.useState(false);
+  const focused = React.useRef(false);
+  const nativeRef = React.useRef<HTMLInputElement | null>(null);
+  React.useEffect(() => {
+    if (!focused.current) { setText(formatDateAs(stored, fmt)); setBad(false); }
+  }, [stored, fmt]);
+  if (!fmt) {
+    return (
+      <input className="rs-input sm" type="date" value={stored} data-testid="date-input"
+        min={p.q.settings.minDate} max={p.q.settings.maxDate}
+        readOnly={p.q.settings.readOnly} onChange={(e) => p.onChange(e.target.value || null)} style={{ maxWidth: 190 }} />
+    );
+  }
   return (
-    <input className="rs-input sm" type="date" value={p.value == null ? "" : String(p.value)}
-      readOnly={p.q.settings.readOnly} onChange={(e) => p.onChange(e.target.value || null)} style={{ maxWidth: 190 }} />
+    <span className="rs-datefield" data-testid="date-input" data-format={fmt}>
+      <input className="rs-input sm" type="text" inputMode={/MMM/.test(fmt) ? "text" : "numeric"}
+        placeholder={datePlaceholder(fmt)} aria-label={`Date (${fmt})`} value={text}
+        readOnly={p.q.settings.readOnly} data-testid="date-text"
+        onFocus={() => { focused.current = true; }}
+        onBlur={() => { focused.current = false; setBad(text.trim() !== "" && parseDateAs(text, fmt) == null); }}
+        onChange={(e) => {
+          const t = e.target.value;
+          setText(t);
+          const iso = parseDateAs(t, fmt);
+          /* an unfinished or impossible date is no answer — never the previous one left standing */
+          p.onChange(iso);
+          if (iso) setBad(false);
+        }} />
+      <button type="button" className="rs-date-btn" aria-label="Open calendar" data-testid="date-calendar"
+        disabled={p.q.settings.readOnly}
+        onClick={() => {
+          const el = nativeRef.current;
+          if (!el) return;
+          try { (el as HTMLInputElement & { showPicker?: () => void }).showPicker?.(); } catch { el.focus(); }
+        }}>📅</button>
+      <input ref={nativeRef} type="date" className="rs-date-native" tabIndex={-1} aria-hidden
+        min={p.q.settings.minDate} max={p.q.settings.maxDate} value={stored}
+        onChange={(e) => { const v = e.target.value || null; p.onChange(v); setText(formatDateAs(v, fmt)); setBad(false); }} />
+      {bad && <span className="rs-date-hint" data-testid="date-format-hint">Please enter the date as {datePlaceholder(fmt)}.</span>}
+    </span>
   );
 }
+
+/**
+ * TIME PICKER. With a Time Format chosen, hour / minute (/ seconds) selectors
+ * in 12- or 24-hour form; stored as 24-hour HH:MM(:SS). With no format the
+ * native field stays exactly as it was.
+ */
 export function TimeInput(p: QRProps) {
+  useInitialAnswer(p, () => initialTimeValue(p.q.settings));
+  const fmt = p.q.settings.timeFormat;
+  if (!fmt) {
+    return (
+      <input className="rs-input sm" type="time" value={p.value == null ? "" : String(p.value)} data-testid="time-input"
+        step={p.q.settings.showSeconds ? 1 : undefined}
+        readOnly={p.q.settings.readOnly} onChange={(e) => p.onChange(e.target.value || null)} style={{ maxWidth: 150 }} />
+    );
+  }
   return (
-    <input className="rs-input sm" type="time" value={p.value == null ? "" : String(p.value)}
-      readOnly={p.q.settings.readOnly} onChange={(e) => p.onChange(e.target.value || null)} style={{ maxWidth: 150 }} />
+    <TimeSelects testid="time-input" label="Time" value={p.value} readOnly={p.q.settings.readOnly}
+      hour12={fmt === "12"} seconds={!!p.q.settings.showSeconds}
+      onChange={(v) => p.onChange(v)} />
   );
 }
 
@@ -855,6 +1050,11 @@ export function ListInput(p: QRProps & { numeric: boolean }) {
                     readOnly={p.q.settings.readOnly}
                     onChange={(e) => setField(rc, e.target.value || null)}
                   />
+                ) : ft === "phone" ? (
+                  <PhoneInput value={v} onChange={(x) => setField(rc, x)}
+                    country={typeof row.meta?.phoneCountry === "string" ? row.meta.phoneCountry : p.q.settings.phoneCountry}
+                    readOnly={p.q.settings.readOnly} placeholder={row.placeholder}
+                    ariaLabel={row.label.replace(/<[^>]*>/g, "")} testid={`phone-input-${rc}`} />
                 ) : ["number", "decimal", "integer", "currency"].includes(ft) ? (
                   <NumberField
                     className="rs-input"
@@ -1918,17 +2118,26 @@ export function SwipeDeck(p: QRProps) {
     );
   }
 
-  const img = (current.meta?.image as string) ?? undefined;
   const tilt = Math.max(-14, Math.min(14, drag.x / 10));
   const verdict = drag.x > 40 ? rightOpt : drag.x < -40 ? leftOpt : null;
+  /*
+   * THE CARD'S CONTENT (October 2026 review): image, title, subtitle,
+   * description, price and extra fields — `CardFace`, shared with the other
+   * two decks. The interaction is unchanged; a card that only has a label
+   * draws as it always did. A sized / proportioned frame is applied once the
+   * programmer chooses one, or once the card carries more than its label.
+   */
+  const framed = !!(p.q.settings.cardAspect || p.q.settings.cardSize || current.meta?.subtitle || current.meta?.description || current.meta?.price || (current.meta?.fields as unknown[] | undefined)?.length);
+  const showButtons = p.q.settings.swipeButtons !== false;
 
   return (
     <div className="rs-swipe">
       <div className="rs-swipe-progress">{done + 1} / {view.rows.length}</div>
-      <div className="rs-swipe-stack">
+      <div className={`rs-swipe-stack ${framed ? "framed" : ""}`}>
         {remaining[1] && <div className="rs-swipe-card behind" />}
         <div
-          className="rs-swipe-card"
+          className={`rs-swipe-card ${framed ? cardFrameClass(p.q.settings, "3:4") : ""}`}
+          data-testid="swipe-card"
           style={{
             transform: `translateX(${drag.x}px) rotate(${tilt}deg)`,
             transition: drag.active ? "none" : "transform .18s ease",
@@ -1939,11 +2148,7 @@ export function SwipeDeck(p: QRProps) {
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp}
         >
-          {img && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <SafeImage src={img} alt="" draggable={false}/>
-          )}
-          <div className="rs-swipe-label" dangerouslySetInnerHTML={{ __html: current.label }} />
+          <CardFace row={current} settings={p.q.settings} />
           {verdict && (
             <div className={`rs-swipe-verdict ${drag.x > 0 ? "right" : "left"}`}>
               {verdict.label.replace(/<[^>]*>/g, "")}
@@ -1952,7 +2157,7 @@ export function SwipeDeck(p: QRProps) {
         </div>
       </div>
       <div className="rs-swipe-actions">
-        {leftOpt && (
+        {showButtons && leftOpt && (
           <button type="button" className="rs-swipe-btn left"
             onClick={() => judge(String(current.code), leftOpt.code)}>
             <span dangerouslySetInnerHTML={{ __html: leftOpt.label }} />
@@ -1961,7 +2166,7 @@ export function SwipeDeck(p: QRProps) {
         {done > 0 && (
           <button type="button" className="rs-swipe-btn undo" onClick={undo} title="Undo last">↩</button>
         )}
-        {rightOpt && rightOpt !== leftOpt && (
+        {showButtons && rightOpt && rightOpt !== leftOpt && (
           <button type="button" className="rs-swipe-btn right"
             onClick={() => judge(String(current.code), rightOpt.code)}>
             <span dangerouslySetInnerHTML={{ __html: rightOpt.label }} />
@@ -2192,49 +2397,6 @@ export function CompareImages(p: QRProps) {
   );
 }
 
-/** Categorization into buckets (per_row model): each row card gets one
- *  bucket; stored exactly like a single-select matrix. */
-export function Categorize(p: QRProps) {
-  const view = effectiveQuestion(p.q, ctxOf(p));
-  const vals = (p.value ?? {}) as Record<string, unknown>;
-  const setRow = (rc: string, v: unknown) => p.onChange({ ...vals, [rc]: v });
-  const done = view.rows.filter((r) => vals[String(r.code)] !== undefined).length;
-  return (
-    <div>
-      <div className="rs-hotspot-status" style={{ marginBottom: 8 }}>
-        {done} / {view.rows.length} assigned
-      </div>
-      <div className="rs-catgrid" style={gridColumnsStyle(p, "repeat(auto-fill, minmax(220px, 1fr))")}>
-        {view.rows.map((row) => {
-          const rc = String(row.code);
-          const img = (row.meta?.image as string) ?? undefined;
-          return (
-            <div key={rc} {...anchor("row", rc)} className={`rs-catcard ${vals[rc] !== undefined ? "assigned" : ""}`}>
-              {img && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <SafeImage src={img} alt=""/>
-              )}
-              <div className="rs-catcard-label" dangerouslySetInnerHTML={{ __html: row.label }} />
-              <div className="rs-catcard-buckets">
-                {view.options.map((o) => {
-                  const sel = String(vals[rc]) === String(o.code);
-                  return (
-                    <button key={String(o.code)} type="button" {...anchor("option", o.code)}
-                      className={`rs-bucket ${sel ? "on" : ""}`}
-                      onClick={() => setRow(rc, sel ? undefined : o.code)}>
-                      <span dangerouslySetInnerHTML={{ __html: o.label }} />
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 /* ------------------------------------------------------- custom component */
 function CustomComponent(p: QRProps) {
   const ref = React.useRef<HTMLDivElement>(null);
@@ -2409,8 +2571,6 @@ export function QuestionRenderer(props: QRProps) {
         return <HotspotClick {...p} />;
       case "compare":
         return <CompareImages {...p} />;
-      case "categorize":
-        return <Categorize {...p} />;
       default:
         return null;
     }

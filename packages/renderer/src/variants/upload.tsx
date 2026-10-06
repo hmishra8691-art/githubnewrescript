@@ -4,6 +4,7 @@ import type { UploadState } from "@rescript/storage/uploader";
 import type { QRProps } from "../QuestionRenderer";
 import { playbackUrl, uploadBlobForSession, uploadStateSay } from "../lib/sessionUpload";
 import { registerVariantRenderer } from "./registry";
+import { uploadAccept, uploadTypeAllowed } from "@rescript/engine";
 
 /**
  * File / Media Upload family: File Upload, Photo / Camera Capture and
@@ -124,8 +125,20 @@ export function commitFiles(p: QRProps, files: UploadedFile[]): void {
 export function tooBig(p: QRProps, file: File | Blob): string | null {
   const cap = p.q.settings.maxSizeMb;
   if (cap == null || file.size <= cap * 1024 * 1024) return null;
-  const name = (file as File).name ? `“${(file as File).name}”` : "That file";
-  return `${name} is ${fmtSize(file.size)} — the limit is ${cap} MB.`;
+  /* the review's wording, the same sentence validation uses */
+  return `File size exceeds the ${cap} MB limit.`;
+}
+
+/**
+ * Client-side type guard — the engine's `uploadAccept`, so the picker refuses
+ * exactly what validation would ("Invalid file type. Please upload a PDF
+ * file."). The `accept` attribute on the file input is only a hint the
+ * browser may ignore; this is the rule.
+ */
+export function wrongType(p: QRProps, file: File | Blob): string | null {
+  const acc = uploadAccept(p.q);
+  return uploadTypeAllowed(acc, { name: (file as File).name ?? "", type: file.type })
+    ? null : `Invalid file type. Please upload ${acc!.wanted}.`;
 }
 
 /** A stored file's row: name, size and a remove button. */
@@ -156,6 +169,9 @@ function FileRow({ f, i, onRemove, sessionId }: { f: UploadedFile; i: number; on
  */
 export function FileUpload(p: QRProps) {
   const max = p.q.settings.maxFiles ?? 1;
+  const min = p.q.settings.minFiles;
+  const acc = uploadAccept(p.q);
+  const totalCap = p.q.settings.maxTotalMb;
   const files = filesOf(p);
   const [busy, setBusy] = React.useState(0);
   const [progress, setProgress] = React.useState<string>("");
@@ -168,12 +184,19 @@ export function FileUpload(p: QRProps) {
     if (!list || ro) return;
     setError(null);
     let next = [...filesOf(p)];
+    /* the review's order: file type → file count → file size */
     for (const f of Array.from(list)) {
+      const wrong = wrongType(p, f);
+      if (wrong) { setError(wrong); continue; }
+      if (max > 1 && next.length >= max) {
+        setError(`You can upload a maximum of ${max} files.`);
+        break;
+      }
       const big = tooBig(p, f);
       if (big) { setError(big); continue; }
-      if (max > 1 && next.length >= max) {
-        setError(`You can attach at most ${max} files.`);
-        break;
+      if (totalCap != null && next.reduce((a, x) => a + (x.size ?? 0), 0) + f.size > totalCap * 1024 * 1024) {
+        setError(`The files together exceed the ${totalCap} MB limit.`);
+        continue;
       }
       setBusy((b) => b + 1);
       try {
@@ -210,10 +233,11 @@ export function FileUpload(p: QRProps) {
         <span className="rs-up-zone-icon" aria-hidden>⬆</span>
         <span>
           <strong>Choose a file</strong> or drop it here
-          <span className="rs-up-hint">
-            {p.q.settings.accept ? ` · ${p.q.settings.accept}` : ""}
-            {p.q.settings.maxSizeMb != null ? ` · up to ${p.q.settings.maxSizeMb} MB` : ""}
-            {max > 1 ? ` · up to ${max} files` : ""}
+          <span className="rs-up-hint" data-testid="upload-hint">
+            {acc ? ` · ${acc.wanted.replace(/^an? /, "")}` : ""}
+            {p.q.settings.maxSizeMb != null ? ` · up to ${p.q.settings.maxSizeMb} MB each` : ""}
+            {max > 1 ? ` · ${min && min > 1 ? `${min}–${max}` : `up to ${max}`} files` : ""}
+            {totalCap != null ? ` · ${totalCap} MB in total` : ""}
           </span>
         </span>
       </div>
@@ -221,7 +245,7 @@ export function FileUpload(p: QRProps) {
         ref={inputRef}
         className="rs-up-input"
         type="file"
-        accept={p.q.settings.accept}
+        accept={acc?.attr}
         multiple={max > 1}
         disabled={ro}
         data-testid="upload-input"
@@ -277,6 +301,9 @@ export function CameraCapture(p: QRProps) {
   };
 
   const store = async (blob: Blob, name: string) => {
+    /* a photo question takes JPG / JPEG / PNG only — "document.pdf → Rejected" */
+    const wrong = wrongType(p, blob instanceof File ? blob : new File([blob], name, { type: blob.type }));
+    if (wrong) { setNote(wrong); return; }
     const big = tooBig(p, blob);
     if (big) { setNote(big); return; }
     setBusy(true);
@@ -336,7 +363,7 @@ export function CameraCapture(p: QRProps) {
         ref={inputRef}
         className="rs-up-input"
         type="file"
-        accept={p.q.settings.accept ?? "image/*"}
+        accept={uploadAccept(p.q)?.attr ?? "image/jpeg,image/png"}
         capture="environment"
         disabled={ro}
         data-testid="photo-input"

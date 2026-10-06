@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { QuestionColumn } from "@rescript/schema";
-import { effectiveQuestion, fieldInputProps } from "@rescript/engine";
+import { effectiveQuestion, fieldInputProps, CURRENCIES } from "@rescript/engine";
 import type { QRProps } from "../QuestionRenderer";
 import { NumberField, SliderCell, ctxOf } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
@@ -176,12 +176,18 @@ function SheetCell({
         );
       }
     // falls through when the column has no range to slide between
-    case "numeric":
-      return (
+    case "numeric": {
+      /* a whole-number column refuses the decimal point; a currency column shows its symbol (Columns editor) */
+      const whole = col.validation.some((v) => v.kind === "integer");
+      const sym = col.meta?.currencyCode ? CURRENCIES.find((c) => c.code === col.meta?.currencyCode)?.symbol : undefined;
+      const field = (
         <NumberField className="rs-input rs-sheet-in" ariaLabel={label}
           min={col.min} max={col.max} placeholder={col.placeholder}
+          decimals={whole ? 0 : undefined} step={whole ? 1 : "any"}
           readOnly={ro} value={value} onChange={onChange} />
       );
+      return sym ? <span className="rs-affixed rs-sheet-money"><span className="rs-prefix">{sym}</span>{field}</span> : field;
+    }
     case "dropdown":
     case "single":
       return (
@@ -237,7 +243,24 @@ function SheetCell({
 
 export function Spreadsheet(p: QRProps) {
   const view = effectiveQuestion(p.q, ctxOf(p));
-  const rows = view.rows;
+  const allRows = view.rows;
+  /*
+   * ADD AND REMOVE ROWS (October 2026 review: "Allow adding rows, Allow
+   * deleting rows"). The rows are still the authored ones — each has its
+   * variables in the export — so "+ Add row" reveals the next authored row
+   * and "remove" clears one and hides it again. A row with an answer in it
+   * is always shown, so nothing a respondent typed can be hidden from them.
+   */
+  const addable = !!p.q.settings.allowAddRows;
+  const deletable = !!p.q.settings.allowDeleteRows;
+  const filledRow = (rc: string) => Object.values(((p.value ?? {}) as Record<string, Record<string, unknown>>)[rc] ?? {}).some((x) => x != null && x !== "");
+  const [shown, setShown] = React.useState(() => {
+    const start = addable ? Math.min(allRows.length, Math.max(1, p.q.settings.initialRows ?? 1)) : allRows.length;
+    const lastFilled = allRows.reduce((m, r, i) => (filledRow(String(r.code)) ? i + 1 : m), 0);
+    return Math.max(start, lastFilled);
+  });
+  const [removed, setRemoved] = React.useState<Set<string>>(() => new Set());
+  const rows = allRows.slice(0, addable ? shown : allRows.length).filter((r) => !removed.has(String(r.code)) || filledRow(String(r.code)));
   const columns = view.columns.length ? view.columns : fallbackSheetColumns(p);
   const cells = (p.value ?? {}) as Record<string, Record<string, unknown>>;
   const wrap = React.useRef<HTMLDivElement>(null);
@@ -257,6 +280,19 @@ export function Spreadsheet(p: QRProps) {
     else row[colId] = v;
     p.onChange({ ...cells, [rc]: row });
   };
+  const removeRow = (rc: string) => {
+    const next = { ...cells };
+    delete next[rc];
+    setRemoved((s) => new Set([...s, rc]));
+    p.onChange(next);
+  };
+  const addRow = () => {
+    /* a removed row comes back first, then the next authored one */
+    const back = allRows.find((r) => removed.has(String(r.code)));
+    if (back) setRemoved((s) => { const n = new Set(s); n.delete(String(back.code)); return n; });
+    else setShown((n) => Math.min(allRows.length, n + 1));
+  };
+  const canAdd = addable && !p.q.settings.readOnly && (shown < allRows.length || removed.size > 0);
 
   /**
    * Focus the control in cell (r, c), found through the DOM rather than a
@@ -303,6 +339,7 @@ export function Spreadsheet(p: QRProps) {
               <th key={c.id} {...anchor("column", c.id)} style={c.width ? { width: c.width } : undefined}
                 dangerouslySetInnerHTML={{ __html: c.label }} />
             ))}
+            {deletable && <th className="rs-sheet-n" aria-label="Remove" />}
           </tr>
         </thead>
         <tbody>
@@ -322,11 +359,26 @@ export function Spreadsheet(p: QRProps) {
                       onChange={(v) => setCell(rc, c.id, v)} />
                   </td>
                 ))}
+                {deletable && (
+                  <td className="rs-sheet-n">
+                    <button type="button" className="rs-dynlist-remove" data-testid={`sheet-remove-${rc}`}
+                      aria-label={`Remove row ${r + 1}`} disabled={!!p.q.settings.readOnly || rows.length <= 1}
+                      onClick={() => removeRow(rc)}>✕</button>
+                  </td>
+                )}
               </tr>
             );
           })}
         </tbody>
       </table>
+      {addable && (
+        <div className="rs-dynlist-foot">
+          <button type="button" className="rs-dynlist-add" data-testid="sheet-add-row" disabled={!canAdd} onClick={addRow}>
+            + Add row
+          </button>
+          <span className="rs-dynlist-count" data-testid="sheet-row-count">{rows.length} of up to {allRows.length} rows</span>
+        </div>
+      )}
     </div>
   );
 }

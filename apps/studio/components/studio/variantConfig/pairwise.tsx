@@ -1,115 +1,121 @@
 "use client";
 import React from "react";
+import type { Option, Question } from "@rescript/schema";
 import { registerVariantSettings } from "./registry";
+import { MediaUrlInput } from "../MediaUrlInput";
+import { addPair, removePair, optionLetter, nextOptionCode, unpairedOptions } from "@/lib/builder/pairwise";
 
 /**
- * AUTHORING A SET OF PAIRWISE COMPARISONS.
+ * THE PAIRWISE CHOICE BUILDER — the review's own shape.
  *
- * The rows are the pairs and the options are the pool of choices, which is
- * what lets this borrow the single-select matrix's answer shape instead of
- * inventing one. But the generic Rows editor knows nothing about a pair, so
- * a programmer editing this variant would be typing option codes into a meta
- * field by hand. This is the editor for it: two dropdowns per pair, both
- * drawn from the question's own options.
+ * "For the initial comparison, show only: Option A, Option B. Remove the
+ * existing + Option button from the Pairwise Choice question. Instead, add a
+ * + Field option after Option A and Option B. When + Field is selected, add
+ * another complete pair: Option C, Option D. The user can continue adding
+ * additional pairs: Option A vs Option B, Option C vs Option D, Option E vs
+ * Option F …" (October 2026 review).
  *
- * The review's wording was "each pair should always contain exactly two
- * choices", and that is enforced by shape here — there is nowhere to put a
- * third.
+ * The question is stored the way Pairwise Comparison Set always stored it —
+ * the ROWS are the pairs, the OPTIONS are the choices, each pair names its two
+ * in `meta.left` / `meta.right` and records the winner's code — so the
+ * exporter, the analytics, the logic engine and the variable dictionary read
+ * it unchanged. What changed is that the programmer no longer sees that
+ * plumbing: a pair is two text fields, "+ Field" makes the next two, and there
+ * is no free option list to put a third option in (the variant hides the
+ * generic Options and Rows editors).
+ *
+ * A pair built under the older editor may share a choice with another pair.
+ * That still works and is said, because editing the shared text edits both.
  */
 
-let seq = 0;
-const nextCode = (used: Set<string>) => {
-  let c = "";
-  do { c = `p${++seq}`; } while (used.has(c));
-  return c;
-};
-
 registerVariantSettings("pairwiseset", ({ q, patch }) => {
-  const options = q.options;
-  const setPair = (i: number, key: "left" | "right", code: string) =>
-    patch({
-      rows: q.rows.map((r, j) =>
-        j === i ? { ...r, meta: { ...(r.meta ?? {}), [key]: code } } : r),
-    });
+  const byCode = new Map(q.options.map((o) => [String(o.code), o]));
+  const uses = new Map<string, number>();
+  for (const r of q.rows) for (const k of [r.meta?.left, r.meta?.right]) uses.set(String(k ?? ""), (uses.get(String(k ?? "")) ?? 0) + 1);
 
-  const addPair = () => {
-    const used = new Set(q.rows.map((r) => String(r.code)));
-    /* pick two choices nothing else has paired yet, so a new pair is usable
-       the moment it appears rather than being two copies of Choice 1 */
-    const paired = new Set(q.rows.flatMap((r) => [String(r.meta?.left ?? ""), String(r.meta?.right ?? "")]));
-    const free = options.filter((o) => !paired.has(String(o.code)));
-    const left = free[0] ?? options[0];
-    const right = free[1] ?? options[1] ?? options[0];
-    if (!left || !right) return;
-    patch({
-      rows: [...q.rows, {
-        code: nextCode(used),
-        label: `Pair ${q.rows.length + 1}`,
-        flags: [], validation: [], required: false,
-        meta: { left: String(left.code), right: String(right.code) },
-      } as never],
-    });
+  const editOption = (code: string, change: Partial<Option>) =>
+    patch({ options: q.options.map((o) => (String(o.code) === code ? { ...o, ...change } : o)) });
+  const setMeta = (code: string, key: string, value: string) =>
+    patch({ options: q.options.map((o) => (String(o.code) === code ? { ...o, meta: { ...(o.meta ?? {}), [key]: value || undefined } } : o)) });
+
+  const side = (rowIndex: number, which: "left" | "right") => {
+    const code = String(q.rows[rowIndex].meta?.[which] ?? "");
+    const o = byCode.get(code);
+    const letter = optionLetter(rowIndex * 2 + (which === "left" ? 0 : 1));
+    const testid = `pair-${rowIndex}-${which === "left" ? "a" : "b"}`;
+    if (!o) {
+      return (
+        <div className="card" style={{ padding: 8, flex: 1, minWidth: 220 }} data-testid={`${testid}-missing`}>
+          <span className="chip warn">Option {letter} is missing</span>
+          <button type="button" className="btn small" style={{ marginLeft: 6 }}
+            onClick={() => {
+              const c = nextOptionCode(q.options);
+              patch({
+                options: [...q.options, { code: c, label: `Option ${letter}`, flags: [] } as Option],
+                rows: q.rows.map((r, j) => (j === rowIndex ? { ...r, meta: { ...(r.meta ?? {}), [which]: String(c) } } : r)),
+              });
+            }}>add it</button>
+        </div>
+      );
+    }
+    const shared = (uses.get(code) ?? 0) > 1;
+    return (
+      <div className="card" style={{ padding: 8, flex: 1, minWidth: 220 }} data-testid={testid}>
+        <label className="f" style={{ marginBottom: 6 }}><span>Option {letter}</span>
+          <input className="input" value={o.label} data-testid={`${testid}-label`}
+            onChange={(e) => editOption(code, { label: e.target.value })} /></label>
+        <MediaUrlInput compact accept={["image"]} testId={`${testid}-image`}
+          placeholder="image (optional)"
+          value={o.imageUrl}
+          onChange={(url) => editOption(code, { imageUrl: url || undefined })} />
+        <input className="input" style={{ marginTop: 6 }} placeholder="description (optional)"
+          data-testid={`${testid}-desc`}
+          value={String(o.meta?.description ?? "")}
+          onChange={(e) => setMeta(code, "description", e.target.value)} />
+        {shared && (
+          <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }} data-testid={`${testid}-shared`}>
+            Also used in another pair — editing it changes both.
+          </p>
+        )}
+      </div>
+    );
   };
 
   return (
-    <div className="card" style={{ padding: 10 }} data-testid="pairwise-pairs">
-      <h3 className="sec" style={{ marginTop: 0 }}>Comparisons — each pair holds exactly two choices</h3>
-      {options.length < 2 && (
-        <p className="muted" style={{ fontSize: 13 }}>
-          Add at least two choices in Options above, then build pairs from them.
+    <div data-testid="pairwise-pairs">
+      <h3 className="sec">Comparisons — exactly two options in each pair</h3>
+      {q.rows.map((r, i) => (
+        <div key={String(r.code)} className="card" style={{ padding: 10, marginBottom: 8 }} data-testid={`pair-${i}`}>
+          <div className="row" style={{ alignItems: "center", marginBottom: 6 }}>
+            <input className="input" style={{ maxWidth: 220 }} value={r.label} data-testid={`pair-label-${i}`}
+              placeholder={`Pair ${i + 1}`} aria-label={`Name of pair ${i + 1}`}
+              onChange={(e) => patch({ rows: q.rows.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)) })} />
+            <span className="spacer" />
+            {q.rows.length > 1 && (
+              <button type="button" className="btn small danger" data-testid={`pair-remove-${i}`}
+                title="Remove this pair and the two options only it uses"
+                onClick={() => patch(removePair(q, i))}>remove pair</button>
+            )}
+          </div>
+          <div className="row" style={{ alignItems: "stretch", gap: 8, flexWrap: "wrap" }}>
+            {side(i, "left")}
+            <span style={{ alignSelf: "center", color: "var(--subtle)" }}>vs</span>
+            {side(i, "right")}
+          </div>
+        </div>
+      ))}
+      {unpairedOptions(q).length > 0 && (
+        <p className="chip warn" data-testid="pair-unpaired" style={{ display: "block", whiteSpace: "normal" }}>
+          Not in any pair, so never shown: {unpairedOptions(q).map((o) => o.label.replace(/<[^>]*>/g, "") || String(o.code)).join(", ")}.{" "}
+          <button type="button" className="btn small" data-testid="pair-unpaired-remove"
+            onClick={() => { const drop = new Set(unpairedOptions(q).map((o) => String(o.code))); patch({ options: q.options.filter((o) => !drop.has(String(o.code))) }); }}>
+            remove {unpairedOptions(q).length === 1 ? "it" : "them"}</button>
         </p>
       )}
-      {q.rows.map((r, i) => {
-        const left = String(r.meta?.left ?? "");
-        const right = String(r.meta?.right ?? "");
-        const missing = !options.some((o) => String(o.code) === left) || !options.some((o) => String(o.code) === right);
-        return (
-          <div key={i} className="row" style={{ flexWrap: "wrap", marginBottom: 8, alignItems: "flex-end" }}>
-            <label className="f" style={{ width: 130 }}><span>Pair</span>
-              <input className="input" value={r.label} data-testid={`pair-label-${i}`}
-                onChange={(e) => patch({ rows: q.rows.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)) })} />
-            </label>
-            <label className="f" style={{ width: 190 }}><span>Choice A</span>
-              <select className="select" value={left} data-testid={`pair-left-${i}`}
-                onChange={(e) => setPair(i, "left", e.target.value)}>
-                <option value="">—</option>
-                {options.map((o) => (
-                  <option key={String(o.code)} value={String(o.code)}>
-                    {o.label.replace(/<[^>]*>/g, "") || String(o.code)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <span style={{ paddingBottom: 9, color: "var(--subtle)" }}>vs</span>
-            <label className="f" style={{ width: 190 }}><span>Choice B</span>
-              <select className="select" value={right} data-testid={`pair-right-${i}`}
-                onChange={(e) => setPair(i, "right", e.target.value)}>
-                <option value="">—</option>
-                {options.map((o) => (
-                  <option key={String(o.code)} value={String(o.code)}>
-                    {o.label.replace(/<[^>]*>/g, "") || String(o.code)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {left && right && left === right && (
-              <span className="chip warn" style={{ marginBottom: 7 }} data-testid={`pair-same-${i}`}>
-                both sides are the same choice
-              </span>
-            )}
-            {missing && (
-              <span className="chip warn" style={{ marginBottom: 7 }} data-testid={`pair-missing-${i}`}>
-                a choice this pair names is no longer in the options
-              </span>
-            )}
-            <button className="btn small danger" style={{ marginBottom: 7 }}
-              data-testid={`pair-remove-${i}`}
-              onClick={() => patch({ rows: q.rows.filter((_, j) => j !== i) })}>×</button>
-          </div>
-        );
-      })}
-      <button className="btn small" data-testid="pair-add" disabled={options.length < 2} onClick={addPair}>
-        + comparison
+      <button type="button" className="btn small" data-testid="pair-add"
+        title="Add another complete pair — two more options compared with each other"
+        onClick={() => patch(addPair(q))}>
+        + Field <span className="muted">(adds Option {optionLetter(q.rows.length * 2)} vs Option {optionLetter(q.rows.length * 2 + 1)})</span>
       </button>
     </div>
   );

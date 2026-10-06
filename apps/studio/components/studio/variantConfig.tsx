@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import type { Question, QuestionVariantDef } from "@rescript/schema";
+import { variantRegistry } from "@rescript/schema";
 import {
   OPTION_META_FIELDS, VARIANT_SETTINGS, registerOptionMetaFields, registerVariantSettings,
   DESC, BADGE, PRICE, type MetaField, type VariantSettingsProps,
@@ -34,6 +35,9 @@ registerOptionMetaFields("multicarousel", [DESC]);
 registerOptionMetaFields("cards", [DESC]);
 registerOptionMetaFields("carousel", [DESC]);
 registerOptionMetaFields("compare", [DESC]);
+/* a bucket: an optional description, and a capacity that overrides the question's maximum (bucket rules) */
+registerOptionMetaFields("categorize", [{ ...DESC, placeholder: "description (optional)" }, { key: "capacity", label: "capacity", placeholder: "no limit", width: 90, kind: "number" }]);
+registerOptionMetaFields("dragbuckets", [{ key: "capacity", label: "capacity", placeholder: "no limit", width: 90, kind: "number" }]);
 
 registerVariantSettings("pairwise", ({ q }) =>
   q.options.length !== 2 ? (
@@ -55,9 +59,21 @@ export function optionMetaFields(v: QuestionVariantDef | undefined): MetaField[]
 export function VariantSettings({ q, v, patch, patchSettings }: VariantSettingsProps): React.ReactElement | null {
   const key = v?.renderer ?? `base:${q.type}`;
   const block = VARIANT_SETTINGS[key] ?? VARIANT_SETTINGS[`base:${q.type}`];
-  if (!block) return null;
+  /*
+   * A VARIANT NO LONGER OFFERED says so, and names its replacement — the
+   * conversion is the ordinary type change, which shows what it does to the
+   * answers before it happens.
+   */
+  const replaced = v?.pickerReplacedBy ? variantRegistry.get(v.pickerReplacedBy) : undefined;
+  const note = replaced ? (
+    <p className="chip" data-testid="variant-replaced-note" style={{ display: "block", whiteSpace: "normal" }}>
+      This is the older “{v!.name}”. New questions use “{replaced.name}” — choose it under Question type to convert this one.
+    </p>
+  ) : null;
+  if (!block) return note;
   return (
     <div className="variant-settings" data-testid={`variant-settings-${key.replace(":", "-")}`}>
+      {note}
       {block({ q, v, patch, patchSettings })}
     </div>
   );
@@ -74,6 +90,7 @@ import "./variantConfig/image";
 import "./variantConfig/media";
 import "./variantConfig/interview";
 import "./variantConfig/dragdrop";
+import "./variantConfig/buckets";
 import "./variantConfig/swipe";
 import "./variantConfig/carousel";
 import "./variantConfig/card";

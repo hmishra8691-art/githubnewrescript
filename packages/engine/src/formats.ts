@@ -48,6 +48,84 @@ export const PHONE_FORMATS: readonly CountryFormat[] = [
   { code: "ZA", name: "South Africa", dial: "27", re: /^\d{9}$/, example: "+27 82 123 4567" },
 ];
 
+/**
+ * THE RESPONDENT'S COUNTRY-CODE LIST (October 2026 review: "the respondent
+ * should be able to select their country code from a dropdown … country names
+ * and their corresponding international dialing codes"). Longer than
+ * `PHONE_FORMATS`: a country here without a format there is offered and
+ * checked loosely; one with a format is checked strictly.
+ */
+export const DIAL_CODES: readonly { code: string; name: string; dial: string; flag: string }[] = [
+  { code: "IN", name: "India", dial: "91", flag: "🇮🇳" },
+  { code: "US", name: "United States", dial: "1", flag: "🇺🇸" },
+  { code: "GB", name: "United Kingdom", dial: "44", flag: "🇬🇧" },
+  { code: "AE", name: "United Arab Emirates", dial: "971", flag: "🇦🇪" },
+  { code: "AU", name: "Australia", dial: "61", flag: "🇦🇺" },
+  { code: "CA", name: "Canada", dial: "1", flag: "🇨🇦" },
+  { code: "DE", name: "Germany", dial: "49", flag: "🇩🇪" },
+  { code: "FR", name: "France", dial: "33", flag: "🇫🇷" },
+  { code: "SG", name: "Singapore", dial: "65", flag: "🇸🇬" },
+  { code: "ZA", name: "South Africa", dial: "27", flag: "🇿🇦" },
+  { code: "SA", name: "Saudi Arabia", dial: "966", flag: "🇸🇦" },
+  { code: "QA", name: "Qatar", dial: "974", flag: "🇶🇦" },
+  { code: "KW", name: "Kuwait", dial: "965", flag: "🇰🇼" },
+  { code: "OM", name: "Oman", dial: "968", flag: "🇴🇲" },
+  { code: "BH", name: "Bahrain", dial: "973", flag: "🇧🇭" },
+  { code: "PK", name: "Pakistan", dial: "92", flag: "🇵🇰" },
+  { code: "BD", name: "Bangladesh", dial: "880", flag: "🇧🇩" },
+  { code: "LK", name: "Sri Lanka", dial: "94", flag: "🇱🇰" },
+  { code: "NP", name: "Nepal", dial: "977", flag: "🇳🇵" },
+  { code: "MY", name: "Malaysia", dial: "60", flag: "🇲🇾" },
+  { code: "ID", name: "Indonesia", dial: "62", flag: "🇮🇩" },
+  { code: "PH", name: "Philippines", dial: "63", flag: "🇵🇭" },
+  { code: "TH", name: "Thailand", dial: "66", flag: "🇹🇭" },
+  { code: "VN", name: "Vietnam", dial: "84", flag: "🇻🇳" },
+  { code: "CN", name: "China", dial: "86", flag: "🇨🇳" },
+  { code: "JP", name: "Japan", dial: "81", flag: "🇯🇵" },
+  { code: "KR", name: "South Korea", dial: "82", flag: "🇰🇷" },
+  { code: "NZ", name: "New Zealand", dial: "64", flag: "🇳🇿" },
+  { code: "IE", name: "Ireland", dial: "353", flag: "🇮🇪" },
+  { code: "NL", name: "Netherlands", dial: "31", flag: "🇳🇱" },
+  { code: "ES", name: "Spain", dial: "34", flag: "🇪🇸" },
+  { code: "IT", name: "Italy", dial: "39", flag: "🇮🇹" },
+  { code: "PT", name: "Portugal", dial: "351", flag: "🇵🇹" },
+  { code: "SE", name: "Sweden", dial: "46", flag: "🇸🇪" },
+  { code: "CH", name: "Switzerland", dial: "41", flag: "🇨🇭" },
+  { code: "BR", name: "Brazil", dial: "55", flag: "🇧🇷" },
+  { code: "MX", name: "Mexico", dial: "52", flag: "🇲🇽" },
+  { code: "NG", name: "Nigeria", dial: "234", flag: "🇳🇬" },
+  { code: "KE", name: "Kenya", dial: "254", flag: "🇰🇪" },
+  { code: "EG", name: "Egypt", dial: "20", flag: "🇪🇬" },
+];
+
+/**
+ * The country a number written with a "+" prefix belongs to, when it is one
+ * the platform can check strictly — so a respondent who picked "+91" from the
+ * list is held to India's format, not the loose any-country check. The
+ * longest matching dialing code wins ("+971" is the UAE, not "+97…").
+ */
+/**
+ * The country to check a phone answer against. `"pick"` is the setting that
+ * puts the country-code list in front of the respondent, so their own "+code"
+ * decides; any other value is a configured country (or none — the loose,
+ * any-country check every question authored before had, which stays as it
+ * was: an answer like "+1 (555) 123-4567" is not suddenly refused).
+ */
+export function phoneCountryFor(setting: string | undefined, value: string): string | undefined {
+  return setting === PHONE_PICK ? phoneCountryFromPrefix(value) : setting || undefined;
+}
+/** The phone-country setting value meaning "the respondent chooses from the code list". */
+export const PHONE_PICK = "pick";
+
+export function phoneCountryFromPrefix(value: string): string | undefined {
+  const v = value.trim();
+  if (!v.startsWith("+")) return undefined;
+  const d = v.replace(/\D/g, "");
+  const hit = [...PHONE_FORMATS].sort((a, b) => (b.dial?.length ?? 0) - (a.dial?.length ?? 0))
+    .find((f) => f.dial && d.startsWith(f.dial) && d.length > f.dial.length);
+  return hit?.code;
+}
+
 export const POSTAL_FORMATS: readonly CountryFormat[] = [
   { code: "IN", name: "India (PIN)", re: /^[1-9]\d{5}$/, example: "560001" },
   { code: "US", name: "United States (ZIP)", re: /^\d{5}(-\d{4})?$/, example: "94107 or 94107-1234" },

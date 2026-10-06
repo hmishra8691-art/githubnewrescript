@@ -64,7 +64,7 @@ import {
   type QuotaCounts,
   type InspectorSnapshot,
 } from "@rescript/engine";
-import { QuestionRenderer, UxLayer } from "@rescript/renderer";
+import { QuestionRenderer, UxLayer, MediaGateContext, useMediaGateState } from "@rescript/renderer";
 import { Inspector } from "./Inspector";
 import { RunnerBoundary, FatalCard, fatalOf, type FatalDetail } from "./RunnerBoundary";
 import { MediaEmbed, SafeImage, VoiceConsole, QuestionAudio, brandingVars, widthModeClass, brandingClasses, pageThemeVars, brandingResponsiveCss } from "@rescript/renderer";
@@ -558,6 +558,12 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
    */
   const advancingRef = React.useRef(false);
   const [advancing, setAdvancing] = React.useState(false);
+  /*
+   * A question that must be watched before the respondent moves on holds the
+   * page (renderer `mediaGate`): "the Next button should remain disabled until
+   * the video has been completely watched" (October 2026 review).
+   */
+  const mediaGate = useMediaGateState();
   const [counts] = React.useState<QuotaCounts>(initialCounts ?? {});
   const [device, setDevice] = React.useState<"desktop" | "tablet" | "mobile">("desktop");
   const [epoch, setEpoch] = React.useState(0);
@@ -1142,6 +1148,7 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
 
   const handleNextInner = async () => {
     if (!pageStep) return;
+    if (mediaGate.held) return;
     const errs = validatePage(def, questions, ctx);
     /*
      * on_validate runs FIRST and on its own: it is the event whose whole
@@ -1384,6 +1391,7 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
   /** Conversational Next: validate just the question on screen, then the next one, or the page's own Next. */
   const convoNext = once(async () => {
     if (!pageStep) return;
+    if (mediaGate.held) return;
     const q = questions[convoIndex];
     if (q) {
       const errs = validatePage(def, [q], ctx);
@@ -1618,6 +1626,7 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
           ))}
         </div>
       )}
+      <MediaGateContext.Provider value={mediaGate.gate}>
       <div id="rs-questions" tabIndex={-1} className={conversational ? "rs-convo-current" : undefined} data-convo-index={conversational ? convoIndex : undefined}>
       {shownQuestions.map((q) => {
         // the full iteration path, so nested loops key separately (see loopKeySuffix)
@@ -1678,11 +1687,23 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
               else setOtherTextFor(state, q, code, t, pageStep.loop ?? null);
               force();
             }}
+            onExtraChange={(suffix, v) => {
+              /* beside the answer, like `__voice` — Video Rating's comment is `__comment` */
+              const k = `${key}__${suffix}`;
+              if (v == null || v === "") delete (state.answers as Record<string, unknown>)[k];
+              else (state.answers as Record<string, unknown>)[k] = v;
+              telemetryRef.current?.answerChanged(q.id);
+              force();
+            }}
           />
           </React.Fragment>
         );
       })}
       </div>
+      </MediaGateContext.Provider>
+      {mediaGate.held && (
+        <div className="rs-media-note" role="status" data-testid="rs-next-held">{mediaGate.reason}</div>
+      )}
       <div className="rs-nav">
         {b.buttons.showBack && (state.stepIndex > 0 || (conversational && convoIndex > 0)) ? (
           <button type="button" data-testid="rs-back" data-rs-button="back" className={`rs-btn secondary ${b.buttons.style}`} onClick={conversational ? convoBack : handleBack}>
@@ -1695,8 +1716,9 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
           data-rs-button={pageIndexAmongPages >= totalPages && (!conversational || convoIndex >= questions.length - 1) ? "submit" : "next"}
           className={`rs-btn ${b.buttons.style}`}
           /* the ref above is what actually prevents the second submit; this
-             is so the respondent can see why the button stopped responding */
-          disabled={advancing}
+             is so the respondent can see why the button stopped responding —
+             and a clip that must be watched first holds it too */
+          disabled={advancing || mediaGate.held}
           aria-busy={advancing || undefined}
           onClick={conversational ? convoNext : handleNext}
         >

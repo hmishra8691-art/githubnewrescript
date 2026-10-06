@@ -608,6 +608,11 @@ export function questionVariables(
    * `Q5_PROBE_n_Q` the wording that was asked — which the analyst must see
    * when the wording was generated per respondent (probe.ts).
    */
+  /* a rating's optional comment ("Allow Additional Comment" — Video Rating, October 2026 review) */
+  if (q.settings?.allowComment) {
+    push({ name: `${q.variableName}_COMMENT`, label: `${q.code} — comment`, dataType: "text",
+      notes: q.settings.commentPrompt ? `Answer to “${q.settings.commentPrompt}”` : "The respondent's optional comment" });
+  }
   if (q.probe) {
     for (let n = 1; n <= q.probe.maxProbes; n++) {
       push({ name: `${q.variableName}_PROBE_${n}`, label: `${q.code} — follow-up ${n}`, dataType: "text",

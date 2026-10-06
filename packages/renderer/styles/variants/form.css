@@ -66,3 +66,15 @@
 @media (max-width: 520px) {
   .rs-entry-fields { grid-template-columns: 1fr; }
 }
+
+/* phone with a country: a code picker (or a fixed code) and the number, on one line */
+.rs-phone {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  max-width: 420px;
+}
+.rs-phone .rs-phone-code { width: auto; max-width: 150px; flex: 0 0 auto; }
+.rs-phone .rs-input { flex: 1 1 auto; min-width: 0; }
+.rs-phone-fixed { font-weight: 600; color: var(--rs-text); white-space: nowrap; }

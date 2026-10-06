@@ -79,3 +79,32 @@
   .rs-my-field .rs-select { min-width: 0; width: 100%; }
   .rs-my-value { flex-basis: 100%; padding-bottom: 0; }
 }
+
+/* Date Picker with a chosen format: the typed date, a calendar button, and the
+   native picker kept off-screen so the button can open it */
+.rs-datefield {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.rs-datefield .rs-input { max-width: 170px; }
+.rs-date-btn {
+  border: 1px solid var(--rs-border, rgba(0, 0, 0, 0.14));
+  background: var(--rs-surface, #fff);
+  border-radius: 8px;
+  padding: 5px 8px;
+  cursor: pointer;
+  line-height: 1;
+}
+.rs-date-native {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.rs-date-hint { flex-basis: 100%; font-size: 0.82em; color: var(--rs-danger, #b91c1c); }

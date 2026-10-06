@@ -1,10 +1,11 @@
 "use client";
 import React from "react";
 import type { QRProps } from "../QuestionRenderer";
-import { StarRating } from "../QuestionRenderer";
+import { StarRating, EmojiRating, Slider } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { MediaEmbed } from "../Media";
-import { resolveMediaUrl } from "@rescript/engine";
+import { resolveMediaUrl, videoList, watchFieldCode, answerKey, effectiveScale, type VideoClip } from "@rescript/engine";
+import { useMediaHold } from "../mediaGate";
 import { useOptions } from "./shared";
 import { uploadFile, liveSessionId, filesOf, commitFiles, fmtSize, tooBig } from "./upload";
 import { anchor } from "../authoring";
@@ -33,11 +34,74 @@ interface MediaHandlers {
   onError?(): void;
 }
 
-/** The stimulus player, or a clear note when there is nothing to play. */
-function Stimulus({
-  p, vref, handlers,
-}: { p: QRProps; vref: React.RefObject<HTMLVideoElement>; handlers: MediaHandlers }) {
-  const url = p.q.settings.mediaUrl;
+type Settings = QRProps["q"]["settings"];
+
+const round1 = (n: number) => Math.round(n * 10) / 10;
+const mmss = (s: number) => {
+  if (!Number.isFinite(s)) return "0:00";
+  const m = Math.floor(s / 60);
+  return `${m}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+};
+
+/** A clip's title and description, above its player, when the programmer gave them. */
+function ClipHead({ clip, index, count }: { clip: VideoClip; index: number; count: number }) {
+  if (!clip.title && !clip.description && count < 2) return null;
+  return (
+    <div className="rs-clip-head" data-testid={`clip-head-${index}`}>
+      <div className="rs-clip-title">{clip.title || `Video ${index + 1}`}</div>
+      {clip.description && <div className="rs-clip-desc">{clip.description}</div>}
+    </div>
+  );
+}
+
+/**
+ * THE PLAYER, AS THE PROGRAMMER SET IT UP (October 2026 review: "Show
+ * Play/Pause Controls, Allow Fullscreen, Allow Volume Control, Autoplay, Show
+ * Video Progress Bar, Allow Replay"; Video Hotspot "should have Auto-Play
+ * enabled by default … subject to normal browser autoplay restrictions").
+ *
+ * With every control allowed it is the browser's own player, as before. Turn
+ * any of them off and it draws its own small control bar instead, because the
+ * native bar cannot hide its volume or progress. Autoplay tries with sound and,
+ * where the browser refuses that, plays muted with a note — the browser's rule,
+ * not ours. Replay off stops a finished clip from starting again.
+ *
+ * Media that will not load is treated as a fact of the respondent's device,
+ * never as a dead end: a note says so, and any gate that depended on watching
+ * it opens.
+ */
+function VideoPlayer({ clip, settings, vref, handlers, autoplayDefault, testid }: {
+  clip: VideoClip | undefined; settings: Settings; vref: React.RefObject<HTMLVideoElement>;
+  handlers: MediaHandlers; autoplayDefault?: boolean; testid?: string;
+}) {
+  const [playing, setPlaying] = React.useState(false);
+  const [muted, setMuted] = React.useState(false);
+  const [mutedForAutoplay, setMutedForAutoplay] = React.useState(false);
+  const [ended, setEnded] = React.useState(false);
+  const [t, setT] = React.useState(0);
+  const [dur, setDur] = React.useState(0);
+  const url = clip?.url;
+  const autoplay = settings.autoPlayVideo ?? !!autoplayDefault;
+  const controls = settings.playerControls !== false;
+  const progress = settings.showProgress !== false;
+  const fullscreen = settings.allowFullscreen !== false;
+  const volume = settings.allowVolume !== false;
+  const replay = settings.allowReplay !== false;
+  const seek = settings.allowSeek !== false;
+  const native = controls && progress && fullscreen && volume && seek;
+
+  React.useEffect(() => {
+    if (!autoplay || !url) return;
+    const el = vref.current;
+    if (!el) return;
+    el.play().catch(() => {
+      /* the browser refused sound without a gesture: play muted, and say so */
+      el.muted = true;
+      setMuted(true);
+      el.play().then(() => setMutedForAutoplay(true)).catch(() => { /* not even muted — the Play control stays */ });
+    });
+  }, [autoplay, url]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (!url) {
     return (
       <div className="rs-media-note" data-testid="media-missing">
@@ -67,79 +131,125 @@ function Stimulus({
   }
   const h = (fn?: (el: HTMLVideoElement) => void) => (e: React.SyntheticEvent<HTMLVideoElement>) =>
     fn?.(e.currentTarget);
+  const toggle = () => {
+    const el = vref.current;
+    if (!el) return;
+    if (el.paused) {
+      if (ended && !replay) return;
+      void el.play().catch(() => {});
+    } else el.pause();
+  };
   return (
-    <video
-      ref={vref}
-      className="rs-media-el"
-      data-testid="media-el"
-      src={url}
-      controls
-      playsInline
-      preload="metadata"
-      onLoadedMetadata={h(handlers.onLoadedMetadata)}
-      onTimeUpdate={h(handlers.onTimeUpdate)}
-      onEnded={h(handlers.onEnded)}
-      onPlay={h(handlers.onPlay)}
-      onPause={h(handlers.onPause)}
-      onSeeked={h(handlers.onSeeked)}
-      onError={() => handlers.onError?.()}
-    />
+    <div className="rs-player" data-testid={testid ?? "media-player"} data-native={native ? "1" : "0"}
+      data-autoplay={autoplay ? "1" : "0"}>
+      <video
+        ref={vref}
+        className="rs-media-el"
+        data-testid="media-el"
+        src={url}
+        controls={native}
+        controlsList={fullscreen ? undefined : "nofullscreen"}
+        disablePictureInPicture={!fullscreen || undefined}
+        autoPlay={autoplay}
+        muted={muted}
+        playsInline
+        preload="metadata"
+        onClick={!native && controls ? toggle : undefined}
+        onLoadedMetadata={(e) => { setDur(Number.isFinite(e.currentTarget.duration) ? e.currentTarget.duration : 0); handlers.onLoadedMetadata?.(e.currentTarget); }}
+        onTimeUpdate={(e) => { setT(e.currentTarget.currentTime); handlers.onTimeUpdate?.(e.currentTarget); }}
+        onEnded={(e) => { setEnded(true); setPlaying(false); handlers.onEnded?.(e.currentTarget); }}
+        onPlay={(e) => {
+          /* replay not allowed: a finished clip does not start again, from any control */
+          if (ended && !replay) { e.currentTarget.pause(); return; }
+          setPlaying(true); handlers.onPlay?.(e.currentTarget);
+        }}
+        onPause={(e) => { setPlaying(false); handlers.onPause?.(e.currentTarget); }}
+        onSeeked={h(handlers.onSeeked)}
+        onVolumeChange={(e) => { if (!volume && !mutedForAutoplay && e.currentTarget.volume !== 1) e.currentTarget.volume = 1; }}
+        onError={() => handlers.onError?.()}
+      />
+      {!native && (
+        <div className="rs-player-bar" data-testid="player-bar">
+          {controls ? (
+            <button type="button" className="rs-player-btn" data-testid="player-toggle"
+              disabled={ended && !replay}
+              aria-label={playing ? "Pause" : ended ? "Replay" : "Play"} onClick={toggle}>
+              {playing ? "❚❚" : ended ? (replay ? "↻" : "✓") : "▶"}
+            </button>
+          ) : !playing && !ended && !autoplay ? (
+            <button type="button" className="rs-player-btn" data-testid="player-start" aria-label="Play" onClick={toggle}>▶</button>
+          ) : null}
+          {progress && (
+            seek ? (
+              <input type="range" className="rs-player-seek" min={0} max={dur || 0} step={0.1} value={t}
+                aria-label="Position" data-testid="player-seek"
+                onChange={(e) => { const el = vref.current; if (el) el.currentTime = Number(e.target.value); }} />
+            ) : (
+              <div className="rs-player-progress" data-testid="player-progress" aria-hidden>
+                <div style={{ width: `${dur ? Math.min(100, (t / dur) * 100) : 0}%` }} />
+              </div>
+            )
+          )}
+          {progress && <span className="rs-player-time">{mmss(t)} / {mmss(dur)}</span>}
+          {volume && (
+            <button type="button" className="rs-player-btn" data-testid="player-mute" aria-label={muted ? "Unmute" : "Mute"}
+              onClick={() => { const el = vref.current; if (el) { el.muted = !el.muted; setMuted(el.muted); setMutedForAutoplay(false); } }}>
+              {muted ? "🔇" : "🔊"}
+            </button>
+          )}
+          {fullscreen && (
+            <button type="button" className="rs-player-btn" data-testid="player-fullscreen" aria-label="Full screen"
+              onClick={() => { void vref.current?.requestFullscreen?.().catch(() => {}); }}>⛶</button>
+          )}
+        </div>
+      )}
+      {mutedForAutoplay && (
+        <div className="rs-media-note rs-media-note-small" data-testid="autoplay-muted">
+          Playing without sound — your browser only lets videos start on their own when muted. Tap 🔊 or the player to hear it.
+        </div>
+      )}
+    </div>
   );
 }
-
-const round1 = (n: number) => Math.round(n * 10) / 10;
-const mmss = (s: number) => {
-  if (!Number.isFinite(s)) return "0:00";
-  const m = Math.floor(s / 60);
-  return `${m}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
-};
 
 /* ------------------------------------------------------------ video rating */
 
 /**
- * Video Rating — a clip, then a star rating (the `numeric` base type, so it
- * reports as any other rating scale). With `settings.requireComplete` the
- * stars stay disabled until the clip ends; the fieldset does the disabling,
- * so the buttons are genuinely inert rather than merely dimmed.
+ * Video Rating — a clip, then a rating. The `numeric` base type, so it
+ * reports as any other rating scale, whichever way it is drawn (October 2026
+ * review: "Rating Type: Star Rating, Numeric Rating, Emoji/Smiley Rating,
+ * Slider, Likert Scale … Labels … Required Response … Allow Additional
+ * Comment"). With `settings.requireComplete` the rating stays disabled until
+ * the clip ends; the fieldset does the disabling, so the controls are
+ * genuinely inert rather than merely dimmed.
  */
 export function VideoRating(p: QRProps) {
   const vref = React.useRef<HTMLVideoElement>(null);
   const [ended, setEnded] = React.useState(false);
   const [pct, setPct] = React.useState(0);
   const [broken, setBroken] = React.useState(false);
+  const clip = videoList(p.q)[0];
   /*
    * Seconds actually watched, accumulated the way Watch-Time Tracking below
    * already does it: only small forward steps count, so dragging the scrubber
-   * to the end does not earn the whole clip. The percentage shown was
-   * `currentTime / duration`, which meant a respondent who jumped to the last
-   * second was told they had watched 100%.
+   * to the end does not earn the whole clip.
    */
   const watched = React.useRef({ total: 0, last: 0 });
-
   /*
-   * THE DEADLOCK THE REVIEW FOUND.
-   *
-   * `requireComplete` is on by default for this variant, and the gate asked
-   * only whether a media URL was set. But a YouTube or Vimeo link renders as
-   * an IFRAME, whose timeline this page cannot observe — `Stimulus` says so
-   * itself, in a note printed directly above these stars. So `ended` never
-   * became true, the fieldset stayed disabled, and a respondent who had
-   * watched the whole clip was told "Watch to the end to rate — 0% watched"
-   * with no way past it. Not a slow question: an unanswerable one.
-   *
-   * A gate that cannot be measured is not applied. The requirement is a real
-   * one where playback can be observed, and where it cannot the question
-   * behaves as an ordinary rating — the same rule this file already follows
-   * for media that will not load, and for the same reason: a respondent must
-   * always be able to finish.
+   * A gate that cannot be measured is not applied: a YouTube / Vimeo embed
+   * cannot report its position, and a clip that will not load cannot be
+   * finished — the respondent must always be able to answer.
    */
-  const embedded = resolveMediaUrl(p.q.settings.mediaUrl).kind === "embed";
-  const gate = !!p.q.settings.requireComplete && !!p.q.settings.mediaUrl && !broken && !embedded;
+  const embedded = resolveMediaUrl(clip?.url).kind === "embed";
+  const gate = !!p.q.settings.requireComplete && !!clip?.url && !broken && !embedded;
   const locked = gate && !ended;
+  const commentKey = `${answerKey(p.q.id, p.loop)}__comment`;
+  const comment = p.state.answers[commentKey];
 
   return (
     <div className="rs-media">
-      <Stimulus p={p} vref={vref} handlers={{
+      {clip && <ClipHead clip={clip} index={0} count={1} />}
+      <VideoPlayer clip={clip} settings={p.q.settings} vref={vref} handlers={{
         onTimeUpdate: (el) => {
           const d = el.currentTime - watched.current.last;
           if (d > 0 && d < 1.5) watched.current.total += d;
@@ -162,68 +272,196 @@ export function VideoRating(p: QRProps) {
           Watch to the end to rate — {pct}% watched
         </div>
       )}
-      <fieldset className="rs-media-rate" disabled={locked} data-testid="rating-fieldset">
-        <StarRating {...p} />
+      <fieldset className="rs-media-rate" disabled={locked} data-testid="rating-fieldset"
+        data-rating-type={p.q.settings.ratingType ?? "stars"}>
+        <RatingInput p={p} />
       </fieldset>
+      {p.q.settings.allowComment && (
+        <label className="rs-rate-comment" data-testid="rating-comment">
+          <span>{p.q.settings.commentPrompt || "What did you think about this video?"}</span>
+          <textarea className="rs-textarea" disabled={locked || !!p.q.settings.readOnly}
+            placeholder="Enter your response…"
+            value={typeof comment === "string" ? comment : ""}
+            onChange={(e) => p.onExtraChange?.("comment", e.target.value === "" ? null : e.target.value)} />
+        </label>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The rating, drawn the way `ratingType` says. The answer is the same number
+ * every way; the end labels are `sliderLeftLabel` / `sliderRightLabel`, one
+ * pair whichever control shows them.
+ */
+function RatingInput({ p }: { p: QRProps }) {
+  const type = p.q.settings.ratingType ?? "stars";
+  const left = p.q.settings.sliderLeftLabel;
+  const right = p.q.settings.sliderRightLabel;
+  const labels = (left || right) ? (
+    <div className="rs-nps-labels" data-testid="rating-labels"><span>{left}</span><span>{right}</span></div>
+  ) : null;
+  if (type === "stars") return <div className="rs-rate-wrap"><StarRating {...p} />{labels}</div>;
+  if (type === "emoji") {
+    const q = { ...p.q, settings: { ...p.q.settings, npsLeftLabel: left, npsRightLabel: right } };
+    return <EmojiRating {...p} q={q as typeof p.q} />;
+  }
+  if (type === "slider") return <Slider {...p} />;
+  const { min, max } = effectiveScale(p.q, { min: 1, max: 10 });
+  const points = Array.from({ length: Math.max(0, max - min + 1) }, (_, i) => min + i);
+  if (type === "numeric") {
+    return (
+      <div className="rs-nps-wrap" data-testid="rating-numeric">
+        <div className="rs-nps">
+          {points.map((n) => (
+            <span key={n} className="rs-nps-point">
+              <button type="button" {...anchor("scalepoint", n)} className={String(p.value) === String(n) ? "selected" : ""}
+                onClick={() => p.onChange(n)}>{n}</button>
+            </span>
+          ))}
+        </div>
+        {labels}
+      </div>
+    );
+  }
+  /* likert: a labelled point per step — its own label where the programmer gave one, else the ends' */
+  return (
+    <div className="rs-likert" role="radiogroup" data-testid="rating-likert">
+      {points.map((n, i) => {
+        const lab = p.q.settings.scalePointLabels?.[String(n)] ?? (i === 0 ? left : i === points.length - 1 ? right : undefined);
+        const sel = String(p.value) === String(n);
+        return (
+          <label key={n} className={`rs-likert-point ${sel ? "selected" : ""}`} {...anchor("scalepoint", n)}>
+            <input type="radio" name={`${p.q.id}-likert`} checked={sel} onChange={() => p.onChange(n)} />
+            <span className="rs-likert-n">{n}</span>
+            {lab && <span className="rs-likert-lab">{lab}</span>}
+          </label>
+        );
+      })}
     </div>
   );
 }
 
 /* ---------------------------------------------------------- video timeline */
 
-interface Mark { t: number; code?: string | number }
+interface Mark { t: number; code?: string | number; v?: number }
 
 function readMarks(v: unknown): Mark[] {
   if (!Array.isArray(v)) return [];
   return v
     .map((m) => {
-      const o = m as { t?: unknown; code?: unknown };
+      const o = m as { t?: unknown; code?: unknown; v?: unknown };
       const t = Number(o?.t);
-      return Number.isFinite(t) ? { t: round1(t), ...(o.code == null ? {} : { code: o.code as string | number }) } : null;
+      const vi = Number(o?.v);
+      return Number.isFinite(t)
+        ? { t: round1(t), ...(o.code == null ? {} : { code: o.code as string | number }), ...(Number.isFinite(vi) && vi > 0 ? { v: vi } : {}) }
+        : null;
     })
     .filter((m): m is Mark => m != null)
-    .sort((a, b) => a.t - b.t);
+    .sort((a, b) => (a.v ?? 0) - (b.v ?? 0) || a.t - b.t);
 }
 
 /**
- * Video Hotspot / Annotation — reactions pinned to moments of the clip
- * (`media_timeline`: `{t, code?}[]`, always sorted by time). Two modes:
- * `tap` is one big React button, `options` offers the question's options.
- * Every reaction also appears as a marker on the strip under the video —
- * click it to jump back there, × to take it back.
+ * Video Hotspot / Annotation — reactions pinned to moments of a clip
+ * (`media_timeline`: `{t, code?, v?}[]`). Two modes: `tap` is one big React
+ * button, `options` offers the question's options.
+ *
+ * SEVERAL CLIPS (October 2026 review: "+ Add Video … each video should have
+ * its own hotspot/annotation configuration"). Each clip has its own reactions
+ * (`videos[i].reactions`, all of them when unset) and its own strip; a
+ * reaction records which clip it was made on in `v` (absent for the first,
+ * so every answer collected before reads the same). Auto-play is on by
+ * default here, and "Require Complete Video Watch" holds the page's Next
+ * button until every clip has finished — independently of Required.
  */
 export function VideoTimeline(p: QRProps) {
   const options = useOptions(p);
+  const clips = videoList(p.q);
+  const [active, setActive] = React.useState(0);
+  const [ended, setEnded] = React.useState<Set<number>>(() => new Set());
+  const [broken, setBroken] = React.useState<Set<number>>(() => new Set());
+  const marks = readMarks(p.value);
+  const ro = !!p.q.settings.readOnly;
+  const n = Math.max(1, clips.length);
+  const unobservable = (i: number) => broken.has(i) || resolveMediaUrl(clips[i]?.url).kind === "embed" || !clips[i]?.url;
+  const finished = Array.from({ length: n }, (_, i) => i).every((i) => ended.has(i) || unobservable(i));
+  useMediaHold(`watch:${p.q.id}`, !!p.q.settings.requireComplete && !finished,
+    n > 1 ? "Please watch every video to the end to continue." : "Please watch the video to the end to continue.");
+
+  return (
+    <div className="rs-media" data-testid="timeline">
+      {n > 1 && (
+        <div className="rs-clip-tabs" role="tablist" data-testid="clip-tabs">
+          {clips.map((c, i) => (
+            <button key={i} type="button" role="tab" aria-selected={active === i}
+              className={`rs-clip-tab ${active === i ? "on" : ""}`} data-testid={`clip-tab-${i}`}
+              onClick={() => setActive(i)}>
+              {c.title || `Video ${i + 1}`}{ended.has(i) ? " ✓" : ""}
+            </button>
+          ))}
+        </div>
+      )}
+      {Array.from({ length: n }, (_, i) => i).map((i) => (
+        <div key={i} hidden={active !== i} data-testid={`clip-${i}`}>
+          <TimelineClip p={p} clip={clips[i]} index={i} count={n} options={options} ro={ro}
+            marks={marks} active={active === i}
+            onEnded={() => setEnded((s) => new Set([...s, i]))}
+            onBroken={() => setBroken((s) => new Set([...s, i]))} />
+        </div>
+      ))}
+      {p.q.settings.requireComplete && !finished && (
+        <div className="rs-media-note" data-testid="watch-required">
+          {n > 1 ? `Watch every video to the end to continue — ${ended.size} of ${n} done.` : "Watch the video to the end to continue."}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TimelineClip({ p, clip, index, count, options: all, ro, marks: allMarks, active, onEnded, onBroken }: {
+  p: QRProps; clip: VideoClip | undefined; index: number; count: number; options: ReturnType<typeof useOptions>;
+  ro: boolean; marks: Mark[]; active: boolean; onEnded(): void; onBroken(): void;
+}) {
   const vref = React.useRef<HTMLVideoElement>(null);
   const [dur, setDur] = React.useState(0);
   const [at, setAt] = React.useState(0);
   const [broken, setBroken] = React.useState(false);
-  const marks = readMarks(p.value);
+  const allowed = clip?.reactions?.length ? new Set(clip.reactions.map(String)) : null;
+  const options = allowed ? all.filter((o) => allowed.has(String(o.code))) : all;
   const mode = p.q.settings.timelineMode ?? (options.length > 0 ? "options" : "tap");
-  const ro = !!p.q.settings.readOnly;
+  const mine = allMarks.filter((m) => (m.v ?? 0) === index);
+  /* only the clip on screen plays by itself: the first one on arrival, each next one when it is opened */
+  const settings = { ...p.q.settings, autoPlayVideo: active ? p.q.settings.autoPlayVideo : false };
 
-  const span = dur > 0 ? dur : Math.max(1, ...marks.map((m) => m.t + 1));
+  const span = dur > 0 ? dur : Math.max(1, ...mine.map((m) => m.t + 1));
   const add = (code?: string | number) => {
     if (ro) return;
     const t = round1(vref.current?.currentTime ?? at);
-    p.onChange([...marks, code == null ? { t } : { t, code }].sort((a, b) => a.t - b.t));
+    const mark: Mark = { t, ...(code == null ? {} : { code }), ...(index > 0 ? { v: index } : {}) };
+    p.onChange(readMarks([...allMarks, mark]));
   };
-  const remove = (i: number) => {
-    const next = marks.filter((_, j) => j !== i);
+  const remove = (m: Mark) => {
+    const i = allMarks.indexOf(m);
+    const next = allMarks.filter((_, j) => j !== i);
     p.onChange(next.length ? next : null);
   };
   const seek = (t: number) => { if (vref.current) vref.current.currentTime = t; };
   const labelOf = (m: Mark) => {
-    const o = options.find((x) => String(x.code) === String(m.code));
+    const o = all.find((x) => String(x.code) === String(m.code));
     return o ? o.label.replace(/<[^>]*>/g, "") : "Reaction";
   };
 
   return (
-    <div className="rs-media">
-      <Stimulus p={p} vref={vref} handlers={{
+    <>
+      {clip && <ClipHead clip={clip} index={index} count={count} />}
+      <VideoPlayer clip={clip} settings={settings} vref={vref} autoplayDefault={active} testid={`media-player-${index}`} handlers={{
         onLoadedMetadata: (el) => setDur(Number.isFinite(el.duration) ? el.duration : 0),
-        onTimeUpdate: (el) => setAt(el.currentTime),
-        onError: () => setBroken(true),
+        onTimeUpdate: (el) => {
+          setAt(el.currentTime);
+          if (el.duration > 0 && el.currentTime >= el.duration - 0.25) onEnded();
+        },
+        onEnded: () => onEnded(),
+        onError: () => { setBroken(true); onBroken(); },
       }} />
       {broken && (
         <div className="rs-media-note" data-testid="media-broken">
@@ -233,7 +471,7 @@ export function VideoTimeline(p: QRProps) {
 
       <div className="rs-tl-strip" data-testid="timeline-strip">
         <div className="rs-tl-played" style={{ width: `${span ? Math.min(100, (at / span) * 100) : 0}%` }} />
-        {marks.map((m, i) => (
+        {mine.map((m, i) => (
           <button key={`${m.t}-${i}`} type="button"
             className="rs-tl-mark"
             style={{ left: `${Math.min(100, (m.t / span) * 100)}%` }}
@@ -267,20 +505,20 @@ export function VideoTimeline(p: QRProps) {
         )}
       </div>
 
-      {marks.length > 0 && (
+      {mine.length > 0 && (
         <ul className="rs-tl-list" data-testid="timeline-list">
-          {marks.map((m, i) => (
+          {mine.map((m, i) => (
             <li key={`${m.t}-${i}`} data-row={i} {...anchor("row", i)}>
               <button type="button" className="rs-tl-jump" onClick={() => seek(m.t)}>{mmss(m.t)}</button>
               <span className="rs-tl-label">{labelOf(m)}</span>
               <button type="button" className="rs-tl-x" data-testid={`timeline-remove-${i}`}
                 aria-label={`Remove the ${labelOf(m)} reaction at ${mmss(m.t)}`}
-                onClick={() => remove(i)}>×</button>
+                onClick={() => remove(m)}>×</button>
             </li>
           ))}
         </ul>
       )}
-    </div>
+    </>
   );
 }
 
@@ -288,22 +526,47 @@ export function VideoTimeline(p: QRProps) {
 
 /**
  * Video Watch-Time Tracking — passive telemetry, no input for the respondent
- * to fill in. Stored as the `numeric_list` fields `watched` (seconds actually
- * played, summed from playback rather than read off `currentTime`, so
- * scrubbing to the end does not count as watching), `duration`, `percent` and
- * `completed`.
+ * to fill in. Stored as fixed `numeric_list` fields per clip — `watched`
+ * (seconds actually played, summed from playback rather than read off
+ * `currentTime`, so scrubbing to the end does not count as watching),
+ * `duration`, `percent`, `completed`, and `…_2`, `…_3` for further clips
+ * (engine `watchTimeRows`). The builder does not show these fields: they are
+ * the system's (October 2026 review).
  *
  * `settings.requireComplete` turns "watched to the end" into a validation
- * rule in the engine (validate.ts, media family block), so the runtime, the
- * preview and the inspector all agree about it.
+ * rule in the engine, for every clip, so the runtime, the preview and the
+ * inspector all agree about it.
  */
 export function WatchTime(p: QRProps) {
+  const clips = videoList(p.q);
+  const n = Math.max(1, clips.length);
+  const vals = (p.value ?? {}) as Record<string, number>;
+  /* one shared object, so each clip's write keeps the others' fields */
+  const latest = React.useRef<Record<string, number>>({ ...vals });
+  latest.current = { ...vals, ...latest.current };
+  const write = (fields: Record<string, number>) => {
+    latest.current = { ...latest.current, ...fields };
+    p.onChange({ ...latest.current });
+  };
+  return (
+    <div className="rs-media" data-testid="watchtime">
+      {Array.from({ length: n }, (_, i) => i).map((i) => (
+        <WatchClip key={i} p={p} clip={clips[i]} index={i} count={n} vals={vals} write={write} />
+      ))}
+    </div>
+  );
+}
+
+function WatchClip({ p, clip, index, count, vals, write }: {
+  p: QRProps; clip: VideoClip | undefined; index: number; count: number;
+  vals: Record<string, number>; write(fields: Record<string, number>): void;
+}) {
   const vref = React.useRef<HTMLVideoElement>(null);
   const [broken, setBroken] = React.useState(false);
   const st = React.useRef({ watched: 0, lastT: 0, duration: 0, completed: 0, wroteAt: 0 });
-  const [, force] = React.useReducer((n: number) => n + 1, 0);
+  const k = (f: string) => watchFieldCode(f, index);
 
-  const write = (throttle: boolean) => {
+  const emit = (throttle: boolean) => {
     const s = st.current;
     const now = Date.now();
     if (throttle && now - s.wroteAt < 400) return;
@@ -311,24 +574,24 @@ export function WatchTime(p: QRProps) {
     const duration = round1(s.duration);
     const watched = round1(duration > 0 ? Math.min(s.watched, duration) : s.watched);
     const percent = duration > 0 ? Math.min(100, Math.round((watched / duration) * 100)) : 0;
-    p.onChange({ watched, duration, percent, completed: s.completed });
-    force();
+    write({ [k("watched")]: watched, [k("duration")]: duration, [k("percent")]: percent, [k("completed")]: s.completed });
   };
 
-  const vals = (p.value ?? {}) as Record<string, number>;
-  const watched = Number(vals.watched ?? 0);
-  const duration = Number(vals.duration ?? 0);
-  const percent = Number(vals.percent ?? 0);
+  const watched = Number(vals[k("watched")] ?? 0);
+  const duration = Number(vals[k("duration")] ?? 0);
+  const percent = Number(vals[k("percent")] ?? 0);
 
   return (
-    <div className="rs-media">
-      <Stimulus p={p} vref={vref} handlers={{
+    <div className="rs-watchclip" data-testid={`watch-clip-${index}`}>
+      {clip && <ClipHead clip={clip} index={index} count={count} />}
+      <VideoPlayer clip={clip} settings={{ ...p.q.settings, autoPlayVideo: index === 0 ? p.q.settings.autoPlayVideo : false }}
+        vref={vref} testid={`media-player-${index}`} handlers={{
         onLoadedMetadata: (el) => {
           st.current.duration = Number.isFinite(el.duration) ? el.duration : 0;
           st.current.lastT = el.currentTime;
           // record a zero straight away: an unwatched clip is a finding, and
           // it keeps the fields present rather than half-missing
-          write(false);
+          emit(false);
         },
         onPlay: (el) => { st.current.lastT = el.currentTime; },
         onSeeked: (el) => { st.current.lastT = el.currentTime; },
@@ -338,13 +601,13 @@ export function WatchTime(p: QRProps) {
           if (d > 0 && d < 1.5) st.current.watched += d;
           st.current.lastT = el.currentTime;
           if (!st.current.duration && Number.isFinite(el.duration)) st.current.duration = el.duration;
-          write(true);
+          emit(true);
         },
-        onPause: () => write(false),
+        onPause: () => emit(false),
         onEnded: (el) => {
           st.current.completed = 1;
           if (Number.isFinite(el.duration) && st.current.watched > el.duration) st.current.watched = el.duration;
-          write(false);
+          emit(false);
         },
         onError: () => setBroken(true),
       }} />
@@ -356,9 +619,9 @@ export function WatchTime(p: QRProps) {
       <div className="rs-wt-bar" aria-hidden>
         <div className="rs-wt-fill" style={{ width: `${Math.min(100, percent)}%` }} />
       </div>
-      <div className="rs-annot-status" data-testid="watch-status">
+      <div className="rs-annot-status" data-testid={index === 0 ? "watch-status" : `watch-status-${index}`}>
         Watched {watched}s of {duration || "?"}s ({percent}%)
-        {Number(vals.completed) === 1 && <span className="rs-wt-done"> · complete ✓</span>}
+        {Number(vals[k("completed")]) === 1 && <span className="rs-wt-done"> · complete ✓</span>}
       </div>
     </div>
   );
