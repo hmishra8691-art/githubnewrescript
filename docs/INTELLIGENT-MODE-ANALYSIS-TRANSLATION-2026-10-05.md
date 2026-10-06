@@ -1,6 +1,6 @@
 # Intelligent Mode, Phase 6 — an analysis plan that explains itself, findings that read direction, translations that stay intact
 
-*Intelligent Mode upgrade, Phase 6. Built 2026-10-05/06 on Phases 2–5. It answers the brief's §§14–20 (analysis framework, explainability, outputs, findings, translation integrity and impact) and the audit's R14–R18.*
+*Intelligent Mode upgrade, Phase 6. Built 2026-10-05/06 on Phases 2–5. It answers the brief's §§14–20 (analysis framework, explainability, outputs, findings, translation integrity and impact) and the audit's R17–R19.*
 
 ## The analysis framework says why
 
@@ -34,7 +34,7 @@
 
 ## Tests
 
-- Engine 1649 (`analysisExplain.test.ts` 23, `placeholders.test.ts` 13, plus additions to nlIntent and surveyActions), analytics 130, ai 27, Studio unit 253, typecheck clean, auth-guard audit 0 problems.
+- Engine 1649 (`analysisExplain.test.ts` 22, `placeholders.test.ts` 13, plus additions to nlIntent and surveyActions), analytics 130, ai 27, Studio unit 253, typecheck clean, auth-guard audit 0 problems.
 - Mutation-checked: the explanation, base and review rules, the outcome-share complement (3/3), placeholders and scripts, orphans and impact, direction and group matching, and the change-time plan feedback (6/6 after two survivors were closed by asserting the impact's severity and that an existing issue is not repeated).
 - Browser: `analysis-framework-test` (9), `findings-copilot-test` (7) and `translation-copilot-test` (11) cover Why?, the sample-size answer, direction in the verdicts, wrong script, orphans and the impact panel. The other Intelligent-mode suites were re-run.
 
