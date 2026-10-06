@@ -147,6 +147,31 @@ assert.ok(await page.$('[data-testid="an-test"][data-method="regression"]'), "a 
 assert.ok(await page.$('[data-testid="an-test"][data-method="chi_square"]'), "awareness by exposure is a chi-square");
 assert.ok(await page.$('[data-testid="an-test"][data-method="reliability"]'), "two trust items → reliability");
 assert.equal((await page.$$('[data-testid="an-crosstab-remove"]')).length, 0, "nothing to remove from a plan that is not saved");
+/* Phase 6 — "Why?": each planned item explained by the engine, opened in place */
+{
+  assert.match(await page.textContent('[data-testid="an-sample"]'), /The plan needs about \d+ completes — driven by .*No sample is recorded/, "the plan's sample need, with nothing recorded to compare it with");
+  const xrow = page.locator('[data-testid="an-crosstab"]', { hasText: "(Purchase intention) by the sample profile" }).first();
+  assert.equal(await xrow.locator('[data-testid="an-why-body"]').count(), 0, "closed until asked");
+  await xrow.locator('[data-testid="an-why-toggle"]').click();
+  await xrow.locator('[data-testid="an-why-body"]').waitFor();
+  const why = (await xrow.locator('[data-testid="an-why-body"]').textContent()).replace(/\s+/g, " ");
+  assert.match(why, /A crosstab of Q5 by S2, S3 is recommended because Q5 measures purchase intention and S2, S3 profile the sample\./, why.slice(0, 300));
+  for (const label of ["Objective", "Variables", "Why this method", "Expected output", "Required sample"]) assert.ok(why.includes(label), `the expander shows ${label}`);
+  assert.match(await xrow.locator('[data-testid="an-why-sample"]').textContent(), /about 90 completes \(30 per column × 3 columns of S2\)/);
+  assert.match(await xrow.locator('[data-testid="an-why-objective"]').textContent(), /This serves H1 \(“Brand trust increases purchase intention”\)/);
+  const reg = page.locator('[data-testid="an-test"][data-method="regression"]').first();
+  await reg.locator('[data-testid="an-why-toggle"]').click();
+  await reg.locator('[data-testid="an-why-body"]').waitFor();
+  assert.match(await reg.locator('[data-testid="an-why-text"]').textContent(), /^Driver analysis is recommended because Q5 measures purchase intention and .+ measure potential drivers\./);
+  assert.match(await reg.locator('[data-testid="an-why-limits"]').textContent(), /Correlation is not causation/);
+  assert.match(await reg.locator('[data-testid="an-why-rule"]').textContent(), /linear regression estimates each one's effect on Q5 holding the others constant/);
+  // the variables in the expander navigate like every other reference
+  assert.ok(await reg.locator('[data-testid="an-why-variables"] [data-testid="an-var"]').count() >= 2);
+  await page.click('[data-testid="an-derived-item"] >> nth=0 >> [data-testid="an-why-toggle"]');
+  await page.waitForSelector('[data-testid="an-derived-item"] [data-testid="an-why-body"]');
+  assert.match(await page.textContent('[data-testid="an-derived-item"] [data-testid="an-why-rule"]'), /is the mean of|is 1 when/);
+}
+ok("Phase 6: every planned item has a “Why?” — objective, variables, the rule, the output, the base it needs, its limits — from the engine");
 await page.click('[data-testid="an-propose"]');
 await page.waitForSelector('[data-testid="cp-changes"]');
 { const sm = await texts('[data-testid="cp-summary"] li'); assert.ok(sm.some((t) => /Plan the analysis: \d+ crosstabs?, \d+ tests?/.test(t)), `the proposal is the plan: ${sm.join(" | ")}`); }
@@ -250,6 +275,41 @@ await page.waitForTimeout(800);
 const review = await page.textContent('[data-testid="cp-panel"]');
 assert.match(review, /REGION, which is not in the survey/);
 ok("the review reports dead references and a test on the wrong number of groups");
+
+/* ------------------------------------------------ Phase 6: the sample the quotas target, the engine's "why", a monadic design's arm */
+{
+  const withQuota = structuredClone(FIXTURE);
+  withQuota.quotas = [{ id: "qt", name: "Country", cells: [{ id: "c1", label: "US", when: rule("COUNTRY", "eq", 1), limit: 40, target: 30 }, { id: "c2", label: "UK", when: rule("COUNTRY", "eq", 2), limit: 40, target: 30 }] }];
+  withQuota.questions.push({ id: "sa", code: "C1", variableName: "STIM_A", type: "html", text: "Concept A" }, { id: "sb", code: "C2", variableName: "STIM_B", type: "html", text: "Concept B" });
+  withQuota.flow.splice(1, 0, { type: "randomizer", id: "rz", title: "Concepts", show: 1, children: [{ type: "block", id: "ba", title: "Concept A", children: [{ type: "page", id: "pa", questionIds: ["sa"] }] }, { type: "block", id: "bb", title: "Concept B", children: [{ type: "page", id: "pb", questionIds: ["sb"] }] }] });
+  await loadDef(withQuota);
+  await openTab(page, "Questions");
+  await switchMode(page, "intelligent");
+  await page.waitForSelector('[data-testid="intelligent-view"]');
+  await page.click('[data-testid="cp-tab-analysis"]');
+  await page.waitForSelector('[data-testid="an-issues"]');
+  assert.equal(await page.getAttribute('[data-testid="an-sample"]', "data-short"), "true", "the plan needs more than the 60 the quotas target");
+  assert.match(await page.textContent('[data-testid="an-sample"]'), /That is more than the quotas target 60\./);
+  const iss = await texts('[data-testid="an-issue"]');
+  assert.ok(iss.some((t) => /needs about \d+ completes \(.+\) — the quotas target 60\./.test(t)), `the sample-size warnings appear with the (unsaved) plan: ${iss.join(" | ")}`);
+  assert.ok(iss.some((t) => /Randomizer “Concepts” shows each respondent one of 2 blocks .* is not recorded/.test(t)), iss.join(" | "));
+  await page.click('[data-testid="an-issue-fix"]');
+  await page.waitForSelector('[data-testid="cp-changes"]');
+  assert.ok((await texts('[data-testid="cp-summary"] li')).some((t) => /CONCEPTS_ARM/.test(t)), "the fix is the create_embedded action, as a proposal");
+  await page.click('[data-testid="cp-panel-cancel"]');
+  /* the engine answers "why" in the input box — no model call */
+  const n = (await page.$$('[data-testid="cp-turn"]')).length;
+  await page.fill('[data-testid="iq-input"]', "Why are you recommending driver analysis?");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction((k) => { const t = document.querySelectorAll('[data-testid="cp-turn"]'); return t.length > k && t[t.length - 1].getAttribute("data-status") !== "thinking"; }, n, { timeout: 30000 });
+  const turns = await page.$$('[data-testid="cp-turn"]');
+  const t = turns[turns.length - 1];
+  assert.ok(await t.$('[data-testid="cp-engine"]'), "answered by the internal engine");
+  const titles = await t.$$eval('[data-testid="cp-engine-section"]', (es) => es.map((e) => e.getAttribute("data-title")));
+  assert.deepEqual(titles.slice(0, 6), ["Objective", "Variables", "Why this method", "Expected output", "Required sample", "Limitations"]);
+  assert.match(await t.textContent(), /Driver analysis is recommended because Q5 measures purchase intention/);
+}
+ok("Phase 6: the quotas' target bounds the plan (warnings with the plan), a monadic design without its arm offers the variable, and “why” is answered by the engine");
 
 assert.deepEqual(errors.filter((e) => !/ResizeObserver/.test(e)), [], errors.join("\n"));
 await browser.close();

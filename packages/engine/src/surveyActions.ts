@@ -14,9 +14,9 @@ import { runQualityCheck } from "./qualityCheck.js";
 import { questionOrder, conditionRefs } from "./dependencies.js";
 import { applyUxAction, coerceUxAction, isUxOp, UX_ACTION_OPS, type UxAction } from "./uxActions.js";
 import { applyAnalysisAction, coerceAnalysisAction, describeAnalysisAction, isAnalysisOp, ANALYSIS_ACTION_OPS, type AnalysisAction } from "./analysisActions.js";
-import { describeAnalysisImpact } from "./analysisFramework.js";
+import { describeAnalysisImpact, reviewAnalysisPlan } from "./analysisFramework.js";
 import { applyLocalizationAction, coerceLocalizationAction, describeLocalizationAction, isLocalizationOp, localizationRank, outdateTranslations, LOCALIZATION_ACTION_OPS, type LocalizationAction } from "./localizationActions.js";
-import { languageName } from "./localization.js";
+import { languageName, pruneOrphanedTranslations, movedTranslationKeys } from "./localization.js";
 import { applyQuotaAction, coerceQuotaAction, describeQuotaAction, isQuotaOp, quotaDiff, containsQuestion, endIndex, QUOTA_ACTION_OPS, type QuotaAction } from "./quotaActions.js";
 import { parsePunchExpression, formatPunchExpression } from "./autoPunch.js";
 import { authoringQuestionView } from "./carryforward.js";
@@ -98,7 +98,7 @@ export type SurveyAction =
   | { op: "create_randomizer"; blocks: string[]; show?: number; title?: string }
   | { op: "create_branch"; blocks: string[]; when: CondInput; title?: string; arms?: { blocks: string[]; when: CondInput; label?: string }[]; otherwise?: string[] }
   | { op: "create_loop"; from: string; to: string; over?: string; items?: string[]; loopVar?: string; title?: string }
-  | { op: "set_research"; objective?: string; hypotheses?: string[]; population?: string; methodology?: string; constructs?: { name: string; role?: string; definition?: string; questions?: string[] }[]; analysis?: string[]; assumptions?: string[]; sources?: string[] }
+  | { op: "set_research"; objective?: string; hypotheses?: string[]; population?: string; sampleSize?: number; methodology?: string; constructs?: { name: string; role?: string; definition?: string; questions?: string[] }[]; analysis?: string[]; assumptions?: string[]; sources?: string[] }
   /* criteria-based coding (punching): IF <when> THEN code <target> — on the target question's punch rules */
   | { op: "add_punch"; target: string; when?: CondInput; action?: "select" | "deselect" | "set_value" | "clear"; codes?: (string | number)[]; value?: string | number; expression?: string; label?: string; mode?: "if" | "else_if" | "else"; recompute?: "once" | "always" }
   | { op: "remove_punches"; target: string; id?: string }
@@ -297,7 +297,7 @@ function coerceOne(item: unknown): SurveyAction | string {
     }
     case "set_research": {
       const constructs = Array.isArray(o.constructs) ? o.constructs.map((c) => { const x = (c ?? {}) as Record<string, unknown>; const name = str(x.name); return name ? { name, ...(str(x.role) ? { role: str(x.role) } : {}), ...(str(x.definition) ? { definition: str(x.definition) } : {}), ...(strs(x.questions) ? { questions: strs(x.questions) } : {}) } : null; }).filter((x): x is NonNullable<typeof x> => !!x) : undefined;
-      return { op, ...(str(o.objective) ? { objective: str(o.objective) } : {}), ...(strs(o.hypotheses) ? { hypotheses: strs(o.hypotheses) } : {}), ...(str(o.population) ? { population: str(o.population) } : {}), ...(str(o.methodology) ? { methodology: str(o.methodology) } : {}), ...(constructs ? { constructs } : {}), ...(strs(o.analysis) ? { analysis: strs(o.analysis) } : {}), ...(strs(o.assumptions) ? { assumptions: strs(o.assumptions) } : {}), ...(strs(o.sources) ? { sources: strs(o.sources) } : {}) };
+      return { op, ...(str(o.objective) ? { objective: str(o.objective) } : {}), ...(strs(o.hypotheses) ? { hypotheses: strs(o.hypotheses) } : {}), ...(str(o.population) ? { population: str(o.population) } : {}), ...(Number.isInteger(Number(o.sampleSize)) && Number(o.sampleSize) > 0 ? { sampleSize: Number(o.sampleSize) } : {}), ...(str(o.methodology) ? { methodology: str(o.methodology) } : {}), ...(constructs ? { constructs } : {}), ...(strs(o.analysis) ? { analysis: strs(o.analysis) } : {}), ...(strs(o.assumptions) ? { assumptions: strs(o.assumptions) } : {}), ...(strs(o.sources) ? { sources: strs(o.sources) } : {}) };
     }
     default: {
       const ux = op ? coerceUxAction(op, o) : null;
@@ -414,6 +414,14 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
    */
   const stale = outdateTranslations(def);
   if (stale.outdated) ctx.uxWarnings.push(`${stale.outdated} translation${stale.outdated === 1 ? " is" : "s are"} now outdated (${stale.languages.join(", ")}) — the source text changed; ask to re-translate them, or confirm them in Localization.`);
+  /*
+   * …and TRANSLATIONS WHOSE ELEMENT THIS BATCH REMOVED are dropped, not left
+   * as orphans that no screen shows and every count includes. A recode moved
+   * its option's translations already (update_option); an option list rebuilt
+   * from labels is rescued by its source hash. What is dropped is said.
+   */
+  const orphans = pruneOrphanedTranslations(def);
+  if (orphans.dropped) ctx.uxWarnings.push(`${orphans.dropped} translation${orphans.dropped === 1 ? "" : "s"} (${orphans.languages.join(", ")}) of removed elements ${orphans.dropped === 1 ? "was" : "were"} dropped.`);
   const parsed = SurveyDefinitionSchema.safeParse(def);
   results.sort((x, y) => x.index - y.index);
   const errors = results.filter((r) => !r.ok).map((r) => `${describeAction(actions[r.index])}: ${r.error}`);
@@ -428,7 +436,22 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
   const beforeIssues = new Set(runQualityCheck(before).areas.flatMap((x) => x.issues).filter((i) => i.level === "error").map((i) => i.message));
   const warnings = runQualityCheck(after).areas.flatMap((x) => x.issues).filter((i) => i.level === "error" && !beforeIssues.has(i.message)).map((i) => `${i.questionCode ? `${i.questionCode}: ` : ""}${i.message}`);
   const validationWarnings = results.flatMap((r) => (r.issues ?? []).filter((i) => i.level === "warning").map((i) => i.message));
-  return { def: after, results, errors, warnings: [...new Set([...warnings, ...validationWarnings, ...ctx.uxWarnings])].slice(0, 40), destructive: results.filter((r) => r.ok && r.destructive).map((r) => r.destructive!), refs: Object.fromEntries([...ctx.refs, ...ctx.uxRefs]), valid: true, uxOnly, structureUnchanged };
+  /*
+   * WHAT THE BATCH DID TO THE ANALYSIS PLAN. A type change, a removed option,
+   * a deleted question can leave a planned test grouping by an open text or
+   * an ANOVA with two groups; the plan's own review says so, and what it says
+   * now that it did not say before is reported with the batch — at the change,
+   * not discovered later in the Analysis tab.
+   */
+  const planWarnings: string[] = [];
+  if (before.research?.analysisPlan || after.research?.analysisPlan) {
+    try {
+      // every level: only what the batch newly caused is said, so a suggestion it caused ("two groups now — a t-test") is news too
+      const had = new Set(reviewAnalysisPlan(before).map((i) => i.message));
+      for (const i of reviewAnalysisPlan(after)) if (!had.has(i.message)) planWarnings.push(`Analysis plan: ${i.message}${i.suggestion ? ` ${i.suggestion}` : ""}`);
+    } catch { /* a half-formed plan must not take the batch down */ }
+  }
+  return { def: after, results, errors, warnings: [...new Set([...warnings, ...validationWarnings, ...planWarnings, ...ctx.uxWarnings])].slice(0, 40), destructive: results.filter((r) => r.ok && r.destructive).map((r) => r.destructive!), refs: Object.fromEntries([...ctx.refs, ...ctx.uxRefs]), valid: true, uxOnly, structureUnchanged };
 }
 
 class ActionError extends Error {}
@@ -742,11 +765,19 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
         objective: a.objective ?? prev?.objective,
         hypotheses: a.hypotheses ?? prev?.hypotheses ?? [],
         population: a.population ?? prev?.population,
+        // the planned sample bounds the analysis plan (analysisFramework.expectedSample)
+        ...((a.sampleSize ?? prev?.sampleSize) ? { sampleSize: a.sampleSize ?? prev?.sampleSize } : {}),
         methodology: a.methodology ?? prev?.methodology,
         constructs: a.constructs ? a.constructs.map((c) => ({ name: c.name, role: (ROLES.has(String(c.role)) ? c.role : "descriptive") as never, ...(c.definition ? { definition: c.definition } : {}), questionIds: map(c.questions) })) : prev?.constructs ?? [],
         analysis: a.analysis ?? prev?.analysis ?? [],
         assumptions: a.assumptions ?? prev?.assumptions ?? [],
         sources: a.sources ?? prev?.sources ?? [],
+        /*
+         * The analysis plan is not the research design's words: an edit of the
+         * objective or the hypotheses keeps it. It was rebuilt without it, so
+         * "set the objective" silently deleted a saved plan.
+         */
+        ...(prev?.analysisPlan ? { analysisPlan: prev.analysisPlan } : {}),
         updatedAt: ctx.now,
       } as never;
       return { description: `Research design: ${[a.objective ? "objective" : "", a.hypotheses?.length ? `${a.hypotheses.length} hypothes${a.hypotheses.length === 1 ? "is" : "es"}` : "", a.constructs?.length ? `${a.constructs.length} constructs` : ""].filter(Boolean).join(", ") || "updated"}`, touched: [] };
@@ -1439,8 +1470,10 @@ function localizationDiff(before: SurveyDefinition, after: SurveyDefinition): st
     if (bc && (bc.status !== ac.status || bc.enabled !== ac.enabled)) out.push(`${languageName(l, ac)}: ${bc.status !== ac.status ? ac.status : ""}${bc.enabled !== ac.enabled ? `${bc.status !== ac.status ? ", " : ""}${ac.enabled ? "offered" : "not offered"}` : ""}`);
     const bt = b?.translations?.[l] ?? {}, at = a?.translations?.[l] ?? {};
     let written = 0, approved = 0, confirmed = 0;
+    // a translation that followed its option's recode is not a new one
+    const moved = movedTranslationKeys(bt, at);
     for (const [k, t] of Object.entries(at)) {
-      const p = bt[k];
+      const p = bt[k] ?? (moved.has(k) ? bt[moved.get(k)!] : undefined);
       if (!p || p.text !== t.text) { if (t.text.trim() && t.status !== "not_translated") written++; continue; }
       // a confirmation re-stamps the source hash without changing the text — whether the stale state was stored ("outdated") or only detected (the hash no longer matched)
       if (p.sourceHash !== t.sourceHash && (p.status === "outdated" || t.status === "edited")) { confirmed++; continue; }

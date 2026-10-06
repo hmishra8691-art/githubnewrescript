@@ -9,7 +9,7 @@ import { conditionSummary } from "./logicSummary.js";
 import { conditionRefs } from "./dependencies.js";
 import { buildDependencyIndex, objectKey, parseObjectKey, type DependencyEdge, type DependencyIndex, type EdgeKind, type ObjectKey, type ObjectKind } from "./dependencyIndex.js";
 import { impactOf, impactPhrase, type ImpactItem, type ImpactReport } from "./impact.js";
-import { buildAnalysisFramework, hypothesisCoverage, prioritizeCrosstabs, segmentationQuestions } from "./analysisFramework.js";
+import { buildAnalysisFramework, explainPlan, explainPlanItem, hypothesisCoverage, planItemKind, planItemTitle, planSampleSize, prioritizeCrosstabs, segmentationQuestions, segmentVariableName } from "./analysisFramework.js";
 import { effectiveLocalization, languageName, lintLanguage } from "./localization.js";
 import { listBlocks, listPages } from "./blocks.js";
 import { getQuestionByCodeOrVar } from "./state.js";
@@ -863,6 +863,138 @@ const analysisQuery: Recogniser = (r) => {
   }
   return null;
 };
+
+/* ---------------------------------------------------------- queries: why this analysis */
+
+/*
+ * "WHY ARE YOU RECOMMENDING A REGRESSION?" — answered by the engine from the
+ * plan item's explanation (`explainPlanItem`): the objective it serves, the
+ * variables and their levels, the rule that chose the method, what the run
+ * will produce, the sample it needs against the sample expected, and what to
+ * keep in mind. It was the model's to word from structured facts; the facts
+ * are the answer. The item is found by the method named, by the variables
+ * named, or — "explain the analysis plan", "why this analysis" — it is the
+ * whole plan.
+ */
+const WHY_METHODS: [RegExp, { kind: "crosstab" | "test" | "derived" | "segment"; methods?: string[]; derivedKinds?: string[] }][] = [
+  [/^(?:key\s+)?drivers?(?:\s+analysis)?$|^(?:linear\s+|multiple\s+)?regressions?(?:\s+(?:analysis|model))?$|^(?:the\s+)?models?$/i, { kind: "test", methods: ["regression", "driver_analysis", "logistic_regression"] }],
+  [/^logistic(?:\s+regression)?$|^logit$/i, { kind: "test", methods: ["logistic_regression"] }],
+  [/^t[-\s]?tests?$/i, { kind: "test", methods: ["t_test"] }],
+  [/^(?:one[-\s]way\s+)?anovas?$|^analysis\s+of\s+variance$/i, { kind: "test", methods: ["anova"] }],
+  [/^chi[-\s]?squares?(?:\s+tests?)?$|^χ²$/i, { kind: "test", methods: ["chi_square"] }],
+  [/^correlations?$/i, { kind: "test", methods: ["correlation"] }],
+  [/^(?:mann[-\s–]whitney|kruskal[-\s–]wallis)(?:\s+tests?)?$/i, { kind: "test", methods: ["mann_whitney", "kruskal_wallis"] }],
+  [/^reliability(?:\s+analysis)?$|^cronbach(?:'s)?(?:\s+alpha|\s+α)?$/i, { kind: "test", methods: ["reliability"] }],
+  [/^factor(?:\s+analysis)?$/i, { kind: "test", methods: ["factor"] }],
+  [/^cluster(?:ing|\s+analysis)?$/i, { kind: "test", methods: ["cluster"] }],
+  [/^max\s?diff(?:\s+scores?)?$/i, { kind: "test", methods: ["maxdiff_scores"] }],
+  [/^conjoint(?:\s+utilities)?$/i, { kind: "test", methods: ["conjoint_utilities"] }],
+  [/^nps$|^net\s+promoter(?:\s+score)?$/i, { kind: "test", methods: ["nps"] }],
+  [/^cross[-\s]?tab(?:ulation)?s?$|^tables?$|^banners?$/i, { kind: "crosstab" }],
+  [/^top[-\s]?(?:2|two)[-\s]?box(?:es)?$|^t2b$|^top[-\s]?box(?:es)?$/i, { kind: "derived", derivedKinds: ["top_box"] }],
+  [/^(?:mean\s+)?scores?$|^(?:the\s+)?(?:construct\s+)?scores?$/i, { kind: "derived", derivedKinds: ["mean_score", "sum_score"] }],
+  [/^derived\s+variables?$/i, { kind: "derived" }],
+  [/^segments?(?:ation)?$/i, { kind: "segment" }],
+];
+const WHOLE_PLAN = /^(?:(?:(?:the|this|that|your|our)\s+)?(?:analysis\s+)?(?:plan|framework|analys[ie]s|analysis\s+(?:plan|framework))|this|that|it|these|them)$/i;
+
+type PlanItemAny = Parameters<typeof explainPlanItem>[1];
+
+const analysisWhy: Recogniser = (r) => {
+  const t = r.text.replace(/\?+$/, "").trim();
+  const def = r.def;
+  /* how many completes the plan needs */
+  if ((/\bsample\s+size\b|\bhow\s+many\s+(?:completes|respondents|interviews|people|responses)\b|\bhow\s+(?:big|large)\s+(?:a\s+)?sample\b|\bwhat\s+(?:base|n)\s+do\b/i.test(t)) && /\b(?:need|require|enough|should|plan|analysis|analyses)\b/i.test(t) && !/^(?:set|make|change|add)\b/i.test(t)) {
+    const { plan, saved } = savedOrBuilt(def);
+    const s = planSampleSize(def, plan);
+    const exp = s.expected;
+    const verdict = !exp ? "No sample is recorded to compare it with — set quota targets or the research design's sample size." : s.minimum > exp.n ? `That is more than ${exp.note} (${exp.detail}).` : `${exp.note.replace(/^./, (c) => c.toUpperCase())}, which is enough.`;
+    const sections: AnswerSection[] = [
+      { title: "Required sample by item", items: s.items.slice(0, 12).map((x) => ({ label: x.title.replace(/^./, (c) => c.toUpperCase()), detail: `about ${x.minimum} — ${x.note}` })) },
+      { title: "Expected sample", items: [{ label: exp ? exp.detail : "Nothing records it", ...(exp ? {} : { detail: "the quotas have no targets and the research design no sample size" }) }] },
+      ...(s.driver ? [{ title: "The rule that drives it", items: [{ label: s.driver.title, detail: s.driver.requiredBase.rule }] }] : []),
+    ];
+    return { kind: "answer", category: "analysis", understood: `Work out the sample the ${saved ? "saved" : "engine's"} analysis plan needs.`, answer: `The plan needs about ${s.minimum} completes${s.driver ? `, driven by ${s.driver.title.replace(/^./, (c) => c.toLowerCase())} (${s.driver.requiredBase.note})` : ""}. ${verdict}`, sections, detected: s.driver ? [det("driving item", s.driver.title)] : [] };
+  }
+  /* which item the sentence asks about */
+  let phrase: string | null = null;
+  let pair: [string, string] | null = null;
+  let m: RegExpExecArray | null;
+  if ((m = /^why\s+(?:are|do|did|would)\s+(?:you|we)\s+(?:recommend(?:ing)?|suggest(?:ing)?|propos(?:e|ing)|plan(?:ning)?|includ(?:e|ing)|us(?:e|ing))\s+(.+)$/i.exec(t))) phrase = m[1];
+  else if ((m = /^why\s+(?:is|was)\s+(?:the\s+engine\s+|it\s+)?(?:recommending|suggesting|proposing|planning)\s+(.+)$/i.exec(t))) phrase = m[1];
+  else if ((m = /^why\s+(?:is|are)\s+(\S+)\s+(?:crossed|cross[-\s]?tabbed|cross[-\s]?tabulated|tabulated|compared|tested|correlated|regressed|analy[sz]ed)\s+(?:with|by|against|across|on)\s+(\S+)$/i.exec(t))) pair = [m[1], m[2]];
+  else if ((m = /^why\s+(?:(?:a|an|the|this|that)\s+)?(.+?)(?:\s+(?:on|of|for|between|across|with|by)\s+(.+))?$/i.exec(t)) && WHY_METHODS.some(([re]) => re.test(m![1].trim()))) phrase = m[2] ? `${m[1]} on ${m[2]}` : m[1];
+  else if (/^why\s+(?:this|that|these|the)\s+(?:analys[ie]s|analysis\s+plan|plan|framework|methods?)$/i.test(t) || /^(?:explain|justify|walk\s+me\s+through)\s+(?:the\s+|this\s+|your\s+)?(?:analysis\s+plan|analysis\s+framework|analysis|plan)$/i.test(t)) phrase = "the plan";
+  else if ((m = /^(?:explain|justify)\s+(?:the\s+|this\s+)?(.+?)(?:\s+(?:on|of|for|between|across|with|by)\s+(.+))?$/i.exec(t)) && WHY_METHODS.some(([re]) => re.test(m![1].trim()))) phrase = m[2] ? `${m[1]} on ${m[2]}` : m[1];
+  if (!phrase && !pair) return null;
+
+  const { plan, saved } = savedOrBuilt(def);
+  const all: PlanItemAny[] = [...plan.crosstabs, ...plan.tests, ...plan.derived, ...plan.segments];
+  const label = (x: PlanItemAny) => planItemTitle(def, x).replace(/^./, (c) => c.toUpperCase());
+  const varsOf = (x: PlanItemAny): string[] => ("rows" in x ? [...x.rows, ...x.columns] : "method" in x ? [x.outcome, x.groupBy, x.moderator, x.mediator, ...x.variables].filter((v): v is string => !!v) : "from" in x ? [x.name, ...x.from] : [segmentVariableName(x), ...x.by]);
+  const named = (s: string): string[] => {
+    // every question the words name (codes and variable names), as variable names; derived / segment names as they are
+    const out: string[] = [];
+    for (const w of s.split(/[\s,]+|\band\b/i).map((x) => x.replace(/^["“'‘(]+|["”'’).?]+$/g, "")).filter(Boolean)) {
+      const q = getQuestionByCodeOrVar(def, w) ?? def.questions.find((x) => String(x.code).toLowerCase() === w.toLowerCase() || x.variableName.toLowerCase() === w.toLowerCase());
+      if (q) out.push(q.variableName);
+      else if (all.some((x) => varsOf(x).some((v) => v.toLowerCase() === w.toLowerCase()))) out.push(all.flatMap(varsOf).find((v) => v.toLowerCase() === w.toLowerCase())!);
+    }
+    return out;
+  };
+  const understood = (what: string) => `Explain why the ${saved ? "saved" : "engine's"} analysis plan includes ${what}.`;
+
+  /* the whole plan */
+  if (phrase && WHOLE_PLAN.test(phrase.trim())) {
+    const ex = explainPlan(def, plan);
+    if (!ex.length) return { kind: "answer", category: "analysis", understood: "Explain the analysis plan.", answer: "The plan is empty — nothing in the design implies a table or a test yet. Mark the outcomes and the segmentation questions (Properties → Analysis), or say “create an analysis framework”.", sections: [], detected: [] };
+    const size = planSampleSize(def, plan);
+    const sections: AnswerSection[] = [
+      { title: "Objective", items: [{ label: ex[0].objective.split(/(?<=\.)\s/)[0] }, ...(def.research?.hypotheses ?? []).map((h, i) => ({ label: `${hypothesisLabel(i)}: ${plain(h, 90)}`, detail: `${ex.filter((e) => e.hypotheses.some((x) => x.label === hypothesisLabel(i))).length} planned item(s) serve it` }))] },
+      { title: "Why each item", items: ex.map((e) => ({ label: e.title, ...(e.kind === "crosstab" || e.kind === "test" ? { key: objectKey("analysis", e.id) } : {}), detail: e.why })) },
+      { title: "Required sample", items: [{ label: `about ${size.minimum} completes`, detail: `${size.driver ? `driven by ${size.driver.title.replace(/^./, (c) => c.toLowerCase())} (${size.driver.requiredBase.note})` : ""}${size.expected ? ` — ${size.expected.note}` : " — no sample is recorded"}` }] },
+    ].filter((s) => s.items.length);
+    return { kind: "answer", category: "analysis", understood: "Explain the analysis plan: why each item is there.", answer: `${saved ? "The saved plan" : "The engine's plan (not saved yet)"} has ${plural(ex.length, "item")}; each follows from the measurement levels and roles of the questions it reads. The whole plan needs about ${size.minimum} completes${size.expected ? ` (${size.expected.note})` : ""}.`, sections, detected: [] };
+  }
+
+  /* one item: by the variables named, the method named, or both */
+  let pool = all;
+  let want = "";
+  if (pair) {
+    const vs = [...named(pair[0]), ...named(pair[1])];
+    if (vs.length < 2) return { kind: "refused", category: "analysis", understood: understood(`${pair[0]} with ${pair[1]}`), reason: `${[pair[0], pair[1]].filter((p) => !named(p).length).join(" and ")} ${[pair[0], pair[1]].filter((p) => !named(p).length).length === 1 ? "is" : "are"} not a question or planned variable of this survey.`, detected: [] };
+    pool = all.filter((x) => vs.every((v) => varsOf(x).includes(v)));
+    want = `${pair[0]} with ${pair[1]}`;
+  } else if (phrase) {
+    const [, methodPart, varPart] = /^(.+?)(?:\s+(?:on|of|for|between|across|with|by)\s+(.+))?$/i.exec(phrase.trim().replace(/^(?:a|an|the|this|that)\s+/i, "")) ?? [];
+    const spec = WHY_METHODS.find(([re]) => re.test((methodPart ?? "").trim()))?.[1];
+    const vs = named(varPart ?? (spec ? "" : phrase));
+    if (spec) pool = pool.filter((x) => planItemKind(x) === spec.kind && (!spec.methods || ("method" in x && spec.methods.includes(x.method))) && (!spec.derivedKinds || ("from" in x && spec.derivedKinds.includes(x.kind))));
+    if (vs.length) pool = pool.filter((x) => vs.every((v) => varsOf(x).includes(v)));
+    if (!spec && !vs.length) return null; // not about the analysis
+    want = phrase.trim();
+  }
+  if (!pool.length) {
+    const avail = [...new Set(all.map((x) => ("method" in x ? (METHOD_NAMES[x.method] ?? x.method.replace(/_/g, " ")) : planItemKind(x))))];
+    return { kind: "answer", category: "analysis", understood: understood(want), answer: `The ${saved ? "saved" : "engine's"} plan has no ${want}${avail.length ? ` — it plans ${avail.join(", ")}` : " — it is empty"}. Ask “explain the analysis plan” for every item, or “add a … to the analysis plan” to plan one.`, sections: [], detected: [] };
+  }
+  // the most important match: a hypothesis-linked item first, then by priority
+  const ranked = [...pool].sort((a, b) => (("hypotheses" in b ? b.hypotheses.length : 0) - ("hypotheses" in a ? a.hypotheses.length : 0)) || (("priority" in a ? a.priority : 2) - ("priority" in b ? b.priority : 2)));
+  const e = explainPlanItem(def, ranked[0], plan);
+  const exp = e.expectedSample;
+  const sections: AnswerSection[] = [
+    { title: "Objective", items: [{ label: e.objective }, ...e.hypotheses.map((h) => ({ label: `${h.label}: ${plain(h.text, 90)}` }))] },
+    { title: "Variables", items: e.variables.map((v) => ({ label: `${v.code}${v.code !== v.name ? ` (${v.name})` : ""} — ${v.role}`, ...(varKey(def, v.name) ? { key: varKey(def, v.name) } : {}), detail: `${v.level}${v.categories ? `, ${v.categories} categories` : ""} · ${v.designRole}${v.text ? ` · ${plain(v.text, 60)}` : ""}` })) },
+    { title: "Why this method", items: [{ label: e.why }] },
+    { title: "Expected output", items: [{ label: e.expectedOutput }] },
+    { title: "Required sample", items: [{ label: `about ${e.requiredBase.minimum} completes (${e.requiredBase.note})`, detail: `${e.requiredBase.rule}${exp ? ` — ${e.requiredBase.minimum > exp.n ? `more than ${exp.note}` : exp.note}` : " — no expected sample is recorded"}` }] },
+    { title: "Limitations", items: e.limitations.map((l) => ({ label: l })) },
+    ...(ranked.length > 1 ? [{ title: "Also planned", items: ranked.slice(1, 8).map((x) => ({ label: label(x), ...("id" in x && typeof x.id === "string" ? { key: objectKey("analysis", x.id) } : {}) })) }] : []),
+  ].filter((s) => s.items.length);
+  return { kind: "answer", category: "analysis", understood: understood(e.title.replace(/^./, (c) => c.toLowerCase())), answer: e.text, sections, detected: [det("plan item", e.title), ...e.variables.filter((v) => resolve(def, v.name)).map((v) => det("question", v.code))] };
+};
+const METHOD_NAMES: Record<string, string> = { t_test: "a t-test", anova: "an ANOVA", chi_square: "a chi-square test", correlation: "a correlation", regression: "a regression", logistic_regression: "a logistic regression", reliability: "a reliability analysis", maxdiff_scores: "MaxDiff scores", conjoint_utilities: "conjoint utilities", nps: "NPS" };
+const resolve = (def: SurveyDefinition, name: string) => getQuestionByCodeOrVar(def, name) ?? def.questions.find((q) => q.id === name);
 
 const hypothesesQuery: Recogniser = (r) => {
   const t = r.text;
@@ -1927,7 +2059,7 @@ function fallback(r: Run): Interpretation {
  * before "remove Q11"), skips before display ("if Q7 is no, skip …").
  */
 const RECOGNISERS: Recogniser[] = [
-  impact, dependents, dependencies, untranslated, hypothesesQuery, analysisQuery, measures,
+  analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, analysisQuery, measures,
   deferred, longBrief,
   surveySettings, languages, research, variables, pageBreaks,
   masking, optionVisibility, randomization, options, required, skips, display, validation, questions,

@@ -181,3 +181,131 @@ test("the plan runs by itself at the milestones of fieldwork — once each", () 
   assert.equal(nextMilestone([], { completes: 12, fieldEnd: "2026-10-01T00:00:00Z", now: "2026-10-05T00:00:00Z" }), null, "the field ended with too few to read");
   assert.equal(nextMilestone(["first_results"], { completes: 30, target: 50 }), "halfway");
 });
+
+/* ------------------------------------------------------------ Phase 6: direction */
+
+import { hypothesisDirection, matchGroup } from "./findings.js";
+import type { RunItem, Finding } from "./findings.js";
+
+test("hypothesisDirection — the direction a hypothesis states, from its words", () => {
+  const d = (t: string) => hypothesisDirection(t);
+  assert.deepEqual(d("Brand trust increases purchase intention"), { kind: "positive" });
+  assert.deepEqual(d("Satisfaction drives recommendation"), { kind: "positive" });
+  assert.deepEqual(d("Advertising exposure raises awareness"), { kind: "positive" });
+  assert.deepEqual(d("Ad exposure leads to higher awareness"), { kind: "positive" });
+  assert.deepEqual(d("Heavy users are more likely to buy"), { kind: "positive" });
+  assert.deepEqual(d("Price sensitivity reduces purchase intent"), { kind: "negative" });
+  assert.deepEqual(d("Long surveys make respondents less likely to finish"), { kind: "negative" });
+  assert.deepEqual(d("Lower prices increase purchase intent"), { kind: "negative" }, "the low end as the subject turns the verb round");
+  assert.deepEqual(d("Higher prices lower purchase intent"), { kind: "negative" }, "“lower” is the verb here, “higher” the subject");
+  assert.deepEqual(d("Older respondents are more satisfied"), { kind: "positive" });
+  assert.deepEqual(d("Younger respondents are less satisfied"), { kind: "positive" }, "less satisfied when younger: satisfaction rises with age");
+  assert.deepEqual(d("Women are more satisfied than men"), { kind: "group_higher", group: "women", lower: "men" });
+  assert.deepEqual(d("Men are less likely to recommend than women"), { kind: "group_higher", group: "women", lower: "men" });
+  assert.deepEqual(d("Customers in the North score higher than those in the South."), { kind: "group_higher", group: "customers in the north", lower: "in the south" });
+  assert.deepEqual(d("Region affects satisfaction"), { kind: "difference" });
+  assert.deepEqual(d("Satisfaction differs by region"), { kind: "difference" });
+  assert.deepEqual(d("Price perception moderates the effect of trust on purchase intention"), { kind: "difference" });
+  assert.deepEqual(d("Our respondents live in cities"), { kind: "none" });
+  /* the group words resolve against the grouping variable's labels, stemmed, with the usual synonyms */
+  assert.equal(matchGroup("women", ["Male", "Female"]), 1);
+  assert.equal(matchGroup("men", ["Male", "Female"]), 0);
+  assert.equal(matchGroup("customers in the north", ["North", "South", "East"]), 0);
+  assert.equal(matchGroup("Northerners", ["North", "South"]), -1, "a word the labels do not have is not guessed");
+});
+
+/** the planted data with a hypothesis list of our own, every test tagged as written */
+function directional(hypotheses: string[], tests: { id: string; method: string; outcome: string; groupBy?: string; variables?: string[]; h: string }[]) {
+  const def = structuredClone(base);
+  def.research = { objective: "direction", population: "adults", hypotheses, constructs: [], analysis: [], assumptions: [], sources: [],
+    analysisPlan: { crosstabs: [], derived: [], segments: [], tests: tests.map((t) => ({ id: t.id, method: t.method, outcome: t.outcome, variables: t.variables ?? [], ...(t.groupBy ? { groupBy: t.groupBy } : {}), priority: 1, hypotheses: [t.h] })) } } as never;
+  return runPlan(def, synthDataset(400));
+}
+
+test("verdicts read the direction: a significant effect the other way is evidence AGAINST — for a coefficient's sign and for which group is higher", () => {
+  const run = directional(
+    ["Satisfaction increases recommendation", "Satisfaction reduces recommendation", "Women are more satisfied than men", "Men are more satisfied than women", "Men are less satisfied than women", "Region affects satisfaction"],
+    [
+      { id: "a", method: "regression", outcome: "NPS", variables: ["SAT"], h: "H1" },
+      { id: "b", method: "regression", outcome: "NPS", variables: ["SAT"], h: "H2" },
+      { id: "c", method: "t_test", outcome: "SAT", groupBy: "GENDER", h: "H3" },
+      { id: "d", method: "t_test", outcome: "SAT", groupBy: "GENDER", h: "H4" },
+      { id: "e", method: "t_test", outcome: "SAT", groupBy: "GENDER", h: "H5" },
+      { id: "f", method: "anova", outcome: "SAT", groupBy: "REGION", h: "H6" },
+    ],
+  );
+  const v = Object.fromEntries(run.verdicts.map((x) => [x.label, x]));
+  assert.equal(v.H1.verdict, "supported", v.H1.reason);
+  assert.match(v.H1.reason, /— in the direction the hypothesis states$/);
+  assert.deepEqual([v.H1.direction?.kind, v.H1.direction?.agreeing, v.H1.direction?.contradicting], ["positive", 1, 0]);
+  assert.equal(v.H2.verdict, "not_supported", "a significant POSITIVE β does not support “reduces”");
+  assert.match(v.H2.reason, /^The planned test is significant, but in the opposite direction \(β = 0\.\d\d\): Overall satisfaction raises Recommend\?/);
+  assert.equal(v.H2.direction?.contradicting, 1);
+  assert.equal(v.H3.verdict, "supported", v.H3.reason);
+  assert.equal(v.H4.verdict, "not_supported", v.H4.reason);
+  assert.match(v.H4.reason, /significant, but in the opposite direction \(Female 3\.\d\d vs Male 3\.\d\d\)/);
+  assert.equal(v.H5.verdict, "supported", "“men are LESS satisfied than women” is the same direction as H3");
+  assert.equal(v.H6.direction?.kind, "difference");
+  assert.ok(run.findings.some((f) => f.evidence.groups?.length === 2), "a comparison of means carries each group's mean");
+});
+
+test("verdicts — mixed when significant evidence points both ways; a control variable's sign is not the hypothesis's; an unread direction is said", () => {
+  const def = structuredClone(base);
+  def.research = { objective: "x", population: "adults", hypotheses: ["Satisfaction increases recommendation", "Women are more satisfied than men"], constructs: [], analysis: [], assumptions: [], sources: [] } as never;
+  const result = { base: { n: 400 } } as RunItem["result"];
+  const finding = (o: Partial<Finding> & { variables: string[] }, ev: Partial<Finding["evidence"]>): Finding => ({ id: Math.random().toString(36), kind: "driver", strength: "moderate", significant: true, headline: `${o.variables.join(" ~ ")}`, analysis: { name: "m", kind: "regression", hash: "h" }, hypotheses: ["H1"], ...o, evidence: { n: 400, p: 0.001, ...ev } });
+  const item = (h: string, vars: string[], fs: Finding[], kind = "regression"): RunItem => ({ definition: { name: "m", kind: kind as never, dataset: spec, variables: vars }, result, findings: fs, hypotheses: [h] });
+  const pos = finding({ variables: ["NPS", "SAT"] }, { direction: "positive", effect: { name: "standardized β", value: 0.4 } });
+  const neg = finding({ variables: ["NPS", "SAT"] }, { direction: "negative", effect: { name: "standardized β", value: -0.42 } });
+  /* one model agrees, another (a different wave's) disagrees → mixed, and the reason quotes the opposite β */
+  const mixed = hypothesisVerdicts(def, [item("H1", ["NPS", "SAT"], [pos]), item("H1", ["NPS", "SAT"], [neg])])[0];
+  assert.equal(mixed.verdict, "mixed");
+  assert.match(mixed.reason, /^1 of 2 planned tests support it — NPS ~ SAT — but one is significant, but in the opposite direction \(β = -0\.42\)/);
+  /* a negative control variable in the same model is not evidence against “satisfaction increases …” */
+  const control = finding({ variables: ["NPS", "AGE"] }, { direction: "negative", effect: { name: "standardized β", value: -0.3 } });
+  const withControl = hypothesisVerdicts(def, [item("H1", ["NPS", "SAT", "AGE"], [pos, control])])[0];
+  assert.equal(withControl.verdict, "supported", withControl.reason);
+  assert.equal(withControl.direction?.unread, 1);
+  /* a group hypothesis served by a crosstab only: significant, direction not readable → supported, and said */
+  const xt = finding({ kind: "difference", variables: ["SAT", "GENDER"], hypotheses: ["H2"] }, { test: "chi_square" });
+  const unread = hypothesisVerdicts(def, [item("H2", ["SAT", "GENDER"], [xt], "crosstab")])[1];
+  assert.equal(unread.verdict, "supported");
+  assert.match(unread.reason, /\(the direction could not be read from these results\)$/);
+});
+
+/* ------------------------------------------------------------ mutation-checked edges (Phase 6) */
+
+test("hypothesisDirection / matchGroup — edges: the first verb decides; any “-er … than” compares groups; a phrase that names two groups names none; plurals are stemmed", () => {
+  assert.deepEqual(hypothesisDirection("Delays reduce satisfaction and increase complaints"), { kind: "negative" }, "the first verb decides");
+  assert.deepEqual(hypothesisDirection("Women are happier than men"), { kind: "group_higher", group: "women", lower: "men" });
+  assert.equal(matchGroup("north and south", ["North", "South"]), -1, "two groups named equally: none is chosen");
+  assert.equal(matchGroup("students", ["Student", "Worker"]), 0, "“students” is the “Student” group");
+});
+
+test("verdicts — edges: a group that is not the highest contradicts “higher than the others”; a group the labels do not have is unread; an interaction's sign is not the hypothesis's; agreeing counts only the read ones", () => {
+  const def = structuredClone(base);
+  def.research = { objective: "x", population: "adults", hypotheses: ["Customers in the North score higher than the others", "Women are more satisfied than men", "Engagement increases loyalty"], constructs: [], analysis: [], assumptions: [], sources: [] } as never;
+  const result = { base: { n: 400 } } as RunItem["result"];
+  const finding = (o: Partial<Finding> & { variables: string[] }, ev: Partial<Finding["evidence"]>): Finding => ({ id: Math.random().toString(36), kind: "difference", strength: "moderate", significant: true, headline: o.variables.join(" ~ "), analysis: { name: "m", kind: "test", hash: "h" }, hypotheses: [], ...o, evidence: { n: 400, p: 0.001, ...ev } });
+  const item = (h: string, vars: string[], fs: Finding[], kind = "test"): RunItem => ({ definition: { name: "m", kind: kind as never, dataset: spec, variables: vars }, result, findings: fs, hypotheses: [h] });
+  /* North is said to be higher than the others: South is higher → against */
+  const regions = finding({ variables: ["SAT", "REGION"] }, { test: "anova", groups: [{ label: "North", mean: 3.0, n: 130 }, { label: "South", mean: 3.5, n: 130 }, { label: "East", mean: 2.0, n: 140 }] });
+  const v1 = hypothesisVerdicts(def, [item("H1", ["SAT", "REGION"], [regions])])[0];
+  assert.equal(v1.verdict, "not_supported", v1.reason);
+  assert.match(v1.reason, /opposite direction \(South 3\.50 vs East 2\.00\)/);
+  /* … and when North IS the highest, it agrees */
+  const top = finding({ variables: ["SAT", "REGION"] }, { test: "anova", groups: [{ label: "North", mean: 3.9, n: 130 }, { label: "South", mean: 3.5, n: 130 }, { label: "East", mean: 2.0, n: 140 }] });
+  assert.equal(hypothesisVerdicts(def, [item("H1", ["SAT", "REGION"], [top])])[0].verdict, "supported");
+  /* the test's groups are not women and men: the direction cannot be read */
+  const ab = finding({ variables: ["SAT", "ARM"] }, { test: "t_independent", groups: [{ label: "Group A", mean: 3.0, n: 200 }, { label: "Group B", mean: 3.6, n: 200 }] });
+  const v2 = hypothesisVerdicts(def, [item("H2", ["SAT", "ARM"], [ab])])[1];
+  assert.equal(v2.verdict, "supported");
+  assert.match(v2.reason, /\(the direction could not be read from these results\)$/);
+  assert.deepEqual([v2.direction?.agreeing, v2.direction?.unread], [0, 1], "an unread finding is not counted as agreeing");
+  /* a moderation model: the main effect agrees; the interaction's negative sign is not evidence against */
+  const main = finding({ kind: "driver", variables: ["NPS", "SAT"] }, { direction: "positive", effect: { name: "standardized β", value: 0.4 } });
+  const inter = finding({ kind: "driver", variables: ["NPS", "SAT × PRICE"] }, { direction: "negative", effect: { name: "standardized β", value: -0.2 } });
+  const v3 = hypothesisVerdicts(def, [item("H3", ["NPS", "SAT", "PRICE"], [main, inter], "regression")])[2];
+  assert.equal(v3.verdict, "supported", v3.reason);
+  assert.deepEqual([v3.direction?.agreeing, v3.direction?.contradicting, v3.direction?.unread], [1, 0, 1]);
+});

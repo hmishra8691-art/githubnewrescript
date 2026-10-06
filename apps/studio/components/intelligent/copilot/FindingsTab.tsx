@@ -71,6 +71,12 @@ export function FindingsTab({ copilot, def }: { copilot: Copilot; def: SurveyDef
               <div key={label} className="cp-block" data-testid="fd-verdict" data-label={label} data-verdict={verdict}>
                 <div><b>{label}</b> {text} <span className={`cp-sev v-${VERDICT_SEV[verdict]}`}>{VERDICT_WORD[verdict]}</span></div>
                 {v?.reason && <div className="iqi-dim">{v.reason}</div>}
+                {v?.direction && v.direction.kind !== "difference" && (v.direction.agreeing + v.direction.contradicting + v.direction.unread) > 0 && (
+                  <div className="iqi-dim" data-testid="fd-direction" data-agreeing={v.direction.agreeing} data-contradicting={v.direction.contradicting}>
+                    Direction stated: {v.direction.kind === "group_higher" ? `${v.direction.group} higher${v.direction.lower ? ` than ${v.direction.lower}` : ""}` : v.direction.kind}
+                    {" — "}{[v.direction.agreeing ? `${v.direction.agreeing} significant result${v.direction.agreeing === 1 ? "" : "s"} agree${v.direction.agreeing === 1 ? "s" : ""}` : "", v.direction.contradicting ? `${v.direction.contradicting} point${v.direction.contradicting === 1 ? "s" : ""} the other way` : "", v.direction.unread ? `${v.direction.unread} without a readable direction` : ""].filter(Boolean).join(", ")}.
+                  </div>
+                )}
                 {verdict === "untested" && !s.readOnly && <div><button type="button" className="iq-btn" data-testid="fd-plan-test" disabled={copilot.busy} onClick={() => ask(`${label} (“${text}”) is untested: add the crosstab or test to the analysis plan that would test it, naming the questions that measure it.`)}>Plan a test</button></div>}
               </div>
             );

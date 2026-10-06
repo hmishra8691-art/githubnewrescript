@@ -1,4 +1,4 @@
-import { pickCategory, pickSentiment, fakeClassify, fakeSentiment, fakeProbe } from "@rescript/engine";
+import { pickCategory, pickSentiment, fakeClassify, fakeSentiment, fakeProbe, placeholderMismatch, placeholdersIn } from "@rescript/engine";
 import { approxTokens, reportUsage } from "./usage.js";
 
 /**
@@ -353,10 +353,15 @@ export async function translateBatch(items: TranslateItem[], opts: TranslateOpti
   return result;
 }
 
-const PLACEHOLDER_RE = /\{\{[^}]+\}\}|\{\w+\}/g;
+/**
+ * Did a provider's translation `b` keep the placeholders of source `a`? The
+ * engine's one grammar decides (`placeholderMismatch`): pipes, `${…}`,
+ * `[[…]]`, every `{word}` parameter and the source's question codes — the
+ * same check `set_translations` applies when the text reaches the survey, so
+ * nothing the provider path accepts is refused there, and the reverse.
+ */
 export function placeholdersMatch(a: string, b: string): boolean {
-  const norm = (s: string) => (s.match(PLACEHOLDER_RE) ?? []).map((x) => x.replace(/\s+/g, "")).sort().join("|");
-  return norm(a) === norm(b);
+  return placeholderMismatch(a, b) === null;
 }
 export function tagsBalanced(s: string): boolean {
   return (s.match(/</g) ?? []).length === (s.match(/>/g) ?? []).length && !/<[^>]*$/.test(s);
@@ -382,7 +387,11 @@ export function fakeTranslate(text: string, opts: TranslateOptions): string {
   const dict = FAKE_DICT[lang] ?? {};
   // protect placeholders and tags
   const holes: string[] = [];
-  const protectedText = text.replace(/\{\{[^}]+\}\}|\{\w+\}|<[^>]+>/g, (m) => { holes.push(m); return `\u0000${holes.length - 1}\u0000`; });
+  // the engine's placeholder grammar, then the tags — the same post-conditions the real providers are held to
+  let lifted = "", at = 0;
+  for (const p of placeholdersIn(text)) { lifted += text.slice(at, p.start); holes.push(p.text); lifted += `\u0000${holes.length - 1}\u0000`; at = p.end; }
+  lifted += text.slice(at);
+  const protectedText = lifted.replace(/<[^>]+>/g, (m) => { holes.push(m); return `\u0000${holes.length - 1}\u0000`; });
   const plain = protectedText.trim().toLowerCase();
   let out: string;
   if (dict[plain]) out = dict[plain];

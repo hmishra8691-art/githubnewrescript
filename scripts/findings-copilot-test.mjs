@@ -100,6 +100,12 @@ await page.waitForSelector('[data-testid="fd-verdict"]');
   assert.match(verdicts[0][2], /All 2 planned tests are significant: Overall satisfaction (across|by) Gender/);
   assert.match(verdicts[1][2], /The planned test is significant|None of the|The planned test is not/i);
   assert.match(verdicts[3][2], /No analysis in the plan serves this hypothesis/);
+  /* Phase 6: a verdict reads the direction the hypothesis states — which group is higher, which way the coefficient points */
+  assert.match(verdicts[0][2], /in the direction the hypothesis states/);
+  const dir = await page.$('[data-testid="fd-verdict"][data-label="H1"] [data-testid="fd-direction"]');
+  assert.ok(dir, "H1 says which way it points and how the results sided with it");
+  assert.match((await dir.textContent()).replace(/\s+/g, " "), /Direction stated: women higher than men — 1 significant result agrees, 1 without a readable direction\./);
+  assert.equal(await dir.getAttribute("data-contradicting"), "0");
   const meta = await page.textContent('[data-testid="fd-run-meta"]');
   assert.match(meta, /Run halfway to target · .* · 400 live completes · 5 analyses/);
   const findings = await page.$$eval('[data-testid="fd-finding"]', (es) => es.map((e) => ({ kind: e.getAttribute("data-kind"), strength: e.getAttribute("data-strength"), sig: e.getAttribute("data-significant"), t: e.textContent })));

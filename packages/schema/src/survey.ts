@@ -90,6 +90,12 @@ export const ResearchDesign = z.object({
   objective: z.string().optional(),
   hypotheses: z.array(z.string()).default([]),
   population: z.string().optional(),
+  /**
+   * The completes the study is planned to achieve, when the researcher says
+   * so. The analysis framework reads it (with the quotas' targets) to say
+   * whether a planned table or test has the base it needs.
+   */
+  sampleSize: z.number().int().positive().optional(),
   methodology: z.string().optional(),
   constructs: z.array(ResearchConstruct).default([]),
   /** analysis the design anticipates: "compare purchase intent by exposure tertile" */

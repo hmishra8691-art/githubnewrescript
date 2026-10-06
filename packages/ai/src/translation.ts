@@ -1,5 +1,6 @@
 import { LANGUAGE_LIBRARY } from "@rescript/schema";
 import { reportUsage } from "./usage.js";
+import { placeholdersIn } from "@rescript/engine";
 import { translateBatch as llmTranslateBatch, fakeTranslate, aiConfigured, aiProviderName, placeholdersMatch, tagsBalanced, type TranslateItem, type TranslateOptions } from "./index.js";
 
 /**
@@ -61,20 +62,32 @@ export interface TranslationAdapter {
 /* --------------------------------------------------------- placeholders */
 
 /**
- * LIFT OUT what must never be translated — `{{Q1}}`, `{answer}`, `${brand}`,
- * `[[…]]` — and put it back afterwards. The marker is a `translate="no"`
+ * LIFT OUT what must never be translated and put it back afterwards. WHAT
+ * that is comes from the engine's one placeholder grammar (`placeholdersIn`,
+ * packages/engine/src/placeholders.ts) — the same tokens the engine's lint
+ * checks and `set_translations` refuses to lose: `{{Q1}}` pipes, `${brand}`,
+ * `[[loop.item]]`, every `{label}`-style parameter, and the question codes
+ * (`Q7`, `Q7.R1`) the source names. It used to be a fourth regex of its own,
+ * which agreed with none of the other three. The marker is a `translate="no"`
  * span with a language-neutral token, which Google's HTML mode leaves alone
  * and which survives a machine that ignores the attribute; `restore` finds
  * the tokens even if a provider moved or spaced them, and reports when one
  * went missing so the caller can drop that string rather than store a
  * broken one.
  */
+/** @deprecated the grammar is the engine's `placeholdersIn`; kept for callers that tested a string against it */
 export const PROTECT_RE = /\{\{[^}]+\}\}|\$\{[^}]+\}|\{\w+\}|\[\[[^\]]+\]\]/g;
 
 export function protectPlaceholders(text: string): { text: string; tokens: string[] } {
   const tokens: string[] = [];
-  const out = text.replace(PROTECT_RE, (m) => { tokens.push(m); return `<span translate="no" class="notranslate">RSV${tokens.length - 1}RSV</span>`; });
-  return { text: out, tokens };
+  let out = "", at = 0;
+  for (const p of placeholdersIn(text)) {
+    out += text.slice(at, p.start);
+    tokens.push(p.text);
+    out += `<span translate="no" class="notranslate">RSV${tokens.length - 1}RSV</span>`;
+    at = p.end;
+  }
+  return { text: out + text.slice(at), tokens };
 }
 
 export function restorePlaceholders(translated: string, tokens: string[]): { text: string; complete: boolean } {

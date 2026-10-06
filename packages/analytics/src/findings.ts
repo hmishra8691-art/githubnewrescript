@@ -7,6 +7,8 @@ import { runAnalysis } from "./analyses/index.js";
 import { MIN_BASE } from "./analyses/common.js";
 import { recommendCharts } from "./recommend.js";
 import { plannedAnalyses, type PlannedAnalysis } from "./planBridge.js";
+import { withPlannedVariables } from "./plannedVariables.js";
+import { buildAnalysisFramework } from "@rescript/engine";
 
 /*
  * FINDINGS (research-intelligence Phase 5): what the data SAID, read from the
@@ -25,7 +27,11 @@ import { plannedAnalyses, type PlannedAnalysis } from "./planBridge.js";
 export type FindingKind = "difference" | "no_difference" | "driver" | "no_driver" | "correlation" | "no_correlation" | "mediation" | "nps" | "topbox" | "reliability" | "low_base" | "inconclusive";
 export type Strength = "strong" | "moderate" | "weak" | "none";
 
-export interface FindingEvidence { test?: string; statistic?: number | null; df?: number | [number, number]; p?: number | null; effect?: { name: string; value: number }; n: number; direction?: "positive" | "negative" }
+export interface FindingEvidence {
+  test?: string; statistic?: number | null; df?: number | [number, number]; p?: number | null; effect?: { name: string; value: number }; n: number; direction?: "positive" | "negative";
+  /** a comparison of groups: each group's mean, as the test's table printed it — which group is higher is read from here */
+  groups?: { label: string; mean: number | null; n: number }[];
+}
 export interface Finding {
   id: string;
   kind: FindingKind;
@@ -42,7 +48,11 @@ export interface Finding {
 }
 
 export type Verdict = "supported" | "not_supported" | "mixed" | "inconclusive" | "untested";
-export interface HypothesisVerdict { label: string; text: string; verdict: Verdict; reason: string; findings: Finding[]; analyses: number }
+export interface HypothesisVerdict {
+  label: string; text: string; verdict: Verdict; reason: string; findings: Finding[]; analyses: number;
+  /** the direction the hypothesis states, and how the significant evidence sided with it */
+  direction?: HypothesisDirection & { agreeing: number; contradicting: number; unread: number };
+}
 
 export interface RunItem {
   definition: AnalysisDefinition;
@@ -124,6 +134,9 @@ export function findingsFor(def: AnalysisDefinition, result: AnalysisResult, ext
   const outcome = vars[0] ?? def.variables[0] ?? "";
   const by = def.kind === "crosstab" ? (def.columns ?? vars.slice(1)) : vars.slice(1);
 
+  /* a comparison of means prints each group's mean: kept as evidence, so a verdict can read WHICH group is higher */
+  const groupTable = result.tables.find((x) => x.id === "groups");
+  const groups = groupTable ? groupTable.rows.map((r) => ({ label: String(r.group ?? ""), mean: typeof r.mean === "number" ? r.mean : null, n: typeof r.n === "number" ? r.n : 0 })) : undefined;
   /* tests: a difference (or none) per test result */
   const testFindings = (tests: TestResult[], labelFor: (t: TestResult, i: number) => string, varsFor: (i: number) => string[] = () => vars) => {
     tests.forEach((t, i) => {
@@ -137,7 +150,7 @@ export function findingsFor(def: AnalysisDefinition, result: AnalysisResult, ext
         kind: sig ? "difference" : "no_difference", strength, significant: sig,
         headline: sig ? `${what}: ${WORD[strength]} difference (${word}, ${fmtP(t.p)}${effectSize ? `, ${effectSize.name} = ${fmt(effectSize.value)}` : ""}).` : `${what}: no significant difference (${word}, ${fmtP(t.p)}${low ? "; the base is small" : ""}).`,
         ...(t.note ? { detail: t.note } : {}),
-        evidence: { test: t.test, statistic: t.statistic, ...(t.df !== undefined ? { df: t.df } : {}), p: t.p, ...(effectSize ? { effect: effectSize } : {}), n },
+        evidence: { test: t.test, statistic: t.statistic, ...(t.df !== undefined ? { df: t.df } : {}), p: t.p, ...(effectSize ? { effect: effectSize } : {}), n, ...(groups && def.kind === "test" ? { groups } : {}) },
         variables: varsFor(i),
       });
     });
@@ -249,7 +262,134 @@ function mentions(def: SurveyDefinition, text: string, variable: string): boolea
   return candidates.some((c) => words.has(c) || (c.length >= 5 && [...words].some((w) => w.startsWith(c.slice(0, 5)) || c.startsWith(w.slice(0, 5)))));
 }
 
-/** Each hypothesis judged from the findings of the analyses planned for it. */
+/* ------------------------------------------------------------ direction */
+
+export type DirectionKind = "positive" | "negative" | "group_higher" | "difference" | "none";
+export interface HypothesisDirection {
+  kind: DirectionKind;
+  /** group_higher: the group said to be higher ("women" in "women are more satisfied than men") */
+  group?: string;
+  /** group_higher: the group said to be lower, when the hypothesis names one */
+  lower?: string;
+}
+
+const POSITIVE_VERB = /\b(?:increas(?:e|es|ed|ing)|rais(?:e|es|ed|ing)|driv(?:e|es|ing)|boost(?:s|ed|ing)?|improv(?:e|es|ed|ing)|enhanc(?:e|es|ed|ing)|strengthen(?:s|ed|ing)?|encourag(?:e|es|ed|ing)|promot(?:e|es|ed|ing)|grow(?:s|ing)?|lifts?|positively\s+(?:affects?|influences?|predicts?|relates?|related|associated|correlated)|(?:leads?|contributes?)\s+to\s+(?:more|higher|greater|better|increased)|predicts?\s+(?:more|higher|greater|better))\b/i;
+// bare "lower" is a verb only after its subject ("higher prices lower intent"), never as the subject's adjective ("lower prices …", "the lower tier")
+const NEGATIVE_VERB = /\b(?:decreas(?:e|es|ed|ing)|reduc(?:e|es|ed|ing)|lower(?:s|ed|ing)|(?<=\S\s)(?<!\b(?:the|a|an|with|have|has|had|of|and|or|in|at|to|for)\s)lower(?=\s+\p{L})|hurts?|harm(?:s|ed|ing)?|weaken(?:s|ed|ing)?|discourag(?:e|es|ed|ing)|diminish(?:es|ed|ing)?|suppress(?:es|ed|ing)?|negatively\s+(?:affects?|influences?|predicts?|relates?|related|associated|correlated)|(?:leads?|contributes?)\s+to\s+(?:less|lower|fewer|reduced|decreased)|predicts?\s+(?:less|lower|fewer))\b/iu;
+const POSITIVE_ADJ = /\b(?:(?:are|is|be|were|was|being)\s+(?:much\s+|far\s+|significantly\s+)?(?:more|higher|greater|better)|more\s+likely|higher|greater)\b/i;
+const NEGATIVE_ADJ = /\b(?:(?:are|is|be|were|was|being)\s+(?:much\s+|far\s+|significantly\s+)?(?:less|lower|fewer|worse)|less\s+likely|lower|fewer)\b/i;
+const DIFFERENCE = /\b(?:differ(?:s|ent|ence|ences)?|var(?:y|ies)|affects?|effect\s+of|influences?|impacts?|depends?|related|relationship|associated|association|moderates?|mediates?|correlat\w*|predicts?)\b/i;
+// a subject that is itself the low end ("lower prices", "younger respondents") turns the verb round
+const LOW_SUBJECT = /^(?:the\s+)?(?:lower|less|fewer|reduced|decreased|smaller|younger|cheaper|shorter|weaker|poorer)\b/i;
+
+/**
+ * THE DIRECTION A HYPOTHESIS STATES, from its words:
+ *
+ *   positive       increases / raises / drives / improves / more likely /
+ *                  leads to higher — "trust increases intent"
+ *   negative       decreases / reduces / lowers / less likely / fewer —
+ *                  "price sensitivity reduces intent"
+ *   group_higher   "A are more X than B" (and "B are less X than A"):
+ *                  `group` is A, `lower` is B
+ *   difference     differs / varies / affects / depends / is related —
+ *                  a difference with no side
+ *   none           nothing directional
+ *
+ * A subject that is the low end turns a direction round: "lower prices
+ * increase purchase" is a negative relation of price and purchase;
+ * "younger respondents are less satisfied" a positive one of age and
+ * satisfaction.
+ */
+export function hypothesisDirection(text: string): HypothesisDirection {
+  const t = String(text ?? "").replace(/\s+/g, " ").trim().replace(/[.!?]+$/, "");
+  const than = /^(.+?)\s+(?:are|is|were|was|will\s+be|would\s+be|tend\s+to\s+be|feel|score|scores|rate|rates|report|reports)\s+(?:much\s+|far\s+|significantly\s+|slightly\s+|generally\s+)?(more|less|higher|lower|greater|better|worse|fewer|\w+er)\b(.*?)\bthan\s+(.+)$/i.exec(t);
+  if (than) {
+    const clean = (s: string) => s.trim().replace(/^(?:the|a|an|those|people|respondents)\s+/i, "").replace(/^(?:who\s+are\s+|who\s+)/i, "").trim().toLowerCase();
+    const lowWord = /^(?:less|lower|worse|fewer)$/i.test(than[2]);
+    const a = clean(than[1]), b = clean(than[4].replace(/\s+(?:do|does|are|is|did|were|was)$/i, ""));
+    return lowWord ? { kind: "group_higher", group: b, lower: a } : { kind: "group_higher", group: a, lower: b };
+  }
+  const flip = (k: "positive" | "negative"): HypothesisDirection => ({ kind: k === "positive" ? "negative" : "positive" });
+  const at = (re: RegExp) => { const m = re.exec(t); return m ? m.index : -1; };
+  const pv = at(POSITIVE_VERB), nv = at(NEGATIVE_VERB);
+  // the first verb decides ("higher prices lower intent": "lower" is the verb)
+  const verb = pv >= 0 && (nv < 0 || pv <= nv) ? { k: "positive" as const, i: pv } : nv >= 0 ? { k: "negative" as const, i: nv } : null;
+  const adj = verb ? null : (() => { const p = at(POSITIVE_ADJ), n = at(NEGATIVE_ADJ); return p >= 0 && (n < 0 || p <= n) ? { k: "positive" as const, i: p } : n >= 0 ? { k: "negative" as const, i: n } : null; })();
+  const hit = verb ?? adj;
+  if (hit && hit.i > 0) {
+    const subject = t.slice(0, hit.i).trim();
+    return LOW_SUBJECT.test(subject) ? flip(hit.k) : { kind: hit.k };
+  }
+  if (hit) return { kind: hit.k };
+  if (DIFFERENCE.test(t)) return { kind: "difference" };
+  return { kind: "none" };
+}
+
+/* words for the same group: a hypothesis says "women", the option says "Female" */
+const GROUP_SYNONYMS: [RegExp, string][] = [
+  [/^(?:wom[ae]n|females?|ladies|lady|girls?)$/, "female"], [/^(?:m[ae]n|males?|gentlem[ae]n|boys?|guys?)$/, "male"],
+  [/^(?:users?|customers?|clients?|buyers?|purchasers?)$/, "user"], [/^(?:non[- ]?users?|non[- ]?customers?|non[- ]?buyers?|lapsed)$/, "nonuser"],
+  [/^(?:yes|aware|exposed|seen)$/, "yes"], [/^(?:no|unaware|unexposed)$/, "no"],
+];
+const stem = (w: string) => { const x = w.toLowerCase().replace(/['’]s$/, ""); for (const [re, k] of GROUP_SYNONYMS) if (re.test(x)) return k; return x.length > 4 ? x.replace(/(?:ies)$/, "y").replace(/(?:es|s)$/, "") : x; };
+const wordsOf = (s: string) => (s.toLowerCase().match(/[\p{L}\p{N}'’-]+/gu) ?? []).map(stem);
+
+/** which of a test's groups a hypothesis's phrase names — by its words, stemmed, case-insensitive; -1 when none or several equally */
+export function matchGroup(phrase: string | undefined, labels: string[]): number {
+  if (!phrase) return -1;
+  const want = new Set(wordsOf(phrase).filter((w) => !["the", "and", "who", "with", "in", "of", "those", "people", "respondents", "group"].includes(w)));
+  const scores = labels.map((l) => wordsOf(l).filter((w) => want.has(w)).length);
+  const best = Math.max(0, ...scores);
+  if (!best || scores.filter((s) => s === best).length > 1) return -1;
+  return scores.indexOf(best);
+}
+
+/** how a significant finding sides with the hypothesis's direction */
+function sideOf(def: SurveyDefinition, text: string, dir: HypothesisDirection, f: Finding, item: RunItem | undefined): "agree" | "contradict" | "unread" {
+  if (dir.kind === "difference" || dir.kind === "none") return "agree";
+  if (dir.kind === "group_higher") {
+    const g = f.evidence.groups;
+    if (!g || g.length < 2 || g.some((x) => x.mean == null)) return "unread";
+    const labels = g.map((x) => x.label);
+    const hi = matchGroup(dir.group, labels), lo = matchGroup(dir.lower, labels);
+    if (hi < 0) return "unread";
+    const mean = (i: number) => g[i].mean as number;
+    if (lo >= 0 && lo !== hi) return mean(hi) > mean(lo) ? "agree" : mean(hi) < mean(lo) ? "contradict" : "unread";
+    const top = Math.max(...g.map((x) => x.mean as number));
+    return mean(hi) === top ? "agree" : "contradict";
+  }
+  // positive / negative: a model's coefficient or a correlation has a sign
+  const d = f.evidence.direction;
+  if (!d) return "unread";
+  // a moderation's interaction term has a sign, but not the one the hypothesis states
+  if (f.variables.some((v) => / × /.test(v))) return "unread";
+  // judge only the predictors the hypothesis names, when it names any of the item's (a control variable's sign is not the hypothesis's)
+  const preds = item ? item.definition.variables.slice(1) : [];
+  const named = preds.filter((p) => mentions(def, text, p));
+  const predictor = f.variables[1];
+  if (named.length && predictor && !named.includes(predictor)) return "unread";
+  return d === dir.kind ? "agree" : "contradict";
+}
+
+/** the evidence of a direction in a few characters: "β = -0.42", "r = -0.40", "Male 3.80 vs Female 3.00" */
+function directionEvidence(f: Finding): string {
+  const g = f.evidence.groups;
+  if (g && g.length >= 2) { const s = [...g].filter((x) => x.mean != null).sort((a, b) => (b.mean as number) - (a.mean as number)); return `${s[0].label} ${fmt(s[0].mean)} vs ${s[s.length - 1].label} ${fmt(s[s.length - 1].mean)}`; }
+  const e = f.evidence.effect;
+  if (e) return `${/standardized/.test(e.name) ? "β" : e.name === "odds ratio" ? "OR" : e.name} = ${fmt(e.value)}`;
+  return f.evidence.statistic != null ? `estimate ${fmt(f.evidence.statistic)}` : "";
+}
+
+/**
+ * Each hypothesis judged from the findings of the analyses planned for it —
+ * IN ITS DIRECTION. A significant finding is support only when it points the
+ * way the hypothesis says: "trust increases intent" is not supported by a
+ * significant NEGATIVE β, and "women are more satisfied than men" not by
+ * men scoring higher. A significant result in the opposite direction counts
+ * against it; a result whose direction the tables do not show (a crosstab, a
+ * test without group means) neither confirms nor contradicts the direction —
+ * it counts as significant, and the reason says the direction was not read.
+ */
 export function hypothesisVerdicts(def: SurveyDefinition, items: RunItem[]): HypothesisVerdict[] {
   return (def.research?.hypotheses ?? []).map((text, i) => {
     const label = hypothesisLabel(i);
@@ -271,23 +411,50 @@ export function hypothesisVerdicts(def: SurveyDefinition, items: RunItem[]): Hyp
     const fs = rankFindings(mine.flatMap((it) => it.findings.filter((f) => about(it, f))));
     const tested = fs.filter((f) => TESTED.includes(f.kind));
     const sig = tested.filter((f) => f.significant), ns = tested.filter((f) => !f.significant);
+    const dir = hypothesisDirection(text);
+    const itemOf = (f: Finding) => mine.find((it) => it.findings.includes(f));
+    const sides = new Map(sig.map((f) => [f, sideOf(def, text, dir, f, itemOf(f))]));
+    const agree = sig.filter((f) => sides.get(f) !== "contradict"), contra = sig.filter((f) => sides.get(f) === "contradict");
+    const unread = sig.filter((f) => sides.get(f) === "unread").length;
+    const directional = dir.kind === "positive" || dir.kind === "negative" || dir.kind === "group_higher";
     const lowBase = mine.length > 0 && mine.every((it) => it.result.base.n < MIN_BASE);
     let verdict: Verdict; let reason: string;
+    const against = (f: Finding) => `significant, but in the opposite direction (${directionEvidence(f)})`;
     if (!mine.length) { verdict = "untested"; reason = "No analysis in the plan serves this hypothesis."; }
     else if (lowBase) { verdict = "inconclusive"; reason = `Only ${Math.max(...mine.map((it) => it.result.base.n))} respondents so far — below the ${MIN_BASE} needed to read a test.`; }
     else if (!tested.length) { verdict = "inconclusive"; reason = `${mine.length === 1 ? "The analysis" : `The ${mine.length} analyses`} planned for it describe${mine.length === 1 ? "s" : ""} the data but test${mine.length === 1 ? "s" : ""} nothing — add a test or a crosstab with significance.`; }
-    else if (sig.length && !ns.length) { verdict = "supported"; reason = `${sig.length === 1 ? "The planned test" : `All ${sig.length} planned tests`} ${sig.length === 1 ? "is" : "are"} significant: ${sig[0].headline}`; }
-    else if (sig.length && ns.length) { verdict = "mixed"; reason = `${sig.length} of ${tested.length} planned tests ${sig.length === 1 ? "is" : "are"} significant — ${sig[0].headline} — but ${ns[0].headline}`; }
+    else if (contra.length && !agree.length) {
+      verdict = "not_supported";
+      reason = `${contra.length === 1 ? "The planned test is" : `All ${contra.length} significant tests are`} ${against(contra[0])}: ${contra[0].headline}`;
+    }
+    else if (agree.length && !ns.length && !contra.length) {
+      verdict = "supported";
+      reason = `${agree.length === 1 ? "The planned test" : `All ${agree.length} planned tests`} ${agree.length === 1 ? "is" : "are"} significant: ${agree[0].headline}${directional ? (unread === agree.length ? " (the direction could not be read from these results)" : " — in the direction the hypothesis states") : ""}`;
+    }
+    else if (agree.length && contra.length) {
+      verdict = "mixed";
+      reason = `${agree.length} of ${tested.length} planned tests support it — ${agree[0].headline} — but ${contra.length === 1 ? "one is" : `${contra.length} are`} ${against(contra[0])}: ${contra[0].headline}`;
+    }
+    else if (agree.length && ns.length) { verdict = "mixed"; reason = `${agree.length} of ${tested.length} planned tests ${agree.length === 1 ? "is" : "are"} significant — ${agree[0].headline} — but ${ns[0].headline}`; }
     else { verdict = "not_supported"; reason = `${ns.length === 1 ? "The planned test is" : `None of the ${ns.length} planned tests are`} significant: ${ns[0].headline}`; }
-    return { label, text, verdict, reason, findings: fs, analyses: mine.length };
+    return { label, text, verdict, reason, findings: fs, analyses: mine.length, ...(dir.kind !== "none" ? { direction: { ...dir, agreeing: agree.length - unread, contradicting: contra.length, unread } } : {}) };
   });
 }
 
 /* ------------------------------------------------------------ the run */
 
 /** The whole plan, run once on a dataset. `items` lets the caller run saved definitions instead of (or as well as) the plan's. */
-export function runPlan(def: SurveyDefinition, dataset: Dataset, opts: { trigger?: string; items?: PlannedAnalysis[]; primaries?: boolean; now?: string } = {}): AnalysisRun {
-  const planned = opts.items ?? plannedAnalyses(def, dataset.spec, { primaries: opts.primaries ?? false });
+export function runPlan(def: SurveyDefinition, input: Dataset, opts: { trigger?: string; items?: PlannedAnalysis[]; primaries?: boolean; now?: string } = {}): AnalysisRun {
+  /*
+   * The plan's derived variables and segments first, as columns of this run's
+   * dataset — so a planned test of BRAND_TRUST_SCORE, or a crosstab by the
+   * GENDER × AGE segment, runs on a column that exists. What could not be
+   * computed, and any segment too small to read, joins the run's caveats.
+   */
+  const plan = def.research?.analysisPlan ?? buildAnalysisFramework(def);
+  const prepared = withPlannedVariables(def, input, plan);
+  const dataset = prepared.dataset;
+  const planned = opts.items ?? plannedAnalyses(def, dataset.spec, { primaries: opts.primaries ?? false, plan });
   const items: RunItem[] = planned.map((p) => {
     const result = runAnalysis(p.definition, dataset);
     const findings = findingsFor(p.definition, result, { hypotheses: p.hypotheses, ...(p.definition.id ? { id: p.definition.id } : {}), label: (v) => dataset.byName.get(v)?.label ?? v });
@@ -296,7 +463,7 @@ export function runPlan(def: SurveyDefinition, dataset: Dataset, opts: { trigger
   });
   const findings = rankFindings(items.flatMap((it) => it.findings));
   const verdicts = hypothesisVerdicts(def, items);
-  const warnings = [...new Set(items.flatMap((it) => it.result.warnings))];
+  const warnings = [...new Set([...prepared.warnings, ...items.flatMap((it) => it.result.warnings)])];
   return { computedAt: opts.now ?? new Date().toISOString(), trigger: opts.trigger ?? "manual", environment: dataset.spec.environment, n: dataset.cases.length, items, findings, verdicts, warnings };
 }
 

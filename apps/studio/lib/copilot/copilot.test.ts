@@ -429,3 +429,13 @@ test("findings turns: the intent, the run's brief in the outline (verdicts, then
   assert.ok(!copilotUserPrompt({ message: "x", outline: "o", surveyLanguage: "en", mode: "edit" }).includes("FINDINGS GUIDE"));
   for (const w of ["VERDICT", "SUPPORTED", "p-value", "effect size", "not tested", "add_analysis_test", "\"kind\":\"answer\"", "Asked to WRITE", "Draft the report"]) assert.ok(COPILOT_FINDINGS_GUIDE.includes(w), w);
 });
+
+test("Phase 6: the guides say what the engine now enforces — a multi-select is never a test's groups, “why” is the engine's, {label} and codes are kept, the script is the language's", () => {
+  assert.match(COPILOT_ANALYSIS_GUIDE, /MULTI-SELECT is never the groups of a test/);
+  assert.match(COPILOT_ANALYSIS_GUIDE, /"Why this analysis\?".*answered by the Studio's engine itself/);
+  assert.match(COPILOT_ANALYSIS_GUIDE, /monadic randomizer .* only when an embedded variable records it/);
+  assert.match(COPILOT_TRANSLATION_GUIDE, /\{placeholder\} \(including \{label\}\), \$\{var\} and \[\[loop\]\] token/);
+  assert.match(COPILOT_TRANSLATION_GUIDE, /every question code the source names \(Q7, Q7\.R1\)/);
+  assert.match(COPILOT_TRANSLATION_GUIDE, /in the target language's own script/);
+  assert.ok(COPILOT_SYSTEM_PROMPT.length < 13_800, "the system prompt itself is unchanged in size");
+});

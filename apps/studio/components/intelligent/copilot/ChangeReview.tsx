@@ -190,7 +190,7 @@ function Row({ item, tree, statusOf, setIncluded, nav, onSelect, onSelectOption,
         </div>
         {item.from ? <Val kind="from" text={item.from} /> : null}
         {item.to ? <Val kind="to" text={item.to} /> : null}
-        {item.detail ? <p className="cp-row-detail iqi-dim">{item.detail}</p> : null}
+        {item.detail ? <p className="cp-row-detail iqi-dim" data-testid="cp-row-detail">{item.detail}</p> : null}
         {status === "refused" && reason && <p className="cp-row-refused" data-testid="cp-row-reason">{reason}</p>}
         {status === "excluded" && reason && <p className="cp-row-detail iqi-dim" data-testid="cp-row-reason">{reason}</p>}
         {item.destructive && <p className="cp-row-danger" data-testid="cp-row-destructive">{item.destructive}</p>}

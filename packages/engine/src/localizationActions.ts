@@ -6,6 +6,7 @@ import {
   lintLanguage, surveyLanguages, textHash, type TranslatableElement,
 } from "./localization.js";
 import { stripHtmlText } from "./html.js";
+import { placeholderMismatch, wrongScript } from "./placeholders.js";
 
 /**
  * THE LOCALIZATION ACTIONS — how the copilot (and the Studio's own buttons)
@@ -200,17 +201,27 @@ export function resolveTranslationTarget(def: SurveyDefinition, elements: Transl
 
 /* ------------------------------------------------------------ checks */
 
-const PIPE_RE = /\{\{[^}]+\}\}|\{answer\}|\{(?:n|min|max|total|target|date|row)\}/g;
 const TAG_RE = /<\/?([a-zA-Z][\w-]*)/g;
-const tokensOf = (s: string) => (s.match(PIPE_RE) ?? []).map((x) => x.replace(/\s+/g, "")).sort();
 const tagsOf = (s: string) => (s.match(TAG_RE) ?? []).map((x) => x.toLowerCase()).sort();
 
-/** Why a proposed translation of `source` cannot be stored — null when it can. */
+/**
+ * Why a proposed translation of `source` cannot be stored — null when it can.
+ *
+ * The placeholders are the ONE grammar of placeholders.ts — the same tokens
+ * the lint checks and the provider path protects — so `{label}` is kept like
+ * `{{Q1}}`, and a question code the source names ("see Q7") must still be
+ * there. A translation written in a script `lang` does not use (Russian in
+ * Latin letters, Japanese without kana or kanji, the English pasted back
+ * into Hindi) is refused: ≥ 60% of at least 4 letters out of place, judged
+ * on the letters outside protected tokens, do-not-translate terms and the
+ * source's own capitalised names, so "Miures" and "iPhone" in a Russian
+ * sentence are fine.
+ */
 export function translationProblem(source: string, text: string, glossary: GlossaryEntry[], lang: string): string | null {
   if (!text.trim()) return "the translation is empty";
   if (/\p{L}/u.test(stripHtmlText(source)) && !/\p{L}/u.test(stripHtmlText(text))) return "the translation has no words in it";
-  const a = tokensOf(source), b = tokensOf(text);
-  if (a.join("|") !== b.join("|")) return `the piping / placeholders must be kept exactly — the source has ${a.length ? a.join(" ") : "none"}, the translation has ${b.length ? b.join(" ") : "none"}`;
+  const pm = placeholderMismatch(source, text);
+  if (pm) return `the piping / placeholders must be kept exactly — the source has ${pm.source.length ? pm.source.join(" ") : "none"}, the translation has ${pm.translation.length ? pm.translation.join(" ") : "none"}${pm.missing.length ? ` (${pm.missing.join(" ")} ${pm.missing.length === 1 ? "is" : "are"} missing)` : ""}`;
   if ((text.match(/</g) ?? []).length !== (text.match(/>/g) ?? []).length || /<[^>]*$/.test(text)) return "the HTML in the translation is unbalanced";
   const ta = tagsOf(source), tb = tagsOf(text);
   if (ta.join("|") !== tb.join("|")) return `the HTML tags must match the source (${ta.length ? ta.join(" ") : "none"})`;
@@ -219,7 +230,9 @@ export function translationProblem(source: string, text: string, glossary: Gloss
     const re = new RegExp(`(?<![\\p{L}\\p{N}])${g.source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, g.caseSensitive ? "u" : "iu");
     if (re.test(stripHtmlText(source)) && !re.test(stripHtmlText(text))) return `“${g.source}” is a term that is never translated (glossary) and must appear as written`;
   }
-  void lang;
+  const keep = glossary.filter((g) => g.doNotTranslate).flatMap((g) => [g.source, g.targets?.[lang] ?? ""]).filter(Boolean);
+  const ws = wrongScript(source, text, lang, { keep });
+  if (ws) return `the translation is written in ${ws.script} script, but ${languageName(lang)} is written in ${ws.expected.join(" / ")} — ${Math.round(ws.share * 100)}% of its letters are not; is it still in the source language, or transliterated?`;
   return null;
 }
 

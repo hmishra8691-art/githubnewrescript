@@ -12,6 +12,7 @@ import { pagePositionOf } from "./pageBreaks.js";
 import { embeddedFieldNames } from "./structureOps.js";
 import { usedNames } from "./variableUsage.js";
 import { stripHtmlText } from "./html.js";
+import { K, moveTranslationKey } from "./localization.js";
 
 /**
  * THE OPTION, ORDER AND HOUSEKEEPING ACTIONS (Intelligent Mode Phase 2) —
@@ -409,7 +410,14 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
         const to: string | number = typeof a.code === "string" && /^-?\d+$/.test(a.code) && options.some((x) => typeof x.code === "number") ? Number(a.code) : a.code;
         const n = recodeConditions(def, q, o.code, to);
         recodeOwnLists(q, o.code, to);
-        lossy.push(`recodes option “${plain(o.label)}” of ${q.code} from ${o.code} to ${to} — ${plural(n, "condition")} updated`);
+        /*
+         * The option's translations are keyed by its code (`q:<qid>:opt:<code>`):
+         * a recode MOVES them to the new key, status and history with them —
+         * the words did not change, so an approved German label stays approved.
+         * Left where they were, they were orphans the batch would then drop.
+         */
+        const moved = moveTranslationKey(def, K.opt(q.id, o.code), K.opt(q.id, to)) + moveTranslationKey(def, K.optAlt(q.id, o.code), K.optAlt(q.id, to));
+        lossy.push(`recodes option “${plain(o.label)}” of ${q.code} from ${o.code} to ${to} — ${plural(n, "condition")} updated${moved ? `, ${plural(moved, "translation")} moved with it` : ""}`);
         changed.push(`code ${o.code} → ${to}`);
         o.code = to;
       }

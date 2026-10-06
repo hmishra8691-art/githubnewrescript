@@ -153,3 +153,31 @@ test("SELECTION: TRANSLATION_PROVIDER wins; else Google when its key exists; els
   assert.equal(translationAdapter(), null);
   assert.equal(fakeTranslationAdapter.id, "fake");
 });
+
+/* ------------------------------------------------------------ Phase 6: one placeholder grammar */
+
+import { placeholdersMatch, fakeTranslate } from "./index.js";
+import { translationProblem } from "@rescript/engine";
+
+test("ONE GRAMMAR: the provider path protects exactly what the engine refuses to lose — {label} and a question code like Q7.R1 included", async () => {
+  const src = "“{label}” cannot be combined with other answers — see Q7.R1 and {{Q2}}.";
+  const p = protectPlaceholders(src);
+  assert.deepEqual(p.tokens, ["{label}", "Q7.R1", "{{Q2}}"]);
+  assert.ok(!/\{label\}|Q7\.R1|\{\{/.test(p.text), "none of them reaches the provider as text");
+  const back = restorePlaceholders(p.text.replace("cannot be combined with other answers — see", "kann nicht kombiniert werden — siehe").replace(" and ", " und "), p.tokens);
+  assert.equal(back.text, "“{label}” kann nicht kombiniert werden — siehe Q7.R1 und {{Q2}}.");
+  assert.ok(back.complete);
+  /* the post-check is the engine's: a dropped {label} or a lost code is refused here exactly as set_translations refuses it */
+  assert.equal(placeholdersMatch(src, "„{label}“ kann nicht kombiniert werden — siehe Q7.R1 und {{Q2}}."), true);
+  assert.equal(placeholdersMatch(src, "Diese Antwort kann nicht kombiniert werden — siehe Q7.R1 und {{Q2}}."), false, "{label} dropped");
+  assert.equal(placeholdersMatch(src, "„{label}“ kann nicht kombiniert werden — siehe oben und {{Q2}}."), false, "Q7.R1 dropped");
+  for (const t of ["Diese Antwort kann nicht kombiniert werden — siehe Q7.R1 und {{Q2}}.", "„{label}“ kann nicht kombiniert werden — siehe oben und {{Q2}}."]) {
+    assert.equal(placeholdersMatch(src, t), translationProblem(src, t, [], "de") === null, "the provider path and the engine agree");
+  }
+  /* Google returns a translation that lost the {label} marker: the string is dropped, not stored */
+  mockGoogle((_, body) => ({ status: 200, json: { data: { translations: (body as { q: string[] }).q.map((q) => ({ translatedText: q.replace(/<span[^>]*>RSV0RSV<\/span>/, "diese Antwort") })) } } }));
+  const out = await googleTranslationAdapter.translate([{ key: "ui:exclusive_option", text: "“{label}” cannot be selected together with other answers." }, { key: "ok", text: "Select at most {n}." }], { sourceLanguage: "en", targetLanguage: "de" });
+  assert.equal(out["ui:exclusive_option"], undefined, "the {label} hole is closed on the provider path too");
+  /* the fake provider keeps them as well */
+  assert.equal(fakeTranslate("See Q7.R1 and “{label}”", { sourceLanguage: "en", targetLanguage: "de" }), "[de] See Q7.R1 and “{label}”");
+});

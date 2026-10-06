@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
-import { effectiveLocalization, languageName, lintLanguage, type SurveyAction } from "@rescript/engine";
+import { effectiveLocalization, languageName, lintLanguage, orphanedTranslations, translationImpact, type SurveyAction } from "@rescript/engine";
 import { Icon } from "../../ui/Icon";
 import { Linked } from "./CopilotCard";
 import type { Copilot } from "./useCopilot";
@@ -23,6 +23,16 @@ export function LanguagesTab({ copilot, def, onSelect }: { copilot: Copilot; def
   const reports = React.useMemo(() => loc.languages.map((l) => ({ cfg: l, r: lintLanguage(def, l.code) })), [def, loc]);
   const empty = !def.questions.length;
   const ask = (text: string) => void copilot.ask(text);
+  /*
+   * WHAT THE OPEN PROPOSAL DOES TO EACH LANGUAGE — before it is applied: the
+   * translations it makes outdated, the new elements that will need one, the
+   * ones it drops with their element, the ones that follow a recode. Read
+   * from the proposal's own evaluated result, so it is exactly what Apply
+   * would write.
+   */
+  const impact = React.useMemo(() => (copilot.proposal && copilot.state ? translationImpact(copilot.proposal.base, copilot.state.after) : null), [copilot.proposal, copilot.state]);
+  // a translation whose element is gone is nobody's to approve (and the approval could not resolve it)
+  const orphans = React.useMemo(() => new Map(orphanedTranslations(def).map((o) => [o.language, new Set(o.keys)])), [def]);
 
   return (
     <div className="cp-analysis cp-languages" data-testid="cp-languages">
@@ -36,7 +46,10 @@ export function LanguagesTab({ copilot, def, onSelect }: { copilot: Copilot; def
         const blocking = r.issues.filter((i) => i.blocking && i.kind !== "missing" && i.kind !== "stale_source");
         const unreviewed = r.issues.filter((i) => i.kind === "not_approved").length;
         const name = languageName(cfg.code, cfg);
-        const unapprovedTargets = Object.entries(loc.translations[cfg.code] ?? {}).filter(([, t]) => t.status === "ai" || t.status === "edited").map(([k]) => k);
+        const unapprovedTargets = Object.entries(loc.translations[cfg.code] ?? {}).filter(([k, t]) => (t.status === "ai" || t.status === "edited") && !orphans.get(cfg.code)?.has(k)).map(([k]) => k);
+        const li = impact?.languages.find((x) => x.language === cfg.code);
+        const touched = li && (li.outdated.length || li.missing.length || li.dropped.length || li.moved.length);
+        const list = (label: string, xs: { element: string }[], kind: string) => (xs.length ? <li data-kind={kind}><b>{label}</b> {xs.slice(0, 6).map((x) => x.element).join("; ")}{xs.length > 6 ? ` and ${xs.length - 6} more` : ""}</li> : null);
         const staleTargets = stale.map((i) => i.key);
         return (
           <section key={cfg.code} className="cp-block" data-testid="lg-language" data-code={cfg.code} data-status={cfg.status}>
@@ -46,6 +59,17 @@ export function LanguagesTab({ copilot, def, onSelect }: { copilot: Copilot; def
               <span className="iqi-dim" data-testid="lg-completion">{r.completion}% translated</span>
             </div>
             <div className="cp-lang-bar" aria-hidden><span style={{ width: `${r.completion}%` }} /></div>
+            {touched ? (
+              <div className="cp-impact" data-testid="lg-impact" data-code={cfg.code} data-outdated={li!.outdated.length} data-missing={li!.missing.length} data-dropped={li!.dropped.length}>
+                <div>The open proposal: {li!.sentence}</div>
+                <ul>
+                  {list("Outdated:", li!.outdated, "outdated")}
+                  {list(`Needs ${name}:`, li!.missing, "missing")}
+                  {list("Dropped:", li!.dropped, "dropped")}
+                  {list("Moved with a recode:", li!.moved, "moved")}
+                </ul>
+              </div>
+            ) : null}
             <p className="iqi-dim" data-testid="lg-counts">
               {r.translated} of {r.mandatory} needed elements translated · {r.approved} approved{r.reviewed ? ` · ${r.reviewed} reviewed` : ""}{unreviewed ? ` · ${unreviewed} awaiting review` : ""}
               {r.missing > 0 && <> · <b>{r.missing} missing</b></>}

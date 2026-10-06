@@ -12,6 +12,9 @@ import type { AnalysisDefinition, AnalysisKind, DatasetSpec } from "./types.js";
  * it serves, and the Analytics workspace can create the whole set in one
  * step once responses exist. Nothing here reads data: it is a translation,
  * checked by the same `runAnalysis` every hand-built analysis goes through.
+ * The plan's derived variables and segments are not analyses of their own:
+ * `withPlannedVariables` (plannedVariables.ts) computes them as columns of the
+ * run's dataset, so the crosstabs and tests here that name them run on them.
  */
 
 export interface PlannedAnalysis {

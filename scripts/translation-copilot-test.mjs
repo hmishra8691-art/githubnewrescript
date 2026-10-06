@@ -179,6 +179,19 @@ await turn({ kind: "proposal", reply: "Rewording Q2.", actions: [{ op: "update_q
   const problems = await page.textContent('[data-testid="cp-new-problems"]');
   assert.match(problems, /1 translation is now outdated \(de\)/, problems);
   assert.ok(await page.$('[data-testid="cp-retranslate"]'), "the re-translation is offered in the same proposal");
+  /* Phase 6 — the impact is a report, not a count: the Changes row lists the element, and the Languages tab shows what the OPEN proposal does */
+  const trRow = page.locator('[data-testid="cp-row"][data-category="Translation"]');
+  assert.equal(await trRow.count(), 1, "one Translation row for the language");
+  assert.match(await trRow.locator('[data-testid="cp-row-detail"]').textContent(), /Outdated: Q2 text/);
+  assert.match(await trRow.textContent(), /1 outdated/);
+  await page.click('[data-testid="cp-tab-languages"]');
+  await page.waitForSelector('[data-testid="lg-impact"][data-code="de"]');
+  const imp = (await page.textContent('[data-testid="lg-impact"][data-code="de"]')).replace(/\s+/g, " ");
+  assert.match(imp, /The open proposal: 1 Deutsch translation becomes outdated\./, imp);
+  assert.match(imp, /Outdated: Q2 text/, imp);
+  assert.equal(await page.getAttribute('[data-testid="lg-impact"][data-code="de"]', "data-outdated"), "1");
+  await page.click('[data-testid="cp-tab-changes"]');
+  await page.waitForSelector('[data-testid="cp-retranslate"]');
   // the offer is a copilot turn: the fake answers it with the re-translation, chained onto the proposal
   await page.evaluate((r) => window.__rescriptCopilotFake(r), { kind: "proposal", reply: "Re-translated.", actions: [{ op: "set_translations", language: "de", overwriteApproved: true, entries: [{ target: "Q2", text: "Wie zufrieden sind Sie insgesamt mit Brand A?" }] }] });
   const n = (await page.$$('[data-testid="cp-turn"]')).length;
@@ -223,6 +236,35 @@ await page.click('[data-testid="cp-tab-languages"]');
 await page.waitForSelector('[data-testid="cp-languages"]');
 assert.equal(await page.$('[data-testid="lg-outdated"]'), null, "nothing outdated after the confirmation");
 ok("a source edit in Studio marks the translation outdated; Confirm through Changes keeps it against the new source");
+
+/* ------------------------------------------------ Phase 6: an option recoded keeps its German; one removed drops it, said; a dropped {label} is refused */
+await intelligent();
+await turn({ kind: "proposal", reply: "Recoding and removing.", actions: [{ op: "update_option", target: "Q2", option: 1, code: 7 }, { op: "update_question", target: "Q2", removeOptions: [3] }] }, "Recode Very satisfied as 7 and remove Not satisfied");
+{
+  const problems = await page.textContent('[data-testid="cp-new-problems"]');
+  assert.match(problems, /1 translation \(de\) of removed elements was dropped\./, problems);
+  const row = page.locator('[data-testid="cp-row"][data-category="Translation"]');
+  assert.match(await row.locator('[data-testid="cp-row-detail"]').textContent(), /Dropped: Q2 option 3 — Not satisfied.*Moved: Q2 option 7 — Very satisfied/);
+  await page.click('[data-testid="cp-tab-languages"]');
+  await page.waitForSelector('[data-testid="lg-impact"][data-code="de"]');
+  assert.equal(await page.getAttribute('[data-testid="lg-impact"][data-code="de"]', "data-dropped"), "1");
+  await page.click('[data-testid="cp-tab-changes"]');
+  await page.check('[data-testid="cp-confirm"]'); // removing an option is destructive: confirmed
+  await apply();
+  def = await readDef();
+  assert.equal(tr(def, "de", "q:sat:opt:7").text, "Sehr zufrieden", "the recoded option's German moved with it");
+  assert.equal(tr(def, "de", "q:sat:opt:7").status, "approved", "…approved as it was");
+  assert.equal(tr(def, "de", "q:sat:opt:1"), undefined);
+  assert.equal(tr(def, "de", "q:sat:opt:3"), undefined, "the removed option's German is gone, not orphaned");
+}
+await intelligent();
+await turn({ kind: "proposal", reply: "Translating the interface.", actions: [{ op: "set_translations", language: "de", entries: [{ target: "ui:exclusive_option", text: "Diese Antwort kann nicht mit anderen kombiniert werden." }, { target: "ui:required", text: "Diese Frage ist erforderlich." }] }] }, "Translate the interface messages into German");
+{
+  const problems = await page.textContent('[data-testid="cp-new-problems"]');
+  assert.match(problems, /Not translated — Interface · validation — an exclusive option was combined with others: the piping \/ placeholders must be kept exactly — the source has \{label\}/, problems);
+  await page.click('[data-testid="cp-panel-cancel"]');
+}
+ok("Phase 6: a recode moves the option's approved German, a removal drops it and says so — both listed by element; a translation that drops {label} is refused");
 
 /* ------------------------------------------------ routing by action */
 await intelligent();

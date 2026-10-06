@@ -7,6 +7,7 @@ export * from "./flatten.js";
 export * from "./calc.js";
 export * from "./piping.js";
 export * from "./pipingTokens.js";
+export * from "./placeholders.js";
 export * from "./carryforward.js";
 export * from "./displayRules.js";
 export * from "./setExpression.js";

@@ -174,7 +174,15 @@ test("brief 9 — “Create an analysis framework for this research.”", () => 
   assert.equal(i.category, "analysis");
   assert.deepEqual(i.actions, [{ op: "propose_analysis_plan" }]);
   const plan = applied(def, i).research!.analysisPlan!;
-  assert.ok(plan.crosstabs.length > 0 && plan.tests.length > 0);
+  /*
+   * Phase 6: the only independent here is BRANDS, a multi-select — its
+   * "groups" overlap, so it is a crosstab (each option a column), never the
+   * grouping variable of a t-test or ANOVA. This asserted `tests.length > 0`,
+   * which was the ANOVA across BRANDS the audit (§2.3) found invalid.
+   */
+  assert.ok(plan.crosstabs.length > 0);
+  assert.ok(!plan.tests.some((t) => t.groupBy === "BRANDS"), "a multi-select is not a grouping variable");
+  assert.match(plan.crosstabs.find((x) => x.columns.includes("BRANDS"))!.reason!, /multi-select: each option is a column .* no t-test or ANOVA/);
   assert.match(i.understood, /^Propose the analysis framework the design implies: \d+ crosstabs?, \d+ tests?/);
   // with a plan already saved, the proposal merges into it
   const saved = applied(def, i);
@@ -593,7 +601,8 @@ test("analysis queries: what can be run, segments", () => {
   const i = as(say(def, "What analysis can I run on this study?"), "answer");
   assert.equal(i.category, "analysis");
   assert.match(i.answer, /^From the survey's design \(no plan is saved yet/);
-  assert.deepEqual(i.sections.map((s) => s.title), ["Crosstabs", "Tests", "Derived variables", "Segments"]);
+  // no "Tests" section: the one independent is a multi-select, planned as a crosstab only (it was an ANOVA across overlapping groups)
+  assert.deepEqual(i.sections.map((s) => s.title), ["Crosstabs", "Derived variables", "Segments"]);
   const saved = applied(def, say(def, "plan the analysis"));
   assert.match(as(say(saved, "What analysis can I run on this study?"), "answer").answer, /^The saved analysis plan has/);
   const seg = as(say(def, "which variables are used in segment What is your gender?"), "answer");

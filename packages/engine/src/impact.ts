@@ -415,8 +415,13 @@ export function impactOf(def: SurveyDefinition, scope: ImpactScope, opts: Impact
       const hit = (src.kind === "codes" ? src.codes ?? [] : []).map(String).filter((c) => wanted.has(c));
       if (hit.length) report.add({ object: { kind: "question", id: q.id, code: String(q.code), label: plain(q.text), questionId: q.id }, via: "punch", text: `${q.code} — auto punch codes ${hit.map(labelOf).join(", ")}`, severity: sev, path: `questions[${def.questions.indexOf(q)}].punches[${i}].source` });
     });
-    // what inherits its option list: a carried-forward list, a mask, a loop, a punch source
+    // what inherits its option list: a carried-forward list, a mask, a loop, a punch source —
+    // and a planned analysis that crosses or groups by this question: its categories (a crosstab's columns, a test's groups) are these options
     for (const e of ix.usedBy(objectKey("question", q.id))) {
+      if (e.kind === "analysis") {
+        report.add({ object: objectOf(ix, e.from), via: "analysis plan", text: `${e.label} — its categories are ${q.code}'s options, so ${change === "edit" ? "its labels change" : "its groups change"}`, severity: change === "edit" ? "informs" : "changes", path: e.path });
+        continue;
+      }
       if (!["carryForward", "mask", "punch", "listLogic", "listOperation", "loopSource", "listFillSource"].includes(e.kind)) continue;
       const d = detailAt(def, e);
       report.add({ object: objectOf(ix, e.from), via: e.kind, text: `${e.label}${d ? ` ${d}` : ""} — its list follows ${q.code}'s options`, severity: "changes", path: e.path });

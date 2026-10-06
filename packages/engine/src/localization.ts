@@ -2,6 +2,7 @@ import type { SurveyDefinition, Question, Localization, LanguageConfig, Translat
 import { Localization as LocalizationSchema, LANGUAGE_LIBRARY, languageInfo } from "@rescript/schema";
 import { evaluateCondition, type EvalContext } from "./evaluate.js";
 import type { ResponseState } from "./state.js";
+import { placeholderMismatch, wrongScript } from "./placeholders.js";
 
 /**
  * LOCALIZATION — the pure half of the multilingual survey.
@@ -602,7 +603,7 @@ export function audioStale(def: SurveyDefinition, a: AudioAsset): boolean {
 
 export type LocalizationIssueKind =
   | "missing" | "untranslated" | "stale_source" | "placeholder_mismatch" | "html_mismatch" | "duplicate" | "inconsistent"
-  | "overflow" | "empty" | "audio_missing" | "audio_stale" | "audio_unapproved" | "not_approved";
+  | "overflow" | "empty" | "audio_missing" | "audio_stale" | "audio_unapproved" | "not_approved" | "wrong_script";
 
 export interface LocalizationIssue {
   language: string;
@@ -629,12 +630,17 @@ export interface LanguageReport {
   audio: { elements: number; withAudio: number; missing: number; stale: number; unapproved: number };
   issues: LocalizationIssue[];
   ready: boolean;
+  /**
+   * Translations still stored for elements the survey no longer has — an
+   * option removed or recoded, a question deleted. Not counted anywhere above
+   * (nothing a respondent can see is behind them); `pruneOrphanedTranslations`
+   * drops them, and every batch of actions does so by itself.
+   */
+  orphaned: number;
 }
 
-const PIPE_RE = /\{\{[^}]+\}\}|\{answer\}|\{(?:n|min|max|total|target|date|row)\}/g;
 const TAG_RE = /<\/?([a-zA-Z][\w-]*)/g;
 
-const tokens = (s: string) => (s.match(PIPE_RE) ?? []).map((x) => x.replace(/\s+/g, "")).sort();
 const tags = (s: string) => (s.match(TAG_RE) ?? []).map((x) => x.toLowerCase()).sort();
 const hasLetters = (s: string) => /\p{L}/u.test(strip(s));
 
@@ -657,6 +663,10 @@ export function lintLanguage(def: SurveyDefinition, lang: string): LanguageRepor
   let translated = 0, approved = 0, reviewed = 0, missing = 0;
   const mandatory = elements.filter((e) => e.mandatory);
   const source = lang === loc.sourceLanguage;
+  // brand names and other never-translated terms are not "letters in the wrong script"
+  const dntTerms = (loc.glossary ?? []).filter((g) => g.doNotTranslate).flatMap((g) => [g.source, g.targets?.[lang] ?? ""]).filter(Boolean);
+  const live = new Set(elements.map((e) => e.key));
+  const orphaned = source ? 0 : Object.keys(table).filter((k) => !live.has(k)).length;
 
   for (const el of elements) {
     const t = table[el.key];
@@ -674,8 +684,21 @@ export function lintLanguage(def: SurveyDefinition, lang: string): LanguageRepor
     else if (strip(tx) === strip(el.source) && hasLetters(el.source) && strip(el.source).length > 2 && !/^\{\{[^}]+\}\}$/.test(strip(el.source)) && !/^[\d\s.,%$€£+-]+$/.test(strip(el.source)))
       issues.push({ language: lang, kind: "untranslated", key: el.key, label: el.label, message: "Identical to the source text — still in the original language?", blocking: false, questionId: el.questionId });
     if (t.status === "outdated" || (t.sourceHash && t.sourceHash !== textHash(el.source))) issues.push({ language: lang, kind: "stale_source", key: el.key, label: el.label, message: "Outdated — the source text was edited after this was translated. Re-translate or confirm it.", blocking: el.mandatory, questionId: el.questionId });
-    const a = tokens(el.source), b = tokens(tx);
-    if (a.join("|") !== b.join("|")) issues.push({ language: lang, kind: "placeholder_mismatch", key: el.key, label: el.label, message: `Piping / placeholders differ: source has ${a.length ? a.join(" ") : "none"}, translation has ${b.length ? b.join(" ") : "none"}.`, blocking: true, questionId: el.questionId });
+    /*
+     * ONE GRAMMAR (placeholders.ts): the pipes, `${…}`, `[[…]]`, every `{word}`
+     * parameter — `{label}` included, which this list used to leave out — and
+     * the question codes the source names.
+     */
+    const pm = placeholderMismatch(el.source, tx);
+    if (pm) issues.push({ language: lang, kind: "placeholder_mismatch", key: el.key, label: el.label, message: `Piping / placeholders differ: source has ${pm.source.length ? pm.source.join(" ") : "none"}, translation has ${pm.translation.length ? pm.translation.join(" ") : "none"}${pm.missing.length ? ` (missing ${pm.missing.join(" ")})` : ""}.`, blocking: true, questionId: el.questionId });
+    /*
+     * Written in the wrong letters — Russian in Latin, Japanese in romaji, the
+     * English source pasted back. Reported, not blocking (the identical-to-
+     * source check beside it is not either); `set_translations` refuses a new
+     * one at write time, so this finds what arrived another way.
+     */
+    const ws = wrongScript(el.source, tx, lang, { keep: dntTerms });
+    if (ws) issues.push({ language: lang, kind: "wrong_script", key: el.key, label: el.label, message: `Written in ${ws.script} script — ${languageName(lang, cfg)} is written in ${ws.expected.join(" / ")} (${Math.round(ws.share * 100)}% of its ${ws.letters} letters are not).`, blocking: false, questionId: el.questionId });
     const ta = tags(el.source), tb = tags(tx);
     if (ta.join("|") !== tb.join("|")) issues.push({ language: lang, kind: "html_mismatch", key: el.key, label: el.label, message: "HTML tags differ from the source — formatting may break.", blocking: false, questionId: el.questionId });
     if (/<[^>]*$/.test(tx) || (tx.match(/</g) ?? []).length !== (tx.match(/>/g) ?? []).length) issues.push({ language: lang, kind: "html_mismatch", key: el.key, label: el.label, message: "Unbalanced HTML in the translation.", blocking: true, questionId: el.questionId });
@@ -719,7 +742,7 @@ export function lintLanguage(def: SurveyDefinition, lang: string): LanguageRepor
   return {
     language: lang, name: languageName(lang, cfg), elements: elements.length, mandatory: mandatory.length, translated, approved, reviewed, missing, completion,
     audio: { elements: spoken.length, withAudio, missing: anyAudio ? spoken.filter((e) => e.kind === "question_text").length - spoken.filter((e) => e.kind === "question_text" && audioAssets(def, e.key, lang).length).length : 0, stale, unapproved },
-    issues, ready: source || !issues.some((i) => i.blocking),
+    issues, ready: source || !issues.some((i) => i.blocking), orphaned,
   };
 }
 
@@ -805,4 +828,222 @@ export function searchLanguages(query: string): typeof LANGUAGE_LIBRARY {
   const q = query.trim().toLowerCase();
   if (!q) return LANGUAGE_LIBRARY;
   return LANGUAGE_LIBRARY.filter((l) => l.name.toLowerCase().includes(q) || l.nativeName.toLowerCase().includes(q) || l.code === q || l.locales.some((x) => x.countryName.toLowerCase().includes(q) || x.tag.toLowerCase() === q || x.name.toLowerCase().includes(q)));
+}
+
+/* ------------------------------------------------------------ orphans */
+
+const translated = (t: TranslationEntry | undefined): t is TranslationEntry => !!t && t.status !== "not_translated" && !!t.text.trim();
+
+/**
+ * TRANSLATIONS WHOSE ELEMENT IS GONE. A translation is addressed by the
+ * element's key (`q:<qid>:opt:<code>`), so removing option 4 — or recoding it
+ * to 9 — left `q:q7:opt:4` in every language's table: never shown, never
+ * pruned, and counted wherever a screen counted a table's entries ("Approve
+ * 12" offered an orphan that the approval then could not resolve). These are
+ * the keys, per language, that no current element owns.
+ */
+export function orphanedTranslations(def: SurveyDefinition): { language: string; keys: string[] }[] {
+  const loc = def.localization;
+  if (!loc) return [];
+  const live = new Set(translatableElements(def).map((e) => e.key));
+  return Object.entries(loc.translations ?? {})
+    .filter(([lang]) => lang !== loc.sourceLanguage)
+    .map(([language, table]) => ({ language, keys: Object.keys(table ?? {}).filter((k) => !live.has(k)) }))
+    .filter((x) => x.keys.length);
+}
+
+/**
+ * Move a translation (every language, with its status and history, and any
+ * recording keyed to it) from one element key to another, in place — what a
+ * RECODE means for the German: option 5 is now option 9, its words did not
+ * change, so neither does its approved translation. A key that already holds
+ * a translation is not overwritten. Returns how many entries moved.
+ */
+export function moveTranslationKey(def: SurveyDefinition, from: string, to: string): number {
+  const loc = def.localization;
+  if (!loc || from === to) return 0;
+  let n = 0;
+  for (const [lang, table] of Object.entries(loc.translations ?? {})) {
+    const t = table?.[from];
+    if (!t) continue;
+    const next = { ...table };
+    delete next[from];
+    if (!translated(next[to])) { next[to] = t; n++; }
+    loc.translations[lang] = next;
+  }
+  for (const a of loc.audio ?? []) if (a.elementKey === from) a.elementKey = to;
+  return n;
+}
+
+/**
+ * Between two versions of one language's table: the keys that are new in
+ * `after` holding exactly an entry that left `before` (same text, same source
+ * hash) — a recode's move. `newKey → oldKey`. Each old key is matched once.
+ */
+export function movedTranslationKeys(before: Record<string, TranslationEntry>, after: Record<string, TranslationEntry>): Map<string, string> {
+  const out = new Map<string, string>();
+  const used = new Set<string>();
+  const gone = Object.keys(before).filter((k) => !after[k]);
+  if (!gone.length) return out;
+  for (const [k, t] of Object.entries(after)) {
+    if (before[k] || !translated(t)) continue;
+    const k0 = gone.find((x) => !used.has(x) && before[x].text === t.text && before[x].sourceHash === t.sourceHash);
+    if (k0) { used.add(k0); out.set(k, k0); }
+  }
+  return out;
+}
+
+/** the option / row / column part of a key, for matching an orphan to its recoded element: `q:q7:opt:` */
+const keyFamily = (key: string): string | null => /^(q:[^:]+:(?:opt|optalt|row|rowph|col:[^:]+:opt)):[^:]+$/.exec(key)?.[1] ?? null;
+
+/**
+ * DROP THE ORPHANS, in place — after rescuing the ones that were only
+ * renamed. An orphan of a question that still exists, whose stored source
+ * hash is the hash of exactly one untranslated element of the same family
+ * (the same question's options, rows…), is that element recoded by a path
+ * that did not move it (an option list rebuilt from labels, an edit in the
+ * Studio): it moves, keeping its status. Everything else is dropped.
+ */
+export function pruneOrphanedTranslations(def: SurveyDefinition): { dropped: number; moved: number; languages: string[]; keys: { language: string; key: string }[] } {
+  const loc = def.localization;
+  const none = { dropped: 0, moved: 0, languages: [], keys: [] };
+  if (!loc || !Object.keys(loc.translations ?? {}).length) return none;
+  const elements = translatableElements(def);
+  const live = new Set(elements.map((e) => e.key));
+  const langs = new Set<string>();
+  const keys: { language: string; key: string }[] = [];
+  let dropped = 0, moved = 0;
+  for (const [lang, table] of Object.entries(loc.translations ?? {})) {
+    if (lang === loc.sourceLanguage || !table) continue;
+    const orphans = Object.keys(table).filter((k) => !live.has(k));
+    if (!orphans.length) continue;
+    const next = { ...table };
+    for (const k of orphans) {
+      const t = next[k];
+      const fam = keyFamily(k);
+      if (fam && translated(t) && t.sourceHash) {
+        const cands = elements.filter((e) => keyFamily(e.key) === fam && !translated(next[e.key]) && textHash(e.source) === t.sourceHash);
+        if (cands.length === 1) { next[cands[0].key] = t; delete next[k]; moved++; continue; }
+      }
+      delete next[k];
+      if (translated(t)) { dropped++; langs.add(lang); keys.push({ language: lang, key: k }); }
+    }
+    loc.translations[lang] = next;
+  }
+  return { dropped, moved, languages: [...langs], keys };
+}
+
+/* ------------------------------------------------------------ impact */
+
+export interface TranslationImpactElement {
+  key: string;
+  /** in words: "Q7 option 4 — United States", "Q7 text", "End (complete) · message" */
+  element: string;
+  questionId?: string;
+  questionCode?: string;
+}
+export interface TranslationImpactLanguage {
+  language: string;
+  name: string;
+  /** translations this change made outdated: their source text changed */
+  outdated: TranslationImpactElement[];
+  /** new elements with no translation — in a language that has started translating */
+  missing: TranslationImpactElement[];
+  /** translations whose element this change removed */
+  dropped: TranslationImpactElement[];
+  /** translations that followed a recode to their element's new key */
+  moved: { from: string; to: string; element: string }[];
+  /** translations still valid after the change */
+  kept: number;
+  /** "3 German translations become outdated, 2 new elements need German" */
+  sentence: string;
+}
+export interface TranslationImpact { languages: TranslationImpactLanguage[]; outdated: number; missing: number; dropped: number; summary: string }
+
+/** An element in a researcher's words — "Q7 option 4 — United States" — for the impact lists. */
+export function elementWords(el: TranslationElementLike): string {
+  const src = strip(el.source).slice(0, 48) + (strip(el.source).length > 48 ? "…" : "");
+  const qc = el.questionCode;
+  switch (el.kind) {
+    case "question_text": return `${qc} text`;
+    case "question_instruction": return `${qc} instruction`;
+    case "option": return `${qc} option ${el.code} — ${src}`;
+    case "row": return `${qc} row ${el.code} — ${src}`;
+    case "column": return `${qc} column — ${src}`;
+    case "column_option": return `${qc} column option — ${src}`;
+    default: return el.label;
+  }
+}
+type TranslationElementLike = Pick<TranslatableElement, "kind" | "source" | "label" | "questionCode" | "code">;
+
+const stale = (t: TranslationEntry, source: string | undefined) => t.status === "outdated" || (!!t.sourceHash && source !== undefined && t.sourceHash !== textHash(source));
+
+/**
+ * WHAT A CHANGE DOES TO THE TRANSLATIONS, element by element and language by
+ * language. It used to be a count ("7 translations are now outdated (de,
+ * es)"); a researcher deciding whether to re-translate needs to know WHICH:
+ *
+ *   outdated   a translation whose source text the change rewrote
+ *   missing    an element the change added that has no translation — only
+ *              in a language somebody has started (an untouched language is
+ *              all missing anyway, and saying so for each new element is noise)
+ *   dropped    a translation whose element the change removed
+ *   moved      a translation that followed its option's recode
+ *   kept       the rest, still valid
+ *
+ * Pure: `before` and `after` are read, never written. It reads the stored
+ * status as well as the source hash, so it is right both after
+ * `applySurveyActions` (which marks outdated and prunes) and for a raw edit.
+ */
+export function translationImpact(before: SurveyDefinition, after: SurveyDefinition): TranslationImpact {
+  const b = before.localization, a = after.localization;
+  if (!a) return { languages: [], outdated: 0, missing: 0, dropped: 0, summary: "No translation is affected." };
+  const be = new Map(translatableElements(before).map((e) => [e.key, e]));
+  const ae = new Map(translatableElements(after).map((e) => [e.key, e]));
+  const out: TranslationImpactLanguage[] = [];
+  for (const cfg of a.languages ?? []) {
+    const lang = cfg.code;
+    if (lang === a.sourceLanguage || !(b?.languages ?? []).some((l) => l.code === lang)) continue; // an added language is a Language row, not an impact
+    const bt = b?.translations?.[lang] ?? {}, at = a.translations?.[lang] ?? {};
+    const started = Object.values(bt).some(translated);
+    // a translation that followed its element's recode: gone from one key, the same entry at a new one
+    const movedTo = new Map([...movedTranslationKeys(bt, at)].filter(([, k0]) => !ae.has(k0)));
+    const movedFrom = new Map([...movedTo].map(([t, f]) => [f, t]));
+    const moved: TranslationImpactLanguage["moved"] = [...movedTo].map(([to, from]) => { const el = ae.get(to); return { from, to, element: el ? elementWords(el) : to }; });
+    const outdated: TranslationImpactElement[] = [], missing: TranslationImpactElement[] = [], dropped: TranslationImpactElement[] = [];
+    let kept = 0;
+    const words = (el: TranslatableElement): TranslationImpactElement => ({ key: el.key, element: elementWords(el), ...(el.questionId ? { questionId: el.questionId } : {}), ...(el.questionCode ? { questionCode: el.questionCode } : {}) });
+    for (const el of ae.values()) {
+      const t = at[el.key];
+      if (!translated(t)) {
+        if (started && el.mandatory && !be.has(el.key)) missing.push(words(el));
+        continue;
+      }
+      const priorKey = movedTo.get(el.key) ?? el.key;
+      const p = bt[priorKey];
+      const was = translated(p) && stale(p, be.get(priorKey)?.source);
+      if (stale(t, el.source) && !was && translated(p)) outdated.push(words(el));
+      else if (!stale(t, el.source)) kept++;
+    }
+    for (const [k, t] of Object.entries(bt)) {
+      if (!translated(t) || ae.has(k) || movedFrom.has(k)) continue;
+      if (!be.has(k) && at[k]) continue; // an orphan before and after: not this change's doing
+      const el = be.get(k);
+      dropped.push(el ? words(el) : { key: k, element: k });
+    }
+    const name = languageName(lang, cfg);
+    const parts = [
+      outdated.length ? `${outdated.length} ${name} translation${outdated.length === 1 ? " becomes" : "s become"} outdated` : "",
+      missing.length ? `${missing.length} new element${missing.length === 1 ? " needs" : "s need"} ${name}` : "",
+      dropped.length ? `${dropped.length} ${name} translation${dropped.length === 1 ? " is" : "s are"} dropped with ${dropped.length === 1 ? "its element" : "their elements"}` : "",
+      moved.length ? `${moved.length} follow${moved.length === 1 ? "s its option's" : " their options'"} new code` : "",
+    ].filter(Boolean);
+    out.push({ language: lang, name, outdated, missing, dropped, moved, kept, sentence: parts.length ? `${parts.join(", ")}.`.replace(/^./, (c) => c.toUpperCase()) : `No ${name} translation is affected.` });
+  }
+  const sum = (f: (l: TranslationImpactLanguage) => number) => out.reduce((n, l) => n + f(l), 0);
+  const touched = out.filter((l) => l.outdated.length || l.missing.length || l.dropped.length || l.moved.length);
+  return {
+    languages: out, outdated: sum((l) => l.outdated.length), missing: sum((l) => l.missing.length), dropped: sum((l) => l.dropped.length),
+    summary: touched.length ? touched.map((l) => `${l.name}: ${[l.outdated.length ? `${l.outdated.length} outdated` : "", l.missing.length ? `${l.missing.length} to translate` : "", l.dropped.length ? `${l.dropped.length} dropped` : "", l.moved.length ? `${l.moved.length} moved` : ""].filter(Boolean).join(", ")}`).join("; ") : "No translation is affected.",
+  };
 }

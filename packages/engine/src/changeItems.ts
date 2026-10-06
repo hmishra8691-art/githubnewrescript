@@ -11,7 +11,7 @@ import { questionOrder } from "./dependencies.js";
 import { quotaDiff } from "./quotaActions.js";
 import { diffTheme } from "./theme.js";
 import { diffUx } from "./ux.js";
-import { languageName } from "./localization.js";
+import { languageName, movedTranslationKeys, translationImpact } from "./localization.js";
 import { stripHtmlText } from "./html.js";
 
 /**
@@ -526,6 +526,7 @@ function languageItems(t: Tree, before: SurveyDefinition, after: SurveyDefinitio
   if (!b && !a) return;
   const name = (code: string) => languageName(code, (a?.languages ?? b?.languages ?? []).find((l) => l.code === code));
   const bl = new Set((b?.languages ?? []).map((l) => l.code)), al = new Set((a?.languages ?? []).map((l) => l.code));
+  const impact = translationImpact(before, after);
   for (const l of al) if (!bl.has(l)) t.add({ objectId: l, level: "language", category: "Language", kind: "added", field: name(l), to: `${name(l)} (${a!.languages.find((x) => x.code === l)!.status})` });
   for (const l of bl) if (!al.has(l)) t.add({ objectId: l, level: "language", category: "Language", kind: "removed", field: name(l), from: name(l), detail: `${Object.keys(b?.translations?.[l] ?? {}).length} translations go with it` });
   for (const l of new Set([...al, ...bl])) {
@@ -534,17 +535,32 @@ function languageItems(t: Tree, before: SurveyDefinition, after: SurveyDefinitio
     const bt = b?.translations?.[l] ?? {}, at = a?.translations?.[l] ?? {};
     let written = 0, approved = 0, confirmed = 0, removed = 0;
     const touched: string[] = [];
+    // a translation that followed its option's recode is neither written nor removed: the impact lists it as moved
+    const moved = movedTranslationKeys(bt, at);
+    const movedOld = new Set(moved.values());
     for (const [k, tr] of Object.entries(at)) {
-      const p = bt[k];
+      const p = bt[k] ?? (moved.has(k) ? bt[moved.get(k)!] : undefined);
       if (!p || p.text !== tr.text) { if (tr.text.trim() && tr.status !== "not_translated") { written++; touched.push(k); } continue; }
       if (p.sourceHash !== tr.sourceHash && (p.status === "outdated" || tr.status === "edited")) { confirmed++; touched.push(k); continue; }
       if (p.status !== tr.status && (tr.status === "approved" || tr.status === "reviewed")) { approved++; touched.push(k); }
     }
-    for (const k of Object.keys(bt)) if (!at[k] && bt[k].text.trim()) removed++;
-    if (!written && !approved && !confirmed && !removed) continue;
-    const parts = [written ? `${written} written` : "", approved ? `${approved} approved` : "", confirmed ? `${confirmed} confirmed` : "", removed ? `${removed} removed` : ""].filter(Boolean);
+    /*
+     * WHAT THE CHANGE DOES TO THIS LANGUAGE'S TRANSLATIONS — which ones go
+     * outdated, which new elements need it, which are dropped with their
+     * element, which followed a recode — element by element, so the row says
+     * "Q7 option 4 — United States", not "7 translations".
+     */
+    const il = al.has(l) ? impact.languages.find((x) => x.language === l) : undefined;
+    if (il) removed = il.dropped.length;
+    else for (const k of Object.keys(bt)) if (!at[k] && !movedOld.has(k) && bt[k].text.trim()) removed++;
+    const outdated = il?.outdated.length ?? 0, needed = il?.missing.length ?? 0, followed = il?.moved.length ?? 0;
+    if (!written && !approved && !confirmed && !removed && !outdated && !needed && !followed) continue;
+    const parts = [written ? `${written} written` : "", approved ? `${approved} approved` : "", confirmed ? `${confirmed} confirmed` : "", outdated ? `${outdated} outdated` : "", needed ? `${needed} to translate` : "", removed ? `${removed} ${il ? "dropped" : "removed"}` : "", followed ? `${followed} moved with a recode` : ""].filter(Boolean);
     const codes = [...new Set(touched.map((k) => /^q:([^:]+):/.exec(k)?.[1]).filter((x): x is string => !!x).map((id) => after.questions.find((q) => q.id === id)?.code ?? id))];
-    t.add({ objectId: l, level: "language", category: "Translation", kind: removed && !written && !approved && !confirmed ? "removed" : written && !Object.keys(bt).length ? "added" : "modified", field: `${name(l)} translations`, to: parts.join(", "), ...(codes.length ? { detail: `${codes.slice(0, 12).join(", ")}${codes.length > 12 ? ` and ${codes.length - 12} more` : ""}` } : {}), technical: { written, approved, confirmed, removed, keys: touched } });
+    const listed = (what: string, xs: { element: string }[]) => (xs.length ? `${what}: ${xs.slice(0, 8).map((x) => x.element).join("; ")}${xs.length > 8 ? ` and ${xs.length - 8} more` : ""}` : "");
+    const elements = il ? [listed("Outdated", il.outdated), listed("To translate", il.missing), listed("Dropped", il.dropped), listed("Moved", il.moved)].filter(Boolean) : [];
+    const detail = [codes.length ? `${codes.slice(0, 12).join(", ")}${codes.length > 12 ? ` and ${codes.length - 12} more` : ""}` : "", ...elements].filter(Boolean).join(" · ");
+    t.add({ objectId: l, level: "language", category: "Translation", kind: removed && !written && !approved && !confirmed && !outdated && !needed ? "removed" : written && !Object.keys(bt).length ? "added" : "modified", field: `${name(l)} translations`, to: parts.join(", "), ...(detail ? { detail } : {}), technical: { written, approved, confirmed, removed, keys: touched, ...(il ? { impact: { outdated: il.outdated, missing: il.missing, dropped: il.dropped, moved: il.moved, kept: il.kept } } : {}) } });
   }
   if (!same(b?.routing, a?.routing)) t.add({ objectId: "routing", level: "language", category: "Language", kind: "modified", field: "language routing", to: (a?.routing?.order ?? []).join(" → ") || "default" });
   if (!same(b?.glossary ?? [], a?.glossary ?? [])) { const bg = (b?.glossary ?? []).length, ag = (a?.glossary ?? []).length; t.add({ objectId: "glossary", level: "language", category: "Language", kind: ag > bg ? "added" : ag < bg ? "removed" : "modified", field: "glossary", from: `${bg} terms`, to: `${ag} terms` }); }

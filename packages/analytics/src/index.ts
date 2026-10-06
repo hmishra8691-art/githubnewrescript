@@ -13,5 +13,6 @@ export * from "./themes.js";
 export * from "./fieldwork.js";
 export * from "./versionedMetadata.js";
 export * from "./planBridge.js";
+export * from "./plannedVariables.js";
 export * from "./findings.js";
 export * from "./findingsReport.js";

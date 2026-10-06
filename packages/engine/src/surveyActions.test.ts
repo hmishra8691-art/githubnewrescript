@@ -465,3 +465,29 @@ test("the diff: deleting a block of several pages is not also 'removing page bre
   assert.deepEqual(both.errors, [], both.errors.join("\n"));
   assert.ok(diffSurveys(base, both.def).summary.includes("Remove 1 page break"), diffSurveys(base, both.def).summary.join(" | "));
 });
+
+test("what a change does to the analysis plan is said at the change: a retyped grouping variable, an option removed from it — and the plan items are named in the impact", () => {
+  const opts = (...ls: string[]) => ls.map((l, i) => ({ code: i + 1, label: l }));
+  const def = SurveyDefinition.parse({
+    meta: { id: "s", code: "S", title: "T" },
+    questions: [
+      { id: "g", code: "Q1", variableName: "GENDER", type: "single_select", text: "Gender?", options: opts("Male", "Female", "Other") },
+      { id: "s", code: "Q2", variableName: "SAT", type: "single_select", text: "How satisfied are you?", options: opts("1", "2", "3", "4", "5") },
+    ],
+    research: { objective: "o", hypotheses: [], constructs: [], analysis: [], assumptions: [], sources: [], analysisPlan: { crosstabs: [{ id: "x1", rows: ["SAT"], columns: ["GENDER"] }], tests: [{ id: "t1", method: "anova", outcome: "SAT", variables: [], groupBy: "GENDER" }], derived: [], segments: [] } },
+    flow: [{ type: "block", id: "b", title: "B", children: [{ type: "page", id: "p", questionIds: ["g", "s"] }] }, { type: "end", id: "e", status: "complete" }],
+    deployment: { clientSlug: "c", studySlug: "s" },
+  });
+  const removed = applySurveyActions(def, [{ op: "update_question", target: "Q1", removeOptions: ["Other"] }], { ids });
+  assert.deepEqual(removed.errors, []);
+  assert.ok(removed.warnings.some((w) => /^Analysis plan: .*(2 groups|two groups|t-test)/i.test(w)), removed.warnings.join("\n"));
+  assert.ok(removed.results[0].impact?.items.some((i) => i.via === "analysis plan" && /groups change/.test(i.text) && i.severity === "changes"), JSON.stringify(removed.results[0].impact?.items));
+  /* an issue the plan already had is not said again by the next, unrelated change */
+  const after = applySurveyActions(removed.def, [{ op: "update_question", target: "Q2", required: true }], { ids });
+  assert.ok(!after.warnings.some((w) => /^Analysis plan: /.test(w)), after.warnings.join("\n"));
+  const retyped = applySurveyActions(def, [{ op: "update_question", target: "Q1", type: "open_text" }], { ids });
+  assert.ok(retyped.warnings.some((w) => /^Analysis plan: /.test(w)), retyped.warnings.join("\n"));
+  /* a change that leaves the plan as sound as it was says nothing about it */
+  const plain = applySurveyActions(def, [{ op: "update_question", target: "Q2", required: true }], { ids });
+  assert.ok(!plain.warnings.some((w) => /^Analysis plan: /.test(w)), plain.warnings.join("\n"));
+});
