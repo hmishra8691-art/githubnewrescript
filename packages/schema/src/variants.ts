@@ -162,6 +162,12 @@ export interface QuestionVariantDef {
      */
     sameType?: boolean;
     /**
+     * A from–to range whose type (date / time) and display format are set
+     * ONCE for the range (Date/Time Range): the field rows show no type
+     * select and no placeholder — the format is what the respondent sees.
+     */
+    range?: boolean;
+    /**
      * Sections this form offers to add in one step. "address" adds Street,
      * City, State / Region and ZIP / Postal Code — the Contact Form's "the
      * user should also be able to add an Address section/field".
@@ -2284,7 +2290,13 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   stable(F.datetime, "time", "Time Picker", "Single time of day.", {
     baseType: "time", responseModel: "text", validations: ["required"],
   }),
-  stable(F.datetime, "date_range", "Date Range", "From and to dates as two fields.", {
+  /*
+   * DATE/TIME RANGE (October 2026 review): "rename Date Range to Date/Time
+   * Range … Range Type: Date / Time … Date Format / Time Format … From and To
+   * must use the same format". The id stays `datetime.date_range`, which
+   * every stored question and export already carries.
+   */
+  stable(F.datetime, "date_range", "Date/Time Range", "From and to — two dates or two times, in one chosen format.", {
     baseType: "text_list", responseModel: "fields",
     capabilities: ["fields"], validations: ["required"],
     defaults: {
@@ -2293,7 +2305,7 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
         { code: "to", label: "To", fieldType: "date", required: true, flags: [], validation: [] },
       ],
     },
-    fields: { types: ["date", "time"], fixed: true, sameType: true },
+    fields: { types: ["date", "time"], fixed: true, sameType: true, range: true },
     presetOf: "list.text_list",
   }),
   stable(F.datetime, "calendar", "Calendar / Appointment Selection", "Pick slots on a calendar.", {

@@ -104,11 +104,12 @@ registerVariantSettings("monthyear", ({ q, patchSettings }) => {
  * never read a display format. Unset keeps the browser's own field, which is
  * what every question authored before shows.
  */
-const DATE_FORMAT_OPTIONS: { value: string; example: string }[] = [
+export const DATE_FORMAT_OPTIONS: { value: string; example: string }[] = [
   { value: "MM/DD/YYYY", example: "09/23/2026" }, { value: "DD/MM/YYYY", example: "23/09/2026" },
   { value: "YYYY/MM/DD", example: "2026/09/23" }, { value: "MM-DD-YYYY", example: "09-23-2026" },
   { value: "DD-MM-YYYY", example: "23-09-2026" }, { value: "YYYY-MM-DD", example: "2026-09-23" },
   { value: "DD MMM YYYY", example: "23 Sep 2026" }, { value: "MMM DD, YYYY", example: "Sep 23, 2026" },
+  { value: "DD MMMM YYYY", example: "23 September 2026" }, { value: "MMMM DD, YYYY", example: "September 23, 2026" },
 ];
 
 registerVariantSettings("base:date", ({ q, patchSettings }) => (
@@ -174,3 +175,61 @@ registerVariantSettings("base:time", ({ q, patchSettings }) => (
     </div>
   </>
 ));
+
+/*
+ * DATE/TIME RANGE (October 2026 review). One Range type for both ends, and
+ * one format: "The From and To fields should always use the same field type
+ * and format … The builder should dynamically display only the relevant
+ * settings." The ends' own placeholder boxes are gone — the format is what
+ * the respondent sees (`ListInput` draws both ends with it).
+ */
+const TIME_FORMAT_OPTIONS: { value: string; label: string; format: "12" | "24"; seconds: boolean }[] = [
+  { value: "12", label: "12-hour → 09:30 AM", format: "12", seconds: false },
+  { value: "12s", label: "12-hour with seconds → 09:30:45 AM", format: "12", seconds: true },
+  { value: "24", label: "24-hour → 09:30", format: "24", seconds: false },
+  { value: "24s", label: "24-hour with seconds → 09:30:45", format: "24", seconds: true },
+];
+
+registerVariantSettings("variant:datetime.date_range", ({ q, patch }) => {
+  const rangeType = q.rows.some((r) => r.fieldType === "time") ? "time" : "date";
+  const timeValue = `${q.settings.timeFormat ?? "12"}${q.settings.showSeconds ? "s" : ""}`;
+  return (
+    <>
+      <h3 className="sec">Date/Time Range</h3>
+      <div className="row" style={{ flexWrap: "wrap", gap: 12 }} data-testid="range-settings">
+        <label className="f" style={{ width: 160 }}><span>Range type</span>
+          <select className="select" data-testid="range-type" value={rangeType}
+            onChange={(e) => {
+              const t = e.target.value === "time" ? "time" : "date";
+              /* both ends, always together, and their answers cleared of the other kind's bounds */
+              patch({
+                rows: q.rows.map((r) => ({ ...r, fieldType: t, placeholder: undefined })),
+                settings: { ...q.settings, ...(t === "time" ? { dateFormat: undefined } : { timeFormat: undefined, showSeconds: undefined }) },
+              });
+            }}>
+            <option value="date">Date</option>
+            <option value="time">Time</option>
+          </select></label>
+        {rangeType === "date" ? (
+          <label className="f" style={{ width: 280 }}><span>Date format (From and To)</span>
+            <select className="select" data-testid="range-date-format" value={q.settings.dateFormat ?? "MM/DD/YYYY"}
+              onChange={(e) => patch({ settings: { ...q.settings, dateFormat: e.target.value as never } })}>
+              {DATE_FORMAT_OPTIONS.map((f) => <option key={f.value} value={f.value}>{f.value} → {f.example}</option>)}
+            </select></label>
+        ) : (
+          <label className="f" style={{ width: 300 }}><span>Time format (From and To)</span>
+            <select className="select" data-testid="range-time-format" value={timeValue}
+              onChange={(e) => {
+                const o = TIME_FORMAT_OPTIONS.find((x) => x.value === e.target.value) ?? TIME_FORMAT_OPTIONS[0];
+                patch({ settings: { ...q.settings, timeFormat: o.format, showSeconds: o.seconds || undefined } });
+              }}>
+              {TIME_FORMAT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select></label>
+        )}
+      </div>
+      <p className="muted" style={{ fontSize: 12.5 }}>
+        Preview: From [ {rangeType === "date" ? (q.settings.dateFormat ?? "MM/DD/YYYY") : (q.settings.timeFormat === "24" ? "HH:MM" : "HH:MM AM/PM")}{rangeType === "time" && q.settings.showSeconds ? " (with seconds)" : ""} ] · To [ the same ]
+      </p>
+    </>
+  );
+});

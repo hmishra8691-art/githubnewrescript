@@ -207,7 +207,7 @@ THE THEME is the survey's Branding — the same settings the Branding panel show
  "logoUrl":"https://…","headerHtml":"<p>…</p>","footerHtml":"<p>…</p>"}
   // a dark theme needs light text and enough contrast on buttons and inputs; over a busy background image add an overlay
   // THEME IMAGE: when an uploaded image is given below (url and its palette), build the theme from its palette and, if asked, use its url as background.image
-{"op":"set_custom_html","target":"Q5","html":"<p class=\"note\">…</p>"}   // decorative HTML shown above Q5's answers (no scripts, styles or event handlers; null removes it)
+{"op":"set_custom_html","target":"Q5","html":"<p class=\"note\">…</p>"}   // decorative HTML shown above Q5's answers — it is APPENDED TO Q5's INSTRUCTION (a question has one content: its text and instruction; there is no separate custom-HTML field any more); no scripts, styles or event handlers. For a Custom Component it sets the component's template (null removes it).
 
 HOW TO WORK ON UX.
 • Decompose a compound request into one item per thing asked: "For Block 2 make every question fade up, the options cards, a slight scale when one is selected, one option per row on mobile, don't change the logic" → an animation on block:2.questions (fade-up, appear), a style on block:2.options (card rules, a "selected" rule with transform: scale(1.02), a mobile rule) — and no structural action.

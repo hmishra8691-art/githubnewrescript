@@ -104,13 +104,13 @@ test("set_default_value: the Properties setting, look-only, shown in the diff, c
   assert.ok(rm.destructive.some((x) => /Removes Q2's default value/.test(x)), rm.destructive.join("\n"));
 });
 
-test("a proposal that only sets custom HTML is a change (Apply has something to do)", () => {
+test("a proposal that only sets custom HTML is a change (Apply has something to do) — to the instruction, since October 2026", () => {
   const d = survey();
-  const r = applySurveyActions(d, coerceSurveyActions([{ op: "set_custom_html", target: "Q2", html: "<img src=\"https://cdn.example.com/a.png\" alt=\"\">" }]).actions, { uxOnly: true });
+  const r = applySurveyActions(d, coerceSurveyActions([{ op: "set_custom_html", target: "Q2", html: "<img src=\"https://cdn.example.com/a.png\" alt=\"\">" }]).actions);
   assert.deepEqual(r.errors, []);
   const diff = diffSurveys(d, r.def);
   assert.equal(diff.empty, false);
-  assert.ok(diff.summary.includes("Change Q2: custom HTML"), diff.summary.join("\n"));
+  assert.ok(diff.summary.some((l) => /^Change Q2: .*instruction/i.test(l)), diff.summary.join("\n"));
 });
 
 test("a script cannot fill in answers — the refusal says what to use; page_enter is the page event", () => {

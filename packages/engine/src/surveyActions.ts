@@ -1284,6 +1284,8 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
     const push = (field: string, from: string, to: string) => { if (from !== to) ch.push({ field, from, to }); };
     push("type", typeLabel(p), typeLabel(q));
     push("text", plain(p.text, 120), plain(q.text, 120));
+    // the rich content between the text and the answers — where HTML above the answers lives (October 2026)
+    push("instruction", (p.instruction ?? "").slice(0, 160), (q.instruction ?? "").slice(0, 160));
     push("code", String(p.code), String(q.code));
     push("variable", p.variableName, q.variableName);
     push("required", p.required ? "required" : "optional", q.required ? "required" : "optional");

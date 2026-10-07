@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { MediaDisplay } from "@rescript/schema";
-import { mediaHtml, mediaDisplayFromCss, resolveMediaUrl, expandMediaEmbeds, sanitizeHtml, type InsertableMediaKind } from "@rescript/engine";
+import { mediaHtml, mediaDisplayFromCss, resolveMediaUrl, expandMediaEmbeds, sanitizeHtml, mediaGroupHtml, MEDIA_GROUP_LAYOUTS, type InsertableMediaKind, type MediaGroup } from "@rescript/engine";
 import { AssetPicker } from "./AssetPicker";
 import { MediaDisplayControls } from "./MediaDisplayControls";
 import { useStudio, uid } from "./store";
@@ -55,6 +55,8 @@ export interface MediaApply {
   /** the edited element's source was cleared: take it out */
   remove: boolean;
   items: MediaInsertValue[];
+  /** the layout of several items (new ones), or of the group the edited item belongs to */
+  group?: MediaGroup;
 }
 
 type Item = MediaInsertValue & { id: string };
@@ -63,8 +65,10 @@ type Source = "library" | "upload" | "url" | "drive";
 const PIPED = /\{\{[^}]+\}\}/;
 const isPiped = (u: string) => PIPED.test(u);
 
-export function MediaInsertDialog({ open, initial, onClose, onInsert, placement }: {
+export function MediaInsertDialog({ open, initial, onClose, onInsert, placement, group: initialGroup }: {
   open: boolean;
+  /** editing an item that sits in a group of several: that group's layout, editable here too */
+  group?: MediaGroup | null;
   /** what an existing element carried, when editing */
   initial?: Partial<MediaInsertValue> | null;
   onClose(): void;
@@ -88,6 +92,8 @@ export function MediaInsertDialog({ open, initial, onClose, onInsert, placement 
   const [progress, setProgress] = React.useState<UploadProgress | null>(null);
   const [busy, setBusy] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  /* how several items sit together — Vertical by default (October 2026 review) */
+  const [group, setGroup] = React.useState<MediaGroup>(() => initialGroup ?? { layout: "vertical", columns: 2, gap: 10, align: "left" });
   const fileRef = React.useRef<HTMLInputElement | null>(null);
 
   React.useEffect(() => {
@@ -97,6 +103,7 @@ export function MediaInsertDialog({ open, initial, onClose, onInsert, placement 
     setPosition(editing ? "keep" : placement ? "above" : "cursor");
     setSource(sourceOf(first.url));
     setError(null); setBusy(null); setProgress(null);
+    setGroup(initialGroup ?? { layout: "vertical", columns: 2, gap: 10, align: "left" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
   React.useEffect(() => {
@@ -157,10 +164,13 @@ export function MediaInsertDialog({ open, initial, onClose, onInsert, placement 
   const canApply = removing || allOk;
   const htmlOf = (it: Item) => mediaHtml(kindOf(it), it.url.trim(), it.display, { alt: it.alt.trim(), mimeType: it.mimeType });
 
+  /* two or more new items are one group with a layout; an item edited inside a group keeps its group */
+  const grouped = !editing && filled.length > 1;
+  const groupedHtml = (parts: string[]) => (grouped ? mediaGroupHtml(parts, group) : parts.join(""));
   const apply = () => {
     const values: MediaInsertValue[] = filled.map((it) => ({ kind: kindOf(it), url: it.url.trim(), alt: it.alt.trim(), display: it.display, mimeType: it.mimeType }));
-    const html = removing ? "" : filled.map(htmlOf).join("");
-    onInsert(html, values[0] ?? { kind: cur.kind, url: "", alt: "", display: cur.display }, { position, remove: removing, items: values });
+    const html = removing ? "" : groupedHtml(filled.map(htmlOf));
+    onInsert(html, values[0] ?? { kind: cur.kind, url: "", alt: "", display: cur.display }, { position, remove: removing, items: values, ...((grouped || initialGroup) ? { group } : {}) });
     onClose();
   };
   const move = (i: number, d: -1 | 1) => {
@@ -171,7 +181,8 @@ export function MediaInsertDialog({ open, initial, onClose, onInsert, placement 
   };
 
   /* the preview is the markup the respondent gets, through the renderer's own last step */
-  const previewHtml = expandMediaEmbeds(sanitizeHtml(filled.filter((it) => verdict(it).ok).map((it) => isPiped(it.url) ? pipedPlaceholder(it) : htmlOf(it)).join("")));
+  const previewParts = filled.filter((it) => verdict(it).ok).map((it) => isPiped(it.url) ? pipedPlaceholder(it) : htmlOf(it));
+  const previewHtml = expandMediaEmbeds(sanitizeHtml(previewParts.length > 1 || initialGroup ? mediaGroupHtml(previewParts, group) : previewParts.join("")));
   const textLine = <div className="mins-preview-text" aria-hidden>Question text…</div>;
   const multi = !!placement && !editing;
   const title = editing ? "Edit media" : "Insert media";
@@ -257,6 +268,49 @@ export function MediaInsertDialog({ open, initial, onClose, onInsert, placement 
 
         <h3 className="sec" style={{ marginTop: 10 }}>Size &amp; layout{multi && items.length > 1 ? ` — Media ${active + 1}` : ""}</h3>
         <MediaDisplayControls kind={curV.kind} value={cur.display} onChange={(display) => patch({ display })} compact />
+
+        {((multi && items.length > 1) || initialGroup) && (
+          <div data-testid="media-layout">
+            <h3 className="sec" style={{ marginTop: 10 }}>Media layout{initialGroup ? " — every item in this group" : ""}</h3>
+            <div className="row" style={{ gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+              {MEDIA_GROUP_LAYOUTS.map((l) => (
+                <label key={l.value} className="row" style={{ gap: 4, fontSize: 13 }}>
+                  <input type="radio" name="media-layout" data-testid={`media-layout-${l.value}`} checked={group.layout === l.value}
+                    onChange={() => setGroup((g) => ({ ...g, layout: l.value }))} />
+                  {l.label}{l.value === "vertical" ? " (default)" : ""}
+                </label>
+              ))}
+            </div>
+            <div className="row" style={{ gap: 12, flexWrap: "wrap", marginTop: 6 }}>
+              {group.layout === "grid" && (
+                <label className="f" style={{ width: 120 }}><span>Grid columns</span>
+                  <select className="select" data-testid="media-layout-columns" value={group.columns ?? 2}
+                    onChange={(e) => setGroup((g) => ({ ...g, columns: Number(e.target.value) }))}>
+                    {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n} column{n === 1 ? "" : "s"}</option>)}
+                  </select></label>
+              )}
+              {group.layout !== "carousel" && (
+                <label className="f" style={{ width: 100 }}><span>Gap (px)</span>
+                  <input className="input" type="number" min={0} max={80} data-testid="media-layout-gap" value={group.gap ?? 10}
+                    onChange={(e) => setGroup((g) => ({ ...g, gap: e.target.value === "" ? 10 : Number(e.target.value) }))} /></label>
+              )}
+              {group.layout !== "carousel" && (
+                <label className="f" style={{ width: 130 }}><span>Alignment</span>
+                  <select className="select" data-testid="media-layout-align" value={group.align ?? "left"}
+                    onChange={(e) => setGroup((g) => ({ ...g, align: e.target.value as MediaGroup["align"] }))}>
+                    <option value="left">left</option><option value="center">center</option><option value="right">right</option>
+                  </select></label>
+              )}
+            </div>
+            <p className="muted" style={{ fontSize: 12.5 }}>
+              {group.layout === "carousel" ? "One item at a time: the respondent swipes, or uses ← → under it." :
+                group.layout === "grid" ? "Fewer columns on a tablet (3 at most) and a phone (2 at most)." :
+                group.layout === "horizontal" ? "Side by side, wrapping to the next row when the screen is narrow." :
+                "One under another — works for every kind of media and screen."}
+              {" "}Each item's own size and fit are set under Size &amp; layout.
+            </p>
+          </div>
+        )}
 
         {placement && (
           <div className="row" style={{ gap: 14, marginTop: 10, flexWrap: "wrap", alignItems: "center" }} data-testid="media-insert-position">

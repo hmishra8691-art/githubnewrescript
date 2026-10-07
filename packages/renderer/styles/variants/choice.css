@@ -4,6 +4,9 @@
 .rs-icongrid.cols-1 { grid-template-columns: 1fr; }
 .rs-icongrid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .rs-icongrid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.rs-icongrid.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.rs-icongrid.cols-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@media (max-width: 640px) { .rs-icongrid.cols-4, .rs-icongrid.cols-5 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .rs-iconopt {
   position: relative; display: flex; flex-direction: column; align-items: center; gap: 8px;
   padding: 16px 10px 12px; border: 2px solid var(--rs-border); border-radius: var(--rs-radius);
@@ -31,11 +34,12 @@
 /* One column by default — `.cols-1` is the same thing said out loud, which is
    what an author who picks "1 column" expects to see. 2–4 become a grid. */
 .rs-listrows, .rs-listrows.cols-1 { display: flex; flex-direction: column; gap: 6px; }
-.rs-listrows.cols-2, .rs-listrows.cols-3, .rs-listrows.cols-4 { display: grid; gap: 6px; }
+.rs-listrows.cols-2, .rs-listrows.cols-3, .rs-listrows.cols-4, .rs-listrows.cols-5 { display: grid; gap: 6px; }
 .rs-listrows.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .rs-listrows.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .rs-listrows.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-@media (max-width: 640px) { .rs-listrows.cols-3, .rs-listrows.cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.rs-listrows.cols-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@media (max-width: 640px) { .rs-listrows.cols-3, .rs-listrows.cols-4, .rs-listrows.cols-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 440px) { .rs-listrows[class*="cols-"] { display: flex; flex-direction: column; } }
 .rs-listrow {
   display: flex; align-items: center; gap: 12px; padding: 10px 14px;
@@ -71,6 +75,7 @@
 .rs-richcards.cols-1 { grid-template-columns: 1fr; }
 .rs-richcards.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .rs-richcards.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.rs-richcards.cols-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .rs-richcard {
   position: relative; display: flex; flex-direction: column; overflow: hidden;
   border: 2px solid var(--rs-border); border-radius: var(--rs-radius); background: var(--rs-surface); cursor: pointer;
@@ -92,11 +97,12 @@
 .rs-richcard-select.on { background: var(--rs-primary); color: #fff; }
 
 .rs-statements, .rs-statements.cols-1 { display: flex; flex-direction: column; gap: 10px; }
-.rs-statements.cols-2, .rs-statements.cols-3, .rs-statements.cols-4 { display: grid; gap: 10px; }
+.rs-statements.cols-2, .rs-statements.cols-3, .rs-statements.cols-4, .rs-statements.cols-5 { display: grid; gap: 10px; }
 .rs-statements.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .rs-statements.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .rs-statements.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-@media (max-width: 640px) { .rs-statements.cols-3, .rs-statements.cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.rs-statements.cols-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@media (max-width: 640px) { .rs-statements.cols-3, .rs-statements.cols-4, .rs-statements.cols-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 440px) { .rs-statements[class*="cols-"] { display: flex; flex-direction: column; } }
 .rs-statement {
   position: relative; display: flex; align-items: flex-start; gap: 14px; padding: 14px 16px;

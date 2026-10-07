@@ -18,7 +18,12 @@ import {
   type LoopContext,
   stripHtmlText,
   sanitizeHtml,
-  expandMediaEmbeds,
+  layoutColumns,
+  customAffix,
+  numericBoxCh,
+  renderRichContent,
+  hasStyleBlock,
+  SCOPE_ATTR,
   selectedOtherCodes,
   uiText,
   effectiveScale,
@@ -28,6 +33,7 @@ import {
   formatDateAs,
   parseDateAs,
   datePlaceholder,
+  type DateFormat,
   initialDateValue,
   initialTimeValue,
   type ValidationError,
@@ -37,6 +43,7 @@ import { MediaEmbed, SafeImage } from "./Media";
 import { SpeechInputButton } from "./SpeechInput";
 import { anchor, cellAnchor, type AuthoringAnchor } from "./authoring";
 import { TimeSelects } from "./TimeSelects";
+import { enhanceMediaCarousels } from "./mediaCarousel";
 import { CardFace, cardFrameClass } from "./CardFace";
 // side-effect: every family registers its renderers
 import "./variants";
@@ -273,46 +280,16 @@ export function optionsClass(p: QRProps): string {
    * as it always was.
    */
   if (p.q.settings.optionOrientation === "horizontal") return "rs-options horizontal";
-  const n = p.q.settings.columnsLayout;
-  if (n != null) return n > 1 ? `rs-options cols-${Math.min(n, 4)}` : "rs-options";
   /*
-   * "AUTO (FIT WIDTH)" NOW FITS THE WIDTH.
-   *
-   * The Studio's Layout control has always labelled the unset value "auto
-   * (fit width)", and the renderer has always drawn it as a single column —
-   * so the default was one tall stack of full-width boxes whatever the
-   * question looked like. The review filed both halves of that:
-   *
-   *   "the option boxes appear unnecessarily large, and when I add around
-   *    10–12 options, all the options are not visible at once in the preview"
-   *   "the preview does not look well-organized when the options are
-   *    displayed in a single column. However, when I use a 2-column layout,
-   *    the options look much better and use the available space efficiently"
-   *
-   * Auto now means what it says: short options flow into as many columns as
-   * fit, long ones keep a line to themselves, and a list stays a single
-   * column until there is enough of it to be worth splitting. An author who
-   * has chosen a number still gets exactly that number — this only changes
-   * the value that never was a choice.
+   * ALWAYS A NUMBER OF COLUMNS, AND ONE BY DEFAULT (October 2026 review:
+   * "remove Auto (Fit Width) … set Columns: 1 as the default"). The old
+   * "auto" flowed five short options into three columns on its own; the
+   * engine's `layoutColumns` is now the one answer the builder shows and
+   * every renderer draws.
    */
-  return p.q.options.length >= AUTO_FLOW_FROM ? "rs-options auto" : "rs-options";
+  const n = layoutColumns(p.q, resolveVariant(p.q.variant)?.renderer);
+  return n > 1 ? `rs-options cols-${n}` : "rs-options";
 }
-
-/**
- * How many options before "auto" starts flowing them into columns.
- *
- * Below this a single column reads better than a short ragged grid; at and
- * above it the stack is what the review complained about — first as "all the
- * options are not visible at once", then as choice boxes stretched across a
- * desktop with four words at the far left of each.
- *
- * Four, not six: five short options in one column is the exact case the
- * desktop screenshots were taken of, and the CSS behind `auto` is
- * `auto-fit`/`minmax`, so this is a floor rather than a decision — a list of
- * four LONG options still occupies one column per row because no second
- * track fits. It only splits when splitting actually helps.
- */
-const AUTO_FLOW_FROM = 4;
 
 /**
  * The Question Layout setting only ever reached the radio/checkbox list, the
@@ -321,8 +298,9 @@ const AUTO_FLOW_FROM = 4;
  * comparison did nothing at all. This turns the setting into an override any
  * grid can apply.
  */
-export function gridColumnsStyle(p: QRProps, fallback: string): React.CSSProperties {
-  const n = p.q.settings.columnsLayout;
+export function gridColumnsStyle(p: QRProps, _fallback?: string): React.CSSProperties {
+  /* a number of columns always (`layoutColumns`) — the designed count when none is stored */
+  const n = layoutColumns(p.q, resolveVariant(p.q.variant)?.renderer);
   /*
    * `n > 1` was the bug: one column fell through to the fallback, which for
    * an image grid is `repeat(auto-fill, minmax(150px, 1fr))` — as many
@@ -330,9 +308,7 @@ export function gridColumnsStyle(p: QRProps, fallback: string): React.CSSPropert
    * nothing visible, while 2, 3 and 4 worked. The fallback is now only for
    * questions that have chosen nothing at all.
    */
-  return n && n >= 1
-    ? { gridTemplateColumns: `repeat(${Math.min(Math.max(n, 1), 4)}, minmax(0, 1fr))` }
-    : { gridTemplateColumns: fallback };
+  return { gridTemplateColumns: `repeat(${n}, minmax(0, 1fr))` };
 }
 
 /**
@@ -617,11 +593,13 @@ export function MultiDropdown(p: QRProps) {
  * from somewhere else (a calculation, a reset, another respondent action).
  */
 export function NumberField({
-  value, onChange, className = "rs-input sm", min, max, step, placeholder, readOnly, ariaLabel, disabled, decimals,
+  value, onChange, className = "rs-input sm", min, max, step, placeholder, readOnly, ariaLabel, disabled, decimals, style,
 }: {
   value: unknown;
   onChange(v: number | null): void;
   className?: string;
+  /** the box's own width, when the system sizes it (`numericBoxCh`) */
+  style?: React.CSSProperties;
   min?: number; max?: number; step?: number | string;
   placeholder?: string; readOnly?: boolean; disabled?: boolean; ariaLabel?: string;
   /**
@@ -653,6 +631,7 @@ export function NumberField({
   return (
     <input
       className={className}
+      style={style}
       type="text"
       inputMode={decimals === 0 ? "numeric" : "decimal"}
       aria-label={ariaLabel}
@@ -714,7 +693,14 @@ export function NumericInput(p: QRProps) {
   const affix = policy?.symbol === "fixed" && policy.fixedSymbol
     ? { text: policy.fixedSymbol, side: p.q.settings.symbolSide ?? "right" }
     : affixFor(p.q.settings);
-  const unit = p.q.settings.unitLabel?.trim();
+  /*
+   * THE AUTHOR'S TEXT BESIDE THE BOX — "kg [ 50 ]" or "[ 50 ] kg", any word
+   * or symbol, in every Numeric subtype (October 2026 review). A Quantity's
+   * older Unit is the same thing on the right (`customAffix`).
+   */
+  const custom = customAffix(p.q.settings);
+  const customEl = (side: "left" | "right") => custom?.side === side
+    ? <span className={`rs-affix-text ${side}`} data-testid={`numeric-affix-${side}`}>{custom.text}</span> : null;
   /*
    * FORMAT AND SIGN, said at the keystroke (October 2026 review). Whole
    * numbers are the `integer` rule or zero decimal places; "zero or more"
@@ -745,6 +731,8 @@ export function NumericInput(p: QRProps) {
       p.onChange(next);
     };
     return (
+      <span className="rs-affixed" data-testid="numeric-affixed">
+      {customEl("left")}
       <span className="rs-stepper" data-testid="numeric-stepper">
         <button type="button" aria-label="Decrease" data-testid="stepper-down"
           disabled={p.q.settings.readOnly || (cur != null && lo != null && cur <= lo)}
@@ -763,7 +751,8 @@ export function NumericInput(p: QRProps) {
         <button type="button" aria-label="Increase" data-testid="stepper-up"
           disabled={p.q.settings.readOnly || (cur != null && hi != null && cur >= hi)}
           onClick={() => nudge(1)}>+</button>
-        {unit && <span className="rs-stepper-unit">{unit}</span>}
+      </span>
+      {customEl("right")}
       </span>
     );
   }
@@ -779,13 +768,14 @@ export function NumericInput(p: QRProps) {
       onChange={p.onChange}
     />
   );
-  if (!affix && !unit) return field;
+  if (!affix && !custom) return field;
   return (
     <span className="rs-affixed" data-testid="numeric-affixed">
+      {customEl("left")}
       {affix?.side === "left" && <span className="rs-prefix">{affix.text}</span>}
       {field}
       {affix?.side === "right" && <span className="rs-prefix">{affix.text}</span>}
-      {unit && <span className="rs-stepper-unit">{unit}</span>}
+      {customEl("right")}
     </span>
   );
 }
@@ -934,13 +924,6 @@ export function DateInput(p: QRProps) {
   useInitialAnswer(p, () => initialDateValue(p.q.settings));
   const fmt = p.q.settings.dateFormat;
   const stored = p.value == null ? "" : String(p.value);
-  const [text, setText] = React.useState(() => formatDateAs(stored, fmt));
-  const [bad, setBad] = React.useState(false);
-  const focused = React.useRef(false);
-  const nativeRef = React.useRef<HTMLInputElement | null>(null);
-  React.useEffect(() => {
-    if (!focused.current) { setText(formatDateAs(stored, fmt)); setBad(false); }
-  }, [stored, fmt]);
   if (!fmt) {
     return (
       <input className="rs-input sm" type="date" value={stored} data-testid="date-input"
@@ -949,10 +932,35 @@ export function DateInput(p: QRProps) {
     );
   }
   return (
-    <span className="rs-datefield" data-testid="date-input" data-format={fmt}>
+    <FormattedDateField value={p.value} fmt={fmt} onChange={(v) => p.onChange(v)} readOnly={p.q.settings.readOnly}
+      min={p.q.settings.minDate} max={p.q.settings.maxDate} testid="date-input" />
+  );
+}
+
+/**
+ * A DATE TYPED IN THE CHOSEN FORMAT, with the calendar one click away. Stored
+ * as YYYY-MM-DD whatever is shown. The Date Picker and the From / To of a
+ * Date/Time Range draw this same field, so the format chosen in the builder
+ * is the format the respondent sees in both (October 2026 review: "the
+ * current hard-coded MM/DD/YYYY should be removed").
+ */
+export function FormattedDateField({ value, fmt, onChange, readOnly, min, max, testid, label }: {
+  value: unknown; fmt: DateFormat; onChange(v: string | null): void; readOnly?: boolean;
+  min?: string; max?: string; testid: string; label?: string;
+}) {
+  const stored = value == null ? "" : String(value);
+  const [text, setText] = React.useState(() => formatDateAs(stored, fmt));
+  const [bad, setBad] = React.useState(false);
+  const focused = React.useRef(false);
+  const nativeRef = React.useRef<HTMLInputElement | null>(null);
+  React.useEffect(() => {
+    if (!focused.current) { setText(formatDateAs(stored, fmt)); setBad(false); }
+  }, [stored, fmt]);
+  return (
+    <span className="rs-datefield" data-testid={testid} data-format={fmt}>
       <input className="rs-input sm" type="text" inputMode={/MMM/.test(fmt) ? "text" : "numeric"}
-        placeholder={datePlaceholder(fmt)} aria-label={`Date (${fmt})`} value={text}
-        readOnly={p.q.settings.readOnly} data-testid="date-text"
+        placeholder={datePlaceholder(fmt)} aria-label={`${label ? `${label} — ` : ""}Date (${fmt})`} value={text}
+        readOnly={readOnly} data-testid={`${testid === "date-input" ? "date" : testid}-text`}
         onFocus={() => { focused.current = true; }}
         onBlur={() => { focused.current = false; setBad(text.trim() !== "" && parseDateAs(text, fmt) == null); }}
         onChange={(e) => {
@@ -960,20 +968,20 @@ export function DateInput(p: QRProps) {
           setText(t);
           const iso = parseDateAs(t, fmt);
           /* an unfinished or impossible date is no answer — never the previous one left standing */
-          p.onChange(iso);
+          onChange(iso);
           if (iso) setBad(false);
         }} />
-      <button type="button" className="rs-date-btn" aria-label="Open calendar" data-testid="date-calendar"
-        disabled={p.q.settings.readOnly}
+      <button type="button" className="rs-date-btn" aria-label="Open calendar" data-testid={`${testid === "date-input" ? "date" : testid}-calendar`}
+        disabled={readOnly}
         onClick={() => {
           const el = nativeRef.current;
           if (!el) return;
           try { (el as HTMLInputElement & { showPicker?: () => void }).showPicker?.(); } catch { el.focus(); }
         }}>📅</button>
       <input ref={nativeRef} type="date" className="rs-date-native" tabIndex={-1} aria-hidden
-        min={p.q.settings.minDate} max={p.q.settings.maxDate} value={stored}
-        onChange={(e) => { const v = e.target.value || null; p.onChange(v); setText(formatDateAs(v, fmt)); setBad(false); }} />
-      {bad && <span className="rs-date-hint" data-testid="date-format-hint">Please enter the date as {datePlaceholder(fmt)}.</span>}
+        min={min} max={max} value={stored}
+        onChange={(e) => { const v = e.target.value || null; onChange(v); setText(formatDateAs(v, fmt)); setBad(false); }} />
+      {bad && <span className="rs-date-hint" data-testid={`${testid === "date-input" ? "date" : testid}-format-hint`}>Please enter the date as {datePlaceholder(fmt)}.</span>}
     </span>
   );
 }
@@ -1007,14 +1015,25 @@ export function TimeInput(p: QRProps) {
  */
 export function ListInput(p: QRProps & { numeric: boolean }) {
   const view = effectiveQuestion(p.q, ctxOf(p));
-  const cols = p.q.settings.columnsLayout ?? 1;
+  const cols = layoutColumns(p.q, resolveVariant(p.q.variant)?.renderer);
+  /*
+   * DATE/TIME RANGE (October 2026 review): the From / To ends use the range's
+   * chosen format — a date format (MM/DD/YYYY by default) or 12 / 24-hour
+   * time — instead of the browser's own mm/dd/yyyy. A form field outside a
+   * range keeps its native input unless the author chose a format.
+   */
+  const isRange = p.q.variant === "datetime.date_range";
+  const rangeFormats = {
+    date: (p.q.settings.dateFormat ?? (isRange ? "MM/DD/YYYY" : undefined)) as DateFormat | undefined,
+    time: p.q.settings.timeFormat ?? (isRange ? "12" : undefined),
+  };
 
   if (view.rows.length > 0) {
     const vals = (p.value ?? {}) as Record<string, unknown>;
     const setField = (rc: string, v: unknown) => p.onChange({ ...vals, [rc]: v });
     return (
       <div
-        className={cols > 1 ? `rs-options cols-${Math.min(cols, 4)}` : "rs-options"}
+        className={cols > 1 ? `rs-options cols-${cols}` : "rs-options"}
         style={{ maxWidth: cols > 1 ? undefined : 520 }}
       >
         {view.rows.map((row) => {
@@ -1033,6 +1052,17 @@ export function ListInput(p: QRProps & { numeric: boolean }) {
            * a message containing markup would not have matched at all.
            */
           const err = p.errors.find((e) => e.rowCode === rc);
+          /*
+           * A NUMERIC FIELD'S OWN TEXT AND A BOX ITS SIZE (October 2026
+           * review, Numeric List): "Amount: [ 100 ] USD", "$ [ 250 ]" — per
+           * field, left or right — and a box as wide as the number it takes,
+           * worked out from the field's own bounds and decimals rather than
+           * stretched across the card or set by hand.
+           */
+          const isNumeric = ["number", "decimal", "integer", "currency"].includes(ft);
+          const own = isNumeric ? customAffix(row.meta as never) : null;
+          const bound = (k: string) => { const r = (row.validation ?? []).find((x) => x.kind === k) as { value?: unknown } | undefined; const n = Number(r?.value); return r && Number.isFinite(n) ? n : null; };
+          const boxCh = isNumeric ? numericBoxCh({ min: bound("min_value"), max: bound("max_value"), whole: ft === "integer", decimals: ft === "currency" ? 2 : null }) : null;
           return (
             <div key={rc} {...anchor("row", rc)}>
               <div className="rs-field-row">
@@ -1040,6 +1070,7 @@ export function ListInput(p: QRProps & { numeric: boolean }) {
                   <span dangerouslySetInnerHTML={{ __html: row.label }} />
                   {row.required && <span className="rs-req"> *</span>}
                 </span>
+                {own?.side === "left" && <span className="rs-affix-text left" data-testid={`field-affix-left-${rc}`}>{own.text}</span>}
                 {ip.prefix && <span className="rs-prefix">{ip.prefix}</span>}
                 {ip.multiline ? (
                   <textarea
@@ -1055,12 +1086,25 @@ export function ListInput(p: QRProps & { numeric: boolean }) {
                     country={typeof row.meta?.phoneCountry === "string" ? row.meta.phoneCountry : p.q.settings.phoneCountry}
                     readOnly={p.q.settings.readOnly} placeholder={row.placeholder}
                     ariaLabel={row.label.replace(/<[^>]*>/g, "")} testid={`phone-input-${rc}`} />
+                ) : ft === "date" && rangeFormats.date ? (
+                  /* a Date/Time Range draws both ends in its one chosen format */
+                  <FormattedDateField value={v} fmt={rangeFormats.date} testid={`range-date-${rc}`}
+                    label={row.label.replace(/<[^>]*>/g, "")} readOnly={p.q.settings.readOnly}
+                    min={p.q.settings.minDate} max={p.q.settings.maxDate}
+                    onChange={(x) => setField(rc, x)} />
+                ) : ft === "time" && rangeFormats.time ? (
+                  <TimeSelects testid={`range-time-${rc}`} label={row.label.replace(/<[^>]*>/g, "")}
+                    value={v} readOnly={p.q.settings.readOnly}
+                    hour12={rangeFormats.time === "12"} seconds={!!p.q.settings.showSeconds}
+                    onChange={(x) => setField(rc, x)} />
                 ) : ["number", "decimal", "integer", "currency"].includes(ft) ? (
                   <NumberField
-                    className="rs-input"
+                    className="rs-input rs-numbox"
                     placeholder={row.placeholder}
                     value={v}
                     readOnly={p.q.settings.readOnly}
+                    decimals={ft === "integer" ? 0 : undefined}
+                    style={{ width: `calc(${boxCh}ch + 26px)` }}
                     onChange={(n) => setField(rc, n)}
                   />
                 ) : (
@@ -1076,6 +1120,7 @@ export function ListInput(p: QRProps & { numeric: boolean }) {
                 )}
                 {/* a symbol on the right when the author put it there */}
                 {ip.suffix && <span className="rs-prefix">{ip.suffix}</span>}
+                {own?.side === "right" && <span className="rs-affix-text right" data-testid={`field-affix-right-${rc}`}>{own.text}</span>}
               </div>
               {err && <ValidationMessageText error={err} />}
             </div>
@@ -1805,12 +1850,10 @@ export function ChoiceButtons(p: QRProps & { multi: boolean }) {
   return (
     <div>
       {searchBox}
-      {/* same "auto fits the width" rule as the radio/checkbox list above —
-          Button Select is the variant the review raised it against */}
+      {/* the same layout as the radio/checkbox list above: a number of columns, one by default,
+          or "horizontal row" — the buttons' own wrapping row */}
       <div className={`rs-choicebtns ${
-        p.q.settings.columnsLayout
-          ? `cols-${Math.min(Math.max(p.q.settings.columnsLayout, 1), 4)}`
-          : filtered.length >= AUTO_FLOW_FROM ? "auto" : ""
+        p.q.settings.optionOrientation === "horizontal" ? "horizontal" : `cols-${layoutColumns(p.q, "buttons")}`
       }`}>
         {filtered.map((o) => {
           const sel = vals.some((v) => String(v) === String(o.code));
@@ -1841,10 +1884,10 @@ export function ChoiceCards(p: QRProps & { multi: boolean }) {
     if (p.multi) p.onChange(toggleMultiValue(vals, o.code, options, p.q.settings.maxSelections));
     else p.onChange(String(p.value) === String(o.code) ? null : o.code);
   };
-  const cols = p.q.settings.columnsLayout ?? 2;
+  const cols = layoutColumns(p.q, "cards");
   return (
     <div>
-    <div className={`rs-cardgrid cols-${Math.min(Math.max(cols, 1), 4)}`}>
+    <div className={`rs-cardgrid cols-${cols}`}>
       {options.map((o) => {
         const sel = vals.some((v) => String(v) === String(o.code));
         const desc = (o.meta?.description as string) ?? "";
@@ -2530,10 +2573,26 @@ export function QuestionRenderer(props: QRProps) {
    * otherwise. Piped values are already escaped by resolvePiping; a text
    * with no markup is returned untouched.
    */
-  /* sanitised, then players placed and pictures that piped to nothing dropped (`expandMediaEmbeds`) */
-  const safe = (html: string) => (html.includes("<") ? expandMediaEmbeds(sanitizeHtml(html)) : html);
-  const text = safe(resolvePiping(p.q.text, ctx));
-  const instruction = p.q.instruction ? safe(resolvePiping(p.q.instruction, ctx)) : null;
+  /*
+   * sanitised (the author's own stylesheet kept), unwrapped, its CSS scoped to
+   * this question, then players placed and pictures that piped to nothing
+   * dropped — `renderRichContent`, the one pipeline for a question's content
+   */
+  const textScope = `${p.q.id}-text`;
+  const instructionScope = `${p.q.id}-instruction`;
+  const text = renderRichContent(resolvePiping(p.q.text, ctx), textScope, { allowFrames: p.q.type === "html" });
+  const instruction = p.q.instruction ? renderRichContent(resolvePiping(p.q.instruction, ctx), instructionScope) : null;
+  /*
+   * A TEXT THAT CARRIES ITS OWN STYLESHEET IS A DOCUMENT, NOT A HEADING.
+   * The question text normally reads as a heading (weight, size, colour);
+   * an author who writes `<style>` beside a chess board or a table has
+   * styled it themselves, and inherits plain body text instead — the same
+   * result a Text / HTML block gives the same HTML (October 2026 review).
+   */
+  const textIsDocument = hasStyleBlock(text);
+  /* inserted media laid out as a carousel gets its ← → and dots (`mediaCarousel.ts`) */
+  const cardRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => enhanceMediaCarousels(cardRef.current?.closest<HTMLElement>(".rs-card") ?? cardRef.current), [text, instruction]);
 
   // Variant renderer dispatch (family/variant architecture). Questions
   // without a variant — every pre-existing survey — fall through to the
@@ -2628,7 +2687,8 @@ export function QuestionRenderer(props: QRProps) {
       aria-invalid={p.errors.length > 0 || undefined}
       {...anchor("question", p.q.id)}
     >
-          <div {...anchor("text")} dangerouslySetInnerHTML={{ __html: resolvePiping(p.q.customHtml ?? p.q.text, ctx) }} />
+          {/* the block's content IS its text (`normalizeQuestionContent` moved any legacy HTML Content there) */}
+          <div {...anchor("text")} className="rs-qhtml" ref={cardRef} {...{ [SCOPE_ATTR]: textScope }} dangerouslySetInnerHTML={{ __html: text }} />
           {/* a content block's media was configured in the builder and never drawn (Prince 11 §4) */}
           <QuestionMedia q={p.q} anchor={anchor("media")} decorative={!!a11y?.decorative} altText={a11y?.altText} />
         </div>
@@ -2650,6 +2710,7 @@ export function QuestionRenderer(props: QRProps) {
       {...anchor("question", p.q.id)}
     >
       {p.q.customCss && <style dangerouslySetInnerHTML={{ __html: p.q.customCss }} />}
+      <span ref={cardRef} hidden aria-hidden />
       {/*
         * ABOVE THE QUESTION, when the author asked for it.
         *
@@ -2662,16 +2723,22 @@ export function QuestionRenderer(props: QRProps) {
       {p.q.settings.validationPosition === "above" && (
         <ValidationBlock id={`${p.q.id}__err`} errors={p.errors} />
       )}
-      <p className="rs-qtext" {...anchor("text")}>
-        <span dangerouslySetInnerHTML={{ __html: text }} />
-        {p.q.required && <span className="rs-required">*</span>}
-      </p>
-      {instruction && <p className="rs-qinstruction" {...anchor("instruction")} dangerouslySetInnerHTML={{ __html: instruction }} />}
+      {textIsDocument ? (
+        <div className="rs-qtext rs-qhtml" {...anchor("text")}>
+          <div {...{ [SCOPE_ATTR]: textScope }} dangerouslySetInnerHTML={{ __html: text }} />
+          {p.q.required && <span className="rs-required">*</span>}
+        </div>
+      ) : (
+        <p className="rs-qtext" {...anchor("text")}>
+          <span {...{ [SCOPE_ATTR]: textScope }} dangerouslySetInnerHTML={{ __html: text }} />
+          {p.q.required && <span className="rs-required">*</span>}
+        </p>
+      )}
+      {instruction && (hasStyleBlock(instruction)
+        ? <div className="rs-qinstruction rs-qhtml" {...anchor("instruction")} {...{ [SCOPE_ATTR]: instructionScope }} dangerouslySetInnerHTML={{ __html: instruction }} />
+        : <p className="rs-qinstruction" {...anchor("instruction")} {...{ [SCOPE_ATTR]: instructionScope }} dangerouslySetInnerHTML={{ __html: instruction }} />)}
       {!MEDIA_OWNING_RENDERERS.has(variantDef?.renderer ?? `base:${p.q.type}`) && (
         <QuestionMedia q={p.q} anchor={anchor("media")} decorative={!!a11y?.decorative} altText={a11y?.altText} />
-      )}
-      {p.q.customHtml && p.q.type !== "custom_component" && (
-        <div dangerouslySetInnerHTML={{ __html: safe(resolvePiping(p.q.customHtml, ctx)) }} />
       )}
       {body}
       {p.q.customJs && p.q.type !== "custom_component" && <QuestionScript {...p} />}

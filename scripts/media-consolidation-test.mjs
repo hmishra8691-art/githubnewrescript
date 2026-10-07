@@ -135,7 +135,8 @@ assert.match(await page.textContent('[data-testid="media-insert-ok"]'), /Insert 
 await page.click('[data-testid="media-insert-ok"]');
 await page.waitForTimeout(500);
 let text = q(await readDef(), "q1").text;
-assert.match(text, /^Hello<div><img/, `below the text: ${text}`);
+/* several items are one group with a layout (Vertical by default — 06-10-2026 workbook, "Insert Media – Multiple Media Layout") */
+assert.match(text, /^Hello<div><div class="rs-media-group" data-rs-layout="vertical"[^>]*><div class="rs-media-cell"><img/, `below the text, as one vertical group: ${text}`);
 let st = imgStyles(text);
 assert.equal(st.length, 3);
 assert.match(st[0], /margin-left: auto; margin-right: auto/, "item 1 centred");

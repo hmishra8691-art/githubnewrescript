@@ -56,15 +56,27 @@ test("set_theme and set_custom_html are look-only: allowed in a look-only reques
   assert.deepEqual(c.rejected, []);
   const r = applySurveyActions(d, c.actions, { uxOnly: true });
   assert.equal(r.results[0].ok, true); assert.equal(r.results[1].ok, true);
-  assert.match(r.errors.join(" "), /custom HTML may not contain scripts, frames, styles, event handlers/);
-  assert.equal(r.uxOnly, true); assert.equal(r.structureUnchanged, true);
+  /*
+   * October 2026: HTML above a question's answers is part of its
+   * instruction (one place for a question's content). A look request may
+   * still add a decorative note — it lands in the instruction, and the
+   * outcome no longer claims the structure is unchanged, because what the
+   * respondent reads did change.
+   */
+  assert.equal(r.uxOnly, true); assert.equal(r.structureUnchanged, false);
   assert.equal(r.def.branding.colors.primary, "#c9a227");
-  assert.equal(r.def.questions[0].customHtml, "<p class=\"note\">Pick the one you use most.</p>");
+  assert.equal(r.def.questions[0].customHtml, undefined, "no rival copy of the content is written");
+  assert.match(String(r.def.questions[0].instruction), /<p class="note">Pick the one you use most\.<\/p>$/);
+  const content = applySurveyActions(d, coerceSurveyActions([{ op: "set_custom_html", target: "Q1", html: "<p class=\"note\">Pick the one you use most.</p>" }]).actions);
+  assert.equal(content.results[0].ok, true);
+  assert.match(String(content.def.questions[0].instruction), /<p class="note">Pick the one you use most\.<\/p>$/, "outside a look-only request it goes into the instruction");
+  assert.equal(content.def.questions[0].customHtml, undefined);
+  assert.match(applySurveyActions(d, coerceSurveyActions([{ op: "set_custom_html", target: "Q1", html: "<img src=x onerror=alert(1)>" }]).actions).errors.join(" "), /custom HTML may not contain scripts, frames, styles, event handlers/);
   assert.match(r.results[0].description, /Theme “Premium dark”: primary colour: #2563eb → #c9a227; page background colour: #f8fafc → #0b0b0f/);
   const diff = diffSurveys(d, r.def);
   assert.ok(diff.summary.some((l) => /^Theme: primary colour/.test(l)), diff.summary.join("\n"));
   // structure is not presentation: a label change is
   const labels = applySurveyActions(d, coerceSurveyActions([{ op: "set_theme", buttons: { nextLabel: "Continue" } }]).actions);
   assert.equal(labels.structureUnchanged, false, "button labels are wording the respondent reads, not look");
-  assert.deepEqual(withoutPresentation(r.def), withoutPresentation(d));
+  assert.deepEqual(withoutPresentation(applySurveyActions(d, coerceSurveyActions([{ op: "set_theme", label: "Premium dark", colors: { primary: "#c9a227", background: "#0b0b0f" } }]).actions, { uxOnly: true }).def), withoutPresentation(d), "a theme alone leaves the structure as it was");
 });

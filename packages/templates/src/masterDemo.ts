@@ -101,7 +101,7 @@ export function buildMasterDemoSurvey(surveyId = "master-demo"): SurveyDefinitio
   const open = (id: string, variableName: string, text: string, extra: Record<string, unknown> = {}) =>
     Q({ id, variableName, type: "long_text", text, ...extra });
   const info = (id: string, text: string, extra: Record<string, unknown> = {}) =>
-    Q({ id, variableName: id.toUpperCase(), type: "html", text, customHtml: text, ...extra });
+    Q({ id, variableName: id.toUpperCase(), type: "html", text, ...extra });
   const hidden = (id: string, variableName: string, text: string, extra: Record<string, unknown> = {}) =>
     Q({ id, variableName, type: "hidden", text, ...extra });
   const calculated = (id: string, variableName: string, text: string, expression: string, extra: Record<string, unknown> = {}) =>

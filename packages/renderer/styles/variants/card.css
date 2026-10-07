@@ -5,6 +5,7 @@
 .rs-flipgrid.cols-1 { grid-template-columns: 1fr; }
 .rs-flipgrid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .rs-flipgrid.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.rs-flipgrid.cols-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 
 .rs-flipcard { position: relative; height: 300px; perspective: 1200px; min-width: 0; }
 .rs-flipcard-inner {

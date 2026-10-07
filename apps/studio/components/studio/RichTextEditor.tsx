@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
-import { sanitizeHtml, stripHtmlText } from "@rescript/engine";
+import { sanitizeHtml, stripHtmlText, mediaGroupFromAttrs, type SanitizeOptions, type MediaGroup } from "@rescript/engine";
+import { surfaceHtml, restoreSurfaceHtml, RTE_SCOPE_ATTR } from "@/lib/rteStyles";
 import { InsertPipingButton, tokensToChips, chipsToTokens } from "./PipingPicker";
 import { MediaInsertDialog, mediaValueFromElement, type MediaApply, type MediaInsertValue } from "./MediaInsertDialog";
 import { useStudio } from "./store";
@@ -133,12 +134,17 @@ export function RteToolbar({ exec, onLink, onMedia, insertPipe, questionId, mode
 }
 
 /** The editing behaviours both surfaces share: sync, commit, exec, link, media. */
-function useRichSurface(value: string, onChange: (html: string) => void, mode: "visual" | "html", placement = false) {
+function useRichSurface(value: string, onChange: (html: string) => void, mode: "visual" | "html", placement = false, clean: SanitizeOptions = {}) {
   const s = useStudio();
+  /* an author's stylesheet is shown scoped to THIS surface (`rteStyles.ts`) */
+  const scopeId = React.useId().replace(/[^a-zA-Z0-9_-]/g, "");
+  const show = React.useCallback((html: string, codeFor: (r: string) => string) => surfaceHtml(tokensToChips(html || "", codeFor), scopeId), [scopeId]);
+  const read = React.useCallback((html: string) => restoreSurfaceHtml(chipsToTokens(html)), []);
   const surface = React.useRef<HTMLDivElement>(null);
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastCommitted = React.useRef(value);
-  const [media, setMedia] = React.useState<{ initial: Partial<MediaInsertValue> | null; target: HTMLElement | null } | null>(null);
+  const cleanOpts = React.useMemo<SanitizeOptions>(() => ({ keepStyles: !!clean.keepStyles, allowFrames: !!clean.allowFrames }), [clean.keepStyles, clean.allowFrames]);
+  const [media, setMedia] = React.useState<{ initial: Partial<MediaInsertValue> | null; target: HTMLElement | null; group?: MediaGroup | null } | null>(null);
 
   const codeFor = React.useCallback(
     (ref: string) => s.def.questions.find((q) => q.code === ref || q.id === ref)?.code ?? ref,
@@ -152,18 +158,18 @@ function useRichSurface(value: string, onChange: (html: string) => void, mode: "
     if (!el) return;
     if (document.activeElement === el || el.contains(document.activeElement)) return;
     if (value !== lastCommitted.current || (el.innerHTML === "" && value)) {
-      el.innerHTML = tokensToChips(value || "", codeFor);
+      el.innerHTML = show(value || "", codeFor);
       lastCommitted.current = value;
     }
-  }, [value, mode, codeFor]);
+  }, [value, mode, codeFor, show]);
 
   const commit = React.useCallback((html: string, immediate = false) => {
-    const clean = sanitizeHtml(chipsToTokens(html));
+    const clean = sanitizeHtml(read(html), cleanOpts);
     lastCommitted.current = clean;
     if (timer.current) clearTimeout(timer.current);
     if (immediate) onChange(clean);
     else timer.current = setTimeout(() => onChange(clean), 300);
-  }, [onChange]);
+  }, [onChange, read, cleanOpts]);
 
   const exec = (cmd: string, arg?: string) => {
     surface.current?.focus();
@@ -191,7 +197,9 @@ function useRichSurface(value: string, onChange: (html: string) => void, mode: "
     const el = t.closest?.('img, video, audio, [data-rs-media="embed"]') as HTMLElement | null;
     if (!el || !surface.current?.contains(el)) return;
     e.preventDefault();
-    setMedia({ initial: mediaValueFromElement(el), target: el });
+    /* an item in a group of several: its group's layout comes along, editable in the dialog */
+    const groupEl = el.closest(".rs-media-group") as HTMLElement | null;
+    setMedia({ initial: mediaValueFromElement(el), target: el, group: groupEl ? mediaGroupFromAttrs((n) => groupEl.getAttribute(n)) : null });
   };
   const openMedia = () => setMedia({ initial: null, target: null });
   /*
@@ -205,6 +213,15 @@ function useRichSurface(value: string, onChange: (html: string) => void, mode: "
     const target = media?.target && root?.contains(media.target) ? media.target : null;
     const position = apply?.position ?? (target ? "keep" : "cursor");
     if (target && root) {
+      /* the group the edited item sits in takes the layout chosen for it */
+      const groupEl = target.closest(".rs-media-group") as HTMLElement | null;
+      if (groupEl && apply?.group) {
+        const g = apply.group;
+        groupEl.setAttribute("data-rs-layout", g.layout);
+        if (g.layout === "grid") groupEl.setAttribute("data-rs-cols", String(g.columns ?? 2)); else groupEl.removeAttribute("data-rs-cols");
+        groupEl.setAttribute("data-rs-align", g.align ?? "left");
+        groupEl.setAttribute("style", `gap: ${g.gap ?? 10}px`);
+      }
       if (apply?.remove || position === "above" || position === "below") removeMediaElement(target, root);
       else target.outerHTML = html;
       if (!apply?.remove && (position === "above" || position === "below")) placeMedia(root, html, position);
@@ -219,10 +236,10 @@ function useRichSurface(value: string, onChange: (html: string) => void, mode: "
     insertHtml(`${html}&nbsp;`);
   };
   const mediaDialog = (
-    media && <MediaInsertDialog open initial={media.initial} onClose={() => setMedia(null)} onInsert={applyMedia} placement={placement} />
+    media && <MediaInsertDialog open initial={media.initial} group={media.group} onClose={() => setMedia(null)} onInsert={applyMedia} placement={placement} />
   );
 
-  return { surface, commit, exec, insertHtml, onStyle, addLink, onSurfaceClick, openMedia, mediaDialog, codeFor, mediaOpen: !!media };
+  return { surface, commit, exec, insertHtml, onStyle, addLink, onSurfaceClick, openMedia, mediaDialog, codeFor, mediaOpen: !!media, show, read, scopeId, cleanOpts };
 }
 
 /** media placed above or below the question text sits on its own line */
@@ -234,6 +251,7 @@ function placeMedia(root: HTMLElement, html: string, position: "above" | "below"
 /** take one picture or player out, and the line it stood on if that is now empty */
 function removeMediaElement(el: HTMLElement, root: HTMLElement) {
   const parent = el.parentElement;
+  const group = el.closest(".rs-media-group") as HTMLElement | null;
   /* the &nbsp; the cursor insert put after it goes with it */
   const next = el.nextSibling;
   if (next && next.nodeType === Node.TEXT_NODE && /^\u00a0$/.test(next.textContent ?? "")) next.remove();
@@ -241,12 +259,21 @@ function removeMediaElement(el: HTMLElement, root: HTMLElement) {
   if (parent && parent !== root && /^(DIV|P|SPAN)$/.test(parent.tagName)
     && !(parent.textContent ?? "").replace(/\u00a0/g, " ").trim()
     && !parent.querySelector('img, video, audio, [data-rs-media]')) parent.remove();
+  /* the last item out of a group of several takes the group with it */
+  if (group && root.contains(group) && !group.querySelector('img, video, audio, [data-rs-media]')) group.remove();
 }
 
 /* ================================================================ block editor */
 
-export function RichTextEditor({ value, onChange, placeholder, autoFocusId, questionId, mediaPlacement }: {
+export function RichTextEditor({ value, onChange, placeholder, autoFocusId, questionId, mediaPlacement, keepStyles, allowFrames }: {
   value: string;
+  /**
+   * A question's text or instruction: the author's own `<style>` is kept
+   * (and scoped when drawn) — October 2026 review. Off elsewhere.
+   */
+  keepStyles?: boolean;
+  /** a Text / HTML block: frames, objects and forms are kept, as they always were drawn */
+  allowFrames?: boolean;
   /**
    * The QUESTION TEXT editor: Insert media offers Above / Below question,
    * several items and players (1-10-26 review). Off for every other editor.
@@ -261,7 +288,7 @@ export function RichTextEditor({ value, onChange, placeholder, autoFocusId, ques
 }) {
   const [mode, setMode] = React.useState<"visual" | "html">("visual");
   const [htmlDraft, setHtmlDraft] = React.useState(value);
-  const r = useRichSurface(value, onChange, mode, !!mediaPlacement);
+  const r = useRichSurface(value, onChange, mode, !!mediaPlacement, { keepStyles, allowFrames });
   const { surface, commit, exec, codeFor } = r;
 
   /** Insert a piping token at the caret, as a chip. */
@@ -277,11 +304,11 @@ export function RichTextEditor({ value, onChange, placeholder, autoFocusId, ques
   const switchMode = (m: "visual" | "html") => {
     if (m === mode) return;
     if (m === "visual") {
-      const clean = sanitizeHtml(chipsToTokens(htmlDraft));
+      const clean = sanitizeHtml(chipsToTokens(htmlDraft), r.cleanOpts);
       commit(clean, true);
-      if (surface.current) surface.current.innerHTML = tokensToChips(clean, codeFor);
+      if (surface.current) surface.current.innerHTML = r.show(clean, codeFor);
     } else if (surface.current) {
-      setHtmlDraft(chipsToTokens(surface.current.innerHTML));
+      setHtmlDraft(r.read(surface.current.innerHTML));
     }
     setMode(m);
   };
@@ -297,6 +324,7 @@ export function RichTextEditor({ value, onChange, placeholder, autoFocusId, ques
         ref={surface}
         id={autoFocusId}
         className="rte-surface"
+        {...{ [RTE_SCOPE_ATTR]: r.scopeId }}
         contentEditable
         suppressContentEditableWarning
         data-placeholder={placeholder ?? "Question text — formatting and piping like {{Q1}} allowed"}
@@ -421,11 +449,11 @@ export function InlineRichText({ value, onChange, placeholder, questionId, testI
   const switchMode = (m: "visual" | "html") => {
     if (m === mode) return;
     if (m === "visual") {
-      const clean = sanitizeHtml(chipsToTokens(htmlDraft));
+      const clean = sanitizeHtml(chipsToTokens(htmlDraft), r.cleanOpts);
       commit(clean, true);
-      if (surface.current) surface.current.innerHTML = tokensToChips(clean, codeFor);
+      if (surface.current) surface.current.innerHTML = r.show(clean, codeFor);
     } else if (surface.current) {
-      setHtmlDraft(chipsToTokens(surface.current.innerHTML));
+      setHtmlDraft(r.read(surface.current.innerHTML));
     }
     setMode(m);
   };

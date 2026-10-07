@@ -94,6 +94,9 @@ const SETTING_GROUPS = {
   quiz: ["showFeedback", "pointsPerCorrect"],
   attention_codes: ["expectedCodes", "onFail"],
   range_pair: ["rangePair"],
+  /* how a number is typed and shown: currency, unit, stepper, places, sign, the author's own beside-text */
+  number_input: ["currencyCode", "currencySymbol", "symbolSide", "unitLabel", "stepper",
+                 "decimalPlaces", "numberSign", "affixText", "affixSide"],
   design_ref: ["designRef"],
   placeholder: ["placeholder"],
   interview_video: ["interviewVideo", "requireWatch", "allowSeek", "allowReplay",
@@ -105,6 +108,9 @@ const SETTING_GROUPS = {
 } as const;
 
 type SettingGroup = keyof typeof SETTING_GROUPS;
+
+/** every setting some shape owns — the only ones that can be left over */
+const CLAIMED_SETTINGS: ReadonlySet<string> = new Set(Object.values(SETTING_GROUPS).flat());
 
 /**
  * Settings every shape reads, whatever it is: presentation, stimulus,
@@ -154,6 +160,9 @@ const SETTING_LABEL: Record<string, string> = {
   showFeedback: "Show feedback", pointsPerCorrect: "Points per correct",
   expectedCodes: "Expected codes", onFail: "On failure",
   rangePair: "Range pair", designRef: "Design file", placeholder: "Placeholder",
+  currencyCode: "Currency", currencySymbol: "Currency symbol", symbolSide: "Symbol side",
+  unitLabel: "Unit", stepper: "Stepper", decimalPlaces: "Decimal places", numberSign: "Allowed numbers",
+  affixText: "Text beside the number", affixSide: "Side of the text",
 };
 
 /* ------------------------------------------------------------------- the table */
@@ -190,7 +199,7 @@ export const SHAPES: Record<ResponseModel, ShapeSpec> = {
   numeric: {
     label: "a number",
     axes: [],
-    groups: ["numeric_bounds", "scale_labels", "range_pair", "slider_layout", "placeholder"],
+    groups: ["numeric_bounds", "scale_labels", "range_pair", "slider_layout", "placeholder", "number_input"],
   },
   fields: {
     label: "a list of fields",
@@ -694,6 +703,16 @@ export function migrateQuestionType(
   const s = (q.settings ?? {}) as Record<string, unknown>;
   for (const key of Object.keys(s)) {
     if (s[key] === undefined) continue;
+    /*
+     * ONLY A SETTING THE TABLE CLAIMS CAN BE LEFT OVER. The table lists the
+     * settings that belong to one shape; a key it does not list at all —
+     * `optionSearch`, `validationPosition`, a date format, a card layout —
+     * is not "unknown, therefore dead". Treating it so reported a Currency
+     * question's own currency as "left over from an earlier question type"
+     * and offered to delete it (October 2026 review screenshot), and
+     * stripped the same keys on every type change.
+     */
+    if (!allowed.has(key) && !CLAIMED_SETTINGS.has(key)) continue;
     if (!allowed.has(key)) {
       delete s[key];
       add("removed", `settings.${key}`, `${SETTING_LABEL[key] ?? key} — ${toSpec.label} does not use it`);

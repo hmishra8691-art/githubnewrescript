@@ -187,6 +187,14 @@
 .rs-qtext { font-weight: var(--rs-heading-weight); font-size: var(--rs-q-size, 1.08em); margin: 0 0 4px; color: var(--rs-heading); font-family: var(--rs-heading-font, inherit); }
 .rs-shell a { color: var(--rs-link); }
 .rs-qinstruction { color: var(--rs-subtle); font-size: 0.9em; margin: 0 0 14px; }
+/*
+ * A question's own document — HTML that brought its stylesheet (a chess
+ * board, a styled table) — reads as body text the author styled, not as the
+ * heading. Wide content scrolls inside the card rather than widening the page.
+ */
+.rs-qtext.rs-qhtml { font-weight: normal; font-size: 1em; color: var(--rs-text); font-family: inherit; }
+.rs-qhtml { max-width: 100%; overflow-x: auto; }
+.rs-qinstruction.rs-qhtml { color: var(--rs-text); font-size: 1em; }
 .rs-required { color: var(--rs-error); margin-left: 4px; }
 
 .rs-options { display: flex; flex-direction: column; gap: var(--rs-option-gap, 8px); }
@@ -388,22 +396,25 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-options.cols-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .rs-options.cols-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .rs-options.cols-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.rs-options.cols-5 { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
 /* the option box itself: wrap rather than overflow, whatever the text is */
 .rs-option, .rs-choicebtn, .rs-cardopt, .rs-listrow, .rs-statement { min-width: 0; }
 .rs-option .lbl, .rs-choicebtn > span, .rs-cardopt-title, .rs-listrow-title > span, .rs-statement-text {
   min-width: 0; overflow-wrap: anywhere; word-break: break-word;
 }
 @media (max-width: 640px) {
-  .rs-options.cols-3, .rs-options.cols-4 { grid-template-columns: repeat(2, 1fr); }
+  .rs-options.cols-3, .rs-options.cols-4, .rs-options.cols-5 { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 440px) {
-  .rs-options.cols-2, .rs-options.cols-3, .rs-options.cols-4 { grid-template-columns: 1fr; }
+  .rs-options.cols-2, .rs-options.cols-3, .rs-options.cols-4, .rs-options.cols-5 { grid-template-columns: 1fr; }
 }
 .rs-optfilter { margin-bottom: 10px; max-width: 100%; }
 
 /* ---------- form-style list fields (req §3–5) ---------- */
 .rs-field-row { display: flex; gap: 10px; align-items: center; }
 .rs-field-row .flab { min-width: 150px; font-size: .93em; }
+/* a Numeric List box sized to its number (width set inline from the field's bounds — `numericBoxCh`) */
+.rs-field-row .rs-numbox { flex: 0 0 auto; max-width: 100%; }
 .rs-req { color: var(--rs-error); }
 .rs-prefix { color: var(--rs-subtle); }
 /* a currency or per-cent symbol sitting beside a numeric input */
@@ -418,7 +429,7 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-stepper > button:hover:not(:disabled) { border-color: var(--rs-primary); color: var(--rs-primary); }
 .rs-stepper > button:disabled { opacity: .4; cursor: not-allowed; }
 .rs-stepper-in { max-width: 96px; text-align: center; }
-.rs-stepper-unit { color: var(--rs-subtle); font-size: .92em; }
+.rs-stepper-unit, .rs-affix-text { color: var(--rs-subtle); font-size: .92em; white-space: nowrap; }
 /* a slider inside a grid cell — the control and its current value together */
 .rs-cellslider { display: inline-flex; align-items: center; gap: 8px; min-width: 120px; width: 100%; }
 .rs-cellslider input[type="range"] { flex: 1; min-width: 60px; accent-color: var(--rs-primary); }
@@ -426,6 +437,7 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-affixed .rs-prefix { font-weight: 600; color: var(--rs-text); }
 @media (max-width: 520px) {
   .rs-field-row { flex-direction: column; align-items: stretch; gap: 4px; }
+  .rs-field-row .rs-numbox { align-self: flex-start; }
   .rs-field-row .flab { min-width: 0; }
 }
 
@@ -438,7 +450,8 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-choicebtns.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .rs-choicebtns.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .rs-choicebtns.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-@media (max-width: 640px) { .rs-choicebtns.cols-3, .rs-choicebtns.cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.rs-choicebtns.cols-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@media (max-width: 640px) { .rs-choicebtns.cols-3, .rs-choicebtns.cols-4, .rs-choicebtns.cols-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 440px) { .rs-choicebtns[class*="cols-"] { grid-template-columns: minmax(0, 1fr); } }
 .rs-choicebtn {
   font: inherit; cursor: pointer; padding: 11px 20px; text-align: center;
@@ -453,7 +466,8 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-cardgrid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .rs-cardgrid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .rs-cardgrid.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-@media (max-width: 640px) { .rs-cardgrid.cols-3, .rs-cardgrid.cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.rs-cardgrid.cols-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@media (max-width: 640px) { .rs-cardgrid.cols-3, .rs-cardgrid.cols-4, .rs-cardgrid.cols-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 440px) { .rs-cardgrid[class*="cols-"] { grid-template-columns: 1fr; } }
 .rs-cardopt {
   position: relative; border: 1.5px solid var(--rs-border); border-radius: var(--rs-radius);

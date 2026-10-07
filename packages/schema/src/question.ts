@@ -6,6 +6,7 @@ import { AttentionCheck } from "./quality.js";
 import { AiQuestionOverride, SpokenScript } from "./aiConversation.js";
 import { MediaDisplay } from "./mediaDisplay.js";
 import { QuestionAnalysis } from "./analysisPlan.js";
+import { normalizeQuestionContent } from "./questionContent.js";
 
 /**
  * Question model.
@@ -864,7 +865,7 @@ export const InterviewVideo = z.object({
 });
 export type InterviewVideo = z.infer<typeof InterviewVideo>;
 
-export const Question = z.object({
+const QuestionObject = z.object({
   id: z.string(), // stable internal id, e.g. "q_age"
   code: z.string(), // display code, e.g. "Q1"
   /** Base variable name; expanded per option/row/column by the dictionary. */
@@ -975,6 +976,14 @@ export const Question = z.object({
       currencyCode: z.string().optional(),
       currencySymbol: z.string().optional(),
       symbolSide: z.enum(["left", "right"]).optional(),
+      /**
+       * THE AUTHOR'S OWN TEXT BESIDE A NUMBER (October 2026 review): any
+       * word, unit or symbol — "kg", "years", "per month", "+", "%" — on
+       * the left or the right, in every Numeric subtype. Quantity's older
+       * `unitLabel` is read as this when this is absent.
+       */
+      affixText: z.string().optional(),
+      affixSide: z.enum(["left", "right"]).optional(),
       /**
        * A LABEL ON A PARTICULAR POINT OF A SCALE.
        *
@@ -1249,7 +1258,7 @@ export const Question = z.object({
        */
       defaultDateMode: z.enum(["none", "current", "custom"]).optional(),
       defaultDate: z.string().optional(),
-      dateFormat: z.enum(["MM/DD/YYYY", "DD/MM/YYYY", "YYYY/MM/DD", "MM-DD-YYYY", "DD-MM-YYYY", "YYYY-MM-DD", "DD MMM YYYY", "MMM DD, YYYY"]).optional(),
+      dateFormat: z.enum(["MM/DD/YYYY", "DD/MM/YYYY", "YYYY/MM/DD", "MM-DD-YYYY", "DD-MM-YYYY", "YYYY-MM-DD", "DD MMM YYYY", "MMM DD, YYYY", "DD MMMM YYYY", "MMMM DD, YYYY"]).optional(),
       /**
        * TIME PICKER: the same three defaults, and 12- or 24-hour display with
        * or without seconds. Stored as HH:MM (or HH:MM:SS) in 24-hour form.
@@ -1448,9 +1457,18 @@ export const Question = z.object({
    * a default from the type and the research design.
    */
   analysis: QuestionAnalysis.optional(),
+  /**
+   * A CUSTOM COMPONENT'S TEMPLATE — the markup its script drives. On every
+   * other type this used to be a second, rival copy of the question's
+   * content ("HTML Content", "Custom HTML above the input"); it is migrated
+   * into the text / instruction on parse (`normalizeQuestionContent`) and no
+   * editor writes it any more.
+   */
   customHtml: z.string().optional(),
 
   notes: z.string().optional(),
   meta: z.record(z.any()).optional(),
 });
-export type Question = z.infer<typeof Question>;
+/* every parse — Studio, preview, runtime, import, clone, restore — normalises legacy content first */
+export const Question = z.preprocess(normalizeQuestionContent, QuestionObject);
+export type Question = z.infer<typeof QuestionObject>;

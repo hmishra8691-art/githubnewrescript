@@ -25,7 +25,31 @@ export const EMBEDDED_TYPES: { value: EmbeddedDataType; label: string; hint: str
   { value: "boolean", label: "Boolean", hint: "true / false (1, yes, y also count)" },
   { value: "date", label: "Date", hint: "YYYY-MM-DD" },
   { value: "datetime", label: "Date & time", hint: "ISO 8601 timestamp" },
+  { value: "url", label: "URL", hint: "a web address starting with http:// or https:// — kept exactly as written" },
 ];
+
+/**
+ * IS THIS A WEB ADDRESS THE PLATFORM CAN USE? (October 2026 review)
+ *
+ * Only `http://` and `https://` — the two a respondent's browser can be sent
+ * to, which the Studio says beside the field. Everything a real URL carries
+ * is accepted: a port, a path, a query string (`?id=123&src=panel`), nested
+ * or percent-encoded parameters, a fragment. Nothing is rewritten: the value
+ * is judged, never normalised, so what was typed or pasted is what is
+ * stored, piped and redirected to.
+ */
+export function checkUrlValue(raw: string): string | null {
+  const text = raw.trim();
+  if (!text) return "Enter a URL";
+  if (!/^https?:\/\//i.test(text)) return `"${text}" is not a URL — it must start with http:// or https://`;
+  if (/\s/.test(text)) return `"${text}" contains spaces — encode them as %20`;
+  let u: URL;
+  try { u = new URL(text); } catch { return `"${text}" is not a valid URL`; }
+  if (!u.hostname || (!u.hostname.includes(".") && u.hostname !== "localhost" && !/^\[[0-9a-f:]+\]$/i.test(u.hostname))) {
+    return `"${text}" has no domain name`;
+  }
+  return null;
+}
 
 export interface CoercionResult {
   value: string | number | boolean | null;
@@ -80,6 +104,17 @@ export function coerceEmbedded(type: EmbeddedDataType | undefined, raw: unknown)
       const d = new Date(text);
       if (Number.isNaN(d.getTime())) return { value: null, error: `"${text}" is not a date and time` };
       return { value: d.toISOString() };
+    }
+    case "url": {
+      /*
+       * The value is the address as written — not `new URL(x).href`, which
+       * would re-encode it, lower-case the host and add a trailing slash. A
+       * value that is not a usable address is no value, with the reason,
+       * as for every other type.
+       */
+      const problem = checkUrlValue(text);
+      if (problem) return { value: null, error: problem };
+      return { value: text };
     }
     default:
       return { value: String(raw) };

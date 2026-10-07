@@ -317,6 +317,21 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
   }
   if (a.op === "set_custom_html") {
     const q = env.lookups.question(a.target) ?? fail(`there is no question “${a.target}”`);
+    /*
+     * ONE PLACE FOR A QUESTION'S CONTENT (October 2026 review). Only a
+     * Custom Component still has a separate HTML template; on every other
+     * question, HTML shown above the answers is part of its instruction —
+     * the same rich content the Text Editor writes — so that is where this
+     * goes, appended, and it is a change to what the respondent reads.
+     */
+    if (q.type !== "custom_component") {
+      const html = a.html;
+      if (html === null) return fail(`${q.code} has no separate custom HTML any more — its content is the question text and instruction; ask for a change to those`);
+      if (/<\s*(script|iframe|object|embed|style|link|meta)\b|\bon[a-z]+\s*=|javascript:/i.test(html)) fail("custom HTML may not contain scripts, frames, styles, event handlers or javascript: links — behaviour goes in a behaviour, styling in a style");
+      const had = !!q.instruction?.trim();
+      q.instruction = `${q.instruction ?? ""}${html}`;
+      return { description: `Add to ${q.code}'s instruction (${html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 60) || "markup"}) — HTML above the answers is part of the instruction`, warnings: had ? [`${q.code}'s existing instruction is kept; the HTML follows it`] : [], touched: [q.id] };
+    }
     if (a.html === null) {
       if (!q.customHtml) fail(`${q.code} has no custom HTML`);
       delete (q as { customHtml?: string }).customHtml;

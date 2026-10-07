@@ -223,11 +223,48 @@ export function affixFor(settings: {
   currencySymbol?: string;
   symbolSide?: "left" | "right";
 }, fallback?: string): { text: string; side: "left" | "right" } | null {
+  /*
+   * THE SELECTED CURRENCY WINS (October 2026 review: "if I add anything
+   * [in 'or type a symbol'] the currency which we selected is not seen in
+   * the preview"). The typed symbol is no longer offered; a value an older
+   * question still holds is used only when no currency is selected — which
+   * is what a Percentage's seeded "%" is.
+   */
   const text =
-    settings.currencySymbol?.trim() ||
     CURRENCIES.find((c) => c.code === settings.currencyCode)?.symbol ||
+    settings.currencySymbol?.trim() ||
     fallback ||
     "";
   if (!text) return null;
   return { text, side: settings.symbolSide ?? "left" };
+}
+
+/**
+ * The author's own text beside a number — `affixText` on its side, or a
+ * Quantity's older `unitLabel` on the right (October 2026 review). For a
+ * Numeric List field the same pair lives on the field (`row.meta`).
+ */
+export function customAffix(src: { affixText?: unknown; affixSide?: unknown; unitLabel?: unknown } | undefined): { text: string; side: "left" | "right" } | null {
+  if (!src) return null;
+  const own = typeof src.affixText === "string" ? src.affixText.trim() : "";
+  const unit = typeof src.unitLabel === "string" ? src.unitLabel.trim() : "";
+  const text = own || unit;
+  if (!text) return null;
+  return { text, side: own ? (src.affixSide === "left" ? "left" : "right") : "right" };
+}
+
+/**
+ * HOW WIDE A NUMBER BOX NEEDS TO BE, in characters — decided by the system,
+ * never set by hand (October 2026 review: "the numeric input width should be
+ * automatically determined … based on the numeric input type and expected
+ * value length"). The widest value the bounds allow, its sign and its
+ * decimals, plus a little room; 8 when nothing bounds it.
+ */
+export function numericBoxCh(o: { min?: number | null; max?: number | null; decimals?: number | null; whole?: boolean }): number {
+  const digits = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? 0 : String(Math.trunc(Math.abs(n))).length);
+  const intDigits = Math.max(digits(o.min), digits(o.max));
+  const places = o.whole ? 0 : o.decimals != null ? Math.max(0, o.decimals) : intDigits ? 2 : 0;
+  const sign = o.min != null && o.min < 0 ? 1 : 0;
+  const want = intDigits ? intDigits + (places ? places + 1 : 0) + sign + 2 : 8;
+  return Math.max(6, Math.min(18, want));
 }

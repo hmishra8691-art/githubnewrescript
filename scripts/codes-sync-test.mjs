@@ -220,8 +220,20 @@ await loadDef(FIXTURE);
   assert.deepEqual(items, ["style", "script"]);
   assert.match(await page.$eval('[data-testid="ux-rule-decls"]', (e) => e.value), /border-radius: 17px;/);
   assert.match(await page.$eval('[data-testid="ux-script"]', (e) => e.value), /rs\.listen\("select", "self"/);
-  await openSection("custom-code");
-  assert.equal(await page.locator('label:has-text("Custom HTML") textarea').inputValue(), "<p class=\"note\">Pick the closest.</p>");
+  /*
+   * HTML above Q3's answers is part of Q3's INSTRUCTION since October 2026
+   * (one place for a question's content) — so it is shown in the instruction
+   * editor, and the Custom code panel no longer has a separate HTML box.
+   */
+  {
+    const d = await readDef();
+    const q3 = d.questions.find((q) => q.code === "Q3");
+    assert.match(q3.instruction ?? "", /<p class="note">Pick the closest\.<\/p>$/, `the note is in Q3's instruction: ${q3.instruction}`);
+    assert.equal(q3.customHtml, undefined);
+    await goTab("Questions"); await selectCard("Q3");
+    await openSection("custom-code");
+    assert.ok(await page.$('[data-testid="custom-html-moved"]'), "the Custom code panel points to the text / instruction");
+  }
   ok("10–11: CSS, JavaScript and HTML created by Intelligent mode appear in Question Studio → Properties (the same configuration)");
   // 12: edit by hand
   await page.fill('[data-testid="ux-rule-decls"]', "border-radius: 21px;");

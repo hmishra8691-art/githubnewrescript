@@ -234,7 +234,7 @@ test("UX in the outline and the proposal: existing items by id, the proof the st
   assert.match(o, /style uxs_\d+ “FREQ cards” on Q2 options: base \{border-radius:12px\} · hover \{transform:translateY\(-2px\)\}/);
   assert.match(o, /animation uxa_\d+ “Usage fade” on every question in “Usage”: fade-up on appear, 300ms, stagger 120ms/);
   assert.match(o, /behaviour uxb_\d+ “Nudge” on Q2: on answer → animate the Next button pulse/);
-  assert.match(o, /Q2 ux: layout: auto, 3 options/);
+  assert.match(o, /Q2 ux: layout: 1 column, 3 options/, "the layout is a number of columns (no auto, October 2026)");
   assert.match(o, /Theme: primary/);
   assert.doesNotMatch(copilotOutline(withUx), /Theme: primary/, "the theme only for a UX turn");
   // a look-only proposal: refused structure, proven unchanged

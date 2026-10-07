@@ -16,10 +16,13 @@
 export const DATE_FORMATS = [
   "MM/DD/YYYY", "DD/MM/YYYY", "YYYY/MM/DD", "MM-DD-YYYY",
   "DD-MM-YYYY", "YYYY-MM-DD", "DD MMM YYYY", "MMM DD, YYYY",
+  /* the month written out (October 2026 review, Date/Time Range) */
+  "DD MMMM YYYY", "MMMM DD, YYYY",
 ] as const;
 export type DateFormat = (typeof DATE_FORMATS)[number];
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const pad = (n: number, w = 2) => String(n).padStart(w, "0");
 
 /** A stored date (YYYY-MM-DD) in a display format; "" when it is not a date. */
@@ -28,6 +31,7 @@ export function formatDateAs(iso: unknown, fmt: DateFormat | undefined): string 
   if (!m) return "";
   const [, y, mo, d] = m;
   const mon = MONTHS[Number(mo) - 1] ?? mo;
+  const month = MONTH_NAMES[Number(mo) - 1] ?? mo;
   switch (fmt ?? "MM/DD/YYYY") {
     case "MM/DD/YYYY": return `${mo}/${d}/${y}`;
     case "DD/MM/YYYY": return `${d}/${mo}/${y}`;
@@ -37,6 +41,8 @@ export function formatDateAs(iso: unknown, fmt: DateFormat | undefined): string 
     case "YYYY-MM-DD": return `${y}-${mo}-${d}`;
     case "DD MMM YYYY": return `${d} ${mon} ${y}`;
     case "MMM DD, YYYY": return `${mon} ${d}, ${y}`;
+    case "DD MMMM YYYY": return `${d} ${month} ${y}`;
+    case "MMMM DD, YYYY": return `${month} ${d}, ${y}`;
   }
 }
 
@@ -65,8 +71,10 @@ export function parseDateAs(text: string, fmt: DateFormat | undefined): string |
     else [y, m, d] = [a, b, c];
     return true;
   };
+  /* a month by its name or any start of it from three letters ("Sep", "Sept", "September") — not "Septober" */
   const name = (s: string) => {
-    const i = MONTHS.findIndex((mn) => mn.toLowerCase() === s.slice(0, 3).toLowerCase());
+    const w = s.toLowerCase();
+    const i = MONTH_NAMES.findIndex((mn) => w.length >= 3 && mn.toLowerCase().startsWith(w));
     return i < 0 ? NaN : i + 1;
   };
   let ok = false;
@@ -77,12 +85,14 @@ export function parseDateAs(text: string, fmt: DateFormat | undefined): string |
     case "MM-DD-YYYY": ok = num(/^(\d{1,2})-(\d{1,2})-(\d{4})$/, "mdy"); break;
     case "DD-MM-YYYY": ok = num(/^(\d{1,2})-(\d{1,2})-(\d{4})$/, "dmy"); break;
     case "YYYY-MM-DD": ok = num(/^(\d{4})-(\d{1,2})-(\d{1,2})$/, "ymd"); break;
-    case "DD MMM YYYY": {
+    case "DD MMM YYYY":
+    case "DD MMMM YYYY": {
       const x = /^(\d{1,2})\s+([A-Za-z]{3,})\.?\s+(\d{4})$/.exec(t);
       if (x) { d = Number(x[1]); m = name(x[2]); y = Number(x[3]); ok = true; }
       break;
     }
-    case "MMM DD, YYYY": {
+    case "MMM DD, YYYY":
+    case "MMMM DD, YYYY": {
       const x = /^([A-Za-z]{3,})\.?\s+(\d{1,2}),?\s+(\d{4})$/.exec(t);
       if (x) { m = name(x[1]); d = Number(x[2]); y = Number(x[3]); ok = true; }
       break;

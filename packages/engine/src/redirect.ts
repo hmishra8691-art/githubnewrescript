@@ -1,7 +1,7 @@
 import type { SurveyDefinition } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
 import { resolvePiping } from "./piping.js";
-import { embeddedCatalog } from "./embedded.js";
+import { embeddedCatalog, embeddedTypeOf } from "./embedded.js";
 
 /**
  * Redirect URLs (reqs §17–18).
@@ -16,16 +16,39 @@ import { embeddedCatalog } from "./embedded.js";
 
 const TOKEN_RE = /\{\{\s*[^}]+?\s*\}\}/g;
 
+/**
+ * THE ADDRESS ITSELF, OR A VALUE IN IT (October 2026 review).
+ *
+ * A value pasted into a template is a parameter, and is percent-encoded so
+ * `Ben & Jerry` arrives whole. An embedded field declared as a URL that
+ * STARTS the template is different: it is the address — `{{ed.redirect_url}}`
+ * holding `https://example.com/survey?id=123` must send the respondent to
+ * exactly that, not to `https%3A%2F%2Fexample.com…`, which a browser reads as
+ * a relative path on the survey's own site. The declared type decides,
+ * never the value's appearance; a URL field placed later in a template
+ * (`…?return={{ed.redirect_url}}`) is a parameter, and is encoded, which is
+ * what keeps its own `?`, `&` and `=` intact on the other side.
+ */
+export function leadingUrlField(def: Pick<SurveyDefinition, "embeddedData" | "flow">, url: string): string | null {
+  const m = /^\s*\{\{\s*ed\.([^}\s]+)\s*\}\}/.exec(url ?? "");
+  if (!m) return null;
+  return embeddedTypeOf(def as SurveyDefinition, m[1]) === "url" ? m[1] : null;
+}
+
 /** Resolve piping tokens in a URL and percent-encode each resolved value. */
 export function resolveUrlTemplate(url: string, ctx: EvalContext): string {
   if (!url || !url.includes("{{")) return url;
-  return url.replace(TOKEN_RE, (token) => {
+  const base = ctx.def ? leadingUrlField(ctx.def, url) : null;
+  let first = true;
+  return url.trim().replace(TOKEN_RE, (token) => {
+    const leading = first && base !== null;
+    first = false;
     const resolved = resolvePiping(token, ctx);
     if (!resolved) return "";
     // resolvePiping HTML-escapes respondent-derived values; a URL needs the
     // raw text, encoded for a query string instead
     const plain = decodeEntities(resolved);
-    return encodeURIComponent(plain);
+    return leading ? plain : encodeURIComponent(plain);
   });
 }
 
@@ -53,13 +76,15 @@ export interface UrlCheck {
  * valid URL syntax, and refusing a template because of the very feature it is
  * using would be absurd.
  */
-export function validateRedirectUrl(url: string): UrlCheck {
+export function validateRedirectUrl(url: string, def?: Pick<SurveyDefinition, "embeddedData" | "flow">): UrlCheck {
   const tokens = [...(url ?? "").matchAll(TOKEN_RE)].map((m) => m[0]);
   const raw = (url ?? "").trim();
   if (!raw) return { ok: false, error: "Enter a URL", tokens };
   if (raw === "https://" || raw === "http://") return { ok: false, error: "Enter a URL", tokens };
 
-  const probe = raw.replace(TOKEN_RE, "TOKEN");
+  /* the address comes from a URL-typed field: what follows it is checked against a stand-in address */
+  const base = def ? leadingUrlField(def, raw) : null;
+  const probe = (base ? raw.replace(/^\s*\{\{[^}]+\}\}/, "https://example.com") : raw).replace(TOKEN_RE, "TOKEN");
   if (!/^https?:\/\//i.test(probe)) {
     return { ok: false, error: "URL must start with https:// (or http://)", tokens };
   }
@@ -71,6 +96,9 @@ export function validateRedirectUrl(url: string): UrlCheck {
   }
   if (!parsed.hostname || !parsed.hostname.includes(".")) {
     return { ok: false, error: "That URL has no domain name", tokens };
+  }
+  if (base) {
+    return { ok: true, warning: `The address comes from {{ed.${base}}} (a URL field) — it is used exactly as captured`, tokens };
   }
   if (parsed.protocol === "http:") {
     return {

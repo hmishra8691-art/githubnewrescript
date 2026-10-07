@@ -1496,7 +1496,7 @@ export function PropertiesPanel() {
 
       {showSec("Custom code") && (
       <CollapsibleSection id="custom-code" title="Custom code"
-        active={!!q.customJs || !!q.customCss || !!q.customHtml}>
+        active={!!q.customJs || !!q.customCss || (q.type === "custom_component" && !!q.customHtml)}>
       <label className="f"><span>Custom JavaScript (question scope)</span>
         <textarea className="ta code" style={{ minHeight: 90 }} value={q.customJs ?? ""}
           placeholder="// runs via the script host; use get()/set()/setCalc()…"
@@ -1504,9 +1504,23 @@ export function PropertiesPanel() {
       <label className="f"><span>Custom CSS</span>
         <textarea className="ta code" style={{ minHeight: 60 }} value={q.customCss ?? ""}
           onChange={(e) => patch({ customCss: e.target.value || undefined })} /></label>
-      <label className="f"><span>Custom HTML (above the input)</span>
-        <textarea className="ta code" style={{ minHeight: 60 }} value={q.customHtml ?? ""}
-          onChange={(e) => patch({ customHtml: e.target.value || undefined })} /></label>
+      {/*
+        * "CUSTOM HTML (ABOVE THE INPUT)" IS GONE (October 2026 review): it was
+        * a second, separately authored copy of the question's content — and
+        * on a Text / HTML block, the same field as its "HTML content". HTML
+        * above the answers is written in the question text or the
+        * instruction; older values were moved there on load. Only a Custom
+        * Component keeps a template of its own, which its script drives.
+        */}
+      {q.type === "custom_component" ? (
+        <label className="f"><span>Component HTML (the template your script drives)</span>
+          <textarea className="ta code" style={{ minHeight: 60 }} value={q.customHtml ?? ""} data-testid="component-html"
+            onChange={(e) => patch({ customHtml: e.target.value || undefined })} /></label>
+      ) : (
+        <p className="muted" style={{ fontSize: 12.5 }} data-testid="custom-html-moved">
+          HTML shown with this question is written in the question text or the instruction (HTML tab) — with its own &lt;style&gt;, scoped to this question.
+        </p>
+      )}
 
       <label className="f"><span>Programmer notes</span>
         <textarea className="ta" value={q.notes ?? ""}

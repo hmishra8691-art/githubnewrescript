@@ -29,7 +29,7 @@ import { describeCycle, detectLogicCycles, orderIndex } from "./dependencies.js"
 import { MAX_LOOP_DEPTH, MAX_LOOP_PRODUCT, loopNodes, loopVariableNames, maxLoopIterations, possibleLoopItems, questionIdsInLoop } from "./loops.js";
 import { listFillVariableNames } from "./listFill.js";
 import { buildVariableDictionary } from "./variables.js";
-import { embeddedCatalog, isNamedEmbeddedField } from "./embedded.js";
+import { embeddedCatalog, isNamedEmbeddedField, embeddedFieldName, coerceEmbedded } from "./embedded.js";
 import { gridAxes, gridScaleOptions } from "./gridAxes.js";
 import { staleFields, shapeHasAxis } from "./questionShape.js";
 import { honoursColumns, drawsOptionImages, honoursOrientation } from "./rendererReads.js";
@@ -1160,6 +1160,26 @@ export function lintStructure(def: SurveyDefinition): LogicIssue[] {
     for (const n of nodes ?? []) {
       if (n?.type === "embedded_data") {
         const blank = (n.fields ?? []).filter((f: any) => !isNamedEmbeddedField(f)).length;
+        /*
+         * A FIXED VALUE OR DEFAULT ITS OWN TYPE CANNOT READ (October 2026
+         * review: "reject clearly malformed URLs"). A URL field whose fixed
+         * value is `example.com/x` would capture nothing for every
+         * respondent; an Integer whose default is "abc" likewise. That is
+         * known before anyone answers, so it blocks release, said in the
+         * type's own words — the same reading the runtime applies.
+         */
+        for (const f of n.fields ?? []) {
+          if (!isNamedEmbeddedField(f) || !f.dataType) continue;
+          const checks: [string, unknown][] = [];
+          if (f.source === "static" && f.value) checks.push(["fixed value", f.value]);
+          if (f.source !== "static" && f.defaultValue) checks.push(["default value", f.defaultValue]);
+          for (const [what, raw] of checks) {
+            const r = coerceEmbedded(f.dataType, raw);
+            if (r.error && r.value === null) {
+              issues.push({ level: "error", path: "flow", message: `Embedded data “${embeddedFieldName(f)}”: its ${what} ${r.error.replace(/^"[^"]*" /, "")} (declared type: ${f.dataType}).` });
+            }
+          }
+        }
         if (blank) {
           issues.push({
             level: "warning", path: "flow",

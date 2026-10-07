@@ -193,8 +193,12 @@ export function EmbeddedDataEditor({ node, onChange }: {
             <div className="ed-row2">
               {f.source === "static" && (
                 <label className="f" style={{ marginBottom: 0 }}>
-                  <span>Value</span>
-                  <input className="input" data-testid="ed-value" value={f.value ?? ""}
+                  <span>Value{dataType === "url" ? " — a web address (http:// or https://), kept exactly as typed" : ""}</span>
+                  {/* the value is stored as typed: no trimming, re-encoding or reformatting — the type reads it, never rewrites it */}
+                  <input className={`input${dataType === "url" ? " mono" : ""}`} data-testid="ed-value" value={f.value ?? ""}
+                    inputMode={dataType === "url" ? "url" : undefined} spellCheck={dataType === "url" ? false : undefined}
+                    autoCapitalize={dataType === "url" ? "off" : undefined} autoCorrect={dataType === "url" ? "off" : undefined}
+                    placeholder={dataType === "url" ? "https://example.com/survey?id=123" : undefined}
                     onChange={(e) => setField(i, { value: e.target.value })} />
                 </label>
               )}
@@ -212,8 +216,9 @@ export function EmbeddedDataEditor({ node, onChange }: {
               )}
               <label className="f" style={{ marginBottom: 0, maxWidth: 260 }}>
                 <span>Default value {f.source === "static" ? "(unused for a fixed value)" : "(when nothing arrives)"}</span>
-                <input className="input" data-testid="ed-default" value={f.defaultValue ?? ""}
-                  placeholder={dataType === "integer" ? "25" : dataType === "boolean" ? "false" : ""}
+                <input className={`input${dataType === "url" ? " mono" : ""}`} data-testid="ed-default" value={f.defaultValue ?? ""}
+                  inputMode={dataType === "url" ? "url" : undefined} spellCheck={dataType === "url" ? false : undefined}
+                  placeholder={dataType === "integer" ? "25" : dataType === "boolean" ? "false" : dataType === "url" ? "https://example.com/fallback" : ""}
                   onChange={(e) => setField(i, { defaultValue: e.target.value || undefined })} />
               </label>
               <TypePreview dataType={dataType} raw={f.source === "static" ? f.value : f.defaultValue} />
@@ -241,7 +246,7 @@ function TypePreview({ dataType, raw }: { dataType: EmbeddedDataType; raw?: stri
   return (
     <div className="row" style={{ marginTop: 4 }}>
       <span className={`chip ${error ? "warn" : "on"}`} data-testid="ed-preview">
-        {error ? error : `stored as ${dataType}: ${JSON.stringify(value)}`}
+        {error ? error : dataType === "url" ? `stored as url: ${String(value)}` : `stored as ${dataType}: ${JSON.stringify(value)}`}
       </span>
     </div>
   );
@@ -258,7 +263,8 @@ export function RedirectEditor({ node, onChange }: {
   const [pickerOpen, setPickerOpen] = React.useState(false);
   const [filter, setFilter] = React.useState("");
   const inputRef = React.useRef<HTMLInputElement>(null);
-  const check = validateRedirectUrl(node.url);
+  /* the survey's own fields, so an address that comes from a URL-typed field is recognised */
+  const check = validateRedirectUrl(node.url, s.def);
   const catalog = urlVariableCatalog(s.def);
   const groups = [...new Set(catalog.map((v) => v.group))];
   const f = filter.trim().toLowerCase();
@@ -548,10 +554,10 @@ export function NodeEditor({ node, onChange }: { node: FlowNode; onChange(n: Flo
               onChange={(e) => onChange({ ...node, redirectUrl: e.target.value || undefined })} />
           </label>
           {node.redirectUrl && (
-            <span className={`chip ${validateRedirectUrl(node.redirectUrl).ok ? "on" : "warn"}`}>
-              {validateRedirectUrl(node.redirectUrl).ok
-                ? (validateRedirectUrl(node.redirectUrl).warning ?? "valid URL")
-                : validateRedirectUrl(node.redirectUrl).error}
+            <span className={`chip ${validateRedirectUrl(node.redirectUrl, s.def).ok ? "on" : "warn"}`} data-testid="end-redirect-check">
+              {validateRedirectUrl(node.redirectUrl, s.def).ok
+                ? (validateRedirectUrl(node.redirectUrl, s.def).warning ?? "valid URL")
+                : validateRedirectUrl(node.redirectUrl, s.def).error}
             </span>
           )}
         </div>

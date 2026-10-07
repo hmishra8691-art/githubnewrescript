@@ -6,7 +6,9 @@ test("formatDateAs — the review's eight formats, for 23 September 2026", () =>
   const want: Record<string, string> = {
     "MM/DD/YYYY": "09/23/2026", "DD/MM/YYYY": "23/09/2026", "YYYY/MM/DD": "2026/09/23", "MM-DD-YYYY": "09-23-2026",
     "DD-MM-YYYY": "23-09-2026", "YYYY-MM-DD": "2026-09-23", "DD MMM YYYY": "23 Sep 2026", "MMM DD, YYYY": "Sep 23, 2026",
+    "DD MMMM YYYY": "23 September 2026", "MMMM DD, YYYY": "September 23, 2026",
   };
+  assert.equal(DATE_FORMATS.length, 10, "the October 2026 review's ten formats");
   for (const f of DATE_FORMATS) assert.equal(formatDateAs("2026-09-23", f), want[f], f);
   assert.equal(formatDateAs("2026-09-23", undefined), "09/23/2026", "unset keeps the old MM/DD/YYYY");
   assert.equal(formatDateAs("not a date", "DD/MM/YYYY"), "");
@@ -29,6 +31,10 @@ test("parseDateAs — not a date, the wrong format, and a day the calendar does 
   assert.equal(parseDateAs("2026-09-23", "DD/MM/YYYY"), null, "another format is not this one");
   assert.equal(parseDateAs("13/13/2026", "MM/DD/YYYY"), null, "month 13");
   assert.equal(parseDateAs("23 Foo 2026", "DD MMM YYYY"), null, "an unknown month");
+  assert.equal(parseDateAs("23 Septober 2026", "DD MMMM YYYY"), null, "a word that only starts like a month");
+  assert.equal(parseDateAs("15 January 2026", "DD MMMM YYYY"), "2026-01-15");
+  assert.equal(parseDateAs("January 30, 2026", "MMMM DD, YYYY"), "2026-01-30");
+  assert.equal(parseDateAs("Sept 3, 2026", "MMMM DD, YYYY"), "2026-09-03", "an abbreviation is read in the long format too");
 });
 
 test("formatTimeAs — 12 and 24 hour, with and without seconds", () => {

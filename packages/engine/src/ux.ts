@@ -1,5 +1,7 @@
 import type { Condition, Question, SurveyDefinition, UxAnimation, UxBehavior, UxConfig, UxEffect, UxRule, UxStyle, UxTarget } from "@rescript/schema";
 import { UX_BUTTONS, UX_EFFECTS, UX_EVENTS, UX_PARTS, UX_PRESETS, UX_STATES, UX_TARGET_KINDS, UX_MEDIA, UX_ANIMATION_TRIGGERS } from "@rescript/schema";
+import { resolveVariant } from "@rescript/schema";
+import { layoutColumns } from "./rendererReads.js";
 import { listBlocks, listPages } from "./blocks.js";
 import { evaluateCondition } from "./evaluate.js";
 import { createResponseState, type ResponseState } from "./state.js";
@@ -869,7 +871,7 @@ export function uxContextFor(def: SurveyDefinition, questionId: string): string[
   const ux = def.ux ?? { styles: [], animations: [], behaviors: [] };
   const lines: string[] = [];
   const s = q.settings;
-  lines.push(`layout: ${s.optionOrientation === "horizontal" ? "horizontal" : s.columnsLayout ? `${s.columnsLayout} columns` : "auto"}${q.options?.length ? `, ${q.options.length} options` : ""}${q.options?.some((o) => o.flags?.includes("other_specify")) ? ", has Other" : ""}`);
+  lines.push(`layout: ${s.optionOrientation === "horizontal" ? "horizontal" : `${layoutColumns(q, resolveVariant(q.variant)?.renderer)} column${layoutColumns(q, resolveVariant(q.variant)?.renderer) === 1 ? "" : "s"}`}${q.options?.length ? `, ${q.options.length} options` : ""}${q.options?.some((o) => o.flags?.includes("other_specify")) ? ", has Other" : ""}`);
   const mine = (t: UxTarget) => t.questionId === q.id || (!t.questionId && ["question", "option"].includes(t.kind));
   for (const st of ux.styles.filter((x) => mine(x.target))) lines.push(`style ${st.id} “${st.label}” on ${describeUxTarget(def, st.target)}: ${st.rules.map((r) => `${[r.state, r.media, r.selector].filter(Boolean).join(" ") || "base"} {${Object.entries(r.declarations).map(([k, v]) => `${k}:${v}`).join("; ")}}`).join(" · ")}${st.css ? ` + css ${st.css.length} chars` : ""}`);
   for (const a of ux.animations.filter((x) => mine(x.target))) lines.push(`animation ${a.id} “${a.label}” ${a.preset} on ${a.trigger}, ${a.durationMs}ms${a.staggerMs ? `, stagger ${a.staggerMs}ms` : ""}`);

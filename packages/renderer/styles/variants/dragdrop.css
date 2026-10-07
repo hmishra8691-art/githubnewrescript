@@ -48,6 +48,7 @@
 .rs-dd-buckets.cols-1 { grid-template-columns: 1fr; }
 .rs-dd-buckets.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .rs-dd-buckets.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.rs-dd-buckets.cols-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .rs-dd-bucket {
   display: flex; flex-direction: column; gap: 8px; min-height: 118px; text-align: left;
   padding: 10px 12px 12px; border: 2px solid var(--rs-border); border-radius: var(--rs-radius);
@@ -133,7 +134,7 @@
 
 /* --------------------------------------------------------------- mobile */
 @media (max-width: 560px) {
-  .rs-dd-buckets, .rs-dd-buckets.cols-2, .rs-dd-buckets.cols-3, .rs-dd-buckets.cols-4 {
+  .rs-dd-buckets, .rs-dd-buckets.cols-2, .rs-dd-buckets.cols-3, .rs-dd-buckets.cols-4, .rs-dd-buckets.cols-5 {
     grid-template-columns: 1fr;
   }
   .rs-dd-bucket { min-height: 90px; }

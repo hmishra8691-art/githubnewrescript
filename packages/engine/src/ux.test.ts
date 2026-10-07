@@ -233,7 +233,7 @@ test("the UX review: dead targets, conflicts, duplicate animations, theme overri
   assert.match(m, /critical: “Hand-made” needs an event \(on\) or a script/);
   // and the copilot's view of one question
   const ctx = uxContextFor(r.def, q(r.def, "Q3").id).join("\n");
-  assert.match(ctx, /layout: auto, 4 options, has Other/);
+  assert.match(ctx, /layout: 1 column, 4 options, has Other/);
   assert.match(ctx, /style uxs_\d+ “Cards A” on Q3 options: base \{border-radius:12px; display:inline-flex\}/);
 });
 

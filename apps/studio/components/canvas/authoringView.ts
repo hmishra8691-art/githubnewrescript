@@ -150,8 +150,8 @@ export function withMarkedPiping(q: Question, ctx: EvalContext): Question {
   const rows = q.rows.some((r) => r.label.includes("{{"))
     ? q.rows.map((r) => (r.label.includes("{{") ? { ...r, label: markPiping(r.label, ctx) } : r))
     : q.rows;
-  // content blocks pipe through customHtml, which is what their renderer draws
-  const html = q.customHtml ? markPiping(q.customHtml, ctx) : q.customHtml;
+  // a custom component's template pipes too; every other question's content is its text (October 2026)
+  const html = q.type === "custom_component" && q.customHtml ? markPiping(q.customHtml, ctx) : q.customHtml;
   if (t === q.text && i === q.instruction && opts === q.options && rows === q.rows && html === q.customHtml) return q;
   return { ...q, text: t, instruction: i, options: opts, rows, customHtml: html };
 }

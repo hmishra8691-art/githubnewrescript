@@ -3,6 +3,7 @@ export * from "./optionLogic.js";
 export * from "./setExpression.js";
 export * from "./mediaDisplay.js";
 export * from "./question.js";
+export * from "./questionContent.js";
 export * from "./flow.js";
 export * from "./survey.js";
 export * from "./ux.js";

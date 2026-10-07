@@ -57,7 +57,8 @@ export function optionMetaFields(v: QuestionVariantDef | undefined): MetaField[]
  * the editor can always mount it.
  */
 export function VariantSettings({ q, v, patch, patchSettings }: VariantSettingsProps): React.ReactElement | null {
-  const key = v?.renderer ?? `base:${q.type}`;
+  /* a block for one variant (`variant:<id>`) before the renderer's, then the base type's */
+  const key = v && VARIANT_SETTINGS[`variant:${v.id}`] ? `variant:${v.id}` : v?.renderer ?? `base:${q.type}`;
   const block = VARIANT_SETTINGS[key] ?? VARIANT_SETTINGS[`base:${q.type}`];
   /*
    * A VARIANT NO LONGER OFFERED says so, and names its replacement — the

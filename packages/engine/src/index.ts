@@ -58,6 +58,7 @@ export * from "./versioning.js";
 export * from "./fields.js";
 export * from "./answers.js";
 export * from "./html.js";
+export * from "./scopedHtml.js";
 export * from "./blocks.js";
 export * from "./pageBreaks.js";
 export * from "./structureOps.js";

@@ -66,7 +66,7 @@ export type ProposalChange =
   /** join the question's page with the next page of its block */
   | { kind: "remove_page_break"; questionId: string }
   /** a field on the survey's embedded-data node (created first in the flow when there is none) */
-  | { kind: "add_embedded_field"; field: { name: string; source: "url" | "panel" | "static" | "expression"; value?: string; dataType?: "string" | "number" | "boolean" | "date" }; nodeId: string }
+  | { kind: "add_embedded_field"; field: { name: string; source: "url" | "panel" | "static" | "expression"; value?: string; dataType?: "string" | "number" | "boolean" | "date" | "url" }; nodeId: string }
   /** wrap a run of questions on one page in a loop */
   | { kind: "wrap_in_loop"; fromId: string; toId: string; loopId: string; loopVar?: string; title?: string };
 

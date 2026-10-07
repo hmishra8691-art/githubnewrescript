@@ -25,6 +25,9 @@ const FITS: { value: NonNullable<MediaDisplay["fit"]>; label: string; hint: stri
   { value: "fill", label: "Stretch", hint: "fills the box, distorting if needed" },
   { value: "scale-down", label: "Scale down", hint: "never larger than natural size" },
   { value: "none", label: "Natural", hint: "natural size, cropped to the box" },
+  /* October 2026 review: "Contain, Cover, Original Size, Custom Width/Height, Maintain Aspect Ratio" */
+  { value: "original", label: "Original size", hint: "the file's own pixel size — still shrunk to fit a narrow screen when 'shrink on small screens' is on" },
+  { value: "custom", label: "Custom size", hint: "exactly the width and height given; with keep proportions on, the picture is letterboxed instead of stretched" },
 ];
 
 export function MediaDisplayControls({ value, onChange, kind, compact }: {

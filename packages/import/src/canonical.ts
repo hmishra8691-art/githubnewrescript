@@ -142,7 +142,7 @@ export interface CanonicalEmbeddedField {
   name: string;
   source: "url" | "panel" | "static" | "expression";
   value?: string;
-  dataType?: "string" | "integer" | "decimal" | "boolean" | "date" | "datetime";
+  dataType?: "string" | "integer" | "decimal" | "boolean" | "date" | "datetime" | "url";
   /** the source's own description of the field */
   sourceType?: string;
 }

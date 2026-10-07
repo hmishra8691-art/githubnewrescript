@@ -94,6 +94,7 @@ import {
   type QuestionReference,
   usedNames,
   addQuestion, duplicateQuestion, removeQuestion, moveQuestionBy, cloneQuestion,
+  layoutColumns, MAX_LAYOUT_COLUMNS,
 } from "@rescript/engine"; // also registers builtin question types
 import { optionLogicHasEffect, isEmptyConditionTree } from "@rescript/schema";
 import { useStudio, uid } from "./store";
@@ -914,7 +915,11 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
                 onChange={(e) => setRow(i, { code: e.target.value })} />
               <InlineRichText className="grow" placeholder="Field label, e.g. Email Address" testId="field-label"
                 value={r.label} onChange={(label) => setRow(i, { label })} />
-              {fieldTypes.length === 1 && fieldTypes[0].value === ft ? (
+              {fieldSpec?.range ? (
+                /* a Date/Time Range: its ends take the Range type set once, below */
+                <span className="chip" style={{ width: 150, textAlign: "center" }} data-testid={`field-type-range-${i}`}
+                  title="Set by Range type, for both ends">{ft === "time" ? "Time" : "Date"} — from Range type</span>
+              ) : fieldTypes.length === 1 && fieldTypes[0].value === ft ? (
                 /* one type and it is this one: a fixed fact, not a choice (Name: "Short Text – Fixed") */
                 <span className="chip" style={{ width: 150, textAlign: "center" }} data-testid={`field-type-fixed-${i}`}
                   title="This question type always uses this field type">{fieldTypes[0].label} — fixed</span>
@@ -942,9 +947,12 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
               )}
             </div>
             <div className="row" style={{ marginTop: 6, flexWrap: "wrap" }}>
+              {/* a range end shows its format, not a placeholder — the Date/Time Format setting decides it (October 2026 review) */}
+              {!fieldSpec?.range && (
               <input className="input" style={{ width: 200 }} placeholder="placeholder text"
                 value={r.placeholder ?? ""}
                 onChange={(e) => setRow(i, { placeholder: e.target.value || undefined })} />
+              )}
               {/* a field that appears only when an earlier answer says so — the
                   runtime already honours row.visibleIf live; this is where it
                   gets set (the Conditional Form variant is built on it) */}
@@ -968,6 +976,34 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
                   onChange={(e) => setBound(i, boundMax, e.target.value)} />
               </label>
               </>)}
+              {isNum && (
+                /*
+                 * TEXT BESIDE THIS FIELD'S BOX (October 2026 review, Numeric
+                 * List): "Amount: [ 100 ] USD", "Price: ₹ [ 500 ]" — per field,
+                 * left or right. The box's width is not a setting: the
+                 * runtime sizes it from this field's bounds and decimals.
+                 */
+                <>
+                  <label className="row" style={{ gap: 4, fontSize: 13 }}>
+                    <span className="muted">text beside</span>
+                    <input className="input" style={{ width: 110 }} data-testid={`field-affix-${i}`} placeholder="kg, USD, ₹…"
+                      value={String((r.meta as Record<string, unknown> | undefined)?.affixText ?? "")}
+                      onChange={(e) => {
+                        const meta = { ...((r.meta as Record<string, unknown>) ?? {}) };
+                        if (e.target.value) meta.affixText = e.target.value; else { delete meta.affixText; delete meta.affixSide; }
+                        setRow(i, { meta });
+                      }} />
+                  </label>
+                  {Boolean((r.meta as Record<string, unknown> | undefined)?.affixText) && (
+                    <select className="select" style={{ width: 92 }} data-testid={`field-affix-side-${i}`}
+                      value={(r.meta as Record<string, unknown> | undefined)?.affixSide === "left" ? "left" : "right"}
+                      onChange={(e) => setRow(i, { meta: { ...((r.meta as Record<string, unknown>) ?? {}), affixSide: e.target.value === "left" ? "left" : "right" } })}>
+                      <option value="left">left</option>
+                      <option value="right">right</option>
+                    </select>
+                  )}
+                </>
+              )}
               {ft === "phone" && (
                 /*
                  * PHONE COUNTRY, PER FIELD. Set here, the number is validated
@@ -1200,7 +1236,7 @@ export function QuestionEditor({ q }: { q: Question }) {
              */
             <label className="f" style={{ marginBottom: 0, width: 175 }}><span>Layout</span>
               <select className="select" data-testid="layout-columns"
-                value={q.settings.optionOrientation === "horizontal" ? "horizontal" : String(q.settings.columnsLayout ?? "")}
+                value={q.settings.optionOrientation === "horizontal" ? "horizontal" : String(layoutColumns(q, variantDef?.renderer))}
                 onChange={(e) => {
                   /*
                    * ONE CONTROL, NOT TWO. The review asked for a
@@ -1213,13 +1249,17 @@ export function QuestionEditor({ q }: { q: Question }) {
                    */
                   const v = e.target.value;
                   if (v === "horizontal") patchSettings({ optionOrientation: "horizontal", columnsLayout: undefined });
-                  else patchSettings({ optionOrientation: undefined, columnsLayout: v === "" ? undefined : Number(v) });
+                  else patchSettings({ optionOrientation: undefined, columnsLayout: Number(v) });
                 }}>
-                <option value="">auto (fit width)</option>
-                <option value={1}>1 column</option>
-                <option value={2}>2 columns</option>
-                <option value={3}>3 columns</option>
-                <option value={4}>4 columns</option>
+                {/*
+                  * NO "AUTO (FIT WIDTH)" (October 2026 review). The control
+                  * shows the number of columns the question is drawn with —
+                  * 1 for a new question — read from the engine's
+                  * `layoutColumns`, the same function every renderer uses.
+                  */}
+                {Array.from({ length: MAX_LAYOUT_COLUMNS }, (_, i) => i + 1).map((n) => (
+                  <option key={n} value={n}>{n} column{n === 1 ? "" : "s"}{n === 1 ? " (default)" : ""}</option>
+                ))}
                 {/* offered only where a row is a thing this renderer can draw */}
                 {honoursOrientation(variantDef?.renderer, q.type) && <option value="horizontal">horizontal row</option>}
               </select></label>
@@ -1295,14 +1335,24 @@ export function QuestionEditor({ q }: { q: Question }) {
         <VariantSwitcher q={q} />
       </div>
 
-      <label className="f"><span>Question text — rich text, HTML and piping ({"{{Q1}}"}) supported</span></label>
+      <label className="f"><span>{q.type === "html"
+        ? <>Content — rich text, HTML with its own CSS, and piping ({"{{Q1}}"}) supported</>
+        : <>Question text — rich text, HTML with its own CSS, and piping ({"{{Q1}}"}) supported</>}</span></label>
+      {/*
+        * THE ONE EDITOR FOR WHAT THE QUESTION SAYS (October 2026 review). A
+        * Text / HTML block's content is written here too — the separate
+        * "HTML content" box is gone, and its older contents were moved into
+        * the text on load (`normalizeQuestionContent`). A `<style>` written
+        * with the markup is kept and scoped to this question.
+        */}
       <RichTextEditor value={q.text} autoFocusId={`qtext_${q.id}`} questionId={q.id} mediaPlacement
+        keepStyles allowFrames={q.type === "html"}
         onChange={(html) => patch({ text: html })}
         placeholder="e.g. Earlier you selected {{Q1}}. Why did you choose {{Q1.first}}?" />
       <div className="row" style={{ alignItems: "flex-start" }}>
         <div className="f grow">
           <span>Instruction — formatting and piping supported</span>
-          <RichTextEditor value={q.instruction ?? ""} questionId={q.id}
+          <RichTextEditor value={q.instruction ?? ""} questionId={q.id} keepStyles
             onChange={(html) => patch({ instruction: html || undefined })}
             placeholder="e.g. Select all that apply." />
         </div>
@@ -1683,16 +1733,29 @@ export function QuestionEditor({ q }: { q: Question }) {
               <span>− / + steppers <span className="muted">a counting input rather than a plain box</span></span>
             </label>
           )}
-          {numberControls.unit && (
-            <label className="f" style={{ width: 170 }}><span>Unit</span>
-              <input className="input" data-testid="unit-label" placeholder="kg, litres, pieces, boxes…"
-                list="unit-suggestions"
-                value={q.settings.unitLabel ?? ""}
-                onChange={(e) => patchSettings({ unitLabel: e.target.value || undefined })} />
-              <datalist id="unit-suggestions">
-                {["items", "pieces", "boxes", "kg", "g", "litres", "ml", "metres", "km", "hours", "nights", "people"].map((u) => <option key={u} value={u} />)}
-              </datalist></label>
-          )}
+          {/*
+            * CUSTOM TEXT BESIDE THE BOX, in every Numeric subtype (October
+            * 2026 review): any word, unit or symbol, left or right —
+            * "kg [ 50 ]", "[ 50 ] kg", "$", "%", "+". It is also Quantity's
+            * unit: one field, not two (an older Unit is shown here and moved
+            * into it on the first edit).
+            */}
+          <label className="f" style={{ width: 200 }}><span>Custom text beside the box</span>
+            <input className="input" data-testid="affix-text" placeholder="kg, years, per month, $, %…"
+              list="unit-suggestions"
+              value={q.settings.affixText ?? q.settings.unitLabel ?? ""}
+              onChange={(e) => patchSettings({ affixText: e.target.value || undefined, unitLabel: undefined,
+                ...(q.settings.affixSide || !q.settings.unitLabel ? {} : { affixSide: "right" as const }) })} />
+            <datalist id="unit-suggestions">
+              {["items", "pieces", "boxes", "kg", "g", "litres", "ml", "metres", "km", "hours", "nights", "people", "years"].map((u) => <option key={u} value={u} />)}
+            </datalist></label>
+          <label className="f" style={{ width: 150 }}><span>Position</span>
+            <select className="select" data-testid="affix-side"
+              value={q.settings.affixSide ?? "right"}
+              onChange={(e) => patchSettings({ affixSide: e.target.value === "left" ? "left" : "right" })}>
+              <option value="left">left (kg [ 50 ])</option>
+              <option value="right">right ([ 50 ] kg)</option>
+            </select></label>
           {numberControls.stepper && q.settings.stepper && (
             <label className="f" style={{ width: 100 }}><span>Step</span>
               <input className="input" type="number" min={1} data-testid="stepper-step"
@@ -1721,10 +1784,22 @@ export function QuestionEditor({ q }: { q: Question }) {
                   <option value="">none</option>
                   {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.symbol} {c.code} — {c.name}</option>)}
                 </select></label>
-              <label className="f" style={{ width: 150 }}><span>Or type a symbol</span>
-                <input className="input" data-testid="currency-symbol" placeholder="€, ₹, pts…"
-                  value={q.settings.currencySymbol ?? ""}
-                  onChange={(e) => patchSettings({ currencySymbol: e.target.value || undefined })} /></label>
+              {/*
+                * "OR TYPE A SYMBOL" IS GONE (October 2026 review): it did the
+                * currency's job a second way and, when filled, hid the
+                * currency chosen above in the preview. Any other text goes
+                * in Custom text. A symbol an older question typed is said,
+                * and can be moved there in one click.
+                */}
+              {q.settings.currencySymbol && (
+                <span className="chip warn" data-testid="currency-symbol-legacy" style={{ alignSelf: "flex-end", marginBottom: 7 }}>
+                  older typed symbol “{q.settings.currencySymbol}”{q.settings.currencyCode ? " — not shown: the currency above is" : ""}
+                  <button type="button" className="btn small" style={{ marginLeft: 6 }} data-testid="currency-symbol-move"
+                    onClick={() => patchSettings({ currencySymbol: undefined, ...(q.settings.currencyCode ? {} : { affixText: q.settings.affixText ?? q.settings.currencySymbol, affixSide: q.settings.affixSide ?? (q.settings.symbolSide === "right" ? "right" : "left") }) })}>
+                    {q.settings.currencyCode ? "remove it" : "move to custom text"}
+                  </button>
+                </span>
+              )}
               <label className="f" style={{ width: 130 }}><span>Symbol side</span>
                 <select className="select" data-testid="symbol-side"
                   value={q.settings.symbolSide ?? "left"}
@@ -1910,11 +1985,6 @@ export function QuestionEditor({ q }: { q: Question }) {
         </div>
       )}
 
-      {q.type === "html" && (
-        <label className="f"><span>HTML content</span>
-          <textarea className="ta code" value={q.customHtml ?? ""}
-            onChange={(e) => patch({ customHtml: e.target.value || undefined })} /></label>
-      )}
       </>
       )}
     </div>

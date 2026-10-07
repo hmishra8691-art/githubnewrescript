@@ -1,7 +1,8 @@
 "use client";
 import React from "react";
 import type { Option } from "@rescript/schema";
-import { answerKey, effectiveQuestion, toggleMultiValue } from "@rescript/engine";
+import { answerKey, effectiveQuestion, toggleMultiValue, layoutColumns } from "@rescript/engine";
+import { resolveVariant } from "@rescript/schema";
 import type { QRProps } from "../QuestionRenderer";
 import { ctxOf } from "../QuestionRenderer";
 
@@ -46,10 +47,15 @@ export function activate(fn: () => void) {
   };
 }
 
-/** `settings.columnsLayout` as a grid class suffix, clamped 1–4. */
-export function colsClass(p: QRProps, fallback = 1): string {
-  const n = p.q.settings.columnsLayout ?? fallback;
-  return `cols-${Math.min(Math.max(n, 1), 4)}`;
+/**
+ * The question's layout as a grid class suffix — `layoutColumns`, the same
+ * number the builder's Layout control shows (1–5, one by default; a grid
+ * variant's designed count when none is stored). `_fallback` is no longer
+ * read: a renderer-local default is how the builder and the preview came to
+ * disagree.
+ */
+export function colsClass(p: QRProps, _fallback = 1): string {
+  return `cols-${layoutColumns(p.q, resolveVariant(p.q.variant)?.renderer)}`;
 }
 
 /** Deterministic per-respondent shuffle seed for a question — same as the engine's randomizer scope. */

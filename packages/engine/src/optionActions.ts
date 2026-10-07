@@ -91,7 +91,7 @@ const SORTS: Record<string, Extract<OptionAction, { op: "reorder_options" }>["so
   reverse: "reverse", reversed: "reverse", flip: "reverse",
 };
 const EMBEDDED_SOURCES = new Set<string>(["url", "static", "panel", "expression"]);
-const EMBEDDED_TYPES = new Set<string>(["string", "integer", "decimal", "boolean", "date", "datetime"]);
+const EMBEDDED_TYPES = new Set<string>(["string", "integer", "decimal", "boolean", "date", "datetime", "url"]);
 const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 /** the first of several spellings of a field that was given — `??` would read an explicit null as "not given", and null is exactly how the model says "remove it" */
 const first = (o: Record<string, unknown>, ...keys: string[]): unknown => keys.map((k) => o[k]).find((v) => v !== undefined);
@@ -184,7 +184,7 @@ export function coerceOptionAction(op: string, o: Record<string, unknown>): Opti
       const newName = str(o.newName ?? o.rename ?? o.to, 80); if (newName) a.newName = newName;
       const source = str(o.source)?.toLowerCase(); if (source) { if (!EMBEDDED_SOURCES.has(source)) return "source is url, static, panel or expression"; a.source = source as EmbeddedSource; }
       if (o.value === null) a.value = null; else if (typeof o.value === "string" || typeof o.value === "number") a.value = String(o.value).trim().slice(0, 2000);
-      const dt = str(o.dataType ?? o.type)?.toLowerCase(); if (dt) { if (!EMBEDDED_TYPES.has(dt)) return `“${dt}” is not an embedded data type (string, integer, decimal, boolean, date, datetime)`; a.dataType = dt as EmbeddedDataType; }
+      const dt = str(o.dataType ?? o.type)?.toLowerCase(); if (dt) { if (!EMBEDDED_TYPES.has(dt)) return `“${dt}” is not an embedded data type (string, integer, decimal, boolean, date, datetime, url)`; a.dataType = dt as EmbeddedDataType; }
       if (Object.keys(a).length <= 2) return "update_embedded changes nothing";
       return a;
     }

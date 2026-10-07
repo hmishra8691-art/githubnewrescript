@@ -23,6 +23,13 @@ export const EmbeddedDataType = z.enum([
   "boolean",
   "date",
   "datetime",
+  /*
+   * A web address (October 2026 review). Kept EXACTLY as written — query
+   * string, fragment, percent-encoding and all — validated as an http(s)
+   * URL, and inserted into a redirect as the address itself rather than
+   * percent-encoded as a parameter value (`redirect.ts`).
+   */
+  "url",
 ]);
 export type EmbeddedDataType = z.infer<typeof EmbeddedDataType>;
 

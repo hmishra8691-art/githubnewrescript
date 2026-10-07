@@ -225,3 +225,49 @@ export function drawsOptionImages(renderer: string | undefined, baseType: string
 export function honoursOrientation(renderer: string | undefined, baseType: string): boolean {
   return ORIENTATION_RENDERERS.has(rendererKey(renderer, baseType));
 }
+
+/* ------------------------------------------------------- layout columns */
+
+/**
+ * THE LAYOUT IS ALWAYS A NUMBER OF COLUMNS (October 2026 review).
+ *
+ * "Remove the 'Auto (Fit Width)' option completely … set Columns: 1 as the
+ * default layout." Auto had made five short options flow into three columns
+ * on their own, which is the thing the review asked to stop: a question now
+ * starts as one column, and the author chooses 2–5 when a long list wants a
+ * compact layout. There is no unset value any more as far as anyone can see:
+ * the Studio's Layout control, the Studio preview, Test Survey and the live
+ * survey all read this one function, so the number the builder shows is the
+ * number the respondent gets.
+ *
+ * A few variants are grids by design and were created with their own count —
+ * Card Select's two, a flip-card grid's three, an image grid's three, a
+ * side-by-side comparison of every option — and keep it when they have none
+ * stored; for every option list it is 1.
+ */
+export const MAX_LAYOUT_COLUMNS = 5;
+
+const DESIGNED_COLUMNS: Record<string, number | ((optionCount: number) => number)> = {
+  cards: 2,
+  flipcards: 3,
+  icons: 4,
+  richcards: 3,
+  dragbuckets: 3,
+  "base:image_select": 3,
+  "base:image_ranking": 3,
+  compare: (n) => Math.max(1, Math.min(n, 4)),
+};
+
+export function defaultLayoutColumns(renderer: string | undefined, baseType: string, optionCount = 0): number {
+  const d = DESIGNED_COLUMNS[rendererKey(renderer, baseType)];
+  return typeof d === "function" ? d(optionCount) : d ?? 1;
+}
+
+export function layoutColumns(
+  q: { type: string; settings: { columnsLayout?: number | null }; options?: readonly unknown[] },
+  renderer?: string,
+): number {
+  const n = Number(q.settings.columnsLayout);
+  if (Number.isFinite(n) && n >= 1) return Math.min(Math.floor(n), MAX_LAYOUT_COLUMNS);
+  return Math.min(defaultLayoutColumns(renderer, q.type, q.options?.length ?? 0), MAX_LAYOUT_COLUMNS);
+}

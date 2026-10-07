@@ -23,8 +23,14 @@ export const MediaDisplay = z.object({
   height: Length,
   maxWidth: Length,
   maxHeight: Length,
-  /** how the picture fills the box it is given — `contain` never crops, `cover` never letterboxes */
-  fit: z.enum(["contain", "cover", "fill", "none", "scale-down"]).optional(),
+  /**
+   * how the picture fills the box it is given — `contain` never crops,
+   * `cover` never letterboxes; `original` is the file's own pixel size
+   * (still shrunk to fit a narrow screen when `responsive`), `custom` is
+   * exactly the width and height given (October 2026 review: "Contain,
+   * Cover, Original Size, Custom Width/Height")
+   */
+  fit: z.enum(["contain", "cover", "fill", "none", "scale-down", "original", "custom"]).optional(),
   align: z.enum(["left", "center", "right"]).optional(),
   /** keep the intrinsic proportions when only one dimension is set (default on) */
   keepRatio: z.boolean().optional(),

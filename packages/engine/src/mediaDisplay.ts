@@ -37,7 +37,17 @@ export function mediaDisplayDeclarations(d: MediaDisplay | null | undefined): Re
   if (mw) out["max-width"] = mw;
   else if (d.responsive !== false) out["max-width"] = "100%";
   if (mh) out["max-height"] = mh;
-  if (d.fit) out["object-fit"] = d.fit;
+  if (d.fit === "original") {
+    /* the file's own size: no box imposed, only the narrow-screen cap */
+    delete out.width; delete out.height;
+    out.width = "auto"; out.height = "auto";
+    if (!mw) out["max-width"] = d.responsive === false ? "none" : "100%";
+    out["--rs-fit"] = "original";
+  } else if (d.fit === "custom") {
+    /* exactly the size given; proportions kept by letterboxing when asked to keep them */
+    out["object-fit"] = d.keepRatio === false ? "fill" : "contain";
+    out["--rs-fit"] = "custom";
+  } else if (d.fit) out["object-fit"] = d.fit;
   const pad = len(d.padding), gap = len(d.spacing);
   if (pad) out.padding = pad;
   if (gap) { out["margin-top"] = gap; out["margin-bottom"] = gap; }
@@ -94,7 +104,9 @@ export function mediaDisplayFromCss(style: string | null | undefined): MediaDisp
       case "height": if (val !== "auto") d.height = val; break;
       case "max-width": sawMaxWidth = true; if (val !== "100%") d.maxWidth = val; break;
       case "max-height": d.maxHeight = val; break;
-      case "object-fit": d.fit = val as MediaDisplay["fit"]; break;
+      case "object-fit": if (!d.fit) d.fit = val as MediaDisplay["fit"]; break;
+      /* "original" and "custom" are intents, not one CSS value: they travel as a custom property */
+      case "--rs-fit": if (val === "original" || val === "custom") d.fit = val; break;
       case "display": if (val === "block") sawAlign = true; else extra.push(`${prop}: ${val}`); break;
       case "padding": d.padding = val; break;
       case "margin-top": mt = val; break;
@@ -206,4 +218,62 @@ export function expandMediaEmbeds(html: string): string {
         `referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-same-origin allow-presentation allow-popups" loading="lazy"></iframe></div>`;
     })
     .replace(EMPTY_SRC_MEDIA, "");
+}
+
+/* ------------------------------------------------------ several media items */
+
+/**
+ * HOW SEVERAL INSERTED MEDIA ITEMS SIT TOGETHER (October 2026 review,
+ * "Insert Media – Multiple Media Layout"): Vertical (the default — one under
+ * another), Horizontal (side by side, wrapping on a narrow screen), Grid (a
+ * chosen number of columns, fewer on a phone), or Carousel (one at a time,
+ * swiped or stepped with ← →). For pictures, videos, audio and players alike.
+ *
+ * The items are wrapped in one element whose data attributes carry the
+ * layout, so the choice lives in the question text with the media — the same
+ * markup in the Studio's editor and preview, Test Survey and the live survey,
+ * styled by the renderer's stylesheet (and a carousel given its controls by
+ * the renderer). Nothing else stores it.
+ */
+export type MediaGroupLayout = "vertical" | "horizontal" | "grid" | "carousel";
+export interface MediaGroup {
+  layout: MediaGroupLayout;
+  /** Grid only: 1–4 */
+  columns?: number;
+  /** space between items, px */
+  gap?: number;
+  align?: "left" | "center" | "right";
+}
+export const MEDIA_GROUP_LAYOUTS: { value: MediaGroupLayout; label: string }[] = [
+  { value: "vertical", label: "Vertical" },
+  { value: "horizontal", label: "Horizontal" },
+  { value: "grid", label: "Grid" },
+  { value: "carousel", label: "Carousel" },
+];
+
+export function mediaGroupHtml(items: string[], g: MediaGroup): string {
+  const cols = Math.max(1, Math.min(4, Math.round(g.columns ?? 2)));
+  const gap = Number.isFinite(g.gap) ? Math.max(0, Math.min(80, Math.round(g.gap!))) : 10;
+  const attrs = [
+    `class="rs-media-group"`,
+    `data-rs-layout="${g.layout}"`,
+    g.layout === "grid" ? `data-rs-cols="${cols}"` : "",
+    `data-rs-align="${g.align ?? "left"}"`,
+    `style="gap: ${gap}px"`,
+  ].filter(Boolean).join(" ");
+  return `<div ${attrs}>${items.map((h) => `<div class="rs-media-cell">${h}</div>`).join("")}</div>`;
+}
+
+/** A group's settings read back from its opening tag's attributes (the editor reopening it). */
+export function mediaGroupFromAttrs(get: (name: string) => string | null): MediaGroup | null {
+  const layout = get("data-rs-layout");
+  if (!layout || !MEDIA_GROUP_LAYOUTS.some((l) => l.value === layout)) return null;
+  const gap = /gap:\s*(\d+)px/.exec(get("style") ?? "");
+  const align = get("data-rs-align");
+  return {
+    layout: layout as MediaGroupLayout,
+    ...(layout === "grid" ? { columns: Number(get("data-rs-cols") ?? 2) || 2 } : {}),
+    ...(gap ? { gap: Number(gap[1]) } : {}),
+    ...(align === "center" || align === "right" || align === "left" ? { align } : {}),
+  };
 }

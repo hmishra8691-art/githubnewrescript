@@ -342,8 +342,8 @@ export function buildEmployeeSurvey(surveyId = "employee"): SurveyDefinition {
     },
     {
       id: "q_confidential", code: "I1", type: "html", variableName: "CONFIDENTIAL",
-      text: "Your answers are confidential.",
-      customHtml: "<p>Your answers are confidential and are reported only in groups of five or more. Nobody in your team sees your individual responses.</p>",
+      /* a content block's content is its text (one place for a question's content, October 2026) */
+      text: "<p>Your answers are confidential and are reported only in groups of five or more. Nobody in your team sees your individual responses.</p>",
     },
   ];
   return survey(surveyId, { code: "ENGAGE", title: "Employee engagement — annual" }, questions, [
