@@ -182,6 +182,8 @@ export function withPlannedVariables(def: SurveyDefinition, ds: Dataset, plan: A
     computed.push(name);
   };
   for (const d of plan.derived) {
+    /* already on this dataset from an earlier pass (the Studio adds the plan's columns when it builds a dataset, Phase 1): nothing to add, nothing to warn */
+    if (out.byName.get(d.name)?.derived && !computed.includes(d.name)) continue;
     if (out.byName.has(d.name) && !computed.includes(d.name)) { warnings.push(`${d.name}: not computed — the survey already has a variable of that name.`); continue; }
     const r = compute(out, d, warnings);
     if (r) add(d.name, r.values, r.meta);
@@ -189,8 +191,8 @@ export function withPlannedVariables(def: SurveyDefinition, ds: Dataset, plan: A
   for (const s of plan.segments) {
     const name = segmentVariableName(s);
     if (out.byName.has(name)) {
-      // a segment named after the single variable that defines it IS that variable: nothing to add
-      if (!(s.by.length === 1 && s.by[0] === name)) warnings.push(`Segment “${s.name}”: not computed — ${name} is already a variable.`);
+      // a segment named after the single variable that defines it IS that variable, and one computed on an earlier pass is already here: nothing to add
+      if (!(s.by.length === 1 && s.by[0] === name) && !out.byName.get(name)?.derived) warnings.push(`Segment “${s.name}”: not computed — ${name} is already a variable.`);
       continue;
     }
     const r = segmentColumn(out, s, warnings);

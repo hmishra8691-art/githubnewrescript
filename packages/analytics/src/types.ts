@@ -161,6 +161,8 @@ export interface ChartData {
   words?: { text: string; value: number; sentiment?: number }[];
   kpis?: { label: string; value: number | string; delta?: number; unit?: string; target?: number }[];
   dendrogram?: { left: number; right: number; height: number; size: number }[];
+  /** factor analysis: one score per case (dataset order) and factor — for an export or a segment; null where a case lacked an item */
+  scores?: { factors: string[]; values: (number | null)[][] };
   valueFormat?: "pct" | "number" | "score";
 }
 

@@ -267,14 +267,16 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
   await proposesNothing(turn);
   ok("logic that reads a LATER question is refused by the engine's validation — the model could not sneak it in either");
 
-  // the engine hands it on; the copilot (the fake model) has nothing usable; the grammar explains it did not understand
+  // the engine hands it on; the copilot (the fake model) has nothing usable: the turn fails with its cause and what to do —
+  // not the grammar's "not understood" (Research Engine audit, Phase 1)
   turn = await say("make me a sandwich");
-  assert.ok(await isGrammar(turn), "the grammar's card");
-  assert.equal(await turn.getAttribute("data-kind"), "unknown");
-  assert.equal((await turn.$$('[data-testid="iq-apply"]')).length, 0);
-  const e3 = await allText(turn, '[data-testid="iq-error"]');
-  assert.ok(e3.length >= 1);
-  ok("a sentence nobody understood gets an explanation and no Apply button");
+  assert.equal(await turn.getAttribute("data-testid"), "cp-turn", "the model's turn, failed with its cause");
+  assert.equal(await turn.getAttribute("data-status"), "failed");
+  assert.equal(await turn.$eval('[data-testid="cp-failure"]', (e) => e.getAttribute("data-code")), "unusable");
+  assert.match(await turn.evaluate((e) => e.innerText), /FAKE provider/);
+  assert.equal((await turn.$$('[data-testid="cp-apply"]')).length, 0);
+  assert.doesNotMatch(await page.$eval('[data-testid="intelligent-view"]', (e) => e.innerText), /I did not understand that/);
+  ok("a sentence nobody could read says why (the model's answer had nothing to apply) and no Apply button — never \"not understood\"");
 }
 
 /* ------------------------------------------------- skip / required */
@@ -570,9 +572,10 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
   await page.waitForTimeout(500);
   const before2 = await entryCount();
   await page.click('[data-testid="iq-mic"]');
-  // the engine hands Hindi on, the (fake) copilot has nothing usable, the grammar's card says what was heard
+  // the engine hands Hindi on, the (fake) copilot has nothing usable: the failed turn says why, and what was heard (Phase 1)
   const ht = await settled(before2);
-  assert.ok(await isGrammar(ht), "the grammar's card");
+  assert.equal(await ht.getAttribute("data-testid"), "cp-turn", "the model's turn, failed with its cause");
+  assert.equal(await ht.$eval('[data-testid="cp-failure"]', (e) => e.getAttribute("data-code")), "unusable");
   const heard = await ht.$('[data-testid="iq-heard"]');
   assert.equal(await heard.getAttribute("data-language"), "hi");
   assert.match(await heard.textContent(), /Heard \(Hindi\): Q5 के option 3 पर Q10 को दिखाना है/);

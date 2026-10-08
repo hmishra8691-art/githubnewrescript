@@ -61,7 +61,8 @@ async function run(req: Request): Promise<NextResponse> {
     if (!def.research?.analysisPlan) continue;
     const due = await dueMilestone(db, surveyId, def);
     if (!due) continue;
-    const r = await runPlanFor(db, surveyId, loaded, { environment: "LIVE", trigger: due });
+    /* on the CLEAN dataset (Phase 1): the automatic findings should not count respondents the quality engine flagged or the researcher removed */
+    const r = await runPlanFor(db, surveyId, loaded, { environment: "LIVE", dataset: "clean", trigger: due });
     if (r.error && !r.stored) { skipped.push({ surveyId, reason: r.error }); continue; }
     let report: string | undefined;
     if ((due === "target_reached" || due === "field_end") && def.research.analysisPlan.autoReport !== false && r.stored) {

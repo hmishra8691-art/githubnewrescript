@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Condition, SurveyDefinition } from "@rescript/schema";
 import {
   buildDataset, runAnalysis, variableMetadata, recommendCharts, DEFAULT_THEME,
-  unionVariableMetadata, definitionResolver, plannedAnalyses, runPlan, compactRun, nextMilestone, reportFromRun,
+  unionVariableMetadata, definitionResolver, plannedAnalyses, runPlan, compactRun, nextMilestone, reportFromRun, withPlannedVariables,
   type AnalysisDefinition, type AnalysisResult, type AnalyticsRow, type Dataset, type DatasetSpec, type ReportTheme, type SegmentDef, type VariableMeta, type AnalysisRun, type PlannedAnalysis, type ReportDefinition,
 } from "@rescript/analytics";
 import type { VersionedDefinition } from "@rescript/engine";
@@ -218,7 +218,20 @@ export async function buildFor(db: SupabaseClient, surveyId: string, ctx: Loaded
 
   const rows = await loadRows(db, surveyId, def.dataset);
   const versioned = await resolveAnalyticsVersions(db, rows, ctx);
-  const ds = buildDataset(ctx.def, rows, { spec: def.dataset, weighting: def.weighting ?? null, versioned });
+  const built = buildDataset(ctx.def, rows, { spec: def.dataset, weighting: def.weighting ?? null, versioned });
+  /*
+   * THE PLAN'S OWN VARIABLES, ON EVERY DATASET (Research Engine audit, Phase
+   * 1). Derived variables and segments were computed only inside `runPlan`,
+   * so a saved analysis naming BRAND_TRUST_SCORE — including the ones the
+   * findings report's charts point at — ran on a dataset without that column
+   * and warned "not in this survey's dictionary". They are added here, where
+   * every path builds its dataset, and `runPlan`'s own pass then finds them
+   * present and adds nothing. A warning the computation raises (a box with no
+   * ordered scale, a segment too small to read) is kept on the dataset.
+   */
+  const planned = withPlannedVariables(ctx.def as SurveyDefinition, built);
+  const ds = planned.dataset;
+  if (planned.warnings.length) ds.warnings = [...(ds.warnings ?? []), ...planned.warnings];
   if (wasTruncated(rows)) ds.truncatedAt = MAX_ROWS;
 
   /*
@@ -342,13 +355,14 @@ export async function verifyPassword(pw: string, stored: string): Promise<boolea
 /* ------------------------------------------------------------ analysis runs (research-intelligence Phase 5) */
 
 /** a stored run: the compact form plus its row id */
-export type StoredRun = ReturnType<typeof compactRun> & { id: string; surveyVersion?: string | null };
+export type StoredRun = ReturnType<typeof compactRun> & { id: string; surveyVersion?: string | null; dataset?: DatasetSpec | null };
 
 function rowToRun(r: Record<string, unknown>): StoredRun {
   return {
     id: String(r.id), computedAt: String(r.computed_at), trigger: String(r.trigger), environment: r.environment as DatasetSpec["environment"], n: Number(r.n ?? 0),
     items: (r.items as StoredRun["items"]) ?? [], findings: (r.findings as StoredRun["findings"]) ?? [], verdicts: (r.verdicts as StoredRun["verdicts"]) ?? [], warnings: (r.warnings as string[]) ?? [],
     surveyVersion: (r.survey_version as string | null) ?? null,
+    dataset: (r.dataset as DatasetSpec | null) ?? null,
   };
 }
 
@@ -454,7 +468,8 @@ export async function ensurePlannedAnalyses(db: SupabaseClient, surveyId: string
  * stored in `analytics_reports` as a live draft to edit, publish and export.
  */
 export async function draftFindingsReport(db: SupabaseClient, surveyId: string, ctx: LoadedContext, run: StoredRun, opts: { userId?: string | null; title?: string } = {}): Promise<{ report: Record<string, unknown> | null; definition: ReportDefinition; error?: string }> {
-  const spec: DatasetSpec = { environment: run.environment, dataset: "all" };
+  // the report's saved analyses read the same dataset the run did (a clean run is not reported on "all")
+  const spec: DatasetSpec = { environment: run.environment, dataset: run.dataset?.dataset ?? "all" };
   const items = plannedAnalyses(ctx.def as SurveyDefinition, spec, { primaries: false });
   const ensured = await ensurePlannedAnalyses(db, surveyId, ctx, items, opts.userId ?? null);
   const proj = await db.from("surveys").select("fieldwork_from, fieldwork_to, client_name").eq("id", surveyId).maybeSingle();

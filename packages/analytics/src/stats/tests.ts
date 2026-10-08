@@ -223,20 +223,3 @@ export function proportionCI(x: number, n: number, confidence = 0.95): [number, 
   return [(centre - half) / denom, (centre + half) / denom];
 }
 
-/**
- * Column-proportion significance letters (the market-research "a b c"
- * notation): each column gets a letter; a cell lists the letters of the
- * columns whose proportion is significantly LOWER than its own at alpha.
- */
-export function significanceLetters(counts: number[], bases: number[], alpha = 0.05): string[] {
-  const letters = counts.map((_, j) => String.fromCharCode(97 + (j % 26)));
-  return counts.map((x, j) => {
-    const out: string[] = [];
-    for (let k = 0; k < counts.length; k++) {
-      if (k === j || !bases[j] || !bases[k]) continue;
-      const r = proportionTest(x, bases[j], counts[k], bases[k]);
-      if (r.p != null && r.p < alpha && x / bases[j] > counts[k] / bases[k]) out.push(letters[k]);
-    }
-    return out.join("");
-  });
-}

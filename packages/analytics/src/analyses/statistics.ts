@@ -325,10 +325,23 @@ export function factor(def: AnalysisDefinition, ds: Dataset, totalCases: number)
   const load: ResultTable = { id: "loadings", title: "Rotated factor loadings", columns: [{ key: "v", label: "Variable" }, ...fNames.map((f, j) => ({ key: `f${j}`, label: f, type: "number" as const, decimals: 2 })), { key: "h2", label: "Communality", type: "number", decimals: 2 }],
     rows: r.variables.map((v, i) => ({ v, ...Object.fromEntries(fNames.map((_, j) => [`f${j}`, round(r.loadings[i][j], 2)])), ...Object.fromEntries(fNames.map((_, j) => [`f${j}__sig`, Math.abs(r.loadings[i][j]) >= 0.4 ? "*" : ""])), h2: round(r.communalities[i], 2) })), notes: ["* loading ≥ .40"] };
   const eig: ResultTable = { id: "eigen", title: "Eigenvalues and variance explained", columns: [{ key: "c", label: "Component" }, { key: "e", label: "Eigenvalue", type: "number", decimals: 3 }, { key: "v", label: "% variance", type: "pct", decimals: 1 }, { key: "cum", label: "Cumulative %", type: "pct", decimals: 1 }], rows: r.eigenvalues.map((e, i) => ({ c: i + 1, e: round(e, 3), v: pct(r.explained[i]), cum: pct(r.cumulative[i]) })) };
+  /*
+   * THE SCORES THE DESCRIPTION PROMISES (Phase 1). `factorAnalysis` computes
+   * a score per case and factor and the runner dropped them. A per-case
+   * listing is not a result anyone reads, so the table is the scores'
+   * summary — mean, SD and the range per factor over the cases that had every
+   * item — and the per-case scores travel on the chart data for an export or
+   * a segment to use.
+   */
+  // the scores are computed for the complete cases only; put each back at its case's position, null where an item was missing
+  const perCase: (number | null)[][] = ds.cases.map(() => fNames.map(() => null));
+  r.cases.forEach((caseIndex, k) => { perCase[caseIndex] = r.scores[k].map((x) => (Number.isFinite(x) ? round(x, 3) : null)); });
+  const scoreStats = fNames.map((f, j) => { const col = r.scores.map((row) => row[j]).filter((x) => Number.isFinite(x)); const d = describe(col); return { f, n: col.length, mean: round(d.mean ?? 0, 3), sd: round(d.sd ?? 0, 3), min: round(d.min ?? 0, 2), max: round(d.max ?? 0, 2) }; });
+  const scoresTable: ResultTable = { id: "scores", title: "Factor scores (per respondent, summarised)", columns: [{ key: "f", label: "Factor" }, { key: "n", label: "n", type: "number", decimals: 0 }, { key: "mean", label: "Mean", type: "number", decimals: 3 }, { key: "sd", label: "SD", type: "number", decimals: 3 }, { key: "min", label: "Min", type: "number", decimals: 2 }, { key: "max", label: "Max", type: "number", decimals: 2 }], rows: scoreStats, notes: ["Regression-method scores on standardised items; a respondent missing any item has no score."] };
   const insights = [`${k} factor${k === 1 ? "" : "s"} retained, explaining ${fmtPct(r.cumulative[k - 1], 1)} of the variance. KMO = ${fmtNum(r.kmo, 2)} (${r.kmo == null ? "n/a" : r.kmo >= 0.8 ? "meritorious" : r.kmo >= 0.7 ? "middling" : r.kmo >= 0.6 ? "mediocre" : "poor"} sampling adequacy).`];
   for (let j = 0; j < k; j++) { const top = r.variables.map((v, i) => ({ v, l: r.loadings[i][j] })).filter((x) => Math.abs(x.l) >= 0.4).sort((a, b) => Math.abs(b.l) - Math.abs(a.l)); if (top.length) insights.push(`Factor ${j + 1}: ${top.map((t) => t.v).slice(0, 4).join(", ")}.`); }
   return makeResult(def, ds, {
-    tables: [eig, load], chart: { matrix: { rows: r.variables, columns: fNames, values: r.loadings.map((row) => row.map((x) => round(x, 2))) }, categories: r.eigenvalues.map((_, i) => `${i + 1}`), series: [{ name: "Eigenvalue", values: r.eigenvalues.map((e) => round(e, 3)) }] },
+    tables: [eig, load, scoresTable], chart: { matrix: { rows: r.variables, columns: fNames, values: r.loadings.map((row) => row.map((x) => round(x, 2))) }, categories: r.eigenvalues.map((_, i) => `${i + 1}`), series: [{ name: "Eigenvalue", values: r.eigenvalues.map((e) => round(e, 3)) }], scores: { factors: fNames, values: perCase } },
     insights, recommendedCharts: ["heatmap", "line", "bar_horizontal", "scatter"], variablesUsed: vars, totalCases,
   });
 }

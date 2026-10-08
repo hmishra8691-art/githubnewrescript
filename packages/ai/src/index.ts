@@ -833,6 +833,8 @@ export function parseJsonReply(content: string): { label?: unknown; question?: u
  * it again for the life of the process.
  */
 const NO_JSON_MODE = new Set<string>();
+/** bases that refused `json_schema` (a schema is then sent as `json_object`, or not at all) */
+const NO_JSON_SCHEMA = new Set<string>();
 export function acceptsJsonMode(base: string): boolean {
   if (NO_JSON_MODE.has(base)) return false;
   try { return !/(^|\.)anthropic\.com$/i.test(new URL(base).hostname); } catch { return true; }
@@ -841,9 +843,24 @@ async function postChat(base: string, key: string, body: Record<string, unknown>
   const send = (b: Record<string, unknown>) => fetch(`${base}/chat/completions`, {
     method: "POST", signal, cache: "no-store", headers: providerHeaders(key), body: JSON.stringify(b),
   });
-  const { response_format: _format, ...plain } = body;
-  if (!("response_format" in body) || !acceptsJsonMode(base)) return { r: await send(plain) };
-  const r = await send(body);
+  const { response_format: format, ...plain } = body;
+  const schema = !!format && typeof format === "object" && (format as { type?: string }).type === "json_schema";
+  /*
+   * A SCHEMA FIRST, WHERE THE PROVIDER TAKES ONE. Anthropic's compatibility
+   * layer refuses `json_object` but names `json_schema` as what it wants, so
+   * a schema goes to every provider; one that refuses it with a 400 naming
+   * `response_format` is sent `json_object` (where that is accepted), and a
+   * second refusal is remembered as "no json mode at all" for this base.
+   */
+  if (schema && !NO_JSON_SCHEMA.has(base)) {
+    const r = await send(body);
+    if (r.ok || r.status !== 400) return { r };
+    const detail = (await r.text().catch(() => "")).trim();
+    if (!/response_format|json_schema|schema/i.test(detail)) return { r, detail };
+    NO_JSON_SCHEMA.add(base);
+  }
+  if (!format || !acceptsJsonMode(base)) return { r: await send(plain) };
+  const r = await send({ ...plain, response_format: { type: "json_object" } });
   if (r.ok || r.status !== 400) return { r };
   const detail = (await r.text().catch(() => "")).trim();
   if (!/response_format/i.test(detail)) return { r, detail };
@@ -881,6 +898,45 @@ export interface CompleteJsonOptions {
    * analysis; a background job passes what it can afford. Capped at 300 s.
    */
   timeoutMs?: number;
+  /**
+   * A JSON schema for the reply, sent as `response_format: json_schema` to
+   * providers that have it (OpenAI-style; Anthropic's compatibility layer
+   * names it in its own refusal of `json_object`). A provider that refuses it
+   * is sent `json_object`, or nothing, exactly as before — the schema is a
+   * nicety for the provider, never a requirement.
+   */
+  schema?: { name: string; schema: Record<string, unknown>; strict?: boolean };
+  /**
+   * When the provider stops at `max_tokens` (`finish_reason: "length"`), ask
+   * it to continue from where it stopped, up to this many times, and read
+   * the pieces as one reply. Default 2 — enough for a questionnaire twice
+   * the budget; a reply still cut off after that is reported as truncated
+   * rather than parsed as nothing. 0 disables continuation.
+   */
+  continuations?: number;
+}
+
+/**
+ * WHY A REPLY COULD NOT BE READ — said in a code the caller can act on,
+ * instead of `null`, which told the Studio nothing (Research Engine audit,
+ * Phase 1: "the model's answer had nothing I could use" covered a truncated
+ * questionnaire, a prose answer and an empty answer alike).
+ *
+ *   truncated    the provider stopped at max_tokens and the pieces did not
+ *                make one JSON object, even after continuing
+ *   unparseable  the provider answered, in words, with no JSON object in it,
+ *                twice (the second time asked for the object alone)
+ *   empty        the provider answered with no content at all
+ */
+export type AiReplyFailure = "truncated" | "unparseable" | "empty";
+export class AiReplyError extends Error {
+  constructor(public readonly code: AiReplyFailure, message: string, public readonly detail: { outputTokens?: number; maxTokens?: number; continuations?: number; sample?: string } = {}) {
+    super(message);
+    this.name = "AiReplyError";
+  }
+}
+export function isAiReplyError(e: unknown): e is AiReplyError {
+  return e instanceof AiReplyError || (!!e && typeof e === "object" && (e as { name?: string }).name === "AiReplyError");
 }
 
 export async function completeJson(
@@ -908,14 +964,16 @@ export async function completeJson(
   const timeoutMs = Number.isFinite(options.timeoutMs) && (options.timeoutMs as number) > 0
     ? Math.min(300_000, Math.round(options.timeoutMs as number))
     : TIMEOUT_MS;
+  const continuations = Number.isFinite(options.continuations) ? Math.max(0, Math.min(5, Math.round(options.continuations as number))) : 2;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const { r, detail: refused } = await postChat(base, key, {
-      model, temperature: 0, max_tokens: maxTokens,
-      response_format: { type: "json_object" },
-      messages: [{ role: "system", content: system }, { role: "user", content: user }],
-    }, ctrl.signal);
+  type Msg = { role: "system" | "user" | "assistant"; content: string };
+  const format = options.schema
+    ? { type: "json_schema", json_schema: { name: options.schema.name, schema: options.schema.schema, ...(options.schema.strict ? { strict: true } : {}) } }
+    : { type: "json_object" };
+  /* one call, its content and why it stopped — usage reported per call, so a continuation is metered like any other */
+  const call = async (messages: Msg[]): Promise<{ content: string; finish: string | null; outputTokens: number }> => {
+    const { r, detail: refused } = await postChat(base, key, { model, temperature: 0, max_tokens: maxTokens, response_format: format, messages }, ctrl.signal);
     if (!r.ok) {
       const detail = (refused ?? (await r.text().catch(() => ""))).trim().slice(0, 200);
       const err = new Error(`the analysis provider refused the request (${r.status}) ${detail}`.trim());
@@ -923,25 +981,63 @@ export async function completeJson(
       throw err;
     }
     const j = await r.json().catch(() => null) as {
-      choices?: { message?: { content?: string } }[];
+      choices?: { message?: { content?: string }; finish_reason?: string }[];
       usage?: { prompt_tokens?: number; completion_tokens?: number };
       model?: string;
     } | null;
-    const content = j?.choices?.[0]?.message?.content;
+    const content = j?.choices?.[0]?.message?.content ?? "";
     const inTok = j?.usage?.prompt_tokens, outTok = j?.usage?.completion_tokens;
+    const outputTokens = typeof outTok === "number" ? outTok : approxTokens(content);
     reportUsage({
       kind: "chat", provider: "openai-compatible", model: j?.model || model,
-      inputTokens: typeof inTok === "number" ? inTok : approxTokens(system + user),
-      outputTokens: typeof outTok === "number" ? outTok : approxTokens(content ?? ""),
+      inputTokens: typeof inTok === "number" ? inTok : approxTokens(messages.map((m) => m.content).join("")),
+      outputTokens,
       requests: 1, estimated: typeof inTok !== "number",
     });
-    if (!content) return null;
-    try {
-      return JSON.parse(content.trim().replace(/^```(?:json)?\s*|\s*```$/g, ""));
-    } catch {
-      /* without json mode the object can come after a sentence */
-      return parseJsonReply(content);
+    return { content, finish: j?.choices?.[0]?.finish_reason ?? null, outputTokens };
+  };
+  const read = (content: string): unknown | null => {
+    try { return JSON.parse(content.trim().replace(/^```(?:json)?\s*|\s*```$/g, "")); }
+    catch { return parseJsonReply(content); }   /* without json mode the object can come after a sentence */
+  };
+  try {
+    const messages: Msg[] = [{ role: "system", content: system }, { role: "user", content: user }];
+    let { content, finish, outputTokens } = await call(messages);
+    /*
+     * CUT OFF AT THE OUTPUT BUDGET. A survey of forty questions with options,
+     * roles and a plan does not fit the budget the copilot allows, and the
+     * cut-off JSON parsed as nothing: "the model's answer had nothing I could
+     * use" for a question of size. The provider says why it stopped
+     * (`finish_reason: "length"`), so the reply is continued — the partial
+     * answer sent back as the assistant's, with one instruction to go on from
+     * exactly where it stopped — and the pieces are read as one.
+     */
+    let continued = 0;
+    let total = outputTokens;
+    while (finish === "length" && continued < continuations) {
+      const more = await call([...messages, { role: "assistant", content }, { role: "user", content: "Your answer was cut off. Continue EXACTLY from where it stopped — output only the remaining characters of the same JSON, with no preamble, no repetition and no code fence." }]);
+      content += more.content;
+      finish = more.finish;
+      total += more.outputTokens;
+      continued += 1;
     }
+    if (!content.trim()) throw new AiReplyError("empty", "the model answered with no content", { outputTokens: total, maxTokens });
+    let value = read(content);
+    if (value == null && finish === "length") {
+      throw new AiReplyError("truncated", `the model's answer was cut off at the output limit (${maxTokens} tokens${continued ? `, continued ${continued}×` : ""}) and could not be read as one JSON object`, { outputTokens: total, maxTokens, continuations: continued, sample: content.slice(-200) });
+    }
+    /*
+     * WORDS, NOT AN OBJECT. Asked once more, for the object alone, before
+     * giving up — a provider without json mode answers in prose now and then,
+     * and the second ask is cheaper than a researcher retyping the request.
+     */
+    if (value == null) {
+      const again = await call([...messages, { role: "assistant", content }, { role: "user", content: "That was not a JSON object. Reply again with ONLY the JSON object — no words before or after it, no code fence." }]);
+      total += again.outputTokens;
+      value = again.content.trim() ? read(again.content) : null;
+      if (value == null) throw new AiReplyError("unparseable", "the model answered in words, not in the JSON shape the Studio reads, twice", { outputTokens: total, maxTokens, sample: content.slice(0, 200) });
+    }
+    return value;
   } catch (e) {
     /*
      * "This operation was aborted" tells a job runner nothing. Say what

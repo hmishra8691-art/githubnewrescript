@@ -1,4 +1,5 @@
 import "server-only";
+import { aiPresence, aiConfigWarning } from "./aiConfig";
 
 /**
  * WHICH DEPLOYMENT OF THE PLATFORM THIS IS (§45).
@@ -58,6 +59,12 @@ export interface PlatformInfo {
     authSalt: boolean;
     qualitySalt: boolean;
     mail: boolean;
+    /** a language model for Intelligent Mode, the copilot, document cards, rephrasing (AI_API_URL) */
+    ai: boolean;
+    /** the fake in-process provider (`AI_API_URL=fake:`) — fine for development, never for a research team */
+    aiFake: boolean;
+    /** AI_MODEL named explicitly (unset means the OpenAI default, which an Anthropic endpoint does not serve) */
+    aiModel: boolean;
   };
   /** things worth telling a deployment manager before somebody hits them */
   warnings: string[];
@@ -127,6 +134,14 @@ export function platformInfo(): PlatformInfo {
      */
     mail: !!(process.env.RESEND_API_KEY && (process.env.MAIL_FROM ?? "").trim()),
     /*
+     * THE ONE VARIABLE INTELLIGENT MODE'S READING OF DESCRIPTIVE REQUESTS
+     * DEPENDS ON, AND IT WAS NOT ON THIS PAGE (Research Engine audit, Phase 1).
+     * Without AI_API_URL the mode is "engine only": instructions that name
+     * their objects work, every descriptive one fails — and used to fail as
+     * "not understood". Presence only; the key is never read here.
+     */
+    ...aiPresence(),
+    /*
      * THE SCHEDULED JOBS' ONE PREREQUISITE, AND IT WAS NOT ON THIS PAGE.
      *
      * Everything else in the platform is driven by somebody's open tab, so it
@@ -183,6 +198,8 @@ export function platformInfo(): PlatformInfo {
   if (!configured.mail) {
     warnings.push("No mail is configured (RESEND_API_KEY and MAIL_FROM), so password resets cannot be delivered and invitations fall back to handing you a link to send by hand.");
   }
+  const aiWarning = aiConfigWarning(configured, tier);
+  if (aiWarning) warnings.push(aiWarning);
   /*
    * Configured, and unable to reach anybody — the state a staging instance
    * SHOULD be in, but worth saying out loud so nobody spends an afternoon

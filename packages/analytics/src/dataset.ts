@@ -89,6 +89,13 @@ export interface Dataset {
    * the study. Absent means the whole response set is present.
    */
   truncatedAt?: number;
+  /**
+   * What the plan's own variables could not be computed as (a top box with no
+   * ordered scale, a segment under the readable base) — raised when the
+   * dataset was built with `withPlannedVariables`, and carried onto any result
+   * that reads one of the variables named.
+   */
+  warnings?: string[];
   spec: DatasetSpec;
 }
 

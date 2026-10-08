@@ -1,4 +1,5 @@
 "use client";
+import { describeFailure } from "@/lib/copilot/failure";
 import React from "react";
 import type { Condition, SurveyDefinition } from "@rescript/schema";
 import { variantRegistry } from "@rescript/schema";
@@ -248,12 +249,16 @@ export function IntelligentView() {
       setBusy(false); inputRef.current?.focus(); return;
     }
     const deferred = interp.reason === DEFER_TO_GRAMMAR;
+    let modelHadNothing = false;
     const pre = parseIntent(t);
     const readOnlyExact = deferred || (["find", "explain", "diagnose", "screening"].includes(pre.kind) && !planProposal(s.def, pre, "grammar", deps).errors.length);
     if (!readOnlyExact && copilot.available !== false) {
-      // an unusable model answer ("empty") falls through to the grammar; anything else is the copilot's
-      const outcome = await copilot.ask(t, heard);
+      // the model's turn carries what the engine read; a failed turn says its cause on the card (Phase 1). "empty" — the model
+      // had nothing usable — goes on to the grammar: a reading it has replaces the failed turn; none, and the failed turn stands.
+      const outcome = await copilot.ask(t, heard, undefined, deferred ? undefined : { category: interp.category, reason: interp.reason, detected: interp.detected });
       if (outcome === "handled") { setBusy(false); inputRef.current?.focus(); return; }
+      if (outcome === "unavailable" && !deferred) { setBusy(false); inputRef.current?.focus(); return; }
+      modelHadNothing = outcome === "empty";
     }
     const selectedLabel = primary?.startsWith("question:") ? (s.def.questions.find((q) => q.id === primary.slice(9))?.code ?? null) : null;
     let intent: Intent = parseIntent(t);
@@ -261,6 +266,9 @@ export function IntelligentView() {
     let plan = planProposal(s.def, intent, source, deps);
     // the grammar did not understand, or understood but could not find the object: ask the model, if there is one
     // the grammar did not understand, could not find the object, or read a condition the parser rejects: the model may know better (§17)
+    // the model had nothing usable and the grammar cannot read it either: the failed turn — the cause, the next step, what the
+    // engine read — is the answer; the grammar's "could not read this" would only say it twice
+    if (modelHadNothing && intent.kind === "unknown") { setBusy(false); inputRef.current?.focus(); return; }
     const askModel = intent.kind === "unknown" || plan.errors.some((e) => /could not find/.test(e)) || (plan.expression?.errors.length ?? 0) > 0;
     // the older single-intent model route is asked only when there is no copilot: one sentence, one model call at most
     if (askModel && aiAvailable !== false && copilot.available === false) {
@@ -284,6 +292,18 @@ export function IntelligentView() {
         }
       } catch { /* offline: the grammar's answer stands */ }
     }
+    /*
+     * NO MODEL, AND THE ENGINE COULD NOT READ IT (Phase 1). The grammar's
+     * "I did not understand that" said the Studio cannot read English; the
+     * truth is that this Studio has no language model and the engine reads
+     * instructions that name their objects. Say that, with what the engine
+     * detected and the examples it does read.
+     */
+    if (intent.kind === "unknown" && !deferred && copilot.available === false) {
+      const f = describeFailure("not_configured");
+      const read = [interp.category ? `request type: ${interp.category.replace(/_/g, " ")}` : "", ...interp.detected.map((d) => `${d.what}: ${d.value}`)].filter(Boolean);
+      plan = { ...plan, errors: [`${f.message} ${f.next.join(" ")}${read.length ? ` What the engine read — ${read.join("; ")}.` : ""}`] };
+    }
     // spoken in another language, with nothing to read it into English: say so, rather than "not understood"
     if (heard && heard.language !== "en" && heard.language !== "und" && !heard.english && intent.kind === "unknown") {
       plan = { ...plan, errors: [`I heard this in ${languageName(heard.language)}, but no language model is configured on this Studio to read it into English. Say it in English, or type it.`] };
@@ -299,7 +319,7 @@ export function IntelligentView() {
     setTurns((ts) => {
       // the model had nothing usable and the grammar has an answer: show the answer, not the empty turn
       const lastEntry = ts[ts.length - 1];
-      const drop = lastEntry && "kind" in lastEntry && lastEntry.kind === "copilot" && lastEntry.status === "empty" && lastEntry.text === t && !plan.errors.length ? lastEntry.id : null;
+      const drop = lastEntry && "kind" in lastEntry && lastEntry.kind === "copilot" && (lastEntry.status === "empty" || (lastEntry.status === "failed" && lastEntry.failure?.code === "unusable")) && lastEntry.text === t && !plan.errors.length ? lastEntry.id : null;
       return [...ts.filter((x) => x.id !== drop), { id: uid("turn"), text: t, proposal: plan, state: plan.readOnly ? "applied" : "open", opKey, ...(heard ? { heard } : {}) }];
     });
     if (plan.targetKey) selectKey(plan.targetKey);
@@ -854,7 +874,7 @@ function TurnCard({ turn, def, onApply, onCancel, onReview, onSelect, readOnly, 
 
       {p.readOnly ? (
         <div className="iq-card answer" data-testid="iq-answer">
-          <div className="iq-card-head"><span className="iq-kicker">{blocked ? "NOT UNDERSTOOD" : "ANSWER"}</span>{p.source === "ai" && <span className="iq-source">model</span>}</div>
+          <div className="iq-card-head"><span className="iq-kicker">{blocked ? (p.errors.some((e) => /no language model (is )?configured/i.test(e)) ? "NO LANGUAGE MODEL — THE ENGINE COULD NOT READ THIS" : "COULD NOT READ THIS") : "ANSWER"}</span>{p.source === "ai" && <span className="iq-source">model</span>}</div>
           {p.summary && <p className="iq-summary">{p.summary}</p>}
           {p.errors.map((e, i) => <p key={i} className="iq-error" data-testid="iq-error"><Icon name="warning" size={12} /> {e}</p>)}
           {p.answer && p.answer.length > 0 && (

@@ -1922,3 +1922,22 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
   100% { box-shadow: var(--sh-1); }
 }
 @media (prefers-reduced-motion: reduce) { .qcard.flash { animation: none; outline: 2px solid var(--c-primary-100); } }
+/* a failed copilot turn: the cause, what to do, and what the engine had read (Phase 1) */
+.cp-failure { margin-top: 8px; padding: 10px 12px; border: 1px solid var(--c-warning-bd); background: var(--c-warning-bg); border-radius: var(--r-md); font-size: var(--fs-small); color: var(--c-text-2); }
+.cp-failure ul { margin: 4px 0 0 18px; padding: 0; }
+.cp-failure li { margin: 2px 0; }
+.cp-failure .cp-handoff { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--c-warning-bd); }
+.cp-failure .iqi-dim { margin: 6px 0 0; font-size: var(--fs-caption); }
+/* the research design editor (Phase 1) */
+.rd-editor .rd-h { font-size: var(--fs-small); font-weight: 600; margin: 14px 0 6px; color: var(--c-text-2); }
+.rd-editor .rd-h .muted { font-weight: 400; }
+.rd-list { list-style: none; margin: 0 0 6px; padding: 0; display: grid; gap: 6px; }
+.rd-row { display: flex; align-items: center; gap: 8px; }
+.rd-row .rd-label { flex: none; width: 30px; color: var(--c-text-3); font-size: var(--fs-caption); }
+.rd-row .chip { flex: none; }
+.rd-constructs { display: grid; gap: 8px; }
+.rd-construct { margin-bottom: 0; }
+.rd-x { border: 0; background: transparent; color: var(--c-text-3); cursor: pointer; padding: 0 0 0 4px; font-size: 12px; }
+.rd-x:hover { color: var(--c-error); }
+.rd-editor.compact .settings-grid { grid-template-columns: 1fr; }
+.rd-editor.compact .ta { font-size: 13px; }

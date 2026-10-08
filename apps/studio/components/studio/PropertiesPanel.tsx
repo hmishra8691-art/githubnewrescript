@@ -12,6 +12,7 @@ import { RandomizeAxes } from "./RandomizeAxes";
 import { LoopScopeProvider, loopsAroundQuestion } from "./loopScope";
 import { MaskingBuilder, PunchRules } from "./MaskingBuilder";
 import { QualitySettings } from "./QualitySettings";
+import { ResearchDesignEditor } from "./ResearchDesignEditor";
 import { OptionGroupsEditor } from "./OptionGroupsEditor";
 import { CollapsibleSection } from "./CollapsibleSection";
 import { HeaderRepeatEditor } from "./HeaderRepeatEditor";
@@ -896,6 +897,14 @@ export function SurveySettings() {
       </label>
 
       <QualitySettings />
+
+      {/* the research design, editable by hand (Research Engine audit, Phase 1) — the Analysis tab reads it */}
+      <h3 className="sec" id="research-design">Research design</h3>
+      <p className="muted" style={{ fontSize: 12.5, marginTop: -4 }}>
+        The objective, hypotheses, population and constructs the analysis framework, the findings and the report are built on.
+        The copilot writes here too; what you type is what it reads.
+      </p>
+      <ResearchDesignEditor />
 
       <p className="muted" style={{ fontSize: 12.5 }}>
         Changes here autosave to your draft. They reach respondents only when you save a version

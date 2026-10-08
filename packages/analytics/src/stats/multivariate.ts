@@ -145,8 +145,10 @@ export interface FactorResult {
   factors: number;
   rotation: "none" | "varimax";
   kmo: number | null;
-  /** factor scores per case (regression method on standardized data) */
+  /** factor scores per complete case (regression method on standardized data), in `cases` order */
   scores: number[][];
+  /** the input row index of each scored case (a case missing any item is not scored) */
+  cases: number[];
   communalities: number[];
 }
 
@@ -222,7 +224,7 @@ export function factorAnalysis(columns: { name: string; values: (number | null |
     method, variables: columns.map((c) => c.name), eigenvalues: eig.values,
     explained: eig.values.map((v) => (v / total) * 100),
     cumulative: eig.values.reduce<number[]>((acc, v) => [...acc, (acc.at(-1) ?? 0) + (v / total) * 100], []),
-    loadings, factors, rotation, kmo, scores, communalities,
+    loadings, factors, rotation, kmo, scores, cases: keep, communalities,
   };
 }
 

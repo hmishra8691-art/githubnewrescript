@@ -1,4 +1,5 @@
 "use client";
+import { ResearchDesignEditor } from "../../studio/ResearchDesignEditor";
 import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
 import { hypothesisLabel } from "@rescript/schema";
@@ -121,7 +122,11 @@ export function AnalysisTab({ copilot, def, onSelect }: { copilot: Copilot; def:
 
           <section data-testid="an-hypotheses">
             <div className="iq-label">Hypotheses · {coverage.length}</div>
-            {!coverage.length && <p className="iqi-dim">No hypotheses recorded. Tell the copilot the research objective and hypotheses and it records them (set_research), or write them in the Research design.</p>}
+            {!coverage.length && <p className="iqi-dim">No hypotheses recorded. Tell the copilot the research objective and hypotheses and it records them (set_research), or write them in the research design below.</p>}
+            <details className="cp-ux-code" data-testid="an-design-editor" open={!coverage.length}>
+              <summary>Research design — objective, hypotheses, population, constructs (edit by hand)</summary>
+              <ResearchDesignEditor compact />
+            </details>
             {coverage.map((h) => (
               <div key={h.label} className="cp-block" data-testid="an-hyp" data-status={h.status}>
                 <div><b>{h.label}</b> {h.text} <span className={`cp-sev v-${h.status === "testable" ? "suggestion" : h.status === "partly" ? "warning" : "critical"}`}>{status[h.status]}</span></div>

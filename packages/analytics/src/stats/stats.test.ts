@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chiSquareP, fTestP, normalCdf, normalQuantile, tCdf, tQuantile } from "./distributions.js";
 import { boxShares, describe, frequencies } from "./descriptive.js";
-import { chiSquare, fisherExact, friedman, independentT, kruskalWallis, mannWhitney, oneSampleT, oneWayAnova, pairedT, proportionCI, proportionTest, significanceLetters, twoWayAnova, wilcoxonSignedRank } from "./tests.js";
+import { chiSquare, fisherExact, friedman, independentT, kruskalWallis, mannWhitney, oneSampleT, oneWayAnova, pairedT, proportionCI, proportionTest, twoWayAnova, wilcoxonSignedRank } from "./tests.js";
 import { correlate, correlationMatrix } from "./correlation.js";
 import { logistic, mediation, multinomialLogistic, ols } from "./regression.js";
 import { cronbachAlpha, factorAnalysis, hierarchical, kMeans, rimWeights, standardize } from "./multivariate.js";
@@ -90,13 +90,11 @@ test("ANOVA one-way / two-way, Kruskal, Mann-Whitney, Wilcoxon, Friedman", () =>
   close(fr.statistic, 6.5, 1e-6); assert.equal(fr.df, 2);
 });
 
-test("proportions: z-test, Wilson CI, significance letters", () => {
+test("proportions: z-test, Wilson CI", () => {
   const pt = proportionTest(60, 100, 40, 100);
   close(pt.statistic, 2.828, 1e-2); close(pt.p, 0.0047, 1e-3);
   const ci = proportionCI(50, 100)!; close(ci[0], 0.404, 1e-2); close(ci[1], 0.596, 1e-2);
-  const letters = significanceLetters([72, 61, 30], [100, 100, 100]);
-  assert.equal(letters[0], "c", "72% beats 30% (c) but not 61%");
-  assert.equal(letters[1], "c"); assert.equal(letters[2], "");
+  /* the market-research letters are the crosstab's own (`columnLetter` in analyses/crosstab.ts), tested there */
 });
 
 test("correlation: Pearson, Spearman, Kendall, matrix", () => {

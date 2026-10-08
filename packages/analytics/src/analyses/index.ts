@@ -27,7 +27,10 @@ export function runAnalysis(def: AnalysisDefinition, dataset: Dataset): Analysis
     };
   }
   try {
-    return runner(def, ds, dataset.cases.length);
+    const result = runner(def, ds, dataset.cases.length);
+    /* a plan variable this analysis reads that could not be computed as planned: the dataset's own note, on the result that depends on it */
+    const relevant = (dataset.warnings ?? []).filter((w) => def.variables.some((v) => v && w.includes(v)) && !result.warnings.includes(w));
+    return relevant.length ? { ...result, warnings: [...result.warnings, ...relevant] } : result;
   } catch (e) {
     return {
       kind: def.kind, name: def.name, base: { total: dataset.cases.length, filtered: ds.cases.length, n: ds.cases.length, weightedN: ds.cases.length, label: "All respondents" },

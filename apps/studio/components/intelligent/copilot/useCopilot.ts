@@ -12,6 +12,7 @@ import {
 } from "../../../lib/copilot/history";
 import type { OpApiCall, OpFailed, OpIntent, OpProposed, OpSource } from "../../../lib/copilot/operations";
 import { excludedLabels, validExclusions } from "../../../lib/copilot/review";
+import { describeFailure, isTurnFailure, type FailureCode, type TurnFailure } from "@/lib/copilot/failure";
 import type { HeardTranscript } from "../../../lib/intelligent/voice";
 import { prepareThemeImage, type ThemeImage } from "../../../lib/copilot/themeImage";
 
@@ -48,6 +49,10 @@ export interface CopilotEntry {
   reply?: CopilotReply;
   error?: string;
   message?: string;
+  /** why a model turn failed — the cause and what to do next, never the grammar's "not understood" (Phase 1) */
+  failure?: TurnFailure;
+  /** what the engine read before handing the sentence to the model: its category, its reason, what it detected */
+  handoff?: EngineHandoff;
   usage?: { charge: number };
   context?: { mode: string; researchUsed: boolean; passages: string[]; promptChars: number; outlineChars?: number; cached: boolean; ux?: boolean; uxOnly?: boolean; repair?: { refused: string[]; fixed: boolean } };
   passages?: Record<string, Passage>;
@@ -67,6 +72,11 @@ export interface CopilotEntry {
    * suggested fix: everything the card shows instead of a model's reply.
    */
   engine?: EngineTurn;
+}
+export interface EngineHandoff {
+  category: string | null;
+  reason: string;
+  detected: { what: string; value: string }[];
 }
 export interface EngineTurn {
   kind: Interpretation["kind"];
@@ -391,9 +401,9 @@ export function useCopilot(opts: {
   /** what travels with a turn: the verdicts and the strongest findings, never the results */
   const runForTurn = React.useMemo(() => (analysisRun ? { computedAt: analysisRun.computedAt, n: analysisRun.n, trigger: analysisRun.trigger, environment: analysisRun.environment, verdicts: analysisRun.verdicts, warnings: analysisRun.warnings.slice(0, 6), findings: analysisRun.findings.slice(0, 40) } : null), [analysisRun]);
 
-  const ask = React.useCallback(async (text: string, heard?: HeardTranscript, mode?: "review" | "generate"): Promise<"handled" | "unavailable" | "empty"> => {
+  const ask = React.useCallback(async (text: string, heard?: HeardTranscript, mode?: "review" | "generate", handoff?: EngineHandoff): Promise<"handled" | "unavailable" | "empty"> => {
     const id = uid("copilot");
-    opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "thinking" });
+    opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), ...(handoff ? { handoff } : {}), status: "thinking" });
     setBusy(true);
     try {
       const proposal = session.proposal;
@@ -410,18 +420,41 @@ export function useCopilot(opts: {
         return { route: "/api/copilot/turn", mode: ctx.mode ?? mode ?? "", charge: Number((d?.usage as { charge?: number } | undefined)?.charge) || 0, ...(typeof ctx.cached === "boolean" ? { cached: ctx.cached } : {}), ...(typeof ctx.promptChars === "number" ? { promptChars: ctx.promptChars } : {}), ...(error ? { error } : {}) };
       };
       const failedTurn = (d: Record<string, unknown> | null, error: string) => opts.patch(id, { opKey: recordOp({ prompt: text, source: "model", status: "failed", intent: { mode: mode ?? "" }, statusDetail: error, apiCalls: [call(d, error)] }) });
-      if (r.status === 501) { setAvailable(false); const error = "No language model is configured on this Studio."; opts.patch(id, { status: "failed", error }); failedTurn(null, error); return "unavailable"; }
+      /*
+       * A FAILED TURN SAYS WHY (Phase 1). The route names the cause — not
+       * configured, the wallet, a timeout, a refusal, an answer cut off or in
+       * words — and the card shows it with what to do next, beside what the
+       * engine had already read. None of these is replaced by the grammar's
+       * "I did not understand" any more, which only ever hid the real cause;
+       * the one case that still reaches the grammar is a well-formed answer
+       * with nothing in it ("empty"), where a phrasing the grammar parses is
+       * offered instead of the failed turn.
+       */
+      const failTurn = (d: Record<string, unknown> | null, status: number, fallback: FailureCode) => {
+        const failure = isTurnFailure(d?.failure) ? d.failure : describeFailure(fallback, String(d?.error ?? "").slice(0, 200) || undefined);
+        const error = `${failure.message}`;
+        opts.patch(id, { status: "failed", error, failure, usage: d?.usage as { charge: number } | undefined, context: d?.context as CopilotEntry["context"] });
+        failedTurn(d, `${failure.title}: ${failure.message}`);
+        void status;
+      };
+      if (r.status === 501) { setAvailable(false); const d = await r.json().catch(() => null) as Record<string, unknown> | null; failTurn(d, 501, "not_configured"); return "unavailable"; }
       const d = await r.json().catch(() => null) as Record<string, unknown> | null;
-      if (!r.ok || !d || d.ok === false) { const error = String(d?.error ?? `The copilot could not answer (${r.status}).`); opts.patch(id, { status: "failed", error }); failedTurn(d, error); return "handled"; }
+      if (!r.ok || !d || d.ok === false) { failTurn(d, r.status, r.status === 402 || r.status === 423 ? "wallet" : "provider"); return "handled"; }
       setAvailable(true);
       const reply = d.reply as CopilotReply | null;
       const review = d.review as SurveyReview | undefined;
       if (!reply) {
-        const message = String(d.message ?? "No answer.");
-        // nothing usable came back: recorded as failed with the model's call — the grammar may still answer the sentence (its own entry)
-        opts.patch(id, { status: "empty", message, usage: d.usage as { charge: number }, ...(review ? { review } : {}), opKey: recordOp({ prompt: text, source: "model", status: review ? "answered" : "failed", intent: { mode: String((d.context as { mode?: string } | undefined)?.mode ?? mode ?? ""), kind: "empty" }, statusDetail: message, apiCalls: [call(d)] }) });
-        if (review) setSession((x) => ({ ...x, review: { rules: review, ai: [], at: new Date().toISOString(), running: false }, tab: "review" }));
-        return review ? "handled" : "empty";
+        if (review) {
+          // the model had nothing, the engine's own review stands: shown as the answer
+          const message = String(d.message ?? "No answer.");
+          opts.patch(id, { status: "empty", message, usage: d.usage as { charge: number }, review, opKey: recordOp({ prompt: text, source: "model", status: "answered", intent: { mode: String((d.context as { mode?: string } | undefined)?.mode ?? mode ?? ""), kind: "empty" }, statusDetail: message, apiCalls: [call(d)] }) });
+          setSession((x) => ({ ...x, review: { rules: review, ai: [], at: new Date().toISOString(), running: false }, tab: "review" }));
+          return "handled";
+        }
+        // nothing usable: the turn fails with its cause — and the grammar may still read the sentence (a phrasing the engine's
+        // recognisers handed on but the grammar parses, "call Q2 PLATFORMS"); the view then shows that reading instead
+        failTurn(d, 200, "unusable");
+        return "empty";
       }
       const patch: Partial<CopilotEntry> = { status: "ready", reply, usage: d.usage as { charge: number }, context: d.context as CopilotEntry["context"], passages: (d.passages ?? {}) as Record<string, Passage>, ...(review ? { review } : {}) };
       const intent: OpIntent = { mode: String((d.context as { mode?: string } | undefined)?.mode ?? mode ?? ""), kind: reply.kind };

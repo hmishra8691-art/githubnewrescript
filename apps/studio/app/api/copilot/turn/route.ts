@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { SurveyDefinition } from "@rescript/schema";
-import { aiConfigured, aiProviderName, completeJson, embedTexts, aiEmbeddingsModelName } from "@rescript/ai";
+import { aiConfigured, aiProviderName, completeJson, embedTexts, aiEmbeddingsModelName, isAiReplyError } from "@rescript/ai";
+import { describeFailure, failureFromError, failureFromReplyError } from "@/lib/copilot/failure";
+import { COPILOT_REPLY_SCHEMA } from "@/lib/copilot/replySchema";
 import { applySurveyActions, diffSurveys, reviewSurvey } from "@rescript/engine";
 import { ResearchIndex } from "@rescript/import/research";
 import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
@@ -56,7 +58,7 @@ export async function POST(req: NextRequest) {
   if (isFailure(authed)) {
     if (!(surveyId === "sandbox" && aiProviderName() === "fake")) return authed.response;
   } else user = authed;
-  if (!aiConfigured()) return NextResponse.json({ error: "No language model is configured on this Studio (AI_API_URL). The built-in grammar still handles common edits.", code: "ai_unconfigured" }, { status: 501 });
+  if (!aiConfigured()) return NextResponse.json({ error: "No language model is configured on this Studio (AI_API_URL). The built-in grammar still handles common edits.", code: "ai_unconfigured", failure: describeFailure("not_configured") }, { status: 501 });
   const message = typeof body.message === "string" ? body.message.trim().slice(0, 8000) : "";
   if (!message) return NextResponse.json({ error: "say what you want" }, { status: 400 });
   const parsed = SurveyDefinition.safeParse(body.definition);
@@ -135,15 +137,27 @@ export async function POST(req: NextRequest) {
   if (hit && Date.now() - hit.at < TTL && !fake) { raw = hit.value; cached = true; }
   else {
     try {
+      /*
+       * The reply's shape goes with the request where the provider takes a
+       * schema; a cut-off answer is continued (generation is the one most
+       * likely to outgrow its budget — two continuations give it three
+       * budgets); and what still cannot be read comes back as a CODE the
+       * researcher is told, not as "nothing I could use" (Phase 1).
+       */
       const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + prompt, maxTokens, operation: `copilot_${mode}` },
-        () => completeJson(COPILOT_SYSTEM_PROMPT, prompt, maxTokens, { timeoutMs: mode === "generate" ? 170_000 : 90_000 }));
-      if (!m.ok) return refusalResponse(m);
+        () => completeJson(COPILOT_SYSTEM_PROMPT, prompt, maxTokens, { timeoutMs: mode === "generate" ? 170_000 : 90_000, schema: COPILOT_REPLY_SCHEMA, continuations: mode === "generate" ? 2 : 1 }));
+      if (!m.ok) {
+        const r = refusalResponse(m);
+        const body = await r.json().catch(() => ({})) as Record<string, unknown>;
+        return NextResponse.json({ ...body, failure: describeFailure("wallet", String(body.error ?? "")) }, { status: r.status });
+      }
       charge += m.event?.customerCharge ?? 0;
       raw = fake ?? m.value;
       if (raw && !fake) { CACHE.set(key, { at: Date.now(), value: raw }); if (CACHE.size > 300) CACHE.delete(CACHE.keys().next().value!); }
     } catch (e) {
       console.warn("[rescript:copilot] turn failed", JSON.stringify({ error: (e as Error).message }));
-      return NextResponse.json({ ok: false, error: `The language model did not answer: ${(e as Error).message}. Nothing was changed.` }, { status: 502 });
+      const failure = isAiReplyError(e) ? failureFromReplyError(e.code, e.detail) : failureFromError((e as Error).message);
+      return NextResponse.json({ ok: false, error: `${failure.message} Nothing was changed.`, failure, context: { mode, promptChars: prompt.length, cached: false }, usage: { charge } }, { status: 502 });
     }
   }
 
@@ -151,7 +165,10 @@ export async function POST(req: NextRequest) {
   const coerced = coerceCopilotReply(raw);
   let reply = coerced && themeImageUrl ? { ...coerced, actions: withThemeImage(coerced.actions, themeImageUrl) } : coerced;
   if (!reply) {
-    return NextResponse.json({ ok: true, reply: null, message: aiProviderName() === "fake" ? "The FAKE provider cannot reason about surveys; configure a real model to use the copilot." : "The model's answer had nothing I could use. Try rephrasing — nothing was changed.", context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, cached }, usage: { charge }, ...(deterministic ? { review: deterministic } : {}) });
+    const failure = aiProviderName() === "fake"
+      ? describeFailure("unusable", "The FAKE provider cannot reason about surveys; configure a real model to use the copilot.")
+      : describeFailure("unusable");
+    return NextResponse.json({ ok: true, reply: null, message: failure.message, failure, context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, cached }, usage: { charge }, ...(deterministic ? { review: deterministic } : {}) });
   }
   // a look-only request cannot change the structure: the engine refuses structural actions and proves the rest left it alone
   let applied = reply.actions.length ? applySurveyActions(def, reply.actions, { uxOnly: cls.uxOnly }) : null;

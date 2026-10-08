@@ -63,7 +63,7 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
       )}
       <div className={`iq-card cp-card${entry.status === "failed" ? " blocked" : ""}${r?.kind === "proposal" ? " proposal" : " answer"}`}>
         <div className="iq-card-head">
-          <span className="iq-kicker"><Icon name="sparkle" size={11} /> {entry.status === "thinking" ? "THINKING" : entry.status === "failed" ? "COULD NOT ANSWER" : state === "applied" ? appliedKicker(save, n) : state === "superseded" ? "REVISED BELOW" : state === "cancelled" ? "CANCELLED" : r?.kind === "proposal" ? "PROPOSED" : r?.kind === "review" ? "REVIEW" : r?.kind === "clarify" ? "QUESTION" : "COPILOT"}</span>
+          <span className="iq-kicker"><Icon name="sparkle" size={11} /> {entry.status === "thinking" ? "THINKING" : entry.status === "failed" ? (entry.failure?.title ?? "COULD NOT ANSWER") : state === "applied" ? appliedKicker(save, n) : state === "superseded" ? "REVISED BELOW" : state === "cancelled" ? "CANCELLED" : r?.kind === "proposal" ? "PROPOSED" : r?.kind === "review" ? "REVIEW" : r?.kind === "clarify" ? "QUESTION" : "COPILOT"}</span>
           {entry.context?.researchUsed && <span className="iq-source" title={`${entry.context.passages.length} passage(s) from your research documents were used`} data-testid="cp-research-used">research · {entry.context.passages.length}</span>}
           {entry.engine && <span className="iq-source cp-engine-badge" data-testid="cp-engine" data-category={entry.engine.category ?? ""} title="Interpreted and checked by the Studio's own survey engine — no language model was called, nothing was charged">internal engine · no model call</span>}
           {entry.context?.cached && <span className="iq-source" title="The same request was answered moments ago; no new model call was made">cached</span>}
@@ -72,6 +72,23 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
         </div>
         {entry.status === "thinking" && <div className="iq-thinking"><span className="iq-dot" /><span className="iq-dot" /><span className="iq-dot" /></div>}
         {entry.error && <p className="iq-error" role="alert" data-testid="cp-error"><Icon name="warning" size={12} /> {entry.error}</p>}
+        {entry.failure && (
+          /* the cause and the next step (Phase 1) — and what the engine had read before it handed the sentence on */
+          <div className="cp-failure" data-testid="cp-failure" data-code={entry.failure.code}>
+            <span className="iq-label">What to do</span>
+            <ul>{entry.failure.next.map((n, i) => <li key={i}>{n}</li>)}</ul>
+            {entry.handoff && (entry.handoff.category || entry.handoff.detected.length > 0 || entry.handoff.reason) && (
+              <div className="cp-handoff" data-testid="cp-handoff">
+                <span className="iq-label">What the engine read</span>
+                <dl className="cp-detected">
+                  {entry.handoff.category && <div className="cp-detected-row"><dt>Request type</dt><dd>{entry.handoff.category.replace(/_/g, " ")}</dd></div>}
+                  {entry.handoff.detected.map((d, i) => <div key={i} className="cp-detected-row"><dt>{d.what}</dt><dd>{d.value}</dd></div>)}
+                </dl>
+                <p className="iqi-dim">{entry.handoff.reason}</p>
+              </div>
+            )}
+          </div>
+        )}
         {entry.message && <p className="iq-warning" data-testid="cp-empty"><Icon name="info" size={12} /> {entry.message}</p>}
         {entry.appliedNote && <p className="cp-applied-note" data-testid="cp-applied-note"><Icon name="check" size={12} /> {entry.appliedNote}</p>}
         {save?.state === "failed" && <SaveFailed save={save} onRetry={onRetrySave} />}
