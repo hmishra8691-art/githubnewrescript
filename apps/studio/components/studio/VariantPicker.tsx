@@ -39,6 +39,8 @@ export function applyVariantDefaults(q: Question, v: QuestionVariantDef): void {
   if (d.text && !q.text) q.text = d.text;
   if (d.probe && !q.probe) q.probe = d.probe as any;
   if (d.ai && !q.ai) q.ai = d.ai as any;
+  // a preset that randomizes (Matrix with Randomized Rows) switches it on unless the programmer already set it up
+  if (d.randomization && !q.randomization?.enabled) q.randomization = { ...d.randomization } as any;
 }
 
 /** settings precedence: variant defaults fill gaps, explicit values win —

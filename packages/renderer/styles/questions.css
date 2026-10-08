@@ -332,6 +332,11 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
   .rs-other-input { flex-basis: 100%; margin-left: 27px; }
 }
 
+/* a grid row flagged "Other, please specify": its label, then its box (07-10 review) */
+.rs-rowlabel-other { display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 0; }
+.rs-rowlabel-other .rs-row-other-input { margin: 0; flex: none; width: 100%; min-width: 140px; max-width: 320px; }
+@media (max-width: 560px) { .rs-rowlabel-other .rs-row-other-input { margin-left: 0; max-width: none; } }
+
 /* ---------- multi-select dropdown (req §1) ---------- */
 .rs-msd { position: relative; max-width: 480px; }
 .rs-msd-control {
@@ -411,8 +416,21 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-optfilter { margin-bottom: 10px; max-width: 100%; }
 
 /* ---------- form-style list fields (req §3–5) ---------- */
+/*
+ * The label column is as wide as this question's longest label (`--rs-flab-ch`,
+ * set by the renderer, capped) — not a fixed 150px that left "Age" a hand's
+ * width from its box (07-10 review). Left / right / above per question.
+ */
 .rs-field-row { display: flex; gap: 10px; align-items: center; }
-.rs-field-row .flab { min-width: 150px; font-size: .93em; }
+.rs-field-row .flab { flex: 0 0 auto; width: calc(var(--rs-flab-ch, 12ch) + 1ch); max-width: 45%; font-size: .93em; overflow-wrap: anywhere; }
+.rs-field-ctl { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; }
+.rs-field-ctl > .rs-input:not(.rs-numbox), .rs-field-ctl > .rs-textarea, .rs-field-ctl > .rs-phone { flex: 1 1 auto; min-width: 0; }
+.rs-fields[data-label-pos="right"] .rs-field-row { flex-direction: row-reverse; justify-content: flex-end; }
+.rs-fields[data-label-pos="right"] .rs-field-row .flab { width: auto; max-width: 45%; }
+.rs-fields[data-label-pos="above"] .rs-field-row { flex-direction: column; align-items: stretch; gap: 4px; }
+.rs-fields[data-label-pos="above"] .rs-field-row .flab { width: auto; max-width: none; font-weight: 500; }
+.rs-fields[data-label-pos="above"] .rs-field-row .rs-numbox { align-self: flex-start; }
+.rs-fields-note { font-size: .88em; color: var(--rs-subtle); margin: 0 0 10px; }
 /* a Numeric List box sized to its number (width set inline from the field's bounds — `numericBoxCh`) */
 .rs-field-row .rs-numbox { flex: 0 0 auto; max-width: 100%; }
 .rs-req { color: var(--rs-error); }
@@ -436,10 +454,15 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-cellslider-val { min-width: 32px; text-align: right; font-variant-numeric: tabular-nums; font-size: .9em; }
 .rs-affixed .rs-prefix { font-weight: 600; color: var(--rs-text); }
 @media (max-width: 520px) {
-  .rs-field-row { flex-direction: column; align-items: stretch; gap: 4px; }
+  /* a phone has no room for a label column: every position stacks, label first */
+  .rs-field-row, .rs-fields[data-label-pos] .rs-field-row { flex-direction: column; align-items: stretch; gap: 4px; }
   .rs-field-row .rs-numbox { align-self: flex-start; }
-  .rs-field-row .flab { min-width: 0; }
+  .rs-field-row .flab, .rs-fields[data-label-pos] .rs-field-row .flab { width: auto; max-width: none; }
 }
+/* the Studio's device preview narrows a box, not the window */
+.rs-viewport.mobile .rs-field-row { flex-direction: column; align-items: stretch; gap: 4px; }
+.rs-viewport.mobile .rs-field-row .flab { width: auto; max-width: none; }
+.rs-viewport.mobile .rs-field-row .rs-numbox { align-self: flex-start; }
 
 /* ---------- variant renderers: buttons, cards, stars, emoji ---------- */
 .rs-choicebtns { display: flex; flex-wrap: wrap; gap: 8px; }

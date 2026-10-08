@@ -883,6 +883,30 @@ export function migrateQuestionType(
       }
     }
 
+    /*
+     * THE SAME RULE FOR OPTIONS (07-10 review, Prince #1): a Likert grid
+     * switched to Rating Matrix (1–5) still had "Strongly disagree … Strongly
+     * agree" as its columns, because Likert put them there and nothing took
+     * them away. Options that are still exactly the old variant's seed become
+     * the new variant's; options the programmer edited are theirs and stay.
+     */
+    if (nd?.options?.length && od?.options?.length && shapeHasAxis(q, "options")
+      && q.options.length === od.options.length
+      && q.options.every((o, i) => String(o.code) === String(od.options![i]?.code) && String(o.label) === String(od.options![i]?.label))) {
+      q.options = nd.options.map((o) => ({ flags: [], ...o })) as Question["options"];
+      add("transformed", "options", `The ${target.variant.optionsLabel?.toLowerCase().startsWith("columns") ? "columns" : "options"} are now ${target.variant.name}'s`);
+    }
+
+    /* the same rule for a randomization the old preset switched on (Matrix with Randomized Rows) */
+    if (od?.randomization && q.randomization && !nd?.randomization
+      && sameValue(pickKeys(q.randomization, od.randomization), od.randomization)
+      /* …and nothing added to it since: a pick, groups, rules or a second axis are the programmer's */
+      && q.randomization.pick == null && !q.randomization.groups?.length
+      && !q.randomization.rules?.length && !q.randomization.scopes?.length) {
+      delete (q as Record<string, unknown>).randomization;
+      add("removed", "randomization", `Randomization — it came from ${fromVariant.name} and ${target.variant.name} does not set it`);
+    }
+
     for (const field of ["instruction", "text"] as const) {
       const seeded = od?.[field];
       if (seeded === undefined || !sameValue(q[field], seeded)) continue;
@@ -931,4 +955,10 @@ export function staleFields(q: Question): MigrationChange[] {
     id: q.variant ?? undefined,
     responseModel: model,
   }).changes;
+}
+
+/** `value` narrowed to the keys `like` has — a parsed Randomization carries defaults the seed never wrote. */
+function pickKeys(value: unknown, like: Record<string, unknown>): Record<string, unknown> {
+  const v = (value ?? {}) as Record<string, unknown>;
+  return Object.fromEntries(Object.keys(like).map((k) => [k, v[k]]));
 }

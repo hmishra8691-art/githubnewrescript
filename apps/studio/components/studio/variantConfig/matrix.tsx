@@ -3,6 +3,7 @@ import React from "react";
 import type { Question, QuestionColumn } from "@rescript/schema";
 import { registerVariantSettings } from "./registry";
 import { CountInput } from "../CountInput";
+import { ratingLabelMode, ratingScaleOptions, switchRatingLabels, RATING_SCALE_SIZES, type RatingLabelMode } from "@rescript/engine";
 
 /**
  * Studio authoring for the matrix family — see docs/VARIANT-BATCH.md §4.
@@ -82,3 +83,73 @@ registerVariantSettings("summatrix", ({ q, patch, patchSettings }) => (
     )}
   </>
 ));
+
+/*
+ * RATING MATRIX — THE SCALE AND WHAT ITS HEADERS SAY (07-10 review, Prince #1).
+ *
+ * "Selecting Rating Matrix (1–5) should auto-populate columns 1–5", with
+ * "Numbers" or "Text Labels (Very Poor, Poor, Neutral, Good, Excellent)" as
+ * the column labels, editable, and a "Rating Scale [1–5]" control. The points
+ * are the question's options, so this block and the Columns list above edit
+ * the same thing; the engine's `ratingScaleOptions` / `switchRatingLabels`
+ * keep the codes 1…N (the stored numbers) and remember the words while the
+ * headers show numbers.
+ */
+registerVariantSettings("variant:matrix.rating", ({ q, patch }) => {
+  const mode = ratingLabelMode(q);
+  const n = q.options.length;
+  const standard = (RATING_SCALE_SIZES as readonly number[]).includes(n);
+  const setMode = (m: RatingLabelMode) => {
+    patch({ options: switchRatingLabels(q.options, m), settings: { ...q.settings, ratingLabels: m } });
+  };
+  const setSize = (size: number) => patch({ options: ratingScaleOptions(size, mode, q.options) });
+  return (
+    <div data-testid="rating-scale-block">
+      <h3 className="sec">Rating scale &amp; labels</h3>
+      <div className="row" style={{ gap: 14, flexWrap: "wrap" }}>
+        <label className="row" style={{ gap: 6, fontSize: 13 }}>
+          Rating scale
+          <select className="select" style={{ width: 120 }} data-testid="rating-scale"
+            value={standard ? String(n) : "custom"}
+            onChange={(e) => { if (e.target.value !== "custom") setSize(Number(e.target.value)); }}>
+            {RATING_SCALE_SIZES.map((k) => <option key={k} value={k}>1–{k}</option>)}
+            {!standard && <option value="custom">{n} points (custom)</option>}
+          </select>
+        </label>
+        <span className="row" style={{ gap: 6, fontSize: 13 }}>
+          Column labels
+          <span className="seg" role="radiogroup" aria-label="Column labels" data-testid="rating-labels">
+            {([["numbers", "Numbers"], ["text", "Text labels"]] as const).map(([v, label]) => (
+              <button key={v} type="button" role="radio" aria-checked={mode === v}
+                className={`seg-btn${mode === v ? " on" : ""}`} data-testid={`rating-labels-${v}`}
+                onClick={() => { if (mode !== v) setMode(v); }}>{label}</button>
+            ))}
+          </span>
+        </span>
+      </div>
+      {/* what the header will read — the same cells the preview draws */}
+      <div className="rating-head-preview" aria-hidden data-testid="rating-head-preview">
+        {q.options.map((o) => <span key={String(o.code)} className="rating-head-cell">{String(o.label).replace(/<[^>]*>/g, "") || o.code}</span>)}
+      </div>
+      {mode === "text" ? (
+        <div className="rating-labels" data-testid="rating-label-list">
+          {q.options.map((o, i) => (
+            <label key={String(o.code)} className="rating-label-row">
+              <span className="rating-label-code mono">{String(o.code)}</span>
+              <input className="input" data-testid={`rating-label-${o.code}`} value={String(o.label)}
+                placeholder={`Label for ${o.code}`}
+                onChange={(e) => patch({ options: q.options.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)) })} />
+            </label>
+          ))}
+          <p className="muted" style={{ fontSize: 12.5, margin: "4px 0 0" }}>
+            Respondents see these words as the column headers; the data still stores 1–{n}.
+          </p>
+        </div>
+      ) : (
+        <p className="muted" style={{ fontSize: 12.5, margin: "6px 0 0" }}>
+          The column headers show the numbers 1–{n}. Choose <em>Text labels</em> to name each point (Very Poor … Excellent).
+        </p>
+      )}
+    </div>
+  );
+});

@@ -6,7 +6,7 @@ import { AttentionCheck } from "./quality.js";
 import { AiQuestionOverride, SpokenScript } from "./aiConversation.js";
 import { MediaDisplay } from "./mediaDisplay.js";
 import { QuestionAnalysis } from "./analysisPlan.js";
-import { normalizeQuestionContent } from "./questionContent.js";
+import { normalizeQuestion } from "./questionContent.js";
 
 /**
  * Question model.
@@ -921,6 +921,20 @@ const QuestionObject = z.object({
       sumTarget: z.number().optional(), // allocation
       sumUnit: z.string().optional(), // "%", "points", "$"
       listCount: z.number().optional(), // numeric_list / text_list rows
+      /**
+       * A form-style list's label beside its box (07-10 review, Suraj #6):
+       * left of it (unset — the layout lists always had), right of it, or
+       * above it. Display only.
+       */
+      fieldLabelPosition: z.enum(["left", "right", "above"]).optional(),
+      /**
+       * A grid's column header drawn again every N rows (07-10 review, Prince
+       * #2): "off", "auto" (about every 10) or a row count. Unset = the
+       * default for the grid's length (engine `headerRepeatEvery`). Display only.
+       */
+      headerRepeat: z.union([z.enum(["off", "auto"]), z.number().int().min(1)]).optional(),
+      /** Rating Matrix: column headers as the numbers or as words (engine `ratingLabelMode`). Display only. */
+      ratingLabels: z.enum(["numbers", "text"]).optional(),
       /** Stimulus image for hotspot / image-based questions. */
       imageUrl: z.string().optional(),
       /** Display options/fields in N columns (1–4). */
@@ -1470,5 +1484,5 @@ const QuestionObject = z.object({
   meta: z.record(z.any()).optional(),
 });
 /* every parse — Studio, preview, runtime, import, clone, restore — normalises legacy content first */
-export const Question = z.preprocess(normalizeQuestionContent, QuestionObject);
+export const Question = z.preprocess(normalizeQuestion, QuestionObject);
 export type Question = z.infer<typeof QuestionObject>;

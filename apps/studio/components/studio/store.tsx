@@ -1,7 +1,9 @@
 "use client";
 import React from "react";
-import type { SurveyDefinition, Question } from "@rescript/schema";
-import { normaliseQuestionOrder, canonicalizeSurveyConditions } from "@rescript/engine";
+import type { Question } from "@rescript/schema";
+import { SurveyDefinition } from "@rescript/schema";
+import { normaliseQuestionOrder, canonicalizeSurveyConditions, ensureElementIds } from "@rescript/engine";
+import { serialRunner, isOwnWrite, rememberSent } from "@/lib/draftSave";
 import { codesFrozenBy } from "@/lib/responseSummary";
 
 /**
@@ -335,7 +337,15 @@ export function StudioProvider({
   /** set once a write has been refused — no further autosave may run */
   const blocked = React.useRef(false);
   const autosaveTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const inFlight = React.useRef<Promise<boolean> | null>(null);
+  /*
+   * ONE WRITE AT A TIME, IN ORDER (07-10 review, Suraj #5 — see lib/draftSave).
+   * Every draft write goes through this queue, so no two read the same
+   * revision; the "await whatever is in flight, then go" it replaces let two
+   * waiters wake together and refuse each other as "changed elsewhere".
+   */
+  const saveQueue = React.useRef(serialRunner<boolean>()).current;
+  /** the last few definitions this editor sent — how a refusal is told from a lost answer (`isOwnWrite`) */
+  const sentRef = React.useRef<SurveyDefinition[]>([]);
   const sandbox = surveyDbId === "sandbox";
   /*
    * TEST SEAM — `window.__rescriptSaveFault(kind)`, honoured ONLY in the
@@ -356,7 +366,7 @@ export function StudioProvider({
     return () => { delete w.__rescriptSaveFault; };
   }, [sandbox]);
 
-  const persistDraft = React.useCallback(async (): Promise<boolean> => {
+  const persistDraft = React.useCallback((): Promise<boolean> => saveQueue(async (): Promise<boolean> => {
     if (sandbox) {
       // the /sandbox fixture has no database row — except for the fault a suite asked for (see the seam above)
       const fault = saveFault.current;
@@ -369,8 +379,7 @@ export function StudioProvider({
       if (faultShown.current) { faultShown.current = false; setSaveState({ kind: "dirty" }); }
       return true;
     }
-    // never overlap two writes to the same row
-    if (inFlight.current) await inFlight.current.catch(() => false);
+    // never overlap two writes to the same row: `saveQueue` runs this after the previous write has settled
     // A conflict means this editor is behind. Writing again would overwrite
     // whatever is newer, so autosave stops until the programmer resolves it.
     if (blocked.current) return false;
@@ -381,6 +390,7 @@ export function StudioProvider({
      * that describes a client bug rather than anything the user can act on.
      */
     if (readOnlyRef.current) return false;
+    const attempt = async (retried: boolean): Promise<boolean> => {
     // the exact object being sent — compared after the round trip, so a save
     // that lands while newer edits exist never reports "all changes saved"
     const sent = latest.current;
@@ -390,10 +400,10 @@ export function StudioProvider({
       baseVersionId: versionId,
       baseRevision,
     });
+    sentRef.current = rememberSent(sentRef.current, sent);
     setSaveState({ kind: "saving" });
     const startedAt = Date.now();
     console.debug("[rescript:save] draft start", { surveyId: surveyDbId, baseRevision, questions: sent.questions.length });
-    const run = (async () => {
       try {
         const r = await fetch(`/api/surveys/${surveyDbId}/draft`, {
           method: "PUT",
@@ -414,6 +424,18 @@ export function StudioProvider({
          * rather than the status is the fix.
          */
         if (r.status === 409 && d.conflict === true) {
+          /*
+           * NOT A CONFLICT WHEN THE "NEWER WORK" IS OUR OWN — an earlier save
+           * the server took and whose answer never reached us. Adopt its
+           * revision and send again, once. Anything this editor did not send
+           * is a real conflict and is handled below as it always was.
+           */
+          if (!retried && typeof d.revision === "number" && ownWrite(d.serverDraft)) {
+            console.info("[rescript:save] refusal was this editor's own earlier write — adopting revision", { surveyId: surveyDbId, baseRevision, serverRevision: d.revision });
+            revisionRef.current = d.revision;
+            setRevision(d.revision);
+            return attempt(true);
+          }
           console.warn("[rescript:save] draft REFUSED (stale)", { surveyId: surveyDbId, baseRevision, serverRevision: d.revision, ms: Date.now() - startedAt });
           blocked.current = true;
           setSaveState({
@@ -500,13 +522,21 @@ export function StudioProvider({
         console.warn("[rescript:save] draft FAILED", { surveyId: surveyDbId, baseRevision, error: (e as Error).message });
         setSaveState({ kind: "error", message: (e as Error).message || "network error" });
         return false;
-      } finally {
-        inFlight.current = null;
       }
-    })();
-    inFlight.current = run;
-    return run;
-  }, [sandbox, surveyDbId, versionId, setSaveState]);
+    };
+    return attempt(false);
+  }), [sandbox, surveyDbId, versionId, setSaveState, saveQueue]);
+
+  /** Is this draft one this editor sent? Compared in the form the server stores it (schema defaults, element ids). */
+  const ownWrite = (serverDraft: unknown): boolean => {
+    if (!serverDraft || !sentRef.current.length) return false;
+    const stored = (x: unknown) => {
+      const parsed = SurveyDefinition.safeParse(x);
+      return parsed.success ? ensureElementIds(parsed.data).def : x;
+    };
+    try { return isOwnWrite(stored(serverDraft), sentRef.current.map(stored)); }
+    catch { return false; }
+  };
 
   /** Debounced autosave, rescheduled on every edit. */
   const scheduleDraftSave = React.useCallback(() => {
@@ -519,7 +549,7 @@ export function StudioProvider({
       clearTimeout(autosaveTimer.current);
       autosaveTimer.current = null;
     }
-    if (inFlight.current) await inFlight.current.catch(() => false);
+    // queued behind any write in flight — see `saveQueue`
     return persistDraft();
   }, [persistDraft]);
 

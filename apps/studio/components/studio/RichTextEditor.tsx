@@ -5,6 +5,7 @@ import { surfaceHtml, restoreSurfaceHtml, RTE_SCOPE_ATTR } from "@/lib/rteStyles
 import { InsertPipingButton, tokensToChips, chipsToTokens } from "./PipingPicker";
 import { MediaInsertDialog, mediaValueFromElement, type MediaApply, type MediaInsertValue } from "./MediaInsertDialog";
 import { useStudio } from "./store";
+import { typedMarkup, decodeTypedMarkup } from "@/lib/typedMarkup";
 
 /**
  * Rich text / HTML editor for question text (reqs §10–12, §20–22) — and,
@@ -265,8 +266,14 @@ function removeMediaElement(el: HTMLElement, root: HTMLElement) {
 
 /* ================================================================ block editor */
 
-export function RichTextEditor({ value, onChange, placeholder, autoFocusId, questionId, mediaPlacement, keepStyles, allowFrames }: {
+export function RichTextEditor({ value, onChange, placeholder, autoFocusId, questionId, mediaPlacement, keepStyles, allowFrames, markup }: {
   value: string;
+  /**
+   * A Text / HTML block (07-10 review, Oweas #2): opens on the HTML tab, so
+   * markup typed is markup, and offers to turn HTML that was typed into the
+   * Visual tab — stored as text, shown to respondents as code — into markup.
+   */
+  markup?: boolean;
   /**
    * A question's text or instruction: the author's own `<style>` is kept
    * (and scoped when drawn) — October 2026 review. Off elsewhere.
@@ -286,9 +293,21 @@ export function RichTextEditor({ value, onChange, placeholder, autoFocusId, ques
   /** the question being edited — lets the piping picker warn about forward refs */
   questionId?: string;
 }) {
-  const [mode, setMode] = React.useState<"visual" | "html">("visual");
+  const [mode, setMode] = React.useState<"visual" | "html">(markup ? "html" : "visual");
   const [htmlDraft, setHtmlDraft] = React.useState(value);
   const r = useRichSurface(value, onChange, mode, !!mediaPlacement, { keepStyles, allowFrames });
+  /* the HTML tab shows what is stored — kept in step when the value changes from outside (undo, a restore) */
+  React.useEffect(() => {
+    if (mode !== "html") return;
+    if (value !== r.read(htmlDraft) && document.activeElement?.getAttribute("data-rte-source") !== "1") setHtmlDraft(value);
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  const looksTyped = !!markup && typedMarkup(value);
+  const renderTyped = () => {
+    const fixed = sanitizeHtml(decodeTypedMarkup(value), r.cleanOpts);
+    commit(fixed, true);
+    setHtmlDraft(fixed);
+    if (surface.current) surface.current.innerHTML = r.show(fixed, codeFor);
+  };
   const { surface, commit, exec, codeFor } = r;
 
   /** Insert a piping token at the caret, as a chip. */
@@ -346,7 +365,11 @@ export function RichTextEditor({ value, onChange, placeholder, autoFocusId, ques
       {mode === "html" && (
         <textarea
           className="ta code"
-          style={{ minHeight: 110, borderTopLeftRadius: 0, borderTopRightRadius: 0 }}
+          data-rte-source="1"
+          data-testid="rte-html-source"
+          spellCheck={false}
+          placeholder={markup ? "<h2>Welcome to our survey</h2>\n<p>It takes about <b>5 minutes</b>.</p>" : undefined}
+          style={{ minHeight: markup ? 170 : 110, borderTopLeftRadius: 0, borderTopRightRadius: 0 }}
           value={htmlDraft}
           onChange={(e) => {
             setHtmlDraft(e.target.value);
@@ -354,6 +377,17 @@ export function RichTextEditor({ value, onChange, placeholder, autoFocusId, ques
           }}
           onBlur={(e) => commit(e.target.value, true)}
         />
+      )}
+      {looksTyped && (
+        <div className="alert warning rte-typed" data-testid="rte-typed-markup" role="status">
+          <span>
+            This content holds HTML typed as text — respondents would see the tags as code, like
+            <code> &lt;b&gt;</code>.
+          </span>
+          <button type="button" className="btn small" data-testid="rte-render-typed" onClick={renderTyped}>
+            Render it as HTML
+          </button>
+        </div>
       )}
       {r.mediaDialog}
     </div>

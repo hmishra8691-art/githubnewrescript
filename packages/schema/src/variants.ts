@@ -310,6 +310,8 @@ export interface QuestionVariantDef {
     probe?: Record<string, unknown>;
     /** per-question AI conversation overrides (schema AiQuestionOverride) */
     ai?: Record<string, unknown>;
+    /** randomization switched on (schema Randomization) — Matrix with Randomized Rows */
+    randomization?: Record<string, unknown>;
     rows?: Record<string, unknown>[];
     /** cell questions (composite / custom_table): starter columns */
     columns?: Record<string, unknown>[];
@@ -1008,13 +1010,23 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   }),
 
   /* ----------------------------------------------------------------- LIST */
+  /*
+   * STARTER FIELDS, ONE BY ONE (07-10 review, Suraj #3). These two used to
+   * arrive with no fields, which drew the older numbered list — N identical
+   * boxes made by an "item count", with one Required for all of them and no
+   * way to make a single box required. They now arrive with three ordinary
+   * fields, each with its own label, type and Required / Optional, and
+   * "+ field" adds one more at a time.
+   */
   stable(F.list, "text_list", "Open Text List", "Labeled text fields, one variable per row.", {
     baseType: "text_list", responseModel: "fields",
     capabilities: ["fields", "layout_columns"], validations: ["required"],
+    defaults: { rows: [1, 2, 3].map((n) => ({ code: `f${n}`, label: `Item ${n}`, fieldType: "text" })) },
   }),
   stable(F.list, "numeric_list", "Numeric List", "Labeled numeric fields.", {
     baseType: "numeric_list", responseModel: "fields",
     capabilities: ["fields", "layout_columns"], validations: ["required"],
+    defaults: { rows: [1, 2, 3].map((n) => ({ code: `f${n}`, label: `Item ${n}`, fieldType: "number" })) },
     /* "only numeric field types should be available: Number, Decimal, Integer" */
     fields: { types: ["number", "decimal", "integer"] },
   }),
@@ -1115,12 +1127,18 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       ],
     },
   }),
+  /*
+   * 07-10 review (Prince #1): Rows, then Columns, then the Rating scale &
+   * labels block (Numbers or Text labels, 1–3 … 1–10), then display settings;
+   * the preview is a grid with the points as aligned column headers.
+   */
   stable(F.matrix, "rating", "Rating Matrix (1–5)", "Numbered rating points across the columns.", {
     baseType: "matrix_single", renderer: "ratingmatrix", responseModel: "per_row",
     capabilities: ["rows", "options", "randomization", "carry_forward"],
     validations: ["required"],
     optionsLabel: "Columns (the rating scale)",
-    optionsHint: "The rating points — add or remove entries to change the range (1–5, 1–7, 1–10…).",
+    optionsHint: "The rating points, left to right — set the range and the header words in Rating scale & labels below.",
+    builder: { rowsFirst: true },
     defaults: {
       options: [1, 2, 3, 4, 5].map((n) => ({ code: n, label: String(n) })),
     },
@@ -1209,7 +1227,16 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: ["rows", "options", "randomization", "carry_forward"], validations: ["required"],
     optionsLabel: "Columns",
     optionsHint: "Each entry is one column of the grid — the response choices.",
-    defaults: { settings: { randomizeRows: true } },
+    /*
+     * 07-10 review (Suraj #2): this used to seed `settings.randomizeRows`, a
+     * setting nothing in the engine reads — the preset promised shuffled rows
+     * and every respondent saw them in programmed order. Rows are shuffled by
+     * the question's `randomization`, the same model the Randomization panel
+     * edits, so that is what the preset switches on (seeded per respondent;
+     * anchored rows stay put). Older questions carrying the dead setting are
+     * migrated on parse (`normalizeLegacyRowRandomization`).
+     */
+    defaults: { randomization: { enabled: true, scope: "rows", method: "shuffle" } },
     presetOf: "matrix.single",
   }),
   /*

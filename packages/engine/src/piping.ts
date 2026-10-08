@@ -6,7 +6,7 @@ import { evaluateExpression } from "./calc.js";
 import { escapeHtml } from "./html.js";
 import { isGeoAnswer, geoText, round6, formatMetres } from "./geo.js";
 import { interviewText, isInterviewAnswer } from "./interview.js";
-import { isOtherOption, otherOptions, otherTextFor } from "./otherSpecify.js";
+import { isOtherOption, otherOptions, otherRows, otherTextFor, rowOtherCode } from "./otherSpecify.js";
 import {
   PIPE_TOKEN_RE,
   parsePipeBody,
@@ -231,6 +231,11 @@ function renderToken(t: PipeToken, ctx: EvalContext): string {
    */
   if (t.property === "other") {
     const flagged = otherOptions(q);
+    /* `{{Q5[r9].other}}` on a grid names a ROW's box when r9 is a flagged row and not a flagged option */
+    const rowBox = t.rowCode != null
+      && !flagged.some((o) => String(o.code) === t.rowCode)
+      && otherRows(q).some((r) => String(r.code) === t.rowCode);
+    if (rowBox) return escapeHtml(otherTextFor(ctx.state, q, rowOtherCode(t.rowCode!), ctx.loop ?? null));
     if (!flagged.length) return "";
     const code = t.rowCode ?? String(flagged[0]!.code);
     return escapeHtml(otherTextFor(ctx.state, q, code, ctx.loop ?? null));

@@ -1,7 +1,7 @@
 import type { SurveyDefinition, Question } from "@rescript/schema";
 import { optionColumn, rowColumn, cellColumn, indexColumn, type SuffixPatterns } from "./derivedNames.js";
 import { loopKeySuffix, type LoopContext, type ResponseState } from "./state.js";
-import { otherOptions, otherTextFor, otherColumnFor, otherKeyFor, legacyOtherKey } from "./otherSpecify.js";
+import { otherBoxCodes, otherTextFor, otherColumnFor, otherKeyFor, legacyOtherKey } from "./otherSpecify.js";
 import { directChildLoops, directQuestionIdsInLoop, loopNodes, loopVariablePrefix, type LoopFlowNode } from "./loopModel.js";
 import { designFor, designVersionFor } from "./designVersion.js";
 import { isGeoAnswer, hasCoordinates, geoText, round6 } from "./geo.js";
@@ -107,11 +107,12 @@ export function flattenVariables(def: SurveyDefinition, state: ResponseState, op
      * all three boxes wrote to the same place. The FIRST flagged option keeps
      * `VAR_other` so last month's export still lines up beside this one.
      */
-    for (const o of otherOptions(q)) {
-      const text = otherTextFor(state, q, o.code, null);
+    // options' boxes, then grid rows' (`VAR_<row>_other`, see `otherRows`)
+    for (const code of otherBoxCodes(q)) {
+      const text = otherTextFor(state, q, code, null);
       if (!text) continue;
-      out[otherColumnFor(q, o.code)] = text;
-      placed.add(otherKeyFor(q.id, o.code, null));
+      out[otherColumnFor(q, code)] = text;
+      placed.add(otherKeyFor(q.id, code, null));
     }
     placed.add(legacyOtherKey(q.id, null));
 
@@ -477,12 +478,12 @@ function placeLoopAnswers(def: SurveyDefinition, state: ResponseState, out: Flat
         flattenQuestion(q, state.answers[key], `${q.variableName}${position}`, out, opts);
         placed.add(key);
         /* the same per-box columns, inside the iteration's own prefix */
-        for (const o of otherOptions(q)) {
-          const text = otherTextFor(state, q, o.code, ctx);
+        for (const code of otherBoxCodes(q)) {
+          const text = otherTextFor(state, q, code, ctx);
           if (!text) continue;
-          const stem = otherColumnFor(q, o.code).slice(q.variableName.length);  // "_other" | "_other_97"
+          const stem = otherColumnFor(q, code).slice(q.variableName.length);  // "_other" | "_other_97" | "_r5_other"
           out[`${q.variableName}${position}${stem}`] = text;
-          placed.add(otherKeyFor(q.id, o.code, ctx));
+          placed.add(otherKeyFor(q.id, code, ctx));
         }
         placed.add(`${key}__other`);
       }

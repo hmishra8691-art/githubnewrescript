@@ -226,41 +226,60 @@ table.rs-summatrix td[data-col] .rs-input { max-width: 84px; min-width: 56px; te
   color: var(--rs-subtle);
   padding: 0 2px 2px;
 }
-.rs-ratingmatrix-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 8px 10px;
-  border: 1px solid var(--rs-border);
-  border-radius: 10px;
-  background: var(--rs-surface);
+/* A grid (07-10 review, Prince #1): the points are the column headers, a
+   circle in each cell sits directly under its header. */
+.rs-ratingmatrix-table th.rs-ratingmatrix-head {
+  font-size: 0.85em; font-weight: 600; line-height: 1.25; padding: 8px 6px;
+  vertical-align: bottom; white-space: normal; min-width: 52px; text-align: center;
 }
-.rs-ratingmatrix-label { flex: 1 1 160px; min-width: 0; font-weight: 500; }
-.rs-ratingmatrix-scale { display: flex; gap: 6px; flex-wrap: wrap; }
+.rs-ratingmatrix[data-labels="text"] .rs-ratingmatrix-table th.rs-ratingmatrix-head { min-width: 74px; }
+.rs-ratingmatrix-table td.rs-ratingmatrix-cell { padding: 2px; text-align: center; }
+.rs-ratingmatrix-label { display: block; min-width: 0; font-weight: 500; }
 .rs-ratingmatrix-pt {
-  min-width: 38px;
-  height: 38px;
-  padding: 0 8px;
-  cursor: pointer;
-  font-size: 0.95em;
-  font-weight: 600;
-  color: var(--rs-text);
-  border: 1px solid var(--rs-border);
-  border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%; min-height: 40px; padding: 4px;
+  cursor: pointer; color: var(--rs-text);
+  border: 0; border-radius: 8px; background: transparent;
+  transition: background .12s ease;
+}
+.rs-ratingmatrix-pt:hover:not(:disabled) { background: color-mix(in srgb, var(--rs-primary) 7%, transparent); }
+.rs-ratingmatrix-pt:focus-visible { outline: 2px solid var(--rs-primary); outline-offset: -2px; }
+.rs-ratingmatrix-dot {
+  flex: none; width: 20px; height: 20px; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--rs-text) 45%, var(--rs-border));
   background: var(--rs-surface);
-  transition: background .12s ease, border-color .12s ease, color .12s ease;
+  transition: border-color .12s ease, background .12s ease, box-shadow .12s ease;
 }
-.rs-ratingmatrix-pt:hover:not(:disabled) { border-color: var(--rs-primary); }
-.rs-ratingmatrix-pt.on {
-  background: var(--rs-primary);
+.rs-ratingmatrix-pt:hover:not(:disabled) .rs-ratingmatrix-dot { border-color: var(--rs-primary); }
+.rs-ratingmatrix-pt.on .rs-ratingmatrix-dot {
   border-color: var(--rs-primary);
-  color: var(--rs-on-primary, #fff);
+  background: radial-gradient(circle, var(--rs-primary) 0 45%, var(--rs-surface) 50%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--rs-primary) 22%, transparent);
 }
+.rs-ratingmatrix-cap { display: none; font-size: .88em; }
+.rs-ratingmatrix-pt:disabled { cursor: default; opacity: .7; }
+
+/* a repeated column header (07-10 review, Prince #2): the same cells as the
+   real header, a touch quieter so it reads as a reminder, not a new section */
+.rs-matrix tr.rs-header-repeat > th {
+  background: color-mix(in srgb, var(--rs-primary) 4%, var(--rs-surface));
+  font-size: .82em; color: var(--rs-subtle); padding-top: 6px; padding-bottom: 6px;
+}
+.rs-semantic th.rs-semantic-head { font-size: .85em; min-width: 34px; }
 
 /* Stacked layout: on a phone a grid cannot stay a grid, so each row becomes
    its own block and every band carries its own caption. */
 @media (max-width: 560px) {
+  /* stacked: the header is not drawn, so neither are its repeats */
+  .rs-likert-table tr.rs-header-repeat, .rs-ratingmatrix-table tr.rs-header-repeat { display: none; }
+  .rs-ratingmatrix-table, .rs-ratingmatrix-table thead, .rs-ratingmatrix-table tbody,
+  .rs-ratingmatrix-table tr, .rs-ratingmatrix-table td { display: block; width: 100%; }
+  .rs-ratingmatrix-table thead { display: none; }
+  .rs-ratingmatrix-table tr { border: 1px solid var(--rs-border); border-radius: 10px; padding: 8px; margin-bottom: 8px; }
+  .rs-ratingmatrix-table td { border: 0; }
+  .rs-ratingmatrix-table td.rowlabel { font-weight: 600; padding: 0 0 6px; }
+  .rs-ratingmatrix-pt { justify-content: flex-start; }
+  .rs-ratingmatrix-cap { display: inline; }
   .rs-likert-table, .rs-likert-table thead, .rs-likert-table tbody,
   .rs-likert-table tr, .rs-likert-table td { display: block; width: 100%; }
   .rs-likert-table thead { display: none; }
@@ -274,3 +293,24 @@ table.rs-summatrix td[data-col] .rs-input { max-width: 84px; min-width: 56px; te
   .rs-likert-band { flex-direction: row; justify-content: flex-start; gap: 8px; min-height: 38px; }
   .rs-likert-band .rs-likert-cap { display: block; text-align: left; }
 }
+/* the same stacking in the preview's Mobile view, which narrows a box rather than the window */
+.rs-viewport.mobile .rs-likert-table tr.rs-header-repeat, .rs-viewport.mobile .rs-ratingmatrix-table tr.rs-header-repeat { display: none; }
+.rs-viewport.mobile .rs-ratingmatrix-table, .rs-viewport.mobile .rs-ratingmatrix-table thead, .rs-viewport.mobile .rs-ratingmatrix-table tbody, .rs-viewport.mobile .rs-ratingmatrix-table tr, .rs-viewport.mobile .rs-ratingmatrix-table td { display: block; width: 100%; }
+.rs-viewport.mobile .rs-ratingmatrix-table thead { display: none; }
+.rs-viewport.mobile .rs-ratingmatrix-table tr { border: 1px solid var(--rs-border); border-radius: 10px; padding: 8px; margin-bottom: 8px; }
+.rs-viewport.mobile .rs-ratingmatrix-table td { border: 0; }
+.rs-viewport.mobile .rs-ratingmatrix-table td.rowlabel { font-weight: 600; padding: 0 0 6px; }
+.rs-viewport.mobile .rs-ratingmatrix-pt { justify-content: flex-start; }
+.rs-viewport.mobile .rs-ratingmatrix-cap { display: inline; }
+.rs-viewport.mobile .rs-likert-table, .rs-viewport.mobile .rs-likert-table thead, .rs-viewport.mobile .rs-likert-table tbody, .rs-viewport.mobile .rs-likert-table tr, .rs-viewport.mobile .rs-likert-table td { display: block; width: 100%; }
+.rs-viewport.mobile .rs-likert-table thead { display: none; }
+.rs-viewport.mobile .rs-likert-table tr {
+    border: 1px solid var(--rs-border);
+    border-radius: 10px;
+    padding: 8px;
+    margin-bottom: 8px;
+  }
+.rs-viewport.mobile .rs-likert-table td.rowlabel { font-weight: 600; padding: 0 0 6px; }
+.rs-viewport.mobile .rs-likert-band { flex-direction: row; justify-content: flex-start; gap: 8px; min-height: 38px; }
+.rs-viewport.mobile .rs-likert-band .rs-likert-cap { display: block; text-align: left; }
+

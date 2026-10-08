@@ -37,6 +37,9 @@ page.on("pageerror", (e) => pageErrors.push(e.message));
 /** Hand `def` to a fresh /preview and wait for whatever proves it settled. */
 async function run(def, { selector = "[data-qid], [data-testid='rs-ended'], [data-testid='rs-fatal']" } = {}) {
   await page.goto(`${RUNTIME}/preview`, { waitUntil: "domcontentloaded" });
+  /* each scenario is a new respondent: a preview resumes its tab's last position (Runner, "a preview resumes too"),
+     and every scenario here shares one survey id, so the previous scenario's page 2 would be resumed */
+  await page.evaluate(() => sessionStorage.clear());
   await sendPreview(page, { definition: def }, { selector, timeout: 20_000 });
 }
 

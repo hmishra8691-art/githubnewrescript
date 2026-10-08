@@ -279,7 +279,19 @@ await page.fill("textarea.code", JSON.stringify(ALIGNED, null, 2));
 await page.click('button:has-text("validate & apply")');
 await page.waitForTimeout(400);
 await selectQuestion("Q1");
-const rel = (sel, box) => page.$$eval(sel, (es, box) => es.map((e) => { const r = e.getBoundingClientRect(); const c = e.closest(box).getBoundingClientRect(); return { al: e.getAttribute("src").split("al=")[1], left: Math.round(r.left - c.left), right: Math.round(c.right - r.right) }; }), box);
+/*
+ * `$$eval` finds the elements in one round trip and measures them in another;
+ * a re-render in between (the Live View redraws once its media settle)
+ * detaches the first set, and a detached image has no container to measure
+ * against. Measure again until the set is the one on screen.
+ */
+const rel = async (sel, box) => {
+  for (let i = 0; ; i++) {
+    const out = await page.$$eval(sel, (es, box) => es.map((e) => { const c0 = e.closest(box); if (!c0) return null; const r = e.getBoundingClientRect(); const c = c0.getBoundingClientRect(); return { al: e.getAttribute("src").split("al=")[1], left: Math.round(r.left - c.left), right: Math.round(c.right - r.right) }; }), box);
+    if (out.every(Boolean) || i >= 10) return out;
+    await page.waitForTimeout(150);
+  }
+};
 const inEditor = Object.fromEntries((await rel(".rte-surface img", ".rte-surface")).map((x) => [x.al, x]));
 const pad = inEditor.left.left;
 assert.ok(Math.abs(inEditor.right.right - pad) <= 2 && Math.abs(inEditor.center.left - inEditor.center.right) <= 2, `builder: ${JSON.stringify(inEditor)}`);

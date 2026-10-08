@@ -5,7 +5,8 @@ import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition, conditionFires } from "./evaluate.js";
 import { effectiveQuestion } from "./carryforward.js";
 import { answerKey, lookupAnswer } from "./state.js";
-import { selectedOtherCodes, otherTextFor, checkOtherText } from "./otherSpecify.js";
+import { fieldIsRequired } from "./formFields.js";
+import { selectedOtherCodes, otherTextFor, checkOtherText, isOtherRow, rowOtherCode, rowHasAnswer } from "./otherSpecify.js";
 import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
 import { validateFieldValue, rangeEndKey } from "./fields.js";
@@ -524,6 +525,30 @@ export function validateQuestion(
     }
   }
 
+  /*
+   * A GRID ROW'S "OTHER, PLEASE SPECIFY" (07-10 review) — the pair rule, see
+   * `otherRows`. Rows the respondent was shown only: a masked row cannot ask.
+   */
+  if ((q.rows ?? []).some(isOtherRow)) {
+    const cells = (value && typeof value === "object" && !Array.isArray(value) ? value : {}) as Record<string, unknown>;
+    for (const row of effectiveQuestion(q, ctx).rows.filter(isOtherRow)) {
+      const rc = String(row.code);
+      const text = otherTextFor(ctx.state, q, rowOtherCode(rc), ctx.loop).trim();
+      const answered = rowHasAnswer(cells[rc]);
+      const label = row.label.replace(/<[^>]*>/g, "").trim();
+      if (answered && !text && !q.settings.otherSpecifyOptional) {
+        push(`${label}: ${uiText(ctx.ui, "other_required")}`, { rowCode: rc });
+      } else if (text && !answered) {
+        // a required grid already asks for every row it is owed, this one included
+        if (q.required && (q.type.startsWith("matrix") || q.settings.rowSum)) continue;
+        push(uiText(ctx.ui, "row_required", { row: label }), { rowCode: rc });
+      } else if (text && q.settings.otherSpecifyFormat) {
+        const problem = checkOtherText(q.settings.otherSpecifyFormat, text);
+        if (problem) push(`${label}: ${problem}`, { rowCode: rc });
+      }
+    }
+  }
+
   // bounds from settings
   if (!isEmpty(value) && (q.type === "numeric" || q.type === "slider" || q.type === "nps")) {
     /*
@@ -906,7 +931,7 @@ export function validateQuestion(
       const rc = String(row.code);
       const v = typeof vals === "object" && !Array.isArray(vals) ? vals[rc] : undefined;
       const label = row.label.replace(/<[^>]*>/g, "");
-      if ((row.required || (q.required && !q.rows.some((r) => r.required))) && isEmpty(v)) {
+      if (fieldIsRequired(q, row) && isEmpty(v)) {
         push(`${label}: this field is required.`, { rowCode: rc });
         continue;
       }
@@ -934,6 +959,8 @@ export function validateQuestion(
     const view = effectiveQuestion(q, ctx);
     const rowsAnswered = (value ?? {}) as Record<string, unknown>;
     for (const row of view.rows) {
+      // an "Other, please specify" row nobody named is not owed an answer (see `otherRows`)
+      if (isOtherRow(row) && !otherTextFor(ctx.state, q, rowOtherCode(row.code), ctx.loop).trim()) continue;
       if (isEmpty(rowsAnswered[String(row.code)]))
         push(uiText(ctx.ui, "row_required", { row: row.label }), { rowCode: String(row.code) });
     }
@@ -1034,7 +1061,10 @@ export function validateQuestion(
       const filled = vals.filter((v) => !isEmpty(v));
       const complete = cols.length > 0 && filled.length === cols.length;
       if (!complete) {
-        if (q.required) push(`Row “${label}” must total ${target}${unit}.`, { rowCode: rc });
+        // an unused "Other, please specify" row (no text, no numbers) is not owed a total
+        const unusedOther = isOtherRow(row) && !filled.length
+          && !otherTextFor(ctx.state, q, rowOtherCode(rc), ctx.loop).trim();
+        if (q.required && !unusedOther) push(`Row “${label}” must total ${target}${unit}.`, { rowCode: rc });
         continue;
       }
       const total = vals.reduce((a: number, b) => a + (Number(b) || 0), 0);

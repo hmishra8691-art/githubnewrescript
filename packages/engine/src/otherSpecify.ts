@@ -1,4 +1,5 @@
-import type { Option, Question, SurveyDefinition } from "@rescript/schema";
+import type { Option, Question, QuestionRow, SurveyDefinition } from "@rescript/schema";
+import { resolveVariant } from "@rescript/schema";
 import { answerKey, answerLookupKeys, type LoopContext, type ResponseState } from "./state.js";
 
 /**
@@ -55,6 +56,97 @@ export function isOtherOption(o: Option): boolean {
 /** The flagged options of a question, in their programmed order. */
 export function otherOptions(q: Question): Option[] {
   return (q.options ?? []).filter(isOtherOption);
+}
+
+/* ------------------------------------------------------------- grid rows */
+
+/**
+ * "OTHER, PLEASE SPECIFY" ON A GRID ROW (07-10-2026 review, Suraj #1 and
+ * Oweas #1).
+ *
+ * The Studio has offered `other_specify` on a matrix ROW for months — it is in
+ * `allowedRowFlagsFor` — and nothing downstream knew a row could carry it:
+ * `otherOptions` reads options only, so the renderer drew no box, the
+ * validator asked for nothing, and the export had no column. A grid row
+ * labelled "Other, please describe" was rated or given a number with no way to
+ * say what it was.
+ *
+ * A row's box is the same kind of box as an option's, so it is stored the same
+ * way — one key per box, under the question's own iteration — with a code in
+ * a namespace of its own: `row:<rowCode>`. The prefix is what keeps row 3's box
+ * apart from column option 3's box on a grid that flags both. Every function in
+ * this file that takes a code takes a row-box code unchanged.
+ *
+ * Unlike an option's, a row's box is ALWAYS shown: the respondent names the
+ * "other" thing and rates it, in either order. So its text is not housekeeping
+ * to drop when the row is cleared — it is visible on screen — and the rules
+ * are about the PAIR: an answered row needs its text (unless the question
+ * says Other text is optional), text needs its row answered, and a row with
+ * neither is simply not used — a required grid does not force a respondent to
+ * rate an "other" they do not have.
+ */
+export const ROW_OTHER_PREFIX = "row:";
+
+/** The box code of a flagged row. */
+export function rowOtherCode(rowCode: string | number): string {
+  return `${ROW_OTHER_PREFIX}${String(rowCode)}`;
+}
+
+/** The row code a row-box code names, or null for an option's box. */
+export function rowCodeOfOtherCode(code: string | number): string | null {
+  const s = String(code);
+  return s.startsWith(ROW_OTHER_PREFIX) ? s.slice(ROW_OTHER_PREFIX.length) : null;
+}
+
+export function isOtherRow(r: { flags?: readonly string[] | null }): boolean {
+  return !!r.flags?.includes(OTHER_SPECIFY_FLAG);
+}
+
+/** The flagged rows of a question, in their programmed order. */
+export function otherRows(q: Question): QuestionRow[] {
+  return (q.rows ?? []).filter(isOtherRow);
+}
+
+/** Every box a question can have — options first, then rows — as box codes. */
+export function otherBoxCodes(q: Question): string[] {
+  return [
+    ...otherOptions(q).map((o) => String(o.code)),
+    ...otherRows(q).map((r) => rowOtherCode(r.code)),
+  ];
+}
+
+/** The label of the option or row a box belongs to. */
+export function otherBoxLabel(q: Question, code: string | number): string {
+  const rc = rowCodeOfOtherCode(code);
+  const owner = rc != null
+    ? (q.rows ?? []).find((r) => String(r.code) === rc)
+    : (q.options ?? []).find((o) => String(o.code) === String(code));
+  return owner ? String(owner.label ?? "") : "";
+}
+
+/**
+ * WHERE A ROW CAN CARRY A BOX: the grids that draw their row labels through
+ * the renderer's `RowLabel` — the plain matrix and mixed table (no renderer
+ * of their own), Likert, Rating, Star, Slider and Constant-Sum matrices, and
+ * the editable table. A swipe card, a drag chip or a bipolar pair has no row
+ * label to put a box beside, so the Studio does not offer the flag there:
+ * offering what the respondent will never see is how this bug began.
+ */
+const ROW_BOX_RENDERERS = new Set(["likert", "ratingmatrix", "starmatrix", "slidermatrix", "summatrix", "spreadsheet"]);
+const ROW_BOX_TYPES = new Set(["matrix_single", "matrix_multi", "matrix_numeric", "matrix_text", "matrix_dropdown", "composite", "custom_table"]);
+
+export function rowOtherBoxSupported(q: { type: string; variant?: string | null }): boolean {
+  if (!ROW_BOX_TYPES.has(q.type)) return false;
+  const renderer = resolveVariant(q.variant ?? undefined)?.renderer;
+  return !renderer || ROW_BOX_RENDERERS.has(renderer);
+}
+
+/** Is a grid row's answer present? A cell map counts when any cell is filled. */
+export function rowHasAnswer(v: unknown): boolean {
+  if (v == null || v === "") return false;
+  if (Array.isArray(v)) return v.length > 0;
+  if (typeof v === "object") return Object.values(v as Record<string, unknown>).some(rowHasAnswer);
+  return true;
 }
 
 /**
@@ -149,9 +241,9 @@ export function otherTextsOf(
   loop?: LoopContext | null,
 ): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const o of otherOptions(q)) {
-    const text = otherTextFor(state, q, o.code, loop);
-    if (text) out[String(o.code)] = text;
+  for (const code of otherBoxCodes(q)) {
+    const text = otherTextFor(state, q, code, loop);
+    if (text) out[code] = text;
   }
   return out;
 }
@@ -280,7 +372,7 @@ export function syncOtherText(state: ResponseState, q: Question, loop?: LoopCont
 
 /** Remove every box's text for this question — used when the question itself goes away. */
 export function clearOtherText(state: ResponseState, q: Question, loop?: LoopContext | null): void {
-  for (const o of otherOptions(q)) delete state.answers[otherKeyFor(q.id, o.code, loop)];
+  for (const code of otherBoxCodes(q)) delete state.answers[otherKeyFor(q.id, code, loop)];
   delete state.answers[legacyOtherKey(q.id, loop)];
 }
 
@@ -296,7 +388,7 @@ export interface OtherSpecifyEntry {
   questionId: string;
   /** the variable this question writes, for the column name */
   variableName: string;
-  /** the option whose box this is */
+  /** the option whose box this is — or `row:<code>` for a grid row's box */
   optionCode: string;
   optionLabel: string;
   /** the column this text is exported under */
@@ -315,6 +407,9 @@ export interface OtherSpecifyEntry {
  * than renaming the one that was already right.
  */
 export function otherColumnFor(q: Question, code: string | number): string {
+  /* a row's box sits beside the row's own column: VAR_<row>_other */
+  const rc = rowCodeOfOtherCode(code);
+  if (rc != null) return `${q.variableName}_${rc}_other`;
   const flagged = otherOptions(q);
   const first = flagged[0];
   return first && String(first.code) === String(code)
@@ -331,12 +426,11 @@ export function otherSpecifyEntries(def: SurveyDefinition, state: ResponseState)
     const dedupe = `${q.id}${iteration}__${code}`;
     if (seen.has(dedupe)) return;
     seen.add(dedupe);
-    const option = otherOptions(q).find((o) => String(o.code) === code);
     out.push({
       questionId: q.id,
       variableName: q.variableName,
       optionCode: code,
-      optionLabel: option ? String(option.label ?? "") : "",
+      optionLabel: otherBoxLabel(q, code),
       column: otherColumnFor(q, code),
       iteration,
       text,

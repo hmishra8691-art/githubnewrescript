@@ -116,6 +116,8 @@ const preview = await browser.newPage({ viewport: { width: 900, height: 900 } })
 preview.on("pageerror", (e) => console.error("PREVIEW ERROR:", e.message));
 const show = async (def) => {
   await preview.goto("http://localhost:3001/preview", { waitUntil: "networkidle" });
+  /* a fresh respondent each time: the preview otherwise resumes the page an earlier check advanced to */
+  await preview.evaluate(() => sessionStorage.clear());
   await sendPreview(preview, { definition: def }, { selector: ".rs-option" });
 };
 await show(await readDef());

@@ -1,6 +1,6 @@
 "use client";
 import React from "react";
-import type { Question, Option, SurveyDefinition, QuestionColumn } from "@rescript/schema";
+import type { Question, Option, SurveyDefinition, QuestionColumn, QuestionRow } from "@rescript/schema";
 import { resolveVariant } from "@rescript/schema";
 import {
   effectiveQuestion,
@@ -25,6 +25,13 @@ import {
   hasStyleBlock,
   SCOPE_ATTR,
   selectedOtherCodes,
+  headerRepeatApplies,
+  headerRepeatEvery,
+  headerRepeatsBefore,
+  fieldIsRequired,
+  requiredFieldsNote,
+  isOtherRow,
+  rowOtherCode,
   uiText,
   effectiveScale,
   affixFor,
@@ -181,6 +188,48 @@ function OtherInput(p: QRProps & { option: Option; below?: boolean }) {
 }
 
 const stripTags = (s: string) => s.replace(/<[^>]*>/g, "").trim();
+
+/**
+ * A GRID ROW'S LABEL — and, on a row flagged "Other, please specify", the box
+ * that says what the row is (07-10 review, Suraj #1 / Oweas #1).
+ *
+ * The flag was offered on matrix rows and drawn by no grid, so a row reading
+ * "Other, please describe" took a rating or a number with nowhere to type
+ * what it was. Every tabular grid renderer draws its row label through this
+ * one component, so the box appears the same way on a Single / Multi Matrix,
+ * a Likert, a Rating Matrix, a Star or Slider Matrix, a Mixed or Constant-Sum
+ * Matrix and an editable table — and binds to the engine's per-box key
+ * (`rowOtherCode`), the same plumbing an option's box uses. The box is always
+ * shown; the validator holds the row and its text to each other.
+ */
+export function RowLabel(p: QRProps & { row: QuestionRow; labelClass?: string }) {
+  const rc = String(p.row.code);
+  const label = <span className={p.labelClass ?? "rs-rowlabel-text"} dangerouslySetInnerHTML={{ __html: p.row.label }} />;
+  if (!isOtherRow(p.row)) return label;
+  const code = rowOtherCode(rc);
+  const plain = stripTags(String(p.row.label ?? ""));
+  return (
+    <span className="rs-rowlabel-other">
+      {label}
+      <input
+        className="rs-input rs-other-input rs-row-other-input"
+        data-testid="rs-row-other-input"
+        data-other-code={code}
+        id={`${p.q.id}__other__${code}`}
+        name={`${p.q.id}__other__${code}`}
+        aria-label={`${plain} — ${uiOf(p, "other_specify")}`}
+        placeholder={uiOf(p, "other_specify")}
+        inputMode={p.q.settings.otherSpecifyFormat === "numeric" ? "decimal" : undefined}
+        value={otherTextOfOption(p, code)}
+        disabled={p.q.settings.readOnly}
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+        onChange={(e) => p.onOtherChange?.(e.target.value, code)}
+      />
+    </span>
+  );
+}
 
 /**
  * THE "OTHER, SPECIFY" BOX FOR A LAYOUT THAT CANNOT NEST ONE.
@@ -593,8 +642,11 @@ export function MultiDropdown(p: QRProps) {
  * from somewhere else (a calculation, a reset, another respondent action).
  */
 export function NumberField({
-  value, onChange, className = "rs-input sm", min, max, step, placeholder, readOnly, ariaLabel, disabled, decimals, style,
+  value, onChange, className = "rs-input sm", min, max, step, placeholder, readOnly, ariaLabel, disabled, decimals, style, id, ariaRequired,
 }: {
+  /** for a `<label htmlFor>` — a form field's own label */
+  id?: string;
+  ariaRequired?: boolean;
   value: unknown;
   onChange(v: number | null): void;
   className?: string;
@@ -634,7 +686,9 @@ export function NumberField({
       style={style}
       type="text"
       inputMode={decimals === 0 ? "numeric" : "decimal"}
+      id={id}
       aria-label={ariaLabel}
+      aria-required={ariaRequired || undefined}
       value={raw}
       placeholder={placeholder}
       readOnly={readOnly}
@@ -1031,7 +1085,22 @@ export function ListInput(p: QRProps & { numeric: boolean }) {
   if (view.rows.length > 0) {
     const vals = (p.value ?? {}) as Record<string, unknown>;
     const setField = (rc: string, v: unknown) => p.onChange({ ...vals, [rc]: v });
+    /*
+     * LABEL AND BOX (07-10 review, Suraj #6). The label column was a fixed
+     * 150px, so "Age" sat a hand's width from its box. It is now as wide as
+     * the longest label on this question (capped, so a sentence-long label
+     * wraps rather than squeezing the boxes), and every box still starts in
+     * one line. The author picks where the label goes: left of the box (the
+     * layout surveys already had), right of it, or above it.
+     */
+    const labelPos = p.q.settings.fieldLabelPosition ?? "left";
+    const longest = Math.max(1, ...view.rows.map((r) => stripTags(String(r.label ?? "")).length));
+    const note = requiredFieldsNote(p.q, view.rows, p.ui);
     return (
+      <div className="rs-fields" data-label-pos={labelPos}
+        style={{ ["--rs-flab-ch" as string]: `${Math.min(longest, 28)}ch` }}>
+        {/* the rule in words, not a star beside each label (Suraj #4) */}
+        {note && <div className="rs-fields-note" data-testid="fields-required-note">{note}</div>}
       <div
         className={cols > 1 ? `rs-options cols-${cols}` : "rs-options"}
         style={{ maxWidth: cols > 1 ? undefined : 520 }}
@@ -1065,16 +1134,18 @@ export function ListInput(p: QRProps & { numeric: boolean }) {
           const boxCh = isNumeric ? numericBoxCh({ min: bound("min_value"), max: bound("max_value"), whole: ft === "integer", decimals: ft === "currency" ? 2 : null }) : null;
           return (
             <div key={rc} {...anchor("row", rc)}>
-              <div className="rs-field-row">
-                <span className="flab">
+              <div className="rs-field-row" data-required={fieldIsRequired(p.q, row) || undefined}>
+                <label className="flab" htmlFor={`${p.q.id}__f__${rc}`} id={`${p.q.id}__flab__${rc}`}>
                   <span dangerouslySetInnerHTML={{ __html: row.label }} />
-                  {row.required && <span className="rs-req"> *</span>}
-                </span>
+                </label>
+                <span className="rs-field-ctl">
                 {own?.side === "left" && <span className="rs-affix-text left" data-testid={`field-affix-left-${rc}`}>{own.text}</span>}
                 {ip.prefix && <span className="rs-prefix">{ip.prefix}</span>}
                 {ip.multiline ? (
                   <textarea
                     className="rs-textarea"
+                    id={`${p.q.id}__f__${rc}`}
+                    aria-required={fieldIsRequired(p.q, row) || undefined}
                     style={{ minHeight: 60 }}
                     placeholder={row.placeholder}
                     value={v == null ? "" : String(v)}
@@ -1100,6 +1171,8 @@ export function ListInput(p: QRProps & { numeric: boolean }) {
                 ) : ["number", "decimal", "integer", "currency"].includes(ft) ? (
                   <NumberField
                     className="rs-input rs-numbox"
+                    id={`${p.q.id}__f__${rc}`}
+                    ariaRequired={fieldIsRequired(p.q, row)}
                     placeholder={row.placeholder}
                     value={v}
                     readOnly={p.q.settings.readOnly}
@@ -1110,6 +1183,8 @@ export function ListInput(p: QRProps & { numeric: boolean }) {
                 ) : (
                   <input
                     className="rs-input"
+                    id={`${p.q.id}__f__${rc}`}
+                    aria-required={fieldIsRequired(p.q, row) || undefined}
                     type={ip.inputType}
                     inputMode={ip.inputMode as any}
                     placeholder={row.placeholder}
@@ -1121,11 +1196,13 @@ export function ListInput(p: QRProps & { numeric: boolean }) {
                 {/* a symbol on the right when the author put it there */}
                 {ip.suffix && <span className="rs-prefix">{ip.suffix}</span>}
                 {own?.side === "right" && <span className="rs-affix-text right" data-testid={`field-affix-right-${rc}`}>{own.text}</span>}
+                </span>
               </div>
               {err && <ValidationMessageText error={err} />}
             </div>
           );
         })}
+      </div>
       </div>
     );
   }
@@ -1422,6 +1499,21 @@ export function ImageSelect(p: QRProps & { multi?: boolean; ranking?: boolean })
 }
 
 /* ----------------------------------------------------------------- matrix */
+/**
+ * A GRID'S HEADER, DRAWN AGAIN EVERY N ROWS (07-10 review, Prince #2) — see
+ * the engine's `headerRepeatEvery`. Every grid with a header row uses these
+ * two, so the setting means the same thing on all of them. The repeat is
+ * the same header cells, hidden from assistive technology (the real header
+ * still labels every cell); no column and no data is added.
+ */
+export function headerEveryFor(p: QRProps, rowCount: number): number | null {
+  return headerRepeatApplies(p.q) ? headerRepeatEvery(p.q.settings.headerRepeat, rowCount) : null;
+}
+export function RepeatedHeaderRow({ index, every, count, children }: { index: number; every: number | null; count: number; children: React.ReactNode }) {
+  if (!headerRepeatsBefore(index, every, count)) return null;
+  return <tr className="rs-header-repeat" aria-hidden="true" data-testid="header-repeat">{children}</tr>;
+}
+
 export function Matrix(p: QRProps) {
   const view = effectiveQuestion(p.q, ctxOf(p));
   const colOpts = view.columns[0]?.options?.length ? view.columns[0].options : view.options;
@@ -1429,24 +1521,30 @@ export function Matrix(p: QRProps) {
   const setRow = (row: string, v: unknown) => p.onChange({ ...vals, [row]: v });
   const type = p.q.type;
 
+  const headCells = (repeat: boolean) => (
+    <>
+      <th className="rowlabel"></th>
+      {type === "matrix_numeric" || type === "matrix_text" || type === "matrix_dropdown"
+        ? <th>{view.columns[0]?.label ?? "Answer"}</th>
+        : colOpts.map((o) => <th key={String(o.code)} {...(repeat ? {} : anchor("column", o.code))} dangerouslySetInnerHTML={{ __html: o.label }} />)}
+    </>
+  );
+  const every = headerEveryFor(p, view.rows.length);
   return (
     <div className="rs-table-wrap">
       <table className="rs-matrix">
         <thead>
-          <tr>
-            <th className="rowlabel"></th>
-            {type === "matrix_numeric" || type === "matrix_text" || type === "matrix_dropdown"
-              ? <th>{view.columns[0]?.label ?? "Answer"}</th>
-              : colOpts.map((o) => <th key={String(o.code)} {...anchor("column", o.code)} dangerouslySetInnerHTML={{ __html: o.label }} />)}
-          </tr>
+          <tr>{headCells(false)}</tr>
         </thead>
         <tbody>
-          {view.rows.map((row) => {
+          {view.rows.map((row, ri) => {
             const rc = String(row.code);
             const rowVal = vals[rc];
             return (
-              <tr key={rc} {...anchor("row", rc)}>
-                <td className="rowlabel" {...anchor("row", rc)} dangerouslySetInnerHTML={{ __html: row.label }} />
+              <React.Fragment key={rc}>
+              <RepeatedHeaderRow index={ri} every={every} count={view.rows.length}>{headCells(true)}</RepeatedHeaderRow>
+              <tr {...anchor("row", rc)}>
+                <td className="rowlabel" {...anchor("row", rc)}><RowLabel {...p} row={row} /></td>
                 {type === "matrix_single" &&
                   colOpts.map((o) => (
                     <td key={String(o.code)} {...cellAnchor(rc, o.code)}>
@@ -1492,6 +1590,7 @@ export function Matrix(p: QRProps) {
                   </td>
                 )}
               </tr>
+              </React.Fragment>
             );
           })}
         </tbody>
@@ -1640,22 +1739,28 @@ export function Composite(p: QRProps) {
   const vals = (p.value ?? {}) as Record<string, Record<string, unknown>>;
   const setCell = (row: string, col: string, v: unknown) =>
     p.onChange({ ...vals, [row]: { ...(vals[row] ?? {}), [col]: v } });
+  const headCells = (repeat: boolean) => (
+    <>
+      <th className="rowlabel"></th>
+      {view.columns.map((c) => (
+        <th key={c.id} {...(repeat ? {} : anchor("column", c.id))} style={c.width ? { width: c.width } : undefined}
+          dangerouslySetInnerHTML={{ __html: c.label }} />
+      ))}
+    </>
+  );
+  const every = headerEveryFor(p, view.rows.length);
   return (
     <div className="rs-table-wrap">
       <table className="rs-matrix">
         <thead>
-          <tr>
-            <th className="rowlabel"></th>
-            {view.columns.map((c) => (
-              <th key={c.id} {...anchor("column", c.id)} style={c.width ? { width: c.width } : undefined}
-                dangerouslySetInnerHTML={{ __html: c.label }} />
-            ))}
-          </tr>
+          <tr>{headCells(false)}</tr>
         </thead>
         <tbody>
-          {view.rows.map((row) => (
-            <tr key={String(row.code)} {...anchor("row", row.code)}>
-              <td className="rowlabel" dangerouslySetInnerHTML={{ __html: row.label }} />
+          {view.rows.map((row, ri) => (
+            <React.Fragment key={String(row.code)}>
+            <RepeatedHeaderRow index={ri} every={every} count={view.rows.length}>{headCells(true)}</RepeatedHeaderRow>
+            <tr {...anchor("row", row.code)}>
+              <td className="rowlabel"><RowLabel {...p} row={row} /></td>
               {view.columns.map((c) => (
                 <td key={c.id} {...cellAnchor(String(row.code), c.id)}>
                   <CompositeCell col={c} p={p}
@@ -1664,6 +1769,7 @@ export function Composite(p: QRProps) {
                 </td>
               ))}
             </tr>
+            </React.Fragment>
           ))}
         </tbody>
       </table>
@@ -2287,15 +2393,32 @@ export function SemanticDifferential(p: QRProps) {
   const view = effectiveQuestion(p.q, ctxOf(p));
   const vals = (p.value ?? {}) as Record<string, unknown>;
   const setRow = (rc: string, v: unknown) => p.onChange({ ...vals, [rc]: v });
+  /*
+   * THE SCALE POINTS, NAMED ABOVE THEIR COLUMNS (07-10 review). A bipolar
+   * grid drew its points as bare radios with no header at all, so there was
+   * nothing to keep in view on a long one (Prince #2) and nothing telling a
+   * respondent which circle was 4.
+   */
+  const headCells = (repeat: boolean) => (
+    <>
+      <th className="rowlabel" />
+      {view.options.map((o) => <th key={String(o.code)} {...(repeat ? {} : anchor("column", o.code))} className="rs-semantic-head" dangerouslySetInnerHTML={{ __html: o.label }} />)}
+      <th className="rowlabel" />
+    </>
+  );
+  const every = headerEveryFor(p, view.rows.length);
   return (
     <div className="rs-table-wrap">
       <table className="rs-matrix rs-semantic">
+        <thead><tr>{headCells(false)}</tr></thead>
         <tbody>
-          {view.rows.map((row) => {
+          {view.rows.map((row, ri) => {
             const rc = String(row.code);
             const [left, right] = row.label.split("|").map((x) => x.trim());
             return (
-              <tr key={rc} {...anchor("row", rc)}>
+              <React.Fragment key={rc}>
+              <RepeatedHeaderRow index={ri} every={every} count={view.rows.length}>{headCells(true)}</RepeatedHeaderRow>
+              <tr {...anchor("row", rc)}>
                 <td className="rowlabel" style={{ textAlign: "right" }} {...anchor("row", rc)}
                   dangerouslySetInnerHTML={{ __html: left ?? row.label }} />
                 {view.options.map((o) => (
@@ -2310,6 +2433,7 @@ export function SemanticDifferential(p: QRProps) {
                 <td className="rowlabel"
                   dangerouslySetInnerHTML={{ __html: right ?? "" }} />
               </tr>
+              </React.Fragment>
             );
           })}
         </tbody>

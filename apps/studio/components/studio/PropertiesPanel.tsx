@@ -2,7 +2,7 @@
 import { CountInput } from "./CountInput";
 import React from "react";
 import type { Question, ValidationRule, SkipRule, ListOperation, ListSource } from "@rescript/schema";
-import { gridAxes, displayedListCanVary, validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion, shapeHasAxis, staleFields, migrateQuestionType, escapeHtml, sanitizeHtml, PIPE_TOKEN_RE, parsePipeBody, describePipeToken } from "@rescript/engine";
+import { headerRepeatApplies, gridAxes, displayedListCanVary, validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion, shapeHasAxis, staleFields, migrateQuestionType, escapeHtml, sanitizeHtml, PIPE_TOKEN_RE, parsePipeBody, describePipeToken } from "@rescript/engine";
 import { isEmptyConditionTree, resolveVariant, effectiveCapabilities, allowedValidationKinds, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript/schema";
 import { useStudio, selectedQuestion, uid } from "./store";
 import { useCanvas } from "../canvas/CanvasContext";
@@ -14,6 +14,7 @@ import { MaskingBuilder, PunchRules } from "./MaskingBuilder";
 import { QualitySettings } from "./QualitySettings";
 import { OptionGroupsEditor } from "./OptionGroupsEditor";
 import { CollapsibleSection } from "./CollapsibleSection";
+import { HeaderRepeatEditor } from "./HeaderRepeatEditor";
 import { QuestionAnalysisSection } from "./QuestionAnalysisSection";
 import { UxItemsEditor, uxItemsFor } from "./UxItemsEditor";
 import { InlineRichText, RichTextEditor } from "./RichTextEditor";
@@ -953,6 +954,15 @@ export function PropertiesPanel() {
       const i = d.questions.findIndex((x) => x.id === q.id);
       if (i >= 0) d.questions[i] = { ...d.questions[i], ...p } as Question;
     });
+  /* merged into the settings as they are at the moment of the edit, not as this render saw them */
+  const patchSettings = (p: Partial<Question["settings"]>) =>
+    s.update((d) => {
+      const i = d.questions.findIndex((x) => x.id === q.id);
+      if (i < 0) return;
+      const next = { ...d.questions[i].settings, ...p } as Record<string, unknown>;
+      for (const [k, v] of Object.entries(p)) if (v === undefined) delete next[k];
+      d.questions[i] = { ...d.questions[i], settings: next as Question["settings"] };
+    });
 
   const variantDef = resolveVariant(q.variant);
   /*
@@ -1410,6 +1420,13 @@ export function PropertiesPanel() {
        * matrix could still be carrying its old rows, and offering to mask
        * them built a mask over a list nothing renders.
        */}
+      {/* every grid / matrix subtype with a column header (07-10 review, Prince #2) */}
+      {headerRepeatApplies(q) && showSec("Header repeat") && (
+      <CollapsibleSection id="header-repeat" title="Header repeat" active={q.settings.headerRepeat != null && q.settings.headerRepeat !== "off"}>
+      <HeaderRepeatEditor q={q} patchSettings={patchSettings} />
+      </CollapsibleSection>
+      )}
+
       {shapeHasAxis(q, "rows") && q.rows.length > 0 && showSec("Row masking") && (
       <CollapsibleSection id="row-masking" title="Row masking (dynamic row sets)" active={!!q.rowMask}>
       <MaskingBuilder q={q} patch={patch} field="rowMask" />

@@ -35,6 +35,8 @@ export function AttentionCheckEditor({ q, patch }: { q: Question; patch(p: Parti
   };
   const others = s.def.questions.filter((x) => x.id !== q.id);
   const hasOptions = q.options.length > 0;
+  /* a Text / HTML block takes no answer, so there is nothing to grade (07-10 review) — unless one was already set */
+  if (q.type === "html" && !ac) return null;
 
   return (
     <div data-testid="attention-check">

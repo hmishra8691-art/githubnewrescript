@@ -95,6 +95,7 @@ import {
   usedNames,
   addQuestion, duplicateQuestion, removeQuestion, moveQuestionBy, cloneQuestion,
   layoutColumns, MAX_LAYOUT_COLUMNS,
+  rowOtherBoxSupported,
 } from "@rescript/engine"; // also registers builtin question types
 import { optionLogicHasEffect, isEmptyConditionTree } from "@rescript/schema";
 import { useStudio, uid } from "./store";
@@ -159,8 +160,9 @@ export function allowedFlagsFor(qtype: string): string[] {
  * the engine already honours — the editor simply never offered them, so a
  * programmer could not pin "None of these" to the bottom of a grid.
  */
-export function allowedRowFlagsFor(qtype: string): string[] {
-  const base = ["anchor_top", "anchor_bottom", "other_specify"];
+export function allowedRowFlagsFor(qtype: string, variant?: string | null): string[] {
+  /* "other/specify" only where the grid draws the row's box (`rowOtherBoxSupported`, 07-10 review) */
+  const base = ["anchor_top", "anchor_bottom", ...(rowOtherBoxSupported({ type: qtype, variant }) ? ["other_specify"] : [])];
   if (qtype === "matrix_multi") return [...base, "exclusive"];
   return base;
 }
@@ -893,11 +895,59 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
   return (
     <>
       <h3 className="sec">Fields — each row is its own typed, validated variable</h3>
+      {/* display options for every field of this question (07-10 review, Suraj #6) */}
+      {rows.length > 0 && !fieldSpec?.range && (q.type === "text_list" || q.type === "numeric_list") && (
+        <div className="row" style={{ gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+          <span className="muted" style={{ fontSize: 12.5 }}>Label position</span>
+          <span className="seg" role="radiogroup" aria-label="Label position" data-testid="field-label-pos">
+            {([["left", "Left of the box"], ["above", "Above the box"], ["right", "Right of the box"]] as const).map(([v, label]) => {
+              const on = (q.settings.fieldLabelPosition ?? "left") === v;
+              return (
+                <button key={v} type="button" role="radio" aria-checked={on}
+                  className={`seg-btn${on ? " on" : ""}`} data-testid={`field-label-pos-${v}`}
+                  onClick={() => patchSettings({ fieldLabelPosition: v === "left" ? undefined : v })}>{label}</button>
+              );
+            })}
+          </span>
+        </div>
+      )}
       {rows.length === 0 && (
-        <p className="muted" style={{ fontSize: 13 }}>
-          No fields yet. Add labeled fields below (recommended), or keep the legacy
-          numbered list via <em>item count</em>.
-        </p>
+        q.settings.listCount != null || q.type === "text_list" || q.type === "numeric_list" ? (
+          /*
+           * THE OLDER NUMBERED LIST (07-10 review, Suraj #3). A question with
+           * no fields draws N identical numbered boxes that share one
+           * Required. It is no longer something to author — the item-count
+           * box is gone — but a survey that has one keeps drawing it, and
+           * this turns it into N ordinary fields in one step. Not while the
+           * survey has live responses: the answer would change shape from a
+           * list to named fields under them.
+           */
+          <div className="card" style={{ padding: 10, fontSize: 13 }} data-testid="legacy-list-notice">
+            <p style={{ margin: "0 0 8px" }}>
+              This question shows <strong>{q.settings.listCount ?? 3} numbered boxes</strong> (an older layout) that share one
+              Required setting. Make them separate fields to label each one and choose Required or Optional per field.
+            </p>
+            <button className="btn small primary" data-testid="convert-legacy-fields" disabled={frozen}
+              title={frozen ? "Not while this survey has live responses — the stored answers would change shape" : undefined}
+              onClick={() => {
+                const n = Math.max(1, q.settings.listCount ?? 3);
+                const ft = (fieldTypes[0]?.value ?? (q.type === "numeric_list" ? "number" : "text")) as never;
+                const nextSettings = { ...q.settings } as Record<string, unknown>;
+                delete nextSettings.listCount;
+                patch({
+                  settings: nextSettings as Question["settings"],
+                  rows: Array.from({ length: n }, (_, i) => ({
+                    id: uid("row"), code: `f${i + 1}`, label: `Item ${i + 1}`, flags: [], fieldType: ft,
+                    validation: [], required: false,
+                  })) as never,
+                });
+              }}>
+              Make {q.settings.listCount ?? 3} separate fields
+            </button>
+          </div>
+        ) : (
+          <p className="muted" style={{ fontSize: 13 }} data-testid="fields-empty">No fields yet — add the first one below.</p>
+        )
       )}
       {rows.map((r, i) => {
         const ft = r.fieldType ?? (q.type === "numeric_list" ? "number" : "text");
@@ -933,10 +983,16 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
                   .map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
               </select>
               )}
-              <label className="row" style={{ gap: 4, fontSize: 13 }}>
-                <input type="checkbox" checked={r.required ?? false} data-testid={`field-required-${i}`}
-                  onChange={(e) => setRow(i, { required: e.target.checked })} /> required
-              </label>
+              {/* Required / Optional, per field (07-10 review, Suraj #3) — a two-state switch that says which it is */}
+              <button type="button" role="switch" aria-checked={!!r.required}
+                className={`req-toggle${r.required ? " on" : ""}`} data-testid={`field-required-${i}`}
+                title={r.required ? "Required — the respondent must fill this field. Click to make it optional."
+                  : q.required && !rows.some((x) => x.required)
+                    ? "Optional on its own — but the question is Required and no field is singled out, so every field is required. Click to require just the fields you choose."
+                    : "Optional. Click to make this field required."}
+                onClick={() => setRow(i, { required: !r.required })}>
+                {r.required ? "Required" : "Optional"}
+              </button>
               <button className="btn small" onClick={() => move(i, -1)}>↑</button>
               <button className="btn small" onClick={() => move(i, 1)}>↓</button>
               {/* a from–to pair has two ends; removing one leaves a range that
@@ -1054,16 +1110,60 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
             + Address section
           </button>
         )}
-        {rows.length === 0 && (
-          <label className="row" style={{ gap: 6, fontSize: 13 }}>
-            legacy item count
-            <CountInput min={1} allowEmpty={false} width={80}
-              value={q.settings.listCount ?? 3}
-              onChange={(v) => patchSettings({ listCount: v ?? 1 })} />
-          </label>
-        )}
       </div>
+      {rows.length > 0 && q.required && !rows.some((x) => x.required) && (
+        <p className="muted" style={{ fontSize: 12.5, margin: "6px 0 0" }} data-testid="fields-all-required-hint">
+          The question is Required and no field is marked Required, so respondents must fill every field.
+          Mark the fields that matter as Required to make the others optional.
+        </p>
+      )}
     </>
+  );
+}
+
+/**
+ * WHAT HAPPENED TO THE EDIT, AT THE EDIT (07-10 review). The foot of the open
+ * question said "Changes save automatically." in every state — including
+ * while a save had been refused and the header said "Not saved", which the
+ * review highlighted. It now says what the save is doing, from the same
+ * state the header reads, so the two can never disagree.
+ */
+/** A question's type by its name — "Rating Matrix (1–5)", not "rating". */
+export function variantLabelOf(q: Question): string {
+  const v = resolveVariant(q.variant ?? undefined);
+  if (v) return v.name;
+  return questionTypeRegistry.get(q.type)?.label ?? q.type;
+}
+
+/** "3 rows × 5 columns", "4 options", "3 fields" — what the card is made of. */
+export function structureOf(q: Question): string {
+  const n = (k: number, one: string, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
+  if (q.type === "text_list" || q.type === "numeric_list" || q.type === "repeating_group") return q.rows.length ? n(q.rows.length, "field") : "";
+  if (q.type.startsWith("matrix") || q.type === "composite" || q.type === "custom_table") {
+    const cols = q.type === "composite" || q.type === "custom_table" ? q.columns.length : q.options.length;
+    return [q.rows.length ? n(q.rows.length, "row") : "", cols ? n(cols, "column") : ""].filter(Boolean).join(" × ");
+  }
+  return q.options.length ? n(q.options.length, "option") : "";
+}
+
+export function SaveHint() {
+  const s = useStudio();
+  const st = s.saveState;
+  const [label, tone] = ((): [string, "" | "ok" | "busy" | "err"] => {
+    if (s.surveyDbId === "sandbox" && (st.kind === "dirty" || st.kind === "clean")) return ["Sandbox — edits stay on this page", ""];
+    switch (st.kind) {
+      case "saving": return ["Saving…", "busy"];
+      case "dirty": return ["Unsaved changes — saving shortly", "busy"];
+      case "saved": return ["✓ All changes saved", "ok"];
+      case "clean": return [st.savedAt ? "✓ All changes saved" : "Changes save automatically", st.savedAt ? "ok" : ""];
+      case "conflict": case "lock_lost": case "signed_out": case "error":
+        return ["Not saved — see the save status at the top", "err"];
+      case "unavailable": return ["Autosave unavailable — use Save version", "err"];
+      default: return ["Changes save automatically", ""];
+    }
+  })();
+  return (
+    <span className={`save-hint ${tone}`} data-testid="question-save-hint" data-state={st.kind} aria-live="polite">{label}</span>
   );
 }
 
@@ -1272,7 +1372,7 @@ export function QuestionEditor({ q }: { q: Question }) {
           {builder.rowsHint && <p className="muted" style={{ fontSize: 12.5, marginTop: -6 }} data-testid="rows-hint">{builder.rowsHint}</p>}
           <OptionRows enableLogic questionId={q.id}
             addLabel={builder.rowsAddLabel}
-            flagChoices={allowedRowFlagsFor(q.type)}
+            flagChoices={allowedRowFlagsFor(q.type, q.variant)}
             onAfterDelete={() => resequence("rows")}
             /* a row's picture lives in `meta.image` (Image Categorization) — edited with the same upload / choose control an option's image uses */
             showImage={!!builder.rowsImages}
@@ -1336,7 +1436,7 @@ export function QuestionEditor({ q }: { q: Question }) {
       </div>
 
       <label className="f"><span>{q.type === "html"
-        ? <>Content — rich text, HTML with its own CSS, and piping ({"{{Q1}}"}) supported</>
+        ? <>Content HTML — drawn exactly as written: markup, its own CSS, and piping ({"{{Q1}}"})</>
         : <>Question text — rich text, HTML with its own CSS, and piping ({"{{Q1}}"}) supported</>}</span></label>
       {/*
         * THE ONE EDITOR FOR WHAT THE QUESTION SAYS (October 2026 review). A
@@ -1345,10 +1445,34 @@ export function QuestionEditor({ q }: { q: Question }) {
         * the text on load (`normalizeQuestionContent`). A `<style>` written
         * with the markup is kept and scoped to this question.
         */}
-      <RichTextEditor value={q.text} autoFocusId={`qtext_${q.id}`} questionId={q.id} mediaPlacement
-        keepStyles allowFrames={q.type === "html"}
+      {/*
+        * …and for a Text / HTML block it opens on the HTML tab (07-10 review,
+        * Oweas #2: "<b>Welcome to our survey</b> displays as code"). One
+        * field, as the 06-10 brief required — the block's content IS its
+        * text — but HTML-first, because markup is what this block is for.
+        * Visual stays one click away, and HTML typed into it by mistake is
+        * offered back as markup (`typedMarkup`).
+        */}
+      <RichTextEditor key={`qtext_${q.id}_${q.type === "html" ? "h" : "t"}`} value={q.text} autoFocusId={`qtext_${q.id}`} questionId={q.id} mediaPlacement
+        keepStyles allowFrames={q.type === "html"} markup={q.type === "html"}
         onChange={(html) => patch({ text: html })}
         placeholder="e.g. Earlier you selected {{Q1}}. Why did you choose {{Q1.first}}?" />
+      {/*
+        * A Text / HTML block takes no answer and draws no instruction — the
+        * Instruction box and Required were two more text boxes on it that
+        * did nothing (07-10 review, Oweas #2, "remove unnecessary question
+        * text box"). An instruction already written on one is kept, shown,
+        * and can be moved into the content in one click.
+        */}
+      {q.type === "html" ? (
+        stripHtmlText(q.instruction ?? "").trim() ? (
+          <div className="alert warning" data-testid="html-instruction-orphan" style={{ marginBottom: 10 }}>
+            <span>This block has an instruction, which a Text / HTML block does not show: “{stripHtmlText(q.instruction ?? "").slice(0, 80)}”.</span>
+            <button className="btn small" data-testid="html-instruction-move"
+              onClick={() => patch({ text: `${q.text}${q.instruction}`, instruction: undefined })}>Move it into the content</button>
+          </div>
+        ) : null
+      ) : (
       <div className="row" style={{ alignItems: "flex-start" }}>
         <div className="f grow">
           <span>Instruction — formatting and piping supported</span>
@@ -1362,6 +1486,7 @@ export function QuestionEditor({ q }: { q: Question }) {
             <option value="0">optional</option><option value="1">required</option>
           </select></label>
       </div>
+      )}
       {/*
         * ONE PLACE FOR MEDIA (1-10-26 review). The separate "Media shown under
         * the question text" field is retired: pictures, video, audio and
@@ -2531,11 +2656,33 @@ export function QuestionsPanel() {
    * stays here is only what is the panel's own: which id generator to use,
    * what to focus, what to toast.
    */
-  const move = (qid: string, dir: -1 | 1) =>
-    s.update((d) => { moveQuestionBy(d, qid, dir); });
+  /*
+   * FEEDBACK WHERE THE ACTION LANDED (07-10 review, Script UI). Moving or
+   * duplicating a question changed the list with nothing to show which card
+   * had moved or which was the copy; the card that changed now pulses once
+   * and is scrolled into view, and a short toast says what happened.
+   */
+  const [flashId, setFlashId] = React.useState<string | null>(null);
+  const flash = (id: string | null | undefined) => {
+    if (!id) return;
+    setFlashId(id);
+    window.setTimeout(() => setFlashId((cur) => (cur === id ? null : cur)), 1300);
+    window.setTimeout(() => {
+      document.querySelector(`[data-testid="qcard"][data-qid="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }, 30);
+  };
+  const move = (qid: string, dir: -1 | 1) => {
+    let moved = false;
+    s.update((d) => { moved = moveQuestionBy(d, qid, dir); });
+    if (moved) flash(qid);
+  };
 
-  const duplicate = (id: string) =>
-    s.update((d) => { duplicateQuestion(d, id, uid); });
+  const duplicate = (id: string) => {
+    let copy: { id: string; code: string } | null = null;
+    s.update((d) => { copy = duplicateQuestion(d, id, uid); });
+    const c = copy as { id: string; code: string } | null;
+    if (c) { flash(c.id); s.toast(`Duplicated as ${c.code}`); }
+  };
 
   /**
    * DELETING IS A CHANGE TO THE WHOLE SURVEY, so it is shown as one.
@@ -2594,19 +2741,28 @@ export function QuestionsPanel() {
     const close = () => s.select(null);
     return (
       <div key={q.id}
-        className={`card selectable qcard ${isSelected ? "selected" : ""}`}
+        className={`card selectable qcard ${isSelected ? "selected" : ""}${flashId === q.id ? " flash" : ""}`}
         data-testid="qcard" data-qid={q.id}
         onClick={() => s.select(isSelected ? null : q.id)}>
         {isSelected && <EscapeCloses onClose={close} />}
         <div className="qlist-item">
+          {/* open / close from the keyboard as well as by clicking the card */}
+          <button type="button" className="qcard-caret" data-testid="qcard-toggle" aria-expanded={isSelected}
+            aria-label={`${isSelected ? "Close" : "Edit"} ${q.code} — ${variantLabelOf(q)}`}
+            onClick={(e) => { e.stopPropagation(); s.select(isSelected ? null : q.id); }}>{isSelected ? "▾" : "▸"}</button>
           <strong className="mono">{q.code}</strong>
-          <span className="qtype-badge">{q.variant?.split(".")[1] ?? q.type}</span>
-          <span className={`grow qcard-text${stripHtmlText(q.text) ? "" : " muted"}`}>
-            {stripHtmlText(q.text) || "untitled"}
+          {/* the type a programmer chose, by its name — the internal key stays on the element for tools */}
+          <span className="qtype-badge" data-key={q.variant?.split(".")[1] ?? q.type} title={`${q.variant ?? q.type}`}>{variantLabelOf(q)}</span>
+          <span className={`grow qcard-text${stripHtmlText(q.text) ? "" : " muted is-empty"}`}>
+            {stripHtmlText(q.text) || (q.type === "html" ? "No content yet" : "No question text yet")}
           </span>
+          {/* what the question is made of, at a glance */}
+          {structureOf(q) && <span className="qcard-meta" data-testid="qcard-meta">{structureOf(q)}</span>}
+          {q.required && q.type !== "html" && <span className="qcard-req" title="Respondents must answer this question">Required</span>}
           {!isEmptyConditionTree(q.displayLogic) && <span className="chip warn" title="has display logic">DL</span>}
           {q.skipLogic.length > 0 && <span className="chip warn" title="has skip logic">SL</span>}
           {q.carryForward && <span className="chip" title="carry-forward">CF</span>}
+          <span className="qcard-actions">
           <button className="btn small" title="Move up" onClick={(e) => { e.stopPropagation(); move(q.id, -1); }}>↑</button>
           <button className="btn small" title="Move down" onClick={(e) => { e.stopPropagation(); move(q.id, 1); }}>↓</button>
           <button className="btn small" title="Duplicate" onClick={(e) => { e.stopPropagation(); duplicate(q.id); }}>⧉</button>
@@ -2626,12 +2782,13 @@ export function QuestionsPanel() {
               onClick={(e) => { e.stopPropagation(); close(); }}>Done</button>
           )}
           <button className="btn small danger" data-testid="delete-question" title="Delete this question" onClick={(e) => { e.stopPropagation(); remove(q.id); }}>×</button>
+          </span>
         </div>
         {isSelected && selected && (
           <div style={{ marginTop: 14 }} onClick={(e) => e.stopPropagation()}>
             <QuestionEditor q={selected} />
             <div className="row qcard-foot">
-              <span className="muted" style={{ fontSize: 12.5 }}>Changes save automatically.</span>
+              <SaveHint />
               <span className="grow" />
               <button className="btn primary" data-testid="close-question-bottom"
                 title="Done editing — close this question (Esc)"

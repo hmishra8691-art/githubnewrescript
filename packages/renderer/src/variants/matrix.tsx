@@ -1,9 +1,9 @@
 "use client";
 import React from "react";
 import type { QuestionColumn } from "@rescript/schema";
-import { effectiveQuestion } from "@rescript/engine";
+import { effectiveQuestion, ratingLabelMode } from "@rescript/engine";
 import type { QRProps } from "../QuestionRenderer";
-import { NumberField, ctxOf } from "../QuestionRenderer";
+import { NumberField, ctxOf, RowLabel, headerEveryFor, RepeatedHeaderRow } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { useOptions, useRows, activate, usePointerDrag, dropTargetAt } from "./shared";
 import { anchor, cellAnchor } from "../authoring";
@@ -72,7 +72,7 @@ export function StarMatrix(p: QRProps) {
         const plain = row.label.replace(/<[^>]*>/g, "");
         return (
           <div key={rc} className={`rs-starmatrix-row ${val ? "rated" : ""}`} data-row={rc} {...anchor("row", rc)}>
-            <span className="rs-starmatrix-label" dangerouslySetInnerHTML={{ __html: row.label }} />
+            <span className="rs-starmatrix-label"><RowLabel {...p} row={row} /></span>
             <span className="rs-starmatrix-stars" role="radiogroup" aria-label={plain}
               onMouseLeave={() => setHover(null)}>
               {scale.map((n) => (
@@ -149,28 +149,34 @@ export function SumMatrix(p: QRProps) {
   const totalOf = (rc: string) =>
     columns.reduce((a, c) => a + (Number(cells[rc]?.[c.id]) || 0), 0);
 
+  const headCells = (repeat: boolean) => (
+    <>
+      <th className="rowlabel" />
+      {columns.map((c) => (
+        <th key={c.id} {...(repeat ? {} : anchor("column", c.id))} style={c.width ? { width: c.width } : undefined}
+          dangerouslySetInnerHTML={{ __html: c.label }} />
+      ))}
+      <th className="rs-summatrix-th-total">Total</th>
+    </>
+  );
+  const every = headerEveryFor(p, rows.length);
   return (
     <div className="rs-table-wrap">
       <table className="rs-matrix rs-summatrix">
         <thead>
-          <tr>
-            <th className="rowlabel" />
-            {columns.map((c) => (
-              <th key={c.id} {...anchor("column", c.id)} style={c.width ? { width: c.width } : undefined}
-                dangerouslySetInnerHTML={{ __html: c.label }} />
-            ))}
-            <th className="rs-summatrix-th-total">Total</th>
-          </tr>
+          <tr>{headCells(false)}</tr>
         </thead>
         <tbody>
-          {rows.map((row) => {
+          {rows.map((row, ri) => {
             const rc = String(row.code);
             const total = totalOf(rc);
             const state = total === target ? "ok" : total > target ? "over" : "under";
             const plain = row.label.replace(/<[^>]*>/g, "");
             return (
-              <tr key={rc} data-row={rc} {...anchor("row", rc)}>
-                <td className="rowlabel" dangerouslySetInnerHTML={{ __html: row.label }} />
+              <React.Fragment key={rc}>
+              <RepeatedHeaderRow index={ri} every={every} count={rows.length}>{headCells(true)}</RepeatedHeaderRow>
+              <tr data-row={rc} {...anchor("row", rc)}>
+                <td className="rowlabel"><RowLabel {...p} row={row} /></td>
                 {columns.map((c) => (
                   <td key={c.id} data-row={rc} data-col={c.id} {...cellAnchor(rc, c.id)}>
                     <NumberField className="rs-input" min={c.min ?? 0} max={c.max}
@@ -185,6 +191,7 @@ export function SumMatrix(p: QRProps) {
                   {total} / {target}{unit}
                 </td>
               </tr>
+              </React.Fragment>
             );
           })}
         </tbody>
@@ -351,28 +358,34 @@ export function LikertMatrix(p: QRProps) {
     p.onChange(next);
   };
   const answered = rows.filter((r) => vals[String(r.code)] != null).length;
+  const likertHead = (repeat: boolean) => (
+    <>
+      <th className="rowlabel" />
+      {opts.map((o, i) => (
+        <th key={String(o.code)} {...(repeat ? {} : anchor("column", o.code))}
+          className={`rs-likert-head p${Math.round((i / Math.max(1, opts.length - 1)) * 100)}`}>
+          <span dangerouslySetInnerHTML={{ __html: o.label }} />
+        </th>
+      ))}
+    </>
+  );
+  const every = headerEveryFor(p, rows.length);
   return (
     <div className="rs-likert" data-testid="likert-matrix">
       <div className="rs-likert-progress">{answered} / {rows.length} answered</div>
       <div className="rs-table-wrap">
         <table className="rs-matrix rs-likert-table">
           <thead>
-            <tr>
-              <th className="rowlabel" />
-              {opts.map((o, i) => (
-                <th key={String(o.code)} {...anchor("column", o.code)}
-                  className={`rs-likert-head p${Math.round((i / Math.max(1, opts.length - 1)) * 100)}`}>
-                  <span dangerouslySetInnerHTML={{ __html: o.label }} />
-                </th>
-              ))}
-            </tr>
+            <tr>{likertHead(false)}</tr>
           </thead>
           <tbody>
-            {rows.map((row) => {
+            {rows.map((row, ri) => {
               const rc = String(row.code);
               return (
-                <tr key={rc} {...anchor("row", rc)}>
-                  <td className="rowlabel" dangerouslySetInnerHTML={{ __html: row.label }} />
+                <React.Fragment key={rc}>
+                <RepeatedHeaderRow index={ri} every={every} count={rows.length}>{likertHead(true)}</RepeatedHeaderRow>
+                <tr {...anchor("row", rc)}>
+                  <td className="rowlabel"><RowLabel {...p} row={row} /></td>
                   {opts.map((o, i) => {
                     const on = String(vals[rc]) === String(o.code);
                     /* 0…100 across the scale — the CSS grades the band from it */
@@ -393,6 +406,7 @@ export function LikertMatrix(p: QRProps) {
                     );
                   })}
                 </tr>
+                </React.Fragment>
               );
             })}
           </tbody>
@@ -404,13 +418,17 @@ export function LikertMatrix(p: QRProps) {
 
 /* ----------------------------------------------------------- Rating Matrix */
 /**
- * A NUMBERED RATING, NOT A COLUMN OF WORDS.
+ * A RATING GRID: THE SCALE ACROSS THE TOP, ONE CIRCLE PER POINT PER ROW
+ * (07-10 review, Prince #1).
  *
- * "The Preview should clearly look like a rating question rather than a
- * standard Single Select Matrix. The rating range should be configurable
- * where required." The range is the option list — five entries is 1–5, ten
- * is 1–10 — and each point is drawn as a numbered chip with the ends named,
- * so the scale reads as a scale. Still one code per row.
+ * It used to draw a row of numbered chips under every statement, with no
+ * header — "1 2 3 4 5" repeated down the page and nothing above the columns.
+ * It is now a grid: the rating points are the column headers — the numbers,
+ * or words such as "Very Poor … Excellent" (`ratingLabelMode`) — and each
+ * cell is a circle aligned under its header. On a phone the grid stacks and
+ * every circle carries its own caption, since the header has scrolled away.
+ * Still one option code per row, exactly as `matrix_single` stores it, and
+ * the end labels (left / right) are still drawn when set.
  */
 export function RatingMatrix(p: QRProps) {
   const rows = useRows(p);
@@ -427,39 +445,63 @@ export function RatingMatrix(p: QRProps) {
   const left = p.q.settings.sliderLeftLabel ?? p.q.settings.npsLeftLabel;
   const right = p.q.settings.sliderRightLabel ?? p.q.settings.npsRightLabel;
   const answered = rows.filter((r) => vals[String(r.code)] != null).length;
+  const mode = ratingLabelMode(p.q);
+  const plain = (s: string) => s.replace(/<[^>]*>/g, "");
+  const head = (repeat: boolean) => (
+    <>
+      <th className="rowlabel" />
+      {opts.map((o) => (
+        <th key={String(o.code)} scope="col" className="rs-ratingmatrix-head"
+          {...(repeat ? {} : anchor("column", o.code))}
+          dangerouslySetInnerHTML={{ __html: o.label }} />
+      ))}
+    </>
+  );
+  const every = headerEveryFor(p, rows.length);
   return (
-    <div className="rs-ratingmatrix" data-testid="rating-matrix">
+    <div className="rs-ratingmatrix" data-testid="rating-matrix" data-labels={mode}>
       <div className="rs-ratingmatrix-progress">{answered} / {rows.length} rated</div>
       {(left || right) && (
         <div className="rs-ratingmatrix-ends">
           <span>{left ?? ""}</span><span>{right ?? ""}</span>
         </div>
       )}
-      {rows.map((row) => {
-        const rc = String(row.code);
-        return (
-          <div key={rc} className="rs-ratingmatrix-row" {...anchor("row", rc)}>
-            <span className="rs-ratingmatrix-label" dangerouslySetInnerHTML={{ __html: row.label }} />
-            <span className="rs-ratingmatrix-scale" role="radiogroup"
-              aria-label={row.label.replace(/<[^>]*>/g, "")}>
-              {opts.map((o) => {
-                const on = String(vals[rc]) === String(o.code);
-                return (
-                  <button key={String(o.code)} type="button"
-                    className={`rs-ratingmatrix-pt${on ? " on" : ""}`}
-                    {...cellAnchor(rc, o.code)}
-                    role="radio" aria-checked={on}
-                    disabled={p.q.settings.readOnly}
-                    aria-label={`${row.label.replace(/<[^>]*>/g, "")}: ${o.label.replace(/<[^>]*>/g, "")}`}
-                    onClick={() => set(rc, o.code)}>
-                    {o.label.replace(/<[^>]*>/g, "")}
-                  </button>
-                );
-              })}
-            </span>
-          </div>
-        );
-      })}
+      <div className="rs-table-wrap">
+        <table className="rs-matrix rs-ratingmatrix-table">
+          <thead><tr>{head(false)}</tr></thead>
+          <tbody>
+            {rows.map((row, ri) => {
+              const rc = String(row.code);
+              return (
+                <React.Fragment key={rc}>
+                  <RepeatedHeaderRow index={ri} every={every} count={rows.length}>{head(true)}</RepeatedHeaderRow>
+                  <tr className="rs-ratingmatrix-row" {...anchor("row", rc)}>
+                    <td className="rowlabel"><span className="rs-ratingmatrix-label"><RowLabel {...p} row={row} /></span></td>
+                    {opts.map((o) => {
+                      const on = String(vals[rc]) === String(o.code);
+                      return (
+                        <td key={String(o.code)} className="rs-ratingmatrix-cell">
+                          <button type="button"
+                            className={`rs-ratingmatrix-pt${on ? " on" : ""}`}
+                            {...cellAnchor(rc, o.code)}
+                            role="radio" aria-checked={on}
+                            disabled={p.q.settings.readOnly}
+                            aria-label={`${plain(row.label)}: ${plain(o.label)}`}
+                            onClick={() => set(rc, o.code)}>
+                            <span className="rs-ratingmatrix-dot" aria-hidden="true" />
+                            {/* the column's header, shown beside the circle when the grid is stacked */}
+                            <span className="rs-ratingmatrix-cap" aria-hidden="true">{plain(o.label)}</span>
+                          </button>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

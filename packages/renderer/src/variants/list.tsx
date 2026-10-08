@@ -3,7 +3,7 @@ import React from "react";
 import type { QuestionColumn } from "@rescript/schema";
 import { effectiveQuestion, fieldInputProps, CURRENCIES } from "@rescript/engine";
 import type { QRProps } from "../QuestionRenderer";
-import { NumberField, SliderCell, ctxOf } from "../QuestionRenderer";
+import { NumberField, SliderCell, ctxOf, RowLabel, headerEveryFor, RepeatedHeaderRow } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { useRows } from "./shared";
 import { anchor, cellAnchor } from "../authoring";
@@ -301,7 +301,8 @@ export function Spreadsheet(p: QRProps) {
    * the numeric column would be worse than no arrow keys at all.
    */
   const focusCell = (r: number, c: number) => {
-    const tr = wrap.current?.querySelectorAll("tbody tr")[r];
+    // data rows only — a repeated header row (Prince #2) is not a row to move to
+    const tr = wrap.current?.querySelectorAll("tbody tr:not(.rs-header-repeat)")[r];
     const td = tr?.querySelectorAll("td[data-col]")[c];
     const el = td?.querySelector("input, select, textarea") as HTMLElement | null;
     if (!el) return false;
@@ -328,28 +329,34 @@ export function Spreadsheet(p: QRProps) {
     if (moved) e.preventDefault();
   };
 
+  const sheetHead = (repeat: boolean) => (
+    <>
+      <th className="rs-sheet-n" aria-label={repeat ? undefined : "Row"} />
+      <th className="rowlabel">Row</th>
+      {columns.map((c) => (
+        <th key={c.id} {...(repeat ? {} : anchor("column", c.id))} style={c.width ? { width: c.width } : undefined}
+          dangerouslySetInnerHTML={{ __html: c.label }} />
+      ))}
+      {deletable && <th className="rs-sheet-n" aria-label={repeat ? undefined : "Remove"} />}
+    </>
+  );
+  const every = headerEveryFor(p, rows.length);
   return (
     <div className="rs-table-wrap" ref={wrap}>
       <table className="rs-matrix rs-sheet">
         <thead>
-          <tr>
-            <th className="rs-sheet-n" aria-label="Row" />
-            <th className="rowlabel">Row</th>
-            {columns.map((c) => (
-              <th key={c.id} {...anchor("column", c.id)} style={c.width ? { width: c.width } : undefined}
-                dangerouslySetInnerHTML={{ __html: c.label }} />
-            ))}
-            {deletable && <th className="rs-sheet-n" aria-label="Remove" />}
-          </tr>
+          <tr>{sheetHead(false)}</tr>
         </thead>
         <tbody>
           {rows.map((row, r) => {
             const rc = String(row.code);
             const plain = row.label.replace(/<[^>]*>/g, "");
             return (
-              <tr key={rc} data-row={rc} {...anchor("row", rc)}>
+              <React.Fragment key={rc}>
+              <RepeatedHeaderRow index={r} every={every} count={rows.length}>{sheetHead(true)}</RepeatedHeaderRow>
+              <tr data-row={rc} {...anchor("row", rc)}>
                 <th className="rs-sheet-n" scope="row">{r + 1}</th>
-                <td className="rowlabel" dangerouslySetInnerHTML={{ __html: row.label }} />
+                <td className="rowlabel"><RowLabel {...p} row={row} /></td>
                 {columns.map((c, ci) => (
                   <td key={c.id} data-row={rc} data-col={c.id} {...cellAnchor(rc, c.id)}
                     onKeyDown={(e) => onKeyDown(e, r, ci)}>
@@ -367,6 +374,7 @@ export function Spreadsheet(p: QRProps) {
                   </td>
                 )}
               </tr>
+              </React.Fragment>
             );
           })}
         </tbody>

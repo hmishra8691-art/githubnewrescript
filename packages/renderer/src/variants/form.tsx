@@ -1,6 +1,6 @@
 "use client";
 import React from "react";
-import { fieldInputProps } from "@rescript/engine";
+import { fieldInputProps, requiredFieldsNote } from "@rescript/engine";
 import type { QRProps } from "../QuestionRenderer";
 import { NumberField, ValidationMessageText } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
@@ -69,8 +69,11 @@ export function RepeatForm(p: QRProps) {
     commit(list);
   };
 
+  /* the rule in words above the entries, not a star beside each label (07-10 review); a repeating form's fields are required only when they say so */
+  const note = requiredFieldsNote({ required: false, rows }, rows, p.ui);
   return (
     <div className="rs-repeatform">
+      {note && <div className="rs-fields-note" data-testid="fields-required-note">{note}</div>}
       {entries.map((entry, i) => {
         /*
          * The engine reports per-entry problems as "Entry 3: Name is
@@ -107,7 +110,6 @@ export function RepeatForm(p: QRProps) {
                   <label key={rc} className="rs-entry-field" data-field={rc}>
                     <span className="flab">
                       <span dangerouslySetInnerHTML={{ __html: row.label }} />
-                      {row.required && <span className="rs-req"> *</span>}
                     </span>
                     {ip.prefix && <span className="rs-prefix">{ip.prefix}</span>}
                     {ip.multiline ? (

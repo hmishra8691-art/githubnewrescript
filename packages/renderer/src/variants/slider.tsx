@@ -1,6 +1,8 @@
 "use client";
 import React from "react";
 import type { QRProps } from "../QuestionRenderer";
+import { RowLabel, headerEveryFor } from "../QuestionRenderer";
+import { headerRepeatsBefore } from "@rescript/engine";
 import { registerVariantRenderer } from "./registry";
 import { useRows } from "./shared";
 import { anchor } from "../authoring";
@@ -214,39 +216,54 @@ export function SliderMatrix(p: QRProps) {
   };
 
   if (grid) {
+    const head = (repeat: boolean) => (
+      <div className={`rs-slidermatrix-head${repeat ? " rs-header-repeat" : ""}`} aria-hidden {...(repeat ? { "data-testid": "header-repeat" } : {})}>
+        <span />
+        <span className="rs-slidermatrix-ends"><span>{leftLabel}</span><span>{rightLabel}</span></span>
+        <span />
+      </div>
+    );
+    /* the end labels again every N attributes on a long grid (Prince #2) */
+    const every = headerEveryFor(p, rows.length);
     return (
       <div className="rs-slidermatrix grid" data-testid="slidermatrix" data-layout="grid">
-        <div className="rs-slidermatrix-head" aria-hidden>
-          <span />
-          <span className="rs-slidermatrix-ends"><span>{leftLabel}</span><span>{rightLabel}</span></span>
-          <span />
-        </div>
-        {rows.map((r) => {
+        {head(false)}
+        {rows.map((r, ri) => {
           const rc = String(r.code);
           return (
-            <div key={rc} className="rs-slidermatrix-gridrow" data-rowfor={rc} {...anchor("row", rc)}>
-              <span className="rs-slidermatrix-label" dangerouslySetInnerHTML={{ __html: r.label }} />
+            <React.Fragment key={rc}>
+            {headerRepeatsBefore(ri, every, rows.length) && head(true)}
+            <div className="rs-slidermatrix-gridrow" data-rowfor={rc} {...anchor("row", rc)}>
+              <span className="rs-slidermatrix-label"><RowLabel {...p} row={r} /></span>
               {row(rc, plain(r.label))}
             </div>
+            </React.Fragment>
           );
         })}
       </div>
     );
   }
 
+  const stackEvery = headerEveryFor(p, rows.length);
+  const ends = (repeat: boolean) => (
+    <div className={`rs-slidermatrix-ends top${repeat ? " rs-header-repeat" : ""}`} aria-hidden {...(repeat ? { "data-testid": "header-repeat" } : {})}>
+      <span>{leftLabel}</span>
+      <span>{rightLabel}</span>
+    </div>
+  );
   return (
     <div className="rs-slidermatrix stack" data-testid="slidermatrix" data-layout="stack">
-      <div className="rs-slidermatrix-ends top" aria-hidden>
-        <span>{leftLabel}</span>
-        <span>{rightLabel}</span>
-      </div>
-      {rows.map((r) => {
+      {ends(false)}
+      {rows.map((r, ri) => {
         const rc = String(r.code);
         return (
-          <div key={rc} className="rs-slidermatrix-item" data-rowfor={rc} {...anchor("row", rc)}>
-            <div className="rs-slidermatrix-label" dangerouslySetInnerHTML={{ __html: r.label }} />
+          <React.Fragment key={rc}>
+          {headerRepeatsBefore(ri, stackEvery, rows.length) && ends(true)}
+          <div className="rs-slidermatrix-item" data-rowfor={rc} {...anchor("row", rc)}>
+            <div className="rs-slidermatrix-label"><RowLabel {...p} row={r} /></div>
             <div className="rs-slidermatrix-line">{row(rc, plain(r.label))}</div>
           </div>
+          </React.Fragment>
         );
       })}
     </div>

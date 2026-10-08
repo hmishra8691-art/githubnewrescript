@@ -47,5 +47,6 @@ export function createQuestionFromVariant(
   if (v.defaults?.text) q.text = v.defaults.text;
   if (v.defaults?.probe) q.probe = v.defaults.probe as never;
   if (v.defaults?.ai) q.ai = v.defaults.ai as never;
+  if (v.defaults?.randomization) q.randomization = { ...v.defaults.randomization } as never;
   return q;
 }

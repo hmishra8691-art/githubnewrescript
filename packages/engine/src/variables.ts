@@ -4,7 +4,7 @@ import {
   possibleLoopItems, type LoopFlowNode,
 } from "./loops.js";
 import { listFillVariableNames } from "./listFill.js";
-import { otherOptions, otherColumnFor } from "./otherSpecify.js";
+import { otherOptions, otherRows, otherColumnFor, rowOtherCode } from "./otherSpecify.js";
 import { fieldDataType } from "./fields.js";
 import { questionAi, voiceOn } from "./aiConversation.js";
 import { embeddedCatalog } from "./embedded.js";
@@ -557,6 +557,15 @@ export function questionVariables(
       label: `${q.code} — ${strip(String(o.label ?? "Other"))} (specify)`,
       dataType: "text",
       optionCode: String(o.code),
+    });
+  }
+  /* and a grid row's box (07-10 review, see `otherRows`) */
+  for (const r of otherRows(q)) {
+    push({
+      name: otherColumnFor(q, rowOtherCode(r.code)),
+      label: `${q.code} — ${strip(String(r.label ?? "Other"))} (specify)`,
+      dataType: "text",
+      rowCode: String(r.code),
     });
   }
 

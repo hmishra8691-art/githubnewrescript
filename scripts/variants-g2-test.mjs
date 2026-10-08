@@ -103,7 +103,7 @@ ok("seeded defaults are right for all 8 (bounds, rows, field types, the rowSum f
  */
 const openEditor = async (variantKey, testid) => {
   await h.goTab("Questions");
-  await h.page.click(`.qcard:has(.qtype-badge:text-is("${variantKey}"))`);
+  await h.page.click(`.qcard:has(.qtype-badge[data-key="${variantKey}"])`);
   await h.page.waitForSelector(`[data-testid="${testid}"]`);
   await h.page.waitForTimeout(400);
 };

@@ -64,3 +64,46 @@ function plain(html: string): string {
     .trim()
     .toLowerCase();
 }
+
+/**
+ * THE DEAD "randomizeRows" SETTING (07-10-2026 review, Suraj #2).
+ *
+ * "Matrix with Randomized Rows" used to seed `settings.randomizeRows: true`,
+ * which no part of the engine ever read: the preset was chosen, the rows were
+ * promised to shuffle per respondent, and every respondent saw them in the
+ * programmed order. Row order is the question's `randomization` (scope rows)
+ * — the model the Randomization panel edits and `effectiveQuestion` applies —
+ * so a question that carries the dead flag is given what it asked for:
+ *
+ *   no randomization (or switched off)  → rows shuffled, seeded per respondent
+ *   randomization already on, other axis → rows added as a second axis
+ *   rows already randomized              → unchanged
+ *
+ * `randomizeRows: false` (never written by anything) is simply dropped.
+ * Idempotent and pure, like `normalizeQuestionContent`.
+ */
+export function normalizeLegacyRowRandomization(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const q = raw as Record<string, unknown>;
+  const settings = q.settings as Record<string, unknown> | undefined;
+  if (!settings || typeof settings !== "object" || !("randomizeRows" in settings)) return raw;
+  const { randomizeRows, ...rest } = settings;
+  const out: Record<string, unknown> = { ...q, settings: rest };
+  if (randomizeRows !== true) return out;
+  const r = (q.randomization && typeof q.randomization === "object" ? q.randomization : null) as Record<string, unknown> | null;
+  if (!r || r.enabled !== true) {
+    const next: Record<string, unknown> = { ...(r ?? {}), enabled: true, scope: "rows" };
+    if (!next.method || next.method === "none") next.method = "shuffle";
+    delete next.scopes;  // it was off: nothing else was being shuffled
+    out.randomization = next;
+    return out;
+  }
+  const axes = Array.isArray(r.scopes) && r.scopes.length ? (r.scopes as string[]) : [String(r.scope ?? "options")];
+  if (!axes.includes("rows")) out.randomization = { ...r, scopes: [...axes, "rows"] };
+  return out;
+}
+
+/** Every parse-time migration a question goes through, in order. */
+export function normalizeQuestion(raw: unknown): unknown {
+  return normalizeLegacyRowRandomization(normalizeQuestionContent(raw));
+}
