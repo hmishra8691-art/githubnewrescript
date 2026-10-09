@@ -437,7 +437,7 @@ export function hypothesisVerdicts(def: SurveyDefinition, items: RunItem[]): Hyp
       reason = `${agree.length} of ${tested.length} planned tests support it — ${agree[0].headline} — but ${contra.length === 1 ? "one is" : `${contra.length} are`} ${against(contra[0])}: ${contra[0].headline}`;
     }
     else if (agree.length && ns.length) { verdict = "mixed"; reason = `${agree.length} of ${tested.length} planned tests ${agree.length === 1 ? "is" : "are"} significant — ${agree[0].headline} — but ${ns[0].headline}`; }
-    else { verdict = "not_supported"; reason = `${ns.length === 1 ? "The planned test is" : `None of the ${ns.length} planned tests are`} significant: ${ns[0].headline}`; }
+    else { verdict = "not_supported"; reason = `${ns.length === 1 ? "The planned test is not" : `None of the ${ns.length} planned tests are`} significant: ${ns[0].headline}`; }
     return { label, text, verdict, reason, findings: fs, analyses: mine.length, ...(dir.kind !== "none" ? { direction: { ...dir, agreeing: agree.length - unread, contradicting: contra.length, unread } } : {}) };
   });
 }

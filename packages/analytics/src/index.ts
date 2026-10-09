@@ -20,3 +20,6 @@ export * from "./posthoc.js";
 export * from "./dataAdvice.js";
 export * from "./synthesis.js";
 export * from "./dataQuery.js";
+export * from "./chartPurpose.js";
+export * from "./deck.js";
+export * from "./narrative.js";

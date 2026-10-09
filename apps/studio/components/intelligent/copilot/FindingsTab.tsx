@@ -162,6 +162,20 @@ export function FindingsTab({ copilot, def, onAsk }: { copilot: Copilot; def: Su
           </div>
         </section>
       )}
+
+      {onAsk && (
+        /* the documents (Phase 5): each a sentence the engine reads, so the output route makes the file — the proposal from the design, the others from a run on the data */
+        <section data-testid="fd-outputs">
+          <div className="iq-label">Documents</div>
+          <p className="iqi-dim">Client-ready files from the research engine: the proposal from the research design; the findings report and the presentation from a fresh run on the data, with the chart for each finding chosen for the audience and the story in the engine's words (a configured model writes the narrative, through the gate).</p>
+          <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
+            <button type="button" className="iq-btn" data-testid="fd-output-proposal" disabled={copilot.busy} onClick={() => onAsk("Create the client-ready research proposal")}>Research proposal (Word)</button>
+            <button type="button" className="iq-btn" data-testid="fd-output-report" disabled={copilot.busy} onClick={() => onAsk("Write the findings report as a Word document")}>Findings report (Word)</button>
+            <button type="button" className="iq-btn" data-testid="fd-output-deck" disabled={copilot.busy} onClick={() => onAsk("Create the final findings presentation")}>Findings deck (PowerPoint)</button>
+            <button type="button" className="iq-btn" data-testid="fd-output-deck-exec" disabled={copilot.busy} onClick={() => onAsk("Create the findings deck for the board")}>Executive deck</button>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

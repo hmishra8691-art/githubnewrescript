@@ -263,6 +263,9 @@ importers:
       '@rescript/schema':
         specifier: workspace:*
         version: link:../schema
+      docx:
+        specifier: ^9.7.1
+        version: 9.7.1
       exceljs:
         specifier: ^4.4.0
         version: 4.4.0

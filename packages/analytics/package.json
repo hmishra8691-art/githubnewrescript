@@ -22,12 +22,13 @@
   "dependencies": {
     "@rescript/engine": "workspace:*",
     "@rescript/schema": "workspace:*",
+    "docx": "^9.7.1",
     "exceljs": "^4.4.0",
     "pptxgenjs": "^4.0.1"
   },
   "devDependencies": {
+    "@rescript/designs": "workspace:*",
     "@types/node": "^22.20.1",
-    "typescript": "^5.6.3",
-    "@rescript/designs": "workspace:*"
+    "typescript": "^5.6.3"
   }
 }

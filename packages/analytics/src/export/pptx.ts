@@ -9,9 +9,9 @@ import PptxModule from "pptxgenjs";
 // pptxgenjs ships CJS-style typings; under Node ESM the default import is the class itself,
 // while TypeScript sees the module namespace — resolve both shapes to the constructor.
 type PptxCtorType = typeof PptxModule extends { default: infer D } ? D : typeof PptxModule;
-const PptxCtor = (((PptxModule as unknown as { default?: unknown }).default ?? PptxModule) as unknown) as PptxCtorType;
-type Pres = InstanceType<PptxCtorType>;
-type Slide = ReturnType<Pres["addSlide"]>;
+export const PptxCtor = (((PptxModule as unknown as { default?: unknown }).default ?? PptxModule) as unknown) as PptxCtorType;
+export type Pres = InstanceType<PptxCtorType>;
+export type Slide = ReturnType<Pres["addSlide"]>;
 type ChartName = Extract<Parameters<Slide["addChart"]>[0], string>;
 import type { AnalysisResult, ChartSpec, ChartType, ExportSettings, ReportBlock, ReportDefinition, ReportTheme, ResultTable } from "../types.js";
 import { DEFAULT_EXPORT_SETTINGS, DEFAULT_THEME } from "../types.js";
@@ -55,7 +55,7 @@ export function isEmbeddableImage(uri: unknown): uri is string {
   return b64.length > 64 && (b64.length * 3) / 4 <= MAX_EMBEDDED_IMAGE_BYTES;
 }
 
-const hex = (c: string) => c.replace("#", "").slice(0, 6).toUpperCase();
+export const hex = (c: string) => c.replace("#", "").slice(0, 6).toUpperCase();
 
 function pptChartType(p: Pres, type: ChartType): { type: ChartName; opts: Record<string, unknown> } {
   const T = p.ChartType;
@@ -79,7 +79,7 @@ function pptChartType(p: Pres, type: ChartType): { type: ChartName; opts: Record
   }
 }
 
-function addTable(slide: Slide, table: ResultTable, theme: ReportTheme, box: { x: number; y: number; w: number }, maxRows = 14, fontSize = 9): number {
+export function addTable(slide: Slide, table: ResultTable, theme: ReportTheme, box: { x: number; y: number; w: number }, maxRows = 14, fontSize = 9): number {
   const cols = table.columns;
   const head = cols.map((c) => ({ text: c.label, options: { bold: true, color: "FFFFFF", fill: { color: hex(theme.colors.primary) }, fontSize, align: "center" as const } }));
   const body = table.rows.slice(0, maxRows).map((r, i) => cols.map((c) => {
@@ -106,7 +106,7 @@ function addTable(slide: Slide, table: ResultTable, theme: ReportTheme, box: { x
  * table geometry the export has always used, so an existing "chart" block
  * that happens to fall back to a table renders pixel-identical to before.
  */
-function drawAnalysisVisual(
+export function drawAnalysisVisual(
   p: Pres, s: Slide, result: AnalysisResult, spec: ChartSpec, theme: ReportTheme,
   box: { x: number; y: number; w: number; h: number },
   ctx: { font: string; text: string; subtle: string; primary: string; palette: string[] },

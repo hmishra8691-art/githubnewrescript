@@ -243,6 +243,11 @@ export function IntelligentView() {
       await copilot.askData(t, interp, heard);
       setBusy(false); inputRef.current?.focus(); return;
     }
+    // a document to produce (Phase 5): the proposal from the design, the findings report or deck from a run — the output route makes the file
+    if (interp.kind === "output") {
+      await copilot.makeOutput(t, interp, heard);
+      setBusy(false); inputRef.current?.focus(); return;
+    }
     if (interp.kind !== "model") {
       copilot.local(t, interp, heard);
       if (interp.kind === "actions") {

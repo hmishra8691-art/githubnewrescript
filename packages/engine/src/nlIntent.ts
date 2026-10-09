@@ -100,6 +100,8 @@ export type Interpretation =
   | { kind: "refused"; category: IntentCategory; understood: string; reason: string; detected: Detected[]; suggestion?: { text: string; actions?: SurveyAction[] }; /** nothing to do: the survey already is as asked */ noop?: boolean }
   /** a question about the DATA (Phase 4): read into a query the Studio answers on the dataset — the engine has no data */
   | { kind: "query"; category: IntentCategory; understood: string; query: DataQuery; detected: Detected[] }
+  /** a document to produce (Phase 5): the proposal, the findings report or the findings deck — the Studio builds the file */
+  | { kind: "output"; category: IntentCategory; understood: string; output: OutputRequest; detected: Detected[] }
   | { kind: "model"; category: IntentCategory | null; reason: string; detected: Detected[];
       /** what the engine can do by itself when no model answers: a question and executable choices (each a sentence this layer reads) — Phase 2 */
       fallback?: { understood: string; question: string; choices: { label: string; text: string }[] } };
@@ -111,6 +113,15 @@ export interface InterpretContext {
   selectedOption?: string | number | null;
   /** a multi-selection of questions: "these questions" (falls back to `selectedId`) */
   selectedIds?: string[] | null;
+}
+
+/** what the Studio produces for an output request (Phase 5) */
+export interface OutputRequest {
+  type: "proposal_docx" | "findings_docx" | "findings_pptx";
+  audience: "executive" | "client" | "researcher";
+  client?: string;
+  /** the words that named the document, for the card */
+  words: string;
 }
 
 /** the `reason` of a `model` result that hands the sentence to the Studio's deterministic grammar instead */
@@ -2142,6 +2153,51 @@ const scaleChange: Recogniser = (r) => {
   return act(r, "question_modification", `Change ${code(target)}'s ${what} to a ${scale.name}: ${labels.join(" · ")}${have.length ? ` — this replaces its ${have.length} current ${what}${(target.options ?? []).some((o) => o.flags?.length) ? " (flags such as exclusive or Other are not carried over)" : ""}` : ""}.`, [{ op: "update_question", target: code(target), scale: spec }], detected);
 };
 
+/* ---------------------------------------------------------- documents to produce (Phase 5) */
+
+/*
+ * "CREATE THE CLIENT-READY RESEARCH PROPOSAL", "create the final findings
+ * presentation", "write the findings report as a Word document" — the
+ * output the sentence asks for, read exactly: the document type from its
+ * noun, the audience from its words ("for the board" is an executive
+ * deck, "for the analysts" a researcher's), the client from "for Acme".
+ * The engine builds nothing: the Studio makes the file from the design or
+ * the run. A sentence about an executive summary, a slide to edit or a
+ * report to draft in the analytics workspace is not this.
+ */
+const OUTPUT_VERB = String.raw`(?:create|write|draft|prepare|produce|generate|build|make|export|compile|assemble|put\s+together|give\s+me)`;
+const OUTPUT_MOD = String.raw`(?:(?:client[-\s]ready|client|final|full|formal|complete|executive|research|findings|results|study|topline|detailed|polished|professional)\s+)*`;
+const outputRequest: Recogniser = (r) => {
+  const t = r.text.replace(/[.!]+$/, "").trim();
+  let m: RegExpExecArray | null;
+  let type: OutputRequest["type"] | null = null;
+  let tail = "";
+  const lead = String.raw`^${OUTPUT_VERB}\s+(?:me\s+)?(?:the\s+|a\s+|an\s+|our\s+|my\s+)?${OUTPUT_MOD}`;
+  if ((m = new RegExp(String.raw`${lead}(?:proposal|research\s+design\s+(?:document|doc|report|write-?up)|design\s+document|study\s+design(?:\s+document)?)(?:\s+(?:document|doc))?(?:\s+(?:as|in)\s+(?:a\s+)?(?:word|docx|ms\s+word)(?:\s+(?:document|doc|file))?)?(.*)$`, "i").exec(t))) { type = "proposal_docx"; tail = m[1]; }
+  else if ((m = new RegExp(String.raw`${lead}(?:findings\s+|results\s+)?(?:presentation|deck|slide\s+deck|slides|powerpoint|pptx)(?:\s+of\s+(?:the\s+)?(?:findings|results))?(.*)$`, "i").exec(t))) { type = "findings_pptx"; tail = m[1]; }
+  else if ((m = new RegExp(String.raw`${lead}(?:findings|results|final)\s+report(?:\s+(?:as|in)\s+(?:a\s+)?(?:word|docx|ms\s+word)(?:\s+(?:document|doc|file))?|\s+(?:document|doc))?(.*)$`, "i").exec(t))
+    || (m = new RegExp(String.raw`${lead}(?:word|docx)\s+(?:document|doc|report|version)\s+(?:of|with|for)\s+(?:the\s+)?(?:findings|results|report)(.*)$`, "i").exec(t))) { type = "findings_docx"; tail = m[1]; }
+  if (!type) return null;
+  tail = tail.trim();
+  // the tail: an audience, a client, a language level — anything else is not this recogniser's sentence
+  let audience: OutputRequest["audience"] = /\bexecutive\b/i.test(t) ? "executive" : "client";
+  let client: string | undefined;
+  const rest = tail.replace(/^,?\s*/, "");
+  if (rest) {
+    let n: RegExpExecArray | null;
+    if ((n = /^for\s+(?:the\s+)?(board|executives?|leadership|c-suite|ceo|management|senior\s+team|steering\s+(?:group|committee))$/i.exec(rest))) audience = "executive";
+    else if ((n = /^for\s+(?:the\s+)?(researchers?|analysts?|research\s+team|technical\s+(?:team|readers?)|methodologists?|statisticians?)$/i.exec(rest))) audience = "researcher";
+    else if ((n = /^for\s+(?:the\s+)?(client|clients|customer|stakeholders?|team)$/i.exec(rest))) audience = audience === "executive" ? "executive" : "client";
+    else if (/^(?:for|of|on)\s+(?:the\s+|this\s+|our\s+|my\s+)?(?:survey|study|project|questionnaire|research|findings|results)$/i.test(rest)) { /* "for this survey": what it is for anyway */ }
+    else if ((n = /^for\s+(.+)$/i.exec(rest)) && !/\b(?:survey|study|questionnaire|this|that|it|them|us|me)\b/i.test(n[1])) client = unquote(n[1]).slice(0, 80);
+    else return null;
+  }
+  const words = type === "proposal_docx" ? "the research proposal (Word)" : type === "findings_docx" ? "the findings report (Word)" : `the findings presentation (PowerPoint, ${audience} edition)`;
+  const hasDesign = !!(r.def.research?.objective || r.def.research?.hypotheses.length);
+  if (type === "proposal_docx" && !hasDesign && !r.def.questions.length) return refused("reporting", `Produce ${words}.`, "There is nothing to write a proposal from yet — no research objective, hypotheses or questions. Record the objective (“set the objective to …”) or build the questionnaire first.", []);
+  return { kind: "output", category: "reporting", understood: `Produce ${words}${client ? ` for ${client}` : ""}${type !== "proposal_docx" ? " from the latest analysis run" : " from the research design"}.`, output: { type, audience, ...(client ? { client } : {}), words }, detected: [det("document", words), det("audience", audience), ...(client ? [det("client", client)] : [])] };
+};
+
 /* ---------------------------------------------------------- data questions (Phase 4) */
 
 /*
@@ -2645,7 +2701,7 @@ function fallback(r: Run): Interpretation {
  * before "remove Q11"), skips before display ("if Q7 is no, skip …").
  */
 const RECOGNISERS: Recogniser[] = [
-  analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion,
+  analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest,
   deferred, longBrief,
   surveySettings, languages, objective, audience, research, variables, pageBreaks,
   shorten, screenerEdit, scaleChange, removeAnalysis, analysisTests, crosstabs,
@@ -2725,7 +2781,7 @@ function compound(def: SurveyDefinition, text: string, parts: string[], ctx: Int
     if (it.kind === "refused" && it.noop) { noops.push(it); category ??= it.category; continue; }
     if (it.kind === "clarify") { stop = { ...it, understood: `In “${part}”: ${it.understood}`, choices: it.choices.map((c) => ({ label: c.label, text: text.replace(part, c.text) })) }; continue; }
     if (it.kind === "refused") { stop = { ...it, understood: `In “${part}”: ${it.understood}`, reason: `${it.reason} Nothing else in the request was applied.`, ...(it.suggestion ? { suggestion: { text: text.replace(part, it.suggestion.text) } } : {}) }; continue; }
-    if (it.kind === "answer" || it.kind === "query") { stop = { kind: "model", category: it.category, reason: "a question and an edit in one sentence — the language model takes the whole request", detected }; continue; }
+    if (it.kind === "answer" || it.kind === "query" || it.kind === "output") { stop = { kind: "model", category: it.category, reason: "a question and an edit in one sentence — the language model takes the whole request", detected }; continue; }
     category ??= it.category;
     actions.push(...it.actions);
     detected.push(...it.detected);

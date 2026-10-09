@@ -52,6 +52,8 @@ export interface CopilotEntry {
   changePlan?: ChangePlan & { approved?: string[]; failures?: { id: string; failure: TurnFailure }[] };
   /** the research coverage of a generated survey, checked on the clone (Phase 3) */
   coverage?: { ok: boolean; summary: string; unmeasured: string[]; unconnected: string[]; hypotheses: { label: string; text: string; status: string }[] };
+  /** a document the engine produced (Phase 5): its name, size and a link to it, what it holds, and what the narrative gate kept */
+  output?: { name: string; size: number; url: string; kind: "docx" | "pptx"; summary: string; narrative?: string };
   /** a data question's answer, read on the respondent data (Phase 4): the base, the test behind it, the caveats */
   data?: { n: number; environment: string; dataset: string; source: "data" | "sandbox"; evidence?: { test: string; p: number | null; significant: boolean; effect?: { name: string; value: number } }; caveats: string[]; fromRun?: string };
   error?: string;
@@ -617,6 +619,41 @@ export function useCopilot(opts: {
       fail(`The data could not be read: ${(e as Error).message || "the network request failed"}.`);
     } finally { setBusy(false); }
   }, [opts, s.surveyDbId, s.def, recordOp, analysisRun]);
+  /*
+   * A DOCUMENT TO PRODUCE (Phase 5). The engine read the sentence into an
+   * output request; the output route makes the file — the proposal from the
+   * design, the findings report or deck from a fresh run on the data, with
+   * the model's narrative through the gate when a model is there. The card
+   * holds the file for download and says what it contains and what the
+   * gate kept. The sandbox makes the proposal from its own definition and
+   * the findings outputs from rows a test put on the page.
+   */
+  const makeOutput = React.useCallback(async (text: string, it: Extract<Interpretation, { kind: "output" }>, heard?: HeardTranscript): Promise<void> => {
+    const id = uid("copilot");
+    const engine: EngineTurn = { kind: "output", category: it.category, understood: it.understood, detected: it.detected };
+    const reply = (r: string): CopilotReply => ({ kind: "answer", reply: r, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] });
+    opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "thinking", reply: reply(it.understood), engine });
+    setBusy(true);
+    const fail = (message: string) => opts.patch(id, { status: "ready", reply: reply(message), engine: { ...engine, kind: "refused", refusal: message }, opKey: recordOp({ prompt: text, source: "engine", status: "refused", intent: { category: it.category, kind: "output" }, detected: it.detected, statusDetail: message.slice(0, 2000) }) });
+    try {
+      const sandbox = s.surveyDbId === "sandbox";
+      const rows = sandbox ? rowsRef.current : null;
+      if (sandbox && it.output.type !== "proposal_docx" && !rows?.length) { fail("The sandbox has no respondents to report on. Open a survey with fieldwork and ask there — the report and the deck come from a run of its data."); return; }
+      const fake = sandbox ? fakeRef.current.shift() : undefined;
+      const r = await fetch("/api/copilot/output", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: s.surveyDbId, output: it.output, ...(sandbox ? { definition: s.def, rows, ...(fake ? { fake } : {}) } : {}) }) });
+      if (!r.ok) { const d = await r.json().catch(() => null) as { error?: string } | null; fail(d?.error ?? (r.status === 401 ? "Sign in to produce documents for this survey." : `The document could not be produced (HTTP ${r.status}).`)); return; }
+      const blob = await r.blob();
+      const name = /filename="([^"]+)"/.exec(r.headers.get("content-disposition") ?? "")?.[1] ?? `output.${it.output.type.endsWith("pptx") ? "pptx" : "docx"}`;
+      const summary = r.headers.get("x-rescript-output") ?? "";
+      const narrative = r.headers.get("x-rescript-narrative") ?? undefined;
+      const url = URL.createObjectURL(blob);
+      const output: NonNullable<CopilotEntry["output"]> = { name, size: blob.size, url, kind: name.endsWith(".pptx") ? "pptx" : "docx", summary, ...(narrative ? { narrative } : {}) };
+      const said = `${it.output.words[0].toUpperCase()}${it.output.words.slice(1)} is ready: ${name} (${Math.round(blob.size / 1024)} KB). ${summary}${narrative ? ` Narrative gate: ${narrative}.` : ""}`;
+      opts.patch(id, { status: "ready", output, reply: reply(said), engine: { ...engine, kind: "answer" }, opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "output" }, detected: it.detected, statusDetail: said.slice(0, 2000), apiCalls: [{ route: "/api/copilot/output", mode: it.output.type, charge: 0 }] }) });
+    } catch (e) {
+      fail(`The document could not be produced: ${(e as Error).message || "the network request failed"}.`);
+    } finally { setBusy(false); }
+  }, [opts, s.surveyDbId, s.def, recordOp]);
   /** the survey a new request is read against: the open proposal's result, so a revision builds on what is proposed */
   const working: SurveyDefinition = React.useMemo(() => (session.proposal ? (stale ? evaluateProposal(rebaseProposal(session.proposal, s.def)).after : full?.after ?? s.def) : s.def), [session.proposal, stale, full, s.def]);
 
@@ -811,7 +848,7 @@ export function useCopilot(opts: {
     docs: session.docs ?? [], durable: session.durable, uploading, docError,
     confirmed: session.confirmed, setConfirmed: (v: boolean) => setSession((x) => ({ ...x, confirmed: v })),
     tab: session.tab, setTab: (t: PanelTab) => setSession((x) => ({ ...x, tab: t })),
-    ask, local, askData, working, runReview, previewFix, apply, cancel, uploadDocs, deleteDoc, refreshDocs,
+    ask, local, askData, makeOutput, working, runReview, previewFix, apply, cancel, uploadDocs, deleteDoc, refreshDocs,
     planFirst, setPlanFirst, executePlan, cancelPlan,
     themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),
     quotaCounts, quotaCountsAt, refreshQuotaCounts,

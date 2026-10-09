@@ -56,7 +56,8 @@ export function testDefinition(t: PlannedTest, dataset: DatasetSpec): AnalysisDe
   switch (kind) {
     case "test": {
       // the runner reads [measured, grouping]: the outcome first, then the group or the second variable
-      const variables = [t.outcome, t.groupBy ?? t.variables[0], ...(t.groupBy ? t.variables : t.variables.slice(1))].filter((v): v is string => !!v);
+      // a test planned by sentence (Phase 4) lists the outcome in `variables` too: the same variable once, never "SAT across GENDER and SAT"
+      const variables = [...new Set([t.outcome, t.groupBy ?? t.variables[0], ...(t.groupBy ? t.variables : t.variables.slice(1))].filter((v): v is string => !!v))];
       return { ...base, name, kind, variables, options: { ...base.options, test: TEST_NAME[t.method] ?? "auto" } };
     }
     case "regression": {

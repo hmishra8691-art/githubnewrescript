@@ -183,3 +183,37 @@ test("data questions are read into queries — the option, the question, the cut
   // a data question and an edit in one sentence: the model's
   assert.equal(interpretRequest(def, "does satisfaction differ by gender and make Q1 required").kind, "model");
 });
+
+/* ------------------------------------------------------------ Phase 5: documents by sentence */
+test("a document by sentence (Phase 5): the proposal from the design, the findings report or deck from a run — the type from the noun, the audience and the client from the words; an executive summary or a report to draft stays the model's", () => {
+  const def = survey();
+  const outputOf = (t: string) => { const r = interpretRequest(def, t); assert.equal(r.kind, "output", JSON.stringify(r)); return r as Extract<Interpretation, { kind: "output" }>; };
+  let o = outputOf("Create the client-ready research proposal");
+  assert.deepEqual(o.output, { type: "proposal_docx", audience: "client", words: "the research proposal (Word)" });
+  assert.equal(o.category, "reporting");
+  assert.equal(o.understood, "Produce the research proposal (Word) from the research design.");
+  assert.deepEqual(o.detected, [{ what: "document", value: "the research proposal (Word)" }, { what: "audience", value: "client" }]);
+  o = outputOf("write the research design document for Acme Ltd");
+  assert.equal(o.output.type, "proposal_docx"); assert.equal(o.output.client, "Acme Ltd");
+  assert.equal(o.understood, "Produce the research proposal (Word) for Acme Ltd from the research design.");
+  assert.equal(outputOf("create a proposal for the survey").output.type, "proposal_docx", "'for the survey' is what it is for anyway");
+  o = outputOf("create the final findings presentation");
+  assert.deepEqual(o.output, { type: "findings_pptx", audience: "client", words: "the findings presentation (PowerPoint, client edition)" });
+  assert.equal(o.understood, "Produce the findings presentation (PowerPoint, client edition) from the latest analysis run.");
+  assert.equal(outputOf("Create the findings deck for the board").output.audience, "executive");
+  assert.equal(outputOf("give me the executive findings deck").output.audience, "executive");
+  assert.equal(outputOf("build the results deck for the analysts").output.audience, "researcher");
+  assert.equal(outputOf("prepare the slides for the client").output.audience, "client");
+  o = outputOf("write the findings report as a Word document");
+  assert.deepEqual(o.output, { type: "findings_docx", audience: "client", words: "the findings report (Word)" });
+  assert.equal(outputOf("draft the final report in Word").output.type, "findings_docx");
+  assert.equal(outputOf("make a Word document of the findings").output.type, "findings_docx");
+  // not this recogniser's: the executive summary in words, the analytics report to draft, a deck with an edit in the same sentence, a tail it cannot read
+  assert.equal(interpretRequest(def, "Write the executive summary for the client report").kind, "model");
+  assert.equal(interpretRequest(def, "draft the report").kind, "model");
+  assert.equal(interpretRequest(def, "create the findings presentation and make Q1 required").kind, "model");
+  assert.equal(interpretRequest(def, "create the findings deck with three slides per hypothesis").kind, "model");
+  // nothing to write a proposal from
+  const bare = SurveyDefinition.parse({ meta: { id: "b", code: "B", title: "Bare" }, questions: [], flow: [] });
+  refusal(interpretRequest(bare, "create the research proposal"), /^There is nothing to write a proposal from yet/);
+});

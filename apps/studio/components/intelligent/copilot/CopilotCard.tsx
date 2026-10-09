@@ -108,6 +108,14 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
             <Icon name={entry.coverage.ok ? "check" : "warning"} size={12} /> <span className="iq-label">Coverage</span> <Linked text={entry.coverage.summary} def={def} onSelect={onSelect} />
           </p>
         )}
+        {entry.output && (
+          /* a document the engine produced (Phase 5): the file to download, what it holds, what the narrative gate kept */
+          <p className="cp-data cp-output" data-testid="cp-output" data-kind={entry.output.kind} data-size={entry.output.size}>
+            <Icon name="download" size={12} /> <a className="iq-btn primary" href={entry.output.url} download={entry.output.name} data-testid="cp-output-download">Download {entry.output.name}</a>
+            <span className="iqi-dim">{Math.round(entry.output.size / 1024)} KB · {entry.output.summary}</span>
+            {entry.output.narrative ? <span className="iqi-dim" data-testid="cp-output-narrative"> · Narrative gate: {entry.output.narrative}</span> : null}
+          </p>
+        )}
         {entry.data && (
           /* a data question's answer (Phase 4): read on the respondent data — the base, the test, the caveats, and the planned finding on the same pair */
           <p className="cp-data" data-testid="cp-data" data-n={entry.data.n} data-source={entry.data.source}>
