@@ -50,6 +50,8 @@ export interface CopilotEntry {
   reply?: CopilotReply;
   /** the change plan the model proposed before building (Phase 2): read, ticked and approved here; `approved` once it was built */
   changePlan?: ChangePlan & { approved?: string[]; failures?: { id: string; failure: TurnFailure }[] };
+  /** the research coverage of a generated survey, checked on the clone (Phase 3) */
+  coverage?: { ok: boolean; summary: string; unmeasured: string[]; unconnected: string[]; hypotheses: { label: string; text: string; status: string }[] };
   error?: string;
   message?: string;
   /** why a model turn failed — the cause and what to do next, never the grammar's "not understood" (Phase 1) */
@@ -254,10 +256,15 @@ export function useCopilot(opts: {
   const commitApplied = React.useCallback(async (k: string, x: { record: ChangeRecord; applied: string[]; excluded: string[]; failed: OpFailed[]; warnings: string[]; engineOps: string[]; targets: string[] }, show?: (n: number | null) => void, openHistory = true): Promise<{ n: number | null; save: SaveView }> => {
     const flushing = s.flushDraft();
     recorder.note(k, { save: { state: "saving" } });
+    /* the record joins the history the moment the store took the change — what was created, modified and removed is the
+       page's own reading and needs no server; the entry is undoable at once and never reads "Applied …" first and
+       "Created …" a round-trip later. The server's number is patched in when it answers. */
+    const draft: ChangeRecord = { ...x.record, n: null, key: k };
+    setSession((h) => ({ ...h, history: h.history.some((r) => r.key === k) ? h.history.map((r) => (r.key === k ? draft : r)) : [...h.history, draft] }));
     const op = await recorder.update(k, { status: "applied", applied: x.applied, excluded: x.excluded, failed: x.failed, warnings: x.warnings, engineOps: x.engineOps, targets: x.targets, before: x.record.before, after: x.record.after });
     const n = op?.changeN ?? null;
-    const record: ChangeRecord = { ...x.record, n, key: k };
-    setSession((h) => ({ ...h, history: [...h.history, record], ...(openHistory ? { tab: "history" as const } : {}) }));
+    const record: ChangeRecord = { ...draft, n };
+    setSession((h) => ({ ...h, history: h.history.map((r) => (r.key === k ? { ...r, n } : r)), ...(openHistory ? { tab: "history" as const } : {}) }));
     show?.(n);
     void auditChange(k, record);
     const ok = await flushing.catch(() => false);
@@ -475,6 +482,7 @@ export function useCopilot(opts: {
         return "empty";
       }
       const patch: Partial<CopilotEntry> = { status: "ready", reply, usage: d.usage as { charge: number }, context: d.context as CopilotEntry["context"], passages: (d.passages ?? {}) as Record<string, Passage>, ...(review ? { review } : {}) };
+      if (d.coverage && typeof d.coverage === "object") patch.coverage = d.coverage as CopilotEntry["coverage"];
       if (d.stage === "executed" && d.plan) {
         const built = d.plan as ChangePlan;
         patch.changePlan = { ...built, approved: built.items.map((i) => i.id), ...(Array.isArray(d.planFailures) ? { failures: d.planFailures as { id: string; failure: TurnFailure }[] } : {}) };

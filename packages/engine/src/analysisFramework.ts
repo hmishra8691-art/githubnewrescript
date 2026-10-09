@@ -1,4 +1,5 @@
 import type { AnalysisMethod, AnalysisPlan, AnalysisRole, MeasurementLevel, PlannedCrosstab, PlannedDerived, PlannedSegment, PlannedTest, Question, QuestionAnalysis, SurveyDefinition } from "@rescript/schema";
+import { hypothesisConstructs, structuredHypotheses } from "./hypotheses.js";
 import { hypothesisLabel } from "@rescript/schema";
 import { listBlocks } from "./blocks.js";
 import { questionOrder } from "./dependencies.js";
@@ -190,9 +191,12 @@ export function hypothesisCoverage(def: SurveyDefinition): HypothesisCoverage[] 
   if (!r) return [];
   const plan = r.analysisPlan;
   const codeOf = (id: string) => def.questions.find((q) => q.id === id)?.code;
+  const structured = structuredHypotheses(def);
   return r.hypotheses.map((text, i) => {
     const label = hypothesisLabel(i);
-    const constructs = (r.constructs ?? []).filter((c) => hypothesesNaming(def, c.name).includes(label)).map((c) => {
+    // the constructs on the hypothesis's sides (recorded or parsed, Phase 3), and any whose name the statement carries
+    const named = new Set(hypothesisConstructs(structured[i]).map((c) => c.name));
+    const constructs = (r.constructs ?? []).filter((c) => named.has(c.name) || hypothesesNaming(def, c.name).includes(label)).map((c) => {
       const questions = c.questionIds.map(codeOf).filter((x): x is string => !!x);
       return { name: c.name, role: c.role, questions, measured: questions.length > 0 };
     });

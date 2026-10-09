@@ -5,7 +5,7 @@ import { aiConfigured, aiProviderName, completeJson, embedTexts, aiEmbeddingsMod
 import { describeFailure, failureFromError, failureFromReplyError, type TurnFailure } from "@/lib/copilot/failure";
 import { CHANGE_PLAN_SCHEMA, coerceChangePlan, executeItemPrompt, mergeItemReplies, planStagePrompt, type ChangePlan } from "@/lib/copilot/changePlan";
 import { COPILOT_REPLY_SCHEMA } from "@/lib/copilot/replySchema";
-import { applySurveyActions, diffSurveys, reviewSurvey } from "@rescript/engine";
+import { applySurveyActions, coverageReport, diffSurveys, reviewSurvey, type CoverageReport } from "@rescript/engine";
 import { ResearchIndex } from "@rescript/import/research";
 import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
 import { billingProjectFor, meteredAi, refusalResponse } from "@/lib/metering";
@@ -49,6 +49,9 @@ export const maxDuration = 180;
 
 const CACHE = new Map<string, { at: number; value: unknown }>();
 const TTL = 15 * 60_000;
+
+/** the scripted replies an executed plan consumed: one per approved item */
+const approvedCount = (plan: { items: unknown[] }) => plan.items.length;
 
 export async function POST(req: NextRequest) {
   const authed = await requireUser(req);
@@ -278,6 +281,40 @@ export async function POST(req: NextRequest) {
       console.warn("[rescript:copilot] repair failed", JSON.stringify({ error: (e as Error).message }));
     }
   }
+  /*
+   * THE COVERAGE GATE (Phase 3). A generated survey is checked on the clone
+   * before it is shown: every hypothesis measured, every question serving
+   * the design or the sample. What is loose goes back to the model once —
+   * keep the actions, add the tags, links and questions that connect them
+   * — and the better answer is used. The report travels with the proposal
+   * either way, so the card says what is connected and what is not.
+   */
+  let coverage: CoverageReport | undefined;
+  if (mode === "generate" && applied?.valid && reply.actions.length) {
+    coverage = coverageReport(applied.def);
+    const nextFake = executedPlan ? fakes[approvedCount(executedPlan)] : fakes[repair ? 2 : 1];
+    if (!coverage.ok && !cached && (aiProviderName() !== "fake" || nextFake)) {
+      const coveragePrompt = `${prompt}\n\nYOUR PREVIOUS ANSWER:\n${JSON.stringify(executedPlan ? raw : raw).slice(0, 14_000)}\n\nTHE STUDIO CHECKED THE RESEARCH COVERAGE OF THAT ANSWER: ${coverage.summary}.\n\nAnswer again in the same JSON shape with the SAME actions, plus what connects the loose ends: set_question_analysis tags (hypotheses) on the questions that measure each unmeasured hypothesis, constructs in set_research that name the measuring questions, a question for a hypothesis none measures, and a tag or construct for each unconnected question — or remove a question that serves nothing. Every hypothesis must be measured and every question must serve one, a construct, the plan or a KPI (screeners and demographics are exempt).`;
+      try {
+        const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + coveragePrompt, maxTokens, operation: `copilot_${mode}_coverage` },
+          () => completeJson(COPILOT_SYSTEM_PROMPT, coveragePrompt, maxTokens, { timeoutMs: 170_000, schema: COPILOT_REPLY_SCHEMA, continuations: 1 }));
+        if (m.ok) {
+          charge += m.event?.customerCharge ?? 0;
+          const raw3 = nextFake ?? m.value;
+          const c3 = coerceCopilotReply(raw3);
+          const r3 = c3 && themeImageUrl ? { ...c3, actions: withThemeImage(c3.actions, themeImageUrl) } : c3;
+          const a3 = r3 && r3.actions.length ? applySurveyActions(def, r3.actions, { uxOnly: cls.uxOnly }) : null;
+          if (r3 && a3?.valid) {
+            const cov3 = coverageReport(a3.def);
+            const better = cov3.ok || cov3.unmeasured.length + cov3.unconnected.length < coverage.unmeasured.length + coverage.unconnected.length;
+            if (better && a3.results.filter((x) => x.ok).length >= applied.results.filter((x) => x.ok).length) { reply = r3; applied = a3; coverage = { ...cov3, summary: `${cov3.summary} (connected on a second pass)` }; }
+          }
+        }
+      } catch (e) {
+        console.warn("[rescript:copilot] coverage pass failed", JSON.stringify({ error: (e as Error).message }));
+      }
+    }
+  }
   const diff = applied?.valid ? diffSurveys(def, applied.def) : null;
   const passages = passageIds.length || reply.sources.length ? await describePassages(store, surveyId, docs, [...passageIds, ...reply.sources.flatMap((x) => x.passages)]) : {};
   // a citation to a passage that does not exist is not a citation: dropped, and a "document" claim with none left is only a recommendation
@@ -288,6 +325,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     ok: true, reply,
     ...(executedPlan ? { stage: "executed", plan: executedPlan, ...(planFailures.length ? { planFailures } : {}) } : {}),
+    ...(coverage ? { coverage: { ok: coverage.ok, summary: coverage.summary, unmeasured: coverage.unmeasured, unconnected: coverage.unconnected.map((q) => String(q.code)), hypotheses: coverage.hypotheses } } : {}),
     validation: applied ? { valid: applied.valid, results: applied.results, errors: applied.errors, destructive: applied.destructive, warnings: applied.warnings, summary: diff?.summary ?? [], diff, uxOnly: applied.uxOnly, structureUnchanged: applied.structureUnchanged } : null,
     ...(deterministic ? { review: deterministic } : {}),
     passages,

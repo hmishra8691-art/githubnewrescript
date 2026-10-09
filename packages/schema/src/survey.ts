@@ -86,9 +86,67 @@ export const ResearchConstruct = z.object({
 });
 export type ResearchConstruct = z.infer<typeof ResearchConstruct>;
 
+/**
+ * WHAT A HYPOTHESIS STATES, structured (Research Engine audit, Phase 3). The
+ * statement itself stays in `ResearchDesign.hypotheses[i]` (every label,
+ * tag and plan item names a hypothesis by position); this is the reading of
+ * it — type, direction, the constructs on each side, the effect expected —
+ * recorded by the researcher or the copilot, or parsed from the words when
+ * absent. Aligned with `hypotheses` by index.
+ */
+export const HypothesisDetail = z.object({
+  /** causal (X drives Y), association (X relates to Y), difference (A is higher than B), descriptive (a level or share) */
+  type: z.enum(["causal", "association", "difference", "descriptive"]).optional(),
+  /** positive / negative: the sign of the relation or the side of the difference; "difference" when a side is not stated */
+  direction: z.enum(["positive", "negative", "difference", "none"]).optional(),
+  /** construct names from `constructs`, or the words of the statement when no construct is recorded */
+  independent: z.string().optional(),
+  dependent: z.string().optional(),
+  moderator: z.string().optional(),
+  mediator: z.string().optional(),
+  /** difference: the group said to be higher, and the one said to be lower */
+  group: z.string().optional(),
+  lower: z.string().optional(),
+  expectedEffect: z.enum(["small", "medium", "large"]).optional(),
+  /** the researcher's own standing of it — the fieldwork verdicts live on the analysis run */
+  status: z.enum(["proposed", "supported", "not_supported", "mixed", "inconclusive"]).optional(),
+  note: z.string().optional(),
+});
+export type HypothesisDetail = z.infer<typeof HypothesisDetail>;
+
+/** a key performance indicator the study reports: a variable (or derived variable) and, when known, the target */
+export const ResearchKpi = z.object({
+  name: z.string(),
+  /** the variable name it is read from */
+  variable: z.string().optional(),
+  /** "top-2-box share", "mean", "NPS" */
+  measure: z.string().optional(),
+  target: z.string().optional(),
+  direction: z.enum(["higher", "lower"]).optional(),
+});
+export type ResearchKpi = z.infer<typeof ResearchKpi>;
+
+/** who the questionnaire is written for — what adaptation reads (Phase 3) */
+export const ResearchAudience = z.object({
+  description: z.string(),
+  /** what sets them apart and what to assume: "first-time buyers — no brand vocabulary, no prior experience of the category" */
+  characteristics: z.array(z.string()).default([]),
+  /** plain / general / expert */
+  literacy: z.enum(["plain", "general", "expert"]).optional(),
+  tone: z.string().optional(),
+  language: z.string().optional(),
+});
+export type ResearchAudience = z.infer<typeof ResearchAudience>;
+
 export const ResearchDesign = z.object({
   objective: z.string().optional(),
   hypotheses: z.array(z.string()).default([]),
+  /** the structured reading of each hypothesis, by index (Phase 3) */
+  hypothesisDetails: z.array(HypothesisDetail).default([]),
+  /** the questions the research answers, in words ("Why do customers switch?") */
+  researchQuestions: z.array(z.string()).default([]),
+  kpis: z.array(ResearchKpi).default([]),
+  audience: ResearchAudience.optional(),
   population: z.string().optional(),
   /**
    * The completes the study is planned to achieve, when the researcher says

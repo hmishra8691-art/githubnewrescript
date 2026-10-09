@@ -7,6 +7,7 @@ import { forEachRuleIn } from "./actionValidation.js";
 import { forEachRule } from "./conditionWalk.js";
 import { formatCondition } from "./logicExpression.js";
 import { setExpressionSummary } from "./setExpression.js";
+import { structuredHypotheses } from "./hypotheses.js";
 import { analysisDependencies } from "./analysisFramework.js";
 import { variableUsages, type VariableUsage } from "./variableUsage.js";
 import { operatorsForQuestion } from "./lintLogic.js";
@@ -95,7 +96,7 @@ const worse = (a: ImpactSeverity, b: ImpactSeverity): ImpactSeverity => (RANK[a]
 const plain = (s: string | undefined, n = 120): string => { const t = stripHtmlText(s ?? "").replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 
 /** the edge kinds whose reference is metadata, not runtime logic */
-const INFORMS: Set<string> = new Set(["piping", "analysis", "construct", "translation", "analysis plan", "export column"]);
+const INFORMS: Set<string> = new Set(["piping", "analysis", "construct", "translation", "analysis plan", "export column", "hypothesis", "kpi"]);
 /** the edge kinds whose reference is a condition tree — the ones a type change can make unfit */
 const CONDITIONAL: Set<string> = new Set(["display", "skip", "validation", "randomization", "optionLogic", "quotaCell", "flowCondition", "namedExpression", "listLogic", "listOperation", "listFillGate", "carryForward", "mask", "punch", "calculation"]);
 
@@ -108,6 +109,7 @@ const VIA_WORDS: Record<string, string> = {
   listLogic: "list logic", listOperation: "list operation", mask: "masking", punch: "auto punch", optionLogic: "option logic", piping: "piping",
   calculation: "expression", quotaCell: "quota cell", flowCondition: "condition", loopSource: "loop source", listFillSource: "source", listFillGate: "gate",
   namedExpression: "definition", target: "routing", placement: "placement", "analysis plan": "analysis", construct: "construct", translation: "translations", "export column": "export",
+  hypothesis: "hypothesis", kpi: "KPI",
 };
 
 /* ------------------------------------------------------------ reading the definition by path */
@@ -257,6 +259,8 @@ export function impactPhrase(item: ImpactItem): string {
     case "embedded": return `embedded ${o.code}`;
     case "analysis": return `planned ${o.code.replace(/ \S+$/, "")} ${o.label}`.replace(/\s+/g, " ");
     case "construct": return `construct ${o.code}`;
+    case "hypothesis": return `hypothesis ${o.code}`;
+    case "kpi": return `KPI “${o.code}”`;
     case "translation": return `${o.label} translations`;
     case "option": return `${o.code} option`;
     case "block": return `block “${o.code}”`;
@@ -343,6 +347,8 @@ export function impactOf(def: SurveyDefinition, scope: ImpactScope, opts: Impact
       const { key, depth, through } = queue.shift()!;
       for (const e of ix.usedBy(key)) {
         if (!keep(e)) continue;
+        // the research design's own edges are reported by the pass below, with what the hypothesis or KPI would lose
+        if (e.kind === "hypothesis" || e.kind === "kpi") continue;
         const via = viaOf(e.kind);
         // a language or the plan is about the intermediate question, not about what changed
         if (depth > 0 && (via === "translation" || via === "construct" || via === "analysis plan")) continue;
@@ -374,6 +380,33 @@ export function impactOf(def: SurveyDefinition, scope: ImpactScope, opts: Impact
     for (const d of deps.derived) report.add({ object: objectOf(ix, objectKey("analysis", `derived:${d.name}`)), via: "analysis plan", text: `derived variable ${d.name} — analysis plan`, severity: sev });
     for (const s of deps.segments) report.add({ object: objectOf(ix, objectKey("analysis", `segment:${s.name}`)), via: "analysis plan", text: `segment “${s.name}” — analysis plan`, severity: sev });
     for (const c of deps.constructs) report.add({ object: objectOf(ix, objectKey("construct", c)), via: "construct", text: `${c} — construct`, severity: sev });
+    /*
+     * THE RESEARCH DESIGN (Phase 3). A hypothesis measured through this
+     * question — tagged with its label, or through a construct this
+     * question measures — is affected: "changes" when the question is the
+     * construct's only measure or the only question tagged (the hypothesis
+     * becomes unmeasured), "informs" when others remain. A KPI read from
+     * its variable breaks when the question goes.
+     */
+    if (change === "delete" || change === "retype") {
+      const r = def.research;
+      if (r) {
+        const myConstructs = new Set(deps.constructs);
+        for (const h of structuredHypotheses(def)) {
+          const tagged = q.analysis?.hypotheses?.includes(h.label) ?? false;
+          const through = [h.constructs.independent, h.constructs.dependent, h.constructs.moderator, h.constructs.mediator].filter((c): c is NonNullable<typeof c> => !!c && myConstructs.has(c.name));
+          if (!tagged && !through.length) continue;
+          const alone = through.filter((c) => c.questionIds.filter((id) => id !== q.id).length === 0);
+          const otherTagged = def.questions.filter((o) => o.id !== q.id && o.analysis?.hypotheses?.includes(h.label)).length;
+          const severity: ImpactSeverity = change === "delete" && ((alone.length > 0) || (tagged && !through.length && otherTagged === 0)) ? "changes" : "informs";
+          const how = [tagged ? "tagged with it" : "", ...through.map((c) => `measures its construct “${c.name}”${alone.includes(c) ? " (its only question)" : ""}`)].filter(Boolean).join(", ");
+          report.add({ object: objectOf(ix, objectKey("hypothesis", h.label)), via: "hypothesis", text: `${h.label} “${plain(h.text, 60)}” — ${how}${severity === "changes" ? "; it would be left unmeasured" : ""}`, severity });
+        }
+        for (const k of r.kpis ?? []) {
+          if (k.variable && k.variable.toLowerCase() === q.variableName.toLowerCase()) report.add({ object: objectOf(ix, objectKey("kpi", k.name)), via: "kpi", text: `KPI “${k.name}” is read from ${k.variable} — ${change === "delete" ? "no variable to read it from" : "its type changes"}`, severity: change === "delete" ? "breaks" : "changes" });
+        }
+      }
+    }
     // the saved export settings for its variable are keyed by name
     if (change === "delete" || change === "retype") {
       for (const u of variableUsages(def, q.variableName)) {

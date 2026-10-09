@@ -1,4 +1,5 @@
-import type { Condition, FlowNode, Question, SurveyDefinition, ValidationRule, OptionLogic, ListOperation } from "@rescript/schema";
+import type { Condition, FlowNode, Question, ResearchConstruct, SurveyDefinition, ValidationRule, OptionLogic, ListOperation } from "@rescript/schema";
+import { structuredHypotheses } from "./hypotheses.js";
 import { isQuestionValueRef } from "@rescript/schema";
 import { getQuestionByCodeOrVar } from "./state.js";
 import { pipeTokensIn } from "./pipingTokens.js";
@@ -64,6 +65,8 @@ export type ObjectKind =
   | "embedded"
   | "analysis"          // one plan item: a crosstab, a test, a derived variable, a segment
   | "construct"         // a research construct, by name
+  | "hypothesis"        // a hypothesis of the research design, by label (H1) — Phase 3
+  | "kpi"               // a KPI of the research design, by name — Phase 3
   | "translation";      // one language version
 
 /** `kind:id` — stable across renames because it is built on ids, not names. */
@@ -92,6 +95,8 @@ export type EdgeKind =
   | "placement"        // a question placed under a conditional container reads that container
   | "analysis"         // a plan item, or a question's analysis metadata, reads a question
   | "construct"        // a construct is measured by a question
+  | "hypothesis"       // a hypothesis reads the constructs on its sides and the questions tagged with it; a plan item tagged with it reads the hypothesis
+  | "kpi"              // a KPI reads the question whose variable it is read from
   | "translation";     // a language holds translations keyed to a question (or a quota)
 
 export interface DependencyEdge {
@@ -511,6 +516,47 @@ class Builder {
     });
   }
 
+  /**
+   * THE HYPOTHESES AND THE KPIs (Phase 3). A hypothesis is a node that reads
+   * the constructs on its sides (recorded or parsed) and the questions
+   * tagged with its label, so "which questions measure H1" is `reach(H1)`
+   * and "what is affected if I remove Q6" climbs from Q6 through its
+   * construct to the hypothesis. A plan item that serves a hypothesis
+   * reads it (the tag is held on the item). A KPI reads the question its
+   * variable is read from, or the plan's derived variable.
+   */
+  hypotheses(): void {
+    const r = this.def.research;
+    if (!r) return;
+    const readings = structuredHypotheses(this.def);
+    readings.forEach((h, i) => {
+      const me = this.node("hypothesis", h.label, h.label, h.text);
+      const sides: [string, ResearchConstruct | undefined][] = [["independent", h.constructs.independent], ["dependent", h.constructs.dependent], ["moderator", h.constructs.moderator], ["mediator", h.constructs.mediator]];
+      for (const [side, c] of sides) {
+        if (!c) continue;
+        const k = objectKey("construct", c.name);
+        if (!this.nodes.has(k)) this.node("construct", c.name, c.name, `${c.name} (${c.role})`);
+        this.edge(me, k, "hypothesis", `research.hypotheses[${i}]`, `${h.label} — ${side} construct`);
+      }
+      this.def.questions.forEach((q, qi) => {
+        if (!q.analysis?.hypotheses?.includes(h.label)) return;
+        const k = this.questionKey(q.id);
+        if (k) this.edge(me, k, "hypothesis", `questions[${qi}].analysis.hypotheses`, `${h.label} — tagged question`);
+      });
+    });
+    const plan = r.analysisPlan;
+    if (plan) {
+      plan.crosstabs.forEach((x, i) => x.hypotheses.forEach((label, j) => { if (this.nodes.has(objectKey("hypothesis", label))) this.edge(objectKey("analysis", x.id), objectKey("hypothesis", label), "hypothesis", `research.analysisPlan.crosstabs[${i}].hypotheses[${j}]`, `crosstab ${x.rows.join(" + ")} by ${x.columns.join(" + ")} — serves ${label}`); }));
+      plan.tests.forEach((t, i) => t.hypotheses.forEach((label, j) => { if (this.nodes.has(objectKey("hypothesis", label))) this.edge(objectKey("analysis", t.id), objectKey("hypothesis", label), "hypothesis", `research.analysisPlan.tests[${i}].hypotheses[${j}]`, `${t.method.replace(/_/g, " ")}${t.outcome ? ` on ${t.outcome}` : ""} — serves ${label}`); }));
+    }
+    (r.kpis ?? []).forEach((k, i) => {
+      const me = this.node("kpi", k.name, k.name, `KPI ${k.name}${k.variable ? ` (${k.variable})` : ""}`);
+      if (!k.variable) return;
+      const target = this.resolveName(k.variable) ?? ((plan?.derived ?? []).some((d) => d.name === k.variable) ? objectKey("analysis", `derived:${k.variable}`) : null);
+      if (target) this.edge(me, target, "kpi", `research.kpis[${i}].variable`, `KPI ${k.name} — read from ${k.variable}`);
+    });
+  }
+
   /** The research constructs, each measured by the questions it lists. */
   constructs(): void {
     (this.def.research?.constructs ?? []).forEach((c, i) => {
@@ -676,6 +722,7 @@ export function buildDependencyIndex(def: SurveyDefinition): DependencyIndex {
   b.flow();
   b.analysisPlan();
   b.constructs();
+  b.hypotheses();
   b.translations();
 
   // referenced-but-undeclared targets (a dangling flow id) still get a node so the edge is inspectable

@@ -59,7 +59,8 @@ test("the outline: blocks with their questions, the named questions' logic in fu
   assert.match(o, /Block contents: “Screening”: Q1; “Usage”: Q2/);
   assert.match(o, /Q1 details: skip when Q1 = 2 → screen out \(screened\)|Q1 details: skip when .*Q1.*→ screen out \(screened\)/);
   assert.match(o, /Q2 details: display logic: /);
-  assert.match(o, /Research design: objective: Understand premium skincare buying · hypotheses: H1 Social exposure drives purchase · constructs: Purchase \(dependent: Q2\); Exposure \(independent, not measured\)/);
+  // Phase 3: each hypothesis carries its reading in braces
+  assert.match(o, /Research design: objective: Understand premium skincare buying · hypotheses: H1 Social exposure drives purchase \{causal · Social exposure ↑ purchase\} · constructs: Purchase \(dependent: Q2\); Exposure \(independent, not measured\)/);
   assert.deepEqual(referencedQuestions(def, "make freq required"), [def.questions[1].id], "variables are matched case-insensitively");
   assert.equal(surveyLanguageOf(def), "en");
   // bounded: a large survey is listed by code beyond the first 60, but a named question is always in full
@@ -189,7 +190,8 @@ test("the model is told about every action the engine accepts — and only those
   assert.deepEqual(documented.filter((o) => ![...SURVEY_ACTION_OPS, ...UX_ACTION_ALIASES].includes(o as never)), [], "no action is advertised that the engine would refuse");
   // the detail of each domain lives in its guide (UX, analysis, translation), sent only with requests about it; the system prompt only names the actions
   // 13_800: the Phase 2 option-level, mask, duplicate, settings, embedded and hypothesis actions are one compact line each
-  assert.ok(COPILOT_SYSTEM_PROMPT.length < 13_800, `the system prompt stays compact: ${COPILOT_SYSTEM_PROMPT.length}`);
+  // 13.8k before Phase 3; the structured hypothesis (set_hypothesis) and the design's questions, KPIs and audience add two lines
+  assert.ok(COPILOT_SYSTEM_PROMPT.length < 14_600, `the system prompt stays compact: ${COPILOT_SYSTEM_PROMPT.length}`);
 });
 
 test("UX requests: recognised, look-only when they are, and given the UX guide only then", () => {
@@ -437,5 +439,5 @@ test("Phase 6: the guides say what the engine now enforces — a multi-select is
   assert.match(COPILOT_TRANSLATION_GUIDE, /\{placeholder\} \(including \{label\}\), \$\{var\} and \[\[loop\]\] token/);
   assert.match(COPILOT_TRANSLATION_GUIDE, /every question code the source names \(Q7, Q7\.R1\)/);
   assert.match(COPILOT_TRANSLATION_GUIDE, /in the target language's own script/);
-  assert.ok(COPILOT_SYSTEM_PROMPT.length < 13_800, "the system prompt itself is unchanged in size");
+  assert.ok(COPILOT_SYSTEM_PROMPT.length < 14_600, "the system prompt itself is unchanged in size");
 });

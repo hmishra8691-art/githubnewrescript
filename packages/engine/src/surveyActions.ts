@@ -98,7 +98,9 @@ export type SurveyAction =
   | { op: "create_randomizer"; blocks: string[]; show?: number; title?: string }
   | { op: "create_branch"; blocks: string[]; when: CondInput; title?: string; arms?: { blocks: string[]; when: CondInput; label?: string }[]; otherwise?: string[] }
   | { op: "create_loop"; from: string; to: string; over?: string; items?: string[]; loopVar?: string; title?: string }
-  | { op: "set_research"; objective?: string; hypotheses?: string[]; population?: string; sampleSize?: number; methodology?: string; constructs?: { name: string; role?: string; definition?: string; questions?: string[] }[]; analysis?: string[]; assumptions?: string[]; sources?: string[] }
+  | { op: "set_research"; objective?: string; hypotheses?: string[]; population?: string; sampleSize?: number; methodology?: string; constructs?: { name: string; role?: string; definition?: string; questions?: string[] }[]; analysis?: string[]; assumptions?: string[]; sources?: string[];
+      /** Phase 3: the questions the research answers, the KPIs it reports, who it is written for */
+      researchQuestions?: string[]; kpis?: { name: string; variable?: string; measure?: string; target?: string; direction?: "higher" | "lower" }[]; audience?: { description: string; characteristics?: string[]; literacy?: "plain" | "general" | "expert"; tone?: string; language?: string } }
   /* criteria-based coding (punching): IF <when> THEN code <target> — on the target question's punch rules */
   | { op: "add_punch"; target: string; when?: CondInput; action?: "select" | "deselect" | "set_value" | "clear"; codes?: (string | number)[]; value?: string | number; expression?: string; label?: string; mode?: "if" | "else_if" | "else"; recompute?: "once" | "always" }
   | { op: "remove_punches"; target: string; id?: string }
@@ -297,7 +299,10 @@ function coerceOne(item: unknown): SurveyAction | string {
     }
     case "set_research": {
       const constructs = Array.isArray(o.constructs) ? o.constructs.map((c) => { const x = (c ?? {}) as Record<string, unknown>; const name = str(x.name); return name ? { name, ...(str(x.role) ? { role: str(x.role) } : {}), ...(str(x.definition) ? { definition: str(x.definition) } : {}), ...(strs(x.questions) ? { questions: strs(x.questions) } : {}) } : null; }).filter((x): x is NonNullable<typeof x> => !!x) : undefined;
-      return { op, ...(str(o.objective) ? { objective: str(o.objective) } : {}), ...(strs(o.hypotheses) ? { hypotheses: strs(o.hypotheses) } : {}), ...(str(o.population) ? { population: str(o.population) } : {}), ...(Number.isInteger(Number(o.sampleSize)) && Number(o.sampleSize) > 0 ? { sampleSize: Number(o.sampleSize) } : {}), ...(str(o.methodology) ? { methodology: str(o.methodology) } : {}), ...(constructs ? { constructs } : {}), ...(strs(o.analysis) ? { analysis: strs(o.analysis) } : {}), ...(strs(o.assumptions) ? { assumptions: strs(o.assumptions) } : {}), ...(strs(o.sources) ? { sources: strs(o.sources) } : {}) };
+      const kpis = Array.isArray(o.kpis) ? o.kpis.map((k) => { const x = (k ?? {}) as Record<string, unknown>; const name = str(x.name); return name ? { name, ...(str(x.variable) ? { variable: str(x.variable) } : {}), ...(str(x.measure) ? { measure: str(x.measure) } : {}), ...(str(x.target) ? { target: str(x.target) } : {}), ...(x.direction === "higher" || x.direction === "lower" ? { direction: x.direction as "higher" | "lower" } : {}) } : null; }).filter((x): x is NonNullable<typeof x> => !!x).slice(0, 20) : undefined;
+      const au = o.audience && typeof o.audience === "object" ? (o.audience as Record<string, unknown>) : typeof o.audience === "string" ? { description: o.audience } : null;
+      const audience = au && str(au.description) ? { description: str(au.description)!, ...(strs(au.characteristics) ? { characteristics: strs(au.characteristics) } : {}), ...(au.literacy === "plain" || au.literacy === "general" || au.literacy === "expert" ? { literacy: au.literacy as "plain" | "general" | "expert" } : {}), ...(str(au.tone) ? { tone: str(au.tone) } : {}), ...(str(au.language) ? { language: str(au.language) } : {}) } : undefined;
+      return { op, ...(str(o.objective) ? { objective: str(o.objective) } : {}), ...(strs(o.hypotheses) ? { hypotheses: strs(o.hypotheses) } : {}), ...(str(o.population) ? { population: str(o.population) } : {}), ...(Number.isInteger(Number(o.sampleSize)) && Number(o.sampleSize) > 0 ? { sampleSize: Number(o.sampleSize) } : {}), ...(str(o.methodology) ? { methodology: str(o.methodology) } : {}), ...(constructs ? { constructs } : {}), ...(strs(o.analysis) ? { analysis: strs(o.analysis) } : {}), ...(strs(o.assumptions) ? { assumptions: strs(o.assumptions) } : {}), ...(strs(o.sources) ? { sources: strs(o.sources) } : {}), ...(strs(o.researchQuestions) ? { researchQuestions: strs(o.researchQuestions) } : {}), ...(kpis ? { kpis } : {}), ...(audience ? { audience } : {}) };
     }
     default: {
       const ux = op ? coerceUxAction(op, o) : null;
@@ -778,9 +783,14 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
          * "set the objective" silently deleted a saved plan.
          */
         ...(prev?.analysisPlan ? { analysisPlan: prev.analysisPlan } : {}),
+        /* Phase 3: the structured readings follow their statements (by text, when the list is replaced); the questions, KPIs and audience are kept unless given */
+        hypothesisDetails: a.hypotheses ? a.hypotheses.map((h) => { const k = (prev?.hypotheses ?? []).findIndex((x) => x.trim().toLowerCase() === h.trim().toLowerCase()); return k >= 0 ? prev?.hypothesisDetails?.[k] ?? {} : {}; }) : prev?.hypothesisDetails ?? [],
+        researchQuestions: a.researchQuestions ?? prev?.researchQuestions ?? [],
+        kpis: a.kpis ?? prev?.kpis ?? [],
+        ...((a.audience ?? prev?.audience) ? { audience: a.audience ? { characteristics: [], ...a.audience } : prev?.audience } : {}),
         updatedAt: ctx.now,
       } as never;
-      return { description: `Research design: ${[a.objective ? "objective" : "", a.hypotheses?.length ? `${a.hypotheses.length} hypothes${a.hypotheses.length === 1 ? "is" : "es"}` : "", a.constructs?.length ? `${a.constructs.length} constructs` : ""].filter(Boolean).join(", ") || "updated"}`, touched: [] };
+      return { description: `Research design: ${[a.objective ? "objective" : "", a.hypotheses?.length ? `${a.hypotheses.length} hypothes${a.hypotheses.length === 1 ? "is" : "es"}` : "", a.constructs?.length ? `${a.constructs.length} constructs` : "", a.researchQuestions?.length ? `${a.researchQuestions.length} research question${a.researchQuestions.length === 1 ? "" : "s"}` : "", a.kpis?.length ? `${a.kpis.length} KPI${a.kpis.length === 1 ? "" : "s"}` : "", a.audience ? "audience" : "", a.population ? "population" : ""].filter(Boolean).join(", ") || "updated"}`, touched: [] };
     }
     case "add_punch": {
       /*

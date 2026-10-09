@@ -102,6 +102,12 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
           </div>
         )}
         {entry.status === "plan" && entry.changePlan && <PlanCard entry={entry} def={def} onSelect={onSelect} onExecute={onExecutePlan} onCancel={onCancelPlan} onAnswer={onAnswer} />}
+        {entry.coverage && (
+          /* the research coverage of a generated survey (Phase 3): every hypothesis measured, every question serving the design */
+          <p className={`cp-coverage${entry.coverage.ok ? " ok" : " warn"}`} data-testid="cp-coverage" data-ok={entry.coverage.ok ? "1" : "0"}>
+            <Icon name={entry.coverage.ok ? "check" : "warning"} size={12} /> <span className="iq-label">Coverage</span> <Linked text={entry.coverage.summary} def={def} onSelect={onSelect} />
+          </p>
+        )}
         {entry.status !== "plan" && entry.changePlan?.approved && (
           <div className="cp-plan-built" data-testid="cp-plan-built">
             <span className="iq-label">Built from the change plan</span>

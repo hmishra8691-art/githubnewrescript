@@ -95,7 +95,12 @@ test("deleting Q7: logic that reads it breaks, the plan / construct / language i
   assert.equal(r.byVia["analysis plan"], 2);
   assert.match(r.summary, /^Impact: \d+ dependent objects — Q9 display logic, Q11 skip logic, calculation SCORE, quota “Happy”/);
   assert.match(r.summary, /construct Satisfaction/);
-  assert.match(r.summary, /Deutsch translations/);
+  // Phase 3: the hypothesis measured only through Q7 is affected, and says what it would lose
+  assert.match(r.summary, /hypothesis H1/);
+  const h1 = r.items.find((i) => i.object.kind === "hypothesis" && i.object.id === "H1")!;
+  assert.equal(h1.severity, "changes");
+  assert.match(h1.text, /measures its construct “Satisfaction” \(its only question\); it would be left unmeasured/);
+  assert.ok(r.items.some((i) => i.via === "translation" && /Deutsch/.test(i.object.label)), "the language is among the items (the summary names the first eight)");
   // one row per object and via, however many edges carry the same reason
   const keys = r.items.map((i) => `${i.object.kind}:${i.object.id}|${i.via}`);
   assert.equal(new Set(keys).size, keys.length);
@@ -306,7 +311,10 @@ test("the summary counts what it does not name: 'and N more' for the indirect de
   const r = impactOf(survey(), { questions: ["q7"] }, { change: "delete" });
   const indirect = r.items.filter((i) => i.indirect).length;
   assert.ok(indirect > 0);
-  assert.ok(r.summary.endsWith(` and ${indirect} more`), r.summary);
+  // the summary names up to eight direct dependents; the rest, with the indirect ones, are counted
+  const direct = new Set(r.items.filter((i) => !i.indirect).map((i) => (i.object.kind === "analysis" ? "analyses" : `${i.object.kind}:${i.object.id}`))).size;
+  const unnamed = Math.max(0, direct - 8);
+  assert.ok(r.summary.endsWith(` and ${indirect + unnamed} more`), r.summary);
 });
 
 test("impactOfAction: a variable rename reports every place the old name is held", () => {

@@ -8,7 +8,7 @@ import { MIN_BASE } from "./analyses/common.js";
 import { recommendCharts } from "./recommend.js";
 import { plannedAnalyses, type PlannedAnalysis } from "./planBridge.js";
 import { withPlannedVariables } from "./plannedVariables.js";
-import { buildAnalysisFramework } from "@rescript/engine";
+import { buildAnalysisFramework, parseHypothesis, structuredHypotheses } from "@rescript/engine";
 
 /*
  * FINDINGS (research-intelligence Phase 5): what the data SAID, read from the
@@ -273,17 +273,10 @@ export interface HypothesisDirection {
   lower?: string;
 }
 
-const POSITIVE_VERB = /\b(?:increas(?:e|es|ed|ing)|rais(?:e|es|ed|ing)|driv(?:e|es|ing)|boost(?:s|ed|ing)?|improv(?:e|es|ed|ing)|enhanc(?:e|es|ed|ing)|strengthen(?:s|ed|ing)?|encourag(?:e|es|ed|ing)|promot(?:e|es|ed|ing)|grow(?:s|ing)?|lifts?|positively\s+(?:affects?|influences?|predicts?|relates?|related|associated|correlated)|(?:leads?|contributes?)\s+to\s+(?:more|higher|greater|better|increased)|predicts?\s+(?:more|higher|greater|better))\b/i;
-// bare "lower" is a verb only after its subject ("higher prices lower intent"), never as the subject's adjective ("lower prices …", "the lower tier")
-const NEGATIVE_VERB = /\b(?:decreas(?:e|es|ed|ing)|reduc(?:e|es|ed|ing)|lower(?:s|ed|ing)|(?<=\S\s)(?<!\b(?:the|a|an|with|have|has|had|of|and|or|in|at|to|for)\s)lower(?=\s+\p{L})|hurts?|harm(?:s|ed|ing)?|weaken(?:s|ed|ing)?|discourag(?:e|es|ed|ing)|diminish(?:es|ed|ing)?|suppress(?:es|ed|ing)?|negatively\s+(?:affects?|influences?|predicts?|relates?|related|associated|correlated)|(?:leads?|contributes?)\s+to\s+(?:less|lower|fewer|reduced|decreased)|predicts?\s+(?:less|lower|fewer))\b/iu;
-const POSITIVE_ADJ = /\b(?:(?:are|is|be|were|was|being)\s+(?:much\s+|far\s+|significantly\s+)?(?:more|higher|greater|better)|more\s+likely|higher|greater)\b/i;
-const NEGATIVE_ADJ = /\b(?:(?:are|is|be|were|was|being)\s+(?:much\s+|far\s+|significantly\s+)?(?:less|lower|fewer|worse)|less\s+likely|lower|fewer)\b/i;
-const DIFFERENCE = /\b(?:differ(?:s|ent|ence|ences)?|var(?:y|ies)|affects?|effect\s+of|influences?|impacts?|depends?|related|relationship|associated|association|moderates?|mediates?|correlat\w*|predicts?)\b/i;
-// a subject that is itself the low end ("lower prices", "younger respondents") turns the verb round
-const LOW_SUBJECT = /^(?:the\s+)?(?:lower|less|fewer|reduced|decreased|smaller|younger|cheaper|shorter|weaker|poorer)\b/i;
-
 /**
- * THE DIRECTION A HYPOTHESIS STATES, from its words:
+ * THE DIRECTION A HYPOTHESIS STATES — read by the engine's hypothesis parser
+ * (`parseHypothesis`, Phase 3), which is the one place the words of a
+ * hypothesis are read; this keeps the verdicts' own vocabulary:
  *
  *   positive       increases / raises / drives / improves / more likely /
  *                  leads to higher — "trust increases intent"
@@ -294,35 +287,20 @@ const LOW_SUBJECT = /^(?:the\s+)?(?:lower|less|fewer|reduced|decreased|smaller|y
  *   difference     differs / varies / affects / depends / is related —
  *                  a difference with no side
  *   none           nothing directional
- *
- * A subject that is the low end turns a direction round: "lower prices
- * increase purchase" is a negative relation of price and purchase;
- * "younger respondents are less satisfied" a positive one of age and
- * satisfaction.
  */
-export function hypothesisDirection(text: string): HypothesisDirection {
-  const t = String(text ?? "").replace(/\s+/g, " ").trim().replace(/[.!?]+$/, "");
-  const than = /^(.+?)\s+(?:are|is|were|was|will\s+be|would\s+be|tend\s+to\s+be|feel|score|scores|rate|rates|report|reports)\s+(?:much\s+|far\s+|significantly\s+|slightly\s+|generally\s+)?(more|less|higher|lower|greater|better|worse|fewer|\w+er)\b(.*?)\bthan\s+(.+)$/i.exec(t);
-  if (than) {
-    const clean = (s: string) => s.trim().replace(/^(?:the|a|an|those|people|respondents)\s+/i, "").replace(/^(?:who\s+are\s+|who\s+)/i, "").trim().toLowerCase();
-    const lowWord = /^(?:less|lower|worse|fewer)$/i.test(than[2]);
-    const a = clean(than[1]), b = clean(than[4].replace(/\s+(?:do|does|are|is|did|were|was)$/i, ""));
-    return lowWord ? { kind: "group_higher", group: b, lower: a } : { kind: "group_higher", group: a, lower: b };
-  }
-  const flip = (k: "positive" | "negative"): HypothesisDirection => ({ kind: k === "positive" ? "negative" : "positive" });
-  const at = (re: RegExp) => { const m = re.exec(t); return m ? m.index : -1; };
-  const pv = at(POSITIVE_VERB), nv = at(NEGATIVE_VERB);
-  // the first verb decides ("higher prices lower intent": "lower" is the verb)
-  const verb = pv >= 0 && (nv < 0 || pv <= nv) ? { k: "positive" as const, i: pv } : nv >= 0 ? { k: "negative" as const, i: nv } : null;
-  const adj = verb ? null : (() => { const p = at(POSITIVE_ADJ), n = at(NEGATIVE_ADJ); return p >= 0 && (n < 0 || p <= n) ? { k: "positive" as const, i: p } : n >= 0 ? { k: "negative" as const, i: n } : null; })();
-  const hit = verb ?? adj;
-  if (hit && hit.i > 0) {
-    const subject = t.slice(0, hit.i).trim();
-    return LOW_SUBJECT.test(subject) ? flip(hit.k) : { kind: hit.k };
-  }
-  if (hit) return { kind: hit.k };
-  if (DIFFERENCE.test(t)) return { kind: "difference" };
+const toDirection = (p: { direction: string; group?: string; lower?: string }): HypothesisDirection => {
+  if (p.group && p.lower) return { kind: "group_higher", group: p.group, lower: p.lower };
+  if (p.direction === "positive" || p.direction === "negative") return { kind: p.direction };
+  if (p.direction === "difference") return { kind: "difference" };
   return { kind: "none" };
+};
+export function hypothesisDirection(text: string): HypothesisDirection {
+  return toDirection(parseHypothesis(text));
+}
+/** the direction of the design's i-th hypothesis: what was recorded on it (Phase 3), else its words */
+function directionOf(def: SurveyDefinition, i: number, text: string): HypothesisDirection {
+  const h = structuredHypotheses(def)[i];
+  return h ? toDirection(h) : hypothesisDirection(text);
 }
 
 /* words for the same group: a hypothesis says "women", the option says "Female" */
@@ -411,7 +389,7 @@ export function hypothesisVerdicts(def: SurveyDefinition, items: RunItem[]): Hyp
     const fs = rankFindings(mine.flatMap((it) => it.findings.filter((f) => about(it, f))));
     const tested = fs.filter((f) => TESTED.includes(f.kind));
     const sig = tested.filter((f) => f.significant), ns = tested.filter((f) => !f.significant);
-    const dir = hypothesisDirection(text);
+    const dir = directionOf(def, i, text);
     const itemOf = (f: Finding) => mine.find((it) => it.findings.includes(f));
     const sides = new Map(sig.map((f) => [f, sideOf(def, text, dir, f, itemOf(f))]));
     const agree = sig.filter((f) => sides.get(f) !== "contradict"), contra = sig.filter((f) => sides.get(f) === "contradict");

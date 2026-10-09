@@ -17,6 +17,8 @@ import { stripHtmlText } from "./html.js";
 import { ruleLabel } from "./logicProposal.js";
 import { conceptWords, parseScale, resolveConcept, resolvePopulation, scaleLabels, wordFamily, type ConceptMatch, type ScaleDescription } from "./nlSemantics.js";
 import { inferRole } from "./analysisFramework.js";
+import { describeHypothesis, structuredHypotheses } from "./hypotheses.js";
+import { questionRelevance, relevanceLine, relevanceSummary, removalSet, type QuestionRelevance, type RelevanceTier, type RemovalSet } from "./relevance.js";
 
 /**
  * THE SENTENCE INTERPRETER (Intelligent Mode Phase 3) — what the researcher
@@ -463,20 +465,20 @@ const deferred: Recogniser = (r) => {
 /* ---------------------------------------------------------- queries: dependencies */
 
 /** the Studio's sections, in the order an inspector lists them */
-const SECTION_ORDER = ["Display logic", "Skip logic", "Validation", "Masking & carry-forward", "Piping", "Calculations", "Quotas", "Randomization & list logic", "Flow (branches, loops, blocks)", "Analysis plan", "Constructs", "Translations"] as const;
+const SECTION_ORDER = ["Display logic", "Skip logic", "Validation", "Masking & carry-forward", "Piping", "Calculations", "Quotas", "Randomization & list logic", "Flow (branches, loops, blocks)", "Analysis plan", "Constructs", "Research design", "Translations"] as const;
 const SECTION_OF: Record<EdgeKind, (typeof SECTION_ORDER)[number]> = {
   display: "Display logic", optionLogic: "Display logic", skip: "Skip logic", validation: "Validation",
   mask: "Masking & carry-forward", carryForward: "Masking & carry-forward", piping: "Piping",
   calculation: "Calculations", punch: "Calculations", namedExpression: "Calculations", quotaCell: "Quotas",
   randomization: "Randomization & list logic", listLogic: "Randomization & list logic", listOperation: "Randomization & list logic", listFillSource: "Randomization & list logic", listFillGate: "Randomization & list logic",
   flowCondition: "Flow (branches, loops, blocks)", loopSource: "Flow (branches, loops, blocks)", placement: "Flow (branches, loops, blocks)", target: "Flow (branches, loops, blocks)",
-  analysis: "Analysis plan", construct: "Constructs", translation: "Translations",
+  analysis: "Analysis plan", construct: "Constructs", hypothesis: "Research design", kpi: "Research design", translation: "Translations",
 };
 const NOUN: Record<(typeof SECTION_ORDER)[number], [string, string]> = {
   "Display logic": ["display condition", "display conditions"], "Skip logic": ["skip", "skips"], Validation: ["validation rule", "validation rules"],
   "Masking & carry-forward": ["mask or carry-forward", "masks and carry-forwards"], Piping: ["pipe", "pipes"], Calculations: ["calculation", "calculations"], Quotas: ["quota", "quotas"],
   "Randomization & list logic": ["list rule", "list rules"], "Flow (branches, loops, blocks)": ["flow element", "flow elements"],
-  "Analysis plan": ["planned analysis", "planned analyses"], Constructs: ["construct", "constructs"], Translations: ["translation", "translations"],
+  "Analysis plan": ["planned analysis", "planned analyses"], Constructs: ["construct", "constructs"], "Research design": ["hypothesis or KPI", "hypotheses and KPIs"], Translations: ["translation", "translations"],
 };
 
 /** the value at a dotted path of the definition */
@@ -512,6 +514,8 @@ function nodeWords(ix: DependencyIndex, k: ObjectKey): string {
     case "flowNode": return `${n.label.toLowerCase()} “${n.code}”`;
     case "translation": return `${n.label} translations`;
     case "analysis": return `planned ${n.code.replace(/ \S+$/, "")}`;
+    case "hypothesis": return `hypothesis ${n.code}`;
+    case "kpi": return `KPI “${n.code}”`;
     default: return `${({ displayRule: "display rule", calculation: "calculation", quota: "quota", namedExpression: "expression", listFill: "list fill", embedded: "embedded", construct: "construct" } as Record<string, string>)[n.kind] ?? n.kind} ${n.code}`;
   }
 }
@@ -528,6 +532,18 @@ function objectFor(r: Run, ref: string): { key: ObjectKey; label: string } | { f
   if (b) return { key: objectKey("flowNode", b.id), label: `block “${b.title}”` };
   const quota = r.def.quotas?.find((x) => x.name.toLowerCase() === name.toLowerCase());
   if (quota) return { key: objectKey("quota", quota.id), label: `quota “${quota.name}”` };
+  // a hypothesis by label, number or words; a KPI by name (Phase 3)
+  const hm = /^(?:hypothesis\s*)?h\s*(\d+)$/i.exec(name) ?? /^hypothesis\s+(\d+)$/i.exec(name) ?? /^(?:the\s+)?(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|last)\s+hypothesis$/i.exec(name);
+  const hyps = r.def.research?.hypotheses ?? [];
+  if (hm) {
+    const n = /^\d+$/.test(hm[1]) ? Number(hm[1]) : hm[1].toLowerCase() === "last" ? hyps.length : ORDINAL_WORDS[hm[1].toLowerCase()];
+    if (n >= 1 && n <= hyps.length) return { key: objectKey("hypothesis", hypothesisLabel(n - 1)), label: hypothesisLabel(n - 1) };
+    return { fail: refused("dependency_analysis", `Find what depends on ${unquote(ref)}.`, hyps.length ? `There is no hypothesis ${name} — the hypotheses are ${hyps.map((_, i) => hypothesisLabel(i)).join(", ")}.` : "This survey's research design has no hypotheses yet.") };
+  }
+  const byText = hyps.findIndex((h) => h.trim().toLowerCase() === name.toLowerCase());
+  if (byText >= 0) return { key: objectKey("hypothesis", hypothesisLabel(byText)), label: hypothesisLabel(byText) };
+  const kpi = (r.def.research?.kpis ?? []).find((k) => k.name.toLowerCase() === name.toLowerCase().replace(/^(?:the\s+)?kpi\s+/, "").replace(/\s+kpi$/, ""));
+  if (kpi) return { key: objectKey("kpi", kpi.name), label: `KPI “${kpi.name}”` };
   return { fail: unresolved(r, "dependency_analysis", `Find what depends on ${unquote(ref)}.`, ref, q) };
 }
 
@@ -756,6 +772,38 @@ const measures: Recogniser = (r) => {
   if (!m) return null;
   const def = r.def;
   const phrase = unquote(m[1]);
+  /*
+   * A HYPOTHESIS BY LABEL (Phase 3): "which questions measure H1" is one
+   * graph query — everything H1 reaches: the constructs on its sides and
+   * the questions that measure them, the questions tagged with it; and,
+   * the other way, the planned analyses that serve it.
+   */
+  const hm = /^(?:hypothesis\s*)?h\s*(\d+)$/i.exec(phrase.trim()) ?? /^(?:the\s+)?(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|last)\s+hypothesis$/i.exec(phrase.trim());
+  if (hm) {
+    const hyps = def.research?.hypotheses ?? [];
+    const n = /^\d+$/.test(hm[1]) ? Number(hm[1]) : hm[1].toLowerCase() === "last" ? hyps.length : ORDINAL_WORDS[hm[1].toLowerCase()];
+    const understood = `Find the questions that measure hypothesis ${/^\d+$/.test(hm[1]) ? hypothesisLabel(n - 1) : phrase}.`;
+    if (!(n >= 1 && n <= hyps.length)) return refused("research_design", understood, hyps.length ? `There is no hypothesis ${phrase} — the hypotheses are ${hyps.map((_, i) => hypothesisLabel(i)).join(", ")}.` : "This survey's research design has no hypotheses yet — record them in the Research design (Survey Settings, or the Analysis tab).");
+    const label = hypothesisLabel(n - 1);
+    const ix = index(r);
+    const key = objectKey("hypothesis", label);
+    const reach = ix.reach(key);
+    const flow = placedOrder(def);
+    const questions = reach.filter((k) => parseObjectKey(k).kind === "question").map((k) => def.questions.find((q) => q.id === parseObjectKey(k).id)).filter((q): q is Question => !!q).sort((a, b) => flow.indexOf(a.id) - flow.indexOf(b.id));
+    const constructs = reach.filter((k) => parseObjectKey(k).kind === "construct").map((k) => parseObjectKey(k).id);
+    const serving = ix.usedBy(key).map((e) => ix.nodes.get(e.from)).filter((x): x is NonNullable<typeof x> => !!x);
+    const reading = structuredHypotheses(def)[n - 1];
+    const how = (q: Question) => { const tagged = q.analysis?.hypotheses?.includes(label); const via = (def.research?.constructs ?? []).filter((c) => constructs.includes(c.name) && c.questionIds.includes(q.id)).map((c) => `construct “${c.name}”`); return [...(tagged ? ["tagged"] : []), ...via].join(", "); };
+    const sections: AnswerSection[] = [];
+    if (questions.length) sections.push({ title: `Questions that measure ${label}`, items: questions.map((q) => ({ label: code(q), key: objectKey("question", q.id), detail: `${plain(q.text, 60)} — ${how(q)}` })) });
+    const unmeasured = (def.research?.constructs ?? []).filter((c) => constructs.includes(c.name) && !c.questionIds.length);
+    if (unmeasured.length) sections.push({ title: "Constructs it names that no question measures", items: unmeasured.map((c) => ({ label: c.name, key: objectKey("construct", c.name), detail: `${c.role} — add a question and link it in the Research design` })) });
+    if (serving.length) sections.push({ title: "Planned analyses that serve it", items: serving.map((x) => ({ label: x.code, key: x.key, detail: x.label })) });
+    const answer = questions.length
+      ? `${label} (“${plain(hyps[n - 1], 60)}”${reading ? `; ${describeHypothesis(reading)}` : ""}) is measured by ${questions.map((q) => `${code(q)} (${how(q)})`).join(", ")}${unmeasured.length ? `; its construct${unmeasured.length === 1 ? "" : "s"} ${unmeasured.map((c) => `“${c.name}”`).join(", ")} ${unmeasured.length === 1 ? "has" : "have"} no question yet` : ""}.`
+      : `No question measures ${label} (“${plain(hyps[n - 1], 60)}”) yet — ${constructs.length ? `its construct${constructs.length === 1 ? "" : "s"} ${constructs.map((c) => `“${c}”`).join(", ")} ${constructs.length === 1 ? "has" : "have"} no question; link one in the Research design` : "no construct or tagged question is linked to it; record its sides in the Research design or tag the questions that serve it"}.`;
+    return { kind: "answer", category: "research_design", understood, answer, sections, detected: [det("hypothesis", label)] };
+  }
   const words = contentWords(phrase).filter((w) => !QUERY_STOP.has(w));
   if (!words.length) return null;
   const fams = words.map(family);
@@ -2192,6 +2240,88 @@ const unconnected: Recogniser = (r) => {
   return { kind: "answer", category: "research_design", understood, answer, sections, detected: [] };
 };
 
+/* ---------------------------------------------------------- shorten: the removal set (Phase 3) */
+
+const SHORTEN_TAIL = String.raw`(?:\s*,?\s*(?:without|while|but|and)\s+(?:losing|keeping|preserving|retaining|still\s+\w+|not\s+\w+)\b.*)?`;
+function removalWords(def: SurveyDefinition, set: RemovalSet): { understood: string; detected: Detected[] } {
+  const line = (x: QuestionRelevance) => `${code(x.question)} (“${plain(x.question.text, 40)}”)`;
+  const kept = set.kept.filter((x) => x.tier === "essential");
+  const understood = `Remove ${plural(set.remove.length, "question")} that serve${set.remove.length === 1 ? "s" : ""} nothing in the research design: ${set.remove.map(line).join(", ")}. ${kept.length ? `${kept.length} essential question${kept.length === 1 ? " stays" : "s stay"} (${kept.slice(0, 6).map((x) => code(x.question)).join(", ")}${kept.length > 6 ? ", …" : ""}) — they measure a hypothesis, a KPI or the sample.` : ""}${set.held.length ? ` ${set.held.map((x) => `${code(x.question)} is also unconnected but read by ${x.readers.map((r) => r.split(" — ")[0]).join(", ")} — remove that logic first, or keep it`).join("; ")}.` : ""}${set.short ? ` ${set.short}` : ""}`.replace(/\s+/g, " ").trim();
+  const detected: Detected[] = [...set.remove.map((x) => det("remove", `${code(x.question)} — ${x.reasons.join("; ") || "connected to nothing"}`)), ...set.held.map((x) => det("held", `${code(x.question)} — read by ${x.readers.join(", ")}`))];
+  return { understood, detected };
+}
+
+const shorten: Recogniser = (r) => {
+  const t = r.text;
+  let m: RegExpExecArray | null;
+  let target: { questions?: number; minutes?: number } = {};
+  let asks = false;
+  if ((m = new RegExp(String.raw`^(?:make|keep)\s+(?:the\s+|this\s+)?(?:questionnaire|survey|study|instrument|it)\s+(?:a\s+(?:bit|lot|little)\s+)?(?:shorter|short|leaner|lean|tighter|briefer|more\s+concise)${SHORTEN_TAIL}$`, "i").exec(t))) asks = true;
+  else if ((m = new RegExp(String.raw`^(?:shorten|trim|cut|reduce|streamline|tighten|condense|slim)\s+(?:down\s+)?(?:the\s+|this\s+)?(?:questionnaire|survey|study|instrument|it)(?:\s+(?:length|down))?(?:\s+to\s+(?:about\s+|around\s+|roughly\s+)?(\d+)\s+questions?|\s+by\s+(\d+)\s+questions?|\s+to\s+(?:about\s+|around\s+|roughly\s+|under\s+)?(\d+)\s+minutes?)?${SHORTEN_TAIL}$`, "i").exec(t))) {
+    asks = true;
+    if (m[1]) target = { questions: Number(m[1]) };
+    else if (m[2]) target = { questions: Math.max(0, r.def.questions.length - Number(m[2])) };
+    else if (m[3]) target = { minutes: Number(m[3]) };
+  }
+  else if ((m = /^(?:remove|delete|drop|cut|take\s+out)\s+(?:the\s+|any\s+|all\s+(?:the\s+)?)?(?:unnecessary|unneeded|redundant|irrelevant|unrelated|non-?essential|superfluous|extra|unimportant|unused)\s+questions?(?:\s+(?:from\s+(?:the\s+)?(?:survey|questionnaire)))?\.?$/i.exec(t))) asks = true;
+  else if ((m = /^(?:remove|delete|drop|cut|take\s+out)\s+(?:the\s+|any\s+|all\s+(?:the\s+)?)?questions?\s+(?:that\s+(?:are|is|do|does)\s+)?(?:not\s+(?:related|relevant|connected|linked|tied|needed|necessary|contributing)|unrelated|irrelevant)(?:\s+(?:to|with)\s+(?:the\s+|any\s+|our\s+)?(?:research\s+)?(?:objectives?|hypothes[ie]s|design|framework|study|goals?|questions?))?\.?$/i.exec(t))) asks = true;
+  if (!asks) return null;
+  // with no design there is nothing to measure the questions against: never propose removals on that basis
+  const noDesign = !r.def.research || (!r.def.research.hypotheses.length && !r.def.research.constructs.length && !r.def.research.kpis?.length && !r.def.research.objective);
+  if (noDesign) return refused("survey_editing", "Shorten the questionnaire without losing the research objectives.", "There is no research design to measure the questions against — no objective, hypotheses, constructs or KPIs — so nothing can be called unnecessary yet. Record the design (Survey Settings → Research design, or “set the research objective to …”, “add hypothesis: …”) and ask again.");
+  const set = removalSet(r.def, target);
+  const all = questionRelevance(r.def);
+  const detected: Detected[] = [det("relevance", relevanceSummary(all))];
+  if (!set.remove.length) {
+    const unconnectedHeld = set.held.length ? ` ${set.held.map((x) => `${code(x.question)} is connected to nothing but read by ${x.readers.map((y) => y.split(" — ")[0]).join(", ")}`).join("; ")} — remove that logic first.` : "";
+    return refused("survey_editing", `Shorten the questionnaire without losing the research objectives.`, `Every question serves the design or the sample: ${relevanceSummary(all)}.${unconnectedHeld} ${set.short ?? ""}`.trim(), detected);
+  }
+  const actions: SurveyAction[] = set.remove.map((x) => ({ op: "delete_question", target: code(x.question) }));
+  const rep = impactOf(r.def, { questions: set.remove.map((x) => x.question.id) }, { change: "delete", index: index(r) });
+  const words = removalWords(r.def, set);
+  return act(r, "survey_editing", `${words.understood} ${rep.summary}.`, actions, [...detected, ...words.detected, ...rep.items.filter((i) => i.severity === "breaks").slice(0, 6).map((i) => det("breaks", impactPhrase(i)))]);
+};
+
+const relevanceQuery: Recogniser = (r) => {
+  const t = r.text;
+  if (!/^(?:which|what)\s+questions?\s+(?:are|is|could\s+be|can\s+be|might\s+be|should\s+be|would\s+be)\s+(?:(?:safely\s+)?(?:removed|dropped|cut|deleted)|unnecessary|unneeded|redundant|irrelevant|(?:the\s+)?least\s+(?:important|relevant|necessary|useful)|not\s+(?:needed|necessary|essential))(?:\s+(?:from\s+(?:the\s+)?(?:survey|questionnaire)|without\s+.+))?\??$/i.test(t)
+    && !/^(?:rank|rate|score|list)\s+(?:the\s+)?questions?\s+by\s+(?:relevance|importance|necessity)$/i.test(t)
+    && !/^(?:how\s+relevant|how\s+important)\s+(?:is|are)\s+(?:each|every|the)\s+questions?\b/i.test(t)) return null;
+  const all = questionRelevance(r.def);
+  const understood = "Rank the questions by what they serve in the research design.";
+  const sections: AnswerSection[] = (["unconnected", "supporting", "essential"] as RelevanceTier[]).map((tier) => ({
+    title: tier === "unconnected" ? "Connected to nothing — removable" : tier === "supporting" ? "Supporting — cuts, plan, the objective's words" : "Essential — hypotheses, KPIs, the sample",
+    items: all.filter((x) => x.tier === tier).map((x) => ({ label: code(x.question), key: objectKey("question", x.question.id), detail: relevanceLine(x) })),
+  })).filter((s) => s.items.length);
+  const u = all.filter((x) => x.tier === "unconnected");
+  return { kind: "answer", category: "research_design", understood, answer: `${relevanceSummary(all)}. ${u.length ? `${u.map((x) => code(x.question)).join(", ")} ${u.length === 1 ? "serves" : "serve"} nothing in the research design${u.some((x) => x.readers.length) ? ` (${u.filter((x) => x.readers.length).map((x) => code(x.question)).join(", ")} read by logic)` : ""} — say “remove the unnecessary questions” to propose their removal.` : "Every question serves the design or the sample."}`, sections, detected: [det("relevance", relevanceSummary(all))] };
+};
+
+/* ---------------------------------------------------------- the audience (Phase 3) */
+
+const audience: Recogniser = (r) => {
+  const t = r.text;
+  let m: RegExpExecArray | null;
+  if ((m = /^(?:set|record|define|note|make)\s+(?:the\s+)?(?:target\s+)?audience\s+(?:to|as|:|=|—|-)\s*(.+)$/i.exec(t)) ?? (m = /^(?:the\s+)?(?:target\s+)?audience\s+(?:is|:)\s+(.+)$/i.exec(t))) {
+    const description = cap(unquote(m[1]));
+    const had = r.def.research?.audience?.description;
+    if (had && had.trim().toLowerCase() === description.toLowerCase()) return alreadySo("research_design", `Record the audience as “${plain(description, 60)}”.`, "That is already the audience.", [det("audience", plain(description, 60))]);
+    return act(r, "research_design", `Record the audience as “${plain(description, 80)}”${had ? ` (it was “${plain(had, 40)}”)` : ""} — generation and rewording are written for them from now on.`, [{ op: "set_research", audience: { description } }], [det("audience", plain(description, 60))]);
+  }
+  // "make this survey more suitable for first-time smartphone buyers [and remove unnecessary questions]": the wording is the model's; the engine records the audience and, when asked, proposes the removals
+  if ((m = /^(?:make|adapt|adjust|tailor|rewrite|rephrase|reword|optimi[sz]e)\s+(?:this\s+|the\s+)?(?:survey|questionnaire|study|questions?|wording|instrument)\s+(?:more\s+)?(?:suitable|appropriate|accessible|friendly|relevant|understandable|readable|suited|fit)\s+(?:for|to)\s+(.+?)(?:\s*,?\s+and\s+(?:remove|delete|drop|cut)\s+(?:the\s+|any\s+)?(?:unnecessary|unneeded|irrelevant|redundant|non-?essential)\s+questions?)?\.?$/i.exec(t)) ?? (m = /^(?:adapt|tailor|adjust|rewrite|reword|localise|localize)\s+(?:this\s+|the\s+)?(?:survey|questionnaire|wording|questions?)\s+(?:for|to)\s+(.+?)(?:\s*,?\s+and\s+(?:remove|delete|drop|cut)\s+(?:the\s+|any\s+)?(?:unnecessary|unneeded|irrelevant|redundant|non-?essential)\s+questions?)?\.?$/i.exec(t))) {
+    const who = unquote(m[1]).replace(/^(?:a|an|the)\s+/i, "");
+    const removes = /\b(?:remove|delete|drop|cut)\b/i.test(t);
+    const recorded = r.def.research?.audience?.description?.trim().toLowerCase() === who.toLowerCase();
+    const choices: { label: string; text: string }[] = [];
+    if (!recorded) choices.push({ label: `Record the audience: ${plain(who, 40)}`, text: `Set the audience to "${who}"` });
+    if (removes) choices.push({ label: "Remove the questions that serve nothing in the design", text: "Remove the unnecessary questions" });
+    return { kind: "model", category: "question_modification", reason: `adapting the wording for ${who} is writing — the language model rewrites each question for that audience (the outline carries the audience once it is recorded), and the change is applied through the same gate`, detected: [det("audience", who), ...(removes ? [det("also", "remove the unnecessary questions")] : [])],
+      ...(choices.length ? { fallback: { understood: `Adapt the questionnaire for ${who}${removes ? " and remove the unnecessary questions" : ""}.`, question: `The rewording is the language model's. The engine can ${[!recorded ? "record the audience so every generation and rewording is written for them" : "", removes ? "propose the removal of the questions connected to nothing in the research design" : ""].filter(Boolean).join(", and ")}:`, choices } } : {}) };
+  }
+  return null;
+};
+
 /* ---------------------------------------------------------- the research objective */
 
 const objective: Recogniser = (r) => {
@@ -2330,18 +2460,21 @@ function fallback(r: Run): Interpretation {
  * before "remove Q11"), skips before display ("if Q7 is no, skip …").
  */
 const RECOGNISERS: Recogniser[] = [
-  analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, unconnected, keyCrosstabs, analysisQuery, measures,
+  analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, measures,
   deferred, longBrief,
-  surveySettings, languages, objective, research, variables, pageBreaks,
-  screenerEdit, scaleChange, crosstabs,
+  surveySettings, languages, objective, audience, research, variables, pageBreaks,
+  shorten, screenerEdit, scaleChange, crosstabs,
   masking, optionVisibility, randomization, options, required, skips, display, validation, questions,
 ];
+
+/** recognisers that read a sentence with an "and" clause as one request, tried before the sentence is split into commands */
+const WHOLE_FIRST: Recogniser[] = [audience, shorten];
 
 function interpret(r: Run): Interpretation {
   if (!r.text) return { kind: "clarify", category: "survey_editing", understood: "Nothing was asked.", question: "What would you like to change, or to know about this survey?", choices: ["Make Q1 required", "What depends on Q1?", "Which questions are untranslated?"].map((text) => ({ label: text, text })), detected: [] };
   for (const rec of RECOGNISERS) {
     const out = rec(r);
-    if (out) return withFallback(r, out);
+    if (out) { if (process.env.RESCRIPT_NL_DEBUG) console.error(`[nl] ${rec.name} → ${out.kind}`); return withFallback(r, out); }
   }
   return withFallback(r, fallback(r));
 }
@@ -2356,6 +2489,9 @@ export function interpretRequest(def: SurveyDefinition, text: string, ctx: Inter
   const clean = String(text ?? "").trim().replace(/\s+/g, " ").replace(/[.!?]+$/, "").trim();
   try {
     const parts = splitCommands(clean);
+    // a sentence whose "and …" is part of one request ("adapt it for X and remove the unnecessary questions") is read whole before it is split
+    const whole = parts.length > 1 ? WHOLE_FIRST.map((rec) => rec({ def, text: clean, ctx, depth: 0 })).find((x) => x) : null;
+    if (whole) return withFallback({ def, text: clean, ctx, depth: 0 }, whole);
     return parts.length > 1 ? compound(def, clean, parts, ctx) : interpret({ def, text: clean, ctx, depth: 0 });
   } catch (e) {
     if (process.env.RESCRIPT_NL_DEBUG) console.error((e as Error).stack);

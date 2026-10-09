@@ -4,7 +4,7 @@ import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
 import { hypothesisLabel } from "@rescript/schema";
 import type { AnalysisPlan, PlannedCrosstab, PlannedDerived, PlannedSegment, PlannedTest } from "@rescript/schema";
-import { buildAnalysisFramework, explainPlanItem, hypothesisCoverage, inferQuestionAnalysis, methodologyAdvice, planSampleSize, prioritizeCrosstabs, reviewAnalysisPlan, sampleSizeReview, type SurveyAction } from "@rescript/engine";
+import { buildAnalysisFramework, describeHypothesis, explainPlanItem, hypothesisCoverage, structuredHypotheses, inferQuestionAnalysis, methodologyAdvice, planSampleSize, prioritizeCrosstabs, reviewAnalysisPlan, sampleSizeReview, type SurveyAction } from "@rescript/engine";
 import { Icon } from "../../ui/Icon";
 import { Linked } from "./CopilotCard";
 import type { Copilot } from "./useCopilot";
@@ -71,6 +71,7 @@ function WhyExpander({ def, plan, item, V }: { def: SurveyDefinition; plan: Anal
 export function AnalysisTab({ copilot, def, onSelect }: { copilot: Copilot; def: SurveyDefinition; onSelect(id: string): void }) {
   const plan = def.research?.analysisPlan;
   const coverage = React.useMemo(() => hypothesisCoverage(def), [def]);
+  const readings = React.useMemo(() => structuredHypotheses(def), [def]);
   const proposed = React.useMemo(() => (plan ? null : buildAnalysisFramework(def)), [def, plan]);
   const shown = plan ?? proposed!;
   // the saved plan's checks include the sample-size ones; an unsaved proposal is checked against the sample too, so the warnings appear with the plan either way
@@ -127,9 +128,9 @@ export function AnalysisTab({ copilot, def, onSelect }: { copilot: Copilot; def:
               <summary>Research design — objective, hypotheses, population, constructs (edit by hand)</summary>
               <ResearchDesignEditor compact />
             </details>
-            {coverage.map((h) => (
+            {coverage.map((h, i) => (
               <div key={h.label} className="cp-block" data-testid="an-hyp" data-status={h.status}>
-                <div><b>{h.label}</b> {h.text} <span className={`cp-sev v-${h.status === "testable" ? "suggestion" : h.status === "partly" ? "warning" : "critical"}`}>{status[h.status]}</span></div>
+                <div><b>{h.label}</b> {h.text} <span className={`cp-sev v-${h.status === "testable" ? "suggestion" : h.status === "partly" ? "warning" : "critical"}`}>{status[h.status]}</span>{readings[i] && describeHypothesis(readings[i]) ? <span className="iqi-dim" data-testid="an-hyp-reading" title="The reading of this hypothesis — recorded in the Research design, or read from its words"> · {describeHypothesis(readings[i])}</span> : null}</div>
                 {h.constructs.length > 0 && <div className="iqi-dim">{h.constructs.map((c) => <span key={c.name} style={{ marginRight: 8 }}>{c.name} <i>({c.role})</i>: {c.measured ? c.questions.map((code) => <Linked key={code} text={code} def={def} onSelect={onSelect} />) : <b>not measured</b>}</span>)}</div>}
                 {(h.tests.length > 0 || h.crosstabs.length > 0) && <div className="iqi-dim">Runs: {[...h.tests.map((t) => `${word(t.method)}${t.outcome ? ` on ${t.outcome}` : ""}`), ...h.crosstabs.map((x) => `${x.rows.join("+")} by ${x.columns.join("+")}`)].join(" · ")}</div>}
               </div>

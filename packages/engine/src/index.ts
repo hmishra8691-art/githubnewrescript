@@ -114,3 +114,5 @@ export * from "./naturalCondition.js";
 export * from "./nlTargets.js";
 export * from "./nlIntent.js";
 export * from "./contextActions.js";
+export * from "./hypotheses.js";
+export * from "./relevance.js";

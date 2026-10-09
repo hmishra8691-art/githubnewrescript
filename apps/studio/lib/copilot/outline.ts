@@ -1,5 +1,5 @@
 import type { SurveyDefinition } from "@rescript/schema";
-import { listBlocks, formatCondition, describeUxTarget, uxContextFor, inferQuestionAnalysis, effectiveLocalization, lintLanguage, translatableElements, languageName, reviewQuotas, quotaAdvice } from "@rescript/engine";
+import { listBlocks, formatCondition, structuredHypotheses, describeHypothesis, describeUxTarget, uxContextFor, inferQuestionAnalysis, effectiveLocalization, lintLanguage, translatableElements, languageName, reviewQuotas, quotaAdvice } from "@rescript/engine";
 import type { FlowNode } from "@rescript/schema";
 import { briefText, type AnalysisRun } from "@rescript/analytics";
 import { hypothesisLabel } from "@rescript/schema";
@@ -68,7 +68,9 @@ export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: strin
   const r = def.research;
   if (r) {
     const role = (id: string) => code(id);
-    lines.push(`Research design: ${[r.objective ? `objective: ${r.objective}` : "", r.hypotheses.length ? `hypotheses: ${r.hypotheses.map((h, i) => `${hypothesisLabel(i)} ${h}`).join(" | ")}` : "", r.population ? `population: ${r.population}` : "", r.constructs.length ? `constructs: ${r.constructs.map((c) => `${c.name} (${c.role}${c.questionIds.length ? `: ${c.questionIds.map(role).join(" ")}` : ", not measured"})`).join("; ")}` : ""].filter(Boolean).join(" · ")}`);
+    // each hypothesis with its structured reading (Phase 3): type, direction, the sides — recorded, else parsed from its words
+    const readings = structuredHypotheses(def);
+    lines.push(`Research design: ${[r.objective ? `objective: ${r.objective}` : "", r.hypotheses.length ? `hypotheses: ${r.hypotheses.map((h, i) => `${hypothesisLabel(i)} ${h}${readings[i] ? ` {${describeHypothesis(readings[i])}${readings[i].status ? `, ${readings[i].status}` : ""}}` : ""}`).join(" | ")}` : "", r.researchQuestions?.length ? `research questions: ${r.researchQuestions.join(" | ")}` : "", r.kpis?.length ? `KPIs: ${r.kpis.map((k) => `${k.name}${k.variable ? ` (${k.variable}${k.measure ? `, ${k.measure}` : ""})` : ""}${k.target ? ` target ${k.target}` : ""}`).join("; ")}` : "", r.population ? `population: ${r.population}` : "", r.audience ? `audience: ${r.audience.description}${r.audience.characteristics?.length ? ` — ${r.audience.characteristics.join("; ")}` : ""}${r.audience.literacy ? ` (${r.audience.literacy} language)` : ""}${r.audience.tone ? `, tone ${r.audience.tone}` : ""}` : "", r.constructs.length ? `constructs: ${r.constructs.map((c) => `${c.name} (${c.role}${c.questionIds.length ? `: ${c.questionIds.map(role).join(" ")}` : ", not measured"})`).join("; ")}` : ""].filter(Boolean).join(" · ")}`);
   }
   /*
    * THE ANALYSIS FRAMEWORK, as the model must address it: the saved plan with

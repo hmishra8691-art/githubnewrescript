@@ -16,6 +16,7 @@ import { applyCount, presentIds, reviewTree, optionTitle } from "../../../lib/co
 import { apiCallWords, canReapply, canRestore, isChange, sourceWord, statusWord, type ClientOp } from "../../../lib/copilot/history";
 import { formatCharge } from "../../../lib/import/chat";
 import type { Copilot, PanelTab } from "./useCopilot";
+import { describeDocMerge, mergeDocActions } from "../../../lib/copilot/mergeDoc";
 
 /**
  * THE RIGHT-HAND PANEL of the copilot workspace (the copilot brief §10, §12,
@@ -97,7 +98,7 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
       <div className="cp-panel-body">
         {copilot.tab === "changes" && <ChangesTab copilot={copilot} def={def} onSelect={onSelect} onSelectKey={onSelectKey} onSelectOption={(questionId, code) => setOption({ questionId, code })} onApply={onApply} applyNote={applyNote} readOnly={readOnly} />}
         {copilot.tab === "review" && <ReviewTab copilot={copilot} def={def} onSelect={onSelect} />}
-        {copilot.tab === "research" && <ResearchTab copilot={copilot} />}
+        {copilot.tab === "research" && <ResearchTab copilot={copilot} def={def} />}
         {copilot.tab === "history" && <HistoryTab copilot={copilot} def={def} readOnly={readOnly} onSelect={onSelect} />}
         {copilot.tab === "analysis" && <AnalysisTab copilot={copilot} def={def} onSelect={onSelect} />}
         {copilot.tab === "findings" && <FindingsTab copilot={copilot} def={def} />}
@@ -352,7 +353,7 @@ function ReviewTab({ copilot, def, onSelect }: { copilot: Copilot; def: SurveyDe
 
 /* ------------------------------------------------------------ research */
 
-function ResearchTab({ copilot }: { copilot: Copilot }) {
+function ResearchTab({ copilot, def }: { copilot: Copilot; def: SurveyDefinition }) {
   const input = React.useRef<HTMLInputElement>(null);
   return (
     <div className="cp-research" data-testid="cp-research">
@@ -383,6 +384,11 @@ function ResearchTab({ copilot }: { copilot: Copilot }) {
             </dl>
           )}
           {d.warnings.map((w, i) => <p key={i} className="iqi-dim"><Icon name="info" size={11} /> {w}</p>)}
+          {d.summary && (() => {
+            /* into the research model (Phase 3): what the card has that the design does not, as one proposal */
+            const merge = mergeDocActions(def, { name: d.name, summary: d.summary });
+            return <div className="row" style={{ gap: 6, marginTop: 6 }}><button type="button" className="iq-btn" data-testid="cp-doc-merge" disabled={merge.empty || copilot.busy} title={merge.empty ? "The research design already has everything this card found" : `Record ${describeDocMerge(merge)} in the research design — as a proposal to review`} onClick={() => copilot.previewFix(merge.actions, `Use “${d.name}” in the research design`)}>Use in the research design</button><span className="iqi-dim" data-testid="cp-doc-merge-adds">{merge.empty ? "already in the design" : `adds ${describeDocMerge(merge)}`}</span></div>;
+          })()}
         </details>
       ))}
     </div>

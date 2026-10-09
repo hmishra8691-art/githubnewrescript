@@ -106,7 +106,7 @@ await intelligent();
 }
 {
   await page.route("**/api/copilot/turn", (route) => route.fulfill({ status: 402, contentType: "application/json", body: JSON.stringify({ error: "Insufficient balance: $0.12 available, this call needs about $0.30.", code: "wallet_insufficient_balance", failure: { code: "wallet", title: "THE WALLET REFUSED THIS CALL", message: "The meter refused this call: Insufficient balance: $0.12 available, this call needs about $0.30.", next: ["Check the wallet balance and the project's spending limit under Usage.", "Nothing was sent to the model and nothing was changed."] } }) }));
-  const t = await say("Make the questionnaire shorter without losing the important research objectives.");
+  const t = await say("Rewrite every question in a friendlier tone."); // (Phase 3 reads the shorten sentence itself; a rewording is still the model's)
   assert.equal(await t.$eval('[data-testid="cp-failure"]', (e) => e.getAttribute("data-code")), "wallet");
   assert.match(await t.evaluate((e) => e.innerText), /Insufficient balance/);
   await page.unroute("**/api/copilot/turn");

@@ -1,4 +1,4 @@
-import type { Condition, EmbeddedDataType, FlowNode, Option, OptionMask, Question, SetExpr, SurveyDefinition } from "@rescript/schema";
+import type { HypothesisDetail, Condition, EmbeddedDataType, FlowNode, Option, OptionMask, Question, SetExpr, SurveyDefinition } from "@rescript/schema";
 import { hypothesisLabel } from "@rescript/schema";
 import type { IdMinter } from "./questionOps.js";
 import { duplicateQuestion, moveQuestionTo } from "./questionOps.js";
@@ -10,6 +10,7 @@ import { formatSetExpression, parseSetExpression, setExprSources } from "./setEx
 import { maskSummary } from "./logicProposal.js";
 import { pagePositionOf } from "./pageBreaks.js";
 import { embeddedFieldNames } from "./structureOps.js";
+import { constructFor } from "./hypotheses.js";
 import { usedNames } from "./variableUsage.js";
 import { stripHtmlText } from "./html.js";
 import { K, moveTranslationKey } from "./localization.js";
@@ -59,13 +60,15 @@ export type OptionAction =
   | { op: "set_survey_settings"; title?: string; description?: string | null; code?: string }
   | { op: "update_embedded"; name: string; newName?: string; source?: EmbeddedSource; value?: string | null; dataType?: EmbeddedDataType }
   | { op: "remove_embedded"; name: string; force?: boolean }
-  | { op: "add_hypothesis"; text: string }
+  | { op: "add_hypothesis"; text: string; detail?: HypothesisDetail }
   | { op: "remove_hypothesis"; hypothesis: string | number }
+  /** the structured reading of a hypothesis (Phase 3): only the fields given change; a construct name must exist in the design */
+  | { op: "set_hypothesis"; hypothesis: string | number; text?: string; detail: HypothesisDetail }
   | { op: "set_custom_code"; target: string; js?: string | null; css?: string | null };
 
 export const OPTION_ACTION_OPS = [
   "update_option", "reorder_options", "set_option_randomization", "set_mask", "clear_mask", "duplicate_question",
-  "set_survey_settings", "update_embedded", "remove_embedded", "add_hypothesis", "remove_hypothesis", "set_custom_code",
+  "set_survey_settings", "update_embedded", "remove_embedded", "add_hypothesis", "remove_hypothesis", "set_hypothesis", "set_custom_code",
 ] as const;
 const OPS = new Set<string>(OPTION_ACTION_OPS);
 export const isOptionOp = (op: string): boolean => OPS.has(op);
@@ -194,7 +197,16 @@ export function coerceOptionAction(op: string, o: Record<string, unknown>): Opti
     }
     case "add_hypothesis": {
       const text = str(o.text ?? o.hypothesis, 1000); if (!text) return "add_hypothesis needs the hypothesis text";
-      return { op, text };
+      const detail = hypothesisDetail(o.detail ?? o);
+      return { op, text, ...(detail && Object.keys(detail).length ? { detail } : {}) };
+    }
+    case "set_hypothesis": {
+      const hypothesis = ref(o.hypothesis ?? o.label ?? o.index ?? o.target);
+      if (hypothesis === undefined) return "set_hypothesis needs the hypothesis (its label such as H2, its number, or its text)";
+      const detail = hypothesisDetail(o.detail ?? o) ?? {};
+      const text = str(o.text, 1000);
+      if (!Object.keys(detail).length && !text) return "set_hypothesis changes nothing — give type, direction, independent, dependent, moderator, mediator, group, lower, expectedEffect, status, note or text";
+      return { op, hypothesis, ...(text ? { text } : {}), detail };
     }
     case "remove_hypothesis": {
       const hypothesis = ref(o.hypothesis ?? o.text ?? o.label ?? o.index ?? o.target);
@@ -374,6 +386,23 @@ function embeddedReads(def: SurveyDefinition, name: string): { conditions: strin
 
 const research = (def: SurveyDefinition) => (def.research ??= { hypotheses: [], constructs: [], analysis: [], assumptions: [], sources: [] } as never);
 
+const H_TYPES = new Set(["causal", "association", "difference", "descriptive"]);
+const H_DIRS = new Set(["positive", "negative", "difference", "none"]);
+const H_EFFECTS = new Set(["small", "medium", "large"]);
+const H_STATUS = new Set(["proposed", "supported", "not_supported", "mixed", "inconclusive"]);
+/** the structured fields of a hypothesis the model or the editor sent, each read strictly; unknown values are dropped */
+function hypothesisDetail(v: unknown): HypothesisDetail | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const o = v as Record<string, unknown>;
+  const d: HypothesisDetail = {};
+  const pick = (k: keyof HypothesisDetail, ok: (x: string) => boolean) => { const x = str(o[k], 200); if (x && ok(x)) (d as Record<string, unknown>)[k] = x; };
+  pick("type", (x) => H_TYPES.has(x)); pick("direction", (x) => H_DIRS.has(x));
+  pick("independent", () => true); pick("dependent", () => true); pick("moderator", () => true); pick("mediator", () => true); pick("group", () => true); pick("lower", () => true);
+  pick("expectedEffect", (x) => H_EFFECTS.has(x)); pick("status", (x) => H_STATUS.has(x));
+  const note = str(o.note, 600); if (note) d.note = note;
+  return d;
+}
+
 /** a hypothesis by number, label (H2) or text — its index, or a reason listing them */
 function hypothesisIndex(hyps: string[], ref: string | number): number | string {
   if (!hyps.length) return "the research design has no hypotheses";
@@ -387,6 +416,21 @@ function hypothesisIndex(hyps: string[], ref: string | number): number | string 
   if (loose.length === 1) return loose[0].i;
   return `there is no hypothesis “${ref}” — the hypotheses are ${list()}`;
 }
+
+/** a side that names a construct must name one the design has — a word or two off is corrected to it, anything else refused */
+function checkedDetail(def: SurveyDefinition, d: HypothesisDetail): HypothesisDetail {
+  const out: HypothesisDetail = { ...d };
+  const cs = def.research?.constructs ?? [];
+  for (const k of ["independent", "dependent", "moderator", "mediator"] as const) {
+    const v = d[k];
+    if (!v) continue;
+    const c = constructFor(def, v);
+    if (c) out[k] = c.name;
+    else if (cs.length && /^[A-Z]/.test(v) && !/\s/.test(v)) fail(`${k}: there is no construct “${v}” — the constructs are ${cs.map((c) => `“${c.name}”`).join(", ")}; name one of them, or describe the side in words`);
+  }
+  return out;
+}
+const detailWords = (d: HypothesisDetail): string => [d.type, d.direction, d.independent ? `IV ${d.independent}` : "", d.dependent ? `DV ${d.dependent}` : "", d.moderator ? `moderator ${d.moderator}` : "", d.mediator ? `mediator ${d.mediator}` : "", d.group ? `${d.group} higher${d.lower ? ` than ${d.lower}` : ""}` : "", d.expectedEffect ? `${d.expectedEffect} effect` : "", d.status, d.note ? "note" : ""].filter(Boolean).join(", ");
 
 /* ------------------------------------------------------------ apply */
 
@@ -605,8 +649,13 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
       const i = r.hypotheses.findIndex((h) => h.trim().toLowerCase() === a.text.trim().toLowerCase());
       if (i >= 0) fail(`that is already hypothesis ${hypothesisLabel(i)}`);
       r.hypotheses = [...r.hypotheses, a.text];
+      // the structured reading travels with the statement, by index
+      const details = [...(r.hypothesisDetails ?? [])];
+      while (details.length < r.hypotheses.length - 1) details.push({});
+      details.push(a.detail ? checkedDetail(def, a.detail) : {});
+      r.hypothesisDetails = details;
       r.updatedAt = env.now;
-      return { description: `Hypothesis ${hypothesisLabel(r.hypotheses.length - 1)}: ${a.text}`, warnings, touched: [] };
+      return { description: `Hypothesis ${hypothesisLabel(r.hypotheses.length - 1)}: ${a.text}${a.detail && Object.keys(a.detail).length ? ` (${detailWords(a.detail)})` : ""}`, warnings, touched: [] };
     }
     case "remove_hypothesis": {
       /*
@@ -642,6 +691,7 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
         for (const t of plan.tests) t.hypotheses = relabel(t.hypotheses, `the ${t.method.replace(/_/g, " ")}${t.outcome ? ` on ${t.outcome}` : ""}`)!;
       }
       r.hypotheses = r.hypotheses.filter((_, k) => k !== i);
+      if (r.hypothesisDetails?.length) r.hypothesisDetails = r.hypothesisDetails.filter((_, k) => k !== i);
       r.updatedAt = env.now;
       const renumbered = last > i + 1 ? `${hypothesisLabel(i + 1)}${last > i + 2 ? `–${hypothesisLabel(last - 1)}` : ""} ${last > i + 2 ? "become" : "becomes"} ${hypothesisLabel(i)}${last > i + 2 ? `–${hypothesisLabel(last - 2)}` : ""}` : "";
       return {
@@ -649,6 +699,23 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
         destructive: `Removes hypothesis ${label} “${plain(text, 80)}”${dropped.length ? ` — ${plural(dropped.length, "reference")} to it (${[...new Set(dropped)].slice(0, 4).join(", ")}) dropped` : ""}${renumbered ? `; ${renumbered} everywhere` : ""}`,
         warnings, touched: [],
       };
+    }
+    case "set_hypothesis": {
+      const r = research(def);
+      const idx = hypothesisIndex(r.hypotheses, a.hypothesis);
+      if (typeof idx === "string") fail(idx);
+      const i = idx as number;
+      const details = [...(r.hypothesisDetails ?? [])];
+      while (details.length < r.hypotheses.length) details.push({});
+      const next = checkedDetail(def, a.detail);
+      const before = details[i] ?? {};
+      const changed = (Object.keys(next) as (keyof HypothesisDetail)[]).filter((k) => next[k] !== before[k]);
+      if (a.text && a.text.trim() !== r.hypotheses[i].trim()) { r.hypotheses = r.hypotheses.map((h, k) => (k === i ? a.text!.trim() : h)); changed.push("note" as never); }
+      if (!changed.length) fail(`${hypothesisLabel(i)} already reads that way — nothing to change`);
+      details[i] = { ...before, ...next };
+      r.hypothesisDetails = details;
+      r.updatedAt = env.now;
+      return { description: `${hypothesisLabel(i)}: ${a.text && a.text.trim() !== r.hypotheses[i] ? "restated; " : ""}${detailWords(next)}`, warnings, touched: [] };
     }
     case "set_custom_code": {
       const q = questionOrFail(env, a.target);
@@ -682,6 +749,7 @@ export function describeOptionAction(a: OptionAction): string {
     case "remove_embedded": return `Remove embedded variable ${a.name}`;
     case "add_hypothesis": return `Add hypothesis “${plain(a.text, 50)}”`;
     case "remove_hypothesis": return `Remove hypothesis ${a.hypothesis}`;
+    case "set_hypothesis": return `Set the reading of hypothesis ${a.hypothesis} (${detailWords(a.detail) || "restated"})`;
     case "set_custom_code": return `${a.js === null && a.css === null ? "Remove" : "Set"} the custom code of ${a.target}`;
   }
 }
