@@ -9,6 +9,7 @@ import {
 import type { VersionedDefinition } from "@rescript/engine";
 import { getCachedVersionDefinition } from "@rescript/quality/server";
 import { loadQualityDefinition } from "./qualityDef";
+import { insertRun, runFromRow, type RunInsertDb, type StoredRun as StoredRunShape } from "./analyticsRunStore";
 
 /**
  * THE ANALYTICS SERVICE — server-side aggregation (§38).
@@ -354,17 +355,9 @@ export async function verifyPassword(pw: string, stored: string): Promise<boolea
 
 /* ------------------------------------------------------------ analysis runs (research-intelligence Phase 5) */
 
-/** a stored run: the compact form plus its row id */
-export type StoredRun = ReturnType<typeof compactRun> & { id: string; surveyVersion?: string | null; dataset?: DatasetSpec | null };
-
-function rowToRun(r: Record<string, unknown>): StoredRun {
-  return {
-    id: String(r.id), computedAt: String(r.computed_at), trigger: String(r.trigger), environment: r.environment as DatasetSpec["environment"], n: Number(r.n ?? 0),
-    items: (r.items as StoredRun["items"]) ?? [], findings: (r.findings as StoredRun["findings"]) ?? [], verdicts: (r.verdicts as StoredRun["verdicts"]) ?? [], warnings: (r.warnings as string[]) ?? [],
-    surveyVersion: (r.survey_version as string | null) ?? null,
-    dataset: (r.dataset as DatasetSpec | null) ?? null,
-  };
-}
+/** a stored run: the compact form plus its row id (the shape and the row reader live in `analyticsRunStore.ts`, testable without the server chain) */
+export type StoredRun = StoredRunShape;
+const rowToRun = runFromRow;
 
 /** The most recent run of this survey's plan, or null. */
 export async function latestRun(db: SupabaseClient, surveyId: string, environment?: DatasetSpec["environment"]): Promise<StoredRun | null> {
@@ -404,13 +397,10 @@ export async function runPlanFor(db: SupabaseClient, surveyId: string, ctx: Load
   if (!items.length) return { run: { computedAt: new Date().toISOString(), trigger: opts.trigger ?? "manual", environment: spec.environment, n: 0, items: [], findings: [], verdicts: [], warnings: [] }, stored: null, error: "Nothing is planned yet — plan the analysis in Intelligent mode (Analysis tab) first." };
   const ds = await buildFor(db, surveyId, ctx, { ...items[0].definition, dataset: spec });
   const run = runPlan(ctx.def as SurveyDefinition, ds, { items, trigger: opts.trigger ?? "manual" });
-  const compact = compactRun(run);
-  const { data, error } = await db.from("analytics_runs").insert({
-    survey_id: surveyId, trigger: run.trigger, environment: run.environment, n: run.n, dataset: spec, computed_at: run.computedAt,
-    findings: compact.findings, verdicts: compact.verdicts, items: compact.items, warnings: compact.warnings, survey_version: ctx.version ?? null, created_by: opts.userId ?? null,
-  }).select("*").single();
-  if (error) return { run, stored: null, error: error.message };
-  return { run, stored: rowToRun(data as Record<string, unknown>) };
+  /* Phase 4: the corrections, the data advice and the discoveries go in the columns migration 0048 adds — a database without them still keeps the run */
+  const ins = await insertRun(db as unknown as RunInsertDb, surveyId, compactRun(run), spec, { surveyVersion: ctx.version ?? null, userId: opts.userId ?? null });
+  if (!ins.stored) return { run, stored: null, error: ins.error };
+  return { run, stored: ins.stored };
 }
 
 /**

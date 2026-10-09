@@ -16,7 +16,7 @@ import { surveyContext } from "../intelligent/context.ts";
  * questions in full and the rest by code, plus the named ones in full, so
  * the prompt stays bounded however large the survey is.
  */
-export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: string | null; focusIds?: string[]; ux?: boolean; analysis?: boolean; translation?: boolean; quota?: boolean; quotaCounts?: Record<string, Record<string, number>> | null; findings?: boolean; analysisRun?: Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger"> | null } = {}): string {
+export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: string | null; focusIds?: string[]; ux?: boolean; analysis?: boolean; translation?: boolean; quota?: boolean; quotaCounts?: Record<string, Record<string, number>> | null; findings?: boolean; analysisRun?: Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger" | "corrections" | "advice" | "discoveries"> | null } = {}): string {
   const n = def.questions.length;
   const base = surveyContext(def, { selectedId: opts.selectedId ?? null, focusIds: opts.focusIds ?? [], limit: n > 150 ? 60 : 150, textWidth: n > 150 ? 70 : 110 });
   const lines = [base];

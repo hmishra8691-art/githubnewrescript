@@ -426,6 +426,17 @@ test("findings turns: the intent, the run's brief in the outline (verdicts, then
   assert.match(copilotOutline(planned, { findings: true, analysisRun: null }), /the plan has not been run on the responses/);
   assert.ok(copilotOutline(planned, { analysis: true, analysisRun: run }).includes("Analysis run (halfway)"), "an analysis turn with a run carries it too");
   assert.ok(!copilotOutline(planned, { analysis: true, analysisRun: null }).includes("Analysis run"), "but without one says nothing");
+  /* Phase 4: the correction, the data advice and the discoveries travel with the brief, so a narration can say what holds and what was found beyond the plan */
+  const p4 = copilotOutline(def, { findings: true, analysisRun: { ...run,
+    findings: [{ ...run.findings[0], evidence: { ...run.findings[0].evidence, adjusted: { method: "holm" as const, p: 0.09, significant: false, family: "H1" } } }, run.findings[1]],
+    corrections: { method: "holm" as const, families: [{ family: "H1", tests: 3, before: 1, after: 0, lost: ["a:0"] }], summary: "Holm correction over 3 tests for H1: 1 finding significant on its own is not once corrected." },
+    advice: [{ name: "FREQ by BUY", kind: "crosstab" as const, planned: "x1", checks: [{ code: "expected_cells" as const, severity: "note" as const, message: "2 of 6 cells have an expected count below 5." }], recommended: { test: "chi_square", label: "chi-square on combined categories", reason: "combine the thin categories." }, ok: false, summary: "s" }],
+    discoveries: { segments: [{ id: "segment:FREQ|AGE", kind: "segment" as const, strength: "moderate" as const, significant: true, headline: "FREQ differs by Age band: 18–24 highest (3.9), 55+ lowest (3.1) (ANOVA, p = .002 Holm-adjusted, η² = 0.07).", evidence: { n: 312 }, variables: ["FREQ", "AGE"], hypotheses: [], analysis: { name: "Beyond the plan", kind: "segment", hash: "s" } }], anomalies: [], trends: [], looked: { outcomes: ["FREQ"], cuts: ["AGE"], waves: null, pairs: 1 }, method: "holm" as const, summary: "Beyond the plan: 1 segment difference the plan did not test (1 outcome × cut pairs looked at; p-values Holm-adjusted)." },
+  } });
+  assert.match(p4, /\[moderate\] FREQ by BUY: a moderate difference \(chi-square, p = \.003, Cramér's V = 0\.21\)\. \(H1\) \[not significant after Holm correction, p = \.090\]/);
+  assert.match(p4, /\n  Corrections: Holm correction over 3 tests for H1: 1 finding significant on its own is not once corrected\./);
+  assert.match(p4, /\n  Data advice: 1 of 1 analyses has data advice: FREQ by BUY — recommended chi-square on combined categories\./);
+  assert.match(p4, /\n  Beyond the plan: 1 segment difference the plan did not test .*\n    \[segment\] FREQ differs by Age band/);
   const p = copilotUserPrompt({ message: "what did we find?", outline: "o", surveyLanguage: "en", mode: "edit", findings: true });
   assert.ok(p.includes("FINDINGS GUIDE") && p.includes("never invents") === false && p.includes("Never report a number that is not in the run"));
   assert.ok(!copilotUserPrompt({ message: "x", outline: "o", surveyLanguage: "en", mode: "edit" }).includes("FINDINGS GUIDE"));

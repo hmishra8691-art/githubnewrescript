@@ -1970,4 +1970,5 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .rd-reading .f span { font-size: var(--fs-caption); }
 .rd-row { flex-wrap: wrap; }
 .cp-coverage { margin: 6px 0 0; font-size: var(--fs-caption); display: flex; gap: 6px; align-items: baseline; }
+.cp-data { margin: 6px 0 0; font-size: var(--fs-caption); display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
 .cp-coverage.warn { color: var(--c-text-2); }

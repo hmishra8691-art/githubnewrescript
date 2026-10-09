@@ -19,6 +19,8 @@ import { conceptWords, parseScale, resolveConcept, resolvePopulation, scaleLabel
 import { inferRole } from "./analysisFramework.js";
 import { describeHypothesis, structuredHypotheses } from "./hypotheses.js";
 import { questionRelevance, relevanceLine, relevanceSummary, removalSet, type QuestionRelevance, type RelevanceTier, type RemovalSet } from "./relevance.js";
+import { parseDataQuestion, type DataQuery } from "./dataQuestion.js";
+import { measurementOf } from "./analysisFramework.js";
 
 /**
  * THE SENTENCE INTERPRETER (Intelligent Mode Phase 3) — what the researcher
@@ -96,6 +98,8 @@ export type Interpretation =
   | { kind: "answer"; category: IntentCategory; understood: string; answer: string; sections: AnswerSection[]; detected: Detected[] }
   | { kind: "clarify"; category: IntentCategory; understood: string; question: string; choices: { label: string; text: string }[]; detected: Detected[] }
   | { kind: "refused"; category: IntentCategory; understood: string; reason: string; detected: Detected[]; suggestion?: { text: string; actions?: SurveyAction[] }; /** nothing to do: the survey already is as asked */ noop?: boolean }
+  /** a question about the DATA (Phase 4): read into a query the Studio answers on the dataset — the engine has no data */
+  | { kind: "query"; category: IntentCategory; understood: string; query: DataQuery; detected: Detected[] }
   | { kind: "model"; category: IntentCategory | null; reason: string; detected: Detected[];
       /** what the engine can do by itself when no model answers: a question and executable choices (each a sentence this layer reads) — Phase 2 */
       fallback?: { understood: string; question: string; choices: { label: string; text: string }[] } };
@@ -2138,6 +2142,187 @@ const scaleChange: Recogniser = (r) => {
   return act(r, "question_modification", `Change ${code(target)}'s ${what} to a ${scale.name}: ${labels.join(" · ")}${have.length ? ` — this replaces its ${have.length} current ${what}${(target.options ?? []).some((o) => o.flags?.length) ? " (flags such as exclusive or Other are not carried over)" : ""}` : ""}.`, [{ op: "update_question", target: code(target), scale: spec }], detected);
 };
 
+/* ---------------------------------------------------------- data questions (Phase 4) */
+
+/*
+ * "WHICH GROUPS PREFER BRAND A?" — a question about the data, not the
+ * survey. The engine reads it exactly (the option, the question, the cut,
+ * the population) and hands a query to the Studio, which answers it on the
+ * dataset with the numbers and the test. An option two questions share is
+ * a choice; a word the survey does not have is a refusal with the fix.
+ */
+const dataQuestion: Recogniser = (r) => {
+  const out = parseDataQuestion(r.def, r.text, r.ctx);
+  if (!out) return null;
+  const understood = (q: DataQuery) => `Read from the data: ${q.words}.`;
+  if (out.ok) return { kind: "query", category: "findings", understood: understood(out.query), query: out.query, detected: out.detected };
+  if (out.ambiguous) {
+    const a = out.ambiguous;
+    return { kind: "clarify", category: "findings", understood: `Read ${plain(r.text, 80)} from the data.`, question: `${out.reason.replace(/\.$/, "")} — which one?`, choices: a.candidates.map((q) => ({ label: `${code(q)} — ${plain(q.text, 50)}`, text: `${r.text.replace(/[?.!]+$/, "")} in ${code(q)}` })), detected: [det("phrase", a.phrase)] };
+  }
+  return refused("findings", `Read ${plain(r.text, 80)} from the data.`, out.reason, []);
+};
+
+/* ---------------------------------------------------------- tests by sentence (Phase 4) */
+
+const TEST_NAMES: [RegExp, string][] = [
+  [/^t[-\s]?tests?$/i, "t_test"], [/^(?:one[-\s]way\s+)?anovas?$|^analysis\s+of\s+variance$/i, "anova"], [/^chi[-\s]?squares?(?:\s+tests?)?$|^χ²$/i, "chi_square"],
+  [/^mann[-\s–]whitney(?:\s+u)?(?:\s+tests?)?$/i, "mann_whitney"], [/^kruskal[-\s–]wallis(?:\s+tests?)?$/i, "kruskal_wallis"], [/^correlations?(?:\s+tests?)?$/i, "correlation"],
+  [/^(?:linear\s+|multiple\s+)?regressions?$/i, "regression"], [/^logistic(?:\s+regression)?$|^logit$/i, "logistic_regression"], [/^(?:key\s+)?drivers?(?:\s+analysis)?$/i, "driver_analysis"],
+  [/^(?:significance\s+|statistical\s+)?tests?$|^comparison$/i, "auto"],
+];
+const TEST_WORD = String.raw`(t[-\s]?tests?|(?:one[-\s]way\s+)?anovas?|analysis\s+of\s+variance|chi[-\s]?squares?(?:\s+tests?)?|χ²|mann[-\s–]whitney(?:\s+u)?(?:\s+tests?)?|kruskal[-\s–]wallis(?:\s+tests?)?|correlations?(?:\s+tests?)?|(?:linear\s+|multiple\s+)?regressions?|logistic(?:\s+regression)?|logit|(?:key\s+)?drivers?(?:\s+analysis)?|(?:significance\s+|statistical\s+)?tests?|comparison)`;
+const methodNamed = (w: string): string | undefined => TEST_NAMES.find(([re]) => re.test(w.trim()))?.[1];
+const METHOD_WORDS: Record<string, string> = { t_test: "t-test", anova: "ANOVA", chi_square: "chi-square", mann_whitney: "Mann–Whitney test", kruskal_wallis: "Kruskal–Wallis test", correlation: "correlation", regression: "regression", logistic_regression: "logistic regression", driver_analysis: "driver analysis" };
+const methodWord = (m: string) => METHOD_WORDS[m] ?? m.replace(/_/g, " ");
+const article = (w: string) => (/^(?:[aeiou]|ANOVA)/i.test(w) ? "an" : "a");
+const levelOf = (q: Question) => { const m = measurementOf(q); return m === "interval" || m === "ratio" || m === "ordinal" ? "numeric" : m === "nominal" || m === "multi" ? "categorical" : "other"; };
+/** the method the two variables' levels call for, when the sentence named none */
+function autoMethod(def: SurveyDefinition, a: Question, b: Question): { method: string; why: string } | string {
+  const la = levelOf(a), lb = levelOf(b);
+  if (la === "numeric" && lb === "categorical") return { method: (b.options?.length ?? 0) > 2 ? "anova" : "t_test", why: `${a.variableName} is ${measurementOf(a)} and ${b.variableName} has ${(b.options?.length ?? 0) > 2 ? `${b.options!.length} groups` : "two groups"}` };
+  if (la === "categorical" && lb === "numeric") return { method: (a.options?.length ?? 0) > 2 ? "anova" : "t_test", why: `${b.variableName} is ${measurementOf(b)} and ${a.variableName} has ${(a.options?.length ?? 0) > 2 ? `${a.options!.length} groups` : "two groups"}` };
+  if (la === "categorical" && lb === "categorical") return { method: "chi_square", why: `both are categorical` };
+  if (la === "numeric" && lb === "numeric") return { method: "correlation", why: `both are numeric` };
+  return `${la === "other" ? a.variableName : b.variableName} is ${measurementOf(la === "other" ? a : b)} — no standard test compares it; code it first.`;
+}
+const testSpecFor = (method: string, a: Question, b: Question, reason: string): SurveyAction => {
+  if (method === "correlation") return { op: "add_analysis_test", method, variables: [a.variableName, b.variableName], priority: 1, reason } as SurveyAction;
+  if (method === "regression" || method === "logistic_regression" || method === "driver_analysis") return { op: "add_analysis_test", method, outcome: a.variableName, variables: [b.variableName], priority: 1, reason } as SurveyAction;
+  if (method === "chi_square") return { op: "add_analysis_test", method, outcome: a.variableName, variables: [a.variableName], groupBy: b.variableName, priority: 1, reason } as SurveyAction;
+  // a group comparison: the numeric side is the outcome
+  const [y, g] = levelOf(a) === "numeric" ? [a, b] : [b, a];
+  return { op: "add_analysis_test", method, outcome: y.variableName, variables: [y.variableName], groupBy: g.variableName, priority: 1, reason } as SurveyAction;
+};
+
+/*
+ * "RUN A T-TEST OF SATISFACTION BY GENDER", "test whether NPS differs by
+ * region", "add a chi-square of brand preference by country", "correlate
+ * satisfaction with NPS" — a planned test, its method named or chosen from
+ * the two variables' levels, through the same gate as the model's actions.
+ * "… with a chi-square" on a crosstab sentence adds the test to the table.
+ */
+const analysisTests: Recogniser = (r) => {
+  const t = r.text;
+  let m: RegExpExecArray | null;
+  let a: string, b: string, named: string | undefined;
+  // "… of X by Y" splits at the cut word; "between X and Y" / "comparing X with Y" at the pairing word — never at an "and" inside a side
+  if ((m = new RegExp(String.raw`^(?:run|add|plan|do|perform|make|set\s+up|create|include|compute|calculate)\s+(?:an?\s+|the\s+)?(?:new\s+)?${TEST_WORD}\s+(?:of|on|for)\s+(.+?)\s+(?:by|across|against|vs\.?|versus)\s+(.+)$`, "i").exec(t))) { named = methodNamed(m[1]); a = m[2]; b = m[3]; }
+  else if ((m = new RegExp(String.raw`^(?:run|add|plan|do|perform|make|set\s+up|create|include|compute|calculate)\s+(?:an?\s+|the\s+)?(?:new\s+)?${TEST_WORD}\s+(?:between|comparing|to\s+compare|of|on|for)\s+(.+?)\s+(?:and|with|vs\.?|versus)\s+(.+)$`, "i").exec(t))) { named = methodNamed(m[1]); a = m[2]; b = m[3]; }
+  else if ((m = /^(?:test|check|see|find\s+out)\s+(?:whether|if)\s+(.+?)\s+(?:differs?|varies|vary|is\s+different|are\s+different|is\s+higher|is\s+lower|depends?|changes?)\s+(?:by|across|between|on|with|among)\s+(.+)$/i.exec(t))) { named = "auto"; a = m[1]; b = m[2]; }
+  else if ((m = /^correlate\s+(.+?)\s+(?:with|and|against)\s+(.+)$/i.exec(t))) { named = "correlation"; a = m[1]; b = m[2]; }
+  else if ((m = /^(?:regress|model|predict)\s+(.+?)\s+(?:on|from|with|by|using)\s+(.+)$/i.exec(t))) { named = "regression"; a = m[1]; b = m[2]; }
+  else return null;
+  if (!named) return null;
+  a = unquote(a).replace(/\s+(?:question|variable|scores?|answers?|results?|responses?)$/i, ""); b = unquote(b).replace(/\s+(?:question|variable|groups?|answers?|results?|responses?)$/i, "");
+  if (/\b(?:and|then|plus|also)\b|,|;/i.test(a) || (/\b(?:then|plus|also)\b|,|;/i.test(b))) return null;
+  const understood = `Plan ${named === "auto" ? "a test" : `${article(methodWord(named))} ${methodWord(named)}`} of ${a} by ${b}.`;
+  const first = conceptOrAsk(r, a, "analysis", understood, b);
+  if (!first.ok) return first.out;
+  const second = conceptOrAsk(r, b, "analysis", understood, a);
+  if (!second.ok) return second.out;
+  if (first.v.id === second.v.id) return refused("analysis", understood, `“${a}” and “${b}” both resolve to ${code(first.v)} — a test needs two different variables.`, qDetected([first.v]));
+  let method = named, why = "";
+  if (named === "auto") { const auto = autoMethod(r.def, first.v, second.v); if (typeof auto === "string") return refused("analysis", understood, auto, qDetected([first.v, second.v])); method = auto.method; why = auto.why; }
+  else if (named === "t_test" || named === "anova" || named === "mann_whitney" || named === "kruskal_wallis") {
+    if (levelOf(first.v) !== "numeric" && levelOf(second.v) !== "numeric") return refused("analysis", understood, `${cap(article(methodWord(named)))} ${methodWord(named)} compares the means of a numeric or scale variable across groups — ${first.v.variableName} and ${second.v.variableName} are both ${measurementOf(first.v)}${measurementOf(first.v) === measurementOf(second.v) ? "" : ` and ${measurementOf(second.v)}`}. Use a chi-square for two categorical variables.`, qDetected([first.v, second.v]));
+    const g = levelOf(first.v) === "numeric" ? second.v : first.v;
+    if ((named === "t_test" || named === "mann_whitney") && (g.options?.length ?? 0) > 2) why = `${g.variableName} has ${g.options!.length} groups — only the first two are compared; an ANOVA reads all of them`;
+  }
+  else if (named === "chi_square" && [first.v, second.v].some((q) => !["nominal", "ordinal", "multi"].includes(measurementOf(q)))) return refused("analysis", understood, `A chi-square needs two categorical variables — ${[first.v, second.v].filter((q) => !["nominal", "ordinal", "multi"].includes(measurementOf(q))).map((q) => `${q.variableName} is ${measurementOf(q)}`).join(", ")}. Use a t-test or ANOVA to compare its means across groups, or band it first.`, qDetected([first.v, second.v]));
+  else if (named === "correlation" && (levelOf(first.v) !== "numeric" || levelOf(second.v) !== "numeric")) return refused("analysis", understood, `A correlation needs two numeric or scale variables — ${[first.v, second.v].filter((q) => levelOf(q) !== "numeric").map((q) => `${q.variableName} is ${measurementOf(q)}`).join(", ")}.`, qDetected([first.v, second.v]));
+  const action = testSpecFor(method, first.v, second.v, `asked for in Intelligent mode: ${a} by ${b}`);
+  const spec = action as { outcome?: string; groupBy?: string; variables?: string[] };
+  const plan = r.def.research?.analysisPlan;
+  const same = plan?.tests.find((x) => x.method === method && (x.outcome ?? "") === (spec.outcome ?? "") && (x.groupBy ?? "") === (spec.groupBy ?? "") && [...x.variables].sort().join("|") === [...(spec.variables ?? [])].sort().join("|"));
+  const line = `${article(methodWord(method))} ${methodWord(method)}${spec.outcome ? ` of ${spec.outcome} (${code(first.v.variableName === spec.outcome ? first.v : second.v)})` : ""}${spec.groupBy ? ` across ${spec.groupBy}` : method === "correlation" ? ` between ${spec.variables!.join(" and ")}` : spec.variables?.length ? ` with ${spec.variables.join(", ")}` : ""}`;
+  if (same) return alreadySo("analysis", `Plan ${line}.`, `${cap(line)} is already in the analysis plan${same.hypotheses.length ? ` (${same.hypotheses.join(", ")})` : ""} — nothing to add. It runs from the Analysis tab.`, [det("method", method)]);
+  return act(r, "analysis", `Plan ${line}${why ? ` — ${why}` : ""}.${plan ? " It runs" : " This starts the survey's analysis plan; it runs"} from the Analysis tab, or with the plan on the fieldwork milestones.`, [action], [det("method", method), det("variables", `${first.v.variableName} (${code(first.v)}), ${second.v.variableName} (${code(second.v)})`)]);
+};
+
+/** the planned items that read a variable: crosstabs, tests, derived variables, segments */
+function planItemsOn(def: SurveyDefinition, names: string[]): { crosstabs: PlannedCrosstabLike[]; tests: PlannedTestLike[]; derived: { name: string; kind: string; from: string[] }[]; segments: { name: string; by: string[] }[] } {
+  const { plan } = savedOrBuilt(def);
+  const has = (vs: (string | undefined)[]) => vs.some((v) => v && names.includes(v));
+  return {
+    crosstabs: plan.crosstabs.filter((x) => has([...x.rows, ...x.columns])),
+    tests: plan.tests.filter((x) => has([x.outcome, x.groupBy, x.moderator, x.mediator, ...x.variables])),
+    derived: plan.derived.filter((d) => has(d.from) || names.includes(d.name)),
+    segments: plan.segments.filter((s) => has(s.by) || names.includes(segmentVariableName(s))),
+  };
+}
+type PlannedCrosstabLike = { id: string; rows: string[]; columns: string[]; priority: number; hypotheses: string[]; reason?: string };
+type PlannedTestLike = { id: string; method: string; outcome?: string; groupBy?: string; moderator?: string; mediator?: string; variables: string[]; hypotheses: string[]; reason?: string };
+
+/*
+ * "WHAT ANALYSES ARE PLANNED FOR Q5?", "which tests use satisfaction?",
+ * "is gender in the analysis plan?" — the plan items that read the
+ * variable, with the hypotheses they serve; nothing, said as nothing.
+ */
+const planQuery: Recogniser = (r) => {
+  const t = r.text;
+  let m: RegExpExecArray | null;
+  let phrase: string;
+  if ((m = /^(?:what|which)\s+(?:analys[ie]s|tests?|cross[-\s]?tabs?|crosstabulations?|statistics|statistical\s+tests?|plan\s+items?)\s+(?:are\s+planned|are\s+there|exist|do\s+we\s+have|do\s+we\s+run|use|involve|include|read|cover|are\s+(?:in\s+the\s+plan|run))\s+(?:for|on|with|of|about)\s+(.+)$/i.exec(t))) phrase = m[1];
+  else if ((m = /^(?:what|which)\s+(?:analys[ie]s|tests?|cross[-\s]?tabs?)\s+(?:use|involve|include|read|cover|run\s+on)\s+(.+)$/i.exec(t))) phrase = m[1];
+  else if ((m = /^(?:is|are)\s+(.+?)\s+(?:in|part\s+of|covered\s+by|used\s+in)\s+the\s+(?:analysis\s+)?plan$/i.exec(t))) phrase = m[1];
+  else if ((m = /^how\s+(?:is|will)\s+(.+?)\s+(?:be\s+)?analy[sz]ed$/i.exec(t))) phrase = m[1];
+  else return null;
+  phrase = unquote(phrase).replace(/\s+(?:question|variable)$/i, "");
+  const understood = `List the planned analyses that read ${phrase}.`;
+  const got = conceptOrAsk(r, phrase, "analysis", understood);
+  if (!got.ok) return got.out;
+  const q = got.v;
+  const { saved, plan } = savedOrBuilt(r.def);
+  const names = [q.variableName, ...plan.derived.filter((d) => d.from.includes(q.variableName)).map((d) => d.name)];
+  const on = planItemsOn(r.def, names);
+  const total = on.crosstabs.length + on.tests.length + on.derived.length + on.segments.length;
+  const sections: AnswerSection[] = [
+    { title: "Crosstabs", items: on.crosstabs.map((x) => ({ label: `${x.rows.join(" + ")} by ${x.columns.join(" + ")}`, key: objectKey("analysis", x.id), detail: `${withHypotheses(x.reason, x.hypotheses)} — priority ${x.priority}`.replace(/^ — /, "") })) },
+    { title: "Tests", items: on.tests.map((x) => ({ label: testWords(x), key: objectKey("analysis", x.id), detail: withHypotheses(x.reason, x.hypotheses) || undefined })) },
+    { title: "Derived variables", items: on.derived.map((d) => ({ label: d.name, key: objectKey("analysis", `derived:${d.name}`), detail: `${d.kind.replace(/_/g, " ")} of ${d.from.join(", ")}` })) },
+    { title: "Segments", items: on.segments.map((x) => ({ label: x.name, key: objectKey("analysis", `segment:${x.name}`), detail: `by ${x.by.join(", ")}` })) },
+  ].filter((x) => x.items.length);
+  const hyps = [...new Set([...on.crosstabs, ...on.tests].flatMap((x) => x.hypotheses))].sort();
+  const answer = !total
+    ? `Nothing in the ${saved ? "saved" : "design's"} analysis plan reads ${q.variableName} (${code(q)}). ${inferRole(r.def, q) === "segmentation" ? "It is a demographic — say “create the most important crosstabs” to cut the outcomes by it, or “cross-tab <outcome> by " + q.variableName + "”." : `Say “test whether ${q.variableName} differs by <group>” or “cross-tab ${q.variableName} by <demographic>” to plan one.`}`
+    : `${q.variableName} (${code(q)}) is read by ${[on.crosstabs.length ? plural(on.crosstabs.length, "crosstab") : "", on.tests.length ? plural(on.tests.length, "test") : "", on.derived.length ? plural(on.derived.length, "derived variable") : "", on.segments.length ? plural(on.segments.length, "segment") : ""].filter(Boolean).join(", ")} in the ${saved ? "saved" : "design's"} plan${hyps.length ? `, serving ${hyps.join(", ")}` : ""}.${saved ? "" : " No plan is saved yet — say “create an analysis framework” to save it."}`;
+  return { kind: "answer", category: "analysis", understood, answer, sections, detected: [det("variable", `${q.variableName} (${code(q)})`)] };
+};
+
+/*
+ * "REMOVE THE CROSSTAB OF SATISFACTION BY GENDER", "drop the t-test on NPS
+ * by region" — the planned item that pairs those variables, removed through
+ * the gate (a removal is confirmed on the card); none → a refusal naming
+ * what the plan does have for them.
+ */
+const removeAnalysis: Recogniser = (r) => {
+  const t = r.text;
+  const m = new RegExp(String.raw`^(?:remove|delete|drop|cancel|unplan)\s+(?:the\s+)?(?:planned\s+)?(cross[-\s]?tab(?:ulation)?|${TEST_WORD}|analysis)\s+(?:of|on|for|between|comparing)\s+(.+?)\s+(?:by|and|vs\.?|versus|against|across|with)\s+(.+)$`, "i").exec(t);
+  if (!m) return null;
+  // TEST_WORD carries a capture of its own: the sides are the third and fourth groups
+  const what = m[1].toLowerCase();
+  const a = unquote(m[3]).replace(/\s+(?:question|variable)$/i, ""), b = unquote(m[4]).replace(/\s+(?:question|variable|groups?)$/i, "");
+  const understood = `Remove the planned ${/cross/.test(what) ? "crosstab" : what === "analysis" ? "analysis" : "test"} of ${a} by ${b}.`;
+  const first = conceptOrAsk(r, a, "analysis", understood, b);
+  if (!first.ok) return first.out;
+  const second = conceptOrAsk(r, b, "analysis", understood, a);
+  if (!second.ok) return second.out;
+  const plan = r.def.research?.analysisPlan;
+  if (!plan) return refused("analysis", understood, "No analysis plan is saved for this survey — there is nothing to remove.", qDetected([first.v, second.v]));
+  const pair = new Set([first.v.variableName, second.v.variableName]);
+  const method = /cross/.test(what) ? "crosstab" : what === "analysis" ? "any" : (methodNamed(what) ?? "auto");
+  const xs = method === "crosstab" || method === "any" ? plan.crosstabs.filter((x) => [...x.rows, ...x.columns].filter((v) => pair.has(v)).length >= 2) : [];
+  const ts = method !== "crosstab" ? plan.tests.filter((x) => (method === "any" || method === "auto" || x.method === method) && [x.outcome, x.groupBy, ...x.variables].filter((v, i, arr) => v && pair.has(v) && arr.indexOf(v) === i).length >= 2) : [];
+  if (!xs.length && !ts.length) {
+    const on = planItemsOn(r.def, [first.v.variableName, second.v.variableName]);
+    const have = [...on.crosstabs.map((x) => `crosstab ${x.rows.join(" + ")} by ${x.columns.join(" + ")}`), ...on.tests.map(testWords)];
+    return refused("analysis", understood, `The plan has no ${method === "crosstab" ? "crosstab" : method === "any" ? "analysis" : method === "auto" ? "test" : methodWord(method)} of ${first.v.variableName} by ${second.v.variableName}.${have.length ? ` It has: ${have.join("; ")}.` : ""}`, qDetected([first.v, second.v]));
+  }
+  const actions: SurveyAction[] = [...xs.map((x) => ({ op: "remove_crosstab", id: x.id } as SurveyAction)), ...ts.map((x) => ({ op: "remove_analysis_test", id: x.id } as SurveyAction))];
+  return act(r, "analysis", `Remove ${[...xs.map((x) => `the crosstab ${x.rows.join(" + ")} by ${x.columns.join(" + ")}${x.hypotheses.length ? ` (${x.hypotheses.join(", ")})` : ""}`), ...ts.map((x) => `the ${testWords(x)}${x.hypotheses.length ? ` (${x.hypotheses.join(", ")})` : ""}`)].join(" and ")} from the analysis plan.`, actions, [...xs.map((x) => det("crosstab", x.id)), ...ts.map((x) => det("test", x.id))]);
+};
+
 /* ---------------------------------------------------------- crosstabs */
 
 const DEMO_ROLE = (def: SurveyDefinition, q: Question) => inferRole(def, q) === "segmentation" || inferRole(def, q) === "screening";
@@ -2460,10 +2645,10 @@ function fallback(r: Run): Interpretation {
  * before "remove Q11"), skips before display ("if Q7 is no, skip …").
  */
 const RECOGNISERS: Recogniser[] = [
-  analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, measures,
+  analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion,
   deferred, longBrief,
   surveySettings, languages, objective, audience, research, variables, pageBreaks,
-  shorten, screenerEdit, scaleChange, crosstabs,
+  shorten, screenerEdit, scaleChange, removeAnalysis, analysisTests, crosstabs,
   masking, optionVisibility, randomization, options, required, skips, display, validation, questions,
 ];
 
@@ -2540,7 +2725,7 @@ function compound(def: SurveyDefinition, text: string, parts: string[], ctx: Int
     if (it.kind === "refused" && it.noop) { noops.push(it); category ??= it.category; continue; }
     if (it.kind === "clarify") { stop = { ...it, understood: `In “${part}”: ${it.understood}`, choices: it.choices.map((c) => ({ label: c.label, text: text.replace(part, c.text) })) }; continue; }
     if (it.kind === "refused") { stop = { ...it, understood: `In “${part}”: ${it.understood}`, reason: `${it.reason} Nothing else in the request was applied.`, ...(it.suggestion ? { suggestion: { text: text.replace(part, it.suggestion.text) } } : {}) }; continue; }
-    if (it.kind === "answer") { stop = { kind: "model", category: it.category, reason: "a question and an edit in one sentence — the language model takes the whole request", detected }; continue; }
+    if (it.kind === "answer" || it.kind === "query") { stop = { kind: "model", category: it.category, reason: "a question and an edit in one sentence — the language model takes the whole request", detected }; continue; }
     category ??= it.category;
     actions.push(...it.actions);
     detected.push(...it.detected);

@@ -52,6 +52,8 @@ export interface CopilotEntry {
   changePlan?: ChangePlan & { approved?: string[]; failures?: { id: string; failure: TurnFailure }[] };
   /** the research coverage of a generated survey, checked on the clone (Phase 3) */
   coverage?: { ok: boolean; summary: string; unmeasured: string[]; unconnected: string[]; hypotheses: { label: string; text: string; status: string }[] };
+  /** a data question's answer, read on the respondent data (Phase 4): the base, the test behind it, the caveats */
+  data?: { n: number; environment: string; dataset: string; source: "data" | "sandbox"; evidence?: { test: string; p: number | null; significant: boolean; effect?: { name: string; value: number } }; caveats: string[]; fromRun?: string };
   error?: string;
   message?: string;
   /** why a model turn failed — the cause and what to do next, never the grammar's "not understood" (Phase 1) */
@@ -100,7 +102,7 @@ export interface ResearchDocView { id: string; ref: string; name: string; format
 export interface ReviewState { rules: SurveyReview; ai: CopilotFinding[]; at: string; running: boolean }
 export type PanelTab = "changes" | "review" | "research" | "history" | "analysis" | "findings" | "languages" | "quotas" | "ux" | "inspector";
 /** the stored analysis run, as the analytics route returns it (results are not stored — only findings, verdicts and each item's chart) */
-export type StoredRunBrief = Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger"> & { id?: string; items?: { definition: { name: string; kind: string; options?: Record<string, unknown> }; chart?: string; hypotheses: string[] }[] };
+export type StoredRunBrief = Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger" | "corrections" | "advice" | "discoveries"> & { id?: string; items?: { definition: { name: string; kind: string; options?: Record<string, unknown> }; chart?: string; hypotheses: string[] }[] };
 
 interface Session {
   proposal: Proposal | null;
@@ -411,7 +413,10 @@ export function useCopilot(opts: {
     return () => { delete w.__rescriptAnalysisRun; };
   }, []);
   /** what travels with a turn: the verdicts and the strongest findings, never the results */
-  const runForTurn = React.useMemo(() => (analysisRun ? { computedAt: analysisRun.computedAt, n: analysisRun.n, trigger: analysisRun.trigger, environment: analysisRun.environment, verdicts: analysisRun.verdicts, warnings: analysisRun.warnings.slice(0, 6), findings: analysisRun.findings.slice(0, 40) } : null), [analysisRun]);
+  const runForTurn = React.useMemo(() => (analysisRun ? { computedAt: analysisRun.computedAt, n: analysisRun.n, trigger: analysisRun.trigger, environment: analysisRun.environment, verdicts: analysisRun.verdicts, warnings: analysisRun.warnings.slice(0, 6), findings: analysisRun.findings.slice(0, 40),
+    /* Phase 4: the correction, the data advice and the discoveries travel too, so a narration can say what holds and what the run found beyond the plan */
+    ...(analysisRun.corrections ? { corrections: analysisRun.corrections } : {}), ...(analysisRun.advice ? { advice: analysisRun.advice.slice(0, 8) } : {}),
+    ...(analysisRun.discoveries ? { discoveries: { ...analysisRun.discoveries, segments: analysisRun.discoveries.segments.slice(0, 8), trends: analysisRun.discoveries.trends.slice(0, 6), anomalies: analysisRun.discoveries.anomalies.slice(0, 8) } } : {}) } : null), [analysisRun]);
 
   /*
    * PLAN FIRST (Phase 2). A generation is planned before it is built: the
@@ -573,6 +578,45 @@ export function useCopilot(opts: {
     }
     opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "ready", reply, engine, opKey, ...(actions.length ? { proposal: "open" as const } : {}) });
   }, [opts, setSession, stale, s.def, session.openOp, recordOp, recordProposal]);
+  /*
+   * A DATA QUESTION (Phase 4). The engine read the sentence into a query;
+   * the answer is on the respondent data, which only the server holds, so
+   * the card asks the ask route — no model — and shows the numbers, the
+   * test and the base. The sandbox has no respondents: its question is
+   * answered from rows a test put on the page, or said to be unanswerable.
+   * A planned finding on the same pair, from the last run, is shown too.
+   */
+  const rowsRef = React.useRef<unknown[] | null>(null);
+  React.useEffect(() => {
+    const w = window as unknown as { __rescriptAnalyticsRows?: (rows: unknown[] | null) => void };
+    w.__rescriptAnalyticsRows = (rows) => { rowsRef.current = rows; };
+    return () => { delete w.__rescriptAnalyticsRows; };
+  }, []);
+  const askData = React.useCallback(async (text: string, it: Extract<Interpretation, { kind: "query" }>, heard?: HeardTranscript): Promise<void> => {
+    const id = uid("copilot");
+    const engine: EngineTurn = { kind: "query", category: it.category, understood: it.understood, detected: it.detected };
+    opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "thinking", reply: { kind: "answer", reply: it.understood, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] }, engine });
+    setBusy(true);
+    const fail = (message: string) => {
+      opts.patch(id, { status: "ready", reply: { kind: "answer", reply: message, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] }, engine: { ...engine, kind: "refused", refusal: message }, opKey: recordOp({ prompt: text, source: "engine", status: "refused", intent: { category: it.category, kind: "query" }, detected: it.detected, statusDetail: message.slice(0, 2000) }) });
+    };
+    try {
+      const sandbox = s.surveyDbId === "sandbox";
+      const rows = sandbox ? rowsRef.current : null;
+      if (sandbox && !rows?.length) { fail("The sandbox has no respondents to read. Open a survey with fieldwork and ask there — the answer comes from its data, with the base and the test."); return; }
+      const r = await fetch("/api/copilot/ask", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: s.surveyDbId, query: it.query, ...(sandbox ? { definition: s.def, rows } : {}) }) });
+      const d = await r.json().catch(() => null) as { answer?: { text: string; sections: { title: string; items: { label: string; detail?: string }[] }[]; n: number; evidence?: NonNullable<CopilotEntry["data"]>["evidence"]; caveats: string[] }; n?: number; environment?: string; dataset?: string; source?: "data" | "sandbox"; error?: string } | null;
+      if (!r.ok || !d?.answer) { fail(d?.error ?? (r.status === 401 ? "Sign in to read this survey's data." : `The data could not be read (HTTP ${r.status}).`)); return; }
+      const a = d.answer;
+      // the planned finding on the same variables, from the last run, beside the live answer
+      const pair = [it.query.variable, ...(it.query.by ?? [])];
+      const fromRun = analysisRun?.findings.find((f) => f.variables.length >= 1 && pair.every((v) => f.variables.includes(v)) && (pair.length === 1 || f.variables.length === pair.length));
+      const data: CopilotEntry["data"] = { n: a.n, environment: d.environment ?? "LIVE", dataset: d.dataset ?? "clean", source: d.source ?? "data", ...(a.evidence ? { evidence: a.evidence } : {}), caveats: a.caveats, ...(fromRun ? { fromRun: `${fromRun.headline} (run of ${analysisRun!.computedAt.slice(0, 10)})` } : {}) };
+      opts.patch(id, { status: "ready", data, reply: { kind: "answer", reply: a.text, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] }, engine: { ...engine, kind: "answer", sections: a.sections }, opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "query" }, detected: it.detected, statusDetail: a.text.slice(0, 2000), apiCalls: [{ route: "/api/copilot/ask", mode: "data", charge: 0 }] }) });
+    } catch (e) {
+      fail(`The data could not be read: ${(e as Error).message || "the network request failed"}.`);
+    } finally { setBusy(false); }
+  }, [opts, s.surveyDbId, s.def, recordOp, analysisRun]);
   /** the survey a new request is read against: the open proposal's result, so a revision builds on what is proposed */
   const working: SurveyDefinition = React.useMemo(() => (session.proposal ? (stale ? evaluateProposal(rebaseProposal(session.proposal, s.def)).after : full?.after ?? s.def) : s.def), [session.proposal, stale, full, s.def]);
 
@@ -767,7 +811,7 @@ export function useCopilot(opts: {
     docs: session.docs ?? [], durable: session.durable, uploading, docError,
     confirmed: session.confirmed, setConfirmed: (v: boolean) => setSession((x) => ({ ...x, confirmed: v })),
     tab: session.tab, setTab: (t: PanelTab) => setSession((x) => ({ ...x, tab: t })),
-    ask, local, working, runReview, previewFix, apply, cancel, uploadDocs, deleteDoc, refreshDocs,
+    ask, local, askData, working, runReview, previewFix, apply, cancel, uploadDocs, deleteDoc, refreshDocs,
     planFirst, setPlanFirst, executePlan, cancelPlan,
     themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),
     quotaCounts, quotaCountsAt, refreshQuotaCounts,

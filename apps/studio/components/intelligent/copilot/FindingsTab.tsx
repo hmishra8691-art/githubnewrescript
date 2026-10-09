@@ -25,11 +25,16 @@ import { useStudio } from "../../studio/store";
 const VERDICT_WORD: Record<Verdict, string> = { supported: "supported", not_supported: "not supported", mixed: "mixed", inconclusive: "inconclusive", untested: "untested" };
 const VERDICT_SEV: Record<Verdict, string> = { supported: "suggestion", not_supported: "critical", mixed: "warning", inconclusive: "warning", untested: "warning" };
 const STRENGTH_SEV: Record<Finding["strength"], string> = { strong: "critical", moderate: "warning", weak: "suggestion", none: "suggestion" };
+const CORRECTION_WORD: Record<string, string> = { holm: "Holm", bonferroni: "Bonferroni", bh: "BH" };
+const pWord = (p: number) => (p < 0.001 ? "p < .001" : `p = ${p.toFixed(3).replace(/^0/, "")}`);
 const MILESTONE_WORD: Record<string, string> = { first_results: "first results (30 completes)", halfway: "halfway to target", target_reached: "target reached", field_end: "end of fieldwork", manual: "on request" };
 
-export function FindingsTab({ copilot, def }: { copilot: Copilot; def: SurveyDefinition }) {
+export function FindingsTab({ copilot, def, onAsk }: { copilot: Copilot; def: SurveyDefinition; /** a sentence put to the engine first, as if typed (Phase 4) */ onAsk?(sentence: string): void }) {
   const s = useStudio();
   const run = copilot.analysisRun;
+  /* the first discovery whose two variables are questions (a grid's row column is not one), for "add it to the plan" */
+  const isQ = (v: string) => def.questions.some((q) => q.variableName === v);
+  const plannable = run?.discoveries?.segments.find((f) => isQ(f.variables[0]) && isQ(f.variables[1]));
   const [onlySig, setOnlySig] = React.useState(true);
   const plan = def.research?.analysisPlan;
   const hyps = def.research?.hypotheses ?? [];
@@ -71,6 +76,7 @@ export function FindingsTab({ copilot, def }: { copilot: Copilot; def: SurveyDef
               <div key={label} className="cp-block" data-testid="fd-verdict" data-label={label} data-verdict={verdict}>
                 <div><b>{label}</b> {text} <span className={`cp-sev v-${VERDICT_SEV[verdict]}`}>{VERDICT_WORD[verdict]}</span></div>
                 {v?.reason && <div className="iqi-dim">{v.reason}</div>}
+                {v?.corrected && <div className="iq-warning" data-testid="fd-corrected" data-verdict={v.corrected.verdict}><Icon name="warning" size={12} /> {v.corrected.note}</div>}
                 {v?.direction && v.direction.kind !== "difference" && (v.direction.agreeing + v.direction.contradicting + v.direction.unread) > 0 && (
                   <div className="iqi-dim" data-testid="fd-direction" data-agreeing={v.direction.agreeing} data-contradicting={v.direction.contradicting}>
                     Direction stated: {v.direction.kind === "group_higher" ? `${v.direction.group} higher${v.direction.lower ? ` than ${v.direction.lower}` : ""}` : v.direction.kind}
@@ -98,12 +104,48 @@ export function FindingsTab({ copilot, def }: { copilot: Copilot; def: SurveyDef
                 <span className={`cp-sev v-${f.significant ? STRENGTH_SEV[f.strength] : "suggestion"}`}>{f.significant ? f.strength : f.kind === "nps" || f.kind === "topbox" || f.kind === "reliability" ? f.kind : "n.s."}</span> {f.headline}
                 <div className="iqi-dim">
                   {f.analysis.name}{f.hypotheses.length ? ` · ${f.hypotheses.join(", ")}` : ""} · n = {f.evidence.n}{f.evidence.effect ? ` · ${f.evidence.effect.name} = ${f.evidence.effect.value.toFixed(2)}` : ""}{f.chart ? ` · ${String(f.chart).replace(/_/g, " ")}` : ""}
+                  {f.evidence.adjusted ? <span data-testid="fd-adjusted" data-holds={f.evidence.adjusted.significant ? "1" : "0"}> · {CORRECTION_WORD[f.evidence.adjusted.method]}-adjusted {pWord(f.evidence.adjusted.p)}{f.significant && !f.evidence.adjusted.significant ? " — does not hold once corrected" : ""}</span> : null}
                   {f.detail ? <> · {f.detail}</> : null}
                 </div>
               </li>
             ))}
           </ul>
           {run.warnings.length > 0 && <p className="iqi-dim" data-testid="fd-warnings"><Icon name="info" size={12} /> {run.warnings.slice(0, 3).join(" ")}</p>}
+          {run.corrections?.summary && <p className="iqi-dim" data-testid="fd-corrections"><Icon name="info" size={12} /> {run.corrections.summary}</p>}
+        </section>
+      )}
+
+      {run?.advice && run.advice.length > 0 && (
+        /* what the data says about each method (Phase 4): the checks, and the method it recommends */
+        <section data-testid="fd-advice">
+          <div className="iq-label">What the data says about the methods · {run.advice.length}</div>
+          <ul className="cp-review-list">
+            {run.advice.map((a) => (
+              <li key={`${a.planned ?? a.name}`} data-testid="fd-advice-item" data-planned={a.planned ?? ""} data-recommended={a.recommended?.test ?? ""}>
+                <span className={`cp-sev v-${a.checks.some((c) => c.severity === "warning") ? "warning" : "suggestion"}`}>{a.name}</span> {a.checks.map((c) => c.message).join(" ")}
+                {a.recommended && <div className="iq-warning">Recommended: {a.recommended.label} — {a.recommended.reason}</div>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {run?.discoveries && (
+        /* beyond the plan (Phase 4): segment differences the plan did not test, anomalies, trends across waves */
+        <section data-testid="fd-discoveries">
+          <div className="iq-label">Beyond the plan</div>
+          <p className="iqi-dim" data-testid="fd-discoveries-summary">{run.discoveries.summary}</p>
+          {(["segments", "trends", "anomalies"] as const).map((k) => run.discoveries![k].length > 0 && (
+            <ul key={k} className="cp-review-list" data-testid={`fd-${k}`}>
+              {run.discoveries![k].slice(0, 12).map((f) => (
+                <li key={f.id} data-testid="fd-discovery" data-kind={f.kind}>
+                  <span className={`cp-sev v-${f.kind === "anomaly" ? "warning" : STRENGTH_SEV[f.strength]}`}>{f.kind}</span> {f.headline}
+                  {f.detail ? <div className="iqi-dim">{f.detail}</div> : null}
+                </li>
+              ))}
+            </ul>
+          ))}
+          {!s.readOnly && plannable && <div><button type="button" className="iq-btn" data-testid="fd-plan-discovery" disabled={copilot.busy} onClick={() => (onAsk ?? ask)(`Test whether ${plannable.variables[0]} differs by ${plannable.variables[1]}`)}>Add “{plannable.variables[0]} by {plannable.variables[1]}” to the plan</button></div>}
         </section>
       )}
 

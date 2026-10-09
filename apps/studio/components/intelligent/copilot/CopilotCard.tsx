@@ -108,6 +108,15 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
             <Icon name={entry.coverage.ok ? "check" : "warning"} size={12} /> <span className="iq-label">Coverage</span> <Linked text={entry.coverage.summary} def={def} onSelect={onSelect} />
           </p>
         )}
+        {entry.data && (
+          /* a data question's answer (Phase 4): read on the respondent data — the base, the test, the caveats, and the planned finding on the same pair */
+          <p className="cp-data" data-testid="cp-data" data-n={entry.data.n} data-source={entry.data.source}>
+            <Icon name="chart" size={12} /> <span className="iq-label">Read from the data</span> {entry.data.n} {entry.data.source === "sandbox" ? "sandbox" : `${entry.data.environment.toLowerCase()} ${entry.data.dataset}`} respondents
+            {entry.data.evidence ? ` · ${entry.data.evidence.test.replace(/_/g, " ")}${entry.data.evidence.p != null ? `, ${entry.data.evidence.p < 0.001 ? "p < .001" : `p = ${entry.data.evidence.p.toFixed(3).replace(/^0/, "")}`}` : ""}${entry.data.evidence.effect ? `, ${entry.data.evidence.effect.name} = ${entry.data.evidence.effect.value.toFixed(2)}` : ""} — ${entry.data.evidence.significant ? "significant" : "not significant"}` : ""}
+            {entry.data.caveats.length ? <span className="iq-warning" data-testid="cp-data-caveat"> · {entry.data.caveats.join(" ")}</span> : null}
+            {entry.data.fromRun ? <span className="iqi-dim" data-testid="cp-data-run"> · In the plan's last run: {entry.data.fromRun}</span> : null}
+          </p>
+        )}
         {entry.status !== "plan" && entry.changePlan?.approved && (
           <div className="cp-plan-built" data-testid="cp-plan-built">
             <span className="iq-label">Built from the change plan</span>

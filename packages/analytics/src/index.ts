@@ -16,3 +16,7 @@ export * from "./planBridge.js";
 export * from "./plannedVariables.js";
 export * from "./findings.js";
 export * from "./findingsReport.js";
+export * from "./posthoc.js";
+export * from "./dataAdvice.js";
+export * from "./synthesis.js";
+export * from "./dataQuery.js";

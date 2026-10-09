@@ -9,6 +9,9 @@ import { recommendCharts } from "./recommend.js";
 import { plannedAnalyses, type PlannedAnalysis } from "./planBridge.js";
 import { withPlannedVariables } from "./plannedVariables.js";
 import { buildAnalysisFramework, parseHypothesis, structuredHypotheses } from "@rescript/engine";
+import { adjustP, pairwiseComparisons, CORRECTION_WORDS, type CorrectionMethod, type PairwiseResult } from "./posthoc.js";
+import { adviseAnalysis, adviceSummary, type DataAdvice } from "./dataAdvice.js";
+import { synthesize, type Discoveries } from "./synthesis.js";
 
 /*
  * FINDINGS (research-intelligence Phase 5): what the data SAID, read from the
@@ -24,13 +27,19 @@ import { buildAnalysisFramework, parseHypothesis, structuredHypotheses } from "@
  * and decides when to make them (a milestone of fieldwork, or on request).
  */
 
-export type FindingKind = "difference" | "no_difference" | "driver" | "no_driver" | "correlation" | "no_correlation" | "mediation" | "nps" | "topbox" | "reliability" | "low_base" | "inconclusive";
+export type FindingKind = "difference" | "no_difference" | "driver" | "no_driver" | "correlation" | "no_correlation" | "mediation" | "nps" | "topbox" | "reliability" | "low_base" | "inconclusive"
+  /** beyond the plan (Phase 4): a segment difference the plan did not test, a data anomaly, a move across waves */
+  | "segment" | "anomaly" | "trend";
 export type Strength = "strong" | "moderate" | "weak" | "none";
 
 export interface FindingEvidence {
   test?: string; statistic?: number | null; df?: number | [number, number]; p?: number | null; effect?: { name: string; value: number }; n: number; direction?: "positive" | "negative";
   /** a comparison of groups: each group's mean, as the test's table printed it — which group is higher is read from here */
   groups?: { label: string; mean: number | null; n: number }[];
+  /** the p adjusted for the family of tests it was made in (Phase 4); the raw p and `significant` stay as they are */
+  adjusted?: { method: CorrectionMethod; p: number; significant: boolean; family: string };
+  /** which pairs of groups differ, when the test compared three or more (Phase 4) */
+  pairwise?: PairwiseResult;
 }
 export interface Finding {
   id: string;
@@ -52,6 +61,8 @@ export interface HypothesisVerdict {
   label: string; text: string; verdict: Verdict; reason: string; findings: Finding[]; analyses: number;
   /** the direction the hypothesis states, and how the significant evidence sided with it */
   direction?: HypothesisDirection & { agreeing: number; contradicting: number; unread: number };
+  /** the verdict once the hypothesis' tests are corrected as a family, when it differs from the raw one (Phase 4) */
+  corrected?: { verdict: Verdict; note: string };
 }
 
 export interface RunItem {
@@ -63,7 +74,13 @@ export interface RunItem {
   source?: PlannedAnalysis["source"];
   priority?: number;
   hypotheses: string[];
+  /** what the data says about the method (Phase 4): the checks and the method it recommends */
+  advice?: DataAdvice;
+  /** this item was run because the data advice recommended its method beside a planned item */
+  adaptedFrom?: string;
 }
+/** one family of tests corrected together (Phase 4) */
+export interface CorrectionFamily { family: string; tests: number; /** findings significant before and after */ before: number; after: number; lost: string[] }
 export interface AnalysisRun {
   computedAt: string;
   trigger: string;
@@ -75,6 +92,12 @@ export interface AnalysisRun {
   findings: Finding[];
   verdicts: HypothesisVerdict[];
   warnings: string[];
+  /** the multiple-comparison correction applied to the planned tests, by family (Phase 4) */
+  corrections?: { method: CorrectionMethod; families: CorrectionFamily[]; summary: string };
+  /** the data advice, one entry per analysis that had something to say (Phase 4) */
+  advice?: DataAdvice[];
+  /** what the run found beyond the plan (Phase 4) */
+  discoveries?: Discoveries;
 }
 
 /* ------------------------------------------------------------ strength */
@@ -421,8 +444,65 @@ export function hypothesisVerdicts(def: SurveyDefinition, items: RunItem[]): Hyp
 
 /* ------------------------------------------------------------ the run */
 
+/* ------------------------------------------------------------ corrections (Phase 4) */
+
+const CORRECTABLE: FindingKind[] = ["difference", "no_difference", "driver", "no_driver", "correlation", "no_correlation", "mediation"];
+
+/**
+ * The planned tests' p-values corrected by family: one family per hypothesis
+ * (its tagged findings), and one for the findings that serve no hypothesis.
+ * A finding in two hypotheses is corrected in the larger family. The raw p
+ * and `significant` stay; `evidence.adjusted` says what holds.
+ */
+export function applyCorrections(items: RunItem[], method: CorrectionMethod = "holm", alpha = 0.05): { families: CorrectionFamily[]; summary: string } {
+  const all = items.flatMap((it) => it.findings).filter((f) => CORRECTABLE.includes(f.kind) && typeof f.evidence.p === "number");
+  const byFamily = new Map<string, Finding[]>();
+  const labels = [...new Set(all.flatMap((f) => f.hypotheses))].sort();
+  const sizeOf = new Map(labels.map((h) => [h, all.filter((f) => f.hypotheses.includes(h)).length]));
+  for (const f of all) {
+    const fam = f.hypotheses.length ? [...f.hypotheses].sort((a, b) => (sizeOf.get(b) ?? 0) - (sizeOf.get(a) ?? 0))[0] : "plan";
+    byFamily.set(fam, [...(byFamily.get(fam) ?? []), f]);
+  }
+  const families: CorrectionFamily[] = [];
+  for (const [family, fs] of byFamily) {
+    const adj = adjustP(fs.map((f) => f.evidence.p), method);
+    const lost: string[] = [];
+    fs.forEach((f, i) => {
+      const p = adj[i]; if (p == null) return;
+      const significant = p < alpha;
+      f.evidence.adjusted = { method, p, significant, family };
+      if (f.significant && !significant) lost.push(f.id);
+    });
+    families.push({ family, tests: fs.length, before: fs.filter((f) => f.significant).length, after: fs.filter((f) => f.evidence.adjusted?.significant).length, lost });
+  }
+  families.sort((a, b) => (a.family === "plan" ? 1 : b.family === "plan" ? -1 : a.family.localeCompare(b.family)));
+  const lostAll = families.reduce((n, f) => n + f.lost.length, 0);
+  const summary = !all.length ? "" : `${CORRECTION_WORDS[method]} correction over ${families.map((f) => `${f.tests} test${f.tests === 1 ? "" : "s"} for ${f.family === "plan" ? "the plan" : f.family}`).join(", ")}: ${lostAll ? `${lostAll} finding${lostAll === 1 ? "" : "s"} significant on ${lostAll === 1 ? "its" : "their"} own ${lostAll === 1 ? "is" : "are"} not once corrected.` : "every significant finding holds."}`;
+  return { families, summary };
+}
+
+/** the verdict with the family correction read: differs from the raw one only when a supporting test no longer holds */
+export function correctedVerdict(v: HypothesisVerdict): HypothesisVerdict["corrected"] | undefined {
+  const tested = v.findings.filter((f) => TESTED.includes(f.kind) && f.evidence.adjusted);
+  if (!tested.length) return undefined;
+  const lost = tested.filter((f) => f.significant && !f.evidence.adjusted!.significant);
+  if (!lost.length) return undefined;
+  const stillSig = tested.filter((f) => f.evidence.adjusted!.significant);
+  const k = tested.length, method = CORRECTION_WORDS[tested[0].evidence.adjusted!.method];
+  const verdict: Verdict = v.verdict === "not_supported" ? "not_supported" : stillSig.length ? "mixed" : "not_supported";
+  if (verdict === v.verdict) return undefined;
+  return { verdict, note: `After ${method} correction for ${k} test${k === 1 ? "" : "s"}, ${stillSig.length ? `${stillSig.length} of ${lost.length + stillSig.length} significant finding${lost.length + stillSig.length === 1 ? "" : "s"} still hold${stillSig.length === 1 ? "s" : ""}` : `no significant finding holds`} — ${verdict === "mixed" ? "mixed rather than supported" : "not supported"} on the corrected reading.` };
+}
+
 /** The whole plan, run once on a dataset. `items` lets the caller run saved definitions instead of (or as well as) the plan's. */
-export function runPlan(def: SurveyDefinition, input: Dataset, opts: { trigger?: string; items?: PlannedAnalysis[]; primaries?: boolean; now?: string } = {}): AnalysisRun {
+export function runPlan(def: SurveyDefinition, input: Dataset, opts: { trigger?: string; items?: PlannedAnalysis[]; primaries?: boolean; now?: string;
+  /** the multiple-comparison correction (Phase 4): Holm by default; "none" leaves the raw p-values alone */
+  correction?: CorrectionMethod | "none";
+  /** run the method the data advice recommends beside the planned one (Phase 4) */
+  adapt?: boolean;
+  /** look beyond the plan — segment discovery, anomalies, wave trends (Phase 4); on by default */
+  discover?: boolean;
+} = {}): AnalysisRun {
   /*
    * The plan's derived variables and segments first, as columns of this run's
    * dataset — so a planned test of BRAND_TRUST_SCORE, or a crosstab by the
@@ -433,16 +513,45 @@ export function runPlan(def: SurveyDefinition, input: Dataset, opts: { trigger?:
   const prepared = withPlannedVariables(def, input, plan);
   const dataset = prepared.dataset;
   const planned = opts.items ?? plannedAnalyses(def, dataset.spec, { primaries: opts.primaries ?? false, plan });
-  const items: RunItem[] = planned.map((p) => {
+  const method: CorrectionMethod | "none" = opts.correction ?? "holm";
+  const corrMethod: CorrectionMethod = method === "none" ? "holm" : method;
+  const runOne = (p: PlannedAnalysis, adaptedFrom?: string): RunItem => {
     const result = runAnalysis(p.definition, dataset);
     const findings = findingsFor(p.definition, result, { hypotheses: p.hypotheses, ...(p.definition.id ? { id: p.definition.id } : {}), label: (v) => dataset.byName.get(v)?.label ?? v });
     const chart = recommendCharts(result, 1)[0]?.type ?? result.recommendedCharts[0];
-    return { definition: p.definition, result, findings, ...(chart ? { chart } : {}), source: p.source, priority: p.priority, hypotheses: p.hypotheses };
-  });
+    /* which pairs differ, when a significant comparison had three or more groups (Phase 4) */
+    if (p.definition.kind === "test" && dataset.cases.length >= MIN_BASE) {
+      const [y, g] = p.definition.variables;
+      const groups = result.tables.find((t) => t.id === "groups")?.rows.length ?? 0;
+      const f = findings.find((x) => x.kind === "difference" && /anova|kruskal/.test(x.evidence.test ?? ""));
+      if (f && y && g && groups >= 3) {
+        const pw = pairwiseComparisons(dataset, y, g, { method: corrMethod, nonparametric: /kruskal/.test(f.evidence.test ?? "") });
+        f.evidence.pairwise = pw;
+        f.detail = `${f.detail ? `${f.detail} ` : ""}${pw.summary}`;
+      }
+    }
+    const advice = adviseAnalysis(p.definition, dataset);
+    return { definition: p.definition, result, findings, ...(chart ? { chart } : {}), source: p.source, priority: p.priority, hypotheses: p.hypotheses, ...(advice.ok ? {} : { advice }), ...(adaptedFrom ? { adaptedFrom } : {}) };
+  };
+  const items: RunItem[] = planned.map((p) => runOne(p));
+  /* the recommended method beside the planned one, when asked (Phase 4) */
+  if (opts.adapt) {
+    for (const it of [...items]) {
+      const rec = it.advice?.recommended;
+      if (!rec || it.definition.kind !== "test" || !["mann_whitney", "kruskal_wallis", "t_welch", "fisher_exact"].includes(rec.test)) continue;
+      const planned = it.definition.options?.planned ? String(it.definition.options.planned) : it.definition.name;
+      const adapted: PlannedAnalysis = { definition: { ...it.definition, name: `${it.definition.name} (${rec.label})`, options: { ...(it.definition.options ?? {}), test: rec.test, planned: undefined } }, source: it.source ?? { kind: "test", id: planned }, priority: it.priority ?? 2, hypotheses: it.hypotheses, reason: rec.reason };
+      items.push(runOne(adapted, planned));
+    }
+  }
+  const corrections = method === "none" ? undefined : { method: corrMethod, ...applyCorrections(items, corrMethod) };
   const findings = rankFindings(items.flatMap((it) => it.findings));
-  const verdicts = hypothesisVerdicts(def, items);
+  const verdicts = hypothesisVerdicts(def, items).map((v) => { const corrected = corrections ? correctedVerdict(v) : undefined; return corrected ? { ...v, corrected } : v; });
+  const advice = items.map((it) => it.advice).filter((a): a is DataAdvice => !!a);
+  const discoveries = opts.discover === false ? undefined : synthesize(def, dataset, { method: corrMethod });
   const warnings = [...new Set([...prepared.warnings, ...items.flatMap((it) => it.result.warnings)])];
-  return { computedAt: opts.now ?? new Date().toISOString(), trigger: opts.trigger ?? "manual", environment: dataset.spec.environment, n: dataset.cases.length, items, findings, verdicts, warnings };
+  return { computedAt: opts.now ?? new Date().toISOString(), trigger: opts.trigger ?? "manual", environment: dataset.spec.environment, n: dataset.cases.length, items, findings, verdicts, warnings,
+    ...(corrections ? { corrections } : {}), ...(advice.length ? { advice } : {}), ...(discoveries ? { discoveries } : {}) };
 }
 
 /** the run without its results — what is stored and sent around */
@@ -459,10 +568,18 @@ export function briefText(run: Pick<AnalysisRun, "computedAt" | "n" | "findings"
   const max = opts.maxFindings ?? 15;
   const lines: string[] = [];
   lines.push(`Analysis run (${run.trigger}) on ${run.n} ${run.environment.toLowerCase()} completes, ${run.computedAt.slice(0, 16).replace("T", " ")}:`);
-  for (const v of run.verdicts) lines.push(`  ${v.label} ${VERDICT_WORDS[v.verdict]} — ${v.text}. ${v.reason}`);
+  for (const v of run.verdicts) lines.push(`  ${v.label} ${VERDICT_WORDS[v.verdict]} — ${v.text}. ${v.reason}${v.corrected ? ` ${v.corrected.note}` : ""}`);
   const shown = run.findings.filter((f) => f.kind !== "inconclusive").slice(0, max);
-  if (shown.length) { lines.push(`  Findings (strongest first):`); for (const f of shown) lines.push(`    [${f.significant ? f.strength : "ns"}] ${f.headline}${f.hypotheses.length ? ` (${f.hypotheses.join(", ")})` : ""}${f.detail ? ` ${f.detail}` : ""}`); }
+  const adj = (f: Finding) => (f.evidence.adjusted && f.significant && !f.evidence.adjusted.significant ? ` [not significant after ${CORRECTION_WORDS[f.evidence.adjusted.method]} correction, ${fmtP(f.evidence.adjusted.p)}]` : "");
+  if (shown.length) { lines.push(`  Findings (strongest first):`); for (const f of shown) lines.push(`    [${f.significant ? f.strength : "ns"}] ${f.headline}${f.hypotheses.length ? ` (${f.hypotheses.join(", ")})` : ""}${adj(f)}${f.detail ? ` ${f.detail}` : ""}`); }
   if (run.findings.length > shown.length) lines.push(`    … and ${run.findings.length - shown.length} more`);
+  const r = run as Partial<Pick<AnalysisRun, "corrections" | "advice" | "discoveries">>;
+  if (r.corrections?.summary) lines.push(`  Corrections: ${r.corrections.summary}`);
+  if (r.advice?.length) lines.push(`  Data advice: ${adviceSummary(r.advice)}`);
+  if (r.discoveries) {
+    lines.push(`  ${r.discoveries.summary}`);
+    for (const f of [...r.discoveries.segments, ...r.discoveries.trends, ...r.discoveries.anomalies].slice(0, Math.max(5, Math.floor(max / 2)))) lines.push(`    [${f.kind}] ${f.headline}`);
+  }
   if (run.warnings.length) lines.push(`  Caveats: ${run.warnings.slice(0, 4).join(" ")}`);
   return lines.join("\n");
 }

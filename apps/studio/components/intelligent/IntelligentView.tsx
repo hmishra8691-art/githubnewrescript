@@ -238,6 +238,11 @@ export function IntelligentView() {
      */
     const ids = (sel?.keys ?? []).filter((k) => k.startsWith("question:")).map((k) => k.slice(9));
     const interp = interpretRequest(copilot.working, t, { selectedId, ...(ids.length > 1 ? { selectedIds: ids } : {}) });
+    // a question about the data (Phase 4): the engine read it into a query; the answer is on the server's respondent data
+    if (interp.kind === "query") {
+      await copilot.askData(t, interp, heard);
+      setBusy(false); inputRef.current?.focus(); return;
+    }
     if (interp.kind !== "model") {
       copilot.local(t, interp, heard);
       if (interp.kind === "actions") {

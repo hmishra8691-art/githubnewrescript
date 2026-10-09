@@ -101,7 +101,7 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
         {copilot.tab === "research" && <ResearchTab copilot={copilot} def={def} />}
         {copilot.tab === "history" && <HistoryTab copilot={copilot} def={def} readOnly={readOnly} onSelect={onSelect} />}
         {copilot.tab === "analysis" && <AnalysisTab copilot={copilot} def={def} onSelect={onSelect} />}
-        {copilot.tab === "findings" && <FindingsTab copilot={copilot} def={def} />}
+        {copilot.tab === "findings" && <FindingsTab copilot={copilot} def={def} onAsk={onAsk} />}
         {copilot.tab === "languages" && <LanguagesTab copilot={copilot} def={def} onSelect={onSelect} />}
         {copilot.tab === "quotas" && <QuotasTab copilot={copilot} def={def} onSelect={onSelect} onImportSheet={() => onImportQuotaSheet?.()} lastImport={quotaImport ?? null} readOnly={readOnly} />}
         {copilot.tab === "ux" && <UxTab copilot={copilot} def={def} onSelect={onSelect} />}

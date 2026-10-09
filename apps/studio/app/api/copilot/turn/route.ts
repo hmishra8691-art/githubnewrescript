@@ -11,7 +11,7 @@ import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
 import { billingProjectFor, meteredAi, refusalResponse } from "@/lib/metering";
 import { describeThemeImage, withThemeImage } from "@/lib/copilot/themeImageText";
 import type { AnalysisRun } from "@rescript/analytics";
-type RunBrief = Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger">;
+type RunBrief = Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger" | "corrections" | "advice" | "discoveries">;
 import { COPILOT_SYSTEM_PROMPT, classifyRequest, coerceCopilotReply, copilotUserPrompt, analysisIntent, translationIntent, quotaIntent, findingsIntent, referencedQuestions, surveyLanguageOf, type RequestMode, type TurnMemory } from "@/lib/copilot/prompt";
 import { researchCards, researchPassages } from "@/lib/copilot/research";
 import { researchStoreFor } from "@/lib/copilot/store";
