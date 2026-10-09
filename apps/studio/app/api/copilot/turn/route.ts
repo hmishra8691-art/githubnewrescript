@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { SurveyDefinition } from "@rescript/schema";
 import { aiConfigured, aiProviderName, completeJson, embedTexts, aiEmbeddingsModelName, isAiReplyError } from "@rescript/ai";
-import { describeFailure, failureFromError, failureFromReplyError } from "@/lib/copilot/failure";
+import { describeFailure, failureFromError, failureFromReplyError, type TurnFailure } from "@/lib/copilot/failure";
+import { CHANGE_PLAN_SCHEMA, coerceChangePlan, executeItemPrompt, mergeItemReplies, planStagePrompt, type ChangePlan } from "@/lib/copilot/changePlan";
 import { COPILOT_REPLY_SCHEMA } from "@/lib/copilot/replySchema";
 import { applySurveyActions, diffSurveys, reviewSurvey } from "@rescript/engine";
 import { ResearchIndex } from "@rescript/import/research";
@@ -51,7 +52,7 @@ const TTL = 15 * 60_000;
 
 export async function POST(req: NextRequest) {
   const authed = await requireUser(req);
-  let body: { surveyId?: unknown; message?: unknown; definition?: unknown; selectedId?: unknown; memory?: TurnMemory; mode?: unknown; fake?: unknown; scope?: unknown; themeImage?: unknown; quotaCounts?: unknown; analysisRun?: unknown };
+  let body: { surveyId?: unknown; message?: unknown; definition?: unknown; selectedId?: unknown; memory?: TurnMemory; mode?: unknown; fake?: unknown; scope?: unknown; themeImage?: unknown; quotaCounts?: unknown; analysisRun?: unknown; stage?: unknown; planFirst?: unknown; plan?: unknown; items?: unknown };
   try { body = await req.json(); } catch { return isFailure(authed) ? authed.response : NextResponse.json({ error: "bad json" }, { status: 400 }); }
   const surveyId = typeof body.surveyId === "string" ? body.surveyId : "";
   let user: AuthedUser | null = null;
@@ -128,13 +129,86 @@ export async function POST(req: NextRequest) {
   /* 3: the model — or the cache, for exactly the same request */
   const maxTokens = mode === "generate" ? 8000 : mode === "review" ? 3000 : uxTurn ? 3500 : 2500;
   const key = createHash("sha256").update(`${COPILOT_SYSTEM_PROMPT}\u0000${prompt}\u0000${maxTokens}`).digest("hex");
-  // the browser suites stand in for the model: one reply, or [reply, the reply to the repair request]
+  // the browser suites stand in for the model: one reply, or [reply, the reply to the repair request] — or, executing a plan, one reply per item
   const fakes = aiProviderName() === "fake" && body.fake && typeof body.fake === "object" ? (Array.isArray(body.fake) ? body.fake : [body.fake]) : [];
   const fake = fakes[0] ?? null;
   let raw: unknown;
   let cached = false;
+  /*
+   * THE CHANGE PLAN (Phase 2). A generation — a questionnaire from a brief,
+   * a restructuring — is planned before it is built: one small call for the
+   * plan, shown to the researcher; then, once approved, one call per item.
+   * `stage: "execute"` is the second half; a plan-first request that the
+   * model cannot plan (or a scripted reply that is not a plan) falls through
+   * to the single-reply turn as before.
+   */
+  const stage = body.stage === "execute" ? "execute" : body.stage === "plan" || (body.planFirst !== false && mode === "generate" && !(fake && (fake as { kind?: string }).kind !== "plan")) ? "plan" : null;
+  let planFailures: { id: string; failure: TurnFailure }[] = [];
+  let executedPlan: ChangePlan | null = null;
+  if (stage === "plan") {
+    const planPrompt = prompt + planStagePrompt();
+    try {
+      const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + planPrompt, maxTokens: 2000, operation: "copilot_plan" },
+        () => completeJson(COPILOT_SYSTEM_PROMPT, planPrompt, 2000, { timeoutMs: 90_000, schema: CHANGE_PLAN_SCHEMA, continuations: 1 }));
+      if (!m.ok) {
+        const r = refusalResponse(m);
+        const body = await r.json().catch(() => ({})) as Record<string, unknown>;
+        return NextResponse.json({ ...body, failure: describeFailure("wallet", String(body.error ?? "")) }, { status: r.status });
+      }
+      charge += m.event?.customerCharge ?? 0;
+      const plan = coerceChangePlan(fake ?? m.value);
+      if (plan) return NextResponse.json({ ok: true, stage: "plan", plan, context: { mode, researchUsed: !!research, passages: passageIds, promptChars: planPrompt.length, cached: false }, usage: { charge } });
+      // nothing plan-shaped came back: the single-reply turn below, as before (and the scripted reply, if any, is that turn's)
+    } catch (e) {
+      console.warn("[rescript:copilot] plan failed", JSON.stringify({ error: (e as Error).message }));
+      const failure = isAiReplyError(e) ? failureFromReplyError(e.code, e.detail) : failureFromError((e as Error).message);
+      return NextResponse.json({ ok: false, error: `${failure.message} Nothing was changed.`, failure, context: { mode, promptChars: planPrompt.length, cached: false }, usage: { charge } }, { status: 502 });
+    }
+  }
+  if (stage === "execute") {
+    const plan = coerceChangePlan(body.plan);
+    if (!plan) return NextResponse.json({ error: "send the approved change plan (plan)" }, { status: 400 });
+    const wanted = Array.isArray(body.items) ? new Set(body.items.map(String)) : null;
+    const approved = plan.items.filter((it) => !wanted || wanted.has(it.id));
+    if (!approved.length) return NextResponse.json({ error: "no plan item was approved" }, { status: 400 });
+    executedPlan = { ...plan, items: approved };
+    const built: { item: typeof approved[number]; raw: unknown }[] = [];
+    const done: string[] = [];
+    const itemTokens = mode === "generate" ? 4000 : 3000;
+    for (let i = 0; i < approved.length; i++) {
+      const item = approved[i];
+      const itemPrompt = prompt + executeItemPrompt(plan, item, i, approved, done);
+      try {
+        const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + itemPrompt, maxTokens: itemTokens, operation: `copilot_${mode}_item` },
+          () => completeJson(COPILOT_SYSTEM_PROMPT, itemPrompt, itemTokens, { timeoutMs: 120_000, schema: COPILOT_REPLY_SCHEMA, continuations: 1 }));
+        if (!m.ok) {
+          const r = refusalResponse(m);
+          const body = await r.json().catch(() => ({})) as Record<string, unknown>;
+          if (!built.length) return NextResponse.json({ ...body, failure: describeFailure("wallet", String(body.error ?? "")) }, { status: r.status });
+          planFailures.push({ id: item.id, failure: describeFailure("wallet", String(body.error ?? "")) });
+          break;
+        }
+        charge += m.event?.customerCharge ?? 0;
+        const itemRaw = fakes[i] ?? m.value;
+        built.push({ item, raw: itemRaw });
+        const o = (itemRaw && typeof itemRaw === "object" ? itemRaw : {}) as { actions?: { op?: string; code?: string; text?: string; title?: string }[] };
+        const codes = (o.actions ?? []).map((a) => a?.code ?? a?.title ?? "").filter(Boolean).slice(0, 12);
+        done.push(`${item.title}${codes.length ? ` (${codes.join(", ")})` : ""}`);
+      } catch (e) {
+        console.warn("[rescript:copilot] plan item failed", JSON.stringify({ item: item.id, error: (e as Error).message }));
+        const failure = isAiReplyError(e) ? failureFromReplyError(e.code, e.detail) : failureFromError((e as Error).message);
+        planFailures.push({ id: item.id, failure });
+      }
+    }
+    if (!built.length) {
+      const failure = planFailures[0]?.failure ?? describeFailure("unusable");
+      return NextResponse.json({ ok: false, error: `${failure.message} Nothing was changed.`, failure, context: { mode, promptChars: prompt.length, cached: false }, usage: { charge } }, { status: 502 });
+    }
+    raw = mergeItemReplies(built);
+  }
   const hit = CACHE.get(key);
-  if (hit && Date.now() - hit.at < TTL && !fake) { raw = hit.value; cached = true; }
+  if (stage === "execute") { /* built above */ }
+  else if (hit && Date.now() - hit.at < TTL && !fake) { raw = hit.value; cached = true; }
   else {
     try {
       /*
@@ -182,7 +256,7 @@ export async function POST(req: NextRequest) {
   let repair: { refused: string[]; fixed: boolean } | undefined;
   // the failed actions, each "what it was: why" — the first entries of errors, in order
   const refused = applied ? applied.errors.slice(0, applied.results.filter((x) => !x.ok).length) : [];
-  if (applied && refused.length && !cached && (aiProviderName() !== "fake" || fakes.length > 1)) {
+  if (applied && refused.length && !cached && !executedPlan && (aiProviderName() !== "fake" || fakes.length > 1)) {
     const repairPrompt = `${prompt}\n\nYOUR PREVIOUS ANSWER:\n${JSON.stringify(raw).slice(0, 14_000)}\n\nTHE STUDIO REFUSED ${refused.length} OF ITS ${reply.actions.length} ACTIONS:\n${refused.map((e) => `- ${e}`).join("\n")}\n\nAnswer again in the same JSON shape. Keep the accepted actions as they were; correct each refused action using only the actions, events and rs api described above, or drop it and say plainly in "reply" what the Studio cannot do. Do not mention the refusal to the user unless something could not be done.`;
     try {
       const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + repairPrompt, maxTokens, operation: `copilot_${mode}_repair` },
@@ -213,6 +287,7 @@ export async function POST(req: NextRequest) {
   }
   return NextResponse.json({
     ok: true, reply,
+    ...(executedPlan ? { stage: "executed", plan: executedPlan, ...(planFailures.length ? { planFailures } : {}) } : {}),
     validation: applied ? { valid: applied.valid, results: applied.results, errors: applied.errors, destructive: applied.destructive, warnings: applied.warnings, summary: diff?.summary ?? [], diff, uxOnly: applied.uxOnly, structureUnchanged: applied.structureUnchanged } : null,
     ...(deterministic ? { review: deterministic } : {}),
     passages,

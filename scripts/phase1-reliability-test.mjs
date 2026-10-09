@@ -76,7 +76,8 @@ ok("fixture loaded");
 /* ============================================================ 1. honest failures */
 await intelligent();
 {
-  const t = await say("Change the screener so that respondents under 25 are excluded.");
+  // (Phase 2 reads the screener sentence itself; a rewording is still the model's)
+  const t = await say("Rewrite the age question so it is friendlier.");
   assert.equal(await t.getAttribute("data-status"), "failed");
   const f = await t.$('[data-testid="cp-failure"]');
   assert.ok(f, "the failure block is shown");
@@ -87,7 +88,7 @@ await intelligent();
   assert.match(text, /WHAT TO DO/i, "and what to do next");
   const handoff = await t.$('[data-testid="cp-handoff"]');
   assert.ok(handoff, "what the engine read is shown");
-  assert.match(await handoff.evaluate((e) => e.innerText), /does not parse that phrasing/, "…including why it handed the sentence on");
+  assert.match(await handoff.evaluate((e) => e.innerText), /rewording a question is writing/, "…including why it handed the sentence on");
   assert.doesNotMatch(await viewText(), /I did not understand that/, "the grammar's message is gone");
   ok("an unusable model reply: the cause, the next step, what the engine read — not “not understood”");
 }

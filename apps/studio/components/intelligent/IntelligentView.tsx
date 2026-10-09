@@ -252,13 +252,27 @@ export function IntelligentView() {
     let modelHadNothing = false;
     const pre = parseIntent(t);
     const readOnlyExact = deferred || (["find", "explain", "diagnose", "screening"].includes(pre.kind) && !planProposal(s.def, pre, "grammar", deps).errors.length);
+    /*
+     * NO MODEL, BUT SOMETHING THE ENGINE CAN DO (Phase 2). The Studio knows
+     * there is no model, and the engine handed the sentence on with what it
+     * could do by itself — a standard item for "add a question to measure
+     * purchase intent", the objective for "create a research design for …".
+     * That is offered as a choice, not a dead end.
+     */
+    if (!readOnlyExact && copilot.available === false && interp.kind === "model" && interp.fallback && !deferred) {
+      const fb = interp.fallback;
+      copilot.local(t, { kind: "clarify", category: interp.category ?? "survey_editing", understood: fb.understood, question: `No language model is configured on this Studio, so the copilot cannot write this. ${fb.question}`, choices: fb.choices, detected: interp.detected }, heard);
+      setBusy(false); inputRef.current?.focus(); return;
+    }
     if (!readOnlyExact && copilot.available !== false) {
       // the model's turn carries what the engine read; a failed turn says its cause on the card (Phase 1). "empty" — the model
       // had nothing usable — goes on to the grammar: a reading it has replaces the failed turn; none, and the failed turn stands.
-      const outcome = await copilot.ask(t, heard, undefined, deferred ? undefined : { category: interp.category, reason: interp.reason, detected: interp.detected });
+      const outcome = await copilot.ask(t, heard, undefined, deferred ? undefined : { category: interp.category, reason: interp.reason, detected: interp.detected, ...(interp.fallback ? { fallback: interp.fallback } : {}) });
       if (outcome === "handled") { setBusy(false); inputRef.current?.focus(); return; }
       if (outcome === "unavailable" && !deferred) { setBusy(false); inputRef.current?.focus(); return; }
       modelHadNothing = outcome === "empty";
+      // the model had nothing, and the engine knows what it can do instead: the failed card offers it — the grammar's guess at a sentence the engine declined to read is not better
+      if (modelHadNothing && interp.kind === "model" && interp.fallback) { setBusy(false); inputRef.current?.focus(); return; }
     }
     const selectedLabel = primary?.startsWith("question:") ? (s.def.questions.find((q) => q.id === primary.slice(9))?.code ?? null) : null;
     let intent: Intent = parseIntent(t);
@@ -706,6 +720,7 @@ export function IntelligentView() {
           <button type="button" className="iq-btn" onClick={() => { setText("My hypothesis is that … Target respondents: … Create a survey that tests it."); inputRef.current?.focus(); }} data-testid="cp-generate" title="Describe an objective or hypothesis; the copilot proposes the whole survey"><Icon name="plus" size={13} /> Generate survey</button>
           <button type="button" className="iq-btn" onClick={() => { setShowInspector(true); void copilot.runReview(); }} disabled={busy} data-testid="cp-review" title="Check logic, reachability, wording, scales, duplicates, length — and, with a model, research alignment"><Icon name="check" size={13} /> Review</button>
           <button type="button" className="iq-btn" onClick={() => { const last = [...copilot.history].reverse().find((h) => !h.reverted && h.key); if (last?.key) void copilot.restore(last.key).then((r) => { if (!r.ok && r.reason) { setShowInspector(true); copilot.setTab("history"); s.toast(r.reason, "err"); } }); }} disabled={!copilot.history.some((h) => !h.reverted && h.key)} data-testid="cp-undo-last" title="Undo the last AI change, as one operation">Undo AI change</button>
+          <label className={`iq-toggle${copilot.planFirst ? " on" : ""}`} data-testid="iq-plan-first" title="Plan first: a questionnaire generated from a brief, or a restructuring, is planned before it is built — the plan is shown for approval, then each approved item is built with its own model call, so nothing is cut off. Off: one reply with everything, as before."><input type="checkbox" checked={copilot.planFirst} onChange={(e) => copilot.setPlanFirst(e.target.checked)} /> Plan first</label>
           <span className="iq-provider" data-testid="iq-provider" data-ai={aiAvailable === null && copilot.available === null ? "unknown" : copilot.available || aiAvailable ? "on" : "off"} data-copilot={copilot.available === null ? "unknown" : copilot.available ? "on" : "off"} title={copilot.available === false ? "The Studio's engine reads every request first — edits, logic, options, dependencies, impact — with no model call. No language model is configured, so what the engine hands on (rewording, generation, translation text) is not available." : "The Studio's engine reads every request first and does everything it can deterministically, with no model call; the copilot (the configured model) is asked only for what it hands on."}>
             {copilot.available === false ? "engine only" : copilot.available ? "engine + copilot" : aiAvailable ? "engine + model" : "engine"}
           </span>
@@ -759,6 +774,7 @@ export function IntelligentView() {
                     onAnswer={(q) => { setText(`${q} — `); inputRef.current?.focus(); }}
                     onSelectKey={(k) => selectKey(k as ObjectKey)} onAsk={(q) => void ask(q)}
                     onPreviewFix={(actions, label) => { copilot.previewFix(actions, label); setShowInspector(true); }}
+                    onExecutePlan={(id, items) => void copilot.executePlan(id, items)} onCancelPlan={(id) => copilot.cancelPlan(id)}
                     counts={open ? proposalCounts(copilot.state!.diff, copilot.state!.after) : null}
                     canApply={!!open && !s.readOnly && !copilot.state!.diff.empty && (!copilot.state!.destructive.length || copilot.confirmed)}
                     refused={open ? copilot.state!.errors : []}

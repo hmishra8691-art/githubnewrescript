@@ -20,7 +20,7 @@ import { appliedKicker, type ClientOp, type SaveView } from "../../../lib/copilo
  *
  * Every question code in the copilot's words is a link to the question.
  */
-export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges, onApply, onCancel, onAnswer, onAsk, onPreviewFix, counts, canApply, applyTitle, applyLabel = "Apply changes", refused = [], op, onRetrySave }: {
+export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges, onApply, onCancel, onAnswer, onAsk, onPreviewFix, onExecutePlan, onCancelPlan, counts, canApply, applyTitle, applyLabel = "Apply changes", refused = [], op, onRetrySave }: {
   entry: CopilotEntry;
   def: SurveyDefinition;
   onSelect(questionId: string): void;
@@ -34,6 +34,10 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
   onAsk?(text: string): void;
   /** preview the engine's suggested fix as a proposal */
   onPreviewFix?(actions: SurveyAction[], label: string): void;
+  /** build the ticked items of this turn's change plan (Phase 2) */
+  onExecutePlan?(entryId: string, items: string[]): void;
+  /** set the change plan aside */
+  onCancelPlan?(entryId: string): void;
   counts: { label: string; value: number }[] | null;
   canApply: boolean;
   /** the proposal's actions the Studio refused, each with its reason — shown here, so a disabled Apply is never a mystery */
@@ -63,7 +67,7 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
       )}
       <div className={`iq-card cp-card${entry.status === "failed" ? " blocked" : ""}${r?.kind === "proposal" ? " proposal" : " answer"}`}>
         <div className="iq-card-head">
-          <span className="iq-kicker"><Icon name="sparkle" size={11} /> {entry.status === "thinking" ? "THINKING" : entry.status === "failed" ? (entry.failure?.title ?? "COULD NOT ANSWER") : state === "applied" ? appliedKicker(save, n) : state === "superseded" ? "REVISED BELOW" : state === "cancelled" ? "CANCELLED" : r?.kind === "proposal" ? "PROPOSED" : r?.kind === "review" ? "REVIEW" : r?.kind === "clarify" ? "QUESTION" : "COPILOT"}</span>
+          <span className="iq-kicker"><Icon name="sparkle" size={11} /> {entry.status === "thinking" ? (entry.changePlan?.approved ? "BUILDING THE PLAN" : "THINKING") : entry.status === "plan" ? "CHANGE PLAN" : entry.status === "failed" ? (entry.failure?.title ?? "COULD NOT ANSWER") : state === "applied" ? appliedKicker(save, n) : state === "superseded" ? "REVISED BELOW" : state === "cancelled" ? "CANCELLED" : r?.kind === "proposal" ? "PROPOSED" : r?.kind === "review" ? "REVIEW" : r?.kind === "clarify" ? "QUESTION" : "COPILOT"}</span>
           {entry.context?.researchUsed && <span className="iq-source" title={`${entry.context.passages.length} passage(s) from your research documents were used`} data-testid="cp-research-used">research · {entry.context.passages.length}</span>}
           {entry.engine && <span className="iq-source cp-engine-badge" data-testid="cp-engine" data-category={entry.engine.category ?? ""} title="Interpreted and checked by the Studio's own survey engine — no language model was called, nothing was charged">internal engine · no model call</span>}
           {entry.context?.cached && <span className="iq-source" title="The same request was answered moments ago; no new model call was made">cached</span>}
@@ -87,6 +91,23 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
                 <p className="iqi-dim">{entry.handoff.reason}</p>
               </div>
             )}
+          </div>
+        )}
+        {entry.status === "failed" && entry.handoff?.fallback && (
+          /* what the engine can do by itself when the model is not there (Phase 2): executable choices */
+          <div className="cp-clarify cp-fallback" data-testid="cp-fallback">
+            <span className="iq-label">Without a model</span>
+            <p className="iqi-dim">{entry.handoff.fallback.question}</p>
+            {entry.handoff.fallback.choices.map((c, i) => <button key={i} type="button" className="iq-example cp-q" onClick={() => onAsk?.(c.text)} data-testid="cp-fallback-choice"><span className="iq-example-text">{c.label}</span><span className="iq-example-about">{c.text}</span></button>)}
+          </div>
+        )}
+        {entry.status === "plan" && entry.changePlan && <PlanCard entry={entry} def={def} onSelect={onSelect} onExecute={onExecutePlan} onCancel={onCancelPlan} onAnswer={onAnswer} />}
+        {entry.status !== "plan" && entry.changePlan?.approved && (
+          <div className="cp-plan-built" data-testid="cp-plan-built">
+            <span className="iq-label">Built from the change plan</span>
+            <ol className="cp-plan">
+              {entry.changePlan.items.map((it) => { const failed = entry.changePlan!.failures?.find((f) => f.id === it.id); return <li key={it.id} data-testid="cp-plan-built-item" data-failed={failed ? "1" : ""}><b>{it.title}</b>{it.objects.length ? <span className="iqi-dim"> · {it.objects.join(", ")}</span> : null}{failed ? <span className="iq-error"> — not built: {failed.failure.message}</span> : null}</li>; })}
+            </ol>
           </div>
         )}
         {entry.message && <p className="iq-warning" data-testid="cp-empty"><Icon name="info" size={12} /> {entry.message}</p>}
@@ -243,5 +264,51 @@ export function SaveFailed({ save, onRetry }: { save: Extract<SaveView, { state:
       <Icon name="warning" size={12} /> Applied in this editor but NOT saved — {save.message}.{" "}
       {onRetry && <button type="button" className="iq-btn" onClick={onRetry} data-testid="cp-retry-save">Try saving again</button>}
     </p>
+  );
+}
+
+
+/**
+ * THE CHANGE PLAN, read before anything is built (Phase 2): every item with
+ * what it touches and why, ticked by default; the model's questions and
+ * assumptions beside it; Build the ticked items, or set the plan aside.
+ */
+function PlanCard({ entry, def, onSelect, onExecute, onCancel, onAnswer }: { entry: CopilotEntry; def: SurveyDefinition; onSelect(id: string): void; onExecute?(entryId: string, items: string[]): void; onCancel?(entryId: string): void; onAnswer(text: string): void }) {
+  const plan = entry.changePlan!;
+  const [ticked, setTicked] = React.useState<string[]>(() => plan.items.map((i) => i.id));
+  const toggle = (id: string) => setTicked((xs) => (xs.includes(id) ? xs.filter((x) => x !== id) : [...xs, id]));
+  const KIND_WORD: Record<string, string> = { create: "add", modify: "change", remove: "remove", logic: "logic", design: "design", analysis: "analysis", other: "" };
+  return (
+    <div className="cp-change-plan" data-testid="cp-change-plan" data-items={plan.items.length}>
+      <p className="cp-reply"><Linked text={plan.summary} def={def} onSelect={onSelect} /></p>
+      <ol className="cp-plan cp-plan-items">
+        {plan.items.map((it, i) => (
+          <li key={it.id} className={ticked.includes(it.id) ? "" : "off"} data-testid="cp-plan-item" data-kind={it.kind} data-on={ticked.includes(it.id) ? "1" : "0"}>
+            <label className="cp-plan-row">
+              <input type="checkbox" checked={ticked.includes(it.id)} onChange={() => toggle(it.id)} data-testid="cp-plan-tick" aria-label={`Build: ${it.title}`} />
+              <span className="cp-plan-n">{i + 1}</span>
+              <span className="cp-plan-body">
+                <b>{it.title}</b>{KIND_WORD[it.kind] ? <span className={`chip cp-plan-kind k-${it.kind}`}>{KIND_WORD[it.kind]}</span> : null}
+                {it.objects.length > 0 && <span className="iqi-dim"> · <Linked text={it.objects.join(", ")} def={def} onSelect={onSelect} /></span>}
+                {it.reason && <span className="cp-plan-why"><Linked text={it.reason} def={def} onSelect={onSelect} /></span>}
+                {it.detail && <span className="cp-plan-detail iqi-dim">{it.detail}</span>}
+              </span>
+            </label>
+          </li>
+        ))}
+      </ol>
+      {plan.questions.length > 0 && (
+        <div className="cp-clarify" data-testid="cp-plan-questions">
+          <span className="iq-label">Before building, the copilot would ask</span>
+          {plan.questions.map((q, i) => <button key={i} type="button" className="iq-example cp-q" onClick={() => onAnswer(q)}><span className="iq-example-text">{q}</span></button>)}
+        </div>
+      )}
+      {plan.assumptions.length > 0 && <p className="iqi-dim cp-plan-assumptions" data-testid="cp-plan-assumptions"><span className="iq-label">Assumed</span> {plan.assumptions.join(" · ")}</p>}
+      <div className="cp-actions">
+        <button type="button" className="iq-btn primary" disabled={!ticked.length} onClick={() => onExecute?.(entry.id, ticked)} data-testid="cp-plan-build" title={ticked.length ? `Build ${ticked.length} of ${plan.items.length} items — one model call each, then one proposal to review` : "Tick at least one item"}>Build {ticked.length === plan.items.length ? "the plan" : `${ticked.length} of ${plan.items.length}`}</button>
+        <button type="button" className="iq-btn" onClick={() => onCancel?.(entry.id)} data-testid="cp-plan-cancel">Set aside</button>
+        <span className="iqi-dim">Nothing is written until the built proposal is applied.</span>
+      </div>
+    </div>
   );
 }

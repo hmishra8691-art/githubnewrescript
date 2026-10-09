@@ -13,6 +13,7 @@ import {
 import type { OpApiCall, OpFailed, OpIntent, OpProposed, OpSource } from "../../../lib/copilot/operations";
 import { excludedLabels, validExclusions } from "../../../lib/copilot/review";
 import { describeFailure, isTurnFailure, type FailureCode, type TurnFailure } from "@/lib/copilot/failure";
+import type { ChangePlan } from "@/lib/copilot/changePlan";
 import type { HeardTranscript } from "../../../lib/intelligent/voice";
 import { prepareThemeImage, type ThemeImage } from "../../../lib/copilot/themeImage";
 
@@ -45,8 +46,10 @@ export interface CopilotEntry {
   kind: "copilot";
   text: string;
   heard?: HeardTranscript;
-  status: "thinking" | "ready" | "failed" | "empty";
+  status: "thinking" | "ready" | "failed" | "empty" | "plan";
   reply?: CopilotReply;
+  /** the change plan the model proposed before building (Phase 2): read, ticked and approved here; `approved` once it was built */
+  changePlan?: ChangePlan & { approved?: string[]; failures?: { id: string; failure: TurnFailure }[] };
   error?: string;
   message?: string;
   /** why a model turn failed — the cause and what to do next, never the grammar's "not understood" (Phase 1) */
@@ -77,6 +80,8 @@ export interface EngineHandoff {
   category: string | null;
   reason: string;
   detected: { what: string; value: string }[];
+  /** what the engine can do without a model — a question with executable choices (Phase 2) */
+  fallback?: { understood: string; question: string; choices: { label: string; text: string }[] };
 }
 export interface EngineTurn {
   kind: Interpretation["kind"];
@@ -401,9 +406,16 @@ export function useCopilot(opts: {
   /** what travels with a turn: the verdicts and the strongest findings, never the results */
   const runForTurn = React.useMemo(() => (analysisRun ? { computedAt: analysisRun.computedAt, n: analysisRun.n, trigger: analysisRun.trigger, environment: analysisRun.environment, verdicts: analysisRun.verdicts, warnings: analysisRun.warnings.slice(0, 6), findings: analysisRun.findings.slice(0, 40) } : null), [analysisRun]);
 
-  const ask = React.useCallback(async (text: string, heard?: HeardTranscript, mode?: "review" | "generate", handoff?: EngineHandoff): Promise<"handled" | "unavailable" | "empty"> => {
-    const id = uid("copilot");
-    opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), ...(handoff ? { handoff } : {}), status: "thinking" });
+  /*
+   * PLAN FIRST (Phase 2). A generation is planned before it is built: the
+   * route returns a change plan, the card shows it, and only the approved
+   * items are built — one call each. Off, the single-reply turn runs as
+   * before. The preference is the researcher's, kept in this browser.
+   */
+  const [planFirst, setPlanFirstState] = React.useState<boolean>(() => { try { return window.localStorage.getItem("rescript.copilot.planFirst") !== "off"; } catch { return true; } });
+  const setPlanFirst = React.useCallback((v: boolean) => { setPlanFirstState(v); try { window.localStorage.setItem("rescript.copilot.planFirst", v ? "on" : "off"); } catch { /* a private window */ } }, []);
+
+  const run = React.useCallback(async (id: string, text: string, mode: "review" | "generate" | undefined, extra: Record<string, unknown>): Promise<"handled" | "unavailable" | "empty"> => {
     setBusy(true);
     try {
       const proposal = session.proposal;
@@ -411,7 +423,7 @@ export function useCopilot(opts: {
       const fake = fakeRef.current.shift();
       const r = await fetch("/api/copilot/turn", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ surveyId: s.surveyDbId, message: text, definition: working, selectedId: opts.selectedId, memory: memoryFrom(copilotTurns.map((t) => ({ user: t.text, reply: t.reply }))), ...(mode ? { mode } : {}), ...(fake ? { fake } : {}), ...(themeImage ? { themeImage } : {}), ...(quotaCounts ? { quotaCounts } : {}), ...(runForTurn ? { analysisRun: runForTurn } : {}) }),
+        body: JSON.stringify({ surveyId: s.surveyDbId, message: text, definition: working, selectedId: opts.selectedId, memory: memoryFrom(copilotTurns.map((t) => ({ user: t.text, reply: t.reply }))), ...(mode ? { mode } : {}), ...(fake ? { fake } : {}), ...(themeImage ? { themeImage } : {}), ...(quotaCounts ? { quotaCounts } : {}), ...(runForTurn ? { analysisRun: runForTurn } : {}), planFirst, ...extra }),
       });
       if (themeImage) setThemeImage(null);
       /* every model turn is in the history with the call it made and what it cost — a failed one too */
@@ -441,6 +453,12 @@ export function useCopilot(opts: {
       const d = await r.json().catch(() => null) as Record<string, unknown> | null;
       if (!r.ok || !d || d.ok === false) { failTurn(d, r.status, r.status === 402 || r.status === 423 ? "wallet" : "provider"); return "handled"; }
       setAvailable(true);
+      if (d.stage === "plan" && d.plan) {
+        // the change plan: read and approved before anything is built
+        const plan = d.plan as ChangePlan;
+        opts.patch(id, { status: "plan", changePlan: plan, usage: d.usage as { charge: number }, context: d.context as CopilotEntry["context"], opKey: recordOp({ prompt: text, source: "model", status: "clarify", intent: { mode: String((d.context as { mode?: string } | undefined)?.mode ?? mode ?? ""), kind: "plan" }, statusDetail: `Change plan: ${plan.items.map((i) => i.title).join("; ")}`.slice(0, 2000), apiCalls: [call(d)] }) });
+        return "handled";
+      }
       const reply = d.reply as CopilotReply | null;
       const review = d.review as SurveyReview | undefined;
       if (!reply) {
@@ -457,6 +475,10 @@ export function useCopilot(opts: {
         return "empty";
       }
       const patch: Partial<CopilotEntry> = { status: "ready", reply, usage: d.usage as { charge: number }, context: d.context as CopilotEntry["context"], passages: (d.passages ?? {}) as Record<string, Passage>, ...(review ? { review } : {}) };
+      if (d.stage === "executed" && d.plan) {
+        const built = d.plan as ChangePlan;
+        patch.changePlan = { ...built, approved: built.items.map((i) => i.id), ...(Array.isArray(d.planFailures) ? { failures: d.planFailures as { id: string; failure: TurnFailure }[] } : {}) };
+      }
       const intent: OpIntent = { mode: String((d.context as { mode?: string } | undefined)?.mode ?? mode ?? ""), kind: reply.kind };
       const failed = reply.rejected.map((x) => ({ description: "an action the model wrote", reason: x.reason ?? "not in a shape the Studio accepts" }));
       if (reply.actions.length) patch.opKey = recordProposal(text, reply.actions, { source: "model", intent, apiCalls: [call(d)], warnings: failed.map((f) => `Dropped: ${f.reason}`) }, session.openOp);
@@ -481,7 +503,30 @@ export function useCopilot(opts: {
     } finally {
       setBusy(false);
     }
-  }, [session.proposal, session.openOp, stale, s.def, s.surveyDbId, opts, copilotTurns, setSession, themeImage, quotaCounts, runForTurn, recordOp, recordProposal]);
+  }, [session.proposal, session.openOp, stale, s.def, s.surveyDbId, opts, copilotTurns, setSession, themeImage, quotaCounts, runForTurn, recordOp, recordProposal, planFirst]);
+
+  const ask = React.useCallback(async (text: string, heard?: HeardTranscript, mode?: "review" | "generate", handoff?: EngineHandoff): Promise<"handled" | "unavailable" | "empty"> => {
+    const id = uid("copilot");
+    opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), ...(handoff ? { handoff } : {}), status: "thinking" });
+    return run(id, text, mode, {});
+  }, [opts, run]);
+
+  /** the approved items of a change plan, built one call each into one proposal on the same card */
+  const executePlan = React.useCallback(async (entryId: string, items: string[]): Promise<void> => {
+    const entry = copilotTurns.find((t) => t.id === entryId);
+    if (!entry?.changePlan || entry.status !== "plan" || !items.length) return;
+    const mode = (entry.context?.mode === "generate" ? "generate" : undefined) as "generate" | undefined;
+    opts.patch(entryId, { status: "thinking", changePlan: { ...entry.changePlan, approved: items } });
+    await run(entryId, entry.text, mode, { stage: "execute", plan: entry.changePlan, items });
+  }, [copilotTurns, opts, run]);
+
+  /** a change plan the researcher does not want: the card says so, nothing was built or charged beyond the plan */
+  const cancelPlan = React.useCallback((entryId: string) => {
+    const entry = copilotTurns.find((t) => t.id === entryId);
+    if (!entry || entry.status !== "plan") return;
+    opts.patch(entryId, { status: "empty", message: "Plan set aside — nothing was built." });
+    if (entry.opKey) updateOp(entry.opKey, { status: "cancelled" });
+  }, [copilotTurns, opts, updateOp]);
 
   /*
    * THE ENGINE'S OWN ANSWER. A sentence the engine interpreted
@@ -715,6 +760,7 @@ export function useCopilot(opts: {
     confirmed: session.confirmed, setConfirmed: (v: boolean) => setSession((x) => ({ ...x, confirmed: v })),
     tab: session.tab, setTab: (t: PanelTab) => setSession((x) => ({ ...x, tab: t })),
     ask, local, working, runReview, previewFix, apply, cancel, uploadDocs, deleteDoc, refreshDocs,
+    planFirst, setPlanFirst, executePlan, cancelPlan,
     themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),
     quotaCounts, quotaCountsAt, refreshQuotaCounts,
     analysisRun, runDue, running, runError, refreshAnalysisRun, runPlanNow,

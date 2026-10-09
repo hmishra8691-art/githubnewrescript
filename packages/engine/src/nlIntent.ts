@@ -15,6 +15,8 @@ import { listBlocks, listPages } from "./blocks.js";
 import { getQuestionByCodeOrVar } from "./state.js";
 import { stripHtmlText } from "./html.js";
 import { ruleLabel } from "./logicProposal.js";
+import { conceptWords, parseScale, resolveConcept, resolvePopulation, scaleLabels, wordFamily, type ConceptMatch, type ScaleDescription } from "./nlSemantics.js";
+import { inferRole } from "./analysisFramework.js";
 
 /**
  * THE SENTENCE INTERPRETER (Intelligent Mode Phase 3) — what the researcher
@@ -92,7 +94,9 @@ export type Interpretation =
   | { kind: "answer"; category: IntentCategory; understood: string; answer: string; sections: AnswerSection[]; detected: Detected[] }
   | { kind: "clarify"; category: IntentCategory; understood: string; question: string; choices: { label: string; text: string }[]; detected: Detected[] }
   | { kind: "refused"; category: IntentCategory; understood: string; reason: string; detected: Detected[]; suggestion?: { text: string; actions?: SurveyAction[] }; /** nothing to do: the survey already is as asked */ noop?: boolean }
-  | { kind: "model"; category: IntentCategory | null; reason: string; detected: Detected[] };
+  | { kind: "model"; category: IntentCategory | null; reason: string; detected: Detected[];
+      /** what the engine can do by itself when no model answers: a question and executable choices (each a sentence this layer reads) — Phase 2 */
+      fallback?: { understood: string; question: string; choices: { label: string; text: string }[] } };
 
 export interface InterpretContext {
   /** the selected question: "this question", "it", "these options" */
@@ -742,31 +746,8 @@ const untranslated: Recogniser = (r) => {
 
 /* ---------------------------------------------------------- queries: research */
 
-/**
- * Concept words for "which questions measure X": a researcher's construct
- * name is rarely the wording of the question ("purchase intent" is asked as
- * "how likely are you to buy …"), so each word brings its everyday family.
- * Kept small and obvious — anything subtler is the model's.
- */
-const CONCEPTS: string[][] = [
-  ["purchase", "buy", "bought", "buying", "order", "shop", "shopp"],
-  ["intent", "intention", "intend", "likely", "likelihood", "plan", "consider", "probability"],
-  ["satisfaction", "satisfied", "satisfi", "happy", "pleased", "content"],
-  ["awareness", "aware", "heard", "familiar", "recognise", "recognize", "know"],
-  ["loyalty", "loyal", "recommend", "again", "repeat", "nps"],
-  ["usage", "use", "used", "using", "consume"],
-  ["price", "cost", "expensive", "cheap", "afford", "pay", "spend", "value"],
-  ["age", "old", "year", "born"],
-  ["gender", "sex", "male", "female"],
-  ["income", "earn", "salary", "household"],
-  ["trust", "trustworthy", "reliable", "rely"],
-  ["preference", "prefer", "favourite", "favorite", "best"],
-];
-const family = (w: string): Set<string> => {
-  const s = stemWord(w);
-  const g = CONCEPTS.find((xs) => xs.some((x) => stemWord(x) === s));
-  return new Set([s, ...(g ?? []).map(stemWord)]);
-};
+/** concept word families — shared with the semantic resolvers (nlSemantics), so "which questions measure X" and "cross-tab X by Y" read a concept the same way */
+const family = wordFamily;
 const QUERY_STOP = new Set(["measure", "measur", "capture", "captur", "asses", "assess", "track", "cover", "relat", "relate", "deal", "concept", "thing", "topic", "our", "my", "their", "study", "survey"]);
 
 const measures: Recogniser = (r) => {
@@ -2000,6 +1981,296 @@ const questions: Recogniser = (r) => {
   return null;
 };
 
+/* ============================================================ Phase 2: the brief's sentences, read by the engine */
+
+/*
+ * RESEARCH ENGINE AUDIT, PHASE 2 — the descriptive sentences the audit found
+ * ending in "NOT UNDERSTOOD" although the engine owns every operation they
+ * need. Each resolves its objects semantically (nlSemantics) and lands on the
+ * same actions the model would emit, through the same gate: a screener
+ * exclusion is `add_skip` to a screened end on the question the population
+ * reads; a scale change is `update_question.scale`; a crosstab is
+ * `add_crosstab` on the two variables the concepts name; the key crosstabs
+ * are the framework's own priorities; the unconnected questions are read off
+ * the design. When a phrase fits several questions the researcher is asked,
+ * with one choice per candidate.
+ */
+
+const POPULATION_SHAPE = new RegExp(String.raw`^(?:(?:all|any|every|the)\s+)?(?:respondents?|people|persons?|participants?|anyone|anybody|everyone|everybody|someone|those|users?|customers?|consumers?|buyers?|shoppers?|individuals?|adults?|subjects?|panel(?:l?ists)?|members?|women|woman|females?|men|man|males?|ladies|gentlemen|under|over|above|below)\b|^\d{1,3}\s*(?:\+|-|–|to|and)|^(?:under|over)-?\d`, "i");
+
+/* ---------------------------------------------------------- the screener */
+
+const screenerEdit: Recogniser = (r) => {
+  const t = r.text;
+  const SCREEN_OUT = String.raw`(?:screened?\s*out|excluded|disqualified|terminated|rejected|not\s+(?:be\s+)?(?:allowed|eligible|included|admitted|qualified)|(?:be\s+)?(?:removed|dropped|turned\s+away|kept\s+out|filtered\s+out)|ineligible)`;
+  let m: RegExpExecArray | null;
+  let phrase: string | null = null;
+  let only = false;
+  // "change the screener so that respondents under 25 are excluded"
+  if ((m = new RegExp(String.raw`^(?:change|update|modify|edit|adjust|set|fix|tighten|revise|amend)\s+(?:the\s+)?(?:screener|screening(?:\s+(?:logic|questions?|section|criteria|rules?))?|qualification(?:\s+criteria)?|eligibility(?:\s+criteria|\s+rules?)?)\s*,?\s*(?:so\s+that|so|such\s+that|to\s+ensure(?:\s+that)?|to\s+make\s+sure(?:\s+that)?|to\s+guarantee(?:\s+that)?|to)\s+(.+?)\s+(?:are|is|get|gets|will\s+be|would\s+be|should\s+be|must\s+be|can'?t\s+(?:take\s+part|participate|continue|proceed)|cannot\s+(?:take\s+part|participate|continue|proceed))(?:\s+${SCREEN_OUT})?$`, "i").exec(t))) {
+    phrase = m[1];
+    if (!new RegExp(String.raw`${SCREEN_OUT}$|can'?t|cannot`, "i").test(t)) return null;
+  }
+  // "screen out respondents under 25", "exclude anyone over 65 from the survey", "do not allow people under 18"
+  else if ((m = new RegExp(String.raw`^(?:screen\s*out|disqualify|terminate|reject|exclude|filter\s+out|keep\s+out|turn\s+away|do\s+not\s+(?:allow|admit|include|accept)|don'?t\s+(?:allow|admit|include|accept))\s+(.+?)(?:\s+(?:from|in)\s+(?:the\s+)?(?:survey|study|sample|research|interview|questionnaire))?$`, "i").exec(t))) {
+    phrase = m[1];
+    if (!/^(?:screen\s*out|disqualify|terminate)/i.test(t) && !POPULATION_SHAPE.test(phrase)) return null;
+  }
+  // "only allow people aged 18 to 65", "restrict the survey to women", "make sure only car owners can take part"
+  else if ((m = new RegExp(String.raw`^(?:only\s+)?(?:allow|include|accept|admit|qualify|let\s+(?:in|through))\s+(?:only\s+)?(.+?)(?:\s+(?:in|into|to|through)\s+(?:the\s+)?(?:survey|study|sample|research|interview))?$`, "i").exec(t)) && /\bonly\b/i.test(t)) { phrase = m[1]; only = true; }
+  else if ((m = /^(?:restrict|limit)\s+(?:the\s+)?(?:survey|study|sample|respondents?|participation|eligibility)\s+to\s+(.+)$/i.exec(t))) { phrase = m[1]; only = true; }
+  else if ((m = /^(?:make\s+sure|ensure)\s+(?:that\s+)?only\s+(.+?)\s+(?:can\s+|may\s+|are\s+able\s+to\s+|are\s+allowed\s+to\s+)?(?:take\s+part|participate|continue|proceed|qualify|complete\s+the\s+survey|take\s+the\s+survey|answer|enter|respond)$/i.exec(t))) { phrase = m[1]; only = true; }
+  if (!phrase) return null;
+  const ref = unquote(phrase).replace(/^(?:all|any|every)\s+/i, "");
+  const pop = resolvePopulation(r.def, ref);
+  if (!pop) return null;
+  const understood = only ? `Allow only ${ref} into the survey — screen out everyone else.` : `Screen out ${ref}.`;
+  if (!pop.ok) return refused("logic", understood, pop.reason, [det("population", ref)]);
+  const p = pop.population;
+  if (p.alternatives?.length) {
+    return { kind: "clarify", category: "logic", understood, question: `“${ref}” could be read on ${[p.question, ...p.alternatives].map((q) => `${code(q)} (${plain(q.text, 40)})`).join(" or ")} — which question should the screener read?`,
+      choices: [p.question, ...p.alternatives].map((q) => { const again = resolvePopulation({ ...r.def, questions: r.def.questions.filter((x) => x.id === q.id || ![p.question, ...p.alternatives!].some((a) => a.id === x.id)) }, ref); const e = again?.ok ? again.population.expression : null; return e ? { label: `${code(q)} — ${plain(q.text, 50)}`, text: `Screen out when ${only ? `NOT (${e})` : e}` } : null; }).filter((x): x is { label: string; text: string } => !!x), detected: [det("population", ref)] };
+  }
+  const expression = only ? `NOT (${p.expression})` : p.expression;
+  const c = readCondition(r, expression);
+  if (!c.ok) return badCondition(r, "logic", understood, expression, c);
+  const condWords = conditionWords(r.def, c.condition);
+  // the screener already does this: a terminating rule on that question with the same condition
+  const canon = formatCondition(r.def, c.condition);
+  const twin = (p.question.skipLogic ?? []).find((s) => (s.target.kind === "terminate" || s.target.kind === "end" && s.target.status === "screened") && formatCondition(r.def, s.when) === canon);
+  if (twin) return alreadySo("logic", understood, `${code(p.question)} already screens out when ${condWords} — nothing to add.`, [det("population", `${ref} → ${p.words}`)]);
+  const out = planSkip(r, { cond: expression, status: "screened", from: code(p.question) });
+  const detected: Detected[] = [det("population", `${ref} → ${p.words}`), ...out.detected.filter((d) => d.what !== "condition")];
+  if (out.kind === "actions") return { ...out, understood: `${understood} ${code(p.question)} (${p.question.variableName}) is where the survey learns it, so the rule lives there: screen out when ${condWords}.`, detected };
+  return { ...out, understood, detected } as Interpretation;
+};
+
+/* ---------------------------------------------------------- a scale */
+
+const SCALE_TYPES = new Set(["single_select", "dropdown", "rating", "matrix_single", "slider"]);
+const scaleChange: Recogniser = (r) => {
+  const t = r.text;
+  let m: RegExpExecArray | null;
+  let ref: string | null = null;
+  let words: string | null = null;
+  if ((m = /^(?:change|convert|turn|switch|update|set|move|put)\s+(?:question\s+)?(.+?)\s+(?:to|into|onto|so\s+(?:that\s+)?it\s+uses|to\s+use|on)\s+(?:an?\s+)?(.+)$/i.exec(t)) && parseScale(m[2])) { ref = m[1]; words = m[2]; }
+  else if ((m = /^make\s+(?:question\s+)?(.+?)\s+(?:an?\s+)?(.+)$/i.exec(t)) && /\b(?:scale|point|likert|nps)\b/i.test(m[2]) && parseScale(m[2])) { ref = m[1]; words = m[2]; }
+  else if ((m = /^(?:use|apply|give)\s+(?:an?\s+)?(.+?)\s+(?:on|for|at|in|to)\s+(?:question\s+)?(.+)$/i.exec(t)) && parseScale(m[1])) { ref = m[2]; words = m[1]; }
+  else if ((m = /^(?:change|set|update|replace)\s+(?:the\s+)?(?:scale|options|answer\s+options|response\s+options|answers)\s+(?:of|for|on)\s+(.+?)\s+(?:to|with)\s+(?:an?\s+)?(.+)$/i.exec(t)) && parseScale(m[2])) { ref = m[1]; words = m[2]; }
+  if (!ref || !words) return null;
+  const scale = parseScale(words)!;
+  const understood = `Change ${unquote(ref)} to a ${scale.name}.`;
+  const direct = resolveQuestionRef(r.def, ref, r.ctx);
+  let target: Question;
+  if (direct.ok) target = direct.question;
+  else if (direct.ambiguous || CODE_SHAPE.test(unquote(ref))) return unresolved(r, "question_modification", understood, ref, direct);
+  else {
+    // "the satisfaction question": by what it measures
+    const c = conceptOrAsk(r, unquote(ref).replace(/^(?:the|this|that)\s+/i, ""), "question_modification", understood);
+    if (!c.ok) return c.out && c.out.kind === "clarify" ? c.out : null;
+    target = c.v;
+  }
+  const labels = scaleLabels(scale);
+  const spec = { points: scale.points, ...(scale.start !== undefined ? { start: scale.start } : {}), ...(scale.labels ? { labels: scale.labels } : {}), ...(scale.low ? { low: scale.low } : {}), ...(scale.high ? { high: scale.high } : {}) };
+  const detected: Detected[] = [...qDetected([target]), det("scale", `${scale.name}: ${labels.join(" · ")}`)];
+  const have = (target.options ?? []).map((o) => o.label);
+  if (SCALE_TYPES.has(target.type) && have.length === labels.length && have.every((l, i) => l.trim().toLowerCase() === labels[i].toLowerCase())) {
+    return alreadySo("question_modification", understood, `${code(target)} already is a ${scale.name} (${labels.join(" · ")}).`, detected);
+  }
+  if (target.type === "multi_select") {
+    const fix = suggest(r, `Change ${code(target)} to a single-select ${scale.name}`);
+    return refused("question_modification", understood, `${code(target)} is a multi-select — each option is a separate answer, so it has no scale. Make it single-select first.`, detected, fix.actions ? fix : { text: fix.text, actions: [{ op: "update_question", target: code(target), type: "single_select", scale: spec }] });
+  }
+  if (/^(?:open_text|text|numeric|date|file|email)$/.test(target.type) || /single-select|single select/i.test(words)) {
+    const a: SurveyAction = { op: "update_question", target: code(target), type: "single_select", scale: spec };
+    return act(r, "question_modification", `Change ${code(target)} from ${kindOf(target)} to a single-select ${scale.name} (${labels.join(" · ")}); answers already collected as ${kindOf(target)} are reported before the change is applied.`, [a], [...detected, det("new type", "single select")]);
+  }
+  if (!SCALE_TYPES.has(target.type)) return refused("question_modification", understood, `${code(target)} is a ${kindOf(target)} question, which has no scale to change — say “change ${code(target)} to a single-select ${scale.name}” to convert it.`, detected, suggest(r, `Change ${code(target)} to a single-select ${scale.name}`));
+  const what = target.type === "matrix_single" ? "columns" : "options";
+  return act(r, "question_modification", `Change ${code(target)}'s ${what} to a ${scale.name}: ${labels.join(" · ")}${have.length ? ` — this replaces its ${have.length} current ${what}${(target.options ?? []).some((o) => o.flags?.length) ? " (flags such as exclusive or Other are not carried over)" : ""}` : ""}.`, [{ op: "update_question", target: code(target), scale: spec }], detected);
+};
+
+/* ---------------------------------------------------------- crosstabs */
+
+const DEMO_ROLE = (def: SurveyDefinition, q: Question) => inferRole(def, q) === "segmentation" || inferRole(def, q) === "screening";
+function conceptOrAsk(r: Run, phrase: string, category: IntentCategory, understood: string, other?: string): Got<ConceptMatch["question"]> {
+  const c = resolveConcept(r.def, phrase, r.ctx);
+  if (c.ok) return { ok: true, v: c.question };
+  if (c.ambiguous) {
+    return { ok: false, out: { kind: "clarify", category, understood, question: c.reason.replace(/\.$/, "") + " — which one?", choices: c.candidates.map((x) => ({ label: `${code(x.question)} — ${plain(x.question.text, 50)} (${x.why})`, text: substitute(r.text, phrase, x.question.variableName) })), detected: [det("concept", phrase), ...(other ? [det("concept", other)] : [])] } };
+  }
+  return { ok: false, out: refused(category, understood, `${c.reason} Name the variable (“${code(r.def.questions[0] ?? { code: "Q1" } as Question)}”, “AGE”) or add the question first.`, [det("concept", phrase)]) };
+}
+
+const crosstabs: Recogniser = (r) => {
+  const t = r.text;
+  let m: RegExpExecArray | null;
+  let a: string, b: string;
+  let byForm = false;
+  if ((m = /^(?:create|add|make|build|plan|set\s+up|run|produce|generate|prepare|i\s+(?:want|need)|we\s+(?:want|need))\s+(?:an?\s+|the\s+)?(?:new\s+)?cross[-\s]?tab(?:ulation|ulations|s)?\s+(?:between|of|for|with|showing|comparing|on)\s+(.+?)\s+(?:and|by|vs\.?|versus|against|×|x|with)\s+(.+)$/i.exec(t))) { a = m[1]; b = m[2]; byForm = /\s+by\s+/i.test(t.slice(m.index)); }
+  else if ((m = /^cross[-\s]?tab(?:ulate)?\s+(.+?)\s+(?:by|and|against|with|vs\.?|versus|×)\s+(.+)$/i.exec(t))) { a = m[1]; b = m[2]; byForm = /\s+by\s+/i.test(t); }
+  else if ((m = /^(?:analy[sz]e|compare|break\s+(?:down|out)|cut|split|tabulate)\s+(.+?)\s+by\s+(.+)$/i.exec(t))) { a = m[1]; b = m[2]; byForm = true; }
+  else return null;
+  a = unquote(a).replace(/\s+(?:question|variable|answers?|results?|responses?)$/i, ""); b = unquote(b).replace(/\s+(?:question|variable|answers?|results?|responses?|groups?)$/i, "");
+  // "… by country and test intent across age groups": a second instruction, or several variables a side — the model's, not a guess here
+  if (/\b(?:and|then|plus|also)\b|,|;/i.test(a) || /\b(?:and|then|plus|also)\b|,|;/i.test(b)) return null;
+  const understood = `Plan a crosstab of ${a} by ${b}.`;
+  const first = conceptOrAsk(r, a, "analysis", understood, b);
+  if (!first.ok) return first.out;
+  const second = conceptOrAsk(r, b, "analysis", understood, a);
+  if (!second.ok) return second.out;
+  if (first.v.id === second.v.id) return refused("analysis", understood, `“${a}” and “${b}” both resolve to ${code(first.v)} — a crosstab needs two different variables.`, qDetected([first.v]));
+  // the banner (columns) is the demographic when exactly one side is one and the sentence did not say "X by Y"
+  let rows = first.v, cols = second.v;
+  const demoA = DEMO_ROLE(r.def, first.v), demoB = DEMO_ROLE(r.def, second.v);
+  let note = "";
+  if (!byForm && demoA && !demoB) { rows = second.v; cols = first.v; note = ` — ${cols.variableName} goes in the banner as the demographic`; }
+  else if (!byForm && demoB && !demoA) note = ` — ${cols.variableName} goes in the banner as the demographic`;
+  const numeric = [rows, cols].filter((q) => q.type === "numeric");
+  const saved = !!r.def.research?.analysisPlan;
+  const action: SurveyAction = { op: "add_crosstab", rows: [rows.variableName], columns: [cols.variableName], priority: 1, reason: `asked for in Intelligent mode: ${a} by ${b}` } as SurveyAction;
+  return act(r, "analysis", `Plan a crosstab of ${rows.variableName} (${code(rows)}, “${plain(rows.text, 40)}”) by ${cols.variableName} (${code(cols)}, “${plain(cols.text, 40)}”)${note}.${numeric.length ? ` ${numeric.map((q) => q.variableName).join(" and ")} ${numeric.length === 1 ? "is" : "are"} numeric and ${numeric.length === 1 ? "is" : "are"} banded when the table runs.` : ""}${saved ? "" : " This starts the survey's analysis plan;"} it runs from the Analysis tab, or with the plan on the fieldwork milestones.`, [action], [det("rows", `${rows.variableName} (${code(rows)})`), det("columns", `${cols.variableName} (${code(cols)})`)]);
+};
+
+const KEY_WORDS = String.raw`(?:most\s+important|most\s+relevant|most\s+useful|most\s+valuable|key|essential|main|priority|recommended|core|top|best|standard)`;
+const keyCrosstabs: Recogniser = (r) => {
+  const t = r.text;
+  const def = r.def;
+  const asksFor = new RegExp(String.raw`^(?:create|add|plan|build|make|propose|set\s+up|generate|prepare|produce|run)\s+(?:me\s+)?(?:the\s+|some\s+|all\s+(?:of\s+)?the\s+)?(?:\d+\s+)?${KEY_WORDS}\s+(?:cross[-\s]?tab(?:ulation)?s?|tables|banners?|cuts)(?:\s+(?:for|of)\s+(?:this|the|my|our)\s+(?:research|study|survey|project|analysis|objectives?|design|data))?$`, "i");
+  const asksWhich = new RegExp(String.raw`^(?:show\s+me|give\s+me|list|tell\s+me|what\s+are|which\s+are)\s+(?:the\s+)?(?:\d+\s+)?${KEY_WORDS}\s+(?:cross[-\s]?tab(?:ulation)?s?|tables|banners?|cuts)(?:\s+(?:for|of)\s+(?:this|the|my|our)\s+(?:research|study|survey|project|analysis|objectives?|design|data))?$`, "i");
+  if (!asksFor.test(t) && !asksWhich.test(t)) return null;
+  const built = buildAnalysisFramework(def, { now: "" });
+  const top = prioritizeCrosstabs(def, 8, built);
+  const saved = def.research?.analysisPlan;
+  const same = (x: { rows: string[]; columns: string[] }, y: { rows: string[]; columns: string[] }) => x.rows.join("|") === y.rows.join("|") && x.columns.join("|") === y.columns.join("|");
+  const items = top.map((x) => ({ label: `${x.rows.join(" + ")} by ${x.columns.join(" + ")}`, key: objectKey("analysis", x.id), detail: `${withHypotheses(x.reason, x.hypotheses)} — priority ${x.priority}${saved?.crosstabs.some((y) => same(x, y)) ? " (already planned)" : ""}`.replace(/^ — /, "") }));
+  const understood = asksWhich.test(t) ? "List the crosstabs that matter most for this research." : "Plan the crosstabs that matter most for this research.";
+  if (!top.length) return refused("analysis", understood, "The design gives nothing to cross-tabulate yet: no question is in an analytic role (dependent, independent) with a demographic to cut it by. Tag the outcome and the demographics in the Analysis tab, or record a hypothesis, and ask again.", []);
+  if (asksWhich.test(t)) return { kind: "answer", category: "analysis", understood, answer: `${plural(top.length, "crosstab")}, hypothesis-linked and priority-1 first: ${top.map((x) => `${x.rows.join(" + ")} by ${x.columns.join(" + ")}`).join("; ")}. Say “create the most important crosstabs” to plan them.`, sections: [{ title: "Crosstabs, in order", items }], detected: [] };
+  const fresh = top.filter((x) => !saved?.crosstabs.some((y) => same(x, y)));
+  if (!fresh.length) return alreadySo("analysis", understood, `The ${plural(top.length, "crosstab")} that matter most are already in the saved plan: ${top.map((x) => `${x.rows.join(" + ")} by ${x.columns.join(" + ")}`).join("; ")}.`, []);
+  const actions: SurveyAction[] = fresh.map((x) => ({ op: "add_crosstab", rows: x.rows, columns: x.columns, measure: x.measure, priority: x.priority, hypotheses: x.hypotheses, reason: x.reason ?? "from the analysis framework" } as SurveyAction));
+  return act(r, "analysis", `Plan the ${plural(fresh.length, "crosstab")} the framework ranks highest${saved ? ` (${top.length - fresh.length} already planned)` : ""}: ${fresh.map((x) => `${x.rows.join(" + ")} by ${x.columns.join(" + ")}${x.hypotheses.length ? ` (${x.hypotheses.join(", ")})` : ""}`).join("; ")}. Hypothesis-linked tables come first, then priority; they run from the Analysis tab.`, actions, fresh.map((x) => det("crosstab", `${x.rows.join(" + ")} by ${x.columns.join(" + ")}`)));
+};
+
+/* ---------------------------------------------------------- unconnected questions */
+
+const unconnected: Recogniser = (r) => {
+  const t = r.text;
+  const asks = /^(?:which|what|list(?:\s+the)?|show(?:\s+me)?(?:\s+the)?|find(?:\s+the)?|are\s+there(?:\s+any)?|identify(?:\s+the)?|tell\s+me\s+which)\s+(?:of\s+the\s+)?questions?\s+(?:that\s+)?(?:(?:are|is|aren'?t|are\s+not|isn'?t|have\s+not\s+been|haven'?t\s+been|remain)\s+(?:not\s+|still\s+)?(?:connected|linked|tied|mapped|related|attached|assigned|associated|hooked|wired)\s+(?:to|with)\s+(?:any\s+|an?\s+|the\s+)?(?:hypothes[ie]s|research\s+(?:framework|design|objectives?|questions?)|constructs?|analysis(?:\s+plan)?|framework|objectives?)|(?:have|has|do\s+not\s+have|don'?t\s+have|without|lack)\s+(?:no\s+|a\s+|any\s+)?hypothes[ie]s|(?:do|does)\s+not\s+(?:serve|support|test|measure)|(?:don'?t|doesn'?t)\s+(?:serve|support|test|measure)\s+(?:any\s+|an?\s+|the\s+)?(?:hypothes[ie]s|objectives?|research\s+objectives?|constructs?)|(?:are|is)\s+(?:orphan(?:ed)?|unconnected|unlinked|unmapped|unassigned|not\s+(?:in|part\s+of)\s+the\s+(?:framework|design|plan)))$/i.test(t)
+    || /^(?:which|what|list|show(?:\s+me)?|find)\s+(?:the\s+)?(?:orphan(?:ed)?|unconnected|unlinked|unmapped|unassigned)\s+questions?$/i.test(t);
+  if (!asks) return null;
+  const def = r.def;
+  const research = def.research;
+  const understood = "Find the questions not connected to any hypothesis, construct or planned analysis.";
+  const order = placedOrder(def);
+  const qs = def.questions.filter((q) => !["html", "custom_component", "media_timeline"].includes(q.type) && order.includes(q.id)).sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+  const plan = research?.analysisPlan;
+  const inPlan = new Set<string>([...(plan?.crosstabs ?? []).flatMap((x) => [...x.rows, ...x.columns]), ...(plan?.tests ?? []).flatMap((x) => [x.outcome, x.groupBy, x.moderator, ...x.variables].filter((v): v is string => !!v)), ...(plan?.derived ?? []).flatMap((d) => d.from)]);
+  const inConstruct = new Map<string, string>();
+  for (const c of research?.constructs ?? []) for (const id of c.questionIds) inConstruct.set(id, c.name);
+  const why = (q: Question): string[] => {
+    const out: string[] = [];
+    if (q.analysis?.hypotheses?.length) out.push(`hypotheses ${q.analysis.hypotheses.join(", ")}`);
+    if (inConstruct.has(q.id)) out.push(`construct “${inConstruct.get(q.id)}”`);
+    if (inPlan.has(q.variableName)) out.push("in the analysis plan");
+    return out;
+  };
+  const connected = qs.filter((q) => why(q).length);
+  const loose = qs.filter((q) => !why(q).length);
+  const roleWord = (q: Question) => { const role = inferRole(def, q); return q.type === "open_text" ? "open text — coded or quoted, not tested" : role === "segmentation" ? "a demographic — a cut of the results, not a measure of a hypothesis" : role === "screening" ? "a screener — selects the sample, measures nothing" : `${role}, ${kindOf(q)}`; };
+  const sections: AnswerSection[] = [];
+  if (loose.length) sections.push({ title: "Not connected to any hypothesis, construct or planned analysis", items: loose.map((q) => ({ label: code(q), key: objectKey("question", q.id), detail: `${plain(q.text, 60)} — ${roleWord(q)}` })) });
+  const coverage = hypothesisCoverage(def).filter((h) => h.status === "unlinked" || h.status === "unmeasured");
+  if (coverage.length) sections.push({ title: "Hypotheses no question measures", items: coverage.map((h) => ({ label: h.label, detail: `${plain(h.text, 70)} — ${h.status === "unlinked" ? "no construct or question is linked to it" : `construct ${h.constructs.filter((c) => !c.measured).map((c) => `“${c.name}”`).join(", ")} has no question`}` })) });
+  if (connected.length) sections.push({ title: "Connected", items: connected.map((q) => ({ label: code(q), key: objectKey("question", q.id), detail: why(q).join("; ") })) });
+  const noDesign = !research || (!research.hypotheses.length && !research.constructs.length && !plan);
+  const answer = noDesign
+    ? `This survey has no research design yet — no hypotheses, constructs or analysis plan — so none of its ${plural(qs.length, "question")} is connected to one. Record the hypotheses in the Research design (Survey Settings, or the Analysis tab) and tag what each question measures.`
+    : loose.length ? `${loose.length} of ${plural(qs.length, "question")} ${loose.length === 1 ? "is" : "are"} not connected to any hypothesis, construct or planned analysis: ${loose.map(code).join(", ")}. ${loose.filter((q) => inferRole(def, q) === "segmentation" || inferRole(def, q) === "screening").length ? "Demographics and screeners are expected here — they cut or select, they do not test. " : ""}The rest can be tagged with the hypothesis they serve (“tag Q8 with H1”) or removed if they serve nothing.`
+    : `Every one of the ${plural(qs.length, "question")} is connected to a hypothesis, a construct or the analysis plan.`;
+  return { kind: "answer", category: "research_design", understood, answer, sections, detected: [] };
+};
+
+/* ---------------------------------------------------------- the research objective */
+
+const objective: Recogniser = (r) => {
+  const m = /^(?:set|change|update|record|define|make)\s+(?:the\s+)?(?:research\s+|study\s+)?(?:objective|goal|aim|purpose)\s*(?:to|as|:|=|—|-)\s*(.+)$/i.exec(r.text) ?? /^(?:the\s+)?(?:research\s+)?objective\s*(?::|is)\s*(.+)$/i.exec(r.text);
+  if (!m) return null;
+  const text = cap(unquote(m[1]));
+  const had = r.def.research?.objective;
+  if (had && had.trim() === text) return alreadySo("research_design", `Set the research objective to “${plain(text, 60)}”.`, "That is already the research objective.", [det("objective", plain(text, 60))]);
+  return act(r, "research_design", `Set the research objective to “${plain(text, 80)}”${had ? ` (replacing “${plain(had, 50)}”)` : ""}.`, [{ op: "set_research", objective: text }], [det("objective", plain(text, 60))]);
+};
+
+/* ---------------------------------------------------------- what the engine can do when no model answers */
+
+/**
+ * The standard items a researcher means by "a question to measure X" —
+ * written as sentences this layer reads, so that with no model (or an
+ * unusable answer) the request still ends in a proposal, not a dead end.
+ */
+const MEASURES: { re: RegExp; name: string; items: (subject: string) => { label: string; text: string }[] }[] = [
+  { re: /purchase\s+intent|intent(?:ion)?\s+to\s+(?:buy|purchase)|buying\s+intent|likelihood\s+(?:to|of)\s+(?:buy|purchas)/i, name: "purchase intent", items: (s) => [
+    { label: "5-point likelihood to purchase", text: `Add a required single-select question "How likely are you to purchase ${s} in the next 3 months?" with options Very unlikely, Unlikely, Neither likely nor unlikely, Likely, Very likely` },
+    { label: "0–10 likelihood to purchase", text: `Add a required single-select question "On a scale of 0 to 10, how likely are you to purchase ${s} in the next 3 months?" with options 0 – Not at all likely, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 – Extremely likely` },
+  ] },
+  { re: /satisfaction|how\s+satisfied/i, name: "satisfaction", items: (s) => [
+    { label: "5-point satisfaction", text: `Add a required single-select question "Overall, how satisfied are you with ${s}?" with options Very dissatisfied, Dissatisfied, Neither satisfied nor dissatisfied, Satisfied, Very satisfied` },
+    { label: "7-point satisfaction", text: `Add a required single-select question "Overall, how satisfied are you with ${s}?" with options Very dissatisfied, Dissatisfied, Somewhat dissatisfied, Neither satisfied nor dissatisfied, Somewhat satisfied, Satisfied, Very satisfied` },
+  ] },
+  { re: /recommend|nps|net\s+promoter|advocacy/i, name: "likelihood to recommend", items: (s) => [
+    { label: "NPS (0–10)", text: `Add a required single-select question "How likely are you to recommend ${s} to a friend or colleague?" with options 0 – Not at all likely, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 – Extremely likely` },
+  ] },
+  { re: /awareness|aware\s+of|heard\s+of|familiarity/i, name: "awareness", items: (s) => [
+    { label: "Aided awareness (yes/no)", text: `Add a required single-select question "Before today, had you heard of ${s}?" with options Yes, No, Not sure` },
+    { label: "Familiarity (4-point)", text: `Add a required single-select question "How familiar are you with ${s}?" with options Never heard of it, Heard of it but know little, Know it somewhat, Know it very well` },
+  ] },
+  { re: /importance|how\s+important/i, name: "importance", items: (s) => [
+    { label: "5-point importance", text: `Add a required single-select question "How important is ${s} to you?" with options Not at all important, Slightly important, Moderately important, Very important, Extremely important` },
+  ] },
+  { re: /loyalty|repurchase|buy\s+again|continue\s+(?:using|buying)/i, name: "loyalty", items: (s) => [
+    { label: "Repurchase intent (5-point)", text: `Add a required single-select question "How likely are you to choose ${s} again next time?" with options Very unlikely, Unlikely, Neither likely nor unlikely, Likely, Very likely` },
+  ] },
+  { re: /trust/i, name: "trust", items: (s) => [
+    { label: "5-point agreement", text: `Add a required single-select question "I trust ${s}" with options Strongly disagree, Disagree, Neither agree nor disagree, Agree, Strongly agree` },
+  ] },
+  { re: /usage\s+frequency|how\s+often|frequency\s+of\s+(?:use|purchase)/i, name: "usage frequency", items: (s) => [
+    { label: "Frequency (6-point)", text: `Add a required single-select question "How often do you use ${s}?" with options Daily, Several times a week, About once a week, A few times a month, Less often, Never` },
+  ] },
+  { re: /price\s+(?:perception|sensitivity)|value\s+for\s+money|affordab/i, name: "price perception", items: (s) => [
+    { label: "Value for money (5-point agreement)", text: `Add a required single-select question "${s} offers good value for money" with options Strongly disagree, Disagree, Neither agree nor disagree, Agree, Strongly agree` },
+  ] },
+];
+
+/** "add a question to measure purchase intent [for Brand A]" → the standard items, as executable sentences; null when the concept is not one of them */
+function measureFallback(def: SurveyDefinition, text: string): NonNullable<Extract<Interpretation, { kind: "model" }>["fallback"]> | null {
+  const m = /^(?:add|create|insert|include|write|new)\s+(?:an?\s+|another\s+|one\s+more\s+)?(?:new\s+)?(?:\w+\s+)?question\s+(?:to\s+|that\s+|which\s+)?(?:measures?|measuring|captures?|capturing|assess(?:es|ing)?|asks?\s+about|asking\s+about|about|on|for|covering|tracking)\s+(.+)$/i.exec(text);
+  if (!m) return null;
+  const phrase = unquote(m[1]).replace(/[.!?]+$/, "");
+  const measure = MEASURES.find((x) => x.re.test(phrase));
+  if (!measure) return null;
+  const subj = /\b(?:for|of|with|towards?|in|about)\s+(.+)$/i.exec(phrase.replace(measure.re, "").trim())?.[1]?.trim();
+  const brand = /\b(Brand\s+[A-Z]\b|[A-Z][\w&]+(?:\s+[A-Z][\w&]+)*)(?=\s*$)/.exec(def.research?.objective ?? "")?.[1];
+  const subject = subj ? subj.replace(/^(?:the|our|your)\s+/i, (x) => x) : brand ?? "the brand";
+  return { understood: `Add a question measuring ${measure.name}${subj ? ` (${subj})` : ""}.`, question: `The language model writes the wording for this; without one, a standard ${measure.name} item can be added as it is — which?`, choices: measure.items(subject) };
+}
+
+/** "create a research design for <objective>" → the objective recorded, as a first step the engine takes itself */
+function designFallback(text: string): NonNullable<Extract<Interpretation, { kind: "model" }>["fallback"]> | null {
+  const m = /^(?:create|build|make|write|draft|design|prepare|develop|propose|set\s+up)\s+(?:me\s+)?(?:an?\s+|the\s+)?(?:new\s+)?(?:research\s+(?:design|framework|plan|proposal)|study\s+design)\s+(?:for|to|on|about|that|which)\s+(.+)$/i.exec(text);
+  if (!m) return null;
+  const objective = cap(unquote(m[1]).replace(/^(?:understand(?:ing)?|explore|exploring|find(?:ing)?\s+out|learn(?:ing)?|investigat(?:e|ing)|study(?:ing)?)\s+/i, "").replace(/[.!?]+$/, ""));
+  return { understood: `Create a research design for “${plain(objective, 60)}”.`, question: "The language model drafts the design — hypotheses, population, constructs. Without one, the engine can record the objective now and you can add the hypotheses by hand (“add hypothesis: …”) or in the Research design editor:", choices: [{ label: "Record the objective", text: `Set the research objective to "${objective}"` }] };
+}
+
+/** the model's turn, with what the engine could do instead */
+function withFallback(r: Run, out: Interpretation): Interpretation {
+  if (out.kind !== "model") return out;
+  const fb = measureFallback(r.def, r.text) ?? designFallback(r.text);
+  return fb ? { ...out, fallback: fb } : out;
+}
+
 /* ---------------------------------------------------------- everything else: the model */
 
 const CATEGORY_WORDS: [RegExp, IntentCategory][] = [
@@ -2059,9 +2330,10 @@ function fallback(r: Run): Interpretation {
  * before "remove Q11"), skips before display ("if Q7 is no, skip …").
  */
 const RECOGNISERS: Recogniser[] = [
-  analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, analysisQuery, measures,
+  analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, unconnected, keyCrosstabs, analysisQuery, measures,
   deferred, longBrief,
-  surveySettings, languages, research, variables, pageBreaks,
+  surveySettings, languages, objective, research, variables, pageBreaks,
+  screenerEdit, scaleChange, crosstabs,
   masking, optionVisibility, randomization, options, required, skips, display, validation, questions,
 ];
 
@@ -2069,9 +2341,9 @@ function interpret(r: Run): Interpretation {
   if (!r.text) return { kind: "clarify", category: "survey_editing", understood: "Nothing was asked.", question: "What would you like to change, or to know about this survey?", choices: ["Make Q1 required", "What depends on Q1?", "Which questions are untranslated?"].map((text) => ({ label: text, text })), detected: [] };
   for (const rec of RECOGNISERS) {
     const out = rec(r);
-    if (out) return out;
+    if (out) return withFallback(r, out);
   }
-  return fallback(r);
+  return withFallback(r, fallback(r));
 }
 
 /**
@@ -2086,6 +2358,7 @@ export function interpretRequest(def: SurveyDefinition, text: string, ctx: Inter
     const parts = splitCommands(clean);
     return parts.length > 1 ? compound(def, clean, parts, ctx) : interpret({ def, text: clean, ctx, depth: 0 });
   } catch (e) {
+    if (process.env.RESCRIPT_NL_DEBUG) console.error((e as Error).stack);
     return { kind: "model", category: null, reason: `the interpreter could not read this (${(e as Error).message}) — the language model takes it`, detected: [] };
   }
 }

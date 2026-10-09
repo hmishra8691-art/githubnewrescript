@@ -1941,3 +1941,26 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .rd-x:hover { color: var(--c-error); }
 .rd-editor.compact .settings-grid { grid-template-columns: 1fr; }
 .rd-editor.compact .ta { font-size: 13px; }
+
+/* ---- Phase 2: the change plan, the engine's fallback, plan-first ---- */
+.cp-change-plan { margin-top: 6px; display: flex; flex-direction: column; gap: 8px; }
+.cp-plan-items { list-style: none; padding-left: 0; gap: 4px; }
+.cp-plan-items li { border: 1px solid var(--c-border); border-radius: var(--r-md); padding: 6px 8px; background: var(--c-surface); }
+.cp-plan-items li.off { opacity: 0.55; }
+.cp-plan-row { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+.cp-plan-row input { margin-top: 3px; }
+.cp-plan-n { font-family: var(--ff-mono); font-size: var(--fs-caption); color: var(--c-text-3); min-width: 16px; padding-top: 2px; }
+.cp-plan-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.cp-plan-body b { font-weight: 600; }
+.cp-plan-kind { margin-left: 6px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+.cp-plan-kind.k-remove { color: var(--c-error); border-color: var(--c-error); }
+.cp-plan-why { font-size: var(--fs-caption); color: var(--c-text-2); }
+.cp-plan-detail { font-size: var(--fs-caption); }
+.cp-plan-assumptions { margin: 0; font-size: var(--fs-caption); }
+.cp-plan-built { margin-top: 6px; }
+.cp-plan-built li[data-failed="1"] { color: var(--c-text-2); }
+.cp-fallback { flex-direction: column; align-items: stretch; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--c-warning-bd); }
+.cp-fallback .iqi-dim { margin: 0; }
+.iq-toggle { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-caption); color: var(--c-text-2); cursor: pointer; white-space: nowrap; }
+.iq-toggle.on { color: var(--c-text); }
+.iq-toggle input { margin: 0; }
