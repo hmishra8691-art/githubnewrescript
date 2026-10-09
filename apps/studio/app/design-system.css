@@ -1631,6 +1631,18 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .cp-sev.v-critical { color: var(--c-error-fg); border-color: var(--c-error); }
 .cp-sev.v-warning { color: var(--c-warning-fg); border-color: var(--c-warning); }
 .cp-cite { font-size: 10.5px; color: var(--c-text-3); margin-left: 4px; cursor: help; }
+/* the research workflow (Phase 6): the steps, each with its mark */
+.wf-steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.wf-step { padding: 6px 8px; border: 1px solid var(--c-border); border-radius: 6px; font-size: 12.5px; }
+.wf-step.next { border-color: var(--c-primary-600); }
+.wf-step.wf-blocked { opacity: .65; }
+.wf-mark { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 999px; border: 1px solid var(--c-border); color: var(--c-text-3); flex: none; margin-top: 1px; }
+.wf-mark.v-done { color: var(--c-success-fg); border-color: var(--c-success); }
+.wf-mark.v-ready { color: var(--c-primary-600); border-color: var(--c-primary-600); }
+.wf-mark.v-needs_input, .wf-mark.v-model { color: var(--c-warning-fg); border-color: var(--c-warning); }
+.wf-why { margin-top: 2px; line-height: 1.4; }
+.wf-questions { margin: 4px 0 0; padding: 0 0 0 14px; display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+.wf-questions .iq-chip { margin-left: 4px; white-space: normal; text-align: left; }
 .cp-assumptions { border-left: 3px solid var(--c-warning); padding: 4px 10px; background: var(--c-warning-bg); border-radius: 6px; font-size: 12.5px; }
 .cp-assumptions ul { margin: 2px 0 0; padding-left: 18px; }
 .cp-refused { border-left: 3px solid var(--c-warning); padding: 4px 10px; background: var(--c-warning-bg); border-radius: 6px; font-size: 12.5px; margin-top: 8px; }

@@ -102,6 +102,8 @@ export type Interpretation =
   | { kind: "query"; category: IntentCategory; understood: string; query: DataQuery; detected: Detected[] }
   /** a document to produce (Phase 5): the proposal, the findings report or the findings deck — the Studio builds the file */
   | { kind: "output"; category: IntentCategory; understood: string; output: OutputRequest; detected: Detected[] }
+  /** the research agent's workflow (Phase 6): the Studio runs the planner on the survey and shows the steps — with the objective when the sentence gave one */
+  | { kind: "workflow"; category: IntentCategory; understood: string; objective?: string; detected: Detected[] }
   | { kind: "model"; category: IntentCategory | null; reason: string; detected: Detected[];
       /** what the engine can do by itself when no model answers: a question and executable choices (each a sentence this layer reads) — Phase 2 */
       fallback?: { understood: string; question: string; choices: { label: string; text: string }[] } };
@@ -2574,6 +2576,21 @@ const objective: Recogniser = (r) => {
   return act(r, "research_design", `Set the research objective to “${plain(text, 80)}”${had ? ` (replacing “${plain(had, 50)}”)` : ""}.`, [{ op: "set_research", objective: text }], [det("objective", plain(text, 60))]);
 };
 
+/** "start the research workflow for <objective>", "run the workflow", "what's next in the workflow", "plan the study for <objective>" → the planner (Phase 6) */
+const workflowRequest: Recogniser = (r) => {
+  const t = r.text.replace(/[.!?]+$/, "").trim();
+  let m: RegExpExecArray | null;
+  let objective: string | undefined;
+  if ((m = /^(?:start|run|begin|open|launch|resume|continue|show|plan)\s+(?:me\s+)?(?:the\s+|a\s+|my\s+)?(?:research\s+|study\s+)?(?:workflow|agent|planner|pipeline)(?:\s+(?:for|on|to|about)\s+(.+))?$/i.exec(t))) objective = m[1];
+  else if ((m = /^(?:plan|design|set\s+up|scope)\s+(?:me\s+)?(?:the\s+|a\s+|my\s+)?(?:whole\s+|entire\s+|full\s+)?(?:study|research\s+project|project)\s+(?:for|on|to|about)\s+(.+)$/i.exec(t))) objective = m[1];
+  else if (/^(?:what(?:'s|\s+is)\s+(?:the\s+)?next(?:\s+step)?(?:\s+in\s+(?:the\s+)?(?:research\s+)?workflow)?|what\s+(?:should|do)\s+(?:i|we)\s+do\s+next|where\s+(?:am\s+i|are\s+we)(?:\s+in\s+the\s+(?:research\s+)?workflow)?|next\s+step)$/i.test(t)) objective = undefined;
+  else return null;
+  const obj = objective ? cap(unquote(objective).trim()) : undefined;
+  const had = r.def.research?.objective?.trim();
+  return { kind: "workflow", category: "research_design", understood: obj ? `Run the research workflow for ${quoteFor(plain(obj, 70))}${had && had !== obj ? ` (the recorded objective is ${quoteFor(plain(had, 50))})` : ""}.` : "Show the research workflow: what is done, what the engine does next, what you are asked.", ...(obj ? { objective: obj } : {}), detected: obj ? [det("objective", plain(obj, 60))] : [] };
+};
+const quoteFor = (s: string) => `“${s}”`;
+
 /* ---------------------------------------------------------- what the engine can do when no model answers */
 
 /**
@@ -2613,6 +2630,12 @@ const MEASURES: { re: RegExp; name: string; items: (subject: string) => { label:
     { label: "Value for money (5-point agreement)", text: `Add a required single-select question "${s} offers good value for money" with options Strongly disagree, Disagree, Neither agree nor disagree, Agree, Strongly agree` },
   ] },
 ];
+
+/** the standard items for a concept named in words ("purchase intent", "satisfaction with the service") — what the research planner (Phase 6) offers for an unmeasured construct; null when the concept is not one of the library's */
+export function standardMeasure(concept: string): { name: string; re: RegExp; items: (subject: string) => { label: string; text: string }[] } | null {
+  const m = MEASURES.find((x) => x.re.test(concept));
+  return m ? { name: m.name, re: m.re, items: m.items } : null;
+}
 
 /** "add a question to measure purchase intent [for Brand A]" → the standard items, as executable sentences; null when the concept is not one of them */
 function measureFallback(def: SurveyDefinition, text: string): NonNullable<Extract<Interpretation, { kind: "model" }>["fallback"]> | null {
@@ -2701,7 +2724,7 @@ function fallback(r: Run): Interpretation {
  * before "remove Q11"), skips before display ("if Q7 is no, skip …").
  */
 const RECOGNISERS: Recogniser[] = [
-  analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest,
+  analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest, workflowRequest,
   deferred, longBrief,
   surveySettings, languages, objective, audience, research, variables, pageBreaks,
   shorten, screenerEdit, scaleChange, removeAnalysis, analysisTests, crosstabs,
@@ -2781,7 +2804,7 @@ function compound(def: SurveyDefinition, text: string, parts: string[], ctx: Int
     if (it.kind === "refused" && it.noop) { noops.push(it); category ??= it.category; continue; }
     if (it.kind === "clarify") { stop = { ...it, understood: `In “${part}”: ${it.understood}`, choices: it.choices.map((c) => ({ label: c.label, text: text.replace(part, c.text) })) }; continue; }
     if (it.kind === "refused") { stop = { ...it, understood: `In “${part}”: ${it.understood}`, reason: `${it.reason} Nothing else in the request was applied.`, ...(it.suggestion ? { suggestion: { text: text.replace(part, it.suggestion.text) } } : {}) }; continue; }
-    if (it.kind === "answer" || it.kind === "query" || it.kind === "output") { stop = { kind: "model", category: it.category, reason: "a question and an edit in one sentence — the language model takes the whole request", detected }; continue; }
+    if (it.kind === "answer" || it.kind === "query" || it.kind === "output" || it.kind === "workflow") { stop = { kind: "model", category: it.category, reason: "a question and an edit in one sentence — the language model takes the whole request", detected }; continue; }
     category ??= it.category;
     actions.push(...it.actions);
     detected.push(...it.detected);

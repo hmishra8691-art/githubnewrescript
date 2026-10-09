@@ -21,7 +21,8 @@ export type FailureCode =
   | "unparseable"      // the answer was words, not the JSON the Studio reads
   | "empty"            // the answer had no content
   | "unusable"         // valid JSON with no reply, actions or findings
-  | "engine_unparsed"; // no model, and the engine could not read the sentence
+  | "engine_unparsed"  // no model, and the engine could not read the sentence
+  | "internal_mode";   // the project runs internally: no model is called (Phase 6)
 
 export interface TurnFailure {
   code: FailureCode;
@@ -46,6 +47,7 @@ const TITLES: Record<FailureCode, string> = {
   empty: "THE MODEL ANSWERED WITH NOTHING",
   unusable: "THE MODEL'S ANSWER HAD NOTHING TO APPLY",
   engine_unparsed: "THE ENGINE COULD NOT READ THIS",
+  internal_mode: "INTERNAL MODE — NO MODEL CALLED",
 };
 
 /** The failure for a code, with the cause and the next steps written for the researcher. */
@@ -92,6 +94,10 @@ export function describeFailure(code: FailureCode, detail?: string): TurnFailure
       return { code, title: TITLES[code], detail: d,
         message: "The engine reads instructions that name their objects — a question by code or variable, an option by label, a condition with its operator. It could not resolve this one on its own.",
         next: ["Examples it reads: “Terminate if Q1 < 25”, “Show Q12 only if Q1 is Male”, “Make Q5 required”, “Add an Other option to Q3”, “What will break if I delete Q6?”.", "With a language model configured, descriptive requests are read by the model and applied through the same review."] };
+    case "internal_mode":
+      return { code, title: TITLES[code], detail: d,
+        message: "This project runs in internal mode: nothing is sent to a language model, so only the engine's own reading is available — instructions that name their objects, the standard items, the research workflow's own steps.",
+        next: ["Switch the project to cloud execution in the Workflow tab (or for this one request) to send sentences like this one to the model.", "Or rephrase with the objects named: “Terminate if Q1 < 25”, “Add a crosstab of AGE by BRAND_PREF”, “Add a question to measure purchase intent”."] };
   }
 }
 

@@ -2,7 +2,8 @@
 import React from "react";
 import type { AnalysisRun } from "@rescript/analytics";
 import type { SurveyDefinition } from "@rescript/schema";
-import { reviewSurvey, describeAction, type SurveyAction, type SurveyReview, type Interpretation } from "@rescript/engine";
+import { reviewSurvey, describeAction, describeWorkflow, researchWorkflow, type ExecutionMode, type ResearchWorkflow, type SurveyAction, type SurveyReview, type Interpretation, type WorkflowStep } from "@rescript/engine";
+import type { WorkflowResponse } from "../../../app/api/copilot/workflow/route";
 import { useStudio, uid } from "../../studio/store";
 import type { CopilotReply, CopilotFinding } from "../../../lib/copilot/prompt";
 import { evaluateProposal, rebaseProposal, sameSurvey, changeRecord, changeLabel, memoryFrom, type Proposal, type ProposalState, type ChangeRecord } from "../../../lib/copilot/client";
@@ -102,7 +103,9 @@ export interface EngineTurn {
 }
 export interface ResearchDocView { id: string; ref: string; name: string; format: string; kind?: string; pages: number; ocrPages: number; chars: number; summary: import("../../../lib/copilot/research").DocSummary | null; warnings: string[]; createdAt: string }
 export interface ReviewState { rules: SurveyReview; ai: CopilotFinding[]; at: string; running: boolean }
-export type PanelTab = "changes" | "review" | "research" | "history" | "analysis" | "findings" | "languages" | "quotas" | "ux" | "inspector";
+export type PanelTab = "changes" | "review" | "research" | "history" | "analysis" | "findings" | "workflow" | "languages" | "quotas" | "ux" | "inspector";
+/** what the workflow route told the Studio (Phase 6): the execution mode, the model, the cost of each model step, whether fieldwork data exists */
+export type WorkflowInfo = Omit<WorkflowResponse, "workflow">;
 /** the stored analysis run, as the analytics route returns it (results are not stored — only findings, verdicts and each item's chart) */
 export type StoredRunBrief = Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger" | "corrections" | "advice" | "discoveries"> & { id?: string; items?: { definition: { name: string; kind: string; options?: Record<string, unknown> }; chart?: string; hypotheses: string[] }[] };
 
@@ -429,7 +432,33 @@ export function useCopilot(opts: {
   const [planFirst, setPlanFirstState] = React.useState<boolean>(() => { try { return window.localStorage.getItem("rescript.copilot.planFirst") !== "off"; } catch { return true; } });
   const setPlanFirst = React.useCallback((v: boolean) => { setPlanFirstState(v); try { window.localStorage.setItem("rescript.copilot.planFirst", v ? "on" : "off"); } catch { /* a private window */ } }, []);
 
+  /*
+   * THE EXECUTION CHOICE (Phase 6). A project runs INTERNAL (nothing is sent
+   * to a language model: the engine's reading, the standard items, the
+   * workflow's own steps) or CLOUD (model steps go to the model). The
+   * project's choice is a project setting the workflow route keeps (the
+   * sandbox keeps it in the browser); `cloudOnce` lets one request through.
+   */
+  const [executionMode, setExecutionModeState] = React.useState<ExecutionMode>(() => { try { return window.localStorage.getItem("rescript.copilot.mode") === "internal" ? "internal" : "cloud"; } catch { return "cloud"; } });
+  const [workflowInfo, setWorkflowInfo] = React.useState<WorkflowInfo | null>(null);
+  const [workflowError, setWorkflowError] = React.useState<string | null>(null);
+  const [workflowObjective, setWorkflowObjective] = React.useState<string | null>(null);
+  const [workflowLoading, setWorkflowLoading] = React.useState(false);
+  /** the outputs produced this session — the engine cannot see a file, so the workflow is told */
+  const producedRef = React.useRef<("design_document" | "deck")[]>([]);
+  /** one request let through to the cloud while the project runs internally — reset by the call that used it */
+  const cloudOnceRef = React.useRef(false);
+  const [cloudOnce, setCloudOnceState] = React.useState(false);
+  const setCloudOnce = React.useCallback((v: boolean) => { cloudOnceRef.current = v; setCloudOnceState(v); }, []);
+
   const run = React.useCallback(async (id: string, text: string, mode: "review" | "generate" | undefined, extra: Record<string, unknown>): Promise<"handled" | "unavailable" | "empty"> => {
+    /* internal mode: the call is not made, the card says why and where the switch is, the history records a turn that cost nothing */
+    if (executionMode === "internal" && !cloudOnceRef.current) {
+      const failure = describeFailure("internal_mode");
+      opts.patch(id, { status: "failed", error: failure.message, failure, opKey: recordOp({ prompt: text, source: "model", status: "failed", intent: { mode: mode ?? "", execution: "internal" }, statusDetail: `${failure.title}: ${failure.message}`, apiCalls: [] }) });
+      return "unavailable";
+    }
+    if (cloudOnceRef.current) { cloudOnceRef.current = false; setCloudOnceState(false); }
     setBusy(true);
     try {
       const proposal = session.proposal;
@@ -518,7 +547,7 @@ export function useCopilot(opts: {
     } finally {
       setBusy(false);
     }
-  }, [session.proposal, session.openOp, stale, s.def, s.surveyDbId, opts, copilotTurns, setSession, themeImage, quotaCounts, runForTurn, recordOp, recordProposal, planFirst]);
+  }, [session.proposal, session.openOp, stale, s.def, s.surveyDbId, opts, copilotTurns, setSession, themeImage, quotaCounts, runForTurn, recordOp, recordProposal, planFirst, executionMode]);
 
   const ask = React.useCallback(async (text: string, heard?: HeardTranscript, mode?: "review" | "generate", handoff?: EngineHandoff): Promise<"handled" | "unavailable" | "empty"> => {
     const id = uid("copilot");
@@ -551,7 +580,7 @@ export function useCopilot(opts: {
    * open proposal exactly as a model's would: the same Changes panel, the
    * same Apply, the same history and undo. Nothing is charged.
    */
-  const local = React.useCallback((text: string, it: Exclude<Interpretation, { kind: "model" }>, heard?: HeardTranscript): void => {
+  const local = React.useCallback((text: string, it: Exclude<Interpretation, { kind: "model" | "workflow" }>, heard?: HeardTranscript, workflowStep?: string): void => {
     const id = uid("copilot");
     const actions = it.kind === "actions" ? it.actions : [];
     const reply: CopilotReply = {
@@ -567,7 +596,7 @@ export function useCopilot(opts: {
       ...(it.kind === "actions" && it.warnings?.length ? { warnings: it.warnings } : {}),
     };
     /* recorded: an engine reading costs nothing, and the history says so (no model calls) */
-    const intent: OpIntent = { category: it.category ?? null, kind: it.kind };
+    const intent: OpIntent = { category: it.category ?? null, kind: it.kind, ...(workflowStep ? { workflow: workflowStep } : {}) };
     const opKey = actions.length
       ? recordProposal(text, actions, { source: "engine", intent, detected: it.detected, targets: it.kind === "actions" ? it.targets : [], warnings: it.kind === "actions" ? it.warnings : undefined }, session.openOp)
       : recordOp({ prompt: text, source: "engine", status: it.kind === "answer" ? "answered" : it.kind === "clarify" ? "clarify" : "refused", intent, detected: it.detected, statusDetail: (it.kind === "answer" ? it.answer : it.kind === "clarify" ? it.question : it.kind === "refused" ? it.reason : it.understood).slice(0, 2000), ...(it.kind === "refused" && it.suggestion?.actions?.length ? { proposed: proposedOf(it.suggestion.actions) } : {}) });
@@ -628,7 +657,7 @@ export function useCopilot(opts: {
    * gate kept. The sandbox makes the proposal from its own definition and
    * the findings outputs from rows a test put on the page.
    */
-  const makeOutput = React.useCallback(async (text: string, it: Extract<Interpretation, { kind: "output" }>, heard?: HeardTranscript): Promise<void> => {
+  const makeOutput = React.useCallback(async (text: string, it: Extract<Interpretation, { kind: "output" }>, heard?: HeardTranscript, workflowStep?: string): Promise<void> => {
     const id = uid("copilot");
     const engine: EngineTurn = { kind: "output", category: it.category, understood: it.understood, detected: it.detected };
     const reply = (r: string): CopilotReply => ({ kind: "answer", reply: r, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] });
@@ -640,7 +669,7 @@ export function useCopilot(opts: {
       const rows = sandbox ? rowsRef.current : null;
       if (sandbox && it.output.type !== "proposal_docx" && !rows?.length) { fail("The sandbox has no respondents to report on. Open a survey with fieldwork and ask there — the report and the deck come from a run of its data."); return; }
       const fake = sandbox ? fakeRef.current.shift() : undefined;
-      const r = await fetch("/api/copilot/output", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: s.surveyDbId, output: it.output, ...(sandbox ? { definition: s.def, rows, ...(fake ? { fake } : {}) } : {}) }) });
+      const r = await fetch("/api/copilot/output", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: s.surveyDbId, output: it.output, ...(executionMode === "internal" ? { narrative: false } : {}), ...(sandbox ? { definition: s.def, rows, ...(fake ? { fake } : {}) } : {}) }) });
       if (!r.ok) { const d = await r.json().catch(() => null) as { error?: string } | null; fail(d?.error ?? (r.status === 401 ? "Sign in to produce documents for this survey." : `The document could not be produced (HTTP ${r.status}).`)); return; }
       const blob = await r.blob();
       const name = /filename="([^"]+)"/.exec(r.headers.get("content-disposition") ?? "")?.[1] ?? `output.${it.output.type.endsWith("pptx") ? "pptx" : "docx"}`;
@@ -649,13 +678,67 @@ export function useCopilot(opts: {
       const url = URL.createObjectURL(blob);
       const output: NonNullable<CopilotEntry["output"]> = { name, size: blob.size, url, kind: name.endsWith(".pptx") ? "pptx" : "docx", summary, ...(narrative ? { narrative } : {}) };
       const said = `${it.output.words[0].toUpperCase()}${it.output.words.slice(1)} is ready: ${name} (${Math.round(blob.size / 1024)} KB). ${summary}${narrative ? ` Narrative gate: ${narrative}.` : ""}`;
-      opts.patch(id, { status: "ready", output, reply: reply(said), engine: { ...engine, kind: "answer" }, opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "output" }, detected: it.detected, statusDetail: said.slice(0, 2000), apiCalls: [{ route: "/api/copilot/output", mode: it.output.type, charge: 0 }] }) });
+      opts.patch(id, { status: "ready", output, reply: reply(said), engine: { ...engine, kind: "answer" }, opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "output", ...(workflowStep ? { workflow: workflowStep } : {}) }, detected: it.detected, statusDetail: said.slice(0, 2000), apiCalls: [{ route: "/api/copilot/output", mode: it.output.type, charge: 0 }] }) });
+      /* the workflow's own outputs are marked produced (the deck, the design document) */
+      const produced = it.output.type === "proposal_docx" ? "design_document" : it.output.type === "findings_pptx" ? "deck" : null;
+      if (produced && !producedRef.current.includes(produced)) { producedRef.current = [...producedRef.current, produced]; setWorkflowInfo((x) => (x ? { ...x } : x)); }
     } catch (e) {
       fail(`The document could not be produced: ${(e as Error).message || "the network request failed"}.`);
     } finally { setBusy(false); }
-  }, [opts, s.surveyDbId, s.def, recordOp]);
+  }, [opts, s.surveyDbId, s.def, recordOp, executionMode]);
   /** the survey a new request is read against: the open proposal's result, so a revision builds on what is proposed */
   const working: SurveyDefinition = React.useMemo(() => (session.proposal ? (stale ? evaluateProposal(rebaseProposal(session.proposal, s.def)).after : full?.after ?? s.def) : s.def), [session.proposal, stale, full, s.def]);
+  /*
+   * THE RESEARCH WORKFLOW (Phase 6). The planner is the engine's and runs
+   * here, on the survey as it is (the open proposal included), so a step
+   * applied is a step done at once; the route adds what only the server
+   * knows — the project's execution mode, the model, the cost of each model
+   * step priced before any call, whether fieldwork data exists.
+   */
+  const refreshWorkflow = React.useCallback(async (opt: { objective?: string; setMode?: ExecutionMode } = {}): Promise<WorkflowInfo | null> => {
+    setWorkflowLoading(true);
+    setWorkflowError(null);
+    try {
+      const sandbox = s.surveyDbId === "sandbox";
+      const body = { surveyId: s.surveyDbId, ...(sandbox ? { definition: s.def, runAvailable: !!rowsRef.current?.length, mode: executionMode } : {}), ...(opt.objective ? { objective: opt.objective } : {}), ...(opt.setMode ? { setMode: opt.setMode } : {}), produced: producedRef.current };
+      const r = await fetch("/api/copilot/workflow", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      if (!r.ok) { const d = await r.json().catch(() => null) as { error?: string } | null; setWorkflowError(d?.error ?? (r.status === 401 ? "Sign in to see the workflow for this survey." : `The workflow could not be read (HTTP ${r.status}).`)); return null; }
+      const d = await r.json() as WorkflowResponse;
+      const { workflow: _w, ...info } = d;
+      void _w;
+      setWorkflowInfo(info);
+      if (!sandbox && info.mode.project !== executionMode) { setExecutionModeState(info.mode.project); try { window.localStorage.setItem("rescript.copilot.mode", info.mode.project); } catch { /* a private window */ } }
+      return info;
+    } catch (e) { setWorkflowError(`The workflow could not be read: ${(e as Error).message || "the network request failed"}.`); return null; }
+    finally { setWorkflowLoading(false); }
+  }, [s.surveyDbId, s.def, executionMode]);
+  const setExecutionMode = React.useCallback(async (mode: ExecutionMode) => {
+    setExecutionModeState(mode);
+    try { window.localStorage.setItem("rescript.copilot.mode", mode); } catch { /* a private window */ }
+    if (s.surveyDbId !== "sandbox") await refreshWorkflow({ setMode: mode });
+    else setWorkflowInfo((x) => (x ? { ...x, mode: { ...x.mode, project: mode, effective: x.model.configured ? mode : "internal", override: false } } : x));
+  }, [s.surveyDbId, refreshWorkflow]);
+  /** the workflow on the survey as it stands here, in the effective mode */
+  const workflow: ResearchWorkflow = React.useMemo(() => researchWorkflow(working, { mode: workflowInfo ? workflowInfo.mode.effective : available === false ? "internal" : executionMode, runAvailable: workflowInfo?.runAvailable ?? (s.surveyDbId === "sandbox" ? !!rowsRef.current?.length : !!analysisRun), produced: producedRef.current, ...(workflowObjective ? { objective: workflowObjective } : {}) }), [working, workflowInfo, executionMode, available, workflowObjective, analysisRun, s.surveyDbId]);
+  /** "start the research workflow for …": the card says where the study stands, the tab opens on the steps */
+  const showWorkflow = React.useCallback(async (text: string, it: Extract<Interpretation, { kind: "workflow" }>, heard?: HeardTranscript): Promise<void> => {
+    const id = uid("copilot");
+    if (it.objective) setWorkflowObjective(it.objective);
+    const engine: EngineTurn = { kind: "answer", category: it.category, understood: it.understood, detected: it.detected };
+    const reply = (r: string): CopilotReply => ({ kind: "answer", reply: r, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] });
+    opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "thinking", reply: reply(it.understood), engine });
+    setSession((x) => ({ ...x, tab: "workflow" }));
+    const info = await refreshWorkflow(it.objective ? { objective: it.objective } : {});
+    const wf = researchWorkflow(working, { mode: info ? info.mode.effective : executionMode, runAvailable: info?.runAvailable ?? false, produced: producedRef.current, ...(it.objective ? { objective: it.objective } : {}) });
+    const said = `${describeWorkflow(wf)}${info ? `\nExecution: ${info.mode.effective}${info.cost.steps.length ? ` · model steps from here: ${info.cost.steps.map((c) => `${c.id} (${c.tier}, ${c.model}, ${c.charge} credits)`).join(", ")}` : ""}` : ""}`;
+    opts.patch(id, { status: "ready", reply: reply(said), opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "workflow", ...(it.objective ? { objective: it.objective.slice(0, 200) } : {}) }, detected: it.detected, statusDetail: said.slice(0, 2000) }) });
+  }, [opts, setSession, refreshWorkflow, working, executionMode, recordOp]);
+  /** one step, as the researcher approved it: the engine's actions as a proposal, an output as a file, a model step as a model turn */
+  const runWorkflowStep = React.useCallback(async (step: WorkflowStep): Promise<void> => {
+    if (step.status === "ready" && step.executor === "output" && step.output) { await makeOutput(step.sentence ?? step.title, { kind: "output", category: "reporting", understood: `Produce ${step.output.words} (workflow: ${step.title.toLowerCase()}).`, output: step.output, detected: [] }, undefined, step.id); return; }
+    if (step.status === "ready" && step.actions?.length) { local(step.sentence ?? step.title, { kind: "actions", category: "research_design", understood: `${step.title}: ${step.why}`, actions: step.actions, detected: [], targets: [] }, undefined, step.id); return; }
+    if ((step.status === "model" || (step.status === "needs_input" && step.model)) && step.sentence) { await ask(step.sentence, undefined, undefined, { category: "research_design", reason: `workflow step ${step.id}: ${step.why}`, detected: [] }); }
+  }, [makeOutput, local, ask]);
 
   /* ------------------------------------------------------------ review */
   const runReview = React.useCallback(async (text = "Review my survey") => {
@@ -850,6 +933,7 @@ export function useCopilot(opts: {
     tab: session.tab, setTab: (t: PanelTab) => setSession((x) => ({ ...x, tab: t })),
     ask, local, askData, makeOutput, working, runReview, previewFix, apply, cancel, uploadDocs, deleteDoc, refreshDocs,
     planFirst, setPlanFirst, executePlan, cancelPlan,
+    executionMode, setExecutionMode, cloudOnce, setCloudOnce, workflow, workflowInfo, workflowError, workflowLoading, workflowObjective, refreshWorkflow, showWorkflow, runWorkflowStep,
     themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),
     quotaCounts, quotaCountsAt, refreshQuotaCounts,
     analysisRun, runDue, running, runError, refreshAnalysisRun, runPlanNow,

@@ -4,6 +4,8 @@ import {
   type MeterContext, type MeterRefusal, type UsageSpec, type UsageEvent, type Environment,
 } from "@rescript/billing";
 import { aiModelName, collectUsage, sumUsage, type AiUsage } from "@rescript/ai";
+import { aiSpec, meterModel, meterProvider, type AiEstimate } from "./aiEstimate";
+export { aiSpec, meterModel, meterProvider, type AiEstimate };
 import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProjectFor, type AuthedUser, type ProjectContext } from "@/lib/guard";
 import type { Capability } from "@rescript/access";
@@ -173,19 +175,6 @@ export async function billingProjectFor(user: AuthedUser | null, surveyId: unkno
 }
 
 /** Provider ids as the cost registry knows them; the fake provider is priced as the real one only when simulation is on. */
-export function meterProvider(provider: string, kind: "chat" | "tts" | "stt" | "translate"): string {
-  if (provider !== "fake") return provider;
-  if (process.env.BILLING_SIMULATE_FAKE_COSTS !== "1") return "fake";
-  return kind === "translate" ? "google" : "openai-compatible";
-}
-export function meterModel(provider: string, model: string | null, kind: "chat" | "tts" | "stt" | "translate"): string | null {
-  if (provider !== "fake" || process.env.BILLING_SIMULATE_FAKE_COSTS !== "1") return model;
-  if (kind === "translate") return "v2";
-  if (kind === "chat") return aiModelName();
-  if (kind === "stt") return (process.env.AI_STT_MODEL ?? "").trim() || "whisper-1";
-  return (process.env.AI_TTS_MODEL ?? "").trim() || "tts-1";
-}
-
 /** Turn collected provider reports into the usage the meter settles. */
 export function usageToSpec(usage: AiUsage[], fallback: { kind: "chat" | "tts" | "stt" | "translate" }): Partial<UsageSpec> {
   const t = sumUsage(usage);
@@ -209,27 +198,16 @@ export type Metered<T> = { ok: true; value: T; event: UsageEvent | null } | Mete
  * Run an AI call under the meter: reserve from the prompt size and the
  * output ceiling, settle with what the provider actually reported.
  */
-/** The usage spec an AI call is reserved (and estimated) at — one definition for `meteredAi` and `estimateAi`. */
-function aiSpec(eventType: string, est: { estimateText: string; maxTokens: number; requests?: number; operation: string }): UsageSpec {
-  const providerName = process.env.AI_API_URL === "fake:" ? "fake" : "openai-compatible";
-  const reqs = est.requests ?? 1;
-  return {
-    eventType, provider: meterProvider(providerName, "chat"), service: "chat", model: meterModel(providerName, aiModelName(), "chat"),
-    inputUnits: (estimateTokens(est.estimateText) + 120) * reqs, outputUnits: est.maxTokens * reqs,
-    metadata: { operation: est.operation },
-  };
-}
-
 /**
  * What an AI call WOULD cost, priced exactly as `meteredAi` would reserve it —
  * for the "estimated cost" a person sees before choosing to run it (the
  * import brief §33). Touches no wallet.
  */
-export async function estimateAi(meter: Meter, ctx: MeterContext, eventType: string, est: { estimateText: string; maxTokens: number; requests?: number; operation: string }): Promise<number> {
+export async function estimateAi(meter: Meter, ctx: MeterContext, eventType: string, est: AiEstimate): Promise<number> {
   try { return (await meter.estimate(ctx, aiSpec(eventType, est))).customerCharge; } catch { return 0; }
 }
 
-export async function meteredAi<T>(meter: Meter, ctx: MeterContext, eventType: string, est: { estimateText: string; maxTokens: number; requests?: number; operation: string }, fn: () => Promise<T>): Promise<Metered<T>> {
+export async function meteredAi<T>(meter: Meter, ctx: MeterContext, eventType: string, est: AiEstimate, fn: () => Promise<T>): Promise<Metered<T>> {
   const hold = await meter.reserve(ctx, aiSpec(eventType, est));
   if (!hold.ok) return hold;
   try {

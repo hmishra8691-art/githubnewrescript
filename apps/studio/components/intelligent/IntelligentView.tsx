@@ -248,6 +248,11 @@ export function IntelligentView() {
       await copilot.makeOutput(t, interp, heard);
       setBusy(false); inputRef.current?.focus(); return;
     }
+    // the research workflow (Phase 6): where the study stands and what comes next — the planner on this survey, the Workflow tab open
+    if (interp.kind === "workflow") {
+      await copilot.showWorkflow(t, interp, heard);
+      setBusy(false); inputRef.current?.focus(); return;
+    }
     if (interp.kind !== "model") {
       copilot.local(t, interp, heard);
       if (interp.kind === "actions") {
@@ -269,9 +274,10 @@ export function IntelligentView() {
      * purchase intent", the objective for "create a research design for …".
      * That is offered as a choice, not a dead end.
      */
-    if (!readOnlyExact && copilot.available === false && interp.kind === "model" && interp.fallback && !deferred) {
+    const internal = copilot.executionMode === "internal" && copilot.available !== false;
+    if (!readOnlyExact && (copilot.available === false || internal) && interp.kind === "model" && interp.fallback && !deferred) {
       const fb = interp.fallback;
-      copilot.local(t, { kind: "clarify", category: interp.category ?? "survey_editing", understood: fb.understood, question: `No language model is configured on this Studio, so the copilot cannot write this. ${fb.question}`, choices: fb.choices, detected: interp.detected }, heard);
+      copilot.local(t, { kind: "clarify", category: interp.category ?? "survey_editing", understood: fb.understood, question: `${internal ? "This project runs in internal mode — nothing is sent to a language model (switch to cloud in the Workflow tab)" : "No language model is configured on this Studio"}, so the copilot cannot write this. ${fb.question}`, choices: fb.choices, detected: interp.detected }, heard);
       setBusy(false); inputRef.current?.focus(); return;
     }
     if (!readOnlyExact && copilot.available !== false) {

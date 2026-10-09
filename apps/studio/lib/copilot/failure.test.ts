@@ -4,7 +4,7 @@ import { describeFailure, failureFromError, failureFromReplyError, isTurnFailure
 
 /* Phase 1: every failure of the model path has a code, a cause and a next step. */
 test("every code has a title, a cause and at least one next step", () => {
-  for (const code of ["not_configured", "wallet", "timeout", "provider", "network", "truncated", "unparseable", "empty", "unusable", "engine_unparsed"] as const) {
+  for (const code of ["not_configured", "wallet", "timeout", "provider", "network", "truncated", "unparseable", "empty", "unusable", "engine_unparsed", "internal_mode"] as const) {
     const f = describeFailure(code, "x");
     assert.equal(f.code, code);
     assert.ok(f.title.length > 8 && f.title === f.title.toUpperCase(), code);
@@ -14,6 +14,11 @@ test("every code has a title, a cause and at least one next step", () => {
   }
   assert.ok(!isTurnFailure({ code: "nope", message: "", next: [] }));
   assert.ok(!isTurnFailure(null));
+  /* Phase 6: internal mode is a cause of its own — not "no model configured" — and says where the switch is */
+  const internal = describeFailure("internal_mode");
+  assert.match(internal.title, /^INTERNAL MODE/);
+  assert.match(internal.message, /nothing is sent to a language model/);
+  assert.match(internal.next[0], /Workflow tab/);
 });
 
 test("a provider exception is read into the right code", () => {

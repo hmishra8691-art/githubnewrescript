@@ -12,7 +12,9 @@ import { approxTokens, reportUsage } from "./usage.js";
  *                e.g. https://api.openai.com/v1 — or the literal `fake:` to
  *                use the deterministic in-process provider below
  *   AI_API_KEY   bearer token for that API
- *   AI_MODEL     model name (default gpt-4o-mini)
+ *   AI_MODEL     model name (default gpt-4o-mini) — the LARGE tier: drafting
+ *   AI_MODEL_SMALL   a cheaper model for short structuring calls (the SMALL
+ *                tier, Research Engine audit Phase 6); falls back to AI_MODEL
  *
  *   AI_STT_API_URL   base URL of a provider serving POST
  *                    <base>/audio/transcriptions. Falls back to AI_API_URL.
@@ -868,9 +870,14 @@ async function postChat(base: string, key: string, body: Record<string, unknown>
   return { r: await send(plain) };
 }
 
-/** The model the Studio / runtime is configured to call. */
-export function aiModelName(): string {
-  return (process.env.AI_MODEL ?? "").trim() || "gpt-4o-mini";
+/** a model tier: "large" drafts (AI_MODEL), "small" structures a short answer (AI_MODEL_SMALL, else AI_MODEL) — Phase 6 */
+export type AiModelTier = "small" | "large";
+
+/** The model the Studio / runtime is configured to call, by tier (the large tier when none is named). */
+export function aiModelName(tier: AiModelTier = "large"): string {
+  const large = (process.env.AI_MODEL ?? "").trim() || "gpt-4o-mini";
+  if (tier === "small") return (process.env.AI_MODEL_SMALL ?? "").trim() || large;
+  return large;
 }
 
 /** A fake-provider call reports the shape of a real one so the meter can show what it WOULD cost. */
@@ -914,6 +921,8 @@ export interface CompleteJsonOptions {
    * rather than parsed as nothing. 0 disables continuation.
    */
   continuations?: number;
+  /** the tier to call — the small model for a short structuring reply (Phase 6); the large tier when absent */
+  tier?: AiModelTier;
 }
 
 /**
@@ -946,7 +955,7 @@ export async function completeJson(
   options: CompleteJsonOptions = {},
 ): Promise<unknown | null> {
   const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
-  const model = aiModelName();
+  const model = aiModelName(options.tier);
   const key = (process.env.AI_API_KEY ?? "").trim();
   if (!base) return null;
 

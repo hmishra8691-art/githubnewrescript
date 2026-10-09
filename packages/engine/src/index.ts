@@ -117,3 +117,4 @@ export * from "./contextActions.js";
 export * from "./hypotheses.js";
 export * from "./relevance.js";
 export * from "./dataQuestion.js";
+export * from "./researchPlanner.js";

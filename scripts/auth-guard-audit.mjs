@@ -229,6 +229,10 @@ const LOCK_EXEMPT = {
     "records the project's client, manager, fieldwork dates and deadline (\u00a760). Recording a deadline "
     + "is not an act of authorship on the questionnaire, and blocking it behind a colleague's edit lock "
     + "would stop a project manager doing their job",
+  "copilot/workflow/route.ts POST":
+    "reads the research workflow (project.read) and, with setMode, records the project's AI execution choice "
+    + "in surveys.settings — the same project-configuration bag the config route writes under survey.edit, "
+    + "not the questionnaire; the definition is never written here (Research Engine audit, Phase 6)",
 };
 
 const files = [];
