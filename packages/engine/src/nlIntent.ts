@@ -21,6 +21,9 @@ import { describeHypothesis, structuredHypotheses } from "./hypotheses.js";
 import { questionRelevance, relevanceLine, relevanceSummary, removalSet, type QuestionRelevance, type RelevanceTier, type RemovalSet } from "./relevance.js";
 import { parseDataQuestion, type DataQuery } from "./dataQuestion.js";
 import { measurementOf } from "./analysisFramework.js";
+import { objectChoices, semanticReading, stripPreamble, type SemanticCandidate } from "./nlSemanticMatch.js";
+import { researchBlockers } from "./researchBlockers.js";
+import { reviewSurvey, type ReviewFinding } from "./surveyReview.js";
 
 /**
  * THE SENTENCE INTERPRETER (Intelligent Mode Phase 3) — what the researcher
@@ -2178,6 +2181,7 @@ const outputRequest: Recogniser = (r) => {
   if ((m = new RegExp(String.raw`${lead}(?:proposal|research\s+design\s+(?:document|doc|report|write-?up)|design\s+document|study\s+design(?:\s+document)?)(?:\s+(?:document|doc))?(?:\s+(?:as|in)\s+(?:a\s+)?(?:word|docx|ms\s+word)(?:\s+(?:document|doc|file))?)?(.*)$`, "i").exec(t))) { type = "proposal_docx"; tail = m[1]; }
   else if ((m = new RegExp(String.raw`${lead}(?:findings\s+|results\s+)?(?:presentation|deck|slide\s+deck|slides|powerpoint|pptx)(?:\s+of\s+(?:the\s+)?(?:findings|results))?(.*)$`, "i").exec(t))) { type = "findings_pptx"; tail = m[1]; }
   else if ((m = new RegExp(String.raw`${lead}(?:findings|results|final)\s+report(?:\s+(?:as|in)\s+(?:a\s+)?(?:word|docx|ms\s+word)(?:\s+(?:document|doc|file))?|\s+(?:document|doc))?(.*)$`, "i").exec(t))
+    || (m = new RegExp(String.raw`${lead}report\s+(?:showing|of|on|with|summari[sz]ing|presenting|covering)\s+(?:the\s+|our\s+)?(?:key\s+|main\s+|top\s+)?(?:findings|results)(.*)$`, "i").exec(t))
     || (m = new RegExp(String.raw`${lead}(?:word|docx)\s+(?:document|doc|report|version)\s+(?:of|with|for)\s+(?:the\s+)?(?:findings|results|report)(.*)$`, "i").exec(t))) { type = "findings_docx"; tail = m[1]; }
   if (!type) return null;
   tail = tail.trim();
@@ -2446,6 +2450,53 @@ const keyCrosstabs: Recogniser = (r) => {
 
 /* ---------------------------------------------------------- unconnected questions */
 
+/**
+ * A REVIEW ASKED FOR IN A SENTENCE (consolidation, Phase 7). "Review the
+ * entire survey and identify problems with the logic", "check the
+ * questionnaire", "what is wrong with the routing?" — the engine's own review
+ * is the answer, at once and without a model: the findings, grouped by
+ * severity, narrowed to the area named. The Studio fills the Review tab from
+ * the same call and, with a model, asks for its reading on top. Before this
+ * the sentence was handed to the model as "does not parse that phrasing"
+ * while the Review button next to it did exactly this.
+ */
+const REVIEW_AREA: Record<string, ReviewFinding["category"][]> = {
+  logic: ["logic", "reachability"], routing: ["logic", "reachability"], flow: ["logic", "reachability", "sequencing"], skips: ["logic"], branching: ["logic"],
+  wording: ["wording"], questions: ["wording", "options", "scales", "duplicates"], text: ["wording"], translations: ["localization"], translation: ["localization"], languages: ["localization"],
+  structure: ["structure", "sequencing"], order: ["sequencing"], sequencing: ["sequencing"], scales: ["scales"], options: ["options"], quotas: ["quota"], quota: ["quota"],
+  length: ["length"], screening: ["screening"], screener: ["screening"], duplicates: ["duplicates"], research: ["hypothesis", "analysis"], hypotheses: ["hypothesis"], analysis: ["analysis"], ux: ["ux"], design: ["ux"],
+};
+const reviewRequest: Recogniser = (r) => {
+  const t = r.text.replace(/[.!?]+$/, "").trim();
+  const AREA = String.raw`(logic|routing|flow|skips|branching|wording|questions|text|translations?|languages|structure|order|sequencing|scales|options|quotas?|length|screening|screener|duplicates|research|hypotheses|analysis|ux|design)`;
+  const OBJECT = String.raw`(?:the\s+|this\s+|my\s+|our\s+)?(?:entire\s+|whole\s+|full\s+|complete\s+)?(?:survey|questionnaire|script|study|project)`;
+  const PROBLEMS = String.raw`(?:any\s+|all\s+|the\s+|potential\s+|possible\s+)?(?:problems?|issues?|errors?|bugs?|mistakes?|gaps?|risks?|flaws?|weaknesses)`;
+  let m: RegExpExecArray | null;
+  let area: string | undefined;
+  if ((m = new RegExp(String.raw`^(?:please\s+)?(?:can\s+you\s+|could\s+you\s+)?(?:review|check|audit|inspect|validate|proof-?read|qa|go\s+over|look\s+over|examine)\s+${OBJECT}(?:\s+(?:and|to)\s+(?:identify|find|list|flag|report|spot|show(?:\s+me)?|highlight|point\s+out|look\s+for)\s+${PROBLEMS}(?:\s+(?:with|in)\s+(?:the\s+|its\s+)?${AREA})?)?$`, "i").exec(t))) area = m[1];
+  else if ((m = new RegExp(String.raw`^(?:please\s+)?(?:review|check|audit|inspect|validate|look\s+at|examine)\s+(?:the\s+|this\s+|my\s+|our\s+)?(?:survey'?s\s+|questionnaire'?s\s+)?${AREA}(?:\s+(?:of|in|for)\s+${OBJECT})?(?:\s+(?:and|to)\s+(?:identify|find|list|flag|report|spot|show(?:\s+me)?|highlight|point\s+out)\s+${PROBLEMS})?$`, "i").exec(t))) area = m[1];
+  else if ((m = new RegExp(String.raw`^(?:what(?:'s|\s+is)\s+wrong\s+with|is\s+there\s+anything\s+wrong\s+with|are\s+there\s+(?:any\s+)?(?:problems?|issues?|errors?)\s+(?:with|in)|(?:identify|find|list|show(?:\s+me)?|flag)\s+${PROBLEMS}\s+(?:with|in))\s+(?:the\s+|this\s+|my\s+|our\s+)?(?:(?:survey|questionnaire)(?:'s)?\s+)?(?:${AREA}|survey|questionnaire)$`, "i").exec(t))) area = m[1];
+  else return null;
+  const cats = area ? REVIEW_AREA[area.toLowerCase().replace(/s$/, "") as string] ?? REVIEW_AREA[area.toLowerCase()] : undefined;
+  const review = reviewSurvey(r.def);
+  const findings = cats ? review.findings.filter((f) => cats.includes(f.category)) : review.findings;
+  const sevs: ReviewFinding["severity"][] = ["critical", "warning", "suggestion"];
+  const sections: AnswerSection[] = sevs
+    .map((sev) => ({ sev, fs: findings.filter((f) => f.severity === sev) }))
+    .filter((x) => x.fs.length)
+    .map((x) => ({ title: `${x.sev === "critical" ? "Critical" : x.sev === "warning" ? "Warnings" : "Suggestions"} (${x.fs.length})`, items: x.fs.slice(0, 40).map((f) => {
+      const q = f.questionIds.map((id) => r.def.questions.find((qq) => qq.id === id)).filter((qq): qq is Question => !!qq);
+      return { label: q.length ? q.map(code).join(", ") : f.category, ...(q[0] ? { key: objectKey("question", q[0].id) } : {}), detail: `${f.blocks ? "blocks — " : ""}${f.message}${f.suggestion ? ` — ${f.suggestion}` : ""}` };
+    }) }));
+  const scope = area ? `the ${area.toLowerCase()}` : "the whole survey";
+  const n = findings.length;
+  const crit = findings.filter((f) => f.severity === "critical").length;
+  const answer = n === 0
+    ? `Reviewed ${scope}: nothing to report — ${review.questions} questions, about ${review.minutes} minutes to complete.`
+    : `Reviewed ${scope}: ${n} finding${n === 1 ? "" : "s"} (${crit} critical, ${findings.filter((f) => f.severity === "warning").length} warnings)${review.blockers ? `, ${review.blockers} blocking under the enforced research design` : ""} — ${review.questions} questions, about ${review.minutes} minutes. The Review tab has each with its fix where one is mechanical.`;
+  return { kind: "answer", category: "quality_control", understood: `Review ${scope}${cats ? ` (${cats.join(", ")})` : ""} with the engine's checks.`, answer, sections, detected: [det("review", area ? area.toLowerCase() : "survey"), det("findings", String(n))] };
+};
+
 const unconnected: Recogniser = (r) => {
   const t = r.text;
   const asks = /^(?:which|what|list(?:\s+the)?|show(?:\s+me)?(?:\s+the)?|find(?:\s+the)?|are\s+there(?:\s+any)?|identify(?:\s+the)?|tell\s+me\s+which)\s+(?:of\s+the\s+)?questions?\s+(?:that\s+)?(?:(?:are|is|aren'?t|are\s+not|isn'?t|have\s+not\s+been|haven'?t\s+been|remain)\s+(?:not\s+|still\s+)?(?:connected|linked|tied|mapped|related|attached|assigned|associated|hooked|wired)\s+(?:to|with)\s+(?:any\s+|an?\s+|the\s+)?(?:hypothes[ie]s|research\s+(?:framework|design|objectives?|questions?)|constructs?|analysis(?:\s+plan)?|framework|objectives?)|(?:have|has|do\s+not\s+have|don'?t\s+have|without|lack)\s+(?:no\s+|a\s+|any\s+)?hypothes[ie]s|(?:do|does)\s+not\s+(?:serve|support|test|measure)|(?:don'?t|doesn'?t)\s+(?:serve|support|test|measure)\s+(?:any\s+|an?\s+|the\s+)?(?:hypothes[ie]s|objectives?|research\s+objectives?|constructs?)|(?:are|is)\s+(?:orphan(?:ed)?|unconnected|unlinked|unmapped|unassigned|not\s+(?:in|part\s+of)\s+the\s+(?:framework|design|plan)))$/i.test(t)
@@ -2566,6 +2617,20 @@ const audience: Recogniser = (r) => {
 };
 
 /* ---------------------------------------------------------- the research objective */
+
+/** "enforce the research design", "treat research gaps as blockers", "stop enforcing the research design" → the design's strict flag (Phase 7) */
+const enforceDesign: Recogniser = (r) => {
+  const t = r.text;
+  const on = /^(?:enforce|lock\s+in|lock|protect|guard)\s+(?:the\s+)?(?:research\s+)?design$|^(?:treat|make)\s+(?:the\s+)?research(?:[-\s]level)?\s+(?:gaps|checks|issues|findings|problems)\s+(?:as\s+)?(?:blockers|blocking|errors|hard\s+errors)$|^block\s+(?:any\s+|every\s+|all\s+)?changes?\s+that\s+(?:breaks?|widens?|opens?)\s+(?:the\s+)?(?:research\s+)?(?:design|gaps?)$|^(?:turn|switch)\s+on\s+(?:research\s+)?(?:design\s+)?enforcement$|^(?:research\s+)?(?:design\s+)?enforcement\s+on$/i.test(t);
+  const off = /^(?:stop|quit)\s+enforcing\s+(?:the\s+)?(?:research\s+)?design$|^(?:relax|unlock|unprotect)\s+(?:the\s+)?(?:research\s+)?design$|^(?:treat|make)\s+(?:the\s+)?research(?:[-\s]level)?\s+(?:gaps|checks|issues|findings|problems)\s+(?:as\s+)?(?:warnings|advisory|non-?blocking)$|^(?:turn|switch)\s+off\s+(?:research\s+)?(?:design\s+)?enforcement$|^(?:research\s+)?(?:design\s+)?enforcement\s+off$|^don'?t\s+enforce\s+(?:the\s+)?(?:research\s+)?design$/i.test(t);
+  if (!on && !off) return null;
+  const strict = on;
+  const had = r.def.research?.strict === true;
+  if (had === strict) return alreadySo("research_design", strict ? "Enforce the research design." : "Stop enforcing the research design.", strict ? "The research design is already enforced: research gaps are blockers." : "The research design is not enforced: research gaps are warnings.", []);
+  if (strict && !r.def.research) return refused("research_design", "Enforce the research design.", "There is no research design to enforce yet — record the objective and the hypotheses first.", []);
+  const gaps = r.def.research ? researchBlockers(r.def).length : 0;
+  return act(r, "research_design", strict ? `Enforce the research design: from now on a change that opens a research gap — a construct left with no question, a planned analysis reading a removed variable, a KPI with no variable, a hypothesis nothing tests — is refused at the change${gaps ? `; the ${gaps} gap${gaps === 1 ? "" : "s"} the design has now ${gaps === 1 ? "is" : "are"} listed as blockers in Review` : ""}.` : "Stop enforcing the research design: research gaps go back to being warnings in Review.", [{ op: "set_research", strict }], [det("enforcement", strict ? "on" : "off")]);
+};
 
 const objective: Recogniser = (r) => {
   const m = /^(?:set|change|update|record|define|make)\s+(?:the\s+)?(?:research\s+|study\s+)?(?:objective|goal|aim|purpose)\s*(?:to|as|:|=|—|-)\s*(.+)$/i.exec(r.text) ?? /^(?:the\s+)?(?:research\s+)?objective\s*(?::|is)\s*(.+)$/i.exec(r.text);
@@ -2724,9 +2789,9 @@ function fallback(r: Run): Interpretation {
  * before "remove Q11"), skips before display ("if Q7 is no, skip …").
  */
 const RECOGNISERS: Recogniser[] = [
-  analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest, workflowRequest,
+  analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, reviewRequest, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest, workflowRequest,
   deferred, longBrief,
-  surveySettings, languages, objective, audience, research, variables, pageBreaks,
+  surveySettings, languages, enforceDesign, objective, audience, research, variables, pageBreaks,
   shorten, screenerEdit, scaleChange, removeAnalysis, analysisTests, crosstabs,
   masking, optionVisibility, randomization, options, required, skips, display, validation, questions,
 ];
@@ -2738,9 +2803,70 @@ function interpret(r: Run): Interpretation {
   if (!r.text) return { kind: "clarify", category: "survey_editing", understood: "Nothing was asked.", question: "What would you like to change, or to know about this survey?", choices: ["Make Q1 required", "What depends on Q1?", "Which questions are untranslated?"].map((text) => ({ label: text, text })), detected: [] };
   for (const rec of RECOGNISERS) {
     const out = rec(r);
-    if (out) { if (process.env.RESCRIPT_NL_DEBUG) console.error(`[nl] ${rec.name} → ${out.kind}`); return withFallback(r, out); }
+    if (!out) continue;
+    if (process.env.RESCRIPT_NL_DEBUG) console.error(`[nl] ${rec.name} → ${out.kind}`);
+    /* a recogniser that hands on to the model, or that could not find the object it was given, lets the semantic tier try first (Phase 7) */
+    if (r.depth === 0 && rec !== deferred && rec !== longBrief && ((out.kind === "model" && out.reason !== DEFER_TO_GRAMMAR) || (out.kind === "refused" && !out.noop && /^There is no (?:question|block|option)\b/.test(out.reason)))) {
+      const sem = semantic(r);
+      if (sem) return sem;
+    }
+    return withFallback(r, out);
+  }
+  /*
+   * THE SEMANTIC TIER (Phase 7, §F ①b). The recognisers read a sentence by
+   * its shape; what they missed is read by what it means — politeness and
+   * preamble stripped, the intent found by its cues, the object by code,
+   * wording or concept, the whole written as the canonical sentence the
+   * recognisers do read and interpreted again. One clear reading is taken
+   * (and said); several become one question with the readings as choices;
+   * a question named with nothing readable about it is asked what should
+   * happen to it. Only then does the sentence go to the model.
+   */
+  if (r.depth === 0) {
+    const core = stripPreamble(r.text);
+    if (core !== r.text) {
+      const again = interpret({ ...r, text: core, depth: 1 });
+      if (again.kind !== "model") return again;
+    }
+    const sem = semantic(r);
+    if (sem) return sem;
   }
   return withFallback(r, fallback(r));
+}
+
+function semantic(r: Run): Interpretation | null {
+  const reading = semanticReading(r.def, r.text, r.ctx);
+  type Verified = Exclude<Interpretation, { kind: "model" }>;
+  const verified: { c: SemanticCandidate; it: Verified }[] = [];
+  let offered: Interpretation | null = null;
+  for (const c of reading.candidates.slice(0, 6)) {
+    const it = interpret({ def: r.def, text: c.text, ctx: r.ctx, depth: 1 });
+    if (it.kind === "actions" || it.kind === "answer" || it.kind === "query" || (it.kind === "refused" && it.noop)) verified.push({ c, it });
+    /* a reading the model would finish, with what the engine offers instead (a standard item): kept as the answer when nothing deterministic reads */
+    else if (it.kind === "model" && it.fallback && !offered) offered = it;
+  }
+  if (process.env.RESCRIPT_NL_DEBUG) console.error(`[nl] semantic: ${reading.candidates.map((c) => `${c.text} (${c.score})`).join(" | ")} → ${verified.length} verified`);
+  if (!verified.length) {
+    if (offered) return offered;
+    if (reading.objects.length === 1 && reading.candidates.length === 0) {
+      const q = reading.objects[0];
+      return { kind: "clarify", category: "survey_editing", understood: `Something about ${String(q.code)} (“${plain(q.text, 50)}”).`, question: `The engine read ${String(q.code)} but not what should happen to it. Did you mean one of these?`, choices: objectChoices(q), detected: [det("question", String(q.code))] };
+    }
+    if (reading.objects.length > 1 && reading.candidates.length === 0) {
+      return { kind: "clarify", category: "survey_editing", understood: `One of ${reading.objects.map((q) => String(q.code)).join(", ")}.`, question: `“${plain(reading.core, 50)}” fits ${reading.objects.length} questions — which one?`, choices: reading.objects.slice(0, 4).map((q) => ({ label: `${String(q.code)} — ${plain(q.text, 40)}`, text: String(q.code) })), detected: reading.objects.map((q) => det("question", String(q.code))) };
+    }
+    return null;
+  }
+  const [top, second] = verified;
+  const sameReading = (a: Verified, b: Verified) => a.kind === b.kind && (a.kind === "actions" ? JSON.stringify(a.actions) === JSON.stringify((b as typeof a).actions) : a.understood === b.understood);
+  const clear = (top.c.score >= 0.7 && (!second || top.c.score - second.c.score >= 0.2 || sameReading(top.it, second.it))) || (!second && top.c.score >= 0.5);
+  if (clear) {
+    const readAs = det("read as", top.c.text);
+    const understood = `Read “${plain(r.text, 70)}” as “${top.c.text}” — ${top.it.understood.charAt(0).toLowerCase()}${top.it.understood.slice(1)}`;
+    return { ...top.it, understood, detected: [readAs, ...top.it.detected] } as Interpretation;
+  }
+  const choices = verified.slice(0, 4).map((v) => ({ label: v.c.text, text: v.c.text }));
+  return { kind: "clarify", category: verified[0].it.category ?? "survey_editing", understood: `Read “${plain(r.text, 70)}” in ${verified.length} ways.`, question: `This could mean more than one thing — which?`, choices, detected: verified.slice(0, 4).map((v) => det("reading", `${v.c.text} (${v.c.why})`)) };
 }
 
 /**

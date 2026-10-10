@@ -15,6 +15,7 @@ import { questionOrder, conditionRefs } from "./dependencies.js";
 import { applyUxAction, coerceUxAction, isUxOp, UX_ACTION_OPS, type UxAction } from "./uxActions.js";
 import { applyAnalysisAction, coerceAnalysisAction, describeAnalysisAction, isAnalysisOp, ANALYSIS_ACTION_OPS, type AnalysisAction } from "./analysisActions.js";
 import { describeAnalysisImpact, reviewAnalysisPlan } from "./analysisFramework.js";
+import { newResearchBlockers, researchStrict } from "./researchBlockers.js";
 import { applyLocalizationAction, coerceLocalizationAction, describeLocalizationAction, isLocalizationOp, localizationRank, outdateTranslations, LOCALIZATION_ACTION_OPS, type LocalizationAction } from "./localizationActions.js";
 import { languageName, pruneOrphanedTranslations, movedTranslationKeys } from "./localization.js";
 import { applyQuotaAction, coerceQuotaAction, describeQuotaAction, isQuotaOp, quotaDiff, containsQuestion, endIndex, QUOTA_ACTION_OPS, type QuotaAction } from "./quotaActions.js";
@@ -98,7 +99,7 @@ export type SurveyAction =
   | { op: "create_randomizer"; blocks: string[]; show?: number; title?: string }
   | { op: "create_branch"; blocks: string[]; when: CondInput; title?: string; arms?: { blocks: string[]; when: CondInput; label?: string }[]; otherwise?: string[] }
   | { op: "create_loop"; from: string; to: string; over?: string; items?: string[]; loopVar?: string; title?: string }
-  | { op: "set_research"; objective?: string; hypotheses?: string[]; population?: string; sampleSize?: number; methodology?: string; constructs?: { name: string; role?: string; definition?: string; questions?: string[] }[]; analysis?: string[]; assumptions?: string[]; sources?: string[];
+  | { op: "set_research"; strict?: boolean; objective?: string; hypotheses?: string[]; population?: string; sampleSize?: number; methodology?: string; constructs?: { name: string; role?: string; definition?: string; questions?: string[] }[]; analysis?: string[]; assumptions?: string[]; sources?: string[];
       /** Phase 3: the questions the research answers, the KPIs it reports, who it is written for */
       researchQuestions?: string[]; kpis?: { name: string; variable?: string; measure?: string; target?: string; direction?: "higher" | "lower" }[]; audience?: { description: string; characteristics?: string[]; literacy?: "plain" | "general" | "expert"; tone?: string; language?: string } }
   /* criteria-based coding (punching): IF <when> THEN code <target> — on the target question's punch rules */
@@ -302,7 +303,7 @@ function coerceOne(item: unknown): SurveyAction | string {
       const kpis = Array.isArray(o.kpis) ? o.kpis.map((k) => { const x = (k ?? {}) as Record<string, unknown>; const name = str(x.name); return name ? { name, ...(str(x.variable) ? { variable: str(x.variable) } : {}), ...(str(x.measure) ? { measure: str(x.measure) } : {}), ...(str(x.target) ? { target: str(x.target) } : {}), ...(x.direction === "higher" || x.direction === "lower" ? { direction: x.direction as "higher" | "lower" } : {}) } : null; }).filter((x): x is NonNullable<typeof x> => !!x).slice(0, 20) : undefined;
       const au = o.audience && typeof o.audience === "object" ? (o.audience as Record<string, unknown>) : typeof o.audience === "string" ? { description: o.audience } : null;
       const audience = au && str(au.description) ? { description: str(au.description)!, ...(strs(au.characteristics) ? { characteristics: strs(au.characteristics) } : {}), ...(au.literacy === "plain" || au.literacy === "general" || au.literacy === "expert" ? { literacy: au.literacy as "plain" | "general" | "expert" } : {}), ...(str(au.tone) ? { tone: str(au.tone) } : {}), ...(str(au.language) ? { language: str(au.language) } : {}) } : undefined;
-      return { op, ...(str(o.objective) ? { objective: str(o.objective) } : {}), ...(strs(o.hypotheses) ? { hypotheses: strs(o.hypotheses) } : {}), ...(str(o.population) ? { population: str(o.population) } : {}), ...(Number.isInteger(Number(o.sampleSize)) && Number(o.sampleSize) > 0 ? { sampleSize: Number(o.sampleSize) } : {}), ...(str(o.methodology) ? { methodology: str(o.methodology) } : {}), ...(constructs ? { constructs } : {}), ...(strs(o.analysis) ? { analysis: strs(o.analysis) } : {}), ...(strs(o.assumptions) ? { assumptions: strs(o.assumptions) } : {}), ...(strs(o.sources) ? { sources: strs(o.sources) } : {}), ...(strs(o.researchQuestions) ? { researchQuestions: strs(o.researchQuestions) } : {}), ...(kpis ? { kpis } : {}), ...(audience ? { audience } : {}) };
+      return { op, ...(typeof o.strict === "boolean" ? { strict: o.strict } : {}), ...(str(o.objective) ? { objective: str(o.objective) } : {}), ...(strs(o.hypotheses) ? { hypotheses: strs(o.hypotheses) } : {}), ...(str(o.population) ? { population: str(o.population) } : {}), ...(Number.isInteger(Number(o.sampleSize)) && Number(o.sampleSize) > 0 ? { sampleSize: Number(o.sampleSize) } : {}), ...(str(o.methodology) ? { methodology: str(o.methodology) } : {}), ...(constructs ? { constructs } : {}), ...(strs(o.analysis) ? { analysis: strs(o.analysis) } : {}), ...(strs(o.assumptions) ? { assumptions: strs(o.assumptions) } : {}), ...(strs(o.sources) ? { sources: strs(o.sources) } : {}), ...(strs(o.researchQuestions) ? { researchQuestions: strs(o.researchQuestions) } : {}), ...(kpis ? { kpis } : {}), ...(audience ? { audience } : {}) };
     }
     default: {
       const ux = op ? coerceUxAction(op, o) : null;
@@ -434,6 +435,24 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
     return { def: before, results, errors: [...errors, ...parsed.error.issues.slice(0, 5).map((i) => `The result does not pass the survey schema at ${i.path.join(".")}: ${i.message}`)], warnings: [], destructive: [], refs: Object.fromEntries(ctx.refs), valid: false, uxOnly: false, structureUnchanged: false };
   }
   const after = parsed.data;
+  /*
+   * THE RESEARCH DESIGN ENFORCED (Phase 7). When the researcher asked for
+   * it, a batch that opens a research-level gap — a construct left with no
+   * question, a planned analysis reading a variable this batch removed, a
+   * KPI pointing at nothing, a hypothesis nothing tests — is refused whole,
+   * with each gap named and the way to close it. Only gaps the batch OPENS
+   * block: the ones the design had already are the review's to list, and
+   * turning enforcement on with gaps present is allowed (it is how they
+   * become visible as blockers).
+   */
+  if (researchStrict(after) || researchStrict(before)) {
+    const opened = newResearchBlockers(before, after);
+    if (opened.length) {
+      const said = opened.map((b) => `${b.message}${b.suggestion ? ` ${b.suggestion}` : ""}`).join(" ");
+      const blockedBy = `Blocked by the research design (enforced): ${said} Ask “stop enforcing the research design” to make this a warning instead.`;
+      return { def: before, results: results.map((r) => (r.ok ? { ...r, ok: false, error: blockedBy } : r)), errors: [...errors, blockedBy], warnings: [], destructive: [], refs: Object.fromEntries(ctx.refs), valid: false, uxOnly: false, structureUnchanged: false };
+    }
+  }
   const baseline = SurveyDefinitionSchema.safeParse(before);
   const structureUnchanged = JSON.stringify(withoutPresentation(baseline.success ? baseline.data : before)) === JSON.stringify(withoutPresentation(after));
   const applied = results.filter((r) => r.ok);
@@ -788,9 +807,11 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
         researchQuestions: a.researchQuestions ?? prev?.researchQuestions ?? [],
         kpis: a.kpis ?? prev?.kpis ?? [],
         ...((a.audience ?? prev?.audience) ? { audience: a.audience ? { characteristics: [], ...a.audience } : prev?.audience } : {}),
+        /* Phase 7: whether the design is enforced is kept unless the action says */
+        ...((a.strict ?? prev?.strict) !== undefined ? { strict: a.strict ?? prev?.strict } : {}),
         updatedAt: ctx.now,
       } as never;
-      return { description: `Research design: ${[a.objective ? "objective" : "", a.hypotheses?.length ? `${a.hypotheses.length} hypothes${a.hypotheses.length === 1 ? "is" : "es"}` : "", a.constructs?.length ? `${a.constructs.length} constructs` : "", a.researchQuestions?.length ? `${a.researchQuestions.length} research question${a.researchQuestions.length === 1 ? "" : "s"}` : "", a.kpis?.length ? `${a.kpis.length} KPI${a.kpis.length === 1 ? "" : "s"}` : "", a.audience ? "audience" : "", a.population ? "population" : ""].filter(Boolean).join(", ") || "updated"}`, touched: [] };
+      return { description: `Research design: ${[a.strict === true ? "enforced (research gaps are blockers)" : a.strict === false ? "no longer enforced" : "", a.objective ? "objective" : "", a.hypotheses?.length ? `${a.hypotheses.length} hypothes${a.hypotheses.length === 1 ? "is" : "es"}` : "", a.constructs?.length ? `${a.constructs.length} constructs` : "", a.researchQuestions?.length ? `${a.researchQuestions.length} research question${a.researchQuestions.length === 1 ? "" : "s"}` : "", a.kpis?.length ? `${a.kpis.length} KPI${a.kpis.length === 1 ? "" : "s"}` : "", a.audience ? "audience" : "", a.population ? "population" : ""].filter(Boolean).join(", ") || "updated"}`, touched: [] };
     }
     case "add_punch": {
       /*
@@ -1203,7 +1224,7 @@ export function describeAction(a: SurveyAction): string {
     case "create_randomizer": return `Randomize ${a.blocks.join(", ")}`;
     case "create_branch": return `Show ${a.blocks.join(", ")} only when ${condWords(a.when)}${a.arms?.length ? ` (+${a.arms.length} more arm${a.arms.length === 1 ? "" : "s"})` : ""}`;
     case "create_loop": return `Loop ${a.from}${a.to !== a.from ? `–${a.to}` : ""}`;
-    case "set_research": return "Record the research design";
+    case "set_research": return a.strict === true && Object.keys(a).length === 2 ? "Enforce the research design" : a.strict === false && Object.keys(a).length === 2 ? "Stop enforcing the research design" : "Record the research design";
     case "add_punch": return a.expression ? `Punch rule ${a.expression}` : `Punch ${a.target} when ${a.when ? condWords(a.when) : "otherwise"}`;
     case "remove_punches": return `Remove the punch rules of ${a.target}`;
     case "create_style": return `Style “${a.label}”`;

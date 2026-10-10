@@ -321,8 +321,8 @@ function ReviewTab({ copilot, def, onSelect }: { copilot: Copilot; def: SurveyDe
   );
   const byCode = new Map(def.questions.map((q) => [String(q.code).toUpperCase(), q.id]));
   const all = [
-    ...rv.rules.findings.map((f) => ({ severity: f.severity, message: f.message, suggestion: f.suggestion, questionIds: f.questionIds, fix: f.fix, source: "engine" as const })),
-    ...rv.ai.map((f) => ({ severity: f.severity, message: f.message, suggestion: f.suggestion, questionIds: f.questions.map((c) => byCode.get(c.toUpperCase())).filter((x): x is string => !!x), fix: undefined as SurveyAction[] | undefined, source: "copilot" as const })),
+    ...rv.rules.findings.map((f) => ({ severity: f.severity, message: f.message, suggestion: f.suggestion, questionIds: f.questionIds, fix: f.fix, source: "engine" as const, blocks: f.blocks })),
+    ...rv.ai.map((f) => ({ severity: f.severity, message: f.message, suggestion: f.suggestion, questionIds: f.questions.map((c) => byCode.get(c.toUpperCase())).filter((x): x is string => !!x), fix: undefined as SurveyAction[] | undefined, source: "copilot" as const, blocks: false })),
   ];
   const groups = (["critical", "warning", "suggestion"] as const).map((sv) => ({ sv, items: all.filter((f) => f.severity === sv) }));
   return (
@@ -332,13 +332,19 @@ function ReviewTab({ copilot, def, onSelect }: { copilot: Copilot; def: SurveyDe
         <span className="iq-spacer" />
         <button type="button" className="iq-btn" onClick={() => void copilot.runReview()} data-testid="cp-rerun-review">Review again</button>
       </div>
+      {rv.rules.blockers !== undefined && (
+        <p className={rv.rules.blockers ? "iq-error" : "iqi-dim"} data-testid="cp-review-blockers" data-count={rv.rules.blockers}>
+          <Icon name={rv.rules.blockers ? "warning" : "check"} size={12} /> The research design is enforced: {rv.rules.blockers ? `${rv.rules.blockers} research gap${rv.rules.blockers === 1 ? " is a blocker" : "s are blockers"} — a change that widens one is refused; close them, or ask “stop enforcing the research design”.` : "no research gaps — a change that would open one is refused at the change."}
+        </p>
+      )}
       {groups.map(({ sv, items }) => (
         <section key={sv} data-testid={`cp-review-${sv}`}>
           <div className={`iq-label cp-sev-head v-${sv}`}>{sv === "critical" ? "Critical" : sv === "warning" ? "Warning" : "Suggestion"} · {items.length}</div>
           {items.length === 0 && <p className="iqi-dim">None.</p>}
           <ul className="cp-review-list">
             {items.map((f, i) => (
-              <li key={i} data-severity={f.severity} data-source={f.source} data-testid="cp-finding">
+              <li key={i} data-severity={f.severity} data-source={f.source} data-testid="cp-finding" data-blocks={f.blocks ? "true" : undefined}>
+                {f.blocks && <span className="cp-sev v-critical" data-testid="cp-finding-blocks">blocker</span>}
                 <Linked text={f.message} def={def} onSelect={onSelect} />
                 {f.suggestion && <div className="iqi-dim">→ {f.suggestion}</div>}
                 <div className="cp-finding-foot">

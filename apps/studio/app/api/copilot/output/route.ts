@@ -7,6 +7,7 @@ import { buildDeckPptx, buildFindingsDocx, buildProposalDocx } from "@rescript/a
 import { supabaseService } from "@/lib/authServer";
 import { isFailure, requireProject, requireUser, type AuthedUser } from "@/lib/guard";
 import { billingProjectFor, meteredAi } from "@/lib/metering";
+import { outputBudget } from "@/lib/copilot/budget";
 import { buildFor, loadDefinition } from "@/lib/analytics";
 
 /**
@@ -113,7 +114,8 @@ export async function POST(req: NextRequest) {
       if (!("response" in billing)) {
         const brief = briefText(run, { maxFindings: 25 });
         const prompt = `${NARRATIVE_INSTRUCTIONS}\n\nAUDIENCE: ${output.audience}.\n\nRUN BRIEF:\n${brief}`;
-        const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: prompt, maxTokens: 900, operation: "copilot_narrative" }, () => completeJson("You write research findings for clients. Answer with JSON only.", prompt, 900, { timeoutMs: 60_000 })).catch(() => null);
+        const nb = outputBudget("narrative");
+        const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: prompt, maxTokens: nb.expectedTokens, operation: "copilot_narrative" }, () => completeJson("You write research findings for clients. Answer with JSON only.", prompt, nb.maxTokens, { timeoutMs: nb.timeoutMs, continuations: nb.continuations })).catch(() => null);
         raw = m && m.ok ? m.value : null;
       }
     }

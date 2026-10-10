@@ -76,8 +76,8 @@ export function describeFailure(code: FailureCode, detail?: string): TurnFailure
         next: ["Check AI_API_URL and the server's network access, then try again."] };
     case "truncated":
       return { code, title: TITLES[code], detail: d,
-        message: d ? `The answer was longer than the output budget allows (${d}), even after asking the model to continue, so no change could be read from it.` : "The answer was longer than the output budget allows, even after asking the model to continue, so no change could be read from it.",
-        next: ["Ask for less at once — one block, one section of the questionnaire, or the design first and the questions after.", "Nothing was changed, and the partial answer was not applied."] };
+        message: d ? `The answer outgrew the provider's output ceiling (${d}), even after asking the model to continue, so no change could be read from it. The Studio does not ration output — the ceiling is the provider's.` : "The answer outgrew the provider's output ceiling, even after asking the model to continue, so no change could be read from it. The Studio does not ration output — the ceiling is the provider's.",
+        next: ["Ask for less at once — one block, one section of the questionnaire, or the design first and the questions after — or use Plan first, which builds each item with its own call.", "A higher ceiling can be set on the Studio (AI_MAX_OUTPUT_TOKENS) when the provider allows more.", "Nothing was changed, and the partial answer was not applied."] };
     case "unparseable":
       return { code, title: TITLES[code], detail: d,
         message: "The model answered in prose instead of the structured changes the Studio applies, and did so again when asked for the structure alone.",

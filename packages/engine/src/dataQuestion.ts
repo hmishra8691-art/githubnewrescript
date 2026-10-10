@@ -129,7 +129,7 @@ const isCategorical = (q: Question) => { const m = measurementOf(q); return m ==
 /* ------------------------------------------------------------ the reading */
 
 const PREFER_VERB = String.raw`(prefer|prefers|choose|chooses|chose|pick|picks|select|selects|consider|considers|buy|buys|use|uses|like|likes|recommend|recommends|know|are\s+aware\s+of|is\s+aware\s+of|be\s+aware\s+of|intend\s+to\s+buy|intends\s+to\s+buy|would\s+buy|would\s+choose|would\s+recommend|own|owns|have\s+switched|has\s+switched|switched)`;
-const GROUPS = String.raw`(?:groups?|segments?|respondents?|people|demographics?|audiences?|customers?|subgroups?|types\s+of\s+(?:respondents?|people|customers?))`;
+const GROUPS = String.raw`(?:(?:demographic|consumer|customer|respondent|user|key|main)\s+)?(?:groups?|segments?|respondents?|people|demographics?|audiences?|customers?|subgroups?|types\s+of\s+(?:respondents?|people|customers?))`;
 
 /** Read a sentence as a data question; null when it is not one. */
 export function parseDataQuestion(def: SurveyDefinition, text: string, ctx: TargetContext = {}): DataQuestionOutcome {

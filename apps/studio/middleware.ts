@@ -38,7 +38,8 @@ import { NextResponse, type NextRequest } from "next/server";
  * carries its own credential (a 32-byte token, stored only as a hash, dead
  * after 48 hours) and refuses everything else with a 410.
  */
-const PUBLIC_PATHS = ["/login", "/signup", "/forgot", "/reset", "/sandbox", "/share", "/platform", "/d"];
+/* `/docs`, `/llms.txt`, `/llms-full.txt`, `/robots.txt` and `/sitemap.xml` are the public developer documentation (Phase 7): read by people who are not users yet, by search engines and by AI tools; they read no data. */
+const PUBLIC_PATHS = ["/login", "/signup", "/forgot", "/reset", "/sandbox", "/share", "/platform", "/d", "/docs", "/llms.txt", "/llms-full.txt", "/robots.txt", "/sitemap.xml"];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
@@ -47,6 +48,10 @@ export function middleware(req: NextRequest) {
   // what a client can actually act on. A redirect would turn every expired
   // request into an HTML login page arriving where JSON was expected.
   if (pathname.startsWith("/api/")) return NextResponse.next();
+
+  // a documentation page asked for as markdown (`/docs/logic.md`, what llms.txt links to) is served by the docs API, as text
+  const md = /^\/docs\/([a-z0-9-]+)\.md$/.exec(pathname);
+  if (md) { const url = req.nextUrl.clone(); url.pathname = `/api/docs/${md[1]}`; return NextResponse.rewrite(url); }
 
   const isPublic = PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
   const hasCookie = !!req.cookies.get("rescript_session")?.value;

@@ -9,6 +9,7 @@ import { reviewUx } from "./ux.js";
 import { reviewAnalysisPlan } from "./analysisFramework.js";
 import { lintLocalization } from "./localization.js";
 import { reviewQuotas } from "./quotaActions.js";
+import { researchBlockers, researchStrict } from "./researchBlockers.js";
 
 /**
  * "REVIEW MY SURVEY" — the part of a survey review that is a matter of fact.
@@ -45,10 +46,14 @@ export interface ReviewFinding {
   /** a mechanical fix, as copilot actions — shown for approval, never applied here */
   fix?: SurveyAction[];
   source: "rules";
+  /** the research design is enforced and this gap blocks changes that would widen it (Phase 7) */
+  blocks?: boolean;
 }
 export interface SurveyReview {
   findings: ReviewFinding[];
   counts: Record<ReviewSeverity, number>;
+  /** the research gaps that are blockers — present only when the design is enforced */
+  blockers?: number;
   /** estimated median completion time, minutes */
   minutes: number;
   questions: number;
@@ -183,11 +188,33 @@ export function reviewSurvey(def: SurveyDefinition): SurveyReview {
   /* ---------------------------------------------------------- the look and behaviour */
   for (const f of reviewUx(def)) add({ severity: f.level, category: "ux", message: f.message, questionIds: [], ...(f.fix ? { fix: [f.fix as SurveyAction] } : {}) });
 
+  /*
+   * THE RESEARCH DESIGN ENFORCED (Phase 7): every research gap is a blocker
+   * — critical, marked, listed first — and the review says how many. A gap
+   * the review did not already name (a KPI with no variable) is added.
+   */
+  let blockers: number | undefined;
+  if (researchStrict(def)) {
+    blockers = 0;
+    const gaps = researchBlockers(def);
+    // the review's own line for an unmeasured construct is the same gap in other words: the blocker's line (with its fix) replaces it rather than standing beside it
+    for (let i = findings.length - 1; i >= 0; i--) {
+      const f = findings[i];
+      const m = /^The (\w+) variable “([^”]+)” is not measured by any question/.exec(f.message);
+      if (m && f.category === "hypothesis" && gaps.some((b) => b.code === "unmeasured_construct" && b.message.startsWith(`The ${m[1]} construct “${m[2]}” is measured by no question`))) findings.splice(i, 1);
+    }
+    for (const b of gaps) {
+      const have = findings.find((f) => f.message === b.message);
+      if (have) { have.severity = "critical"; have.blocks = true; }
+      else add({ severity: "critical", category: b.code === "dead_kpi" ? "analysis" : "hypothesis", message: b.message, questionIds: b.questionIds, ...(b.suggestion ? { suggestion: b.suggestion } : {}), blocks: true });
+      blockers++;
+    }
+  }
   const order: Record<ReviewSeverity, number> = { critical: 0, warning: 1, suggestion: 2 };
-  findings.sort((a, b) => order[a.severity] - order[b.severity]);
+  findings.sort((a, b) => (Number(!!b.blocks) - Number(!!a.blocks)) || order[a.severity] - order[b.severity]);
   const counts = { critical: 0, warning: 0, suggestion: 0 } as Record<ReviewSeverity, number>;
   for (const f of findings) counts[f.severity]++;
-  return { findings, counts, minutes, questions: asked.length };
+  return { findings, counts, minutes, questions: asked.length, ...(blockers !== undefined ? { blockers } : {}) };
 }
 
 const STOP = new Set(["the", "and", "you", "your", "are", "for", "with", "how", "what", "which", "that", "this", "have", "has", "was", "were", "did", "does", "about", "from", "any", "all", "our", "who", "when", "would", "please", "select", "one", "most", "last"]);

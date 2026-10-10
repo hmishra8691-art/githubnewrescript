@@ -178,7 +178,7 @@ export function simulateRespondent(def: SurveyDefinition, opts: SimulationOption
       else value = defaultAnswer(def, q, { state, loop });
       if (value !== undefined && value !== null) {
         setAnswer(def, state, q.id, value, loop);
-        const r = runScripts(def, state, "on_change", { scopeRef: q.id, loop });
+        const r = runScripts(def, state, "on_change", { scopeRef: [q.id, step.pageId.split("@")[0]], loop });
         out.logs.push(...r.logs);
       }
     }
@@ -187,7 +187,11 @@ export function simulateRespondent(def: SurveyDefinition, opts: SimulationOption
     out.pages.push(visited);
 
     const errors = validatePage(def, visible, { def, state, loop, quotaCounts });
-    const scripts = runScripts(def, state, "on_submit", { scopeRef: step.pageId.split("@")[0], loop });
+    // as the runner does: on_validate first (its purpose is to add errors), then on_submit — for the page and every question on it
+    const submitScope = [step.pageId.split("@")[0], ...visible.map((q) => q.id)];
+    const validate = runScripts(def, state, "on_validate", { scopeRef: submitScope, loop });
+    const submit = runScripts(def, state, "on_submit", { scopeRef: submitScope, loop });
+    const scripts = { logs: [...validate.logs, ...submit.logs], errors: [...validate.errors, ...submit.errors] };
     out.logs.push(...scripts.logs);
     if (scripts.errors.length) out.scriptErrors.push({ pageId: step.pageId, errors: scripts.errors });
     if (errors.length || scripts.errors.length) {

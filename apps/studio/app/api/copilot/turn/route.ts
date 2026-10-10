@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { SurveyDefinition } from "@rescript/schema";
 import { aiConfigured, aiProviderName, completeJson, embedTexts, aiEmbeddingsModelName, isAiReplyError } from "@rescript/ai";
 import { describeFailure, failureFromError, failureFromReplyError, type TurnFailure } from "@/lib/copilot/failure";
+import { outputBudget } from "@/lib/copilot/budget";
 import { CHANGE_PLAN_SCHEMA, coerceChangePlan, executeItemPrompt, mergeItemReplies, planStagePrompt, type ChangePlan } from "@/lib/copilot/changePlan";
 import { COPILOT_REPLY_SCHEMA } from "@/lib/copilot/replySchema";
 import { applySurveyActions, coverageReport, diffSurveys, reviewSurvey, type CoverageReport } from "@rescript/engine";
@@ -129,9 +130,11 @@ export async function POST(req: NextRequest) {
     ...(themeScope ? { themeOnly: true } : {}),
   });
 
-  /* 3: the model — or the cache, for exactly the same request */
-  const maxTokens = mode === "generate" ? 8000 : mode === "review" ? 3000 : uxTurn ? 3500 : 2500;
-  const key = createHash("sha256").update(`${COPILOT_SYSTEM_PROMPT}\u0000${prompt}\u0000${maxTokens}`).digest("hex");
+  /* 3: the model — or the cache, for exactly the same request. The answer is not rationed (Phase 7): the provider's ceiling, the expected size reserved */
+  const budget = outputBudget(mode === "generate" ? "generate" : mode === "review" ? "review" : uxTurn ? "ux" : "edit");
+  const maxTokens = budget.maxTokens;
+  // the key names the project and the person too (consolidation, audit §C.2 #4): a copy of a survey under another project is never served another project's reply
+  const key = createHash("sha256").update(`${surveyId}\u0000${user?.userId ?? "sandbox"}\u0000${COPILOT_SYSTEM_PROMPT}\u0000${prompt}\u0000${maxTokens}`).digest("hex");
   // the browser suites stand in for the model: one reply, or [reply, the reply to the repair request] — or, executing a plan, one reply per item
   const fakes = aiProviderName() === "fake" && body.fake && typeof body.fake === "object" ? (Array.isArray(body.fake) ? body.fake : [body.fake]) : [];
   const fake = fakes[0] ?? null;
@@ -151,8 +154,9 @@ export async function POST(req: NextRequest) {
   if (stage === "plan") {
     const planPrompt = prompt + planStagePrompt();
     try {
-      const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + planPrompt, maxTokens: 2000, operation: "copilot_plan" },
-        () => completeJson(COPILOT_SYSTEM_PROMPT, planPrompt, 2000, { timeoutMs: 90_000, schema: CHANGE_PLAN_SCHEMA, continuations: 1 }));
+      const pb = outputBudget("plan");
+      const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + planPrompt, maxTokens: pb.expectedTokens, operation: "copilot_plan" },
+        () => completeJson(COPILOT_SYSTEM_PROMPT, planPrompt, pb.maxTokens, { timeoutMs: pb.timeoutMs, schema: CHANGE_PLAN_SCHEMA, continuations: pb.continuations }));
       if (!m.ok) {
         const r = refusalResponse(m);
         const body = await r.json().catch(() => ({})) as Record<string, unknown>;
@@ -177,13 +181,13 @@ export async function POST(req: NextRequest) {
     executedPlan = { ...plan, items: approved };
     const built: { item: typeof approved[number]; raw: unknown }[] = [];
     const done: string[] = [];
-    const itemTokens = mode === "generate" ? 4000 : 3000;
+    const ib = outputBudget("item");
     for (let i = 0; i < approved.length; i++) {
       const item = approved[i];
       const itemPrompt = prompt + executeItemPrompt(plan, item, i, approved, done);
       try {
-        const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + itemPrompt, maxTokens: itemTokens, operation: `copilot_${mode}_item` },
-          () => completeJson(COPILOT_SYSTEM_PROMPT, itemPrompt, itemTokens, { timeoutMs: 120_000, schema: COPILOT_REPLY_SCHEMA, continuations: 1 }));
+        const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + itemPrompt, maxTokens: ib.expectedTokens, operation: `copilot_${mode}_item` },
+          () => completeJson(COPILOT_SYSTEM_PROMPT, itemPrompt, ib.maxTokens, { timeoutMs: ib.timeoutMs, schema: COPILOT_REPLY_SCHEMA, continuations: ib.continuations }));
         if (!m.ok) {
           const r = refusalResponse(m);
           const body = await r.json().catch(() => ({})) as Record<string, unknown>;
@@ -221,8 +225,8 @@ export async function POST(req: NextRequest) {
        * budgets); and what still cannot be read comes back as a CODE the
        * researcher is told, not as "nothing I could use" (Phase 1).
        */
-      const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + prompt, maxTokens, operation: `copilot_${mode}` },
-        () => completeJson(COPILOT_SYSTEM_PROMPT, prompt, maxTokens, { timeoutMs: mode === "generate" ? 170_000 : 90_000, schema: COPILOT_REPLY_SCHEMA, continuations: mode === "generate" ? 2 : 1 }));
+      const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + prompt, maxTokens: budget.expectedTokens, operation: `copilot_${mode}` },
+        () => completeJson(COPILOT_SYSTEM_PROMPT, prompt, maxTokens, { timeoutMs: budget.timeoutMs, schema: COPILOT_REPLY_SCHEMA, continuations: budget.continuations }));
       if (!m.ok) {
         const r = refusalResponse(m);
         const body = await r.json().catch(() => ({})) as Record<string, unknown>;
@@ -262,8 +266,9 @@ export async function POST(req: NextRequest) {
   if (applied && refused.length && !cached && !executedPlan && (aiProviderName() !== "fake" || fakes.length > 1)) {
     const repairPrompt = `${prompt}\n\nYOUR PREVIOUS ANSWER:\n${JSON.stringify(raw).slice(0, 14_000)}\n\nTHE STUDIO REFUSED ${refused.length} OF ITS ${reply.actions.length} ACTIONS:\n${refused.map((e) => `- ${e}`).join("\n")}\n\nAnswer again in the same JSON shape. Keep the accepted actions as they were; correct each refused action using only the actions, events and rs api described above, or drop it and say plainly in "reply" what the Studio cannot do. Do not mention the refusal to the user unless something could not be done.`;
     try {
-      const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + repairPrompt, maxTokens, operation: `copilot_${mode}_repair` },
-        () => completeJson(COPILOT_SYSTEM_PROMPT, repairPrompt, maxTokens, { timeoutMs: 90_000 }));
+      const rb = outputBudget("repair");
+      const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + repairPrompt, maxTokens: rb.expectedTokens, operation: `copilot_${mode}_repair` },
+        () => completeJson(COPILOT_SYSTEM_PROMPT, repairPrompt, rb.maxTokens, { timeoutMs: rb.timeoutMs, continuations: rb.continuations }));
       if (m.ok) {
         charge += m.event?.customerCharge ?? 0;
         const raw2 = fakes[1] ?? m.value;
@@ -296,8 +301,9 @@ export async function POST(req: NextRequest) {
     if (!coverage.ok && !cached && (aiProviderName() !== "fake" || nextFake)) {
       const coveragePrompt = `${prompt}\n\nYOUR PREVIOUS ANSWER:\n${JSON.stringify(executedPlan ? raw : raw).slice(0, 14_000)}\n\nTHE STUDIO CHECKED THE RESEARCH COVERAGE OF THAT ANSWER: ${coverage.summary}.\n\nAnswer again in the same JSON shape with the SAME actions, plus what connects the loose ends: set_question_analysis tags (hypotheses) on the questions that measure each unmeasured hypothesis, constructs in set_research that name the measuring questions, a question for a hypothesis none measures, and a tag or construct for each unconnected question — or remove a question that serves nothing. Every hypothesis must be measured and every question must serve one, a construct, the plan or a KPI (screeners and demographics are exempt).`;
       try {
-        const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + coveragePrompt, maxTokens, operation: `copilot_${mode}_coverage` },
-          () => completeJson(COPILOT_SYSTEM_PROMPT, coveragePrompt, maxTokens, { timeoutMs: 170_000, schema: COPILOT_REPLY_SCHEMA, continuations: 1 }));
+        const cb = outputBudget("coverage");
+        const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + coveragePrompt, maxTokens: cb.expectedTokens, operation: `copilot_${mode}_coverage` },
+          () => completeJson(COPILOT_SYSTEM_PROMPT, coveragePrompt, cb.maxTokens, { timeoutMs: cb.timeoutMs, schema: COPILOT_REPLY_SCHEMA, continuations: cb.continuations }));
         if (m.ok) {
           charge += m.event?.customerCharge ?? 0;
           const raw3 = nextFake ?? m.value;

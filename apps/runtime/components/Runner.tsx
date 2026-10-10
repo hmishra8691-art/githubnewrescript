@@ -1157,8 +1157,9 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
      * platform did nothing. on_submit still runs after it, for the work a
      * page does on the way out.
      */
-    const validateRes = runScripts(def, state, "on_validate", { scopeRef: pageStep.pageId.split("@")[0], loop: pageStep.loop });
-    const scriptRes = runScripts(def, state, "on_submit", { scopeRef: pageStep.pageId.split("@")[0], loop: pageStep.loop });
+    const submitScope = [pageStep.pageId.split("@")[0], ...pageStep.questionIds]; // the page and every question on it
+    const validateRes = runScripts(def, state, "on_validate", { scopeRef: submitScope, loop: pageStep.loop });
+    const scriptRes = runScripts(def, state, "on_submit", { scopeRef: submitScope, loop: pageStep.loop });
     setLogs((l) => [...l, ...validateRes.logs, ...scriptRes.logs]);
     const fromScripts = [...validateRes.errors, ...scriptRes.errors]
       .map((e) => ({ questionId: e.questionRef ?? "", message: e.message }));
@@ -1594,7 +1595,7 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
             setAnswer(def, state, q.id, v, pageStep.loop);
             telemetryRef.current?.answerChanged(q.id);
             recomputePunchesAfterChange(def, state, q.id, questions, ctx, pageStep.loop ?? null);
-            const r = runScripts(def, state, "on_change", { scopeRef: q.id, loop: pageStep.loop });
+            const r = runScripts(def, state, "on_change", { scopeRef: [q.id, pageStep.pageId.split("@")[0]], loop: pageStep.loop });
             if (r.logs.length) setLogs((l) => [...l, ...r.logs]);
             force();
           }}
@@ -1671,7 +1672,7 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
                * counted but undrawn.
                */
               pruneHiddenSelections(def, questions, ctx, pageStep.loop ?? null);
-              const r = runScripts(def, state, "on_change", { scopeRef: q.id, loop: pageStep.loop });
+              const r = runScripts(def, state, "on_change", { scopeRef: [q.id, pageStep.pageId.split("@")[0]], loop: pageStep.loop });
               if (r.logs.length) setLogs((l) => [...l, ...r.logs]);
               force();
             }}

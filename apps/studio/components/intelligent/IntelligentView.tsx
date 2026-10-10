@@ -253,6 +253,13 @@ export function IntelligentView() {
       await copilot.showWorkflow(t, interp, heard);
       setBusy(false); inputRef.current?.focus(); return;
     }
+    // a review asked for in a sentence (Phase 7 consolidation): the engine's review is the card and the Review tab; with a model, its reading follows as the Review button's does
+    if (interp.kind === "answer" && interp.category === "quality_control" && interp.detected.some((d) => d.what === "review")) {
+      copilot.local(t, interp, heard);
+      setShowInspector(true);
+      if (copilot.available !== false && (copilot.executionMode !== "internal" || copilot.cloudOnce)) await copilot.runReview(t); else copilot.showReview();
+      setBusy(false); inputRef.current?.focus(); return;
+    }
     if (interp.kind !== "model") {
       copilot.local(t, interp, heard);
       if (interp.kind === "actions") {

@@ -143,7 +143,8 @@ function tokenize(src: string): { tokens: Tok[]; error?: ExpressionError } {
  * rest are accepted. Every operator has its canonical name as a spelling too,
  * so nothing in the schema is inexpressible.
  */
-const OPERATOR_WORDS: Partial<Record<ComparisonOperator, string[]>> = {
+/** every spelling of every operator, canonical first — what the formatter prints, and what the public reference lists */
+export const OPERATOR_WORDS: Partial<Record<ComparisonOperator, string[]>> = {
   eq: ["=", "==", "is", "eq"],
   ne: ["!=", "is not", "ne"],
   gt: [">", "gt"],

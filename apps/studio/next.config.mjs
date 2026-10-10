@@ -20,5 +20,7 @@ const nextConfig = {
    * normal `dev`, `build` and deployment — this is Next's own default.
    */
   ...(process.env.NEXT_DIST_DIR ? { distDir: process.env.NEXT_DIST_DIR } : {}),
+  /* the public documentation pages are read from disk at request time (Phase 7): a traced deploy must carry them */
+  experimental: { outputFileTracingIncludes: { "/docs": ["./content/docs/**"], "/docs/[slug]": ["./content/docs/**"], "/llms.txt": ["./content/docs/**"], "/llms-full.txt": ["./content/docs/**"], "/sitemap.xml": ["./content/docs/**"] } },
 };
 export default nextConfig;

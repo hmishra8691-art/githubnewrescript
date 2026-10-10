@@ -5,6 +5,7 @@ import { modelSteps, researchWorkflow, type ExecutionMode, type ResearchWorkflow
 import { supabaseService } from "@/lib/authServer";
 import { isFailure, requireProject, requireUser, type AuthedUser } from "@/lib/guard";
 import { billingProjectFor, estimateAi } from "@/lib/metering";
+import { outputBudget } from "@/lib/copilot/budget";
 import { loadDefinition } from "@/lib/analytics";
 
 /**
@@ -100,7 +101,8 @@ export async function POST(req: NextRequest) {
     if (!("response" in billing)) {
       for (const m of priced) {
         const tier = m.tier === "small" ? "small" : "large";
-        const charge = await estimateAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: m.estimateText, maxTokens: m.maxTokens, operation: m.operation, tier });
+        /* priced at what the turn would reserve: the step's own expectation, or an edit turn's when that is larger (Phase 7 — the ceiling is the provider's, the reservation the expected size) */
+        const charge = await estimateAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: m.estimateText, maxTokens: Math.max(m.maxTokens, outputBudget("edit").expectedTokens), operation: m.operation, tier });
         steps.push({ id: m.id, tier, model: aiModelName(tier), charge });
         if (effective === "cloud") total += charge;
       }

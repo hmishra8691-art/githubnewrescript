@@ -118,3 +118,5 @@ export * from "./hypotheses.js";
 export * from "./relevance.js";
 export * from "./dataQuestion.js";
 export * from "./researchPlanner.js";
+export * from "./nlSemanticMatch.js";
+export * from "./researchBlockers.js";

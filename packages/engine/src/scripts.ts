@@ -315,17 +315,26 @@ export function runScript(code: string, ctx: ScriptCtx, into?: ScriptRunResult):
  * keys rather than on one bare key every iteration overwrites. Before this a
  * page-scoped on_load never ran at all (the session-open call passes no
  * scopeRef, so nothing matched).
+ *
+ * `scopeRef` is the id, or the ids, the event belongs to. A page's submit
+ * belongs to the page AND to every question on it, so a question-scoped
+ * on_validate / on_submit script runs when its question's page is submitted;
+ * a change belongs to the question and to its page, so a page-scoped
+ * on_change runs for any question on the page. Before this only the one id
+ * was matched and those scripts — written, enabled, and listed in the editor
+ * — silently never ran.
  */
 export function runScripts(
   def: SurveyDefinition,
   state: ResponseState,
   event: CustomScript["event"],
-  opts?: { scopeRef?: string; loop?: LoopContext | null; only?: "scoped" },
+  opts?: { scopeRef?: string | string[]; loop?: LoopContext | null; only?: "scoped" },
 ): ScriptRunResult {
   const combined: ScriptRunResult = { logs: [], errors: [], ran: 0 };
+  const refs = opts?.scopeRef === undefined ? [] : Array.isArray(opts.scopeRef) ? opts.scopeRef : [opts.scopeRef];
   for (const script of def.scripts) {
     if (!script.enabled || script.event !== event) continue;
-    if (script.scope === "survey" ? opts?.only === "scoped" : script.ref !== opts?.scopeRef) continue;
+    if (script.scope === "survey" ? opts?.only === "scoped" : !(script.ref && refs.includes(script.ref))) continue;
     // the script's guard: an ordinary condition, any nesting, against the answers as they are now
     if (script.when && !evaluateCondition(script.when, { def, state, loop: opts?.loop ?? null })) continue;
     const own: ScriptRunResult = { logs: [], errors: [] };

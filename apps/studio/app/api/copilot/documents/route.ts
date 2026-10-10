@@ -3,6 +3,7 @@ import { aiConfigured, aiProviderName, completeJson, ocrImage, embedTexts, aiEmb
 import { extractResearchDocument, chunkResearchDocument } from "@rescript/import/research";
 import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
 import { billingProjectFor, meteredAi, refusalResponse } from "@/lib/metering";
+import { outputBudget } from "@/lib/copilot/budget";
 import { DOC_SUMMARY_SYSTEM_PROMPT, coerceDocSummary, summaryInput } from "@/lib/copilot/research";
 import { researchStoreFor, type StoredChunk } from "@/lib/copilot/store";
 
@@ -120,7 +121,8 @@ export async function POST(req: NextRequest) {
       const input = summaryInput(chunks);
       const prompt = `Document: ${file.name}\n\n${input.text}`;
       try {
-        const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: DOC_SUMMARY_SYSTEM_PROMPT + prompt, maxTokens: 1800, operation: "copilot_document_summary" }, () => completeJson(DOC_SUMMARY_SYSTEM_PROMPT, prompt, 1800, { timeoutMs: 120_000 }));
+        const sb = outputBudget("summary");
+        const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: DOC_SUMMARY_SYSTEM_PROMPT + prompt, maxTokens: sb.expectedTokens, operation: "copilot_document_summary" }, () => completeJson(DOC_SUMMARY_SYSTEM_PROMPT, prompt, sb.maxTokens, { timeoutMs: sb.timeoutMs, continuations: sb.continuations }));
         if (!m.ok) return refusalResponse(m);
         charge += m.event?.customerCharge ?? 0;
         summary = coerceDocSummary(fakeSummary ?? m.value, chunks.map((c) => c.id));

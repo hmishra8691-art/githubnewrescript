@@ -749,6 +749,11 @@ export function useCopilot(opts: {
     setSession((x) => (x.review ? { ...x, review: { ...x.review, running: false } } : x));
   }, [s.def, available, ask, setSession]);
 
+  /** the engine's review in the Review tab, and nothing else — for a review asked for in a sentence when no model's reading follows (none, or internal mode) */
+  const showReview = React.useCallback(() => {
+    setSession((x) => ({ ...x, review: { rules: reviewSurvey(s.def), ai: x.review?.ai ?? [], at: new Date().toISOString(), running: false }, tab: "review" }));
+  }, [s.def, setSession]);
+
   /** a mechanical fix from the review (or a Reapply from History), previewed like any proposal — no model call; recorded as a "fix" */
   const previewFix = React.useCallback((actions: SurveyAction[], label: string, meta?: { intent?: OpIntent }) => {
     const opKey = recordProposal(label, actions, { source: "fix", intent: meta?.intent ?? { kind: "fix" } }, session.openOp);
@@ -931,7 +936,7 @@ export function useCopilot(opts: {
     docs: session.docs ?? [], durable: session.durable, uploading, docError,
     confirmed: session.confirmed, setConfirmed: (v: boolean) => setSession((x) => ({ ...x, confirmed: v })),
     tab: session.tab, setTab: (t: PanelTab) => setSession((x) => ({ ...x, tab: t })),
-    ask, local, askData, makeOutput, working, runReview, previewFix, apply, cancel, uploadDocs, deleteDoc, refreshDocs,
+    ask, local, askData, makeOutput, working, runReview, showReview, previewFix, apply, cancel, uploadDocs, deleteDoc, refreshDocs,
     planFirst, setPlanFirst, executePlan, cancelPlan,
     executionMode, setExecutionMode, cloudOnce, setCloudOnce, workflow, workflowInfo, workflowError, workflowLoading, workflowObjective, refreshWorkflow, showWorkflow, runWorkflowStep,
     themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),

@@ -898,6 +898,23 @@ function reportFake(kind: "chat", promptText: string, outputTokens: number): voi
  * request, same metering, same timeout: there is one place that talks to a
  * chat provider, not two that will drift.
  */
+/** the output ceiling a provider named for a base + model, so the next call starts there */
+const OUTPUT_CEILING = new Map<string, number>();
+/**
+ * The ceiling a provider's refusal names, when the request asked for more:
+ * the largest number in the message below what was asked ("supports at
+ * most 16384 completion tokens, whereas you provided 32000" → 16384;
+ * "max_tokens: 32000 > 8192, which is the maximum allowed" → 8192). Null
+ * when the message is not about the output limit, or names no smaller number.
+ */
+export function outputCeilingFrom(detail: string, asked: number): number | null {
+  if (!/max_?tokens|completion tokens|output tokens|output limit|max_completion_tokens/i.test(detail)) return null;
+  const ns = (detail.match(/\d{2,7}/g) ?? []).map(Number).filter((n) => n >= 16 && n < asked);
+  return ns.length ? Math.max(...ns) : null;
+}
+/** forget the ceilings providers named (tests) */
+export function resetOutputCeilings(): void { OUTPUT_CEILING.clear(); }
+
 export interface CompleteJsonOptions {
   /**
    * How long to wait. Defaults to the survey product's `TIMEOUT_MS` (8 s),
@@ -973,7 +990,20 @@ export async function completeJson(
   const timeoutMs = Number.isFinite(options.timeoutMs) && (options.timeoutMs as number) > 0
     ? Math.min(300_000, Math.round(options.timeoutMs as number))
     : TIMEOUT_MS;
-  const continuations = Number.isFinite(options.continuations) ? Math.max(0, Math.min(5, Math.round(options.continuations as number))) : 2;
+  const continuations = Number.isFinite(options.continuations) ? Math.max(0, Math.min(8, Math.round(options.continuations as number))) : 2;
+  /*
+   * THE OUTPUT LIMIT IS THE PROVIDER'S, NOT OURS (Research Engine audit,
+   * Phase 7). The Studio asks for as much output as the answer needs; a
+   * provider that caps `max_tokens` below that refuses with a 400 naming its
+   * ceiling ("supports at most 16384 completion tokens", "max_tokens: 32000
+   * > 8192, which is the maximum"), and the call is sent again at that
+   * ceiling — once, remembered per base and model — rather than failing a
+   * researcher's request over a number. Continuations then carry an answer
+   * past the ceiling, as before.
+   */
+  let limit = Math.max(1, Math.round(maxTokens));
+  const known = OUTPUT_CEILING.get(`${base} ${model}`);
+  if (known && known < limit) limit = known;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   type Msg = { role: "system" | "user" | "assistant"; content: string };
@@ -981,11 +1011,13 @@ export async function completeJson(
     ? { type: "json_schema", json_schema: { name: options.schema.name, schema: options.schema.schema, ...(options.schema.strict ? { strict: true } : {}) } }
     : { type: "json_object" };
   /* one call, its content and why it stopped — usage reported per call, so a continuation is metered like any other */
-  const call = async (messages: Msg[]): Promise<{ content: string; finish: string | null; outputTokens: number }> => {
-    const { r, detail: refused } = await postChat(base, key, { model, temperature: 0, max_tokens: maxTokens, response_format: format, messages }, ctrl.signal);
+  const call = async (messages: Msg[], lowered = false): Promise<{ content: string; finish: string | null; outputTokens: number }> => {
+    const { r, detail: refused } = await postChat(base, key, { model, temperature: 0, max_tokens: limit, response_format: format, messages }, ctrl.signal);
     if (!r.ok) {
-      const detail = (refused ?? (await r.text().catch(() => ""))).trim().slice(0, 200);
-      const err = new Error(`the analysis provider refused the request (${r.status}) ${detail}`.trim());
+      const detail = (refused ?? (await r.text().catch(() => ""))).trim().slice(0, 300);
+      const ceiling = r.status === 400 && !lowered ? outputCeilingFrom(detail, limit) : null;
+      if (ceiling) { OUTPUT_CEILING.set(`${base} ${model}`, ceiling); limit = ceiling; return call(messages, true); }
+      const err = new Error(`the analysis provider refused the request (${r.status}) ${detail.slice(0, 200)}`.trim());
       (err as Error & { status?: number }).status = r.status;
       throw err;
     }
@@ -1033,7 +1065,7 @@ export async function completeJson(
     if (!content.trim()) throw new AiReplyError("empty", "the model answered with no content", { outputTokens: total, maxTokens });
     let value = read(content);
     if (value == null && finish === "length") {
-      throw new AiReplyError("truncated", `the model's answer was cut off at the output limit (${maxTokens} tokens${continued ? `, continued ${continued}×` : ""}) and could not be read as one JSON object`, { outputTokens: total, maxTokens, continuations: continued, sample: content.slice(-200) });
+      throw new AiReplyError("truncated", `the model's answer was cut off at the output limit (${limit} tokens${continued ? `, continued ${continued}×` : ""}) and could not be read as one JSON object`, { outputTokens: total, maxTokens: limit, continuations: continued, sample: content.slice(-200) });
     }
     /*
      * WORDS, NOT AN OBJECT. Asked once more, for the object alone, before

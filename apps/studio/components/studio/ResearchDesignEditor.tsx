@@ -91,6 +91,10 @@ export function ResearchDesignEditor({ compact = false }: { compact?: boolean })
         <label className="f" style={{ maxWidth: 220 }}><span>Planned completes</span>
           <input className="input" type="number" min={1} step={1} data-testid="rd-sample" placeholder="e.g. 1000"
             value={r.sampleSize ?? ""} onChange={(e) => patch("edit planned sample size", (d) => { const n = Math.floor(Number(e.target.value)); d.sampleSize = Number.isFinite(n) && n > 0 ? n : undefined; })} /></label>
+        <label className="f rd-strict" title="Enforced: a change that opens a research gap — a construct left with no question, a planned analysis reading a removed variable, a KPI with no variable, a hypothesis nothing tests — is refused at the change, and the gaps the design has are blockers in Review. Off: the same gaps are warnings." data-testid="rd-strict">
+          <span>Enforcement</span>
+          <span className="row" style={{ gap: 6, alignItems: "center" }}><input type="checkbox" data-testid="rd-strict-box" checked={r.strict === true} onChange={(e) => patch(e.target.checked ? "enforce the research design" : "stop enforcing the research design", (d) => { d.strict = e.target.checked ? true : undefined; })} /> research gaps are blockers</span>
+        </label>
       </div>
 
       <h4 className="rd-h">Hypotheses <span className="muted">· {r.hypotheses.length}</span></h4>

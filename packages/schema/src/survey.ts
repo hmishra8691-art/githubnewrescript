@@ -167,6 +167,15 @@ export const ResearchDesign = z.object({
    * derived variables and segments the study will run — see analysisPlan.ts.
    */
   analysisPlan: AnalysisPlan.optional(),
+  /**
+   * The research design ENFORCED (Research Engine audit, Phase 7): when
+   * true, the research-level checks are blockers — a change that leaves a
+   * hypothesis unmeasured, a planned analysis reading a variable that is
+   * gone, a KPI with no variable or a construct with no question is refused
+   * at the change, with the gap named, rather than reported later. Off by
+   * default; the researcher asks for it ("enforce the research design").
+   */
+  strict: z.boolean().optional(),
   updatedAt: z.string().optional(),
 });
 export type ResearchDesign = z.infer<typeof ResearchDesign>;
