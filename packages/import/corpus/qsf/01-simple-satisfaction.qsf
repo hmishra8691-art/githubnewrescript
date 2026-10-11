@@ -1,0 +1,452 @@
+{
+ "SurveyEntry": {
+  "SurveyID": "SV_simple01",
+  "SurveyName": "Simple Satisfaction Survey",
+  "SurveyDescription": null,
+  "SurveyOwnerID": "UR_sanitized",
+  "SurveyBrandID": "sanitized",
+  "DivisionID": null,
+  "SurveyLanguage": "EN",
+  "SurveyActiveResponseSet": "RS_demo",
+  "SurveyStatus": "Inactive",
+  "SurveyStartDate": "0000-00-00 00:00:00",
+  "SurveyExpirationDate": "0000-00-00 00:00:00",
+  "SurveyCreationDate": "2026-01-10 09:00:00",
+  "CreatorID": "UR_sanitized",
+  "LastModified": "2026-02-01 12:00:00",
+  "LastAccessed": "0000-00-00 00:00:00",
+  "LastActivated": "0000-00-00 00:00:00",
+  "Deleted": null
+ },
+ "SurveyElements": [
+  {
+   "SurveyID": "SV_simple01",
+   "Element": "BL",
+   "PrimaryAttribute": "Survey Blocks",
+   "SecondaryAttribute": null,
+   "TertiaryAttribute": null,
+   "Payload": [
+    {
+     "Type": "Default",
+     "Description": "Introduction",
+     "ID": "BL_intro",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID1"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "false"
+     }
+    },
+    {
+     "Type": "Standard",
+     "Description": "Main questions",
+     "ID": "BL_main",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID2"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID3"
+      },
+      {
+       "Type": "Page Break"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID4"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID5"
+      },
+      {
+       "Type": "Page Break"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID6"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "false"
+     }
+    },
+    {
+     "Type": "Trash",
+     "Description": "Trash / Unused Questions",
+     "ID": "BL_trash",
+     "BlockElements": []
+    }
+   ]
+  },
+  {
+   "SurveyID": "SV_simple01",
+   "Element": "FL",
+   "PrimaryAttribute": "Survey Flow",
+   "SecondaryAttribute": null,
+   "TertiaryAttribute": null,
+   "Payload": {
+    "Type": "Root",
+    "FlowID": "FL_1",
+    "Flow": [
+     {
+      "Type": "Block",
+      "ID": "BL_intro",
+      "FlowID": "FL_2"
+     },
+     {
+      "Type": "Standard",
+      "ID": "BL_main",
+      "FlowID": "FL_3"
+     },
+     {
+      "Type": "EndSurvey",
+      "FlowID": "FL_4"
+     }
+    ],
+    "Properties": {
+     "Count": 4
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_simple01",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID1",
+   "SecondaryAttribute": "Thank you for taking part. This survey t",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID1",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Thank you for taking part. This survey takes about 3 minutes",
+    "QuestionText": "<div>Thank you for taking part. This survey takes about 3 minutes.</div>",
+    "DataExportTag": "Intro",
+    "QuestionType": "DB",
+    "Selector": "TB",
+    "Validation": {
+     "Settings": {
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_simple01",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID2",
+   "SecondaryAttribute": "Overall, how satisfied are you with our ",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID2",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Overall, how satisfied are you with our service?",
+    "QuestionText": "Overall, how satisfied are you with our service?",
+    "DataExportTag": "Sat",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very dissatisfied"
+     },
+     "2": {
+      "Display": "Dissatisfied"
+     },
+     "3": {
+      "Display": "Neutral"
+     },
+     "4": {
+      "Display": "Satisfied"
+     },
+     "5": {
+      "Display": "Very satisfied"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4,
+     5
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_simple01",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID3",
+   "SecondaryAttribute": "Which of the following have you used in ",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID3",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Which of the following have you used in the last month?",
+    "QuestionText": "Which of the following have you used in the last month?",
+    "DataExportTag": "Used",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Online account"
+     },
+     "2": {
+      "Display": "Mobile app"
+     },
+     "3": {
+      "Display": "Phone support"
+     },
+     "4": {
+      "Display": "In-store help"
+     },
+     "5": {
+      "Display": "None of these",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4,
+     5
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "MinChoices",
+      "MinChoices": "1"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_simple01",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID4",
+   "SecondaryAttribute": "How many times did you contact us?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID4",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "How many times did you contact us?",
+    "QuestionText": "How many times did you contact us?",
+    "DataExportTag": "Contacts",
+    "QuestionType": "TE",
+    "Selector": "SL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "ContentType",
+      "ContentType": "ValidNumber",
+      "ValidNumber": {
+       "Min": "0",
+       "Max": "50",
+       "NumDecimals": "0"
+      }
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_simple01",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID5",
+   "SecondaryAttribute": "Please rate each of the following.",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID5",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Please rate each of the following.",
+    "QuestionText": "Please rate each of the following.",
+    "DataExportTag": "Rate",
+    "QuestionType": "Matrix",
+    "Selector": "Likert",
+    "SubSelector": "SingleAnswer",
+    "Choices": {
+     "1": {
+      "Display": "Speed of service"
+     },
+     "2": {
+      "Display": "Friendliness of staff"
+     },
+     "3": {
+      "Display": "Value for money"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Answers": {
+     "1": {
+      "Display": "Poor"
+     },
+     "2": {
+      "Display": "Fair"
+     },
+     "3": {
+      "Display": "Good"
+     },
+     "4": {
+      "Display": "Excellent"
+     }
+    },
+    "AnswerOrder": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "ChoiceDataExportTags": {
+     "1": "speed",
+     "2": "staff",
+     "3": "value"
+    },
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_simple01",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID6",
+   "SecondaryAttribute": "Anything else you would like to tell us?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID6",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Anything else you would like to tell us?",
+    "QuestionText": "Anything else you would like to tell us?",
+    "DataExportTag": "Comments",
+    "QuestionType": "TE",
+    "Selector": "ESTB",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_simple01",
+   "Element": "SO",
+   "PrimaryAttribute": "Survey Options",
+   "SecondaryAttribute": null,
+   "TertiaryAttribute": null,
+   "Payload": {
+    "BackButton": "false",
+    "SaveAndContinue": "true",
+    "ProgressBarDisplay": "None",
+    "Header": "",
+    "Footer": "",
+    "EOSMessage": "",
+    "NextButton": " → ",
+    "PreviousButton": " ← "
+   }
+  },
+  {
+   "SurveyID": "SV_simple01",
+   "Element": "PROJ",
+   "PrimaryAttribute": "CORE",
+   "SecondaryAttribute": null,
+   "TertiaryAttribute": "1.1.0",
+   "Payload": {
+    "ProjectCategory": "CORE",
+    "SchemaVersion": "1.1.0"
+   }
+  },
+  {
+   "SurveyID": "SV_simple01",
+   "Element": "STAT",
+   "PrimaryAttribute": "Survey Statistics",
+   "SecondaryAttribute": null,
+   "TertiaryAttribute": null,
+   "Payload": {
+    "MobileCompatible": true,
+    "ID": "Survey Statistics"
+   }
+  },
+  {
+   "SurveyID": "SV_simple01",
+   "Element": "RS",
+   "PrimaryAttribute": "RS_demo",
+   "SecondaryAttribute": "Default Response Set",
+   "TertiaryAttribute": null,
+   "Payload": null
+  },
+  {
+   "SurveyID": "SV_simple01",
+   "Element": "QC",
+   "PrimaryAttribute": "Survey Question Count",
+   "SecondaryAttribute": "6",
+   "TertiaryAttribute": null,
+   "Payload": null
+  }
+ ]
+}

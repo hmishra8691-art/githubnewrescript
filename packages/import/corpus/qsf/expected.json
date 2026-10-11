@@ -1,0 +1,576 @@
+{
+  "01-simple-satisfaction.qsf": {
+    "file": "01-simple-satisfaction.qsf",
+    "ok": true,
+    "title": "Simple Satisfaction Survey",
+    "detected": {
+      "questions": 5,
+      "blocks": 2,
+      "pages": 4,
+      "pageBreaks": 2,
+      "embeddedFields": 0,
+      "hiddenVariables": 0,
+      "displayLogic": 0,
+      "skipLogic": 0,
+      "branches": 0,
+      "randomizers": 0,
+      "loops": 0,
+      "quotas": 0,
+      "customLogic": 0,
+      "validations": 4
+    },
+    "created": {
+      "questions": 5,
+      "blocks": 2,
+      "pages": 4,
+      "pageBreaks": 2,
+      "embeddedFields": 0,
+      "hiddenVariables": 0,
+      "displayLogic": 0,
+      "skipLogic": 0,
+      "branches": 0,
+      "randomizers": 0,
+      "loops": 0,
+      "quotas": 0,
+      "customLogic": 0,
+      "validations": 4
+    },
+    "fidelity": {
+      "totals": {
+        "detected": 15,
+        "imported": 14,
+        "partial": 0,
+        "unsupported": 1
+      },
+      "importedPct": 93.3,
+      "features": {
+        "question": {
+          "detected": 6,
+          "imported": 6,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "validation": {
+          "detected": 4,
+          "imported": 4,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "survey_option": {
+          "detected": 5,
+          "imported": 4,
+          "partial": 0,
+          "unsupported": 1
+        }
+      },
+      "unresolved": [],
+      "assets": [],
+      "languages": [],
+      "elements": [
+        "BL:1:read",
+        "FL:1:read",
+        "SQ:6:read",
+        "SO:1:read",
+        "PROJ:1:ignored",
+        "STAT:1:ignored",
+        "RS:1:ignored",
+        "QC:1:ignored"
+      ]
+    },
+    "quality": {
+      "errors": 0,
+      "warnings": 0
+    },
+    "risks": {
+      "high": 0,
+      "medium": 0,
+      "low": 0
+    },
+    "verification": {
+      "ok": true,
+      "structure": {
+        "checked": 8,
+        "ok": 8,
+        "errors": [],
+        "warnings": 0
+      },
+      "runtime": {
+        "placed": 6,
+        "reached": 6,
+        "unreachable": [],
+        "unanswerable": [],
+        "errors": [],
+        "endStatuses": [
+          "complete"
+        ],
+        "walks": [
+          "deepest:4p/6q→complete",
+          "first:4p/6q→complete",
+          "last:4p/6q→complete",
+          "random:4p/6q→complete",
+          "random:4p/6q→complete",
+          "random:4p/6q→complete",
+          "random:4p/6q→complete",
+          "random:4p/6q→complete"
+        ]
+      },
+      "analysis": {
+        "variablesKept": 6,
+        "variablesRenamed": [],
+        "codesKept": 14,
+        "codesChanged": [],
+        "rowsKept": 3
+      }
+    },
+    "summary": [
+      "I imported your Qualtrics survey (QSF) into Rescript — “Simple Satisfaction Survey”.",
+      "Created 5 questions, 2 blocks, 2 page breaks, 4 validation rules.",
+      "The survey passes the quality check.",
+      "Of 15 source elements checked, 14 came across as they were, 1 could not be reproduced (93.3% as-is)."
+    ]
+  },
+  "02-screener-logic-quotas.qsf": {
+    "file": "02-screener-logic-quotas.qsf",
+    "ok": true,
+    "title": "Screener with Logic and Quotas",
+    "detected": {
+      "questions": 11,
+      "blocks": 5,
+      "pages": 7,
+      "pageBreaks": 2,
+      "embeddedFields": 4,
+      "hiddenVariables": 0,
+      "displayLogic": 3,
+      "skipLogic": 3,
+      "branches": 2,
+      "randomizers": 2,
+      "loops": 0,
+      "quotas": 3,
+      "customLogic": 0,
+      "validations": 4
+    },
+    "created": {
+      "questions": 11,
+      "blocks": 5,
+      "pages": 7,
+      "pageBreaks": 2,
+      "embeddedFields": 4,
+      "hiddenVariables": 0,
+      "displayLogic": 2,
+      "skipLogic": 2,
+      "branches": 2,
+      "randomizers": 1,
+      "loops": 0,
+      "quotas": 2,
+      "customLogic": 0,
+      "validations": 4
+    },
+    "fidelity": {
+      "totals": {
+        "detected": 45,
+        "imported": 38,
+        "partial": 2,
+        "unsupported": 5
+      },
+      "importedPct": 84.4,
+      "features": {
+        "question": {
+          "detected": 12,
+          "imported": 12,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "validation": {
+          "detected": 4,
+          "imported": 4,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "display_logic": {
+          "detected": 3,
+          "imported": 2,
+          "partial": 0,
+          "unsupported": 1
+        },
+        "option_logic": {
+          "detected": 1,
+          "imported": 1,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "skip_logic": {
+          "detected": 3,
+          "imported": 2,
+          "partial": 0,
+          "unsupported": 1
+        },
+        "branch": {
+          "detected": 2,
+          "imported": 2,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "randomizer": {
+          "detected": 2,
+          "imported": 1,
+          "partial": 0,
+          "unsupported": 1
+        },
+        "embedded": {
+          "detected": 4,
+          "imported": 4,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "quota": {
+          "detected": 3,
+          "imported": 3,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "quota_logic": {
+          "detected": 1,
+          "imported": 0,
+          "partial": 1,
+          "unsupported": 0
+        },
+        "carry_forward": {
+          "detected": 1,
+          "imported": 1,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "randomization": {
+          "detected": 1,
+          "imported": 0,
+          "partial": 1,
+          "unsupported": 0
+        },
+        "piping": {
+          "detected": 3,
+          "imported": 3,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "survey_option": {
+          "detected": 4,
+          "imported": 2,
+          "partial": 0,
+          "unsupported": 2
+        },
+        "default_value": {
+          "detected": 1,
+          "imported": 1,
+          "partial": 0,
+          "unsupported": 0
+        }
+      },
+      "unresolved": [
+        "question:QID42@QID10 · skip logic",
+        "question:QID99@QID11 · display logic"
+      ],
+      "assets": [],
+      "languages": [],
+      "elements": [
+        "BL:1:read",
+        "FL:1:read",
+        "SQ:13:read",
+        "QO:3:read",
+        "QG:1:read",
+        "SO:1:read",
+        "PROJ:1:ignored",
+        "STAT:1:ignored",
+        "RS:1:ignored",
+        "QC:1:ignored"
+      ]
+    },
+    "quality": {
+      "errors": 0,
+      "warnings": 0
+    },
+    "risks": {
+      "high": 2,
+      "medium": 2,
+      "low": 2
+    },
+    "verification": {
+      "ok": true,
+      "structure": {
+        "checked": 20,
+        "ok": 20,
+        "errors": [],
+        "warnings": 0
+      },
+      "runtime": {
+        "placed": 12,
+        "reached": 12,
+        "unreachable": [],
+        "unanswerable": [],
+        "errors": [],
+        "endStatuses": [
+          "complete",
+          "screened"
+        ],
+        "walks": [
+          "deepest:6p/10q→complete",
+          "first:2p/4q→screened",
+          "last:2p/4q→screened",
+          "random:2p/4q→screened",
+          "random:2p/4q→screened",
+          "random:2p/4q→screened",
+          "random:2p/4q→screened",
+          "random:6p/10q→complete"
+        ]
+      },
+      "analysis": {
+        "variablesKept": 12,
+        "variablesRenamed": [],
+        "codesKept": 35,
+        "codesChanged": [],
+        "rowsKept": 3
+      }
+    },
+    "summary": [
+      "I imported your Qualtrics survey (QSF) into Rescript — “Screener with Logic and Quotas”.",
+      "Created 11 questions, 5 blocks, 2 page breaks, 4 embedded variables, 2 display logic rules, 2 skip rules, 2 branches, 1 randomizer, 2 quotas, 4 validation rules.",
+      "The survey passes the quality check.",
+      "Of 45 source elements checked, 38 came across as they were, 2 with a change, 5 could not be reproduced (84.4% as-is).",
+      "2 references point at something that is not in the imported survey."
+    ]
+  },
+  "03-brand-tracker-complex.qsf": {
+    "file": "03-brand-tracker-complex.qsf",
+    "ok": true,
+    "title": "Brand Tracker — Wave 3 (complex)",
+    "detected": {
+      "questions": 27,
+      "blocks": 10,
+      "pages": 15,
+      "pageBreaks": 5,
+      "embeddedFields": 2,
+      "hiddenVariables": 2,
+      "displayLogic": 1,
+      "skipLogic": 0,
+      "branches": 3,
+      "randomizers": 1,
+      "loops": 2,
+      "quotas": 2,
+      "customLogic": 3,
+      "validations": 2
+    },
+    "created": {
+      "questions": 26,
+      "blocks": 10,
+      "pages": 15,
+      "pageBreaks": 5,
+      "embeddedFields": 2,
+      "hiddenVariables": 2,
+      "displayLogic": 1,
+      "skipLogic": 0,
+      "branches": 3,
+      "randomizers": 1,
+      "loops": 2,
+      "quotas": 1,
+      "customLogic": 0,
+      "validations": 2
+    },
+    "fidelity": {
+      "totals": {
+        "detected": 87,
+        "imported": 66,
+        "partial": 9,
+        "unsupported": 12
+      },
+      "importedPct": 75.9,
+      "features": {
+        "question": {
+          "detected": 29,
+          "imported": 22,
+          "partial": 6,
+          "unsupported": 1
+        },
+        "validation": {
+          "detected": 4,
+          "imported": 2,
+          "partial": 1,
+          "unsupported": 1
+        },
+        "display_logic": {
+          "detected": 1,
+          "imported": 1,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "branch": {
+          "detected": 3,
+          "imported": 2,
+          "partial": 0,
+          "unsupported": 1
+        },
+        "randomizer": {
+          "detected": 1,
+          "imported": 1,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "block_randomizer": {
+          "detected": 1,
+          "imported": 1,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "loop": {
+          "detected": 2,
+          "imported": 2,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "embedded": {
+          "detected": 2,
+          "imported": 1,
+          "partial": 1,
+          "unsupported": 0
+        },
+        "quota": {
+          "detected": 2,
+          "imported": 1,
+          "partial": 0,
+          "unsupported": 1
+        },
+        "carry_forward": {
+          "detected": 1,
+          "imported": 1,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "randomization": {
+          "detected": 2,
+          "imported": 2,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "piping": {
+          "detected": 3,
+          "imported": 2,
+          "partial": 0,
+          "unsupported": 1
+        },
+        "translation": {
+          "detected": 22,
+          "imported": 22,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "asset": {
+          "detected": 4,
+          "imported": 2,
+          "partial": 1,
+          "unsupported": 1
+        },
+        "custom_js": {
+          "detected": 2,
+          "imported": 0,
+          "partial": 0,
+          "unsupported": 2
+        },
+        "flow_element": {
+          "detected": 2,
+          "imported": 0,
+          "partial": 0,
+          "unsupported": 2
+        },
+        "survey_option": {
+          "detected": 6,
+          "imported": 4,
+          "partial": 0,
+          "unsupported": 2
+        }
+      },
+      "unresolved": [],
+      "assets": [
+        "no_url:QID24",
+        "ok:QID1",
+        "ok:QID23 · option 1",
+        "platform_hosted:QID23 · option 2"
+      ],
+      "languages": [
+        {
+          "code": "es",
+          "strings": 11
+        },
+        {
+          "code": "fr",
+          "strings": 11
+        }
+      ],
+      "elements": [
+        "BL:1:read",
+        "FL:1:read",
+        "SQ:30:read",
+        "QO:2:read",
+        "SC:1:unsupported",
+        "SO:1:read",
+        "PROJ:1:ignored",
+        "STAT:1:ignored",
+        "RS:1:ignored",
+        "QC:1:ignored"
+      ]
+    },
+    "quality": {
+      "errors": 0,
+      "warnings": 4
+    },
+    "risks": {
+      "high": 8,
+      "medium": 6,
+      "low": 7
+    },
+    "verification": {
+      "ok": true,
+      "structure": {
+        "checked": 41,
+        "ok": 40,
+        "errors": [],
+        "warnings": 1
+      },
+      "runtime": {
+        "placed": 27,
+        "reached": 26,
+        "unreachable": [
+          "orphan:by_source"
+        ],
+        "unanswerable": [],
+        "errors": [],
+        "endStatuses": [
+          "complete"
+        ],
+        "walks": [
+          "deepest:18p/32q→complete",
+          "first:15p/26q→complete",
+          "last:15p/26q→complete",
+          "random:15p/26q→complete",
+          "random:15p/26q→complete",
+          "random:15p/26q→complete",
+          "random:15p/26q→complete",
+          "random:15p/26q→complete"
+        ]
+      },
+      "analysis": {
+        "variablesKept": 29,
+        "variablesRenamed": [],
+        "codesKept": 47,
+        "codesChanged": [],
+        "rowsKept": 23
+      }
+    },
+    "summary": [
+      "I imported your Qualtrics survey (QSF) into Rescript — “Brand Tracker — Wave 3 (complex)”.",
+      "Created 26 questions, 10 blocks, 5 page breaks, 2 embedded variables, 2 hidden variables, 1 display logic rule, 3 branches, 1 randomizer, 2 loops, 1 quota, 2 validation rules.",
+      "6 custom logic items need review — none were guessed.",
+      "The survey passes the quality check.",
+      "Of 87 source elements checked, 66 came across as they were, 9 with a change, 12 could not be reproduced (75.9% as-is).",
+      "2 images are still hosted by Qualtrics or named only by a library id — re-upload them here.",
+      "Translations in es, fr were imported for review."
+    ]
+  }
+}

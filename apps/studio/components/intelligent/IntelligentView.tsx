@@ -477,7 +477,7 @@ export function IntelligentView() {
     try {
       const { d } = await postImport(id, { phase: "run", scope: job.scope, into: job.into, ...(job.into === "merge" ? { existing: JSON.stringify(basedOn) } : {}) });
       if (!d.report) { patchJob(id, { stage: "failed", error: String(d.error ?? "The import could not be completed.") }); return; }
-      patchJob(id, { stage: "ready", report: d.report, definition: d.definition, mapping: d.mapping, actual: d.actual, basedOn, ...(d.report.ok ? {} : { error: "The file was read, but it did not produce a valid survey — see the issues." }) });
+      patchJob(id, { stage: "ready", report: d.report, definition: d.definition, mapping: d.mapping, verification: d.verification ?? null, actual: d.actual, basedOn, ...(d.report.ok ? {} : { error: "The file was read, but it did not produce a valid survey — see the issues." }) });
     } catch (e) {
       patchJob(id, { stage: "estimated", error: (e as Error).message });
     }

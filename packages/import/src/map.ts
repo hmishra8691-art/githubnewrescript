@@ -1,7 +1,7 @@
-import { SurveyDefinition, type Condition, type FlowNode, type Question, type ImportMapEntry, type Quota } from "@rescript/schema";
-import { runQualityCheck, listBlocks, constantCondition } from "@rescript/engine";
+import { SurveyDefinition, Localization, LanguageConfig, resolveVariant, type Condition, type FlowNode, type Question, type ImportMapEntry, type Quota } from "@rescript/schema";
+import { runQualityCheck, listBlocks, constantCondition, recordTranslation } from "@rescript/engine";
 import type {
-  CanonicalSurvey, CanonicalQuestion, CanonicalOption, CExpr, CFlow, CSkipTarget, Issue, CanonicalKind, CanonicalEmbeddedField,
+  CanonicalSurvey, CanonicalQuestion, CanonicalOption, CExpr, CFlow, CSkipTarget, Issue, CanonicalKind, CanonicalEmbeddedField, InventoryItem,
 } from "./canonical.js";
 import { plainText, canonicalStats, exprHasRaw, type CanonicalStats } from "./canonical.js";
 
@@ -56,6 +56,9 @@ export interface MergeSummary {
 
 export interface QuestionConfidence { id: string; code: string; source: string; level: CanonicalQuestion["confidence"]; notes: string[] }
 
+/** a reference the source makes that the imported survey cannot satisfy — a question, choice, block, field or quota that is not there */
+export interface UnresolvedReference { location: string; ref: string; kind: "question" | "choice" | "row" | "block" | "embedded" | "quota" | "loop" | "piping"; message: string }
+
 export interface MapResult {
   def: SurveyDefinition | null;
   mapping: ImportMapEntry[];
@@ -64,6 +67,9 @@ export interface MapResult {
   confidence: QuestionConfidence[];
   merge?: MergeSummary;
   quality: { errors: string[]; warnings: string[]; deployable: boolean } | null;
+  /** what the mapper attempted and how each attempt ended — see InventoryItem */
+  inventory: InventoryItem[];
+  unresolved: UnresolvedReference[];
 }
 
 /* ------------------------------------------------------------ kind → Rescript type */
@@ -84,6 +90,7 @@ const KIND: Record<CanonicalKind, { type: string; variant?: string }> = {
   matrix_text: { type: "matrix_text" },
   matrix_numeric: { type: "numeric_list", variant: "list.numeric_list" },
   matrix_dropdown: { type: "matrix_dropdown" },
+  matrix_mixed: { type: "composite", variant: "matrix.mixed" },
   ranking: { type: "ranking", variant: "ranking.drag" },
   slider: { type: "slider", variant: "slider.single" },
   stars: { type: "numeric", variant: "single_select.stars" },
@@ -93,6 +100,8 @@ const KIND: Record<CanonicalKind, { type: string; variant?: string }> = {
   hidden: { type: "hidden", variant: "calculated.hidden" },
   calculated: { type: "calculated", variant: "calculated.value" },
   file_upload: { type: "upload", variant: "upload.file" },
+  signature: { type: "upload", variant: "upload.signature" },
+  bucket: { type: "matrix_single", variant: "dragdrop.buckets" },
   hotspot: { type: "hotspot", variant: "hotspot.click" },
   conjoint: { type: "conjoint_task", variant: "conjoint.cbc" },
   maxdiff: { type: "maxdiff_task", variant: "maxdiff.best_worst" },
@@ -111,6 +120,8 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
   const uid = opts.uid ?? ((p: string) => `${p}_${Date.now().toString(36)}${(seq++).toString(36)}`);
   const issues: Issue[] = [];
   const mapping: ImportMapEntry[] = [];
+  const inventory: InventoryItem[] = [];
+  const unresolved: UnresolvedReference[] = [];
   const existing = opts.existing ?? null;
 
   /* ------------------------------------------------------------ names already taken */
@@ -171,6 +182,20 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
   const optionCode = (qs: string, choice: string): string | number | undefined => qBySource.get(qs)?.options.find((o) => o.sourceId === choice)?.code;
   const rowCode = (qs: string, row: string): string | undefined => qBySource.get(qs)?.rows.find((r) => r.sourceId === row)?.code;
   const confidence: QuestionConfidence[] = [];
+  /* quota ids and limits by SOURCE id — decided before any condition is built, because branches and display logic may read a quota */
+  const quotaIdOf = new Map<string, string>();
+  const quotaLimitOf = new Map<string, number>();
+  {
+    const takenQ = new Set<string>(existing?.quotas.map((q) => q.id) ?? []);
+    const groupIds = new Map<string, string>();
+    for (const cq of c.quotas) {
+      let id: string;
+      if (cq.group) { id = groupIds.get(cq.group.id) ?? unique(safeIdent(cq.group.id), takenQ); groupIds.set(cq.group.id, id); }
+      else id = unique(safeIdent(cq.sourceId), takenQ);
+      quotaIdOf.set(cq.sourceId, id);
+      quotaLimitOf.set(cq.sourceId, cq.limit);
+    }
+  }
 
   for (const cq of c.questions) {
     const ex = reuse.get(cq.sourceId);
@@ -192,11 +217,20 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
     else if (merge) merge.added.push(cq.sourceId);
 
     const k = KIND[cq.kind];
+    /* the adapter's closer variant is used only when the registry agrees it belongs to this base type — never a variant the renderer would refuse */
+    const hinted = cq.variantHint && resolveVariant(cq.variantHint)?.baseType === k.type ? cq.variantHint : undefined;
+    const cs = cq.settings ?? {};
+    const num = (key: string) => (typeof cs[key] === "number" ? { [key]: cs[key] } : {});
     const q: Record<string, unknown> = {
-      id, code, variableName, type: k.type, ...(k.variant ? { variant: k.variant } : {}),
+      id, code, variableName, type: k.type, ...(hinted ? { variant: hinted } : k.variant ? { variant: k.variant } : {}),
       text: cq.text, required: cq.required && cq.kind !== "descriptive" && cq.kind !== "hidden" && cq.kind !== "calculated",
       options: [], rows: [], columns: [], validation: [], skipLogic: [], listLogic: [],
-      settings: { readOnly: false, hidden: false, ...(cq.settings && typeof cq.settings.minValue === "number" ? { minValue: cq.settings.minValue } : {}), ...(cq.settings && typeof cq.settings.maxValue === "number" ? { maxValue: cq.settings.maxValue } : {}) },
+      settings: {
+        readOnly: false, hidden: cs.hidden === true, ...num("minValue"), ...num("maxValue"), ...num("decimalPlaces"),
+        ...(cs.defaultValue !== undefined ? { defaultValue: cs.defaultValue } : {}),
+        ...(cs.headerRepeat === "auto" || cs.headerRepeat === "off" || typeof cs.headerRepeat === "number" ? { headerRepeat: cs.headerRepeat } : {}),
+        ...(cs.fieldLabelPosition === "left" || cs.fieldLabelPosition === "above" || cs.fieldLabelPosition === "right" ? { fieldLabelPosition: cs.fieldLabelPosition } : {}),
+      },
     };
     if (cq.instruction) q.instruction = cq.instruction;
     if (cq.kind === "unknown") q.text = `<p><strong>Not migrated:</strong> ${cq.sourceType} question ${cq.sourceId} (“${plainText(cq.text).slice(0, 120)}”). Rebuild it here.</p>`;
@@ -211,9 +245,23 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
       if (o.exclusive) flags.push("exclusive");
       if (o.otherSpecify) flags.push("other_specify");
       if (o.anchor) flags.push(i >= cq.options.length / 2 ? "anchor_bottom" : "anchor_top");
-      return { code: codeV, label: o.label, flags };
+      const rnd = cq.randomization;
+      if (rnd?.anchorsTop.includes(o.sourceId) && !flags.includes("anchor_top")) flags.push("anchor_top");
+      if (rnd?.anchorsBottom.includes(o.sourceId) && !flags.includes("anchor_bottom")) flags.push("anchor_bottom");
+      const img = (o as { imageUrl?: string }).imageUrl;
+      return { code: codeV, label: o.label, flags, ...(img ? { imageUrl: img } : {}), ...(rnd?.undisplayed.includes(o.sourceId) ? { logic: { visibility: "always_hide" } } : {}) };
     });
-    if (cq.kind === "matrix_numeric" && opts.length) {
+    if (cq.kind === "matrix_mixed" && cq.columns?.length) {
+      q.columns = cq.columns.map((col) => {
+        const seen = new Set<string>();
+        return {
+          id: safeIdent(`c${col.sourceId}`), label: col.label, responseType: col.responseType, variableStem: safeIdent(`${variableName}_${col.sourceId}`),
+          options: col.options.map((o, j) => { let cv: string | number = o.code; if (seen.has(String(cv))) cv = `${cv}_${j + 1}`; seen.add(String(cv)); return { code: cv, label: o.label, flags: [] }; }),
+          validation: [], readOnly: false, flags: [],
+        };
+      });
+      mapping.push(...cq.columns.map((col) => ({ kind: "variable" as const, source: `${cq.variable}#${col.sourceId}`, rescript: safeIdent(`${variableName}_${col.sourceId}`), reason: "a side-by-side column: Qualtrics writes <variable>#<column>, Rescript <variable>_<column>" })));
+    } else if (cq.kind === "matrix_numeric" && opts.length) {
       // a numeric grid with columns: Rescript's matrix_numeric carries them as numeric columns
       q.type = "matrix_numeric"; delete q.variant;
       q.columns = opts.map((o) => ({ id: safeIdent(`c_${o.code}`), label: o.label, responseType: "numeric", variableStem: safeIdent(`${variableName}_${o.code}`), options: [], validation: [], readOnly: false, flags: [] }));
@@ -223,7 +271,8 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
     if (cq.kind === "numeric" && cq.rows.length) { q.type = "numeric_list"; q.variant = "list.numeric_list"; }
     // validation
     for (const v of cq.validation) (q.validation as unknown[]).push({ kind: v.kind, ...(v.value !== undefined ? { value: v.value } : {}), ...(v.message ? { message: v.message } : {}) });
-    if (cq.randomizeOptions) q.randomization = { enabled: true, scope: cq.rows.length && /matrix/.test(cq.kind) ? "rows" : "options", method: "shuffle" };
+    if (cq.randomizeOptions) q.randomization = { enabled: true, scope: cq.rows.length && /matrix/.test(cq.kind) ? "rows" : "options", method: "shuffle", ...(cq.randomization?.pick ? { pick: cq.randomization.pick } : {}) };
+    /* carry-forward: the source question is resolved once every id is known (below) */
     // notes carry what the source said and could not be reproduced
     const notes = [...cq.notes];
     // custom code is preserved, never run: a DISABLED script on the question (see `scripts` below)
@@ -254,11 +303,27 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
       const rule = (source: Record<string, unknown>, operator: string, value?: unknown, value2?: unknown): Condition => ({ type: "rule", source, operator, ...(value !== undefined ? { value } : {}), ...(value2 !== undefined ? { value2 } : {}) } as unknown as Condition);
       if (r.kind === "embedded") return rule({ kind: "embedded", ref: r.id }, opName(x.op), x.value);
       if (r.kind === "loop") return rule({ kind: "loop", ref: r.id === "field1" ? "label" : r.id }, opName(x.op), x.value);
+      if (r.kind === "quota") {
+        /*
+         * "quota X is full": Rescript reads a quota source as its current
+         * count, so "full" is "count ≥ its limit" and "not full" is "count <
+         * its limit" — the same test the quota check itself makes. The quota
+         * must be one this import created (or the survey already has).
+         */
+        const qq = quotaIdOf.get(r.id);
+        const lim = quotaLimitOf.get(r.id);
+        if (!qq || lim === undefined) { issues.push({ location, type: "reference", severity: "high", message: `A condition reads quota ${r.id}, which is not in the imported survey.`, autoAttempted: true, refs: [r.id] }); unresolved.push({ location, ref: r.id, kind: "quota", message: `A condition reads quota ${r.id}, which is not in the imported survey.` }); return null; }
+        const full = !(x.op === "ne" || x.op === "notSelected");
+        const grouped = c.quotas.find((z) => z.sourceId === r.id)?.group;
+        if (grouped) { issues.push({ location, type: "converted", severity: "medium", message: `A condition reads whether quota “${r.id}” is full. That quota is one cell of group “${grouped.name}” here, and the condition reads the group's whole count against the cell's limit.`, suggestion: "Check the branch in Architect; split the group if the cells must be tested one by one.", autoAttempted: true, refs: [r.id] }); inventory.push({ feature: "quota_logic", sourceId: location, status: "partial", note: "reads the quota group's count, not the one cell's" }); }
+        else inventory.push({ feature: "quota_logic", sourceId: location, status: "imported" });
+        return rule({ kind: "quota", ref: qq }, full ? "gte" : "lt", lim);
+      }
       if (r.kind !== "question") { issues.push({ location, type: "custom_logic", severity: "high", message: `A condition on ${r.kind} ${r.id} has no Rescript equivalent.`, autoAttempted: true, refs: [r.id] }); return null; }
       const qid = idOf.get(r.id);
-      if (!qid) { issues.push({ location, type: "reference", severity: "high", message: `A condition refers to ${r.id}, which is not in the imported survey.`, suggestion: "Check whether the question was in the trash or another block.", autoAttempted: true, refs: [r.id] }); return null; }
+      if (!qid) { issues.push({ location, type: "reference", severity: "high", message: `A condition refers to ${r.id}, which is not in the imported survey.`, suggestion: "Check whether the question was in the trash or another block.", autoAttempted: true, refs: [r.id] }); unresolved.push({ location, ref: r.id, kind: "question", message: `A condition refers to ${r.id}, which is not in the imported survey.` }); return null; }
       const src: Record<string, unknown> = { kind: "question", ref: qid };
-      if (r.row) { const rc = rowCode(r.id, r.row); if (rc) src.rowCode = rc; else { issues.push({ location, type: "reference", severity: "medium", message: `A condition names row ${r.row} of ${r.id}, which has no such row.`, autoAttempted: true, refs: [r.id] }); return null; } }
+      if (r.row) { const rc = rowCode(r.id, r.row); if (rc) src.rowCode = rc; else { issues.push({ location, type: "reference", severity: "medium", message: `A condition names row ${r.row} of ${r.id}, which has no such row.`, autoAttempted: true, refs: [r.id] }); unresolved.push({ location, ref: `${r.id}/${r.row}`, kind: "row", message: `A condition names row ${r.row} of ${r.id}, which has no such row.` }); return null; } }
       let op = x.op;
       if (op === "displayed" || op === "notDisplayed") {
         issues.push({ location, type: "converted", severity: "medium", message: `“${describe(x)}”: a was-displayed condition has no direct equivalent; it was converted to ${op === "displayed" ? "answered" : "not answered"}${r.choice ? " / selected" : ""}.`, suggestion: "Check it — an optional question can be displayed and left blank.", autoAttempted: true, refs: [r.id] });
@@ -267,7 +332,7 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
       }
       if (r.choice) {
         const cc = optionCode(r.id, r.choice);
-        if (cc === undefined) { issues.push({ location, type: "reference", severity: "high", message: `A condition refers to choice ${r.choice} of ${r.id}, which has no such choice.`, autoAttempted: true, refs: [r.id] }); return null; }
+        if (cc === undefined) { issues.push({ location, type: "reference", severity: "high", message: `A condition refers to choice ${r.choice} of ${r.id}, which has no such choice.`, autoAttempted: true, refs: [r.id] }); unresolved.push({ location, ref: `${r.id}/${r.choice}`, kind: "choice", message: `A condition refers to choice ${r.choice} of ${r.id}, which has no such choice.` }); return null; }
         if (op === "selected" || op === "notSelected") return rule(src, op, cc);
         if (op === "eq" || op === "ne") return rule(src, op === "eq" ? "selected" : "notSelected", cc);
         return rule(src, opName(op), x.value ?? cc);
@@ -304,12 +369,35 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
       const dl = cond(cq.displayLogic, loc);
       if (dl) q.displayLogic = dl;
       else if (cq.displayLogic) { reportUnconverted(cq.displayLogic, loc, `${cq.variable}'s display logic`); q.notes = `${q.notes ?? ""}\nSource display logic (not converted): ${describe(cq.displayLogic)}`.trim(); }
+      inventory.push({ feature: "display_logic", sourceId: cq.sourceId, status: dl ? "imported" : "unsupported", note: dl ? undefined : cq.displayLogic ? describe(cq.displayLogic) : undefined });
+      if (!cq.displayLogic) inventory.pop();
       cq.options.forEach((o, i) => {
         if (!o.displayLogic) return;
         const oc = cond(o.displayLogic, `${cq.sourceId} · option ${o.sourceId} display logic`);
         if (oc && q.options?.[i]) (q.options[i] as { visibleIf?: Condition }).visibleIf = oc;
+        else if (!oc) reportUnconverted(o.displayLogic, `${cq.sourceId} · option ${o.sourceId} display logic`, `The display logic of option ${o.sourceId} of ${cq.variable}`);
+        inventory.push({ feature: "option_logic", sourceId: `${cq.sourceId} · option ${o.sourceId}`, status: oc ? "imported" : "unsupported" });
+      });
+      cq.rows.forEach((r, i) => {
+        if (!r.displayLogic) return;
+        const rc = cond(r.displayLogic, `${cq.sourceId} · row ${r.sourceId} display logic`);
+        if (rc && q.rows?.[i]) (q.rows[i] as { visibleIf?: Condition }).visibleIf = rc;
+        else if (!rc) reportUnconverted(r.displayLogic, `${cq.sourceId} · row ${r.sourceId} display logic`, `The display logic of row ${r.sourceId} of ${cq.variable}`);
+        inventory.push({ feature: "option_logic", sourceId: `${cq.sourceId} · row ${r.sourceId}`, status: rc ? "imported" : "unsupported" });
       });
     }
+  }
+  /* carry-forward, a first-class Rescript feature: the choices of this question come from another's answer */
+  for (const cq of c.questions) {
+    if (!cq.carryForward) continue;
+    const q = built.find((b) => b.id === idOf.get(cq.sourceId));
+    if (!q) continue;
+    const src = idOf.get(cq.carryForward.questionId);
+    if (!src) { unresolved.push({ location: `${cq.sourceId} · carry-forward`, ref: cq.carryForward.questionId, kind: "question", message: `${cq.variable} carries choices forward from ${cq.carryForward.questionId}, which is not in the imported survey.` }); if (!c.inventory?.some((i) => i.feature === "carry_forward" && i.sourceId === cq.sourceId)) inventory.push({ feature: "carry_forward", sourceId: cq.sourceId, status: "unsupported", note: "source question missing" }); continue; }
+    const filter = cq.carryForward.filter === "notSelected" ? "not_selected" : cq.carryForward.filter === "displayed" ? "displayed" : cq.carryForward.filter === "all" ? "all" : "selected";
+    (q as { carryForward?: unknown }).carryForward = { sourceQuestionId: src, filter, into: cq.carryForward.into, keepOwn: (cq.carryForward.into === "rows" ? (q.rows?.length ?? 0) : (q.options?.length ?? 0)) > 0 };
+    mapping.push({ kind: "question", source: `${cq.sourceId} carry-forward`, rescript: `${q.id} ← ${src}` });
+    inventory.push({ feature: "carry_forward", sourceId: cq.sourceId, status: "imported" });
   }
 
   /* ------------------------------------------------------------ flow */
@@ -339,7 +427,9 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
             if (pagesOf.every((p) => (p as { questionIds: string[] }).questionIds.length === 1) && pagesOf.length > 1) {
               const rnd = { type: "randomizer", id: nodeId(`${bid}_random`), children: pagesOf } as FlowNode;
               node = node.type === "page" ? rnd : ({ ...(node as object), children: [rnd] } as FlowNode);
+              inventory.push({ feature: "randomizer", sourceId: `${f.sourceId} questions`, status: "imported" });
             } else {
+              inventory.push({ feature: "randomizer", sourceId: `${f.sourceId} questions`, status: "unsupported", note: "question order inside a page cannot be randomized" });
               issues.push({ location: `Block ${f.title ?? f.sourceId}`, type: "converted", severity: "medium", message: `Block “${f.title ?? f.sourceId}” randomizes the order of its questions. Rescript randomizes pages, not questions on one page, so the order was left fixed.`, suggestion: "Put each question on its own page and wrap the pages in a randomizer, if the order must vary.", autoAttempted: true });
             }
           }
@@ -363,7 +453,8 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
             if (source) {
               node = { type: "loop", id: lid, title: f.title ? `Loop: ${f.title}` : "Loop", loopVar, source, ...(references ? { references } : {}), ...(lp.randomize ? { order: { kind: "random" } } : {}), children: [node] } as unknown as FlowNode;
               mapping.push({ kind: "loop", source: `${f.sourceId} loop`, rescript: lid });
-            }
+              inventory.push({ feature: "loop", sourceId: f.sourceId, status: "imported" });
+            } else { inventory.push({ feature: "loop", sourceId: f.sourceId, status: "unsupported", note: lp.kind === "question" ? `loops over ${lp.questionId}, which is missing` : "unreadable" }); if (lp.kind === "question" && lp.questionId) unresolved.push({ location: `Loop on ${f.title ?? f.sourceId}`, ref: lp.questionId, kind: "loop", message: `The loop repeats over ${lp.questionId}, which is not in the imported survey.` }); }
           }
           out.push(node);
           break;
@@ -389,7 +480,8 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
             if (logic && f.when) reportUnconverted(f.when, `Flow · branch ${f.sourceId}`, `The condition of branch “${f.description ?? f.sourceId}”`);
             when = { type: "group", op: "and", children: [] } as Condition;
             if (logic && exprHasRaw(f.when)) issues.push({ location: `Flow · branch ${f.sourceId}`, type: "custom_logic", severity: "high", message: `Branch “${f.description ?? f.sourceId}” now applies to everyone, because its condition could not be converted.`, suggestion: "Set its condition in Architect before fielding.", autoAttempted: true });
-          }
+            if (logic) inventory.push({ feature: "branch", sourceId: f.sourceId, status: "unsupported", note: "condition not converted — applies to everyone" });
+          } else inventory.push({ feature: "branch", sourceId: f.sourceId, status: "imported" });
           out.push({ type: "branch", id, ...(f.description ? { title: f.description.slice(0, 120) } : {}), branches: [{ id: nodeId(`${id}_arm`), label: f.description?.slice(0, 80), when, children }], otherwise: [] } as unknown as FlowNode);
           break;
         }
@@ -398,6 +490,7 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
           if (!structure) { out.push(...children); break; }
           const id = nodeId(f.sourceId);
           mapping.push({ kind: "randomizer", source: f.sourceId, rescript: id });
+          inventory.push({ feature: "randomizer", sourceId: f.sourceId, status: "imported" });
           out.push({ type: "randomizer", id, ...(f.show ? { show: f.show } : {}), ...(f.even ? { evenPresentation: true } : {}), children } as FlowNode);
           break;
         }
@@ -413,7 +506,7 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
           if (!structure) break;
           const id = nodeId(f.sourceId);
           mapping.push({ kind: "end", source: f.sourceId, rescript: id });
-          out.push({ type: "end", id, status: f.status, ...(f.redirectUrl ? { redirectUrl: f.redirectUrl } : {}) } as FlowNode);
+          out.push({ type: "end", id, status: f.status, ...(f.message ? { message: f.message } : {}), ...(f.redirectUrl ? { redirectUrl: f.redirectUrl } : {}) } as FlowNode);
           break;
         }
         case "quota_check": break; // placed after quotas are built
@@ -424,8 +517,9 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
   };
   const embField = (x: CanonicalEmbeddedField) => {
     const name = IDENT.test(x.name) ? x.name : safeIdent(x.name);
-    if (takenFields.has(name.toUpperCase())) { issues.push({ location: `Embedded ${x.name}`, type: "renamed", severity: "low", message: `Embedded variable ${x.name} already exists in this survey; the imported one was merged into it.`, autoAttempted: true }); return null; }
+    if (takenFields.has(name.toUpperCase())) { issues.push({ location: `Embedded ${x.name}`, type: "renamed", severity: "low", message: `Embedded variable ${x.name} already exists in this survey; the imported one was merged into it.`, autoAttempted: true }); inventory.push({ feature: "embedded", sourceId: x.name, status: "imported", note: "merged into the existing field" }); return null; }
     takenFields.add(name.toUpperCase());
+    inventory.push({ feature: "embedded", sourceId: x.name, status: x.source === "expression" && x.value && /\{\{@/.test(x.value) && !/^\{\{@(\w+)\}\}$/.test(x.value.trim()) ? "partial" : "imported", note: x.source === "expression" && x.value && /\{\{@/.test(x.value) && !/^\{\{@(\w+)\}\}$/.test(x.value.trim()) ? "set from piping imported as a fixed value" : undefined });
     if (name !== x.name) mapping.push({ kind: "embedded", source: x.name, rescript: name, reason: "not a valid variable name" });
     else mapping.push({ kind: "embedded", source: x.name, rescript: name });
     let value = x.value;
@@ -434,6 +528,12 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
       const one = /^\{\{@(\w+)\}\}$/.exec(value.trim());
       if (one && idOf.has(one[1])) value = built.find((b) => b.id === idOf.get(one[1]))?.variableName ?? value;
       else if (/\{\{@/.test(value)) { issues.push({ location: `Embedded ${x.name}`, type: "converted", severity: "medium", message: `Embedded variable ${x.name} is set from “${x.value}”, which is not an expression Rescript can evaluate; it was imported as a fixed value.`, suggestion: "Rewrite its value as an expression in Architect.", autoAttempted: true }); source = "static"; }
+    }
+    if (source === "expression" && value && /\$\{/.test(value)) {
+      /* a Qualtrics-only pipe (a random number, a date) is not an expression Rescript can evaluate: kept as the text it was, and said so */
+      source = "static";
+      const it = inventory.find((i) => i.feature === "embedded" && i.sourceId === x.name);
+      if (it) { it.status = "partial"; it.note = `set from “${value}”, which Rescript cannot evaluate — imported as fixed text`; }
     }
     const dataType = x.dataType && x.dataType !== "string" ? x.dataType : undefined;
     return { name, source, ...(value !== undefined ? { value } : {}), ...(dataType ? { dataType } : {}) };
@@ -457,7 +557,8 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
   if (logic) {
     for (const cq of c.quotas) {
       const when = cond(cq.when, `Quota ${cq.name}`);
-      if (!when) { reportUnconverted(cq.when, `Quota ${cq.name}`, `Quota “${cq.name}”`); continue; }
+      if (!when) { reportUnconverted(cq.when, `Quota ${cq.name}`, `Quota “${cq.name}”`); inventory.push({ feature: "quota", sourceId: cq.sourceId, status: "unsupported", note: "its condition could not be converted" }); continue; }
+      inventory.push({ feature: "quota", sourceId: cq.sourceId, status: cq.onFull === "redirect" && !cq.redirectUrl ? "partial" : "imported", note: cq.onFull === "redirect" && !cq.redirectUrl ? "redirect without a URL" : undefined });
       /* a member of a source quota GROUP is a cell of the group's one quota */
       if (cq.group) {
         const gq = quotas.find((q) => (q as { __group?: string }).__group === cq.group!.id);
@@ -468,7 +569,7 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
           continue;
         }
       }
-      const id = unique(safeIdent(cq.group ? cq.group.id : cq.sourceId), new Set([...(existing?.quotas.map((q) => q.id) ?? []), ...quotas.map((q) => q.id)]));
+      const id = quotaIdOf.get(cq.sourceId) ?? unique(safeIdent(cq.group ? cq.group.id : cq.sourceId), new Set([...(existing?.quotas.map((q) => q.id) ?? []), ...quotas.map((q) => q.id)]));
       mapping.push({ kind: "quota", source: cq.sourceId, rescript: id });
       quotas.push({ id, name: cq.group ? cq.group.name : cq.name, mode: "hard", cells: [{ id: `${id}_cell`, label: cq.name, when, limit: cq.limit, limitType: "count" }], onFull: { kind: cq.onFull === "continue" ? "flag" : cq.onFull }, countStatus: ["complete"], ...(cq.group ? { __group: cq.group.id } : {}) } as unknown as Quota);
     }
@@ -493,10 +594,11 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
       for (const sk of cq.skips) {
         const loc = `${cq.sourceId} · skip logic`;
         const when = cond(sk.when, loc);
-        if (!when) { reportUnconverted(sk.when, loc, `A skip rule on ${cq.variable}`); q.notes = `${q.notes ?? ""}\nSource skip (not converted): ${sk.label ?? describe(sk.when)}`.trim(); continue; }
+        if (!when) { reportUnconverted(sk.when, loc, `A skip rule on ${cq.variable}`); q.notes = `${q.notes ?? ""}\nSource skip (not converted): ${sk.label ?? describe(sk.when)}`.trim(); inventory.push({ feature: "skip_logic", sourceId: cq.sourceId, status: "unsupported", note: describe(sk.when) }); continue; }
         const target = skipTarget(sk.to, q, blocksInOrder, idOf, flowMap, blockOfQuestion);
-        if (!target) { issues.push({ location: loc, type: "reference", severity: "high", message: `A skip on ${cq.variable} goes to ${JSON.stringify(sk.to)}, which is not in the imported survey.`, autoAttempted: true, refs: [cq.sourceId] }); continue; }
+        if (!target) { issues.push({ location: loc, type: "reference", severity: "high", message: `A skip on ${cq.variable} goes to ${JSON.stringify(sk.to)}, which is not in the imported survey.`, autoAttempted: true, refs: [cq.sourceId] }); unresolved.push({ location: loc, ref: "id" in sk.to ? sk.to.id : sk.to.kind, kind: sk.to.kind === "block" ? "block" : "question", message: `A skip on ${cq.variable} goes to a destination that is not in the imported survey.` }); inventory.push({ feature: "skip_logic", sourceId: cq.sourceId, status: "unsupported", note: "destination missing" }); continue; }
         (q.skipLogic as unknown[]).push({ id: uid("sk"), ...(sk.label ? { label: sk.label.slice(0, 120) } : {}), when, target });
+        inventory.push({ feature: "skip_logic", sourceId: cq.sourceId, status: "imported" });
       }
     }
   }
@@ -504,11 +606,22 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
   /* ------------------------------------------------------------ piping: {{@QID}} → {{CODE}} */
   const codeOf = new Map<string, string>();
   for (const [src, id] of idOf) { const q = built.find((b) => b.id === id) ?? existing?.questions.find((e) => e.id === id); if (q) codeOf.set(src, q.code); }
-  const pipe = (s: string | undefined, where: string): string | undefined => s?.replace(/\{\{@(\w+)((?:\[[^\]]*\])?(?:\.\w+)?)\}\}/g, (m, src: string, rest: string) => {
+  const pipe = (s: string | undefined, where: string): string | undefined => s?.replace(/\{\{@(\w+)((?:\[[^\]]*\])?(?:\.[\w.]+)?)\}\}/g, (m, src: string, rest: string) => {
     const code = codeOf.get(src);
-    if (code) return `{{${code}${rest}}}`;
-    issues.push({ location: where, type: "reference", severity: "low", message: `Piped text refers to ${src}, which is not in the imported survey.`, autoAttempted: true, refs: [src] });
-    return `[${src}]`;
+    if (!code) {
+      issues.push({ location: where, type: "reference", severity: "low", message: `Piped text refers to ${src}, which is not in the imported survey.`, autoAttempted: true, refs: [src] });
+      unresolved.push({ location: where, ref: src, kind: "piping", message: `Piped text refers to ${src}, which is not in the imported survey.` });
+      inventory.push({ feature: "piping", sourceId: `${where} ${m}`, status: "unsupported", note: `${src} missing` });
+      return `[${src}]`;
+    }
+    const srcQ = qBySource.get(src);
+    /* a choice's wording, or a question's text, is a fact of the source — written in, as the words themselves */
+    const optM = /^\.option\.(\w+)$/.exec(rest);
+    if (optM) { const o = srcQ?.options.find((x) => x.sourceId === optM[1]) ?? srcQ?.rows.find((x) => x.sourceId === optM[1]); inventory.push({ feature: "piping", sourceId: `${where} ${m}`, status: o ? "imported" : "unsupported", note: o ? "choice wording written in" : "choice missing" }); return o ? plainText(o.label) : `[${src} choice ${optM[1]}]`; }
+    if (rest === ".text") { inventory.push({ feature: "piping", sourceId: `${where} ${m}`, status: "imported", note: "question wording written in" }); return plainText(srcQ?.text ?? ""); }
+    const mapped = rest === ".displayed" ? ".displayed" : rest === ".unselected" ? ".remaining" : rest;
+    inventory.push({ feature: "piping", sourceId: `${where} ${m}`, status: "imported" });
+    return `{{${code}${mapped}}}`;
   });
   for (const q of built) {
     q.text = pipe(q.text, q.code) ?? "";
@@ -531,6 +644,35 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
   const review = sortIssues([...c.issues, ...issues]).filter((i) => i.severity === "high" || (i.severity === "medium" && i.type !== "converted")).slice(0, 300)
     .map((i) => ({ location: i.location, type: i.type, severity: i.severity, message: i.message, ...(i.suggestion ? { suggestion: i.suggestion } : {}), ...(i.refs?.length ? { refs: i.refs } : {}), ...(qidOf(i.refs, i.location) ? { questionId: qidOf(i.refs, i.location) } : {}) }));
   const record = { id: uid("import"), platform: c.source.platform, format: c.source.format, fileName: c.source.fileName, fingerprint: c.source.fingerprint, importedAt: now, scope, mode: existing ? "merge" : "new", map: mapping.filter((e) => (e.kind !== "option" && e.kind !== "row") || e.reason), review };
+  /*
+   * TRANSLATIONS, keyed the way the Studio's localization keys them (q:<id>:text,
+   * q:<id>:opt:<code>, q:<id>:row:<code>) and recorded through the engine's own
+   * writer, so each entry carries the source hash and is "outdated" the moment
+   * the source text is edited — exactly as a translation typed here would be.
+   */
+  const translated: { lang: string; key: string; text: string; source: string }[] = [];
+  for (const cq of c.questions) {
+    if (!cq.translations) continue;
+    const q = built.find((b) => b.id === idOf.get(cq.sourceId));
+    if (!q) continue;
+    for (const [lang, table] of Object.entries(cq.translations)) {
+      for (const [key, text] of Object.entries(table)) {
+        if (key === "text") translated.push({ lang, key: `q:${q.id}:text`, text: pipe(text, `${q.code} (${lang})`) ?? text, source: q.text });
+        else if (key.startsWith("choice:") || key.startsWith("answer:")) {
+          const sid = key.slice(key.indexOf(":") + 1);
+          const isRowKind = /^matrix|^bucket$/.test(cq.kind) || ((cq.kind === "text" || cq.kind === "numeric") && cq.rows.length > 0);
+          const asRow = key.startsWith("choice:") && isRowKind;
+          const row = asRow ? cq.rows.find((r) => r.sourceId === sid) : undefined;
+          const opt = !asRow ? cq.options.find((o) => o.sourceId === sid) : undefined;
+          const rrow = row ? (q.rows ?? []).find((r) => String(r.code) === String(row.code)) : undefined;
+          const ropt = opt ? (q.options ?? []).find((o) => String(o.code) === String(opt.code) || String(o.code).startsWith(`${opt.code}_`)) : undefined;
+          if (rrow) translated.push({ lang, key: `q:${q.id}:row:${rrow.code}`, text: pipe(text, `${q.code} (${lang})`) ?? text, source: rrow.label });
+          else if (ropt) translated.push({ lang, key: `q:${q.id}:opt:${ropt.code}`, text: pipe(text, `${q.code} (${lang})`) ?? text, source: ropt.label });
+          else inventory.push({ feature: "translation", sourceId: `${cq.sourceId} ${lang} ${key}`, status: "unsupported", note: "no such choice in the imported question" });
+        }
+      }
+    }
+  }
   let raw: unknown;
   if (existing) {
     const ex = structuredClone(existing) as SurveyDefinition;
@@ -543,16 +685,30 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
     ex.scripts = [...(ex.scripts ?? []), ...scripts] as never;
     raw = ex;
   } else {
+    const so = c.options ?? {};
+    const branding: Record<string, unknown> = {};
+    if (so.backButton !== undefined || so.nextLabel || so.backLabel) branding.buttons = { ...(so.backButton !== undefined ? { showBack: so.backButton } : {}), ...(so.nextLabel ? { nextLabel: so.nextLabel } : {}), ...(so.backLabel ? { backLabel: so.backLabel } : {}) };
+    if (so.progressBar) branding.layout = { progressBar: so.progressBar === "none" ? "none" : "top", ...(so.progressBar === "verbose" ? { progressStyle: "percent" } : {}) };
     raw = {
       meta: { id: opts.surveyId, code: safeIdent(c.source.title ?? c.source.fileName.replace(/\.[^.]+$/, "")).slice(0, 40).toUpperCase(), title: c.source.title || c.source.fileName.replace(/\.[^.]+$/, ""), version: "1.0" },
-      questions: built, flow, quotas, imports: [record], scripts,
+      questions: built, flow, quotas, imports: [record], scripts, ...(Object.keys(branding).length ? { branding } : {}),
+      ...(c.source.language ? { localization: { sourceLanguage: c.source.language.toLowerCase(), languages: [] } } : {}),
     };
+  }
+  /* the languages, then every translated string, through the engine's writer (a merge keeps what the survey already has) */
+  if (translated.length) {
+    const r = raw as { localization?: Localization };
+    let loc: Localization = Localization.parse(r.localization ?? (c.source.language ? { sourceLanguage: c.source.language.toLowerCase() } : {}));
+    const langs = [...new Set(translated.map((t) => t.lang))].filter((l) => l !== loc.sourceLanguage);
+    for (const l of langs) if (!loc.languages.some((x) => x.code === l)) loc = { ...loc, languages: [...loc.languages, LanguageConfig.parse({ code: l, status: "in_review" })] };
+    for (const t of translated) if (langs.includes(t.lang)) { loc = recordTranslation(loc, t.lang, t.key, t.text, t.source, { origin: "import", now }); inventory.push({ feature: "translation", sourceId: `${t.key} ${t.lang}`, status: "imported" }); }
+    r.localization = loc;
   }
   const parsed = SurveyDefinition.safeParse(raw);
   const all = [...c.issues, ...issues];
   if (!parsed.success) {
     all.push(...parsed.error.issues.slice(0, 10).map((i): Issue => ({ location: i.path.join("."), type: "validation", severity: "high", message: `The imported survey did not pass the schema: ${i.message}`, autoAttempted: false })));
-    return { def: null, mapping, issues: sortIssues(all), created: canonicalStats(c), confidence, merge, quality: null };
+    return { def: null, mapping, issues: sortIssues(all), created: canonicalStats(c), confidence, merge, quality: null, inventory: [...(c.inventory ?? []), ...inventory], unresolved };
   }
   const def = parsed.data;
   /* post-migration validation (§31): the engine's own quality check — references, flow, variables, logic */
@@ -568,7 +724,7 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
     for (const i of relevant.filter((x) => x.level === "error").slice(0, 60)) all.push({ location: where(i), type: "validation", severity: "high", message: i.message, autoAttempted: false, ...(i.questionId ? { refs: [i.questionId] } : {}) });
     for (const i of relevant.filter((x) => x.level !== "error").slice(0, 60)) all.push({ location: where(i), type: "validation", severity: "low", message: i.message, autoAttempted: false, ...(i.questionId ? { refs: [i.questionId] } : {}) });
   } catch (e) { all.push({ location: "validation", type: "validation", severity: "medium", message: `The quality check could not run: ${(e as Error).message}`, autoAttempted: false }); }
-  return { def, mapping, issues: sortIssues(all), created: createdStats(def, built, existing), confidence, merge, quality };
+  return { def, mapping, issues: sortIssues(all), created: createdStats(def, built, existing), confidence, merge, quality, inventory: [...(c.inventory ?? []), ...inventory], unresolved };
 }
 
 function opName(op: string): string {

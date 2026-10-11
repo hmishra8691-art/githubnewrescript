@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SurveyDefinition } from "@rescript/schema";
 import { aiProviderName, aiConfigured } from "@rescript/ai";
-import { detectFormat, readSource, mapCanonical, buildReport, workload, type ImportScope } from "@rescript/import";
+import { detectFormat, readSource, mapCanonical, buildReport, workload, verifyImport, type ImportScope, type VerificationReport } from "@rescript/import";
 import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
 import { billingProjectFor, estimateAi, recordUsage } from "@/lib/metering";
 import { CUSTOM_LOGIC_SYSTEM_PROMPT } from "@/lib/import/customLogic";
@@ -29,6 +29,12 @@ export const maxDuration = 120;
  *              import is added beside it — nothing in it is overwritten (§27);
  *              the result goes back to the browser, where it is applied as one
  *              undoable edit, like every other Intelligent proposal.
+ *
+ * The run also VERIFIES what it produced (QSF brief, Phase 4): the structure
+ * against the source (families, choices, rows, variable names, codes) and
+ * the runtime — the engine walks the result under several answering
+ * strategies and reports what it reached. A verification that cannot run
+ * is returned as its error, never as a pass.
  *
  * Nothing is saved here. A new project is created by POST /api/surveys with
  * the definition this returns (`strict`, so an invalid one is refused, never
@@ -105,6 +111,12 @@ export async function POST(req: NextRequest) {
   const started = Date.now();
   const result = mapCanonical(canonical, { surveyId: into === "merge" ? existing!.meta.id : "import_preview", existing, scope });
   const report = buildReport(detection, canonical, result, scope);
+  /* verification: facts about the result, bounded so a huge survey cannot hold the request */
+  let verification: VerificationReport | { error: string } | null = null;
+  if (result.def && into === "new") {
+    try { verification = verifyImport(canonical, result); }
+    catch (e) { verification = { error: `Verification could not run: ${(e as Error).message}` }; }
+  }
 
   const upload = await recordUsage(meter, ctx, { eventType: "FILE_UPLOAD", quantity: mb, metadata: { operation: "survey_import", fileName: fileName.slice(0, 120), format: detection.format, bytes: bytes.length } });
   const processing = await recordUsage(meter, ctx, {
@@ -116,7 +128,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     ok: report.ok, phase, detection, workload: work, estimate, actual,
     title: canonical.source.title ?? null,
-    definition: result.def, report, mapping: result.mapping, confidence: result.confidence,
+    definition: result.def, report, mapping: result.mapping, confidence: result.confidence, verification,
     // the custom logic the reader kept but did not translate — what Deep analysis would look at
     custom: [
       ...canonical.questions.flatMap((q) => q.custom.map((cu) => ({ ...cu, questionSource: q.sourceId, questionId: result.mapping.find((m) => m.kind === "question" && m.source === q.sourceId)?.rescript ?? null }))),

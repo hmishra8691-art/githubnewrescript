@@ -1,0 +1,1295 @@
+{
+ "SurveyEntry": {
+  "SurveyID": "SV_screener02",
+  "SurveyName": "Screener with Logic and Quotas",
+  "SurveyDescription": null,
+  "SurveyOwnerID": "UR_sanitized",
+  "SurveyBrandID": "sanitized",
+  "DivisionID": null,
+  "SurveyLanguage": "EN",
+  "SurveyActiveResponseSet": "RS_demo",
+  "SurveyStatus": "Inactive",
+  "SurveyStartDate": "0000-00-00 00:00:00",
+  "SurveyExpirationDate": "0000-00-00 00:00:00",
+  "SurveyCreationDate": "2026-01-10 09:00:00",
+  "CreatorID": "UR_sanitized",
+  "LastModified": "2026-02-01 12:00:00",
+  "LastAccessed": "0000-00-00 00:00:00",
+  "LastActivated": "0000-00-00 00:00:00",
+  "Deleted": null
+ },
+ "SurveyElements": [
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "BL",
+   "PrimaryAttribute": "Survey Blocks",
+   "SecondaryAttribute": null,
+   "TertiaryAttribute": null,
+   "Payload": [
+    {
+     "Type": "Default",
+     "Description": "Screener",
+     "ID": "BL_screen",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID1"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID2"
+      },
+      {
+       "Type": "Page Break"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID3"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID4"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "false"
+     }
+    },
+    {
+     "Type": "Standard",
+     "Description": "Brands",
+     "ID": "BL_brands",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID5"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID6"
+      },
+      {
+       "Type": "Page Break"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID7"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "false"
+     }
+    },
+    {
+     "Type": "Standard",
+     "Description": "Detail",
+     "ID": "BL_detail",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID8"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID9"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "true"
+     }
+    },
+    {
+     "Type": "Standard",
+     "Description": "Alternative detail",
+     "ID": "BL_alt",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID12"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "false"
+     }
+    },
+    {
+     "Type": "Standard",
+     "Description": "Close",
+     "ID": "BL_close",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID10"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID11"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "false"
+     }
+    },
+    {
+     "Type": "Trash",
+     "Description": "Trash / Unused Questions",
+     "ID": "BL_trash",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID99"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "FL",
+   "PrimaryAttribute": "Survey Flow",
+   "SecondaryAttribute": null,
+   "TertiaryAttribute": null,
+   "Payload": {
+    "Type": "Root",
+    "FlowID": "FL_1",
+    "Flow": [
+     {
+      "Type": "EmbeddedData",
+      "FlowID": "FL_2",
+      "EmbeddedData": [
+       {
+        "Description": "source",
+        "Type": "Custom",
+        "Field": "source",
+        "VariableType": "String",
+        "DataVisibility": [],
+        "AnalyzeText": false,
+        "Value": ""
+       },
+       {
+        "Description": "panel_id",
+        "Type": "Recipient",
+        "Field": "panel_id",
+        "VariableType": "String",
+        "DataVisibility": [],
+        "AnalyzeText": false
+       },
+       {
+        "Description": "wave",
+        "Type": "Custom",
+        "Field": "wave",
+        "VariableType": "Number",
+        "DataVisibility": [],
+        "AnalyzeText": false,
+        "Value": "3"
+       },
+       {
+        "Description": "age_group",
+        "Type": "Custom",
+        "Field": "age_group",
+        "VariableType": "String",
+        "DataVisibility": [],
+        "AnalyzeText": false,
+        "Value": "${q://QID2/ChoiceGroup/SelectedChoices}"
+       }
+      ]
+     },
+     {
+      "Type": "Block",
+      "ID": "BL_screen",
+      "FlowID": "FL_3"
+     },
+     {
+      "Type": "Branch",
+      "FlowID": "FL_4",
+      "Description": "Screen out: under 18 or no consent",
+      "BranchLogic": {
+       "0": {
+        "0": {
+         "LogicType": "Question",
+         "QuestionID": "QID1",
+         "QuestionIsInLoop": "no",
+         "ChoiceLocator": "q://QID1/SelectableChoice/2",
+         "Operator": "Selected",
+         "QuestionIDFromLocator": "QID1",
+         "LeftOperand": "q://QID1/SelectableChoice/2",
+         "Type": "Expression",
+         "Description": "<span class=\"ConjDesc\">If</span> <span class=\"QuestionDesc\">QID1</span> <span class=\"LeftOpDesc\">2</span> <span class=\"OpDesc\">Is Selected</span>"
+        },
+        "1": {
+         "LogicType": "Question",
+         "QuestionID": "QID2",
+         "QuestionIsInLoop": "no",
+         "ChoiceLocator": "q://QID2/SelectableChoice/1",
+         "Operator": "Selected",
+         "QuestionIDFromLocator": "QID2",
+         "LeftOperand": "q://QID2/SelectableChoice/1",
+         "Type": "Expression",
+         "Description": "Or age Is Selected 1",
+         "Conjuction": "Or"
+        },
+        "Type": "If"
+       },
+       "Type": "BooleanExpression"
+      },
+      "Flow": [
+       {
+        "Type": "EndSurvey",
+        "FlowID": "FL_5",
+        "Options": {
+         "Advanced": "true",
+         "SurveyTermination": "DefaultMessage",
+         "ScreenOutResponse": "true"
+        }
+       }
+      ]
+     },
+     {
+      "Type": "Branch",
+      "FlowID": "FL_6",
+      "Description": "Quota full",
+      "BranchLogic": {
+       "0": {
+        "0": {
+         "LogicType": "Quota",
+         "QuotaID": "QO_north",
+         "Operator": "QuotaMet",
+         "Type": "Expression",
+         "Description": "If Quota North Has Been Met"
+        },
+        "Type": "If"
+       },
+       "Type": "BooleanExpression"
+      },
+      "Flow": [
+       {
+        "Type": "EndSurvey",
+        "FlowID": "FL_7",
+        "Options": {
+         "Advanced": "true",
+         "SurveyTermination": "DefaultMessage",
+         "ScreenOutResponse": "true"
+        }
+       }
+      ]
+     },
+     {
+      "Type": "Block",
+      "ID": "BL_brands",
+      "FlowID": "FL_8"
+     },
+     {
+      "Type": "Randomizer",
+      "FlowID": "FL_9",
+      "SubSet": 1,
+      "EvenPresentation": true,
+      "Flow": [
+       {
+        "Type": "Block",
+        "ID": "BL_detail",
+        "FlowID": "FL_10"
+       },
+       {
+        "Type": "Group",
+        "FlowID": "FL_11",
+        "Description": "Alternative detail",
+        "Flow": [
+         {
+          "Type": "Block",
+          "ID": "BL_alt",
+          "FlowID": "FL_12"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "Type": "Block",
+      "ID": "BL_close",
+      "FlowID": "FL_13"
+     },
+     {
+      "Type": "EndSurvey",
+      "FlowID": "FL_14",
+      "Options": {
+       "Advanced": "true",
+       "SurveyTermination": "Redirect",
+       "EOSRedirectURL": "https://panel.example.com/complete?id=${e://Field/panel_id}"
+      }
+     }
+    ],
+    "Properties": {
+     "Count": 14
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID1",
+   "SecondaryAttribute": "Do you agree to take part in this study?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID1",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Do you agree to take part in this study?",
+    "QuestionText": "Do you agree to take part in this study?",
+    "DataExportTag": "consent",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Yes"
+     },
+     "2": {
+      "Display": "No"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID2",
+   "SecondaryAttribute": "How old are you?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID2",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "How old are you?",
+    "QuestionText": "How old are you?",
+    "DataExportTag": "age",
+    "QuestionType": "MC",
+    "Selector": "DL",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Under 18"
+     },
+     "2": {
+      "Display": "18–24"
+     },
+     "3": {
+      "Display": "25–34"
+     },
+     "4": {
+      "Display": "35–44"
+     },
+     "5": {
+      "Display": "45–54"
+     },
+     "6": {
+      "Display": "55+"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6
+    ],
+    "RecodeValues": {
+     "1": "1",
+     "2": "2",
+     "3": "3",
+     "4": "4",
+     "5": "5",
+     "6": "6"
+    },
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID3",
+   "SecondaryAttribute": "Which region do you live in?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID3",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Which region do you live in?",
+    "QuestionText": "Which region do you live in?",
+    "DataExportTag": "region",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "North"
+     },
+     "2": {
+      "Display": "South"
+     },
+     "3": {
+      "Display": "East"
+     },
+     "4": {
+      "Display": "West"
+     },
+     "5": {
+      "Display": "Other (please specify)",
+      "TextEntry": "true"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4,
+     5
+    ],
+    "RecodeValues": {
+     "1": "10",
+     "2": "20",
+     "3": "30",
+     "4": "40",
+     "5": "99"
+    },
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    },
+    "DefaultChoices": {
+     "1": {
+      "Selected": false
+     },
+     "2": {
+      "Selected": true
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID4",
+   "SecondaryAttribute": "Which of these brands are you aware of?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID4",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Which of these brands are you aware of?",
+    "QuestionText": "Which of these brands are you aware of?",
+    "DataExportTag": "aware",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Alpha"
+     },
+     "2": {
+      "Display": "Beta"
+     },
+     "3": {
+      "Display": "Gamma"
+     },
+     "4": {
+      "Display": "Delta"
+     },
+     "5": {
+      "Display": "Epsilon"
+     },
+     "6": {
+      "Display": "Zeta"
+     },
+     "7": {
+      "Display": "None of these",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7
+    ],
+    "Randomization": {
+     "Type": "Advanced",
+     "Advanced": {
+      "FixedOrder": [
+       "1",
+       "RAND",
+       "7"
+      ],
+      "RandomSubSet": [
+       "2",
+       "3",
+       "4",
+       "5",
+       "6"
+      ],
+      "TotalRandSubset": 4,
+      "Undisplayed": [
+       "6"
+      ]
+     },
+     "TotalRandSubset": "4"
+    },
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "MinChoices",
+      "MinChoices": "1"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID5",
+   "SecondaryAttribute": "Which of the brands you know have you bo",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID5",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Which of the brands you know have you bought?",
+    "QuestionText": "Which of the brands you know have you bought?",
+    "DataExportTag": "bought",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Alpha"
+     },
+     "2": {
+      "Display": "Beta"
+     },
+     "3": {
+      "Display": "Gamma"
+     },
+     "4": {
+      "Display": "Delta"
+     },
+     "5": {
+      "Display": "Epsilon"
+     },
+     "6": {
+      "Display": "Zeta"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6
+    ],
+    "DynamicChoices": {
+     "Locator": "q://QID4/SelectedChoices",
+     "Type": "DisplayedChoices"
+    },
+    "DisplayLogic": {
+     "0": {
+      "0": {
+       "LogicType": "Question",
+       "QuestionID": "QID4",
+       "QuestionIsInLoop": "no",
+       "ChoiceLocator": "q://QID4/SelectedChoicesCount",
+       "Operator": "GreaterThanOrEqual",
+       "QuestionIDFromLocator": "QID4",
+       "LeftOperand": "q://QID4/SelectedChoicesCount",
+       "RightOperand": "2",
+       "Type": "Expression",
+       "Description": "If aware Selected Choices Count Is Greater Than or Equal to 2"
+      },
+      "Type": "If"
+     },
+     "Type": "BooleanExpression",
+     "inPage": false
+    },
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID6",
+   "SecondaryAttribute": "How do you feel about each brand you bou",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID6",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "How do you feel about each brand you bought?",
+    "QuestionText": "How do you feel about each brand you bought?",
+    "DataExportTag": "feel",
+    "QuestionType": "Matrix",
+    "Selector": "Likert",
+    "SubSelector": "SingleAnswer",
+    "Choices": {
+     "1": {
+      "Display": "Alpha"
+     },
+     "2": {
+      "Display": "Beta"
+     },
+     "3": {
+      "Display": "Gamma",
+      "DisplayLogic": {
+       "0": {
+        "0": {
+         "LogicType": "Question",
+         "QuestionID": "QID5",
+         "QuestionIsInLoop": "no",
+         "ChoiceLocator": "q://QID5/SelectableChoice/3",
+         "Operator": "Selected",
+         "QuestionIDFromLocator": "QID5",
+         "LeftOperand": "q://QID5/SelectableChoice/3",
+         "Type": "Expression",
+         "Description": "<span class=\"ConjDesc\">If</span> <span class=\"QuestionDesc\">QID5</span> <span class=\"LeftOpDesc\">3</span> <span class=\"OpDesc\">Is Selected</span>"
+        },
+        "Type": "If"
+       },
+       "Type": "BooleanExpression",
+       "inPage": false
+      }
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Answers": {
+     "1": {
+      "Display": "Dislike"
+     },
+     "2": {
+      "Display": "Neutral"
+     },
+     "3": {
+      "Display": "Like"
+     }
+    },
+    "AnswerOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    },
+    "DisplayLogic": {
+     "0": {
+      "0": {
+       "LogicType": "EmbeddedField",
+       "LeftOperand": "wave",
+       "Operator": "GreaterThan",
+       "RightOperand": "1",
+       "Type": "Expression",
+       "Description": "If wave Is Greater Than 1"
+      },
+      "Type": "If"
+     },
+     "Type": "BooleanExpression",
+     "inPage": false
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID7",
+   "SecondaryAttribute": "Why did you choose ${q://QID5/ChoiceGrou",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID7",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Why did you choose ${q://QID5/ChoiceGroup/SelectedChoices}? ",
+    "QuestionText": "Why did you choose ${q://QID5/ChoiceGroup/SelectedChoices}? (Awareness: ${q://QID4/ChoiceGroup/SelectedChoicesCount} brands)",
+    "DataExportTag": "why",
+    "QuestionType": "TE",
+    "Selector": "ML",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "CharRange",
+      "MinChars": "3",
+      "MaxChars": "500"
+     }
+    },
+    "SkipLogic": [
+     {
+      "SkipLogicID": 1,
+      "ChoiceLocator": "q://QID7/ChoiceTextEntryValue",
+      "Condition": "Empty",
+      "SkipToDestination": "ENDOFBLOCK",
+      "SkipToDestinationType": "EndOfBlock",
+      "Description": "If why Is Empty Then Skip To End of Block"
+     }
+    ]
+   }
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID8",
+   "SecondaryAttribute": "How likely are you to recommend Alpha to",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID8",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "How likely are you to recommend Alpha to a friend?",
+    "QuestionText": "How likely are you to recommend Alpha to a friend?",
+    "DataExportTag": "nps",
+    "QuestionType": "MC",
+    "Selector": "NPS",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "0"
+     },
+     "2": {
+      "Display": "1"
+     },
+     "3": {
+      "Display": "2"
+     },
+     "4": {
+      "Display": "3"
+     },
+     "5": {
+      "Display": "4"
+     },
+     "6": {
+      "Display": "5"
+     },
+     "7": {
+      "Display": "6"
+     },
+     "8": {
+      "Display": "7"
+     },
+     "9": {
+      "Display": "8"
+     },
+     "10": {
+      "Display": "9"
+     },
+     "11": {
+      "Display": "10"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID9",
+   "SecondaryAttribute": "Your email, if we may follow up",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID9",
+    "Language": [],
+    "DataVisibility": {
+     "Private": true,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Your email, if we may follow up",
+    "QuestionText": "Your email, if we may follow up",
+    "DataExportTag": "email",
+    "QuestionType": "TE",
+    "Selector": "SL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "ContentType",
+      "ContentType": "ValidEmail"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID10",
+   "SecondaryAttribute": "Which statements apply to you?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID10",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Which statements apply to you?",
+    "QuestionText": "Which statements apply to you?",
+    "DataExportTag": "apply",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "I buy for my household"
+     },
+     "2": {
+      "Display": "I buy for a business"
+     },
+     "3": {
+      "Display": "Neither",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    },
+    "SkipLogic": [
+     {
+      "SkipLogicID": 2,
+      "ChoiceLocator": "q://QID10/SelectableChoice/3",
+      "Condition": "Selected",
+      "SkipToDestination": "ENDOFSURVEY",
+      "SkipToDestinationType": "EndOfSurvey"
+     },
+     {
+      "SkipLogicID": 3,
+      "ChoiceLocator": "q://QID10/SelectableChoice/2",
+      "Condition": "Selected",
+      "SkipToDestination": "QID42",
+      "SkipToDestinationType": "Question"
+     }
+    ]
+   }
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID11",
+   "SecondaryAttribute": "Thank you. Your region: ${q://QID3/Choic",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID11",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Thank you. Your region: ${q://QID3/ChoiceGroup/SelectedChoic",
+    "QuestionText": "Thank you. Your region: ${q://QID3/ChoiceGroup/SelectedChoices}. Panel: ${e://Field/panel_id}.",
+    "DataExportTag": "thanks",
+    "QuestionType": "DB",
+    "Selector": "TB",
+    "DisplayLogic": {
+     "0": {
+      "0": {
+       "LogicType": "Question",
+       "QuestionID": "QID99",
+       "QuestionIsInLoop": "no",
+       "ChoiceLocator": "q://QID99/SelectableChoice/1",
+       "Operator": "Selected",
+       "QuestionIDFromLocator": "QID99",
+       "LeftOperand": "q://QID99/SelectableChoice/1",
+       "Type": "Expression",
+       "Description": "<span class=\"ConjDesc\">If</span> <span class=\"QuestionDesc\">QID99</span> <span class=\"LeftOpDesc\">1</span> <span class=\"OpDesc\">Is Selected</span>"
+      },
+      "Type": "If"
+     },
+     "Type": "BooleanExpression",
+     "inPage": false
+    },
+    "Validation": {
+     "Settings": {
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID12",
+   "SecondaryAttribute": "How often do you buy from any of these b",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID12",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "How often do you buy from any of these brands?",
+    "QuestionText": "How often do you buy from any of these brands?",
+    "DataExportTag": "freq",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Weekly"
+     },
+     "2": {
+      "Display": "Monthly"
+     },
+     "3": {
+      "Display": "Less often"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID99",
+   "SecondaryAttribute": "Old question",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID99",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Old question",
+    "QuestionText": "Old question",
+    "DataExportTag": "old",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "Choices": {
+     "1": {
+      "Display": "A"
+     }
+    },
+    "ChoiceOrder": [
+     1
+    ]
+   }
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "QO",
+   "PrimaryAttribute": "QO_north",
+   "SecondaryAttribute": "North",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "ID": "QO_north",
+    "Name": "North",
+    "Occurrences": 200,
+    "Logic": {
+     "0": {
+      "0": {
+       "LogicType": "Question",
+       "QuestionID": "QID3",
+       "QuestionIsInLoop": "no",
+       "ChoiceLocator": "q://QID3/SelectableChoice/1",
+       "Operator": "Selected",
+       "QuestionIDFromLocator": "QID3",
+       "LeftOperand": "q://QID3/SelectableChoice/1",
+       "Type": "Expression",
+       "Description": "<span class=\"ConjDesc\">If</span> <span class=\"QuestionDesc\">QID3</span> <span class=\"LeftOpDesc\">1</span> <span class=\"OpDesc\">Is Selected</span>"
+      },
+      "Type": "If"
+     },
+     "Type": "BooleanExpression"
+    },
+    "LogicType": "Simple",
+    "QuotaAction": "EndCurrentSurvey",
+    "QuotaGroupID": "QG_region",
+    "Count": 0
+   }
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "QO",
+   "PrimaryAttribute": "QO_south",
+   "SecondaryAttribute": "South",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "ID": "QO_south",
+    "Name": "South",
+    "Occurrences": 200,
+    "Logic": {
+     "0": {
+      "0": {
+       "LogicType": "Question",
+       "QuestionID": "QID3",
+       "QuestionIsInLoop": "no",
+       "ChoiceLocator": "q://QID3/SelectableChoice/2",
+       "Operator": "Selected",
+       "QuestionIDFromLocator": "QID3",
+       "LeftOperand": "q://QID3/SelectableChoice/2",
+       "Type": "Expression",
+       "Description": "<span class=\"ConjDesc\">If</span> <span class=\"QuestionDesc\">QID3</span> <span class=\"LeftOpDesc\">2</span> <span class=\"OpDesc\">Is Selected</span>"
+      },
+      "Type": "If"
+     },
+     "Type": "BooleanExpression"
+    },
+    "LogicType": "Simple",
+    "QuotaAction": "EndCurrentSurvey",
+    "QuotaGroupID": "QG_region",
+    "Count": 0
+   }
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "QO",
+   "PrimaryAttribute": "QO_young",
+   "SecondaryAttribute": "Young buyers",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "ID": "QO_young",
+    "Name": "Young buyers",
+    "Occurrences": 50,
+    "Logic": {
+     "0": {
+      "0": {
+       "LogicType": "Question",
+       "QuestionID": "QID2",
+       "QuestionIsInLoop": "no",
+       "ChoiceLocator": "q://QID2/SelectableChoice/2",
+       "Operator": "Selected",
+       "QuestionIDFromLocator": "QID2",
+       "LeftOperand": "q://QID2/SelectableChoice/2",
+       "Type": "Expression",
+       "Description": "<span class=\"ConjDesc\">If</span> <span class=\"QuestionDesc\">QID2</span> <span class=\"LeftOpDesc\">2</span> <span class=\"OpDesc\">Is Selected</span>"
+      },
+      "1": {
+       "LogicType": "Question",
+       "QuestionID": "QID5",
+       "QuestionIsInLoop": "no",
+       "ChoiceLocator": "q://QID5/SelectableChoice/1",
+       "Operator": "Selected",
+       "QuestionIDFromLocator": "QID5",
+       "LeftOperand": "q://QID5/SelectableChoice/1",
+       "Type": "Expression",
+       "Description": "<span class=\"ConjDesc\">And</span> <span class=\"QuestionDesc\">QID5</span> <span class=\"LeftOpDesc\">1</span> <span class=\"OpDesc\">Is Selected</span>",
+       "Conjuction": "And"
+      },
+      "Type": "If"
+     },
+     "Type": "BooleanExpression"
+    },
+    "LogicType": "Simple",
+    "QuotaAction": "DoNotRecord",
+    "Count": 0
+   }
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "QG",
+   "PrimaryAttribute": "QG_region",
+   "SecondaryAttribute": "Region",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "ID": "QG_region",
+    "Name": "Region",
+    "Quotas": [
+     "QO_north",
+     "QO_south"
+    ],
+    "Selected": true,
+    "MultipleMatch": "PlaceInAll"
+   }
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "SO",
+   "PrimaryAttribute": "Survey Options",
+   "SecondaryAttribute": null,
+   "TertiaryAttribute": null,
+   "Payload": {
+    "BackButton": "true",
+    "SaveAndContinue": "true",
+    "ProgressBarDisplay": "VerboseText",
+    "Header": "",
+    "Footer": "",
+    "EOSMessage": "",
+    "BallotBoxStuffingPrevention": "true"
+   }
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "PROJ",
+   "PrimaryAttribute": "CORE",
+   "SecondaryAttribute": null,
+   "TertiaryAttribute": "1.1.0",
+   "Payload": {
+    "ProjectCategory": "CORE",
+    "SchemaVersion": "1.1.0"
+   }
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "STAT",
+   "PrimaryAttribute": "Survey Statistics",
+   "SecondaryAttribute": null,
+   "TertiaryAttribute": null,
+   "Payload": {
+    "MobileCompatible": true,
+    "ID": "Survey Statistics"
+   }
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "RS",
+   "PrimaryAttribute": "RS_demo",
+   "SecondaryAttribute": "Default Response Set",
+   "TertiaryAttribute": null,
+   "Payload": null
+  },
+  {
+   "SurveyID": "SV_screener02",
+   "Element": "QC",
+   "PrimaryAttribute": "Survey Question Count",
+   "SecondaryAttribute": "6",
+   "TertiaryAttribute": null,
+   "Payload": null
+  }
+ ]
+}

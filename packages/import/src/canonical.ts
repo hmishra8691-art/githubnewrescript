@@ -30,9 +30,9 @@ export type Confidence = "confirmed" | "high" | "review" | "ambiguous" | "unsupp
 export type CanonicalKind =
   | "single" | "multi" | "dropdown" | "multi_dropdown"
   | "text" | "textarea" | "numeric" | "date" | "time" | "email"
-  | "matrix_single" | "matrix_multi" | "matrix_text" | "matrix_numeric" | "matrix_dropdown"
+  | "matrix_single" | "matrix_multi" | "matrix_text" | "matrix_numeric" | "matrix_dropdown" | "matrix_mixed"
   | "ranking" | "slider" | "constant_sum" | "nps" | "stars"
-  | "descriptive" | "hidden" | "calculated" | "file_upload" | "hotspot" | "conjoint" | "maxdiff"
+  | "descriptive" | "hidden" | "calculated" | "file_upload" | "signature" | "hotspot" | "conjoint" | "maxdiff" | "bucket"
   | "unknown";
 
 export interface CanonicalOption {
@@ -49,6 +49,53 @@ export interface CanonicalOption {
 }
 
 export interface CanonicalRow { sourceId: string; code: string; label: string; displayLogic?: CExpr }
+
+/** a column of a mixed grid (a Qualtrics side-by-side): its own answer type and, for a choice column, its own choices */
+export interface CanonicalColumn { sourceId: string; label: string; responseType: "single" | "multi" | "dropdown" | "text" | "numeric"; options: CanonicalOption[] }
+
+/** choices taken from another question's answer (Qualtrics carry-forward, Decipher `rowsFrom`) */
+export interface CanonicalCarryForward {
+  /** the source question's SOURCE id */
+  questionId: string;
+  filter: "selected" | "notSelected" | "displayed" | "all";
+  /** where the carried items land in this question */
+  into: "options" | "rows";
+}
+
+/**
+ * Option randomization beyond a plain shuffle: which choices keep their
+ * position (anchors, by source id), how many of the random ones are shown,
+ * and which the source never displays at all.
+ */
+export interface CanonicalRandomization {
+  anchorsTop: string[];
+  anchorsBottom: string[];
+  /** show only this many of the randomized choices */
+  pick?: number;
+  /** choices the source keeps in its data map but never shows */
+  undisplayed: string[];
+  /** the source's own words for the scheme, for the report */
+  sourceType: string;
+}
+
+/** an image, video or file the source refers to — carried by reference, never fetched */
+export interface CanonicalAsset {
+  url: string;
+  /** "QID5", "QID5 · option 2", "survey header" */
+  location: string;
+  /** what it is attached to */
+  role: "question_text" | "option_image" | "row_label" | "graphic" | "header" | "other";
+  /** hosted by the source platform (breaks when that account closes) / a library id with no URL / an external host */
+  hosting: "platform" | "library_id" | "external";
+}
+
+/** survey-level options the source carries that Rescript has a home for */
+export interface CanonicalSurveyOptions {
+  backButton?: boolean;
+  progressBar?: "none" | "text" | "verbose";
+  nextLabel?: string;
+  backLabel?: string;
+}
 
 export interface CanonicalValidation {
   kind: "min_value" | "max_value" | "min_length" | "max_length" | "min_selections" | "max_selections" | "integer" | "email" | "phone" | "zip" | "url" | "pattern" | "sum_equals" | "date_min" | "date_max";
@@ -124,11 +171,20 @@ export interface CanonicalQuestion {
   sourceType: string;
   options: CanonicalOption[];
   rows: CanonicalRow[];
+  /** only a mixed grid has these — see CanonicalColumn */
+  columns?: CanonicalColumn[];
   required: boolean;
   validation: CanonicalValidation[];
   displayLogic?: CExpr;
   skips: CanonicalSkip[];
   randomizeOptions?: boolean;
+  /** anchors, subsets and undisplayed choices — present only when the source said more than "shuffle" */
+  randomization?: CanonicalRandomization;
+  carryForward?: CanonicalCarryForward;
+  /** a Rescript variant the adapter knows is the closest fit (a bipolar matrix → matrix.semantic); the mapper uses it when it matches the kind's base type */
+  variantHint?: string;
+  /** translations of this question's text, options and rows: language → key ("text", "instruction", "opt:<sourceId>", "row:<sourceId>") → text */
+  translations?: Record<string, Record<string, string>>;
   settings?: Record<string, unknown>;
   /** a calculated / hidden question's expression, in the source language */
   expression?: string;
@@ -185,6 +241,30 @@ export interface CanonicalQuota {
   group?: { id: string; name: string };
 }
 
+/**
+ * THE SOURCE-FEATURE INVENTORY (QSF brief §5–§6): one line per element the
+ * source carries, saying what became of it. The adapter records the items
+ * it decides alone (an unsupported question type, a flow element with no
+ * equivalent, an asset, a piping token); the mapper records every item it
+ * attempts (a condition, a skip, a quota, a loop) with the outcome it
+ * reached. The report counts these — detected, imported, partial,
+ * unsupported — per feature, so the fidelity it states is measured, not
+ * estimated.
+ */
+export type InventoryFeature =
+  | "question" | "option" | "row" | "validation" | "display_logic" | "option_logic" | "skip_logic" | "branch" | "randomizer"
+  | "block_randomizer" | "loop" | "embedded" | "quota" | "quota_logic" | "carry_forward" | "randomization" | "piping" | "translation"
+  | "asset" | "custom_js" | "flow_element" | "survey_option" | "default_value";
+export type InventoryStatus = "imported" | "partial" | "unsupported";
+export interface InventoryItem {
+  feature: InventoryFeature;
+  /** the source id or location: "QID5", "QID5 · option 2", "FL_4", "${rand://int/1:10}" */
+  sourceId: string;
+  status: InventoryStatus;
+  /** what was lost or changed when it is not "imported" */
+  note?: string;
+}
+
 export interface Issue {
   /** where: "QID15", "QID15 · display logic", "Flow · Branch FL_4", "row 12 of Sheet1" */
   location: string;
@@ -218,6 +298,15 @@ export interface CanonicalSurvey {
   /** flow-level custom code (Decipher top-level exec, Qualtrics survey-level JS) */
   custom: CanonicalCustom[];
   issues: Issue[];
+  /** images and files referred to, by reference — see CanonicalAsset */
+  assets?: CanonicalAsset[];
+  /** the languages the source carries translations for, beside `source.language` */
+  languages?: string[];
+  options?: CanonicalSurveyOptions;
+  /** what the adapter decided on its own — see InventoryItem; the mapper adds the rest */
+  inventory?: InventoryItem[];
+  /** the source's own element kinds and how many of each were seen, read or not — the file's table of contents */
+  elements?: { type: string; count: number; handled: "read" | "ignored" | "unsupported"; note?: string }[];
 }
 
 /** FNV-1a over the bytes, base36 — a fingerprint, not a security hash */

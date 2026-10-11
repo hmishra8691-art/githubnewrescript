@@ -1557,6 +1557,19 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .iqi-map-scroll { max-height: 320px; overflow: auto; }
 .iqi-map-scroll .iqi-table { max-width: none; }
 .iqi-badges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+/* the measured fidelity line (QSF brief §7): a three-colour bar and the sentence under it */
+.iqi-fidelity { display: flex; flex-direction: column; gap: 4px; max-width: 520px; }
+.iqi-fid-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--c-border); }
+.iqi-fid-bar span { display: block; height: 100%; }
+.iqi-fid-bar .imported { background: var(--green, #2e9e5b); }
+.iqi-fid-bar .partial { background: var(--amber, #d9a21b); }
+.iqi-fid-bar .unsupported { background: var(--red, #d24c3c); }
+.iqi-fid-line { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12.5px; }
+.iqi-fid-warn { color: var(--red, #d24c3c); }
+.iqi-fid-verify.warn { color: var(--amber, #d9a21b); }
+.iqi-fid-detail section { margin-top: 10px; }
+.iqi-fid-detail ul { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.iqi-fid-detail li { font-size: 12.5px; }
 .iqi-badge { font-family: var(--mono); font-size: 10.5px; letter-spacing: .04em; text-transform: uppercase; border: 1px solid var(--c-border); border-radius: 999px; padding: 2px 8px; color: var(--c-text-2); }
 .iqi-badge.c-confirmed, .iqi-badge.c-high { color: var(--c-success-fg); border-color: var(--c-success); }
 .iqi-badge.c-review, .iqi-badge.r-medium { color: var(--c-warning-fg); border-color: var(--c-warning); }

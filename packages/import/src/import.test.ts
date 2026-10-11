@@ -52,7 +52,7 @@ test("QSF: identity is preserved — QIDs, export tags, recodes, block ids", asy
   const r = await readSource(qsfBytes(), "Customer_Satisfaction.qsf");
   const c = r.canonical!;
   assert.equal(c.source.title, "Customer Satisfaction 2026");
-  assert.deepEqual(c.questions.map((q) => q.sourceId), ["QID1", "QID2", "QID3", "QID4", "QID5", "QID6", "QID7", "QID8", "QID9", "QID10"], "the trash is not read");
+  assert.deepEqual(c.questions.map((q) => q.sourceId), ["QID1", "QID2", "QID3", "QID4", "QID5", "QID6", "QID7", "QID8", "QID9", "QID10", "QID11"], "the trash is not read");
   const m = mapCanonical(c, { surveyId: "s1", uid, now: "2026-09-27T00:00:00Z" });
   assert.ok(m.def, JSON.stringify(m.issues.filter((i) => i.severity === "high").slice(0, 3)));
   const def = m.def!;
@@ -129,16 +129,17 @@ test("QSF: risks are explicit — JavaScript, unsupported types and flow element
   assert.ok(js, "real JavaScript is a high risk");
   assert.deepEqual(js!.refs?.includes("Country"), true, "with the fields it reads");
   assert.ok(!rep.risks.high.some((i) => /QID5 · JavaScript/.test(i.location)), "the empty template on QID5 is not flagged");
-  assert.ok(rep.risks.high.some((i) => /Signature|Draw/.test(i.message)), "an unsupported question type is high risk");
-  assert.ok(find(a.result!.def!, "QID10").text.includes("Not migrated"), "…and a placeholder keeps its position");
+  assert.ok(rep.risks.high.some((i) => /Captcha/.test(i.message)), "an unsupported question type is high risk");
+  assert.ok(find(a.result!.def!, "QID11").text.includes("Not migrated"), "…and a placeholder keeps its position");
+  assert.equal(find(a.result!.def!, "QID10").variant, "upload.signature", "a Qualtrics signature is a signature here");
   assert.ok(rep.risks.high.some((i) => /WebService/.test(i.message)));
   assert.ok(rep.review.length >= 3);
   for (const i of [...rep.risks.high, ...rep.risks.medium]) { assert.ok(i.location && i.type && i.message, JSON.stringify(i)); assert.equal(typeof i.autoAttempted, "boolean"); }
-  assert.equal(rep.detected.questions, 9, "QID1–QID10 less the descriptive QID9 — the trash excluded");
+  assert.equal(rep.detected.questions, 10, "QID1–QID11 less the descriptive QID9 — the trash excluded");
   assert.equal(rep.detected.loops, 1); assert.equal(rep.detected.quotas, 1); assert.equal(rep.detected.embeddedFields, 2);
   assert.match(rep.summary[0], /imported your Qualtrics survey \(QSF\)/);
   assert.ok(rep.audit.some((l) => /^Detected Qualtrics/.test(l)) && rep.audit.some((l) => /^Validation completed/.test(l)));
-  assert.equal(a.workload!.questions, 9);
+  assert.equal(a.workload!.questions, 10);
   assert.ok(a.workload!.aiRequests >= 1);
 });
 

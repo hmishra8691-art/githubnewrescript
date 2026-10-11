@@ -20,7 +20,7 @@ export function qsfFixture(): Record<string, unknown> {
         { Type: "Default", Description: "Screener", ID: "BL_screen", BlockElements: [{ Type: "Question", QuestionID: "QID1" }, { Type: "Question", QuestionID: "QID2" }, { Type: "Page Break" }, { Type: "Question", QuestionID: "QID3" }], Options: { BlockLocking: "false", RandomizeQuestions: "false" } },
         { Type: "Standard", Description: "Products", ID: "BL_products", BlockElements: [{ Type: "Question", QuestionID: "QID4" }, { Type: "Question", QuestionID: "QID5" }, { Type: "Question", QuestionID: "QID6" }], Options: {} },
         { Type: "Standard", Description: "Per product", ID: "BL_loop", BlockElements: [{ Type: "Question", QuestionID: "QID7" }], Options: { Looping: "Question", LoopingOptions: { QID: "QID4", ChoiceLocator: "q://QID4/ChoiceGroup/SelectedChoices", Randomization: "None" } } },
-        { Type: "Standard", Description: "Wrap up", ID: "BL_end", BlockElements: [{ Type: "Question", QuestionID: "QID8" }, { Type: "Question", QuestionID: "QID9" }, { Type: "Question", QuestionID: "QID10" }], Options: {} },
+        { Type: "Standard", Description: "Wrap up", ID: "BL_end", BlockElements: [{ Type: "Question", QuestionID: "QID8" }, { Type: "Question", QuestionID: "QID9" }, { Type: "Question", QuestionID: "QID10" }, { Type: "Question", QuestionID: "QID11" }], Options: {} },
         { Type: "Trash", Description: "Trash / Unused Questions", ID: "BL_trash", BlockElements: [{ Type: "Question", QuestionID: "QID99" }] },
       ] },
       { SurveyID: "SV_demo", Element: "FL", PrimaryAttribute: "Survey Flow", Payload: { Type: "Root", FlowID: "FL_1", Flow: [
@@ -49,7 +49,8 @@ export function qsfFixture(): Record<string, unknown> {
         QuestionJS: "Qualtrics.SurveyEngine.addOnload(function(){ var c = \"${e://Field/Country}\"; if (c == 'India') { this.hideNextButton(); } Qualtrics.SurveyEngine.setEmbeddedData('Seen8', '1'); });",
         DisplayLogic: { 0: { 0: { LogicType: "GeoIP", Operator: "Selected", Type: "Expression", Description: "If location is India" }, Type: "If" }, Type: "BooleanExpression" } }),
       q("QID9", { QuestionText: "Thank you!", DataExportTag: "Q9", QuestionType: "DB", Selector: "TB" }),
-      q("QID10", { QuestionText: "Rate us", DataExportTag: "Q10", QuestionType: "Draw", Selector: "Signature" }),
+      q("QID10", { QuestionText: "Please sign below", DataExportTag: "Q10", QuestionType: "Draw", Selector: "Signature" }),
+      q("QID11", { QuestionText: "Prove you are human", DataExportTag: "Q11", QuestionType: "Captcha", Selector: "V2" }),
       q("QID99", { QuestionText: "Old question", DataExportTag: "Old", QuestionType: "MC", Selector: "SAVR", Choices: { 1: { Display: "A" } }, ChoiceOrder: [1] }),
       { SurveyID: "SV_demo", Element: "QO", PrimaryAttribute: "QO_1", Payload: { ID: "QO_1", Name: "North region", Occurrences: 100, Logic: { 0: { 0: selected("QID3", "1"), Type: "If" }, Type: "BooleanExpression" }, LogicType: "Simple", QuotaAction: "EndCurrentSurvey" } },
       { SurveyID: "SV_demo", Element: "SO", PrimaryAttribute: "Survey Options", Payload: { BackButton: "false", Header: "" } },
