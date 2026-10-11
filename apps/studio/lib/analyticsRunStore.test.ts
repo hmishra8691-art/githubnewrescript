@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { insertRun, runFromRow, missingColumn, type CompactRun, type RunInsertDb } from "./analyticsRunStore.ts";
+import { insertRun, pickPrevious, runFromRow, missingColumn, type CompactRun, type RunInsertDb } from "./analyticsRunStore.ts";
 
 /*
  * STORING A RUN WITH ITS PHASE 4 FIELDS: the corrections, the data advice
@@ -37,11 +37,22 @@ test("the run is inserted with its corrections, advice and discoveries; the stor
   assert.equal(r.withoutExtras, undefined);
 });
 
-test("a database without the Phase 4 columns: the insert is retried without them, and the run still carries what was computed", async () => {
-  const { db, inserts } = stub([{ error: { message: "Could not find the 'corrections' column of 'analytics_runs' in the schema cache" } }, { data: {} }]);
-  const r = await insertRun(db, "s1", compact(), { environment: "LIVE", dataset: "clean" }, { surveyVersion: null, userId: null });
+test("a database without the Phase 8 columns: the insert is retried without them, with the Phase 4 ones", async () => {
+  const { db, inserts } = stub([{ error: { message: "Could not find the 'kpis' column of 'analytics_runs' in the schema cache" } }, { data: {} }]);
+  const r = await insertRun(db, "s1", { ...compact(), kpis: [{ name: "K", measure: "mean", value: 3.2, n: 40 }] }, { environment: "LIVE", dataset: "clean" }, { surveyVersion: null, userId: null });
   assert.equal(inserts.length, 2, "tried twice");
-  assert.ok("corrections" in inserts[0] && !("corrections" in inserts[1]), "the second insert has no Phase 4 columns");
+  assert.ok("kpis" in inserts[0] && "since" in inserts[0] && "corrections" in inserts[0], "the first insert sends everything");
+  assert.ok(!("kpis" in inserts[1]) && "corrections" in inserts[1], "the second insert drops the Phase 8 columns and keeps the Phase 4 ones");
+  assert.ok(r.stored);
+  assert.equal(r.withoutExtras, undefined);
+  assert.deepEqual(r.stored!.kpis, [{ name: "K", measure: "mean", value: 3.2, n: 40 }], "the Studio still shows what it computed");
+});
+
+test("a database without the Phase 4 columns: the insert is retried without them, and the run still carries what was computed", async () => {
+  const { db, inserts } = stub([{ error: { message: "Could not find the 'kpis' column of 'analytics_runs' in the schema cache" } }, { error: { message: "Could not find the 'corrections' column of 'analytics_runs' in the schema cache" } }, { data: {} }]);
+  const r = await insertRun(db, "s1", compact(), { environment: "LIVE", dataset: "clean" }, { surveyVersion: null, userId: null });
+  assert.equal(inserts.length, 3, "tried three times: with everything, without Phase 8, bare");
+  assert.ok("corrections" in inserts[0] && "corrections" in inserts[1] && !("corrections" in inserts[2]), "the last insert has no Phase 4 columns");
   assert.ok(r.stored);
   assert.equal(r.withoutExtras, true);
   assert.equal(r.stored!.corrections?.method, "holm", "the Studio still shows what it computed");
@@ -64,4 +75,17 @@ test("a stored row is read back with the Phase 4 columns when it has them, and w
   assert.equal(fresh.corrections?.method, "bh");
   assert.equal(fresh.discoveries?.summary, "x");
   assert.equal(fresh.advice, undefined, "null stays absent");
+});
+
+test("the previous run is the latest before this one on the same dataset kind — a clean run is not compared with an 'all' run (Phase 8)", () => {
+  const row = (id: string, at: string, dataset: string | null, extra: Record<string, unknown> = {}) => ({ id, computed_at: at, trigger: "manual", environment: "LIVE", n: 100, items: [], findings: [], verdicts: [], warnings: [], dataset: dataset ? { environment: "LIVE", dataset } : null, ...extra });
+  const rows = [row("r3", "2026-10-03T00:00:00Z", "all"), row("r2", "2026-10-02T00:00:00Z", "clean", { kpis: [{ name: "K", measure: "mean", value: 1, n: 50 }], since: { summary: "s" } }), row("r1", "2026-10-01T00:00:00Z", "clean")];
+  assert.equal(pickPrevious(rows, "clean")!.id, "r2", "the newest clean run, not the newer 'all' run");
+  assert.equal(pickPrevious(rows, "all")!.id, "r3");
+  assert.equal(pickPrevious(rows, "custom"), null);
+  assert.equal(pickPrevious([], "clean"), null);
+  const prev = pickPrevious(rows, "clean")!;
+  assert.deepEqual(prev.kpis, [{ name: "K", measure: "mean", value: 1, n: 50 }], "the stored KPI snapshot comes back with the run");
+  assert.deepEqual(prev.since, { summary: "s" });
+  assert.equal(pickPrevious([row("r0", "2026-09-01T00:00:00Z", null)], "all")!.id, "r0", "a run stored without a dataset spec counts as 'all'");
 });

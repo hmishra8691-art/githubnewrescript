@@ -492,6 +492,14 @@ function researchItems(t: Tree, before: SurveyDefinition, after: SurveyDefinitio
     ["analysis", (d) => (d.research?.analysis ?? []).map((x) => plain(x, 80)).join("; ")],
     ["assumptions", (d) => (d.research?.assumptions ?? []).map((x) => plain(x, 80)).join("; ")],
     ["sources", (d) => (d.research?.sources ?? []).join("; ")],
+    /* Phase 8: the brief, field by field, so "the client is Acme" reads as the client and nothing else */
+    ["client", (d) => plain(d.research?.brief?.client, 120)],
+    ["business question", (d) => plain(d.research?.brief?.businessQuestion, 200)],
+    ["decision", (d) => plain(d.research?.brief?.decision, 200)],
+    ["background", (d) => plain(d.research?.brief?.background, 200)],
+    ["stakeholders", (d) => (d.research?.brief?.stakeholders ?? []).join("; ")],
+    ["deadline", (d) => plain(d.research?.brief?.deadline, 80)],
+    ["deliverables", (d) => (d.research?.brief?.deliverables ?? []).join("; ")],
   ];
   for (const [name, read] of fields) {
     const from = read(before), to = read(after);

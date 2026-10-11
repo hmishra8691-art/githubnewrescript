@@ -1747,6 +1747,19 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .cp-op-status.s-save_failed, .cp-op-status.s-failed, .cp-op-status.s-refused { color: var(--c-error-fg); border-color: var(--c-error); background: var(--c-error-bg); }
 .cp-op-status.s-proposed, .cp-op-status.s-clarify { color: var(--c-warning-fg); border-color: var(--c-warning); background: var(--c-warning-bg); }
 .cp-op-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+/* the KPIs and the waves in Findings (Phase 8) */
+.fd-kpi-table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 4px 0; }
+.fd-kpi-table th, .fd-kpi-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line, #e3e6ea); }
+.fd-delta.better { color: var(--ok, #1a7f37); }
+.fd-delta.worse { color: var(--danger, #b42318); }
+.fd-since-list { margin: 4px 0 0 16px; padding: 0; font-size: 12px; }
+.fd-since-list li { margin: 2px 0; }
+/* the project's language (Phase 8): the corpus summary and the backlog, folded above the history */
+.cp-language { margin: 0 0 8px; padding: 6px 8px; border: 1px solid var(--line, #e3e6ea); border-radius: 8px; font-size: 12px; background: var(--panel-2, #fafbfc); }
+.cp-language > summary { cursor: pointer; display: flex; gap: 6px; align-items: center; }
+.cp-language-backlog { margin: 6px 0; }
+.cp-language-backlog ul { margin: 4px 0 0 16px; padding: 0; }
+.cp-language-backlog li { margin: 2px 0; }
 .cp-op-detail { display: grid; grid-template-columns: minmax(70px, max-content) minmax(0, 1fr); gap: 3px 10px; margin: 4px 0 0; font-size: 12px; }
 .cp-op-detail dt { color: var(--c-text-3); font-size: 11px; }
 .cp-op-detail dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }

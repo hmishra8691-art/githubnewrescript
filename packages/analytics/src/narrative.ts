@@ -1,4 +1,5 @@
 import type { AnalysisRun } from "./findings.js";
+import { waveNumbers } from "./waves.js";
 import type { NarrativeSections } from "./deck.js";
 
 /**
@@ -18,7 +19,7 @@ export interface NarrativeCandidate { headline?: unknown; summary?: unknown; imp
 export interface NarrativeRejection { section: keyof NarrativeSections; text: string; reason: string }
 export interface GatedNarrative { accepted: NarrativeSections; rejected: NarrativeRejection[]; /** how many sentences were offered and how many kept */ offered: number; kept: number }
 
-type RunForGate = Pick<AnalysisRun, "n" | "findings" | "verdicts" | "warnings"> & { corrections?: AnalysisRun["corrections"]; discoveries?: AnalysisRun["discoveries"]; advice?: AnalysisRun["advice"] };
+type RunForGate = Pick<AnalysisRun, "n" | "findings" | "verdicts" | "warnings"> & { corrections?: AnalysisRun["corrections"]; discoveries?: AnalysisRun["discoveries"]; advice?: AnalysisRun["advice"]; kpis?: AnalysisRun["kpis"]; since?: AnalysisRun["since"] };
 
 const NUM = /-?\d+(?:[.,]\d+)?%?/g;
 /** a number as the gate compares it: "3.86" → "3.86", "3.9" → "3.9", "26.6%" → "26.6", ".021" → "0.021", "1,200" → "1200" */
@@ -48,6 +49,9 @@ export function runNumbers(run: RunForGate): Set<string> {
   for (const f of [...(run.discoveries?.segments ?? []), ...(run.discoveries?.trends ?? []), ...(run.discoveries?.anomalies ?? [])]) { addText(f.headline); add(f.evidence.n); add(f.evidence.effect?.value); for (const g of f.evidence.groups ?? []) { add(g.mean); add(g.n); } }
   addText(run.discoveries?.summary);
   for (const a of run.advice ?? []) addText(a.summary);
+  /* Phase 8: the KPIs and what moved since the last wave are the run's numbers too */
+  for (const k of run.kpis ?? []) { add(k.value); add(k.n); addText(k.target); }
+  if (run.since) { for (const x of waveNumbers(run.since)) add(x); addText(run.since.summary); for (const k of run.since.kpis) add(k.p); }
   return out;
 }
 

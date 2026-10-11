@@ -107,7 +107,7 @@ export type PanelTab = "changes" | "review" | "research" | "history" | "analysis
 /** what the workflow route told the Studio (Phase 6): the execution mode, the model, the cost of each model step, whether fieldwork data exists */
 export type WorkflowInfo = Omit<WorkflowResponse, "workflow">;
 /** the stored analysis run, as the analytics route returns it (results are not stored — only findings, verdicts and each item's chart) */
-export type StoredRunBrief = Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger" | "corrections" | "advice" | "discoveries"> & { id?: string; items?: { definition: { name: string; kind: string; options?: Record<string, unknown> }; chart?: string; hypotheses: string[] }[] };
+export type StoredRunBrief = Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger" | "corrections" | "advice" | "discoveries" | "kpis" | "since"> & { id?: string; items?: { definition: { name: string; kind: string; options?: Record<string, unknown> }; chart?: string; hypotheses: string[] }[] };
 
 interface Session {
   proposal: Proposal | null;
@@ -451,11 +451,13 @@ export function useCopilot(opts: {
   const [cloudOnce, setCloudOnceState] = React.useState(false);
   const setCloudOnce = React.useCallback((v: boolean) => { cloudOnceRef.current = v; setCloudOnceState(v); }, []);
 
-  const run = React.useCallback(async (id: string, text: string, mode: "review" | "generate" | undefined, extra: Record<string, unknown>): Promise<"handled" | "unavailable" | "empty"> => {
+  const run = React.useCallback(async (id: string, text: string, mode: "review" | "generate" | undefined, extra: Record<string, unknown>, handoff?: EngineHandoff): Promise<"handled" | "unavailable" | "empty"> => {
+    /* what the engine read before handing the sentence on, and the selection it was read with — kept on every model record so the language corpus (Phase 8) can replay the sentence */
+    const read: OpIntent = { engine: "model", ...(handoff ? { engineCategory: handoff.category ?? null, engineReason: handoff.reason.slice(0, 200) } : {}), ...(opts.selectedId ? { selected: opts.selectedId } : {}) };
     /* internal mode: the call is not made, the card says why and where the switch is, the history records a turn that cost nothing */
     if (executionMode === "internal" && !cloudOnceRef.current) {
       const failure = describeFailure("internal_mode");
-      opts.patch(id, { status: "failed", error: failure.message, failure, opKey: recordOp({ prompt: text, source: "model", status: "failed", intent: { mode: mode ?? "", execution: "internal" }, statusDetail: `${failure.title}: ${failure.message}`, apiCalls: [] }) });
+      opts.patch(id, { status: "failed", error: failure.message, failure, opKey: recordOp({ prompt: text, source: "model", status: "failed", intent: { ...read, mode: mode ?? "", execution: "internal" }, statusDetail: `${failure.title}: ${failure.message}`, apiCalls: [] }) });
       return "unavailable";
     }
     if (cloudOnceRef.current) { cloudOnceRef.current = false; setCloudOnceState(false); }
@@ -474,7 +476,7 @@ export function useCopilot(opts: {
         const ctx = (d?.context ?? {}) as { mode?: string; cached?: boolean; promptChars?: number };
         return { route: "/api/copilot/turn", mode: ctx.mode ?? mode ?? "", charge: Number((d?.usage as { charge?: number } | undefined)?.charge) || 0, ...(typeof ctx.cached === "boolean" ? { cached: ctx.cached } : {}), ...(typeof ctx.promptChars === "number" ? { promptChars: ctx.promptChars } : {}), ...(error ? { error } : {}) };
       };
-      const failedTurn = (d: Record<string, unknown> | null, error: string) => opts.patch(id, { opKey: recordOp({ prompt: text, source: "model", status: "failed", intent: { mode: mode ?? "" }, statusDetail: error, apiCalls: [call(d, error)] }) });
+      const failedTurn = (d: Record<string, unknown> | null, error: string) => opts.patch(id, { opKey: recordOp({ prompt: text, source: "model", status: "failed", intent: { ...read, mode: mode ?? "" }, statusDetail: error, apiCalls: [call(d, error)] }) });
       /*
        * A FAILED TURN SAYS WHY (Phase 1). The route names the cause — not
        * configured, the wallet, a timeout, a refusal, an answer cut off or in
@@ -499,7 +501,7 @@ export function useCopilot(opts: {
       if (d.stage === "plan" && d.plan) {
         // the change plan: read and approved before anything is built
         const plan = d.plan as ChangePlan;
-        opts.patch(id, { status: "plan", changePlan: plan, usage: d.usage as { charge: number }, context: d.context as CopilotEntry["context"], opKey: recordOp({ prompt: text, source: "model", status: "clarify", intent: { mode: String((d.context as { mode?: string } | undefined)?.mode ?? mode ?? ""), kind: "plan" }, statusDetail: `Change plan: ${plan.items.map((i) => i.title).join("; ")}`.slice(0, 2000), apiCalls: [call(d)] }) });
+        opts.patch(id, { status: "plan", changePlan: plan, usage: d.usage as { charge: number }, context: d.context as CopilotEntry["context"], opKey: recordOp({ prompt: text, source: "model", status: "clarify", intent: { ...read, mode: String((d.context as { mode?: string } | undefined)?.mode ?? mode ?? ""), kind: "plan" }, statusDetail: `Change plan: ${plan.items.map((i) => i.title).join("; ")}`.slice(0, 2000), apiCalls: [call(d)] }) });
         return "handled";
       }
       const reply = d.reply as CopilotReply | null;
@@ -508,7 +510,7 @@ export function useCopilot(opts: {
         if (review) {
           // the model had nothing, the engine's own review stands: shown as the answer
           const message = String(d.message ?? "No answer.");
-          opts.patch(id, { status: "empty", message, usage: d.usage as { charge: number }, review, opKey: recordOp({ prompt: text, source: "model", status: "answered", intent: { mode: String((d.context as { mode?: string } | undefined)?.mode ?? mode ?? ""), kind: "empty" }, statusDetail: message, apiCalls: [call(d)] }) });
+          opts.patch(id, { status: "empty", message, usage: d.usage as { charge: number }, review, opKey: recordOp({ prompt: text, source: "model", status: "answered", intent: { ...read, mode: String((d.context as { mode?: string } | undefined)?.mode ?? mode ?? ""), kind: "empty" }, statusDetail: message, apiCalls: [call(d)] }) });
           setSession((x) => ({ ...x, review: { rules: review, ai: [], at: new Date().toISOString(), running: false }, tab: "review" }));
           return "handled";
         }
@@ -523,7 +525,7 @@ export function useCopilot(opts: {
         const built = d.plan as ChangePlan;
         patch.changePlan = { ...built, approved: built.items.map((i) => i.id), ...(Array.isArray(d.planFailures) ? { failures: d.planFailures as { id: string; failure: TurnFailure }[] } : {}) };
       }
-      const intent: OpIntent = { mode: String((d.context as { mode?: string } | undefined)?.mode ?? mode ?? ""), kind: reply.kind };
+      const intent: OpIntent = { ...read, mode: String((d.context as { mode?: string } | undefined)?.mode ?? mode ?? ""), kind: reply.kind };
       const failed = reply.rejected.map((x) => ({ description: "an action the model wrote", reason: x.reason ?? "not in a shape the Studio accepts" }));
       if (reply.actions.length) patch.opKey = recordProposal(text, reply.actions, { source: "model", intent, apiCalls: [call(d)], warnings: failed.map((f) => `Dropped: ${f.reason}`) }, session.openOp);
       else patch.opKey = recordOp({ prompt: text, source: "model", status: reply.kind === "clarify" ? "clarify" : "answered", intent, apiCalls: [call(d)], failed, statusDetail: reply.reply.slice(0, 2000) });
@@ -542,7 +544,7 @@ export function useCopilot(opts: {
       return "handled";
     } catch (e) {
       const error = (e as Error).message;
-      opts.patch(id, { status: "failed", error, opKey: recordOp({ prompt: text, source: "model", status: "failed", intent: { mode: mode ?? "" }, statusDetail: error, apiCalls: [{ route: "/api/copilot/turn", mode: mode ?? "", charge: 0, error }] }) });
+      opts.patch(id, { status: "failed", error, opKey: recordOp({ prompt: text, source: "model", status: "failed", intent: { ...read, mode: mode ?? "" }, statusDetail: error, apiCalls: [{ route: "/api/copilot/turn", mode: mode ?? "", charge: 0, error }] }) });
       return "handled";
     } finally {
       setBusy(false);
@@ -552,7 +554,7 @@ export function useCopilot(opts: {
   const ask = React.useCallback(async (text: string, heard?: HeardTranscript, mode?: "review" | "generate", handoff?: EngineHandoff): Promise<"handled" | "unavailable" | "empty"> => {
     const id = uid("copilot");
     opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), ...(handoff ? { handoff } : {}), status: "thinking" });
-    return run(id, text, mode, {});
+    return run(id, text, mode, {}, handoff);
   }, [opts, run]);
 
   /** the approved items of a change plan, built one call each into one proposal on the same card */
@@ -596,7 +598,7 @@ export function useCopilot(opts: {
       ...(it.kind === "actions" && it.warnings?.length ? { warnings: it.warnings } : {}),
     };
     /* recorded: an engine reading costs nothing, and the history says so (no model calls) */
-    const intent: OpIntent = { category: it.category ?? null, kind: it.kind, ...(workflowStep ? { workflow: workflowStep } : {}) };
+    const intent: OpIntent = { category: it.category ?? null, kind: it.kind, engine: it.kind, ...(it.kind === "actions" ? { ops: it.actions.map((a) => a.op).join(",").slice(0, 500) } : {}), ...(opts.selectedId ? { selected: opts.selectedId } : {}), ...(workflowStep ? { workflow: workflowStep } : {}) };
     const opKey = actions.length
       ? recordProposal(text, actions, { source: "engine", intent, detected: it.detected, targets: it.kind === "actions" ? it.targets : [], warnings: it.kind === "actions" ? it.warnings : undefined }, session.openOp)
       : recordOp({ prompt: text, source: "engine", status: it.kind === "answer" ? "answered" : it.kind === "clarify" ? "clarify" : "refused", intent, detected: it.detected, statusDetail: (it.kind === "answer" ? it.answer : it.kind === "clarify" ? it.question : it.kind === "refused" ? it.reason : it.understood).slice(0, 2000), ...(it.kind === "refused" && it.suggestion?.actions?.length ? { proposed: proposedOf(it.suggestion.actions) } : {}) });
@@ -629,7 +631,7 @@ export function useCopilot(opts: {
     opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "thinking", reply: { kind: "answer", reply: it.understood, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] }, engine });
     setBusy(true);
     const fail = (message: string) => {
-      opts.patch(id, { status: "ready", reply: { kind: "answer", reply: message, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] }, engine: { ...engine, kind: "refused", refusal: message }, opKey: recordOp({ prompt: text, source: "engine", status: "refused", intent: { category: it.category, kind: "query" }, detected: it.detected, statusDetail: message.slice(0, 2000) }) });
+      opts.patch(id, { status: "ready", reply: { kind: "answer", reply: message, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] }, engine: { ...engine, kind: "refused", refusal: message }, opKey: recordOp({ prompt: text, source: "engine", status: "refused", intent: { category: it.category, kind: "query", engine: "query", ...(opts.selectedId ? { selected: opts.selectedId } : {}) }, detected: it.detected, statusDetail: message.slice(0, 2000) }) });
     };
     try {
       const sandbox = s.surveyDbId === "sandbox";
@@ -643,7 +645,7 @@ export function useCopilot(opts: {
       const pair = [it.query.variable, ...(it.query.by ?? [])];
       const fromRun = analysisRun?.findings.find((f) => f.variables.length >= 1 && pair.every((v) => f.variables.includes(v)) && (pair.length === 1 || f.variables.length === pair.length));
       const data: CopilotEntry["data"] = { n: a.n, environment: d.environment ?? "LIVE", dataset: d.dataset ?? "clean", source: d.source ?? "data", ...(a.evidence ? { evidence: a.evidence } : {}), caveats: a.caveats, ...(fromRun ? { fromRun: `${fromRun.headline} (run of ${analysisRun!.computedAt.slice(0, 10)})` } : {}) };
-      opts.patch(id, { status: "ready", data, reply: { kind: "answer", reply: a.text, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] }, engine: { ...engine, kind: "answer", sections: a.sections }, opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "query" }, detected: it.detected, statusDetail: a.text.slice(0, 2000), apiCalls: [{ route: "/api/copilot/ask", mode: "data", charge: 0 }] }) });
+      opts.patch(id, { status: "ready", data, reply: { kind: "answer", reply: a.text, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] }, engine: { ...engine, kind: "answer", sections: a.sections }, opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "query", engine: "query", ...(opts.selectedId ? { selected: opts.selectedId } : {}) }, detected: it.detected, statusDetail: a.text.slice(0, 2000), apiCalls: [{ route: "/api/copilot/ask", mode: "data", charge: 0 }] }) });
     } catch (e) {
       fail(`The data could not be read: ${(e as Error).message || "the network request failed"}.`);
     } finally { setBusy(false); }
@@ -663,7 +665,7 @@ export function useCopilot(opts: {
     const reply = (r: string): CopilotReply => ({ kind: "answer", reply: r, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] });
     opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "thinking", reply: reply(it.understood), engine });
     setBusy(true);
-    const fail = (message: string) => opts.patch(id, { status: "ready", reply: reply(message), engine: { ...engine, kind: "refused", refusal: message }, opKey: recordOp({ prompt: text, source: "engine", status: "refused", intent: { category: it.category, kind: "output" }, detected: it.detected, statusDetail: message.slice(0, 2000) }) });
+    const fail = (message: string) => opts.patch(id, { status: "ready", reply: reply(message), engine: { ...engine, kind: "refused", refusal: message }, opKey: recordOp({ prompt: text, source: "engine", status: "refused", intent: { category: it.category, kind: "output", engine: "output" }, detected: it.detected, statusDetail: message.slice(0, 2000) }) });
     try {
       const sandbox = s.surveyDbId === "sandbox";
       const rows = sandbox ? rowsRef.current : null;
@@ -678,7 +680,7 @@ export function useCopilot(opts: {
       const url = URL.createObjectURL(blob);
       const output: NonNullable<CopilotEntry["output"]> = { name, size: blob.size, url, kind: name.endsWith(".pptx") ? "pptx" : "docx", summary, ...(narrative ? { narrative } : {}) };
       const said = `${it.output.words[0].toUpperCase()}${it.output.words.slice(1)} is ready: ${name} (${Math.round(blob.size / 1024)} KB). ${summary}${narrative ? ` Narrative gate: ${narrative}.` : ""}`;
-      opts.patch(id, { status: "ready", output, reply: reply(said), engine: { ...engine, kind: "answer" }, opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "output", ...(workflowStep ? { workflow: workflowStep } : {}) }, detected: it.detected, statusDetail: said.slice(0, 2000), apiCalls: [{ route: "/api/copilot/output", mode: it.output.type, charge: 0 }] }) });
+      opts.patch(id, { status: "ready", output, reply: reply(said), engine: { ...engine, kind: "answer" }, opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "output", engine: "output", ...(workflowStep ? { workflow: workflowStep } : {}) }, detected: it.detected, statusDetail: said.slice(0, 2000), apiCalls: [{ route: "/api/copilot/output", mode: it.output.type, charge: 0 }] }) });
       /* the workflow's own outputs are marked produced (the deck, the design document) */
       const produced = it.output.type === "proposal_docx" ? "design_document" : it.output.type === "findings_pptx" ? "deck" : null;
       if (produced && !producedRef.current.includes(produced)) { producedRef.current = [...producedRef.current, produced]; setWorkflowInfo((x) => (x ? { ...x } : x)); }
@@ -731,7 +733,7 @@ export function useCopilot(opts: {
     const info = await refreshWorkflow(it.objective ? { objective: it.objective } : {});
     const wf = researchWorkflow(working, { mode: info ? info.mode.effective : executionMode, runAvailable: info?.runAvailable ?? false, produced: producedRef.current, ...(it.objective ? { objective: it.objective } : {}) });
     const said = `${describeWorkflow(wf)}${info ? `\nExecution: ${info.mode.effective}${info.cost.steps.length ? ` · model steps from here: ${info.cost.steps.map((c) => `${c.id} (${c.tier}, ${c.model}, ${c.charge} credits)`).join(", ")}` : ""}` : ""}`;
-    opts.patch(id, { status: "ready", reply: reply(said), opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "workflow", ...(it.objective ? { objective: it.objective.slice(0, 200) } : {}) }, detected: it.detected, statusDetail: said.slice(0, 2000) }) });
+    opts.patch(id, { status: "ready", reply: reply(said), opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "workflow", engine: "workflow", ...(it.objective ? { objective: it.objective.slice(0, 200) } : {}) }, detected: it.detected, statusDetail: said.slice(0, 2000) }) });
   }, [opts, setSession, refreshWorkflow, working, executionMode, recordOp]);
   /** one step, as the researcher approved it: the engine's actions as a proposal, an output as a file, a model step as a model turn */
   const runWorkflowStep = React.useCallback(async (step: WorkflowStep): Promise<void> => {
@@ -932,6 +934,13 @@ export function useCopilot(opts: {
     /* the operation history: every entry (newest first), where it is kept, and what can be done with one */
     sandbox, ops: recorder.list(), opsDurable: recorder.durable, opsLoaded: recorder.loaded, opsError: recorder.loadError, op: (k: string) => recorder.get(k),
     refreshOps: () => recorder.refresh(), recordOp, updateOp, commitApplied, retrySave, restore, reapply, compare,
+    /* the language corpus (Phase 8): the project's sentences with their readings, as the server's file */
+    exportCorpus: async (): Promise<{ ok: true; name: string; blob: Blob } | { ok: false; error: string }> => {
+      const r = await fetch("/api/copilot/corpus", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: key, ...(sandbox ? { scope: sandboxScope(), definition: s.def } : {}), download: true }) });
+      if (!r.ok) { const j = await r.json().catch(() => null) as { error?: string } | null; return { ok: false, error: j?.error ?? r.statusText }; }
+      const name = /filename="([^"]+)"/.exec(r.headers.get("content-disposition") ?? "")?.[1] ?? "language-corpus.json";
+      return { ok: true, name, blob: await r.blob() };
+    },
     actionsOf: (k: string) => actionsByOp.get(k) ?? null,
     docs: session.docs ?? [], durable: session.durable, uploading, docError,
     confirmed: session.confirmed, setConfirmed: (v: boolean) => setSession((x) => ({ ...x, confirmed: v })),

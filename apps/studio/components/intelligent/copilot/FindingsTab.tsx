@@ -65,6 +65,46 @@ export function FindingsTab({ copilot, def, onAsk }: { copilot: Copilot; def: Su
         {run && run.n < 30 && <p className="iq-warning" data-testid="fd-small"><Icon name="warning" size={12} /> Only {run.n} completes — read every finding with caution; nothing here is conclusive yet.</p>}
       </section>
 
+      {/* Phase 8: the KPIs on this run, and what moved since the previous comparable run */}
+      {run && run.kpis && run.kpis.length > 0 && (
+        <section data-testid="fd-kpis">
+          <div className="iq-label">KPIs · {run.kpis.length}{run.since ? " · since the last wave" : ""}</div>
+          <table className="fd-kpi-table">
+            <thead><tr><th>KPI</th><th>Measure</th>{run.since && <th>Last wave</th>}<th>{run.since ? "This wave" : "Value"}</th>{run.since && <th>Change</th>}<th>n</th><th>Target</th></tr></thead>
+            <tbody>
+              {run.kpis.map((k) => {
+                const d = run.since?.kpis.find((x) => x.name === k.name && x.measure === k.measure);
+                const unit = /share|box/.test(k.measure) ? "%" : "";
+                const num = (v: number | null | undefined) => (v === null || v === undefined ? "—" : `${Math.round(v * 10) / 10}${unit}`);
+                return (
+                  <tr key={k.name} data-testid="fd-kpi" data-name={k.name} data-verdict={d?.verdict ?? ""} data-significant={d?.significant === undefined ? "" : String(d.significant)}>
+                    <td>{k.name}</td><td className="iqi-dim">{k.measure}</td>
+                    {run.since && <td>{num(d?.from)}</td>}
+                    <td><b>{num(k.value)}</b></td>
+                    {run.since && <td className={`fd-delta ${d?.verdict ?? ""}`} data-testid="fd-kpi-delta">{d && d.delta !== null ? `${d.delta > 0 ? "+" : ""}${Math.round(d.delta * 10) / 10}${unit ? " pts" : ""}` : "—"}{d?.significant === true ? " ●" : d?.significant === false ? " ○" : ""}{d && d.verdict !== "unknown" && d.verdict !== "flat" ? ` ${d.verdict}` : ""}</td>}
+                    <td className="iqi-dim">{k.n}</td><td className="iqi-dim">{k.target ?? ""}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {run.since && <p className="iqi-dim" data-testid="fd-kpi-note">● significant on the two samples (p &lt; .05) · ○ not significant</p>}
+        </section>
+      )}
+      {run && run.since && (
+        <section data-testid="fd-since" data-changed={run.since.findings.filter((f) => f.change !== "same").length} data-verdicts={run.since.verdicts.length}>
+          <div className="iq-label">Since the last wave</div>
+          <p data-testid="fd-since-summary">{run.since.summary}</p>
+          {run.since.findings.filter((f) => f.change !== "same").length > 0 && (
+            <ul className="fd-since-list">
+              {run.since.findings.filter((f) => f.change !== "same").slice(0, 8).map((f) => <li key={f.key} data-testid="fd-since-finding" data-change={f.change}><b>{f.change}</b> · {f.headline}{f.from ? <span className="iqi-dim"> (was {f.from.significant ? f.from.strength : "ns"}, now {f.to.significant ? f.to.strength : "ns"})</span> : null}</li>)}
+            </ul>
+          )}
+          {run.since.verdicts.length > 0 && <ul className="fd-since-list">{run.since.verdicts.map((v) => <li key={v.label} data-testid="fd-since-verdict">{v.label}: {v.from.replace(/_/g, " ")} → <b>{v.to.replace(/_/g, " ")}</b></li>)}</ul>}
+          {run.since.gone.length > 0 && <p className="iqi-dim" data-testid="fd-since-gone">No longer found: {run.since.gone.map((g) => g.headline).join("; ")}</p>}
+        </section>
+      )}
+
       {run && hyps.length > 0 && (
         <section data-testid="fd-verdicts">
           <div className="iq-label">Hypotheses · {hyps.length}</div>

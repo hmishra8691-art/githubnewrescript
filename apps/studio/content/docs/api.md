@@ -56,6 +56,8 @@ All under `/api/`. `{id}` is the survey (project) id.
 | `copilot/workflow` | POST | project.read; survey.edit for `setMode` | `{ surveyId, objective?, produced?, mode?, setMode? }` → the workflow, the execution mode, the model, the cost per model step |
 | `copilot/operations`, `copilot/record` | GET, POST, PATCH | project.read; survey.edit; the edit lock | the operation history |
 | `copilot/documents` | GET, POST, DELETE | a session | research documents uploaded for retrieval |
+| `copilot/corpus` | POST | project.read | `{ surveyId, replay?, download? }` → the project's language corpus (every sentence with its reading, and the survey), optionally replayed against the engine as it runs |
+| `briefs` | GET | a session | the project briefs of the caller's projects, for copying one into the research design |
 
 **AI and translation:** `ai/logic`, `ai/rephrase`, `ai/transcribe`, `ai/tts`, `import/custom-logic` (metered AI calls), `ai/translate`, `translation/languages`, `translation/memory`, `translation/status`, `localization/export`, `localization/import`. **Import:** `import/analyze` (a questionnaire document → a definition), `import/quotas`, `import/record`. **Billing:** `billing/me`, `billing/projects`, `billing/transfer`, `surveys/{id}/billing`. **Auth and account:** `auth/login`, `auth/signup`, `auth/password`, `auth/logout`, `auth/me`, `auth/heartbeat`, `sessions`, `profile`, `notifications`.
 

@@ -31,9 +31,17 @@ export function runFromRow(r: Record<string, unknown>): StoredRun {
     ...(r.corrections ? { corrections: r.corrections as AnalysisRun["corrections"] } : {}),
     ...(r.advice ? { advice: r.advice as AnalysisRun["advice"] } : {}),
     ...(r.discoveries ? { discoveries: r.discoveries as AnalysisRun["discoveries"] } : {}),
+    ...(r.kpis ? { kpis: r.kpis as AnalysisRun["kpis"] } : {}),
+    ...(r.since ? { since: r.since as AnalysisRun["since"] } : {}),
     surveyVersion: (r.survey_version as string | null) ?? null,
     dataset: (r.dataset as DatasetSpec | null) ?? null,
   };
+}
+
+/** among the runs before the one at hand (newest first), the latest on the same dataset kind — the "last wave" a run is compared with (Phase 8) */
+export function pickPrevious(rows: Record<string, unknown>[], datasetKind: DatasetSpec["dataset"]): StoredRun | null {
+  const row = rows.find((r) => ((r.dataset as DatasetSpec | null)?.dataset ?? "all") === datasetKind);
+  return row ? runFromRow(row) : null;
 }
 
 /** does the database's error say a column we sent is not there? */
@@ -50,10 +58,13 @@ export async function insertRun(db: RunInsertDb, surveyId: string, compact: Comp
     findings: compact.findings, verdicts: compact.verdicts, items: compact.items, warnings: compact.warnings, survey_version: meta.surveyVersion, created_by: meta.userId,
   };
   const extras = { corrections: compact.corrections ?? null, advice: compact.advice ?? null, discoveries: compact.discoveries ?? null };
+  /* Phase 8: the KPI snapshot and the comparison with the previous run (migration 0049) — tried with, then without, then without the Phase 4 columns too */
+  const waves = { kpis: compact.kpis ?? null, since: compact.since ?? null };
   let withoutExtras = false;
-  let { data, error } = await db.from("analytics_runs").insert({ ...row, ...extras }).select("*").single();
+  let { data, error } = await db.from("analytics_runs").insert({ ...row, ...extras, ...waves }).select("*").single();
+  if (error && missingColumn(error.message)) ({ data, error } = await db.from("analytics_runs").insert({ ...row, ...extras }).select("*").single());
   if (error && missingColumn(error.message)) { withoutExtras = true; ({ data, error } = await db.from("analytics_runs").insert(row).select("*").single()); }
   if (error || !data) return { stored: null, error: error?.message ?? "the run was not stored", withoutExtras };
   const stored = runFromRow(data);
-  return { stored: { ...stored, ...(compact.corrections ? { corrections: compact.corrections } : {}), ...(compact.advice ? { advice: compact.advice } : {}), ...(compact.discoveries ? { discoveries: compact.discoveries } : {}) }, ...(withoutExtras ? { withoutExtras } : {}) };
+  return { stored: { ...stored, ...(compact.corrections ? { corrections: compact.corrections } : {}), ...(compact.advice ? { advice: compact.advice } : {}), ...(compact.discoveries ? { discoveries: compact.discoveries } : {}), ...(compact.kpis ? { kpis: compact.kpis } : {}), ...(compact.since ? { since: compact.since } : {}) }, ...(withoutExtras ? { withoutExtras } : {}) };
 }

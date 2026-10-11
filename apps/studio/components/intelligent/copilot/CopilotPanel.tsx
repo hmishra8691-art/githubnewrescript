@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
-import { changeItems, compileAnimation, compileStyle, describeUxTarget, diffSurveys, reviewUx, type DependencyIndex, type ObjectKey, type SurveyAction } from "@rescript/engine";
+import { changeItems, compileAnimation, compileStyle, corpusFromHistory, describeUxTarget, diffSurveys, replayCorpus, reviewUx, type DependencyIndex, type ObjectKey, type SurveyAction } from "@rescript/engine";
 import { Icon } from "../../ui/Icon";
 import { structureRows, changeLabel, uxPreviewScope, type OutlineRow, type ProposalState } from "../../../lib/copilot/client";
 import { UxPreview } from "./UxPreview";
@@ -447,6 +447,7 @@ function HistoryTab({ copilot, def, readOnly, onSelect }: { copilot: Copilot; de
     <div className="cp-history" data-testid="cp-history" data-durable={copilot.opsDurable === false ? "false" : "true"}>
       {durability}
       {copilot.opsError && <p className="iq-error" data-testid="cp-history-error"><Icon name="warning" size={12} /> The history could not be read: {copilot.opsError}</p>}
+      <LanguageSection copilot={copilot} def={def} ops={ops} />
       {ops.map((o) => (
         <OpEntry key={o.key} o={o} all={ops} rec={records.get(o.key)} copilot={copilot} def={def} readOnly={readOnly} onSelect={onSelect}
           onRestore={(force) => void restore(o, force)} warn={warn?.key === o.key ? warn.reason : null} />
@@ -454,6 +455,51 @@ function HistoryTab({ copilot, def, readOnly, onSelect }: { copilot: Copilot; de
     </div>
   );
 }
+/**
+ * THE PROJECT'S LANGUAGE (Phase 8): what the researchers of this project have
+ * said, how much of it the engine reads by itself, and the sentences it still
+ * hands to the model — the lexicon's backlog, most said first. The replay runs
+ * here, on the survey as it is open, so the counts are the engine's as it
+ * runs now; the export is the same corpus as a file for the repository.
+ */
+function LanguageSection({ copilot, def, ops }: { copilot: Copilot; def: SurveyDefinition; ops: ClientOp[] }) {
+  const [busy, setBusy] = React.useState(false);
+  const [note, setNote] = React.useState<string | null>(null);
+  const report = React.useMemo(() => {
+    const corpus = corpusFromHistory(def, ops.map((o) => ({ prompt: o.prompt, source: o.source, intent: o.intent, createdAt: o.createdAt })), { id: "open", title: def.meta.title });
+    if (!corpus.entries.length) return null;
+    const replay = replayCorpus(corpus);
+    return { total: corpus.entries.length, engine: replay.results.filter((r) => r.now.kind !== "model").length, backlog: replay.backlog, counts: replay.counts };
+  }, [def, ops]);
+  if (!report) return null;
+  const download = async () => {
+    setBusy(true); setNote(null);
+    try {
+      const r = await copilot.exportCorpus();
+      if (!r.ok) { setNote(`Could not export: ${r.error}`); return; }
+      const url = URL.createObjectURL(r.blob);
+      const a = document.createElement("a"); a.href = url; a.download = r.name; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      setNote(`Exported ${r.name} — replay it with scripts/corpus-replay.mjs, or keep it in packages/engine/corpus so every engine change is checked against it.`);
+    } finally { setBusy(false); }
+  };
+  return (
+    <details className="cp-language" data-testid="cp-language" data-total={report.total} data-engine={report.engine} data-backlog={report.backlog.length}>
+      <summary><Icon name="sparkle" size={12} /> This project's language: {report.total} sentence{report.total === 1 ? "" : "s"} — {report.engine} read by the engine, {report.backlog.length} the model's{report.counts.better ? ` (${report.counts.better} the engine reads now that it did not before)` : ""}{report.counts.worse ? ` (${report.counts.worse} it no longer reads)` : ""}</summary>
+      {report.backlog.length > 0 && (
+        <div className="cp-language-backlog" data-testid="cp-language-backlog">
+          <span className="iq-label">The engine hands these to the model — the lexicon's backlog, most said first</span>
+          <ul>{report.backlog.slice(0, 8).map((e) => <li key={e.text} data-testid="cp-language-sentence">{e.count && e.count > 1 ? `${e.count}× ` : ""}“{e.text}”</li>)}</ul>
+        </div>
+      )}
+      <div className="row" style={{ gap: 6, alignItems: "center" }}>
+        <button type="button" className="iq-btn" data-testid="cp-corpus-export" onClick={() => void download()} disabled={busy}>Export the language corpus</button>
+        {note && <span className="muted" data-testid="cp-corpus-note">{note}</span>}
+      </div>
+    </details>
+  );
+}
+
 function OpEntry({ o, all, rec, copilot, def, readOnly, onSelect, onRestore, warn }: {
   o: ClientOp; all: ClientOp[]; rec?: import("../../../lib/copilot/client").ChangeRecord; copilot: Copilot; def: SurveyDefinition; readOnly: boolean;
   onSelect(id: string): void; onRestore(force?: boolean): void; warn: string | null;

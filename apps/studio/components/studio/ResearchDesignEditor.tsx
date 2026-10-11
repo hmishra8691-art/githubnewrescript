@@ -78,6 +78,8 @@ export function ResearchDesignEditor({ compact = false }: { compact?: boolean })
 
   return (
     <div className={`rd-editor${compact ? " compact" : ""}`} data-testid="research-design">
+      <BriefSection r={r} patch={patch} surveyDbId={s.surveyDbId} />
+      <h4 className="rd-h">Research design</h4>
       <div className="settings-grid">
         <label className="f"><span>Research objective</span>
           <textarea className="ta" rows={2} data-testid="rd-objective" placeholder="e.g. Understand why customers switch from Brand A to Brand B"
@@ -202,6 +204,62 @@ export function ResearchDesignEditor({ compact = false }: { compact?: boolean })
 
       <h4 className="rd-h">Assumptions <span className="muted">· what the design rests on that is not yet confirmed</span></h4>
       <LineList items={r.assumptions} testId="rd-assumption" placeholder="e.g. Respondents can recall their previous brand" onChange={(items) => patch("edit assumptions", (d) => { d.assumptions = items; })} />
+    </div>
+  );
+}
+
+/**
+ * THE PROJECT BRIEF (Phase 8): the client's question and decision behind the
+ * objective — who asked, what they will decide, who reads the findings, when.
+ * Each field is one edit; "copy from another project" brings a brief the
+ * researcher already wrote elsewhere (the client, the stakeholders, the
+ * deliverables are the same from one study to the next).
+ */
+type BriefT = NonNullable<ResearchDesign["brief"]>;
+const BRIEF_EMPTY: BriefT = { stakeholders: [], deliverables: [] };
+function BriefSection({ r, patch, surveyDbId }: { r: ResearchDesign; patch(label: string, fn: (d: ResearchDesign) => void): void; surveyDbId: string }) {
+  const b: BriefT = r.brief ?? BRIEF_EMPTY;
+  const canCopy = !!surveyDbId && surveyDbId !== "sandbox";
+  const [others, setOthers] = React.useState<{ surveyId: string; title: string; brief: BriefT }[] | null>(null);
+  const [loadErr, setLoadErr] = React.useState<string | null>(null);
+  const setField = (label: string, k: keyof BriefT, v: string) => patch(label, (d) => { const cur = { ...BRIEF_EMPTY, ...(d.brief ?? {}) }; (cur as Record<string, unknown>)[k] = v || undefined; const empty = !cur.client && !cur.businessQuestion && !cur.decision && !cur.background && !cur.deadline && !cur.stakeholders.length && !cur.deliverables.length; d.brief = empty ? undefined : cur; });
+  const setList = (label: string, k: "stakeholders" | "deliverables", items: string[]) => patch(label, (d) => { const cur = { ...BRIEF_EMPTY, ...(d.brief ?? {}) }; cur[k] = items; d.brief = cur; });
+  const loadOthers = async () => {
+    if (!canCopy) return;
+    try { const res = await fetch("/api/briefs", { cache: "no-store" }); const j = await res.json(); if (!res.ok) throw new Error(j.error ?? res.statusText); setOthers((j.briefs as { surveyId: string; title: string; brief: BriefT }[]).filter((x) => x.surveyId !== surveyDbId)); setLoadErr(null); }
+    catch (e) { setLoadErr((e as Error).message); setOthers([]); }
+  };
+  return (
+    <div data-testid="rd-brief">
+      <h4 className="rd-h">Project brief <span className="muted">· the client's question and the decision the findings inform</span></h4>
+      <div className="settings-grid">
+        <label className="f"><span>Client</span>
+          <input className="input" data-testid="rd-brief-client" placeholder="e.g. Acme Foods" value={b.client ?? ""} onChange={(e) => setField("edit brief client", "client", e.target.value)} /></label>
+        <label className="f"><span>Business question</span>
+          <textarea className="ta" rows={2} data-testid="rd-brief-question" placeholder="e.g. Should we cut the price of Brand A?" value={b.businessQuestion ?? ""} onChange={(e) => setField("edit business question", "businessQuestion", e.target.value)} /></label>
+        <label className="f"><span>Decision it informs</span>
+          <textarea className="ta" rows={2} data-testid="rd-brief-decision" placeholder="e.g. whether to launch the 500ml pack in Q2" value={b.decision ?? ""} onChange={(e) => setField("edit brief decision", "decision", e.target.value)} /></label>
+        <label className="f"><span>Background</span>
+          <textarea className="ta" rows={2} data-testid="rd-brief-background" placeholder="e.g. Brand A lost 4 points of share in 2025; the category is moving to private label" value={b.background ?? ""} onChange={(e) => setField("edit brief background", "background", e.target.value)} /></label>
+        <label className="f" style={{ maxWidth: 260 }}><span>Findings due</span>
+          <input className="input" data-testid="rd-brief-deadline" placeholder="e.g. 30 November 2026" value={b.deadline ?? ""} onChange={(e) => setField("edit brief deadline", "deadline", e.target.value)} /></label>
+      </div>
+      <div className="settings-grid">
+        <div className="f"><span>Stakeholders</span>
+          <LineList items={b.stakeholders} testId="rd-stakeholder" placeholder="Who reads and acts on the findings: e.g. the CMO" onChange={(items) => setList("edit brief stakeholders", "stakeholders", items)} /></div>
+        <div className="f"><span>Deliverables</span>
+          <LineList items={b.deliverables} testId="rd-deliverable" placeholder="e.g. a findings report and a deck" onChange={(items) => setList("edit brief deliverables", "deliverables", items)} /></div>
+      </div>
+      {canCopy && (
+        <div className="row" style={{ gap: 6, alignItems: "center", marginTop: 6 }} data-testid="rd-brief-copy">
+          {others === null ? <button type="button" className="btn small" data-testid="rd-brief-copy-load" onClick={() => void loadOthers()}>Copy from another project…</button> : others.length === 0 ? <span className="muted" data-testid="rd-brief-copy-none">{loadErr ? `Could not list your projects: ${loadErr}` : "No other project of yours has a brief yet."}</span> : (
+            <select className="select" data-testid="rd-brief-copy-select" defaultValue="" onChange={(e) => { const o = others.find((x) => x.surveyId === e.target.value); if (!o) return; patch(`copy the brief from ${o.title}`, (d) => { d.brief = { ...BRIEF_EMPTY, ...o.brief }; }); e.target.value = ""; }}>
+              <option value="">Copy the brief from…</option>
+              {others.map((o) => <option key={o.surveyId} value={o.surveyId}>{o.title}{o.brief.client ? ` — ${o.brief.client}` : ""}</option>)}
+            </select>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -1,0 +1,1743 @@
+{
+ "version": 1,
+ "exported": "2026-10-10T21:05:48.382Z",
+ "survey": {
+  "id": "brand-tracker",
+  "title": "Brand tracker (the public docs' catalogue)"
+ },
+ "definition": {
+  "meta": {
+   "id": "s",
+   "code": "BT",
+   "title": "Brand tracker",
+   "version": "1.0",
+   "status": "draft",
+   "schemaVersion": 1
+  },
+  "branding": {
+   "logoPosition": "left",
+   "colors": {
+    "primary": "#2563eb",
+    "secondary": "#0f172a",
+    "background": "#f8fafc",
+    "surface": "#ffffff",
+    "text": "#0f172a",
+    "subtleText": "#64748b",
+    "border": "#e2e8f0",
+    "error": "#dc2626"
+   },
+   "typography": {
+    "fontFamily": "Inter, system-ui, sans-serif",
+    "baseSize": "16px",
+    "headingWeight": 650
+   },
+   "layout": {
+    "maxWidth": "760px",
+    "widthMode": "full",
+    "contentAlign": "left",
+    "cardStyle": "card",
+    "radius": "12px",
+    "spacing": "regular",
+    "progressBar": "top",
+    "progressStyle": "bar",
+    "showBlockTitles": true,
+    "presentation": "pages",
+    "voice": {
+     "readAloud": false,
+     "dictation": false
+    }
+   },
+   "buttons": {
+    "style": "solid",
+    "nextLabel": "Next",
+    "backLabel": "Back",
+    "submitLabel": "Submit",
+    "showBack": true
+   }
+  },
+  "questions": [
+   {
+    "id": "q1",
+    "code": "Q1",
+    "variableName": "AGE",
+    "type": "numeric",
+    "text": "How old are you?",
+    "options": [],
+    "rows": [],
+    "columns": [],
+    "validation": [],
+    "required": false,
+    "settings": {
+     "readOnly": false,
+     "hidden": false
+    },
+    "optionGroups": [],
+    "listLogic": [],
+    "optionPipeline": [],
+    "punches": [],
+    "skipLogic": []
+   },
+   {
+    "id": "q2",
+    "code": "Q2",
+    "variableName": "REGION",
+    "type": "single_select",
+    "text": "Which region do you live in?",
+    "options": [
+     {
+      "code": 1,
+      "label": "North",
+      "flags": []
+     },
+     {
+      "code": 2,
+      "label": "South",
+      "flags": []
+     },
+     {
+      "code": 3,
+      "label": "East",
+      "flags": []
+     },
+     {
+      "code": 4,
+      "label": "West",
+      "flags": []
+     }
+    ],
+    "rows": [],
+    "columns": [],
+    "validation": [],
+    "required": false,
+    "settings": {
+     "readOnly": false,
+     "hidden": false
+    },
+    "optionGroups": [],
+    "listLogic": [],
+    "optionPipeline": [],
+    "punches": [],
+    "skipLogic": []
+   },
+   {
+    "id": "q3",
+    "code": "Q3",
+    "variableName": "GENDER",
+    "type": "single_select",
+    "text": "What is your gender?",
+    "options": [
+     {
+      "code": 1,
+      "label": "Male",
+      "flags": []
+     },
+     {
+      "code": 2,
+      "label": "Female",
+      "flags": []
+     },
+     {
+      "code": 3,
+      "label": "Non-binary",
+      "flags": []
+     }
+    ],
+    "rows": [],
+    "columns": [],
+    "validation": [],
+    "required": false,
+    "settings": {
+     "readOnly": false,
+     "hidden": false
+    },
+    "optionGroups": [],
+    "listLogic": [],
+    "optionPipeline": [],
+    "punches": [],
+    "skipLogic": []
+   },
+   {
+    "id": "q4",
+    "code": "Q4",
+    "variableName": "CHANNEL",
+    "type": "single_select",
+    "text": "Where do you usually shop?",
+    "options": [
+     {
+      "code": 1,
+      "label": "Online",
+      "flags": []
+     },
+     {
+      "code": 2,
+      "label": "In store",
+      "flags": []
+     },
+     {
+      "code": 3,
+      "label": "Both",
+      "flags": []
+     }
+    ],
+    "rows": [],
+    "columns": [],
+    "validation": [],
+    "required": false,
+    "settings": {
+     "readOnly": false,
+     "hidden": false
+    },
+    "optionGroups": [],
+    "listLogic": [],
+    "optionPipeline": [],
+    "punches": [],
+    "skipLogic": []
+   },
+   {
+    "id": "q5",
+    "code": "Q5",
+    "variableName": "BRANDS",
+    "type": "multi_select",
+    "text": "Which of these brands have you bought in the past month?",
+    "options": [
+     {
+      "code": 1,
+      "label": "Brand A",
+      "flags": []
+     },
+     {
+      "code": 2,
+      "label": "Brand B",
+      "flags": []
+     },
+     {
+      "code": 3,
+      "label": "Brand C",
+      "flags": []
+     },
+     {
+      "code": 4,
+      "label": "Brand D",
+      "flags": []
+     },
+     {
+      "code": 99,
+      "label": "None of these",
+      "flags": [
+       "anchor_bottom"
+      ]
+     }
+    ],
+    "rows": [],
+    "columns": [],
+    "validation": [],
+    "required": false,
+    "settings": {
+     "readOnly": false,
+     "hidden": false
+    },
+    "optionGroups": [],
+    "listLogic": [],
+    "optionPipeline": [],
+    "punches": [],
+    "skipLogic": []
+   },
+   {
+    "id": "q6",
+    "code": "Q6",
+    "variableName": "REASON",
+    "type": "open_text",
+    "text": "Why did you choose {{Q5}}?",
+    "options": [],
+    "rows": [],
+    "columns": [],
+    "validation": [],
+    "required": false,
+    "settings": {
+     "readOnly": false,
+     "hidden": false
+    },
+    "optionGroups": [],
+    "listLogic": [],
+    "optionPipeline": [],
+    "punches": [],
+    "skipLogic": []
+   },
+   {
+    "id": "q7",
+    "code": "Q7",
+    "variableName": "OWN_CAR",
+    "type": "single_select",
+    "text": "Do you own a car?",
+    "options": [
+     {
+      "code": 1,
+      "label": "Yes",
+      "flags": []
+     },
+     {
+      "code": 2,
+      "label": "No",
+      "flags": []
+     }
+    ],
+    "rows": [],
+    "columns": [],
+    "validation": [],
+    "required": false,
+    "settings": {
+     "readOnly": false,
+     "hidden": false
+    },
+    "optionGroups": [],
+    "listLogic": [],
+    "optionPipeline": [],
+    "punches": [],
+    "skipLogic": []
+   },
+   {
+    "id": "q8",
+    "code": "Q8",
+    "variableName": "CAR_BRAND",
+    "type": "single_select",
+    "text": "Which brand is your car?",
+    "options": [
+     {
+      "code": 1,
+      "label": "Toyota",
+      "flags": []
+     },
+     {
+      "code": 2,
+      "label": "Ford",
+      "flags": []
+     },
+     {
+      "code": 3,
+      "label": "Honda",
+      "flags": []
+     }
+    ],
+    "rows": [],
+    "columns": [],
+    "validation": [],
+    "required": false,
+    "settings": {
+     "readOnly": false,
+     "hidden": false
+    },
+    "optionGroups": [],
+    "listLogic": [],
+    "optionPipeline": [],
+    "punches": [],
+    "displayLogic": {
+     "type": "rule",
+     "source": {
+      "kind": "question",
+      "ref": "q7"
+     },
+     "operator": "eq",
+     "value": 1
+    },
+    "skipLogic": []
+   },
+   {
+    "id": "q9",
+    "code": "Q9",
+    "variableName": "CAR_AGE",
+    "type": "numeric",
+    "text": "What is the age of your car, in years?",
+    "options": [],
+    "rows": [],
+    "columns": [],
+    "validation": [],
+    "required": false,
+    "settings": {
+     "readOnly": false,
+     "hidden": false
+    },
+    "optionGroups": [],
+    "listLogic": [],
+    "optionPipeline": [],
+    "punches": [],
+    "displayLogic": {
+     "type": "rule",
+     "source": {
+      "kind": "question",
+      "ref": "q7"
+     },
+     "operator": "eq",
+     "value": 1
+    },
+    "skipLogic": []
+   },
+   {
+    "id": "q10",
+    "code": "Q10",
+    "variableName": "FAV",
+    "type": "single_select",
+    "text": "Which of these brands is your favourite?",
+    "options": [
+     {
+      "code": 1,
+      "label": "Brand A",
+      "flags": []
+     },
+     {
+      "code": 2,
+      "label": "Brand B",
+      "flags": []
+     },
+     {
+      "code": 3,
+      "label": "Brand C",
+      "flags": []
+     },
+     {
+      "code": 4,
+      "label": "Brand D",
+      "flags": []
+     }
+    ],
+    "rows": [],
+    "columns": [],
+    "validation": [],
+    "required": false,
+    "settings": {
+     "readOnly": false,
+     "hidden": false
+    },
+    "optionGroups": [],
+    "listLogic": [],
+    "optionPipeline": [],
+    "punches": [],
+    "skipLogic": []
+   },
+   {
+    "id": "q11",
+    "code": "Q11",
+    "variableName": "COUNTRY",
+    "type": "single_select",
+    "text": "In which country were you born?",
+    "options": [
+     {
+      "code": 1,
+      "label": "Canada",
+      "flags": []
+     },
+     {
+      "code": 2,
+      "label": "US",
+      "flags": []
+     },
+     {
+      "code": 3,
+      "label": "Mexico",
+      "flags": []
+     },
+     {
+      "code": 4,
+      "label": "Other (please specify)",
+      "flags": [
+       "other_specify",
+       "anchor_bottom"
+      ]
+     }
+    ],
+    "rows": [],
+    "columns": [],
+    "validation": [],
+    "required": false,
+    "settings": {
+     "readOnly": false,
+     "hidden": false
+    },
+    "optionGroups": [],
+    "listLogic": [],
+    "optionPipeline": [],
+    "punches": [],
+    "skipLogic": []
+   },
+   {
+    "id": "q12",
+    "code": "Q12",
+    "variableName": "SAT",
+    "type": "matrix_single",
+    "text": "How satisfied are you with each of these?",
+    "options": [
+     {
+      "code": 1,
+      "label": "Very dissatisfied",
+      "flags": []
+     },
+     {
+      "code": 2,
+      "label": "Dissatisfied",
+      "flags": []
+     },
+     {
+      "code": 3,
+      "label": "Neutral",
+      "flags": []
+     },
+     {
+      "code": 4,
+      "label": "Satisfied",
+      "flags": []
+     },
+     {
+      "code": 5,
+      "label": "Very satisfied",
+      "flags": []
+     }
+    ],
+    "rows": [
+     {
+      "code": "r1",
+      "label": "Price",
+      "flags": [],
+      "validation": [],
+      "required": false
+     },
+     {
+      "code": "r2",
+      "label": "Quality",
+      "flags": [],
+      "validation": [],
+      "required": false
+     },
+     {
+      "code": "r3",
+      "label": "Service",
+      "flags": [],
+      "validation": [],
+      "required": false
+     }
+    ],
+    "columns": [],
+    "validation": [],
+    "required": false,
+    "settings": {
+     "readOnly": false,
+     "hidden": false
+    },
+    "optionGroups": [],
+    "listLogic": [],
+    "optionPipeline": [],
+    "punches": [],
+    "skipLogic": []
+   },
+   {
+    "id": "q13",
+    "code": "Q13",
+    "variableName": "INTENT",
+    "type": "single_select",
+    "text": "How likely are you to buy Brand A in the next 3 months?",
+    "options": [
+     {
+      "code": 1,
+      "label": "Very unlikely",
+      "flags": []
+     },
+     {
+      "code": 2,
+      "label": "Unlikely",
+      "flags": []
+     },
+     {
+      "code": 3,
+      "label": "Neutral",
+      "flags": []
+     },
+     {
+      "code": 4,
+      "label": "Likely",
+      "flags": []
+     },
+     {
+      "code": 5,
+      "label": "Very likely",
+      "flags": []
+     }
+    ],
+    "rows": [],
+    "columns": [],
+    "validation": [],
+    "required": false,
+    "settings": {
+     "readOnly": false,
+     "hidden": false
+    },
+    "optionGroups": [],
+    "listLogic": [],
+    "optionPipeline": [],
+    "punches": [],
+    "skipLogic": [],
+    "analysis": {
+     "role": "dependent",
+     "primary": [],
+     "crosstabBy": [],
+     "modeling": [],
+     "relatedTo": [],
+     "hypotheses": [],
+     "construct": "Purchase intent"
+    }
+   },
+   {
+    "id": "q14",
+    "code": "Q14",
+    "variableName": "COLOURS",
+    "type": "multi_select",
+    "text": "Which colours do you like?",
+    "options": [
+     {
+      "code": 1,
+      "label": "Black",
+      "flags": []
+     },
+     {
+      "code": 2,
+      "label": "White",
+      "flags": []
+     }
+    ],
+    "rows": [],
+    "columns": [],
+    "validation": [],
+    "required": false,
+    "settings": {
+     "readOnly": false,
+     "hidden": false
+    },
+    "optionGroups": [],
+    "listLogic": [],
+    "optionPipeline": [],
+    "punches": [],
+    "skipLogic": []
+   },
+   {
+    "id": "q15",
+    "code": "Q15",
+    "variableName": "COMMENTS",
+    "type": "open_text",
+    "text": "Any other comments?",
+    "options": [],
+    "rows": [],
+    "columns": [],
+    "validation": [
+     {
+      "id": "v1",
+      "kind": "max_length",
+      "value": 500
+     }
+    ],
+    "required": false,
+    "settings": {
+     "readOnly": false,
+     "hidden": false
+    },
+    "optionGroups": [],
+    "listLogic": [],
+    "optionPipeline": [],
+    "punches": [],
+    "skipLogic": []
+   }
+  ],
+  "flow": [
+   {
+    "type": "block",
+    "id": "b_scr",
+    "title": "Screener",
+    "children": [
+     {
+      "type": "page",
+      "id": "p1",
+      "questionIds": [
+       "q1"
+      ]
+     },
+     {
+      "type": "page",
+      "id": "p2",
+      "questionIds": [
+       "q2"
+      ]
+     },
+     {
+      "type": "page",
+      "id": "p3",
+      "questionIds": [
+       "q3"
+      ]
+     }
+    ]
+   },
+   {
+    "type": "block",
+    "id": "b_use",
+    "title": "Usage",
+    "children": [
+     {
+      "type": "page",
+      "id": "p4",
+      "questionIds": [
+       "q4"
+      ]
+     },
+     {
+      "type": "page",
+      "id": "p5",
+      "questionIds": [
+       "q5"
+      ]
+     },
+     {
+      "type": "page",
+      "id": "p6",
+      "questionIds": [
+       "q6"
+      ]
+     },
+     {
+      "type": "page",
+      "id": "p7",
+      "questionIds": [
+       "q7"
+      ]
+     },
+     {
+      "type": "page",
+      "id": "p8",
+      "questionIds": [
+       "q8"
+      ]
+     },
+     {
+      "type": "page",
+      "id": "p9",
+      "questionIds": [
+       "q9"
+      ]
+     }
+    ]
+   },
+   {
+    "type": "block",
+    "id": "b_brand",
+    "title": "Brands",
+    "children": [
+     {
+      "type": "page",
+      "id": "p10",
+      "questionIds": [
+       "q10"
+      ]
+     },
+     {
+      "type": "page",
+      "id": "p11",
+      "questionIds": [
+       "q11"
+      ]
+     },
+     {
+      "type": "page",
+      "id": "p12",
+      "questionIds": [
+       "q12"
+      ]
+     },
+     {
+      "type": "page",
+      "id": "p13",
+      "questionIds": [
+       "q13"
+      ]
+     }
+    ]
+   },
+   {
+    "type": "block",
+    "id": "b_end",
+    "title": "Wrap up",
+    "children": [
+     {
+      "type": "page",
+      "id": "p14",
+      "questionIds": [
+       "q14",
+       "q15"
+      ]
+     }
+    ]
+   },
+   {
+    "type": "end",
+    "id": "e",
+    "status": "complete"
+   }
+  ],
+  "logicFlow": {
+   "nodes": [],
+   "edges": []
+  },
+  "displayRules": [],
+  "calculations": [
+   {
+    "id": "c1",
+    "targetVariable": "AGE_GAP",
+    "expression": "AGE - CAR_AGE",
+    "trigger": "on_page_submit",
+    "dataType": "numeric"
+   }
+  ],
+  "quotas": [
+   {
+    "id": "qt1",
+    "name": "Gender",
+    "mode": "hard",
+    "cells": [
+     {
+      "id": "c1",
+      "label": "Male",
+      "when": {
+       "type": "rule",
+       "source": {
+        "kind": "question",
+        "ref": "q3"
+       },
+       "operator": "eq",
+       "value": 1
+      },
+      "limit": 100,
+      "limitType": "count"
+     },
+     {
+      "id": "c2",
+      "label": "Female",
+      "when": {
+       "type": "rule",
+       "source": {
+        "kind": "question",
+        "ref": "q3"
+       },
+       "operator": "eq",
+       "value": 2
+      },
+      "limit": 100,
+      "limitType": "count"
+     }
+    ],
+    "onFull": {
+     "kind": "terminate"
+    },
+    "countStatus": [
+     "complete"
+    ]
+   }
+  ],
+  "scripts": [],
+  "designs": [],
+  "variables": [],
+  "namingTemplates": [],
+  "localization": {
+   "sourceLanguage": "en",
+   "languages": [
+    {
+     "code": "de",
+     "status": "draft",
+     "enabled": true,
+     "format": {}
+    }
+   ],
+   "translations": {
+    "de": {
+     "q:q7:text": {
+      "text": "Besitzen Sie ein Auto?",
+      "status": "ai",
+      "version": 1,
+      "history": []
+     }
+    }
+   },
+   "audio": [],
+   "audioPriority": [
+    "human",
+    "ai",
+    "url"
+   ],
+   "glossary": [],
+   "routing": {
+    "order": [
+     "url",
+     "embedded",
+     "invitation",
+     "rules",
+     "browser",
+     "respondent"
+    ],
+    "urlParam": "lang",
+    "embeddedField": "language",
+    "countryMap": {},
+    "rules": [],
+    "allowSwitch": true
+   },
+   "mode": "hybrid",
+   "cache": true
+  },
+  "namedExpressions": [],
+  "embeddedData": [],
+  "deployment": {
+   "clientSlug": "c",
+   "studySlug": "s",
+   "access": {
+    "mode": "open",
+    "allowRetake": false,
+    "captureAnonymous": true
+   },
+   "languages": [
+    "en"
+   ],
+   "sample": {}
+  },
+  "quality": {
+   "enabled": false,
+   "strictness": "standard",
+   "evidence": {
+    "combination": "correlated",
+    "minPeers": 30,
+    "estimateConfidence": 0.6,
+    "minPopulation": 30,
+    "flagged": "strong_or_two_categories",
+    "flaggedMinCategories": 2
+   },
+   "bands": {
+    "review": 20,
+    "suspicious": 40,
+    "highlySuspicious": 60,
+    "critical": 80
+   },
+   "rules": {},
+   "customRules": [],
+   "telemetry": {
+    "timing": true,
+    "focus": true,
+    "clipboard": true,
+    "navigation": true,
+    "interaction": true,
+    "device": true,
+    "network": true
+   },
+   "privacy": {
+    "telemetryRetentionDays": 0,
+    "longitudinal": false
+   },
+   "maxPeers": 3000
+  },
+  "listFills": [],
+  "research": {
+   "hypotheses": [
+    "Women have a higher purchase intent for Brand A than men"
+   ],
+   "hypothesisDetails": [],
+   "researchQuestions": [],
+   "kpis": [],
+   "constructs": [
+    {
+     "name": "Purchase intent",
+     "role": "dependent",
+     "definition": "How likely the respondent is to buy Brand A",
+     "questionIds": [
+      "q13"
+     ]
+    },
+    {
+     "name": "Brand usage",
+     "role": "independent",
+     "questionIds": [
+      "q5"
+     ]
+    }
+   ],
+   "analysis": [],
+   "assumptions": [],
+   "sources": []
+  }
+ },
+ "entries": [
+  {
+   "text": "Make Q7 required",
+   "kind": "actions",
+   "category": "question_modification",
+   "ops": [
+    "update_question"
+   ]
+  },
+  {
+   "text": "Q7 should be required",
+   "kind": "actions",
+   "category": "question_modification",
+   "ops": [
+    "update_question"
+   ]
+  },
+  {
+   "text": "make Q8 through Q10 required",
+   "kind": "actions",
+   "category": "question_modification",
+   "ops": [
+    "update_question",
+    "update_question",
+    "update_question"
+   ]
+  },
+  {
+   "text": "the gender question must be answered",
+   "kind": "actions",
+   "category": "question_modification",
+   "ops": [
+    "update_question"
+   ]
+  },
+  {
+   "text": "respondents shouldn't be able to skip the age question",
+   "kind": "actions",
+   "category": "question_modification",
+   "ops": [
+    "update_question"
+   ]
+  },
+  {
+   "text": "delete Q3",
+   "kind": "actions",
+   "category": "question_modification",
+   "ops": [
+    "delete_question"
+   ]
+  },
+  {
+   "text": "get rid of the favourite brand question",
+   "kind": "actions",
+   "category": "question_modification",
+   "ops": [
+    "delete_question"
+   ]
+  },
+  {
+   "text": "we don't need Q7",
+   "kind": "actions",
+   "category": "question_modification",
+   "ops": [
+    "delete_question"
+   ]
+  },
+  {
+   "text": "duplicate Q7",
+   "kind": "actions",
+   "category": "question_modification",
+   "ops": [
+    "duplicate_question"
+   ]
+  },
+  {
+   "text": "move Q4 after Q6",
+   "kind": "actions",
+   "category": "question_modification",
+   "ops": [
+    "move_question"
+   ]
+  },
+  {
+   "text": "put Q7 before Q3",
+   "kind": "actions",
+   "category": "question_modification",
+   "ops": [
+    "move_question"
+   ]
+  },
+  {
+   "text": "change Q7 to a dropdown",
+   "kind": "actions",
+   "category": "question_modification",
+   "ops": [
+    "update_question"
+   ]
+  },
+  {
+   "text": "rename AGE to RESP_AGE",
+   "kind": "actions",
+   "category": "variables",
+   "ops": [
+    "update_question"
+   ]
+  },
+  {
+   "text": "add a numeric question \"How many cars do you own?\" after Q7",
+   "kind": "actions",
+   "category": "question_creation",
+   "ops": [
+    "create_question"
+   ]
+  },
+  {
+   "text": "add a single choice question \"Do you rent?\" with options Yes, No",
+   "kind": "actions",
+   "category": "question_creation",
+   "ops": [
+    "create_question"
+   ]
+  },
+  {
+   "text": "add an Other option to Q4",
+   "kind": "actions",
+   "category": "option_modification",
+   "ops": [
+    "update_question"
+   ]
+  },
+  {
+   "text": "add options Red, Green and Blue to Q14",
+   "kind": "actions",
+   "category": "option_modification",
+   "ops": [
+    "update_question"
+   ]
+  },
+  {
+   "text": "make None exclusive in Q5",
+   "kind": "actions",
+   "category": "option_modification",
+   "ops": [
+    "update_option"
+   ]
+  },
+  {
+   "text": "reorder Q11 options alphabetically",
+   "kind": "actions",
+   "category": "option_modification",
+   "ops": [
+    "reorder_options"
+   ]
+  },
+  {
+   "text": "recode option Male in Q3 as 5",
+   "kind": "actions",
+   "category": "option_modification",
+   "ops": [
+    "update_option"
+   ]
+  },
+  {
+   "text": "Make Q13 a 7-point agree-disagree scale",
+   "kind": "actions",
+   "category": "question_modification",
+   "ops": [
+    "update_question"
+   ]
+  },
+  {
+   "text": "Change Q1 to a 1-10 scale",
+   "kind": "actions",
+   "category": "question_modification",
+   "ops": [
+    "update_question"
+   ]
+  },
+  {
+   "text": "randomize Q7 options",
+   "kind": "actions",
+   "category": "randomization",
+   "ops": [
+    "set_option_randomization"
+   ]
+  },
+  {
+   "text": "randomize the options of Q11 keeping Other last",
+   "kind": "actions",
+   "category": "randomization",
+   "ops": [
+    "set_option_randomization"
+   ]
+  },
+  {
+   "text": "show 3 random options of Q5",
+   "kind": "actions",
+   "category": "randomization",
+   "ops": [
+    "set_option_randomization"
+   ]
+  },
+  {
+   "text": "shuffle the brands in Q10",
+   "kind": "actions",
+   "category": "randomization",
+   "ops": [
+    "set_option_randomization"
+   ]
+  },
+  {
+   "text": "page break after Q14",
+   "kind": "actions",
+   "category": "survey_editing",
+   "ops": [
+    "page_break"
+   ]
+  },
+  {
+   "text": "put Q15 on a new page",
+   "kind": "actions",
+   "category": "survey_editing",
+   "ops": [
+    "page_break"
+   ]
+  },
+  {
+   "text": "I want the comments question on its own page",
+   "kind": "actions",
+   "category": "survey_editing",
+   "ops": [
+    "page_break"
+   ]
+  },
+  {
+   "text": "rename block Usage to Behaviour",
+   "kind": "actions",
+   "category": "survey_editing",
+   "ops": [
+    "rename_block"
+   ]
+  },
+  {
+   "text": "make everything required",
+   "kind": "actions",
+   "category": "question_modification",
+   "ops": [
+    "update_question",
+    "update_question",
+    "update_question",
+    "update_question",
+    "update_question",
+    "update_question",
+    "update_question",
+    "update_question",
+    "update_question",
+    "update_question",
+    "update_question",
+    "update_question",
+    "update_question",
+    "update_question",
+    "update_question"
+   ]
+  },
+  {
+   "text": "If Q7 is No, skip Q8 through Q12",
+   "kind": "actions",
+   "category": "logic",
+   "ops": [
+    "add_skip"
+   ]
+  },
+  {
+   "text": "screen out if Q1 < 18",
+   "kind": "actions",
+   "category": "logic",
+   "ops": [
+    "add_skip"
+   ]
+  },
+  {
+   "text": "terminate if Q1 < 18",
+   "kind": "actions",
+   "category": "logic",
+   "ops": [
+    "add_skip"
+   ]
+  },
+  {
+   "text": "kick out anyone under 18",
+   "kind": "actions",
+   "category": "logic",
+   "ops": [
+    "add_skip"
+   ]
+  },
+  {
+   "text": "nobody under 18 should continue",
+   "kind": "actions",
+   "category": "logic",
+   "ops": [
+    "add_skip"
+   ]
+  },
+  {
+   "text": "people who are 65 or older shouldn't take part",
+   "kind": "actions",
+   "category": "logic",
+   "ops": [
+    "add_skip"
+   ]
+  },
+  {
+   "text": "Only allow women into the survey",
+   "kind": "actions",
+   "category": "logic",
+   "ops": [
+    "add_skip"
+   ]
+  },
+  {
+   "text": "hide Q11 when Q3 = 2",
+   "kind": "actions",
+   "category": "logic",
+   "ops": [
+    "set_display_logic"
+   ]
+  },
+  {
+   "text": "show Q8 only when Q1 > 60",
+   "kind": "actions",
+   "category": "logic",
+   "ops": [
+    "set_display_logic"
+   ]
+  },
+  {
+   "text": "only ask Q13 to women",
+   "kind": "actions",
+   "category": "logic",
+   "ops": [
+    "set_display_logic"
+   ]
+  },
+  {
+   "text": "don't show Q10 to anyone under 18",
+   "kind": "actions",
+   "category": "logic",
+   "ops": [
+    "set_display_logic"
+   ]
+  },
+  {
+   "text": "show block Brands only if Q7 = 1",
+   "kind": "actions",
+   "category": "logic",
+   "ops": [
+    "set_display_logic"
+   ]
+  },
+  {
+   "text": "remove the display logic from Q8",
+   "kind": "actions",
+   "category": "logic",
+   "ops": [
+    "set_display_logic"
+   ]
+  },
+  {
+   "text": "Q1 must be between 18 and 99",
+   "kind": "actions",
+   "category": "validation",
+   "ops": [
+    "set_validation"
+   ]
+  },
+  {
+   "text": "Q5 needs at least 2 selections",
+   "kind": "actions",
+   "category": "validation",
+   "ops": [
+    "set_validation"
+   ]
+  },
+  {
+   "text": "limit Q6 to 120 characters",
+   "kind": "actions",
+   "category": "validation",
+   "ops": [
+    "set_validation"
+   ]
+  },
+  {
+   "text": "Q9 must be a whole number",
+   "kind": "actions",
+   "category": "validation",
+   "ops": [
+    "set_validation"
+   ]
+  },
+  {
+   "text": "Mask all brands selected in Q5 from Q10",
+   "kind": "actions",
+   "category": "masking",
+   "ops": [
+    "set_mask"
+   ]
+  },
+  {
+   "text": "at Q10 show only the brands not selected in Q5",
+   "kind": "actions",
+   "category": "masking",
+   "ops": [
+    "set_mask"
+   ]
+  },
+  {
+   "text": "show option Canada in Q11 only when Q3 = 1",
+   "kind": "actions",
+   "category": "option_modification",
+   "ops": [
+    "update_option"
+   ]
+  },
+  {
+   "text": "create an embedded variable called source from the url",
+   "kind": "actions",
+   "category": "variables",
+   "ops": [
+    "create_embedded"
+   ]
+  },
+  {
+   "text": "add a calculated variable TOTAL = Q1 + Q9",
+   "kind": "actions",
+   "category": "calculations",
+   "ops": [
+    "create_calculation"
+   ]
+  },
+  {
+   "text": "What will break if I delete Q15?",
+   "kind": "answer",
+   "category": "impact_analysis"
+  },
+  {
+   "text": "What questions depend on Q7?",
+   "kind": "answer",
+   "category": "dependency_analysis"
+  },
+  {
+   "text": "can we see what breaks if Q2 goes",
+   "kind": "answer",
+   "category": "dependency_analysis"
+  },
+  {
+   "text": "What does Q9 depend on?",
+   "kind": "answer",
+   "category": "dependency_analysis"
+  },
+  {
+   "text": "Which questions are untranslated?",
+   "kind": "answer",
+   "category": "translation"
+  },
+  {
+   "text": "Which questions measure purchase intent?",
+   "kind": "answer",
+   "category": "research_design"
+  },
+  {
+   "text": "Which questions are not connected to any hypothesis?",
+   "kind": "answer",
+   "category": "research_design"
+  },
+  {
+   "text": "Which questions could be removed?",
+   "kind": "answer",
+   "category": "research_design"
+  },
+  {
+   "text": "What analysis can I run on this study?",
+   "kind": "answer",
+   "category": "analysis"
+  },
+  {
+   "text": "which questions are about price",
+   "kind": "answer",
+   "category": "research_design"
+  },
+  {
+   "text": "Why are you recommending a t-test?",
+   "kind": "answer",
+   "category": "analysis"
+  },
+  {
+   "text": "How many completes does the analysis plan need?",
+   "kind": "answer",
+   "category": "analysis"
+  },
+  {
+   "text": "Review the entire survey and identify problems with the logic.",
+   "kind": "answer",
+   "category": "quality_control"
+  },
+  {
+   "text": "What is wrong with the wording?",
+   "kind": "answer",
+   "category": "quality_control"
+  },
+  {
+   "text": "Set the research objective to understand churn",
+   "kind": "actions",
+   "category": "research_design",
+   "ops": [
+    "set_research"
+   ]
+  },
+  {
+   "text": "the objective of the study is to understand brand switching",
+   "kind": "actions",
+   "category": "research_design",
+   "ops": [
+    "set_research"
+   ]
+  },
+  {
+   "text": "add hypothesis: women are more satisfied than men",
+   "kind": "actions",
+   "category": "research_design",
+   "ops": [
+    "add_hypothesis"
+   ]
+  },
+  {
+   "text": "we expect women to be more satisfied than men",
+   "kind": "actions",
+   "category": "research_design",
+   "ops": [
+    "add_hypothesis"
+   ]
+  },
+  {
+   "text": "Set the target audience to first-time smartphone buyers",
+   "kind": "actions",
+   "category": "research_design",
+   "ops": [
+    "set_research"
+   ]
+  },
+  {
+   "text": "Create an analysis framework for this research.",
+   "kind": "actions",
+   "category": "analysis",
+   "ops": [
+    "propose_analysis_plan"
+   ]
+  },
+  {
+   "text": "plan the analysis",
+   "kind": "actions",
+   "category": "analysis",
+   "ops": [
+    "propose_analysis_plan"
+   ]
+  },
+  {
+   "text": "Create a cross-tab between age and brand preference.",
+   "kind": "actions",
+   "category": "analysis",
+   "ops": [
+    "add_crosstab"
+   ]
+  },
+  {
+   "text": "break purchase intent down by gender",
+   "kind": "actions",
+   "category": "analysis",
+   "ops": [
+    "add_crosstab"
+   ]
+  },
+  {
+   "text": "add a chi-square of brand preference by region",
+   "kind": "actions",
+   "category": "analysis",
+   "ops": [
+    "add_analysis_test"
+   ]
+  },
+  {
+   "text": "run a t-test of purchase intent by gender",
+   "kind": "actions",
+   "category": "analysis",
+   "ops": [
+    "add_analysis_test"
+   ]
+  },
+  {
+   "text": "is purchase intent related to gender",
+   "kind": "actions",
+   "category": "analysis",
+   "ops": [
+    "add_analysis_test"
+   ]
+  },
+  {
+   "text": "Create the most important crosstabs for this research",
+   "kind": "actions",
+   "category": "analysis",
+   "ops": [
+    "add_crosstab",
+    "add_crosstab",
+    "add_crosstab"
+   ]
+  },
+  {
+   "text": "Remove questions not related to the hypotheses",
+   "kind": "actions",
+   "category": "survey_editing",
+   "ops": [
+    "delete_question",
+    "delete_question",
+    "delete_question",
+    "delete_question",
+    "delete_question",
+    "delete_question",
+    "delete_question"
+   ]
+  },
+  {
+   "text": "enforce the research design",
+   "kind": "actions",
+   "category": "research_design",
+   "ops": [
+    "set_research"
+   ]
+  },
+  {
+   "text": "the client is Acme Foods",
+   "kind": "actions",
+   "category": "research_design",
+   "ops": [
+    "set_research"
+   ]
+  },
+  {
+   "text": "set the business question to Should we cut the price of Brand A?",
+   "kind": "actions",
+   "category": "research_design",
+   "ops": [
+    "set_research"
+   ]
+  },
+  {
+   "text": "this study informs the decision to launch the 500ml pack in Q2",
+   "kind": "actions",
+   "category": "research_design",
+   "ops": [
+    "set_research"
+   ]
+  },
+  {
+   "text": "the stakeholders are the CMO and the brand team",
+   "kind": "actions",
+   "category": "research_design",
+   "ops": [
+    "set_research"
+   ]
+  },
+  {
+   "text": "the findings are due by 15 December",
+   "kind": "actions",
+   "category": "research_design",
+   "ops": [
+    "set_research"
+   ]
+  },
+  {
+   "text": "what is the brief?",
+   "kind": "answer",
+   "category": "research_design"
+  },
+  {
+   "text": "add French as a language",
+   "kind": "actions",
+   "category": "translation",
+   "ops": [
+    "add_language"
+   ]
+  },
+  {
+   "text": "rename the survey to Brand Health 2026",
+   "kind": "actions",
+   "category": "survey_editing",
+   "ops": [
+    "set_survey_settings"
+   ]
+  },
+  {
+   "text": "Which groups prefer Brand A?",
+   "kind": "query",
+   "category": "findings"
+  },
+  {
+   "text": "Which demographic groups are most likely to prefer Brand A?",
+   "kind": "query",
+   "category": "findings"
+  },
+  {
+   "text": "Does purchase intent differ by region?",
+   "kind": "query",
+   "category": "findings"
+  },
+  {
+   "text": "what is the average car age by gender",
+   "kind": "query",
+   "category": "findings"
+  },
+  {
+   "text": "create the client-ready research proposal",
+   "kind": "output",
+   "category": "reporting"
+  },
+  {
+   "text": "create the final findings presentation",
+   "kind": "output",
+   "category": "reporting"
+  },
+  {
+   "text": "write the findings report as a Word document",
+   "kind": "output",
+   "category": "reporting"
+  },
+  {
+   "text": "Create a report showing the key findings.",
+   "kind": "output",
+   "category": "reporting"
+  },
+  {
+   "text": "start the research workflow for understanding brand switching",
+   "kind": "workflow",
+   "category": "research_design"
+  },
+  {
+   "text": "what's next?",
+   "kind": "workflow",
+   "category": "research_design"
+  },
+  {
+   "text": "rewrite Q7 in a friendlier tone",
+   "kind": "model",
+   "category": "question_modification"
+  },
+  {
+   "text": "Translate this survey into French",
+   "kind": "model",
+   "category": "translation"
+  },
+  {
+   "text": "Make this survey more suitable for first-time smartphone buyers",
+   "kind": "model",
+   "category": "question_modification"
+  },
+  {
+   "text": "Create a survey for this research: we want to understand how younger respondents choose between brands of soft drinks and what makes them switch from one brand to another",
+   "kind": "model",
+   "category": "survey_creation"
+  },
+  {
+   "text": "change the theme to dark blue",
+   "kind": "model",
+   "category": "survey_editing"
+  }
+ ]
+}

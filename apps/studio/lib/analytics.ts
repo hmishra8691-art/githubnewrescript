@@ -3,13 +3,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Condition, SurveyDefinition } from "@rescript/schema";
 import {
   buildDataset, runAnalysis, variableMetadata, recommendCharts, DEFAULT_THEME,
-  unionVariableMetadata, definitionResolver, plannedAnalyses, runPlan, compactRun, nextMilestone, reportFromRun, withPlannedVariables,
+  unionVariableMetadata, definitionResolver, plannedAnalyses, runPlan, compactRun, compareRuns, nextMilestone, reportFromRun, withPlannedVariables,
   type AnalysisDefinition, type AnalysisResult, type AnalyticsRow, type Dataset, type DatasetSpec, type ReportTheme, type SegmentDef, type VariableMeta, type AnalysisRun, type PlannedAnalysis, type ReportDefinition,
 } from "@rescript/analytics";
 import type { VersionedDefinition } from "@rescript/engine";
 import { getCachedVersionDefinition } from "@rescript/quality/server";
 import { loadQualityDefinition } from "./qualityDef";
-import { insertRun, runFromRow, type RunInsertDb, type StoredRun as StoredRunShape } from "./analyticsRunStore";
+import { insertRun, pickPrevious, runFromRow, type RunInsertDb, type StoredRun as StoredRunShape } from "./analyticsRunStore";
 
 /**
  * THE ANALYTICS SERVICE — server-side aggregation (§38).
@@ -385,6 +385,12 @@ export async function listRuns(db: SupabaseClient, surveyId: string, limit = 20)
  * dataset is built once; the full results are returned to the caller and
  * only the compact run is stored.
  */
+/** the latest run before `before` on the same environment and dataset kind — the "last wave" a run is compared with (Phase 8) */
+export async function previousRun(db: SupabaseClient, surveyId: string, spec: DatasetSpec, before: string): Promise<StoredRun | null> {
+  const { data } = await db.from("analytics_runs").select("*").eq("survey_id", surveyId).eq("environment", spec.environment).lt("computed_at", before).order("computed_at", { ascending: false }).limit(12);
+  return pickPrevious((data ?? []) as Record<string, unknown>[], spec.dataset);
+}
+
 export async function runPlanFor(db: SupabaseClient, surveyId: string, ctx: LoadedContext, opts: { environment?: DatasetSpec["environment"]; dataset?: "all" | "clean"; trigger?: string; primaries?: boolean; userId?: string | null } = {}): Promise<{ run: AnalysisRun; stored: StoredRun | null; error?: string }> {
   const spec: DatasetSpec = { environment: opts.environment ?? "LIVE", dataset: opts.dataset ?? "all" };
   const planned = plannedAnalyses(ctx.def as SurveyDefinition, spec, { primaries: opts.primaries ?? false });
@@ -397,6 +403,9 @@ export async function runPlanFor(db: SupabaseClient, surveyId: string, ctx: Load
   if (!items.length) return { run: { computedAt: new Date().toISOString(), trigger: opts.trigger ?? "manual", environment: spec.environment, n: 0, items: [], findings: [], verdicts: [], warnings: [] }, stored: null, error: "Nothing is planned yet — plan the analysis in Intelligent mode (Analysis tab) first." };
   const ds = await buildFor(db, surveyId, ctx, { ...items[0].definition, dataset: spec });
   const run = runPlan(ctx.def as SurveyDefinition, ds, { items, trigger: opts.trigger ?? "manual" });
+  /* Phase 8: what moved since the previous comparable run — same environment, same dataset kind — is attached to the run before it is stored */
+  const prev = await previousRun(db, surveyId, spec, run.computedAt);
+  if (prev) run.since = compareRuns({ ...run }, prev);
   /* Phase 4: the corrections, the data advice and the discoveries go in the columns migration 0048 adds — a database without them still keeps the run */
   const ins = await insertRun(db as unknown as RunInsertDb, surveyId, compactRun(run), spec, { surveyVersion: ctx.version ?? null, userId: opts.userId ?? null });
   if (!ins.stored) return { run, stored: null, error: ins.error };
@@ -466,7 +475,7 @@ export async function draftFindingsReport(db: SupabaseClient, surveyId: string, 
   const definition = reportFromRun(ctx.def as SurveyDefinition, run as never, {
     analysisIdFor: (planned) => (planned ? ensured.byPlanned.get(planned) : undefined),
     ...(opts.title ? { title: opts.title } : {}),
-    ...(proj.data?.client_name ? { client: String(proj.data.client_name) } : {}),
+    ...((ctx.def as SurveyDefinition).research?.brief?.client ?? proj.data?.client_name ? { client: String((ctx.def as SurveyDefinition).research?.brief?.client ?? proj.data?.client_name) } : {}),
     ...(proj.data?.fieldwork_from || proj.data?.fieldwork_to ? { fieldwork: { ...(proj.data?.fieldwork_from ? { from: String(proj.data.fieldwork_from).slice(0, 10) } : {}), ...(proj.data?.fieldwork_to ? { to: String(proj.data.fieldwork_to).slice(0, 10) } : {}) } } : {}),
   });
   const { data, error } = await db.from("analytics_reports").insert({ survey_id: surveyId, kind: "report", name: definition.title.slice(0, 160), definition, theme_id: null, mode: "live", created_by: opts.userId ?? null, updated_by: opts.userId ?? null }).select("*").single();

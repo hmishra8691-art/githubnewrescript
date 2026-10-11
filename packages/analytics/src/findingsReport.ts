@@ -78,7 +78,7 @@ export function reportFromRun(def: SurveyDefinition, run: RunLike, opts: ReportO
   const title = opts.title ?? (def.research?.objective ? `${def.research.objective} — findings` : `${def.meta.title} — findings`);
   const idOf = (item: RunLike["items"][number]) => opts.analysisIdFor(item.definition.options?.planned as string | undefined, item.definition.name);
   const blocks: ReportBlock[] = [];
-  blocks.push({ id: bid("cover"), type: "cover", title, subtitle: `${plural(run.n, "complete")} · ${MILESTONE_WORD[run.trigger] ?? run.trigger} · ${date(run.computedAt)}${opts.client ? ` · prepared for ${opts.client}` : ""}`, date: date(run.computedAt), ...(opts.author ? { author: opts.author } : {}) });
+  blocks.push({ id: bid("cover"), type: "cover", title, subtitle: `${plural(run.n, "complete")} · ${MILESTONE_WORD[run.trigger] ?? run.trigger} · ${date(run.computedAt)}${(opts.client ?? def.research?.brief?.client) ? ` · prepared for ${opts.client ?? def.research?.brief?.client}` : ""}`, date: date(run.computedAt), ...(opts.author ? { author: opts.author } : {}) });
   const sigItems = run.items.filter((it) => it.findings.some((f) => f.significant));
   blocks.push({ id: bid("exec"), type: "executive_summary", title: "Executive summary", analysisIds: sigItems.slice(0, 6).map(idOf).filter((x): x is string => !!x), text: narrative.summary });
   if (run.verdicts.length) blocks.push({ id: bid("hyp"), type: "text", title: "The hypotheses", markdown: narrative.hypotheses });

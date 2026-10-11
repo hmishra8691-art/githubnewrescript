@@ -347,7 +347,7 @@ export function IntelligentView() {
     }
     /* the grammar's reading is in the history too: proposed, answered, or failed with why */
     const opKey = copilot.recordOp({
-      prompt: t, source: source === "ai" ? "model" : "grammar", intent: { kind: intent.kind, ...(source === "ai" ? { reader: "model" } : {}) },
+      prompt: t, source: source === "ai" ? "model" : "grammar", intent: { kind: intent.kind, ...(source === "ai" ? { reader: "model" } : {}), engine: deferred ? "grammar" : "model", ...(interp.category ? { engineCategory: interp.category } : {}), ...(selectedId ? { selected: selectedId } : {}) },
       status: plan.errors.length ? "failed" : plan.readOnly ? "answered" : "proposed",
       proposed: plan.readOnly ? [] : plan.descriptions.map((description) => ({ description })), targets: proposalTargets(plan.changes), warnings: plan.warnings,
       statusDetail: (plan.errors.join(" ") || plan.summary || "").slice(0, 2000) || null,

@@ -33,7 +33,9 @@ export type DeckSlide =
   | { type: "implications"; title: string; bullets: string[] }
   | { type: "recommendations"; title: string; items: string[] }
   | { type: "method"; title: string; items: { label: string; value: string }[] }
-  | { type: "caveats"; title: string; bullets: string[] };
+  | { type: "caveats"; title: string; bullets: string[] }
+  /** what moved since the previous run (Phase 8): the KPIs with their deltas and whether each move is significant, the findings that changed, the verdicts that changed */
+  | { type: "wave_change"; title: string; since: string; kpis: { name: string; from: string; to: string; delta: string; verdict: "better" | "worse" | "flat" | "unknown"; significant?: boolean }[]; changes: string[]; verdicts: string[] };
 
 export interface DeckDefinition { title: string; subtitle: string; audience: Audience; slides: DeckSlide[]; /** the analysis ids the slides draw */ analysisIds: string[] }
 
@@ -54,7 +56,19 @@ export interface DeckOptions {
   results?: Record<string, AnalysisResult>;
 }
 
-type RunForDeck = Pick<AnalysisRun, "computedAt" | "trigger" | "environment" | "n" | "findings" | "verdicts" | "warnings"> & { items: (Pick<RunItem, "definition" | "hypotheses" | "chart" | "findings"> & { result?: AnalysisResult; adaptedFrom?: string })[]; corrections?: AnalysisRun["corrections"]; advice?: AnalysisRun["advice"]; discoveries?: AnalysisRun["discoveries"] };
+type RunForDeck = Pick<AnalysisRun, "computedAt" | "trigger" | "environment" | "n" | "findings" | "verdicts" | "warnings"> & { items: (Pick<RunItem, "definition" | "hypotheses" | "chart" | "findings"> & { result?: AnalysisResult; adaptedFrom?: string })[]; corrections?: AnalysisRun["corrections"]; advice?: AnalysisRun["advice"]; discoveries?: AnalysisRun["discoveries"]; kpis?: AnalysisRun["kpis"]; since?: AnalysisRun["since"] };
+
+/** the "since the last wave" slide, when the run has a previous one to compare with (Phase 8) */
+export function waveSlide(run: Pick<RunForDeck, "since">): Extract<DeckSlide, { type: "wave_change" }> | null {
+  const c = run.since;
+  if (!c) return null;
+  const unit = (m: string) => (/share|box/.test(m) ? "%" : "");
+  const num = (x: number | null, m: string) => (x === null ? "—" : `${Math.round(x * 10) / 10}${unit(m)}`);
+  const kpis = c.kpis.map((k) => ({ name: `${k.name} (${k.measure})`, from: num(k.from, k.measure), to: num(k.to, k.measure), delta: k.delta === null ? "—" : `${k.delta > 0 ? "+" : ""}${Math.round(k.delta * 10) / 10}${/share|box/.test(k.measure) ? " pts" : ""}`, verdict: k.verdict, ...(k.significant !== undefined ? { significant: k.significant } : {}) }));
+  const changes = c.findings.filter((f) => f.change !== "same").slice(0, 6).map((f) => `${f.change === "new" ? "New" : f.change === "stronger" ? "Stronger" : f.change === "weaker" ? "Weaker" : "Reversed"}: ${strip(f.headline)}`);
+  const verdicts = c.verdicts.map((v) => `${v.label}: ${VERDICT_WORD[v.from]} → ${VERDICT_WORD[v.to]}`);
+  return { type: "wave_change", title: "Since the last wave", since: `vs ${c.previous.computedAt.slice(0, 10)} (${c.previous.n} completes → now)`, kpis, changes, verdicts };
+}
 
 const fmtP = (p: number | null | undefined) => (p == null ? "" : p < 0.001 ? "p < .001" : `p = ${p.toFixed(3).replace(/^0/, "")}`);
 const fmt = (x: number | null | undefined, d = 2) => (x == null || !Number.isFinite(x) ? "—" : x.toFixed(d));
@@ -86,8 +100,10 @@ export function deckFromRun(def: SurveyDefinition, run: RunForDeck, opts: DeckOp
   const idFor = opts.analysisIdFor ?? ((planned, name) => planned ?? name);
   const narrative = opts.narrative ?? {};
   const date = (opts.date ?? run.computedAt).slice(0, 10);
+  const brief = def.research?.brief;
+  const client = opts.client ?? brief?.client;
   const title = opts.title ?? `${def.research?.objective ? short(def.research.objective, 70) : def.meta.title} — findings`;
-  const subtitle = `${run.n} ${run.environment.toLowerCase()} completes · ${date}${opts.client ? ` · prepared for ${opts.client}` : ""}`;
+  const subtitle = `${run.n} ${run.environment.toLowerCase()} completes · ${date}${client ? ` · prepared for ${client}` : ""}`;
   const slides: DeckSlide[] = [];
   const analysisIds = new Set<string>();
   const itemOf = (f: Finding) => run.items.find((it) => it.findings.some((x) => x.id === f.id));
@@ -99,18 +115,25 @@ export function deckFromRun(def: SurveyDefinition, run: RunForDeck, opts: DeckOp
     return { type, options: { title: titleText, dataLabels: true } };
   };
 
-  slides.push({ type: "title", title, subtitle, date, ...(opts.client ? { client: opts.client } : {}), audience });
+  slides.push({ type: "title", title, subtitle, date, ...(client ? { client } : {}), audience });
 
   /* summary: what we set out to learn, what we found */
   const n = reportNarrative(def, run);
   const sig = run.findings.filter((f) => f.significant && f.kind !== "inconclusive" && f.kind !== "low_base" && !["segment", "anomaly", "trend"].includes(f.kind));
   const bullets = narrative.summary?.length ? narrative.summary : [
+    /* Phase 8: the brief's question and decision open the summary — the findings are read against them */
+    ...(brief?.businessQuestion ? [`Business question: ${short(brief.businessQuestion, 140)}`] : []),
+    ...(brief?.decision ? [`Decision this informs: ${short(brief.decision, 140)}`] : []),
     ...(def.research?.objective ? [`Objective: ${short(def.research.objective, 140)}`] : []),
     ...run.verdicts.map((v) => `${v.label} ${VERDICT_WORD[v.verdict]}: ${short(v.text, 100)}`),
     ...sig.slice(0, 3).map((f) => strip(f.headline)),
     ...(run.discoveries?.segments.length ? [`Beyond the plan: ${run.discoveries.segments.length} segment difference${run.discoveries.segments.length === 1 ? "" : "s"} the plan did not test`] : []),
   ];
   slides.push({ type: "summary", title: "What we learned", headline: narrative.headline ?? (sig[0] ? strip(sig[0].headline) : n.summary.split(". ")[0]), bullets: bullets.slice(0, 6) });
+
+  /* since the last wave (Phase 8): right after the summary — a tracker's reader asks "what moved?" before "what did we find?" */
+  const wave = waveSlide(run);
+  if (wave) slides.push(wave);
 
   /* key findings: one per significant planned finding, strongest first */
   const max = opts.maxFindings ?? 5;

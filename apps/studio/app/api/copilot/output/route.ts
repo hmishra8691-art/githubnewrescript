@@ -2,13 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { aiConfigured, aiProviderName, completeJson } from "@rescript/ai";
 import { SurveyDefinition } from "@rescript/schema";
 import type { OutputRequest } from "@rescript/engine";
-import { briefText, buildDataset, deckFromRun, describeDeck, gateNarrative, runPlan, NARRATIVE_INSTRUCTIONS, type AnalyticsRow, type AnalysisResult, type NarrativeSections } from "@rescript/analytics";
+import { briefText, buildDataset, compareRuns, deckFromRun, describeDeck, gateNarrative, runPlan, NARRATIVE_INSTRUCTIONS, type AnalyticsRow, type AnalysisResult, type NarrativeSections } from "@rescript/analytics";
 import { buildDeckPptx, buildFindingsDocx, buildProposalDocx } from "@rescript/analytics/export";
 import { supabaseService } from "@/lib/authServer";
 import { isFailure, requireProject, requireUser, type AuthedUser } from "@/lib/guard";
 import { billingProjectFor, meteredAi } from "@/lib/metering";
 import { outputBudget } from "@/lib/copilot/budget";
-import { buildFor, loadDefinition } from "@/lib/analytics";
+import { buildFor, loadDefinition, previousRun } from "@/lib/analytics";
 
 /**
  * A DOCUMENT FROM THE RESEARCH ENGINE (Research Engine audit, Phase 5).
@@ -50,7 +50,7 @@ function readOutput(x: unknown): OutputRequest | string {
 
 export async function POST(req: NextRequest) {
   const authed = await requireUser(req);
-  let body: { surveyId?: unknown; output?: unknown; definition?: unknown; rows?: unknown; narrative?: unknown; fake?: unknown; environment?: unknown; dataset?: unknown };
+  let body: { surveyId?: unknown; output?: unknown; definition?: unknown; rows?: unknown; narrative?: unknown; fake?: unknown; environment?: unknown; dataset?: unknown; previous?: unknown };
   try { body = await req.json(); } catch { return isFailure(authed) ? authed.response : json({ error: "bad json" }, 400); }
   const surveyId = typeof body.surveyId === "string" ? body.surveyId : "";
   const sandbox = surveyId === "sandbox";
@@ -76,7 +76,8 @@ export async function POST(req: NextRequest) {
     if ("error" in loaded) return json({ error: loaded.error }, loaded.status);
     def = loaded.def as SurveyDefinition;
     const proj = await db!.from("surveys").select("fieldwork_from, fieldwork_to, client_name").eq("id", surveyId).maybeSingle();
-    client ??= proj.data?.client_name ? String(proj.data.client_name) : undefined;
+    // Phase 8: the brief's client first — it is part of the design the researcher approved; the project's client name stands in when there is none
+    client ??= def.research?.brief?.client ?? (proj.data?.client_name ? String(proj.data.client_name) : undefined);
     if (proj.data?.fieldwork_from || proj.data?.fieldwork_to) fieldwork = { ...(proj.data?.fieldwork_from ? { from: String(proj.data.fieldwork_from).slice(0, 10) } : {}), ...(proj.data?.fieldwork_to ? { to: String(proj.data.fieldwork_to).slice(0, 10) } : {}) };
   }
   const author = user?.email ?? undefined;
@@ -101,6 +102,11 @@ export async function POST(req: NextRequest) {
   }
   const run = runPlan(def, dataset, { trigger: "output" });
   if (!run.items.length) return json({ error: "Nothing is planned yet — plan the analysis in Intelligent mode (Analysis tab) first.", code: "no_plan" }, 409);
+  /* Phase 8: since the last wave — the latest stored run on the same data (the sandbox, with no database, may send the previous run itself) */
+  const previous = sandbox
+    ? (body.previous && typeof body.previous === "object" && Array.isArray((body.previous as { findings?: unknown }).findings) ? body.previous as Parameters<typeof compareRuns>[1] : null)
+    : await previousRun(db!, surveyId, dataset.spec, run.computedAt);
+  if (previous) run.since = compareRuns(run, previous);
   const results: Record<string, AnalysisResult> = Object.fromEntries(run.items.map((it) => [it.definition.options?.planned ? String(it.definition.options.planned) : it.definition.name, it.result]));
 
   /* the narrative: the model, from the brief only, through the gate */
@@ -134,5 +140,5 @@ export async function POST(req: NextRequest) {
     return new NextResponse(new Uint8Array(buf), { status: 200, headers: { "content-type": PPTX, "content-disposition": `attachment; filename="${base}-findings-${output.audience}.pptx"`, "cache-control": "no-store", "x-rescript-output": ascii(`${describeDeck(deck)} - ${run.n} completes`), "x-rescript-narrative": ascii(gate) } });
   }
   const buf = await buildFindingsDocx(def, run, opts);
-  return new NextResponse(new Uint8Array(buf), { status: 200, headers: { "content-type": DOCX, "content-disposition": `attachment; filename="${base}-findings-report.docx"`, "cache-control": "no-store", "x-rescript-output": ascii(`Findings report: ${run.verdicts.length} hypotheses, ${run.findings.filter((f) => f.significant).length} significant findings - ${run.n} completes`), "x-rescript-narrative": ascii(gate) } });
+  return new NextResponse(new Uint8Array(buf), { status: 200, headers: { "content-type": DOCX, "content-disposition": `attachment; filename="${base}-findings-report.docx"`, "cache-control": "no-store", "x-rescript-output": ascii(`Findings report: ${run.verdicts.length} hypotheses, ${run.findings.filter((f) => f.significant).length} significant findings - ${run.n} completes${run.since ? ` - since the last wave (${run.since.previous.computedAt.slice(0, 10)})` : ""}`), "x-rescript-narrative": ascii(gate) } });
 }

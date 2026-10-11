@@ -1,6 +1,6 @@
 import type { Condition, ConditionRule, Option, Question, SurveyDefinition, ValidationRule } from "@rescript/schema";
 import { hypothesisLabel, LANGUAGE_LIBRARY, variantRegistry } from "@rescript/schema";
-import { applySurveyActions, describeAction, diffSurveys, variantForActionType, type OptionSpec, type SurveyAction, type ValidationSpec } from "./surveyActions.js";
+import { applySurveyActions, BRIEF_WORDS, describeAction, diffSurveys, variantForActionType, type OptionSpec, type SurveyAction, type ValidationSpec } from "./surveyActions.js";
 import { conditionFromText } from "./naturalCondition.js";
 import { closestName } from "./logicExpression.js";
 import { contentWords, countWord, firstQuestionAfter, placedOrder, resolveOptionRef, resolveQuestionRange, resolveQuestionRef, stemWord, type QuestionCandidate, type TargetContext } from "./nlTargets.js";
@@ -2641,6 +2641,78 @@ const objective: Recogniser = (r) => {
   return act(r, "research_design", `Set the research objective to “${plain(text, 80)}”${had ? ` (replacing “${plain(had, 50)}”)` : ""}.`, [{ op: "set_research", objective: text }], [det("objective", plain(text, 60))]);
 };
 
+/**
+ * THE PROJECT BRIEF (Phase 8): "the client is Acme", "set the business
+ * question to …", "the decision this informs is whether to …", "the
+ * stakeholders are the CMO and the brand team", "add stakeholder: the CFO",
+ * "the deadline is 30 November", "background: …", "the deliverables are a
+ * report and a deck" — each a `set_research { brief }` that merges one field;
+ * "what is the brief?" / "show the project brief" answers with it.
+ */
+const BRIEF_FIELD = String.raw`(client|customer|sponsor|business\s+question|decision(?:\s+(?:this|the\s+study|it)\s+informs)?|background|context|stakeholders?|readers?|deadline|due\s+date|deliverables?)`;
+const briefField = (w: string): "client" | "businessQuestion" | "decision" | "background" | "stakeholders" | "deadline" | "deliverables" => {
+  const x = w.toLowerCase().replace(/\s+/g, " ");
+  if (/^(?:client|customer|sponsor)$/.test(x)) return "client";
+  if (/^business question$/.test(x)) return "businessQuestion";
+  if (/^decision/.test(x)) return "decision";
+  if (/^(?:background|context)$/.test(x)) return "background";
+  if (/^(?:stakeholders?|readers?)$/.test(x)) return "stakeholders";
+  if (/^(?:deadline|due date)$/.test(x)) return "deadline";
+  return "deliverables";
+};
+const LIST_SPLIT = /\s*(?:,|;|\band\b|&)\s*/i;
+const brief: Recogniser = (r) => {
+  const t = r.text;
+  const had = r.def.research?.brief;
+  let m: RegExpExecArray | null;
+  // the brief in words: what it says
+  if (/^(?:what(?:'s|\s+is)\s+(?:the\s+|our\s+|this\s+)?(?:project\s+)?brief|show(?:\s+me)?\s+(?:the\s+|our\s+)?(?:project\s+)?brief|(?:the\s+)?(?:project\s+)?brief\??)$/i.test(t)) {
+    const lines: AnswerItem[] = [];
+    if (had?.client) lines.push({ label: "Client", detail: had.client });
+    if (had?.businessQuestion) lines.push({ label: "Business question", detail: had.businessQuestion });
+    if (had?.decision) lines.push({ label: "Decision it informs", detail: had.decision });
+    if (had?.background) lines.push({ label: "Background", detail: had.background });
+    if (had?.stakeholders.length) lines.push({ label: "Stakeholders", detail: had.stakeholders.join(", ") });
+    if (had?.deadline) lines.push({ label: "Deadline", detail: had.deadline });
+    if (had?.deliverables.length) lines.push({ label: "Deliverables", detail: had.deliverables.join(", ") });
+    if (r.def.research?.objective) lines.push({ label: "Research objective", detail: plain(r.def.research.objective, 160) });
+    const answer = lines.length ? `The project brief: ${lines.map((l) => `${l.label.toLowerCase()} — ${l.detail}`).join("; ")}.` : "No project brief is recorded yet. Say “the client is …”, “the business question is …”, “the decision this informs is …”, “the stakeholders are …”, “the deadline is …” — or copy one from another project in the Research design editor.";
+    return { kind: "answer", category: "research_design", understood: "Show the project brief.", answer, sections: lines.length ? [{ title: "Project brief", items: lines }] : [], detected: [det("brief", lines.length ? `${lines.length} fields` : "none")] };
+  }
+  // "add stakeholder X" / "add a deliverable: X"
+  if ((m = /^(?:add|include)\s+(?:a\s+|the\s+|another\s+)?(stakeholders?|readers?|deliverables?)\s*(?::|—|-)?\s*(.+)$/i.exec(t))) {
+    const field = briefField(m[1]);
+    const items = unquote(m[2]).split(LIST_SPLIT).map((x) => x.trim()).filter(Boolean);
+    const have = (field === "stakeholders" ? had?.stakeholders : had?.deliverables) ?? [];
+    const fresh = items.filter((x) => !have.some((h) => h.toLowerCase() === x.toLowerCase()));
+    if (!fresh.length) return alreadySo("research_design", `Add ${items.join(", ")} to the ${BRIEF_WORDS[field]}.`, `${items.join(", ")} ${items.length === 1 ? "is" : "are"} already among the ${BRIEF_WORDS[field]}.`, [det(BRIEF_WORDS[field], items.join(", "))]);
+    return act(r, "research_design", `Add ${fresh.join(", ")} to the brief's ${BRIEF_WORDS[field]}.`, [{ op: "set_research", brief: { [field]: [...have, ...fresh] } }], [det(BRIEF_WORDS[field], fresh.join(", "))]);
+  }
+  // "the client is X", "set the business question to X", "this study is for X", "the decision this informs is X", "background: X"
+  let field: ReturnType<typeof briefField> | null = null;
+  let raw = "";
+  if ((m = new RegExp(String.raw`^(?:set|record|define|note|change|update)\s+(?:the\s+|our\s+)?(?:project\s+|brief'?s\s+)?${BRIEF_FIELD}\s*(?:to|as|:|=|—|-)\s*(.+)$`, "i").exec(t))
+    || (m = new RegExp(String.raw`^(?:the\s+|our\s+)?(?:project\s+|brief'?s\s+)?${BRIEF_FIELD}\s*(?:is|are|:)\s+(.+)$`, "i").exec(t))) { field = briefField(m[1]); raw = m[2]; }
+  else if ((m = /^(?:this|the)\s+(?:study|survey|research|project)\s+(?:is\s+for|is\s+commissioned\s+by|was\s+commissioned\s+by)\s+(.+)$/i.exec(t))) { field = "client"; raw = m[1]; }
+  else if ((m = /^(?:this|the)\s+(?:study|survey|research|project)\s+(?:informs|will\s+inform|supports)\s+(?:the\s+)?decision\s+(to|on|about|whether)\s+(.+)$/i.exec(t))) { field = "decision"; raw = m[1].toLowerCase() === "to" ? `whether to ${m[2]}` : m[1].toLowerCase() === "whether" ? `whether ${m[2]}` : m[2]; }
+  else if ((m = /^(?:the\s+)?(?:findings|results|report)\s+(?:are|is)\s+(?:due|needed)\s+(?:by|on|before)\s+(.+)$/i.exec(t))) { field = "deadline"; raw = m[1]; }
+  if (!field) return null;
+  raw = unquote(raw).replace(/[.]+$/, "").trim();
+  if (!raw) return null;
+  const word = BRIEF_WORDS[field];
+  if (field === "stakeholders" || field === "deliverables") {
+    const items = raw.split(LIST_SPLIT).map((x) => x.trim()).filter(Boolean);
+    const have = (field === "stakeholders" ? had?.stakeholders : had?.deliverables) ?? [];
+    if (items.length === have.length && items.every((x, i) => x.toLowerCase() === have[i].toLowerCase())) return alreadySo("research_design", `Set the brief's ${word} to ${items.join(", ")}.`, `Those are already the ${word}.`, [det(word, items.join(", "))]);
+    return act(r, "research_design", `Set the brief's ${word} to ${items.join(", ")}${have.length ? ` (replacing ${have.join(", ")})` : ""}.`, [{ op: "set_research", brief: { [field]: items } }], [det(word, items.join(", "))]);
+  }
+  // the sentence's own question mark was stripped with the trailing punctuation: a business question gets it back
+  const value = field === "client" ? raw.replace(/^(?:for\s+)?(?:the\s+)?/i, "") : field === "deadline" || field === "decision" ? raw : field === "businessQuestion" ? `${cap(raw)}${/^(?:should|is|are|do|does|did|can|could|will|would|which|what|how|why|when|where|who)\b/i.test(raw) && !/[?!.]$/.test(raw) ? "?" : ""}` : cap(raw);
+  const before = had?.[field];
+  if (before && before.trim().toLowerCase() === value.trim().toLowerCase()) return alreadySo("research_design", `Set the brief's ${word} to “${plain(value, 60)}”.`, `That is already the ${word}.`, [det(word, plain(value, 60))]);
+  return act(r, "research_design", `Set the brief's ${word} to “${plain(value, 80)}”${before ? ` (replacing “${plain(before, 50)}”)` : ""}.`, [{ op: "set_research", brief: { [field]: value } }], [det(word, plain(value, 60))]);
+};
+
 /** "start the research workflow for <objective>", "run the workflow", "what's next in the workflow", "plan the study for <objective>" → the planner (Phase 6) */
 const workflowRequest: Recogniser = (r) => {
   const t = r.text.replace(/[.!?]+$/, "").trim();
@@ -2791,7 +2863,7 @@ function fallback(r: Run): Interpretation {
 const RECOGNISERS: Recogniser[] = [
   analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, reviewRequest, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest, workflowRequest,
   deferred, longBrief,
-  surveySettings, languages, enforceDesign, objective, audience, research, variables, pageBreaks,
+  surveySettings, languages, enforceDesign, objective, brief, audience, research, variables, pageBreaks,
   shorten, screenerEdit, scaleChange, removeAnalysis, analysisTests, crosstabs,
   masking, optionVisibility, randomization, options, required, skips, display, validation, questions,
 ];

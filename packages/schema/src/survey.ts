@@ -138,7 +138,33 @@ export const ResearchAudience = z.object({
 });
 export type ResearchAudience = z.infer<typeof ResearchAudience>;
 
+/**
+ * THE PROJECT BRIEF (Phase 8) — what the study is for, in the client's terms:
+ * who asked, the business question behind the research objective, the
+ * decision the findings will inform, who will read them, when. Carried into
+ * the proposal, the report and the deck, and copied between projects.
+ */
+export const ResearchBrief = z.object({
+  /** the organisation the study is for */
+  client: z.string().optional(),
+  /** the business question, in the client's words ("Should we cut the price of Brand A?") */
+  businessQuestion: z.string().optional(),
+  /** the decision the findings inform ("whether to launch the 500ml pack in Q2") */
+  decision: z.string().optional(),
+  /** context the reader needs: the market, what is already known, why now */
+  background: z.string().optional(),
+  /** who reads the findings and acts on them */
+  stakeholders: z.array(z.string()).default([]),
+  /** when the findings are needed, as a date or in words */
+  deadline: z.string().optional(),
+  /** what the client receives */
+  deliverables: z.array(z.string()).default([]),
+});
+export type ResearchBrief = z.infer<typeof ResearchBrief>;
+
 export const ResearchDesign = z.object({
+  /** the project brief — the client's question and decision behind the objective (Phase 8) */
+  brief: ResearchBrief.optional(),
   objective: z.string().optional(),
   hypotheses: z.array(z.string()).default([]),
   /** the structured reading of each hypothesis, by index (Phase 3) */

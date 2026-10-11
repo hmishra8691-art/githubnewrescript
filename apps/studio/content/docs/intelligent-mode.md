@@ -113,6 +113,12 @@ The catalogue below is checked by a test against the engine on every build: each
 | Create the most important crosstabs for this research | actions |
 | Remove questions not related to the hypotheses | actions |
 | enforce the research design | actions |
+| the client is Acme Foods | actions |
+| set the business question to Should we cut the price of Brand A? | actions |
+| this study informs the decision to launch the 500ml pack in Q2 | actions |
+| the stakeholders are the CMO and the brand team | actions |
+| the findings are due by 15 December | actions |
+| what is the brief? | answer |
 | add French as a language | actions |
 | rename the survey to Brand Health 2026 | actions |
 
@@ -144,6 +150,8 @@ The catalogue below is checked by a test against the engine on every build: each
 ## Actions, approval, history
 
 Every change is a batch of **actions** from a closed vocabulary (the [actions reference](actions-reference)): `create_question`, `update_question`, `set_display_logic`, `add_skip`, `set_validation`, `add_crosstab`, `set_research`, `create_style`… The engine coerces what it is given, applies it to a copy, validates each action against the survey as the batch leaves it (a forward reference, an operator the source cannot answer, a missing option), lists what the batch newly breaks elsewhere, and shows the diff in *Changes*. The researcher can untick individual changes, must confirm destructive ones, and applies the rest as one undoable change. *History* records every operation — the prompt, how it was read, the actions proposed and applied, the model calls and their cost, before and after — and offers restore, compare and reapply; ⌘Z undoes the last apply.
+
+**The language corpus.** History is also the record of what researchers say. The *History* tab's "This project's language" line counts the project's sentences, how many the engine reads by itself and how many it hands to the model — the lexicon's backlog, most said first — and *Export the language corpus* writes them, with the survey and the reading each got, to a file (`POST /api/copilot/corpus`). `scripts/corpus-replay.mjs` reads every sentence again with the engine as it is now and says which are the same, better (the model's, now the engine's), worse or changed; the corpora kept in `packages/engine/corpus` are replayed by the engine's tests, so a change to the recognisers or the lexicon is checked against what researchers actually typed, not only against our examples.
 
 A review asked for in a sentence ("review the entire survey and identify problems with the logic", "what is wrong with the wording?") is the engine's own review — logic and reachability, wording, options and scales, duplicates, length, screening, sequencing, hypotheses and the analysis plan, localization, quotas — grouped by severity and narrowed to the area named, in the card and in the *Review* tab with a one-click fix wherever the fix is mechanical; with a model in cloud mode, its reading of the same survey follows.
 

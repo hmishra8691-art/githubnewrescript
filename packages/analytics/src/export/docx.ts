@@ -93,12 +93,20 @@ export interface ProposalOptions { client?: string; author?: string; date?: stri
 /** The research proposal / design document, from the survey and its research design. */
 export async function buildProposalDocx(def: SurveyDefinition, opts: ProposalOptions = {}): Promise<Buffer> {
   const r = def.research;
+  const b = r?.brief;
+  const client = opts.client ?? b?.client;
   const date = opts.date ?? new Date().toISOString().slice(0, 10);
-  const title = opts.title ?? (r?.objective ? plain(r.objective, 90) : def.meta.title);
+  const title = opts.title ?? (r?.objective ? plain(r.objective, 90) : b?.businessQuestion ? plain(b.businessQuestion, 90) : def.meta.title);
   const out: Block[] = [];
-  out.push(...cover("Research proposal", title, [opts.client ? `Prepared for ${opts.client}` : "", `${date}${opts.author ? ` · ${opts.author}` : ""}`, `Survey: ${def.meta.title}${def.meta.version ? ` v${def.meta.version}` : ""}`]));
+  out.push(...cover("Research proposal", title, [client ? `Prepared for ${client}` : "", `${date}${opts.author ? ` · ${opts.author}` : ""}`, `Survey: ${def.meta.title}${def.meta.version ? ` v${def.meta.version}` : ""}`, b?.deadline ? `Findings due ${b.deadline}` : ""]));
 
   out.push(h1("1. Background and objective"));
+  /* Phase 8: the brief opens the document — the client's question and the decision are what the objective serves */
+  if (b?.background) out.push(label("Background"), body(b.background));
+  if (b?.businessQuestion) out.push(label("Business question"), lead(b.businessQuestion));
+  if (b?.decision) out.push(label("Decision this research informs"), body(b.decision));
+  if (b?.stakeholders.length) out.push(label("Stakeholders"), body(b.stakeholders.join(", ")));
+  if (b?.businessQuestion || b?.decision || b?.background) out.push(label("Research objective"));
   out.push(r?.objective ? lead(r.objective) : muted("No research objective is recorded yet — record it in the research design."));
   if (r?.population) out.push(label("Population"), body(r.population));
   if (r?.methodology) out.push(label("Methodology"), body(r.methodology));
@@ -146,6 +154,7 @@ export async function buildProposalDocx(def: SurveyDefinition, opts: ProposalOpt
   out.push(body(`${r?.sampleSize ? `Target sample: ${r.sampleSize} completes. ` : ""}${exp ? `Expected sample from the ${exp.source}: ${exp.n} — ${exp.note}. ` : ""}${size.minimum ? `The analysis plan needs at least ${size.minimum} completes${size.driver ? ` (${size.driver.title}: ${size.driver.requiredBase.note})` : ""}.` : ""}`.trim() || "No sample size is recorded."));
   if (size.items.length) out.push(gridTable(["Analysis", "Minimum base", "Why"], size.items.slice(0, 12).map((i) => [i.title, String(i.minimum), i.note]), [3400, 1400, 4200]));
   if (opts.fieldwork?.from || opts.fieldwork?.to) out.push(body(`Fieldwork: ${opts.fieldwork.from ?? "—"} to ${opts.fieldwork.to ?? "—"}.`));
+  if (b?.deadline) out.push(body(`Findings due: ${b.deadline}.`));
 
   out.push(h1(`${n++}. Analysis plan`));
   const plan = explainPlan(def);
@@ -153,7 +162,7 @@ export async function buildProposalDocx(def: SurveyDefinition, opts: ProposalOpt
   else out.push(gridTable(["Analysis", "Serves", "Why this method", "Output", "Base"], plan.slice(0, 30).map((x) => [x.title, x.hypotheses.map((h) => h.label).join(", ") || x.objective.slice(0, 40), x.why, x.expectedOutput, `${x.requiredBase.minimum}`]), [2200, 900, 2900, 2200, 800]));
 
   out.push(h1(`${n++}. Deliverables`));
-  for (const d of opts.deliverables ?? ["Topline findings at the first readable base (30 completes), run automatically", "The findings report with the verdict on each hypothesis, at target and at the end of fieldwork", "The findings presentation, with the key findings, who differs, and what to do next", "The data: respondent-level export (SPSS, Excel, CSV) with the variable dictionary"]) out.push(bullet(d));
+  for (const d of opts.deliverables ?? (b?.deliverables.length ? b.deliverables : null) ?? ["Topline findings at the first readable base (30 completes), run automatically", "The findings report with the verdict on each hypothesis, at target and at the end of fieldwork", "The findings presentation, with the key findings, who differs, and what to do next", "The data: respondent-level export (SPSS, Excel, CSV) with the variable dictionary"]) out.push(bullet(d));
 
   if (r?.assumptions.length || r?.sources.length) {
     out.push(h1(`${n++}. Assumptions and sources`));
@@ -180,7 +189,7 @@ export async function buildFindingsDocx(def: SurveyDefinition, run: RunForDocx, 
   const date = (opts.date ?? run.computedAt).slice(0, 10);
   const title = opts.title ?? deck.title;
   const out: Block[] = [];
-  out.push(...cover("Findings report", title, [opts.client ? `Prepared for ${opts.client}` : "", `${run.n} ${run.environment.toLowerCase()} completes · ${run.trigger.replace(/_/g, " ")} · ${date}`, opts.author ?? ""]));
+  out.push(...cover("Findings report", title, [(opts.client ?? def.research?.brief?.client) ? `Prepared for ${opts.client ?? def.research?.brief?.client}` : "", `${run.n} ${run.environment.toLowerCase()} completes · ${run.trigger.replace(/_/g, " ")} · ${date}`, opts.author ?? ""]));
 
   out.push(h1("Executive summary"));
   const summary = deck.slides.find((s): s is Extract<DeckSlide, { type: "summary" }> => s.type === "summary")!;
@@ -191,6 +200,17 @@ export async function buildFindingsDocx(def: SurveyDefinition, run: RunForDocx, 
   out.push(h1("The hypotheses"));
   if (!run.verdicts.length) out.push(muted("No hypotheses are recorded in the research design."));
   else out.push(gridTable(["", "Hypothesis", "Verdict", "Why"], run.verdicts.map((v) => [v.label, v.text, `${v.verdict.replace(/_/g, " ")}${v.corrected ? ` (${v.corrected.verdict.replace(/_/g, " ")} once corrected)` : ""}`, `${v.reason}${v.corrected ? ` ${v.corrected.note}` : ""}`]), [600, 2700, 1500, 4200]));
+
+  /* Phase 8: what moved since the last wave — the KPI table, the findings that changed, the verdicts that changed */
+  const wave = deck.slides.find((s): s is Extract<DeckSlide, { type: "wave_change" }> => s.type === "wave_change");
+  if (wave) {
+    out.push(h1("Since the last wave"));
+    out.push(body(run.since?.summary ?? wave.since));
+    if (wave.kpis.length) out.push(gridTable(["KPI", "Last wave", "This wave", "Change", ""], wave.kpis.map((k) => [k.name, k.from, k.to, `${k.delta}${k.significant === true ? " (significant)" : k.significant === false ? " (not significant)" : ""}`, k.verdict === "unknown" ? "" : k.verdict]), [3000, 1500, 1500, 2200, 1000]));
+    for (const c of wave.changes) out.push(bullet(c));
+    for (const v of wave.verdicts) out.push(bullet(v));
+    if (run.since?.gone.length) out.push(muted(`No longer found: ${run.since.gone.map((g) => g.headline).join("; ")}`));
+  }
 
   out.push(h1("Key findings"));
   const keys = deck.slides.filter((s): s is Extract<DeckSlide, { type: "key_finding" }> => s.type === "key_finding" && !s.beyond);

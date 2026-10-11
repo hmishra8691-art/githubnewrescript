@@ -117,11 +117,24 @@ const step = (id: WorkflowStepId, s: Omit<WorkflowStep, "id" | "title" | "tier">
 const blocked = (id: WorkflowStepId, by: WorkflowStepId, why: string): WorkflowStep => step(id, { status: "blocked", executor: "engine", why, blockedBy: by });
 const isDone = (prior: WorkflowStep[], id: WorkflowStepId) => prior.find((s) => s.id === id)?.status === "done";
 
+/** "Should we cut the price of Brand A?" → "Understand whether to cut the price of Brand A"; a statement is kept as it is */
+export function objectiveFromBusinessQuestion(q: string): string {
+  const t = q.trim().replace(/[?.!]+$/, "");
+  let m: RegExpExecArray | null;
+  if ((m = /^(?:should|shall|do|does|can|could|will|would)\s+(?:we|i|the\s+\w+|\w+)\s+(.+)$/i.exec(t))) return `Understand whether to ${m[1]}`;
+  if ((m = /^(?:is|are)\s+(.+)$/i.exec(t))) return `Understand whether ${m[1]}`;
+  if ((m = /^(?:which|what|how|why|when|where|who)\b(.*)$/i.exec(t))) return `Understand ${t.charAt(0).toLowerCase()}${t.slice(1)}`;
+  return t;
+}
+
 const objectiveStep: Build = (def, o) => {
   const had = def.research?.objective?.trim();
   if (had) return step("objective", { status: "done", executor: "engine", why: `The objective is recorded: ${quote(plain(had))}.` });
   const given = o.objective?.trim();
   if (given) return step("objective", { status: "ready", executor: "engine", why: `Record the objective ${quote(plain(given))}.`, sentence: `Set the research objective to ${quote(given)}`, actions: [{ op: "set_research", objective: given }] });
+  // Phase 8: the brief's business question is the objective in the client's words — offered as the objective, for approval
+  const bq = def.research?.brief?.businessQuestion?.trim();
+  if (bq) { const objective = objectiveFromBusinessQuestion(bq); return step("objective", { status: "ready", executor: "engine", why: `The brief asks ${quote(plain(bq))} — recorded as the objective ${quote(plain(objective))}.`, sentence: `Set the research objective to ${quote(objective)}`, actions: [{ op: "set_research", objective }] }); }
   return step("objective", { status: "needs_input", executor: "researcher", why: "No research objective is recorded — everything else reads it.", questions: [{ ask: "What should the study find out?", example: "Set the research objective to \"Understand why customers switch from Brand A to Brand B\"" }] });
 };
 

@@ -172,6 +172,21 @@ export async function buildDeckPptx(input: DeckPptxInput): Promise<Buffer> {
         bullets(s, slide.bullets, { x: g, y: 1.2, w: W - 2 * g, h: H - 1.2 - 0.5 }, st.type.body - 1);
         break;
       }
+      case "wave_change": {
+        /* Phase 8: the KPIs since the last wave as a table (from → to, the move, whether it is significant), the changed findings and verdicts beside */
+        frame(s, slide.title, slide.since);
+        const half = slide.kpis.length && (slide.changes.length || slide.verdicts.length);
+        const tw = half ? (W - 2 * g) * 0.55 : W - 2 * g;
+        if (slide.kpis.length) {
+          const rows = slide.kpis.map((k) => ({ kpi: k.name, from: k.from, to: k.to, delta: `${k.delta}${k.significant === true ? " ●" : k.significant === false ? " ○" : ""}`, verdict: k.verdict === "better" ? "better" : k.verdict === "worse" ? "worse" : k.verdict === "flat" ? "flat" : "—" }));
+          addTable(s, { id: "waves", title: "KPIs", columns: [{ key: "kpi", label: "KPI" }, { key: "from", label: "Last wave" }, { key: "to", label: "This wave" }, { key: "delta", label: "Change" }, { key: "verdict", label: "" }], rows }, theme, { x: g, y: 1.2, w: tw }, 11, 10);
+          s.addText("● significant on the two samples (p < .05) · ○ not significant", { x: g, y: H - 0.75, w: tw, h: 0.3, fontSize: st.type.caption, color: subtle, fontFace: font });
+        }
+        const side = [...slide.changes, ...slide.verdicts];
+        if (side.length) bullets(s, side, { x: slide.kpis.length ? g + tw + 0.3 : g, y: 1.2, w: slide.kpis.length ? W - 2 * g - tw - 0.3 : W - 2 * g, h: H - 1.2 - 0.8 }, st.type.body - 2);
+        if (!slide.kpis.length && !side.length) s.addText("Nothing moved since the last wave: the KPIs and the findings stand.", { x: g, y: 1.3, w: W - 2 * g, h: 0.6, fontSize: st.type.body, color: text, fontFace: font });
+        break;
+      }
     }
   }
   const out = await p.write({ outputType: "nodebuffer" });

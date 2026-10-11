@@ -101,7 +101,7 @@ export type SurveyAction =
   | { op: "create_loop"; from: string; to: string; over?: string; items?: string[]; loopVar?: string; title?: string }
   | { op: "set_research"; strict?: boolean; objective?: string; hypotheses?: string[]; population?: string; sampleSize?: number; methodology?: string; constructs?: { name: string; role?: string; definition?: string; questions?: string[] }[]; analysis?: string[]; assumptions?: string[]; sources?: string[];
       /** Phase 3: the questions the research answers, the KPIs it reports, who it is written for */
-      researchQuestions?: string[]; kpis?: { name: string; variable?: string; measure?: string; target?: string; direction?: "higher" | "lower" }[]; audience?: { description: string; characteristics?: string[]; literacy?: "plain" | "general" | "expert"; tone?: string; language?: string } }
+      researchQuestions?: string[]; kpis?: { name: string; variable?: string; measure?: string; target?: string; direction?: "higher" | "lower" }[]; audience?: { description: string; characteristics?: string[]; literacy?: "plain" | "general" | "expert"; tone?: string; language?: string } ; /** Phase 8: the project brief — merged into the one recorded, field by field */ brief?: { client?: string; businessQuestion?: string; decision?: string; background?: string; stakeholders?: string[]; deadline?: string; deliverables?: string[] } }
   /* criteria-based coding (punching): IF <when> THEN code <target> — on the target question's punch rules */
   | { op: "add_punch"; target: string; when?: CondInput; action?: "select" | "deselect" | "set_value" | "clear"; codes?: (string | number)[]; value?: string | number; expression?: string; label?: string; mode?: "if" | "else_if" | "else"; recompute?: "once" | "always" }
   | { op: "remove_punches"; target: string; id?: string }
@@ -303,7 +303,10 @@ function coerceOne(item: unknown): SurveyAction | string {
       const kpis = Array.isArray(o.kpis) ? o.kpis.map((k) => { const x = (k ?? {}) as Record<string, unknown>; const name = str(x.name); return name ? { name, ...(str(x.variable) ? { variable: str(x.variable) } : {}), ...(str(x.measure) ? { measure: str(x.measure) } : {}), ...(str(x.target) ? { target: str(x.target) } : {}), ...(x.direction === "higher" || x.direction === "lower" ? { direction: x.direction as "higher" | "lower" } : {}) } : null; }).filter((x): x is NonNullable<typeof x> => !!x).slice(0, 20) : undefined;
       const au = o.audience && typeof o.audience === "object" ? (o.audience as Record<string, unknown>) : typeof o.audience === "string" ? { description: o.audience } : null;
       const audience = au && str(au.description) ? { description: str(au.description)!, ...(strs(au.characteristics) ? { characteristics: strs(au.characteristics) } : {}), ...(au.literacy === "plain" || au.literacy === "general" || au.literacy === "expert" ? { literacy: au.literacy as "plain" | "general" | "expert" } : {}), ...(str(au.tone) ? { tone: str(au.tone) } : {}), ...(str(au.language) ? { language: str(au.language) } : {}) } : undefined;
-      return { op, ...(typeof o.strict === "boolean" ? { strict: o.strict } : {}), ...(str(o.objective) ? { objective: str(o.objective) } : {}), ...(strs(o.hypotheses) ? { hypotheses: strs(o.hypotheses) } : {}), ...(str(o.population) ? { population: str(o.population) } : {}), ...(Number.isInteger(Number(o.sampleSize)) && Number(o.sampleSize) > 0 ? { sampleSize: Number(o.sampleSize) } : {}), ...(str(o.methodology) ? { methodology: str(o.methodology) } : {}), ...(constructs ? { constructs } : {}), ...(strs(o.analysis) ? { analysis: strs(o.analysis) } : {}), ...(strs(o.assumptions) ? { assumptions: strs(o.assumptions) } : {}), ...(strs(o.sources) ? { sources: strs(o.sources) } : {}), ...(strs(o.researchQuestions) ? { researchQuestions: strs(o.researchQuestions) } : {}), ...(kpis ? { kpis } : {}), ...(audience ? { audience } : {}) };
+      const br = o.brief && typeof o.brief === "object" ? (o.brief as Record<string, unknown>) : null;
+      const briefFields = br ? { ...(str(br.client) ? { client: str(br.client) } : {}), ...(str(br.businessQuestion) ? { businessQuestion: str(br.businessQuestion) } : {}), ...(str(br.decision) ? { decision: str(br.decision) } : {}), ...(str(br.background) ? { background: str(br.background) } : {}), ...(strs(br.stakeholders, 40) ? { stakeholders: strs(br.stakeholders, 40) } : {}), ...(str(br.deadline) ? { deadline: str(br.deadline) } : {}), ...(strs(br.deliverables, 40) ? { deliverables: strs(br.deliverables, 40) } : {}) } : null;
+      const brief = briefFields && Object.keys(briefFields).length ? briefFields : undefined;
+      return { op, ...(typeof o.strict === "boolean" ? { strict: o.strict } : {}), ...(str(o.objective) ? { objective: str(o.objective) } : {}), ...(strs(o.hypotheses) ? { hypotheses: strs(o.hypotheses) } : {}), ...(str(o.population) ? { population: str(o.population) } : {}), ...(Number.isInteger(Number(o.sampleSize)) && Number(o.sampleSize) > 0 ? { sampleSize: Number(o.sampleSize) } : {}), ...(str(o.methodology) ? { methodology: str(o.methodology) } : {}), ...(constructs ? { constructs } : {}), ...(strs(o.analysis) ? { analysis: strs(o.analysis) } : {}), ...(strs(o.assumptions) ? { assumptions: strs(o.assumptions) } : {}), ...(strs(o.sources) ? { sources: strs(o.sources) } : {}), ...(strs(o.researchQuestions) ? { researchQuestions: strs(o.researchQuestions) } : {}), ...(kpis ? { kpis } : {}), ...(audience ? { audience } : {}), ...(brief ? { brief } : {}) };
     }
     default: {
       const ux = op ? coerceUxAction(op, o) : null;
@@ -807,11 +810,13 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
         researchQuestions: a.researchQuestions ?? prev?.researchQuestions ?? [],
         kpis: a.kpis ?? prev?.kpis ?? [],
         ...((a.audience ?? prev?.audience) ? { audience: a.audience ? { characteristics: [], ...a.audience } : prev?.audience } : {}),
+        /* Phase 8: the brief is merged field by field — "the client is Acme" does not lose the business question */
+        ...((a.brief ?? prev?.brief) ? { brief: a.brief ? { stakeholders: [], deliverables: [], ...(prev?.brief ?? {}), ...a.brief } : prev?.brief } : {}),
         /* Phase 7: whether the design is enforced is kept unless the action says */
         ...((a.strict ?? prev?.strict) !== undefined ? { strict: a.strict ?? prev?.strict } : {}),
         updatedAt: ctx.now,
       } as never;
-      return { description: `Research design: ${[a.strict === true ? "enforced (research gaps are blockers)" : a.strict === false ? "no longer enforced" : "", a.objective ? "objective" : "", a.hypotheses?.length ? `${a.hypotheses.length} hypothes${a.hypotheses.length === 1 ? "is" : "es"}` : "", a.constructs?.length ? `${a.constructs.length} constructs` : "", a.researchQuestions?.length ? `${a.researchQuestions.length} research question${a.researchQuestions.length === 1 ? "" : "s"}` : "", a.kpis?.length ? `${a.kpis.length} KPI${a.kpis.length === 1 ? "" : "s"}` : "", a.audience ? "audience" : "", a.population ? "population" : ""].filter(Boolean).join(", ") || "updated"}`, touched: [] };
+      return { description: `Research design: ${[a.strict === true ? "enforced (research gaps are blockers)" : a.strict === false ? "no longer enforced" : "", a.objective ? "objective" : "", a.hypotheses?.length ? `${a.hypotheses.length} hypothes${a.hypotheses.length === 1 ? "is" : "es"}` : "", a.constructs?.length ? `${a.constructs.length} constructs` : "", a.researchQuestions?.length ? `${a.researchQuestions.length} research question${a.researchQuestions.length === 1 ? "" : "s"}` : "", a.kpis?.length ? `${a.kpis.length} KPI${a.kpis.length === 1 ? "" : "s"}` : "", a.audience ? "audience" : "", a.population ? "population" : "", a.brief ? `brief (${Object.keys(a.brief).map((k) => BRIEF_WORDS[k] ?? k).join(", ")})` : ""].filter(Boolean).join(", ") || "updated"}`, touched: [] };
     }
     case "add_punch": {
       /*
@@ -896,6 +901,8 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
   }
 }
 
+/** the brief's fields, in words (Phase 8) */
+export const BRIEF_WORDS: Record<string, string> = { client: "client", businessQuestion: "business question", decision: "decision", background: "background", stakeholders: "stakeholders", deadline: "deadline", deliverables: "deliverables" };
 const ROLES = new Set(["independent", "dependent", "mediator", "moderator", "control", "screening", "descriptive"]);
 const KNOWN_FUNCTIONS = new Set(["SUM", "COUNT", "AVG", "MEAN", "MIN", "MAX", "IF", "ROUND", "ABS", "LEN", "CONTAINS", "AND", "OR", "NOT", "TRUE", "FALSE", "NULL", "ANSWERED", "SELECTED", "FLOOR", "CEIL", "NUMBER", "TEXT", "DATE", "TODAY", "NOW", "DAYS"]);
 const identifiers = (expr: string): string[] => [...new Set((expr.replace(/"[^"]*"|'[^']*'/g, " ").match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? []))];
@@ -1224,7 +1231,7 @@ export function describeAction(a: SurveyAction): string {
     case "create_randomizer": return `Randomize ${a.blocks.join(", ")}`;
     case "create_branch": return `Show ${a.blocks.join(", ")} only when ${condWords(a.when)}${a.arms?.length ? ` (+${a.arms.length} more arm${a.arms.length === 1 ? "" : "s"})` : ""}`;
     case "create_loop": return `Loop ${a.from}${a.to !== a.from ? `–${a.to}` : ""}`;
-    case "set_research": return a.strict === true && Object.keys(a).length === 2 ? "Enforce the research design" : a.strict === false && Object.keys(a).length === 2 ? "Stop enforcing the research design" : "Record the research design";
+    case "set_research": return a.strict === true && Object.keys(a).length === 2 ? "Enforce the research design" : a.strict === false && Object.keys(a).length === 2 ? "Stop enforcing the research design" : a.brief && Object.keys(a).length === 2 ? `Record the project brief (${Object.keys(a.brief).map((k) => BRIEF_WORDS[k] ?? k).join(", ")})` : "Record the research design";
     case "add_punch": return a.expression ? `Punch rule ${a.expression}` : `Punch ${a.target} when ${a.when ? condWords(a.when) : "otherwise"}`;
     case "remove_punches": return `Remove the punch rules of ${a.target}`;
     case "create_style": return `Style “${a.label}”`;

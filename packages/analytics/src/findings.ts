@@ -8,6 +8,7 @@ import { MIN_BASE } from "./analyses/common.js";
 import { recommendCharts } from "./recommend.js";
 import { plannedAnalyses, type PlannedAnalysis } from "./planBridge.js";
 import { withPlannedVariables } from "./plannedVariables.js";
+import { describeSince, kpiSnapshot, type KpiSnapshot, type WaveComparison } from "./waves.js";
 import { buildAnalysisFramework, parseHypothesis, structuredHypotheses } from "@rescript/engine";
 import { adjustP, pairwiseComparisons, CORRECTION_WORDS, type CorrectionMethod, type PairwiseResult } from "./posthoc.js";
 import { adviseAnalysis, adviceSummary, type DataAdvice } from "./dataAdvice.js";
@@ -98,6 +99,10 @@ export interface AnalysisRun {
   advice?: DataAdvice[];
   /** what the run found beyond the plan (Phase 4) */
   discoveries?: Discoveries;
+  /** every KPI of the design measured on this run's data (Phase 8) */
+  kpis?: KpiSnapshot[];
+  /** what moved since the previous comparable run (Phase 8) — attached by whoever has the previous run */
+  since?: WaveComparison;
 }
 
 /* ------------------------------------------------------------ strength */
@@ -550,8 +555,9 @@ export function runPlan(def: SurveyDefinition, input: Dataset, opts: { trigger?:
   const advice = items.map((it) => it.advice).filter((a): a is DataAdvice => !!a);
   const discoveries = opts.discover === false ? undefined : synthesize(def, dataset, { method: corrMethod });
   const warnings = [...new Set([...prepared.warnings, ...items.flatMap((it) => it.result.warnings)])];
+  const kpis = kpiSnapshot(def, dataset);
   return { computedAt: opts.now ?? new Date().toISOString(), trigger: opts.trigger ?? "manual", environment: dataset.spec.environment, n: dataset.cases.length, items, findings, verdicts, warnings,
-    ...(corrections ? { corrections } : {}), ...(advice.length ? { advice } : {}), ...(discoveries ? { discoveries } : {}) };
+    ...(corrections ? { corrections } : {}), ...(advice.length ? { advice } : {}), ...(discoveries ? { discoveries } : {}), ...(kpis.length ? { kpis } : {}) };
 }
 
 /** the run without its results — what is stored and sent around */
@@ -573,7 +579,9 @@ export function briefText(run: Pick<AnalysisRun, "computedAt" | "n" | "findings"
   const adj = (f: Finding) => (f.evidence.adjusted && f.significant && !f.evidence.adjusted.significant ? ` [not significant after ${CORRECTION_WORDS[f.evidence.adjusted.method]} correction, ${fmtP(f.evidence.adjusted.p)}]` : "");
   if (shown.length) { lines.push(`  Findings (strongest first):`); for (const f of shown) lines.push(`    [${f.significant ? f.strength : "ns"}] ${f.headline}${f.hypotheses.length ? ` (${f.hypotheses.join(", ")})` : ""}${adj(f)}${f.detail ? ` ${f.detail}` : ""}`); }
   if (run.findings.length > shown.length) lines.push(`    … and ${run.findings.length - shown.length} more`);
-  const r = run as Partial<Pick<AnalysisRun, "corrections" | "advice" | "discoveries">>;
+  const r = run as Partial<Pick<AnalysisRun, "corrections" | "advice" | "discoveries" | "kpis" | "since">>;
+  if (r.kpis?.length) lines.push(`  KPIs: ${r.kpis.map((k) => `${k.name} ${k.value === null ? `— (${k.measure})` : `${k.value}${/share|box/.test(k.measure) ? "%" : ""} (${k.measure}, n=${k.n})`}${k.target ? `, target ${k.target}` : ""}`).join("; ")}`);
+  if (r.since) for (const line of describeSince(r.since)) lines.push(`  ${line}`);
   if (r.corrections?.summary) lines.push(`  Corrections: ${r.corrections.summary}`);
   if (r.advice?.length) lines.push(`  Data advice: ${adviceSummary(r.advice)}`);
   if (r.discoveries) {
