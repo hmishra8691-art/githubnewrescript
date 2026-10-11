@@ -68,13 +68,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       { status: 400 },
     );
   }
-  await db.from("audit_logs").insert({
-    customer_id: survey.customer_id,
-    action: "survey.status",
-    entity: "survey",
-    entity_id: params.id,
-    detail: { from: survey.status, to: status },
-  });
+  /* in the project's Activity log (dashboard brief §8): it used to be written without the survey or the person, so the log never showed it */
+  await audit({ action: "survey.status_changed", userId: gate.user.userId, sessionId: gate.user.sessionId, surveyId: params.id, customerId: survey.customer_id, entity: "survey", entityId: params.id, detail: { from: survey.status, to: status } });
   return NextResponse.json({ ok: true, status });
 }
 

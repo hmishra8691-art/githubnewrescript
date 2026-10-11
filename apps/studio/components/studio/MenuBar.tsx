@@ -40,12 +40,14 @@ export interface MenuBarProps {
   setTab(tab: string): void;
   counts: Partial<Record<string, number>>;
   analyticsHref?: string;
+  /** beside the Mode cluster: this project's spend (dashboard brief §2C) — absent in the sandbox */
+  after?: React.ReactNode;
 }
 
 const HOVER_OPEN_MS = 140;
 const LEAVE_CLOSE_MS = 220;
 
-export function MenuBar({ nav, tab, setTab, counts, analyticsHref }: MenuBarProps) {
+export function MenuBar({ nav, tab, setTab, counts, analyticsHref, after }: MenuBarProps) {
   const mode = useMode();
   const groups = React.useMemo(() => buildMenuGroups(nav, { analyticsHref }), [nav, analyticsHref]);
   const iconOf = React.useMemo(() => new Map(nav.map((n) => [n.key, n.icon])), [nav]);
@@ -183,6 +185,7 @@ export function MenuBar({ nav, tab, setTab, counts, analyticsHref }: MenuBarProp
           testId="mode-cluster">
           <ModeMenu onDone={closeAll} />
         </Group>
+        {after}
       </div>
 
       {/* WHERE AM I — the group and tool on screen, and the environment when it matters */}

@@ -30,12 +30,8 @@ const SORTS: { key: SortKey; label: string }[] = [
   { key: "responses_asc", label: "Fewest responses" },
   { key: "questions_desc", label: "Most questions" },
   { key: "due", label: "Due soonest" },
-  /* the spending sorts: "which study is about to stop" is a question about
-     money, and none of the sorts above can answer it */
-  { key: "balance_asc", label: "Least left to spend" },
-  { key: "balance_desc", label: "Most left to spend" },
-  { key: "used_desc", label: "Most spent" },
-  { key: "used_asc", label: "Least spent" },
+  /* the spending sorts left with the spend figures (dashboard brief §1): a
+     project's spend is read on its overview and in Usage & Wallet, not here */
 ];
 
 /** The spending states a researcher filters by, in the words the cards use. */
@@ -463,7 +459,7 @@ export default function Dashboard() {
 
   return (
     <div className="dash">
-      <AppHeader active="dashboard" user={session.state.kind === "signed_in" ? session.state.user : null} onSignOut={() => void session.signOut()} />
+      <AppHeader active="dashboard" user={session.state.kind === "signed_in" ? session.state.user : null} onSignOut={() => void session.signOut()} onAddFunds={billingOn ? () => setAddingFunds(true) : undefined} />
 
       <section className="hero" data-testid="dash-hero">
         <div>
@@ -473,52 +469,13 @@ export default function Dashboard() {
         </div>
       </section>
 
-      {/* the workspace in six numbers, all summed from the statistics the cards
-          below show per project — a band rather than a corner, so the first
-          screen answers "how much is going on here" before any scrolling */}
+      {/* the workspace in two numbers (dashboard brief §1): how many projects, how many are live — the rest belongs to each project */}
       <div className="hero-metrics" aria-label="Workspace summary" data-testid="dash-metrics">
         <div className="metric"><span className="metric-v">{surveys ? totals.surveys : <span className="sk sk-num" />}</span><span className="metric-l">Projects</span></div>
         <div className="metric"><span className="metric-v">{surveys ? totals.live : <span className="sk sk-num" />}</span><span className="metric-l">Live</span></div>
-        <div className="metric"><span className="metric-v">{surveys ? totals.responses.toLocaleString() : <span className="sk sk-num" />}</span><span className="metric-l">Live responses</span></div>
-        <div className="metric"><span className="metric-v">{surveys ? totals.test.toLocaleString() : <span className="sk sk-num" />}</span><span className="metric-l">Test responses</span></div>
-        <div className="metric"><span className="metric-v">{surveys ? totals.completes.toLocaleString() : <span className="sk sk-num" />}</span><span className="metric-l">Completes</span></div>
-        <div className="metric"><span className="metric-v">{surveys ? totals.questions.toLocaleString() : <span className="sk sk-num" />}</span><span className="metric-l">Questions</span></div>
       </div>
 
-      {/*
-        * ONE WALLET, ABOVE THE PROJECTS THAT SPEND IT.
-        *
-        * The balance belongs here and not on the cards, because there is one
-        * of it: repeating it on every card would suggest each project had its
-        * own, which is exactly the model this replaced. The cards below say
-        * what each study has spent and what it may still take; this says what
-        * there is.
-        */}
-      {billingOn && wallet && (
-        <div className={`dash-wallet ${wallet.state === "read_only" ? "empty" : ""}`} data-testid="dash-wallet"
-          data-level={wallet.level} data-state={wallet.state}>
-          <div className="dw-main">
-            <div className="dw-label">My wallet</div>
-            <div className="dw-balance" data-testid="dash-wallet-balance">{fmtMoney(wallet.balance, wallet.currency)}</div>
-            <div className="dw-sub muted">
-              {fmtMoney(wallet.totalUsed, wallet.currency)} used of {fmtMoney(wallet.totalAdded, wallet.currency)} added
-              {wallet.reserved > 0 ? ` · ${fmtMoney(wallet.reserved, wallet.currency)} held by work in progress` : ""}
-            </div>
-          </div>
-          <div className="dw-side">
-            <span className={`badge ${wallet.state === "suspended" ? "error" : LEVEL_CLASS[wallet.level]}`} data-testid="dash-wallet-level">
-              {wallet.state === "suspended" ? "Suspended" : wallet.state === "read_only" ? "Empty" : LEVEL_WORD[wallet.level]}
-            </span>
-            <button className="btn small primary" data-testid="dash-add-funds" onClick={() => setAddingFunds(true)}>Add funds</button>
-            <a className="btn small" href="/billing">My usage</a>
-          </div>
-          {wallet.state === "read_only" && (
-            <div className="dw-note" data-testid="dash-wallet-empty">
-              Your wallet is empty, so every project has stopped running billable work. Adding funds starts them again.
-            </div>
-          )}
-        </div>
-      )}
+      {/* the wallet is in the header now (dashboard brief §3): one compact balance beside the account controls, its actions behind it */}
 
       <div className="dash-body">
       <div className="dash-main">
@@ -538,13 +495,6 @@ export default function Dashboard() {
           <option value="has">Has responses</option>
           <option value="none">No responses</option>
         </select>
-        {/* offered only where there are wallets to filter by */}
-        {billingOn && (
-          <select className="select" aria-label="Filter by wallet balance" data-testid="dash-balance-filter"
-            value={balanceFilter} onChange={(e) => setBalanceFilter(e.target.value as BalanceFilter)}>
-            {BALANCE_FILTERS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
-          </select>
-        )}
       </div>
 
       <div className="dash-filters" data-testid="dash-ownership">
@@ -587,8 +537,7 @@ export default function Dashboard() {
         <span className="grow" />
         {surveys && surveys.length > 0 && (
           <span className="muted dash-summary">
-            {totals.surveys} survey{totals.surveys === 1 ? "" : "s"} · {totals.live} live ·{" "}
-            {totals.responses.toLocaleString()} live responses
+            {totals.surveys} project{totals.surveys === 1 ? "" : "s"} · {totals.live} live
           </span>
         )}
       </div>
@@ -636,8 +585,9 @@ export default function Dashboard() {
           onResponses={() => (window.location.href = `/studio/${s.id}?tab=data`)}
           onStatus={(status) => setStatus(s.id, status)}
           onDelete={() => { setDeleting(s); setConfirmText(""); setDeleteError(null); }}
-          meter={billingOn ? meters[s.id] ?? null : undefined}
-          meterLoading={metersLoading}
+          /* no spend on the list (dashboard brief §1): the figure lives on the project's overview and in Usage & Wallet; the budget control stays in the menu */
+          meter={undefined}
+          meterLoading={false}
           canBudget={!!budgetable[s.id]}
           onBudget={() => setBudgeting(s)}
           onClone={() => setCloning(s)}
@@ -850,7 +800,7 @@ export default function Dashboard() {
           currency={wallet?.currency ?? "USD"}
           balance={wallet?.balance ?? 0}
           onClose={() => setAddingFunds(false)}
-          onRequested={() => { void loadMeters(); }}
+          onRequested={() => { void loadMeters(); try { window.dispatchEvent(new Event("rescript:wallet-changed")); } catch { /* no window */ } }}
         />
       )}
       {cloning && (

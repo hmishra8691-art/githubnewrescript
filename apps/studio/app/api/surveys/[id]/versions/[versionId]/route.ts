@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
-import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
+import { audit, isFailure, requireEditRight, requireProject } from "@/lib/guard";
 import { nextVersion } from "@rescript/engine";
 import { shouldSnapshotDraft } from "@/lib/draftSnapshot";
 
@@ -35,7 +35,7 @@ export async function POST(
   const db = supabaseAdmin();
   const { data, error } = await db
     .from("survey_versions")
-    .select("id")
+    .select("id, version")
     .eq("survey_id", params.id)
     .eq("id", params.versionId)
     .single();
@@ -150,9 +150,7 @@ export async function POST(
       await db.from("surveys").update({ current_version_id: data.id }).eq("id", params.id);
     }
   }
-  await db.from("audit_logs").insert({
-    action: "survey.version.restore", entity: "survey_version", entity_id: data.id,
-    detail: { survey_id: params.id, ...(savedDraftAs ? { draftSavedAsVersion: savedDraftAs } : {}) },
-  });
+  /* in the project's Activity log (dashboard brief §8): written with the survey and the person, under the event the log already describes */
+  await audit({ action: "version.restored", userId: gate.user.userId, sessionId: gate.user.sessionId, surveyId: params.id, customerId: gate.survey.customer_id, entity: "survey_version", entityId: data.id, detail: { version: data.version, ...(savedDraftAs ? { draftSavedAsVersion: savedDraftAs } : {}) } });
   return NextResponse.json({ ok: true, revision, savedDraftAs });
 }

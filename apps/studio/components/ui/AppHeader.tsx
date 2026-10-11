@@ -3,6 +3,7 @@ import React from "react";
 import type { SessionUser } from "@/lib/useSession";
 import { interviewsHandoffHref } from "@/lib/interviews-url";
 import { Icon } from "./Icon";
+import { WalletMenu } from "../billing/WalletMenu";
 
 /**
  * THE TOP-LEVEL HEADER shared by the Dashboard and Data Analytics pages:
@@ -10,11 +11,13 @@ import { Icon } from "./Icon";
  * Profile / Security / Administration / Sign out). Presentation only — every
  * link goes where the old buttons went and sign-out calls the same handler.
  */
-export function AppHeader({ active, user, onSignOut, crumbs }: {
+export function AppHeader({ active, user, onSignOut, crumbs, onAddFunds }: {
   active: "dashboard" | "analytics" | "account";
   user: SessionUser | null;
   onSignOut?: () => void;
   crumbs?: React.ReactNode;
+  /** the page's own add-funds dialog, when it has one; otherwise the wallet menu links to /billing */
+  onAddFunds?: () => void;
 }) {
   const [open, setOpen] = React.useState(false);
   /* read once — NEXT_PUBLIC_INTERVIEWS_URL is inlined at build time and cannot change */
@@ -39,12 +42,13 @@ export function AppHeader({ active, user, onSignOut, crumbs }: {
       <span className="grow" />
       {user && (
         <div className="apph-account" data-testid="dash-account">
+          {/* the wallet, compact, beside the account controls (dashboard brief §3) — the one place the balance lives on these pages */}
+          <WalletMenu onAddFunds={onAddFunds} />
           {active !== "account" && (
             <>
               {!!user.unread && <a className="btn small" href="/profile" title="You have unread notifications"><Icon name="bell" size={14} /> {user.unread} new</a>}
               <a className="btn small" href="/profile">Profile</a>
               <a className="btn small" href="/security">Security</a>
-              <a className="btn small" href="/billing">My usage</a>
               {user.isPlatformAdmin && <a className="btn small" href="/admin">Administration</a>}
               <button className="btn small" data-testid="dash-signout" onClick={() => onSignOut?.()}>Sign out</button>
             </>

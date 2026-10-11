@@ -31,6 +31,7 @@ import { runtimeBaseUrl, surveyBaseUrl } from "@/lib/runtime-url";
 import { Icon, type IconName } from "@/components/ui/Icon";
 import { LocalizationPanel } from "./localization/LocalizationPanel";
 import { UsagePanel, useMeterView } from "./UsagePanel";
+import { WalletMenu } from "../billing/WalletMenu";
 import { fmtMoney } from "@/components/billing/shared";
 import { ModeProvider } from "./ModeContext";
 import { SelectionProvider } from "./SelectionContext";
@@ -886,7 +887,9 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
     <ModeChooser />
     <div className={`ide${modeCtx?.focus ? " is-focus" : ""}${modeCtx?.focus && programmingMode === "studio" && tab === "questions" ? " focus-studio" : ""}`} data-testid="ide">
       <div className="topbar">
-        <a href="/" className="logo-mark" style={{ width: 30, height: 30, fontSize: 15 }} title="Dashboard">R</a>
+        <a href="/" className="logo-mark" style={{ width: 30, height: 30, fontSize: 15 }} title="All projects">R</a>
+        {/* the project's overview is one click away, and the overview is one click from the project list (dashboard brief §2) */}
+        <a href={s.surveyDbId === "sandbox" ? "/sandbox/overview" : `/studio/${s.surveyDbId}`} className="btn small ctx-overview" data-testid="project-overview-link" title="Project overview — status, configuration, spend, modules">← Overview</a>
         <div className="ctx" data-testid="project-context">
           <span className="ctx-title title">{s.def.meta.title}</span>
           <span className="ctx-meta">
@@ -913,8 +916,9 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
         <a className="btn" href={`/api/surveys/${s.surveyDbId}/export/xlsx`} target="_blank"><Icon name="download" size={15} /> Variables .xlsx</a>
         <button className="btn" data-testid="export-survey" onClick={() => setExportOpen(true)}
           title="Export the survey you are editing as Word or JSON"><Icon name="export" size={15} /> Export</button>
-        <WalletBadge surveyId={s.surveyDbId} onOpen={() => setTab("usage")} />
         <button className="btn" onClick={() => setTab("data")} title="Browse test and live responses"><Icon name="data" size={15} /> Data</button>
+        {/* the wallet, compact, beside the account (dashboard brief §3): the owner's balance, never this project's spend; its actions behind it */}
+        {s.surveyDbId === "sandbox" ? <WalletBadge surveyId={s.surveyDbId} onOpen={() => setTab("usage")} /> : <WalletMenu inStudio onAddFunds={() => setTab("usage")} />}
         {session.state.kind === "signed_in" && (
           <span className="row" style={{ gap: 6 }} data-testid="studio-user">
             <span
@@ -941,7 +945,8 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
         * The workspace below gets the sidebar's width back.
         */}
       <MenuBar nav={NAV} tab={tab} setTab={setTabGuarded} counts={counts}
-        analyticsHref={s.surveyDbId ? `/analytics?survey=${encodeURIComponent(s.surveyDbId)}` : "/analytics"} />
+        analyticsHref={s.surveyDbId ? `/analytics?survey=${encodeURIComponent(s.surveyDbId)}` : "/analytics"}
+        after={<ProjectSpendChip surveyId={s.surveyDbId} onOpen={() => setTab("usage")} />} />
       {blocker && (
         <div className="save-blocker" role="alert" data-testid="save-blocker">
           <div className="save-blocker-head">
@@ -1185,6 +1190,26 @@ function WalletBadge({ surveyId, onOpen }: { surveyId: string; onOpen: () => voi
   return (
     <button className={`bl-wallet-badge ${level}`} onClick={onOpen} data-testid="wallet-badge" data-level={level} title="Project wallet — open Usage & Wallet">
       <Icon name="chart" size={13} /> {fmtMoney(view.summary.remaining, view.wallet.currency)}
+    </button>
+  );
+}
+
+/**
+ * THIS PROJECT'S SPEND, BESIDE MODE (dashboard brief §2C): `Project spend:
+ * $12.34` from the same meter the Usage tab reads — the project's own figure,
+ * never the wallet's balance, which the header shows. Re-reads with the meter
+ * (five-second cache, and on every change the Usage tab makes). Absent in the
+ * sandbox and on a Studio without the billing tables.
+ */
+function ProjectSpendChip({ surveyId, onOpen }: { surveyId: string; onOpen: () => void }) {
+  const { view } = useMeterView(surveyId);
+  if (!view || !view.project) return null;
+  const p = view.project;
+  return (
+    <button type="button" className={`menubar-btn project-spend ${p.state === "frozen" || p.state === "read_only" ? "stopped" : ""}`} onClick={onOpen} data-testid="project-spend" data-used={p.used} data-state={p.state}
+      title={`What this project has spent${p.limit != null ? ` of its ${fmtMoney(p.limit, view.wallet.currency)} limit` : " from the owner's wallet"}${p.state === "frozen" ? " — stopped at its limit" : p.state === "read_only" ? " — stopped: the wallet is empty" : ""}. Open Usage & Wallet.`}>
+      <span className="menubar-btn-label">Project spend</span>
+      <span className="menubar-btn-detail mono" data-testid="project-spend-amount">{fmtMoney(p.used, view.wallet.currency)}</span>
     </button>
   );
 }

@@ -74,6 +74,8 @@ const routes = async (p) => {
     status: 200, contentType: "application/json",
     body: JSON.stringify({ ok: true, currency: "USD", wallet: WALLET, thresholds: { low: 20, critical: 5, readOnly: 0 }, isPlatformAdmin: false, projects: PROJECTS }),
   }));
+  /* the header's compact wallet (dashboard brief §3) reads the wallet alone */
+  await p.route("**/api/billing/wallet", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, wallet: WALLET, thresholds: { low: 20, critical: 5, readOnly: 0 } }) }));
 };
 await routes(page);
 
@@ -113,127 +115,77 @@ await page.route("**/api/surveys/*", (route) => route.continue());
 
 await page.goto("http://localhost:3000/", { waitUntil: "networkidle" });
 await page.waitForSelector(".survey-card:not(.skeleton)");
-await page.waitForSelector('[data-testid="dash-wallet"]');
+await page.waitForSelector('[data-testid="wallet-menu"]');
 
 const card = (title) => `.survey-card:has-text("${title}")`;
 const textOf = async (sel) => (await page.$eval(sel, (el) => el.innerText.replace(/\s+/g, " "))).trim();
 
-/* -------------------------------------------------- 1. one wallet, at the top */
+/* -------------------------------------------------- 1. one wallet, in the header */
 
-console.log("\nTHE WALLET — one balance for the whole page, not one per card");
+console.log("\nTHE WALLET — one compact balance in the header, its actions behind it (dashboard brief §3)");
 {
-  const w = await textOf('[data-testid="dash-wallet"]');
-  assert.ok(w.includes("$265.00"), `the balance is shown once, at the top: ${w}`);
+  assert.equal(await page.$('[data-testid="dash-wallet"]'), null, "the large wallet panel is gone from the page");
+  assert.equal(await textOf('[data-testid="wallet-pill-balance"]'), "$265.00", "the balance, two decimals, in the header");
+  await page.click('[data-testid="wallet-pill"]');
+  await page.waitForSelector('[data-testid="wallet-menu-panel"]');
+  const w = await textOf('[data-testid="wallet-menu-panel"]');
   assert.ok(w.toUpperCase().includes("MY WALLET"));
   assert.match(w, /\$235\.00 used of \$500\.00 added/);
-  assert.equal(await textOf('[data-testid="dash-wallet-level"]'), "Healthy");
-  assert.ok(await page.$('[data-testid="dash-add-funds"]'), "and funds are added in one place, not per project");
+  assert.equal(await textOf('[data-testid="wallet-menu-level"]'), "Healthy");
+  assert.ok(await page.$('[data-testid="wallet-add-funds"]'), "funds are added from the wallet, not per project");
+  assert.ok(await page.$('[data-testid="wallet-usage"]') && await page.$('[data-testid="wallet-transactions"]'), "usage and the transaction history are one click away");
+  await page.keyboard.press("Escape"); await page.click("body", { position: { x: 5, y: 400 } }); await page.waitForTimeout(150);
+  console.log("  ok   $265.00 once, in the header, with Add funds, Usage & billing and Transaction history behind it");
+}
 
-  /*
-   * No card presents the wallet's balance as THIS project's figure. A card
-   * may name the wallet — the frozen one does, to say the money is still
-   * there — but the "left" figure on a budgeted project is its own headroom.
-   */
-  for (const t of ["Brand Tracker", "Pricing Pilot"]) {
-    const left = await textOf(`${card(t)} [data-testid="cw-remaining"]`);
-    assert.notEqual(left, "$265.00", `${t} shows its own headroom, not the wallet balance`);
-    assert.ok((await textOf(`${card(t)} [data-testid="card-wallet"]`)).toUpperCase().includes("LEFT OF IT"),
-      `${t} labels that figure as its own budget's`);
+/* ------------------------------------------- 2. the cards: no spend on the list */
+
+console.log("\nTHE CARDS — metrics, no money (dashboard brief §1): the spend lives on the project's overview and in Usage & Wallet");
+{
+  assert.equal((await page.$$('[data-testid="card-wallet"]')).length, 0, "no spend on any card");
+  for (const t of ["Consumer Research", "Brand Tracker", "Pricing Pilot"]) {
+    const labels = await page.$$eval(`${card(t)} .stat-label`, (els) => els.map((e) => e.textContent));
+    assert.deepEqual(labels, ["Questions", "Responses", "Test", "Live", "Complete"], `${t} keeps its five metrics`);
   }
-  console.log("  ok   $265.00 once, above the list, with Add funds beside it");
+  console.log("  ok   five metrics per card, no spend figure, no meter bar");
 }
 
-/* ------------------------------------------- 2. each card: spent, and out of what */
+/* --------------------------------------- 3. an empty wallet is said in the header */
 
-console.log("\nTHE CARDS — what this study spent, and which limit will stop it");
+console.log("\nAN EMPTY WALLET — said once, where the wallet is");
 {
-  const shared = await textOf(`${card("Consumer Research")} [data-testid="card-wallet"]`);
-  assert.ok(shared.includes("$120.00"), `its own spend: ${shared}`);
-  assert.equal(await textOf(`${card("Consumer Research")} [data-testid="cw-limit"]`), "No limit");
-  assert.equal(await textOf(`${card("Consumer Research")} [data-testid="cw-remaining"]`), "$265.00");
-  assert.ok(shared.toUpperCase().includes("WALLET LEFT"), "labelled as the WALLET's money, not the project's");
-
-  const capped = await textOf(`${card("Brand Tracker")} [data-testid="card-wallet"]`);
-  assert.equal(await textOf(`${card("Brand Tracker")} [data-testid="cw-used"]`), "$0.60");
-  assert.equal(await textOf(`${card("Brand Tracker")} [data-testid="cw-limit"]`), "$1.00");
-  assert.equal(await textOf(`${card("Brand Tracker")} [data-testid="cw-remaining"]`), "$0.40");
-  assert.ok(capped.toUpperCase().includes("LEFT OF IT"), "a budgeted project is measured against ITS budget");
-  assert.equal(await textOf(`${card("Brand Tracker")} [data-testid="card-wallet-level"]`), "Critical",
-    "40c left of its dollar is critical even though the wallet is healthy");
-
-  console.log("  ok   shared: $120 spent, no limit, $265 wallet left · capped: $0.60 of $1.00, $0.40 left, Critical");
-}
-
-/* --------------------------------------- 3. stopped by its own limit vs by the wallet */
-
-console.log("\nTWO WAYS TO STOP — and they read differently, because they need different actions");
-{
-  assert.equal(await textOf(`${card("Pricing Pilot")} [data-testid="card-wallet-level"]`), "Limit reached");
-  const frozen = await textOf(`${card("Pricing Pilot")} [data-testid="card-wallet-frozen"]`);
-  assert.match(frozen, /own limit of \$1\.00/);
-  assert.match(frozen, /wallet still has \$265\.00 for other projects/,
-    "it says the money is still there — the remedy is a limit, not a top-up");
-  assert.equal(await page.$(`${card("Pricing Pilot")} [data-testid="card-wallet-readonly"]`), null);
-  assert.equal(await textOf(`${card("Pricing Pilot")} [data-testid="card-budget"]`), "Raise limit",
-    "and the button offers exactly that");
-
-  /* now empty the wallet: every project stops, for the other reason */
   const before = { ...WALLET };
   WALLET = { ...WALLET, balance: 0, available: 0, totalUsed: 500, level: "locked", state: "read_only" };
-  PROJECTS = PROJECTS.map((p) => p.meter
-    ? { ...p, meter: { ...p.meter, walletRemaining: 0, allowance: 0, state: p.meter.state === "frozen" ? "frozen" : "read_only" } }
-    : p);
   await page.reload({ waitUntil: "networkidle" });
-  await page.waitForSelector('[data-testid="dash-wallet"]');
-  assert.equal(await textOf('[data-testid="dash-wallet-level"]'), "Empty");
-  assert.ok(await page.$('[data-testid="dash-wallet-empty"]'), "the wallet says why everything stopped");
-  assert.equal(await textOf(`${card("Consumer Research")} [data-testid="card-wallet-level"]`), "Wallet empty");
-  assert.match(await textOf(`${card("Consumer Research")} [data-testid="card-wallet-readonly"]`), /wallet is empty/i);
-  assert.equal(await textOf(`${card("Pricing Pilot")} [data-testid="card-wallet-level"]`), "Limit reached",
-    "a project already stopped by its own rule still says so — that is still its problem");
-
+  await page.waitForSelector('[data-testid="wallet-menu"][data-state="read_only"]');
+  assert.equal(await textOf('[data-testid="wallet-pill-balance"]'), "$0.00");
+  await page.click('[data-testid="wallet-pill"]');
+  await page.waitForSelector('[data-testid="wallet-menu-panel"]');
+  assert.equal(await textOf('[data-testid="wallet-menu-level"]'), "Empty");
+  await page.click("body", { position: { x: 5, y: 400 } }); await page.waitForTimeout(150);
   WALLET = before;
-  PROJECTS = [
-    { id: "s1", meter: meter({ used: 120, allowance: 265, usedPct: 31.17, level: "normal" }), canBudget: true },
-    { id: "s2", meter: meter({ used: 0.6, limit: 1, mode: "budget", allowance: 0.4, usedPct: 60, level: "critical" }), canBudget: true },
-    { id: "s3", meter: meter({ used: 1, limit: 1, mode: "budget", allowance: 0, usedPct: 100, level: "locked", state: "frozen" }), canBudget: true },
-    { id: "s4", meter: null, canBudget: false },
-  ];
   await page.reload({ waitUntil: "networkidle" });
-  await page.waitForSelector('[data-testid="dash-wallet"]');
-  console.log("  ok   'Limit reached' names the project's rule; 'Wallet empty' names the wallet's");
+  await page.waitForSelector('[data-testid="wallet-menu"][data-state="active"]');
+  console.log("  ok   'Empty' in the header when the wallet is out");
 }
 
-/* ------------------------------------------------------ 4. finding them in a list */
+/* ------------------------------------------------------ 4. no money filters on the list */
 
-console.log("\nFILTERS — which study is at its limit, which is running low");
+console.log("\nFILTERS — the list is about projects, not balances");
 {
-  await page.selectOption('[data-testid="dash-balance-filter"]', "frozen");
-  await page.waitForTimeout(150);
-  let titles = await page.$$eval(".survey-card .survey-title", (els) => els.map((e) => e.innerText.split("\n")[0]));
-  assert.deepEqual(titles, ["Pricing Pilot"], `at its limit: ${titles}`);
-
-  await page.selectOption('[data-testid="dash-balance-filter"]', "critical");
-  await page.waitForTimeout(150);
-  titles = await page.$$eval(".survey-card .survey-title", (els) => els.map((e) => e.innerText.split("\n")[0]));
-  assert.deepEqual(titles, ["Brand Tracker Wave 3"], "a project close to its own limit is critical");
-
-  await page.selectOption('[data-testid="dash-balance-filter"]', "all");
-  await page.selectOption('[aria-label="Sort surveys"]', "balance_asc");
-  await page.waitForTimeout(150);
-  titles = await page.$$eval(".survey-card .survey-title", (els) => els.map((e) => e.innerText.split("\n")[0]));
-  assert.deepEqual(titles.slice(0, 2), ["Pricing Pilot", "Brand Tracker Wave 3"], `least left to spend first: ${titles}`);
-  assert.equal(titles[3], "Colleague Study", "a project with no meter sorts last, never first");
-  await page.selectOption('[aria-label="Sort surveys"]', "updated");
-  await page.waitForTimeout(150);
-  console.log("  ok   'at its limit' and 'critical' filters, and least-left-to-spend first");
+  assert.equal(await page.$('[data-testid="dash-balance-filter"]'), null, "no balance filter");
+  const sorts = await page.$$eval('[aria-label="Sort surveys"] option', (os) => os.map((o) => o.value));
+  assert.ok(!sorts.some((v) => /^(balance|used)_/.test(v)), `no spend sorts: ${sorts.join(", ")}`);
+  console.log("  ok   no balance filter, no spend sorts");
 }
 
 /* ------------------------------------------------------------- 5. the limit */
 
 console.log("\nSETTING A LIMIT — which moves no money, and says so");
 {
-  await page.click(`${card("Brand Tracker")} [data-testid="card-budget"]`);
+  await page.click(`${card("Brand Tracker")} .card-actions .menu-anchor button`);
+  await page.waitForSelector('[data-testid="budget-menu-item"]');
+  await page.click('[data-testid="budget-menu-item"]');
   await page.waitForSelector('[data-testid="budget-dialog"]');
   assert.match(await textOf('[data-testid="budget-context"]'), /\$0\.60 spent by this project/);
   assert.match(await textOf('[data-testid="budget-context"]'), /wallet holds \$265\.00/);
@@ -255,25 +207,25 @@ console.log("\nSETTING A LIMIT — which moves no money, and says so");
   await page.click('[data-testid="budget-dialog"] .btn.primary');
   await page.waitForTimeout(400);
 
-  assert.equal(await textOf(`${card("Brand Tracker")} [data-testid="cw-limit"]`), "$100.00");
-  assert.equal(await textOf('[data-testid="dash-wallet-balance"]'), "$265.00", "and the wallet is exactly what it was");
-  console.log("  ok   $1 → $100 on the card; the wallet balance unchanged");
+  assert.equal(await textOf('[data-testid="wallet-pill-balance"]'), "$265.00", "and the wallet is exactly what it was");
+  console.log("  ok   $1 → $100 saved from the card's menu; the wallet balance unchanged");
 }
 
 /* ----------------------------------------------- 6. raising a limit frees a project */
 
 console.log("\nRAISING A LIMIT — a stopped project runs again, with nothing transferred");
 {
-  await page.click(`${card("Pricing Pilot")} [data-testid="card-budget"]`);
+  await page.click(`${card("Pricing Pilot")} .card-actions .menu-anchor button`);
+  await page.waitForSelector('[data-testid="budget-menu-item"]');
+  await page.click('[data-testid="budget-menu-item"]');
   await page.waitForSelector('[data-testid="budget-dialog"]');
   await page.fill('[data-testid="budget-limit"]', "50");
   await page.click('[data-testid="budget-save"]');
   await page.waitForSelector('[data-testid="budget-done"]');
   await page.click('[data-testid="budget-dialog"] .btn.primary');
   await page.waitForTimeout(400);
-  assert.equal(await textOf(`${card("Pricing Pilot")} [data-testid="card-wallet-level"]`), "Healthy");
-  assert.equal(await page.$(`${card("Pricing Pilot")} [data-testid="card-wallet-frozen"]`), null);
-  assert.equal(await textOf('[data-testid="dash-wallet-balance"]'), "$265.00", "still nothing moved");
+  assert.deepEqual({ mode: saved.body.mode, limit: saved.body.limit }, { mode: "budget", limit: 50 });
+  assert.equal(await textOf('[data-testid="wallet-pill-balance"]'), "$265.00", "still nothing moved");
   console.log("  ok   the project is running; the balance never changed");
 }
 
@@ -281,7 +233,9 @@ console.log("\nRAISING A LIMIT — a stopped project runs again, with nothing tr
 
 console.log("\nADD FUNDS — a request, because payments are not connected yet");
 {
-  await page.click('[data-testid="dash-add-funds"]');
+  await page.click('[data-testid="wallet-pill"]');
+  await page.waitForSelector('[data-testid="wallet-add-funds"]');
+  await page.click('[data-testid="wallet-add-funds"]');
   await page.waitForSelector('[data-testid="add-funds-dialog"]');
   assert.match(await textOf('[data-testid="add-funds-balance"]'), /\$265\.00 in your wallet now/);
   await page.click('[data-testid="add-funds-100"]');
@@ -314,19 +268,17 @@ console.log("\nCLONE — still there, and still honest about the wallet");
 
 /* ------------------------------------------------------------ 9. narrow screen */
 
-console.log("\nNARROW SCREEN — the wallet and the cards survive a phone");
+console.log("\nNARROW SCREEN — the header wallet and the cards survive a phone");
 {
   const phone = await browser.newContext({ viewport: { width: 390, height: 900 } });
   await phone.addCookies([{ name: "rescript_session", value: "meter-test-session-0000", url: "http://localhost:3000" }]);
   const p2 = await phone.newPage();
   await routes(p2);
   await p2.goto("http://localhost:3000/", { waitUntil: "networkidle" });
-  await p2.waitForSelector('[data-testid="card-wallet"]');
+  await p2.waitForSelector(".survey-card:not(.skeleton)");
   const overflow = await p2.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   assert.ok(overflow <= 0, `no sideways scroll on a phone (${overflow}px)`);
-  assert.ok(await p2.$('[data-testid="dash-wallet"]'), "the wallet is still there");
-  const bar = await p2.$('[data-testid="card-wallet-bar"]');
-  assert.ok((await bar.boundingBox()).width > 100, "and the meter is still readable");
+  assert.ok(await p2.$('[data-testid="wallet-menu"]'), "the wallet is still there, in the header");
   await p2.click('.survey-card:has-text("Consumer Research") .card-actions .menu-anchor button');
   await p2.waitForSelector('[data-testid="budget-menu-item"]');
   await p2.screenshot({ path: "/tmp/project-meter-phone.png" });

@@ -22,6 +22,7 @@ All under `/api/`. `{id}` is the survey (project) id.
 | `surveys/{id}/lock` | GET, POST | project.read (acquire, release, request the edit lock) |
 | `surveys/{id}/clone`, `/transfer` | POST | project.clone; project.transfer |
 | `surveys/{id}/activity`, `/diagnostics` | GET | project.read_activity; project.read |
+| `surveys/{id}/overview` | GET | project.read — the project overview: facts, counts, the state of every module read from what is saved, this project's spend, its last activity |
 | `surveys/{id}/themes`, `/glossary`, `/brand-scrape` | GET, POST, PUT, DELETE | project.read; survey.edit |
 | `surveys/{id}/tests` | GET, POST | responses.read; survey.edit (the QA regression suite) |
 | `surveys/{id}/export/survey` | POST | project.read — `{ "format": "json" \| "docx" }` |
@@ -59,7 +60,7 @@ All under `/api/`. `{id}` is the survey (project) id.
 | `copilot/corpus` | POST | project.read | `{ surveyId, replay?, download? }` → the project's language corpus (every sentence with its reading, and the survey), optionally replayed against the engine as it runs |
 | `briefs` | GET | a session | the project briefs of the caller's projects, for copying one into the research design |
 
-**AI and translation:** `ai/logic`, `ai/rephrase`, `ai/transcribe`, `ai/tts`, `import/custom-logic` (metered AI calls), `ai/translate`, `translation/languages`, `translation/memory`, `translation/status`, `localization/export`, `localization/import`. **Import:** `import/analyze` (a questionnaire document → a definition), `import/quotas`, `import/record`. **Billing:** `billing/me`, `billing/projects`, `billing/transfer`, `surveys/{id}/billing`. **Auth and account:** `auth/login`, `auth/signup`, `auth/password`, `auth/logout`, `auth/me`, `auth/heartbeat`, `sessions`, `profile`, `notifications`.
+**AI and translation:** `ai/logic`, `ai/rephrase`, `ai/transcribe`, `ai/tts`, `import/custom-logic` (metered AI calls), `ai/translate`, `translation/languages`, `translation/memory`, `translation/status`, `localization/export`, `localization/import`. **Import:** `import/analyze` (a questionnaire document → a definition), `import/quotas`, `import/record`. **Billing:** `billing/me`, `billing/projects`, `billing/wallet` (the signed-in person's wallet alone — what the header shows), `billing/transfer`, `surveys/{id}/billing`. **Auth and account:** `auth/login`, `auth/signup`, `auth/password`, `auth/logout`, `auth/me`, `auth/heartbeat`, `sessions`, `profile`, `notifications`.
 
 ## The respondent runtime
 

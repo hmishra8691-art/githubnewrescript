@@ -4,6 +4,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
 import { newSurveyDefinition } from "@/lib/defaults";
 import { Studio } from "@/components/studio/Studio";
+import { ProjectOverview } from "@/components/project/ProjectOverview";
 import { ensureElementIds, migrateRetiredVariants } from "@rescript/engine";
 import { projectPageGate } from "@/lib/guard";
 import { SESSION_COOKIE_NAME } from "@/lib/authServer";
@@ -32,7 +33,7 @@ export const dynamic = "force-dynamic";
  * exists but cannot be parsed reports itself instead of pretending to be a new
  * survey.
  */
-export default async function StudioPage({ params }: { params: { id: string } }) {
+export default async function StudioPage({ params, searchParams }: { params: { id: string }; searchParams?: Record<string, string | string[] | undefined> }) {
   const gate = await projectPageGate(
     cookies().get(SESSION_COOKIE_NAME)?.value ?? null,
     params.id,
@@ -58,6 +59,15 @@ export default async function StudioPage({ params }: { params: { id: string } })
       </div>
     );
   }
+
+  /*
+   * THE PROJECT OPENS ON ITS OVERVIEW (dashboard brief §2): Login → Projects →
+   * Overview → the tool chosen there. A link that names a tool (`?tab=…`,
+   * `?mode=…`) goes straight to it, so every existing deep link and the
+   * tools' own links keep working; the bare project URL is the control panel.
+   */
+  const wantsTool = !!(searchParams && (typeof searchParams.tab === "string" || typeof searchParams.mode === "string" || typeof searchParams.split === "string"));
+  if (!wantsTool) return <ProjectOverview surveyDbId={params.id} />;
 
   const db = supabaseAdmin();
 

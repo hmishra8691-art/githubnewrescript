@@ -31,7 +31,7 @@ import type { Capability } from "@rescript/access";
  * wallet drain. Never set in production.
  */
 
-const SANDBOX_CUSTOMER = "sandbox";
+export const SANDBOX_CUSTOMER = "sandbox";
 const dbConfigured = () => !!process.env.SUPABASE_URL && !!process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 declare global {

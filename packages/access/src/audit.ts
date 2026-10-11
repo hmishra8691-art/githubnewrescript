@@ -89,6 +89,8 @@ export const AUDIT_EVENTS = [
      the request, what it created / modified / removed; the change itself is in the version history */
   "survey.ai_changed",
   "survey.saved",
+  /* the lifecycle status (draft → testing → live → paused → closed → archived) — the project's state changed by hand */
+  "survey.status_changed",
   "version.created",
   "version.restored",
   "deployment.started",
@@ -246,6 +248,7 @@ export function describeEvent(r: AuditRow): string {
     case "survey.imported": return `${who} imported ${str(d.fileName) || "a file"}${d.label ? ` (${str(d.label)})` : ""}${d.mode === "merge" ? " into this survey" : ""}${d.questions != null ? ` — ${str(d.questions)} questions${Number(d.review) ? `, ${str(d.review)} to review` : ""}` : ""}`;
     case "survey.modified": return `${who} modified the survey${d.summary ? ` — ${str(d.summary)}` : ""}`;
     case "survey.saved": return `${who} saved the survey`;
+    case "survey.status_changed": return `${who} changed the status${d.from ? ` from ${str(d.from)}` : ""} to ${str(d.to) || "?"}`;
     case "version.created": return `${who} created version ${str(d.version) || "?"}`;
     case "quota.created": return `${who} created quota “${str(d.quotaName) || str(d.quotaId)}”`;
     case "quota.modified": {

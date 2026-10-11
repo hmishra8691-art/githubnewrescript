@@ -56,6 +56,8 @@ export default function BillingPage() {
     } catch { setError({ text: "Could not reach the Studio." }); }
   }, []);
   React.useEffect(() => { void reload(); }, [reload]);
+  /* `/billing#add-funds` — the wallet menu's "Add funds" from a page that has no dialog of its own */
+  React.useEffect(() => { try { if (window.location.hash === "#add-funds") setAdding(true); } catch { /* no window */ } }, []);
   const user = state.kind === "signed_in" ? state.user : null;
   const cur = data?.wallet?.currency ?? "USD";
   const w = data?.wallet ?? null;
@@ -152,7 +154,7 @@ export default function BillingPage() {
           </div>
           <TransferCredits currency={cur} myUserCode={user?.userCode ?? ""} />
 
-          <div className="card bl-card" style={{ marginTop: 12 }}>
+          <div className="card bl-card" style={{ marginTop: 12 }} id="transactions">
             <div className="card-title">Recent usage</div>
             <UsageTable rows={data.recent} currency={cur} showProject testid="my-usage-rows" />
           </div>
