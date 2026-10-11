@@ -315,7 +315,13 @@ try {
   console.log("\nR3 — the studio page authorizes before it reads");
   {
     role = "owner";
-    const mine = await fetch(`${BASE}/studio/${SURVEY}`, { headers: cookie });
+    /* the bare project URL is the overview (dashboard brief §2); the editor, with the definition in the page, is the ?tab= URL */
+    const overview = await fetch(`${BASE}/studio/${SURVEY}`, { headers: cookie });
+    const overviewPage = await overview.text();
+    eq("a member gets the project overview", overview.status, 200);
+    ok("...and is not turned away", !/not found|cannot open this project/i.test(overviewPage), overviewPage.replace(/\s+/g, " ").slice(0, 200));
+    ok("...the overview shell, which carries no questionnaire of its own", overviewPage.includes("project-overview") && !overviewPage.includes(SECRET_QUESTION), "the overview page served the definition in its HTML");
+    const mine = await fetch(`${BASE}/studio/${SURVEY}?tab=questions`, { headers: cookie });
     const minePage = await mine.text();
     eq("a member gets the editor", mine.status, 200);
     ok("...and is not turned away", !/not found|cannot open this project/i.test(minePage),
@@ -325,13 +331,15 @@ try {
   }
   {
     role = null;   // not a member of this project at all
-    const theirs = await fetch(`${BASE}/studio/${SURVEY}`, { headers: cookie });
-    const page = await theirs.text();
-    ok("a stranger does NOT get the questionnaire", !page.includes(SECRET_QUESTION),
-      "the survey's question text was served to a user with no role on it");
-    ok("...nor the option labels", !page.includes("Under 20k"), "option labels leaked");
-    ok("...and is told 'not found', the same as a project that does not exist",
-      /not found/i.test(page), page.replace(/\s+/g, " ").slice(0, 300));
+    for (const url of [`${BASE}/studio/${SURVEY}`, `${BASE}/studio/${SURVEY}?tab=questions`]) {
+      const theirs = await fetch(url, { headers: cookie });
+      const page = await theirs.text();
+      ok(`a stranger does NOT get the questionnaire (${url.includes("tab=") ? "editor" : "overview"} URL)`, !page.includes(SECRET_QUESTION),
+        "the survey's question text was served to a user with no role on it");
+      ok("...nor the option labels", !page.includes("Under 20k"), "option labels leaked");
+      ok("...and is told 'not found', the same as a project that does not exist",
+        /not found/i.test(page), page.replace(/\s+/g, " ").slice(0, 300));
+    }
     role = "owner";
   }
   {
