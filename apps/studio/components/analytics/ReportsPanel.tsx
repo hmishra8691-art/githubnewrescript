@@ -1,10 +1,13 @@
 "use client";
 import { StoryReports } from "./StoryStudio";
 import React from "react";
+import { reportAnalysisIds } from "@rescript/analytics";
 import type { AnalysisDefinition, AnalysisResult, ChartSpec, DashboardBand, DashboardDefinition, DashboardWidget, ExportSettings, ReportBlock, ReportDefinition, ReportTheme } from "@rescript/analytics";
 import { CHART_CATALOG, DEFAULT_EXPORT_SETTINGS, describeTemplate, compactLayout, describeDashboardTemplate, firstFreeSlot, layoutRows, normalizeLayout, placeWidget, scrimFor, templateKind, type LayoutBox, type ReportTemplate } from "@rescript/analytics";
 import { AxApi, ApiError, type Row, type RunResult, timeAgo } from "./api";
 import { ReportView } from "./ReportView";
+import { ReportBuilderDialog } from "./ReportBuilderDialog";
+import { StoryPanel } from "./StoryPanel";
 import { mapImagesOnScreen } from "./ResultView";
 import { ICON_OPTIONS } from "./charts/Icons";
 import { MediaUrlInput } from "../studio/MediaUrlInput";
@@ -284,6 +287,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
   const [error, setError] = React.useState<string | null>(null);
   const [creating, setCreating] = React.useState<"report" | "dashboard" | null>(null);
   /* a story report open in its storyboard takes the whole panel */
+  const [builder, setBuilder] = React.useState(false);
   const [storyOpen, setStoryOpen] = React.useState(false);
   const [newName, setNewName] = React.useState("");
   /* §36 — report templates, and the saved filters a viewer may switch */
@@ -328,6 +332,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
   }, [api, analyses, results]);
 
   const openReport = async (r: Row) => {
+    setStoryOpen(false);
     setOpen(r); setDef(r.definition as ReportDefinition); setDirty(false); setViewVersion(null); setShownVersion(null); setMsg(null);
     await load(r);
     const v = await api.versions("reports", r.id).catch(() => ({ versions: [] })); setVersions(v.versions);
@@ -495,9 +500,10 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
     <div className="ax-panel" data-testid="ax-reports">
       <StoryReports surveyId={api.surveyId} onOpen={setStoryOpen} />
       {!storyOpen && <>
-      <div className="row" style={{ margin: "18px 0 10px" }}><h2 style={{ margin: 0 }}>Reports & dashboards</h2><span className="grow" /><button className="btn small" onClick={() => setCreating("report")} data-testid="ax-new-report">+ Blank report</button><button className="btn small" onClick={() => setCreating("dashboard")} data-testid="ax-new-dashboard">+ Dashboard</button></div>
+      <div className="row" style={{ margin: "18px 0 10px" }}><h2 style={{ margin: 0 }}>Reports & dashboards</h2><span className="grow" /><button className="btn primary small" onClick={() => setBuilder(true)} data-testid="ax-build-report" title="Draft a report from your saved analyses, around an objective and key questions">✦ Build with Rescript</button><button className="btn small" onClick={() => setCreating("report")} data-testid="ax-new-report">+ Blank report</button><button className="btn small" onClick={() => setCreating("dashboard")} data-testid="ax-new-dashboard">+ Dashboard</button></div>
       {creating && <div className="card row"><input className="input" autoFocus placeholder={`${creating === "report" ? "Report" : "Dashboard"} name`} value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && create()} data-testid="ax-report-name" /><button className="btn primary small" onClick={create} data-testid="ax-report-create">Create</button><button className="btn small" onClick={() => setCreating(null)}>Cancel</button></div>}
       {error && <div className="ax-error">{error}</div>}
+      {builder && <ReportBuilderDialog api={api} analyses={analyses} onClose={() => setBuilder(false)} onCreated={(r) => { onChange(); void openReport(r); }} />}
       <div className="ax-cards">
         {items.map((r) => <div key={r.id} className="card selectable" onClick={() => openReport(r)} data-testid="ax-report-card"><div className="card-title">{r.kind === "dashboard" ? "▦" : "▤"} {r.name}</div><div className="muted" style={{ fontSize: 13 }}>{r.kind} · {r.mode} · {r.published_version ? `published v${r.published_version}` : "not published"} · updated {timeAgo(r.updated_at)}</div></div>)}
         {!items.length && <div className="muted">No reports yet. Create one, then add saved analyses as charts, tables and KPIs.</div>}
@@ -511,7 +517,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
   return (
     <div className="ax-panel ax-report-builder" data-testid="ax-report-builder">
       <div className="ax-rb-bar">
-        <button className="btn small" onClick={() => { if (!dirty || confirm("Discard unsaved changes?")) { setOpen(null); setDef(null); } }}>← Reports</button>
+        <button className="btn small" onClick={() => { if (!dirty || confirm("Discard unsaved changes?")) { setOpen(null); setDef(null); setStoryOpen(false); } }}>← Reports</button>
         <input className="input" value={(rd?.title as string) ?? open.name} onChange={(e) => { setDef({ ...(def as ReportDefinition), title: e.target.value }); setDirty(true); }} style={{ maxWidth: 300, fontWeight: 600 }} />
         {!isDash && <input className="input" placeholder="Subtitle" value={rd?.subtitle ?? ""} onChange={(e) => { setDef({ ...rd, subtitle: e.target.value }); setDirty(true); }} style={{ maxWidth: 240 }} />}
         <select className="select small" value={open.theme_id ?? ""} onChange={async (e) => { const r = await api.update("reports", open.id, { themeId: e.target.value || null }); setOpen(r.item); onChange(); }} title="Report theme"><option value="">Default theme</option>{themes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
@@ -521,6 +527,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
         <button className="btn small" onClick={save} disabled={!dirty} data-testid="ax-report-save">{dirty ? "Save" : "Saved"}</button>
         <button className="btn primary small" onClick={publish} data-testid="ax-report-publish">Publish {open.published_version ? `v${open.published_version + 1}` : "v1"}</button>
         <button className="btn small" onClick={() => setTemplatesOpen((o) => !o)} data-testid="ax-templates">Templates</button>
+        {!isDash && <button className={`btn small ${storyOpen ? "primary" : ""}`} onClick={() => setStoryOpen((o) => !o)} data-testid="ax-story-toggle" title="The animated story of this report">{rd?.story ? "Story ●" : "Story"}</button>}
         <button className="btn small" onClick={() => setShare(true)} data-testid="ax-report-share">Share</button>
         <button className="btn small" onClick={() => setExp(true)} data-testid="ax-report-export">Export</button>
         {/*
@@ -670,7 +677,8 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
         </aside>
         <div className="ax-rb-main">
           {loading && <div className="muted" style={{ padding: 8 }}>Computing…</div>}
-          {def && <ReportView title={rd.title ?? open.name} subtitle={rd.subtitle} blocks={isDash ? undefined : rd.blocks} widgets={isDash ? dd.widgets : undefined} hero={isDash ? dd.hero : undefined} bands={isDash ? dd.bands : undefined} crossFilter={isDash ? dd.crossFilter !== false : false} results={results} theme={theme} mode={shownVersion ? "snapshot" : "live"} version={shownVersion} publishedAt={shownVersion ? versions.find((v) => v.version === shownVersion)?.published_at : undefined} branding={rd.branding} viewerSegments={rd.viewerSegments} onBlockAction={viewVersion ? undefined : onBlockAction} onLayout={isDash && !viewVersion ? onLayout : undefined} />}
+          {!isDash && storyOpen && def && <StoryPanel api={api} reportId={open.id} story={rd.story} results={results} dirty={dirty} analysisIds={reportAnalysisIds(rd)} title={rd.title ?? open.name} onChange={(story) => { setDef({ ...rd, story }); setDirty(true); }} />}
+          {!(storyOpen && !isDash) && def && <ReportView title={rd.title ?? open.name} subtitle={rd.subtitle} blocks={isDash ? undefined : rd.blocks} widgets={isDash ? dd.widgets : undefined} hero={isDash ? dd.hero : undefined} bands={isDash ? dd.bands : undefined} crossFilter={isDash ? dd.crossFilter !== false : false} results={results} theme={theme} mode={shownVersion ? "snapshot" : "live"} version={shownVersion} publishedAt={shownVersion ? versions.find((v) => v.version === shownVersion)?.published_at : undefined} branding={rd.branding} viewerSegments={rd.viewerSegments} onBlockAction={viewVersion ? undefined : onBlockAction} onLayout={isDash && !viewVersion ? onLayout : undefined} />}
         </div>
       </div>
       {editing && items_.find((b) => b.id === editing) && <BlockEditor block={items_.find((b) => b.id === editing)!} analyses={analyses} onChange={(nb) => { setItems(items_.map((b) => (b.id === nb.id ? nb : b))); void ensure(idsOf(nb)); }} onClose={() => setEditing(null)} />}

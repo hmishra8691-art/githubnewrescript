@@ -1,6 +1,6 @@
 "use client";
 import React from "react";
-import type { AnalysisResult, DashboardWidget, ReportBlock, ReportTheme, DashboardBand, DashboardHero } from "@rescript/analytics";
+import { storyHtml, type AnalysisResult, type DashboardWidget, type ReportBlock, type ReportTheme, type DashboardBand, type DashboardHero, type StoryDefinition } from "@rescript/analytics";
 import { ReportView } from "@/components/analytics/ReportView";
 import { downloadBlob } from "@/components/analytics/api";
 
@@ -13,7 +13,7 @@ import { downloadBlob } from "@/components/analytics/api";
  */
 
 interface Payload {
-  report: { name: string | null; title: string; subtitle?: string; blocks?: ReportBlock[]; widgets?: DashboardWidget[] | null; crossFilter?: boolean; hero?: DashboardHero | null; bands?: DashboardBand[] | null; viewerSegments: string[]; branding: { showLogo?: boolean; footer?: string; header?: string } };
+  report: { name: string | null; title: string; subtitle?: string; story?: StoryDefinition | null; blocks?: ReportBlock[]; widgets?: DashboardWidget[] | null; crossFilter?: boolean; hero?: DashboardHero | null; bands?: DashboardBand[] | null; viewerSegments: string[]; branding: { showLogo?: boolean; footer?: string; header?: string } };
   theme: ReportTheme; results: Record<string, AnalysisResult>; version: number; publishedAt: string; mode: "snapshot"; dataset: { responses?: number; surveyVersion?: string; computedAt?: string } | null; permission: "viewer" | "download";
   /** §36 — allowed viewer filters and their frozen results (absent on versions published before 0014) */
   viewerFilters?: { id: string; name: string }[];
@@ -25,6 +25,7 @@ export default function SharePage({ params }: { params: { token: string } }) {
   const [gate, setGate] = React.useState<{ status: string; message: string; reportName?: string } | null>(null);
   const [password, setPassword] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  const [playing, setPlaying] = React.useState(false);
   const load = React.useCallback(async (pw?: string) => {
     setBusy(true);
     try {
@@ -66,6 +67,14 @@ export default function SharePage({ params }: { params: { token: string } }) {
   const rep = data.report;
   return (
     <div className="ax-share-page" data-testid="ax-share-view">
+      {/* the story plays from the SAME frozen snapshot as the report beside it — no live data, no second source of numbers */}
+      {playing && rep.story && (
+        <div className="modal-back" onClick={() => setPlaying(false)} style={{ zIndex: 50 }}>
+          <div style={{ width: "min(96vw, 1100px)", aspectRatio: "16 / 9", position: "relative" }} onClick={(e) => e.stopPropagation()}>
+            <iframe title="Story" sandbox="allow-scripts" srcDoc={storyHtml(rep.story, { results: data.results, autoplay: true })} data-testid="ax-share-story-frame" style={{ width: "100%", height: "100%", border: 0, borderRadius: 10 }} />
+            <button className="btn small" style={{ position: "absolute", top: 8, left: 8 }} onClick={() => setPlaying(false)}>✕ Close</button>
+          </div>
+        </div>)}
       <ReportView title={rep.title} subtitle={rep.subtitle} blocks={rep.widgets ? undefined : rep.blocks} widgets={rep.widgets ?? undefined} hero={rep.hero ?? undefined} bands={rep.bands ?? undefined} crossFilter={!!rep.crossFilter} results={data.results} theme={data.theme} mode="snapshot" version={data.version} publishedAt={data.publishedAt} branding={rep.branding} viewerSegments={rep.viewerSegments}
         /*
          * §36 — the filters this link is allowed to switch, and the answer
@@ -84,6 +93,7 @@ export default function SharePage({ params }: { params: { token: string } }) {
             * the share's permission: printing what you can already see on the
             * page is not a download permission, it is a browser.
             */}
+          {rep.story?.scenes?.length ? <button className="btn small" onClick={() => setPlaying(true)} data-testid="ax-share-story">▶ Play story</button> : null}
           {rep.widgets && <button className="btn small" onClick={() => window.print()} data-testid="ax-share-print"
             title="Opens your browser's print dialog — choose “Save as PDF” there.">Print / PDF</button>}
         </>} />

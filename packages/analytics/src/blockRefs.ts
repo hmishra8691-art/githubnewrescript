@@ -34,10 +34,12 @@ const own = (b: AnyBlock): string[] => {
 export function explicitAnalysisIds(block: AnyBlock): string[] { return own(block); }
 
 /** Every analysis a report's data blocks read (what must be computed / snapshotted). */
-export function reportAnalysisIds<R extends { blocks?: readonly AnyBlock[]; widgets?: readonly { analysisId?: string }[] }>(report: R): string[] {
+export function reportAnalysisIds<R extends { blocks?: readonly AnyBlock[]; widgets?: readonly { analysisId?: string }[]; story?: { scenes?: readonly { analysisId?: string }[] } }>(report: R): string[] {
   const ids = new Set<string>();
   for (const b of report.blocks ?? []) for (const id of own(b)) ids.add(id);
   for (const w of report.widgets ?? []) if (w?.analysisId) ids.add(w.analysisId);
+  /* an animated story reads analyses too — they are computed, snapshotted and checked with the rest */
+  for (const sc of report.story?.scenes ?? []) if (typeof sc?.analysisId === "string" && sc.analysisId) ids.add(sc.analysisId);
   return [...ids];
 }
 
@@ -71,7 +73,7 @@ export function normalizeBlocks<T extends AnyBlock>(blocks: readonly T[]): T[] {
 export interface SnapshotCheck { responses: number; missing: string[]; failed: string[]; empty: boolean; ok: boolean; problems: string[] }
 
 export function checkSnapshot(
-  definition: { blocks?: readonly AnyBlock[]; widgets?: readonly { analysisId?: string }[] },
+  definition: { blocks?: readonly AnyBlock[]; widgets?: readonly { analysisId?: string }[]; story?: { scenes?: readonly { analysisId?: string }[] } },
   snapshot: Record<string, { name?: string; base?: { total?: number; n?: number }; error?: unknown } | undefined>,
 ): SnapshotCheck {
   const referenced = reportAnalysisIds(definition);

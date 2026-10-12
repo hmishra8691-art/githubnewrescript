@@ -1,5 +1,5 @@
 "use client";
-import type { AnalysisDefinition, AnalysisResult, ChartAdvice, ChartRecommendation, ReportTemplate, VariableMeta } from "@rescript/analytics";
+import type { AnalysisDefinition, AnalysisResult, BuilderDraft, ChartAdvice, ChartRecommendation, ReportTemplate, StoryScene, VariableMeta } from "@rescript/analytics";
 import type { planPayload, ApplyPlanOutcome } from "@/lib/analysisPlanService";
 
 /** Thin client for `/api/surveys/<id>/analytics/*`. Every call is server-authorised; the client never computes. */
@@ -37,6 +37,21 @@ export class AxApi {
   removeReportTemplate(id: string) { return this.req<{ ok: true }>(`report-templates/${id}`, { method: "DELETE" }); }
   applyReportTemplate(reportId: string, templateId: string) {
     return this.req<{ definition: unknown; appliedTemplate: string }>(`reports/${reportId}/apply-template`, { method: "POST", body: JSON.stringify({ templateId }) });
+  }
+  /** the report builder: a proposed report (and story) from the saved analyses and their results — nothing is saved until the person creates it */
+  reportBuilderDraft(body: { brief: unknown; story?: boolean; interpretation?: boolean }) { return this.req<BuilderDraft & { model: { status: string; detail: string }; truncated: boolean; analysesRead: number }>("report-builder/draft", { method: "POST", body: JSON.stringify(body) }); }
+  /** one story scene rebuilt from its analysis as it is now (or, for a model-written scene, asked for again through the number gate) */
+  regenerateScene(reportId: string, sceneId: string) { return this.req<{ scene: StoryScene }>("report-builder/scene", { method: "POST", body: JSON.stringify({ reportId, sceneId }) }); }
+  /** the story as one animated HTML file; `notes` says what it does not contain (narration that could not be made) */
+  async exportStory(reportId: string, narration: boolean): Promise<{ notes: string[] }> {
+    const r = await fetch(`${this.base()}/report-builder/story`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reportId, narration }) });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error((j as { error?: string }).error ?? `Story export failed (${r.status})`); }
+    const blob = await r.blob();
+    const name = /filename="([^"]+)"/.exec(r.headers.get("content-disposition") ?? "")?.[1] ?? "story.html";
+    downloadBlob(blob, name);
+    let notes: string[] = [];
+    try { notes = JSON.parse(decodeURIComponent(r.headers.get("x-rescript-export-notes") ?? "[]")); } catch { /* no notes */ }
+    return { notes };
   }
   access(shareId: string) { return this.req<{ events: Row[] }>(`shares/${shareId}/access`); }
   /* the analysis plan (Data Analytics → Analysis plan): read, edit with analysis actions, apply */

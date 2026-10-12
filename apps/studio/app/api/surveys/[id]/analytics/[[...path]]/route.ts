@@ -5,10 +5,11 @@ import type { AuditEvent, Capability } from "@rescript/access";
 import { buildPptx, buildXlsx, isEmbeddableImage } from "@rescript/analytics/export";
 import {
   DEFAULT_THEME, BUILT_IN_REPORT_TEMPLATES, applyTemplate, describeTemplate,
-  type AnalysisDefinition, type AnalysisResult, type ChartSpec, type DatasetSpec, type ReportDefinition, type ReportTemplate, type ReportTheme, BUILT_IN_DASHBOARD_TEMPLATES, applyDashboardTemplate, dashboardAsTemplate, describeDashboardTemplate, templateKind, plannedAnalyses, reportAnalysisIds, failedResult, checkSnapshot, normalizeReportDefinition } from "@rescript/analytics";
+  type AnalysisDefinition, type AnalysisResult, type ChartSpec, type DatasetSpec, type ReportDefinition, type ReportTemplate, type ReportTheme, BUILT_IN_DASHBOARD_TEMPLATES, applyDashboardTemplate, dashboardAsTemplate, describeDashboardTemplate, templateKind, plannedAnalyses, reportAnalysisIds, failedResult, checkSnapshot, normalizeReportDefinition, draftReport, regenerateScene, storyHtml, variableMetadata, type StoryDefinition } from "@rescript/analytics";
 import type { SurveyDefinition } from "@rescript/schema";
 import { supabaseService } from "@/lib/authServer";
 import { audit, isFailure, requireEditRight, requireProject, type ProjectContext } from "@/lib/guard";
+import { builderItems, modelInterpretation, narrateStory, parseBrief } from "@/lib/analyticsBuilder";
 import { compute, hashPassword, loadDefinition, loadTheme, newToken, variablesPayload, runPlanFor, latestRun, listRuns, runById, dueMilestone, ensurePlannedAnalyses, draftFindingsReport } from "@/lib/analytics";
 import { applyPlan, editPlan, planPayload } from "@/lib/analysisPlanService";
 
@@ -316,6 +317,72 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     if (!r.report) return bad(r.error ?? "The report could not be saved.", 500);
     log(ctx, "analytics.report_created", String(r.report.id), { name: r.report.name, fromRun: run.id, blocks: r.definition.blocks.length });
     return json({ report: r.report }, 201);
+  }
+  /*
+   * THE REPORT BUILDER. `draft` reads the saved analyses and their computed
+   * results and returns a proposed report (and story) for REVIEW — nothing is
+   * written; the person creates it from the response. `scene` rebuilds one
+   * story scene from its analysis as it is now. `story` renders the story of a
+   * saved report as one self-contained animated HTML file, optionally narrated.
+   */
+  if (head === "report-builder") {
+    if (itemId === "draft") {
+      const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;
+      const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
+      const brief = parseBrief(body.brief);
+      if (!brief.objective && !brief.keyQuestions.length) return bad("State the objective or at least one key question — the report is built around what you want to learn.");
+      const { items, truncated } = await builderItems(db, surveyId, loaded, brief.analysisIds);
+      if (!items.length) return bad("This survey has no saved analyses yet. Create the analyses first (the Analysis tab can create them from the analysis plan), then build the report.", 409);
+      const model = await modelInterpretation(ctx.user, surveyId, brief, items, { ask: body.interpretation === true, fake: body.fake });
+      const draft = draftReport(brief, items, variableMetadata(loaded.def as SurveyDefinition).filter((v) => !v.hidden), { story: body.story === true, interpretation: model.interpretation });
+      return json({ ...draft, model: { status: model.status, detail: model.detail }, truncated, analysesRead: items.length });
+    }
+    if (itemId === "scene") {
+      const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;
+      const reportId = typeof body.reportId === "string" ? body.reportId : "";
+      const sceneId = typeof body.sceneId === "string" ? body.sceneId : "";
+      if (!isUuid(reportId) || !sceneId) return bad("reportId and sceneId are required.");
+      const { data: report } = await db.from("analytics_reports").select("definition").eq("id", reportId).eq("survey_id", surveyId).is("deleted_at", null).maybeSingle();
+      const story = (report?.definition as ReportDefinition | undefined)?.story;
+      if (!story) return bad("This report has no story.", 404);
+      const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
+      const old = story.scenes.find((s) => s.id === sceneId);
+      if (!old) return bad("That scene is no longer in the story.", 404);
+      const ids = [...new Set(story.scenes.map((s) => s.analysisId).filter((x): x is string => !!x && isUuid(x)))];
+      const { items } = await builderItems(db, surveyId, loaded, ids.length ? ids : undefined);
+      const vars = variableMetadata(loaded.def as SurveyDefinition).filter((v) => !v.hidden);
+      if (old.source === "model") {
+        /* a model-written scene is asked for again, through the same number gate */
+        const brief = { objective: story.brief?.objective ?? "", audience: story.audience, tone: story.tone, keyQuestions: story.brief?.keyQuestions ?? [] };
+        const m = await modelInterpretation(ctx.user, surveyId, brief, items, { ask: true, fake: body.fake });
+        const pool = old.title === "Suggested next steps" ? [m.interpretation?.recommendations.join(" ") ?? ""] : (m.interpretation?.implications ?? []);
+        const text = pool.find((t) => t && t !== old.text);
+        if (!text) return bad(`${m.detail} No different sentence passed the number check, so the scene is unchanged.`, 409);
+        return json({ scene: { ...old, text, narration: text } });
+      }
+      const r = regenerateScene(story, sceneId, items, vars);
+      if ("error" in r) return bad(r.error, 409);
+      return json({ scene: r.scene });
+    }
+    if (itemId === "story") {
+      const ctx = await gate(req, surveyId, "analytics.export"); if (isFailure(ctx)) return ctx.response;
+      const reportId = typeof body.reportId === "string" ? body.reportId : "";
+      if (!isUuid(reportId)) return bad("reportId is required.");
+      const { data: report } = await db.from("analytics_reports").select("name, definition").eq("id", reportId).eq("survey_id", surveyId).is("deleted_at", null).maybeSingle();
+      const story = (report?.definition as ReportDefinition | undefined)?.story as StoryDefinition | undefined;
+      if (!story?.scenes?.length) return bad("This report has no story to export. Build one with the report builder first.", 404);
+      const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
+      const results = await computeReport(db, surveyId, loaded, { story } as never);
+      /* never hand back a story that would play blank: the same check publish and export use */
+      const check = checkSnapshot({ story }, results as never);
+      if (!check.ok) return json({ error: `The story cannot be exported yet: ${check.problems.join(" ")}`, code: "story_blank", problems: check.problems }, 409);
+      const narration = body.narration === true ? await narrateStory(ctx.user, surveyId, story) : null;
+      const html = storyHtml(story, { results, audio: narration?.audio });
+      const notes = [narration ? narration.message : "Exported without narration.", `${story.scenes.filter((s) => !s.hidden).length} scenes, from the latest computed results.`];
+      log(ctx, "analytics.report_modified", reportId, { storyExport: true, narrated: narration?.narrated ?? 0 });
+      return new NextResponse(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8", "content-disposition": `attachment; filename="${String(report?.name ?? "story").replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 60) || "story"}-story.html"`, "cache-control": "no-store", "x-rescript-export-notes": encodeURIComponent(JSON.stringify(notes)) } });
+    }
+    return bad("Unknown report-builder endpoint.", 404);
   }
   if (head === "run") {
     const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
@@ -731,7 +798,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     } else if (head === "reports") {
       if (!body.name) return bad("name is required.");
       const kind = body.kind === "dashboard" ? "dashboard" : "report";
-      const definition = (body.definition as object) ?? (kind === "dashboard" ? { title: body.name, widgets: [], crossFilter: true } : { title: body.name, mode: body.mode === "snapshot" ? "snapshot" : "live", blocks: [{ id: "cover", type: "cover", title: body.name }] });
+      const definition = (body.definition ? normalizeReportDefinition(body.definition as object) : null) ?? (kind === "dashboard" ? { title: body.name, widgets: [], crossFilter: true } : { title: body.name, mode: body.mode === "snapshot" ? "snapshot" : "live", blocks: [{ id: "cover", type: "cover", title: body.name }] });
       row = { survey_id: surveyId, kind, name: String(body.name), definition, theme_id: body.themeId ?? null, mode: body.mode === "snapshot" ? "snapshot" : "live", ...now };
     } else {
       // shares (§18, §21): a report must be PUBLISHED before it can be shared — a link only ever reaches a version

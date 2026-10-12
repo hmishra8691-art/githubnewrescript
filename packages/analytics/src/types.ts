@@ -448,6 +448,44 @@ export interface ReportDefinition {
   branding?: { showLogo?: boolean; footer?: string; header?: string };
   exportDefaults?: ExportSettings;
   origin?: OutputOrigin;
+  /** the animated story told from the same analyses (Data Analytics audit, Oct 2026) — scenes, not a second source of numbers */
+  story?: StoryDefinition;
+}
+
+/* ------------------------------------------------------------ the animated story */
+
+export type SceneType = "title" | "objective" | "sample" | "finding" | "comparison" | "difference" | "interpretation" | "summary";
+export interface StoryScene {
+  id: string;
+  type: SceneType;
+  title: string;
+  /** what is on screen: the sentence(s) of this scene */
+  text: string;
+  /** what is read aloud, when narration is added (the text, plus the base it stands on) */
+  narration: string;
+  analysisId?: string;
+  chart?: { type: ChartType };
+  /** what the figures are percentages / means of */
+  base?: string;
+  /** "finding" is a number the data produced; "interpretation" is what it might mean — never mixed */
+  nature: "frame" | "finding" | "interpretation";
+  /** who wrote the words: the engine from the results, a model that passed the number gate, or the researcher */
+  source: "engine" | "model" | "manual";
+  durationMs: number;
+  hidden?: boolean;
+}
+export interface StoryDefinition {
+  title: string;
+  subtitle?: string;
+  audience: "executive" | "client" | "researcher";
+  tone: "plain" | "formal" | "concise";
+  scenes: StoryScene[];
+  transition: "fade" | "slide" | "zoom";
+  accent?: string;
+  logoUrl?: string;
+  /** the brief it was built from, so a scene can be rebuilt */
+  brief?: { objective: string; keyQuestions: string[]; client?: string };
+  builtAt: string;
 }
 
 /**
