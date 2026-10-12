@@ -27,3 +27,4 @@ export * from "./narrative.js";
 export * from "./planWorkspace.js";
 export * from "./blockRefs.js";
 export * from "./questionChart.js";
+export * from "./planCheck.js";

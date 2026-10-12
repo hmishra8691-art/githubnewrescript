@@ -690,7 +690,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     const ensured = await ensurePlannedAnalyses(db, surveyId, loaded, items, ctx.user.userId);
     if (ensured.error) return bad(ensured.error, 500);
     for (const data of ensured.created) log(ctx, "analytics.analysis_created", String(data.id), { name: data.name, kind: data.kind, fromPlan: String((data.definition as AnalysisDefinition)?.options?.planned ?? "") });
-    return json({ created: ensured.created, skipped: ensured.skipped, planned: items.length }, 201);
+    return json({ created: ensured.created, skipped: ensured.skipped, planned: items.length, blocked: ensured.blocked, duplicates: ensured.duplicates }, 201);
   }
   if (head === "analyses" && itemId && action === "duplicate") {
     const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;

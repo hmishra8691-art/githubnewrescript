@@ -4,7 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Condition, SurveyDefinition } from "@rescript/schema";
 import {
   buildDataset, runAnalysis, variableMetadata, recommendCharts, adviseChart, DEFAULT_THEME,
-  unionVariableMetadata, definitionResolver, plannedAnalyses, runPlan, compactRun, compareRuns, nextMilestone, reportFromRun, withPlannedVariables, plannedHash, plannedIdOf,
+  unionVariableMetadata, definitionResolver, reviewAgainstSaved, surveyKnownNames, plannedAnalyses, runPlan, compactRun, compareRuns, nextMilestone, reportFromRun, withPlannedVariables, plannedHash, plannedIdOf,
   type ChartAdvice, type AnalysisDefinition, type AnalysisResult, type AnalyticsRow, type Dataset, type DatasetSpec, type ReportTheme, type SegmentDef, type VariableMeta, type AnalysisRun, type PlannedAnalysis, type ReportDefinition,
 } from "@rescript/analytics";
 import type { VersionedDefinition } from "@rescript/engine";
@@ -464,13 +464,27 @@ export async function dueMilestone(db: SupabaseClient, surveyId: string, def: Su
  * "Create the planned analyses" and by the findings report, whose charts
  * must point at saved analyses to be drawn.
  */
-export async function ensurePlannedAnalyses(db: SupabaseClient, surveyId: string, ctx: LoadedContext, items: PlannedAnalysis[], userId: string | null): Promise<{ created: Record<string, unknown>[]; skipped: number; byPlanned: Map<string, string>; error?: string }> {
+export async function ensurePlannedAnalyses(db: SupabaseClient, surveyId: string, ctx: LoadedContext, items: PlannedAnalysis[], userId: string | null): Promise<{ created: Record<string, unknown>[]; skipped: number; byPlanned: Map<string, string>; error?: string; blocked: { name: string; reason: string }[]; duplicates: { name: string; reason: string; duplicateOf?: string }[] }> {
   const { data: existing } = await db.from("analytics_analyses").select("id, definition, version").eq("survey_id", surveyId).is("deleted_at", null);
   const byPlanned = new Map<string, string>();
   const existingRow = new Map<string, { id: string; definition: AnalysisDefinition; version: number }>();
   for (const r of existing ?? []) { const p = String((r.definition as AnalysisDefinition)?.options?.planned ?? ""); if (p && !byPlanned.has(p)) { byPlanned.set(p, String(r.id)); existingRow.set(p, { id: String(r.id), definition: r.definition as AnalysisDefinition, version: Number(r.version ?? 1) }); } }
   const created: Record<string, unknown>[] = []; let skipped = 0; let firstError: string | undefined;
-  for (const it of items) {
+  /*
+   * REVIEW BEFORE SAVING. An item that reads a variable the survey does not have,
+   * or cannot be computed as specified, is not saved (it used to be saved and then
+   * "ran" into a warning and a blank result). An item that repeats another planned
+   * one — or one the researcher already built by hand, under any name — is not saved
+   * twice. Both are reported with their reason, never silently dropped.
+   */
+  const vmeta = variableMetadata(ctx.def as SurveyDefinition);
+  const savedRefs = (existing ?? []).map((r) => ({ id: String(r.id), name: String((r.definition as AnalysisDefinition)?.name ?? ""), definition: r.definition as AnalysisDefinition }));
+  const review = reviewAgainstSaved(items, vmeta, surveyKnownNames(ctx.def as SurveyDefinition, vmeta), savedRefs);
+  const blocked = review.blocked; const duplicates = review.duplicates;
+  for (const [pid, id] of review.existingFor) if (!byPlanned.has(pid)) byPlanned.set(pid, id);
+  /* items already saved from this very plan item are re-pointed (below) even though they need no new row */
+  const toVisit = [...items.filter((it) => { const pid = String(it.definition.options?.planned ?? ""); return pid && existingRow.has(pid) && !review.blocked.some((x) => x.name === it.definition.name); }), ...review.toCreate.filter((it) => !existingRow.has(String(it.definition.options?.planned ?? "")))];
+  for (const it of toVisit) {
     const planned = String(it.definition.options?.planned ?? "");
     if (planned && byPlanned.has(planned)) {
       /*
@@ -500,7 +514,7 @@ export async function ensurePlannedAnalyses(db: SupabaseClient, surveyId: string
     if (planned) byPlanned.set(planned, String(data.id));
     created.push(data);
   }
-  return { created, skipped, byPlanned, ...(firstError ? { error: firstError } : {}) };
+  return { created, skipped, byPlanned, blocked, duplicates, ...(firstError ? { error: firstError } : {}) };
 }
 
 /* ------------------------------------------------------------ the findings report (research-intelligence Phase 6) */

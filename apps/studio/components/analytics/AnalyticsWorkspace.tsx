@@ -84,9 +84,13 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
   /* the rail's verbs — every one is a request to the API, then a refresh, so the list is always the server's */
   const railFromPlan = async () => {
     try {
-      const r = await api.create("analyses/from-plan", { environment: env, dataset: quality }) as unknown as { created: Row[]; skipped: number; planned: number };
+      const r = await api.create("analyses/from-plan", { environment: env, dataset: quality }) as unknown as { created: Row[]; skipped: number; planned: number; blocked?: { name: string; reason: string }[]; duplicates?: { name: string; reason: string; duplicateOf?: string }[] };
       await refresh();
-      setNotice(r.created.length ? `${r.created.length} planned analys${r.created.length === 1 ? "is" : "es"} created${r.skipped ? ` (${r.skipped} already existed)` : ""}.` : `All ${r.planned} planned analyses already exist.`);
+      const left = [
+        r.duplicates?.length ? `${r.duplicates.length} not created because ${r.duplicates.length === 1 ? "it repeats another analysis" : "they repeat other analyses"}` : "",
+        r.blocked?.length ? `${r.blocked.length} not created because ${r.blocked.length === 1 ? "it cannot be computed" : "they cannot be computed"} (${r.blocked.slice(0, 2).map((b) => b.reason).join(" ")}${r.blocked.length > 2 ? " …" : ""})` : "",
+      ].filter(Boolean).join("; ");
+      setNotice((r.created.length ? `${r.created.length} planned analys${r.created.length === 1 ? "is" : "es"} created${r.skipped ? ` (${r.skipped} already existed)` : ""}.` : `All ${r.planned - (r.blocked?.length ?? 0) - (r.duplicates?.length ?? 0)} usable planned analyses already exist.`) + (left ? ` ${left}.` : ""));
       if (r.created[0]) openBuilder({ analysis: r.created[0] });
     } catch (e) { setError((e as Error).message); }
   };

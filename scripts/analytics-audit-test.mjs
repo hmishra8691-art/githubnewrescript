@@ -416,5 +416,19 @@ assert.match(await text('[data-testid="ax-chart-fallback"]'), /cannot draw this 
 assert.ok((await count('[data-testid="ax-report"] [data-testid="ax-chart"]')) >= 1, "the block still shows a chart");
 ok("a saved chart type that cannot draw the result falls back and says why (was: 'No data to chart')");
 
+/* ------------------------------------------------------------------ 9 */
+console.log("\n§9 RAIL — planned and your own analyses are kept apart");
+const planned = mkAnalysis("Planned crosstab", { kind: "crosstab", variables: ["SAT", "GENDER"], extra: { rows: ["SAT"], columns: ["GENDER"], options: { planned: "xt_1" } } });
+await page.goto(`${STUDIO}/analytics`, { waitUntil: "networkidle" });
+await page.click('[data-testid="ax-tab-analysis"]');
+await page.waitForSelector('[data-testid="ax-rail-scope"]');
+const all = await count('[data-testid="ax-rail-item"]');
+await page.click('[data-testid="ax-rail-scope-planned"]');
+assert.equal(await count('[data-testid="ax-rail-item"]'), 1, "only the generated analysis");
+assert.match(await text('[data-testid="ax-rail-item"]'), /Planned · /);
+await page.click('[data-testid="ax-rail-scope-mine"]');
+assert.equal(await count('[data-testid="ax-rail-item"]'), all - 1, "everything else is the researcher's own");
+ok("the rail separates generated analyses from the ones a person built");
+
 console.log(`\n${passed} checks passed`);
 await browser.close();
