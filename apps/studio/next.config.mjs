@@ -36,8 +36,8 @@ const nextConfig = {
     /* the story-report renderer: native modules and a binary, loaded from node_modules at run time, never bundled */
     serverComponentsExternalPackages: ["@resvg/resvg-js", "ffmpeg-static"],
     outputFileTracingIncludes: {
-      "/api/surveys/[id]/stories/[[...path]]": ["./public/report-fonts/**", "../../node_modules/.pnpm/ffmpeg-static@*/node_modules/ffmpeg-static/ffmpeg", "../../node_modules/.pnpm/@resvg+resvg-js-*/node_modules/@resvg/**"],
-      "/api/cron/story-renders": ["./public/report-fonts/**", "../../node_modules/.pnpm/ffmpeg-static@*/node_modules/ffmpeg-static/ffmpeg", "../../node_modules/.pnpm/@resvg+resvg-js-*/node_modules/@resvg/**"],
+      "/api/surveys/*/stories/**": ["./public/report-fonts/**", "./node_modules/ffmpeg-static/ffmpeg", "../../node_modules/.pnpm/ffmpeg-static@5.2.0/node_modules/ffmpeg-static/ffmpeg", "../../node_modules/.pnpm/@resvg+resvg-js-*/node_modules/@resvg/**"],
+      "/api/cron/story-renders": ["./public/report-fonts/**", "./node_modules/ffmpeg-static/ffmpeg", "../../node_modules/.pnpm/ffmpeg-static@5.2.0/node_modules/ffmpeg-static/ffmpeg", "../../node_modules/.pnpm/@resvg+resvg-js-*/node_modules/@resvg/**"],
       "/docs": ["./content/docs/**"], "/docs/[slug]": ["./content/docs/**"], "/llms.txt": ["./content/docs/**"], "/llms-full.txt": ["./content/docs/**"], "/sitemap.xml": ["./content/docs/**"],
     },
   },

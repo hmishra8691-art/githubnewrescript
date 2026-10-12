@@ -272,12 +272,18 @@ export async function buildPptx(input: PptxInput): Promise<Buffer> {
   }
 
   // blocks
-  for (const block of input.report.blocks) {
-    if (block.type === "cover") continue;
-    if (block.type === "section") { if (!px.sectionDividers) continue; const s = p.addSlide(); slideNo++; s.background = { color: hex(theme.colors.secondary) }; s.addText(block.title, { x: 0.6, y: 2.0, w: W - 1.2, h: 1, fontSize: 28, bold: true, color: "FFFFFF", fontFace: font }); if (block.subtitle) s.addText(block.subtitle, { x: 0.6, y: 3.0, w: W - 1.2, h: 0.6, fontSize: 14, color: "FFFFFF", fontFace: font }); continue; }
-    if (block.type === "text") { const s = p.addSlide(); decorate(s, block.title ?? ""); s.addText(block.markdown.replace(/[#*_`>]/g, ""), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, fontSize: 12, color: text, fontFace: font, valign: "top" }); continue; }
-    if (block.type === "executive_summary") { const s = p.addSlide(); decorate(s, block.title ?? "Executive summary"); const items = executiveSummary(block.analysisIds.map((id) => ({ name: input.results[id]?.name ?? id, result: input.results[id] })).filter((x) => x.result)); s.addText((block.text ? [{ text: block.text, options: { fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 8 } }] : []).concat(items.map((it) => ({ text: `${it.analysis}: ${it.headline}`, options: { bullet: true, fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 6 } as never }))), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, valign: "top" }); continue; }
-    if (block.type === "insights") { const s = p.addSlide(); decorate(s, block.title ?? "Key insights"); const lines = block.analysisIds.flatMap((id) => input.results[id]?.insights ?? []); s.addText(lines.map((l) => ({ text: l, options: { bullet: true, fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 6 } })), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, valign: "top" }); continue; }
+  /*
+   * Each block is drawn on its own: a block that cannot be drawn (an
+   * analysis whose result has an unexpected shape, a chart type the deck
+   * cannot express) becomes a slide that says so, instead of failing the
+   * whole export.
+   */
+  const drawBlock = (block: (typeof input.report.blocks)[number]) => {
+    if (block.type === "cover") return;
+    if (block.type === "section") { if (!px.sectionDividers) return; const s = p.addSlide(); slideNo++; s.background = { color: hex(theme.colors.secondary) }; s.addText(block.title, { x: 0.6, y: 2.0, w: W - 1.2, h: 1, fontSize: 28, bold: true, color: "FFFFFF", fontFace: font }); if (block.subtitle) s.addText(block.subtitle, { x: 0.6, y: 3.0, w: W - 1.2, h: 0.6, fontSize: 14, color: "FFFFFF", fontFace: font }); return; }
+    if (block.type === "text") { const s = p.addSlide(); decorate(s, block.title ?? ""); s.addText(block.markdown.replace(/[#*_`>]/g, ""), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, fontSize: 12, color: text, fontFace: font, valign: "top" }); return; }
+    if (block.type === "executive_summary") { const s = p.addSlide(); decorate(s, block.title ?? "Executive summary"); const items = executiveSummary(block.analysisIds.map((id) => ({ name: input.results[id]?.name ?? id, result: input.results[id] })).filter((x) => x.result)); s.addText((block.text ? [{ text: block.text, options: { fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 8 } }] : []).concat(items.map((it) => ({ text: `${it.analysis}: ${it.headline}`, options: { bullet: true, fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 6 } as never }))), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, valign: "top" }); return; }
+    if (block.type === "insights") { const s = p.addSlide(); decorate(s, block.title ?? "Key insights"); const lines = block.analysisIds.flatMap((id) => input.results[id]?.insights ?? []); s.addText(lines.map((l) => ({ text: l, options: { bullet: true, fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 6 } })), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, valign: "top" }); return; }
     /*
      * §36 — a page break is already a slide boundary here, since every block
      * gets its own slide; it is skipped rather than rendered. The METHODOLOGY
@@ -285,21 +291,21 @@ export async function buildPptx(input: PptxInput): Promise<Buffer> {
      * (below), where a methodology belongs and where this export has always
      * put it.
      */
-    if (block.type === "page_break" || block.type === "methodology") continue;
+    if (block.type === "page_break" || block.type === "methodology") return;
     /*
      * §37 — a panel grid has no single `analysisId` (it has one per panel),
      * so it is drawn before the generic lookup below rather than falling
      * through it.
      */
-    if (block.type === "panel_grid") { panelGridSlide(p, decorate, block, input.results, theme, W, H, { font, text, subtle, primary, palette }); continue; }
+    if (block.type === "panel_grid") { panelGridSlide(p, decorate, block, input.results, theme, W, H, { font, text, subtle, primary, palette }); return; }
     const result = input.results[block.analysisId];
-    if (!result) continue;
+    if (!result) return;
     if (block.type === "kpi") {
       const s = p.addSlide(); decorate(s, block.title ?? result.name);
       const kpis = result.chart.kpis ?? [];
       kpis.slice(0, 4).forEach((k, i) => { const x = 0.6 + i * ((W - 1.2) / Math.min(4, kpis.length)); s.addShape(p.ShapeType.roundRect, { x, y: 1.6, w: (W - 1.2) / Math.min(4, kpis.length) - 0.2, h: 1.8, fill: { color: "F5F7FA" }, line: { color: "D9DEE6" }, rectRadius: 0.1 }); s.addText(`${typeof k.value === "number" ? k.value.toLocaleString() : k.value}${k.unit ?? ""}`, { x, y: 1.7, w: (W - 1.2) / Math.min(4, kpis.length) - 0.2, h: 1, fontSize: 30, bold: true, color: primary, align: "center", fontFace: font }); s.addText(k.label, { x, y: 2.7, w: (W - 1.2) / Math.min(4, kpis.length) - 0.2, h: 0.5, fontSize: 12, color: subtle, align: "center", fontFace: font }); });
       s.addText(`Base: n = ${result.base.n}`, { x: 0.6, y: 4.8, w: W - 1.2, h: 0.3, fontSize: 9, color: subtle, fontFace: font });
-      continue;
+      return;
     }
     if (block.type === "chart" && settings.include.charts) {
       const spec = block.chart;
@@ -308,17 +314,25 @@ export async function buildPptx(input: PptxInput): Promise<Buffer> {
       drawAnalysisVisual(p, s, result, spec, theme, { x: 0.6, y: 1.1, w: chartW, h: chartH }, { font, text, subtle, primary, palette }, { image: input.images?.[block.id] });
       const notes = [`Base: n = ${result.base.n}${result.base.weightedN !== result.base.n ? ` (weighted ${result.base.weightedN})` : ""}`, ...(block.caption ? [block.caption] : []), ...(spec.options.footnote ? [spec.options.footnote] : []), ...(settings.include.footnotes ? (result.tables[0]?.notes ?? []).slice(0, 2) : []), ...(settings.include.tests && result.tests[0] ? [`${result.tests[0].test.replace(/_/g, " ")}: p ${result.tests[0].p == null ? "—" : result.tests[0].p < 0.001 ? "< .001" : "= " + result.tests[0].p.toFixed(3)}`] : [])];
       s.addText(notes.join("  ·  "), { x: 0.6, y: 4.85, w: W - 1.2, h: 0.35, fontSize: 8, color: subtle, fontFace: font });
-      continue;
+      return;
     }
     if (block.type === "table" && settings.include.tables) {
       const table = block.tableId ? result.tables.find((t) => t.id === block.tableId) ?? result.tables[0] : result.tables[0];
-      if (!table) continue;
+      if (!table) return;
       const perSlide = 14;
       for (let start = 0; start < Math.max(1, table.rows.length); start += perSlide) {
         const s = p.addSlide(); decorate(s, `${block.title ?? table.title}${table.rows.length > perSlide ? ` (${Math.floor(start / perSlide) + 1}/${Math.ceil(table.rows.length / perSlide)})` : ""}`);
         addTable(s, { ...table, rows: table.rows.slice(start, start + perSlide) }, theme, { x: 0.5, y: 1.1, w: 9 }, perSlide);
         s.addText([`Base: n = ${table.base?.n ?? result.base.n}`, ...(settings.include.footnotes ? table.notes ?? [] : [])].join("  ·  "), { x: 0.6, y: 4.95, w: W - 1.2, h: 0.3, fontSize: 8, color: subtle, fontFace: font });
       }
+    }
+  };
+  for (const block of input.report.blocks) {
+    try { drawBlock(block); }
+    catch (e) {
+      const s = p.addSlide();
+      decorate(s, ("title" in block && typeof block.title === "string" && block.title) || "Report block");
+      s.addText(`This part of the report could not be drawn in PowerPoint (${(e as Error)?.message ?? "unknown error"}). The rest of the report is complete.`, { x: 0.6, y: 1.4, w: W - 1.2, h: 1.2, fontSize: 12, color: subtle, fontFace: font });
     }
   }
 

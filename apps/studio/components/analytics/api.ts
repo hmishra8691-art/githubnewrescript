@@ -40,7 +40,13 @@ export class AxApi {
   applyPlan(body: { environment: string; dataset: string; replaceReport?: boolean }) { return this.req<ApplyResponse>("plan/apply", { method: "POST", body: JSON.stringify(body) }); }
   async export(body: Record<string, unknown>): Promise<void> {
     const r = await fetch(`${this.base()}/export`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-    if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error((j as { error?: string }).error ?? `Export failed (${r.status})`); }
+    if (!r.ok) {
+      /* the server's own words when it sent JSON; otherwise the start of what the platform answered (a timeout, a crash) */
+      const raw = await r.text().catch(() => "");
+      let msg: string | undefined;
+      try { msg = (JSON.parse(raw) as { error?: string }).error; } catch { msg = raw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200) || undefined; }
+      throw new Error(msg ? `Export failed (${r.status}): ${msg}` : `Export failed (${r.status})`);
+    }
     const blob = await r.blob();
     const name = /filename="([^"]+)"/.exec(r.headers.get("content-disposition") ?? "")?.[1] ?? `export.${body.format ?? "pptx"}`;
     downloadBlob(blob, name);

@@ -269,7 +269,13 @@ async function computeReport(
       name: a.name as string,
       ...(applied.length ? { filterIds: [...new Set([...(own.filterIds ?? []), ...applied])] } : {}),
     };
-    results[a.id] = await compute(db, surveyId, loaded as never, def);
+    /*
+     * One analysis that cannot be computed (a variable since removed from the
+     * survey, a filter that no longer matches) must not take the whole report
+     * down: its blocks are left out and the failure is logged.
+     */
+    try { results[a.id] = await compute(db, surveyId, loaded as never, def); }
+    catch (e) { console.warn("[rescript:analytics] report analysis skipped", JSON.stringify({ surveyId, analysisId: a.id, name: a.name, error: (e as Error)?.message })); }
   }
   return results;
 }
