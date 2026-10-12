@@ -68,6 +68,18 @@ test("quotas, collection, quality, research, plan, reports, languages, fieldwork
   assert.equal(by(moduleStates(survey({ research: { hypotheses: [], brief: { client: "Acme", stakeholders: [], deliverables: [] } } })), "research").detail, "Brief recorded · no objective yet");
   assert.match(by(moduleStates(def, { latestRun: { computedAt: "2026-10-01T10:00:00Z", n: 120, trigger: "halfway" } }), "analysis").detail, /1 crosstab, 0 tests · last run 2026-10-01 on 120 completes/);
   assert.match(by(a, "analysis").detail, /not run yet/);
+  /* the row opens Data Analytics → Analysis plan, and reads the last apply when the database records them */
+  assert.equal(by(a, "analysis").tab, "analytics:plan");
+  assert.equal(by(moduleStates(def, { latestApply: null }), "analysis").state, "incomplete");
+  assert.match(by(moduleStates(def, { latestApply: null }), "analysis").detail, /not applied yet/);
+  assert.equal(by(moduleStates(def, { latestApply: { status: "applied", startedAt: "2026-10-11T09:00:00Z", current: true } }), "analysis").state, "configured");
+  assert.match(by(moduleStates(def, { latestApply: { status: "applied", startedAt: "2026-10-11T09:00:00Z", current: true } }), "analysis").detail, /applied 2026-10-11/);
+  assert.equal(by(moduleStates(def, { latestApply: { status: "applied", startedAt: "2026-10-11T09:00:00Z", current: false } }), "analysis").state, "incomplete");
+  assert.match(by(moduleStates(def, { latestApply: { status: "applied", startedAt: "2026-10-11T09:00:00Z", current: false } }), "analysis").detail, /changed since it was applied/);
+  assert.equal(by(moduleStates(def, { latestApply: { status: "partial", startedAt: "2026-10-11T09:00:00Z", current: true } }), "analysis").state, "needs_attention");
+  assert.equal(by(moduleStates(def, { latestApply: { status: "failed", startedAt: "2026-10-11T09:00:00Z", current: true } }), "analysis").state, "needs_attention");
+  assert.match(by(moduleStates(def, { latestApply: { status: "no_data", startedAt: "2026-10-11T09:00:00Z", current: true } }), "analysis").detail, /waiting for responses/);
+  assert.equal(by(moduleStates(survey({})), "analysis").tab, "analytics:plan");
   assert.equal(by(moduleStates(def, { reports: [{ kind: "dashboard" }, { kind: "report" }, { kind: "report" }], analyses: 4 }), "reporting").detail, "1 dashboard, 2 reports · 4 saved analyses");
   assert.equal(by(moduleStates(def, { analyses: 2 }), "reporting").state, "not_configured");
   assert.equal(by(a, "languages").state, "incomplete"); assert.match(by(a, "languages").detail, /2 languages beside en · 1 not ready/);

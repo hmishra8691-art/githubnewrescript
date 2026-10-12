@@ -1,6 +1,6 @@
 import type { AnalysisMethod, AnalysisPlan, AnalysisRole, MeasurementLevel, PlannedCrosstab, PlannedDerived, PlannedSegment, PlannedTest, Question, SurveyDefinition } from "@rescript/schema";
 import { ANALYSIS_METHODS, ANALYSIS_ROLES, MEASUREMENT_LEVELS } from "@rescript/schema";
-import { buildAnalysisFramework } from "./analysisFramework.js";
+import { buildAnalysisFramework, isNonQuestionVariable } from "./analysisFramework.js";
 import type { IdMinter } from "./questionOps.js";
 
 /**
@@ -22,6 +22,12 @@ import type { IdMinter } from "./questionOps.js";
  *                           segments
  *   add_crosstab, remove_crosstab, add_analysis_test, remove_analysis_test,
  *   add_derived_variable, remove_derived_variable
+ *   update_crosstab, update_analysis_test   change a planned item IN PLACE —
+ *                           its id survives, so the saved analysis, the
+ *                           chart and the dashboard widget made from it
+ *                           stay linked to it (Data Analytics → Analysis plan)
+ *   reorder_analysis_plan   the researcher's own order of the crosstabs
+ *                           and tests
  */
 
 type CrosstabSpec = { rows: string[]; columns: string[]; measure?: PlannedCrosstab["measure"]; priority?: number; hypotheses?: string[]; reason?: string };
@@ -38,12 +44,18 @@ export type AnalysisAction =
   | { op: "add_analysis_test"; method: AnalysisMethod; outcome?: string; variables?: string[]; groupBy?: string; moderator?: string; mediator?: string; priority?: number; hypotheses?: string[]; reason?: string }
   | { op: "remove_analysis_test"; id: string }
   | { op: "add_derived_variable"; name: string; kind: PlannedDerived["kind"]; from: string[]; expression?: string; reason?: string }
-  | { op: "remove_derived_variable"; name: string };
+  | { op: "remove_derived_variable"; name: string }
+  /** every field optional: only what is given changes; `hypotheses: []` clears them, `reason: null` clears the reason */
+  | { op: "update_crosstab"; id: string; rows?: string[]; columns?: string[]; measure?: PlannedCrosstab["measure"] | null; priority?: number; hypotheses?: string[]; reason?: string | null }
+  | { op: "update_analysis_test"; id: string; method?: AnalysisMethod; outcome?: string | null; variables?: string[]; groupBy?: string | null; moderator?: string | null; mediator?: string | null; priority?: number; hypotheses?: string[]; reason?: string | null }
+  /** the ids in the order wanted; an id left out keeps its relative place after the ones named */
+  | { op: "reorder_analysis_plan"; crosstabs?: string[]; tests?: string[] };
 
 export const ANALYSIS_ACTION_OPS = [
   "set_question_analysis", "propose_analysis_plan", "set_analysis_plan",
   "add_crosstab", "remove_crosstab", "add_analysis_test", "remove_analysis_test",
   "add_derived_variable", "remove_derived_variable",
+  "update_crosstab", "update_analysis_test", "reorder_analysis_plan",
 ] as const;
 const OPS = new Set<string>(ANALYSIS_ACTION_OPS);
 export const isAnalysisOp = (op: string): boolean => OPS.has(op);
@@ -137,6 +149,42 @@ export function coerceAnalysisAction(op: string, o: Record<string, unknown>): An
     case "remove_analysis_test": { const id = str(o.id); return id ? { op, id } : "remove_analysis_test needs an id"; }
     case "add_derived_variable": { const d = derivedSpec(o); return typeof d === "string" ? d : { op, ...d }; }
     case "remove_derived_variable": { const name = str(o.name, 40)?.toUpperCase(); return name ? { op, name } : "remove_derived_variable needs a name"; }
+    case "update_crosstab": {
+      const id = str(o.id);
+      if (!id) return "update_crosstab needs an id";
+      const a: AnalysisAction = { op, id };
+      const rows = strs(o.rows), columns = strs(o.columns ?? o.banner);
+      if (rows) { if (!rows.length) return "a crosstab needs at least one row variable"; a.rows = rows; }
+      if (columns) { if (!columns.length) return "a crosstab needs at least one column variable"; a.columns = columns; }
+      if (o.measure === null) a.measure = null;
+      else if (o.measure !== undefined) { const m = str(o.measure); if (!m || !MEASURES.has(m)) return `“${String(o.measure)}” is not a crosstab measure (${[...MEASURES].join(", ")})`; a.measure = m as PlannedCrosstab["measure"]; }
+      if (o.priority !== undefined) { const p = priority(o.priority); if (!p) return "priority is 1, 2 or 3"; a.priority = p; }
+      if (o.hypotheses !== undefined) { const h = hyps(o.hypotheses); if (!h) return "hypotheses is a list of labels (H1, H2…)"; a.hypotheses = h; }
+      if (o.reason === null) a.reason = null; else if (o.reason !== undefined) a.reason = str(o.reason) ?? null;
+      if (Object.keys(a).length === 2) return "update_crosstab changes nothing";
+      return a;
+    }
+    case "update_analysis_test": {
+      const id = str(o.id);
+      if (!id) return "update_analysis_test needs an id";
+      const a: AnalysisAction = { op, id };
+      if (o.method !== undefined) { const method = str(o.method)?.toLowerCase().replace(/[\s-]+/g, "_"); if (!method || !METHODS.has(method)) return `“${String(o.method)}” is not an analysis method the platform runs (${[...METHODS].join(", ")})`; a.method = method as AnalysisMethod; }
+      for (const k of ["outcome", "groupBy", "moderator", "mediator"] as const) {
+        const raw = k === "groupBy" ? (o.groupBy ?? o.group_by) : o[k];
+        if (raw === null) a[k] = null; else if (raw !== undefined) a[k] = str(raw) ?? null;
+      }
+      if (o.variables !== undefined) { const v = strs(o.variables ?? o.predictors); if (!v) return "variables is a list of variable names"; a.variables = v; }
+      if (o.priority !== undefined) { const p = priority(o.priority); if (!p) return "priority is 1, 2 or 3"; a.priority = p; }
+      if (o.hypotheses !== undefined) { const h = hyps(o.hypotheses); if (!h) return "hypotheses is a list of labels (H1, H2…)"; a.hypotheses = h; }
+      if (o.reason === null) a.reason = null; else if (o.reason !== undefined) a.reason = str(o.reason) ?? null;
+      if (Object.keys(a).length === 2) return "update_analysis_test changes nothing";
+      return a;
+    }
+    case "reorder_analysis_plan": {
+      const crosstabs = strs(o.crosstabs, 1000), tests = strs(o.tests, 1000);
+      if (!crosstabs?.length && !tests?.length) return "reorder_analysis_plan needs the crosstab or test ids in their new order";
+      return { op, ...(crosstabs?.length ? { crosstabs } : {}), ...(tests?.length ? { tests } : {}) };
+    }
     default: return null;
   }
 }
@@ -294,7 +342,83 @@ export function applyAnalysisAction(def: SurveyDefinition, a: AnalysisAction, en
       plan.derived = plan.derived.filter((y) => y.name !== a.name); plan.updatedAt = env.now;
       return { description: `Removed the planned derived variable ${a.name}`, destructive: `Removes the planned derived variable ${a.name}`, touched: [] };
     }
+    /*
+     * IN PLACE, BY ID. The item keeps its id, so everything made from it
+     * downstream — the saved analysis whose `options.planned` names it, the
+     * chart, the dashboard widget, the report block — stays its output and is
+     * refreshed rather than duplicated the next time the plan is applied.
+     * Variables are resolved exactly as on creation: a name that is not a
+     * question (or a planned derived variable / segment) is refused.
+     */
+    case "update_crosstab": {
+      const plan = planOf(def);
+      const i = plan.crosstabs.findIndex((y) => y.id === a.id);
+      if (i < 0) fail(`there is no planned crosstab ${a.id}`);
+      const cur = plan.crosstabs[i];
+      const rows = a.rows ? resolvePlanVars(def, env, a.rows, "the crosstab's rows") : cur.rows;
+      const columns = a.columns ? resolvePlanVars(def, env, a.columns, "the crosstab's columns") : cur.columns;
+      if (rows.some((r) => columns.includes(r))) fail(`a crosstab cannot tabulate ${words(rows.filter((r) => columns.includes(r)))} against itself`);
+      if (a.hypotheses) checkHypotheses(def, a.hypotheses);
+      const next: PlannedCrosstab = { ...cur, rows, columns, priority: a.priority ?? cur.priority, hypotheses: a.hypotheses ?? cur.hypotheses };
+      if (a.measure === null) delete next.measure; else if (a.measure) next.measure = a.measure;
+      if (a.reason === null) delete next.reason; else if (a.reason) next.reason = a.reason;
+      const dup = plan.crosstabs.find((y) => y !== cur && sameCrosstab(next, y));
+      if (dup) fail(`a crosstab of ${words(next.rows)} by ${words(next.columns)} is already planned`);
+      plan.crosstabs[i] = next; plan.updatedAt = env.now;
+      return { description: `Changed the planned crosstab: ${words(next.rows)} by ${words(next.columns)}${next.hypotheses.length ? ` (${words(next.hypotheses)})` : ""}`, touched: [] };
+    }
+    case "update_analysis_test": {
+      const plan = planOf(def);
+      const i = plan.tests.findIndex((y) => y.id === a.id);
+      if (i < 0) fail(`there is no planned test ${a.id}`);
+      const cur = plan.tests[i];
+      const method = a.method ?? cur.method;
+      const what = `the ${method.replace(/_/g, " ")}`;
+      const one = (k: "outcome" | "groupBy" | "moderator" | "mediator"): string | undefined => (a[k] === null ? undefined : a[k] !== undefined ? resolvePlanVars(def, env, [a[k]!], what)[0] : cur[k]);
+      const outcome = one("outcome"), groupBy = one("groupBy"), moderator = one("moderator"), mediator = one("mediator");
+      const variables = a.variables ? resolvePlanVars(def, env, a.variables, what) : cur.variables;
+      if (!variables.length && !outcome && !groupBy) fail(`${what} needs an outcome, variables or a grouping variable`);
+      if (a.hypotheses) checkHypotheses(def, a.hypotheses);
+      const next: PlannedTest = { id: cur.id, method, variables, priority: a.priority ?? cur.priority, hypotheses: a.hypotheses ?? cur.hypotheses,
+        ...(outcome ? { outcome } : {}), ...(groupBy ? { groupBy } : {}), ...(moderator ? { moderator } : {}), ...(mediator ? { mediator } : {}) };
+      const reason = a.reason === null ? undefined : a.reason ?? cur.reason;
+      if (reason) next.reason = reason;
+      const dup = plan.tests.find((y) => y !== cur && sameTest(next, y));
+      if (dup) fail(`that ${method.replace(/_/g, " ")} is already planned`);
+      plan.tests[i] = next; plan.updatedAt = env.now;
+      return { description: `Changed the planned ${method.replace(/_/g, " ")}${next.outcome ? ` on ${next.outcome}` : ""}${next.variables.length ? ` with ${words(next.variables)}` : ""}${next.groupBy ? ` across ${next.groupBy}` : ""}`, touched: [] };
+    }
+    case "reorder_analysis_plan": {
+      const plan = planOf(def);
+      const order = <T extends { id: string }>(items: T[], ids: string[] | undefined, what: string): T[] => {
+        if (!ids?.length) return items;
+        const byId = new Map(items.map((x) => [x.id, x]));
+        for (const id of ids) if (!byId.has(id)) fail(`there is no planned ${what} ${id}`);
+        const named = ids.map((id) => byId.get(id)!);
+        return [...named, ...items.filter((x) => !ids.includes(x.id))];
+      };
+      plan.crosstabs = order(plan.crosstabs, a.crosstabs, "crosstab");
+      plan.tests = order(plan.tests, a.tests, "test");
+      plan.updatedAt = env.now;
+      return { description: `Reordered the analysis plan${a.crosstabs?.length ? ` (${a.crosstabs.length} crosstabs)` : ""}${a.tests?.length ? ` (${a.tests.length} tests)` : ""}`, touched: [] };
+    }
   }
+}
+
+/**
+ * A variable a planned item may name: a question, or one of the plan's own
+ * derived variables and segments (those are columns of the run's dataset —
+ * see `withPlannedVariables` in @rescript/analytics). Creation resolves
+ * questions only, because the model writes those; an edit by hand in Data
+ * Analytics may keep a derived variable the engine planned.
+ */
+function resolvePlanVars(def: SurveyDefinition, env: AnalysisEnv, refs: string[], what: string): string[] {
+  return refs.map((r) => env.question(r)?.variableName ?? (isNonQuestionVariable(def, r) ? r : fail(`${what} names “${r}”, which is not a question in this survey`)));
+}
+function checkHypotheses(def: SurveyDefinition, labels: string[]) {
+  const n = def.research?.hypotheses.length ?? 0;
+  const bad = labels.filter((h) => !/^H\d+$/.test(h) || Number(h.slice(1)) < 1 || Number(h.slice(1)) > n);
+  if (bad.length) fail(`${words(bad)} ${bad.length === 1 ? "does" : "do"} not exist — the research design has ${n} hypothes${n === 1 ? "is" : "es"}`);
 }
 
 export function describeAnalysisAction(a: AnalysisAction): string {
@@ -308,5 +432,8 @@ export function describeAnalysisAction(a: AnalysisAction): string {
     case "remove_analysis_test": return `Remove planned test ${a.id}`;
     case "add_derived_variable": return `Plan derived variable ${a.name}`;
     case "remove_derived_variable": return `Remove planned derived variable ${a.name}`;
+    case "update_crosstab": return `Change planned crosstab ${a.id}`;
+    case "update_analysis_test": return `Change planned test ${a.id}`;
+    case "reorder_analysis_plan": return "Reorder the analysis plan";
   }
 }

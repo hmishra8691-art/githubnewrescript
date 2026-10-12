@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Condition, SurveyDefinition } from "@rescript/schema";
 import {
   buildDataset, runAnalysis, variableMetadata, recommendCharts, DEFAULT_THEME,
-  unionVariableMetadata, definitionResolver, plannedAnalyses, runPlan, compactRun, compareRuns, nextMilestone, reportFromRun, withPlannedVariables,
+  unionVariableMetadata, definitionResolver, plannedAnalyses, runPlan, compactRun, compareRuns, nextMilestone, reportFromRun, withPlannedVariables, plannedHash, plannedIdOf,
   type AnalysisDefinition, type AnalysisResult, type AnalyticsRow, type Dataset, type DatasetSpec, type ReportTheme, type SegmentDef, type VariableMeta, type AnalysisRun, type PlannedAnalysis, type ReportDefinition,
 } from "@rescript/analytics";
 import type { VersionedDefinition } from "@rescript/engine";
@@ -155,6 +155,10 @@ export interface LoadedContext {
   customerId: string | null;
   /** the version row the definition came from, when it came from one (R7) */
   versionId?: string | null;
+  /** where the definition came from: the autosaved draft, or the current version when there is no draft */
+  source?: "draft" | "version";
+  /** when the draft was last autosaved (draft source only) */
+  draftUpdatedAt?: string | null;
 }
 
 export async function loadDefinition(db: SupabaseClient, surveyId: string): Promise<LoadedContext | { error: string; status: number }> {
@@ -162,9 +166,9 @@ export async function loadDefinition(db: SupabaseClient, surveyId: string): Prom
   if ("error" in loaded) {
     const v = await loadQualityDefinition(db, surveyId, "version");
     if ("error" in v) return v;
-    return { def: v.def, version: v.version, revision: v.revision, customerId: v.customerId, versionId: v.versionId };
+    return { def: v.def, version: v.version, revision: v.revision, customerId: v.customerId, versionId: v.versionId, source: "version", draftUpdatedAt: null };
   }
-  return { def: loaded.def, version: loaded.version, revision: loaded.revision, customerId: loaded.customerId, versionId: loaded.versionId };
+  return { def: loaded.def, version: loaded.version, revision: loaded.revision, customerId: loaded.customerId, versionId: loaded.versionId, source: loaded.source, draftUpdatedAt: loaded.draftUpdatedAt };
 }
 
 /** Resolve saved filter / segment ids into the definition's inline conditions. */
@@ -391,18 +395,31 @@ export async function previousRun(db: SupabaseClient, surveyId: string, spec: Da
   return pickPrevious((data ?? []) as Record<string, unknown>[], spec.dataset);
 }
 
-export async function runPlanFor(db: SupabaseClient, surveyId: string, ctx: LoadedContext, opts: { environment?: DatasetSpec["environment"]; dataset?: "all" | "clean"; trigger?: string; primaries?: boolean; userId?: string | null } = {}): Promise<{ run: AnalysisRun; stored: StoredRun | null; error?: string }> {
+export async function runPlanFor(db: SupabaseClient, surveyId: string, ctx: LoadedContext, opts: { environment?: DatasetSpec["environment"]; dataset?: "all" | "clean"; trigger?: string; primaries?: boolean; userId?: string | null;
+  /** planned ids not to run — the apply leaves out items that read a variable the survey no longer has */
+  exclude?: Set<string>;
+  /** do not store a run made on zero completes (the apply asks for this: an empty run is not a finding) */
+  skipEmpty?: boolean } = {}): Promise<{ run: AnalysisRun; stored: StoredRun | null; error?: string }> {
   const spec: DatasetSpec = { environment: opts.environment ?? "LIVE", dataset: opts.dataset ?? "all" };
-  const planned = plannedAnalyses(ctx.def as SurveyDefinition, spec, { primaries: opts.primaries ?? false });
-  // saved refinements of the plan: an analysis the researcher edited keeps its planned id, so the saved one replaces the engine's
-  const { data: saved } = await db.from("analytics_analyses").select("id, definition, tags").eq("survey_id", surveyId).eq("folder", "Planned").is("deleted_at", null);
+  const planned = plannedAnalyses(ctx.def as SurveyDefinition, spec, { primaries: opts.primaries ?? false }).filter((p) => !opts.exclude?.has(String(p.definition.options?.planned ?? "")));
+  /*
+   * Saved refinements of the plan: an analysis the researcher edited keeps
+   * its planned id (`options.planned`), so the saved one replaces the
+   * engine's. Any saved analysis counts, whichever folder it was moved to —
+   * the planned id is the link, not the folder (Data Analytics → Analysis
+   * plan keeps that id stable through edits and applies).
+   */
+  const { data: saved } = await db.from("analytics_analyses").select("id, definition, tags, folder").eq("survey_id", surveyId).is("deleted_at", null);
   const items: PlannedAnalysis[] = planned.map((p) => {
-    const mine = (saved ?? []).find((r) => String((r.definition as AnalysisDefinition)?.options?.planned ?? "") === String(p.definition.options?.planned ?? "—"));
+    const wanted = String(p.definition.options?.planned ?? "—");
+    const candidates = (saved ?? []).filter((r) => plannedIdOf(r.definition as AnalysisDefinition) === wanted);
+    const mine = candidates.find((r) => r.folder === "Planned") ?? candidates[0];
     return mine ? { ...p, definition: { ...(mine.definition as AnalysisDefinition), id: String(mine.id), dataset: spec } } : p;
   });
   if (!items.length) return { run: { computedAt: new Date().toISOString(), trigger: opts.trigger ?? "manual", environment: spec.environment, n: 0, items: [], findings: [], verdicts: [], warnings: [] }, stored: null, error: "Nothing is planned yet — plan the analysis in Intelligent mode (Analysis tab) first." };
   const ds = await buildFor(db, surveyId, ctx, { ...items[0].definition, dataset: spec });
   const run = runPlan(ctx.def as SurveyDefinition, ds, { items, trigger: opts.trigger ?? "manual" });
+  if (opts.skipEmpty && run.n === 0) return { run, stored: null };
   /* Phase 8: what moved since the previous comparable run — same environment, same dataset kind — is attached to the run before it is stored */
   const prev = await previousRun(db, surveyId, spec, run.computedAt);
   if (prev) run.since = compareRuns({ ...run }, prev);
@@ -448,7 +465,9 @@ export async function ensurePlannedAnalyses(db: SupabaseClient, surveyId: string
     const planned = String(it.definition.options?.planned ?? "");
     if (planned && byPlanned.has(planned)) { skipped++; continue; }
     const name = it.definition.name.slice(0, 160);
-    const row = { survey_id: surveyId, name, kind: it.definition.kind, definition: { ...it.definition, name, surveyVersion: ctx.version ?? undefined }, version: 1, folder: "Planned", tags: it.hypotheses, created_by: userId, updated_by: userId };
+    /* stamped with the hash of the planned definition it was written from, so a later apply can tell "the plan changed" from "the researcher refined it" (planWorkspace) */
+    const definition: AnalysisDefinition = { ...it.definition, name, surveyVersion: ctx.version ?? undefined, options: { ...(it.definition.options ?? {}), ...(planned ? { plannedHash: plannedHash(it.definition) } : {}) } };
+    const row = { survey_id: surveyId, name, kind: it.definition.kind, definition, version: 1, folder: "Planned", tags: it.hypotheses, created_by: userId, updated_by: userId };
     const { data, error } = await db.from("analytics_analyses").insert(row).select("*").single();
     if (error) return { created, skipped, byPlanned, error: error.message };
     await db.from("analytics_analysis_versions").insert({ analysis_id: data.id, survey_id: surveyId, version: 1, definition: row.definition, summary: `Created from the analysis plan${it.reason ? `: ${it.reason}` : ""}`, created_by: userId });
@@ -466,17 +485,25 @@ export async function ensurePlannedAnalyses(db: SupabaseClient, surveyId: string
  * dates and client go on the cover and the methodology, and the report is
  * stored in `analytics_reports` as a live draft to edit, publish and export.
  */
+/** the cover and methodology facts a findings report takes from the project: the client and the fieldwork dates */
+export async function reportFacts(db: SupabaseClient, surveyId: string, def: SurveyDefinition): Promise<{ client?: string; fieldwork?: { from?: string; to?: string } }> {
+  const proj = await db.from("surveys").select("fieldwork_from, fieldwork_to, client_name").eq("id", surveyId).maybeSingle();
+  return {
+    ...(def.research?.brief?.client ?? proj.data?.client_name ? { client: String(def.research?.brief?.client ?? proj.data?.client_name) } : {}),
+    ...(proj.data?.fieldwork_from || proj.data?.fieldwork_to ? { fieldwork: { ...(proj.data?.fieldwork_from ? { from: String(proj.data.fieldwork_from).slice(0, 10) } : {}), ...(proj.data?.fieldwork_to ? { to: String(proj.data.fieldwork_to).slice(0, 10) } : {}) } } : {}),
+  };
+}
+
 export async function draftFindingsReport(db: SupabaseClient, surveyId: string, ctx: LoadedContext, run: StoredRun, opts: { userId?: string | null; title?: string } = {}): Promise<{ report: Record<string, unknown> | null; definition: ReportDefinition; error?: string }> {
   // the report's saved analyses read the same dataset the run did (a clean run is not reported on "all")
   const spec: DatasetSpec = { environment: run.environment, dataset: run.dataset?.dataset ?? "all" };
   const items = plannedAnalyses(ctx.def as SurveyDefinition, spec, { primaries: false });
   const ensured = await ensurePlannedAnalyses(db, surveyId, ctx, items, opts.userId ?? null);
-  const proj = await db.from("surveys").select("fieldwork_from, fieldwork_to, client_name").eq("id", surveyId).maybeSingle();
+  const facts = await reportFacts(db, surveyId, ctx.def as SurveyDefinition);
   const definition = reportFromRun(ctx.def as SurveyDefinition, run as never, {
     analysisIdFor: (planned) => (planned ? ensured.byPlanned.get(planned) : undefined),
     ...(opts.title ? { title: opts.title } : {}),
-    ...((ctx.def as SurveyDefinition).research?.brief?.client ?? proj.data?.client_name ? { client: String((ctx.def as SurveyDefinition).research?.brief?.client ?? proj.data?.client_name) } : {}),
-    ...(proj.data?.fieldwork_from || proj.data?.fieldwork_to ? { fieldwork: { ...(proj.data?.fieldwork_from ? { from: String(proj.data.fieldwork_from).slice(0, 10) } : {}), ...(proj.data?.fieldwork_to ? { to: String(proj.data.fieldwork_to).slice(0, 10) } : {}) } } : {}),
+    ...facts,
   });
   const { data, error } = await db.from("analytics_reports").insert({ survey_id: surveyId, kind: "report", name: definition.title.slice(0, 160), definition, theme_id: null, mode: "live", created_by: opts.userId ?? null, updated_by: opts.userId ?? null }).select("*").single();
   if (error) return { report: null, definition, error: error.message };

@@ -8,8 +8,9 @@ import {
   type AnalysisDefinition, type AnalysisResult, type ChartSpec, type DatasetSpec, type ReportDefinition, type ReportTemplate, type ReportTheme, BUILT_IN_DASHBOARD_TEMPLATES, applyDashboardTemplate, dashboardAsTemplate, describeDashboardTemplate, templateKind, plannedAnalyses } from "@rescript/analytics";
 import type { SurveyDefinition } from "@rescript/schema";
 import { supabaseService } from "@/lib/authServer";
-import { audit, isFailure, requireProject, type ProjectContext } from "@/lib/guard";
+import { audit, isFailure, requireEditRight, requireProject, type ProjectContext } from "@/lib/guard";
 import { compute, hashPassword, loadDefinition, loadTheme, newToken, variablesPayload, runPlanFor, latestRun, listRuns, runById, dueMilestone, ensurePlannedAnalyses, draftFindingsReport } from "@/lib/analytics";
+import { applyPlan, editPlan, planPayload } from "@/lib/analysisPlanService";
 
 /**
  * The environment a report is built from.
@@ -30,6 +31,10 @@ export const maxDuration = 60;
  * THE ANALYTICS API — one router for the module (§32, §33, §38).
  *
  *   GET  variables                    dictionary-derived variable metadata + dataset counts
+ *   GET  plan                         THE ANALYSIS PLAN as Data Analytics shows it: items, variables, hypotheses, the latest run and apply, the plan's report and dashboard
+ *   PUT  plan                         edit the plan with analysis actions (add / update / remove / reorder), saved to the draft definition
+ *   POST plan/apply                   APPLY the plan: saved analyses, run, charts, dashboard, findings report — idempotent
+ *   GET  plan/latest · plan/runs      the analysis runs; POST plan/run · plan/report
  *   POST run                          compute an AnalysisDefinition server-side → AnalysisResult
  *   GET  home                         recent analyses / reports / shares for the landing page
  *   GET|POST  analyses|charts|segments|themes|reports|shares
@@ -88,6 +93,14 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
     const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
     const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
     return json(await variablesPayload(db, surveyId, loaded));
+  }
+  /* THE ANALYSIS PLAN in Data Analytics: everything the workspace shows, from stored data */
+  if (head === "plan" && !itemId) {
+    const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
+    const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
+    const env = req.nextUrl.searchParams.get("environment");
+    const dataset: DatasetSpec = { environment: env === "TEST" || env === "ALL" ? env : "LIVE", dataset: req.nextUrl.searchParams.get("dataset") === "clean" ? "clean" : "all" };
+    return json(await planPayload(db, surveyId, loaded, dataset));
   }
   /* the analysis runs (research-intelligence Phase 5): the latest, the list, and what milestone is due */
   if (head === "plan" && itemId === "latest") {
@@ -267,6 +280,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
   const db = supabaseService();
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
 
+  /*
+   * APPLY THE ANALYSIS PLAN (Data Analytics → Analysis plan). Validates the
+   * plan against the survey, makes or refreshes the saved analyses (one per
+   * planned id — never twice), runs them when responses exist, and keeps the
+   * charts, the dashboard and the findings report current. `analytics.edit`,
+   * like every other write to the analytics tables.
+   */
+  if (head === "plan" && itemId === "apply") {
+    const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;
+    const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
+    const env = body.environment === "TEST" || body.environment === "ALL" ? body.environment : "LIVE";
+    const r = await applyPlan(db, surveyId, loaded, { dataset: { environment: env as DatasetSpec["environment"], dataset: body.dataset === "clean" ? "clean" : "all" }, userId: ctx.user.userId, replaceReport: body.replaceReport === true });
+    if (!r.ok) return json({ error: r.error, warnings: r.warnings ?? [] }, r.status);
+    log(ctx, "analytics.plan_run", r.runId ?? r.applyId ?? null, { applied: true, status: r.summary?.status, n: r.summary?.n, analyses: r.summary?.items.length, created: r.summary?.counts.created, updated: r.summary?.counts.updated, charts: r.summary?.counts.charts, report: r.report?.action, dashboard: r.dashboard?.action });
+    return json(r);
+  }
   /* run the whole plan now and keep the findings */
   if (head === "plan" && itemId === "run") {
     const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;
@@ -634,7 +663,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     const { data: src } = await db.from("analytics_analyses").select("*").eq("id", itemId).eq("survey_id", surveyId).is("deleted_at", null).maybeSingle();
     if (!src) return bad("Unknown item.", 404);
     const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : `${src.name} (copy)`;
-    const definition = { ...(src.definition as AnalysisDefinition), name };
+    /* a copy is the researcher's own: it must not carry the planned id, or the plan would take it for its analysis */
+    const { planned: _p, plannedHash: _h, ...options } = ((src.definition as AnalysisDefinition).options ?? {}) as Record<string, unknown>;
+    void _p; void _h;
+    const definition = { ...(src.definition as AnalysisDefinition), name, options };
     const row = { survey_id: surveyId, name, kind: src.kind, definition, version: 1, folder: src.folder ?? null, tags: src.tags ?? [], position: null, created_by: ctx.user.userId, updated_by: ctx.user.userId };
     const { data, error } = await db.from("analytics_analyses").insert(row).select("*").single();
     if (error) return bad(error.message, 500);
@@ -700,6 +732,22 @@ function analysisChanged(a: AnalysisDefinition, b: AnalysisDefinition): boolean 
 export async function PUT(req: NextRequest, { params }: { params: { id: string; path?: string[] } }) {
   const [head, itemId] = params.path ?? [];
   const surveyId = params.id;
+  /*
+   * EDIT THE ANALYSIS PLAN from Data Analytics. The plan is part of the
+   * survey definition, so this is a survey edit: `survey.edit` and the edit
+   * lock, exactly as the Studio's autosave requires, and the same
+   * revision-guarded write — never the analytics capability alone.
+   */
+  if (head === "plan" && !itemId) {
+    const gateEdit = await requireEditRight(req, surveyId, "survey.edit"); if (isFailure(gateEdit)) return gateEdit.response;
+    const db = supabaseService();
+    const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+    const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
+    const r = await editPlan(db, surveyId, loaded, { actions: body.actions, baseRevision: typeof body.baseRevision === "number" ? body.baseRevision : null, userId: gateEdit.user.userId });
+    if (!r.ok) return json({ error: r.error, results: r.results ?? [], ...(r.conflict ? { conflict: true, revision: r.revision } : {}) }, r.status);
+    void audit({ action: "survey.modified", userId: gateEdit.user.userId, sessionId: gateEdit.user.sessionId, surveyId, customerId: gateEdit.user.customerId, detail: { summary: `analysis plan edited in Data Analytics: ${r.results.filter((x) => x.ok).map((x) => x.description).join("; ").slice(0, 400)}`, fromRevision: loaded.revision } });
+    return json(r);
+  }
   if (!head || !(head in COLLECTIONS) || !itemId || !isUuid(itemId) || head === "shares") return bad("Unknown analytics endpoint.", 404);
   const coll = COLLECTIONS[head as Collection];
   const ctx = await gate(req, surveyId, coll.write); if (isFailure(ctx)) return ctx.response;

@@ -301,3 +301,71 @@ test("methodology advice: the goal picks the method and names the trade-offs; a 
   assert.equal(methodologyAdvice("which ad creative works better")!.recommended, "A/B (split) test");
   assert.equal(methodologyAdvice("how old are respondents"), null);
 });
+
+test("update_crosstab / update_analysis_test change a planned item in place — the id survives — and reorder_analysis_plan keeps every item (Data Analytics → Analysis plan)", () => {
+  const def = survey();
+  const built = applySurveyActions(def, coerceSurveyActions([
+    { op: "add_crosstab", rows: ["Q6"], columns: ["S2"], priority: 1, hypotheses: ["H1"], reason: "intent by gender" },
+    { op: "add_crosstab", rows: ["Q1"], columns: ["S3"] },
+    { op: "add_analysis_test", method: "anova", outcome: "Q6", groupBy: "S1", hypotheses: ["H1"] },
+    { op: "add_analysis_test", method: "t_test", outcome: "Q6", groupBy: "Q2" },
+    { op: "add_derived_variable", name: "TRUST_SCORE", kind: "mean_score", from: ["Q3", "Q4"] },
+  ]).actions, { now: "2026-10-12T00:00:00Z" });
+  assert.equal(built.errors.length, 0, built.errors.join("\n"));
+  const plan0 = built.def.research!.analysisPlan!;
+  const [x1, x2] = plan0.crosstabs; const [t1, t2] = plan0.tests;
+
+  /* the gate: an id is required, nothing to change is refused, bad values are refused by name */
+  const gate = coerceSurveyActions([
+    { op: "update_crosstab" },
+    { op: "update_crosstab", id: x1.id },
+    { op: "update_crosstab", id: x1.id, measure: "median" },
+    { op: "update_analysis_test", id: t1.id, method: "bayesian" },
+    { op: "update_crosstab", id: x1.id, columns: ["S3", "S2"], measure: "mean", priority: 2, hypotheses: ["h2"], reason: null },
+    { op: "update_analysis_test", id: t1.id, method: "kruskal wallis", groupBy: "S3", hypotheses: [], reason: "non-parametric" },
+    { op: "reorder_analysis_plan", crosstabs: [x2.id], tests: [t2.id] },
+  ]);
+  assert.deepEqual(gate.rejected.map((r) => r.index), [0, 1, 2, 3], JSON.stringify(gate.rejected));
+  assert.match(gate.rejected[1].reason, /changes nothing/);
+  assert.match(gate.rejected[2].reason, /not a crosstab measure/);
+  assert.match(gate.rejected[3].reason, /not an analysis method/);
+
+  const out = applySurveyActions(built.def, gate.actions, { now: "2026-10-12T01:00:00Z" });
+  assert.equal(out.errors.length, 0, out.errors.join("\n"));
+  const plan = out.def.research!.analysisPlan!;
+  /* the crosstab: same id, new columns resolved to variable names, reason cleared, hypotheses replaced */
+  const cx = plan.crosstabs.find((x) => x.id === x1.id)!;
+  assert.deepEqual(cx.columns, ["COUNTRY", "GENDER"]); assert.deepEqual(cx.rows, ["PURCHASE_INT"]);
+  assert.equal(cx.measure, "mean"); assert.equal(cx.priority, 2); assert.deepEqual(cx.hypotheses, ["H2"]); assert.equal(cx.reason, undefined);
+  /* the test: same id, method and grouping changed, hypotheses cleared, outcome kept */
+  const ct = plan.tests.find((t) => t.id === t1.id)!;
+  assert.equal(ct.method, "kruskal_wallis"); assert.equal(ct.groupBy, "COUNTRY"); assert.equal(ct.outcome, "PURCHASE_INT"); assert.deepEqual(ct.hypotheses, []); assert.equal(ct.reason, "non-parametric");
+  /* reorder: the named ids first, the rest after, nothing lost */
+  assert.deepEqual(plan.crosstabs.map((x) => x.id), [x2.id, x1.id]);
+  assert.deepEqual(plan.tests.map((t) => t.id), [t2.id, t1.id]);
+  assert.equal(plan.updatedAt, "2026-10-12T01:00:00Z");
+  assert.ok(out.results.every((r) => r.ok && !r.destructive));
+
+  /* refusals at apply: an unknown id, a variable that is not in the survey, a crosstab against itself, a duplicate of another planned item, a hypothesis the design does not have */
+  const bad = applySurveyActions(out.def, coerceSurveyActions([
+    { op: "update_crosstab", id: "xt_nope", rows: ["Q6"] },
+    { op: "update_crosstab", id: x1.id, rows: ["NOPE"] },
+    { op: "update_crosstab", id: x1.id, rows: ["S3"] },
+    { op: "update_crosstab", id: x1.id, rows: ["Q1"], columns: ["S3"] },
+    { op: "update_analysis_test", id: t2.id, hypotheses: ["H9"] },
+    { op: "reorder_analysis_plan", tests: ["t_nope"] },
+  ]).actions);
+  assert.equal(bad.errors.length, 6, bad.errors.join("\n"));
+  assert.match(bad.errors[0], /no planned crosstab xt_nope/);
+  assert.match(bad.errors[1], /names “NOPE”/);
+  assert.match(bad.errors[2], /against itself/);
+  assert.match(bad.errors[3], /already planned/);
+  assert.match(bad.errors[4], /H9 does not exist/);
+  assert.match(bad.errors[5], /no planned test t_nope/);
+  assert.deepEqual(bad.def.research!.analysisPlan, plan, "a refused edit changes nothing");
+
+  /* a planned derived variable is a variable an edit may name — it is a column of the run's dataset */
+  const derived = applySurveyActions(out.def, coerceSurveyActions([{ op: "update_analysis_test", id: t2.id, outcome: "TRUST_SCORE" }]).actions);
+  assert.equal(derived.errors.length, 0, derived.errors.join("\n"));
+  assert.equal(derived.def.research!.analysisPlan!.tests.find((t) => t.id === t2.id)!.outcome, "TRUST_SCORE");
+});

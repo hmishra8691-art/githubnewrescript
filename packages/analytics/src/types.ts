@@ -320,6 +320,22 @@ export const DEFAULT_THEME: ReportTheme = {
 
 /* ------------------------------------------------------------ reports / dashboards */
 
+/**
+ * WHERE A REPORT OR DASHBOARD CAME FROM. Set by "Apply analysis plan" (Data
+ * Analytics → Analysis plan) on the one findings report and the one dashboard
+ * it maintains for a survey, so applying the plan again refreshes them instead
+ * of creating a second pair. `definitionHash` is the definition exactly as the
+ * apply wrote it: a definition that no longer hashes to it was edited by hand,
+ * and the apply leaves it alone unless told to replace it.
+ */
+export interface OutputOrigin {
+  kind: "analysis_plan";
+  appliedAt: string;
+  runId?: string | null;
+  definitionHash?: string;
+}
+
+
 export type ReportBlock =
   | { id: string; type: "cover"; title: string; subtitle?: string; date?: string; author?: string }
   | { id: string; type: "section"; title: string; subtitle?: string }
@@ -429,6 +445,7 @@ export interface ReportDefinition {
   filterId?: string | null;
   branding?: { showLogo?: boolean; footer?: string; header?: string };
   exportDefaults?: ExportSettings;
+  origin?: OutputOrigin;
 }
 
 /**
@@ -575,6 +592,7 @@ export interface DashboardDefinition {
   hero?: DashboardHero;
   /** §41 */
   bands?: DashboardBand[];
+  origin?: OutputOrigin;
 }
 
 /* ------------------------------------------------------------ export */

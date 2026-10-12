@@ -2542,3 +2542,67 @@ p.qs-help { margin: -2px 0 10px; }
 .cp-lang-bar span { display: block; height: 100%; background: var(--accent); transition: width .2s; }
 .cp-outdated { color: var(--amber); }
 .cp-analysis .cp-block { margin: 0; }
+
+/* ------------------------------------------------------------------------
+ * THE ANALYSIS PLAN WORKSPACE (Data Analytics → Analysis plan) — `ap-*`.
+ * Built from the same pieces as the rest of the workspace (.card, .badge,
+ * .metric, .ax-table, .ax-chip, .ax-wstab); these rules only lay them out.
+ * Everything wraps: the plan has to read on a tablet without a horizontal
+ * scroll, so the item row folds its actions under the title when narrow.
+ * ---------------------------------------------------------------------- */
+.ap { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.ap-head { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.ap-head-main { flex: 1 1 420px; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.ap-head-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ap-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ap-title { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
+.ap-meta { font-size: 13px; }
+.ap-notice { margin: 0; padding: 8px 12px; border-radius: 8px; cursor: pointer; }
+.ap-notice.ax-notice { background: var(--tint); }
+.ap-notice.ax-error { background: var(--c-error-bg); }
+.ap-sections { display: flex; gap: 2px; border-bottom: 1px solid var(--border); overflow-x: auto; align-items: center; padding-bottom: 2px; }
+.ap-sections .input { margin: 0 4px 4px 0; }
+.ap-overview { display: flex; flex-direction: column; gap: 12px; }
+.ap-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+.ap-facts, .ap-attention, .ap-verdicts, .ap-findings { margin: 6px 0 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; }
+.ap-attention li, .ap-findings li, .ap-verdicts li { padding: 6px 8px; border-radius: 8px; background: var(--panel2); }
+.ap-steps { margin: 6px 0 0; padding-left: 20px; font-size: 13.5px; display: flex; flex-direction: column; gap: 4px; }
+.ap-outcome { margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: var(--panel2); font-size: 13.5px; }
+.ap-list { display: flex; flex-direction: column; gap: 10px; }
+.ap-hyp .card-title { flex-wrap: wrap; }
+.ap-hlabel { font-size: 12.5px; background: var(--tint); color: var(--accent2); border-radius: 6px; padding: 1px 6px; }
+.ap-hyp-items { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0 4px; }
+.ap-verdict { font-size: 13.5px; margin-top: 4px; }
+.ap-items { display: flex; flex-direction: column; }
+.ap-item-list { display: flex; flex-direction: column; gap: 8px; }
+.ap-item { padding: 10px 12px; }
+.ap-item-row { display: flex; align-items: center; gap: 10px; cursor: pointer; flex-wrap: wrap; }
+.ap-item-main { flex: 1 1 320px; min-width: 0; }
+.ap-item-title { font-weight: 600; font-size: 14.5px; }
+.ap-item-sub { font-size: 12.5px; overflow-wrap: anywhere; }
+.ap-item-badges { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.ap-item-actions { display: flex; gap: 4px; align-items: center; }
+.ap-issues { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.ap-item-detail { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.ap-dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 0; font-size: 13.5px; }
+.ap-dl dt { color: var(--subtle); font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em; padding-top: 2px; }
+.ap-dl dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.ap-dl .chip { margin: 1px 4px 1px 0; }
+.ap-preview { border: 1px solid var(--border); border-radius: 8px; padding: 8px; background: var(--panel); overflow-x: auto; }
+.ap-editor { margin: 8px 0; border-color: var(--accent); }
+.ap-editor-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin-top: 8px; }
+.ap-field-wide { grid-column: 1 / -1; }
+.ap-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-height: 32px; }
+.ap-chips .select.small { min-height: 28px; font-size: 12.5px; max-width: 260px; }
+.ap-chips .ax-chip { user-select: none; }
+.ap-var-missing td { background: var(--c-error-bg); }
+.ap-var-extra td { background: var(--panel2); }
+.ap-cats { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.ap-insights { display: flex; flex-direction: column; gap: 12px; }
+.ap-output { display: flex; flex-direction: column; gap: 12px; }
+.ax-plan-card { border-left: 3px solid var(--accent); margin-bottom: 4px; }
+.ax-plan-card[data-state="applied"] { border-left-color: var(--green); }
+.ax-plan-card[data-state="changed"], .ax-plan-card[data-state="not_applied"], .ax-plan-card[data-state="data_changed"], .ax-plan-card[data-state="partial"] { border-left-color: var(--amber); }
+.ax-plan-card[data-state="failed"] { border-left-color: var(--red); }
+@media (max-width: 1000px) { .ap-two { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) { .ap-dl { grid-template-columns: minmax(0, 1fr); } .ap-item-actions { width: 100%; justify-content: flex-end; } }

@@ -8,6 +8,7 @@ import { loadDashboardStats } from "@/lib/dashboard";
 import { getMeter, SANDBOX_CUSTOMER } from "@/lib/metering";
 import { projectMeterView } from "@/lib/billingView";
 import { moduleStates, overviewSummary, type OverviewFacts } from "@/lib/projectOverview";
+import { latestApply, planHash } from "@/lib/analysisPlanService";
 
 export const dynamic = "force-dynamic";
 
@@ -31,7 +32,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   if ("error" in loaded) return NextResponse.json({ error: loaded.error }, { status: loaded.status });
   const def = loaded.def as SurveyDefinition;
 
-  const [survey, deployments, quotaRows, reports, analyses, latestRun, sampleSources, stats, meterView, activity] = await Promise.all([
+  const [survey, deployments, quotaRows, reports, analyses, latestRun, sampleSources, stats, meterView, activity, applied] = await Promise.all([
     db.from("surveys").select("id, code, title, status, current_version_id, draft_updated_at, revision, updated_at, created_at, client_name, project_manager, fieldwork_from, fieldwork_to, due_date, locked").eq("id", surveyId).maybeSingle().then((r) => r.data ?? null),
     soft("deployments", db.from("deployments").select("mode, active, version_id").eq("survey_id", surveyId).then((r) => { if (r.error) throw new Error(r.error.message); return r.data ?? []; }), [] as { mode: string; active: boolean; version_id: string | null }[]),
     soft("quota counts", db.from("quota_counts").select("quota_id, cell_id, count, is_test").eq("survey_id", surveyId).then((r) => { if (r.error) throw new Error(r.error.message); return r.data ?? []; }), [] as { quota_id: string; cell_id: string; count: number; is_test: boolean | null }[]),
@@ -42,13 +43,17 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     soft("statistics", loadDashboardStats(db, [{ id: surveyId, current_version_id: null }]).then((p) => p.stats[surveyId] ?? null), null),
     soft("usage", (async () => { const meter = getMeter(); return projectMeterView(meter, { customerId: ctx.survey.customer_id ?? ctx.user.customerId ?? SANDBOX_CUSTOMER, surveyId }, { recent: 0 }); })(), null),
     soft("activity", db.from("audit_logs").select("id, action, entity, entity_id, user_id, detail, created_at").eq("survey_id", surveyId).order("created_at", { ascending: false }).limit(8).then((r) => { if (r.error) throw new Error(r.error.message); return r.data ?? []; }), [] as { id: string; action: string; entity: string | null; entity_id: string | null; user_id: string | null; detail: unknown; created_at: string }[]),
+    soft("plan applies", latestApply(db, surveyId), { apply: null, available: false }),
   ]);
   if (!survey) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   const quotaCounts: Record<string, Record<string, number>> = {};
   for (const r of quotaRows) { if (r.is_test) continue; (quotaCounts[r.quota_id] ??= {})[r.cell_id] = (quotaCounts[r.quota_id]?.[r.cell_id] ?? 0) + Number(r.count ?? 0); }
   const config = { clientName: survey.client_name as string | null, projectManager: survey.project_manager as string | null, fieldworkFrom: survey.fieldwork_from ? String(survey.fieldwork_from).slice(0, 10) : null, fieldworkTo: survey.fieldwork_to ? String(survey.fieldwork_to).slice(0, 10) : null, dueDate: survey.due_date ? String(survey.due_date).slice(0, 10) : null };
-  const facts: OverviewFacts = { deployments, quotaCounts, reports, analyses, latestRun, config, sampleSources, status: String(survey.status) };
+  /* the last apply, judged against the plan as it is now; a database without migration 0050 answers as "unknown" and the row says what it can */
+  const currentPlanHash = planHash(def.research?.analysisPlan);
+  const latestApplyFact = applied.available ? (applied.apply ? { status: applied.apply.status, startedAt: applied.apply.startedAt, current: !!applied.apply.planHash && applied.apply.planHash === currentPlanHash } : null) : undefined;
+  const facts: OverviewFacts = { deployments, quotaCounts, reports, analyses, latestRun, latestApply: latestApplyFact, config, sampleSources, status: String(survey.status) };
   const modules = moduleStates(def, facts);
 
   const userIds = [...new Set(activity.map((r) => r.user_id).filter(Boolean))] as string[];

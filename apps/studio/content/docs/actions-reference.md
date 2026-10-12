@@ -12,7 +12,7 @@ Intelligent mode changes a survey only through ACTIONS: a closed vocabulary of o
 
 **Look and behaviour (UX)** (12): `create_style`, `update_style`, `remove_style`, `create_animation`, `update_animation`, `remove_animation`, `create_behavior`, `update_behavior`, `remove_behavior`, `set_theme`, `set_custom_html`, `set_default_value`
 
-**Analysis** (9): `set_question_analysis`, `propose_analysis_plan`, `set_analysis_plan`, `add_crosstab`, `remove_crosstab`, `add_analysis_test`, `remove_analysis_test`, `add_derived_variable`, `remove_derived_variable`
+**Analysis** (12): `set_question_analysis`, `propose_analysis_plan`, `set_analysis_plan`, `add_crosstab`, `remove_crosstab`, `add_analysis_test`, `remove_analysis_test`, `add_derived_variable`, `remove_derived_variable`, `update_crosstab`, `update_analysis_test`, `reorder_analysis_plan`
 
 **Localization** (8): `add_language`, `remove_language`, `set_language_status`, `set_translations`, `approve_translations`, `confirm_translations`, `set_language_routing`, `set_glossary`
 
@@ -130,7 +130,12 @@ export type AnalysisAction =
   | { op: "add_analysis_test"; method: AnalysisMethod; outcome?: string; variables?: string[]; groupBy?: string; moderator?: string; mediator?: string; priority?: number; hypotheses?: string[]; reason?: string }
   | { op: "remove_analysis_test"; id: string }
   | { op: "add_derived_variable"; name: string; kind: PlannedDerived["kind"]; from: string[]; expression?: string; reason?: string }
-  | { op: "remove_derived_variable"; name: string };
+  | { op: "remove_derived_variable"; name: string }
+  /** every field optional: only what is given changes; `hypotheses: []` clears them, `reason: null` clears the reason */
+  | { op: "update_crosstab"; id: string; rows?: string[]; columns?: string[]; measure?: PlannedCrosstab["measure"] | null; priority?: number; hypotheses?: string[]; reason?: string | null }
+  | { op: "update_analysis_test"; id: string; method?: AnalysisMethod; outcome?: string | null; variables?: string[]; groupBy?: string | null; moderator?: string | null; mediator?: string | null; priority?: number; hypotheses?: string[]; reason?: string | null }
+  /** the ids in the order wanted; an id left out keeps its relative place after the ones named */
+  | { op: "reorder_analysis_plan"; crosstabs?: string[]; tests?: string[] };
 ```
 
 ## Localization actions

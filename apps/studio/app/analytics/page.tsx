@@ -60,7 +60,7 @@ export default function AnalyticsPage() {
       {error && <div className="ax-error">{error}</div>}
       {surveys && !surveys.length && <div className="card">You have no surveys yet. Create one from the <a href="/">dashboard</a>, collect responses, and come back to analyse them.</div>}
       {survey && !canRead && <div className="card">Your role on “{survey.title}” ({survey.myRole}) does not include analytics access. Ask the project owner for a Viewer role or higher.</div>}
-      {survey && canRead && <AnalyticsWorkspace key={survey.id} surveyId={survey.id} surveyTitle={survey.title} canEdit={can(role, "analytics.edit")} canPublish={can(role, "analytics.publish")} canExport={can(role, "analytics.export")} initialTab={initialTab} />}
+      {survey && canRead && <AnalyticsWorkspace key={survey.id} surveyId={survey.id} surveyTitle={survey.title} canEdit={can(role, "analytics.edit")} canEditPlan={can(role, "survey.edit")} canPublish={can(role, "analytics.publish")} canExport={can(role, "analytics.export")} initialTab={initialTab} />}
     </div>
   );
 }

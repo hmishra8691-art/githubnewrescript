@@ -53,7 +53,8 @@ export function ProjectOverview({ surveyDbId }: { surveyDbId: string }) {
     } catch (e) { setError((e as Error).message); }
   }, [surveyDbId]);
   React.useEffect(() => { void load(); }, [load]);
-  const href = (tab: string) => (tab === "analytics" ? `/analytics?survey=${surveyDbId}` : `/studio/${surveyDbId}?tab=${tab}`);
+  /* "analytics" opens Data Analytics; "analytics:<tab>" opens one of its tabs (the Analysis plan row) */
+  const href = (tab: string) => (tab === "analytics" ? `/analytics?survey=${surveyDbId}` : tab.startsWith("analytics:") ? `/analytics?survey=${surveyDbId}&tab=${tab.slice(10)}` : `/studio/${surveyDbId}?tab=${tab}`);
   const p = data?.project;
   const meta = p ? STATUS_META[p.status] ?? { label: p.status, tone: "draft", hint: "" } : null;
   const num = (v: number | null | undefined) => (v === null || v === undefined ? "—" : v.toLocaleString());

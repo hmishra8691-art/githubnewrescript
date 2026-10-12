@@ -8,6 +8,7 @@ import { buildAnalysisFramework, describeHypothesis, explainPlanItem, hypothesis
 import { Icon } from "../../ui/Icon";
 import { Linked } from "./CopilotCard";
 import type { Copilot } from "./useCopilot";
+import { useStudio } from "../../studio/store";
 
 /**
  * THE ANALYSIS FRAMEWORK — Intelligent → Analysis.
@@ -69,6 +70,7 @@ function WhyExpander({ def, plan, item, V }: { def: SurveyDefinition; plan: Anal
 }
 
 export function AnalysisTab({ copilot, def, onSelect }: { copilot: Copilot; def: SurveyDefinition; onSelect(id: string): void }) {
+  const s = useStudio();
   const plan = def.research?.analysisPlan;
   const coverage = React.useMemo(() => hypothesisCoverage(def), [def]);
   const readings = React.useMemo(() => structuredHypotheses(def), [def]);
@@ -197,7 +199,7 @@ export function AnalysisTab({ copilot, def, onSelect }: { copilot: Copilot; def:
               ))}
             </tbody></table>
           </section>
-          <p className="iqi-dim"><Icon name="info" size={12} /> Hypotheses are {hypothesisLabel(0)}, {hypothesisLabel(1)}… by their position in the research design. Once responses exist, Analytics → “Create the planned analyses” runs this plan as it is written.</p>
+          <p className="iqi-dim"><Icon name="info" size={12} /> Hypotheses are {hypothesisLabel(0)}, {hypothesisLabel(1)}… by their position in the research design. This plan is also the Results workspace's: <a href={`/analytics?survey=${encodeURIComponent(s.surveyDbId)}&tab=plan`} data-testid="an-open-analytics">Data Analytics → Analysis plan</a> shows the same crosstabs, tests and variables, lets you edit them, and “Apply analysis plan” makes the saved analyses, charts, dashboard and findings report from it.</p>
         </>
       )}
     </div>

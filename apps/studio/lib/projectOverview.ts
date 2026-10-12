@@ -37,6 +37,8 @@ export interface OverviewFacts {
   reports?: { kind: string }[];
   analyses?: number;
   latestRun?: { computedAt: string; n: number; trigger: string } | null;
+  /** the last "Apply analysis plan" (Data Analytics): its status, and whether it was made on the plan as it is now */
+  latestApply?: { status: string; startedAt: string; current: boolean } | null;
   config?: { clientName?: string | null; projectManager?: string | null; fieldworkFrom?: string | null; fieldworkTo?: string | null; dueDate?: string | null } | null;
   sampleSources?: number;
   status?: string;
@@ -94,12 +96,25 @@ export function moduleStates(def: SurveyDefinition, facts: OverviewFacts = {}): 
   else if (r?.objective || hyps || r?.brief) out.push({ key: "research", label: "Research design", state: "incomplete", detail: r?.objective ? "Objective recorded · no hypotheses yet" : r?.brief ? "Brief recorded · no objective yet" : `${n(hyps, "hypothesis", "hypotheses")} · no objective`, tab: "settings", count: hyps });
   else out.push({ key: "research", label: "Research design", state: "not_configured", detail: "No objective or hypotheses — the analysis cannot be planned.", tab: "settings", count: 0 });
 
-  /* analysis plan and its runs */
+  /*
+   * The analysis plan and its runs. The row opens Data Analytics → Analysis
+   * plan, where the plan is reviewed, edited and applied; Intelligent mode
+   * is where one is first planned. A plan that was never applied, or that
+   * changed after it was applied, is "incomplete": its outputs are not (yet)
+   * the plan's.
+   */
   const plan = r?.analysisPlan;
   if (plan) {
     const run = facts.latestRun;
-    out.push({ key: "analysis", label: "Analysis plan", state: "configured", detail: `${n(plan.crosstabs.length, "crosstab")}, ${n(plan.tests.length, "test")}${run ? ` · last run ${run.computedAt.slice(0, 10)} on ${run.n} completes` : " · not run yet"}`, tab: "questions", count: plan.crosstabs.length + plan.tests.length });
-  } else out.push({ key: "analysis", label: "Analysis plan", state: "not_configured", detail: "No plan — ask Intelligent mode to plan the analysis.", tab: "questions", count: 0 });
+    const apply = facts.latestApply;
+    const items = `${n(plan.crosstabs.length, "crosstab")}, ${n(plan.tests.length, "test")}`;
+    const runText = run ? ` · last run ${run.computedAt.slice(0, 10)} on ${run.n} completes` : "";
+    if (apply === undefined) out.push({ key: "analysis", label: "Analysis plan", state: "configured", detail: `${items}${runText || " · not run yet"}`, tab: "analytics:plan", count: plan.crosstabs.length + plan.tests.length });
+    else if (!apply) out.push({ key: "analysis", label: "Analysis plan", state: "incomplete", detail: `${items} · not applied yet — apply it in Data Analytics to make the analyses, charts and dashboard${runText}`, tab: "analytics:plan", count: plan.crosstabs.length + plan.tests.length });
+    else if (apply.status === "failed") out.push({ key: "analysis", label: "Analysis plan", state: "needs_attention", detail: `${items} · the last apply (${apply.startedAt.slice(0, 10)}) failed${runText}`, tab: "analytics:plan", count: plan.crosstabs.length + plan.tests.length });
+    else if (!apply.current) out.push({ key: "analysis", label: "Analysis plan", state: "incomplete", detail: `${items} · changed since it was applied on ${apply.startedAt.slice(0, 10)} — apply it again${runText}`, tab: "analytics:plan", count: plan.crosstabs.length + plan.tests.length });
+    else out.push({ key: "analysis", label: "Analysis plan", state: apply.status === "partial" ? "needs_attention" : "configured", detail: `${items} · applied ${apply.startedAt.slice(0, 10)}${apply.status === "partial" ? " — some analyses were skipped or failed" : apply.status === "no_data" ? " — waiting for responses" : ""}${runText}`, tab: "analytics:plan", count: plan.crosstabs.length + plan.tests.length });
+  } else out.push({ key: "analysis", label: "Analysis plan", state: "not_configured", detail: "No plan — ask Intelligent mode to plan the analysis, or build one in Data Analytics.", tab: "analytics:plan", count: 0 });
 
   /* reporting: dashboards and reports, saved analyses */
   const reports = facts.reports ?? [];

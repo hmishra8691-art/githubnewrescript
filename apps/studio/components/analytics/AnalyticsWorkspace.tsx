@@ -11,21 +11,27 @@ import { ThemesPanel } from "./ThemesPanel";
 import { ReportsPanel, ExportDialog } from "./ReportsPanel";
 import { SharingPanel } from "./SharingPanel";
 import { Chart, ResultTableView } from "./charts/Chart";
+import { PlanWorkspace } from "./PlanWorkspace";
 
 /**
  * THE DATA ANALYTICS WORKSPACE (§2, §40). Survey and dataset selectors on top;
- * Home · Analysis · Charts · Tables · Segments · Filters · Reports · Themes ·
- * Exports · Sharing beneath. Everything it shows is fetched from the analytics
- * API; the browser never holds response rows.
+ * Home · Analysis plan · Analysis · Charts · Tables · Segments · Filters ·
+ * Reports · Themes · Exports · Sharing beneath. Everything it shows is fetched
+ * from the analytics API; the browser never holds response rows.
+ *
+ * ANALYSIS PLAN is where the plan written in Intelligent mode
+ * (research.analysisPlan) is reviewed, edited and applied to these outputs —
+ * see PlanWorkspace. Home is context-aware: with a plan it leads with the
+ * plan's state; without one it offers to create an analysis by hand.
  */
 
-export type WsTab = "home" | "analysis" | "charts" | "tables" | "segments" | "filters" | "reports" | "themes" | "exports" | "sharing";
+export type WsTab = "home" | "plan" | "analysis" | "charts" | "tables" | "segments" | "filters" | "reports" | "themes" | "exports" | "sharing";
 const TABS: { key: WsTab; label: string }[] = [
-  { key: "home", label: "Home" }, { key: "analysis", label: "Analysis" }, { key: "charts", label: "Charts" }, { key: "tables", label: "Tables" }, { key: "segments", label: "Segments" }, { key: "filters", label: "Filters" },
+  { key: "home", label: "Home" }, { key: "plan", label: "Analysis plan" }, { key: "analysis", label: "Analysis" }, { key: "charts", label: "Charts" }, { key: "tables", label: "Tables" }, { key: "segments", label: "Segments" }, { key: "filters", label: "Filters" },
   { key: "reports", label: "Reports" }, { key: "themes", label: "Themes" }, { key: "exports", label: "Exports" }, { key: "sharing", label: "Sharing" },
 ];
 
-export interface WorkspaceProps { surveyId: string; surveyTitle: string; canEdit: boolean; canPublish: boolean; canExport: boolean; initialTab?: WsTab }
+export interface WorkspaceProps { surveyId: string; surveyTitle: string; canEdit: boolean; /** may change the survey definition — the plan lives there */ canEditPlan?: boolean; canPublish: boolean; canExport: boolean; initialTab?: WsTab }
 
 export function AnalyticsWorkspace(p: WorkspaceProps) {
   const api = React.useMemo(() => new AxApi(p.surveyId), [p.surveyId]);
@@ -48,6 +54,18 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
   const [pendingAdd, setPendingAdd] = React.useState<{ analysis: Row; spec: ChartSpec } | null>(null);
   const [dirty, setDirty] = React.useState(false);
   const dataset: DatasetSpec = React.useMemo(() => ({ environment: env, dataset: quality }), [env, quality]);
+  /* the plan in brief, for Home: whether there is one, and where it stands — the Analysis plan tab holds the whole of it */
+  const [planBrief, setPlanBrief] = React.useState<PlanBrief | null | undefined>(undefined);
+  const loadPlanBrief = React.useCallback(async () => {
+    try {
+      const d = await api.plan({ environment: env, dataset: quality });
+      const plan = d.plan;
+      if (!plan || (!plan.crosstabs.length && !plan.tests.length)) { setPlanBrief(null); return; }
+      setPlanBrief({ items: d.items.length, crosstabs: plan.crosstabs.length, tests: plan.tests.length, hypotheses: d.overview?.hypotheses ?? 0, invalid: d.overview?.invalid ?? 0, stale: d.overview?.stale ?? 0, configured: d.overview?.configured ?? 0, charts: d.overview?.charts ?? 0,
+        apply: d.apply ? { status: d.apply.status, startedAt: d.apply.startedAt, current: d.apply.current } : null, run: d.run ? { computedAt: d.run.computedAt, n: d.run.n } : null, dataChanged: d.dataChangedSinceApply, report: !!d.report, dashboard: !!d.dashboard });
+    } catch { setPlanBrief(null); }
+  }, [api, env, quality]);
+  React.useEffect(() => { void loadPlanBrief(); }, [loadPlanBrief]);
 
   const refresh = React.useCallback(async () => {
     try {
@@ -100,7 +118,9 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
       {notice && <div className="ax-notice" style={{ margin: "6px 0" }} data-testid="ax-notice" onClick={() => setNotice(null)}>{notice}</div>}
       {tab === "home" && <Kpis env={env} counts={counts} vars={vars.length} analyses={analyses.length} charts={charts.length} reports={reports} shares={shares.length} />}
       <div className="ax-ws-body">
-        {tab === "home" && <Home home={home} analyses={analyses} onOpen={(a) => openBuilder({ analysis: a })} onNew={(kind) => openBuilder(kind ? { kind } : undefined)} onTab={setTab} canEdit={p.canEdit} api={api} refresh={refresh} />}
+        {tab === "home" && <Home home={home} analyses={analyses} onOpen={(a) => openBuilder({ analysis: a })} onNew={(kind) => openBuilder(kind ? { kind } : undefined)} onTab={setTab} canEdit={p.canEdit} api={api} refresh={refresh} plan={planBrief} surveyId={p.surveyId} />}
+        {tab === "plan" && <PlanWorkspace api={api} surveyId={p.surveyId} surveyTitle={p.surveyTitle} dataset={dataset} variables={vars} counts={counts} analyses={analyses} canEdit={p.canEdit} canEditPlan={!!p.canEditPlan} canExport={p.canExport}
+          onOpenAnalysis={(a) => openBuilder({ analysis: a })} onTab={(t) => setTab(t)} onApplied={() => { void refresh(); void loadPlanBrief(); }} />}
         {tab === "analysis" && (
           <div className="ax-analysis-layout" data-testid="ax-analysis-layout">
             <AnalysesRail analyses={analyses} currentId={currentAnalysisId} dirty={dirty} canEdit={p.canEdit} onNew={() => openBuilder()} onFromPlan={railFromPlan} onOpen={(a) => { if (a.id !== currentAnalysisId) openBuilder({ analysis: a }); }} onDuplicate={railDuplicate} onRename={railRename} onMove={railMove} onDelete={railDelete} />
@@ -171,9 +191,49 @@ function Empty({ title, detail }: { title: string; detail: string }) {
   return <div className="ax-empty"><div className="ax-empty-t">{title}</div><div className="ax-empty-d">{detail}</div></div>;
 }
 
-function Home({ home, analyses, onOpen, onNew, onTab, canEdit, api, refresh }: { home: { analyses: Row[]; charts: Row[]; reports: Row[]; shares: Row[] } | null; analyses: Row[]; onOpen: (a: Row) => void; onNew: (kind?: AnalysisDefinition["kind"]) => void; onTab: (t: WsTab) => void; canEdit: boolean; api: AxApi; refresh: () => Promise<void> }) {
+/** the plan in brief — what Home needs to say where it stands */
+interface PlanBrief { items: number; crosstabs: number; tests: number; hypotheses: number; invalid: number; stale: number; configured: number; charts: number; apply: { status: string; startedAt: string; current: boolean } | null; run: { computedAt: string; n: number } | null; dataChanged: boolean; report: boolean; dashboard: boolean }
+
+/**
+ * THE PLAN ON HOME — context-aware, not a second plan view. With a plan, the
+ * card says whether it is applied, changed since, waiting for data, or has
+ * analyses needing attention, and opens the Analysis plan tab; without one,
+ * it points at Intelligent mode. "Create analysis" stays beside it either
+ * way: a hand-built analysis is still the other way to start.
+ */
+function PlanCard({ plan, onTab, surveyId }: { plan: PlanBrief | null | undefined; onTab: (t: WsTab) => void; surveyId: string }) {
+  if (plan === undefined) return <div className="card ax-plan-card" data-testid="ax-plan-card" data-state="loading"><div className="card-title">Analysis plan</div><div className="muted" style={{ fontSize: 13 }}>Loading…</div></div>;
+  if (plan === null) return (
+    <div className="card ax-plan-card" data-testid="ax-plan-card" data-state="none">
+      <div className="card-title">Analysis plan <span className="badge neutral">none yet</span></div>
+      <div className="muted" style={{ fontSize: 13 }}>No analysis plan for this survey. Plan it in Intelligent mode — the crosstabs and tests the research design implies — and apply it here; or start an analysis by hand below.</div>
+      <div className="card-actions" style={{ marginTop: 8 }}><a className="btn small primary" href={`/studio/${surveyId}?mode=intelligent`} data-testid="ax-plan-intelligent">Plan it in Intelligent mode</a><button className="btn small" onClick={() => onTab("plan")} data-testid="ax-plan-open">Open the plan workspace</button></div>
+    </div>
+  );
+  const a = plan.apply;
+  const state = !a ? { key: "not_applied", label: "Not applied", tone: "warning", text: `Saved with ${plan.crosstabs} crosstab${plan.crosstabs === 1 ? "" : "s"} and ${plan.tests} test${plan.tests === 1 ? "" : "s"} — apply it to create the analyses, charts and dashboard.` }
+    : a.status === "failed" ? { key: "failed", label: "Apply failed", tone: "error", text: "The last apply did not finish. Open the plan to see why and try again." }
+    : !a.current ? { key: "changed", label: "Changed since applied", tone: "warning", text: `Edited after it was applied ${timeAgo(a.startedAt)} — apply it again to update the outputs.` }
+    : a.status === "no_data" ? { key: "no_data", label: "Waiting for data", tone: "neutral", text: "Applied; its outputs fill when complete responses exist in this dataset." }
+    : plan.dataChanged ? { key: "data_changed", label: "New data since", tone: "warning", text: `More completes have arrived since the run of ${plan.run ? timeAgo(plan.run.computedAt) : "the apply"} — apply again to refresh.` }
+    : a.status === "partial" ? { key: "partial", label: "Some analyses failed", tone: "warning", text: `Applied ${timeAgo(a.startedAt)}; ${plan.invalid} planned analys${plan.invalid === 1 ? "is" : "es"} cannot run — open the plan to fix them.` }
+    : { key: "applied", label: "Applied", tone: "success", text: `Applied ${timeAgo(a.startedAt)}${plan.run ? ` · ${plan.run.n} completes` : ""} · ${plan.charts} chart${plan.charts === 1 ? "" : "s"}${plan.report ? " · findings report" : ""}${plan.dashboard ? " · dashboard" : ""}.` };
+  return (
+    <div className="card ax-plan-card" data-testid="ax-plan-card" data-state={state.key}>
+      <div className="card-title">Analysis plan <span className={`badge ${state.tone}`} data-testid="ax-plan-state">{state.label}</span><span className="grow" /><span className="muted" style={{ fontSize: 12.5 }}>{plan.items} planned · {plan.hypotheses} hypothes{plan.hypotheses === 1 ? "is" : "es"}{plan.invalid ? ` · ${plan.invalid} need attention` : ""}{plan.stale ? ` · ${plan.stale} changed` : ""}</span></div>
+      <div className="muted" style={{ fontSize: 13 }}>{state.text}</div>
+      <div className="card-actions" style={{ marginTop: 8, flexWrap: "wrap" }}>
+        <button className="btn small primary" onClick={() => onTab("plan")} data-testid="ax-plan-open">Open the plan</button>
+        <a className="btn small" href={`/studio/${surveyId}?mode=intelligent`} data-testid="ax-plan-intelligent">Intelligent mode</a>
+      </div>
+    </div>
+  );
+}
+
+function Home({ home, analyses, onOpen, onNew, onTab, canEdit, api, refresh, plan, surveyId }: { home: { analyses: Row[]; charts: Row[]; reports: Row[]; shares: Row[] } | null; analyses: Row[]; onOpen: (a: Row) => void; onNew: (kind?: AnalysisDefinition["kind"]) => void; onTab: (t: WsTab) => void; canEdit: boolean; api: AxApi; refresh: () => Promise<void>; plan: PlanBrief | null | undefined; surveyId: string }) {
   return (
     <div className="ax-home" data-testid="ax-home">
+      <PlanCard plan={plan} onTab={onTab} surveyId={surveyId} />
       {/* the two ways to start work, side by side — neither is wide enough to
           deserve a row of its own once the page uses the whole display */}
       <div className="ax-home-start">
