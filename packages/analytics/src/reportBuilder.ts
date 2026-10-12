@@ -86,7 +86,7 @@ export function testLine(r: AnalysisResult): string | undefined {
 }
 
 const STOP = new Set(["what", "which", "does", "have", "with", "that", "this", "from", "about", "their", "they", "them", "your", "how", "why", "who", "when", "are", "the", "and", "for", "our", "do", "is", "of", "to", "in", "on", "by", "a", "an", "we", "us", "more", "most", "between", "among", "across", "than", "like", "would", "should", "can", "will", "any", "all", "per", "each", "over", "into", "differ", "differs", "difference", "differences", "vary", "varies"]);
-const tokens = (s: string): string[] => [...new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 2 && !STOP.has(w)))];
+export const tokens = (s: string): string[] => [...new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 2 && !STOP.has(w)))];
 
 /** the words an analysis is about: its name, and the labels of the variables it reads */
 function aboutWords(item: BuilderItem, byName: Map<string, VariableMeta>): { words: Set<string>; names: string[] } {
@@ -96,12 +96,15 @@ function aboutWords(item: BuilderItem, byName: Map<string, VariableMeta>): { wor
   return { words: new Set(tokens(text)), names };
 }
 
+/** two words are the same word for matching: equal, or long enough to share their first five letters ("satisfied" / "satisfaction") */
+export const wordsMatch = (a: string, b: string): boolean => a === b || (a.length > 4 && b.length > 4 && a.slice(0, 5) === b.slice(0, 5));
+
 /** does this key question speak to this analysis? Named variable, or enough shared words. */
 function answers(question: string, about: ReturnType<typeof aboutWords>): boolean {
   if (about.names.some((n) => mentionsVariable(question, n))) return true;
   const q = tokens(question);
   if (!q.length) return false;
-  const shared = q.filter((w) => about.words.has(w) || [...about.words].some((a) => a.length > 4 && w.length > 4 && (a.startsWith(w.slice(0, 5)) || w.startsWith(a.slice(0, 5)))));
+  const shared = q.filter((w) => about.words.has(w) || [...about.words].some((a) => wordsMatch(a, w)));
   return shared.length >= Math.max(1, Math.ceil(q.length / 2));
 }
 

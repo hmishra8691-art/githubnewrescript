@@ -92,3 +92,9 @@ test("reviewAgainstSaved: a planned analysis the researcher has since edited is 
   assert.deepEqual(r.toCreate, [], "the plan item c1 already has its analysis");
   assert.equal(r.existingFor.get("c1"), "s1");
 });
+
+test("a significance test of a variable against itself is an error, not a result", () => {
+  const issues = validateAnalysis(D({ kind: "test", variables: ["SAT", "SAT"] }), vars);
+  assert.ok(issues.some((i) => i.code === "same_variable" && i.severity === "error"));
+  assert.deepEqual(validateAnalysis(D({ kind: "test", variables: ["SAT", "GENDER"] }), vars), []);
+});

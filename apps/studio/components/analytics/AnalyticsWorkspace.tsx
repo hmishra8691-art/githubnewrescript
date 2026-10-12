@@ -3,6 +3,7 @@ import { Warnings } from "./Warnings";
 import React from "react";
 import type { AnalysisDefinition, ChartSpec, DatasetSpec, ReportTheme, VariableMeta } from "@rescript/analytics";
 import { ANALYSIS_KINDS } from "@rescript/analytics";
+import { AskPanel } from "./AskPanel";
 import { AxApi, type Row, type RunResult, timeAgo } from "./api";
 import { AnalysisBuilder } from "./AnalysisBuilder";
 import { AnalysesRail } from "./AnalysesRail";
@@ -26,10 +27,10 @@ import { PlanWorkspace } from "./PlanWorkspace";
  * plan's state; without one it offers to create an analysis by hand.
  */
 
-export type WsTab = "home" | "plan" | "analysis" | "charts" | "tables" | "segments" | "filters" | "reports" | "themes" | "exports" | "sharing";
+export type WsTab = "home" | "plan" | "analysis" | "charts" | "tables" | "segments" | "filters" | "reports" | "ask" | "themes" | "exports" | "sharing";
 const TABS: { key: WsTab; label: string }[] = [
   { key: "home", label: "Home" }, { key: "plan", label: "Analysis plan" }, { key: "analysis", label: "Analysis" }, { key: "charts", label: "Charts" }, { key: "tables", label: "Tables" }, { key: "segments", label: "Segments" }, { key: "filters", label: "Filters" },
-  { key: "reports", label: "Reports" }, { key: "themes", label: "Themes" }, { key: "exports", label: "Exports" }, { key: "sharing", label: "Sharing" },
+  { key: "reports", label: "Reports" }, { key: "ask", label: "Ask" }, { key: "themes", label: "Themes" }, { key: "exports", label: "Exports" }, { key: "sharing", label: "Sharing" },
 ];
 
 export interface WorkspaceProps { surveyId: string; surveyTitle: string; canEdit: boolean; /** may change the survey definition — the plan lives there */ canEditPlan?: boolean; canPublish: boolean; canExport: boolean; initialTab?: WsTab }
@@ -140,6 +141,7 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
         {tab === "segments" && <SegmentsPanel api={api} variables={vars} items={segments} kind="segment" onChange={() => void refresh()} />}
         {tab === "filters" && <SegmentsPanel api={api} variables={vars} items={segments} kind="filter" onChange={() => void refresh()} />}
         {tab === "reports" && <ReportsPanel api={api} analyses={analyses} themes={themes} items={reports} onChange={() => void refresh()} pendingAdd={pendingAdd} clearPending={() => setPendingAdd(null)} surveyTitle={p.surveyTitle} />}
+        {tab === "ask" && <AskPanel api={api} dataset={dataset} analyses={analyses} canEdit={p.canEdit} onChanged={refresh} />}
         {tab === "themes" && <ThemesPanel api={api} items={themes} onChange={() => void refresh()} />}
         {tab === "exports" && <ExportsPanel api={api} reports={reports} analyses={analyses} themes={themes} />}
         {tab === "sharing" && <SharingPanel api={api} shares={shares} reports={reports} onChange={() => void refresh()} />}

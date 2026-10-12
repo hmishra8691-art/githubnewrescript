@@ -5,11 +5,12 @@ import type { AuditEvent, Capability } from "@rescript/access";
 import { buildPptx, buildXlsx, isEmbeddableImage } from "@rescript/analytics/export";
 import {
   DEFAULT_THEME, BUILT_IN_REPORT_TEMPLATES, applyTemplate, describeTemplate,
-  type AnalysisDefinition, type AnalysisResult, type ChartSpec, type DatasetSpec, type ReportDefinition, type ReportTemplate, type ReportTheme, BUILT_IN_DASHBOARD_TEMPLATES, applyDashboardTemplate, dashboardAsTemplate, describeDashboardTemplate, templateKind, plannedAnalyses, reportAnalysisIds, failedResult, checkSnapshot, normalizeReportDefinition, draftReport, regenerateScene, storyHtml, variableMetadata, type StoryDefinition } from "@rescript/analytics";
+  type AnalysisDefinition, type AnalysisResult, type ChartSpec, type DatasetSpec, type ReportDefinition, type ReportTemplate, type ReportTheme, BUILT_IN_DASHBOARD_TEMPLATES, applyDashboardTemplate, dashboardAsTemplate, describeDashboardTemplate, templateKind, plannedAnalyses, reportAnalysisIds, failedResult, checkSnapshot, normalizeReportDefinition, draftReport, regenerateScene, storyHtml, variableMetadata, parseAskOps, parseUndo, type StoryDefinition } from "@rescript/analytics";
 import type { SurveyDefinition } from "@rescript/schema";
 import { supabaseService } from "@/lib/authServer";
 import { audit, isFailure, requireEditRight, requireProject, type ProjectContext } from "@/lib/guard";
 import { builderItems, modelInterpretation, narrateStory, parseBrief } from "@/lib/analyticsBuilder";
+import { applyOps, askContext, datasetFrom, propose as proposeAsk, undoRecords } from "@/lib/analyticsAsk";
 import { compute, hashPassword, loadDefinition, loadTheme, newToken, variablesPayload, runPlanFor, latestRun, listRuns, runById, dueMilestone, ensurePlannedAnalyses, draftFindingsReport } from "@/lib/analytics";
 import { applyPlan, editPlan, planPayload } from "@/lib/analysisPlanService";
 
@@ -383,6 +384,40 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
       return new NextResponse(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8", "content-disposition": `attachment; filename="${String(report?.name ?? "story").replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 60) || "story"}-story.html"`, "cache-control": "no-store", "x-rescript-export-notes": encodeURIComponent(JSON.stringify(notes)) } });
     }
     return bad("Unknown report-builder endpoint.", 404);
+  }
+  /*
+   * INTELLIGENT MODE FOR ANALYTICS — words → a reviewable proposal → applied item by item.
+   *   intelligent/propose  { request, dataset, model? }   read-only; writes nothing
+   *   intelligent/apply    { request, dataset, ops }      each op validated again, executed, undo records returned
+   *   intelligent/undo     { records }                    reverses what apply recorded, unless changed since
+   * Needs analytics.edit throughout; the browser's copy of a proposal is rebuilt field by field and re-validated.
+   */
+  if (head === "intelligent") {
+    const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;
+    const dataset = datasetFrom(body.dataset);
+    if (itemId === "propose") {
+      const request = typeof body.request === "string" ? body.request.trim().slice(0, 1200) : "";
+      if (!request) return bad("Say what you want done, for example: “cross-tabs of satisfaction by age and gender”.");
+      const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
+      return json(await proposeAsk(db, ctx.user, surveyId, loaded, request, dataset, { model: body.model !== false, fake: body.fake }));
+    }
+    if (itemId === "apply") {
+      const request = typeof body.request === "string" ? body.request.trim().slice(0, 1200) : "";
+      const { ops, rejected } = parseAskOps(body.ops);
+      if (!ops.length) return bad(rejected[0] ?? "There is nothing to apply.");
+      const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
+      const applied = await applyOps(db, surveyId, loaded.version ?? null, ctx.user.userId, ops, dataset, request, (needResults) => askContext(db, surveyId, loaded, dataset, { results: needResults }));
+      for (const a of applied) if (a.status === "done") log(ctx, a.undo?.kind === "removed_analysis" ? "analytics.analysis_deleted" : a.undo?.kind === "chart_changed" ? "analytics.chart_modified" : "analytics.analysis_created", a.createdId ?? (a.undo && "id" in a.undo ? a.undo.id : null), { name: a.name, intelligent: true, request: request.slice(0, 300) });
+      return json({ applied, rejected });
+    }
+    if (itemId === "undo") {
+      const records = parseUndo(body.records);
+      if (!records.length) return bad("There is nothing to undo.");
+      const undone = await undoRecords(db, surveyId, ctx.user.userId, records);
+      log(ctx, "analytics.analysis_modified", null, { intelligent: true, undo: records.length, restored: undone.filter((u) => u.status === "undone").length });
+      return json({ undone });
+    }
+    return bad("Unknown intelligent endpoint.", 404);
   }
   if (head === "run") {
     const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;

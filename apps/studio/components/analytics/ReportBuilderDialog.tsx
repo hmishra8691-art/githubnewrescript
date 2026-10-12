@@ -16,18 +16,18 @@ type Draft = BuilderDraft & { model: { status: string; detail: string }; truncat
 
 const ROLE_WORD: Record<string, string> = { key: "answers a key question", finding: "finding", comparison: "group comparison", difference: "tested difference" };
 
-export function ReportBuilderDialog({ api, analyses, onClose, onCreated }: { api: AxApi; analyses: Row[]; onClose: () => void; onCreated: (report: Row) => void }) {
-  const [objective, setObjective] = React.useState("");
+export function ReportBuilderDialog({ api, analyses, onClose, onCreated, initial }: { api: AxApi; analyses: Row[]; onClose: () => void; onCreated: (report: Row) => void; initial?: Partial<Pick<ReportBrief, "objective" | "audience" | "tone" | "title">> & { story?: boolean } }) {
+  const [objective, setObjective] = React.useState(initial?.objective ?? "");
   const [questions, setQuestions] = React.useState("");
-  const [audience, setAudience] = React.useState<ReportBrief["audience"]>("client");
-  const [tone, setTone] = React.useState<ReportBrief["tone"]>("plain");
-  const [title, setTitle] = React.useState("");
+  const [audience, setAudience] = React.useState<ReportBrief["audience"]>(initial?.audience ?? "client");
+  const [tone, setTone] = React.useState<ReportBrief["tone"]>(initial?.tone ?? "plain");
+  const [title, setTitle] = React.useState(initial?.title ?? "");
   const [client, setClient] = React.useState("");
   const [tests, setTests] = React.useState(true);
   const [crosstabs, setCrosstabs] = React.useState(true);
   const [maxItems, setMaxItems] = React.useState("");
   const [picked, setPicked] = React.useState<Set<string> | null>(null);   // null = every saved analysis
-  const [withStory, setWithStory] = React.useState(true);
+  const [withStory, setWithStory] = React.useState(initial?.story ?? true);
   const [withModel, setWithModel] = React.useState(false);
   const [draft, setDraft] = React.useState<Draft | null>(null);
   const [excluded, setExcluded] = React.useState<Set<string>>(new Set());

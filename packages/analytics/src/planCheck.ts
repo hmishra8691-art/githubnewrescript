@@ -58,6 +58,7 @@ export function validateAnalysis(def: AnalysisDefinition, variables: readonly Va
     if (bad.length && !dead.length) out.push({ code: "wrong_type", severity: "error", variables: bad, message: `A mean needs a numeric or scale variable; ${bad.join(", ")} ${bad.length === 1 ? "is" : "are"} not.` });
   }
   if (def.kind === "test" && !dead.length && (def.variables?.length ?? 0) < 2) out.push({ code: "needs_groups", severity: "error", message: "A significance test compares an outcome across a grouping or a second variable — one variable is not enough." });
+  if (def.kind === "test" && !dead.length && (def.variables?.length ?? 0) >= 2 && new Set(def.variables).size < 2) out.push({ code: "same_variable", severity: "error", variables: [...new Set(def.variables)], message: `${def.variables![0]} is tested against itself.` });
   return out;
 }
 
@@ -70,13 +71,13 @@ const canon = (o: unknown): string => JSON.stringify(o, (_k, v) => (v && typeof 
 export function analysisSignature(def: AnalysisDefinition): string {
   const o = { ...(def.options ?? {}) } as Record<string, unknown>;
   /* presentation and bookkeeping — they change how the table looks or where it came from, not a number in it */
-  for (const k of ["planned", "plannedHash", "hypotheses", "formatting", "title", "subtitle", "layout", "significance", "decimals", "sigLevel", "alpha"]) delete o[k];
+  for (const k of ["planned", "plannedHash", "requested", "hypotheses", "formatting", "title", "subtitle", "layout", "significance", "decimals", "sigLevel", "alpha"]) delete o[k];
   if (def.kind === "crosstab") return `crosstab:${sorted(def.rows)}>${sorted(def.columns)}:${def.measure ?? "pct_col"}:${canon(o)}:${canon(def.filter ?? null)}:${canon(def.dataset ?? null)}`;
   return `${def.kind}:${(def.variables ?? []).join("|")}:${canon(o)}:${canon(def.filter ?? null)}:${canon(def.dataset ?? null)}`;
 }
 
 /** the chi-square a crosstab already prints for its one row × one column pair — a separate test for the same pair repeats it */
-const crosstabCarriesChiSquare = (x: AnalysisDefinition, t: AnalysisDefinition): boolean =>
+export const crosstabCarriesChiSquare = (x: AnalysisDefinition, t: AnalysisDefinition): boolean =>
   x.kind === "crosstab" && t.kind === "test" && (t.options?.test === "chi_square" || t.options?.test === "auto")
   && (x.rows?.length === 1 && x.columns?.length === 1) && (t.variables?.length === 2)
   && ((x.rows![0] === t.variables[0] && x.columns![0] === t.variables[1]) || (x.rows![0] === t.variables[1] && x.columns![0] === t.variables[0]));

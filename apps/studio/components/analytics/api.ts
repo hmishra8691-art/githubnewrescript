@@ -1,5 +1,5 @@
 "use client";
-import type { AnalysisDefinition, AnalysisResult, BuilderDraft, ChartAdvice, ChartRecommendation, ReportTemplate, StoryScene, VariableMeta } from "@rescript/analytics";
+import type { AnalysisDefinition, AnalysisResult, AskOp, AskProposal, BuilderDraft, ChartAdvice, ChartRecommendation, ReportTemplate, StoryScene, UndoRecord, VariableMeta } from "@rescript/analytics";
 import type { planPayload, ApplyPlanOutcome } from "@/lib/analysisPlanService";
 
 /** Thin client for `/api/surveys/<id>/analytics/*`. Every call is server-authorised; the client never computes. */
@@ -53,6 +53,11 @@ export class AxApi {
     try { notes = JSON.parse(decodeURIComponent(r.headers.get("x-rescript-export-notes") ?? "[]")); } catch { /* no notes */ }
     return { notes };
   }
+  /** Intelligent Mode: words → a proposal (writes nothing) */
+  askPropose(body: { request: string; dataset: unknown; model?: boolean }) { return this.req<AskProposal & { model: { status: string; detail: string } }>("intelligent/propose", { method: "POST", body: JSON.stringify(body) }); }
+  /** the chosen items, each validated again by the server; returns what was done and how to undo it */
+  askApply(body: { request: string; dataset: unknown; ops: AskOp[] }) { return this.req<{ applied: { index: number; name: string; status: "done" | "blocked" | "failed"; message: string; undo?: UndoRecord; createdId?: string }[]; rejected: string[] }>("intelligent/apply", { method: "POST", body: JSON.stringify(body) }); }
+  askUndo(records: UndoRecord[]) { return this.req<{ undone: { name: string; status: "undone" | "skipped"; message: string }[] }>("intelligent/undo", { method: "POST", body: JSON.stringify({ records }) }); }
   access(shareId: string) { return this.req<{ events: Row[] }>(`shares/${shareId}/access`); }
   /* the analysis plan (Data Analytics → Analysis plan): read, edit with analysis actions, apply */
   plan(dataset: { environment: string; dataset: string }) { return this.req<PlanPayload>(`plan?environment=${encodeURIComponent(dataset.environment)}&dataset=${encodeURIComponent(dataset.dataset)}`); }
