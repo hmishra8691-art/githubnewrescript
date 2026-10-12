@@ -14,7 +14,8 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+/* its own function on Vercel (routes with the same settings are bundled together, and this one carries the ffmpeg binary) */
+export const maxDuration = 300;
 
 /**
  * STORY REPORTS — animated research reports and their PowerPoint (Results → Reports → Create report).
