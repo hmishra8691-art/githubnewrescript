@@ -330,6 +330,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
   }
 
   if (head === "export") {
+    /*
+     * A failure while computing or building the file is answered in words
+     * (and logged here, without the request's data), not as a bare 500 —
+     * "Export failed (500)" told the researcher nothing.
+     */
+    try {
     const ctx = await gate(req, surveyId, "analytics.export"); if (isFailure(ctx)) return ctx.response;
     if (body.format != null && body.format !== "xlsx" && body.format !== "pptx") return bad(`Unknown export format “${String(body.format)}” — use pptx or xlsx.`);
     const format = body.format === "xlsx" ? "xlsx" : "pptx";
@@ -407,6 +413,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     log(ctx, "analytics.export_generated", reportId ?? analysisId, { name, format, version: reportVersion });
     const filename = `${(name || "analytics").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "_") || "analytics"}.${format}`;
     return new NextResponse(new Uint8Array(buf), { status: 200, headers: { "content-type": format === "pptx" ? "application/vnd.openxmlformats-officedocument.presentationml.presentation" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "content-disposition": `attachment; filename="${filename}"`, "cache-control": "no-store" } });
+    } catch (e) {
+      const message = (e as Error)?.message ?? String(e);
+      console.error("[rescript:analytics] export failed", JSON.stringify({ surveyId, reportId: body.reportId ?? null, analysisId: body.analysisId ?? null, format: body.format ?? "pptx", error: message, stack: (e as Error)?.stack?.split("\n").slice(0, 6).join(" | ") }));
+      return bad(`The export could not be built: ${message}`, 500);
+    }
   }
 
   if (head === "reports" && itemId && action === "publish") {
