@@ -1,4 +1,5 @@
 "use client";
+import { StoryReports } from "./StoryStudio";
 import React from "react";
 import type { AnalysisDefinition, AnalysisResult, ChartSpec, DashboardBand, DashboardDefinition, DashboardWidget, ExportSettings, ReportBlock, ReportDefinition, ReportTheme } from "@rescript/analytics";
 import { CHART_CATALOG, DEFAULT_EXPORT_SETTINGS, describeTemplate, compactLayout, describeDashboardTemplate, firstFreeSlot, layoutRows, normalizeLayout, placeWidget, scrimFor, templateKind, type LayoutBox, type ReportTemplate } from "@rescript/analytics";
@@ -280,6 +281,8 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
   const [msg, setMsg] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [creating, setCreating] = React.useState<"report" | "dashboard" | null>(null);
+  /* a story report open in its storyboard takes the whole panel */
+  const [storyOpen, setStoryOpen] = React.useState(false);
   const [newName, setNewName] = React.useState("");
   /* §36 — report templates, and the saved filters a viewer may switch */
   const [templates, setTemplates] = React.useState<ReportTemplate[]>([]);
@@ -446,13 +449,16 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
 
   if (!open) return (
     <div className="ax-panel" data-testid="ax-reports">
-      <div className="row" style={{ marginBottom: 10 }}><h2 style={{ margin: 0 }}>Reports & dashboards</h2><span className="grow" /><button className="btn primary small" onClick={() => setCreating("report")} data-testid="ax-new-report">+ Report</button><button className="btn small" onClick={() => setCreating("dashboard")} data-testid="ax-new-dashboard">+ Dashboard</button></div>
+      <StoryReports surveyId={api.surveyId} onOpen={setStoryOpen} />
+      {!storyOpen && <>
+      <div className="row" style={{ margin: "18px 0 10px" }}><h2 style={{ margin: 0 }}>Reports & dashboards</h2><span className="grow" /><button className="btn small" onClick={() => setCreating("report")} data-testid="ax-new-report">+ Blank report</button><button className="btn small" onClick={() => setCreating("dashboard")} data-testid="ax-new-dashboard">+ Dashboard</button></div>
       {creating && <div className="card row"><input className="input" autoFocus placeholder={`${creating === "report" ? "Report" : "Dashboard"} name`} value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && create()} data-testid="ax-report-name" /><button className="btn primary small" onClick={create} data-testid="ax-report-create">Create</button><button className="btn small" onClick={() => setCreating(null)}>Cancel</button></div>}
       {error && <div className="ax-error">{error}</div>}
       <div className="ax-cards">
         {items.map((r) => <div key={r.id} className="card selectable" onClick={() => openReport(r)} data-testid="ax-report-card"><div className="card-title">{r.kind === "dashboard" ? "▦" : "▤"} {r.name}</div><div className="muted" style={{ fontSize: 13 }}>{r.kind} · {r.mode} · {r.published_version ? `published v${r.published_version}` : "not published"} · updated {timeAgo(r.updated_at)}</div></div>)}
         {!items.length && <div className="muted">No reports yet. Create one, then add saved analyses as charts, tables and KPIs.</div>}
       </div>
+      </>}
     </div>
   );
 

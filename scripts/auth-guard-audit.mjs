@@ -72,6 +72,10 @@ const PUBLIC = {
     "the hourly analysis-plan job: the same bearer-token credential as the media job, checked against CRON_SECRET by "
     + "`timingSafeEqual` in each handler's first statement, refusing everything when the variable is unset. It runs "
     + "every planned survey's milestones, so there is no single project to gate on — and a scheduler has no session",
+  "cron/story-renders/route.ts":
+    "advances story-report video exports in the background: the same bearer-token credential as the media job, checked "
+    + "against CRON_SECRET by `timingSafeEqual` in each handler's first statement, refusing everything when it is unset. "
+    + "It touches only queued exports whose lease has lapsed, so there is no project to gate on — and no session",
   "cron/billing-reservations/route.ts":
     "the same bearer-token credential as the media job, checked the same way in the handler's first statement. "
     + "It releases reservations whose TTL has passed and touches nothing a caller could name, so there is no "

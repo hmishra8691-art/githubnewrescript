@@ -13,6 +13,14 @@ export const uuid = () => `00000000-0000-4000-8000-${(++seq).toString(16).padSta
 let tick = Date.now();
 export const stamp = () => new Date(++tick).toISOString();
 
+/* the unique indexes the story tables rely on (migration 0051) */
+const ACTIVE = ["queued", "rendering", "verifying"];
+const UNIQUE = {
+  analytics_story_renders: [{ name: "analytics_story_renders_one_active", cols: ["story_id", "kind"], where: (r) => ACTIVE.includes(r.status ?? "queued") }],
+  analytics_story_versions: [{ name: "analytics_story_versions_story_id_version_key", cols: ["story_id", "version"], where: () => true }],
+  analytics_story_segments: [{ name: "analytics_story_segments_pkey", cols: ["survey_id", "hash"], where: () => true }],
+};
+
 class Query {
   constructor(db, table) { this.db = db; this.table = table; this.op = "select"; this.filters = []; this.head = false; this.wantCount = false; this.orderBy = null; this.limitN = null; this.mode = "many"; this.payload = null; }
   select(_cols, opts) { if (opts?.head) this.head = true; if (opts?.count) this.wantCount = true; return this; }
@@ -38,6 +46,8 @@ class Query {
     const rows = this.db.tables[this.table];
     if (!rows) return { data: null, error: { message: `relation "public.${this.table}" does not exist` } };
     if (this.op === "insert") {
+      const clash = (UNIQUE[this.table] ?? []).find((u) => rows.some((r) => u.where(r) && u.where(this.payload) && u.cols.every((c) => r[c] === this.payload[c])));
+      if (clash) return { data: null, error: { message: `duplicate key value violates unique constraint "${clash.name}"`, code: "23505" } };
       const row = { id: uuid(), created_at: stamp(), updated_at: stamp(), ...this.payload };
       if (this.table === "analytics_plan_applies" && !this.payload?.started_at) row.started_at = stamp();
       rows.push(row);
@@ -63,7 +73,7 @@ class Query {
 export class FakeDb {
   constructor() {
     /** @type {Record<string, Record<string, unknown>[]>} */
-    this.tables = { surveys: [], responses: [], analytics_analyses: [], analytics_analysis_versions: [], analytics_charts: [], analytics_segments: [], analytics_themes: [], analytics_reports: [], analytics_report_versions: [], analytics_shares: [], analytics_runs: [], analytics_plan_applies: [], audit_logs: [] };
+    this.tables = { surveys: [], responses: [], analytics_analyses: [], analytics_analysis_versions: [], analytics_charts: [], analytics_segments: [], analytics_themes: [], analytics_reports: [], analytics_report_versions: [], analytics_shares: [], analytics_runs: [], analytics_plan_applies: [], audit_logs: [], analytics_story_reports: [], analytics_story_versions: [], analytics_story_renders: [], analytics_story_segments: [], analytics_story_themes: [] };
     /** @type {Record<string, unknown>[]} */
     this.log = [];
   }

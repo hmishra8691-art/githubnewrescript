@@ -12,6 +12,10 @@
     {
       "path": "/api/cron/analysis-runs",
       "schedule": "17 * * * *"
+    },
+    {
+      "path": "/api/cron/story-renders",
+      "schedule": "* * * * *"
     }
   ]
 }

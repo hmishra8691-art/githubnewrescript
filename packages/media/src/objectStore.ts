@@ -85,6 +85,13 @@ export interface ObjectStore {
   read(bucket: string, path: string): Promise<Uint8Array>;
   /** Delete, then CHECK: a path is only `removed` when a HEAD afterwards finds nothing. */
   remove(bucket: string, paths: string[]): Promise<RemoveReport>;
+  /**
+   * Write bytes the SERVER produced (a rendered report video, a generated
+   * deck) — never a respondent's or researcher's upload, which goes through
+   * `grantUpload`. Refuses to overwrite: every key the report renderer mints
+   * is content-addressed or unique, so a collision is a replay.
+   */
+  put(bucket: string, path: string, bytes: Uint8Array, opts?: { contentType?: string | null }): Promise<ObjectHead>;
   /** Duplicate inside the store. Throws if the store cannot. */
   copy(bucket: string, fromPath: string, toBucket: string, toPath: string, opts?: { contentType?: string | null }): Promise<ObjectHead>;
 }
@@ -141,6 +148,7 @@ export const BUCKET_PREFIX: Record<string, string> = {
   "rescript-uploads": "uploads",
   "rescript-audio": "audio",
   "rescript-assets": "assets",
+  "rescript-reports": "reports",
 };
 
 export function providerKey(bucket: string, path: string): string {
@@ -241,6 +249,11 @@ export function providerObjectStore(provider: MediaStorageProvider): ObjectStore
       return provider.read(key(bucket, path));
     },
 
+    async put(bucket, path, bytes, opts) {
+      const m = await provider.upload(key(bucket, path), bytes, { contentType: opts?.contentType ?? undefined, ifAbsent: true });
+      return { size: m.size ?? bytes.length, contentType: m.contentType ?? opts?.contentType ?? null, etag: m.etag ?? null };
+    },
+
     async remove(bucket, paths) {
       const report: RemoveReport = { removed: [], failed: [] };
       if (!paths.length) return report;
@@ -290,6 +303,7 @@ export interface SupabaseStorageLike {
      * the first page of its folder.
      */
     list(path: string, opts?: { limit?: number; offset?: number; search?: string }): PromiseLike<{ data: { name: string; metadata?: { size?: number; mimetype?: string } | null }[] | null; error: { message: string } | null }>;
+    upload?(path: string, body: Uint8Array, opts?: { contentType?: string; upsert?: boolean }): PromiseLike<{ data: unknown; error: { message: string } | null }>;
     copy?(from: string, to: string): PromiseLike<{ data: unknown; error: { message: string } | null }>;
   };
 }
@@ -391,6 +405,15 @@ export function supabaseObjectStore(storage: SupabaseStorageLike): ObjectStore {
       const signed = await storage.from(bucket).createSignedUrl(path, opts.seconds, opts.downloadAs ? { download: opts.downloadAs } : undefined);
       if (signed.error || !signed.data) throw new Error(signed.error?.message ?? "no url");
       return signed.data.signedUrl;
+    },
+
+    async put(bucket, path, bytes, opts) {
+      await this.ceiling(bucket, 500 * 1024 * 1024);
+      const up = storage.from(bucket).upload;
+      if (!up) throw new Error("this storage client cannot write objects");
+      const { error } = await up.call(storage.from(bucket), path, bytes, { contentType: opts?.contentType ?? undefined, upsert: false });
+      if (error) throw new Error(`could not store ${path}: ${error.message}`);
+      return { size: bytes.length, contentType: opts?.contentType ?? null, etag: null };
     },
 
     async read(bucket, path) {
