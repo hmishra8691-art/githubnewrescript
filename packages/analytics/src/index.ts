@@ -25,3 +25,5 @@ export * from "./chartPurpose.js";
 export * from "./deck.js";
 export * from "./narrative.js";
 export * from "./planWorkspace.js";
+export * from "./blockRefs.js";
+export * from "./questionChart.js";

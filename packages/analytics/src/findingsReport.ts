@@ -121,16 +121,5 @@ export function reportFromRun(def: SurveyDefinition, run: RunLike, opts: ReportO
   return { title, subtitle: `Findings as of ${date(run.computedAt)}`, mode: "live", blocks };
 }
 
-/** every saved analysis the report draws — for the export's results map */
-export function reportAnalysisIds(report: ReportDefinition): string[] {
-  const ids = new Set<string>();
-  for (const b of report.blocks) {
-    if ((b.type === "chart" || b.type === "table" || b.type === "kpi") && b.analysisId) ids.add(b.analysisId);
-    if ((b.type === "insights" || b.type === "executive_summary")) for (const id of b.analysisIds) ids.add(id);
-    if (b.type === "panel_grid") for (const p of b.panels) if (p.analysisId) ids.add(p.analysisId);
-  }
-  return [...ids];
-}
-
 /** a finding's own line for a slide or a caption */
 export const findingLine = (f: Finding): string => `${f.headline}${f.hypotheses.length ? ` (${f.hypotheses.join(", ")})` : ""}`;

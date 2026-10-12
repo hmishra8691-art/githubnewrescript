@@ -1,6 +1,7 @@
 "use client";
+import { Warnings } from "./Warnings";
 import React from "react";
-import type { AnalysisResult, ChartRecommendation, ChartSpec, ChartType, ReportTheme } from "@rescript/analytics";
+import type { AnalysisResult, ChartAdvice, ChartRecommendation, ChartSpec, ChartType, ReportTheme } from "@rescript/analytics";
 import { CHART_CATALOG, CHART_FAMILIES, chartsAvailable } from "@rescript/analytics";
 import { Chart } from "./charts/Chart";
 import { ProTable, tableToTsv, type TableFormatting } from "./ProTable";
@@ -212,6 +213,8 @@ export function ChartFrame({ result, spec, theme, onSelect, selected, name, larg
 export interface ResultViewProps {
   result: AnalysisResult;
   recommendations: ChartRecommendation[];
+  /** why the chart was chosen, and what its figures are a share of — shown with the chart */
+  advice?: ChartAdvice;
   spec: ChartSpec;
   onSpec: (s: ChartSpec) => void;
   theme: ReportTheme | null;
@@ -249,7 +252,7 @@ export function ResultView(p: ResultViewProps) {
         <span className="grow" />
         {p.actions}
       </div>
-      {r.warnings.length > 0 && <div className="ax-warnings" data-testid="ax-warnings">{r.warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}</div>}
+      <Warnings items={r.warnings} />
       {view === "results" && (
         <div className="ax-tabs">
           {(["chart", "tables", "tests", "insights"] as const).map((t) => <button key={t} className={`ax-tab ${tab === t ? "on" : ""}`} onClick={() => setTab(t)}>{t === "chart" ? "Chart" : t === "tables" ? `Tables (${r.tables.length})` : t === "tests" ? `Tests (${r.tests.length})` : `Insights (${r.insights.length})`}</button>)}
@@ -279,6 +282,14 @@ export function ResultView(p: ResultViewProps) {
         <div className="ax-chart-area">
           <div className="ax-chart-main">
             <ChartFrame result={r} spec={spec} theme={p.theme} onSelect={p.onSelectCategory} selected={p.selected} name={spec.options.title ?? r.name} large={view === "chart"} />
+            {p.advice && (
+              <div className="ax-advice" data-testid="ax-chart-advice">
+                <div><strong>{p.spec.type === p.advice.type ? "Why this chart" : `Suggested: ${p.advice.type.replace(/_/g, " ")}`}</strong> — {p.advice.reason}.</div>
+                <div className="muted" data-testid="ax-denominator">{p.advice.denominator}</div>
+                {p.advice.notes.map((n, i) => <div key={i} className="muted">{n}</div>)}
+                {p.spec.type !== p.advice.type && p.advice.avoided.find((x) => x.type === p.spec.type) && <div className="ax-warn" data-testid="ax-advice-override">{p.spec.type.replace(/_/g, " ")} is not recommended here: {p.advice.avoided.find((x) => x.type === p.spec.type)!.why}.</div>}
+              </div>
+            )}
             <ChartGallery result={r} current={p.spec.type} onPick={(t) => p.onSpec({ ...p.spec, type: t })} recommendations={p.recommendations} />
           </div>
           {customize && <ChartCustomizer spec={p.spec} onChange={p.onSpec} themes={p.themes} result={r} />}

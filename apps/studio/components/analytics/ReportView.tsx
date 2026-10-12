@@ -2,7 +2,7 @@
 import React from "react";
 import type { AnalysisResult, ChartSpec, DashboardBand, DashboardHero, DashboardWidget, ReportBlock, ReportTheme } from "@rescript/analytics";
 import {
-  DEFAULT_THEME, executiveSummary, methodologyLines, reportPages, seriesForChart,
+  DEFAULT_THEME, executiveSummary, reportAnalysisIds, summaryAnalysisIds, checkChartChoice, methodologyLines, reportPages, seriesForChart,
   DASHBOARD_COLUMNS, DASHBOARD_GAP_PX, DASHBOARD_ROW_PX, clampBox, heroRows, layoutRows, normalizeBands,
   normalizeLayout, overlayTextColor, scrimFor, sortByPosition, themeSurfaces,
   type LayoutBox,
@@ -95,8 +95,7 @@ export function ReportView(p: ReportViewProps) {
   const filtered = viewerFilter ? p.filterResults?.[viewerFilter] : undefined;
   const results = filtered ?? p.results;
   const usedIds = new Set<string>();
-  for (const b of p.blocks ?? []) { if ("analysisId" in b && b.analysisId) usedIds.add(b.analysisId); if ("analysisIds" in b) b.analysisIds.forEach((id) => usedIds.add(id)); }
-  for (const w of p.widgets ?? []) if (w.analysisId) usedIds.add(w.analysisId);
+  for (const id of reportAnalysisIds({ blocks: p.blocks, widgets: p.widgets })) usedIds.add(id);
   const segmentsAvailable = [...usedIds].map((id) => results[id]).filter(Boolean).flatMap((r) => r.segments ?? []).map((s) => s.name);
   const [globalSeg, setGlobalSeg] = React.useState<string>("");
 
@@ -186,6 +185,8 @@ export function ReportView(p: ReportViewProps) {
     ? <div className="ax-missing" data-testid="ax-unfilled">{hint ? `${hint} — open this widget and pick the analysis.` : "Waiting for an analysis. Open this block and pick one."}</div>
     : <div className="ax-missing">Analysis {id.slice(0, 8)}… is not available{p.mode === "snapshot" ? " in this published version" : " (deleted or not yet computed)"}.</div>;
 
+  /** the block's heading is the title; drawing the analysis name again inside the chart repeats it (and, after a template or an analysis swap, can contradict it) */
+  const untitled = (c: ChartSpec): ChartSpec => ({ ...c, options: { ...c.options, title: "" } });
   const renderChart = (id: string, spec: ChartSpec, height?: number) => {
     /*
      * An unfilled placeholder from a template has no analysis yet, which is a
@@ -194,9 +195,18 @@ export function ReportView(p: ReportViewProps) {
      */
     if (!id) return <div className="ax-missing" data-testid="ax-unfilled">Waiting for an analysis. Open this block and pick one.</div>;
     const r = results[id]; if (!r) return <Missing id={id} />;
+    /* an analysis that failed, or that saw nobody, says so — a chart of zeros reads as a finding */
+    if (r.error) return <div className="ax-missing" data-testid="ax-failed">{r.error.message}</div>;
+    if (r.base.n === 0) return <div className="ax-missing" data-testid="ax-nodata">No respondents in this analysis's data — nothing to chart{r.base.total ? ` (${r.base.total} in the dataset, none answered this)` : ""}. Check the analysis's environment, status and date range.</div>;
     const si = segFor(id);
-    const sp = si != null ? { ...spec, options: { ...spec.options, segmentIndex: si } } : spec;
-    return <Chart result={r} spec={sp} theme={theme} height={height} onSelect={p.crossFilter ? setSelected : undefined} selected={p.crossFilter ? selected : undefined} />;
+    /* a saved choice that the data can no longer draw falls back to the best chart that can, and says so — never "No data to chart" */
+    const choice = checkChartChoice(r, spec.type);
+    const useSpec = choice.valid ? spec : { ...spec, type: choice.fallback ?? "table" };
+    const sp = si != null ? { ...useSpec, options: { ...useSpec.options, segmentIndex: si } } : useSpec;
+    return <>
+      <Chart result={r} spec={sp} theme={theme} height={height} onSelect={p.crossFilter ? setSelected : undefined} selected={p.crossFilter ? selected : undefined} />
+      {!choice.valid && <div className="muted" data-testid="ax-chart-fallback" style={{ fontSize: 12 }}>{choice.reason}</div>}
+    </>;
   };
 
   /*
@@ -210,10 +220,10 @@ export function ReportView(p: ReportViewProps) {
           case "cover": return <section key={b.id} className="ax-block ax-cover" style={{ background: theme.cover?.background ?? theme.colors.primary, color: theme.cover?.textColor ?? "#fff", textAlign: theme.cover?.layout === "center" ? "center" : "left" }}><Actions id={b.id} />{theme.logoUrl && p.branding?.showLogo !== false && <img src={theme.logoUrl} alt="" className="ax-logo" />}<h1 style={{ fontFamily: theme.headingFontFamily ?? font }}>{b.title || p.title}</h1>{(b.subtitle ?? p.subtitle) && <p>{b.subtitle ?? p.subtitle}</p>}<div className="ax-cover-meta">{b.date ?? (p.publishedAt ? new Date(p.publishedAt).toLocaleDateString() : new Date().toLocaleDateString())}{b.author ? ` · ${b.author}` : ""}</div></section>;
           case "section": return <section key={b.id} className="ax-block ax-section" style={{ borderColor: theme.colors.primary }}><Actions id={b.id} /><h2 style={{ color: theme.colors.primary, fontFamily: theme.headingFontFamily ?? font }}>{b.title}</h2>{b.subtitle && <p className="muted">{b.subtitle}</p>}</section>;
           case "text": return <section key={b.id} className="ax-block ax-text"><Actions id={b.id} />{b.title && <h3>{b.title}</h3>}<div dangerouslySetInnerHTML={{ __html: mdToHtml(b.markdown) }} /></section>;
-          case "chart": return <section key={b.id} className="ax-block" data-block-id={b.id}><Actions id={b.id} />{b.title && <h3>{b.title}</h3>}{renderChart(b.analysisId, b.chart)}{results[b.analysisId]?.segments?.length ? <div className="row" style={{ marginTop: 4 }}><select className="select small" value={segIdx[b.analysisId] ?? ""} onChange={(e) => setSegIdx({ ...segIdx, [b.analysisId]: e.target.value === "" ? null : Number(e.target.value) })}><option value="">Segment: follow report</option>{results[b.analysisId].segments!.map((s, i) => <option key={i} value={i}>{s.name} (n = {s.n})</option>)}</select></div> : null}{b.caption && <p className="ax-caption">{b.caption}</p>}</section>;
+          case "chart": return <section key={b.id} className="ax-block" data-block-id={b.id}><Actions id={b.id} />{b.title && <h3>{b.title}</h3>}{renderChart(b.analysisId, b.title ? untitled(b.chart) : b.chart)}{results[b.analysisId]?.segments?.length ? <div className="row" style={{ marginTop: 4 }}><select className="select small" value={segIdx[b.analysisId] ?? ""} onChange={(e) => setSegIdx({ ...segIdx, [b.analysisId]: e.target.value === "" ? null : Number(e.target.value) })}><option value="">Segment: follow report</option>{results[b.analysisId].segments!.map((s, i) => <option key={i} value={i}>{s.name} (n = {s.n})</option>)}</select></div> : null}{b.caption && <p className="ax-caption">{b.caption}</p>}</section>;
           case "table": { const r = results[b.analysisId]; const t = r ? (b.tableId ? r.tables.find((x) => x.id === b.tableId) ?? r.tables[0] : r.tables[0]) : undefined; return <section key={b.id} className="ax-block"><Actions id={b.id} /><h3>{b.title ?? t?.title ?? "Table"}</h3>{r ? <ResultTableView table={t} /> : <Missing id={b.analysisId} />}{b.caption && <p className="ax-caption">{b.caption}</p>}</section>; }
           case "kpi": { const r = results[b.analysisId]; return <section key={b.id} className="ax-block"><Actions id={b.id} />{b.title && <h3>{b.title}</h3>}{r ? <Chart result={r} spec={{ type: r.chart.kpis && r.chart.kpis.length === 1 ? "gauge" : "kpi_card", options: { showBase: true } }} theme={theme} height={160} /> : <Missing id={b.analysisId} />}</section>; }
-          case "insights": return <section key={b.id} className="ax-block"><Actions id={b.id} /><h3>{b.title ?? "Key insights"}</h3><ul className="ax-insights">{(b.analysisIds ?? []).flatMap((id) => (results[id]?.insights ?? []).map((s, i) => <li key={`${id}-${i}`}>{s}</li>))}</ul></section>;
+          case "insights": return <section key={b.id} className="ax-block"><Actions id={b.id} /><h3>{b.title ?? "Key insights"}</h3><ul className="ax-insights">{summaryAnalysisIds(b, { blocks: p.blocks ?? [] }).flatMap((id) => (results[id]?.insights ?? []).map((s, i) => <li key={`${id}-${i}`}>{s}</li>))}</ul></section>;
           /*
            * §37 — a panel grid: a headline sentence, then several analyses
            * side by side. Each panel is drawn exactly the way a lone chart
@@ -246,7 +256,7 @@ export function ReportView(p: ReportViewProps) {
               </section>
             );
           }
-          case "executive_summary": { const items = executiveSummary((b.analysisIds ?? []).map((id) => ({ name: results[id]?.name ?? id, result: results[id] })).filter((x) => x.result)); return <section key={b.id} className="ax-block ax-exec"><Actions id={b.id} /><h3>{b.title ?? "Executive summary"}</h3>{b.text && <p>{b.text}</p>}{items.map((it) => <div key={it.analysis} className="ax-exec-item"><strong>{it.analysis}</strong> — {it.headline} <span className="muted">({it.base})</span></div>)}{!items.length && <p className="muted">Add analyses to this summary.</p>}</section>; }
+          case "executive_summary": { const items = executiveSummary(summaryAnalysisIds(b, { blocks: p.blocks ?? [] }).map((id) => ({ name: results[id]?.name ?? id, result: results[id] })).filter((x) => x.result)); return <section key={b.id} className="ax-block ax-exec"><Actions id={b.id} /><h3>{b.title ?? "Executive summary"}</h3>{b.text && <p>{b.text}</p>}{items.map((it) => <div key={it.analysis} className="ax-exec-item"><strong>{it.analysis}</strong> — {it.headline} <span className="muted">({it.base})</span></div>)}{!items.length && <p className="muted">Add analyses to this summary.</p>}</section>; }
           /*
            * §36 — a page break is a boundary, not a thing on the page. It
            * draws a marker in the builder, where the author needs to see the
@@ -409,9 +419,10 @@ export function ReportView(p: ReportViewProps) {
                   onPointerDown={(e) => beginDrag(e, w, "resize")} onPointerMove={onDragMove} onPointerUp={endDrag} onPointerCancel={endDrag} />
               )}
               {w.title && <div className="ax-widget-title">{w.title}</div>}
+              {w.title && w.analysisId && results[w.analysisId]?.name && results[w.analysisId].name !== w.title && <div className="ax-widget-source muted" data-testid="ax-widget-source" style={{ fontSize: 11.5 }}>{results[w.analysisId].name}</div>}
               {w.type === "text" && <div dangerouslySetInnerHTML={{ __html: mdToHtml(w.text ?? "") }} />}
               {w.type === "kpi" && (r ? <Chart result={r} spec={{ type: r.chart.kpis && r.chart.kpis.length === 1 ? "gauge" : "kpi_card", options: { showBase: false } }} theme={theme} height={Math.max(120, live.h * DASHBOARD_ROW_PX - 30)} /> : <Missing id={w.analysisId ?? ""} hint={w.placeholder} />)}
-              {w.type === "chart" && (w.analysisId && r ? renderChart(w.analysisId, w.chart ?? { type: r.recommendedCharts[0] ?? "bar_vertical", options: {} }, Math.max(160, live.h * DASHBOARD_ROW_PX - 30)) : <Missing id={w.analysisId ?? ""} hint={w.placeholder} />)}
+              {w.type === "chart" && (w.analysisId && r ? renderChart(w.analysisId, w.title ? untitled(w.chart ?? { type: r.recommendedCharts[0] ?? "bar_vertical", options: {} }) : (w.chart ?? { type: r.recommendedCharts[0] ?? "bar_vertical", options: {} }), Math.max(160, live.h * DASHBOARD_ROW_PX - 30)) : <Missing id={w.analysisId ?? ""} hint={w.placeholder} />)}
               {w.type === "table" && (w.analysisId && r ? <ResultTableView table={r.tables[0]} dense maxRows={Math.max(4, live.h * 2)} /> : <Missing id={w.analysisId ?? ""} hint={w.placeholder} />)}
               {w.type === "filter" && <div className="muted" style={{ fontSize: 13 }}>Segment switch: use the selector in the bar above.</div>}
               {/*

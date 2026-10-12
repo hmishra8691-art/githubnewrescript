@@ -1,15 +1,20 @@
 "use client";
-import type { AnalysisDefinition, AnalysisResult, ChartRecommendation, ReportTemplate, VariableMeta } from "@rescript/analytics";
+import type { AnalysisDefinition, AnalysisResult, ChartAdvice, ChartRecommendation, ReportTemplate, VariableMeta } from "@rescript/analytics";
 import type { planPayload, ApplyPlanOutcome } from "@/lib/analysisPlanService";
 
 /** Thin client for `/api/surveys/<id>/analytics/*`. Every call is server-authorised; the client never computes. */
+/** an API failure that keeps its status and body — a 409 "not published" carries the reasons and whether it may be forced */
+export class ApiError extends Error {
+  constructor(message: string, public status: number, public body: unknown) { super(message); }
+}
+
 export class AxApi {
   constructor(public surveyId: string) {}
   private base() { return `/api/surveys/${this.surveyId}/analytics`; }
   private async req<T>(path: string, init?: RequestInit): Promise<T> {
     const r = await fetch(`${this.base()}/${path}`, { ...init, headers: { "content-type": "application/json", ...(init?.headers ?? {}) }, cache: "no-store" });
     const body = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error((body as { error?: string }).error ?? `Request failed (${r.status})`);
+    if (!r.ok) throw new ApiError((body as { error?: string }).error ?? `Request failed (${r.status})`, r.status, body);
     return body as T;
   }
   variables() { return this.req<{ variables: VariableMeta[]; counts: Record<string, number>; surveyVersion: string | null; revision: number | null }>("variables"); }
@@ -23,7 +28,7 @@ export class AxApi {
   remove(coll: string, id: string) { return this.req<{ ok: true }>(`${coll}/${id}`, { method: "DELETE" }); }
   versions(coll: "analyses" | "reports", id: string) { return this.req<{ versions: Row[] }>(`${coll}/${id}/versions`); }
   results(reportId: string, version?: number) { return this.req<{ mode: "live" | "snapshot"; version?: number; definition: unknown; theme: unknown; results: Record<string, AnalysisResult>; computedAt?: string; publishedAt?: string }>(`reports/${reportId}/results${version ? `?version=${version}` : ""}`); }
-  publish(reportId: string, note?: string) { return this.req<{ version: number; publishedAt: string; viewerFilters?: number }>(`reports/${reportId}/publish`, { method: "POST", body: JSON.stringify({ note }) }); }
+  publish(reportId: string, note?: string, force = false) { return this.req<{ version: number; publishedAt: string; viewerFilters?: number }>(`reports/${reportId}/publish`, { method: "POST", body: JSON.stringify({ note, ...(force ? { force: true } : {}) }) }); }
   /* §36 — report templates: the shape of a deliverable, reusable across studies */
   reportTemplates() { return this.req<{ templates: ReportTemplate[]; available: boolean; note?: string }>("report-templates"); }
   saveReportTemplate(body: { name: string; description?: string; fromReportId?: string; template?: unknown }) {
@@ -38,7 +43,8 @@ export class AxApi {
   plan(dataset: { environment: string; dataset: string }) { return this.req<PlanPayload>(`plan?environment=${encodeURIComponent(dataset.environment)}&dataset=${encodeURIComponent(dataset.dataset)}`); }
   editPlan(body: { actions: unknown[]; baseRevision: number | null }) { return this.req<{ ok: true; plan: unknown; revision: number | null; results: { op: string; ok: boolean; description: string; error?: string }[]; warnings: string[]; savedAt: string }>("plan", { method: "PUT", body: JSON.stringify(body) }); }
   applyPlan(body: { environment: string; dataset: string; replaceReport?: boolean }) { return this.req<ApplyResponse>("plan/apply", { method: "POST", body: JSON.stringify(body) }); }
-  async export(body: Record<string, unknown>): Promise<void> {
+  /** returns the notes the server attached — what the file does NOT contain — so the caller can say so beside "downloaded" */
+  async export(body: Record<string, unknown>): Promise<{ notes: string[] }> {
     const r = await fetch(`${this.base()}/export`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     if (!r.ok) {
       /* the server's own words when it sent JSON; otherwise the start of what the platform answered (a timeout, a crash) */
@@ -50,6 +56,9 @@ export class AxApi {
     const blob = await r.blob();
     const name = /filename="([^"]+)"/.exec(r.headers.get("content-disposition") ?? "")?.[1] ?? `export.${body.format ?? "pptx"}`;
     downloadBlob(blob, name);
+    let notes: string[] = [];
+    try { notes = JSON.parse(decodeURIComponent(r.headers.get("x-rescript-export-notes") ?? "[]")); } catch { /* no notes */ }
+    return { notes };
   }
 }
 
@@ -57,7 +66,7 @@ export type Row = Record<string, any>; // eslint-disable-line @typescript-eslint
 /** what `GET plan` and `POST plan/apply` answer — the server's own types, imported as types only (the module itself is server-only) */
 export type PlanPayload = Awaited<ReturnType<typeof planPayload>>;
 export type ApplyResponse = ApplyPlanOutcome;
-export type RunResult = AnalysisResult & { recommendations: ChartRecommendation[] };
+export type RunResult = AnalysisResult & { recommendations: ChartRecommendation[]; advice?: ChartAdvice };
 
 export function downloadBlob(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);

@@ -16,6 +16,7 @@ type ChartName = Extract<Parameters<Slide["addChart"]>[0], string>;
 import type { AnalysisResult, ChartSpec, ChartType, ExportSettings, ReportBlock, ReportDefinition, ReportTheme, ResultTable } from "../types.js";
 import { DEFAULT_EXPORT_SETTINGS, DEFAULT_THEME } from "../types.js";
 import { executiveSummary } from "../summary.js";
+import { summaryAnalysisIds } from "../blockRefs.js";
 import { chartTitleFor, seriesForChart } from "./shared.js";
 import { methodologyBlock, methodologyLines } from "../reportPages.js";
 
@@ -258,7 +259,7 @@ export async function buildPptx(input: PptxInput): Promise<Buffer> {
   if (theme.logoUrl && theme.logoUrl.startsWith("data:")) cover.addImage({ data: theme.logoUrl, x: 0.6, y: 0.5, w: 1.6, h: 0.7 });
 
   // executive summary
-  const usedResults = input.report.blocks.flatMap((b) => ("analysisId" in b && b.analysisId ? [{ name: ("title" in b && b.title) || input.results[b.analysisId]?.name || b.analysisId, result: input.results[b.analysisId] }] : "analysisIds" in b ? b.analysisIds.map((id) => ({ name: input.results[id]?.name ?? id, result: input.results[id] })) : [])).filter((x) => x.result);
+  const usedResults = input.report.blocks.flatMap((b) => ("analysisId" in b && b.analysisId ? [{ name: ("title" in b && b.title) || input.results[b.analysisId]?.name || b.analysisId, result: input.results[b.analysisId] }] : "analysisIds" in b ? summaryAnalysisIds(b, input.report).map((id) => ({ name: input.results[id]?.name ?? id, result: input.results[id] })) : [])).filter((x) => x.result);
   if (settings.include.executiveSummary) {
     const items = executiveSummary(usedResults.filter((x, i, a) => a.findIndex((y) => y.result === x.result) === i));
     if (items.length) {
@@ -282,8 +283,8 @@ export async function buildPptx(input: PptxInput): Promise<Buffer> {
     if (block.type === "cover") return;
     if (block.type === "section") { if (!px.sectionDividers) return; const s = p.addSlide(); slideNo++; s.background = { color: hex(theme.colors.secondary) }; s.addText(block.title, { x: 0.6, y: 2.0, w: W - 1.2, h: 1, fontSize: 28, bold: true, color: "FFFFFF", fontFace: font }); if (block.subtitle) s.addText(block.subtitle, { x: 0.6, y: 3.0, w: W - 1.2, h: 0.6, fontSize: 14, color: "FFFFFF", fontFace: font }); return; }
     if (block.type === "text") { const s = p.addSlide(); decorate(s, block.title ?? ""); s.addText(block.markdown.replace(/[#*_`>]/g, ""), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, fontSize: 12, color: text, fontFace: font, valign: "top" }); return; }
-    if (block.type === "executive_summary") { const s = p.addSlide(); decorate(s, block.title ?? "Executive summary"); const items = executiveSummary(block.analysisIds.map((id) => ({ name: input.results[id]?.name ?? id, result: input.results[id] })).filter((x) => x.result)); s.addText((block.text ? [{ text: block.text, options: { fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 8 } }] : []).concat(items.map((it) => ({ text: `${it.analysis}: ${it.headline}`, options: { bullet: true, fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 6 } as never }))), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, valign: "top" }); return; }
-    if (block.type === "insights") { const s = p.addSlide(); decorate(s, block.title ?? "Key insights"); const lines = block.analysisIds.flatMap((id) => input.results[id]?.insights ?? []); s.addText(lines.map((l) => ({ text: l, options: { bullet: true, fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 6 } })), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, valign: "top" }); return; }
+    if (block.type === "executive_summary") { const s = p.addSlide(); decorate(s, block.title ?? "Executive summary"); const items = executiveSummary(summaryAnalysisIds(block, input.report).map((id) => ({ name: input.results[id]?.name ?? id, result: input.results[id] })).filter((x) => x.result)); s.addText((block.text ? [{ text: block.text, options: { fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 8 } }] : []).concat(items.map((it) => ({ text: `${it.analysis}: ${it.headline}`, options: { bullet: true, fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 6 } as never }))), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, valign: "top" }); return; }
+    if (block.type === "insights") { const s = p.addSlide(); decorate(s, block.title ?? "Key insights"); const lines = summaryAnalysisIds(block, input.report).flatMap((id) => input.results[id]?.insights ?? []); s.addText(lines.map((l) => ({ text: l, options: { bullet: true, fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 6 } })), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, valign: "top" }); return; }
     /*
      * §36 — a page break is already a slide boundary here, since every block
      * gets its own slide; it is skipped rather than rendered. The METHODOLOGY

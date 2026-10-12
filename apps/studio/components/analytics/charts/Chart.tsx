@@ -93,7 +93,7 @@ export function Chart(props: ChartProps) {
   return (
     <div className="ax-chart" ref={boxRef} style={{ position: "relative", fontFamily: ctx.font, background: o.background ?? theme.colors.background, borderRadius: 8 }} data-testid="ax-chart" data-chart-type={t}
       onMouseMove={(e) => { const b = boxRef.current?.getBoundingClientRect(); if (b) setPos({ x: e.clientX - b.left, y: e.clientY - b.top }); }} onMouseLeave={() => setPos(null)}>
-      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: "block", maxWidth: "100%" }} role="img" aria-label={title ?? props.result.name}>
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: "block", maxWidth: "100%" }} role="img" aria-label={title || props.result.name}>
         {title && <text x={0} y={16} fontSize={ctx.fs + 3} fontWeight={700} fill={ctx.textColor} fontFamily={ctx.font}>{title}</text>}
         {o.subtitle && <text x={0} y={title ? 34 : 16} fontSize={ctx.fs - 1} fill={ctx.subtle} fontFamily={ctx.font}>{o.subtitle}</text>}
         {body}

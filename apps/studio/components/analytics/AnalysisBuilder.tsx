@@ -1,4 +1,5 @@
 "use client";
+import { stableStringify } from "@/lib/stableJson";
 import React from "react";
 import type { Condition } from "@rescript/schema";
 import type { AnalysisDefinition, AnalysisKind, ChartSpec, DatasetSpec, ReportTheme, SegmentDef, VariableMeta, VariableRole } from "@rescript/analytics";
@@ -179,9 +180,9 @@ const STAGES: { key: Stage; label: string }[] = [{ key: "builder", label: "Build
 const SECTIONS = ["Analysis type", "Variables", "Filters", "Segments & weighting", "Options"];
 
 /** what "unsaved" compares: the definition as it would be saved */
-const snapshotOf = (def: AnalysisDefinition, name: string, filter: Condition) => JSON.stringify({ ...def, name, filter: isEmptyCondition(filter) ? null : filter });
+const snapshotOf = (def: AnalysisDefinition, name: string, filter: Condition) => stableStringify({ ...def, name, filter: isEmptyCondition(filter) ? null : filter });
 /** what "out of date" compares: the same, minus the name and how the table is formatted — neither changes a number */
-const runSnapshotOf = (def: AnalysisDefinition, filter: Condition) => { const { formatting: _f, ...options } = (def.options ?? {}) as Record<string, unknown>; void _f; return JSON.stringify({ ...def, name: "", options, filter: isEmptyCondition(filter) ? null : filter }); };
+const runSnapshotOf = (def: AnalysisDefinition, filter: Condition) => { const { formatting: _f, ...options } = (def.options ?? {}) as Record<string, unknown>; void _f; return stableStringify({ ...def, name: "", options, filter: isEmptyCondition(filter) ? null : filter }); };
 
 export function AnalysisBuilder(p: BuilderProps) {
   const initialDef: AnalysisDefinition = p.initial?.definition ?? (p.initial?.analysis?.definition as AnalysisDefinition) ?? { name: "", kind: p.initial?.kind ?? "descriptive", dataset: p.dataset, variables: [], options: p.initial?.kind === "crosstab" ? { layout: "banner" } : {} };
@@ -203,7 +204,21 @@ export function AnalysisBuilder(p: BuilderProps) {
   const theme = React.useMemo(() => (themeId ? (p.themes.find((t) => t.id === themeId)?.theme as ReportTheme | undefined) ?? null : null), [themeId, p.themes]);
   const canEdit = p.canEdit !== false;
 
-  React.useEffect(() => { setDef((d) => ({ ...d, dataset: p.dataset })); }, [p.dataset]);
+  /*
+   * The workspace's environment/quality selector SEEDS a new analysis and, when
+   * the researcher changes it, re-points the one on screen. It must NOT run on
+   * mount: opening a saved analysis used to overwrite its stored dataset with
+   * the selector's default (LIVE / all), so the same analysis read n = 33 in the
+   * builder and 0 in the report that was built from what had been saved.
+   */
+  const lastSelector = React.useRef(stableStringify(p.dataset));
+  React.useEffect(() => {
+    /* compares VALUES, not "is this the first run": React strict mode runs an effect twice on mount */
+    const now = stableStringify(p.dataset);
+    if (now === lastSelector.current) return;
+    lastSelector.current = now;
+    setDef((d) => ({ ...d, dataset: p.dataset }));
+  }, [p.dataset]);
   // a saved analysis opens on its results: recompute from its stored definition
   const autoRan = React.useRef(false);
   React.useEffect(() => { if (p.initial?.analysis && !autoRan.current) { autoRan.current = true; void run(); } }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -222,40 +237,60 @@ export function AnalysisBuilder(p: BuilderProps) {
   const setFormatting = (f: TableFormatting) => setOpt({ formatting: f });
   const current = (): AnalysisDefinition => ({ ...def, name: name || def.name || kindInfo.label, filter: isEmptyCondition(filter) ? null : filter });
 
+  /* only the LATEST run may land: an earlier, slower response must not overwrite a newer result or clear `running` under it */
+  const runSeq = React.useRef(0);
   const run = async () => {
+    const mine = ++runSeq.current;
     setRunning(true); setError(null); setMsg(null);
     try {
       const d = current();
+      const snapAtStart = runSnapshotOf(def, filter);
       const { result } = await p.api.run(d);
-      setResult(result); ranSnap.current = runSnapshotOf(def, filter);
+      if (mine !== runSeq.current) return;
+      setResult(result); ranSnap.current = snapAtStart;
       setSpec((s) => ({ ...s, type: result.recommendations[0]?.type ?? result.recommendedCharts[0] ?? "bar_vertical" }));
       setStage("results");
-    } catch (e) { setError((e as Error).message); } finally { setRunning(false); }
+    } catch (e) { if (mine === runSeq.current) setError((e as Error).message); } finally { if (mine === runSeq.current) setRunning(false); }
   };
 
-  const save = async () => {
-    const d = current();
-    try {
+  /*
+   * ONE save at a time. A second click (or "Save chart" racing "Add to report")
+   * used to POST a second create for an analysis that had no id yet — two
+   * copies. Callers that arrive while a save is in flight share its promise.
+   */
+  const [saving, setSaving] = React.useState(false);
+  const inflight = React.useRef<Promise<Row> | null>(null);
+  const persist = (): Promise<Row> => {
+    if (inflight.current) return inflight.current;
+    const d = current(); const snapNow = snapshotOf(def, name, filter);
+    setSaving(true);
+    const op = (async () => {
       const r = saved ? await p.api.update("analyses", saved.id, { name: d.name, definition: d }) : await p.api.create("analyses", { name: d.name, definition: d });
-      setSaved(r.item); setSavedSnap(snapshotOf(def, name, filter)); setMsg(saved ? `Saved as version ${r.item.version}.` : "Analysis saved."); p.onSaved?.(r.item);
-    } catch (e) { setError((e as Error).message); }
+      setSaved(r.item); setSavedSnap(snapNow); p.onSaved?.(r.item);
+      return r.item as Row;
+    })().finally(() => { inflight.current = null; setSaving(false); });
+    inflight.current = op;
+    return op;
+  };
+  const save = async () => {
+    try { const item = await persist(); setMsg(saved ? `Saved as version ${item.version}.` : "Analysis saved."); } catch (e) { setError((e as Error).message); }
   };
   const ensureSaved = async (): Promise<Row> => {
-    if (saved && !dirty) return saved;
-    const d = current();
-    const r = saved ? await p.api.update("analyses", saved.id, { name: d.name, definition: d }) : await p.api.create("analyses", { name: d.name, definition: d });
-    setSaved(r.item); setSavedSnap(snapshotOf(def, name, filter)); p.onSaved?.(r.item);
-    return r.item;
+    if (saved && !dirty && !inflight.current) return saved;
+    return persist();
   };
+  /* what leaves this screen (an export, a saved chart, a report block) must describe the numbers on it */
+  const notCurrent = stale || running;
+  const refuseStale = (): boolean => { if (!notCurrent) return false; setError(running ? "The analysis is still running — wait for it to finish." : "Results are out of date — run the analysis again before exporting or saving a chart from it."); return true; };
   const saveChart = async () => {
-    if (!result) return;
+    if (!result || refuseStale()) return;
     try {
       const a = await ensureSaved();
       const r = await p.api.create("charts", { analysisId: a.id, name: spec.options.title ?? `${a.name} — ${spec.type}`, spec, themeId: spec.themeId ?? null });
       setMsg("Chart saved and linked to this analysis."); p.onChartSaved?.(r.item);
     } catch (e) { setError((e as Error).message); }
   };
-  const exportAs = (format: "pptx" | "xlsx") => p.api.export({ format, ...(saved && !dirty ? { analysisId: saved.id } : { definition: current() }), chart: spec, themeId: spec.themeId ?? null }).catch((e) => setError(e.message));
+  const exportAs = (format: "pptx" | "xlsx") => refuseStale() ? Promise.resolve() : p.api.export({ format, ...(saved && !dirty ? { analysisId: saved.id } : { definition: current() }), chart: spec, themeId: spec.themeId ?? null }).then(() => undefined).catch((e) => setError(e.message));
 
   const segmentsChosen = def.segments ?? [];
   const toggleSegment = (s: Row) => { const cur = segmentsChosen; update({ segments: cur.some((x) => x.id === s.id) ? cur.filter((x) => x.id !== s.id) : [...cur, { id: s.id, name: s.name, condition: s.condition as Condition, color: s.color ?? undefined }] }); };
@@ -270,9 +305,9 @@ export function AnalysisBuilder(p: BuilderProps) {
 
   const actions = (
     <>
-      {canEdit && <button className="btn small" onClick={save} data-testid="ax-save" title={dirty ? "Save the definition (a real change creates a new version)" : "Nothing to save"}>{saved ? "Save changes" : "Save analysis"}{dirty && <span className="ax-dirty" aria-label="unsaved" />}</button>}
+      {canEdit && <button className="btn small" onClick={save} disabled={saving} data-testid="ax-save" title={dirty ? "Save the definition (a real change creates a new version)" : "Nothing to save"}>{saved ? "Save changes" : "Save analysis"}{dirty && <span className="ax-dirty" aria-label="unsaved" />}</button>}
       <button className="btn small" onClick={saveChart} data-testid="ax-save-chart" disabled={!canEdit}>Save chart</button>
-      {p.onAddToReport && canEdit && <button className="btn small" onClick={async () => { try { const a = await ensureSaved(); p.onAddToReport!(a, spec); } catch (e) { setError((e as Error).message); } }}>Add to report</button>}
+      {p.onAddToReport && canEdit && <button className="btn small" onClick={async () => { if (refuseStale()) return; try { const a = await ensureSaved(); p.onAddToReport!(a, spec); } catch (e) { setError((e as Error).message); } }}>Add to report</button>}
       <button className="btn small" onClick={() => exportAs("pptx")} data-testid="ax-export-pptx" disabled={p.canExport === false}>PPT</button>
       <button className="btn small" onClick={() => exportAs("xlsx")} data-testid="ax-export-xlsx" disabled={p.canExport === false}>Excel</button>
     </>
@@ -372,11 +407,11 @@ export function AnalysisBuilder(p: BuilderProps) {
       )}
 
       {stage === "results" && result && (
-        <ResultView result={result} recommendations={result.recommendations} spec={spec} onSpec={setSpec} theme={theme} themes={p.themes.map((t) => ({ id: t.id, name: t.name }))} selected={selected} onSelectCategory={setSelected} view="results" formatting={formatting} onFormatting={setFormatting} actions={actions} />
+        <ResultView result={result} recommendations={result.recommendations} advice={result.advice} spec={spec} onSpec={setSpec} theme={theme} themes={p.themes.map((t) => ({ id: t.id, name: t.name }))} selected={selected} onSelectCategory={setSelected} view="results" formatting={formatting} onFormatting={setFormatting} actions={actions} />
       )}
       {stage === "chart" && result && (
         <div ref={chartHost}>
-          <ResultView result={result} recommendations={result.recommendations} spec={spec} onSpec={setSpec} theme={theme} themes={p.themes.map((t) => ({ id: t.id, name: t.name }))} selected={selected} onSelectCategory={setSelected} view="chart" actions={actions} />
+          <ResultView result={result} recommendations={result.recommendations} advice={result.advice} spec={spec} onSpec={setSpec} theme={theme} themes={p.themes.map((t) => ({ id: t.id, name: t.name }))} selected={selected} onSelectCategory={setSelected} view="chart" actions={actions} />
         </div>
       )}
       {stage === "export" && result && (
@@ -394,9 +429,9 @@ export function AnalysisBuilder(p: BuilderProps) {
           <div className="card">
             <div className="card-title">Keep &amp; share</div>
             <div className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 6 }}>
-              {canEdit && <button className="btn" onClick={save} data-testid="ax-save-export">{saved ? "Save changes" : "Save analysis"}{dirty && <span className="ax-dirty" />}</button>}
+              {canEdit && <button className="btn" onClick={save} disabled={saving} data-testid="ax-save-export">{saved ? "Save changes" : "Save analysis"}{dirty && <span className="ax-dirty" />}</button>}
               <button className="btn" onClick={saveChart} disabled={!canEdit}>Save chart to library</button>
-              {p.onAddToReport && canEdit && <button className="btn" onClick={async () => { try { const a = await ensureSaved(); p.onAddToReport!(a, spec); } catch (e) { setError((e as Error).message); } }}>Add to a report</button>}
+              {p.onAddToReport && canEdit && <button className="btn" onClick={async () => { if (refuseStale()) return; try { const a = await ensureSaved(); p.onAddToReport!(a, spec); } catch (e) { setError((e as Error).message); } }}>Add to a report</button>}
               <span className="muted" style={{ fontSize: 13 }}>Reports are published and shared from the Reports and Sharing tabs.</span>
             </div>
           </div>

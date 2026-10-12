@@ -155,6 +155,7 @@ export const AUDIT_EVENTS = [
   "billing.project_budget_changed",
   "billing.transfer_reversed",
   "analytics.export_generated",
+  "analytics.export_failed",
   "analytics.report_downloaded",
 
   /* collaboration */
@@ -269,6 +270,7 @@ export function describeEvent(r: AuditRow): string {
     case "analytics.report_shared": return `${who} shared report “${str(d.name)}” (${str(d.access) || "link"}${d.permission ? `, ${str(d.permission)}` : ""})`;
     case "analytics.share_revoked": return `${who} revoked a share link for “${str(d.name)}”`;
     case "analytics.share_accessed": return `A shared report “${str(d.name)}” was opened${d.viewer ? ` by ${str(d.viewer)}` : ""}`;
+    case "analytics.export_failed": return `${who} tried to export “${str(d.name)}” as ${str(d.format || "").toUpperCase()} and the file could not be built (ref ${str(d.ref)})`;
     case "analytics.export_generated": return `${who} generated a ${str(d.format || "").toUpperCase()} export of “${str(d.name)}”`;
     case "analytics.report_downloaded": return `A ${str(d.format || "").toUpperCase()} of “${str(d.name)}” was downloaded${d.viewer ? ` by ${str(d.viewer)}` : " from a share link"}`;
     case "version.restored": return `${who} restored version ${str(d.version) || "?"}`;

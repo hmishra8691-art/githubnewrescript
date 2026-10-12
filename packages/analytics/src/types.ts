@@ -182,6 +182,8 @@ export interface AnalysisResult {
   computedAt: string;
   definitionHash: string;
   variablesUsed: string[];
+  /** set when the analysis could not be computed at all — a stable code and a sentence a researcher can act on, never a raw exception */
+  error?: { code: "unknown_kind" | "not_computable" | "no_data"; message: string };
 }
 
 /* ------------------------------------------------------------ charts */

@@ -1,3 +1,4 @@
+import { adviseChart } from "./questionChart.js";
 import type { SurveyDefinition } from "@rescript/schema";
 import { hypothesisLabel } from "@rescript/schema";
 import type { AnalysisDefinition, AnalysisResult, ChartType, DatasetSpec } from "./types.js";
@@ -523,7 +524,7 @@ export function runPlan(def: SurveyDefinition, input: Dataset, opts: { trigger?:
   const runOne = (p: PlannedAnalysis, adaptedFrom?: string): RunItem => {
     const result = runAnalysis(p.definition, dataset);
     const findings = findingsFor(p.definition, result, { hypotheses: p.hypotheses, ...(p.definition.id ? { id: p.definition.id } : {}), label: (v) => dataset.byName.get(v)?.label ?? v });
-    const chart = recommendCharts(result, 1)[0]?.type ?? result.recommendedCharts[0];
+    const chart = adviseChart(p.definition, result, [...dataset.byName.values()]).type ?? recommendCharts(result, 1)[0]?.type ?? result.recommendedCharts[0];
     /* which pairs differ, when a significant comparison had three or more groups (Phase 4) */
     if (p.definition.kind === "test" && dataset.cases.length >= MIN_BASE) {
       const [y, g] = p.definition.variables;

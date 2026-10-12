@@ -3,7 +3,7 @@ import { StoryReports } from "./StoryStudio";
 import React from "react";
 import type { AnalysisDefinition, AnalysisResult, ChartSpec, DashboardBand, DashboardDefinition, DashboardWidget, ExportSettings, ReportBlock, ReportDefinition, ReportTheme } from "@rescript/analytics";
 import { CHART_CATALOG, DEFAULT_EXPORT_SETTINGS, describeTemplate, compactLayout, describeDashboardTemplate, firstFreeSlot, layoutRows, normalizeLayout, placeWidget, scrimFor, templateKind, type LayoutBox, type ReportTemplate } from "@rescript/analytics";
-import { AxApi, type Row, timeAgo } from "./api";
+import { AxApi, ApiError, type Row, type RunResult, timeAgo } from "./api";
 import { ReportView } from "./ReportView";
 import { mapImagesOnScreen } from "./ResultView";
 import { ICON_OPTIONS } from "./charts/Icons";
@@ -26,6 +26,7 @@ export function ExportDialog({ api, reportId, analysisId, definition, chart, the
   const [version, setVersion] = React.useState<string>("");
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [note, setNote] = React.useState<string | null>(null);
   const inc = settings.include;
   const setInc = (k: keyof ExportSettings["include"], v: boolean) => setSettings({ ...settings, include: { ...inc, [k]: v } });
   const go = async () => {
@@ -40,8 +41,9 @@ export function ExportDialog({ api, reportId, analysisId, definition, chart, the
        * falls back to the bars, as before.
        */
       const images = settings.format === "pptx" ? await mapImagesOnScreen() : {};
-      await api.export({ format: settings.format, reportId, analysisId, definition, chart, themeId: themeId || null, settings, version: version ? Number(version) : undefined, ...(Object.keys(images).length ? { images } : {}) });
-      onClose();
+      const { notes } = await api.export({ format: settings.format, reportId, analysisId, definition, chart, themeId: themeId || null, settings, version: version ? Number(version) : undefined, ...(Object.keys(images).length ? { images } : {}) });
+      /* downloaded — but if the file leaves something out, say so rather than closing on a bare success */
+      if (notes.length) setNote(`Downloaded, with gaps: ${notes.join(" ")}`); else onClose();
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   };
   return (
@@ -73,7 +75,7 @@ export function ExportDialog({ api, reportId, analysisId, definition, chart, the
           <div className="ax-toggles"><label className="ax-toggle"><input type="checkbox" checked={settings.xlsx?.freezePanes !== false} onChange={(e) => setSettings({ ...settings, xlsx: { ...settings.xlsx, freezePanes: e.target.checked } })} /> Freeze panes</label><label className="ax-toggle"><input type="checkbox" checked={settings.xlsx?.autoFilter !== false} onChange={(e) => setSettings({ ...settings, xlsx: { ...settings.xlsx, autoFilter: e.target.checked } })} /> Auto-filter</label><label className="ax-toggle"><input type="checkbox" checked={settings.xlsx?.includeNotes !== false} onChange={(e) => setSettings({ ...settings, xlsx: { ...settings.xlsx, includeNotes: e.target.checked } })} /> Notes</label><label className="ax-toggle"><input type="checkbox" checked={settings.xlsx?.includeMetadata !== false} onChange={(e) => setSettings({ ...settings, xlsx: { ...settings.xlsx, includeMetadata: e.target.checked } })} /> Metadata sheet</label></div>
         </div>
       )}
-      <div className="row" style={{ marginTop: 14 }}>{error && <span className="ax-error">{error}</span>}<span className="grow" /><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy} onClick={go} data-testid="ax-export-go">{busy ? "Generating…" : "Generate export"}</button></div>
+      <div className="row" style={{ marginTop: 14 }}>{error && <span className="ax-error" data-testid="ax-export-error">{error}</span>}{note && <span className="ax-warn" data-testid="ax-export-note">{note}</span>}<span className="grow" /><button className="btn" onClick={onClose}>{note ? "Close" : "Cancel"}</button><button className="btn primary" disabled={busy} onClick={go} data-testid="ax-export-go">{busy ? "Generating…" : "Generate export"}</button></div>
     </div></div>
   );
 }
@@ -288,14 +290,24 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
   const [templates, setTemplates] = React.useState<ReportTemplate[]>([]);
   const [templatesOpen, setTemplatesOpen] = React.useState(false);
   const [savedFilters, setSavedFilters] = React.useState<Row[]>([]);
+  /** the numbers on screen come from the SAVED report; an unsaved change to what they are computed from (the report filter) makes them old */
+  const [resultsOutdated, setResultsOutdated] = React.useState(false);
+  const defRef = React.useRef(def); defRef.current = def;
+  const viewVersionRef = React.useRef<number | null>(null); viewVersionRef.current = viewVersion;
   const isDash = open?.kind === "dashboard";
   const theme = (open?.theme_id ? (themes.find((t) => t.id === open.theme_id)?.theme as ReportTheme | undefined) : undefined) ?? null;
 
+  /* only the newest load may land (version dropdown / save / filter can each start one) */
+  const loadSeq = React.useRef(0);
   const load = React.useCallback(async (r: Row, version?: number | null) => {
+    const mine = ++loadSeq.current;
     setLoading(true); setError(null);
     try {
       const res = await api.results(r.id, version ?? undefined);
-      setResults(res.results);
+      if (mine !== loadSeq.current) return;
+      /* merge, don't replace: results the panel computed for blocks that are not saved yet must survive a reload */
+      setResults((prev) => (version ? res.results : { ...prev, ...res.results }));
+      setResultsOutdated(false);
       /*
        * The definition and the label it is shown under are set together, in
        * one commit, so the body is never a version other than the one it
@@ -303,7 +315,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
        */
       if (version) { setDef(res.definition as ReportDefinition); setShownVersion(version); }
       else setShownVersion(null);
-    } catch (e) { setError((e as Error).message); } finally { setLoading(false); }
+    } catch (e) { if (mine === loadSeq.current) setError((e as Error).message); } finally { if (mine === loadSeq.current) setLoading(false); }
   }, [api]);
 
   /** Results for analyses referenced by unsaved blocks: computed server-side per analysis. */
@@ -347,7 +359,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
     if (!open) return;
     const name = prompt(`Name this ${isDash ? "dashboard" : "report"} shape, so the team can reuse it:`, `${open.name} shape`);
     if (!name?.trim()) return;
-    if (dirty) await save();
+    if (dirty && !(await save())) return;
     try {
       await api.saveReportTemplate({ name: name.trim(), fromReportId: open.id });
       setMsg(`Saved “${name.trim()}” as a report template for this workspace. Analysis references were stripped — a template is a shape, not a study.`);
@@ -363,18 +375,50 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
     }
   }, [pendingAdd, open, def, isDash, clearPending, ensure]);
 
-  const save = async () => { if (!open || !def) return; try { const r = await api.update("reports", open.id, { definition: def, name: (def as ReportDefinition).title || open.name }); setOpen(r.item); setDirty(false); setMsg("Saved."); onChange(); } catch (e) { setError((e as Error).message); } };
-  const publish = async () => { if (!open) return; if (dirty) await save(); try { const r = await api.publish(open.id, prompt("Version note (optional)") ?? undefined); setMsg(`Published version ${r.version}. Share links pinned to older versions keep showing those; unpinned links now show v${r.version}.`); const v = await api.versions("reports", open.id); setVersions(v.versions); setOpen({ ...open, published_version: r.version }); onChange(); } catch (e) { setError((e as Error).message); } };
+  const save = async (): Promise<boolean> => {
+    if (!open || !def) return false;
+    setError(null);
+    const sent = def;
+    try {
+      const r = await api.update("reports", open.id, { definition: sent, name: (sent as ReportDefinition).title || open.name });
+      setOpen(r.item);
+      /* edits made while the save was in flight are still unsaved */
+      setDirty(defRef.current !== sent);
+      setMsg("Saved."); onChange();
+      /* the saved report is what computes: refresh the numbers so they match what was just saved */
+      /* by the time the save returns the researcher may be looking at a published version: that load must not be pre-empted */
+      if (!viewVersionRef.current) void load(r.item);
+      return true;
+    } catch (e) { setError((e as Error).message); return false; }
+  };
+  const publish = async () => {
+    if (!open) return;
+    setError(null); setMsg(null);
+    /* a failed save must stop the publish: it would freeze the OLD saved definition and still say "Published" */
+    if (dirty && !(await save())) return;
+    const note = prompt("Version note (optional)") ?? undefined;
+    try {
+      let r;
+      try { r = await api.publish(open.id, note); }
+      catch (e) {
+        const body = (e as ApiError).body as { problems?: string[]; canForce?: boolean } | undefined;
+        if ((e as ApiError).status === 409 && body?.canForce && confirm(`${body.problems?.join("\n") ?? "This report looks blank."}\n\nPublish it anyway?`)) r = await api.publish(open.id, note, true);
+        else throw e;
+      }
+      setMsg(`Published version ${r.version}. Share links pinned to older versions keep showing those; unpinned links now show v${r.version}.`);
+      const v = await api.versions("reports", open.id); setVersions(v.versions); setOpen({ ...open, published_version: r.version }); onChange();
+    } catch (e) { setError((e as Error).message); }
+  };
   const create = async () => { if (!newName.trim() || !creating) return; try { const r = await api.create("reports", { name: newName.trim(), kind: creating, mode: "live" }); setCreating(null); setNewName(""); onChange(); await openReport(r.item); } catch (e) { setError((e as Error).message); } };
 
   /** every analysisId a block or widget touches — one per panel for a panel_grid — so `ensure` can fetch results for all of them. */
   const idsOf = (b: ReportBlock | DashboardWidget): (string | undefined)[] =>
-    "panels" in b ? b.panels.map((pnl) => pnl.analysisId) : "analysisId" in b ? [b.analysisId] : "analysisIds" in b ? b.analysisIds : [];
+    "panels" in b ? b.panels.map((pnl) => pnl.analysisId) : "analysisId" in b ? [b.analysisId] : "analysisIds" in b ? (b.analysisIds ?? []) : [];
 
   const addBlock = (type: ReportBlock["type"]) => {
     if (!def || isDash) return;
     const first = analyses[0]?.id ?? "", firstName = analyses[0]?.name;
-    const b: ReportBlock = type === "cover" ? { id: uid(), type, title: (def as ReportDefinition).title } : type === "section" ? { id: uid(), type, title: "New section" } : type === "text" ? { id: uid(), type, markdown: "Write here…" } : type === "page_break" ? { id: uid(), type } : type === "methodology" ? { id: uid(), type, title: "Methodology", includeStandardNotes: true, items: [] } : type === "chart" ? { id: uid(), type, title: firstName, analysisId: first, chart: { type: (analyses[0]?.kind === "nps" ? "gauge" : "bar_vertical"), options: {} } } : type === "table" ? { id: uid(), type, title: firstName, analysisId: first } : type === "kpi" ? { id: uid(), type, title: firstName, analysisId: first } : type === "insights" ? { id: uid(), type, analysisIds: analyses.slice(0, 3).map((a) => a.id) } : type === "panel_grid" ? { id: uid(), type, title: "Panel grid", headline: "", panels: [{ id: uid(), analysisId: first, title: firstName }, { id: uid(), analysisId: first, title: firstName }] } : { id: uid(), type: "executive_summary", analysisIds: analyses.slice(0, 5).map((a) => a.id) };
+    const b: ReportBlock = type === "cover" ? { id: uid(), type, title: (def as ReportDefinition).title } : type === "section" ? { id: uid(), type, title: "New section" } : type === "text" ? { id: uid(), type, markdown: "Write here…" } : type === "page_break" ? { id: uid(), type } : type === "methodology" ? { id: uid(), type, title: "Methodology", includeStandardNotes: true, items: [] } : type === "chart" ? { id: uid(), type, title: firstName, analysisId: first, chart: { type: ((first ? (results[first] as RunResult | undefined)?.recommendations?.[0]?.type : undefined) ?? (analyses[0]?.kind === "nps" ? "gauge" : "bar_vertical")), options: {} } } : type === "table" ? { id: uid(), type, title: firstName, analysisId: first } : type === "kpi" ? { id: uid(), type, title: firstName, analysisId: first } : type === "insights" ? { id: uid(), type, analysisIds: analyses.slice(0, 3).map((a) => a.id) } : type === "panel_grid" ? { id: uid(), type, title: "Panel grid", headline: "", panels: [{ id: uid(), analysisId: first, title: firstName }, { id: uid(), analysisId: first, title: firstName }] } : { id: uid(), type: "executive_summary", analysisIds: analyses.slice(0, 5).map((a) => a.id) };
     setDef({ ...(def as ReportDefinition), blocks: [...(def as ReportDefinition).blocks, b] }); setDirty(true); setEditing(b.id);
     void ensure(idsOf(b));
   };
@@ -491,6 +535,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
         {isDash && <button className="btn small" onClick={() => window.print()} data-testid="ax-dash-print"
           title="Opens your browser's print dialog — choose “Save as PDF” there. The canvas keeps its arrangement on the page.">Print / PDF</button>}
       </div>
+      {resultsOutdated && <div className="ax-warn" data-testid="ax-report-outdated" style={{ margin: "6px 0" }}>Results are out of date — the filter changed. Save to recompute them with it.</div>}
       {(msg || error) && <div className={error ? "ax-error" : "ax-ok"} style={{ margin: "6px 0" }}>{error ?? msg}</div>}
       <div className="ax-rb-body">
         <aside className="ax-rb-side">
@@ -544,7 +589,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
               */}
             <div className="flabel" style={{ marginTop: 12 }}>This whole report is filtered to</div>
             <select className="select small" value={rd.filterId ?? ""} data-testid="ax-report-filter"
-              onChange={(e) => { setDef({ ...rd, filterId: e.target.value || null }); setDirty(true); void load(open!); }}>
+              onChange={(e) => { setDef({ ...rd, filterId: e.target.value || null }); setDirty(true); setResultsOutdated(true); }}>
               <option value="">The whole sample</option>
               {savedFilters.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
             </select>

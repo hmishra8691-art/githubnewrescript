@@ -123,6 +123,8 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
   const totalRow = opt(def, "totalRow", false) as boolean;
   const decimals = Math.min(4, Math.max(0, Number(opt(def, "decimals", 1)) || 0));
   const warnings: string[] = [];
+  /** columns under the minimum base, across every table — reported ONCE, not once per column */
+  const lowCols = new Map<string, { label: string; group: string; n: number }>();
   const tables: ResultTable[] = [];
   const tests: TestResult[] = [];
   const insights: string[] = [];
@@ -269,9 +271,9 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
         let v: number | null;
         if (suppressed.has(c.key)) v = null;
         else if (measure === "count") v = round(cell.w, ds.weighted ? 1 : 0);
-        else if (measure === "pct_row") v = b.rowBase.get(rk)?.w ? (cell.w / b.rowBase.get(rk)!.w) * 100 : 0;
-        else if (measure === "pct_total") v = tot ? (cell.w / tot) * 100 : 0;
-        else v = base.w ? (cell.w / base.w) * 100 : 0;
+        else if (measure === "pct_row") v = b.rowBase.get(rk)?.w ? (cell.w / b.rowBase.get(rk)!.w) * 100 : null;
+        else if (measure === "pct_total") v = tot ? (cell.w / tot) * 100 : null;
+        else v = base.w ? (cell.w / base.w) * 100 : null;
         row[c.key] = measure === "count" ? v : val(v);
         row[`${c.key}__n`] = cell.count;
         if (sig[c.key]) row[`${c.key}__sig`] = sig[c.key];
@@ -334,7 +336,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
 
   /** the chart follows the first row × first column pair of the first layer */
   const chartFrom = (b: Block, cols: ColumnDef[], cv: string) => {
-    if (chart.categories) return;
+    if (chart.categories?.length) return;
     const cc = cols.filter((c) => c.variable === cv);
     if (b.meanMode) { chart = { categories: cc.map((c) => c.label), series: [{ name: `Mean ${labelOf(ds, b.rv)}`, values: cc.map((c) => { const s = b.nums.get(c.key); return s && s.w ? round(s.sum / s.w) : null; }) }] }; return; }
     const rCats = categoriesOf(ds, b.rv);
@@ -435,7 +437,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
       ...(suppressed.size ? [`* Columns with fewer than ${minBase} respondents are suppressed.`] : []),
       ...(Object.entries(colBases).some(([k, b]) => k !== "__total" && b > 0 && b < 30) ? ["Some columns have a base below 30 — read with caution."] : []),
     ];
-    for (const c of cols) { const b = colBases[c.key]; if (c.variable && b > 0 && b < 30 && !suppressed.has(c.key)) warnings.push(`Column “${c.label}” of ${c.group || labelOf(ds, c.variable)} has a base of ${b}.`); }
+    for (const c of cols) { const b = colBases[c.key]; if (c.variable && b > 0 && b < 30 && !suppressed.has(c.key)) lowCols.set(`${c.group || labelOf(ds, c.variable)}\u0000${c.label}`, { label: c.label, group: c.group || labelOf(ds, c.variable), n: b }); }
     const id = `xt_${rvs.join("+")}_${cvs.join("+")}${layerVar ? "_" + layer.label : ""}`;
     tables.push({ id, title, columns, rows: out, base: { n: top.colBase.get("__total")?.count ?? 0, weightedN: round(top.colBase.get("__total")?.w, 1) ?? 0 }, columnBases: colBases, notes });
     for (const cv of cvs) { testsFor(top, cols, cv); chartFrom(top, cols, cv); }
@@ -450,10 +452,24 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
       else for (const rv of rowVars) for (const cv of colVars) buildTable(layer, [rv], [cv]);
     }
   }
+  if (lowCols.size) warnings.push(lowColumnsWarning([...lowCols.values()]));
   return makeResult(def, ds, {
     tables, chart, tests, insights, warnings: [...new Set(warnings)],
     recommendedCharts: ["bar_grouped", "bar_stacked_100", "heatmap_crosstab", "bar_horizontal", "table"],
     variablesUsed: [...rowVars, ...colVars, ...(layerVar ? [layerVar] : [])], totalCases,
     validN: layerVar ? undefined : tables[0]?.base?.n,
   });
+}
+
+/**
+ * One sentence for every thin column. Twenty small columns used to be twenty
+ * warnings stacked above the table — a wall that read as the result itself.
+ * The detail (each column's base) is already printed under its column header;
+ * this names the worst few and counts the rest.
+ */
+export function lowColumnsWarning(cols: { label: string; group: string; n: number }[], min = 30, show = 4): string {
+  const sorted = [...cols].sort((a, b) => a.n - b.n);
+  const named = sorted.slice(0, show).map((c) => `${c.label} (n = ${c.n})`).join(", ");
+  const more = sorted.length > show ? ` and ${sorted.length - show} more` : "";
+  return `${sorted.length} column${sorted.length === 1 ? " has" : "s have"} a base under ${min}: ${named}${more} — read ${sorted.length === 1 ? "it" : "those"} with caution.`;
 }

@@ -1,4 +1,5 @@
 "use client";
+import { Warnings } from "./Warnings";
 import React from "react";
 import type { AnalysisDefinition, ChartSpec, DatasetSpec, ReportTheme, VariableMeta } from "@rescript/analytics";
 import { ANALYSIS_KINDS } from "@rescript/analytics";
@@ -290,14 +291,40 @@ function ChartsLibrary({ api, charts, analyses, themes, refresh, onOpen }: { api
   const [results, setResults] = React.useState<Record<string, RunResult>>({});
   const [editing, setEditing] = React.useState<Row | null>(null);
   const [spec, setSpec] = React.useState<ChartSpec | null>(null);
-  const load = React.useCallback(async (analysisId: string) => { if (results[analysisId]) return; const a = analyses.find((x) => x.id === analysisId); if (!a) return; try { const { result } = await api.run({ ...(a.definition as AnalysisDefinition), name: a.name }); setResults((r) => ({ ...r, [analysisId]: result })); } catch { /* shown as missing */ } }, [api, analyses, results]);
-  React.useEffect(() => { for (const c of charts.slice(0, 12)) void load(c.analysis_id); }, [charts, load]);
+  /*
+   * Every saved chart's analysis is computed, a few at a time, and each one ends in
+   * either a result or a visible failure with a retry. Before, a failed run left
+   * the card on "Computing…" for ever, only the first 12 charts were ever
+   * requested, and `load` depended on `results` — so each arriving result re-fired
+   * the effect and re-requested every chart that had not arrived yet.
+   */
+  const [status, setStatus] = React.useState<Record<string, "loading" | "error">>({});
+  const inFlight = React.useRef(new Set<string>());
+  const done = React.useRef(new Set<string>());
+  const analysesRef = React.useRef(analyses); analysesRef.current = analyses;
+  const load = React.useCallback(async (analysisId: string, force = false) => {
+    if (!force && (done.current.has(analysisId) || inFlight.current.has(analysisId))) return;
+    const a = analysesRef.current.find((x) => x.id === analysisId); if (!a) return;
+    inFlight.current.add(analysisId); setStatus((s) => ({ ...s, [analysisId]: "loading" }));
+    try {
+      const { result } = await api.run({ ...(a.definition as AnalysisDefinition), name: a.name });
+      done.current.add(analysisId); setResults((r) => ({ ...r, [analysisId]: result }));
+      setStatus((s) => { const { [analysisId]: _x, ...rest } = s; void _x; return rest; });
+    } catch { setStatus((s) => ({ ...s, [analysisId]: "error" })); } finally { inFlight.current.delete(analysisId); }
+  }, [api]);
+  React.useEffect(() => {
+    const ids = [...new Set(charts.map((c) => String(c.analysis_id)))];
+    let cancelled = false; let next = 0;
+    const worker = async () => { while (!cancelled && next < ids.length) { const id = ids[next++]; await load(id); } };
+    void Promise.all([worker(), worker(), worker()]);
+    return () => { cancelled = true; };
+  }, [charts, load]);
   return (
     <div className="ax-panel" data-testid="ax-charts">
       <div className="row" style={{ marginBottom: 10 }}><h2 style={{ margin: 0 }}>Saved charts</h2><span className="muted" style={{ fontSize: 13 }}>Each chart is linked to its analysis definition — the data is recomputed, the styling is yours.</span></div>
       {editing && spec && results[editing.analysis_id] && (
         <div className="card">
-          <ResultView result={results[editing.analysis_id]} recommendations={results[editing.analysis_id].recommendations} spec={spec} onSpec={setSpec} theme={themes.find((t) => t.id === spec.themeId)?.theme ?? null} themes={themes}
+          <ResultView result={results[editing.analysis_id]} recommendations={results[editing.analysis_id].recommendations} advice={results[editing.analysis_id].advice} spec={spec} onSpec={setSpec} theme={themes.find((t) => t.id === spec.themeId)?.theme ?? null} themes={themes}
             actions={<><button className="btn primary small" onClick={async () => { await api.update("charts", editing.id, { spec, themeId: spec.themeId ?? null, name: spec.options.title ?? editing.name }); setEditing(null); await refresh(); }}>Save styling (v{editing.style_version + 1})</button><button className="btn small" onClick={() => setEditing(null)}>Cancel</button></>} />
         </div>
       )}
@@ -306,7 +333,7 @@ function ChartsLibrary({ api, charts, analyses, themes, refresh, onOpen }: { api
           <div key={c.id} className="card ax-chart-card" data-testid="ax-chart-card">
             <div className="card-title">{c.name}<span className="grow" /><span className="muted" style={{ fontSize: 12.5 }}>style v{c.style_version}</span></div>
             <div className="muted" style={{ fontSize: 13 }}>{a?.name ?? "analysis removed"} · {(c.spec as ChartSpec).type}</div>
-            {r ? <Chart result={r} spec={c.spec as ChartSpec} theme={themes.find((t) => t.id === c.theme_id)?.theme ?? null} compact /> : <div className="muted" style={{ padding: 20 }}>{a ? "Computing…" : "The linked analysis no longer exists."}</div>}
+            {r ? <Chart result={r} spec={c.spec as ChartSpec} theme={themes.find((t) => t.id === c.theme_id)?.theme ?? null} compact /> : !a ? <div className="muted" style={{ padding: 20 }}>The linked analysis no longer exists.</div> : status[c.analysis_id] === "error" ? <div className="ax-warn" style={{ padding: 12 }} data-testid="ax-chart-failed">This chart could not be computed. <button className="btn small" onClick={() => void load(c.analysis_id, true)}>Try again</button></div> : <div className="muted" style={{ padding: 20 }}>Computing…</div>}
             <div className="card-actions" style={{ marginTop: 6 }}><button className="btn small" onClick={() => { setEditing(c); setSpec(c.spec as ChartSpec); }} disabled={!r}>Customize</button>{a && <button className="btn small" onClick={() => onOpen(a)}>Open analysis</button>}<button className="btn small" onClick={() => api.export({ format: "pptx", analysisId: c.analysis_id, chart: c.spec, themeId: c.theme_id })}>PPT</button><button className="btn small danger" onClick={async () => { if (confirm("Delete this saved chart?")) { await api.remove("charts", c.id); await refresh(); } }}>Delete</button></div>
           </div>); })}
         {!charts.length && <div className="muted">No saved charts yet. Run an analysis and click “Save chart”.</div>}
@@ -323,7 +350,18 @@ function TablesLibrary({ api, analyses, onOpen, onNew }: { api: AxApi; analyses:
   const [filterText, setFilterText] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const tableAnalyses = analyses.filter((a) => ["crosstab", "descriptive", "topbox", "segmentation", "test", "nps", "csat", "ranking", "allocation", "turf", "brand", "conjoint", "maxdiff", "quality", "weighting"].includes(a.kind));
-  React.useEffect(() => { if (!sel) return; const a = analyses.find((x) => x.id === sel); if (!a) return; setBusy(true); api.run({ ...(a.definition as AnalysisDefinition), name: a.name }).then(({ result }) => { setRes(result); setTableId(result.tables[0]?.id ?? ""); }).finally(() => setBusy(false)); }, [sel, analyses, api]);
+  const [tableError, setTableError] = React.useState<string | null>(null);
+  const selDef = React.useMemo(() => JSON.stringify(analyses.find((x) => x.id === sel)?.definition ?? null) + (analyses.find((x) => x.id === sel)?.name ?? ""), [analyses, sel]);
+  /* keyed on the selected analysis' own definition, not on the `analyses` array (a new array on every refresh re-ran every table); a late answer for a previous selection is dropped; a failure is shown, and the previous table is not left under the new title */
+  React.useEffect(() => {
+    if (!sel) return; const a = analyses.find((x) => x.id === sel); if (!a) return;
+    let cancelled = false; setBusy(true); setTableError(null); setRes(null);
+    api.run({ ...(a.definition as AnalysisDefinition), name: a.name })
+      .then(({ result }) => { if (cancelled) return; setRes(result); setTableId(result.tables[0]?.id ?? ""); })
+      .catch((e: Error) => { if (!cancelled) setTableError(e.message); })
+      .finally(() => { if (!cancelled) setBusy(false); });
+    return () => { cancelled = true; };
+  }, [sel, selDef, api]); // eslint-disable-line react-hooks/exhaustive-deps
   const table = res?.tables.find((t) => t.id === tableId) ?? res?.tables[0];
   const view = React.useMemo(() => {
     if (!table) return table;
@@ -345,12 +383,13 @@ function TablesLibrary({ api, analyses, onOpen, onNew }: { api: AxApi; analyses:
         {sel && <button className="btn small" onClick={() => api.export({ format: "xlsx", analysisId: sel })}>Excel</button>}
       </div>
       {busy && <div className="muted">Computing…</div>}
+      {tableError && !busy && <div className="ax-warn" data-testid="ax-table-failed">{tableError}</div>}
       {view && (
         <div className="card">
           <div className="row" style={{ marginBottom: 6 }}><div className="card-title">{view.title}</div><span className="grow" /><span className="muted" style={{ fontSize: 13 }}>click a column header to sort</span></div>
           <div className="ax-table-wrap"><table className="ax-table" data-testid="ax-builder-table"><thead><tr>{view.columns.map((c) => <th key={c.key} className={c.type && c.type !== "text" ? "num sortable" : "sortable"} onClick={() => setSort(sort?.key === c.key ? { key: c.key, dir: sort.dir === 1 ? -1 : 1 } : { key: c.key, dir: -1 })}>{c.label}{sort?.key === c.key ? (sort.dir === 1 ? " ↑" : " ↓") : ""}</th>)}</tr></thead>
             <tbody>{view.rows.map((r, i) => <tr key={i}>{view.columns.map((c) => { const v = r[c.key]; const sig = r[`${c.key}__sig`]; const ct = (r.__format as string | undefined) ?? c.type; return <td key={c.key} className={typeof v === "number" ? "num" : ""}>{v == null ? "" : typeof v === "number" ? (ct === "pct" ? `${v.toFixed(c.decimals ?? 1)}%` : ct === "count" ? Math.round(v).toLocaleString() : v.toLocaleString("en-US", { maximumFractionDigits: c.decimals ?? 2 })) : String(v)}{sig ? <sup className="ax-sig">{String(sig)}</sup> : null}</td>; })}</tr>)}</tbody></table></div>
-          <div className="ax-table-notes">{view.base ? `Base: n = ${view.base.n}${view.base.weightedN != null && view.base.weightedN !== view.base.n ? ` · weighted n = ${view.base.weightedN}` : ""}` : ""}{view.notes?.map((n, i) => <div key={i}>{n}</div>)}{res?.warnings.map((w, i) => <div key={`w${i}`}>⚠ {w}</div>)}</div>
+          <div className="ax-table-notes">{view.base ? `Base: n = ${view.base.n}${view.base.weightedN != null && view.base.weightedN !== view.base.n ? ` · weighted n = ${view.base.weightedN}` : ""}` : ""}{view.notes?.map((n, i) => <div key={i}>{n}</div>)}<Warnings items={res?.warnings ?? []} testId="ax-table-warnings" /></div>
         </div>
       )}
       {!sel && <div className="muted">Pick a saved analysis to build a frequency, crosstab, banner, means or significance table from it. Tables can be added to reports and exported to PowerPoint and Excel.</div>}

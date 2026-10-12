@@ -32,7 +32,7 @@ export function hashDefinition(def: AnalysisDefinition): string {
  * the variables it needs), when the runner knows it.
  */
 export function baseOf(ds: Dataset, total: number, filtered: number, label = "All respondents", validN?: number) {
-  return { total, filtered, n: validN ?? ds.cases.length, weightedN: round(weightedN(ds), 1) ?? ds.cases.length, label };
+  return { total, filtered, n: validN ?? ds.cases.length, weightedN: ds.weighted ? (round(weightedN(ds), 1) ?? ds.cases.length) : (validN ?? ds.cases.length), label };
 }
 
 export function lowBaseWarning(n: number, what = "This analysis"): string | null {

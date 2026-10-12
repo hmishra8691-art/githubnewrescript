@@ -175,3 +175,25 @@ test("xlsx: summary + one sheet per analysis + chart data + metadata; percents s
   assert.ok(pctCell, "percent cells are numeric with a % format");
   assert.ok(((pctCell as unknown as ExcelJS.Cell).value as number) <= 1);
 });
+
+/* ------------------------------------------------------------- regression: block with no analysisIds
+ * The built-in "Findings" page ships an `insights` block with no analysisIds.
+ * It used to crash the PowerPoint export with
+ * "Cannot read properties of undefined (reading 'flatMap')" while the viewer
+ * rendered it, so the preview worked and the export returned a 500.
+ */
+test("pptx: an insights / executive-summary block with no analysisIds exports (all analyses are summarised)", async () => {
+  const ragged = {
+    title: "Ragged", mode: "live",
+    blocks: [
+      { id: "r0", type: "cover", title: "Ragged" },
+      { id: "r1", type: "chart", analysisId: "a1", chart: { type: "bar_grouped", options: {} } },
+      { id: "r2", type: "insights", title: "Findings" },
+      { id: "r3", type: "executive_summary", title: "Summary" },
+    ],
+  } as unknown as ReportDefinition;
+  const buf = await buildPptx({ report: ragged, results, meta: { survey: "Synthetic", environment: "LIVE" } });
+  assert.equal(buf.subarray(0, 2).toString("latin1"), "PK");
+  const bufX = await buildXlsx({ report: ragged, results, meta: { Survey: "Synthetic" } });
+  assert.equal(bufX.subarray(0, 2).toString("latin1"), "PK");
+});
