@@ -2,6 +2,7 @@ import type { AnalysisDefinition, AnalysisResult, ChartData, ChartType, ResultTa
 import type { Dataset } from "../dataset.js";
 import type { TestResult } from "../stats/tests.js";
 import { answeredCases, weightedN } from "../dataset.js";
+import { canonicalJson, fnv1a } from "../canonical.js";
 
 export const MIN_BASE = 30;
 
@@ -18,11 +19,12 @@ export function fmtP(p: number | null | undefined): string {
   return p < 0.001 ? "< .001" : p.toFixed(3).replace(/^0/, "");
 }
 
+/**
+ * What the analysis IS, as a hash: the definition without its label (id, name, notes, version), with keys in a fixed
+ * order, so the same analysis hashes the same however it was built (audit S-14).
+ */
 export function hashDefinition(def: AnalysisDefinition): string {
-  const s = JSON.stringify({ ...def, id: undefined, name: undefined, notes: undefined, version: undefined });
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
-  return h.toString(16).padStart(8, "0");
+  return fnv1a(canonicalJson({ ...def, id: undefined, name: undefined, notes: undefined, version: undefined }));
 }
 
 /**

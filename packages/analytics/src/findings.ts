@@ -1,7 +1,7 @@
 import { adviseChart } from "./questionChart.js";
 import type { SurveyDefinition } from "@rescript/schema";
 import { hypothesisLabel } from "@rescript/schema";
-import type { AnalysisDefinition, AnalysisResult, ChartType, DatasetSpec } from "./types.js";
+import type { AnalysisDefinition, AnalysisResult, ChartType, DatasetSpec, ResultProvenance } from "./types.js";
 import type { Dataset } from "./dataset.js";
 import type { TestResult } from "./stats/tests.js";
 import { runAnalysis } from "./analyses/index.js";
@@ -80,6 +80,8 @@ export interface RunItem {
   advice?: DataAdvice;
   /** this item was run because the data advice recommended its method beside a planned item */
   adaptedFrom?: string;
+  /** what the result was computed from and how long it took — kept when the run is stored, though the result itself is not (audit S-14) */
+  provenance?: Omit<ResultProvenance, "definition">;
 }
 /** one family of tests corrected together (Phase 4) */
 export interface CorrectionFamily { family: string; tests: number; /** findings significant before and after */ before: number; after: number; lost: string[] }
@@ -547,7 +549,7 @@ export function runPlan(def: SurveyDefinition, input: Dataset, opts: { trigger?:
       }
     }
     const advice = adviseAnalysis(p.definition, dataset);
-    return { definition: p.definition, result, findings, ...(chart ? { chart } : {}), source: p.source, priority: p.priority, hypotheses: p.hypotheses, ...(advice.ok ? {} : { advice }), ...(adaptedFrom ? { adaptedFrom } : {}) };
+    return { definition: p.definition, result, findings, ...(result.provenance ? { provenance: stripDefinition(result.provenance) } : {}), ...(chart ? { chart } : {}), source: p.source, priority: p.priority, hypotheses: p.hypotheses, ...(advice.ok ? {} : { advice }), ...(adaptedFrom ? { adaptedFrom } : {}) };
   };
   const items: RunItem[] = planned.map((p) => runOne(p));
   /* the recommended method beside the planned one, when asked (Phase 4) */
@@ -572,6 +574,14 @@ export function runPlan(def: SurveyDefinition, input: Dataset, opts: { trigger?:
 }
 
 /** the run without its results — what is stored and sent around */
+const stripDefinition = ({ definition: _d, ...rest }: ResultProvenance): Omit<ResultProvenance, "definition"> => { void _d; return rest; };
+
+/** how long a run took, from what each analysis recorded: the total and the slowest analyses */
+export function runTiming(run: { items: { definition: { name: string }; provenance?: { durationMs: number } }[] }): { totalMs: number; measured: number; slowest: { name: string; ms: number }[] } {
+  const timed = run.items.filter((i) => i.provenance).map((i) => ({ name: i.definition.name, ms: i.provenance!.durationMs }));
+  return { totalMs: Math.round(timed.reduce((t, x) => t + x.ms, 0) * 10) / 10, measured: timed.length, slowest: [...timed].sort((a, b) => b.ms - a.ms).slice(0, 5) };
+}
+
 export function compactRun(run: AnalysisRun): Omit<AnalysisRun, "items"> & { items: Omit<RunItem, "result">[] } {
   return { ...run, items: run.items.map(({ result: _r, ...rest }) => { void _r; return rest; }) };
 }

@@ -1,3 +1,4 @@
+import { provenanceOf } from "../provenance.js";
 import type { AnalysisDefinition, AnalysisResult } from "../types.js";
 import { filterDataset, type Dataset } from "../dataset.js";
 import { allocation, crosstab, descriptive, ranking, topbox } from "./basics.js";
@@ -17,7 +18,7 @@ export const RUNNERS: Record<AnalysisDefinition["kind"], AnalysisRunner> = {
  * `filter` is applied here (the dataset may already be narrowed by the caller's
  * dataset spec); segments are resolved by each runner.
  */
-export function runAnalysis(def: AnalysisDefinition, dataset: Dataset): AnalysisResult {
+function runAnalysisCore(def: AnalysisDefinition, dataset: Dataset): AnalysisResult {
   const runner = RUNNERS[def.kind];
   const ds = def.filter ? filterDataset(dataset, def.filter) : dataset;
   const stub = (warning: string, error: NonNullable<AnalysisResult["error"]>): AnalysisResult => ({
@@ -41,6 +42,16 @@ export function runAnalysis(def: AnalysisDefinition, dataset: Dataset): Analysis
     console.error(`[analytics] ${def.kind} “${def.name}” failed:`, e);
     return stub("This analysis could not be computed with the selected data. Check that the variables it uses exist in this survey and have answers, then run it again.", { code: "not_computable", message: "The analysis could not be computed with the selected data." });
   }
+}
+
+const clock = (): number => { const p = (globalThis as { performance?: { now(): number } }).performance; return p ? p.now() : Date.now(); };
+
+/** Run one analysis. The result records what it was computed from and how long it took (audit S-14): `provenance`. */
+export function runAnalysis(def: AnalysisDefinition, dataset: Dataset): AnalysisResult {
+  const t0 = clock();
+  const result = runAnalysisCore(def, dataset);
+  /* recording where a result came from must never be what stops a result: a definition that cannot be read for the record still gets its (failure) result */
+  try { return { ...result, provenance: provenanceOf(def, dataset, result, clock() - t0) }; } catch { return result; }
 }
 
 /** The result a report shows for an analysis that could not be computed: a sentence and a code, no tables, no chart — and every other block still renders. */

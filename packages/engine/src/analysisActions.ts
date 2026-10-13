@@ -1,6 +1,6 @@
 import type { AnalysisMethod, AnalysisPlan, AnalysisRole, MeasurementLevel, PlannedCrosstab, PlannedDerived, PlannedSegment, PlannedTest, Question, SurveyDefinition } from "@rescript/schema";
 import { ANALYSIS_METHODS, ANALYSIS_ROLES, MEASUREMENT_LEVELS } from "@rescript/schema";
-import { buildAnalysisFramework, isNonQuestionVariable } from "./analysisFramework.js";
+import { buildAnalysisFramework, crosstabKey, freePlanId, isNonQuestionVariable, testKey } from "./analysisFramework.js";
 import type { IdMinter } from "./questionOps.js";
 
 /**
@@ -232,8 +232,9 @@ function derivedOf(def: SurveyDefinition, env: AnalysisEnv, d: DerivedSpec): Pla
 function segmentOf(env: AnalysisEnv, s: SegmentSpec): PlannedSegment {
   return { name: s.name, by: resolveVars(env, s.by, `segment “${s.name}”`), ...(s.reason ? { reason: s.reason } : {}) };
 }
-const sameCrosstab = (a: PlannedCrosstab, b: PlannedCrosstab) => a.rows.join("|") === b.rows.join("|") && a.columns.join("|") === b.columns.join("|");
-const sameTest = (a: PlannedTest, b: PlannedTest) => a.method === b.method && a.outcome === b.outcome && a.groupBy === b.groupBy && a.variables.join("|") === b.variables.join("|");
+/* same content, whatever order the variables were listed in, and a moderated model is not the unmoderated one (audit P-1/P-4) */
+const sameCrosstab = (a: PlannedCrosstab, b: PlannedCrosstab) => crosstabKey(a) === crosstabKey(b);
+const sameTest = (a: PlannedTest, b: PlannedTest) => testKey(a) === testKey(b);
 
 export function applyAnalysisAction(def: SurveyDefinition, a: AnalysisAction, env: AnalysisEnv): AnalysisApplied {
   switch (a.op) {
@@ -273,16 +274,17 @@ export function applyAnalysisAction(def: SurveyDefinition, a: AnalysisAction, en
       return { description: `${q.code} analysis: ${words(changed) || "notes"}`, touched: [q.id] };
     }
     case "propose_analysis_plan": {
-      const built = buildAnalysisFramework(def, { now: env.now });
       const plan = planOf(def);
+      const built = buildAnalysisFramework(def, { now: env.now, previous: plan });
       const had = plan.crosstabs.length + plan.tests.length + plan.derived.length;
       if (a.merge) {
-        for (const x of built.crosstabs) if (!plan.crosstabs.some((y) => sameCrosstab(x, y))) plan.crosstabs.push(x);
-        for (const t of built.tests) if (!plan.tests.some((y) => sameTest(t, y))) plan.tests.push(t);
+        /* an item already in the plan (same content) keeps its own id and is not added; a new one gets an id nothing else has */
+        for (const x of built.crosstabs) if (!plan.crosstabs.some((y) => sameCrosstab(x, y))) { x.id = freePlanId(plan, x); plan.crosstabs.push(x); }
+        for (const t of built.tests) if (!plan.tests.some((y) => sameTest(t, y))) { t.id = freePlanId(plan, t); plan.tests.push(t); }
         for (const d of built.derived) if (!plan.derived.some((y) => y.name === d.name)) plan.derived.push(d);
         for (const s of built.segments) if (!plan.segments.some((y) => y.by.join("|") === s.by.join("|"))) plan.segments.push(s);
         plan.updatedAt = env.now; plan.source = "engine";
-      } else def.research!.analysisPlan = built;
+      } else def.research!.analysisPlan = built;   // built with `previous`: an item that was in the plan keeps its id
       const p = def.research!.analysisPlan!;
       return { description: `Analysis plan: ${p.crosstabs.length} crosstab${p.crosstabs.length === 1 ? "" : "s"}, ${p.tests.length} test${p.tests.length === 1 ? "" : "s"}, ${p.derived.length} derived variable${p.derived.length === 1 ? "" : "s"}, ${p.segments.length} segment${p.segments.length === 1 ? "" : "s"}`, ...(had && !a.merge ? { destructive: `Replaces the analysis plan (${had} planned item${had === 1 ? "" : "s"})` } : {}), touched: [] };
     }
@@ -291,13 +293,14 @@ export function applyAnalysisAction(def: SurveyDefinition, a: AnalysisAction, en
       const crosstabs = a.crosstabs?.map((c) => crosstabOf(env, c)), tests = a.tests?.map((t) => testOf(env, t)), derived = a.derived?.map((d) => derivedOf(def, env, d)), segments = a.segments?.map((s) => segmentOf(env, s));
       const replaced: string[] = [];
       if (a.merge) {
-        for (const x of crosstabs ?? []) if (!plan.crosstabs.some((y) => sameCrosstab(x, y))) plan.crosstabs.push(x);
-        for (const t of tests ?? []) if (!plan.tests.some((y) => sameTest(t, y))) plan.tests.push(t);
+        for (const x of crosstabs ?? []) if (!plan.crosstabs.some((y) => sameCrosstab(x, y))) { x.id = freePlanId(plan, x); plan.crosstabs.push(x); }
+        for (const t of tests ?? []) if (!plan.tests.some((y) => sameTest(t, y))) { t.id = freePlanId(plan, t); plan.tests.push(t); }
         for (const d of derived ?? []) { plan.derived = plan.derived.filter((y) => y.name !== d.name); plan.derived.push(d); }
         for (const s of segments ?? []) { plan.segments = plan.segments.filter((y) => y.name !== s.name); plan.segments.push(s); }
       } else {
-        if (crosstabs) { if (plan.crosstabs.length) replaced.push(`${plan.crosstabs.length} crosstabs`); plan.crosstabs = crosstabs; }
-        if (tests) { if (plan.tests.length) replaced.push(`${plan.tests.length} tests`); plan.tests = tests; }
+        /* replacing the list must not move the link a saved analysis has to an item that is still in it: same content, same id */
+        if (crosstabs) { if (plan.crosstabs.length) replaced.push(`${plan.crosstabs.length} crosstabs`); const old = plan.crosstabs; const used = new Set<string>(); for (const x of crosstabs) { const same = old.find((y) => sameCrosstab(x, y) && !used.has(y.id)); if (same) { x.id = same.id; used.add(same.id); } } plan.crosstabs = crosstabs; }
+        if (tests) { if (plan.tests.length) replaced.push(`${plan.tests.length} tests`); const old = plan.tests; const used = new Set<string>(); for (const t of tests) { const same = old.find((y) => sameTest(t, y) && !used.has(y.id)); if (same) { t.id = same.id; used.add(same.id); } } plan.tests = tests; }
         if (derived) { if (plan.derived.length) replaced.push(`${plan.derived.length} derived variables`); plan.derived = derived; }
         if (segments) { if (plan.segments.length) replaced.push(`${plan.segments.length} segments`); plan.segments = segments; }
       }

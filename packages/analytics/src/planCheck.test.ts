@@ -98,3 +98,45 @@ test("a significance test of a variable against itself is an error, not a result
   assert.ok(issues.some((i) => i.code === "same_variable" && i.severity === "error"));
   assert.deepEqual(validateAnalysis(D({ kind: "test", variables: ["SAT", "GENDER"] }), vars), []);
 });
+
+/* ------------------------------------------------------------ P-4: what makes two analyses the same */
+
+test("P-4: a table of pairs — the signature separates what changes a number and merges what does not", () => {
+  const base = xt("c", ["SAT"], ["GENDER"]).definition;
+  const w = { variable: "WGT" };
+  const pairs: [string, AnalysisDefinition, AnalysisDefinition, boolean][] = [
+    ["identical", base, { ...base }, true],
+    ["renamed", base, { ...base, name: "other", notes: "n" }, true],
+    ["different presentation", base, { ...base, options: { ...base.options, layout: "stacked", decimals: 2 } }, true],
+    ["weighted vs unweighted", base, { ...base, weighting: w }, false],
+    ["two different weights", { ...base, weighting: w }, { ...base, weighting: { variable: "OTHER" } }, false],
+    ["weighting key order", { ...base, weighting: { rim: [{ variable: "A", targets: { a: 1, b: 2 } }], cap: [0.5, 2] } }, { ...base, weighting: { cap: [0.5, 2], rim: [{ targets: { b: 2, a: 1 }, variable: "A" }] } }, true],
+    ["saved filter vs none", base, { ...base, filterIds: ["f1"] }, false],
+    ["two saved filters", { ...base, filterIds: ["f1"] }, { ...base, filterIds: ["f2"] }, false],
+    ["same saved filters, other order", { ...base, filterIds: ["f1", "f2"] }, { ...base, filterIds: ["f2", "f1"] }, true],
+    ["layer vs none", base, { ...base, layers: ["REGION"] }, false],
+    ["segments vs none", base, { ...base, segments: [{ name: "Young", condition: { type: "rule", source: { kind: "variable", ref: "AGE" }, operator: "lt", value: 30 } } as never] }, false],
+    ["other dataset", base, { ...base, dataset: { environment: "TEST", dataset: "all" } }, false],
+    ["other measure", base, { ...base, measure: "count" }, false],
+    ["rows and columns swapped is another table", xt("a", ["SAT"], ["GENDER"]).definition, xt("b", ["GENDER"], ["SAT"]).definition, false],
+    ["chi-square, variables reversed", chi("a", "SAT", "REGION").definition, chi("b", "REGION", "SAT").definition, true],
+    ["chi-square, other pair", chi("a", "SAT", "REGION").definition, chi("b", "SAT", "GENDER").definition, false],
+    ["correlation, variables reversed", D({ kind: "correlation", variables: ["AGE", "SAT"], options: { method: "pearson" } }), D({ kind: "correlation", variables: ["SAT", "AGE"], options: { method: "pearson" } }), true],
+    ["correlation, other method", D({ kind: "correlation", variables: ["AGE", "SAT"], options: { method: "pearson" } }), D({ kind: "correlation", variables: ["AGE", "SAT"], options: { method: "spearman" } }), false],
+    ["t-test: outcome and group are not interchangeable", D({ kind: "test", variables: ["SAT", "GENDER"], options: { test: "t_independent" } }), D({ kind: "test", variables: ["GENDER", "SAT"], options: { test: "t_independent" } }), false],
+    ["descriptive weighted vs not", D({ variables: ["SAT"] }), D({ variables: ["SAT"], weighting: w }), false],
+  ];
+  assert.equal(pairs.length, 20);
+  for (const [name, a, b, same] of pairs) assert.equal(analysisSignature(a) === analysisSignature(b), same, name);
+});
+
+test("P-4: a weighted crosstab is not dropped as a repeat of the unweighted one, nor deleted as a duplicate of it", () => {
+  const plain = xt("c1", ["SAT"], ["GENDER"]);
+  const weighted: PlannedAnalysis = { ...xt("c2", ["SAT"], ["GENDER"]), definition: { ...xt("c2", ["SAT"], ["GENDER"]).definition, weighting: { variable: "WGT" } } };
+  assert.equal(reviewPlanned([plain, weighted], vars).kept.length, 2);
+  assert.equal(findExistingDuplicate(weighted.definition, [{ id: "m", name: "plain", definition: plain.definition }]), null);
+  /* and a chi-square with its variables the other way round IS a repeat of the planned one */
+  const r = reviewPlanned([chi("t1", "SAT", "REGION"), chi("t2", "REGION", "SAT")], vars);
+  assert.equal(r.kept.length, 1);
+  assert.equal(r.duplicates.length, 1);
+});

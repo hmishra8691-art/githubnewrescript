@@ -67,13 +67,23 @@ export function validateAnalysis(def: AnalysisDefinition, variables: readonly Va
 const sorted = (a?: readonly string[]) => [...(a ?? [])].sort().join("|");
 const canon = (o: unknown): string => JSON.stringify(o, (_k, v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, (v as Record<string, unknown>)[k]])) : v));
 
-/** What an analysis IS, independent of its name, folder and bookkeeping. Two with the same signature compute the same numbers. */
+/** the kinds of test whose result does not depend on which variable is named first */
+const symmetric = (def: AnalysisDefinition): boolean => def.kind === "correlation" || (def.kind === "test" && def.options?.test === "chi_square");
+
+/**
+ * What an analysis IS, independent of its name, folder and bookkeeping. Two with the same signature compute the same numbers.
+ *
+ * Audit P-4: everything that changes a number is in it — the weighting, the saved filters it uses (`filterIds`),
+ * the layers and the segments (a weighted and an unweighted crosstab used to have the same signature) — and a test
+ * that is symmetric in its two variables (chi-square, correlation) is the same test whichever is named first.
+ */
 export function analysisSignature(def: AnalysisDefinition): string {
   const o = { ...(def.options ?? {}) } as Record<string, unknown>;
   /* presentation and bookkeeping — they change how the table looks or where it came from, not a number in it */
   for (const k of ["planned", "plannedHash", "requested", "hypotheses", "formatting", "title", "subtitle", "layout", "significance", "decimals", "sigLevel", "alpha"]) delete o[k];
-  if (def.kind === "crosstab") return `crosstab:${sorted(def.rows)}>${sorted(def.columns)}:${def.measure ?? "pct_col"}:${canon(o)}:${canon(def.filter ?? null)}:${canon(def.dataset ?? null)}`;
-  return `${def.kind}:${(def.variables ?? []).join("|")}:${canon(o)}:${canon(def.filter ?? null)}:${canon(def.dataset ?? null)}`;
+  const scope = `${canon(o)}:${canon(def.filter ?? null)}:${sorted(def.filterIds)}:${canon(def.weighting ?? null)}:${sorted(def.layers)}:${canon(def.segments ?? null)}:${canon(def.dataset ?? null)}`;
+  if (def.kind === "crosstab") return `crosstab:${sorted(def.rows)}>${sorted(def.columns)}:${def.measure ?? "pct_col"}:${scope}`;
+  return `${def.kind}:${symmetric(def) ? sorted(def.variables) : (def.variables ?? []).join("|")}:${scope}`;
 }
 
 /** the chi-square a crosstab already prints for its one row × one column pair — a separate test for the same pair repeats it */

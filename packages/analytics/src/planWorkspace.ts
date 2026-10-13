@@ -4,6 +4,7 @@ import type { AnalysisDefinition, ChartSpec, ChartType, DashboardDefinition, Das
 import type { VariableMeta } from "./dataset.js";
 import { hashDefinition } from "./analyses/common.js";
 import { plannedAnalyses, type PlannedAnalysis } from "./planBridge.js";
+import { surveyKnownNames, validateAnalysis } from "./planCheck.js";
 import type { AnalysisRun, Finding, RunItem } from "./findings.js";
 import { briefText } from "./findings.js";
 import { firstFreeSlot, normalizeLayout } from "./dashboardLayout.js";
@@ -182,6 +183,7 @@ export function planItemViews(def: SurveyDefinition, dataset: DatasetSpec, ctx: 
   const plan = ctx.plan ?? def.research?.analysisPlan;
   if (!plan) return [];
   const dictionary = new Set(ctx.dictionary.map((v) => v.name));
+  const knownNames = surveyKnownNames(def, ctx.dictionary);
   const review = [...reviewAnalysisPlan({ ...def, research: { ...def.research!, analysisPlan: plan } }), ...sampleSizeReview(def, plan)];
   const planned = plannedAnalyses(def, dataset, { plan, primaries: false });
   const byPlanned = new Map<string, PlannedAnalysis>();
@@ -203,6 +205,8 @@ export function planItemViews(def: SurveyDefinition, dataset: DatasetSpec, ctx: 
     /* the plan review says the same thing about a dead variable in its own words — keep one */
     if (missing.length) for (let i = issues.length - 1; i >= 0; i--) if (missing.some((m) => issues[i].message.includes(m))) issues.splice(i, 1);
     if (missing.length) issues.unshift({ level: "critical", message: `Reads ${missing.join(", ")}, which ${missing.length === 1 ? "is" : "are"} not in this survey's data.`, suggestion: "Change the variable, or remove the item from the plan." });
+    /* ONE VALIDATOR (audit P-13): what "create the planned analyses" refuses (a shape the runner cannot compute) is invalid here too, so the apply and that button agree */
+    for (const i of validateAnalysis(derived, ctx.dictionary, knownNames).filter((x) => x.severity === "error" && x.code !== "unknown_variable")) issues.push({ level: "critical", message: i.message });
     const saved = analysisByPlanned.get(item.id);
     const chartRow = saved ? (chartsByAnalysis.get(saved.id) ?? []).find((c) => c.spec?.id === `plan:${item.id}`) ?? (chartsByAnalysis.get(saved.id) ?? [])[0] : undefined;
     const runItem = runByPlanned.get(item.id);
@@ -282,7 +286,7 @@ export function planOverview(def: SurveyDefinition, items: PlanItemView[], varia
 /* ------------------------------------------------------------ applying */
 
 /** what the apply did to the item's saved analysis */
-export type ApplySyncStatus = "created" | "updated" | "unchanged" | "kept_refined" | "skipped_invalid";
+export type ApplySyncStatus = "created" | "updated" | "repointed" | "unchanged" | "kept_refined" | "skipped_invalid";
 /** what happened to it on the data: run, failed to compute, waiting for data, or not run at all (skipped) */
 export type ApplyItemStatus = "run" | "failed" | "pending_data" | "skipped";
 export interface ApplyItemResult { id: string; title: string; sync: ApplySyncStatus; status: ApplyItemStatus; reason?: string; analysisId?: string; chartId?: string }
@@ -291,7 +295,7 @@ export interface ApplyItemResult { id: string; title: string; sync: ApplySyncSta
 export type AnalysisSync =
   | { kind: "skip"; item: PlanItemView; reason: string }
   | { kind: "create"; item: PlanItemView; definition: AnalysisDefinition; tags: string[] }
-  | { kind: "update"; item: PlanItemView; analysisId: string; definition: AnalysisDefinition; tags: string[]; summary: string }
+  | { kind: "update"; item: PlanItemView; analysisId: string; definition: AnalysisDefinition; tags: string[]; summary: string; /** the dataset it was reading before, when the apply moved it (audit P-5) */ repointedFrom?: DatasetSpec }
   | { kind: "keep"; item: PlanItemView; analysisId: string; refined: boolean };
 
 /** the definition as it is saved — the plan's, stamped with the hash it came from */
@@ -300,6 +304,36 @@ export function stampedDefinition(view: PlanItemView, dataset: DatasetSpec, surv
   return { ...view.derived, name, dataset, ...(surveyVersion ? { surveyVersion } : {}), options: { ...(view.derived.options ?? {}), planned: view.id, plannedHash: view.hash } };
 }
 
+/*
+ * WHO OWNS WHAT IN A SAVED PLANNED ANALYSIS (audit P-2).
+ *
+ * The plan owns what it says: the kind, the variables, the table's rows,
+ * columns and measure, the name and notes (its reason), and the options the
+ * plan generator sets. The researcher owns everything they added in Analytics:
+ * the filter and saved filters, the weighting, layers, segments, and every
+ * option the plan does not set (decimals, sorting, confidence, …). Updating an
+ * analysis from a changed plan used to replace the whole definition, so a
+ * researcher's filter and weighting vanished the next time the plan moved.
+ */
+const PLAN_OPTION_KEYS = ["planned", "plannedHash", "hypotheses", "layout", "significance", "test", "model", "moderation", "interactions", "method", "primaryBox"];
+
+/** the saved definition with the plan's part replaced and the researcher's part kept */
+export function mergePlanUpdate(saved: AnalysisDefinition, fromPlan: AnalysisDefinition): AnalysisDefinition {
+  const keep = Object.fromEntries(Object.entries(saved.options ?? {}).filter(([k]) => !PLAN_OPTION_KEYS.includes(k)));
+  const planOptions = Object.fromEntries(Object.entries(fromPlan.options ?? {}).filter(([k]) => PLAN_OPTION_KEYS.includes(k)));
+  const { filter, filterIds, weighting, layers, segments } = saved;
+  const out: AnalysisDefinition = {
+    ...fromPlan,
+    ...(filter !== undefined ? { filter } : {}), ...(filterIds !== undefined ? { filterIds } : {}), ...(weighting !== undefined ? { weighting } : {}),
+    ...(layers !== undefined ? { layers } : {}), ...(segments !== undefined ? { segments } : {}),
+    options: { ...keep, ...(fromPlan.options ?? {}), ...planOptions },
+  };
+  return out;
+}
+
+const sameDataset = (a: DatasetSpec | null | undefined, b: DatasetSpec | null | undefined): boolean => JSON.stringify(sortKeys(a ?? null)) === JSON.stringify(sortKeys(b ?? null));
+const datasetWords = (d: DatasetSpec | null | undefined): string => (d ? `${d.environment}${d.dataset && d.dataset !== "all" ? ` (${d.dataset})` : ""}` : "no dataset");
+
 /**
  * THE RULE THAT KEEPS BOTH WORKFLOWS: the plan is the source of every
  * planned analysis, and a researcher may still refine one in Analytics.
@@ -307,20 +341,81 @@ export function stampedDefinition(view: PlanItemView, dataset: DatasetSpec, surv
  *   - no saved analysis         → create it from the plan
  *   - saved and matching        → nothing
  *   - plan changed since it was written (its stamped hash is not the plan's
- *     hash now)                 → update it from the plan, new version
+ *     hash now)                 → update the PLAN'S part from the plan (new
+ *     version) and keep the researcher's filter, weighting, layers, segments
+ *     and other options (mergePlanUpdate)
  *   - plan unchanged but the saved definition differs → the researcher's
  *     refinement; keep it (an analysis saved before hashes existed counts
  *     as refined too, rather than being overwritten on the first apply)
+ *   - whichever of the above, a saved analysis that reads another dataset than
+ *     the apply is running on (LIVE → TEST, all → clean) is RE-POINTED at it
+ *     and the apply says so (audit P-5): reports and dashboards read the saved
+ *     analysis, so leaving it on its old dataset made them differ from the run
  *   - invalid                   → skip; an existing analysis is left as it is
+ *
+ * `analyses` are the survey's saved analyses, so the researcher's part can be kept.
  */
-export function planAnalysisSync(items: PlanItemView[], dataset: DatasetSpec, surveyVersion: string | null): AnalysisSync[] {
+export function planAnalysisSync(items: PlanItemView[], dataset: DatasetSpec, surveyVersion: string | null, analyses: readonly Pick<SavedAnalysisRow, "id" | "definition">[] = []): AnalysisSync[] {
+  const byId = new Map(analyses.map((a) => [a.id, a.definition]));
   return items.map((item): AnalysisSync => {
     if (item.state === "invalid") return { kind: "skip", item, reason: item.issues[0]?.message ?? "cannot run" };
     const definition = stampedDefinition(item, dataset, surveyVersion);
     if (!item.analysis) return { kind: "create", item, definition, tags: item.hypotheses };
-    if (item.state === "stale") return { kind: "update", item, analysisId: item.analysis.id, definition, tags: item.hypotheses, summary: "Updated from the analysis plan" };
+    const saved = byId.get(item.analysis.id);
+    const moved = saved && !sameDataset(saved.dataset, dataset) ? saved.dataset : undefined;
+    if (item.state === "stale") {
+      const merged = saved ? mergePlanUpdate(saved, definition) : definition;
+      return { kind: "update", item, analysisId: item.analysis.id, definition: merged, tags: item.hypotheses, summary: `Updated from the analysis plan${saved ? "; your filter, weighting and other refinements were kept" : ""}${moved ? `; now reads ${datasetWords(dataset)} (was ${datasetWords(moved)})` : ""}`, ...(moved ? { repointedFrom: moved } : {}) };
+    }
+    if (moved && saved) return { kind: "update", item, analysisId: item.analysis.id, definition: { ...saved, dataset, ...(surveyVersion ? { surveyVersion } : {}) }, tags: item.hypotheses, summary: `Re-pointed from ${datasetWords(moved)} to ${datasetWords(dataset)} by applying the analysis plan`, repointedFrom: moved };
     return { kind: "keep", item, analysisId: item.analysis.id, refined: item.state === "refined" };
   });
+}
+
+/* ------------------------------------------------------------ links that moved (audit P-1) */
+
+/** what an analysis computes, without the id it is linked by or anything the researcher layers on */
+const coreSignature = (d: AnalysisDefinition): string => {
+  const o = d.options ?? {};
+  const symmetric = d.kind === "correlation" || (d.kind === "test" && o.test === "chi_square");
+  const vars = d.kind === "crosstab" ? `${[...(d.rows ?? [])].sort()}>${[...(d.columns ?? [])].sort()}` : (symmetric ? [...(d.variables ?? [])].sort() : d.variables ?? []).join(",");
+  return [d.kind, vars, d.kind === "crosstab" ? d.measure ?? "pct_col" : "", o.test ?? "", o.model ?? "", o.method ?? "", o.moderation ? "mod" : ""].join("|");
+};
+
+export interface PlanRelink { analysisId: string; name: string; from: string; to: string }
+
+/**
+ * SAVED ANALYSES WHOSE PLAN ITEM IS NOT THE ONE THEIR ID NAMES. Plan ids used
+ * to be counters, so after the survey grew an id could name a different item
+ * than the analysis saved under it was written for — and the next apply would
+ * overwrite that analysis with the other item's definition. For each saved
+ * planned analysis whose item computes something else: if exactly one OTHER
+ * item computes what it does (and has no analysis of its own), it is
+ * re-linked to that item. When no item matches, the plan was edited (not
+ * shifted) and the ordinary update from the plan applies.
+ */
+export function planRelinks(items: readonly PlanItemView[], analyses: readonly SavedAnalysisRow[]): PlanRelink[] {
+  const byId = new Map(items.map((i) => [i.id, i]));
+  const linked = new Set<string>();
+  for (const a of analyses) { const p = plannedIdOf(a.definition); const it = p ? byId.get(p) : undefined; if (it && coreSignature(it.derived) === coreSignature(a.definition)) linked.add(it.id); }
+  const out: PlanRelink[] = [];
+  const taken = new Set<string>();
+  for (const a of analyses) {
+    const p = plannedIdOf(a.definition); if (!p) continue;
+    const it = byId.get(p);
+    if (it && coreSignature(it.derived) === coreSignature(a.definition)) continue;
+    const sig = coreSignature(a.definition);
+    const candidates = items.filter((i) => i.id !== p && !linked.has(i.id) && !taken.has(i.id) && coreSignature(i.derived) === sig);
+    if (candidates.length === 1) { taken.add(candidates[0].id); out.push({ analysisId: a.id, name: a.name, from: p, to: candidates[0].id }); }
+  }
+  return out;
+}
+
+/** the definition after a relink: linked to its right item, stamped as written from it */
+export function relinkedDefinition(def: AnalysisDefinition, to: { id: string; hash: string }): AnalysisDefinition {
+  const { planned: _p, plannedHash: _h, ...rest } = (def.options ?? {}) as Record<string, unknown>;
+  void _p; void _h;
+  return { ...def, options: { ...rest, planned: to.id, plannedHash: to.hash } };
 }
 
 /** the chart the apply keeps for an item: one per planned id, typed as the run recommends, never restyled once the researcher customised it */
@@ -401,17 +496,20 @@ export interface ApplySummary {
   n: number;
   environment: DatasetSpec["environment"];
   items: ApplyItemResult[];
-  counts: { created: number; updated: number; unchanged: number; keptRefined: number; skipped: number; run: number; failed: number; charts: number };
+  counts: { created: number; updated: number; repointed: number; unchanged: number; keptRefined: number; skipped: number; run: number; failed: number; charts: number };
   message: string;
 }
 
-export function summarizeApply(env: DatasetSpec["environment"], n: number, items: ApplyItemResult[], extra: { charts: number; planned: number }): ApplySummary {
+export function summarizeApply(env: DatasetSpec["environment"], n: number, items: ApplyItemResult[], extra: { charts: number; planned: number; relinked?: number; adopted?: number }): ApplySummary {
   const sync = (s: ApplySyncStatus) => items.filter((i) => i.sync === s).length;
   const count = (s: ApplyItemStatus) => items.filter((i) => i.status === s).length;
-  const counts = { created: sync("created"), updated: sync("updated"), unchanged: sync("unchanged"), keptRefined: sync("kept_refined"), skipped: sync("skipped_invalid"), run: count("run"), failed: count("failed"), charts: extra.charts };
+  const counts = { created: sync("created"), updated: sync("updated"), repointed: sync("repointed"), unchanged: sync("unchanged"), keptRefined: sync("kept_refined"), skipped: sync("skipped_invalid"), run: count("run"), failed: count("failed"), charts: extra.charts };
   const words: string[] = [];
   if (counts.created) words.push(`${counts.created} created`);
   if (counts.updated) words.push(`${counts.updated} updated from the plan`);
+  if (counts.repointed) words.push(`${counts.repointed} moved to ${env === "ALL" ? "all responses" : env.toLowerCase()} data`);
+  if (extra.relinked) words.push(`${extra.relinked} re-linked to the plan item they were written for`);
+  if (extra.adopted) words.push(`${extra.adopted} use${extra.adopted === 1 ? "s" : ""} an analysis you already had`);
   if (counts.keptRefined) words.push(`${counts.keptRefined} kept as refined in Analytics`);
   if (counts.skipped) words.push(`${counts.skipped} skipped (invalid)`);
   if (counts.failed) words.push(`${counts.failed} failed to compute`);

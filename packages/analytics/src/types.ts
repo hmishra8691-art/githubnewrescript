@@ -166,6 +166,29 @@ export interface ChartData {
   valueFormat?: "pct" | "number" | "score";
 }
 
+/**
+ * WHERE A NUMBER CAME FROM. Every result carries the analysis exactly as it was run, the dataset and data version it
+ * was run on, the engine version, and a hash of those inputs: two results with the same `inputHash` are the same
+ * numbers (so an unchanged one can be served from a cache), and a report can tell whether what it shows still matches
+ * what the analysis would compute now.
+ */
+export interface ResultProvenance {
+  /** the analysis as run, keys sorted */
+  definition: AnalysisDefinition;
+  definitionHash: string;
+  dataset: DatasetSpec;
+  /** what the data was: the loader's stamp (response count and newest change); null when the caller gave none */
+  dataVersion: string | null;
+  /** the questionnaire version or draft revision the responses were read through; null when not given */
+  surveyVersion: string | null;
+  /** which version of the computations produced it (`ANALYTICS_ENGINE_VERSION`) */
+  engineVersion: string;
+  /** hash of definition + dataset + data + questionnaire + engine: equal inputs, equal hash */
+  inputHash: string;
+  computedAt: string;
+  durationMs: number;
+}
+
 export interface AnalysisResult {
   kind: AnalysisKind;
   name: string;
@@ -182,6 +205,8 @@ export interface AnalysisResult {
   computedAt: string;
   definitionHash: string;
   variablesUsed: string[];
+  /** what this result was computed from, and how long it took (audit S-14) — set by `runAnalysis` */
+  provenance?: ResultProvenance;
   /** set when the analysis could not be computed at all — a stable code and a sentence a researcher can act on, never a raw exception */
   error?: { code: "unknown_kind" | "not_computable" | "no_data"; message: string };
 }

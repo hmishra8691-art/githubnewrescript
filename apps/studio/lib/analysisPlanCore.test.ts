@@ -288,3 +288,101 @@ test("without migration 0050 the apply still produces the outputs and says the r
   const p2 = await planPayload(db.as(), SURVEY, ctxOf(db), LIVE, deps());
   assert.equal(p2.dataChangedSinceApply, true);
 });
+
+/* ------------------------------------------------------------ Phase 1: one path, nothing a researcher did is lost, nothing mislinked */
+
+import { ensurePlannedAnalyses, syncPlannedAnalyses } from "./analysisPlanCore.ts";
+const rowsOf = (db: FakeDb) => db.tables.analytics_analyses as Row[];
+const defOf = (r: Row) => r.definition as AnalysisDefinition;
+import type { AnalysisDefinition } from "@rescript/analytics";
+const editPlanDef = (db: FakeDb, edit: (plan: { crosstabs: Row[]; tests: Row[] }) => void) => { const s = db.tables.surveys[0]; edit((s.draft_definition as { research: { analysisPlan: { crosstabs: Row[]; tests: Row[] } } }).research.analysisPlan); s.revision = Number(s.revision) + 1; };
+
+test("P-13: 'create the planned analyses' and 'apply the plan' follow one path — doing both makes the analyses once and the apply finds them unchanged", async () => {
+  const db = setup();
+  const e = await ensurePlannedAnalyses(db.as(), SURVEY, ctxOf(db), LIVE, "u1");
+  assert.equal(e.created.length, 3); assert.equal(e.planned, 4);
+  assert.deepEqual(e.blocked.map((b) => b.reason.includes("GONE")), [true], "the invalid item is refused with its reason, by the same validator the apply uses");
+  assert.deepEqual([...e.byPlanned.keys()].sort(), ["t_1", "t_2", "xt_1"]);
+  const again = await ensurePlannedAnalyses(db.as(), SURVEY, ctxOf(db), LIVE, "u1");
+  assert.equal(again.created.length, 0, "never created twice"); assert.equal(rowsOf(db).length, 3);
+  const r = await applyPlan(db.as(), SURVEY, ctxOf(db), { dataset: LIVE, userId: "u1" }, deps());
+  assert.equal(r.ok, true, r.error);
+  assert.deepEqual(r.summary!.items.map((i) => i.sync), ["unchanged", "skipped_invalid", "unchanged", "unchanged"]);
+  assert.equal(rowsOf(db).length, 3, "the apply made no second copy");
+});
+
+test("P-4: an analysis you built by hand is used, not duplicated — but a weighted one is not mistaken for the plan's unweighted table", async () => {
+  const db = setup();
+  const planned = plannedAnalyses(ctxOf(db).def, LIVE).find((p) => p.definition.options?.planned === "xt_1")!.definition;
+  const { planned: _p, hypotheses: _h, ...opts } = planned.options as Record<string, unknown>; void _p; void _h;
+  const mine = { id: uuid(), survey_id: SURVEY, name: "My intent by country", kind: "crosstab", version: 1, deleted_at: null, folder: null, definition: { ...planned, name: "My intent by country", options: opts } };
+  db.tables.analytics_analyses.push(mine);
+  const r = await applyPlan(db.as(), SURVEY, ctxOf(db), { dataset: LIVE, userId: "u1" }, deps());
+  assert.equal(r.ok, true, r.error);
+  assert.equal(rowsOf(db).length, 3, "the plan made analyses for t_1 and t_2 only; xt_1 uses yours");
+  assert.equal(r.summary!.items[0].analysisId, mine.id); assert.match(r.summary!.message, /1 uses an analysis you already had/);
+  /* the same table weighted is a different analysis */
+  const db2 = setup();
+  db2.tables.analytics_analyses.push({ ...mine, id: uuid(), definition: { ...mine.definition, weighting: { variable: "WGT" } } });
+  await applyPlan(db2.as(), SURVEY, ctxOf(db2), { dataset: LIVE, userId: "u1" }, deps());
+  assert.equal(rowsOf(db2).length, 4, "the plan still made its own unweighted xt_1");
+});
+
+test("P-2: applying a changed plan keeps the researcher's filter, weighting and options on the analysis", async () => {
+  const db = setup();
+  await applyPlan(db.as(), SURVEY, ctxOf(db), { dataset: LIVE, userId: "u1" }, deps());
+  const row = rowsOf(db).find((r) => defOf(r).options?.planned === "xt_1")!;
+  const mineFilter = { type: "rule", source: { kind: "variable", ref: "COUNTRY" }, operator: "eq", value: 1 };
+  row.definition = { ...defOf(row), filter: mineFilter, weighting: { variable: "WGT" }, options: { ...defOf(row).options, decimals: 2 } }; row.version = 2;
+  editPlanDef(db, (plan) => { plan.crosstabs[0].reason = "intent by country, revised"; });
+  const r = await applyPlan(db.as(), SURVEY, ctxOf(db), { dataset: LIVE, userId: "u1" }, deps());
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.summary!.items[0].sync, "updated");
+  const d = defOf(rowsOf(db).find((x) => x.id === row.id)!);
+  assert.equal(d.name, "intent by country, revised"); assert.deepEqual(d.filter, mineFilter); assert.deepEqual(d.weighting, { variable: "WGT" }); assert.equal(d.options?.decimals, 2);
+  assert.equal(rowsOf(db).find((x) => x.id === row.id)!.version, 3);
+});
+
+test("P-5: applying on another environment re-points the saved analyses and says so", async () => {
+  const db = setup();
+  await applyPlan(db.as(), SURVEY, ctxOf(db), { dataset: LIVE, userId: "u1" }, deps());
+  assert.ok(rowsOf(db).every((r) => defOf(r).dataset.environment === "LIVE"));
+  const TEST: DatasetSpec = { environment: "TEST", dataset: "all" };
+  const r = await applyPlan(db.as(), SURVEY, ctxOf(db), { dataset: TEST, userId: "u1" }, deps());
+  assert.equal(r.ok, true, r.error);
+  assert.ok(rowsOf(db).every((x) => defOf(x).dataset.environment === "TEST"), "every saved analysis now reads the dataset the apply ran on");
+  assert.deepEqual(r.summary!.items.map((i) => i.sync), ["repointed", "skipped_invalid", "repointed", "repointed"]);
+  assert.equal(r.summary!.counts.repointed, 3); assert.match(r.summary!.message, /3 moved to test data/);
+  assert.equal(rowsOf(db).length, 3);
+});
+
+test("P-1: when plan ids shift, saved analyses are re-linked to the item they were written for instead of being overwritten", async () => {
+  const db = setup();
+  await applyPlan(db.as(), SURVEY, ctxOf(db), { dataset: LIVE, userId: "u1" }, deps());
+  const t1 = rowsOf(db).find((r) => defOf(r).options?.planned === "t_1")!, t2 = rowsOf(db).find((r) => defOf(r).options?.planned === "t_2")!;
+  assert.equal(defOf(t1).kind, "test"); assert.equal(defOf(t2).kind, "correlation");
+  /* the old generator renumbered: the t-test is now t_2 and the correlation t_1 */
+  editPlanDef(db, (plan) => { const [a, b] = plan.tests; a.id = "t_2"; b.id = "t_1"; });
+  const out = await syncPlannedAnalyses(db.as(), SURVEY, ctxOf(db), LIVE, "u1");
+  assert.equal(out.relinked, 2);
+  assert.equal(defOf(rowsOf(db).find((r) => r.id === t1.id)!).kind, "test", "the t-test analysis is still a t-test");
+  assert.equal(defOf(rowsOf(db).find((r) => r.id === t1.id)!).options?.planned, "t_2");
+  assert.equal(defOf(rowsOf(db).find((r) => r.id === t2.id)!).kind, "correlation");
+  assert.equal(defOf(rowsOf(db).find((r) => r.id === t2.id)!).options?.planned, "t_1");
+  assert.deepEqual([...out.results.values()].map((r) => r.sync), ["unchanged", "skipped_invalid", "unchanged", "unchanged"]);
+  assert.equal(rowsOf(db).length, 3);
+});
+
+test("P-13: a planned chi-square next to the crosstab that reports it is still its own analysis (it carries its hypothesis); an exact repeat shares one", async () => {
+  const db = setup();
+  editPlanDef(db, (plan) => {
+    plan.crosstabs.push({ id: "xt_9", rows: ["PURCHASE_INT"], columns: ["COUNTRY"], priority: 3, hypotheses: [], reason: "same table again" });
+    plan.tests.push({ id: "t_9", method: "chi_square", outcome: "PURCHASE_INT", variables: ["COUNTRY"], priority: 2, hypotheses: ["H2"] });
+  });
+  const r = await applyPlan(db.as(), SURVEY, ctxOf(db), { dataset: LIVE, userId: "u1" }, deps());
+  assert.equal(r.ok, true, r.error);
+  const by = new Map(r.summary!.items.map((i) => [i.id, i]));
+  assert.equal(by.get("t_9")!.sync, "created", "the chi-square is not dropped for being in the crosstab: its hypothesis needs it");
+  assert.equal(by.get("xt_9")!.sync, "unchanged"); assert.equal(by.get("xt_9")!.analysisId, by.get("xt_1")!.analysisId, "an exact repeat of xt_1 shares its analysis");
+  assert.equal(rowsOf(db).length, 4);
+});

@@ -214,6 +214,53 @@ export function hypothesisCoverage(def: SurveyDefinition): HypothesisCoverage[] 
 /* ------------------------------------------------------------ the plan */
 
 function uniq<T>(xs: T[]): T[] { return [...new Set(xs)]; }
+
+/* ------------------------------------------------------------ stable ids (audit P-1) */
+
+/**
+ * WHAT A PLANNED ITEM IS, as a string: the same content always gives the same
+ * key, whatever order the variables were listed in. The key is the identity
+ * the plan dedupes by and the id is derived from — never a counter, because a
+ * counter names whatever happens to be generated Nth, and every saved analysis
+ * is linked to its plan item by that id (`options.planned`).
+ */
+export const crosstabKey = (x: Pick<PlannedCrosstab, "rows" | "columns">): string => `xt|${[...x.rows].sort().join(",")}|${[...x.columns].sort().join(",")}`;
+export const testKey = (t: Pick<PlannedTest, "method" | "outcome" | "groupBy" | "variables" | "moderator" | "mediator">): string => `t|${t.method}|${t.outcome ?? ""}|${t.groupBy ?? ""}|${[...t.variables].sort().join(",")}|${t.moderator ?? ""}|${t.mediator ?? ""}`;
+
+function fnv32(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(16).padStart(8, "0");
+}
+
+/** the id an item gets when it has none: its prefix and a hash of its key — the same item, the same id, in any survey state */
+export const contentPlanId = (prefix: "xt" | "t", key: string): string => `${prefix}_${fnv32(key)}`;
+
+/**
+ * Give every item of a freshly built plan its stable id. An item that is in
+ * `previous` (same key) KEEPS the id it had, so regenerating a saved plan
+ * never moves the link between a plan item and the analysis saved from it; a
+ * new item gets a content-derived id; two items with the same key (which the
+ * plan should not hold) are told apart by a suffix rather than sharing one.
+ */
+export function stablePlanIds(plan: AnalysisPlan, previous?: AnalysisPlan | null): AnalysisPlan {
+  const prevX = new Map((previous?.crosstabs ?? []).map((x) => [crosstabKey(x), x.id]));
+  const prevT = new Map((previous?.tests ?? []).map((t) => [testKey(t), t.id]));
+  const used = new Set<string>();
+  const take = (want: string): string => { let id = want, n = 1; while (used.has(id)) id = `${want}_${++n}`; used.add(id); return id; };
+  for (const x of plan.crosstabs) { const k = crosstabKey(x); x.id = take(prevX.get(k) ?? contentPlanId("xt", k)); }
+  for (const t of plan.tests) { const k = testKey(t); t.id = take(prevT.get(k) ?? contentPlanId("t", k)); }
+  return plan;
+}
+
+/** an id for `item` that no other item of the plan has: its own when free, otherwise the content id, otherwise suffixed */
+export function freePlanId(plan: AnalysisPlan, item: PlannedCrosstab | PlannedTest): string {
+  const taken = new Set([...plan.crosstabs, ...plan.tests].filter((x) => x !== item).map((x) => x.id));
+  if (item.id && !taken.has(item.id)) return item.id;
+  const want = "rows" in item ? contentPlanId("xt", crosstabKey(item)) : contentPlanId("t", testKey(item));
+  let id = want, n = 1; while (taken.has(id)) id = `${want}_${++n}`;
+  return id;
+}
 const by = (q: Question) => q.variableName;
 
 /**
@@ -236,7 +283,7 @@ const by = (q: Question) => q.variableName;
  *               ordinal outcome
  *   segments    one per segmentation variable
  */
-export function buildAnalysisFramework(def: SurveyDefinition, opts: { now?: string } = {}): AnalysisPlan {
+export function buildAnalysisFramework(def: SurveyDefinition, opts: { now?: string; /** the plan being replaced: items it already has keep their ids */ previous?: AnalysisPlan | null } = {}): AnalysisPlan {
   const asked = def.questions.filter((q) => !NOT_ASKED.has(q.type));
   const info = new Map(asked.map((q) => [q.id, inferQuestionAnalysis(def, q)]));
   const role = (q: Question) => info.get(q.id)!.role;
@@ -250,6 +297,7 @@ export function buildAnalysisFramework(def: SurveyDefinition, opts: { now?: stri
   const crosstabs: PlannedCrosstab[] = [];
   const tests: PlannedTest[] = [];
   const derived: PlannedDerived[] = [];
+  /* placeholders: stablePlanIds replaces every id with the item's content id (or the id it had in the plan it replaces) */
   let n = 0;
   const id = (p: string) => `${p}_${++n}`;
   /*
@@ -367,7 +415,7 @@ export function buildAnalysisFramework(def: SurveyDefinition, opts: { now?: stri
   }
 
   const segs: PlannedSegment[] = segments.map((s) => ({ name: stripHtmlText(s.text).slice(0, 60) || s.variableName, by: [by(s)] }));
-  return { crosstabs, tests, derived, segments: segs, source: "engine", updatedAt: opts.now ?? new Date().toISOString() };
+  return stablePlanIds({ crosstabs, tests, derived, segments: segs, source: "engine", updatedAt: opts.now ?? new Date().toISOString() }, opts.previous);
 }
 
 /** The plan's crosstabs by importance: the more hypotheses a table serves the higher, then by priority, then the wider banner. */

@@ -4,6 +4,7 @@ import { SurveyDefinition as SurveyDefinitionSchema } from "@rescript/schema";
 import { applySurveyActions, coerceSurveyActions, droppedFieldPaths, ensureElementIds, hypothesisCoverage, isAnalysisOp, type SurveyAction } from "@rescript/engine";
 import {
   variableMetadata, reportFromRun, planItemViews, planVariableViews, planOverview, planAnalysisSync, planChartSync, planChartSpec, planDashboard, stampedDefinition, summarizeApply, withOrigin, editedSinceApply, plannedIdOf,
+  planRelinks, relinkedDefinition, analysisSignature, surveyKnownNames, plannedAnalyses, reviewAgainstSaved,
   type AnalysisDefinition, type ChartSpec, type DashboardDefinition, type DatasetSpec, type ReportDefinition, type PlanItemView, type ApplyItemResult, type ApplySummary, type SavedAnalysisRow, type SavedChartRow, type StoredRunLike, type HypothesisVerdict,
 } from "@rescript/analytics";
 import type { LoadedContext, StoredRun } from "./analytics";
@@ -202,6 +203,143 @@ export async function editPlan(db: SupabaseClient, surveyId: string, ctx: Loaded
 
 /* ------------------------------------------------------------ applying */
 
+/* ------------------------------------------------------------ the plan's saved analyses: ONE path (audit P-13) */
+
+export interface SyncOutcome {
+  items: PlanItemView[];
+  results: Map<string, ApplyItemResult>;
+  /** plan item id → the saved analysis that stands for it (its own, or one the researcher already had that computes the same) */
+  idFor: Map<string, string>;
+  created: Record<string, unknown>[];
+  relinked: number;
+  adopted: number;
+  /** items not saved because another item, or an analysis the researcher already has, computes the same */
+  duplicates: { name: string; reason: string; duplicateOf?: string }[];
+}
+
+/**
+ * THE ONE WAY A PLAN BECOMES SAVED ANALYSES. "Apply the plan" and "Create the
+ * planned analyses" (and the findings report's own save) used to follow
+ * different rules — one updated and kept refinements, the other re-pointed only
+ * untouched analyses and checked for repeats; each had its own validator. Both
+ * now come through here:
+ *
+ *   1. analyses whose plan id names another item are re-linked (planRelinks)
+ *   2. each item is created, updated (plan's part only), re-pointed at the
+ *      dataset being run, kept, or skipped as invalid (planAnalysisSync)
+ *   3. a new analysis that repeats another planned item exactly, or one the researcher
+ *      built by hand, is not saved twice: the item uses the one that exists
+ */
+export async function syncPlannedAnalyses(db: SupabaseClient, surveyId: string, ctx: LoadedContext, dataset: DatasetSpec, userId: string | null): Promise<SyncOutcome> {
+  const def = ctx.def as SurveyDefinition;
+  const plan = def.research?.analysisPlan;
+  const dictionary = variableMetadata(def).filter((v) => !v.hidden);
+  const view = (rows: { analyses: SavedAnalysisRow[]; charts: SavedChartRow[] }) => (plan ? planItemViews(def, dataset, { dictionary, analyses: rows.analyses, charts: rows.charts, run: null, plan }) : []);
+  let rows = await loadRows(db, surveyId);
+  let items = view(rows);
+  const results = new Map<string, ApplyItemResult>();
+  const idFor = new Map<string, string>();
+  const created: Record<string, unknown>[] = [];
+  const duplicates: SyncOutcome["duplicates"] = [];
+
+  /* 1. links that moved */
+  let relinked = 0;
+  for (const l of planRelinks(items, rows.analyses)) {
+    const row = rows.analyses.find((a) => a.id === l.analysisId)!; const to = items.find((i) => i.id === l.to)!;
+    const definition = relinkedDefinition(row.definition, { id: to.id, hash: to.hash });
+    const version = (row.version ?? 1) + 1;
+    const { error } = await db.from("analytics_analyses").update({ definition, version, updated_by: userId }).eq("id", row.id).eq("survey_id", surveyId);
+    if (error) continue;
+    await db.from("analytics_analysis_versions").insert({ analysis_id: row.id, survey_id: surveyId, version, definition, summary: `Re-linked from plan item ${l.from} to ${l.to}: the id had come to name a different item`, created_by: userId });
+    relinked++;
+  }
+  if (relinked) { rows = await loadRows(db, surveyId); items = view(rows); }
+
+  /* 2. what each item needs */
+  const syncs = planAnalysisSync(items, dataset, ctx.version ?? null, rows.analyses);
+
+  /*
+   * 3. A NEW ANALYSIS IS NOT A REPEAT. Two plan items that compute exactly the same, or an item that computes exactly what
+   * an analysis the researcher built by hand already does, share one saved analysis: the item still has its chart,
+   * its place on the dashboard and its hypothesis, and nothing is computed or saved twice. ("Exactly" is the signature:
+   * weighting, filters, layers and dataset included — a weighted table is not the unweighted one.)
+   */
+  const bySignature = new Map<string, { id: string; name: string }>();
+  for (const r of rows.analyses) if (!plannedIdOf(r.definition)) { const sig = analysisSignature(r.definition); if (!bySignature.has(sig)) bySignature.set(sig, { id: r.id, name: r.name }); }
+  const planned = new Map<string, { id: string; name: string }>();
+
+  for (const s of syncs) {
+    const it = s.item;
+    /* `status` is what happens on the data, decided later; until then every configured item is waiting */
+    if (s.kind === "skip") { results.set(it.id, { id: it.id, title: it.title, sync: "skipped_invalid", status: "skipped", reason: s.reason, ...(it.analysis ? { analysisId: it.analysis.id } : {}) }); continue; }
+    if (s.kind === "keep") { idFor.set(it.id, s.analysisId); results.set(it.id, { id: it.id, title: it.title, sync: s.refined ? "kept_refined" : "unchanged", status: "pending_data", analysisId: s.analysisId }); if (it.analysis) planned.set(analysisSignature(rows.analyses.find((r) => r.id === s.analysisId)?.definition ?? it.derived), { id: s.analysisId, name: it.analysis.name }); continue; }
+    if (s.kind === "create") {
+      const sig = analysisSignature(s.definition);
+      const same = planned.get(sig) ?? bySignature.get(sig);
+      if (same) {
+        duplicates.push({ name: it.title, reason: planned.has(sig) ? "It computes exactly what another planned analysis already does." : "You already have an analysis that computes this.", duplicateOf: same.name });
+        idFor.set(it.id, same.id); results.set(it.id, { id: it.id, title: it.title, sync: "unchanged", status: "pending_data", analysisId: same.id, reason: `Uses “${same.name}”, which computes the same.` });
+        continue;
+      }
+      const row = { survey_id: surveyId, name: s.definition.name, kind: s.definition.kind, definition: s.definition, version: 1, folder: "Planned", tags: s.tags, created_by: userId, updated_by: userId };
+      const { data, error } = await db.from("analytics_analyses").insert(row).select("*").single();
+      if (error || !data) { results.set(it.id, { id: it.id, title: it.title, sync: "skipped_invalid", status: "failed", reason: `The analysis could not be saved: ${error?.message ?? "not saved"}` }); continue; }
+      await db.from("analytics_analysis_versions").insert({ analysis_id: data.id, survey_id: surveyId, version: 1, definition: s.definition, summary: `Created by applying the analysis plan${it.reason ? `: ${it.reason}` : ""}`, created_by: userId });
+      created.push(data as Record<string, unknown>);
+      planned.set(sig, { id: String(data.id), name: s.definition.name });
+      idFor.set(it.id, String(data.id)); results.set(it.id, { id: it.id, title: it.title, sync: "created", status: "pending_data", analysisId: String(data.id) });
+      continue;
+    }
+    /* update: a new version of the same analysis — the plan's part from the plan, the researcher's part kept, the dataset the apply runs on */
+    const version = (it.analysis?.version ?? 1) + 1;
+    const { error } = await db.from("analytics_analyses").update({ name: s.definition.name, kind: s.definition.kind, definition: s.definition, version, tags: s.tags, updated_by: userId }).eq("id", s.analysisId).eq("survey_id", surveyId);
+    if (error) { results.set(it.id, { id: it.id, title: it.title, sync: "unchanged", status: "failed", reason: `The analysis could not be updated: ${error.message}`, analysisId: s.analysisId }); continue; }
+    await db.from("analytics_analysis_versions").insert({ analysis_id: s.analysisId, survey_id: surveyId, version, definition: s.definition, summary: s.summary, created_by: userId });
+    idFor.set(it.id, s.analysisId); planned.set(analysisSignature(s.definition), { id: s.analysisId, name: s.definition.name });
+    const repointedOnly = !!s.repointedFrom && it.state !== "stale";
+    results.set(it.id, { id: it.id, title: it.title, sync: repointedOnly ? "repointed" : "updated", status: "pending_data", analysisId: s.analysisId, ...(s.repointedFrom ? { reason: s.summary } : {}) });
+  }
+  return { items, results, idFor, created, relinked, adopted: [...results.values()].filter((r) => r.reason?.startsWith("Uses “")).length, duplicates };
+}
+
+/**
+ * The plan's saved analyses for a caller that wants them without a run: "Create the planned analyses" and the findings
+ * report. The plan's crosstabs and tests go through `syncPlannedAnalyses` — the same rules as the apply. Anything else in
+ * `extra` (the per-question primary analyses, which are not plan items) is created once if it is not there.
+ */
+export async function ensurePlannedAnalyses(db: SupabaseClient, surveyId: string, ctx: LoadedContext, dataset: DatasetSpec, userId: string | null, opts: { primaries?: boolean } = {}): Promise<{ created: Record<string, unknown>[]; skipped: number; byPlanned: Map<string, string>; error?: string; blocked: { name: string; reason: string }[]; duplicates: SyncOutcome["duplicates"]; planned: number }> {
+  const def = ctx.def as SurveyDefinition;
+  const sync = await syncPlannedAnalyses(db, surveyId, ctx, dataset, userId);
+  const byPlanned = new Map(sync.idFor);
+  const blocked = [...sync.results.values()].filter((r) => r.sync === "skipped_invalid" && r.status === "skipped" && sync.items.find((i) => i.id === r.id)?.state === "invalid").map((r) => ({ name: r.title, reason: r.reason ?? "cannot run" }));
+  const failed = [...sync.results.values()].find((r) => r.status === "failed");
+  const created = [...sync.created];
+  let skipped = [...sync.results.values()].filter((r) => r.sync === "unchanged" || r.sync === "kept_refined" || r.sync === "updated" || r.sync === "repointed").length;
+  let planned = sync.items.length;
+  let firstError: string | undefined;
+  /* the primary analyses are not plan items: created once, by their own planned id */
+  if (opts.primaries) {
+    const extra = plannedAnalyses(def, dataset, { primaries: true }).filter((p) => String(p.definition.options?.planned ?? "").startsWith("primary:"));
+    planned += extra.length;
+    const rows = await loadRows(db, surveyId);
+    const vmeta = variableMetadata(def);
+    const review = reviewAgainstSaved(extra, vmeta, surveyKnownNames(def, vmeta), rows.analyses.map((r) => ({ id: r.id, name: r.name, definition: r.definition })));
+    for (const [pid, id] of review.existingFor) if (!byPlanned.has(pid)) byPlanned.set(pid, id);
+    blocked.push(...review.blocked); sync.duplicates.push(...review.duplicates);
+    for (const it of review.toCreate) {
+      const pid = String(it.definition.options?.planned ?? "");
+      if (byPlanned.has(pid)) { skipped++; continue; }
+      const name = it.definition.name.slice(0, 160);
+      const definition: AnalysisDefinition = { ...it.definition, name, surveyVersion: ctx.version ?? undefined };
+      const { data, error } = await db.from("analytics_analyses").insert({ survey_id: surveyId, name, kind: it.definition.kind, definition, version: 1, folder: "Planned", tags: it.hypotheses, created_by: userId, updated_by: userId }).select("*").single();
+      if (error || !data) { firstError ??= `The analysis “${name}” could not be saved: ${error?.message ?? "not saved"}`; continue; }
+      await db.from("analytics_analysis_versions").insert({ analysis_id: data.id, survey_id: surveyId, version: 1, definition, summary: `Created from the analysis plan${it.reason ? `: ${it.reason}` : ""}`, created_by: userId });
+      byPlanned.set(pid, String(data.id)); created.push(data as Record<string, unknown>);
+    }
+  }
+  return { created, skipped, byPlanned, blocked, duplicates: sync.duplicates, planned, ...((failed?.reason ?? firstError) ? { error: (failed?.reason ?? firstError) as string } : {}) };
+}
+
 export interface ApplyPlanInput { dataset: DatasetSpec; userId: string | null; /** regenerate the findings report even when it was edited by hand */ replaceReport?: boolean }
 export interface ApplyPlanOutcome {
   ok: boolean; status: number; error?: string;
@@ -228,33 +366,9 @@ export async function applyPlan(db: SupabaseClient, surveyId: string, ctx: Loade
   const finish = async (patch: Record<string, unknown>) => { if (lock.id) await db.from("analytics_plan_applies").update({ ...patch, finished_at: new Date().toISOString() }).eq("id", lock.id); };
 
   try {
-    const dictionary = variableMetadata(def).filter((v) => !v.hidden);
-    const rows = await loadRows(db, surveyId);
-    const items = planItemViews(def, dataset, { dictionary, analyses: rows.analyses, charts: rows.charts, run: null, plan });
-    const results = new Map<string, ApplyItemResult>();
-    const idFor = new Map<string, string>();
-
-    /* 1. the saved analyses — created once, updated when the plan moved, kept when refined, skipped when invalid */
-    for (const s of planAnalysisSync(items, dataset, ctx.version ?? null)) {
-      const it = s.item;
-      /* `status` is what happens on the data, decided below; until then every configured item is waiting */
-      if (s.kind === "skip") { results.set(it.id, { id: it.id, title: it.title, sync: "skipped_invalid", status: "skipped", reason: s.reason, ...(it.analysis ? { analysisId: it.analysis.id } : {}) }); continue; }
-      if (s.kind === "keep") { idFor.set(it.id, s.analysisId); results.set(it.id, { id: it.id, title: it.title, sync: s.refined ? "kept_refined" : "unchanged", status: "pending_data", analysisId: s.analysisId }); continue; }
-      if (s.kind === "create") {
-        const row = { survey_id: surveyId, name: s.definition.name, kind: s.definition.kind, definition: s.definition, version: 1, folder: "Planned", tags: s.tags, created_by: input.userId, updated_by: input.userId };
-        const { data, error } = await db.from("analytics_analyses").insert(row).select("id").single();
-        if (error || !data) { results.set(it.id, { id: it.id, title: it.title, sync: "skipped_invalid", status: "failed", reason: `The analysis could not be saved: ${error?.message ?? "not saved"}` }); continue; }
-        await db.from("analytics_analysis_versions").insert({ analysis_id: data.id, survey_id: surveyId, version: 1, definition: s.definition, summary: `Created by applying the analysis plan${it.reason ? `: ${it.reason}` : ""}`, created_by: input.userId });
-        idFor.set(it.id, String(data.id)); results.set(it.id, { id: it.id, title: it.title, sync: "created", status: "pending_data", analysisId: String(data.id) });
-        continue;
-      }
-      /* update: a new version of the same analysis, from the plan */
-      const version = (it.analysis?.version ?? 1) + 1;
-      const { error } = await db.from("analytics_analyses").update({ name: s.definition.name, kind: s.definition.kind, definition: s.definition, version, tags: s.tags, updated_by: input.userId }).eq("id", s.analysisId).eq("survey_id", surveyId);
-      if (error) { results.set(it.id, { id: it.id, title: it.title, sync: "unchanged", status: "failed", reason: `The analysis could not be updated: ${error.message}`, analysisId: s.analysisId }); continue; }
-      await db.from("analytics_analysis_versions").insert({ analysis_id: s.analysisId, survey_id: surveyId, version, definition: s.definition, summary: s.summary, created_by: input.userId });
-      idFor.set(it.id, s.analysisId); results.set(it.id, { id: it.id, title: it.title, sync: "updated", status: "pending_data", analysisId: s.analysisId });
-    }
+    /* 1. the saved analyses — the one path every caller uses: re-linked when an id moved, created once, updated (the plan's part only) when the plan moved, re-pointed at this dataset, kept when refined, skipped when invalid */
+    const sync = await syncPlannedAnalyses(db, surveyId, ctx, dataset, input.userId);
+    const { items, results, idFor } = sync;
 
     /* 2. the data: is there anything to run on? */
     const counts = await completeCounts(db, surveyId);
@@ -332,7 +446,7 @@ export async function applyPlan(db: SupabaseClient, surveyId: string, ctx: Loade
       }
     }
 
-    const summary = summarizeApply(dataset.environment, n, [...results.values()], { charts: chartCount, planned: items.length });
+    const summary = summarizeApply(dataset.environment, n, [...results.values()], { charts: chartCount, planned: items.length, relinked: sync.relinked, adopted: sync.adopted });
     await finish({ status: summary.status === "nothing_planned" ? "failed" : summary.status, run_id: stored?.id ?? null, report_id: reportId, dashboard_id: dashboardId, summary: { ...summary, warnings, report: reportAction, dashboard: dashboardAction } });
     return { ok: true, status: 200, summary, applyId: lock.id, runId: stored?.id ?? null, reportId, dashboardId, report: { action: reportAction }, dashboard: { action: dashboardAction }, warnings };
   } catch (e) {

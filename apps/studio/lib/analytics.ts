@@ -4,12 +4,14 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Condition, SurveyDefinition } from "@rescript/schema";
 import {
   buildDataset, runAnalysis, variableMetadata, recommendCharts, adviseChart, DEFAULT_THEME,
-  unionVariableMetadata, definitionResolver, reviewAgainstSaved, surveyKnownNames, plannedAnalyses, runPlan, compactRun, compareRuns, nextMilestone, reportFromRun, withPlannedVariables, plannedHash, plannedIdOf,
+  unionVariableMetadata, definitionResolver, reviewAgainstSaved, surveyKnownNames, plannedAnalyses, runPlan, compactRun, compareRuns, nextMilestone, reportFromRun, withPlannedVariables, plannedHash, plannedIdOf, inputHashOf,
   type ChartAdvice, type AnalysisDefinition, type AnalysisResult, type AnalyticsRow, type Dataset, type DatasetSpec, type ReportTheme, type SegmentDef, type VariableMeta, type AnalysisRun, type PlannedAnalysis, type ReportDefinition,
 } from "@rescript/analytics";
 import type { VersionedDefinition } from "@rescript/engine";
 import { getCachedVersionDefinition } from "@rescript/quality/server";
 import { loadQualityDefinition } from "./qualityDef";
+import { ensurePlannedAnalyses as ensureCore } from "./analysisPlanCore";
+import { surveyStamp, withResultCache } from "./resultCache";
 import { insertRun, pickPrevious, runFromRow, type RunInsertDb, type StoredRun as StoredRunShape } from "./analyticsRunStore";
 
 /**
@@ -239,6 +241,8 @@ export async function buildFor(db: SupabaseClient, surveyId: string, ctx: Loaded
   const ds = planned.dataset;
   if (planned.warnings.length) ds.warnings = [...(ds.warnings ?? []), ...planned.warnings];
   if (wasTruncated(rows)) ds.truncatedAt = MAX_ROWS;
+  /* every result computed from this dataset records what the data was and which questionnaire it was read through (audit S-14) */
+  ds.dataVersion = stamp; ds.surveyVersion = surveyStamp(ctx);
 
   /*
    * Bounded by entry count rather than bytes, unlike the row cache — a
@@ -307,18 +311,31 @@ async function resolveAnalyticsVersions(
   return { variables: union.variables, defFor: (row) => resolve(row.version_id) };
 }
 
-export async function compute(db: SupabaseClient, surveyId: string, ctx: LoadedContext, definition: AnalysisDefinition): Promise<AnalysisResult & { recommendations: ReturnType<typeof recommendCharts>; advice?: ChartAdvice }> {
+export type ComputeOutput = AnalysisResult & { recommendations: ReturnType<typeof recommendCharts>; advice?: ChartAdvice; /** where it came from when it was not computed now */ fromCache?: "memory" | "store" };
+
+/**
+ * Compute one analysis — or find it already computed. The result is a function of its inputs (the definition, the
+ * dataset, the data at this moment, the questionnaire version, the engine version), and `inputHashOf` names them: the
+ * same hash is the same numbers, so it is looked up before anything is loaded (memory, then the persisted cache of
+ * migration 0052) and stored after. A new response, an edit or a new engine version is a different hash.
+ */
+export async function compute(db: SupabaseClient, surveyId: string, ctx: LoadedContext, definition: AnalysisDefinition): Promise<ComputeOutput> {
   const def = await resolveSaved(db, surveyId, definition);
-  const ds = await buildFor(db, surveyId, ctx, def);
-  const result = runAnalysis({ ...def, surveyVersion: def.surveyVersion ?? ctx.version ?? undefined }, ds);
-  /* the chart to open on is chosen from WHAT WAS ASKED (multi-select, scale, numeric…), not only from the shape of the numbers */
-  try {
-    const advice = adviseChart(def, result, [...ds.byName.values()]);
-    return { ...result, recommendations: advice.alternatives, advice };
-  } catch (e) {
-    console.error("[analytics] chart advice failed, using shape-based recommendations:", e);
-    return { ...result, recommendations: recommendCharts(result) };
-  }
+  const runDef: AnalysisDefinition = { ...def, surveyVersion: def.surveyVersion ?? ctx.version ?? undefined };
+  const dataVersion = await dataStamp(db, surveyId, def.dataset);
+  const key = inputHashOf(runDef, { dataVersion, surveyVersion: surveyStamp(ctx) });
+  return withResultCache<ComputeOutput>(db, surveyId, key, async () => {
+    const ds = await buildFor(db, surveyId, ctx, def);
+    const result = runAnalysis(runDef, ds);
+    /* the chart to open on is chosen from WHAT WAS ASKED (multi-select, scale, numeric…), not only from the shape of the numbers */
+    try {
+      const advice = adviseChart(def, result, [...ds.byName.values()]);
+      return { ...result, recommendations: advice.alternatives, advice };
+    } catch (e) {
+      console.error("[analytics] chart advice failed, using shape-based recommendations:", e);
+      return { ...result, recommendations: recommendCharts(result) };
+    }
+  }, (cached) => ({ ...cached, name: runDef.name }));
 }
 
 /** Variable picker payload: dictionary-derived metadata, grouped by question, plus dataset counts. */
@@ -464,57 +481,8 @@ export async function dueMilestone(db: SupabaseClient, surveyId: string, def: Su
  * "Create the planned analyses" and by the findings report, whose charts
  * must point at saved analyses to be drawn.
  */
-export async function ensurePlannedAnalyses(db: SupabaseClient, surveyId: string, ctx: LoadedContext, items: PlannedAnalysis[], userId: string | null): Promise<{ created: Record<string, unknown>[]; skipped: number; byPlanned: Map<string, string>; error?: string; blocked: { name: string; reason: string }[]; duplicates: { name: string; reason: string; duplicateOf?: string }[] }> {
-  const { data: existing } = await db.from("analytics_analyses").select("id, definition, version").eq("survey_id", surveyId).is("deleted_at", null);
-  const byPlanned = new Map<string, string>();
-  const existingRow = new Map<string, { id: string; definition: AnalysisDefinition; version: number }>();
-  for (const r of existing ?? []) { const p = String((r.definition as AnalysisDefinition)?.options?.planned ?? ""); if (p && !byPlanned.has(p)) { byPlanned.set(p, String(r.id)); existingRow.set(p, { id: String(r.id), definition: r.definition as AnalysisDefinition, version: Number(r.version ?? 1) }); } }
-  const created: Record<string, unknown>[] = []; let skipped = 0; let firstError: string | undefined;
-  /*
-   * REVIEW BEFORE SAVING. An item that reads a variable the survey does not have,
-   * or cannot be computed as specified, is not saved (it used to be saved and then
-   * "ran" into a warning and a blank result). An item that repeats another planned
-   * one — or one the researcher already built by hand, under any name — is not saved
-   * twice. Both are reported with their reason, never silently dropped.
-   */
-  const vmeta = variableMetadata(ctx.def as SurveyDefinition);
-  const savedRefs = (existing ?? []).map((r) => ({ id: String(r.id), name: String((r.definition as AnalysisDefinition)?.name ?? ""), definition: r.definition as AnalysisDefinition }));
-  const review = reviewAgainstSaved(items, vmeta, surveyKnownNames(ctx.def as SurveyDefinition, vmeta), savedRefs);
-  const blocked = review.blocked; const duplicates = review.duplicates;
-  for (const [pid, id] of review.existingFor) if (!byPlanned.has(pid)) byPlanned.set(pid, id);
-  /* items already saved from this very plan item are re-pointed (below) even though they need no new row */
-  const toVisit = [...items.filter((it) => { const pid = String(it.definition.options?.planned ?? ""); return pid && existingRow.has(pid) && !review.blocked.some((x) => x.name === it.definition.name); }), ...review.toCreate.filter((it) => !existingRow.has(String(it.definition.options?.planned ?? "")))];
-  for (const it of toVisit) {
-    const planned = String(it.definition.options?.planned ?? "");
-    if (planned && byPlanned.has(planned)) {
-      /*
-       * Never created twice — but never left reading a different dataset than the
-       * run did either. A planned analysis saved earlier under another environment
-       * (the plan defaulted to LIVE) and re-used by the report read 0 responses in
-       * the report while the run showed the real count. One no person has edited
-       * (still version 1) is re-pointed at the dataset the plan now runs on; an
-       * edited one is the researcher's own and is left alone.
-       */
-      const cur = existingRow.get(planned);
-      if (cur && cur.version === 1 && stableStringify(cur.definition.dataset ?? null) !== stableStringify(it.definition.dataset ?? null)) {
-        const next = { ...cur.definition, dataset: it.definition.dataset };
-        await db.from("analytics_analyses").update({ definition: next }).eq("id", cur.id);
-        await db.from("analytics_analysis_versions").update({ definition: next }).eq("analysis_id", cur.id).eq("version", 1);
-      }
-      skipped++; continue;
-    }
-    const name = it.definition.name.slice(0, 160);
-    /* stamped with the hash of the planned definition it was written from, so a later apply can tell "the plan changed" from "the researcher refined it" (planWorkspace) */
-    const definition: AnalysisDefinition = { ...it.definition, name, surveyVersion: ctx.version ?? undefined, options: { ...(it.definition.options ?? {}), ...(planned ? { plannedHash: plannedHash(it.definition) } : {}) } };
-    const row = { survey_id: surveyId, name, kind: it.definition.kind, definition, version: 1, folder: "Planned", tags: it.hypotheses, created_by: userId, updated_by: userId };
-    const { data, error } = await db.from("analytics_analyses").insert(row).select("*").single();
-    /* one failed insert must not blank every later block of the report: keep going, report the first failure */
-    if (error) { firstError ??= error.message; continue; }
-    await db.from("analytics_analysis_versions").insert({ analysis_id: data.id, survey_id: surveyId, version: 1, definition: row.definition, summary: `Created from the analysis plan${it.reason ? `: ${it.reason}` : ""}`, created_by: userId });
-    if (planned) byPlanned.set(planned, String(data.id));
-    created.push(data);
-  }
-  return { created, skipped, byPlanned, blocked, duplicates, ...(firstError ? { error: firstError } : {}) };
+export async function ensurePlannedAnalyses(db: SupabaseClient, surveyId: string, ctx: LoadedContext, dataset: DatasetSpec, userId: string | null, opts: { primaries?: boolean } = {}) {
+  return ensureCore(db, surveyId, ctx, dataset, userId, opts);
 }
 
 /* ------------------------------------------------------------ the findings report (research-intelligence Phase 6) */
@@ -537,9 +505,8 @@ export async function reportFacts(db: SupabaseClient, surveyId: string, def: Sur
 export async function draftFindingsReport(db: SupabaseClient, surveyId: string, ctx: LoadedContext, run: StoredRun, opts: { userId?: string | null; title?: string } = {}): Promise<{ report: Record<string, unknown> | null; definition: ReportDefinition; error?: string }> {
   // the report's saved analyses read the same dataset the run did (a clean run is not reported on "all")
   const spec: DatasetSpec = { environment: run.environment, dataset: run.dataset?.dataset ?? "all" };
-  const items = plannedAnalyses(ctx.def as SurveyDefinition, spec, { primaries: false });
-  const ensured = await ensurePlannedAnalyses(db, surveyId, ctx, items, opts.userId ?? null);
-  if (ensured.error && items.length && !ensured.byPlanned.size) return { report: null, definition: null as never, error: `The planned analyses could not be saved, so the report would have no charts: ${ensured.error}` };
+  const ensured = await ensurePlannedAnalyses(db, surveyId, ctx, spec, opts.userId ?? null);
+  if (ensured.error && ensured.planned && !ensured.byPlanned.size) return { report: null, definition: null as never, error: `The planned analyses could not be saved, so the report would have no charts: ${ensured.error}` };
   const facts = await reportFacts(db, surveyId, ctx.def as SurveyDefinition);
   const definition = reportFromRun(ctx.def as SurveyDefinition, run as never, {
     analysisIdFor: (planned) => (planned ? ensured.byPlanned.get(planned) : undefined),

@@ -30,6 +30,8 @@ class Query {
   is(col, v) { this.filters.push((r) => (v === null ? r[col] == null : r[col] === v)); return this; }
   gte(col, v) { this.filters.push((r) => String(r[col]) >= v); return this; }
   lt(col, v) { this.filters.push((r) => String(r[col]) < v); return this; }
+  gt(col, v) { this.filters.push((r) => String(r[col]) > v); return this; }
+  delete() { this.op = "delete"; return this; }
   in(col, vs) { this.filters.push((r) => vs.includes(r[col])); return this; }
   or(expr) {
     /* `survey_id.eq.X,customer_id.eq.Y` — the one shape the analytics route writes */
@@ -55,6 +57,11 @@ class Query {
       return { data: this.mode === "many" ? [row] : row, error: null };
     }
     let hit = rows.filter((r) => this.filters.every((f) => f(r)));
+    if (this.op === "delete") {
+      for (const r of hit) rows.splice(rows.indexOf(r), 1);
+      this.db.log.push({ op: "delete", table: this.table, n: hit.length });
+      return { data: null, error: null };
+    }
     if (this.op === "update") {
       for (const r of hit) Object.assign(r, this.payload, { updated_at: stamp() });
       this.db.log.push({ op: "update", table: this.table, n: hit.length });
@@ -73,7 +80,7 @@ class Query {
 export class FakeDb {
   constructor() {
     /** @type {Record<string, Record<string, unknown>[]>} */
-    this.tables = { surveys: [], responses: [], analytics_analyses: [], analytics_analysis_versions: [], analytics_charts: [], analytics_segments: [], analytics_themes: [], analytics_reports: [], analytics_report_versions: [], analytics_shares: [], analytics_runs: [], analytics_plan_applies: [], audit_logs: [], analytics_story_reports: [], analytics_story_versions: [], analytics_story_renders: [], analytics_story_segments: [], analytics_story_themes: [] };
+    this.tables = { surveys: [], responses: [], analytics_analyses: [], analytics_analysis_versions: [], analytics_charts: [], analytics_segments: [], analytics_themes: [], analytics_reports: [], analytics_report_versions: [], analytics_shares: [], analytics_runs: [], analytics_plan_applies: [], analytics_result_cache: [], audit_logs: [], analytics_story_reports: [], analytics_story_versions: [], analytics_story_renders: [], analytics_story_segments: [], analytics_story_themes: [] };
     /** @type {Record<string, unknown>[]} */
     this.log = [];
   }

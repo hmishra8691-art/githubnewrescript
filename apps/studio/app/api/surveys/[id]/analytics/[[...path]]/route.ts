@@ -789,12 +789,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
     const env = body.environment === "TEST" || body.environment === "ALL" ? body.environment : "LIVE";
     const dataset: DatasetSpec = { environment: env as DatasetSpec["environment"], dataset: body.dataset === "clean" ? "clean" : "all" };
-    const items = plannedAnalyses(loaded.def as SurveyDefinition, dataset, { primaries: body.primaries === true });
-    if (!items.length) return bad("Nothing is planned yet — plan the analysis in Intelligent mode (Analysis tab) first.");
-    const ensured = await ensurePlannedAnalyses(db, surveyId, loaded, items, ctx.user.userId);
+    const ensured = await ensurePlannedAnalyses(db, surveyId, loaded, dataset, ctx.user.userId, { primaries: body.primaries === true });
+    if (!ensured.planned) return bad("Nothing is planned yet — plan the analysis in Intelligent mode (Analysis tab) first.");
     if (ensured.error) return bad(ensured.error, 500);
     for (const data of ensured.created) log(ctx, "analytics.analysis_created", String(data.id), { name: data.name, kind: data.kind, fromPlan: String((data.definition as AnalysisDefinition)?.options?.planned ?? "") });
-    return json({ created: ensured.created, skipped: ensured.skipped, planned: items.length, blocked: ensured.blocked, duplicates: ensured.duplicates }, 201);
+    return json({ created: ensured.created, skipped: ensured.skipped, planned: ensured.planned, blocked: ensured.blocked, duplicates: ensured.duplicates }, 201);
   }
   if (head === "analyses" && itemId && action === "duplicate") {
     const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;

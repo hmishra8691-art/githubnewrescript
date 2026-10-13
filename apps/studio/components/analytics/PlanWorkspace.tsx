@@ -297,7 +297,7 @@ function ApplyOutcome({ r, onFix, onClose }: { r: ApplyResponse; onFix: (id: str
   return (
     <div className="ap-outcome" data-testid="ap-outcome" data-status={s.status}>
       <div className="row"><span className="grow"><b>Last apply:</b> {s.message}</span><button className="ax-rail-btn" onClick={onClose} aria-label="Dismiss" data-testid="ap-outcome-close">×</button></div>
-      <div className="muted" style={{ fontSize: 12.5 }}>{s.counts.created} created · {s.counts.updated} updated · {s.counts.unchanged} unchanged · {s.counts.keptRefined} kept refined · {s.counts.run} run · {s.counts.charts} charts · report {r.report?.action ?? "none"} · dashboard {r.dashboard?.action ?? "none"}</div>
+      <div className="muted" style={{ fontSize: 12.5 }}>{s.counts.created} created · {s.counts.updated} updated{s.counts.repointed ? ` · ${s.counts.repointed} moved to this dataset` : ""} · {s.counts.unchanged} unchanged · {s.counts.keptRefined} kept refined · {s.counts.run} run · {s.counts.charts} charts · report {r.report?.action ?? "none"} · dashboard {r.dashboard?.action ?? "none"}</div>
       {bad.length > 0 && <ul className="ap-attention" style={{ marginTop: 6 }}>{bad.map((i) => <li key={i.id}><span className={`badge ${i.status === "failed" ? "error" : "warning"}`}>{i.status === "failed" ? "Failed" : "Skipped"}</span> <button className="ax-linkbtn" onClick={() => onFix(i.id)}>{i.title}</button><div className="muted" style={{ fontSize: 12.5 }}>{i.reason}</div></li>)}</ul>}
     </div>
   );

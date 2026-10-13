@@ -4,7 +4,7 @@ import { def as base, synthDataset, spec } from "./analyses/fixture.js";
 import { variableMetadata } from "./dataset.js";
 import { runPlan, compactRun } from "./findings.js";
 import {
-  planItemViews, planVariableViews, planOverview, planAnalysisSync, planChartSync, planChartSpec, planDashboard, plannedHash, stampedDefinition, summarizeApply, withOrigin, editedSinceApply,
+  planItemViews, planVariableViews, planOverview, planAnalysisSync, mergePlanUpdate, planRelinks, relinkedDefinition, planChartSync, planChartSpec, planDashboard, plannedHash, stampedDefinition, summarizeApply, withOrigin, editedSinceApply,
   type SavedAnalysisRow, type SavedChartRow,
 } from "./planWorkspace.js";
 import type { DashboardDefinition } from "./types.js";
@@ -204,4 +204,83 @@ test("the apply summary distinguishes configured, applied and computed", () => {
   assert.equal(noData.status, "no_data"); assert.match(noData.message, /No complete live responses yet/);
   assert.equal(summarizeApply("TEST", 10, [], { charts: 0, planned: 0 }).status, "nothing_planned");
   assert.equal(summarizeApply("ALL", 50, [{ id: "x1", title: "a", sync: "unchanged", status: "run" }], { charts: 1, planned: 1 }).status, "applied");
+});
+
+
+/* ------------------------------------------------------------ P-2, P-5, P-1 */
+
+function savedFrom(def: ReturnType<typeof planned>, dataset = spec) {
+  const dictionary = variableMetadata(def);
+  const views = planItemViews(def, dataset, { dictionary, analyses: [], charts: [] });
+  const rows: SavedAnalysisRow[] = planAnalysisSync(views, dataset, "1.0").flatMap((s, i) => (s.kind === "create" ? [{ id: `a${i}`, name: s.definition.name, kind: s.definition.kind, version: 1, definition: s.definition }] : []));
+  return { dictionary, rows };
+}
+
+test("P-2: applying a changed plan updates what the plan owns and keeps the researcher's filter, weighting and options", () => {
+  const def = planned();
+  const { dictionary, rows } = savedFrom(def);
+  const mine = { type: "rule", source: { kind: "variable", ref: "REGION" }, operator: "eq", value: 1 } as never;
+  rows[0].definition = { ...rows[0].definition, filter: mine, filterIds: ["f1"], weighting: { variable: "WGT" }, layers: ["REGION"], options: { ...rows[0].definition.options, decimals: 2, confidence: 0.9 } };
+  rows[0].version = 2;
+  /* the plan moves: x1's reason (and so its name) and its measure are edited */
+  const def2 = structuredClone(def);
+  Object.assign(def2.research!.analysisPlan!.crosstabs[0], { reason: "satisfaction by profile, revised", measure: "count" });
+  const views = planItemViews(def2, spec, { dictionary, analyses: rows, charts: [] });
+  assert.equal(views[0].state, "stale");
+  const s = planAnalysisSync(views, spec, "1.0", rows)[0];
+  assert.equal(s.kind, "update");
+  const d = (s as { definition: ReturnType<typeof stampedDefinition> }).definition;
+  assert.equal(d.name, "satisfaction by profile, revised"); assert.equal(d.measure, "count", "the plan's change is applied");
+  assert.deepEqual(d.filter, mine); assert.deepEqual(d.filterIds, ["f1"]); assert.deepEqual(d.weighting, { variable: "WGT" }); assert.deepEqual(d.layers, ["REGION"]);
+  assert.equal(d.options?.decimals, 2); assert.equal(d.options?.confidence, 0.9);
+  assert.equal(d.options?.planned, "x1"); assert.equal(d.options?.plannedHash, views[0].hash, "stamped as written from the plan as it is now");
+  assert.match((s as { summary: string }).summary, /filter, weighting and other refinements were kept/);
+  /* and an option the plan stopped setting goes with it */
+  const merged = mergePlanUpdate({ ...rows[0].definition, options: { ...rows[0].definition.options, hypotheses: ["H1"], moderation: true } }, { ...rows[0].definition, options: { planned: "x1" } });
+  assert.equal(merged.options?.hypotheses, undefined); assert.equal(merged.options?.moderation, undefined); assert.equal(merged.options?.decimals, 2);
+});
+
+test("P-5: an analysis saved on LIVE is re-pointed when the apply runs on TEST — also a refined one, keeping its refinement — and the apply says so", () => {
+  const def = planned();
+  const { dictionary, rows } = savedFrom(def, spec);
+  rows[1].definition = { ...rows[1].definition, measure: "pct_row" }; rows[1].version = 2;
+  const test = { environment: "TEST" as const, dataset: "all" as const };
+  const views = planItemViews(def, test, { dictionary, analyses: rows, charts: [] });
+  const sync = planAnalysisSync(views, test, "1.0", rows);
+  const live = sync.filter((s) => s.kind !== "skip");
+  assert.ok(live.every((s) => s.kind === "update"), "every saved analysis moves");
+  const x2 = sync[1] as { definition: { dataset: { environment: string }; measure?: string }; repointedFrom?: { environment: string }; summary: string };
+  assert.equal(x2.definition.dataset.environment, "TEST"); assert.equal(x2.repointedFrom?.environment, "LIVE");
+  assert.equal(x2.definition.measure, "pct_row", "the researcher's refinement is kept");
+  assert.match(x2.summary, /Re-pointed from LIVE to TEST/);
+  /* on the dataset it already reads, nothing happens */
+  assert.deepEqual(planAnalysisSync(planItemViews(def, spec, { dictionary, analyses: rows, charts: [] }), spec, "1.0", rows).map((s) => s.kind), ["keep", "keep", "skip", "keep", "keep"]);
+  const sum = summarizeApply("TEST", 10, [{ id: "x1", title: "t", sync: "repointed", status: "run" }], { charts: 0, planned: 1 });
+  assert.match(sum.message, /1 moved to test data/); assert.equal(sum.counts.repointed, 1);
+});
+
+test("P-1: an analysis whose plan id now names another item is re-linked to the item it was written for, not overwritten with the other item's definition", () => {
+  const def = planned();
+  const { dictionary, rows } = savedFrom(def);   // a0: x1 (SAT by profile), a1: x2 (CONSIDER by AWARE), a3: t1, a4: t2
+  /* the ids shift, as counters did when the survey grew: x1 and x2 swap */
+  const shifted = structuredClone(def);
+  const [c1, c2] = shifted.research!.analysisPlan!.crosstabs;
+  const id1 = c1.id; c1.id = c2.id; c2.id = id1;
+  const views = planItemViews(shifted, spec, { dictionary, analyses: rows, charts: [] });
+  /* what used to be silently overwritten with the other item's definition */
+  const before = planAnalysisSync(views, spec, "1.0", rows);
+  assert.equal(before[0].kind, "update"); assert.equal((before[0] as { analysisId: string }).analysisId, "a1"); assert.deepEqual((before[0] as { definition: { rows?: string[] } }).definition.rows, ["SAT"], "(the old behaviour this fixes: a1's CONSIDER table replaced by SAT)");
+  const links = planRelinks(views, rows);
+  assert.deepEqual(links.map((l) => [l.analysisId, l.from, l.to]).sort(), [["a0", "x1", "x2"], ["a1", "x2", "x1"]]);
+  /* after the relink every analysis matches its item and nothing needs updating */
+  const fixed = rows.map((r) => { const l = links.find((x) => x.analysisId === r.id); const to = l ? views.find((v) => v.id === l.to)! : null; return to ? { ...r, definition: relinkedDefinition(r.definition, { id: to.id, hash: to.hash }) } : r; });
+  const views2 = planItemViews(shifted, spec, { dictionary, analyses: fixed, charts: [] });
+  assert.deepEqual(views2.filter((v) => v.state !== "invalid").map((v) => v.state), ["configured", "configured", "configured", "configured"]);
+  assert.deepEqual(planAnalysisSync(views2, spec, "1.0", fixed).map((s) => s.kind), ["keep", "keep", "skip", "keep", "keep"]);
+
+  /* an analysis that matches no item at all is not re-linked: the plan was edited, and the ordinary update applies */
+  const odd = structuredClone(rows); odd[0].definition = { ...odd[0].definition, rows: ["AGE"], columns: ["GENDER"], variables: ["AGE", "GENDER"] };
+  assert.deepEqual(planRelinks(planItemViews(def, spec, { dictionary, analyses: odd, charts: [] }), odd), []);
+  /* an unshifted plan has nothing to relink */
+  assert.deepEqual(planRelinks(planItemViews(def, spec, { dictionary, analyses: rows, charts: [] }), rows), []);
 });

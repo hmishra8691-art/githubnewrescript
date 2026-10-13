@@ -369,3 +369,71 @@ test("update_crosstab / update_analysis_test change a planned item in place — 
   assert.equal(derived.errors.length, 0, derived.errors.join("\n"));
   assert.equal(derived.def.research!.analysisPlan!.tests.find((t) => t.id === t2.id)!.outcome, "TRUST_SCORE");
 });
+
+/* ------------------------------------------------------------ P-1: plan ids are the item's identity, not a counter */
+
+const keyOfX = (x: { rows: string[]; columns: string[] }) => `${[...x.rows].sort()}|${[...x.columns].sort()}`;
+const keyOfT = (t: { method: string; outcome?: string; groupBy?: string; variables: string[]; moderator?: string; mediator?: string }) => `${t.method}|${t.outcome ?? ""}|${t.groupBy ?? ""}|${[...t.variables].sort()}|${t.moderator ?? ""}|${t.mediator ?? ""}`;
+
+test("P-1: ids are derived from what an item is, are unique, and are the same on every build", () => {
+  const a = buildAnalysisFramework(survey(), { now: "" }), b = buildAnalysisFramework(survey(), { now: "" });
+  assert.deepEqual(a.crosstabs.map((x) => x.id), b.crosstabs.map((x) => x.id));
+  const ids = [...a.crosstabs, ...a.tests].map((x) => x.id);
+  assert.equal(new Set(ids).size, ids.length, "no two items share an id");
+  assert.ok(ids.every((id) => !/^(xt|t)_\d+$/.test(id)), "not counters");
+});
+
+test("P-1: after the survey grows, every item that is still in the plan keeps its id (it used to shift: 18 of 27 ids named another item)", () => {
+  const before = buildAnalysisFramework(survey(), { now: "" });
+  const grown = survey();
+  /* a new outcome question early in the survey — under a counter this renumbered everything after it */
+  grown.questions.splice(3, 0, SurveyDefinition.parse({ meta: { id: "x", code: "X", title: "x", version: "1" }, questions: [{ id: "csat", code: "Q0", variableName: "CSAT", type: "single_select", text: "Overall satisfaction", options: scale() }], flow: [] }).questions[0]);
+  grown.research!.constructs.push({ name: "Satisfaction", role: "dependent", questionIds: ["csat"] } as never);
+  const after = buildAnalysisFramework(grown, { now: "" });
+  assert.ok(after.crosstabs.length > before.crosstabs.length || after.tests.length > before.tests.length, "the new question added items");
+  const idAfterX = new Map(after.crosstabs.map((x) => [keyOfX(x), x.id])), idAfterT = new Map(after.tests.map((t) => [keyOfT(t), t.id]));
+  let kept = 0;
+  for (const x of before.crosstabs) if (idAfterX.has(keyOfX(x))) { assert.equal(idAfterX.get(keyOfX(x)), x.id, `crosstab ${keyOfX(x)}`); kept++; }
+  for (const t of before.tests) if (idAfterT.has(keyOfT(t))) { assert.equal(idAfterT.get(keyOfT(t)), t.id, `test ${keyOfT(t)}`); kept++; }
+  assert.ok(kept >= 6, `${kept} items carried over with the same id`);
+});
+
+test("P-1: regenerating over a saved plan keeps the ids it already has — also the old counter ids", () => {
+  const def = survey();
+  const fresh = buildAnalysisFramework(def, { now: "" });
+  /* a plan saved by the old generator: same items, counter ids */
+  const legacy = JSON.parse(JSON.stringify(fresh)) as typeof fresh;
+  legacy.crosstabs.forEach((x, i) => { x.id = `xt_${i + 1}`; }); legacy.tests.forEach((t, i) => { t.id = `t_${i + 1}`; });
+  def.research!.analysisPlan = legacy;
+  const out = applySurveyActions(def, coerceSurveyActions([{ op: "propose_analysis_plan" }]).actions);
+  const plan = out.def.research!.analysisPlan!;
+  assert.deepEqual(plan.crosstabs.map((x) => x.id), legacy.crosstabs.map((x) => x.id));
+  assert.deepEqual(plan.tests.map((t) => t.id), legacy.tests.map((t) => t.id));
+});
+
+test("P-1: merging the engine's plan into a saved one never reuses an id for a different item, and adds nothing twice", () => {
+  const def = survey();
+  const fresh = buildAnalysisFramework(def, { now: "" });
+  /* a hand-made plan whose first crosstab squats on an id the engine would otherwise mint for another one */
+  const mine = JSON.parse(JSON.stringify({ ...fresh, crosstabs: fresh.crosstabs.slice(0, 2), tests: [] })) as typeof fresh;
+  const squatted = fresh.crosstabs[2].id;
+  mine.crosstabs[0].id = squatted;
+  def.research!.analysisPlan = mine;
+  const out = applySurveyActions(def, coerceSurveyActions([{ op: "propose_analysis_plan", merge: true }]).actions).def.research!.analysisPlan!;
+  const ids = [...out.crosstabs, ...out.tests].map((x) => x.id);
+  assert.equal(new Set(ids).size, ids.length, "every id is unique after the merge");
+  assert.equal(out.crosstabs.find((x) => keyOfX(x) === keyOfX(mine.crosstabs[0]))!.id, squatted, "the item that had the id keeps it");
+  const keys = out.crosstabs.map(keyOfX); assert.equal(new Set(keys).size, keys.length, "no item twice");
+  const again = applySurveyActions(applySurveyActions(def, coerceSurveyActions([{ op: "propose_analysis_plan", merge: true }]).actions).def, coerceSurveyActions([{ op: "propose_analysis_plan", merge: true }]).actions).def.research!.analysisPlan!;
+  assert.equal(again.crosstabs.length, out.crosstabs.length, "merging twice adds nothing");
+});
+
+test("P-1: a moderated regression is not the same item as the plain one", () => {
+  const def = survey();
+  const out = applySurveyActions(def, coerceSurveyActions([
+    { op: "add_analysis_test", method: "regression", outcome: "Q6", variables: ["Q3"] },
+    { op: "add_analysis_test", method: "regression", outcome: "Q6", variables: ["Q3"], moderator: "Q5" },
+  ]).actions);
+  assert.equal(out.errors.length, 0, out.errors.join("; "));
+  assert.equal(out.def.research!.analysisPlan!.tests.filter((t) => t.method === "regression" && t.outcome === "PURCHASE_INT").length, 2);
+});

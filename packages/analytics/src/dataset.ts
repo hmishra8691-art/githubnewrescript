@@ -97,6 +97,10 @@ export interface Dataset {
    */
   warnings?: string[];
   spec: DatasetSpec;
+  /** what the data was when this dataset was built (the loader's stamp: response count and newest change) — recorded on every result */
+  dataVersion?: string;
+  /** the questionnaire version / draft revision the responses were read through */
+  surveyVersion?: string;
 }
 
 /* ------------------------------------------------------------ variable metadata */
